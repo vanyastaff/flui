@@ -384,6 +384,8 @@ pub(crate) mod support {
         pub maximized_vert: u32,
         pub fullscreen: u32,
         pub moveresize: u32,
+        pub above: u32,
+        pub below: u32,
     }
 
     /// Which window manager runs on the screen.
@@ -416,6 +418,10 @@ pub(crate) mod support {
         /// It moves and resizes a window from a press on a title bar or a
         /// border the application draws (`_NET_WM_MOVERESIZE`).
         pub moves_and_resizes: bool,
+        /// It keeps a window above the others (`_NET_WM_STATE_ABOVE`).
+        pub above: bool,
+        /// It keeps a window below the others (`_NET_WM_STATE_BELOW`).
+        pub below: bool,
     }
 
     impl WindowManagerSupport {
@@ -434,6 +440,8 @@ pub(crate) mod support {
                 maximizes: lists(atoms.maximized_horz) && lists(atoms.maximized_vert),
                 fullscreen: lists(atoms.fullscreen),
                 moves_and_resizes: lists(atoms.moveresize),
+                above: lists(atoms.above),
+                below: lists(atoms.below),
             }
         }
 
@@ -513,6 +521,19 @@ pub(crate) mod support {
         };
         capabilities.maximizes = from_the_window_manager(support.maximizes);
         capabilities.enters_fullscreen = from_the_window_manager(support.fullscreen);
+        // A grab is the server's (`GrabPointer`, confined to the window); a
+        // lock reads the raw motion of XInput 2, which this host does not yet.
+        capabilities.confines_cursor = Native;
+        capabilities.locks_cursor = Absent(CapabilityAbsence::NOT_YET_ON_THIS_HOST);
+        // The levels are `_NET_WM_STATE_ABOVE` and `_NET_WM_STATE_BELOW`, which
+        // a window manager that lists them keeps; the resize steps and the
+        // proportion are `WM_NORMAL_HINTS`, which any window manager holds.
+        capabilities.keeps_on_top = from_the_window_manager(support.above);
+        capabilities.keeps_on_bottom = from_the_window_manager(support.below);
+        capabilities.sets_resize_increments = from_the_window_manager(support.managed());
+        capabilities.sets_aspect_ratio = from_the_window_manager(support.managed());
+        // A Render picture made into a cursor.
+        capabilities.cursor_image = Availability::Native;
         capabilities.into_capabilities()
     }
 
@@ -531,6 +552,8 @@ pub(crate) mod support {
             maximized_vert: 303,
             fullscreen: 304,
             moveresize: 305,
+            above: 306,
+            below: 307,
         };
 
         /// What a window manager lists decides what a window honours: with no
@@ -567,7 +590,7 @@ pub(crate) mod support {
                 (
                     "a list where no window manager answers the check",
                     Icccm,
-                    &[302, 303, 304, 305],
+                    &[302, 303, 304, 305, 306, 307],
                     [Native, Unavailable, Unavailable, Native],
                 ),
                 (
@@ -722,7 +745,7 @@ pub(crate) mod support {
 
             let honoured = capabilities(WindowManagerSupport::read(
                 WindowManager::Extended,
-                &[302, 303, 304, 305],
+                &[302, 303, 304, 305, 306, 307],
                 &ATOMS,
             ));
             assert_eq!(
@@ -743,6 +766,12 @@ pub(crate) mod support {
                     activates: Native,
                     closes: Native,
                     material: WindowCapability::NOT_ON_THIS_PLATFORM,
+                    confines_cursor: Native,
+                    locks_cursor: WindowCapability::Absent(CapabilityAbsence::NOT_YET_ON_THIS_HOST),
+                    keeps_on_top: Native,
+                    keeps_on_bottom: Native,
+                    sets_resize_increments: Native,
+                    sets_aspect_ratio: Native,
                     reports_presentation: WindowCapability::NOT_ON_THIS_PLATFORM,
                     reports_keyboard_inset: WindowCapability::NOT_ON_THIS_PLATFORM,
                     reports_system_gestures: WindowCapability::NOT_ON_THIS_PLATFORM,
@@ -750,6 +779,7 @@ pub(crate) mod support {
                     observes_minimized: Availability::Native,
                     places_at_open: Availability::Native,
                     frame_rate_hint: Availability::Unavailable,
+                    cursor_image: Availability::Native,
                 }
             );
         }

@@ -648,7 +648,7 @@ impl LaidOut {
 
     /// The last cursor the UI runtime set on its window, from the hovered
     /// region's cursor through the presentation's mouse tracker.
-    pub fn cursor(&self) -> flui_platform::CursorIcon {
+    pub fn cursor(&self) -> flui_platform::Cursor {
         self.host.ui_runtime().window().cursor()
     }
 

@@ -24,7 +24,6 @@ use std::{
     },
 };
 
-use cursor_icon::CursorIcon;
 use flui_foundation::geometry::{Bounds, DevicePixelRatio, Point, Size};
 use flui_platform::{
     Brightness, SizeConstraints, WindowExtent, WindowGeometry, WindowId, WindowMode,
@@ -327,8 +326,21 @@ pub(crate) struct WindowContext {
     /// chose it through `Win32Window::set_dark_mode` or `set_theme`, or opened
     /// with a theme of its own (`Win32WindowOptions::theme`).
     pub chrome_follows_system: std::cell::Cell<bool>,
-    /// Cursor selected by this exact window's presentation.
-    pub cursor: std::cell::Cell<CursorIcon>,
+    /// The cursor this window shows over its client area, as its presentation
+    /// selected it.
+    pub cursor: std::cell::RefCell<super::cursor::NativeCursor>,
+    /// The grab the window holds; `None` whenever it lost the focus.
+    pub(crate) cursor_grab: Cell<flui_platform::CursorGrab>,
+    /// Whether the window is kept below the others, a level Win32 has no
+    /// style for: `WM_WINDOWPOSCHANGING` keeps it at the bottom.
+    pub(crate) kept_below: Cell<bool>,
+    /// The steps and the proportion the user's resize keeps, in logical
+    /// pixels; `WM_SIZING` holds the rectangle to them at the window's scale.
+    pub(crate) resize_increments: Cell<Option<WindowExtent>>,
+    pub(crate) aspect_ratio: Cell<Option<flui_platform::AspectRatio>>,
+    /// Set from the first `WM_SIZING` of a size-move loop to its end: the
+    /// user is resizing the window by its frame, not moving it.
+    pub(crate) live_resize: Cell<bool>,
     /// Window style bits before fullscreen (Windows-specific: WS_OVERLAPPEDWINDOW, etc.)
     ///
     /// Stored here instead of in `NativeMode` to keep the cross-platform enum
@@ -516,12 +528,137 @@ impl WindowContext {
             hovered: self.delivery.hovered(),
             capabilities: self.capabilities,
             frame: self.frame.get(),
-            interaction: if self.in_size_move.get() || self.in_system_command.get() {
+            interaction: if self.in_size_move.get() && self.live_resize.get() {
+                flui_platform::WindowInteraction::UserResizing
+            } else if self.in_size_move.get() || self.in_system_command.get() {
                 flui_platform::WindowInteraction::UserPlacing
             } else {
                 flui_platform::WindowInteraction::None
             },
+            cursor_grab: self.cursor_grab.get(),
+            kept_below: self.kept_below.get(),
         }
+    }
+
+    /// Hold the pointer as `grab` asks: only while the window has the
+    /// keyboard focus, which a grab ends with, as every window system ends
+    /// one. A grab the window cannot take is not held, and the snapshot says
+    /// so. Owner thread only.
+    ///
+    /// # Errors
+    /// [`PlatformFailure::Failed`](flui_platform::PlatformFailure::Failed)
+    /// when Win32 refuses the clip or the raw input; the window then holds
+    /// nothing.
+    pub(crate) fn hold_pointer(
+        &self,
+        hwnd: HWND,
+        grab: flui_platform::CursorGrab,
+    ) -> Result<(), flui_platform::PlatformFailure> {
+        use flui_platform::CursorGrab;
+        use windows::Win32::UI::Input::KeyboardAndMouse::GetFocus;
+
+        self.let_pointer_go(hwnd);
+        // SAFETY: a plain query of this thread's focus.
+        let focused = unsafe { GetFocus() } == hwnd;
+        if grab == CursorGrab::None || !focused {
+            return Ok(());
+        }
+        let locked = grab == CursorGrab::Locked;
+        super::cursor::hold(hwnd, locked)?;
+        self.cursor_grab.set(grab);
+        if locked {
+            self.step(hwnd, WindowStep::PointerLocked(true));
+            // A locked pointer is not shown; the next `WM_SETCURSOR` keeps it so.
+            // SAFETY: `SetCursor(None)` takes no pointer.
+            unsafe {
+                windows::Win32::UI::WindowsAndMessaging::SetCursor(None);
+            }
+        }
+        Ok(())
+    }
+
+    /// Let go of whatever grab the window holds: the window lost the focus,
+    /// is going, or holds another one now. The clip is the desktop's, so it
+    /// must not outlive the window's focus.
+    pub(crate) fn let_pointer_go(&self, hwnd: HWND) {
+        use flui_platform::CursorGrab;
+
+        let held = self.cursor_grab.replace(CursorGrab::None);
+        if held == CursorGrab::None {
+            return;
+        }
+        let locked = held == CursorGrab::Locked;
+        super::cursor::let_go(locked);
+        if locked {
+            self.step(hwnd, WindowStep::PointerLocked(false));
+        }
+    }
+
+    /// `WM_SIZING`: hold the rectangle the user drags `edge` to
+    /// (`proposed`, which Win32 reads back) to the steps and the proportion
+    /// the application asked for, at the window's scale. Whether it held it;
+    /// with nothing asked, the rectangle is left to the default procedure.
+    pub(crate) fn hold_sizing(&self, hwnd: HWND, edge: usize, proposed: &mut RECT) -> bool {
+        use super::limits::PixelSize;
+        use super::sizing::{ResizeRule, SizingEdge, SizingRect};
+
+        let (increments, aspect) = (self.resize_increments.get(), self.aspect_ratio.get());
+        let Some(edge) = SizingEdge::from_wmsz(edge) else {
+            return false;
+        };
+        if increments.is_none() && aspect.is_none() {
+            return false;
+        }
+        let scale = self.scale.scale();
+        let device = |logical: f64| {
+            checked_logical_to_device(logical, scale)
+                .unwrap_or(0)
+                .max(0)
+        };
+        let rule = ResizeRule {
+            increments: increments.map(|step| {
+                PixelSize::new(device(step.width()).max(1), device(step.height()).max(1))
+            }),
+            base: self
+                .constraints
+                .get()
+                .min
+                .map_or(PixelSize::new(0, 0), |min| {
+                    PixelSize::new(device(min.width()), device(min.height()))
+                }),
+            aspect,
+        };
+        let mut window = RECT::default();
+        let mut client = RECT::default();
+        // SAFETY: plain queries of the live window into live locals.
+        let measured = unsafe {
+            GetWindowRect(hwnd, &raw mut window).is_ok()
+                && GetClientRect(hwnd, &raw mut client).is_ok()
+        };
+        if !measured {
+            return false;
+        }
+        let frame = PixelSize::new(
+            ((window.right - window.left) - client.right).max(0),
+            ((window.bottom - window.top) - client.bottom).max(0),
+        );
+        let held = rule.hold(
+            edge,
+            SizingRect {
+                left: proposed.left,
+                top: proposed.top,
+                right: proposed.right,
+                bottom: proposed.bottom,
+            },
+            frame,
+        );
+        *proposed = RECT {
+            left: held.left,
+            top: held.top,
+            right: held.right,
+            bottom: held.bottom,
+        };
+        true
     }
 
     /// The window system reported a change, or a command was just carried
@@ -786,7 +923,8 @@ impl WindowMessages for WindowProc {
             | WindowStep::Rescaled
             | WindowStep::ScaleApplied
             | WindowStep::SettingChanged
-            | WindowStep::Closed => {}
+            | WindowStep::Closed
+            | WindowStep::PointerLocked(_) => {}
         }
     }
 
@@ -797,12 +935,13 @@ impl WindowMessages for WindowProc {
     /// posted to it, and the keyboard's system-menu command.
     fn answers(&self, msg: u32, wparam: WPARAM) -> bool {
         use windows::Win32::UI::WindowsAndMessaging::{
-            WM_ENTERMENULOOP, WM_ENTERSIZEMOVE, WM_EXITMENULOOP, WM_EXITSIZEMOVE, WM_TIMER,
+            WM_ENTERMENULOOP, WM_ENTERSIZEMOVE, WM_EXITMENULOOP, WM_EXITSIZEMOVE, WM_SIZING,
+            WM_TIMER,
         };
         match msg {
             WM_CREATE | WM_CLOSE | WM_DESTROY | WM_ERASEBKGND | WM_ENTERSIZEMOVE
-            | WM_EXITSIZEMOVE | WM_ENTERMENULOOP | WM_EXITMENULOOP | WM_PAINT | WM_SIZE
-            | WM_SHOWWINDOW | WM_MOVE | WM_DPICHANGED | WM_WINDOWPOSCHANGING
+            | WM_EXITSIZEMOVE | WM_SIZING | WM_ENTERMENULOOP | WM_EXITMENULOOP | WM_PAINT
+            | WM_SIZE | WM_SHOWWINDOW | WM_MOVE | WM_DPICHANGED | WM_WINDOWPOSCHANGING
             | WM_WINDOWPOSCHANGED | CLOSE_WINDOW | DELIVER_QUEUED | WM_SETTEXT
             | WM_STYLECHANGED | WM_GETMINMAXINFO | REQUEST_FRAME | WM_SETCURSOR | WM_SETFOCUS
             | WM_KILLFOCUS | WM_ACTIVATE | WM_SETTINGCHANGE | WM_NCCALCSIZE | WM_NCHITTEST => true,
@@ -907,6 +1046,9 @@ impl WindowProc {
                     tracing::debug!("WM_DESTROY for HWND {:?}", hwnd);
 
                     if let Some(ctx) = ctx {
+                        // The clip is the desktop's: it must not outlive the
+                        // window that holds it.
+                        ctx.let_pointer_go(hwnd);
                         // While the window and its callbacks still exist: what
                         // the input holds of the window ends as cancelled and
                         // its touchpad viewport is released, a drag over it
@@ -1015,11 +1157,33 @@ impl WindowProc {
                     if let Some(ctx) = ctx {
                         ctx.exit_modal_loop(hwnd);
                         ctx.in_size_move.set(false);
+                        ctx.live_resize.set(false);
                         ctx.step(hwnd, WindowStep::SizeMoveEnded);
                         // The snapshot ends the user's placement here: the next
                         // report that changes the placement is not the user's
                         // unless it says so itself (ADR-0343 §2).
                         ctx.publish_window_state(hwnd);
+                    }
+                    DefWindowProcW(hwnd, msg, wparam, lparam)
+                }
+
+                // The user drags the frame: the loop is a live resize from
+                // here to its end, and the rectangle keeps the steps and the
+                // proportion the application asked for.
+                windows::Win32::UI::WindowsAndMessaging::WM_SIZING => {
+                    if let Some(ctx) = ctx {
+                        if ctx.in_size_move.get() && !ctx.live_resize.replace(true) {
+                            ctx.publish_window_state(hwnd);
+                        }
+                        // SAFETY: for this message `lParam` is the address of
+                        // the dragged `RECT`, which the system owns for the call
+                        // and reads back; the null check guards a sender that
+                        // breaks that contract.
+                        if let Some(proposed) = (lparam.0 as *mut RECT).as_mut()
+                            && ctx.hold_sizing(hwnd, wparam.0, proposed)
+                        {
+                            return Some(LRESULT(1));
+                        }
                     }
                     DefWindowProcW(hwnd, msg, wparam, lparam)
                 }
@@ -1097,6 +1261,9 @@ impl WindowProc {
                         let size = Size::new(width, height);
                         let prev_mode = ctx.mode.get();
                         if size_type != SIZE_MINIMIZED {
+                            if ctx.cursor_grab.get() == flui_platform::CursorGrab::Confined {
+                                super::cursor::confine_again(hwnd);
+                            }
                             ctx.step(hwnd, WindowStep::Resized((width, height)));
                             ctx.update_window_state(|state| {
                                 state.bounds.size = Size::new(
@@ -1266,6 +1433,11 @@ impl WindowProc {
                                 y as f64 / ctx.scale.scale(),
                             );
                         });
+                        // A confined pointer follows the client area it is
+                        // confined to.
+                        if ctx.cursor_grab.get() == flui_platform::CursorGrab::Confined {
+                            super::cursor::confine_again(hwnd);
+                        }
                         ctx.publish_window_state(hwnd);
                     }
 
@@ -1290,7 +1462,19 @@ impl WindowProc {
                     if let Some(ctx) = ctx {
                         // SAFETY: for this message `lParam` is the address of a
                         // `WINDOWPOS` the system owns for the call.
-                        ctx.clamp_pending_size(hwnd, &mut *(lparam.0 as *mut WINDOWPOS));
+                        let pending = &mut *(lparam.0 as *mut WINDOWPOS);
+                        ctx.clamp_pending_size(hwnd, pending);
+                        // A window kept below the others goes back under them
+                        // whenever something would raise it (an activation, a
+                        // click): Win32 has no level for it.
+                        if ctx.kept_below.get()
+                            && !pending
+                                .flags
+                                .contains(windows::Win32::UI::WindowsAndMessaging::SWP_NOZORDER)
+                        {
+                            pending.hwndInsertAfter =
+                                windows::Win32::UI::WindowsAndMessaging::HWND_BOTTOM;
+                        }
                     }
                     DefWindowProcW(hwnd, msg, wparam, lparam)
                 }
@@ -1450,7 +1634,14 @@ impl WindowProc {
                     if let Some(ctx) = ctx
                         && (lparam.0 as u32 & 0xffff) == HTCLIENT
                     {
-                        match WindowsWindow::apply_native_cursor(ctx.cursor.get()) {
+                        // A locked pointer stays hidden whatever the hovered
+                        // region asks for.
+                        let shown = if ctx.cursor_grab.get() == flui_platform::CursorGrab::Locked {
+                            super::cursor::NativeCursor::Hidden.show()
+                        } else {
+                            ctx.cursor.borrow().show()
+                        };
+                        match shown {
                             Ok(()) => return Some(LRESULT(1)),
                             Err(error) => {
                                 tracing::warn!(
@@ -1493,6 +1684,8 @@ impl WindowProc {
 
                     if let Some(ctx) = ctx {
                         ctx.update_window_state(|state| state.focused = false);
+                        // A grab ends with the focus.
+                        ctx.let_pointer_go(hwnd);
                         ctx.step(hwnd, WindowStep::FocusLost);
                         ctx.publish_window_state(hwnd);
                     }
@@ -1621,8 +1814,14 @@ pub(crate) struct OwnerTracking {
     /// application title bar reads back as itself.
     pub(crate) frame: flui_platform::WindowFrame,
     /// Whether the user is placing the window: inside the size-move loop, or
-    /// inside a system command the user worked (ADR-0343).
+    /// inside a system command the user worked (ADR-0343); resizing it, from
+    /// the loop's first `WM_SIZING`.
     pub(crate) interaction: flui_platform::WindowInteraction,
+    /// The grab the window holds.
+    pub(crate) cursor_grab: flui_platform::CursorGrab,
+    /// Whether the window is kept below the others; whether it is kept above
+    /// them is its `WS_EX_TOPMOST` style, which another program may change.
+    pub(crate) kept_below: bool,
 }
 
 /// Whether the window's style has a caption: a fullscreen window has been
@@ -1704,7 +1903,20 @@ pub(crate) fn sample_state(
         capabilities,
         frame,
         interaction,
+        cursor_grab,
+        kept_below,
     } = tracking;
+    // SAFETY: a plain style query; a stale handle reads as no style.
+    let topmost = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32 }
+        & windows::Win32::UI::WindowsAndMessaging::WS_EX_TOPMOST.0
+        != 0;
+    let level = if topmost {
+        flui_platform::WindowLevel::AlwaysOnTop
+    } else if kept_below {
+        flui_platform::WindowLevel::AlwaysOnBottom
+    } else {
+        flui_platform::WindowLevel::Normal
+    };
     let (scale, visible, focused, cached) = {
         let record = record.lock();
         (
@@ -1819,6 +2031,8 @@ pub(crate) fn sample_state(
             focus: flui_platform::WindowFocus::reported(focused, active),
             capabilities,
             interaction,
+            cursor_grab,
+            level,
         }
         .onto(state)
     })

@@ -92,7 +92,9 @@ pub(crate) mod configure {
     #![forbid(unsafe_code)]
 
     use flui_foundation::geometry::Size;
-    use flui_platform::{CapabilityAbsence, SizeConstraints, WindowCapabilities, WindowCapability};
+    use flui_platform::{
+        Availability, CapabilityAbsence, SizeConstraints, WindowCapabilities, WindowCapability,
+    };
 
     use crate::window::state::ModeFlags;
 
@@ -315,6 +317,13 @@ pub(crate) mod configure {
         capabilities.minimizes = offered(|announced| announced.minimize);
         capabilities.maximizes = offered(|announced| announced.maximize);
         capabilities.enters_fullscreen = offered(|announced| announced.fullscreen);
+        // A cursor image is a buffer on the pointer's cursor surface. The
+        // grabs are the compositor's pointer constraints, which this host does
+        // not speak yet; xdg-shell has no levels, resize steps or proportion,
+        // so those stay the platform's absence.
+        capabilities.cursor_image = Availability::Native;
+        capabilities.confines_cursor = Absent(CapabilityAbsence::NOT_YET_ON_THIS_HOST);
+        capabilities.locks_cursor = Absent(CapabilityAbsence::NOT_YET_ON_THIS_HOST);
         capabilities.into_capabilities()
     }
 
@@ -650,6 +659,14 @@ pub(crate) mod configure {
                     activates: Emulated,
                     closes: Native,
                     material: WindowCapability::NOT_ON_THIS_PLATFORM,
+                    confines_cursor: WindowCapability::Absent(
+                        CapabilityAbsence::NOT_YET_ON_THIS_HOST
+                    ),
+                    locks_cursor: WindowCapability::Absent(CapabilityAbsence::NOT_YET_ON_THIS_HOST),
+                    keeps_on_top: WindowCapability::NOT_ON_THIS_PLATFORM,
+                    keeps_on_bottom: WindowCapability::NOT_ON_THIS_PLATFORM,
+                    sets_resize_increments: WindowCapability::NOT_ON_THIS_PLATFORM,
+                    sets_aspect_ratio: WindowCapability::NOT_ON_THIS_PLATFORM,
                     reports_presentation: WindowCapability::NOT_ON_THIS_PLATFORM,
                     reports_keyboard_inset: WindowCapability::NOT_ON_THIS_PLATFORM,
                     reports_system_gestures: WindowCapability::NOT_ON_THIS_PLATFORM,
@@ -657,6 +674,7 @@ pub(crate) mod configure {
                     observes_minimized: Availability::Unavailable,
                     places_at_open: Availability::Unavailable,
                     frame_rate_hint: Availability::Unavailable,
+                    cursor_image: Availability::Native,
                 }
             );
         }

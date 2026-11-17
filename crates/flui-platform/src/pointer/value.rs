@@ -41,6 +41,8 @@ pub enum Quantity {
     Scale,
     /// A trackpad gesture's rotation.
     Rotation,
+    /// A locked pointer's motion.
+    Motion,
 }
 
 /// Why an input value was refused at the platform boundary.

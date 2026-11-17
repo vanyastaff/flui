@@ -166,7 +166,7 @@ impl PlatformWindow for DragWindow {
 
     fn reveal_after_first_frame(&self) {}
 
-    fn set_cursor(&self, _: flui_platform::CursorIcon) -> Result<(), flui_platform::CursorError> {
+    fn set_cursor(&self, _: &flui_platform::Cursor) -> Result<(), flui_platform::CursorError> {
         Ok(())
     }
     fn drag_source(&self) -> Option<Arc<dyn PlatformDragSource>> {

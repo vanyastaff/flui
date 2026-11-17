@@ -11,7 +11,8 @@ use std::num::NonZeroU64;
 use flui_foundation::{AtomicIdMint, IdExhausted};
 
 use crate::{
-    Availability, CapabilityAbsence, WindowCommand, WindowFrame, WindowMode, WindowRevision,
+    Availability, CapabilityAbsence, CursorGrab, WindowCommand, WindowFrame, WindowLevel,
+    WindowMode, WindowRevision,
 };
 
 /// How a window has one capability, or why it does not.
@@ -85,12 +86,13 @@ impl WindowCapability {
 /// [`FrameRequest::presented`](crate::FrameRequest::presented) or why those
 /// insets stay zero.
 ///
-/// Four fields are a plain [`Availability`]: what the window observes or can
+/// Five fields are a plain [`Availability`]: what the window observes or can
 /// be placed at ([`observes_position`](Self::observes_position),
 /// [`observes_minimized`](Self::observes_minimized),
 /// [`places_at_open`](Self::places_at_open)), which nothing
-/// refuses, and the one verb a window takes outside the command queue,
-/// [`frame_rate_hint`](Self::frame_rate_hint), which answers
+/// refuses, and the verbs a window takes outside the command queue,
+/// [`frame_rate_hint`](Self::frame_rate_hint) and
+/// [`cursor_image`](Self::cursor_image), each of which answers
 /// [`Unsupported`](crate::Unsupported) exactly when it is `Unavailable` and
 /// whose reason is the verb's own answer: nothing admits a verb against the
 /// capabilities, so a reason kept here would be a second copy of what the
@@ -289,6 +291,12 @@ command_capabilities! {
     Activate => activates,
     Close => closes,
     SetMaterial => material,
+    ConfineCursor => confines_cursor,
+    LockCursor => locks_cursor,
+    KeepOnTop => keeps_on_top,
+    KeepOnBottom => keeps_on_bottom,
+    SetResizeIncrements => sets_resize_increments,
+    SetAspectRatio => sets_aspect_ratio,
 }
 
 impl WindowCapabilities {
@@ -310,6 +318,12 @@ impl WindowCapabilities {
         activates: WindowCapability::NOT_ON_THIS_PLATFORM,
         closes: WindowCapability::NOT_ON_THIS_PLATFORM,
         material: WindowCapability::NOT_ON_THIS_PLATFORM,
+        confines_cursor: WindowCapability::NOT_ON_THIS_PLATFORM,
+        locks_cursor: WindowCapability::NOT_ON_THIS_PLATFORM,
+        keeps_on_top: WindowCapability::NOT_ON_THIS_PLATFORM,
+        keeps_on_bottom: WindowCapability::NOT_ON_THIS_PLATFORM,
+        sets_resize_increments: WindowCapability::NOT_ON_THIS_PLATFORM,
+        sets_aspect_ratio: WindowCapability::NOT_ON_THIS_PLATFORM,
         reports_presentation: WindowCapability::NOT_ON_THIS_PLATFORM,
         reports_keyboard_inset: WindowCapability::NOT_ON_THIS_PLATFORM,
         reports_system_gestures: WindowCapability::NOT_ON_THIS_PLATFORM,
@@ -317,6 +331,7 @@ impl WindowCapabilities {
         observes_minimized: Availability::Unavailable,
         places_at_open: Availability::Unavailable,
         frame_rate_hint: Availability::Unavailable,
+        cursor_image: Availability::Unavailable,
     }
     .into_capabilities();
 
@@ -340,6 +355,12 @@ impl WindowCapabilities {
         activates: WindowCapability::Native,
         closes: WindowCapability::Native,
         material: WindowCapability::Native,
+        confines_cursor: WindowCapability::Native,
+        locks_cursor: WindowCapability::Native,
+        keeps_on_top: WindowCapability::Native,
+        keeps_on_bottom: WindowCapability::Native,
+        sets_resize_increments: WindowCapability::Native,
+        sets_aspect_ratio: WindowCapability::Native,
         reports_presentation: WindowCapability::Native,
         reports_keyboard_inset: WindowCapability::Native,
         reports_system_gestures: WindowCapability::Native,
@@ -347,6 +368,7 @@ impl WindowCapabilities {
         observes_minimized: Availability::Native,
         places_at_open: Availability::Native,
         frame_rate_hint: Availability::Native,
+        cursor_image: Availability::Native,
     }
     .into_capabilities();
 
@@ -461,11 +483,12 @@ impl WindowCapabilities {
 
     /// How this window honours `command`, or why it does not.
     ///
-    /// [`WindowMode::Normal`] is [`Native`](WindowCapability::Native) on every
-    /// window but one that withdrew its capabilities: asking a window for the
-    /// mode every window has is never a no-op that pretends. Withdrawn ones
-    /// ([`withdraw`](Self::withdraw)) honour no command, the normal mode
-    /// included.
+    /// [`WindowMode::Normal`], [`WindowLevel::Normal`] and
+    /// [`CursorGrab::None`] are [`Native`](WindowCapability::Native) on every
+    /// window but one that withdrew its capabilities: asking a window for what
+    /// every window is when nothing else was asked of it is never a no-op that
+    /// pretends. Withdrawn ones ([`withdraw`](Self::withdraw)) honour no
+    /// command, those included.
     #[must_use]
     pub const fn capability(&self, command: &WindowCommand) -> WindowCapability {
         match Self::slot(command) {
@@ -527,9 +550,10 @@ impl WindowCapabilities {
         parts.into_capabilities()
     }
 
-    /// The capability `command` is admitted against; `None` for the mode every
-    /// window has. Exhaustive, so a command added to [`WindowCommand`] does
-    /// not compile until it names its slot.
+    /// The capability `command` is admitted against; `None` for what every
+    /// window is when nothing was asked of it (the normal mode and level, no
+    /// grab). Exhaustive, so a command added to [`WindowCommand`] does not
+    /// compile until it names its slot.
     const fn slot(command: &WindowCommand) -> Option<Slot> {
         Some(match command {
             WindowCommand::SetTitle(_) => Slot::SetTitle,
@@ -548,6 +572,14 @@ impl WindowCapabilities {
             WindowCommand::Activate => Slot::Activate,
             WindowCommand::Close => Slot::Close,
             WindowCommand::SetMaterial(_) => Slot::SetMaterial,
+            WindowCommand::SetCursorGrab(CursorGrab::Confined) => Slot::ConfineCursor,
+            WindowCommand::SetCursorGrab(CursorGrab::Locked) => Slot::LockCursor,
+            WindowCommand::SetCursorGrab(CursorGrab::None) => return None,
+            WindowCommand::SetLevel(WindowLevel::AlwaysOnTop) => Slot::KeepOnTop,
+            WindowCommand::SetLevel(WindowLevel::AlwaysOnBottom) => Slot::KeepOnBottom,
+            WindowCommand::SetLevel(WindowLevel::Normal) => return None,
+            WindowCommand::SetResizeIncrements(_) => Slot::SetResizeIncrements,
+            WindowCommand::SetAspectRatio(_) => Slot::SetAspectRatio,
         })
     }
 
@@ -618,6 +650,23 @@ pub struct CapabilityParts {
     /// [`WindowCommand::SetMaterial`]: the window system draws every
     /// [`WindowMaterial`](crate::WindowMaterial) behind the window.
     pub material: WindowCapability,
+    /// [`CursorGrab::Confined`] through [`WindowCommand::SetCursorGrab`]: the
+    /// pointer cannot leave the window's content area.
+    pub confines_cursor: WindowCapability,
+    /// [`CursorGrab::Locked`] through [`WindowCommand::SetCursorGrab`]: the
+    /// pointer stays in place, hidden, and its motion arrives as
+    /// [`PointerEvent::RawMotion`](crate::PointerEvent::RawMotion).
+    pub locks_cursor: WindowCapability,
+    /// [`WindowLevel::AlwaysOnTop`] through [`WindowCommand::SetLevel`].
+    pub keeps_on_top: WindowCapability,
+    /// [`WindowLevel::AlwaysOnBottom`] through [`WindowCommand::SetLevel`].
+    pub keeps_on_bottom: WindowCapability,
+    /// [`WindowCommand::SetResizeIncrements`]: the user's resize goes in
+    /// steps. `Emulated` where the host adjusts the size the drag asks for.
+    pub sets_resize_increments: WindowCapability,
+    /// [`WindowCommand::SetAspectRatio`]: the user's resize keeps a
+    /// proportion. `Emulated` as the resize steps are.
+    pub sets_aspect_ratio: WindowCapability,
     /// [`FrameRequest::presented`](crate::FrameRequest::presented): the window
     /// reports when the frames presented into its surface reached the screen,
     /// on the event timeline.
@@ -639,6 +688,10 @@ pub struct CapabilityParts {
     /// [`PlatformWindow::set_frame_rate_hint`](crate::PlatformWindow::set_frame_rate_hint):
     /// the window system takes a refresh-rate request for the window.
     pub frame_rate_hint: Availability,
+    /// [`Cursor::Image`](crate::Cursor::Image) through
+    /// [`PlatformWindow::set_cursor`](crate::PlatformWindow::set_cursor): the
+    /// window shows an application's own cursor image.
+    pub cursor_image: Availability,
 }
 }
 

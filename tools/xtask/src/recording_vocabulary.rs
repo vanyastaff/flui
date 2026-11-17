@@ -151,6 +151,11 @@ const RECORDED: &[Recorded] = &[
         "crates/flui-platform/src/pointer/pan_zoom.rs",
         "PanZoomPhase",
     ),
+    repo(
+        "MotionAcceleration",
+        "crates/flui-platform/src/pointer/raw_motion.rs",
+        "MotionAcceleration",
+    ),
     repo("Key", "crates/flui-platform/src/keyboard/mod.rs", "Key"),
     repo(
         "KeyState",

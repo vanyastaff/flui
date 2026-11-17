@@ -16,7 +16,7 @@ use flui_native::{
 };
 use flui_platform::data_transfer::DragTransport;
 use flui_platform::{
-    CursorError, CursorIcon, DisplaySnapshot, PlatformWindow,
+    Cursor, CursorError, DisplaySnapshot, PlatformWindow,
     AppDataDir, LaunchKey, SystemPreferences,
     AdmittedCommand, ApplyError, WindowCapabilities, WindowGeometry, WindowId, WindowIdMint,
     WindowHandler, WindowOptions, WindowState,
@@ -142,7 +142,7 @@ impl PlatformWindow for OutsideWindow {
         Ok(())
     }
 
-    fn set_cursor(&self, _: CursorIcon) -> Result<(), CursorError> {
+    fn set_cursor(&self, _: &Cursor) -> Result<(), CursorError> {
         Err(flui_platform::Unsupported::new(flui_platform::UnsupportedReason::NotOnThisPlatform).into())
     }
 

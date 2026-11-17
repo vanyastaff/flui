@@ -9,7 +9,7 @@ use std::sync::Arc;
 use flui_native::{HeadlessHostWindow, HeadlessPlatform, HostWindow, Platform};
 use flui_platform::input_capabilities::InputCapabilities;
 use flui_platform::{
-    AdmittedCommand, ApplyError, CommandRefusal, CursorError, CursorIcon, PlatformHaptics,
+    AdmittedCommand, ApplyError, CommandRefusal, Cursor, CursorError, PlatformHaptics,
     PlatformSystemChrome, PlatformTextInput, PlatformWindow, WindowCommand, WindowFrame, WindowId,
     WindowMode, WindowState,
 };
@@ -207,7 +207,7 @@ impl PlatformWindow for Faulty {
         }
     }
 
-    fn set_cursor(&self, cursor: CursorIcon) -> Result<(), CursorError> {
+    fn set_cursor(&self, cursor: &Cursor) -> Result<(), CursorError> {
         self.0.set_cursor(cursor)
     }
     fn text_input(&self) -> Option<Arc<dyn PlatformTextInput>> {

@@ -35,8 +35,9 @@ use flui_foundation::geometry::{Point, Size, WindowMetrics};
 
 use crate::window_capabilities::Publication;
 use crate::{
-    CapabilityParts, DisplayId, InvalidGeometry, Unsupported, WindowCapabilities, WindowCapability,
-    WindowExecutionState, WindowExtent, WindowFrame, WindowGeometry, WindowInsets,
+    CapabilityParts, CursorGrab, DisplayId, InvalidGeometry, Unsupported, WindowCapabilities,
+    WindowCapability, WindowExecutionState, WindowExtent, WindowFrame, WindowGeometry,
+    WindowInsets,
 };
 
 /// The monotone version of a [`WindowState`]. Never wraps.
@@ -97,6 +98,86 @@ pub enum WindowMode {
     /// Borderless on the whole display. Exclusive video-mode changes are not
     /// part of this contract.
     Fullscreen,
+}
+
+/// Where a window stands among the other windows of its desktop
+/// ([`WindowCommand::SetLevel`], [`WindowState::level`]).
+///
+/// A level is a fact of the snapshot, not only a request: the user can change
+/// it from the window manager's menu (KDE's and GNOME's "Always on Top"), and
+/// another program can change a Win32 window's.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a window is kept above the others, below them, or neither; a level one OS alone has is that OS's extension"
+)]
+pub enum WindowLevel {
+    /// Stacked with the other windows as the user activates them (the default).
+    #[default]
+    Normal,
+    /// Kept above every normal window, active or not: a picture-in-picture
+    /// player, a palette that stays in view.
+    AlwaysOnTop,
+    /// Kept below every normal window: a desktop widget.
+    AlwaysOnBottom,
+}
+
+/// The proportion a window's content keeps while the user resizes it
+/// ([`WindowCommand::SetAspectRatio`]): width to height, held in lowest
+/// terms, so 32:18 and 16:9 are one ratio.
+///
+/// ```
+/// use std::num::NonZeroU32;
+///
+/// use flui_platform::AspectRatio;
+///
+/// let wide = |w, h| AspectRatio::new(NonZeroU32::new(w).unwrap(), NonZeroU32::new(h).unwrap());
+/// assert_eq!(wide(32, 18), wide(16, 9));
+/// assert_eq!((wide(32, 18).width().get(), wide(32, 18).height().get()), (16, 9));
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct AspectRatio {
+    width: std::num::NonZeroU32,
+    height: std::num::NonZeroU32,
+}
+
+impl AspectRatio {
+    /// The ratio `width:height`, reduced to lowest terms.
+    #[must_use]
+    pub const fn new(width: std::num::NonZeroU32, height: std::num::NonZeroU32) -> Self {
+        let (mut a, mut b) = (width.get(), height.get());
+        while b != 0 {
+            (a, b) = (b, a % b);
+        }
+        // `a` is the greatest common divisor of two non-zero numbers: at
+        // least 1, and it divides both, so each quotient is at least 1.
+        match (
+            std::num::NonZeroU32::new(width.get() / a),
+            std::num::NonZeroU32::new(height.get() / a),
+        ) {
+            (Some(width), Some(height)) => Self { width, height },
+            _ => panic!("BUG: a quotient by a common divisor of non-zero numbers is non-zero"),
+        }
+    }
+
+    /// The width term, in lowest terms.
+    #[must_use]
+    pub const fn width(self) -> std::num::NonZeroU32 {
+        self.width
+    }
+
+    /// The height term, in lowest terms.
+    #[must_use]
+    pub const fn height(self) -> std::num::NonZeroU32 {
+        self.height
+    }
+
+    /// Width over height, the proportion a window system that takes a
+    /// floating-point ratio is given.
+    #[must_use]
+    pub fn get(self) -> f64 {
+        f64::from(self.width.get()) / f64::from(self.height.get())
+    }
 }
 
 /// The inner-size limits of a window, in logical pixels.
@@ -182,12 +263,30 @@ pub enum WindowInteraction {
     Unknown,
     /// The host can tell, and no placement by the user is under way.
     None,
-    /// The user is placing the window through the window system. Win32
-    /// states it inside its size-move loop (a drag or resize by the frame, or
-    /// the system menu's move and size) and while the default procedure
-    /// carries out `SC_MAXIMIZE`, `SC_MINIMIZE` or `SC_RESTORE` the user
-    /// worked; the headless host states what its test simulates.
+    /// The user is placing the window through the window system: moving it,
+    /// or changing its mode from the frame. Win32 states it inside its
+    /// size-move loop while the user drags the window (by the frame or the
+    /// system menu's move) and while the default procedure carries out
+    /// `SC_MAXIMIZE`, `SC_MINIMIZE` or `SC_RESTORE` the user worked; the
+    /// headless host states what its test simulates.
     UserPlacing,
+    /// The user is resizing the window by its frame: a live resize, from the
+    /// first size the drag asks for to the release. A size change the user is
+    /// making, like [`Self::UserPlacing`], and also what an application that
+    /// throttles costly work during a resize waits out (AppKit's
+    /// `windowWillStartLiveResize`, Win32's `WM_SIZING` inside the size-move
+    /// loop, a Wayland toplevel's `resizing` state).
+    UserResizing,
+}
+
+impl WindowInteraction {
+    /// Whether the user is changing the window through the window system:
+    /// placing it ([`Self::UserPlacing`]) or resizing it
+    /// ([`Self::UserResizing`]). [`Self::Unknown`] counts as not the user.
+    #[must_use]
+    pub const fn is_user(self) -> bool {
+        matches!(self, Self::UserPlacing | Self::UserResizing)
+    }
 }
 
 /// Where a window stands in its desktop's input: whether it is the active
@@ -319,10 +418,19 @@ pub struct WindowState {
     pub execution: WindowExecutionState,
     /// Whether the pointer is over the window's content.
     pub hovered: bool,
-    /// Whether the user is placing the window through the window system
-    /// right now ([`WindowInteraction`]); [`WindowInteraction::Unknown`] where
-    /// the host cannot tell.
+    /// Whether the user is placing or resizing the window through the window
+    /// system right now ([`WindowInteraction`]); [`WindowInteraction::Unknown`]
+    /// where the host cannot tell.
     pub interaction: WindowInteraction,
+    /// Whether the window holds the pointer ([`WindowCommand::SetCursorGrab`]).
+    /// Always [`CursorGrab::None`] for a window without the keyboard focus,
+    /// which [`successor`](Self::successor) holds: a window lets its grab go
+    /// when it loses the focus, and the snapshot shows that it did.
+    pub cursor_grab: CursorGrab,
+    /// Where the window stands among the other windows of its desktop
+    /// ([`WindowCommand::SetLevel`]). [`WindowLevel::Normal`] where the window
+    /// system has no levels.
+    pub level: WindowLevel,
     /// Which commands the window honours. A change in what it honours (a
     /// compositor revising what it allows) is a state change like any other.
     pub capabilities: WindowCapabilities,
@@ -332,7 +440,7 @@ impl WindowState {
     /// A visible, unoccluded, inactive, unhovered, running, resizable,
     /// system-framed window in normal mode at revision zero, with no title, limits, display,
     /// metrics or insets, a light theme, an interaction the host cannot
-    /// tell, and capabilities that honour nothing.
+    /// tell, no grab, the normal level, and capabilities that honour nothing.
     #[must_use]
     pub fn new(outer: WindowGeometry, content_size: WindowExtent) -> Self {
         Self {
@@ -355,6 +463,8 @@ impl WindowState {
             execution: WindowExecutionState::Running,
             hovered: false,
             interaction: WindowInteraction::Unknown,
+            cursor_grab: CursorGrab::None,
+            level: WindowLevel::Normal,
             capabilities: WindowCapabilities::NONE,
         }
     }
@@ -473,6 +583,20 @@ impl WindowState {
         self
     }
 
+    /// Set whether the window holds the pointer.
+    #[must_use]
+    pub fn with_cursor_grab(mut self, cursor_grab: CursorGrab) -> Self {
+        self.cursor_grab = cursor_grab;
+        self
+    }
+
+    /// Set where the window stands among the other windows.
+    #[must_use]
+    pub fn with_level(mut self, level: WindowLevel) -> Self {
+        self.level = level;
+        self
+    }
+
     /// Set which commands the window honours.
     #[must_use]
     pub fn with_capabilities(mut self, capabilities: WindowCapabilities) -> Self {
@@ -500,7 +624,9 @@ impl WindowState {
     /// said: AppKit calls a miniaturized window occluded, which is no
     /// covering, and a hidden window has nothing to cover. Nor is a sample of
     /// a hidden window active or focused ([`WindowFocus::Inactive`]): the user
-    /// cannot work in a window that is not shown.
+    /// cannot work in a window that is not shown. And a sample of a window
+    /// without the keyboard focus holds no pointer ([`CursorGrab::None`]): a
+    /// grab ends with the focus.
     ///
     /// The capabilities' publication and their own
     /// [`revision`](WindowCapabilities::revision) are this function's to
@@ -543,6 +669,9 @@ impl WindowState {
         sample.occluded &= sample.visible && sample.mode != WindowMode::Minimized;
         if !sample.visible {
             sample.focus = WindowFocus::Inactive;
+        }
+        if !sample.focus.is_focused() {
+            sample.cursor_grab = CursorGrab::None;
         }
         if sample == *self {
             return Ok(sample);
@@ -599,6 +728,30 @@ pub enum WindowCommand {
     /// material is not a fact of the snapshot: the command is the request,
     /// and a refusal of the window system is [`ApplyError::Platform`].
     SetMaterial(crate::WindowMaterial),
+    /// Hold the pointer inside the window, hold it in place, or let it go
+    /// ([`CursorGrab`]). Only a window with the keyboard focus takes a grab: a
+    /// window without it, or one that loses it, holds none, which the next
+    /// snapshot's [`cursor_grab`](WindowState::cursor_grab) shows. Letting go
+    /// ([`CursorGrab::None`]) is admitted on every window, as the normal mode
+    /// is: a window that cannot grab holds nothing to let go of.
+    SetCursorGrab(CursorGrab),
+    /// Keep the window above or below the other windows, or neither
+    /// ([`WindowLevel`]); the next snapshot's [`level`](WindowState::level)
+    /// shows what the window system did. [`WindowLevel::Normal`] is admitted
+    /// on every window.
+    SetLevel(WindowLevel),
+    /// Resize the content only in steps of this extent while the user drags
+    /// the frame (a terminal's character cell), counted from the window's
+    /// minimum size where it has one; `None` lifts the steps. The window
+    /// system holds it during the user's resize; a [`SetSize`](Self::SetSize),
+    /// a maximize or a fullscreen is not stepped. Not a fact of the snapshot:
+    /// the command is the request, as with [`SetMaterial`](Self::SetMaterial).
+    SetResizeIncrements(Option<WindowExtent>),
+    /// Keep the content at this proportion while the user drags the frame
+    /// (a video); `None` lifts it. Held like
+    /// [`SetResizeIncrements`](Self::SetResizeIncrements), and not a fact of
+    /// the snapshot either.
+    SetAspectRatio(Option<AspectRatio>),
 }
 
 impl WindowCommand {
@@ -612,13 +765,14 @@ impl WindowCommand {
     ///
     /// # Errors
     /// [`AdmissionError::InvalidGeometry`] for a position or size that is
-    /// not finite, a size or a limit that encloses no area, or constraints
+    /// not finite, a size, a limit or a resize step that encloses no area, or constraints
     /// whose minimum exceeds their maximum in either dimension.
     pub fn validate(&self) -> Result<(), AdmissionError> {
         match self {
             Self::SetPosition(at) => crate::window_geometry::finite_position(*at).map(drop),
             Self::SetSize(size) => asked_size(*size).map(drop),
             Self::SetConstraints(constraints) => constraints.asked().map(drop),
+            Self::SetResizeIncrements(step) => step.map_or(Ok(()), |step| step.area().map(drop)),
             Self::SetTitle(_)
             | Self::SetResizable(_)
             | Self::SetFrame(_)
@@ -627,7 +781,10 @@ impl WindowCommand {
             | Self::Hide
             | Self::Activate
             | Self::Close
-            | Self::SetMaterial(_) => Ok(()),
+            | Self::SetMaterial(_)
+            | Self::SetCursorGrab(_)
+            | Self::SetLevel(_)
+            | Self::SetAspectRatio(_) => Ok(()),
         }
         .map_err(AdmissionError::InvalidGeometry)
     }
@@ -970,6 +1127,10 @@ pub struct WindowStateParts {
     pub hovered: bool,
     /// [`WindowState::interaction`].
     pub interaction: WindowInteraction,
+    /// [`WindowState::cursor_grab`].
+    pub cursor_grab: CursorGrab,
+    /// [`WindowState::level`].
+    pub level: WindowLevel,
     /// [`WindowState::capabilities`], taken apart.
     pub capabilities: CapabilityParts,
 }
@@ -998,6 +1159,8 @@ impl WindowState {
             execution,
             hovered,
             interaction,
+            cursor_grab,
+            level,
             capabilities,
         } = self;
         WindowStateParts {
@@ -1019,6 +1182,8 @@ impl WindowState {
             execution,
             hovered,
             interaction,
+            cursor_grab,
+            level,
             capabilities: capabilities.into_parts(),
         }
     }
@@ -1049,6 +1214,8 @@ impl WindowStateParts {
             execution,
             hovered,
             interaction,
+            cursor_grab,
+            level,
             capabilities,
         } = self;
         WindowState {
@@ -1071,6 +1238,8 @@ impl WindowStateParts {
             execution,
             hovered,
             interaction,
+            cursor_grab,
+            level,
             capabilities: capabilities.into_capabilities(),
         }
     }

@@ -2060,7 +2060,10 @@ impl GestureBinding {
                     panic.resume();
                 }
             }
-            PointerEvent::ScrollInertiaCancel(_) => {
+            // A locked pointer's motion goes where its contact went, the
+            // target its press found, or where the locked pointer rests: the
+            // view that holds the pointer turns with it either way.
+            PointerEvent::ScrollInertiaCancel(_) | PointerEvent::RawMotion(_) => {
                 let panic = if self.contacts.contains(pointer_id) {
                     self.dispatch_on_cached_route(pointer_id, event)
                 } else {

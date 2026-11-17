@@ -9,9 +9,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use flui_foundation::geometry::WindowMetrics;
 use flui_platform::{
-    InvalidGeometry, PublicationMint, WindowCapabilities, WindowExecutionState, WindowExtent,
-    WindowFocus, WindowGeometry, WindowInsets, WindowInteraction, WindowMode, WindowRevision,
-    WindowState,
+    CursorGrab, InvalidGeometry, PublicationMint, WindowCapabilities, WindowExecutionState,
+    WindowExtent, WindowFocus, WindowGeometry, WindowInsets, WindowInteraction, WindowLevel,
+    WindowMode, WindowRevision, WindowState,
 };
 use parking_lot::Mutex;
 
@@ -48,6 +48,13 @@ pub(crate) struct ReportedFacts {
     /// the host knows it; [`WindowInteraction::Unknown`] where it cannot tell
     /// (ADR-0343).
     pub(crate) interaction: WindowInteraction,
+    /// Whether the window holds the pointer, as the host holds it: the
+    /// snapshot keeps a grab only for a focused window
+    /// (`WindowState::successor`).
+    pub(crate) cursor_grab: CursorGrab,
+    /// Where the window stands among the others, as the window system says;
+    /// [`WindowLevel::Normal`] where it has no levels.
+    pub(crate) level: WindowLevel,
 }
 
 impl ReportedFacts {
@@ -63,6 +70,8 @@ impl ReportedFacts {
             .with_focus(self.focus)
             .with_capabilities(self.capabilities)
             .with_interaction(self.interaction)
+            .with_cursor_grab(self.cursor_grab)
+            .with_level(self.level)
     }
 }
 

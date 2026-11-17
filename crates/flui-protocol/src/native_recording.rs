@@ -1384,6 +1384,61 @@ pub struct Capabilities {
     pub closes: Capability,
     /// Setting its material.
     pub material: Capability,
+    /// Holding the pointer inside it; a recording made before the field
+    /// existed reads as the platform's absence, as the fields below do.
+    #[cfg_attr(
+        feature = "serde",
+        serde(
+            default = "Capability::platform_absence",
+            skip_serializing_if = "Capability::is_platform_absence"
+        )
+    )]
+    pub confines_cursor: Capability,
+    /// Holding the pointer in place.
+    #[cfg_attr(
+        feature = "serde",
+        serde(
+            default = "Capability::platform_absence",
+            skip_serializing_if = "Capability::is_platform_absence"
+        )
+    )]
+    pub locks_cursor: Capability,
+    /// Keeping it above the other windows.
+    #[cfg_attr(
+        feature = "serde",
+        serde(
+            default = "Capability::platform_absence",
+            skip_serializing_if = "Capability::is_platform_absence"
+        )
+    )]
+    pub keeps_on_top: Capability,
+    /// Keeping it below the other windows.
+    #[cfg_attr(
+        feature = "serde",
+        serde(
+            default = "Capability::platform_absence",
+            skip_serializing_if = "Capability::is_platform_absence"
+        )
+    )]
+    pub keeps_on_bottom: Capability,
+    /// Resizing it in steps.
+    #[cfg_attr(
+        feature = "serde",
+        serde(
+            default = "Capability::platform_absence",
+            skip_serializing_if = "Capability::is_platform_absence"
+        )
+    )]
+    pub sets_resize_increments: Capability,
+    /// Keeping its proportion while resized.
+    #[cfg_attr(
+        feature = "serde",
+        serde(
+            default = "Capability::platform_absence",
+            skip_serializing_if = "Capability::is_platform_absence"
+        )
+    )]
+    pub sets_aspect_ratio: Capability,
     /// Reporting that its frames reached the screen.
     pub reports_presentation: Capability,
     /// Reporting where the soft keyboard covers it; a recording made before
@@ -1414,6 +1469,31 @@ pub struct Capabilities {
     pub places_at_open: Availability,
     /// Taking a frame rate hint.
     pub frame_rate_hint: Availability,
+    /// Showing a cursor image of the application's; a recording made before
+    /// the field existed reads as unavailable.
+    #[cfg_attr(
+        feature = "serde",
+        serde(
+            default = "Availability::unavailable",
+            skip_serializing_if = "Availability::is_unavailable"
+        )
+    )]
+    pub cursor_image: Availability,
+}
+
+impl Availability {
+    /// What a recording that predates an availability field reads as.
+    #[must_use]
+    pub const fn unavailable() -> Self {
+        Self::Unavailable
+    }
+
+    /// Whether this is [`Unavailable`](Self::Unavailable), which a writer
+    /// leaves out of a field older recordings lack.
+    #[must_use]
+    pub const fn is_unavailable(&self) -> bool {
+        matches!(self, Self::Unavailable)
+    }
 }
 
 /// A window rectangle in logical pixels.
@@ -1584,8 +1664,57 @@ pub struct WindowState {
         serde(default, skip_serializing_if = "Option::is_none")
     )]
     pub user_placing: Option<bool>,
+    /// Whether the placing the user does is a resize by the frame; absent
+    /// while it is not, and in recordings older than the fact.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "std::ops::Not::not")
+    )]
+    pub user_resizing: bool,
+    /// Whether it holds the pointer; absent while it holds none, and in
+    /// recordings older than the fact.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub cursor_grab: Option<CursorGrab>,
+    /// Where it stands among the other windows; absent at the normal level,
+    /// and in recordings older than the fact.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub level: Option<WindowLevel>,
     /// Which commands it honours.
     pub capabilities: Capabilities,
+}
+
+vocabulary! {
+    /// How a window holds the pointer, when it holds it.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
+    #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema), schemars(rename = "NativeCursorGrab"))]
+    pub enum CursorGrab {
+        /// Inside its content area.
+        Confined => "confined",
+        /// In place, its motion reported raw.
+        Locked => "locked",
+    }
+}
+
+vocabulary! {
+    /// Where a window stands among the others, when not at the normal level.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
+    #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema), schemars(rename = "NativeWindowLevel"))]
+    pub enum WindowLevel {
+        /// Above every normal window.
+        AlwaysOnTop => "always_on_top",
+        /// Below every normal window.
+        AlwaysOnBottom => "always_on_bottom",
+    }
 }
 
 /// Whether all four insets are zero, which a writer leaves out.

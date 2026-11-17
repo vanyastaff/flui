@@ -634,7 +634,7 @@ pub(crate) fn a_tap_on_a_link_reaches_on_link_at_the_current_text_scale() {
 /// Red-check: drop the cursor from the paragraph's hit (every position shows
 /// the arrow).
 pub(crate) fn a_link_shows_a_pointing_hand_and_a_span_its_own_cursor() {
-    use flui_platform::CursorIcon;
+    use flui_platform::{Cursor, CursorIcon};
 
     let opened = Rc::new(RefCell::new(Vec::new()));
     let mut laid = lay_out(linked_paragraph(&opened), loose(10_000.0));
@@ -648,7 +648,11 @@ pub(crate) fn a_link_shows_a_pointing_hand_and_a_span_its_own_cursor() {
     ] {
         let (x, y) = glyph_center(&laid, paragraph, range.clone());
         laid.dispatch_pointer_hover(x, y);
-        assert_eq!(laid.cursor(), expected, "hovering bytes {range:?}");
+        assert_eq!(
+            laid.cursor(),
+            Cursor::Icon(expected),
+            "hovering bytes {range:?}"
+        );
     }
     assert!(opened.borrow().is_empty(), "hovering opens nothing");
 }

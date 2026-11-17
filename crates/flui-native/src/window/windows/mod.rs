@@ -8,6 +8,9 @@
 //!   `WM_NCHITTEST` answers from its chrome regions (ADR-0286);
 //! - [`material`]: the pure half too: from which build the window draws a
 //!   material behind it;
+//! - [`sizing`]: the pure half too: the steps and the proportion a window
+//!   keeps while the user drags its frame, which Win32 has neither of;
+//! - `cursor`: the cursor the window shows and how it holds the pointer;
 //! - `window`: [`WindowsWindow`], the handle a host hands out, how it opens
 //!   and what its commands ask of the OS;
 //! - `set`: [`WindowSet`], the windows of a platform, which the loop holds as
@@ -30,12 +33,15 @@
 #[cfg(windows)]
 pub(crate) mod backdrop;
 pub(crate) mod chrome;
+#[cfg(windows)]
+mod cursor;
 pub(crate) mod frame_timing;
 pub(crate) mod limits;
 #[cfg(windows)]
 pub(crate) mod proc;
 #[cfg(windows)]
 mod set;
+pub(crate) mod sizing;
 #[cfg(windows)]
 mod window;
 

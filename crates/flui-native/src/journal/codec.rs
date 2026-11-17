@@ -31,14 +31,14 @@ use flui_platform::pointer::{PenTool, PointerButton, PointerButtons, PointerEven
 use flui_platform::text_store::TextStore;
 use flui_platform::{
     AppTitleBar, Availability, Brightness, CapabilityAbsence, CapabilityParts, CloseDecision,
-    ColorGamut, ControlsOffset, DisplayColor, DisplayId, DisplayInfo, DisplayParts, GestureParts,
-    Headroom, HourCycle, ImeEvent, InsetCurve, InsetMotion, InvalidPreference, KeyboardInset,
-    Locale, MeasurementSystem, MemoryPressureLevel, MotionPreference, NativeMouseGeometry,
-    NativeTouchGeometry, NumberingSystem, PlatformInput, PreferenceParts, RefreshPeriod,
-    RegionOverride, RegionalParts, SessionEndPhase, SizeConstraints, SystemControls, SystemNotice,
-    SystemPreferences, TextWeightPreference, Weekday, WheelParts, WheelStep, WindowCapability,
-    WindowExecutionState, WindowExtent, WindowFrame, WindowGeometry, WindowInsets,
-    WindowInteraction, WindowMode, WindowState, WindowStateParts,
+    ColorGamut, ControlsOffset, CursorGrab, DisplayColor, DisplayId, DisplayInfo, DisplayParts,
+    GestureParts, Headroom, HourCycle, ImeEvent, InsetCurve, InsetMotion, InvalidPreference,
+    KeyboardInset, Locale, MeasurementSystem, MemoryPressureLevel, MotionPreference,
+    NativeMouseGeometry, NativeTouchGeometry, NumberingSystem, PlatformInput, PreferenceParts,
+    RefreshPeriod, RegionOverride, RegionalParts, SessionEndPhase, SizeConstraints, SystemControls,
+    SystemNotice, SystemPreferences, TextWeightPreference, Weekday, WheelParts, WheelStep,
+    WindowCapability, WindowExecutionState, WindowExtent, WindowFrame, WindowGeometry,
+    WindowInsets, WindowInteraction, WindowLevel, WindowMode, WindowState, WindowStateParts,
 };
 use flui_protocol::native_recording as wire;
 use serde::Serialize;
@@ -2534,6 +2534,12 @@ fn capabilities_to_wire(capabilities: CapabilityParts) -> wire::Capabilities {
         activates,
         closes,
         material,
+        confines_cursor,
+        locks_cursor,
+        keeps_on_top,
+        keeps_on_bottom,
+        sets_resize_increments,
+        sets_aspect_ratio,
         reports_presentation,
         reports_keyboard_inset,
         reports_system_gestures,
@@ -2541,6 +2547,7 @@ fn capabilities_to_wire(capabilities: CapabilityParts) -> wire::Capabilities {
         observes_minimized,
         places_at_open,
         frame_rate_hint,
+        cursor_image,
     } = capabilities;
     wire::Capabilities {
         sets_title: capability_to_wire(sets_title),
@@ -2558,6 +2565,12 @@ fn capabilities_to_wire(capabilities: CapabilityParts) -> wire::Capabilities {
         activates: capability_to_wire(activates),
         closes: capability_to_wire(closes),
         material: capability_to_wire(material),
+        confines_cursor: capability_to_wire(confines_cursor),
+        locks_cursor: capability_to_wire(locks_cursor),
+        keeps_on_top: capability_to_wire(keeps_on_top),
+        keeps_on_bottom: capability_to_wire(keeps_on_bottom),
+        sets_resize_increments: capability_to_wire(sets_resize_increments),
+        sets_aspect_ratio: capability_to_wire(sets_aspect_ratio),
         reports_presentation: capability_to_wire(reports_presentation),
         reports_keyboard_inset: capability_to_wire(reports_keyboard_inset),
         reports_system_gestures: capability_to_wire(reports_system_gestures),
@@ -2565,6 +2578,7 @@ fn capabilities_to_wire(capabilities: CapabilityParts) -> wire::Capabilities {
         observes_minimized: availability_to_wire(observes_minimized),
         places_at_open: availability_to_wire(places_at_open),
         frame_rate_hint: availability_to_wire(frame_rate_hint),
+        cursor_image: availability_to_wire(cursor_image),
     }
 }
 
@@ -2585,6 +2599,12 @@ fn capabilities_from_wire(capabilities: wire::Capabilities) -> DtoResult<Capabil
         activates,
         closes,
         material,
+        confines_cursor,
+        locks_cursor,
+        keeps_on_top,
+        keeps_on_bottom,
+        sets_resize_increments,
+        sets_aspect_ratio,
         reports_presentation,
         reports_keyboard_inset,
         reports_system_gestures,
@@ -2592,6 +2612,7 @@ fn capabilities_from_wire(capabilities: wire::Capabilities) -> DtoResult<Capabil
         observes_minimized,
         places_at_open,
         frame_rate_hint,
+        cursor_image,
     } = capabilities;
     Ok(CapabilityParts {
         sets_title: capability_from_wire(sets_title)?,
@@ -2609,6 +2630,12 @@ fn capabilities_from_wire(capabilities: wire::Capabilities) -> DtoResult<Capabil
         activates: capability_from_wire(activates)?,
         closes: capability_from_wire(closes)?,
         material: capability_from_wire(material)?,
+        confines_cursor: capability_from_wire(confines_cursor)?,
+        locks_cursor: capability_from_wire(locks_cursor)?,
+        keeps_on_top: capability_from_wire(keeps_on_top)?,
+        keeps_on_bottom: capability_from_wire(keeps_on_bottom)?,
+        sets_resize_increments: capability_from_wire(sets_resize_increments)?,
+        sets_aspect_ratio: capability_from_wire(sets_aspect_ratio)?,
         reports_presentation: capability_from_wire(reports_presentation)?,
         reports_keyboard_inset: capability_from_wire(reports_keyboard_inset)?,
         reports_system_gestures: capability_from_wire(reports_system_gestures)?,
@@ -2616,6 +2643,7 @@ fn capabilities_from_wire(capabilities: wire::Capabilities) -> DtoResult<Capabil
         observes_minimized: availability_from_wire(observes_minimized)?,
         places_at_open: availability_from_wire(places_at_open)?,
         frame_rate_hint: availability_from_wire(frame_rate_hint)?,
+        cursor_image: availability_from_wire(cursor_image)?,
     })
 }
 
@@ -2679,6 +2707,8 @@ fn window_state_to_wire(state: &RecordedWindowState) -> DtoResult<wire::WindowSt
         execution,
         hovered,
         interaction,
+        cursor_grab,
+        level,
         capabilities,
     } = (*state.parts).clone();
     Ok(wire::WindowState {
@@ -2727,10 +2757,21 @@ fn window_state_to_wire(state: &RecordedWindowState) -> DtoResult<wire::WindowSt
         hovered,
         active: focus.is_active(),
         user_placing: match interaction {
-            WindowInteraction::UserPlacing => Some(true),
+            WindowInteraction::UserPlacing | WindowInteraction::UserResizing => Some(true),
             WindowInteraction::None => Some(false),
             WindowInteraction::Unknown => None,
             _ => return Err(DtoError::Unmirrored("WindowInteraction")),
+        },
+        user_resizing: interaction == WindowInteraction::UserResizing,
+        cursor_grab: match cursor_grab {
+            CursorGrab::None => None,
+            CursorGrab::Confined => Some(wire::CursorGrab::Confined),
+            CursorGrab::Locked => Some(wire::CursorGrab::Locked),
+        },
+        level: match level {
+            WindowLevel::Normal => None,
+            WindowLevel::AlwaysOnTop => Some(wire::WindowLevel::AlwaysOnTop),
+            WindowLevel::AlwaysOnBottom => Some(wire::WindowLevel::AlwaysOnBottom),
         },
         capabilities: capabilities_to_wire(capabilities),
     })
@@ -2825,6 +2866,9 @@ fn window_state_from_wire(wire: wire::WindowState) -> DtoResult<RecordedWindowSt
         hovered,
         active,
         user_placing,
+        user_resizing,
+        cursor_grab,
+        level,
         capabilities,
     } = wire;
     let metrics = metrics
@@ -2894,10 +2938,23 @@ fn window_state_from_wire(wire: wire::WindowState) -> DtoResult<RecordedWindowSt
             other => return Err(unread(other.name())),
         },
         hovered,
-        interaction: match user_placing {
-            Some(true) => WindowInteraction::UserPlacing,
-            Some(false) => WindowInteraction::None,
-            None => WindowInteraction::Unknown,
+        interaction: match (user_placing, user_resizing) {
+            (_, true) => WindowInteraction::UserResizing,
+            (Some(true), false) => WindowInteraction::UserPlacing,
+            (Some(false), false) => WindowInteraction::None,
+            (None, false) => WindowInteraction::Unknown,
+        },
+        cursor_grab: match cursor_grab {
+            None => CursorGrab::None,
+            Some(wire::CursorGrab::Confined) => CursorGrab::Confined,
+            Some(wire::CursorGrab::Locked) => CursorGrab::Locked,
+            Some(other) => return Err(unread(other.name())),
+        },
+        level: match level {
+            None => WindowLevel::Normal,
+            Some(wire::WindowLevel::AlwaysOnTop) => WindowLevel::AlwaysOnTop,
+            Some(wire::WindowLevel::AlwaysOnBottom) => WindowLevel::AlwaysOnBottom,
+            Some(other) => return Err(unread(other.name())),
         },
         capabilities: capabilities_from_wire(capabilities)?,
     };

@@ -3,7 +3,6 @@
 
 use std::{cell::RefCell, rc::Rc, sync::Arc};
 
-use cursor_icon::CursorIcon;
 use flui_foundation::geometry::{Bounds, DevicePixelRatio, Point, Size};
 use parking_lot::Mutex;
 use raw_window_handle::{
@@ -20,13 +19,11 @@ use windows::{
             WindowsAndMessaging::{
                 CW_USEDEFAULT, CreateWindowExW, DestroyWindow, GCLP_HBRBACKGROUND, GWL_EXSTYLE,
                 GWL_STYLE, GWLP_USERDATA, GetClientRect, GetWindowLongPtrW, GetWindowRect,
-                IDC_APPSTARTING, IDC_ARROW, IDC_CROSS, IDC_HAND, IDC_IBEAM, IDC_NO, IDC_SIZEALL,
-                IDC_SIZENESW, IDC_SIZENS, IDC_SIZENWSE, IDC_SIZEWE, IDC_WAIT, IsIconic,
-                IsWindowVisible, IsZoomed, LoadCursorW, SW_HIDE, SW_MAXIMIZE, SW_MINIMIZE,
-                SW_RESTORE, SW_SHOW, SW_SHOWMAXIMIZED, SW_SHOWMINIMIZED, SWP_FRAMECHANGED,
-                SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SetClassLongPtrW, SetCursor,
-                SetForegroundWindow, SetWindowLongPtrW, SetWindowPlacement, SetWindowPos,
-                SetWindowTextW, ShowWindow, WS_EX_APPWINDOW, WS_MAXIMIZE,
+                IsIconic, IsWindowVisible, IsZoomed, SW_HIDE, SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE,
+                SW_SHOW, SW_SHOWMAXIMIZED, SW_SHOWMINIMIZED, SWP_FRAMECHANGED, SWP_NOACTIVATE,
+                SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SetClassLongPtrW, SetForegroundWindow,
+                SetWindowLongPtrW, SetWindowPlacement, SetWindowPos, SetWindowTextW, ShowWindow,
+                WS_EX_APPWINDOW, WS_MAXIMIZE,
             },
         },
     },
@@ -34,9 +31,10 @@ use windows::{
 };
 
 use flui_platform::{
-    AdmittedCommand, ApplyError, CapabilityAbsence, CursorError, PlatformFailure, PlatformWindow,
-    SizeConstraints, Unsupported, UnsupportedReason, WindowCapabilities, WindowCommand,
-    WindowFrame, WindowId, WindowMaterial, WindowMode, WindowOptions, WindowReveal, WindowState,
+    AdmittedCommand, ApplyError, CapabilityAbsence, Cursor, CursorError, PlatformFailure,
+    PlatformWindow, SizeConstraints, Unsupported, UnsupportedReason, WindowCapabilities,
+    WindowCommand, WindowFrame, WindowId, WindowMaterial, WindowMode, WindowOptions, WindowReveal,
+    WindowState,
 };
 
 use flui_platform::os_options::WindowsCornerPreference;
@@ -198,6 +196,17 @@ pub(crate) const fn window_capabilities(
     capabilities.observes_minimized = Availability::Native;
     capabilities.places_at_open = Availability::Native;
     capabilities.material = Native;
+    // `ClipCursor` to the client area, or to one pixel of it with the mouse's
+    // raw input (`cursor`).
+    capabilities.confines_cursor = Native;
+    capabilities.locks_cursor = Native;
+    capabilities.keeps_on_top = Native;
+    // No style keeps a window under the others: `WM_WINDOWPOSCHANGING` does.
+    capabilities.keeps_on_bottom = Emulated;
+    // Win32 has neither: `WM_SIZING` holds the dragged rectangle (`sizing`).
+    capabilities.sets_resize_increments = Emulated;
+    capabilities.sets_aspect_ratio = Emulated;
+    capabilities.cursor_image = Availability::Native;
     // From the frame statistics of the swap chain the renderer presents
     // through, which it hands the surface target before each present.
     capabilities.reports_presentation = match presentation {
@@ -487,6 +496,8 @@ impl WindowsWindow {
                     capabilities,
                     frame: options.frame,
                     interaction: flui_platform::WindowInteraction::None,
+                    cursor_grab: flui_platform::CursorGrab::None,
+                    kept_below: false,
                 },
             )));
 
@@ -569,7 +580,12 @@ impl WindowsWindow {
                 dpi_streak: std::cell::Cell::default(),
                 mode: std::cell::Cell::new(NativeMode::Normal),
                 last_size: std::cell::Cell::new(initial_size),
-                cursor: std::cell::Cell::new(CursorIcon::default()),
+                cursor: std::cell::RefCell::new(super::cursor::NativeCursor::ARROW),
+                cursor_grab: std::cell::Cell::new(flui_platform::CursorGrab::None),
+                kept_below: std::cell::Cell::new(false),
+                resize_increments: std::cell::Cell::new(None),
+                aspect_ratio: std::cell::Cell::new(None),
+                live_resize: std::cell::Cell::new(false),
                 restore_style: std::cell::Cell::new(0),
                 constraints: std::cell::Cell::new(constraints),
                 scale_streak: std::cell::Cell::default(),
@@ -1309,46 +1325,6 @@ impl WindowsWindow {
             self.show_native(SW_RESTORE);
         }
     }
-
-    pub(crate) fn apply_native_cursor(cursor: CursorIcon) -> Result<(), CursorError> {
-        let resource = match cursor {
-            CursorIcon::Pointer | CursorIcon::Copy | CursorIcon::Grab | CursorIcon::Grabbing => {
-                IDC_HAND
-            }
-            CursorIcon::Progress => IDC_APPSTARTING,
-            CursorIcon::Wait => IDC_WAIT,
-            CursorIcon::Cell | CursorIcon::Crosshair => IDC_CROSS,
-            CursorIcon::Text | CursorIcon::VerticalText => IDC_IBEAM,
-            CursorIcon::Move | CursorIcon::AllScroll => IDC_SIZEALL,
-            CursorIcon::NoDrop | CursorIcon::NotAllowed => IDC_NO,
-            CursorIcon::EResize
-            | CursorIcon::WResize
-            | CursorIcon::EwResize
-            | CursorIcon::ColResize => IDC_SIZEWE,
-            CursorIcon::NResize
-            | CursorIcon::SResize
-            | CursorIcon::NsResize
-            | CursorIcon::RowResize => IDC_SIZENS,
-            CursorIcon::NeResize | CursorIcon::SwResize | CursorIcon::NeswResize => IDC_SIZENESW,
-            CursorIcon::NwResize | CursorIcon::SeResize | CursorIcon::NwseResize => IDC_SIZENWSE,
-            // Default, ContextMenu, Help, Alias, ZoomIn, ZoomOut, DndAsk and
-            // every future variant fall back to the arrow cursor.
-            _ => IDC_ARROW,
-        };
-
-        // SAFETY: `LoadCursorW(None, resource)` loads a built-in system
-        // cursor by atom/ordinal (`resource` is always one of the `IDC_*`
-        // constants from the match above, never a caller-supplied pointer),
-        // and returns a handle owned by the system — no allocation to free.
-        // `SetCursor` takes that handle by value; passing `None` on error is
-        // not reachable here since `?` returns before it.
-        unsafe {
-            let handle = LoadCursorW(None, resource)
-                .map_err(|error| CursorError::failed(error.to_string()))?;
-            SetCursor(Some(handle));
-        }
-        Ok(())
-    }
 }
 
 impl crate::host_window::CoreHostWindow for WindowsWindow {
@@ -1508,13 +1484,24 @@ impl PlatformWindow for WindowsWindow {
         Arc::new(self.surface())
     }
 
-    fn set_cursor(&self, cursor: CursorIcon) -> Result<(), CursorError> {
+    /// Every cursor, an image included: a repeated one is the cursor the
+    /// window already made, and the one it replaces is destroyed only once
+    /// the new one shows.
+    fn set_cursor(&self, cursor: &Cursor) -> Result<(), CursorError> {
         super::proc::with_window_context(self.hwnd, "set_cursor", |ctx| {
-            ctx.cursor.set(cursor);
-            if self.hovered() == Some(true) {
-                Self::apply_native_cursor(cursor)?;
+            if ctx.cursor.borrow().shows(cursor) {
+                return Ok(());
             }
-            Ok(())
+            let next = super::cursor::NativeCursor::of(cursor)?;
+            let replaced = ctx.cursor.replace(next);
+            let locked = ctx.cursor_grab.get() == flui_platform::CursorGrab::Locked;
+            let shown = if self.hovered() == Some(true) && !locked {
+                ctx.cursor.borrow().show()
+            } else {
+                Ok(())
+            };
+            drop(replaced);
+            shown
         })
         .ok_or_else(|| {
             CursorError::failed(
@@ -1578,6 +1565,28 @@ impl PlatformWindow for WindowsWindow {
                 };
                 return super::backdrop::apply_material(self.hwnd, gate, material);
             }
+            WindowCommand::SetCursorGrab(grab) => {
+                super::proc::with_window_context(self.hwnd, "set_cursor_grab", |ctx| {
+                    ctx.hold_pointer(self.hwnd, grab)
+                })
+                .unwrap_or(Ok(()))
+                .map_err(ApplyError::Platform)?;
+            }
+            WindowCommand::SetLevel(level) => self.set_level(level)?,
+            // What the user's resize keeps is held in `WM_SIZING`, and is no
+            // fact of the snapshot: nothing to publish.
+            WindowCommand::SetResizeIncrements(step) => {
+                super::proc::with_window_context(self.hwnd, "set_resize_increments", |ctx| {
+                    ctx.resize_increments.set(step);
+                });
+                return Ok(());
+            }
+            WindowCommand::SetAspectRatio(ratio) => {
+                super::proc::with_window_context(self.hwnd, "set_aspect_ratio", |ctx| {
+                    ctx.aspect_ratio.set(ratio);
+                });
+                return Ok(());
+            }
             other => return Err(crate::window::state::not_carried_out(&other)),
         }
         super::proc::with_window_context(self.hwnd, "apply", |ctx| {
@@ -1636,6 +1645,55 @@ impl PlatformWindow for WindowsWindow {
 
 /// The bodies of the show, activate and close commands.
 impl WindowsWindow {
+    /// Keep the window above the others (`WS_EX_TOPMOST`), below them (no
+    /// style for it: `WM_WINDOWPOSCHANGING` keeps it at the bottom), or
+    /// neither, without activating it.
+    ///
+    /// # Errors
+    /// [`ApplyError::Platform`] when Win32 refuses the restack.
+    fn set_level(&self, level: flui_platform::WindowLevel) -> Result<(), ApplyError> {
+        use flui_platform::WindowLevel;
+        use windows::Win32::UI::WindowsAndMessaging::{HWND_BOTTOM, HWND_NOTOPMOST, HWND_TOPMOST};
+
+        super::proc::with_window_context(self.hwnd, "set_level", |ctx| {
+            ctx.kept_below.set(level == WindowLevel::AlwaysOnBottom);
+        });
+        let after = match level {
+            WindowLevel::AlwaysOnTop => HWND_TOPMOST,
+            WindowLevel::Normal => HWND_NOTOPMOST,
+            WindowLevel::AlwaysOnBottom => {
+                // Out of the topmost band first, then under every window.
+                // SAFETY: a restack of this thread's live window; no pointer.
+                unsafe {
+                    SetWindowPos(
+                        self.hwnd,
+                        Some(HWND_NOTOPMOST),
+                        0,
+                        0,
+                        0,
+                        0,
+                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                    )
+                }
+                .map_err(|error| ApplyError::failed(error.to_string()))?;
+                HWND_BOTTOM
+            }
+        };
+        // SAFETY: as above.
+        unsafe {
+            SetWindowPos(
+                self.hwnd,
+                Some(after),
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+            )
+        }
+        .map_err(|error| ApplyError::failed(error.to_string()))
+    }
+
     /// Show the window, unminimizing it and requesting foreground focus; the
     /// maximized or fullscreen mode is kept.
     fn show_window(&self) -> Result<(), ApplyError> {

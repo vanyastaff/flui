@@ -52,7 +52,7 @@ use flui_platform::drag::{
 use flui_platform::input_regions::{DeviceInputRegion, InputRegion};
 use flui_platform::text_store::TextStoreStatus;
 use flui_platform::{
-    CursorError, CursorIcon, DisplayId, PlatformInput, PlatformTextInput, PlatformWindow,
+    Cursor, CursorError, CursorIcon, DisplayId, PlatformInput, PlatformTextInput, PlatformWindow,
     Unsupported, UnsupportedReason, WindowId, WindowIdMint,
 };
 use flui_platform::{SessionEndAnswer, SessionEndPhase, TextStoreHost};
@@ -92,7 +92,7 @@ pub struct HeadlessWindow {
     id: WindowId,
     size: flui_platform::WindowExtent,
     scale_factor: Mutex<DevicePixelRatio>,
-    cursor: Mutex<CursorIcon>,
+    cursor: Mutex<Cursor>,
     text_input: Option<Arc<RecordingTextInput>>,
     text_store_host: bool,
     gesture_preset: flui_interaction::GestureProfiles,
@@ -259,7 +259,7 @@ impl HeadlessWindow {
             ))
             .expect("BUG: a side in whole pixels is finite and not negative"),
             scale_factor: Mutex::new(DevicePixelRatio::ONE),
-            cursor: Mutex::new(CursorIcon::Default),
+            cursor: Mutex::new(Cursor::Icon(CursorIcon::Default)),
             text_input: None,
             text_store_host: false,
             gesture_preset: flui_interaction::GestureSettings::default().into(),
@@ -348,8 +348,8 @@ impl HeadlessWindow {
 
     /// The last cursor the UI runtime set on this window.
     #[must_use]
-    pub fn cursor(&self) -> CursorIcon {
-        *self.cursor.lock()
+    pub fn cursor(&self) -> Cursor {
+        self.cursor.lock().clone()
     }
 
     /// Every IME cursor area the UI runtime reported, in delivery order; `None`
@@ -442,8 +442,8 @@ impl PlatformWindow for HeadlessWindow {
             .map(|input| Arc::clone(input) as Arc<dyn PlatformTextInput>)
     }
 
-    fn set_cursor(&self, cursor: CursorIcon) -> Result<(), CursorError> {
-        *self.cursor.lock() = cursor;
+    fn set_cursor(&self, cursor: &Cursor) -> Result<(), CursorError> {
+        cursor.clone_into(&mut self.cursor.lock());
         Ok(())
     }
 

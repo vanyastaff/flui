@@ -557,10 +557,7 @@ impl flui_platform::PlatformWindow for OwnershipWindow {
     ) -> Result<(), flui_platform::Unsupported> {
         self.delegate.set_input_regions(regions)
     }
-    fn set_cursor(
-        &self,
-        cursor: flui_platform::CursorIcon,
-    ) -> Result<(), flui_platform::CursorError> {
+    fn set_cursor(&self, cursor: &flui_platform::Cursor) -> Result<(), flui_platform::CursorError> {
         if self.armed.load(Ordering::Relaxed) {
             if let Some(external) = self.external.upgrade() {
                 external.borrow_mut().take();

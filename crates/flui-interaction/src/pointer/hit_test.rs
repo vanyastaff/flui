@@ -1096,6 +1096,13 @@ pub(crate) fn transform_pointer_event(
                 event.position = Some(transform_position(position, transform)?);
             }
         }
+        // The resting point is localized; the delta is the device's motion,
+        // which no transform of the content changes.
+        PointerEvent::RawMotion(event) => {
+            if let Some(position) = event.position {
+                event.position = Some(transform_position(position, transform)?);
+            }
+        }
         // Cancel and device lifecycle carry no geometry; a variant added later
         // is delivered unlocalized until it is named above.
         _ => {}

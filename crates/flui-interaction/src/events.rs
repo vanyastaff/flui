@@ -78,6 +78,7 @@ pub(crate) fn pointer_info(event: &PointerEvent) -> Option<&PointerInfo> {
         PointerEvent::Scroll(data) => Some(&data.pointer),
         PointerEvent::PanZoom(data) => Some(data.pointer()),
         PointerEvent::SmartZoom(data) => Some(data.pointer()),
+        PointerEvent::RawMotion(data) => Some(&data.pointer),
         // Device lifecycle names a device, not a contact; a variant added
         // later carries no contact until it is named above.
         _ => None,
@@ -114,6 +115,7 @@ pub(crate) fn event_time(event: &PointerEvent) -> Option<flui_platform::EventTim
         PointerEvent::Scroll(data) => data.time,
         PointerEvent::PanZoom(data) => data.time,
         PointerEvent::SmartZoom(data) => data.time,
+        PointerEvent::RawMotion(data) => data.time,
         PointerEvent::Cancel(data) => data.time,
         PointerEvent::Enter(data)
         | PointerEvent::Leave(data)
@@ -167,6 +169,7 @@ impl PointerEventExt for PointerEvent {
                 PointerEvent::Scroll(data) => Some(data.position),
                 PointerEvent::PanZoom(data) => Some(data.position),
                 PointerEvent::SmartZoom(data) => Some(data.position),
+                PointerEvent::RawMotion(data) => data.position,
                 _ => None,
             }
         }?;

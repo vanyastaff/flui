@@ -100,7 +100,7 @@ impl crate::SurfaceTarget for NoNativeSurface {
 /// #       command.against(&self.1)?;
 /// #       Ok(())
 /// #   }
-/// #   fn set_cursor(&self, _: CursorIcon) -> Result<(), CursorError> { Ok(()) }
+/// #   fn set_cursor(&self, _: &Cursor) -> Result<(), CursorError> { Ok(()) }
 /// #   fn text_input(&self) -> Option<Arc<dyn PlatformTextInput>> { None }
 /// #   fn haptics(&self) -> Option<Arc<dyn PlatformHaptics>> { None }
 /// #   fn system_chrome(&self) -> Option<Arc<dyn PlatformSystemChrome>> { None }
