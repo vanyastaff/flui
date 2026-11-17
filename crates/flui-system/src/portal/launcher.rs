@@ -33,7 +33,7 @@ impl PortalLauncher {
     /// The `parent_window` of a launch: the acquiring widget's window while
     /// it is open, none once it closed (a closed window's id may name
     /// another window by then) or for a widget in no window.
-    fn parent(&self) -> String {
+    pub(super) fn parent(&self) -> String {
         self.window
             .as_ref()
             .filter(|window| !window.lifetime().is_closed())
