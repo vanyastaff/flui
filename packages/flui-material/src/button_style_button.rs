@@ -244,27 +244,25 @@ pub(crate) struct ButtonStyleButtonCoreState {
     initially_enabled: bool,
     /// Seeded the same way as `initially_enabled`.
     initially_selected: bool,
-    rebuild: Option<RebuildHandle>,
+    rebuild: RebuildHandle,
 }
 
 impl StatefulView for ButtonStyleButtonCore {
     type State = ButtonStyleButtonCoreState;
 
-    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
         ButtonStyleButtonCoreState {
             states: WidgetStatesController::default(),
             states_listener: None,
             initially_enabled: self.is_interactive(),
             initially_selected: self.is_selected(),
-            rebuild: None,
+            rebuild: ctx.rebuild_handle(),
         }
     }
 }
 
 impl ViewState<ButtonStyleButtonCore> for ButtonStyleButtonCoreState {
-    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        let rebuild = ctx.rebuild_handle();
-
+    fn init_state(&mut self, _ctx: &dyn LifecycleContext) {
         // Sync BEFORE listening (ADR-0322 §3): this build reads `Disabled`
         // above the node, which writes the same value during it.
         self.states
@@ -272,12 +270,10 @@ impl ViewState<ButtonStyleButtonCore> for ButtonStyleButtonCoreState {
         self.states
             .update(WidgetState::Selected, self.initially_selected);
 
-        let rebuild_for_listener = rebuild.clone();
+        let rebuild_for_listener = self.rebuild.clone();
         self.states_listener = Some(self.states.listen(std::rc::Rc::new(move || {
             rebuild_for_listener.schedule(flui_sdk::view::RebuildReason::StateChange);
         })));
-
-        self.rebuild = Some(rebuild);
     }
 
     fn did_update_view(

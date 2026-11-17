@@ -689,13 +689,6 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 - A window tiled by the system (Windows Snap, the macOS tiling of a top-edge drag, a GNOME half-screen) is remembered by what the host reports: Win32 reports a snapped window as `Normal` at the snapped rectangle, so it comes back at that rectangle, untiled; AppKit's stale `normal_geometry` after a tile is under [Window control has run only on Windows, an X11 test server and the AppKit conformance kit](#window-control-has-run-only-on-windows-an-x11-test-server-and-the-appkit-conformance-kit). No contract mode names a tiled state.
 - The check is the placement table of `flui-platform` with a same-key display at another scale, and a run on Windows of a snapped window closed and reopened.
 
-### Widget states still fill their handles in `init_state`
-
-> **Environments:** all · **Who it hurts:** Contributors copying a catalog widget's state · **Parity:** none (API shape)
-
-- `StatefulView::create_state` receives the `LifecycleContext`, so a state can be built with its signals and capability handles bound; `Signal::default()` is gone. Production states still hold an `Option` (a `WriterSource`, a focus or text-input handle, a rebuild handle) that `init_state` fills with `self.field = Some(ctx.…)` and that `build` unwraps: `rg 'self\.[a-z_]+ = Some\((ctx|ctx)\.' crates packages` lists them.
-- The check is that search finding no production state, each field a plain handle made in `create_state`.
-
 ### No widget hot reload on Android and the Web
 
 > **Environments:** Android, Web · **Who it hurts:** Developers who iterate on widget code on a phone or in a browser · **Parity:** none yet (hot reload has no row)

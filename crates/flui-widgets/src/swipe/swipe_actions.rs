@@ -343,8 +343,8 @@ pub struct SwipeActionsState {
     applied: Rc<Cell<(RowAnchors, Option<f64>)>>,
     full: Rc<RefCell<FullSwipes>>,
     motion: Rc<Cell<Option<MotionPolicy>>>,
-    watch: Option<OutWatch>,
-    uncover: Option<UncoverWatch>,
+    watch: OutWatch,
+    uncover: UncoverWatch,
 }
 
 impl fmt::Debug for SwipeActionsState {
@@ -359,18 +359,26 @@ impl fmt::Debug for SwipeActionsState {
 impl StatefulView for SwipeActions {
     type State = SwipeActionsState;
 
-    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
         let anchors = self.anchors();
+        let controller = AnchoredDragController::try_new(anchors.build(None), Stop::Closed)
+            .expect("BUG: every row has a closed stop");
+        let (full, motion) = (Rc::default(), Rc::default());
+        let act = SwipeActionsState::full_swipe_performer(
+            controller.clone(),
+            Rc::clone(&full),
+            Rc::clone(&motion),
+            ctx.writer_source(),
+        );
         SwipeActionsState {
-            controller: AnchoredDragController::try_new(anchors.build(None), Stop::Closed)
-                .expect("BUG: every row has a closed stop"),
+            watch: OutWatch::new(&controller, ctx.post_frame_handle(), act),
+            uncover: UncoverWatch::new(&controller, ctx.rebuild_handle()),
+            controller,
             geometry: Rc::default(),
             origin: Rc::default(),
             applied: Rc::new(Cell::new((anchors, None))),
-            full: Rc::default(),
-            motion: Rc::default(),
-            watch: None,
-            uncover: None,
+            full,
+            motion,
         }
     }
 }
@@ -393,12 +401,12 @@ impl SwipeActionsState {
         }
     }
 
-    fn full_swipe_performer(&self, writer: WriterSource) -> Rc<dyn Fn(Stop)> {
-        let (controller, full, motion) = (
-            self.controller.clone(),
-            Rc::clone(&self.full),
-            Rc::clone(&self.motion),
-        );
+    fn full_swipe_performer(
+        controller: AnchoredDragController<Stop>,
+        full: Rc<RefCell<FullSwipes>>,
+        motion: Rc<Cell<Option<MotionPolicy>>>,
+        writer: WriterSource,
+    ) -> Rc<dyn Fn(Stop)> {
         Rc::new(move |stop| {
             let handle = {
                 let full = full.borrow();
@@ -423,13 +431,6 @@ impl SwipeActionsState {
 impl ViewState<SwipeActions> for SwipeActionsState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.geometry.acquire(ctx);
-        let act = self.full_swipe_performer(ctx.writer_source());
-        self.watch = Some(OutWatch::new(
-            &self.controller,
-            ctx.post_frame_handle(),
-            act,
-        ));
-        self.uncover = Some(UncoverWatch::new(&self.controller, ctx.rebuild_handle()));
     }
 
     fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
@@ -446,12 +447,8 @@ impl ViewState<SwipeActions> for SwipeActionsState {
     }
 
     fn dispose(&mut self) {
-        if let Some(watch) = self.watch.take() {
-            watch.retire();
-        }
-        if let Some(uncover) = self.uncover.take() {
-            uncover.retire();
-        }
+        self.watch.retire();
+        self.uncover.retire();
         self.geometry.release();
     }
 

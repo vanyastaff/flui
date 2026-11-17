@@ -766,8 +766,9 @@ struct HeroInner {
     /// `BuildContext::find_render_object` walks strict *ancestors* and cannot
     /// answer it.
     seat: FlightSeat,
-    /// `setState`. Acquired in `init_state`, fired from a post-frame callback —
-    /// never from `build`/layout/paint.
+    /// `setState`, fired from a post-frame callback — never from
+    /// `build`/layout/paint. Made in `create_state`; `dispose` takes it so a
+    /// retained handle is inert.
     rebuild: RefCell<Option<RebuildHandle>>,
     /// Immutable view facts committed together. Readers keep an owning snapshot
     /// before authored Clone or Drop can reenter. Unmount withdraws the snapshot.
@@ -798,7 +799,7 @@ pub struct HeroHandle {
 impl HeroHandle {
     #[cfg(test)]
     pub(super) fn test_handle(view: &Hero) -> Self {
-        Self::new(view)
+        Self::new(view, None)
     }
 
     /// A handle whose hero is laid out at 10×10 in its own render tree, so
@@ -808,7 +809,7 @@ impl HeroHandle {
     pub(super) fn test_laid_out(view: &Hero) -> (Self, PipelineCell) {
         use flui_rendering::pipeline::PipelineOwner;
         use flui_rendering::prelude::BoxConstraints;
-        let handle = Self::new(view);
+        let handle = Self::new(view, None);
         let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
         owner.set_root_render_object(Box::new(flui_objects::RenderSubtreeAnchor::new(
             handle.inner.seat.anchor(),
@@ -822,12 +823,13 @@ impl HeroHandle {
     }
 
     /// A handle over `view`'s current configuration; [`ViewState::did_update_view`]
-    /// keeps the view-derived halves current afterwards.
-    fn new(view: &Hero) -> Self {
+    /// keeps the view-derived halves current afterwards. `rebuild` is the
+    /// mounted hero's; a handle with none never rebuilds.
+    fn new(view: &Hero, rebuild: Option<RebuildHandle>) -> Self {
         Self {
             inner: Rc::new(HeroInner {
                 seat: FlightSeat::new(),
-                rebuild: RefCell::new(None),
+                rebuild: RefCell::new(rebuild),
                 configuration: Terminal::new(RefCell::new(Some(Rc::new(view.clone())))),
                 hero_mode_enabled: Cell::new(true),
             }),
@@ -1198,9 +1200,9 @@ impl View for Hero {
 impl StatefulView for Hero {
     type State = HeroState;
 
-    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
         HeroState {
-            handle: Terminal::new(HeroHandle::new(self)),
+            handle: Terminal::new(HeroHandle::new(self, Some(ctx.rebuild_handle()))),
             registry: None,
         }
     }
@@ -1299,22 +1301,12 @@ impl ViewState<Hero> for HeroState {
         recovery.finish();
     }
 
-    /// Acquire render and rebuild capabilities during mount, and establish the
-    /// route dependency that subsequent lifecycle changes refresh.
+    /// Bind the render seat during mount, and establish the route dependency that subsequent lifecycle changes refresh.
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.handle
             .inner
             .seat
             .bind(ctx.pipeline_owner().map(|owner| owner.downgrade()));
-        let previous = Terminal::new(
-            self.handle
-                .inner
-                .rebuild
-                .borrow_mut()
-                .replace(ctx.rebuild_handle()),
-        );
-        drop(previous);
-
         self.did_change_dependencies(ctx);
     }
 

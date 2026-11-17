@@ -248,8 +248,7 @@ impl SelectionModel {
     /// without taking the focus. A call during a build is refused before
     /// anything changes.
     fn write_programmatic(&self, selection: Option<&DocumentSelection>) -> Result<(), SelectError> {
-        let writer = self.writer.borrow().clone();
-        let writer = writer.ok_or(SelectError::NotAttached)?;
+        let writer = &self.writer;
         writer.write(|ctx| {
             match writer.check_context(ctx) {
                 Ok(()) => {}
