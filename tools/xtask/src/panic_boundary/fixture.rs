@@ -8,7 +8,7 @@ pub(super) use crate::source_tree::Memory;
 pub(super) const ROOT: &str = "fixture/src/lib.rs";
 
 /// `(file, entry or item, kind)` of every planted finding.
-pub(super) const EXPECTED: [(&str, &str, Problem); 41] = [
+pub(super) const EXPECTED: [(&str, &str, Problem); 47] = [
     (WINDOWS, "planted", Unguarded),
     (WINDOWS, "first_then", Unguarded),
     (WINDOWS, "eager", Argument),
@@ -42,6 +42,8 @@ pub(super) const EXPECTED: [(&str, &str, Problem); 41] = [
     (APPLE, "Lookalike::dealloc", Unguarded),
     (APPLE, "Finalized::drop", Unguarded),
     (ANDROID, "Java_dev_flui_Planted_run", Unguarded),
+    (ANDROID, "Java_dev_flui_Direct_run", Unguarded),
+    (ANDROID, "Java_dev_flui_Adapted_run", Unguarded),
     (
         ANDROID,
         "run_on_java_main_thread in fn post_bare",
@@ -67,12 +69,16 @@ pub(super) const EXPECTED: [(&str, &str, Problem); 41] = [
         "run_on_java_main_thread in macro_rules! post_later",
         Unguarded,
     ),
+    (ANDROID, ".add_fd_with_callback", Unguarded),
+    (ANDROID, ".add_fd_with_callback", Unread),
     (POSTER, "run_on_java_main_thread in fn run", Unguarded),
     (IDENTITY_FILE, "fn os_entry", Identity),
     (IDENTITY_FILE, "use other::os_entry", Identity),
     (IDENTITY_FILE, "struct ContainedIvars", Identity),
     (IDENTITY_FILE, "use other::ContainedIvars", Identity),
     (IDENTITY_FILE, "mod panic_boundary", Identity),
+    (IDENTITY_FILE, "fn jni_native", Identity),
+    (IDENTITY_FILE, "use other::jni_native", Identity),
     (SECOND_MODULE, "mod panic_boundary", Identity),
 ];
 
@@ -93,7 +99,7 @@ pub(super) fn source() -> Memory {
     )
 }
 
-const FILES: [(&str, &str); 12] = [
+const FILES: [(&str, &str); 13] = [
     (ROOT, LIB),
     (
         "fixture/src/owner.rs",
@@ -101,9 +107,10 @@ const FILES: [(&str, &str); 12] = [
     ),
     (
         "fixture/src/owner/android.rs",
-        "pub(crate) mod main_thread;\n",
+        "pub(crate) mod main_thread;\npub(crate) mod native_call;\n",
     ),
     (POSTER, POSTER_FILE),
+    ("fixture/src/owner/android/native_call.rs", JNI_ADAPTER_FILE),
     ("fixture/src/owner/panic_boundary.rs", BOUNDARY),
     ("fixture/src/feature.rs", FEATURE),
     (WINDOWS, WINDOWS_FILE),
@@ -474,22 +481,47 @@ ndk_function!(fn_type, unsafe extern "C" fn(i32) -> i32);
 "#;
 
 const ANDROID_FILE: &str = r#"
+use crate::owner::android::native_call::jni_native;
 use crate::owner::panic_boundary::{AfterPanic, os_entry};
 
-fn jni_native<T: Default>(method: &'static str, body: impl FnOnce() -> T) -> T {
-    os_entry(method, (), AfterPanic::Answer(|()| T::default()), body)
+fn local_native(method: &'static str, body: impl FnOnce() -> i64) -> i64 {
+    os_entry(method, (), AfterPanic::Answer(|()| 0), body)
 }
 
-// silent: a JNI export through an adapter
+// silent: a JNI export through the JNI adapter
 #[unsafe(no_mangle)]
-extern "system" fn Java_dev_flui_Guarded_run(_env: JNIEnv, _class: JClass, handle: i64) -> i64 {
-    jni_native("run", || handle)
+extern "system" fn Java_dev_flui_Guarded_run(mut env: EnvUnowned, _class: JClass, handle: i64) -> i64 {
+    jni_native("run", &mut env, |()| 0, |_| Ok(handle))
+}
+
+// silent: a native method bound with `RegisterNatives`, through the adapter
+// by its path
+extern "system" fn native_wake(mut env: EnvUnowned<'_>, _class: JClass<'_>, handle: i64) {
+    crate::owner::android::native_call::jni_native("wake", &mut env, |()| (), |_| Ok(()))
 }
 
 // planted: a JNI export without a boundary
 #[unsafe(no_mangle)]
 extern "system" fn Java_dev_flui_Planted_run(_env: JNIEnv, _class: JClass, handle: i64) -> i64 {
     handle + 1
+}
+
+// planted: a JNI export that calls the boundary itself, which leaves a Java
+// exception pending
+#[unsafe(no_mangle)]
+extern "system" fn Java_dev_flui_Direct_run(mut env: EnvUnowned, _class: JClass, text: JString) -> i64 {
+    os_entry("direct", (), AfterPanic::Answer(|()| 0), || read(&mut env, &text))
+}
+
+// planted: a JNI export through an adapter other than the JNI one
+#[unsafe(no_mangle)]
+extern "system" fn Java_dev_flui_Adapted_run(_env: *mut JNIEnv, _class: JClass, handle: i64) -> i64 {
+    local_native("adapted", || handle)
+}
+
+// silent: an NDK callback, which has no environment, through the boundary
+unsafe extern "C" fn on_frame(time: i64, _data: *mut c_void) {
+    os_entry("on_frame", (), AfterPanic::Answer(|()| ()), move || tick(time))
 }
 
 // planted: a closure posted to the Java main thread outside the posting module
@@ -519,6 +551,19 @@ macro_rules! post_later {
         $app.run_on_java_main_thread(Box::new(|| {}))
     };
 }
+
+fn watch(looper: &ThreadLooper, fd: BorrowedFd<'_>, inbox: Inbox) {
+    // planted: a closure handed to an Android looper without a boundary
+    looper.add_fd_with_callback(fd, FdEvent::INPUT, |_, _| drain());
+    // silent: a looper callback through the boundary, called again and again,
+    // so it borrows its captures
+    looper.add_fd_with_callback(fd, FdEvent::INPUT, move |_, _| {
+        os_entry("an fd source", (), AfterPanic::Answer(|()| false), || inbox.drain())
+    });
+}
+
+// planted: a looper callback in a macro's tokens
+watch_later!(looper.add_fd_with_callback(fd, FdEvent::INPUT, |_, _| true));
 "#;
 
 const POSTER_FILE: &str = r#"
@@ -539,6 +584,20 @@ pub(crate) fn run(app: &AndroidApp, body: impl FnOnce() + Send + 'static) {
 }
 "#;
 
+const JNI_ADAPTER_FILE: &str = r"
+use crate::owner::panic_boundary::{AfterPanic, os_entry};
+
+// silent: the JNI adapter, whose body is the boundary's call
+pub(crate) fn jni_native<C: JniCall, T>(
+    method: &'static str,
+    call: &mut C,
+    nothing: fn(()) -> T,
+    body: impl FnOnce(&mut C::Env) -> Result<T, C::Error>,
+) -> T {
+    os_entry(method, (), AfterPanic::Answer(nothing), || answered(method, call, nothing, body))
+}
+";
+
 const IDENTITY_TEXT: &str = r"
 // planted: an import of another `os_entry`
 use other::os_entry;
@@ -554,4 +613,10 @@ use other::ContainedIvars;
 
 // planted: a second `ContainedIvars`
 struct ContainedIvars;
+
+// planted: an import of another `jni_native`
+use other::jni_native;
+
+// planted: a second `jni_native`
+fn jni_native() {}
 ";

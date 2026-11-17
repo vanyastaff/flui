@@ -37,9 +37,12 @@
 //!   `dispatch*`, `jni`, `ndk`, `android_activity`, …, reached by its path or
 //!   through a name the file imports from it), such as an Objective-C block or
 //!   a WinRT delegate; a block or delegate constructor matched by name where a
-//!   glob import hides it; and a GCD work item (`exec_async`, `exec_sync`,
+//!   glob import hides it; a GCD work item (`exec_async`, `exec_sync`,
 //!   `exec_after`, `after`, `barrier_async`, `barrier_sync`), whose body must
-//!   move its captures into the boundary, so they drop inside it. A named
+//!   move its captures into the boundary, so they drop inside it; and an
+//!   Android looper's callback (the ndk's `add_fd_with_callback`, whose
+//!   trampoline aborts on a panic), called again and again, which the crate
+//!   hands none of today: the rule is there for the first. A named
 //!   constructor or method must be given the closure literal, so its body is
 //!   in view.
 //!
@@ -59,6 +62,17 @@
 //! `os_entry` or `panic_boundary` is a finding, so the name the rule reads is
 //! the function. There is no allowlist: an entry passes or the gate fails.
 //!
+//! A JNI native method (a foreign function whose first parameter is the
+//! environment, `EnvUnowned` or `JNIEnv`) has a stricter rule: its body is
+//! one call of `owner::android::native_call::jni_native` (by that path, or
+//! the bare name imported from it), with arguments of the same kind. Java
+//! calls such a method from a framework callback that catches nothing, so
+//! besides containing the body's panic the adapter clears the Java
+//! exception the body leaves pending; the boundary called directly, or
+//! through another adapter, leaves it to be thrown. The adapter is defined
+//! once, at its module's top level, and its own body is the boundary's call;
+//! any other function or import under its name is a finding.
+//!
 //! A class's ivars go through the boundary when they are declared as
 //! `ContainedIvars<…>` (written `…panic_boundary::ContainedIvars`, or imported
 //! from it): the boundary's own type, defined once beside `os_entry`, whose
@@ -72,7 +86,7 @@
 //! **Limits.** Functions and constructors of OS crates are caught by their
 //! path; methods are not, since a receiver's type is out of the gate's
 //! reach, so a new OS method that takes a closure must be added to the GCD
-//! list, and a constructor reached through a glob import to the list of
+//! or looper list, and a constructor reached through a glob import to the list of
 //! callback types. A block's or delegate's captures live as long as the OS
 //! keeps the block and drop when it releases it, outside any call: they are
 //! kept to values whose destructor runs no user code.
@@ -84,7 +98,8 @@
 //!   nothing to catch there.
 //! - android-activity's glue: that crate holds the boundary of its own
 //!   procedures (it aborts with a log). The closures the crate posts to
-//!   Android's Java main thread through it are not: a call of
+//!   Android's Java main thread through it are not FLUI's to leave to it, since
+//!   it only logs their panic and loses what they owed: a call of
 //!   `run_on_java_main_thread` anywhere but `owner::android::main_thread`,
 //!   whose `post` runs the closure inside the boundary and reports every exit
 //!   but success, is a finding.
@@ -286,6 +301,7 @@ fn check(source: &dyn Source, root: &str) -> anyhow::Result<Report> {
         ..Report::default()
     };
     let mut boundary = None;
+    let mut jni_module = false;
     for file in &files {
         let is_boundary = file.module == BOUNDARY_MODULE;
         if is_boundary {
@@ -303,8 +319,19 @@ fn check(source: &dyn Source, root: &str) -> anyhow::Result<Report> {
                 ),
             });
         }
-        let scanned = scan::scan_file(file, is_boundary);
+        let is_jni_module = file.module == scan::JNI_MODULE;
+        jni_module |= is_jni_module;
+        let scanned = scan::scan_file(file, is_boundary, is_jni_module);
         report.findings.extend(scanned.findings.iter().cloned());
+        if let Some((line, detail)) = scanned.jni_adapter_problem() {
+            report.findings.push(Finding {
+                file: file.rel.clone(),
+                line,
+                what: format!("fn {}", scan::JNI_ADAPTER),
+                kind: Problem::Identity,
+                detail,
+            });
+        }
         if is_boundary && !scanned.defines_boundary {
             report.findings.push(Finding {
                 file: file.rel.clone(),
@@ -345,6 +372,24 @@ fn check(source: &dyn Source, root: &str) -> anyhow::Result<Report> {
                 through,
             });
         }
+    }
+    let jni_adapter = format!("adapter `{}`", scan::JNI_ADAPTER);
+    if !jni_module
+        && report
+            .entries
+            .iter()
+            .any(|entry| entry.through.as_deref() == Some(jni_adapter.as_str()))
+    {
+        report.findings.push(Finding {
+            file: root.to_owned(),
+            line: 1,
+            what: format!("mod {}", scan::JNI_MODULE.join("::")),
+            kind: Problem::Identity,
+            detail: format!(
+                "JNI native methods call `{}`, but the crate has no such module",
+                scan::JNI_ADAPTER
+            ),
+        });
     }
     if boundary.is_none() {
         report.findings.push(Finding {

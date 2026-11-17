@@ -1355,6 +1355,11 @@ pub(crate) struct Folded<'v> {
     pub(crate) key: NodeKey,
     ctm: Matrix4,
     outer: SmallVec<[Outer<'v>; 4]>,
+    /// The translation the chain is, when it is one and nothing outside
+    /// it cuts, spreads or grows what it draws: a chunk of the content then
+    /// lands moved by it, which [`Self::content_reach`] reads without the
+    /// general map.
+    shift: Option<(f64, f64)>,
 }
 
 /// Two clips that cut `out` one after another, as one.
@@ -1377,6 +1382,7 @@ impl<'v> Folded<'v> {
             key: root,
             ctm: Matrix4::IDENTITY,
             outer: SmallVec::new(),
+            shift: None,
         };
         folded.extend(&links);
         folded
@@ -1400,6 +1406,7 @@ impl<'v> Folded<'v> {
             key: child,
             ctm: self.ctm,
             outer: self.outer.clone(),
+            shift: self.shift,
         };
         folded.extend(scratch);
         Some(folded)
@@ -1431,6 +1438,11 @@ impl<'v> Folded<'v> {
             };
             self.outer.push(step);
         }
+        self.shift = if self.outer.is_empty() && self.ctm.m.iter().all(|value| value.is_finite()) {
+            self.ctm.as_translation()
+        } else {
+            None
+        };
     }
 
     /// Where this node's subtree lands on the surface, from its stored
@@ -1464,6 +1476,25 @@ impl<'v> Folded<'v> {
         let mut inner = self.clone();
         inner.extend(scratch);
         inner.outward(inner.mapped(bounds))
+    }
+
+    /// Where `bounds`, in this node's content space with no effect above
+    /// them, land on the surface.
+    pub(crate) fn content_reach(&self, bounds: Bounds) -> Reach {
+        let Some((dx, dy)) = self.shift else {
+            return self.outward(self.mapped(bounds));
+        };
+        // The general map's translation branch, with no step outside it.
+        let reach = match Reach::of(bounds) {
+            Reach::Rect(rect) => translated(rect, Offset::new(dx, dy)),
+            other => other,
+        };
+        debug_assert_eq!(
+            reach,
+            self.outward(self.mapped(bounds)),
+            "BUG: a translated chain lands a chunk as the general map does"
+        );
+        reach
     }
 
     /// `bounds` under this chain's map, before the steps outside it.

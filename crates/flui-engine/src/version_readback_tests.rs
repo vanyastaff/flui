@@ -522,7 +522,7 @@ fn region_frames_match_a_full_frame() {
         Some(FramePlan::RetainedPartial(RegionPlan::Rects(region))),
         "two distant rects redraw rect by rect"
     );
-    assert_eq!(partial.region_passes(), 2, "one pass per rect");
+    assert_eq!(partial.counters().region_passes, 2, "one pass per rect");
 
     let mut full = renderer.retained_capture((SIDE, SIDE)).expect("capture");
     apply(
@@ -531,7 +531,11 @@ fn region_frames_match_a_full_frame() {
     );
     full.render_scene(&Scene::of_version(corners.version()))
         .expect("the full frame renders");
-    assert_eq!(full.region_passes(), 0, "a full frame has no region pass");
+    assert_eq!(
+        full.counters().region_passes,
+        0,
+        "a full frame has no region pass"
+    );
     assert_eq!(
         differing(&mut partial, &mut full),
         0,
@@ -922,7 +926,7 @@ fn a_backdrop_group_outside_the_damage_still_captures_at_its_first_member() {
         );
         if by_rect {
             // The group's members share one rect, the far one has its own.
-            assert_eq!(partial.region_passes(), 2, "{case}: two passes");
+            assert_eq!(partial.counters().region_passes, 2, "{case}: two passes");
         }
         let mut full = renderer.retained_capture((SIDE, SIDE)).expect("capture");
         apply(
@@ -1455,4 +1459,72 @@ fn a_backdrop_filter_filters_the_pixel_a_clip_edge_shows_in_part() {
             px(&without, edge, 16)
         );
     }
+}
+
+/// A frame counts what its walk and recording did (ADR-0304 §9): a full
+/// frame enters every boundary and records every chunk without asking the
+/// cull, a partial frame over one box enters the root and that box, asks the
+/// cull about the root's four slots and the box's chunk, and records that
+/// chunk alone in one pass, and a frame with nothing to draw counts nothing.
+#[test]
+fn a_frame_counts_the_chunks_it_records() {
+    use crate::frame_protocol::RasterCounters;
+    let Some(renderer) = crate::test_support::renderer_or_skip() else {
+        return;
+    };
+    let mut capture = renderer.retained_capture((SIDE, SIDE)).expect("capture");
+    let mut row = Row::new([Color::RED, Color::RED, Color::RED, Color::RED]);
+    apply(
+        &mut capture,
+        DamageRegion::Full(flui_layer::FullReason::FirstFrame),
+    );
+    capture
+        .render_scene(&Scene::of_version(row.version()))
+        .expect("the first frame renders");
+    assert_eq!(
+        capture.counters(),
+        RasterCounters {
+            nodes_entered: 5,
+            cull_tests: 0,
+            chunks_recorded: 4,
+            region_passes: 0,
+        },
+        "a full frame walks the whole row"
+    );
+    capture.mark_dirty(Rect::from_ltrb(0.0, 0.0, 1.0, 1.0));
+    capture
+        .render_scene(&Scene::of_version(row.version()))
+        .expect("the warm-up renders");
+    assert_eq!(capture.last_plan(), Some(FramePlan::RetainedFull));
+
+    let damage = row.recolor(1, Color::BLUE);
+    apply(&mut capture, damage);
+    capture
+        .render_scene(&Scene::of_version(row.version()))
+        .expect("the partial frame renders");
+    assert!(
+        matches!(capture.last_plan(), Some(FramePlan::RetainedPartial(_))),
+        "{:?}",
+        capture.last_plan()
+    );
+    assert_eq!(
+        capture.counters(),
+        RasterCounters {
+            nodes_entered: 2,
+            cull_tests: 5,
+            chunks_recorded: 1,
+            region_passes: 1,
+        },
+        "a partial frame over one box"
+    );
+
+    capture
+        .render_scene(&Scene::of_version(row.version()))
+        .expect("the frame with no damage renders");
+    assert_eq!(capture.last_plan(), Some(FramePlan::Skip));
+    assert_eq!(
+        capture.counters(),
+        RasterCounters::default(),
+        "a skipped frame keeps no count of the frame before it"
+    );
 }

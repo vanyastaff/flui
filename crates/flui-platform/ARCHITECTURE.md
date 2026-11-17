@@ -433,6 +433,19 @@ response code, a bus failure, or an answer outside the system's contract. `Launc
 and `flui-system`'s `DialogError::Failed` carry it, so no backend invents a number or guesses a
 named variant for a code it cannot read.
 
+### A launch is decided at the seam, by what its caller allows
+
+`launch` holds the launch policy for every backend, the scripted double included, so no backend
+re-implements it (ADR-0360). A URI reaches a backend only as an `ExternalUri`, built from the
+schemes its caller names (`&[Scheme::HTTPS]`): bounded before it is read, with no character it
+must percent-encode and no hidden one, an authority's `//` written and no user in it, a `mailto`
+query of the five admitted fields, and never a scheme of `REFUSED_SCHEMES`, which no `Scheme` can
+be. `Launcher`'s path verbs, from the path alone and with no file system call on the owner
+thread, refuse a relative path and any Windows prefix but a drive letter, and `open_path` refuses
+a name that `runs_when_opened` (`RUNNABLE_EXTENSIONS`, a class id). That name list is the floor; a
+backend opens the file off the owner thread and judges what it opened, by its resolved name and
+by its own system, before it hands it on.
+
 ### A capability's double is built from one scenario primitive
 
 `capability::scripted`, under the `scripted` feature (which `testing` turns on), is what every

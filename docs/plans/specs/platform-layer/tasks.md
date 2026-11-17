@@ -8273,6 +8273,116 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
   окон, флаг и запросчик перерисовки, список перерисовок растра, эндпоинт агента, воркеры и
   сервисы, полосы хранилища и хуки разработки (`DevReload`, `DevAgent`; ADR-0311). Не собрано
   здесь: Android, iOS, macOS (правка `android.rs` — только CI); wasm проверен типами в WSL.
+- [x] **LY135** — ветка `native/android-main-thread-boundary`. Проверено на `main` @ `7b065dc08`:
+  главная часть находки уже исправлена в #2654 — каждое замыкание на Java main thread идёт через
+  `owner::android::main_thread::post`/`run` внутри `os_entry` с отчётом о каждом выходе, кроме
+  успеха, а гейт `panic-boundary` отказывает идентификатору `run_on_java_main_thread` вне `fn post`
+  этого модуля (запрос insets на панике отвечает `Ready(None)`). Ложной оставалась заметка о
+  android-activity в доке `main_thread.rs` и константе гейта («прерывает процесс»): 0.6.1
+  (`main_callbacks.rs`) ловит панику замыкания, только логирует через `log` и теряет долг
+  замыкания; доки исправлены. Остаток класса подтверждён чтением. Установка `FluiView` шла через
+  `run`: паника после установки вида (событие `tracing` — чужой код) оставляла окно без
+  `Installed`, паника до неё — `Pending` навсегда, а паника между возвратом `FluiView.install` и
+  записью `Ready` оставляла вид в окне, который `detach` уже не находил; `detach` с ошибкой
+  освобождал handle, который вид ещё называл. Теперь установка — `ViewInstall`
+  (`owner/android/view_install.rs`), машина состояний над её вызовами JNI (`ViewHost`): handle
+  освобождается, только когда ни один вид окна его не называет — отказ или установка,
+  остановившаяся после передачи handle, спрашивает окно о виде с этим handle (`FluiView.handle()`),
+  снимает его и освобождает handle; окно, которое не прочесть, и `detach` с ошибкой оставляют
+  handle. Владелец слышит `Installed` один раз, после записи состояния и до лога; `Pending` и
+  `Failed` читались одинаково — стадия одна, `Absent`. Захваты отправленной работы
+  (`MainThreadWork`) теперь уничтожаются внутри границы на каждом выходе: отчёт после успеха, тело
+  работы, сброшенной без запуска. Обратное направление: `nativeDrag` и `nativeImeState` читали
+  строки через `EnvUnowned::with_env`, который сам ловит панику — её полезная нагрузка молча
+  ронялась вне `discard_payload` и без лога, а ошибка JNI оставляла исключение Java висеть, и
+  фреймворковый колбэк над нативным методом (слушатель drag, input connection) бросал его на
+  главном потоке — процесс падал. Решение (новое правило не нужно, ADR-0151 §16 — «ответ, понятный
+  ОС»; записано в `crates/flui-native/ARCHITECTURE.md`): каждый нативный метод классов FLUI
+  (14 у `FluiView`, `FluiHost.nativeWake`) — один вызов `owner::android::native_call::jni_native`,
+  обобщённого над `JniCall` (на Android — `EnvUnowned`, в тестах — заместитель): граница, страж
+  `ClearsPending`, тело, выбор ответа — «ничто» метода (`false`, `0`, `null`, без значения) на
+  ошибку JNI или панику, и никогда — висящее исключение; среда берётся через `AttachGuard`, без
+  типа исхода с недостижимой паникой. Activity продолжает работу. Тот же страж заменил
+  `ClearPending` моста доступности. Гейт `panic-boundary`: нативный метод JNI (внешняя функция,
+  чей первый параметр — среда) — только один вызов `jni_native`, сам `jni_native` — один вызов
+  `os_entry`, другие функции и импорты под этим именем — находка; замыкание, отданное лупер-у
+  Android методом ndk `add_fd_with_callback`, — вход ОС (в крейте таких нет, правило — для
+  первого). Тесты, в скобках результат с откатом:
+  `a_native_method_answers_and_leaves_no_exception_pending_on_any_exit` (без стража —
+  `ThrowsThenAnswers` отвечает `(Some(7), true)`);
+  `every_exit_of_the_installation_frees_only_handles_no_view_names` (без снятия остановившейся
+  установки — `[None]` вместо `[Some(Freed)]`) и
+  `a_failed_detach_keeps_the_handle_and_a_late_installation_installs_nothing`;
+  `every_capture_of_posted_work_is_destroyed_inside_the_boundary` (с отчётом, сброшенным вне
+  границы после успеха, и с телом, сброшенным вне границы без запуска, — паника деструктора
+  выходит наружу); самотест гейта: прямой `os_entry` и чужой адаптер у нативного метода, второй
+  `jni_native` и его импорт, голый и макросный `add_fd_with_callback` (без правила JNI —
+  `Direct`/`Adapted` `MISSED`; без списка лупера — оба `MISSED`), строка
+  `the_jni_adapter_calls_the_boundary` в `panic_boundary_contract`, счёт фикстуры 16/8 →
+  20/10. Код Android проверен типами в WSL (`cargo +nightly check --target
+  aarch64-linux-android`), clippy под Android — только CI. Прогон на устройстве с намеренной
+  паникой в нативном методе и в отправленном замыкании не сделан: у закреплённого 1.100.0 на
+  Windows нет цели Android, её добавление требует `rustup`, а 1.99.0 с целью не собирает
+  workspace; долг записан в строке паники `platform-parity.toml` и в `docs/gaps.md`.
+
+- [x] **LY144** — ветка `system/filters-and-launch-policy`, решение — ADR-0360. Находки
+  подтверждены на `main` @ `d139b8188` чтением кода: `literal_glob` выдавал `*.png` без сложения
+  регистра; `with_extension("tar.gz")` отказывал (точка была запрещена); `current_filter` не
+  уходил и не читался; `ExternalUri` пропускал всё, кроме шести схем; тело `OpenURI`, `OpenFile`
+  и `OpenDirectory` строилось с `String::new()` вместо родителя (находка «предположительно»
+  подтверждена). Построено: `ExternalUri::try_new(uri: &str, allowed: &[Scheme])` — длина до
+  копирования; без символов, которые RFC 3986 велит кодировать (пробел, `"`, `<`, `>`, `` ` ``,
+  `{`, `|`, `}`, `^`, `\`: оболочка Windows подставляет URI в командную строку обработчика как
+  есть — `UnencodedCharacter`) и без скрытых (управляющие, двунаправленные, нулевой ширины, мягкий
+  перенос, BOM, пробелы и разделители вне ASCII — `HiddenCharacter`); схема из `allowed` без учёта
+  регистра ASCII, никогда не из `REFUSED_SCHEMES` (`Scheme::try_new` их не строит; `Scheme` —
+  `Eq` и `Hash`); у схем с авторитетом (`http`, `https`, `ftp`, `ws`, `wss`, `file`) `//`
+  обязателен (`MissingAuthority`: браузер читает `https:bank@evil` как авторитет), в авторитете нет
+  пользователя (`Credentials`); запрос `mailto` — только `to`, `cc`, `bcc`, `subject`, `body`
+  (`MailtoField`); процент-коды не раскрываются. `Launcher` решает по одному пути, без файловой
+  системы на потоке владельца: путь абсолютный, на Windows допустим только префикс буквы диска
+  (`Disk`, `VerbatimDisk`), любой другой — `NotLocal` (в том числе `\\?\GLOBALROOT\Device\Mup\…`);
+  `open_path` отказывает имени из `RUNNABLE_EXTENSIONS` или с CLSID (`.{…}`), читая имя как
+  Windows (без хвостовых точек и пробелов и без `:потока`) — `NotADocument`; показ и корзина
+  разрешены. Список — нижняя граница, не политика: бэкенд открывает файл вне потока владельца и
+  судит открытое. Launcher портала открывает файл на потоке портала, судит дескриптор
+  (`/proc/self/fd`: разрешённое имя и бит исполнения обычного файла) и отдаёт порталу этот же
+  дескриптор — подмена ссылки между проверкой и открытием ничего не меняет. `FileFilter`:
+  расширение — части из букв, цифр ASCII, `-`, `_`, `+`, через одиночную точку (`tar.gz`), хранится
+  без ведущей точки в нижнем регистре и один раз; MIME — два имени RFC 6838 или `тип/*`; границы
+  `MAX_PATTERN_LEN`, `MAX_NAME_LEN`, `MAX_PATTERNS`, `MAX_PER_REQUEST`; два фильтра с одним именем
+  отказаны. `DialogError::InvalidRequest(MalformedRequest)` называет причину. Портал получает
+  каждое расширение в нижнем и верхнем регистре (`*.png`, `*.PNG`, как шлют приложения GTK), имя в
+  смешанном регистре на чувствительной к регистру ФС не показывается (`docs/gaps.md`), и первый
+  фильтр как `current_filter`; сохранение отвечает `SaveLocation` с индексом выбранного фильтра
+  (портал сообщает фильтр значением — бэкенд находит его по имени; чужое имя — `None`); индекс вне
+  фильтров запроса — `MalformedAnswer` у handle для любого бэкенда. Launcher портала берёт окно
+  виджета и называет его `parent_window`, пока окно открыто. Схемы, объявленные приложением
+  (ADR-0307), в умолчание не вошли: это схемы, которые приложение принимает. Тесты (в скобках —
+  откат, который их роняет; таблицы называют каждую неверную строку):
+  `external_uri_admits_only_the_schemes_its_caller_names` (каждая проверка схемы, авторитета,
+  пользователя, `mailto`, кодирования и скрытых символов отдельно роняет свои строки);
+  `a_scheme_is_named_once_whatever_its_case_and_never_a_refused_one`;
+  `opening_a_program_a_script_or_a_shortcut_is_refused_without_asking_the_system` (без проверки
+  имени `setup.exe` доходит до системы, без CLSID — `readme.txt.{…}`);
+  `only_a_drive_letter_is_a_local_path` (Windows, по строке на каждый вид `Prefix`; со старым
+  запрет-списком до системы доходит `\\?\GLOBALROOT\…`); `a_filter_keeps_each_pattern_once_as_the_dialog_compares_it`
+  (без нижнего регистра и дедупликации — `["TAR.GZ", "tar.gz", "Zip", "zip"]`);
+  `a_malformed_request_is_refused_without_showing_a_dialog` (без каждой границы и проверки имён —
+  её строка); `a_save_reports_the_filter_selected_when_the_user_accepted` (без проверки индекса
+  доходит `Some(2)` при двух фильтрах); на Linux против подставного портала
+  `the_dialogs_reach_the_file_chooser_and_answer_its_picks` (без `current_filter` и без верхнего
+  регистра), `a_save_dialog_reports_the_filter_the_portal_says_was_selected` (без чтения
+  `current_filter` — `None` вместо `Some(1)`) и
+  `a_file_that_would_run_is_judged_by_what_was_opened_and_never_handed_on` (без суда над
+  дескриптором ссылка `report.pdf` → `evil.desktop` открывается); модульные
+  `a_filter_becomes_globs_then_mime_types` и
+  `a_launch_is_attached_to_its_widgets_window_while_it_is_open` (без родителя — `""`). Прогнано:
+  `flui-system` на Windows через `cargo heli nextest` (25), в WSL (4 модульных и 35
+  интеграционных, с подставным порталом). Должно на устройствах (в строках `platform-parity.toml`):
+  настоящие GTK и KDE file chooser и `OpenURI` на рабочем столе. macOS, iOS, Android и Web в
+  `flui-system` без провайдера; отображение фильтров и суд над открытым файлом (`AssocIsDangerous`
+  на Windows, Launch Services на macOS) для них записаны в ADR-0360 §2, §4 и `docs/gaps.md`.
 
 ## Чего нет в этой серии
 

@@ -1,7 +1,7 @@
 # render-scaling: задачи
 
 - **Статус:** утверждена 2026-11-11; исполнение. Сделано: RS1, RS3, RS4, RS5, RS6, RS7, RS8, RS9, RS14, RS15a, RS15b, RS15c1, RS15c2, RS17, RS18, RS19a, RS19b, RS2, RS8c (update с записанным разрывом), RS11 (без включения `Rects` и без `region_passes` в `FrameReport`); из RS19c удалена ось `GpuResourceGeneration`.
-  Update RS8 выше 1,6× принят автором спеки. RS16 готова для настольных раннеров. `RasterOwner` и `RasterHandle` удалены (#2593); RS18: веб рисует слотом того же исполнителя, старый `RasterBackend` удалён, `SlotBackend` переименован в `RasterBackend`. Следующие: счётчик обхода движка — в RS12, и `region_passes` идёт в `FrameReport` тем же путём (design.md, «Счётчики»); запись кадра один раз с воспроизведением на прямоугольник включает `Rects` (RS11).
+  Update RS8 выше 1,6× принят автором спеки. RS16 готова для настольных раннеров. `RasterOwner` и `RasterHandle` удалены (#2593); RS18: веб рисует слотом того же исполнителя, старый `RasterBackend` удалён, `SlotBackend` переименован в `RasterBackend`. RS12 начата: счётчики движка `RasterCounters` (design.md, «Счётчики»); дальше кэш записей. Запись кадра один раз с воспроизведением на прямоугольник включает `Rects` (RS11).
 - **Design:** [design.md](design.md); требования и ворота G1–G7: [requirements.md](requirements.md)
 - **База:** `main` @ `da69efa`. Пути и строки в ADR даны на `e5ba8fe8f`; перед правкой сверить.
 
@@ -12,9 +12,10 @@
   нет, исполнитель останавливается и присылает вопрос координатору.
 - Тест задачи падает при откате её производственной правки. Имена тестов взяты из разделов
   Confirmation трёх ADR; менять имя можно только вместе с ADR.
-- Счётчик, названный в задаче, добавляется в `FrameReport::counters()` и в
+- Счётчик сцены или конвейера, названный в задаче, добавляется в `FrameReport::counters()` и в
   `crates/flui-widgets/perf/baseline/` тем же PR; изменение чужих строк baseline объясняется в
-  теле PR построчно.
+  теле PR построчно. Счётчик движка добавляется в `RasterCounters`, и его ворота читает тест движка
+  на lavapipe (design.md, «Счётчики»).
 - Каждый PR правит пункт своего ADR в `docs/gaps.md`: убирает построенное и называет остаток.
   PR, после которого пункт пуст, удаляет его и ставит записи `Implemented (дата)`.
 - Снимок `*.snap` перегенерируется только там, где задача это разрешает явно.
@@ -237,7 +238,8 @@
 - **Тесты:** `a_cached_chunk_replays_the_command_stream_it_recorded`,
   `a_chunk_moved_by_whole_pixels_hits_the_recording_cache`,
   `an_atlas_reset_misses_every_cached_recording`.
-- **Ворота:** G1 целиком, G3, G4, G6; счётчики `chunks_recorded`, `recording_cache_hits`,
+- **Ворота:** G1 целиком, G3, G4, G6, половины движка в тестах движка на lavapipe; счётчики
+  `RasterCounters` (`nodes_entered`, `cull_tests`, `chunks_recorded`, `region_passes`), `recording_cache_hits`,
   `recording_cache_evictions`, `recording_cache_bytes`.
 - **Зависит:** RS9, RS2 (состояние клипа применяется при воспроизведении). **Размер:** L.
 
@@ -366,4 +368,5 @@
 | RS19c | #2615, #2618 | ось удалена; поток растра в движке (`RasterExecutor::spawn`, `DETACH_DEADLINE`); размещение в flui-app есть (#2678, #2691, #2707; threaded только за `FLUI_RASTER_PLACEMENT` в отладочной сборке на Linux); замер доли растра на сцене-сетке: `crates/flui-app/benches/raster_share.rs`, таблица в теле его PR | `GpuResourceGeneration`, `FrameStamp::gpu_resource_generation` и фикстура `gpu_resource_generation_private_field` удалены, `FrameStamp::new` берёт три значения; кадр до пересборки отклоняется по поколению слота (`raster_executor::a_device_rebuild_refuses_the_frames_stamped_before_it_and_redraws_in_full`, зелёный без оси); clippy и тесты flui-foundation, flui-engine, flui-app |
 | RS15b | #2625, #2628 | эпоха кадра выпускается рантаймом; `Queued`, `FrameSettlement`, `UiRuntime::settle_frame` и запись `PendingFrame` | `a_queued_frame_settles_by_its_stamp_and_a_stale_settlement_is_ignored`, `each_submitted_frame_takes_the_next_epoch_of_its_runtime`, `a_settlement_commits_the_revision_its_frame_was_painted_from`, `a_later_settlement_folds_the_frames_it_superseded`; clippy и тесты flui-runtime, flui-interaction, flui-testing |
 | RS11 | #2699 | построена, `Rects` не включён: `RegionPlan::of` планирует рамку региона всегда, потому что проход на прямоугольник заново записывает всё, что его прямоугольник достаёт (lavapipe, 512², 20 000 прямоугольников: 2 прямоугольника — 17,0 мс `Rects` против 8,4 мс рамки; 8 — 80 мс против 21 мс и 26 мс полного кадра). `Rects` включает следующий PR вместе с записью кадра один раз (отсечение по объединению прямоугольников, воспроизведение на каждый прямоугольник под его scissor и очисткой) и замером; до тех пор тесты ведут его через `RetainedCapture::plan_rect_by_rect`. `region_passes` считает протокол кадра движка, до `FrameReport` (G2) его доводит путь счётчиков движка из design.md, «Счётчики», которого ещё нет | трекер держит `Region`; замыкание над читателями фона идёт по тому, что план перерисует: регион, планируемый рамкой, замыкается как сама рамка; все члены группы фоновых фильтров лежат в одном прямоугольнике региона, и группа снимает фон там же, где полный кадр; самолечение перекрытия спрашивается у каждого прохода; слот окна (и веб) применяет регион по прямоугольникам. Readback (lavapipe): `version_readback_tests::region_frames_match_a_full_frame` (по прямоугольникам: равен полному кадру, `region_passes = 2`, вне прямоугольников пиксели не изменились; с одним scissor вокруг обоих и отсечением по прямоугольнику 14 628 пикселей отличаются); `damage_readback_tests::a_backdrop_reader_in_the_gap_of_a_bounding_box_is_redrawn_whole` и `version_readback_tests::a_backdrop_effect_in_the_gap_of_a_bounding_box_is_redrawn_whole` (при замыкании одних прямоугольников 20 пикселей отличаются); `damage_readback_tests::a_backdrop_group_takes_one_rect_of_a_region_frame` и обе `a_backdrop_group_outside_the_damage_still_captures_at_its_first_member` (без прямоугольника над группой в замыкании первый член не перерисовывается и 256 пикселей устаревают); `damage_readback_tests::a_shape_straddling_a_region_pass_repaints_the_next_frame_in_full` (падает, если самолечение выключено при `Rects`). `damage::tests::plan_frame_table` (рамка для любого региона; по прямоугольникам: один → `Bounds`, два → `Rects`); `layer_it region_contract::an_enclosing_rect_takes_its_whole_pixels_without_a_margin`. `cargo xtask perf --check` держит baseline без правок |
-| RS10, RS12, RS13 | | не начата | |
+| RS12 | | в работе: счётчики движка `RasterCounters` за кадр, без кэша записей | `flui-engine` lib: `version_readback_tests::a_frame_counts_the_chunks_it_records` (lavapipe: полный кадр ряда из 4 границ входит в 5 узлов и пишет 4 куска без вопросов отсечению; частичный кадр над одной границей входит в 2 узла, задаёт 5 вопросов, пишет 1 кусок за 1 проход; пропущенный кадр — нули; падает без счёта) |
+| RS10, RS13 | | не начата | |
