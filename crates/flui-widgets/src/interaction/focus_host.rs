@@ -15,7 +15,7 @@
 //! [`Focus`]: super::focus::Focus
 
 use std::{
-    cell::{Cell, OnceCell, RefCell},
+    cell::{Cell, RefCell},
     rc::{Rc, Weak},
 };
 
@@ -48,10 +48,9 @@ pub(crate) type FocusKeyHandler = Rc<dyn Fn(&mut EventContext<'_>, &KeyEvent) ->
 /// installed on a node keeps the node, or the host's callbacks, alive past
 /// the host.
 struct Shared {
-    /// Set first in `init`; the focus-edge listener and the key handler
-    /// open their writes from it (ADR-0086). A key event cannot reach the
-    /// node before `init` attaches it, so the cell is set by then.
-    writer: OnceCell<WriterSource>,
+    /// The focus-edge listener and the key handler open their writes from
+    /// it (ADR-0086).
+    writer: WriterSource,
     /// The node the listener reads, which a live replacement moves before
     /// the focus tree announces it.
     observed_node: RefCell<Weak<FocusNode>>,
@@ -86,11 +85,7 @@ fn key_handler(handler: &FocusKeyHandler, shared: &Rc<Shared>) -> KeyEventHandle
         let Some(shared) = shared.upgrade() else {
             return KeyEventResult::Ignored;
         };
-        let Some(writer) = shared.writer.get() else {
-            tracing::warn!("Focus: a key event reached a node whose widget has not initialized");
-            return KeyEventResult::Ignored;
-        };
-        writer.write(|ctx| handler(ctx, event))
+        shared.writer.write(|ctx| handler(ctx, event))
     })
 }
 
@@ -310,7 +305,7 @@ impl FocusHost {
     pub(crate) fn new(config: &FocusConfig, ctx: &dyn LifecycleContext) -> Self {
         let node = config.make_node();
         let shared = Rc::new(Shared {
-            writer: OnceCell::new(),
+            writer: ctx.writer_source(),
             observed_node: RefCell::new(Rc::downgrade(&node)),
             was_focused: Cell::new(false),
             node_revision: Cell::new(0),
@@ -351,11 +346,7 @@ impl FocusHost {
     fn add_focus_listener(&self, node: &Rc<FocusNode>) -> Subscription {
         let rebuild = self.rebuild_handle.clone();
         let shared = Rc::clone(&self.shared);
-        let writer = shared
-            .writer
-            .get()
-            .expect("BUG: a focus listener was installed before init acquired the writer source")
-            .clone();
+        let writer = shared.writer.clone();
         node.subscribe(move || {
             let next_revision = shared
                 .node_revision
@@ -458,10 +449,6 @@ impl FocusHost {
         rect_provider: RectProvider,
         record: Option<FocusRecord>,
     ) {
-        self.shared
-            .writer
-            .set(ctx.writer_source())
-            .expect("BUG: a focus host is initialized once");
         let parent = enclosing_focus_parent(ctx);
         self.install_focus_listener();
         let rect_provider_registration =

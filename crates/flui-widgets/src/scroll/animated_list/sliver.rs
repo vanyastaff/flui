@@ -253,7 +253,7 @@ pub struct SliverAnimatedListState<T, K> {
     /// The placement clock, restarted by the sliver's layout.
     clock: DrivenController,
     vsync: Option<Vsync>,
-    rebuild: Option<RebuildHandle>,
+    rebuild: RebuildHandle,
     /// Whether the mount frame's staggered entrance still plays for an item
     /// built now.
     entrance_open: Rc<Cell<bool>>,
@@ -275,7 +275,7 @@ where
 {
     type State = SliverAnimatedListState<T, K>;
 
-    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
         let count = self.items.len();
         let staggered = self.motion.entrance.is_some();
         let roster = self
@@ -303,7 +303,7 @@ where
             generation: Cell::new(0),
             clock,
             vsync: None,
-            rebuild: None,
+            rebuild: ctx.rebuild_handle(),
             entrance_open: Rc::new(Cell::new(staggered)),
         }
     }
@@ -368,9 +368,7 @@ where
                         None,
                         self.vsync.as_ref(),
                     );
-                    if let Some(rebuild) = &self.rebuild {
-                        entry.watch(rebuild.clone());
-                    }
+                    entry.watch(self.rebuild.clone());
                     entry
                 }
                 (None, Source::Ghost) => {
@@ -415,11 +413,9 @@ where
     K: Clone + Eq + Hash + fmt::Debug + 'static,
 {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        let rebuild = ctx.rebuild_handle();
         for entry in self.roster.get_mut() {
-            entry.watch(rebuild.clone());
+            entry.watch(self.rebuild.clone());
         }
-        self.rebuild = Some(rebuild);
         self.vsync = VsyncScope::maybe_of(ctx);
         self.rebind();
         if self.entrance_open.get() {

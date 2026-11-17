@@ -578,12 +578,13 @@ pub struct PageViewState {
     pending_pages: Rc<RefCell<VecDeque<usize>>>,
     /// The listener schedules the draining rebuild through it.
     rebuild: RebuildHandle,
-    /// Minted in `init_state`; recorded pages are delivered through it.
+    /// Recorded pages are delivered through it; `None` where the host has no
+    /// post-frame lane.
     post_frame: Option<PostFrameHandle>,
     /// Owner-local delivery target. Queued post-frame callbacks hold only a
     /// [`Weak`] to it, so the lane cannot keep this state's callback or
     /// writer alive past teardown.
-    delivery: Option<Rc<PageChangeDelivery>>,
+    delivery: Rc<PageChangeDelivery>,
     last_reported_page: Rc<Cell<i64>>,
     /// The listener's own subscription: its withdrawal carries its own
     /// channel, so a controller swap cannot detach somebody else's
@@ -658,10 +659,7 @@ impl PageViewState {
             );
             return;
         };
-        let delivery = self
-            .delivery
-            .as_ref()
-            .expect("BUG: init_state creates the delivery target before the first build");
+        let delivery = &self.delivery;
         while let Some(page) = pending.pop_front() {
             let delivery: Weak<PageChangeDelivery> = Rc::downgrade(delivery);
             if let Err(error) = handle.schedule(move |_timing| {
@@ -738,16 +736,20 @@ impl StatefulView for PageView {
 
     fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
         let controller = self.controller.clone().unwrap_or_default();
+        let on_page_changed = Rc::new(RefCell::new(self.on_page_changed.clone()));
         PageViewState {
             last_reported_page: Rc::new(Cell::new(controller.initial_page() as i64)),
             snap: page_snap(&controller),
             controller,
-            on_page_changed: Rc::new(RefCell::new(self.on_page_changed.clone())),
+            delivery: Rc::new(PageChangeDelivery {
+                callback: Rc::clone(&on_page_changed),
+                writer: ctx.writer_source(),
+            }),
+            on_page_changed,
             has_callback: Rc::new(Cell::new(self.on_page_changed.is_some())),
             pending_pages: Rc::new(RefCell::new(VecDeque::new())),
             rebuild: ctx.rebuild_handle(),
-            post_frame: None,
-            delivery: None,
+            post_frame: ctx.post_frame_handle(),
             page_listener: None,
             turns_change: ChangeNotifier::new(),
             page_count: Rc::new(Cell::new(self.children.len())),
@@ -757,12 +759,7 @@ impl StatefulView for PageView {
 }
 
 impl ViewState<PageView> for PageViewState {
-    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        self.delivery = Some(Rc::new(PageChangeDelivery {
-            callback: Rc::clone(&self.on_page_changed),
-            writer: ctx.writer_source(),
-        }));
-        self.post_frame = ctx.post_frame_handle();
+    fn init_state(&mut self, _ctx: &dyn LifecycleContext) {
         self.register_page_listener();
     }
 

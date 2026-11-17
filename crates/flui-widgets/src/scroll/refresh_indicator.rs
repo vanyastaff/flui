@@ -446,7 +446,7 @@ struct Refresher {
     /// The gesture's command, resolved by the latest build below the
     /// indicator's action.
     command: RefCell<Option<CommandHandle>>,
-    writer: RefCell<Option<WriterSource>>,
+    writer: WriterSource,
     post_frame: RefCell<Option<PostFrameHandle>>,
     driver: RefCell<Option<AsyncDriver>>,
     /// The refresh in flight; dropping it cancels the future.
@@ -459,7 +459,7 @@ struct Refresher {
 }
 
 impl Refresher {
-    fn new(view: &RefreshIndicator, settle: AnimationController) -> Rc<Self> {
+    fn new(view: &RefreshIndicator, settle: AnimationController, writer: WriterSource) -> Rc<Self> {
         Rc::new_cyclic(|this| Self {
             this: this.clone(),
             controller: RefCell::new(view.controller.clone().unwrap_or_default()),
@@ -470,7 +470,7 @@ impl Refresher {
             pulling: Cell::new(None),
             travel: Cell::new(0.0),
             command: RefCell::new(None),
-            writer: RefCell::new(None),
+            writer,
             post_frame: RefCell::new(None),
             driver: RefCell::new(None),
             task: RefCell::new(None),
@@ -591,9 +591,8 @@ impl Refresher {
             return;
         }
         let command = self.command.borrow().clone();
-        let writer = self.writer.borrow().clone();
-        if let (Some(command), Some(writer)) = (command, writer) {
-            writer.write(|ctx| command.perform(ctx));
+        if let Some(command) = command {
+            self.writer.write(|ctx| command.perform(ctx));
         }
     }
 
@@ -764,11 +763,11 @@ impl fmt::Debug for RefreshIndicatorState {
 impl StatefulView for RefreshIndicator {
     type State = RefreshIndicatorState;
 
-    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
         let settle = AnimationController::builder(SETTLE)
             .debug_label("RefreshIndicator.settle")
             .build_on(None);
-        let refresher = Refresher::new(self, settle.controller().clone());
+        let refresher = Refresher::new(self, settle.controller().clone(), ctx.writer_source());
         let connection: Rc<dyn NestedScrollConnection> = refresher.clone();
         RefreshIndicatorState {
             refresher,
@@ -811,7 +810,6 @@ impl RefreshIndicatorState {
 
 impl ViewState<RefreshIndicator> for RefreshIndicatorState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        *self.refresher.writer.borrow_mut() = Some(ctx.writer_source());
         self.refresher.mounted.set(true);
         let settle = self.settle.controller().clone();
         let weak = Rc::downgrade(&self.refresher);

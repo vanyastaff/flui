@@ -507,10 +507,9 @@ pub struct AnimatedSwitcherState {
     /// Monotonically increasing entry counter — the source of each
     /// [`ChildEntry::child_number`].
     child_number: u64,
-    /// Captured in `init_state` (unavailable in `create_state`, which has no
-    /// `BuildContext`); reused for every later entry `did_update_view`
-    /// creates. `None` only in the pre-`init_state` window.
-    rebuild: Option<RebuildHandle>,
+    /// Registered on every entry, the first in `init_state` and each later
+    /// one as `did_update_view` creates it.
+    rebuild: RebuildHandle,
     vsync: Option<Vsync>,
 }
 
@@ -527,7 +526,7 @@ impl std::fmt::Debug for AnimatedSwitcherState {
 impl StatefulView for AnimatedSwitcher {
     type State = AnimatedSwitcherState;
 
-    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
         // The initial entry is added without animating. FLUI splits controller
         // construction (here, no `BuildContext` yet) from vsync/listener
         // registration (`init_state`, below) — see `ChildEntry::new`'s doc.
@@ -548,7 +547,7 @@ impl StatefulView for AnimatedSwitcher {
             current_entry,
             outgoing_entries: RefCell::new(Vec::new()),
             child_number: 0,
-            rebuild: None,
+            rebuild: ctx.rebuild_handle(),
             vsync: None,
         }
     }
@@ -591,21 +590,17 @@ impl AnimatedSwitcherState {
             true,
             self.vsync.as_ref(),
         );
-        if let Some(rebuild) = self.rebuild.clone() {
-            entry.register(self.vsync.clone(), rebuild);
-        }
+        entry.register(self.vsync.clone(), self.rebuild.clone());
         self.current_entry = Some(entry);
     }
 }
 
 impl ViewState<AnimatedSwitcher> for AnimatedSwitcherState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        let rebuild = ctx.rebuild_handle();
         let vsync = VsyncScope::maybe_of(ctx);
         if let Some(entry) = self.current_entry.as_mut() {
-            entry.register(vsync.clone(), rebuild.clone());
+            entry.register(vsync.clone(), self.rebuild.clone());
         }
-        self.rebuild = Some(rebuild);
         self.vsync = vsync;
     }
 

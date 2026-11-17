@@ -36,7 +36,7 @@ struct FieldInner<T> {
     enabled: Cell<bool>,
     mode: Cell<AutovalidateMode>,
     force_error_text: RefCell<Option<String>>,
-    /// The mounted field's rebuild, taken in `init_state`.
+    /// The mounted field's rebuild; `None` while the handle is detached.
     rebuild: RefCell<Option<RebuildHandle>>,
     /// The form this field is registered with.
     form: RefCell<Weak<FormInner>>,
@@ -366,10 +366,18 @@ impl<T: Clone + 'static> FormFieldHandle<T> {
             .then_some(FormFieldHandleAlreadyAttached)
     }
 
-    fn try_attach(&self) -> Option<FieldAttachment<T>> {
+    /// Attach the handle to the mounted field that `writer` and `rebuild`
+    /// reach; they stay on the handle until the attachment drops.
+    fn try_attach(
+        &self,
+        writer: &WriterSource,
+        rebuild: &RebuildHandle,
+    ) -> Option<FieldAttachment<T>> {
         if self.inner.active_attachment.get().is_some() {
             return None;
         }
+        *self.inner.writer.borrow_mut() = Some(writer.clone());
+        *self.inner.rebuild.borrow_mut() = Some(rebuild.clone());
         let generation = self
             .inner
             .next_attachment
@@ -630,6 +638,9 @@ pub struct FormFieldState<T: Clone + 'static> {
     handle: FormFieldHandle<T>,
     attachment: Option<FieldAttachment<T>>,
     form: Option<FormHandle>,
+    /// What every handle this field attaches carries.
+    writer: WriterSource,
+    rebuild: RebuildHandle,
 }
 
 impl<T: Clone + 'static> std::fmt::Debug for FormFieldState<T> {
@@ -642,9 +653,10 @@ impl<T: Clone + 'static> std::fmt::Debug for FormFieldState<T> {
 }
 
 impl<T: Clone + 'static> FormFieldState<T> {
-    fn attach(view: &FormField<T>) -> Self {
+    fn attach(view: &FormField<T>, writer: WriterSource, rebuild: RebuildHandle) -> Self {
         let requested = view.handle.clone().unwrap_or_default();
-        let (handle, attachment) = if let Some(attachment) = requested.try_attach() {
+        let (handle, attachment) = if let Some(attachment) = requested.try_attach(&writer, &rebuild)
+        {
             (requested, attachment)
         } else {
             tracing::error!(
@@ -655,7 +667,7 @@ impl<T: Clone + 'static> FormFieldState<T> {
             requested.inner.attachment_error_pending.set(true);
             let handle = FormFieldHandle::new();
             let attachment = handle
-                .try_attach()
+                .try_attach(&writer, &rebuild)
                 .expect("BUG: a fresh FormFieldHandle has no existing attachment");
             (handle, attachment)
         };
@@ -663,6 +675,8 @@ impl<T: Clone + 'static> FormFieldState<T> {
             handle,
             attachment: Some(attachment),
             form: None,
+            writer,
+            rebuild,
         };
         state.configure(view);
         *state.handle.inner.value.borrow_mut() = Some(view.initial_value.clone());
@@ -700,7 +714,7 @@ impl<T: Clone + 'static> FormFieldState<T> {
     /// but no longer rebuilds the field, writes its controller or belongs to
     /// the form.
     fn try_adopt(&mut self, handle: FormFieldHandle<T>) {
-        let Some(attachment) = handle.try_attach() else {
+        let Some(attachment) = handle.try_attach(&self.writer, &self.rebuild) else {
             tracing::error!(
                 "FormFieldHandle is already attached to a mounted FormField; retaining the \
                  current attachment until a later update can acquire the requested handle"
@@ -710,11 +724,13 @@ impl<T: Clone + 'static> FormFieldState<T> {
         };
         let old = std::mem::replace(&mut self.handle, handle);
         let (from, to) = (&old.inner, &self.handle.inner);
-        *to.writer.borrow_mut() = from.writer.borrow_mut().take();
+        // The attachment gave `to` this field's writer and rebuild; `from`
+        // no longer reaches the field.
+        from.writer.borrow_mut().take();
         to.value.borrow_mut().clone_from(&from.value.borrow());
         to.error.borrow_mut().clone_from(&from.error.borrow());
         to.interacted.set(from.interacted.get());
-        *to.rebuild.borrow_mut() = from.rebuild.borrow_mut().take();
+        from.rebuild.borrow_mut().take();
         // A text field binds its controller to the new handle itself; a
         // plain field's value binding, if any, moves across.
         let sink = from.value_sink.borrow_mut().take();
@@ -764,15 +780,13 @@ impl<T: Clone + 'static> FormFieldState<T> {
 impl<T: Clone + 'static> StatefulView for FormField<T> {
     type State = FormFieldState<T>;
 
-    fn create_state(&self, _ctx: &dyn LifecycleContext) -> FormFieldState<T> {
-        FormFieldState::attach(self)
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> FormFieldState<T> {
+        FormFieldState::attach(self, ctx.writer_source(), ctx.rebuild_handle())
     }
 }
 
 impl<T: Clone + 'static> ViewState<FormField<T>> for FormFieldState<T> {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        *self.handle.inner.writer.borrow_mut() = Some(ctx.writer_source());
-        *self.handle.inner.rebuild.borrow_mut() = Some(ctx.rebuild_handle());
         self.register_with(Form::maybe_of(ctx));
         self.handle.inner.autovalidate();
     }

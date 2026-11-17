@@ -111,6 +111,8 @@ struct Live {
     down_x: Cell<Option<f64>>,
     callback: RefCell<Terminal<Option<ValueCallback<f64>>>>,
     focus: Terminal<Rc<FocusNode>>,
+    /// Made in `create_state`; `dispose` withdraws it, so a gesture handler
+    /// that outlives the state finds `None` and admits no context.
     writer: RefCell<Terminal<Option<WriterSource>>>,
 }
 impl Drop for Live {
@@ -223,16 +225,13 @@ impl StatefulView for Slider {
                 down_x: Cell::new(None),
                 callback: RefCell::new(callback),
                 focus: Terminal::new(FocusNode::with_debug_label("Slider")),
-                writer: RefCell::new(Terminal::new(None)),
+                writer: RefCell::new(Terminal::new(Some(ctx.writer_source()))),
             })),
             rebuild: ctx.rebuild_handle(),
         }
     }
 }
 impl ViewState<Slider> for SliderState {
-    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        *self.live.writer.borrow_mut() = Terminal::new(Some(ctx.writer_source()));
-    }
     fn did_update_view(&mut self, _old: &Slider, view: &Slider) {
         let incoming = Terminal::new(view.on_changed.as_ref().map(Rc::clone));
         self.live.range.set(view.range);

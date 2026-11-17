@@ -647,7 +647,7 @@ impl DefaultFocusTraversal {
 
 /// Presentation-local state behind [`DefaultFocusTraversal`].
 pub struct DefaultFocusTraversalState {
-    focus_owner: Option<Rc<flui_interaction::FocusManager>>,
+    focus_owner: Rc<flui_interaction::FocusManager>,
     /// The node the bindings' key handler lives on, which the focus owner
     /// starts a key's walk at while nothing is focused.
     keys: Rc<FocusNode>,
@@ -898,7 +898,6 @@ pub(crate) fn with_command_modifier(
 impl std::fmt::Debug for DefaultFocusTraversalState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DefaultFocusTraversalState")
-            .field("initialized", &self.focus_owner.is_some())
             .field("keys", &self.keys.id())
             .finish_non_exhaustive()
     }
@@ -907,60 +906,41 @@ impl std::fmt::Debug for DefaultFocusTraversalState {
 impl StatefulView for DefaultFocusTraversal {
     type State = DefaultFocusTraversalState;
 
-    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
         DefaultFocusTraversalState {
-            focus_owner: None,
+            focus_owner: ctx.focus_manager(),
             keys: FocusNode::with_debug_label("Shortcuts"),
             convention: Rc::new(ConventionBindings::new(convention_bindings)),
         }
     }
 }
 
-impl DefaultFocusTraversalState {
-    /// Make these bindings where a key starts while nothing is focused, so
-    /// the first Tab into a window with no focus reaches them. A nested
-    /// instance's claim covers this one only while it is mounted.
-    fn claim_unfocused_keys(&mut self, owner: Rc<flui_interaction::FocusManager>) {
-        self.release_unfocused_keys();
-        owner.claim_unfocused_keys(&self.keys);
-        self.focus_owner = Some(owner);
-    }
-
-    /// Withdraw this instance's claim.
-    fn release_unfocused_keys(&self) {
-        if let Some(owner) = &self.focus_owner {
-            owner.release_unfocused_keys(&self.keys);
-        }
-    }
-}
-
+/// The bindings are where a key starts while nothing is focused, so the
+/// first Tab into a window with no focus reaches them. `init_state` makes the
+/// claim on the focus owner, a new owner takes it over, and `dispose`
+/// withdraws it; a nested instance's claim covers this one only while it is
+/// mounted.
 impl ViewState<DefaultFocusTraversal> for DefaultFocusTraversalState {
-    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        self.claim_unfocused_keys(ctx.focus_manager());
+    fn init_state(&mut self, _ctx: &dyn LifecycleContext) {
+        self.focus_owner.claim_unfocused_keys(&self.keys);
     }
 
     fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
         let owner = ctx.focus_manager();
-        if self
-            .focus_owner
-            .as_ref()
-            .is_none_or(|held| !Rc::ptr_eq(held, &owner))
-        {
-            self.claim_unfocused_keys(owner);
+        if !Rc::ptr_eq(&self.focus_owner, &owner) {
+            self.focus_owner.release_unfocused_keys(&self.keys);
+            owner.claim_unfocused_keys(&self.keys);
+            self.focus_owner = owner;
         }
     }
 
     fn dispose(&mut self) {
-        self.release_unfocused_keys();
+        self.focus_owner.release_unfocused_keys(&self.keys);
     }
 
     fn build(&self, view: &DefaultFocusTraversal, ctx: &dyn BuildContext) -> impl IntoView {
         let platform = flui_view::environment::PlatformConvention::of(ctx);
-        let focus_owner = self
-            .focus_owner
-            .as_ref()
-            .expect("BUG: DefaultFocusTraversal built before init_state")
-            .clone();
+        let focus_owner = Rc::clone(&self.focus_owner);
         let once = |activator: SingleActivator| activator.allow_repeats(false);
         let mut shortcuts = Shortcuts::new(view.child.clone())
             .focus_node(Rc::clone(&self.keys))
