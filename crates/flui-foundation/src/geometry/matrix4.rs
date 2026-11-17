@@ -72,8 +72,8 @@
 //! assert_eq!(m[0], 1.0);
 //!
 //! // Row/column access
-//! let value = m.get(0, 0);
-//! *m.get_mut(0, 3) = 10.0; // Set translation
+//! let value = m[(0, 0)];
+//! m[(0, 3)] = 10.0; // Set translation
 //!
 //! // Zero-copy conversions
 //! let array: [f64; 16] = m.into();
@@ -742,27 +742,6 @@ impl Matrix4 {
         ]
     }
 
-    /// Gets the matrix element at the specified row and column.
-    ///
-    /// # Panics
-    /// Panics if row or column is >= 4.
-    #[must_use]
-    pub fn get(&self, row: usize, col: usize) -> f64 {
-        assert!(row < 4 && col < 4, "Matrix index out of bounds");
-        self.m[col * 4 + row]
-    }
-
-    /// Gets a mutable reference to the matrix element at the specified row and
-    /// column.
-    ///
-    /// # Panics
-    /// Panics if row or column is >= 4.
-    #[inline]
-    pub fn get_mut(&mut self, row: usize, col: usize) -> &mut f64 {
-        assert!(row < 4 && col < 4, "Matrix index out of bounds");
-        &mut self.m[col * 4 + row]
-    }
-
     /// Returns whether this matrix has an admitted finite computed inverse.
     ///
     /// This computes the same inverse as [`try_inverse`](Self::try_inverse).
@@ -909,6 +888,40 @@ impl IndexMut<usize> for Matrix4 {
     #[inline]
     fn index_mut(&mut self, index: usize) -> &mut Self::Output {
         &mut self.m[index]
+    }
+}
+
+/// The element at `(row, column)`.
+///
+/// # Panics
+///
+/// When `row` or `column` is 4 or more, as slice indexing does.
+impl Index<(usize, usize)> for Matrix4 {
+    type Output = f64;
+
+    #[inline]
+    fn index(&self, (row, column): (usize, usize)) -> &Self::Output {
+        assert!(
+            row < 4 && column < 4,
+            "Matrix4 has no element ({row}, {column})"
+        );
+        &self.m[column * 4 + row]
+    }
+}
+
+/// The element at `(row, column)`, mutably.
+///
+/// # Panics
+///
+/// When `row` or `column` is 4 or more, as slice indexing does.
+impl IndexMut<(usize, usize)> for Matrix4 {
+    #[inline]
+    fn index_mut(&mut self, (row, column): (usize, usize)) -> &mut Self::Output {
+        assert!(
+            row < 4 && column < 4,
+            "Matrix4 has no element ({row}, {column})"
+        );
+        &mut self.m[column * 4 + row]
     }
 }
 

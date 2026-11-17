@@ -110,14 +110,14 @@ impl fmt::Debug for ToolbarItemsSplit {
 /// is one.
 fn row_len(widths: &[f64], button: f64, max: f64) -> usize {
     let total = widths.iter().sum::<f64>();
-    if total <= max + flui_foundation::EPSILON {
+    if total <= max + flui_foundation::geometry::PRECISION_ERROR_TOLERANCE {
         return widths.len();
     }
     let room = max - button;
     let mut used = 0.0;
     let mut len = 0;
     for width in widths {
-        if used + width > room + flui_foundation::EPSILON {
+        if used + width > room + flui_foundation::geometry::PRECISION_ERROR_TOLERANCE {
             break;
         }
         used += width;

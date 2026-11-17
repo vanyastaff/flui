@@ -368,6 +368,10 @@ fn scene_patch_damage() {
                 d::a_magnifier_damages_its_sampling_fringe,
             ),
             (
+                "a_magnifier_reads_a_partly_covered_source_pixel_whole",
+                d::a_magnifier_reads_a_partly_covered_source_pixel_whole,
+            ),
+            (
                 "a_follower_at_the_nesting_limit_damages_what_it_draws",
                 d::a_follower_at_the_nesting_limit_damages_what_it_draws,
             ),

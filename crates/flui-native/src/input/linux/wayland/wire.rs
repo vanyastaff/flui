@@ -10,11 +10,13 @@
 
 #![forbid(unsafe_code)]
 
+use std::num::NonZeroU8;
+
 use flui_platform::input_capabilities::PointerKindSet;
 use flui_platform::keyboard::Modifiers;
 use flui_platform::pointer::{
     MotionAcceleration, MotionDelta, PointerButton, PointerButtons, PointerEvent, PointerKind,
-    ScrollDelta, ScrollInversion, ScrollPrecision, ScrollUnit,
+    ScrollDelta, ScrollInversion, ScrollPrecision, ScrollUnit, TouchpadHoldPhase,
 };
 use flui_platform::{EventTime, PlatformInput};
 use smallvec::SmallVec;
@@ -23,7 +25,7 @@ use crate::input::assembly::{
     Assembled, ContactRegistry, ContactScroll, DecodeError, GestureComponent, GestureDelta,
     GesturePhase, GestureReading, MAX_TOUCHES, NativeCancel, NativeClock, NativeContact,
     NativeDevice, NativeReading, NativeSurface, NativeTime, PenAngles, RawSensors, ReadingAction,
-    ReadingTime, ScrollPhases, ScrollReading, decode, framed,
+    ReadingTime, ScrollPhases, ScrollReading, SwipeReading, decode, framed,
 };
 use crate::input::scroll::{DetentSteps, WheelAmount, wheel_step};
 
@@ -31,6 +33,10 @@ use crate::input::scroll::{DetentSteps, WheelAmount, wheel_step};
 pub const MOUSE: NativeContact = NativeContact(u64::MAX);
 /// The pinch of a pointer device's gesture object.
 pub const PINCH: NativeContact = NativeContact(u64::MAX - 1);
+/// The swipe of a pointer device's gesture object.
+pub const SWIPE: NativeContact = NativeContact(u64::MAX - 2);
+/// The hold of a pointer device's gesture object.
+pub const HOLD: NativeContact = NativeContact(u64::MAX - 3);
 /// A tablet tool, the one contact of its device.
 pub const TOOL: NativeContact = NativeContact(0);
 
@@ -337,6 +343,53 @@ pub enum PinchWire {
     },
 }
 
+/// A swipe's event (`zwp_pointer_gesture_swipe_v1`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a mirror of the protocol's events, decoded arm by arm, and a `_` arm would drop input"
+)]
+pub enum SwipeWire {
+    /// A swipe of `fingers` began over `surface`.
+    Begin {
+        /// The window surface.
+        surface: NativeSurface,
+        /// How many fingers swipe.
+        fingers: u32,
+    },
+    /// The fingers' centre moved by this much, in surface coordinates.
+    Update {
+        /// Horizontally.
+        dx: f64,
+        /// Vertically.
+        dy: f64,
+    },
+    /// It ended, or the compositor cancelled it.
+    End {
+        /// Cancelled rather than ended.
+        cancelled: bool,
+    },
+}
+
+/// A hold's event (`zwp_pointer_gesture_hold_v1`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a mirror of the protocol's events, decoded arm by arm, and a `_` arm would drop input"
+)]
+pub enum HoldWire {
+    /// Fingers came to rest over `surface`.
+    Begin {
+        /// The window surface.
+        surface: NativeSurface,
+    },
+    /// They lifted, or started another gesture (`cancelled`).
+    End {
+        /// Cancelled rather than ended.
+        cancelled: bool,
+    },
+}
+
 /// A seat, by a key minted when the input bound it: a `wl_seat` global's
 /// name can be announced again for another seat after its removal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -395,6 +448,24 @@ pub enum SeatEvent {
         pointer: NativeDevice,
         /// What it said.
         event: PinchWire,
+    },
+    /// A swipe's event.
+    Swipe {
+        /// The gesture objects' device.
+        device: NativeDevice,
+        /// The pointer it belongs to, whose cursor stays where the swipe began.
+        pointer: NativeDevice,
+        /// What it said.
+        event: SwipeWire,
+    },
+    /// A hold's event.
+    Hold {
+        /// The gesture objects' device.
+        device: NativeDevice,
+        /// The pointer it belongs to, whose cursor is where the fingers rest.
+        pointer: NativeDevice,
+        /// What it said.
+        event: HoldWire,
     },
     /// The modifiers of `seat`'s keyboard changed.
     Modifiers {
@@ -566,6 +637,21 @@ struct PinchState {
     scale: f64,
 }
 
+/// A swipe or a hold in progress: where the cursor rests while it lasts.
+#[derive(Debug, Clone, Copy)]
+struct RestingState {
+    device: NativeDevice,
+    surface: NativeSurface,
+    at: (f64, f64),
+}
+
+/// A swipe in progress, with its finger count.
+#[derive(Debug, Clone, Copy)]
+struct SwipeState {
+    resting: RestingState,
+    fingers: NonZeroU8,
+}
+
 /// The seats' input as one assembly: the registry every reading is decoded
 /// against, the scroll phases, and what each device's frame gathered.
 #[derive(Debug)]
@@ -580,6 +666,8 @@ pub struct SeatAssembly {
     touches: Vec<TouchState>,
     tools: Vec<ToolState>,
     pinches: Vec<PinchState>,
+    swipes: Vec<SwipeState>,
+    holds: Vec<RestingState>,
 }
 
 /// The output of one wire event.
@@ -599,6 +687,8 @@ impl SeatAssembly {
             touches: Vec::new(),
             tools: Vec::new(),
             pinches: Vec::new(),
+            swipes: Vec::new(),
+            holds: Vec::new(),
         }
     }
 
@@ -631,6 +721,16 @@ impl SeatAssembly {
                 pointer,
                 event,
             } => self.pinch(device, pointer, event, time),
+            SeatEvent::Swipe {
+                device,
+                pointer,
+                event,
+            } => self.swipe(device, pointer, event, time),
+            SeatEvent::Hold {
+                device,
+                pointer,
+                event,
+            } => self.hold(device, pointer, event, time),
             SeatEvent::Modifiers { seat, modifiers } => {
                 self.modifiers.retain(|(held, _)| *held != seat);
                 self.modifiers.push((seat, modifiers));
@@ -710,6 +810,8 @@ impl SeatAssembly {
         self.touches.retain(|touch| touch.device != Some(device));
         self.tools.retain(|tool| tool.device != device);
         self.pinches.retain(|pinch| pinch.device != device);
+        self.swipes.retain(|swipe| swipe.resting.device != device);
+        self.holds.retain(|hold| hold.device != device);
         self.seats.retain(|(held, _)| *held != device);
         let (ended, removed) = self.contacts.remove_device(device, time);
         let mut out: Out = ended
@@ -745,6 +847,8 @@ impl SeatAssembly {
             }
         }
         self.pinches.retain(|pinch| pinch.surface != surface);
+        self.swipes.retain(|swipe| swipe.resting.surface != surface);
+        self.holds.retain(|hold| hold.surface != surface);
     }
 
     // ---- Pointers -------------------------------------------------------
@@ -1252,7 +1356,155 @@ impl SeatAssembly {
         }
     }
 
-    // ---- Pinches --------------------------------------------------------
+    // ---- Gestures -------------------------------------------------------
+
+    /// A gesture of `pointer`'s gesture objects (`device`) begins: the
+    /// objects are the pointer's seat's, so that seat's removal ends the
+    /// gesture too. Returns where the pointer's cursor is.
+    fn gesture_begins(&mut self, device: NativeDevice, pointer: NativeDevice) -> (f64, f64) {
+        if let Some(seat) = self
+            .seats
+            .iter()
+            .find(|(held, _)| *held == pointer)
+            .map(|(_, seat)| *seat)
+        {
+            self.seats.retain(|(held, _)| *held != device);
+            self.seats.push((device, seat));
+        }
+        self.pointers
+            .iter()
+            .find(|state| state.device == pointer)
+            .map_or((0.0, 0.0), |state| state.position)
+    }
+
+    /// One reading of a swipe or a hold of the gesture objects `device`,
+    /// carrying `pointer`'s modifiers, where the cursor rests.
+    fn resting_reading(
+        &self,
+        contact: NativeContact,
+        state: RestingState,
+        pointer: NativeDevice,
+        action: ReadingAction,
+        time: WireTime,
+    ) -> NativeReading {
+        NativeReading::new(contact, PointerKind::Trackpad, action, time.reading_time())
+            .on(state.surface)
+            .from_device(state.device)
+            .with_primary(true)
+            .with_modifiers(self.modifiers_of(pointer))
+            .at_logical(state.at.0, state.at.1)
+    }
+
+    /// A swipe: its steps go on the fingers' travel, while the cursor stays
+    /// where the swipe began (the compositor moves no pointer under it).
+    fn swipe(
+        &mut self,
+        device: NativeDevice,
+        pointer: NativeDevice,
+        event: SwipeWire,
+        time: WireTime,
+    ) -> Out {
+        let mut out = Out::new();
+        let (state, phase, (dx, dy)) = match event {
+            SwipeWire::Begin { surface, fingers } => {
+                // A compositor names at least one finger; a count past a byte
+                // is still a swipe of every finger a byte holds.
+                let Some(fingers) = NonZeroU8::new(u8::try_from(fingers).unwrap_or(u8::MAX)) else {
+                    return out;
+                };
+                let at = self.gesture_begins(device, pointer);
+                let state = SwipeState {
+                    resting: RestingState {
+                        device,
+                        surface,
+                        at,
+                    },
+                    fingers,
+                };
+                self.swipes.retain(|swipe| swipe.resting.device != device);
+                self.swipes.push(state);
+                (state, GesturePhase::Began, (0.0, 0.0))
+            }
+            SwipeWire::Update { dx, dy } => {
+                let Some(state) = self
+                    .swipes
+                    .iter()
+                    .find(|swipe| swipe.resting.device == device)
+                else {
+                    return out;
+                };
+                (*state, GesturePhase::Changed, (dx, dy))
+            }
+            SwipeWire::End { cancelled } => {
+                let Some(index) = self
+                    .swipes
+                    .iter()
+                    .position(|swipe| swipe.resting.device == device)
+                else {
+                    return out;
+                };
+                let phase = if cancelled {
+                    GesturePhase::Cancelled
+                } else {
+                    GesturePhase::Ended
+                };
+                (self.swipes.remove(index), phase, (0.0, 0.0))
+            }
+        };
+        let reading = self.resting_reading(
+            SWIPE,
+            state.resting,
+            pointer,
+            ReadingAction::Swipe(SwipeReading {
+                fingers: state.fingers,
+                phase,
+                dx,
+                dy,
+            }),
+            time,
+        );
+        self.decode(&reading, &mut out);
+        out
+    }
+
+    /// A hold: fingers resting where the cursor is, until they lift or start
+    /// another gesture.
+    fn hold(
+        &mut self,
+        device: NativeDevice,
+        pointer: NativeDevice,
+        event: HoldWire,
+        time: WireTime,
+    ) -> Out {
+        let mut out = Out::new();
+        let (state, phase) = match event {
+            HoldWire::Begin { surface } => {
+                let at = self.gesture_begins(device, pointer);
+                let state = RestingState {
+                    device,
+                    surface,
+                    at,
+                };
+                self.holds.retain(|hold| hold.device != device);
+                self.holds.push(state);
+                (state, TouchpadHoldPhase::Begin)
+            }
+            HoldWire::End { cancelled } => {
+                let Some(index) = self.holds.iter().position(|hold| hold.device == device) else {
+                    return out;
+                };
+                let phase = if cancelled {
+                    TouchpadHoldPhase::Cancelled
+                } else {
+                    TouchpadHoldPhase::End
+                };
+                (self.holds.remove(index), phase)
+            }
+        };
+        let reading = self.resting_reading(HOLD, state, pointer, ReadingAction::Hold(phase), time);
+        self.decode(&reading, &mut out);
+        out
+    }
 
     fn pinch(
         &mut self,
@@ -1264,23 +1516,8 @@ impl SeatAssembly {
         let mut out = Out::new();
         let readings: SmallVec<[(GestureComponent, GesturePhase, GestureDelta); 2]> = match event {
             PinchWire::Begin { surface } => {
-                let focal = self
-                    .pointers
-                    .iter()
-                    .find(|state| state.device == pointer)
-                    .map_or((0.0, 0.0), |state| state.position);
+                let focal = self.gesture_begins(device, pointer);
                 self.pinches.retain(|pinch| pinch.device != device);
-                // The gesture object is its pointer's seat's: that seat's
-                // removal ends it too.
-                if let Some(seat) = self
-                    .seats
-                    .iter()
-                    .find(|(held, _)| *held == pointer)
-                    .map(|(_, seat)| *seat)
-                {
-                    self.seats.retain(|(held, _)| *held != device);
-                    self.seats.push((device, seat));
-                }
                 self.pinches.push(PinchState {
                     device,
                     surface,

@@ -81,10 +81,9 @@ fn combine_flex(a: Option<f64>, b: Option<f64>, fold: impl Fn(f64, f64) -> f64) 
     }
 }
 
-/// Local convergence epsilon for the two-round shrink in
-/// [`RenderTable::compute_column_widths`] — mirrors `wrap.rs`'s
-/// `PRECISION_TOLERANCE` convention (the more directly-analogous sibling
-/// file) over `flui_foundation::EPSILON`.
+/// Convergence tolerance, in logical pixels, of the two-round shrink in
+/// [`RenderTable::compute_column_widths`], as `wrap.rs`'s
+/// `PRECISION_TOLERANCE`.
 const EPSILON: f64 = 1e-6;
 
 /// Lays out children in a row-major grid: `column_count` cells per row, with

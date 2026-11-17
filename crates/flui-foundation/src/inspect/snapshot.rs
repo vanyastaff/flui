@@ -214,7 +214,7 @@ pub struct SnapshotNode {
     /// Its kind's type arguments, for a generic kind.
     pub kind_args: Vec<&'static str>,
     /// What the tree knows about the node ([`InspectTree::facts`]), in the order written:
-    /// [`get_fact`](Self::get_fact) reads these.
+    /// [`fact_as`](Self::fact_as) reads these.
     ///
     /// They are kept apart from [`fields`](Self::fields), so a fact and an object's field of
     /// the same name never stand for each other.
@@ -605,7 +605,7 @@ impl SnapshotNode {
     }
 
     /// The object's own field `name` read as `T`: `node.get::<f64>("flex")`. A fact of the
-    /// same name is not read; [`get_fact`](Self::get_fact) reads that.
+    /// same name is not read; [`fact_as`](Self::fact_as) reads that.
     ///
     /// # Errors
     ///
@@ -621,14 +621,14 @@ impl SnapshotNode {
         self.facts.iter().find(|fact| fact.name == name)
     }
 
-    /// The tree's fact `name` read as `T`: `node.get_fact::<bool>("dirty")`. An object's field
+    /// The tree's fact `name` read as `T`: `node.fact_as::<bool>("dirty")`. An object's field
     /// of the same name is not read; [`get`](Self::get) reads that.
     ///
     /// # Errors
     ///
     /// [`FieldError::Missing`] when the tree wrote no such fact, [`FieldError::WrongKind`] when
     /// it holds another kind of value.
-    pub fn get_fact<'a, T: FromField<'a>>(&'a self, name: &str) -> Result<T, FieldError> {
+    pub fn fact_as<'a, T: FromField<'a>>(&'a self, name: &str) -> Result<T, FieldError> {
         self.read(self.fact(name), name)
     }
 

@@ -40,8 +40,7 @@ use std::{rc::Rc, sync::Arc};
 
 use crossbeam_channel::{Receiver, bounded};
 use flui_foundation::{
-    SurfaceGeneration,
-    clock::MonotonicClock,
+    MonotonicClock, SurfaceGeneration,
     geometry::DeviceSize,
     panic::{FirstPanic, discard_payload},
 };

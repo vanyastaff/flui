@@ -9,9 +9,9 @@
 
 use std::{rc::Rc, sync::Arc};
 
+use super::{AsyncSnapshot, ConnectionState};
 use crate::RebuildHandle;
 use flui_foundation::panic::FirstPanic;
-use flui_foundation::{AsyncSnapshot, ConnectionState};
 use parking_lot::Mutex;
 
 use crate::BoxedView;
@@ -63,7 +63,7 @@ impl<T, E> Slot<T, E> {
 
     /// Publish only a connection-state change, preserving owned data/error.
     pub(crate) fn set_connection_state(&mut self, state: ConnectionState) {
-        let snapshot = core::mem::replace(&mut self.snapshot, AsyncSnapshot::nothing());
+        let snapshot = core::mem::take(&mut self.snapshot);
         self.snapshot = snapshot.in_state(state);
     }
 }

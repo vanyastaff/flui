@@ -156,6 +156,16 @@ const RECORDED: &[Recorded] = &[
         "crates/flui-platform/src/pointer/raw_motion.rs",
         "MotionAcceleration",
     ),
+    repo(
+        "TouchpadHoldPhase",
+        "crates/flui-platform/src/pointer/touchpad.rs",
+        "TouchpadHoldPhase",
+    ),
+    repo(
+        "TouchpadSwipePhase",
+        "crates/flui-platform/src/pointer/touchpad.rs",
+        "TouchpadSwipePhase",
+    ),
     repo("Key", "crates/flui-platform/src/keyboard/mod.rs", "Key"),
     repo(
         "KeyState",

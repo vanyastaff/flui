@@ -13,7 +13,7 @@ use flui_platform::PlatformInput;
 use flui_platform::keyboard::Modifiers;
 use flui_platform::pointer::{
     ButtonChange, PanZoomPhase, PenTool, PointerEvent, PointerInfo, PointerKind, PointerRole,
-    PointerSample,
+    PointerSample, TouchpadSwipePhase,
 };
 
 use codec::{CodecError, NativeRecording};
@@ -167,6 +167,44 @@ fn line(input: &PlatformInput) -> String {
                 out,
                 " t={} ({}, {})",
                 gesture.time.as_nanos(),
+                point.x,
+                point.y
+            )
+            .expect("BUG: a String accepts writes");
+        }
+        PointerEvent::TouchpadHold(hold) => {
+            write_head(&mut out, "hold", hold.pointer());
+            write!(out, " {:?}", hold.phase).expect("BUG: a String accepts writes");
+            write_clicks(&mut out, None, hold.modifiers);
+            let point = hold.position.get();
+            write!(
+                out,
+                " t={} ({}, {})",
+                hold.time.as_nanos(),
+                point.x,
+                point.y
+            )
+            .expect("BUG: a String accepts writes");
+        }
+        PointerEvent::TouchpadSwipe(swipe) => {
+            write_head(&mut out, "swipe", swipe.pointer());
+            match swipe.phase {
+                TouchpadSwipePhase::Update(travel) => write!(
+                    out,
+                    " {} travel=({}, {})",
+                    swipe.fingers,
+                    travel.get().dx,
+                    travel.get().dy
+                ),
+                phase => write!(out, " {} {phase:?}", swipe.fingers),
+            }
+            .expect("BUG: a String accepts writes");
+            write_clicks(&mut out, None, swipe.modifiers);
+            let point = swipe.position.get();
+            write!(
+                out,
+                " t={} ({}, {})",
+                swipe.time.as_nanos(),
                 point.x,
                 point.y
             )
@@ -381,7 +419,12 @@ fn win32_pointer_info_recordings_decode_to_their_host_input() {
 fn win32_direct_manipulation_recording_decodes_to_scroll_and_pinch() {
     assert_replays(
         include_str!("win32_direct_manipulation.jsonl"),
+        // Each manipulation's fingers rest until its pan or pinch passes the
+        // slop: a hold begins at `Running` and is cancelled as the gesture
+        // begins. Each hold and the pinch are trackpad contacts of their own.
         &[
+            "hold p1* trackpad Begin t=1001000000 (200, 160)",
+            "hold p1* trackpad Cancelled t=1004000000 (200, 160)",
             "scroll p1* mouse Began Pixels(0, 4) t=1004000000 (200, 160)",
             "scroll p1* mouse Changed Pixels(0, 4) t=1006000000 (200, 160)",
             "scroll p1* mouse Changed Pixels(-2, 6) t=1008000000 (200, 160)",
@@ -390,10 +433,14 @@ fn win32_direct_manipulation_recording_decodes_to_scroll_and_pinch() {
             "scroll p1* mouse MomentumChanged Pixels(-1, 5) t=1012000000 (200, 160)",
             "scroll p1* mouse MomentumChanged Pixels(0, 3) t=1014000000 (200, 160)",
             "scroll p1* mouse MomentumEnded Pixels(0, 0) t=1016000000 (200, 160)",
-            "panzoom p1* trackpad start t=1042000000 (200, 160)",
-            "panzoom p1* trackpad update scale=1.100 rotation=0.000 t=1042000000 (200, 160)",
-            "panzoom p1* trackpad update scale=1.250 rotation=0.000 t=1044000000 (200, 160)",
-            "panzoom p1* trackpad end t=1046000000 (200, 160)",
+            "hold p2* trackpad Begin t=1040000000 (200, 160)",
+            "hold p2* trackpad Cancelled t=1042000000 (200, 160)",
+            "panzoom p3* trackpad start t=1042000000 (200, 160)",
+            "panzoom p3* trackpad update scale=1.100 rotation=0.000 t=1042000000 (200, 160)",
+            "panzoom p3* trackpad update scale=1.250 rotation=0.000 t=1044000000 (200, 160)",
+            "panzoom p3* trackpad end t=1046000000 (200, 160)",
+            "hold p4* trackpad Begin t=1060000000 (200, 160)",
+            "hold p4* trackpad Cancelled t=1062000000 (200, 160)",
             "scroll p1* mouse Began Pixels(0, 6) t=1062000000 (200, 160)",
             "scroll p1* mouse Cancelled Pixels(0, 0) t=1063000000 (200, 160)",
         ],

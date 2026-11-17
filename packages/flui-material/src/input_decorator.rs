@@ -57,8 +57,8 @@
 //! desktop, where users often click into a field) must show the focused
 //! treatment, not the hovered one.
 
+use flui_sdk::foundation::Listenable;
 use flui_sdk::foundation::Subscription;
-use flui_sdk::foundation::notifier::Listenable;
 use flui_sdk::geometry::EdgeInsets;
 use flui_sdk::geometry::Radius;
 use flui_sdk::painting::TextStyle;

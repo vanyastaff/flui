@@ -186,7 +186,7 @@ pub trait View: Downcast + DynClone + 'static {
     ///
     /// `None` by default. A view type that holds its key in a field marks the field
     /// `#[view(key)]` in its derive, which implements this method
-    /// ([`AsViewKey`](flui_foundation::key::AsViewKey) lists the field types).
+    /// ([`AsViewKey`](flui_foundation::AsViewKey) lists the field types).
     fn key(&self) -> Option<&dyn flui_foundation::ViewKey> {
         None
     }

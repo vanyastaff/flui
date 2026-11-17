@@ -155,6 +155,15 @@ pub const BREAKING: &[Break] = &[
         ],
     },
     Break {
+        version: ProtocolVersion::new(0, 21),
+        adr: "ADR-0358",
+        // Fingers resting on a touchpad are a phased `touchpad_hold`, which replaces the
+        // `scroll_inertia_cancel` signal; a touchpad swipe is a `touchpad_swipe`; recorded
+        // capabilities say whether either reaches the window.
+        renamed: &[],
+        removed: &["/$defs/PointerEvent/oneOf/scroll_inertia_cancel=scroll_inertia_cancel"],
+    },
+    Break {
         version: ProtocolVersion::new(0, 22),
         adr: "ADR-0354",
         // A recorded pointer event may be a locked pointer's `raw_motion`: a `record` event

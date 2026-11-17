@@ -22,7 +22,8 @@ pub use pointer::{
     PanZoomTransform, PointerButton, PointerButtons, PointerCancel, PointerEvent, PointerId,
     PointerInfo, PointerKind, PointerMove, PointerPosition, PointerPress, PointerRelease,
     PointerRole, PointerSample, PointerSignal, ScrollDelta, ScrollEvent, ScrollInversion,
-    SmartZoomEvent,
+    SmartZoomEvent, SwipeOffset, TouchpadHoldEvent, TouchpadHoldPhase, TouchpadSwipeEvent,
+    TouchpadSwipePhase,
 };
 
 /// The interaction clock: `clock`'s current reading on the event timeline
@@ -72,11 +73,11 @@ pub(crate) fn pointer_info(event: &PointerEvent) -> Option<&PointerInfo> {
         }
         PointerEvent::Move(data) => Some(&data.pointer),
         PointerEvent::Cancel(data) => Some(&data.pointer),
-        PointerEvent::Enter(data)
-        | PointerEvent::Leave(data)
-        | PointerEvent::ScrollInertiaCancel(data) => Some(&data.pointer),
+        PointerEvent::Enter(data) | PointerEvent::Leave(data) => Some(&data.pointer),
         PointerEvent::Scroll(data) => Some(&data.pointer),
+        PointerEvent::TouchpadHold(data) => Some(data.pointer()),
         PointerEvent::PanZoom(data) => Some(data.pointer()),
+        PointerEvent::TouchpadSwipe(data) => Some(data.pointer()),
         PointerEvent::SmartZoom(data) => Some(data.pointer()),
         PointerEvent::RawMotion(data) => Some(&data.pointer),
         // Device lifecycle names a device, not a contact; a variant added
@@ -113,13 +114,13 @@ pub(crate) fn event_time(event: &PointerEvent) -> Option<flui_platform::EventTim
         }
         PointerEvent::Move(data) => data.current().time,
         PointerEvent::Scroll(data) => data.time,
+        PointerEvent::TouchpadHold(data) => data.time,
         PointerEvent::PanZoom(data) => data.time,
+        PointerEvent::TouchpadSwipe(data) => data.time,
         PointerEvent::SmartZoom(data) => data.time,
         PointerEvent::RawMotion(data) => data.time,
         PointerEvent::Cancel(data) => data.time,
-        PointerEvent::Enter(data)
-        | PointerEvent::Leave(data)
-        | PointerEvent::ScrollInertiaCancel(data) => data.time,
+        PointerEvent::Enter(data) | PointerEvent::Leave(data) => data.time,
         PointerEvent::DeviceAdded(data) | PointerEvent::DeviceRemoved(data) => data.time,
         // A variant added later has no known time until it is named here.
         _ => return None,
@@ -163,11 +164,11 @@ impl PointerEventExt for PointerEvent {
             Some(sample.position)
         } else {
             match self {
-                PointerEvent::Enter(data)
-                | PointerEvent::Leave(data)
-                | PointerEvent::ScrollInertiaCancel(data) => data.position,
+                PointerEvent::Enter(data) | PointerEvent::Leave(data) => data.position,
                 PointerEvent::Scroll(data) => Some(data.position),
+                PointerEvent::TouchpadHold(data) => Some(data.position),
                 PointerEvent::PanZoom(data) => Some(data.position),
+                PointerEvent::TouchpadSwipe(data) => Some(data.position),
                 PointerEvent::SmartZoom(data) => Some(data.position),
                 PointerEvent::RawMotion(data) => data.position,
                 _ => None,

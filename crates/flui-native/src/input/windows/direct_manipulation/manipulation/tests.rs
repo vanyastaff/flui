@@ -71,6 +71,7 @@ fn describe(input: &PlatformInput) -> String {
             PanZoomPhase::Cancelled => "pinch cancelled".to_owned(),
             _ => "pinch ?".to_owned(),
         },
+        PointerEvent::TouchpadHold(hold) => format!("hold {:?}", hold.phase),
         other => format!("{other:?}"),
     }
 }
@@ -98,10 +99,10 @@ fn a_two_finger_pan_is_a_phased_scroll_with_momentum() {
     assert_eq!(
         run(&[
             status(Running),
-            // Inside the slop: nothing is published yet.
+            // Inside the slop the fingers rest: a hold begins.
             content(1.0, 0.0, -1.0),
-            // Fingers moved up: the scroll offset grows. The pan begins with
-            // everything it has accumulated.
+            // Fingers moved up: the hold is cancelled and the scroll offset
+            // grows. The pan begins with everything it has accumulated.
             content(1.0, 0.0, -6.0),
             content(1.0, 2.0, -16.0),
             status(Inertia),
@@ -111,6 +112,8 @@ fn a_two_finger_pan_is_a_phased_scroll_with_momentum() {
             content(1.0, 0.0, 0.0),
         ]),
         [
+            "hold Begin",
+            "hold Cancelled",
             "scroll Began (0, 6)",
             "scroll Changed (-2, 10)",
             "scroll Ended (0, 0)",
@@ -131,6 +134,8 @@ fn a_pinch_is_scale_and_its_translation_is_not_a_scroll() {
             status(Ready),
         ]),
         [
+            "hold Begin",
+            "hold Cancelled",
             "pinch start",
             "pinch scale=1.050",
             "pinch scale=1.200",
@@ -140,16 +145,40 @@ fn a_pinch_is_scale_and_its_translation_is_not_a_scroll() {
     );
 }
 
-fn a_manipulation_inside_the_slop_publishes_nothing_but_is_reset() {
-    assert_eq!(
-        run(&[
-            status(Running),
-            content(1.0, 0.5, -0.5),
-            content(1.005, 0.5, -0.5),
-            status(Ready),
-        ]),
-        ["reset"]
-    );
+/// Fingers that touch rest until a pan or pinch passes its slop: a stop with
+/// no slop passed ends the hold, a lost viewport cancels it, and coasting
+/// without a slop passed ends it before the momentum begins.
+fn a_manipulation_inside_the_slop_is_a_hold() {
+    for (name, readings, expected) in [
+        (
+            "lifted",
+            &[
+                status(Running),
+                content(1.0, 0.5, -0.5),
+                content(1.005, 0.5, -0.5),
+                status(Ready),
+            ][..],
+            &["hold Begin", "hold End", "reset"][..],
+        ),
+        (
+            "viewport lost",
+            &[status(Running), status(Disabled)][..],
+            &["hold Begin", "hold Cancelled", "reset"][..],
+        ),
+        (
+            "coasting",
+            &[status(Running), status(Inertia), status(Ready)][..],
+            &[
+                "hold Begin",
+                "hold End",
+                "scroll MomentumBegan (0, 0)",
+                "scroll MomentumEnded (0, 0)",
+                "reset",
+            ][..],
+        ),
+    ] {
+        assert_eq!(run(readings), expected, "{name}");
+    }
 }
 
 fn losing_the_viewport_cancels_the_open_gesture() {
@@ -200,11 +229,17 @@ fn touching_during_momentum_ends_it_and_a_new_pan_begins() {
             status(Ready),
         ]),
         [
+            "hold Begin",
+            "hold Cancelled",
             "scroll Began (0, 8)",
             "scroll Ended (0, 0)",
             "scroll MomentumBegan (0, 0)",
             "scroll MomentumChanged (0, 12)",
+            // The touch ends the coasting and its fingers rest, stopping a
+            // fling of the framework's own as well.
             "scroll MomentumEnded (0, 0)",
+            "hold Begin",
+            "hold Cancelled",
             "scroll Began (0, 10)",
             "scroll Ended (0, 0)",
             "reset",
@@ -284,10 +319,14 @@ fn a_pinch_that_coasts_is_still_reset_and_the_next_pan_starts_at_the_origin() {
             status(Ready),
         ]),
         [
+            "hold Begin",
+            "hold Cancelled",
             "pinch start",
             "pinch scale=1.100",
             "pinch end",
             "reset",
+            "hold Begin",
+            "hold Cancelled",
             "scroll Began (0, 8)",
             "scroll Ended (0, 0)",
             "reset",
@@ -307,9 +346,13 @@ fn after_a_lost_viewport_the_next_pan_is_measured_from_the_origin() {
             content(1.0, 0.0, -3.0),
         ]),
         [
+            "hold Begin",
+            "hold Cancelled",
             "scroll Began (0, 8)",
             "scroll Cancelled (0, 0)",
             "reset",
+            "hold Begin",
+            "hold Cancelled",
             "scroll Began (0, 3)",
         ]
     );
@@ -329,8 +372,8 @@ fn direct_manipulation_contracts() {
                 a_pinch_is_scale_and_its_translation_is_not_a_scroll,
             ),
             (
-                "a_manipulation_inside_the_slop_publishes_nothing_but_is_reset",
-                a_manipulation_inside_the_slop_publishes_nothing_but_is_reset,
+                "a_manipulation_inside_the_slop_is_a_hold",
+                a_manipulation_inside_the_slop_is_a_hold,
             ),
             (
                 "losing_the_viewport_cancels_the_open_gesture",

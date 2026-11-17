@@ -504,7 +504,7 @@ pub struct ButtonEvent {
     pub sample: Sample,
 }
 
-/// A pointer signal: an enter, a leave or a scroll-inertia cancel.
+/// A pointer signal: an enter or a leave.
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
@@ -718,6 +718,102 @@ pub enum PanZoomPhase {
     Cancelled,
 }
 
+/// Where fingers resting on a touchpad are.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a pinned mirror of the runtime's vocabulary, converted arm by arm: a new variant is a format version, and a `_` arm would drop recorded input"
+)]
+pub enum TouchpadHoldPhase {
+    /// The fingers came to rest.
+    #[cfg_attr(feature = "serde", serde(rename = "begin"))]
+    Begin,
+    /// The fingers lifted without moving.
+    #[cfg_attr(feature = "serde", serde(rename = "end"))]
+    End,
+    /// The fingers started a gesture, or the platform took the hold back.
+    #[cfg_attr(feature = "serde", serde(rename = "cancelled"))]
+    Cancelled,
+}
+
+/// Fingers resting on a touchpad.
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct TouchpadHold {
+    /// The pointer the event belongs to.
+    pub pointer: PointerInfo,
+    /// The event time, in nanoseconds.
+    pub t: u64,
+    /// The x coordinate, in logical pixels.
+    pub x: f64,
+    /// The y coordinate, in logical pixels.
+    pub y: f64,
+    /// Where the hold is.
+    pub phase: TouchpadHoldPhase,
+    /// The held modifiers, by name.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Vec::is_empty")
+    )]
+    pub modifiers: Vec<String>,
+}
+
+/// A touchpad swipe's phase.
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a pinned mirror of the runtime's vocabulary, converted arm by arm: a new variant is a format version, and a `_` arm would drop recorded input"
+)]
+pub enum TouchpadSwipePhase {
+    /// The swipe started.
+    #[cfg_attr(feature = "serde", serde(rename = "start"))]
+    Start,
+    /// The fingers travelled this far since the start, in logical pixels.
+    #[cfg_attr(feature = "serde", serde(rename = "update"))]
+    Update {
+        /// The horizontal travel.
+        dx: f64,
+        /// The vertical travel.
+        dy: f64,
+    },
+    /// The swipe ended.
+    #[cfg_attr(feature = "serde", serde(rename = "end"))]
+    End,
+    /// The swipe was cancelled.
+    #[cfg_attr(feature = "serde", serde(rename = "cancelled"))]
+    Cancelled,
+}
+
+/// A swipe of three fingers or more across a touchpad.
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct TouchpadSwipe {
+    /// The pointer the event belongs to.
+    pub pointer: PointerInfo,
+    /// The event time, in nanoseconds.
+    pub t: u64,
+    /// The x coordinate where the pointer rests, in logical pixels.
+    pub x: f64,
+    /// The y coordinate where the pointer rests, in logical pixels.
+    pub y: f64,
+    /// How many fingers swipe, at least one.
+    pub fingers: u8,
+    /// Where the swipe is.
+    pub phase: TouchpadSwipePhase,
+    /// The held modifiers, by name.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Vec::is_empty")
+    )]
+    pub modifiers: Vec<String>,
+}
+
 /// A trackpad smart-zoom event.
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -866,12 +962,15 @@ pub enum PointerEvent {
     /// A scroll.
     #[cfg_attr(feature = "serde", serde(rename = "scroll"))]
     Scroll(Scroll),
-    /// A scroll's inertia was cancelled.
-    #[cfg_attr(feature = "serde", serde(rename = "scroll_inertia_cancel"))]
-    ScrollInertiaCancel(Signal),
+    /// Fingers resting on a touchpad.
+    #[cfg_attr(feature = "serde", serde(rename = "touchpad_hold"))]
+    TouchpadHold(TouchpadHold),
     /// A trackpad pan-zoom gesture.
     #[cfg_attr(feature = "serde", serde(rename = "pan_zoom"))]
     PanZoom(PanZoom),
+    /// A swipe of three fingers or more across a touchpad.
+    #[cfg_attr(feature = "serde", serde(rename = "touchpad_swipe"))]
+    TouchpadSwipe(TouchpadSwipe),
     /// A trackpad smart-zoom.
     #[cfg_attr(feature = "serde", serde(rename = "smart_zoom"))]
     SmartZoom(SmartZoom),
@@ -1129,7 +1228,7 @@ pub enum DragDrop {
 }
 
 /// How a platform provides a capability.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[expect(
@@ -1143,8 +1242,10 @@ pub enum Availability {
     /// The `emulated` availability.
     #[cfg_attr(feature = "serde", serde(rename = "emulated"))]
     Emulated,
-    /// The `unavailable` availability.
+    /// The `unavailable` availability: what a capability a writer leaves out
+    /// reads as.
     #[cfg_attr(feature = "serde", serde(rename = "unavailable"))]
+    #[default]
     Unavailable,
 }
 
@@ -1163,6 +1264,12 @@ pub struct Capabilities {
     pub precise_scroll: Availability,
     /// Trackpad gestures.
     pub trackpad_gestures: Availability,
+    /// Fingers resting on a touchpad.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub touchpad_hold: Availability,
+    /// Touchpad swipes of three fingers or more.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub touchpad_swipe: Availability,
     /// System gesture exclusion regions.
     pub system_gesture_exclusion: Availability,
     /// Window move regions.

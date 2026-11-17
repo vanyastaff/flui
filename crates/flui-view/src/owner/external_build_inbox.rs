@@ -10,8 +10,8 @@ use std::{
 };
 
 use flui_foundation::panic::FirstPanic;
-use flui_foundation::sequence::{IdExhausted, IdMint};
 use flui_foundation::{ElementId, RebuildReasons};
+use flui_foundation::{IdExhausted, IdMint};
 use parking_lot::Mutex;
 
 #[derive(Default)]

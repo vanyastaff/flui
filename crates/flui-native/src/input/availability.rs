@@ -15,8 +15,10 @@ use Availability::{Emulated, Native};
 
 /// The native Win32 backend: pointer messages carry pen input. A window whose
 /// DirectManipulation viewport initialised (`direct_manipulation`) delivers
-/// the precision touchpad's phased scrolling and pinch; without one, wheel
-/// messages have no phases and there are no trackpad gestures. Every window
+/// the precision touchpad's phased scrolling, pinch and resting fingers;
+/// without one, wheel messages have no phases and there are no trackpad
+/// gestures. Swipes of three fingers or more are the shell's (task view,
+/// desktops) and never reach a window. Every window
 /// starts OS drag sessions through OLE (`DoDragDrop`). The chrome regions
 /// answer `WM_NCHITTEST` (ADR-0286); Windows starts its edge swipes whatever a
 /// window says, so gesture exclusion is not honoured.
@@ -32,22 +34,28 @@ pub const fn windows(direct_manipulation: bool) -> InputCapabilities {
         builder
             .precise_scroll(Native)
             .trackpad_gestures(Native)
+            .touchpad_hold(Native)
             .build()
     } else {
         builder.build()
     }
 }
 
-/// The native AppKit backend: phased precise scrolling and magnify/rotate
-/// gestures, and a left press on a move area of a title bar the application
-/// draws moves the window (`performWindowDragWithEvent:`). AppKit keeps the
-/// resize borders and draws the caption buttons itself, so their regions are
-/// not honoured. Tablet events are not translated yet.
+/// The native AppKit backend: phased precise scrolling, magnify/rotate
+/// gestures and fingers resting on the trackpad (a scroll's `MayBegin`), and a
+/// left press on a move area of a title bar the application draws moves the
+/// window (`performWindowDragWithEvent:`). AppKit reports a swipe of several
+/// fingers only as its finished direction (`swipeWithEvent:`, under the
+/// system's "swipe between pages" setting), with no travel, so no swipe is
+/// delivered. AppKit keeps the resize borders and draws the caption buttons
+/// itself, so their regions are not honoured. Tablet events are not
+/// translated yet.
 #[must_use]
 pub const fn macos() -> InputCapabilities {
     InputCapabilities::builder()
         .precise_scroll(Native)
         .trackpad_gestures(Native)
+        .touchpad_hold(Native)
         .window_move(Native)
         .build()
 }
@@ -78,9 +86,12 @@ pub struct AndroidInputApis {
 /// The Android backend with `apis`: stylus motion events carry pen input;
 /// system-gesture exclusion regions reach the decor view's
 /// `setSystemGestureExclusionRects`; a touchpad's two-finger scroll and pinch
-/// arrive as gesture axes, delivered as phased scrolling and `PanZoom`.
-/// Outgoing drags start through `FluiView.startDragAndDrop`; without it every
-/// drag stays in its window.
+/// arrive as gesture axes, delivered as phased scrolling and `PanZoom`. A
+/// swipe of three fingers or more drives the system's navigation (back, home,
+/// recent apps) and reports its travel only as a fraction of the touchpad, so
+/// it is not delivered; Android reports no resting fingers. Outgoing drags
+/// start through `FluiView.startDragAndDrop`; without it every drag stays in
+/// its window.
 #[must_use]
 pub const fn android(apis: AndroidInputApis) -> InputCapabilities {
     let mut builder = InputCapabilities::builder().pen(Native);
@@ -116,15 +127,20 @@ pub const fn web(gesture_events: bool) -> InputCapabilities {
 pub struct WaylandInputGlobals {
     /// `zwp_tablet_manager_v2`: pens and other tablet tools.
     pub tablet: bool,
-    /// `zwp_pointer_gestures_v1`: a touchpad's pinch.
+    /// `zwp_pointer_gestures_v1`: a touchpad's pinch and swipe.
     pub pointer_gestures: bool,
+    /// `zwp_pointer_gestures_v1` at version 3: fingers resting on a touchpad
+    /// (`zwp_pointer_gesture_hold_v1`).
+    pub pointer_gesture_hold: bool,
 }
 
 /// The native Wayland backend with the compositor's `globals`: a touchpad's
 /// two-finger scrolling arrives as `wl_pointer` axis frames from a finger
 /// source with a stop at the lift, delivered as phased precise scrolling;
-/// pens arrive through `tablet-v2` and a touchpad's pinch through
-/// `pointer-gestures`, where the compositor has them. No system gesture can
+/// pens arrive through `tablet-v2` and a touchpad's pinch and swipe through
+/// `pointer-gestures`, its hold through that protocol's version 3, where the
+/// compositor has them (a compositor keeps the swipes it binds to its own
+/// gestures). No system gesture can
 /// be excluded, and no drag leaves the window yet (`wl_data_device`). A window
 /// whose application draws the title bar keeps the margins of its own frame,
 /// and the compositor moves and resizes it from its regions
@@ -140,14 +156,18 @@ pub const fn wayland(globals: WaylandInputGlobals) -> InputCapabilities {
         builder = builder.pen(Native);
     }
     if globals.pointer_gestures {
-        builder = builder.trackpad_gestures(Native);
+        builder = builder.trackpad_gestures(Native).touchpad_swipe(Native);
+    }
+    if globals.pointer_gesture_hold {
+        builder = builder.touchpad_hold(Native);
     }
     builder.build()
 }
 
 /// The native X11 backend: XInput 2 carries pen input (a tablet's stylus and
 /// eraser) and touch, and on a server with XInput 2.4 (`gestures`) a
-/// touchpad's pinch; its smooth scrolling has no phases. Every window starts
+/// touchpad's pinch and swipe; XInput has no hold, and its smooth scrolling
+/// has no phases. Every window starts
 /// OS drag sessions over XDND. A window whose application draws the title bar
 /// has no decorations, and the window manager moves and resizes it from its
 /// regions (`_NET_WM_MOVERESIZE`, ADR-0286 §10); no window system draws
@@ -160,7 +180,10 @@ pub const fn x11(gestures: bool) -> InputCapabilities {
         .window_move(Native)
         .window_resize(Native);
     if gestures {
-        builder.trackpad_gestures(Native).build()
+        builder
+            .trackpad_gestures(Native)
+            .touchpad_swipe(Native)
+            .build()
     } else {
         builder.build()
     }

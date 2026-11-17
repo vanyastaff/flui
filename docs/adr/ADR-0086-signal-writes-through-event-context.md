@@ -85,7 +85,7 @@ Beneath the setters sit framework callback types that are `Send + Sync` although
 lists UI callbacks as `!Send + !Sync`:
 
 - `ListenerCallback = Arc<dyn Fn() + Send + Sync + 'static>`
-  (`crates/flui-foundation/src/notifier.rs:46`) and `trait Listenable: Send + Sync` (`:78`);
+  (`crates/flui-foundation/src/notifier/mod.rs:46`) and `trait Listenable: Send + Sync` (`:78`);
 - `StatusCallback = Arc<dyn Fn(AnimationStatus) + Send + Sync>`
   (`crates/flui-animation/src/animation.rs:11`);
 - `PostFrameCallback = Box<dyn FnOnce(&FrameTiming) + Send>`

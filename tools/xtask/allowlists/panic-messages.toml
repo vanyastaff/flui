@@ -37,11 +37,11 @@ path = "crates/flui-foundation/src/id.rs"
 count = 3
 
 [[allow]]
-path = "crates/flui-foundation/src/notifier.rs"
+path = "crates/flui-foundation/src/notifier/mod.rs"
 count = 1
 
 [[allow]]
-path = "crates/flui-foundation/src/notifier_generic.rs"
+path = "crates/flui-foundation/src/notifier/channel.rs"
 count = 1
 
 [[allow]]

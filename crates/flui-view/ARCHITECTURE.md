@@ -790,7 +790,7 @@ own facts (element kind, key, lifecycle, dirtiness, depth, slot) and links the e
 object. The view writes only its configuration, through the provided `View::inspect`, which
 `#[view(inspect)]` on the view derives fills from the type's `#[derive(Inspect)]`. The hook is a
 method because stable Rust cannot ask at mount whether `V: Inspect`. The snapshot keeps the
-tree's facts (`SnapshotNode::facts`, read with `get_fact`) apart from the view's fields
+tree's facts (`SnapshotNode::facts`, read with `fact_as`) apart from the view's fields
 (`SnapshotNode::fields`, read with `get`), so a view may name a field `lifecycle` or `dirty`
 without shadowing the element's fact or diffing against it. Pinned by `flui-testing`'s
 `a_counters_elements_link_to_render_objects_that_link_to_semantics`,

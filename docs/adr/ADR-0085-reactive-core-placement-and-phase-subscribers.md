@@ -399,7 +399,7 @@ foundation contract stays, because production element reads use it.
 - **The two observation systems converge without a crate.** The `Listenable` adapter over a
   signal lives in `flui-view` beside the graph and implements foundation's `Listenable`. It
   lands when the callback surface loses `Send` (ADR-0091 §1), because `Listenable: Send + Sync`
-  today (`crates/flui-foundation/src/notifier.rs:78`).
+  today (`crates/flui-foundation/src/notifier/mod.rs:78`).
 - **No module-dependency gate for the reactive module.** Its only purpose was a mechanical
   extraction. `RebuildSink` stays, for decoupling.
 - **Reopening this takes a new ADR.** The trigger is a crate below `flui-view` that needs to
@@ -466,11 +466,8 @@ foundation contract stays, because production element reads use it.
 - `crates/flui-view/Cargo.toml:118-123` and `Cargo.toml:642-645` are rewritten in the change that
   removes the feature. The "no signals crate" note in the root member list (`Cargo.toml:72-77`)
   stays true.
-- The `Arc<Mutex<…>>` notifier in `flui-foundation`
-  (`crates/flui-foundation/src/notifier_generic.rs:41-45`) stays for `Send + Sync` users until
-  the UI callback surface loses `Send` (scheduled by
-  [ADR-0091](ADR-0091-one-owner-thread-isolated-realms-raster-thread.md) §1), and is then removed
-  in favour of the adapter.
+- `flui-foundation`'s notifier (`crates/flui-foundation/src/notifier/channel.rs`) is `Rc`-based
+  and owner-local, so the UI callback surface it serves has no `Send` bound (ADR-0323 §1).
 - `NEXT_GRAPH_ID` (`mod.rs:72`) is used only through `fetch_add` (`mod.rs:204`), so it is a
   monotonic counter that [ADR-0097](ADR-0097-no-process-global-state-gate.md) §2 exempts, not an
   allowlist entry.

@@ -1565,11 +1565,11 @@ mod raw {
             | PointerEvent::ButtonChange(ButtonChange::Released(release)) => release.sample.time,
             PointerEvent::Move(movement) => movement.current().time,
             PointerEvent::Cancel(cancel) => cancel.time,
-            PointerEvent::Enter(signal)
-            | PointerEvent::Leave(signal)
-            | PointerEvent::ScrollInertiaCancel(signal) => signal.time,
+            PointerEvent::Enter(signal) | PointerEvent::Leave(signal) => signal.time,
             PointerEvent::Scroll(scroll) => scroll.time,
+            PointerEvent::TouchpadHold(hold) => hold.time,
             PointerEvent::PanZoom(pan_zoom) => pan_zoom.time,
+            PointerEvent::TouchpadSwipe(swipe) => swipe.time,
             PointerEvent::SmartZoom(zoom) => zoom.time,
             PointerEvent::RawMotion(motion) => motion.time,
             PointerEvent::DeviceAdded(change) | PointerEvent::DeviceRemoved(change) => change.time,

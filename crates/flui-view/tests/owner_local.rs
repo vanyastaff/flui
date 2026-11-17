@@ -8,7 +8,8 @@ use std::{
     task::{Context, Poll},
 };
 
-use flui_foundation::{AsyncSnapshot, ViewKey};
+use flui_foundation::ViewKey;
+use flui_view::element::AsyncSnapshot;
 use flui_view::{
     ErrorView, ObjectKey, ViewExt, WidgetsBindingObserver,
     element::{SnapshotBuilder, StreamBuilder, StreamFactory},

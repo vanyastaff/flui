@@ -16,7 +16,7 @@ use flui_platform::EventTime;
 
 use crate::{
     containment::RoutePanic,
-    events::{PointerEvent, PointerEventExt, PointerKind},
+    events::{PointerEvent, PointerEventExt, PointerKind, TouchpadSwipePhase},
     gesture::arena::{
         AdmissionContext, ContactRole, GestureArena, GestureArenaEntry, GestureArenaMember,
         GestureDeadlineRegistration, GestureDisposition, HeldOut, MotionFrame, MotionRole,
@@ -221,8 +221,8 @@ pub enum BeginContactError {
     /// Arena membership was refused.
     #[error("arena refused the member")]
     ArenaClosed,
-    /// Admission requires a Down event.
-    #[error("contact admission requires a down event")]
+    /// Admission requires a Down event, or the start of a touchpad swipe.
+    #[error("contact admission requires a down event or a touchpad swipe start")]
     NotDown,
     /// This owner has permanently exhausted its admission identities.
     #[error("contact identities exhausted")]
@@ -262,10 +262,11 @@ impl PrimaryContact {
         }
     }
 
-    /// Admit a finite Down without replacing an existing sequence.
+    /// Admit a finite Down, or a touchpad swipe's start, without replacing an
+    /// existing sequence.
     ///
     /// # Errors
-    /// Refuses non-Down or non-finite input, an already active contact, closed
+    /// Refuses any other or non-finite input, an already active contact, closed
     /// arena membership, and permanently exhausted contact identities.
     ///
     /// The contact is recorded before the members a hold beats learn they
@@ -302,8 +303,14 @@ impl PrimaryContact {
         down: PointerDispatch<'_>,
         settings: &GestureSettings,
     ) -> Result<(ContactId, HeldOut), BeginContactError> {
-        let PointerEvent::Down(data) = down.local else {
-            return Err(BeginContactError::NotDown);
+        // A touchpad swipe's start opens a sequence of its own pointer, as a
+        // Down does (`GestureRecognizer::add_touchpad_swipe`).
+        let pointer_info = match down.local {
+            PointerEvent::Down(data) => data.pointer,
+            PointerEvent::TouchpadSwipe(swipe) if swipe.phase == TouchpadSwipePhase::Start => {
+                *swipe.pointer()
+            }
+            _ => return Err(BeginContactError::NotDown),
         };
         if let Some(current) = self.current() {
             return Err(BeginContactError::Busy {
@@ -316,7 +323,7 @@ impl PrimaryContact {
             return Err(BeginContactError::NonFinite);
         }
         let id = ContactId::next(&self.last_id).ok_or(BeginContactError::Exhausted)?;
-        let pointer = data.pointer.id;
+        let pointer = pointer_info.id;
         // Complete fallible private allocation before arena admission. The
         // registration token retires silently when admission is refused.
         let registration = self
@@ -331,8 +338,8 @@ impl PrimaryContact {
             snapshot: ContactSnapshot {
                 id,
                 pointer,
-                kind: data.pointer.kind,
-                device: data.pointer.device,
+                kind: pointer_info.kind,
+                device: pointer_info.device,
                 sequence: entry.sequence(),
                 local,
                 global,

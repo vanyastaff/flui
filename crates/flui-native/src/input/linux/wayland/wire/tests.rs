@@ -3,7 +3,7 @@
 
 use std::time::Duration;
 
-use flui_platform::pointer::{PanZoomPhase, PenTool, PointerEvent};
+use flui_platform::pointer::{PanZoomPhase, PenTool, PointerEvent, TouchpadSwipePhase};
 
 use super::*;
 
@@ -147,6 +147,32 @@ fn pointer(event: &PointerEvent) -> String {
             format!(
                 "{} {phase} at {},{}",
                 head("pinch", gesture.pointer()),
+                position.x,
+                position.y
+            )
+        }
+        PointerEvent::TouchpadHold(hold) => {
+            let position = hold.position.get();
+            format!(
+                "{} {:?} at {},{}",
+                head("hold", hold.pointer()).replace(" Trackpad", ""),
+                hold.phase,
+                position.x,
+                position.y
+            )
+        }
+        PointerEvent::TouchpadSwipe(swipe) => {
+            let position = swipe.position.get();
+            let phase = match swipe.phase {
+                TouchpadSwipePhase::Update(travel) => {
+                    format!("travel ({}, {})", travel.get().dx, travel.get().dy)
+                }
+                phase => format!("{phase:?}"),
+            };
+            format!(
+                "{} {} {phase} at {},{}",
+                head("swipe", swipe.pointer()).replace(" Trackpad", ""),
+                swipe.fingers,
                 position.x,
                 position.y
             )
@@ -621,6 +647,107 @@ fn a_pinch_is_one_pan_zoom_about_the_cursor() {
             "s1 pinch p2 Trackpad update 3.000 0.000 at 110,75",
             "s1 pinch p2 Trackpad update 3.000 1.571 at 110,75",
             "s1 pinch p2 Trackpad end at 110,75",
+        ],
+        "{lines:?}"
+    );
+}
+
+fn swiper(event: SwipeWire) -> SeatEvent {
+    SeatEvent::Swipe {
+        device: PINCHER,
+        pointer: POINTER,
+        event,
+    }
+}
+
+fn holder(event: HoldWire) -> SeatEvent {
+    SeatEvent::Hold {
+        device: PINCHER,
+        pointer: POINTER,
+        event,
+    }
+}
+
+/// A swipe is one gesture of its finger count where the cursor rests: its
+/// steps sum into its travel, the cursor stays put, and its end is its own;
+/// a step of a swipe that never began reaches no window.
+#[test]
+fn a_swipe_is_one_gesture_where_the_cursor_rests() {
+    let lines = feed(
+        &mut seated(),
+        &[
+            mouse(PointerWire::Enter {
+                surface: WINDOW,
+                x: 100.0,
+                y: 80.0,
+            }),
+            mouse(PointerWire::Frame),
+            swiper(SwipeWire::Update { dx: 5.0, dy: 0.0 }),
+            swiper(SwipeWire::Begin {
+                surface: WINDOW,
+                fingers: 3,
+            }),
+            swiper(SwipeWire::Update { dx: -12.5, dy: 2.0 }),
+            swiper(SwipeWire::Update { dx: -20.0, dy: 0.0 }),
+            swiper(SwipeWire::End { cancelled: false }),
+            swiper(SwipeWire::Begin {
+                surface: WINDOW,
+                fingers: 4,
+            }),
+            swiper(SwipeWire::End { cancelled: true }),
+        ],
+    );
+    assert_eq!(
+        &lines[1..],
+        [
+            "s1 added Trackpad",
+            "s1 swipe p2 3 Start at 100,80",
+            "s1 swipe p2 3 travel (-12.5, 2) at 100,80",
+            "s1 swipe p2 3 travel (-32.5, 2) at 100,80",
+            "s1 swipe p2 3 End at 100,80",
+            "s1 swipe p3 4 Start at 100,80",
+            "s1 swipe p3 4 Cancelled at 100,80",
+        ],
+        "{lines:?}"
+    );
+}
+
+/// Fingers resting on the touchpad are a hold where the cursor is, until
+/// they lift or start another gesture; a seat removed mid-hold ends it.
+#[test]
+fn a_hold_rests_until_it_lifts_or_a_gesture_starts() {
+    let lines = feed(
+        &mut seated(),
+        &[
+            mouse(PointerWire::Enter {
+                surface: WINDOW,
+                x: 40.0,
+                y: 30.0,
+            }),
+            mouse(PointerWire::Frame),
+            holder(HoldWire::End { cancelled: false }),
+            holder(HoldWire::Begin { surface: WINDOW }),
+            holder(HoldWire::End { cancelled: false }),
+            holder(HoldWire::Begin { surface: WINDOW }),
+            holder(HoldWire::End { cancelled: true }),
+            holder(HoldWire::Begin { surface: WINDOW }),
+            SeatEvent::SeatRemoved(SEAT),
+        ],
+    );
+    let held: Vec<&str> = lines
+        .iter()
+        .map(String::as_str)
+        .filter(|line| line.contains("hold"))
+        .collect();
+    assert_eq!(
+        held,
+        [
+            "s1 hold p2 Begin at 40,30",
+            "s1 hold p2 End at 40,30",
+            "s1 hold p3 Begin at 40,30",
+            "s1 hold p3 Cancelled at 40,30",
+            "s1 hold p4 Begin at 40,30",
+            "s1 hold p4 Cancelled at 40,30",
         ],
         "{lines:?}"
     );

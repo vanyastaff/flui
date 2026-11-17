@@ -17,7 +17,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::task::{Context, Poll, Waker};
 
 use crate::common::{lay_out, loose};
-use flui_foundation::ConnectionState;
+use flui_widgets::ConnectionState;
 use flui_widgets::Stream;
 use parking_lot::Mutex;
 

@@ -99,7 +99,7 @@ where
 
     fn listen_with_recovery(
         &self,
-        _relay: flui_foundation::notifier::ListenerObserver,
+        _relay: flui_foundation::ListenerObserver,
     ) -> flui_foundation::Subscription {
         // Nothing to hear: the value never changes. Dropping the inert
         // subscription retires the relay right away.

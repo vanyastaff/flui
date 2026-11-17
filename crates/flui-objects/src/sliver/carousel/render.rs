@@ -364,7 +364,7 @@ impl RenderSliver for RenderSliverCarousel {
         };
         if let Some(index) = self.frames.initial.take() {
             let correction = geometry.rest_offset(index) - constraints.scroll_offset;
-            if correction.abs() > flui_foundation::EPSILON {
+            if correction.abs() > flui_foundation::geometry::PRECISION_ERROR_TOLERANCE {
                 return Ok(SliverGeometry::scroll_offset_correction(correction));
             }
         }

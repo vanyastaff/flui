@@ -238,7 +238,7 @@ fn a_raster_thread_rebuilds_a_lost_device_when_its_backoff_ends() {
     let backend = ScriptedSlots::new();
     let (handle, sender) = RasterExecutor::spawn(
         backend.clone(),
-        Arc::new(flui_foundation::clock::SystemClock),
+        Arc::new(flui_foundation::SystemClock),
         move || {
             let _told = wake.send(());
         },
@@ -619,7 +619,7 @@ struct BrokenClock {
     reads: std::sync::atomic::AtomicUsize,
 }
 
-impl flui_foundation::clock::MonotonicClock for BrokenClock {
+impl flui_foundation::MonotonicClock for BrokenClock {
     fn now(&self) -> web_time::Instant {
         self.reads.fetch_add(1, Ordering::SeqCst);
         panic!("the clock fails on purpose");
@@ -757,7 +757,7 @@ struct GatedClock {
     open: AtomicBool,
 }
 
-impl flui_foundation::clock::MonotonicClock for GatedClock {
+impl flui_foundation::MonotonicClock for GatedClock {
     fn now(&self) -> web_time::Instant {
         while !self.open.load(Ordering::SeqCst) {
             std::thread::sleep(Duration::from_millis(1));

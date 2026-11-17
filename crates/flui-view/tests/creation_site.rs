@@ -100,9 +100,7 @@ fn an_element_shows_where_its_view_was_created() {
         .unique()
         .expect("one tracked view");
     if CreationSite::KEPT {
-        let site = node
-            .get_fact::<&str>("created_at")
-            .expect("a site is shown");
+        let site = node.fact_as::<&str>("created_at").expect("a site is shown");
         assert!(
             site.contains("creation_site.rs") && site.contains(&format!(":{line}:")),
             "{site} names the constructor call on line {line}"
