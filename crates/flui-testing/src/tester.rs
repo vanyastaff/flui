@@ -632,44 +632,12 @@ impl Tester {
     /// ([gaps](https://github.com/vanyastaff/flui/blob/main/docs/gaps.md#a-tester-reads-the-whole-scenes-drawing-not-one-elements)).
     #[must_use]
     pub fn draw_commands(&mut self) -> Vec<flui_painting::DrawCommandBuf> {
-        use flui_foundation::geometry::Matrix4;
-        use flui_rendering::layer::{Layer, resolve_follower_transform};
-
         self.run_due_now();
-        let mut commands = Vec::new();
-        let Some(tree) = self.host.sink().layer_tree() else {
-            return commands;
-        };
-        // Pre-order is paint order: a parent keeps its children in the order
-        // they paint, a repaint boundary's content under its slot. An
-        // explicit stack, children pushed last first, so a deep chain of
-        // effects cannot overflow the test thread's stack.
-        let mut pending = vec![(tree.root(), Matrix4::IDENTITY)];
-        while let Some((id, above)) = pending.pop() {
-            let Some(node) = tree.get(id) else { continue };
-            let local = match node.layer() {
-                Layer::Picture(picture) => {
-                    commands.extend(picture.picture().iter().map(|command| {
-                        let mut command = command.to_buf();
-                        command.transform = above * command.transform;
-                        command
-                    }));
-                    Matrix4::IDENTITY
-                }
-                Layer::Transform(layer) => *layer.transform(),
-                Layer::Follower(_) => match resolve_follower_transform(tree, id) {
-                    Some(transform) => transform,
-                    None => continue,
-                },
-                layer => {
-                    let offset = layer.local_translation();
-                    Matrix4::translation(offset.dx, offset.dy, 0.0)
-                }
-            };
-            let placed = above * local;
-            pending.extend(node.children().iter().rev().map(|&child| (child, placed)));
-        }
-        commands
+        self.host
+            .sink()
+            .layer_tree()
+            .map(scene_commands)
+            .unwrap_or_default()
     }
 
     // --- Acting -----------------------------------------------------------
@@ -1506,5 +1474,120 @@ fn chord_keys(chord: &str) -> Vec<&str> {
     match chord.strip_suffix("++") {
         Some(held) if !held.is_empty() => held.split('+').chain(["+"]).collect(),
         _ => chord.split('+').collect(),
+    }
+}
+
+/// Every draw command of `tree`, in paint order, each placed in the tree's
+/// root coordinates; what [`Tester::draw_commands`] reads.
+///
+/// Pre-order is paint order: a parent keeps its children in the order they
+/// paint, a repaint boundary's content under its slot. An explicit stack,
+/// children pushed last first, so a deep chain of effects cannot overflow
+/// the test thread's stack. A follower its leader does not place is skipped
+/// with its subtree, as the engine skips it.
+fn scene_commands(tree: &flui_rendering::layer::LayerTree) -> Vec<flui_painting::DrawCommandBuf> {
+    use flui_foundation::geometry::Matrix4;
+    use flui_rendering::layer::{Layer, resolve_follower_transform};
+
+    let mut commands = Vec::new();
+    let mut pending = vec![(tree.root(), Matrix4::IDENTITY)];
+    while let Some((id, above)) = pending.pop() {
+        let Some(node) = tree.get(id) else { continue };
+        let local = match node.layer() {
+            Layer::Picture(picture) => {
+                commands.extend(picture.picture().iter().map(|command| {
+                    let mut command = command.to_buf();
+                    command.transform = above * command.transform;
+                    command
+                }));
+                Matrix4::IDENTITY
+            }
+            Layer::Transform(layer) => *layer.transform(),
+            Layer::Follower(_) => match resolve_follower_transform(tree, id) {
+                Some(transform) => transform,
+                None => continue,
+            },
+            layer => {
+                let offset = layer.local_translation();
+                Matrix4::translation(offset.dx, offset.dy, 0.0)
+            }
+        };
+        let placed = above * local;
+        pending.extend(node.children().iter().rev().map(|&child| (child, placed)));
+    }
+    commands
+}
+
+#[cfg(test)]
+mod tests {
+    use flui_foundation::geometry::{Matrix4, Offset, Point, Rect, Size};
+    use flui_painting::{Canvas, DrawOp, Paint, styling::Color};
+    use flui_rendering::layer::{
+        FollowerLayer, Layer, LayerLink, LayerTree, LeaderLayer, OffsetLayer, PictureLayer,
+    };
+
+    fn swatch(shade: u8) -> Layer {
+        let mut canvas = Canvas::new();
+        canvas.draw_rect(
+            Rect::from_origin_size(Point::ZERO, Size::new(1.0, 1.0)),
+            &Paint::fill(Color::rgb(shade, 0, 0)),
+        );
+        Layer::Picture(PictureLayer::new(canvas.finish()))
+    }
+
+    fn placed(tree: &LayerTree) -> Vec<(u8, Matrix4)> {
+        super::scene_commands(tree)
+            .into_iter()
+            .filter_map(|command| match command.op {
+                DrawOp::Rect { paint, .. } => {
+                    let shade = (paint.color.to_rgba_f32_array()[0] * 255.0).round();
+                    #[expect(
+                        clippy::cast_possible_truncation,
+                        clippy::cast_sign_loss,
+                        reason = "a channel the test wrote as a u8"
+                    )]
+                    let shade = shade as u8;
+                    Some((shade, command.transform))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// A follower is placed by its leader, and one with no leader is left
+    /// out with its subtree while the drawing after it is still read.
+    ///
+    /// Fails if the walk places a follower by its own translation (zero),
+    /// reads an unplaced follower's subtree, or stops at it.
+    #[test]
+    fn followers_are_placed_by_their_leader_or_left_out() {
+        let led = LayerLink::new();
+        let unled = LayerLink::new();
+        let mut tree = LayerTree::new(Layer::Offset(OffsetLayer::zero()));
+        let root = tree.root();
+        tree.push_child(
+            root,
+            Layer::Leader(LeaderLayer::with_offset(
+                led,
+                Size::new(5.0, 5.0),
+                Offset::new(30.0, 40.0),
+            )),
+        );
+        let follower = tree.push_child(root, Layer::Follower(FollowerLayer::new(led)));
+        tree.push_child(follower, swatch(1));
+        let hidden = tree.push_child(
+            root,
+            Layer::Follower(FollowerLayer::new(unled).with_show_when_unlinked(false)),
+        );
+        tree.push_child(hidden, swatch(2));
+        tree.push_child(root, swatch(3));
+
+        assert_eq!(
+            placed(&tree),
+            [
+                (1, Matrix4::translation(30.0, 40.0, 0.0)),
+                (3, Matrix4::IDENTITY),
+            ]
+        );
     }
 }
