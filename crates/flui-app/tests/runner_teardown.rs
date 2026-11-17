@@ -267,6 +267,10 @@ fn runner_teardown() {
                 session_end_flushes_the_registry_within_the_framework_budget,
             ),
             (
+                "a_phone_holds_its_background_for_the_writes_in_flight",
+                a_phone_holds_its_background_for_the_writes_in_flight,
+            ),
+            (
                 "session_end_with_a_checked_out_runtime_writes_registry_bytes_and_calls_no_user_code",
                 session_end_with_a_checked_out_runtime_writes_registry_bytes_and_calls_no_user_code,
             ),
@@ -2171,6 +2175,13 @@ struct NoteRun {
 
 impl NoteRun {
     fn start() -> Self {
+        Self::start_on(|platform| platform)
+    }
+
+    /// [`Self::start`] on the headless platform `configure` makes.
+    fn start_on(
+        configure: impl FnOnce(flui_native::HeadlessPlatform) -> flui_native::HeadlessPlatform,
+    ) -> Self {
         let root = tempfile::tempdir().expect("a temporary data root");
         let pools = flui_runtime::execution::DeterministicExecutors::new();
         let shared = Rc::new(RefCell::new(NoteShared::default()));
@@ -2184,7 +2195,7 @@ impl NoteRun {
                 )
                 .exit_policy(ExitPolicy::OnLastWindowClosed),
         );
-        let platform = flui_native::HeadlessPlatform::new().with_data_root(root.path());
+        let platform = configure(flui_native::HeadlessPlatform::new().with_data_root(root.path()));
         let events = platform.host_events();
         let run = HeadlessRun::start_on(application, view, platform);
         run.run_owner_turn();
@@ -2312,6 +2323,108 @@ pub(crate) fn session_end_flushes_the_registry_within_the_framework_budget() {
         took < flui_testing::SESSION_END_BUDGET + Duration::from_secs(1),
         "a stuck write held the session end for {took:?}"
     );
+}
+
+/// A phone's background, as the headless platform stands in for one.
+fn phone(
+    window: Duration,
+) -> impl FnOnce(flui_native::HeadlessPlatform) -> flui_native::HeadlessPlatform {
+    move |platform| {
+        platform.with_session_end_support(flui_platform::SessionEndSupport::Background { window })
+    }
+}
+
+/// Run owner turns until the platform was released `releases` times, for at
+/// most `within`.
+fn turn_until_released(note: &NoteRun, releases: usize, within: Duration) -> bool {
+    let until = Instant::now() + within;
+    while Instant::now() < until {
+        note.run.run_owner_turn();
+        if note.events.session_end_releases() >= releases {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    false
+}
+
+/// On a phone, a write the session end's inline flush could not finish holds
+/// the process in the background (`Block`) and the application stays up; the
+/// platform is released once the write is stored, or once the platform's
+/// window passes with the value reported unstored. A flush that finished
+/// inline holds nothing.
+///
+/// Red-check: answer `Proceed` whatever is in flight — the held rows see no
+/// `Block`, and the platform is never released.
+pub(crate) fn a_phone_holds_its_background_for_the_writes_in_flight() {
+    // Stored inline: nothing to hold.
+    let note = NoteRun::start_on(phone(Duration::from_secs(4)));
+    note.notes()
+        .set(Note("stored inline".to_owned()))
+        .expect("the loaded document takes the value");
+    note.run.run_owner_turn();
+    let driver = note.drive_io_after(Duration::ZERO);
+    assert_eq!(
+        note.run.end_session(SessionEndPhase::Ending),
+        SessionEndAnswer::Proceed
+    );
+    assert!(note.stores("stored inline"));
+    note.run.run_owner_turn();
+    assert_eq!(note.events.session_end_releases(), 0, "nothing was held");
+    assert!(note.run.is_running(), "the application stays up");
+    note.run.join().expect("the run returns Ok");
+    drop(driver);
+
+    // Stored after the inline flush gave up: held, then released.
+    let note = NoteRun::start_on(phone(Duration::from_secs(4)));
+    note.notes()
+        .set(Note("stored in the background".to_owned()))
+        .expect("the loaded document takes the value");
+    note.run.run_owner_turn();
+    let driver = note.drive_io_after(flui_testing::SESSION_END_BUDGET + Duration::from_millis(300));
+    assert_eq!(
+        note.run.end_session(SessionEndPhase::Ending),
+        SessionEndAnswer::Block,
+        "the write in flight holds the background"
+    );
+    assert!(!note.stores("stored in the background"));
+    note.run.run_owner_turn();
+    assert_eq!(
+        note.events.session_end_releases(),
+        0,
+        "held while the write runs"
+    );
+    assert!(
+        turn_until_released(&note, 1, Duration::from_secs(3)),
+        "the stored write released the platform"
+    );
+    assert!(note.stores("stored in the background"));
+    assert!(note.run.is_running(), "the application stays up");
+    note.run.join().expect("the run returns Ok");
+    drop(driver);
+
+    // Never stored: released when the window passes.
+    let window = Duration::from_millis(300);
+    let note = NoteRun::start_on(phone(window));
+    note.notes()
+        .set(Note("never stored".to_owned()))
+        .expect("the loaded document takes the value");
+    note.run.run_owner_turn();
+    assert_eq!(
+        note.run.end_session(SessionEndPhase::Ending),
+        SessionEndAnswer::Block
+    );
+    let ended = Instant::now();
+    assert!(
+        turn_until_released(&note, 1, window + Duration::from_secs(2)),
+        "the window's end released the platform"
+    );
+    assert!(
+        ended.elapsed() >= window.saturating_sub(Duration::from_millis(50)),
+        "released only once the window passed"
+    );
+    assert!(!note.stores("never stored"));
+    note.run.join().expect("the run returns Ok");
 }
 
 /// A session end reported while the window's UI runtime is checked out

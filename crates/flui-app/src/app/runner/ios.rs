@@ -134,6 +134,9 @@ fn drive_owner() {
     // What an opened URL's loan returned is routed here, outside the
     // destructor that returned it.
     super::host::route_owed_opened_urls();
+    // The background task the session end held for its writes ends once they
+    // did.
+    super::host::release_finished_background_writes();
     if let Some(mut lease) = lease_controller() {
         lease
             .controller

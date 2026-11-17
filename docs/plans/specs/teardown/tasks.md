@@ -91,9 +91,9 @@ graph LR
   записи `SessionEnd`; отказ окна держит блок на запросе до закрытия окна), S3 (уведомление и
   `Detached` с коммитом композиции, если осталось ≥ 1 с; извлечённому — уведомление в FIFO), S4
   (размещение окон и `flush_within` от начала
-  `Ending` в `SESSION_END_BUDGET`, у `Delay { max }` — не дольше `max`), S6 (quit). У `NotifyOnly` (остановка Android, pagehide в web) приложение остаётся живым: уведомление и flush идут, `Detached` и quit — нет. В web (`pagehide`) только уведомление: синхронного бюджета нет, `std::time::Instant` там паникует.
+  `Ending` в `SESSION_END_BUDGET`, у `Delay { max }` — не дольше `max`), S6 (quit). У `NotifyOnly` (pagehide в web) и `Background` (остановка Android, уход iOS в фон, ADR-0350) приложение остаётся живым: уведомление и flush идут, `Detached` и quit — нет. В web (`pagehide`) только уведомление: синхронного бюджета нет, `std::time::Instant` там паникует.
   Вето сеанса зависит от `SessionEndSupport` платформы (`Hold` — Windows, macOS, headless;
-  `Delay` — Linux/logind; `NotifyOnly` — Android, iOS, web), а не от cfg. Строки:
+  `Delay` — Linux/logind; `Background` — Android, iOS; `NotifyOnly` — web), а не от cfg. Строки:
   `a_session_end_query_asks_each_window_guard`,
   `a_notify_only_session_end_leaves_the_application_running`,
   `a_refused_session_end_is_released_when_an_earlier_close_carries_out`,

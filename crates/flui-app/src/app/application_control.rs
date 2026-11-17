@@ -555,6 +555,25 @@ impl Ingress {
             contain(|| drop(reply));
         }
     }
+    /// The quit the user or the system asked the platform for (AppKit's
+    /// Quit): asked of every presentation as
+    /// [`AppHandle::request_quit`] asks it, so the platform keeps running and
+    /// the owner's next turn decides. Quit at once only when the application
+    /// has shut down already; a quit already committed goes on by itself. An
+    /// owner that cannot be woken to ask keeps the application running: the
+    /// user's quit is lost, which the user sees and repeats, where quitting
+    /// past the presentations would lose what they hold.
+    pub(crate) fn platform_quit_asked(self: &Arc<Self>) -> flui_native::QuitAnswer {
+        match self.handle().request_quit() {
+            Ok(()) => flui_native::QuitAnswer::KeepRunning,
+            Err(AppControlError::OwnerGone) => flui_native::QuitAnswer::Quit,
+            Err(error) => {
+                tracing::error!(%error, "the platform's quit could not be asked of the windows");
+                flui_native::QuitAnswer::KeepRunning
+            }
+        }
+    }
+
     /// Quit now, past every presentation: the application's own failure
     /// (its initial window, a service that would not start, `on_ready`
     /// panicking), which no presentation may refuse. New work is fenced at
