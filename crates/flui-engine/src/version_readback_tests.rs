@@ -960,7 +960,7 @@ fn a_backdrop_group_outside_the_damage_still_captures_at_its_first_member() {
     }
 }
 
-/// The clips that `clipped_reader` puts around its layer's content.
+/// The layers that `clipped_reader` puts around its content.
 #[derive(Clone, Copy, Debug)]
 enum LayerClip {
     /// A clip that opens its own layer and cuts that layer's composite.
@@ -971,6 +971,9 @@ enum LayerClip {
     /// A save-layer clip over an image filter's layer: the clip shows what
     /// the filter draws from the input it requires, a little past the clip.
     SaveLayerOverImageFilter,
+    /// No clip: a layer that changes nothing, an image filter composing no
+    /// filter, which isolates nothing in any frame.
+    Unchanging,
 }
 
 /// A retained root over stripes, then, under `clip` (x `left`..128), a red
@@ -1052,6 +1055,9 @@ fn clipped_reader(
             Layer::from(ClipRectLayer::new(window, Clip::HardEdge)),
             Layer::from(OpacityLayer::new(0.5)),
         ],
+        LayerClip::Unchanging => vec![Layer::from(ImageFilterLayer::new(ImageFilter::Compose(
+            Vec::new(),
+        )))],
         LayerClip::SaveLayerOverImageFilter => vec![
             Layer::from(ClipRectLayer::new(window, Clip::AntiAliasWithSaveLayer)),
             Layer::from(ImageFilterLayer::new(ImageFilter::blur(1.0))),
@@ -1087,7 +1093,9 @@ fn clipped_reader(
 /// partial frame skips a node the clip hides, so a filter that read past
 /// the clip would blur the hidden box in a full frame and not in a partial
 /// one. At a fractional edge the box ends where the clip starts, inside the
-/// pixel the clip's edge covers in part, which shows it.
+/// pixel the clip's edge covers in part, which shows it. A layer that
+/// changes nothing isolates no backdrop, in a partial frame as in a full one:
+/// its children keep the damage scissor rather than give it to a composite.
 #[test]
 fn a_backdrop_filter_in_a_clipped_layer_reads_only_inside_the_clip() {
     let Some(renderer) = crate::test_support::renderer_or_skip() else {
@@ -1100,6 +1108,7 @@ fn a_backdrop_filter_in_a_clipped_layer_reads_only_inside_the_clip() {
         (LayerClip::SaveLayerOverImageFilter, [90.0, 86.0]),
         (LayerClip::SaveLayer, [89.6, 89.6]),
         (LayerClip::HardOverOpacity, [89.4, 89.4]),
+        (LayerClip::Unchanging, [90.0, 86.0]),
     ] {
         let mut partial = renderer.retained_capture((SIDE, SIDE)).expect("capture");
         let mut owner = SceneOwner::new();

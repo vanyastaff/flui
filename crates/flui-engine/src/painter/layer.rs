@@ -15,6 +15,15 @@ use crate::command_ir::{
 };
 use crate::layer_compositor::RestoreOutcome;
 
+/// What a saved layer runs over its children before it composites.
+#[derive(Debug)]
+enum LayerFilters {
+    /// A per-pixel color-filter chain; empty for a layer that filters nothing.
+    Color(LayerFilterChain),
+    /// A bounds-growing image filter, which reads its children past any scissor.
+    Image(ImageFilterSpec),
+}
+
 /// Signed root origin and admitted attachment dimensions.
 type FilterFramebuffer = ((i64, i64), (u32, u32));
 
@@ -604,7 +613,7 @@ impl WgpuPainter {
             layer_opacity,
             [1.0, 1.0, 1.0],
             paint.blend_mode,
-            LayerFilterChain::new(),
+            LayerFilters::Color(LayerFilterChain::new()),
             composite_clip,
         );
     }
@@ -622,7 +631,7 @@ impl WgpuPainter {
             layer_opacity,
             [1.0, 1.0, 1.0],
             flui_painting::paint::BlendMode::SrcOver,
-            LayerFilterChain::new(),
+            LayerFilters::Color(LayerFilterChain::new()),
             Some(clip),
         );
     }
@@ -737,7 +746,7 @@ impl WgpuPainter {
             layer_opacity,
             [1.0, 1.0, 1.0],
             flui_painting::paint::BlendMode::SrcOver,
-            smallvec![filter],
+            LayerFilters::Color(smallvec![filter]),
             None, // no clip layer opened this one
         );
     }
@@ -772,33 +781,24 @@ impl WgpuPainter {
             layer_opacity,
             [1.0, 1.0, 1.0],
             flui_painting::paint::BlendMode::SrcOver,
-            LayerFilterChain::new(), // no color-filter chain (image filter is separate)
-            None,                    // no clip layer opened this one
+            LayerFilters::Image(spec),
+            None, // no clip layer opened this one
         );
-        // Mark the freshly-pushed SavedLayer with the image filter spec so that
-        // `restore_layer` knows to emit DrawItem::Filter instead of OpacityLayer.
-        // Log before the move so that the trace can capture `?spec` without needing
-        // `Copy` on `ImageFilterSpec` (which was removed when `Chain` was added).
-        tracing::trace!(
-            ?spec,
-            "WgpuPainter::save_layer_with_image_filter: image filter layer opened"
-        );
-        self.compositor.set_top_image_filter(spec);
     }
 
     /// Shared implementation for [`Self::save_layer`] /
     /// [`Self::save_layer_with_filter`] /
     /// [`Self::save_layer_with_image_filter`]:
     /// snapshot the draw state and push a layer with the given composite
-    /// `layer_opacity`, `layer_tint_rgb`, `layer_blend`, color-filter chain, and
-    /// composite clip.
+    /// `layer_opacity`, `layer_tint_rgb`, `layer_blend`, filters, and
+    /// composite clip; an image filter reads its children past any scissor.
     fn save_layer_impl(
         &mut self,
         bounds: Option<Rect<f64>>,
         layer_opacity: f32,
         layer_tint_rgb: [f32; 3],
         layer_blend: flui_painting::paint::BlendMode,
-        filters: LayerFilterChain,
+        filters: LayerFilters,
         composite_clip: Option<crate::command_ir::GroupClip>,
     ) {
         if self.suppressed_layer_depth != 0 || self.compositor.depth() >= 64 {
@@ -815,9 +815,31 @@ impl WgpuPainter {
                 });
             return;
         }
-        // A damage-only hardware scissor belongs to the composite prefix too.
         let inherited_scissor = self.state.current_scissor();
         let inherited = self.state.begin_clip_group();
+        // A layer that changes nothing where it composites (`composites` is
+        // false and no inherited clip coverage) splices its children into the
+        // parent on restore. A hardware scissor with no clip coverage behind it
+        // is a partial frame's damage, which cuts those children as it would
+        // cut the layer, so they keep it: folded into the composite instead, it
+        // would force an offscreen in a partial frame that a full frame does
+        // not make, and isolate a backdrop under the layer there alone.
+        let (chain, image_filter) = match filters {
+            LayerFilters::Color(chain) => (chain, None),
+            LayerFilters::Image(spec) => (LayerFilterChain::new(), Some(spec)),
+        };
+        let changes_nothing = inherited.is_unclipped()
+            && !crate::layer_compositor::composites(
+                layer_opacity,
+                layer_tint_rgb,
+                layer_blend,
+                &chain,
+                image_filter.is_some(),
+                composite_clip.is_some(),
+            );
+        if changes_nothing {
+            self.state.keep_group_scissor();
+        }
         let mut composite_clip = composite_clip.or_else(|| {
             (!inherited.is_unclipped()).then_some(crate::command_ir::GroupClip {
                 legacy: crate::state_stack::ResolvedClip::NONE,
@@ -825,7 +847,9 @@ impl WgpuPainter {
             })
         });
 
-        if let Some((x, y, w, h)) = inherited_scissor {
+        // Any other layer leaves its children unscissored, since a filter
+        // under it may read past the scissor, and cuts its composite instead.
+        if let Some((x, y, w, h)) = inherited_scissor.filter(|_| !changes_nothing) {
             let clip = composite_clip.get_or_insert_with(|| crate::command_ir::GroupClip {
                 legacy: crate::state_stack::ResolvedClip::NONE,
                 chain: crate::clip_chain::ClipChain::default(),
@@ -861,11 +885,12 @@ impl WgpuPainter {
         };
         tracing::trace!(
             "WgpuPainter::save_layer: layer_opacity={:.3}, tint={:?}, blend={:?}, \
-             filters={:?}, bounds={:?}",
+             filters={:?}, image_filter={:?}, bounds={:?}",
             layer_opacity,
             layer_tint_rgb,
             layer_blend,
-            filters,
+            chain,
+            image_filter,
             bounds_array
         );
         self.compositor.push_layer(
@@ -875,9 +900,14 @@ impl WgpuPainter {
             layer_tint_rgb,
             layer_blend,
             (bounds_array).map(|a| a.map(|v| v as f32)),
-            filters, // moved here after the trace
+            chain,
             composite_clip,
         );
+        // `restore_layer` composites a layer that carries an image filter
+        // through `DrawItem::Filter` instead of `DrawItem::OpacityLayer`.
+        if let Some(spec) = image_filter {
+            self.compositor.set_top_image_filter(spec);
+        }
     }
 
     /// Close the current compositing layer and composite it onto the parent.
@@ -891,7 +921,7 @@ impl WgpuPainter {
     ///   (`RestoreOutcome::Empty`). An empty layer whose mode replaces the
     ///   destination still composites: its transparent region is what the
     ///   mode writes.
-    /// - **Opacity ≈ 1.0 + white tint + `SrcOver`** → content re-integrated
+    /// - **A layer `layer_compositor::composites` finds unchanging** → content re-integrated
     ///   directly into the parent draw order without an offscreen blit
     ///   (`RestoreOutcome::Reintegrate`).
     /// - **Opacity-/tint-/blend-mode layer** → `DrawItem::OpacityLayer` over
