@@ -10,7 +10,7 @@
 //!   `BuildOwner::last_frame_build_report` (the drain's own telemetry);
 //! - `layout_roots`, the frame's difference of `PipelineOwner::layout_roots_total`
 //!   (dirty layout entries the frame's `run_layout` passes drained);
-//! - the wall time of `change + pump_frame`, from criterion.
+//! - the wall time of `change + tick`, from criterion.
 //!
 //! The counts are deterministic and printed once as a markdown table (that
 //! table is the evidence ADR-0074 §8 cites); the timings follow as criterion

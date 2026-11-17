@@ -469,7 +469,7 @@ mod tests {
             }
         }
 
-        /// One frame, exactly as `HeadlessBinding::pump_frame` drives it.
+        /// One frame, in the order `UiRuntime::draw_frame` drives it.
         fn frame(&mut self) {
             self.owner.build_scope(&mut self.tree);
             let Self {

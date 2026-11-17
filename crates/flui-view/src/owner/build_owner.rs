@@ -567,8 +567,8 @@ pub struct BuildOwner {
     /// that honestly rather than silently spawning into a driver nobody polls.
     ///
     /// This must be the driver the binding's frame step actually polls:
-    /// `HeadlessBinding` drives its own binding-local `UpdateScheduler`; production
-    /// drives the UI runtime's own owned `UpdateScheduler` (`UiRuntime.scheduler`). Reaching
+    /// each UI runtime, a headless host's included, drives its own owned
+    /// `UpdateScheduler` (`UiRuntime.scheduler`). Reaching
     /// for the wrong one from a widget would make headless tests spawn into a
     /// driver that never runs.
     pub(crate) async_driver: Option<flui_scheduler::AsyncDriver>,
@@ -816,7 +816,7 @@ impl BuildOwner {
 
     /// Install the binding's async task driver.
     ///
-    /// Called once, at wiring time, by `HeadlessBinding` and `UiRuntime`. Must
+    /// Called once, at wiring time, by `UiRuntime`. Must
     /// be the same driver the binding's frame step polls.
     pub fn set_async_driver(&mut self, driver: flui_scheduler::AsyncDriver) {
         self.async_driver = Some(driver);
@@ -830,10 +830,10 @@ impl BuildOwner {
 
     /// Install the binding's post-frame capability.
     ///
-    /// Called once, at wiring time, by `HeadlessBinding` and, in production, by
+    /// Called once, at wiring time, by
     /// `UiRuntime`'s own wiring. It must name **that binding's** scheduler — the
-    /// one whose `drive_frame` drains the queue. Headless owns a binding-local
-    /// `UpdateScheduler`; production drives the UI runtime's own owned `UpdateScheduler`
+    /// one whose `drive_frame` drains the queue. Each UI runtime, a headless
+    /// host's included, drives its own owned `UpdateScheduler`
     /// (`UiRuntime.scheduler`) — there is no process-global scheduler singleton
     /// any more.
     pub fn set_post_frame_handle(&mut self, handle: flui_scheduler::PostFrameHandle) {
@@ -852,7 +852,7 @@ impl BuildOwner {
     ///
     /// Called during presentation assembly with a handle pairing the UI runtime's
     /// dispatch ticket with a probe over THIS presentation's pipeline.
-    /// `HeadlessBinding` installs none, so headless-tree tests observe
+    /// A bare `BuildOwner` (an element-tree unit test's) has none, so its tests observe
     /// `LifecycleContext::hit_test_handle() == None` honestly rather than reading
     /// some other tree.
     pub fn set_hit_test_handle(&mut self, handle: flui_interaction::HitTestHandle) {
@@ -2280,7 +2280,7 @@ impl BuildOwner {
 
     /// Drive lazy-sliver child managers post-layout.
     ///
-    /// Called by `HeadlessBinding::pump_frame` (and future production bindings)
+    /// Called by the layout↔build fixpoint and `WidgetsBinding::service_child_requests`
     /// immediately **after** `PipelineOwner::run_frame` and the pipeline lock
     /// is released, so the render tree is quiescent and no `NodePtr` alias is
     /// live.
@@ -2303,14 +2303,11 @@ impl BuildOwner {
     /// 7. `finalize_tree` cleans up any evicted children pushed to inactive by
     ///    `retain_band` or `on_unmount`.
     ///
-    /// # Production and headless bindings
+    /// # Every frame path
     ///
-    /// Called by both `HeadlessBinding::pump_frame` (step 6) and
-    /// `UiRuntime::draw_frame` (after `run_frame` drops the pipeline write-lock)
-    /// — the two frame paths are now converged at this call site. Headless
-    /// tests drive it directly via `HeadlessBinding`; a real window drives it via
-    /// `WidgetsBinding::service_child_requests`, which `UiRuntime::draw_frame`
-    /// invokes after each `run_frame`.
+    /// `UiRuntime::draw_frame` reaches it through
+    /// `WidgetsBinding::service_child_requests` after each `run_frame` drops
+    /// the pipeline write-lock, on a platform runner and a headless host alike.
     ///
     /// Returns `true` iff a manager built or evicted a child — the sliver was
     /// then marked `needs_layout`, and the caller (the layout↔build fixpoint

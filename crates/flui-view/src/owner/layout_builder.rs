@@ -496,10 +496,10 @@ impl BuildOwner {
 
     /// Run one frame, settling every build-during-layout node before paint.
     ///
-    /// This is the **single** implementation shared by `HeadlessBinding::pump_frame`
-    /// and `UiRuntime::draw_frame`. The two frame paths must not diverge here: a
+    /// This is the **single** implementation `UiRuntime::draw_frame` runs, on a
+    /// platform runner and a headless host alike. No frame path may diverge here: a
     /// builder that settles headlessly but not on screen (or vice versa) is a
-    /// silent correctness bug, so neither binding may hand-roll this loop.
+    /// silent correctness bug, so no frame path may hand-roll this loop.
     ///
     /// The loop drives `run_layout` → `service_layout_builders` +
     /// `service_child_requests` until no builder needs a build and no lazy

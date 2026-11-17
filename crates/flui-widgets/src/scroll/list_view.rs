@@ -31,8 +31,8 @@ use crate::scroll::{
 ///
 /// - **Lazy** ([`ListView::builder`]): children built on demand from a
 ///   closure, only for the viewport-visible + cache band. Backed by
-///   [`SliverList`] (variable-height, element-owned). Wired into both
-///   `HeadlessBinding::pump_frame` and the production `UiRuntime::draw_frame`,
+///   [`SliverList`] (variable-height, element-owned). Wired into
+///   `UiRuntime::draw_frame`, which a headless host runs too,
 ///   where the child-manager wiring and its test coverage converge.
 ///
 ///   **First-frame settling:** lazy children are built
