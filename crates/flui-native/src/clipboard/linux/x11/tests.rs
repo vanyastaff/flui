@@ -614,68 +614,60 @@ fn an_own_read_whose_selection_fails_keeps_the_first_failure() {
     );
 }
 
-/// While a requestor holds every `INCR` transfer, its further requests for
-/// the primary selection are refused without asking the application's
-/// closure: holding the writers and asking again costs the application no
-/// work.
-#[test]
-fn requests_while_every_transfer_is_held_do_not_ask_the_selection() {
-    use x11rb::protocol::Event;
-    use x11rb::protocol::xproto::{CreateWindowAux, WindowClass};
+/// Another client asking for the primary selection into a window of its
+/// own, as a terminal or an editor pasting it does.
+struct Requestor {
+    connection: RustConnection,
+    window: xproto::Window,
+    utf8: xproto::Atom,
+    incr: xproto::Atom,
+}
 
-    let Some(_server) = server() else {
-        return;
-    };
-    let owner = clipboard();
-    let asked = Rc::new(Cell::new(0));
-    // Longer than one request: each answer is an `INCR` transfer.
-    offer_primary(&owner, counted(&"x".repeat(1 << 20), &asked));
+impl Requestor {
+    fn new() -> Self {
+        use x11rb::protocol::xproto::{CreateWindowAux, WindowClass};
 
-    let (requestor, screen) = RustConnection::connect(None).expect("the X server answers");
-    let root = requestor.setup().roots[screen].root;
-    let window = requestor.generate_id().expect("an id");
-    requestor
-        .create_window(
-            x11rb::COPY_DEPTH_FROM_PARENT,
-            window,
-            root,
-            0,
-            0,
-            1,
-            1,
-            0,
-            WindowClass::INPUT_ONLY,
-            x11rb::COPY_FROM_PARENT,
-            &CreateWindowAux::new(),
-        )
-        .expect("the request is sent");
-    let intern = |name: &str| {
-        requestor
-            .intern_atom(false, name.as_bytes())
-            .expect("the request is sent")
-            .reply()
-            .expect("the server answers")
-            .atom
-    };
-    let utf8 = intern("UTF8_STRING");
-    let incr = intern("INCR");
-    // Ask for the text into `property` and wait for the answer's property,
-    // turning the owner's loop meanwhile.
-    let request = |property: u32| -> u32 {
-        requestor
-            .convert_selection(
+        let (connection, screen) = RustConnection::connect(None).expect("the X server answers");
+        let root = connection.setup().roots[screen].root;
+        let window = connection.generate_id().expect("an id");
+        connection
+            .create_window(
+                x11rb::COPY_DEPTH_FROM_PARENT,
                 window,
-                xproto::Atom::from(xproto::AtomEnum::PRIMARY),
-                utf8,
-                property,
-                x11rb::CURRENT_TIME,
+                root,
+                0,
+                0,
+                1,
+                1,
+                0,
+                WindowClass::INPUT_ONLY,
+                x11rb::COPY_FROM_PARENT,
+                &CreateWindowAux::new(),
             )
             .expect("the request is sent");
-        requestor.flush().expect("the request is sent");
+        Self {
+            connection,
+            window,
+            utf8: atom("UTF8_STRING"),
+            incr: atom("INCR"),
+        }
+    }
+
+    /// Ask `owner` for the text into `property` and wait for the answer,
+    /// turning the owner's loop meanwhile: the property it names, `NONE`
+    /// when it refused.
+    fn ask(&self, owner: &X11Clipboard, property: xproto::Atom) -> xproto::Atom {
+        use x11rb::protocol::Event;
+
+        self.send_request(property);
         let deadline = Instant::now() + STEP;
         loop {
             owner.deliver();
-            while let Some(event) = requestor.poll_for_event().expect("the connection holds") {
+            while let Some(event) = self
+                .connection
+                .poll_for_event()
+                .expect("the connection holds")
+            {
                 if let Event::SelectionNotify(notify) = event {
                     return notify.property;
                 }
@@ -686,31 +678,141 @@ fn requests_while_every_transfer_is_held_do_not_ask_the_selection() {
             );
             std::thread::sleep(Duration::from_millis(5));
         }
-    };
-
-    for held in 0..super::selection::MAX_WRITERS {
-        let property = intern(&format!("FLUI_HELD_{held}"));
-        assert_eq!(request(property), property, "transfer {held} starts");
-        let announced = requestor
-            .get_property(false, window, property, incr, 0, 1)
-            .expect("the request is sent")
-            .reply()
-            .expect("the server answers");
-        assert_eq!(announced.type_, incr, "transfer {held} goes INCR");
-        // The property is never deleted: the transfer stays held.
     }
+
+    /// Ask for the text into `property`, waiting for nothing.
+    fn send_request(&self, property: xproto::Atom) {
+        self.connection
+            .convert_selection(
+                self.window,
+                xproto::Atom::from(xproto::AtomEnum::PRIMARY),
+                self.utf8,
+                property,
+                x11rb::CURRENT_TIME,
+            )
+            .expect("the request is sent");
+        self.connection.flush().expect("the request is sent");
+    }
+
+    /// Start every `INCR` transfer `owner` writes at once, and never take a
+    /// chunk of them: they stay held.
+    fn hold_every_writer(&self, owner: &X11Clipboard) {
+        for held in 0..super::selection::MAX_WRITERS {
+            let property = atom(&format!("FLUI_HELD_{held}"));
+            assert_eq!(
+                self.ask(owner, property),
+                property,
+                "transfer {held} starts"
+            );
+            let announced = self
+                .connection
+                .get_property(false, self.window, property, self.incr, 0, 1)
+                .expect("the request is sent")
+                .reply()
+                .expect("the server answers");
+            assert_eq!(announced.type_, self.incr, "transfer {held} goes INCR");
+        }
+    }
+}
+
+/// While a requestor holds every `INCR` transfer, its further requests for
+/// the primary selection are refused without asking the application's
+/// closure: holding the writers and asking again costs the application no
+/// work.
+#[test]
+fn requests_while_every_transfer_is_held_do_not_ask_the_selection() {
+    let Some(_server) = server() else {
+        return;
+    };
+    let owner = clipboard();
+    let asked = Rc::new(Cell::new(0));
+    // Longer than one request: each answer is an `INCR` transfer.
+    offer_primary(&owner, counted(&"x".repeat(1 << 20), &asked));
+
+    let requestor = Requestor::new();
+    requestor.hold_every_writer(&owner);
     let writers = u32::try_from(super::selection::MAX_WRITERS).expect("a few writers");
     assert_eq!(asked.get(), writers);
 
     for refused in 0..3 {
-        let property = intern(&format!("FLUI_REFUSED_{refused}"));
+        let property = atom(&format!("FLUI_REFUSED_{refused}"));
         assert_eq!(
-            request(property),
+            requestor.ask(&owner, property),
             x11rb::NONE,
             "request {refused} is refused"
         );
     }
     assert_eq!(asked.get(), writers, "the refused requests ask nothing");
+}
+
+/// A requestor that goes (it crashes, or is killed) holds none of the
+/// `INCR` transfers the clipboard writes at once: those under way end as its
+/// window goes, not at their timeout, and those asked before it went and
+/// answered after are refused, not started on a window that is not there.
+/// The next client is served at once either way.
+#[test]
+fn a_requestor_that_goes_lets_go_of_its_transfers() {
+    #[derive(Debug, Clone, Copy)]
+    enum Goes {
+        /// After every transfer it asked for started.
+        MidTransfer,
+        /// After it asked, before the owner's turn answered.
+        BeforeTheAnswer,
+    }
+
+    let Some(_server) = server() else {
+        return;
+    };
+    for goes in [Goes::MidTransfer, Goes::BeforeTheAnswer] {
+        let owner = clipboard();
+        let asked = Rc::new(Cell::new(0));
+        offer_primary(&owner, counted(&"x".repeat(1 << 20), &asked));
+
+        let gone = Requestor::new();
+        match goes {
+            Goes::MidTransfer => gone.hold_every_writer(&owner),
+            Goes::BeforeTheAnswer => {
+                // Twice the writers: one asked before the thread holds the
+                // offer is refused at once, and enough are left to hold
+                // every writer were a gone requestor's transfer started.
+                for held in 0..2 * super::selection::MAX_WRITERS {
+                    gone.send_request(atom(&format!("FLUI_HELD_{held}")));
+                }
+            }
+        }
+        let window = gone.window;
+        drop(gone);
+        // Asked before the next requestor connects, by a client that makes
+        // no window: the server may give the next client the range of ids
+        // the gone one had, and its window the same id.
+        let (probe, _) = RustConnection::connect(None).expect("the X server answers");
+        let deadline = Instant::now() + STEP;
+        while probe
+            .get_window_attributes(window)
+            .expect("the request is sent")
+            .reply()
+            .is_ok()
+        {
+            assert!(
+                Instant::now() < deadline,
+                "{goes:?}: the requestor's window outlived its connection"
+            );
+            std::thread::sleep(Duration::from_millis(2));
+        }
+
+        let next = Requestor::new();
+        let started = Instant::now();
+        let property = atom("FLUI_AFTER");
+        assert_eq!(
+            next.ask(&owner, property),
+            property,
+            "{goes:?}: the next is served"
+        );
+        assert!(
+            started.elapsed() < super::selection::TRANSFER_TIMEOUT,
+            "{goes:?}: served at once, not at a transfer's timeout"
+        );
+    }
 }
 
 /// Ask the `CLIPBOARD` selection's owner for `target` as another client
