@@ -429,10 +429,10 @@ fn unpublished_identifiers_are_reported_once_each_and_bounded() {
         node
     };
     let root = owner.insert(node(1, None));
-    // Two lifted siblings share "repeat", then a hundred distinct ones follow.
+    // Two lifted siblings share "repeat", then 300 distinct ones follow.
     let names = ["repeat".to_owned(), "repeat".to_owned()]
         .into_iter()
-        .chain((0..100).map(|index| format!("item-{index}")));
+        .chain((0..300).map(|index| format!("item-{index}")));
     for (index, name) in (2..).zip(names) {
         let child = owner.insert(node(index, Some(name)));
         owner.add_child(root, child);
@@ -457,7 +457,7 @@ fn unpublished_identifiers_are_reported_once_each_and_bounded() {
             _ => None,
         })
         .collect();
-    assert_eq!(reported.len(), 64, "a read reports at most 64");
+    assert_eq!(reported.len(), 256, "a read reports at most 256");
     assert_eq!(reported[0], "repeat");
     assert_eq!(
         reported[1], "item-0",
@@ -466,7 +466,7 @@ fn unpublished_identifiers_are_reported_once_each_and_bounded() {
 }
 
 #[test]
-fn an_identifier_lifted_under_many_parents_is_reported_once() {
+fn an_identifier_lifted_under_many_parents_leaves_room_for_the_rest() {
     let mut owner = SemanticsOwner::new(Arc::new(|_: &TreeUpdate| {}));
     let node = |index: u32, configure: &dyn Fn(&mut SemanticsConfiguration)| {
         let mut node = SemanticsNode::new().with_source_render_id(render_id(index));
@@ -475,8 +475,8 @@ fn an_identifier_lifted_under_many_parents_is_reported_once() {
         node
     };
     let root = owner.insert(node(1, &|c| c.set_label("Window")));
-    // A row template: each of 80 rows lifts a "swatch", more than one read
-    // reports, and a "footer" follows them in tree order.
+    // A row template: each of 80 rows lifts a "swatch", more rows than one
+    // identifier is reported under, and a "footer" follows them.
     for row in 0..80 {
         let published = owner.insert(node(2 + 2 * row, &|c| c.set_label("Row")));
         let swatch = owner.insert(node(3 + 2 * row, &|c| c.set_identifier("swatch")));
@@ -507,5 +507,9 @@ fn an_identifier_lifted_under_many_parents_is_reported_once() {
             _ => None,
         })
         .collect();
-    assert_eq!(reported, ["swatch", "footer"]);
+    assert_eq!(
+        reported,
+        ["swatch", "swatch", "swatch", "swatch", "footer"],
+        "the first four rows, then the rest"
+    );
 }

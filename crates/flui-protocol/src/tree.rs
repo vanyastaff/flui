@@ -479,7 +479,9 @@ pub enum TreeDiagnostic {
     /// into its parent (one with no role, label or text, or with the
     /// `Generic` or `Presentation` role), so no agent or OS automation
     /// locator selects it (ADR-0240 §3). Its author gives the node a role,
-    /// or the identifier to the node that publishes.
+    /// or the identifier to the node that publishes. A read lists one per
+    /// identifier and node it is lifted into, at most 4 nodes per identifier
+    /// and 256 in all.
     UnpublishedIdentifier {
         /// The identifier nothing can select.
         identifier: String,

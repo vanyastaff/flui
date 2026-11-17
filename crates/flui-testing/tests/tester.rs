@@ -1525,6 +1525,14 @@ fn an_identifier_on_a_node_that_publishes_nothing_else_fails_saying_so() {
         present.contains("0 matches") && !present.contains("publishes nothing of its own"),
         "{present}"
     );
+    // A scope a published node satisfies is not the reason a lookup misses.
+    assert!(
+        matches!(
+            t.try_rect(&find::button("Nope").within(find::id("legend"))),
+            Err(TestError::NotFound { .. })
+        ),
+        "the published legend scopes the lookup"
+    );
     assert!(
         matches!(
             t.try_rect(&find::id("absent")),

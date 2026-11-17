@@ -1198,39 +1198,52 @@ impl Tester {
             })
     }
 
-    /// [`TestError::UnpublishedIdentifier`] when an identifier `locator` or a
-    /// scope of it (`within`, `has`) names is one the window reports on a
-    /// node it lifts away.
+    /// [`TestError::UnpublishedIdentifier`] when `locator`, which matched
+    /// nothing, names an identifier the window reports on a node it lifts
+    /// away: its own identifier, or a scope's (`within`, `has`) that no
+    /// published node carries. A scope a published node satisfies leaves the
+    /// miss to the rest of the locator (ADR-0240 §4 lets one identifier stand
+    /// in several places); the target's own identifier is blamed even then,
+    /// since the lifted instance may be the one its scope holds.
     fn unpublished_identifier(&mut self, locator: &Locator) -> Option<TestError> {
-        let mut wanted: Vec<&str> = Vec::new();
-        let mut pending = vec![locator];
-        while let Some(locator) = pending.pop() {
-            wanted.extend(locator.identifier.as_deref());
-            pending.extend(locator.within.as_deref());
-            pending.extend(locator.has.as_deref());
+        let mut scopes: Vec<&str> = Vec::new();
+        let mut pending: Vec<&Locator> = Vec::new();
+        pending.extend(locator.within.as_deref());
+        pending.extend(locator.has.as_deref());
+        while let Some(scope) = pending.pop() {
+            scopes.extend(scope.identifier.as_deref());
+            pending.extend(scope.within.as_deref());
+            pending.extend(scope.has.as_deref());
         }
-        if wanted.is_empty() {
+        if locator.identifier.is_none() && scopes.is_empty() {
             return None;
         }
         let tree = self.try_semantics().ok()?;
-        // An identifier a published node carries selects that node, so a
-        // miss is the rest of the locator's (ADR-0240 §4 lets one identifier
-        // stand in several places).
-        wanted.retain(|identifier| !carries_identifier(&tree.roots, identifier));
-        let (identifier, parent) =
-            tree.diagnostics
-                .iter()
-                .find_map(|diagnostic| match diagnostic {
-                    TreeDiagnostic::UnpublishedIdentifier { identifier, parent }
-                        if wanted.contains(&identifier.as_str()) =>
-                    {
-                        Some((identifier.clone(), *parent))
-                    }
-                    _ => None,
-                })?;
-        let control = find_node(&tree.roots, parent)
-            .filter(|node| names_from_contents(node.role))
-            .map(line_of);
+        scopes.retain(|identifier| !carries_identifier(&tree.roots, identifier));
+        let mut wanted = scopes;
+        wanted.extend(locator.identifier.as_deref());
+        // A node lifted inside a control is preferred, since that fix
+        // differs.
+        let mut lifted = tree
+            .diagnostics
+            .iter()
+            .filter_map(|diagnostic| match diagnostic {
+                TreeDiagnostic::UnpublishedIdentifier { identifier, parent }
+                    if wanted.contains(&identifier.as_str()) =>
+                {
+                    Some((identifier, *parent))
+                }
+                _ => None,
+            })
+            .peekable();
+        let first = lifted.peek().map(|(identifier, _)| (*identifier).clone())?;
+        let (identifier, control) = lifted
+            .find_map(|(identifier, parent)| {
+                let control =
+                    find_node(&tree.roots, parent).filter(|node| names_from_contents(node.role))?;
+                Some((identifier.clone(), Some(line_of(control))))
+            })
+            .unwrap_or((first, None));
         Some(TestError::UnpublishedIdentifier {
             locator: Box::new(locator.clone()),
             identifier,
@@ -1476,10 +1489,11 @@ fn wait(
         let found = match holds(tester, &matches) {
             // No match because an identifier is on a lifted node is no
             // verdict: `to_be_gone` would pass while the node is on screen.
-            Ok(()) if matches.is_empty() => match tester.unpublished_identifier(locator) {
-                Some(error) => return Err(error),
-                None => return Ok(()),
-            },
+            // It waits as a failing check does, so a node still leaving
+            // over the next frames is waited out.
+            Ok(()) if matches.is_empty() && tester.unpublished_identifier(locator).is_some() => {
+                "no match, because an identifier it names is on a lifted node".to_owned()
+            }
             Ok(()) => return Ok(()),
             Err(found) => found,
         };
@@ -1543,7 +1557,6 @@ fn names_from_contents(role: Role) -> bool {
     )
 }
 
-/// The node `id` names among `roots` and their descendants.
 /// Whether a node under `roots` is published with `identifier`.
 fn carries_identifier(roots: &[Node], identifier: &str) -> bool {
     let mut pending: Vec<&Node> = roots.iter().collect();
@@ -1556,6 +1569,7 @@ fn carries_identifier(roots: &[Node], identifier: &str) -> bool {
     false
 }
 
+/// The node `id` names among `roots` and their descendants.
 fn find_node(roots: &[Node], id: ElementId) -> Option<&Node> {
     let mut pending: Vec<&Node> = roots.iter().collect();
     while let Some(node) = pending.pop() {

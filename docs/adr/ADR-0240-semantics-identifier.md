@@ -34,9 +34,9 @@ its driver), Compose's `testTag`, Android `resource-id`, iOS `accessibilityIdent
    AccessKit adapters lift into its parent (one with no role, label or text, or with the
    `Generic` or `Presentation` role) is in no agent or OS automation tree, so no locator selects
    it there; the web mirror still writes it as `data-flui-id` on the element it makes. A wire
-   read lists an `unpublished_identifier` diagnostic naming the node it is lifted into (schema
-   `0.18`), and the testing kit's failure for it gives the form that is found, a role on the node
-   (as `Group`) or the identifier on the control.
+   read lists an `unpublished_identifier` diagnostic naming the node it is lifted into, a bounded
+   number per identifier and per read (schema `0.18`), and the testing kit's failure for it gives
+   the form that is found, a role on the node (as `Group`) or the identifier on the control.
 4. An identifier is unique among its siblings by contract, as AccessKit requires of `author_id`:
    an OS automation client matching it on two siblings finds only one. It need not be unique
    anywhere else, so a row template can name its "delete" button in every row. A clash is the
