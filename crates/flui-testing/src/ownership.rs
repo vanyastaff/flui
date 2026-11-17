@@ -4,7 +4,7 @@
 //! 45° and 46° rows with first-sample noise, the [`PanClaim`] rows and an
 //! `allowed_devices` row (a pen draws, a finger scrolls), each
 //! for a touch and a mouse contact. Every row scripts its contact with a
-//! [`PointerScript`] and replays it in a [`HeadlessHost`](crate::HeadlessHost) on a hit
+//! [`PointerScript`] and replays it in a [`HeadlessHost`] on a hit
 //! route of nested `RawGestureDetector`s, the member under test innermost, so the arena sees
 //! the members in the order a real route admits them.
 //!
