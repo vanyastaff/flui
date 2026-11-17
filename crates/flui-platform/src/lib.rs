@@ -3,7 +3,7 @@
 //! This crate holds what the framework, plugins and tests program against
 //! when they talk to the platform, and nothing that implements it:
 //!
-//! - the capability traits [`PlatformTextInput`], [`PlatformHaptics`] and
+//! - the capability traits [`PlatformTextInput`], [`PlatformHaptics`](haptics::PlatformHaptics) and
 //!   the data-transfer transport
 //!   ([`data_transfer::DragTransport`], ADR-0312);
 //! - the display vocabulary: [`DisplaySnapshot`], [`DisplayDescription`], the opaque
@@ -13,7 +13,7 @@
 //! - the byte-storage capability [`Storage`] and its vocabulary
 //!   ([`StorageName`], [`StoredVersion`], [`WriteMode`], [`StorageError`]) and
 //!   the directory an application's values live in ([`AppDataDir`]);
-//! - the text store an input method pulls from ([`TextStore`] and the rest of
+//! - the text store an input method pulls from ([`TextStore`](text_store::TextStore) and the rest of
 //!   [`text_store`], ADR-0090);
 //! - the input vocabulary ([`PlatformInput`], [`DispatchEventResult`],
 //!   [`DragDropEvent`] and the conversion helpers) and the handle-less input capabilities
