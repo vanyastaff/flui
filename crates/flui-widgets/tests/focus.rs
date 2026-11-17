@@ -384,8 +384,9 @@ pub(crate) fn a_focus_widget_attaches_under_the_nearest_scope_and_unmount_releas
 
 /// A keyed focusable field: its key keeps its element, and so its widget-owned
 /// focus node, across a rebuild that reorders the fields.
-#[derive(Clone)]
+#[derive(Clone, StatelessView)]
 struct Field {
+    #[view(key)]
     key: flui_foundation::ValueKey<&'static str>,
     on_focus_change: Option<FocusChangeHandler>,
 }
@@ -396,15 +397,6 @@ impl Field {
             key: flui_foundation::ValueKey::new(name),
             on_focus_change: None,
         }
-    }
-}
-
-impl View for Field {
-    fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
-        ElementKind::stateless(self)
-    }
-    fn key(&self) -> Option<&dyn flui_foundation::ViewKey> {
-        Some(&self.key)
     }
 }
 

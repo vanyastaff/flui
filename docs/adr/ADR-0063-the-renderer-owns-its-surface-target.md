@@ -85,8 +85,8 @@ borrowed-safe `create_surface(&W)` that #1043 names, sound only by GPUI's owners
    - winit: inherits winit's contract — the `Arc<winit::Window>` the surface holds *is* the native
      lifetime.
    - Win32: the surface target's `window_handle()` answers `Unavailable` once the window's
-     delivery is retired, and otherwise consults the `hwnd_affinity::teardown_route` identity
-     probe (`AlreadyGone`/`StaleHandle` → `Unavailable`). `WM_DESTROY` retires the window's
+     delivery is retired, and otherwise consults the `hwnd_affinity::handle_names` identity
+     probe (`Nothing`/`AnotherWindow` → `Unavailable`). `WM_DESTROY` retires the window's
      delivery after `on_close`, while the HWND is still valid.
    - AppKit: `setReleasedWhenClosed:NO` (the +1 is released once, in `Drop`); the surface target
      keeps its own retained reference to the view, released on the main thread, and its

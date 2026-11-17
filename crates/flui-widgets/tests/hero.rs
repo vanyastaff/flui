@@ -315,8 +315,9 @@ pub(crate) fn reparenting_refreshes_a_build_time_miss_but_prunes_an_unread_one()
 }
 
 fn reparent_hero(initially_scoped: bool, read_scope: bool, stop_reading: bool) {
-    #[derive(Clone)]
+    #[derive(Clone, StatefulView)]
     struct KeyedHero {
+        #[view(key)]
         key: flui_view::GlobalKey<KeyedHeroState>,
         inits: std::rc::Rc<std::cell::Cell<usize>>,
         changes: std::rc::Rc<std::cell::Cell<usize>>,
@@ -325,14 +326,6 @@ fn reparent_hero(initially_scoped: bool, read_scope: bool, stop_reading: bool) {
     struct KeyedHeroState {
         inits: std::rc::Rc<std::cell::Cell<usize>>,
         changes: std::rc::Rc<std::cell::Cell<usize>>,
-    }
-    impl View for KeyedHero {
-        fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
-            flui_view::element::ElementKind::stateful(self)
-        }
-        fn key(&self) -> Option<&dyn flui_foundation::ViewKey> {
-            Some(&self.key)
-        }
     }
     impl StatefulView for KeyedHero {
         type State = KeyedHeroState;

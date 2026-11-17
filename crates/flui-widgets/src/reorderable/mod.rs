@@ -1709,10 +1709,11 @@ fn beside_handle(content: BoxedView, handle: BoxedView, side: f64, view: &Config
 
 /// One row: its moves, its menu or controls, the drop target it is and the
 /// long press that drags it.
-#[derive(Clone)]
+#[derive(Clone, StatelessView)]
 struct ReorderRow {
     /// The item's index in the app's model, wherever the row is shown.
     index: usize,
+    #[view(key)]
     key: Rc<dyn ViewKey>,
     list: Rc<Shared>,
     /// Whether the row is the gap the lead drag's item leaves: laid out and
@@ -1720,16 +1721,6 @@ struct ReorderRow {
     hidden: bool,
     /// Where the row's content is published, kept for the item.
     anchor: SubtreeAnchor,
-}
-
-impl View for ReorderRow {
-    fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
-        ElementKind::stateless(self)
-    }
-
-    fn key(&self) -> Option<&dyn ViewKey> {
-        Some(&*self.key)
-    }
 }
 
 impl StatelessView for ReorderRow {

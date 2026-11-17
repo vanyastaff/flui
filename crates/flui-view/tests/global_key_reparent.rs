@@ -63,8 +63,9 @@ impl View for Spacer {
 
 /// Keyed stateful counter. State holds an `i32 count` we mutate to
 /// prove migration preserves it.
-#[derive(Clone)]
+#[derive(Clone, StatefulView)]
 struct KeyedCounter {
+    #[view(key)]
     key: GlobalKey<CounterState>,
     initial: i32,
 }
@@ -98,15 +99,6 @@ impl StatefulView for KeyedCounter {
 impl ViewState<KeyedCounter> for CounterState {
     fn build(&self, _v: &KeyedCounter, _ctx: &dyn BuildContext) -> impl IntoView {
         crate::global_key_duplication::Leaf.boxed()
-    }
-}
-
-impl View for KeyedCounter {
-    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
-        flui_view::element::ElementKind::stateful(self)
-    }
-    fn key(&self) -> Option<&dyn ViewKey> {
-        Some(&self.key)
     }
 }
 

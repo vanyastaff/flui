@@ -940,6 +940,7 @@ impl HostDrag for OleTransfer {
         Some(Box::new(RegisteredTarget {
             window: window.window(),
             target,
+            _apartment: std::rc::Rc::clone(&window.apartment),
         }))
     }
 }
@@ -950,14 +951,22 @@ impl HostDrag for OleTransfer {
 struct RegisteredTarget {
     window: WindowRef,
     target: ComObject<WindowDropTarget>,
+    /// The OLE apartment the registration lives in, kept entered until the
+    /// target is revoked and dropped: `RevokeDragDrop` after
+    /// `OleUninitialize` would reach an OLE that is gone.
+    _apartment: std::rc::Rc<crate::owner::windows::com_apartment::ComApartment>,
 }
 
 #[cfg(windows)]
 impl DropTarget for RegisteredTarget {
     fn revoke(&self) {
+        #[cfg(test)]
+        testing::REVOKED_IN_APARTMENT.set(Some(
+            crate::owner::windows::com_apartment::thread_in_apartment(),
+        ));
         // SAFETY: the window is live until its destruction ends, on its
-        // thread; the registration being revoked is the one
-        // `register_target` made.
+        // thread, inside the OLE apartment `_apartment` keeps entered; the
+        // registration being revoked is the one `register_target` made.
         if let Err(error) = unsafe { RevokeDragDrop(self.window.hwnd()) } {
             tracing::debug!(%error, "RevokeDragDrop failed");
         }
@@ -1146,6 +1155,10 @@ pub(crate) mod testing {
     thread_local! {
         /// The drop-target hook of every class made on this thread.
         static MADE: RefCell<Vec<Weak<DropTargetRegistration>>> = const { RefCell::new(Vec::new()) };
+        /// Whether the last drop target revoked on this thread was revoked
+        /// inside the thread's COM apartment; `None` until one is.
+        pub(crate) static REVOKED_IN_APARTMENT: std::cell::Cell<Option<bool>> =
+            const { std::cell::Cell::new(None) };
     }
 
     /// Record a class's hook, made on this thread.

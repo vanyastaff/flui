@@ -26,7 +26,7 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use flui_foundation::geometry::Rect;
-use flui_foundation::{Subscription, ValueKey, ViewKey};
+use flui_foundation::{Subscription, ValueKey};
 use flui_interaction::focus::{FocusCause, FocusNode};
 use flui_interaction::{
     GestureRecognizer, InteractionDispatchError, LocalPayloadTarget, PointerDispatch,
@@ -43,10 +43,11 @@ use flui_rendering::hit_testing::PointerEvent;
 use flui_rendering::pipeline::PipelineCell;
 use flui_rendering::semantics::{ActionCall, SemanticsAction, SemanticsActionHandler};
 use flui_view::element::ElementKind;
+use flui_view::prelude::StatelessView;
 use flui_view::{
     BuildContext, EventContext, IntoView, LifecycleContext, RebuildHandle, RebuildReason,
-    RenderObjectContext, RenderObjectContextError, StatefulView, StatelessView, View, ViewExt,
-    ViewState, WriterSource,
+    RenderObjectContext, RenderObjectContextError, StatefulView, View, ViewExt, ViewState,
+    WriterSource,
 };
 
 use super::rich_text::ResolvedParagraph;
@@ -464,24 +465,15 @@ impl ViewState<LinkedParagraph> for LinkedParagraphState {
 /// declines the activation intents; the link's semantics live on the
 /// paragraph's link node, so the stop publishes none. A link the layout cut
 /// takes no focus.
-#[derive(Clone)]
+#[derive(Clone, StatelessView)]
 struct LinkFocusStop {
+    #[view(key)]
     key: ValueKey<u64>,
     live: Rc<LiveLinks>,
     link: TextLink,
     node: Rc<FocusNode>,
     rect: RectProvider,
     shown: bool,
-}
-
-impl View for LinkFocusStop {
-    fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
-        ElementKind::stateless(self)
-    }
-
-    fn key(&self) -> Option<&dyn ViewKey> {
-        Some(&self.key)
-    }
 }
 
 impl StatelessView for LinkFocusStop {
