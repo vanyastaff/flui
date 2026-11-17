@@ -29,7 +29,7 @@ impl HasDisplayHandle for LocalWindow {
 }
 
 impl SurfaceTarget for &'_ LocalWindow {
-    fn pre_present_notify(&self, _frame: Option<flui_foundation::FrameStamp>, _statistics: SwapChainStatistics) {}
+    fn pre_present_notify(&self, _frame: Option<flui_foundation::FrameStamp>, _statistics: SwapChainStatistics) {} fn keep_past_close(&self) {}
 }
 
 async fn borrow_then_drop() {

@@ -113,4 +113,7 @@ impl flui_platform::SurfaceTarget for FakeTarget {
         _: flui_platform::SwapChainStatistics,
     ) {
     }
+
+    /// The double names no native window, so there is nothing to keep.
+    fn keep_past_close(&self) {}
 }

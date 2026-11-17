@@ -1366,28 +1366,47 @@ mod toplevel {
             if let Some(table) = self.table.upgrade() {
                 table.forget(self.id);
             }
-            self.facets.accessibility.detach();
-            self.facets.text.detach();
-            self.delivery.dispatch_close();
-            self.retire();
+            // `closed`, a delivery queued ahead of it and the facets' detach
+            // run user code. Every step runs whichever one before it panics:
+            // `closed` is already set, so nothing later releases what this
+            // close skips. The first panic resumes at the end.
+            let mut failure = flui_foundation::panic::FirstPanic::new();
+            failure.contain(|| self.facets.accessibility.detach());
+            failure.contain(|| self.facets.text.detach());
+            failure.contain(|| self.delivery.dispatch_close());
+            failure.contain(|| self.retire());
+            failure.resume();
         }
 
         /// Leave the seats' input, take down the frame the window drew, let
         /// go of the handler, then destroy the role objects.
         fn retire(&self) {
+            // Every step runs whichever one before it panics (the input's or
+            // the drag's detach can resume a panic of user code), so the frame
+            // and the role objects always go and the handler is always let go
+            // of. The first panic resumes at the end.
+            let mut failure = flui_foundation::panic::FirstPanic::new();
             // No later request names a serial the closed window took.
-            self.last_input.surface_gone(&self.surface.0);
-            self.input.detach(self.id);
-            self.drag.detach(self.id);
+            failure.contain(|| self.last_input.surface_gone(&self.surface.0));
+            failure.contain(|| self.input.detach(self.id));
+            failure.contain(|| self.drag.detach(self.id));
             if let Some(client_frame) = self.client_frame.borrow_mut().take() {
-                client_frame.destroy();
+                failure.contain(|| client_frame.destroy());
             }
             let roles = self.roles.borrow_mut().take();
-            self.delivery.clear_then(move || {
-                if let Some(roles) = roles {
-                    roles.destroy();
-                }
+            let retirement = self.delivery.retirement();
+            failure.contain(|| {
+                self.delivery.clear_then(move || {
+                    // The `wl_surface` stays with its last holder either way
+                    // (`WaylandSurface`'s `keep_past_close`); the fate is
+                    // settled so that a later keep does nothing.
+                    let _fate = retirement.settle();
+                    if let Some(roles) = roles {
+                        roles.destroy();
+                    }
+                });
             });
+            failure.resume();
         }
     }
 
@@ -1448,7 +1467,10 @@ mod toplevel {
         fn drop(&mut self) {
             // The handler may own the renderer whose swapchain draws to the
             // surface: it lets go first, while the role objects still exist.
-            self.delivery.clear();
+            // A delivery queued ahead of the release may panic: the drop
+            // still destroys what the window made (a panic out of a drop
+            // while unwinding aborts).
+            crate::owner::panic_boundary::contain_owner_callback(|| self.delivery.clear());
             if let Some(client_frame) = self.client_frame.get_mut().take() {
                 client_frame.destroy();
             }
@@ -1620,6 +1642,19 @@ mod toplevel {
                     confirms,
                 },
             );
+        }
+
+        /// Records the keep and changes nothing else: a keep may come while
+        /// the window is still open, and it keeps showing and taking input.
+        /// Its close has nothing more to do for it: the close destroys only
+        /// the window's role objects (the toplevel and its `xdg_surface`), so
+        /// the compositor unmaps the window either way, and the `wl_surface` a
+        /// surface is made over goes only with its last holder, which this
+        /// target is. The target, leaked, keeps it and the connection its
+        /// `wl_display` lives on; a present over the role-less surface shows
+        /// nothing. The keep is recorded all the same.
+        fn keep_past_close(&self) {
+            let _first = self.retirement.keep_past_close();
         }
     }
 

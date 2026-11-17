@@ -671,6 +671,12 @@ impl MacOSWindow {
         if self.closed.swap(true, Ordering::SeqCst) {
             return;
         }
+        // Every step below runs whichever one before it panics (`closed`, a
+        // delivery queued ahead of it, the release, a tracing subscriber):
+        // the window's `Drop` finds `closed` set and releases nothing, so a
+        // close once begun always finishes here. The first panic resumes at
+        // the end.
+        let mut failure = flui_foundation::panic::FirstPanic::new();
 
         // Untrack from the platform's window map here, on the owner thread the
         // delegate notification runs on: the map holds the window strongly, so
@@ -687,8 +693,10 @@ impl MacOSWindow {
         // delegate holds the window meanwhile.
         let _prev = self.windows_map.remove(&(self.ns_window as u64));
 
-        self.delivery.dispatch_close();
-        tracing::debug!("Window closed");
+        failure.contain(|| {
+            self.delivery.dispatch_close();
+            tracing::debug!("Window closed");
+        });
 
         // Release every remaining registered callback now, while
         // `ns_window` is still valid (this delegate method runs before
@@ -697,8 +705,10 @@ impl MacOSWindow {
         // `wgpu::Surface` is built from the window's surface target, and that
         // surface goes while the window's view is still there (ADR-0063).
         // The clear also retires the delivery, so the surface target answers
-        // `Unavailable` from here on.
-        self.delivery.clear();
+        // `Unavailable` from here on. A keep recorded for the window before
+        // the handler let go, usually while it was open, keeps its view past
+        // the close.
+        failure.contain(|| self.clear_then_keep_if_kept());
 
         // Match winit's own `windowWillClose:` handling: NIL the delegate
         // so no further delegate method can fire against a window this
@@ -711,8 +721,9 @@ impl MacOSWindow {
             let _: () = msg_send![self.ns_window, setDelegate: NIL];
         }
         if let Some(control) = self.loop_control.get().and_then(std::sync::Weak::upgrade) {
-            control.request(false);
+            failure.contain(|| control.request(false));
         }
+        failure.resume();
     }
 
     /// Handle backing properties changed (Retina/DPI change)
