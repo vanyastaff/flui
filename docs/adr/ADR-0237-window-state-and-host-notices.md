@@ -14,7 +14,7 @@
   snapshot with its revision, the command and capability triad, owner-turn application and
   `WindowHandle` (decision 4), placement, and the notices and the session-end hold themselves
   stay; the payload-free state notification stays as a handler method instead of a registration.
-- **Superseded-by:** [ADR-0360](ADR-0360-a-window-position-names-its-display-and-commands-carry-checked-geometry.md), decision
+- **Superseded-by:** [ADR-0361](ADR-0361-a-window-position-names-its-display-and-commands-carry-checked-geometry.md), decision
   2's global position only: a position is a point of the display it names, in that display's
   logical pixels; and decision 6's options naming a display apart from their position: the
   position names it. The placement record and its encoding stand.

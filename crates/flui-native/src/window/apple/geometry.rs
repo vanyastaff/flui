@@ -17,7 +17,7 @@ pub(crate) mod frame {
     //! points; this module flips that into points from the primary screen's
     //! top-left corner, AppKit's desktop seen from the top. The contract
     //! measures a window's outer top-left on a display, in that display's
-    //! logical pixels from its corner (ADR-0360): on macOS a screen's logical
+    //! logical pixels from its corner (ADR-0361): on macOS a screen's logical
     //! pixels are points, and a screen publishes its corner in that flipped
     //! desktop ([`DisplayInfo::origin`]), so a position on it is the desktop
     //! point less the corner, with no scale between them.

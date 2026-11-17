@@ -2572,7 +2572,7 @@ native contract rows `refresh_is_the_rational_active_mode`,
 is not a CI row; it ran by hand (see
 `docs/platform-parity.md`). Unplugging a monitor on Windows was not run.
 
-### A window's position is a point of its display, converted through that display alone (ADR-0360)
+### A window's position is a point of its display, converted through that display alone (ADR-0361)
 
 A `WindowPosition` names its display and is measured in that display's logical
 pixels from its corner, so a host converts it through the display it names and
@@ -3274,7 +3274,7 @@ minimized or full-screen window, so the backend records the outer rectangle
 just before the window leaves normal mode.
 
 A position is the outer top-left on the screen the window is on, in that
-screen's points from its corner (ADR-0360). AppKit measures from the bottom-left
+screen's points from its corner (ADR-0361). AppKit measures from the bottom-left
 corner of the primary screen, so `window::apple::geometry::frame` flips through
 the primary screen's height into points from its top-left, and a screen
 publishes its corner in that flipped desktop as its `DesktopOrigin` and its
