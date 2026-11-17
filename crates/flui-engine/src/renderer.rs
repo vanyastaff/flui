@@ -3285,8 +3285,9 @@ mod tests {
             builder.add(PictureLayer::new(canvas.finish()));
             let scene = Scene::new(builder.build());
             painter.begin_frame().expect("optimized FXC frame opens");
-            Renderer::record_frame_content(&mut painter, &scene, None)
-                .expect("optimized FXC scene records through the window frame path");
+            let _recorded: crate::frame_protocol::RecordedContent =
+                Renderer::record_frame_content(&mut painter, &scene, None)
+                    .expect("optimized FXC scene records through the window frame path");
             let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("optimized FXC clip encoder"),
             });
