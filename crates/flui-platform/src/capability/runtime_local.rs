@@ -1,5 +1,6 @@
 //! State a provider keeps for one UI runtime (ADR-0152 §5).
 
+use flui_foundation::panic::FirstPanic;
 use std::{
     any::{Any, TypeId},
     cell::{Cell, RefCell},
@@ -86,23 +87,11 @@ impl RuntimeLocals {
     pub fn retire(&self) -> Option<Box<dyn Any + Send>> {
         self.inner.retired.set(true);
         let slots = std::mem::take(&mut *self.inner.slots.borrow_mut());
-        let mut first = None;
+        let mut first = FirstPanic::new();
         for (_, slot) in slots {
-            #[expect(
-                clippy::disallowed_methods,
-                reason = "ADR-0287: a slot's drop runs contained so the remaining slots retire"
-            )]
-            if let Err(payload) =
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(slot)))
-            {
-                match first {
-                    None => first = Some(payload),
-                    // The first failure goes on; a later one is dropped (ADR-0281).
-                    Some(_) => flui_foundation::panic::discard_payload(payload),
-                }
-            }
+            first.contain(move || drop(slot));
         }
-        first
+        first.into_payload()
     }
 }
 

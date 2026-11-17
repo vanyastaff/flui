@@ -1,6 +1,6 @@
 //! A session end waits for as long as anyone holds a block on its request;
 //! the host closes the request's book when it answers, and dropping the last
-//! block after that releases it, once, and never panics.
+//! block after that releases it, once.
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -97,16 +97,37 @@ fn a_block_dropped_before_the_answer_releases_nothing_the_platform_was_told() {
     assert_eq!(request.answer(), SessionEndAnswer::Proceed);
 }
 
-fn a_panicking_release_hook_does_not_escape_the_drop() {
+fn a_panicking_release_hook_reaches_the_releaser_with_the_block_gone() {
     let request = SessionEndRequest::new().on_release(|| panic!("the release hook fails"));
     let block = request.block("a").expect("open book");
     request.answer();
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(block)));
-    assert!(outcome.is_ok(), "dropping a block never panics");
+    let payload = outcome.expect_err("the hook's panic reaches whoever released the block");
+    assert_eq!(
+        payload.downcast_ref::<&str>(),
+        Some(&"the release hook fails")
+    );
     assert!(
         !request.is_blocked(),
         "and the block is released regardless"
     );
+}
+
+fn a_release_hook_that_panics_during_an_unwind_does_not_abort() {
+    let request = SessionEndRequest::new().on_release(|| panic!("the release hook fails"));
+    let block = request.block("a").expect("open book");
+    request.answer();
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+        let _held = block;
+        panic!("the releaser's own failure");
+    }));
+    let payload = outcome.expect_err("the releaser's panic unwinds");
+    assert_eq!(
+        payload.downcast_ref::<&str>(),
+        Some(&"the releaser's own failure"),
+        "the first failure stays the one unwinding"
+    );
+    assert!(!request.is_blocked());
 }
 
 #[test]
@@ -143,8 +164,12 @@ fn session_end_request() {
                 a_block_dropped_before_the_answer_releases_nothing_the_platform_was_told as fn(),
             ),
             (
-                "a_panicking_release_hook_does_not_escape_the_drop",
-                a_panicking_release_hook_does_not_escape_the_drop as fn(),
+                "a_panicking_release_hook_reaches_the_releaser_with_the_block_gone",
+                a_panicking_release_hook_reaches_the_releaser_with_the_block_gone as fn(),
+            ),
+            (
+                "a_release_hook_that_panics_during_an_unwind_does_not_abort",
+                a_release_hook_that_panics_during_an_unwind_does_not_abort as fn(),
             ),
         ],
     );
