@@ -36,12 +36,13 @@ pub(crate) struct RecordedContent {
 /// once per pass.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) struct RasterCounters {
-    /// The scene nodes the walk entered: a version's boundaries it did not
-    /// cull (its effect entries are not nodes), or every layer of a tree it
+    /// The scene nodes the walk entered: a version's boundaries it reached
+    /// and did not cull (its effect entries are not nodes; a slot under an
+    /// effect the walk skipped is never reached), or every layer of a tree it
     /// reached, a layer that then draws nothing included.
     pub(crate) nodes_entered: u64,
-    /// The slots and chunks the walk asked its cull about; `0` for a tree,
-    /// which is walked whole.
+    /// The slots and chunks the walk asked its cull about; `0` for a full
+    /// frame and for a tree, which are walked whole.
     pub(crate) cull_tests: u64,
     /// The chunks of a version whose commands the frame recorded into the
     /// painter's IR; `0` for a tree, whose pictures are layers, not chunks.

@@ -63,8 +63,8 @@ update и repaint `paint/rotated_box_turn_change/inline` по criterion не х�
 | G7 | размер команды | `size_of::<DrawOp>() <= 112` и `size_of::<RecordedOp>() <= 120` (`const`-проверки ADR-0306 §3) |
 
 `chunks_recorded`, `region_passes` и `recording_cache_hits` — счётчики движка (`RasterCounters`, design.md,
-«Счётчики»): ворота читают их в тесте `flui-engine` на lavapipe над той же сценой, остальные числа
-строки — в perf-сценарии `flui-widgets`.
+«Счётчики»): ворота читают их в тесте `flui-engine` на lavapipe над версией сцены того же вида
+(ADR-0304, Confirmation), остальные числа G1, G3, G4 и G6 — в perf-сценарии `flui-widgets`.
 
 Программа сделана, когда G1–G7 держит CI, а пункты ADR-0304, ADR-0305 и ADR-0306 удалены из
 `docs/gaps.md`, после чего три записи получают статус `Implemented`, а эта спека удаляется.

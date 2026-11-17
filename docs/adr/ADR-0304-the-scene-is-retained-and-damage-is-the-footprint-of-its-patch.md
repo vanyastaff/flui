@@ -620,13 +620,16 @@ consecutive versions. The patch damage must cover the diff damage.
   (`crates/flui-engine/src/damage_readback_tests.rs:209`) stay.
 - `flui-runtime` (to be added): `a_refused_submit_keeps_its_damage_owed`,
   `a_refused_patch_rebuilds_under_a_new_lineage`,
-  `a_frame_not_shown_is_retried_from_the_held_version` (the retry records no chunk and paints no
-  boundary) and `a_hot_reload_renews_every_scene_lineage`.
+  `a_frame_not_shown_is_retried_from_the_held_version` (the retry paints no boundary and
+  publishes no new version) and `a_hot_reload_renews_every_scene_lineage`; `flui-engine` (to be
+  added): `a_frame_not_shown_is_retried_without_recording` (the engine's retry of the held version
+  records no chunk).
 - `cargo xtask perf` gains the scenario `caret_blink_in_10k_list` (to be added to
   `crates/flui-widgets/tests/perf.rs`, counts in `crates/flui-widgets/perf/baseline/`), whose
-  `nodes_painted` and `scene_ops` per blink are equal at 1,000 and 10,000 items, and a
-  `flui-engine` test over the same scene records as many chunks (`chunks_recorded`) per blink at
-  both sizes; the engine counts its walk and recording per frame, which no perf scenario reads.
+  `nodes_painted` and `scene_ops` per blink are equal at 1,000 and 10,000 items; the engine's
+  half is `flui-engine`'s `a_caret_blink_records_as_many_chunks_at_any_list_size` (to be added), a
+  version of a list of 1,000 and of 10,000 boundaries whose one blinking boundary records as many
+  chunks (`chunks_recorded`) per blink at both sizes.
 
 ## Pros and cons of the options
 
