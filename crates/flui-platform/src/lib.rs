@@ -203,8 +203,9 @@ pub use pointer::{
 pub use preferences::{
     Distance, DurationScale, FlingSpeeds, GestureGeometry, GestureParts, GesturePreferences,
     InvalidPreference, MotionPreference, NativeMouseGeometry, NativeTouchGeometry, PreferenceParts,
-    PreferenceQueryError, SystemPreferences, TextWeightPreference, WheelParts, WheelPreferences,
-    WheelStep,
+    PreferenceQueryError, ScrollBarParts, ScrollBarPreferences, ScrollBarVisibility,
+    ScrollTrackClick, SrgbColor, SystemPreferences, TextWeightPreference, WheelParts,
+    WheelPreferences, WheelStep,
 };
 pub use regional::{
     HourCycle, InvalidRegionalFormat, MeasurementSystem, NumberingSystem, RegionOverride,

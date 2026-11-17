@@ -35,10 +35,11 @@ use flui_platform::{
     Headroom, HourCycle, ImeEvent, InsetCurve, InsetMotion, InvalidPreference, KeyboardInset,
     Locale, MeasurementSystem, MemoryPressureLevel, MotionPreference, NativeMouseGeometry,
     NativeTouchGeometry, NumberingSystem, PlatformInput, PreferenceParts, RefreshPeriod,
-    RegionOverride, RegionalParts, SessionEndPhase, SizeConstraints, SystemControls, SystemNotice,
-    SystemPreferences, TextWeightPreference, Weekday, WheelParts, WheelStep, WindowCapability,
-    WindowExecutionState, WindowExtent, WindowFrame, WindowGeometry, WindowInsets,
-    WindowInteraction, WindowMode, WindowState, WindowStateParts,
+    RegionOverride, RegionalParts, ScrollBarParts, ScrollBarVisibility, ScrollTrackClick,
+    SessionEndPhase, SizeConstraints, SrgbColor, SystemControls, SystemNotice, SystemPreferences,
+    TextWeightPreference, Weekday, WheelParts, WheelStep, WindowCapability, WindowExecutionState,
+    WindowExtent, WindowFrame, WindowGeometry, WindowInsets, WindowInteraction, WindowMode,
+    WindowState, WindowStateParts,
 };
 use flui_protocol::native_recording as wire;
 use serde::Serialize;
@@ -2016,8 +2017,32 @@ fn preferences_to_wire(values: SystemPreferences) -> DtoResult<wire::Preferences
             vertical,
             horizontal_characters,
         },
+        accent_color,
+        scroll_bars: ScrollBarParts {
+            visibility,
+            track_click,
+        },
     } = values.into_parts();
     Ok(wire::Preferences {
+        accent_color: accent_color.map(SrgbColor::to_array),
+        scroll_bar_visibility: visibility
+            .map(|visibility| {
+                Ok(match visibility {
+                    ScrollBarVisibility::WhenScrolling => wire::ScrollBarVisibility::WhenScrolling,
+                    ScrollBarVisibility::Always => wire::ScrollBarVisibility::Always,
+                    _ => return Err(DtoError::Unmirrored("ScrollBarVisibility")),
+                })
+            })
+            .transpose()?,
+        scroll_track_click: track_click
+            .map(|click| {
+                Ok(match click {
+                    ScrollTrackClick::Page => wire::ScrollTrackClick::Page,
+                    ScrollTrackClick::JumpToSpot => wire::ScrollTrackClick::JumpToSpot,
+                    _ => return Err(DtoError::Unmirrored("ScrollTrackClick")),
+                })
+            })
+            .transpose()?,
         text_scale,
         motion: motion
             .map(|motion| {
@@ -2162,9 +2187,45 @@ fn preferences_from_wire(wire: wire::Preferences) -> DtoResult<SystemPreferences
         gestures,
         wheel_vertical,
         wheel_horizontal_characters,
+        accent_color,
+        scroll_bar_visibility,
+        scroll_track_click,
     } = wire;
     let rejected = |error: InvalidPreference| invalid(error.to_string());
     PreferenceParts {
+        accent_color: accent_color
+            .map(|[red, green, blue, alpha]| {
+                SrgbColor::try_new(
+                    f64::from(red),
+                    f64::from(green),
+                    f64::from(blue),
+                    f64::from(alpha),
+                )
+                .map_err(rejected)
+            })
+            .transpose()?,
+        scroll_bars: ScrollBarParts {
+            visibility: scroll_bar_visibility
+                .map(|visibility| {
+                    Ok(match visibility {
+                        wire::ScrollBarVisibility::WhenScrolling => {
+                            ScrollBarVisibility::WhenScrolling
+                        }
+                        wire::ScrollBarVisibility::Always => ScrollBarVisibility::Always,
+                        _ => return Err(unread("ScrollBarVisibility")),
+                    })
+                })
+                .transpose()?,
+            track_click: scroll_track_click
+                .map(|click| {
+                    Ok(match click {
+                        wire::ScrollTrackClick::Page => ScrollTrackClick::Page,
+                        wire::ScrollTrackClick::JumpToSpot => ScrollTrackClick::JumpToSpot,
+                        _ => return Err(unread("ScrollTrackClick")),
+                    })
+                })
+                .transpose()?,
+        },
         text_scale,
         motion: motion
             .map(|motion| {

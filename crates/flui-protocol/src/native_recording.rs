@@ -1049,6 +1049,53 @@ pub struct Preferences {
         serde(default, skip_serializing_if = "Option::is_none")
     )]
     pub wheel_horizontal_characters: Option<u32>,
+    /// The accent colour: red, green, blue and alpha, sRGB-encoded with straight alpha, each
+    /// finite and in `0..=1`.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub accent_color: Option<[f32; 4]>,
+    /// When the system shows a scroll bar.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub scroll_bar_visibility: Option<ScrollBarVisibility>,
+    /// What a click in a scroll bar's track does.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub scroll_track_click: Option<ScrollTrackClick>,
+}
+
+vocabulary! {
+    /// When the system shows a scroll bar.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
+    #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+    pub enum ScrollBarVisibility {
+        /// While the content scrolls, fading once it stops.
+        WhenScrolling => "when_scrolling",
+        /// Whenever the content is longer than its viewport.
+        Always => "always",
+    }
+}
+
+vocabulary! {
+    /// What a click in a scroll bar's track, off the thumb, does.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
+    #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+    pub enum ScrollTrackClick {
+        /// Scroll by a page toward the click.
+        Page => "page",
+        /// Move the thumb to the spot clicked.
+        JumpToSpot => "jump_to_spot",
+    }
 }
 
 vocabulary! {

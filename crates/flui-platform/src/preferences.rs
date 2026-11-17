@@ -67,6 +67,162 @@ pub enum InvalidPreference {
     /// Minimum fling speed cannot exceed maximum fling speed.
     #[error("minimum fling speed exceeds maximum fling speed")]
     FlingRange,
+    /// Colour components and alpha must be finite and within `0..=1`.
+    #[error("colour components and alpha must be finite and within 0..=1")]
+    Color,
+}
+
+/// A colour the system reports, in sRGB with straight (unpremultiplied)
+/// alpha: each component and the alpha finite and within `0..=1`.
+///
+/// The components are sRGB-encoded, as a colour picker and a stylesheet name
+/// them, not linear light. A host converts the system's colour into sRGB
+/// before it builds this value (AppKit's catalog colours through
+/// `colorUsingColorSpace:`), so a colour in a wider gamut arrives clipped to
+/// sRGB rather than misread. Negative zero reads as zero, so equal colours
+/// compare equal.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SrgbColor {
+    red: f32,
+    green: f32,
+    blue: f32,
+    alpha: f32,
+}
+
+impl SrgbColor {
+    /// The colour of these components, as the system reports them in double
+    /// precision; each is narrowed to `f32` once it is checked.
+    ///
+    /// # Errors
+    /// [`InvalidPreference::Color`] for a component or an alpha that is NaN,
+    /// infinite, below zero or above one. A host whose system spells "no
+    /// colour" as an out-of-range value (the desktop portal's accent) reads
+    /// that spelling as no observation before it calls this.
+    pub fn try_new(red: f64, green: f64, blue: f64, alpha: f64) -> Result<Self, InvalidPreference> {
+        let component = |value: f64| {
+            if (0.0..=1.0).contains(&value) {
+                // `0.0..=1.0` holds `-0.0`; `+ 0.0` turns it into `0.0`.
+                #[expect(
+                    clippy::cast_possible_truncation,
+                    reason = "a value in 0..=1 narrows to the nearest f32 in 0..=1"
+                )]
+                Ok((value + 0.0) as f32)
+            } else {
+                Err(InvalidPreference::Color)
+            }
+        };
+        Ok(Self {
+            red: component(red)?,
+            green: component(green)?,
+            blue: component(blue)?,
+            alpha: component(alpha)?,
+        })
+    }
+
+    /// The colour of these 8-bit components, as Windows and a stylesheet's
+    /// `rgb()` report them: each divided by 255.
+    #[must_use]
+    pub fn from_rgba8(red: u8, green: u8, blue: u8, alpha: u8) -> Self {
+        let component = |value: u8| f32::from(value) / 255.0;
+        Self {
+            red: component(red),
+            green: component(green),
+            blue: component(blue),
+            alpha: component(alpha),
+        }
+    }
+
+    /// The red component, in `0..=1`.
+    #[must_use]
+    pub const fn red(self) -> f32 {
+        self.red
+    }
+
+    /// The green component, in `0..=1`.
+    #[must_use]
+    pub const fn green(self) -> f32 {
+        self.green
+    }
+
+    /// The blue component, in `0..=1`.
+    #[must_use]
+    pub const fn blue(self) -> f32 {
+        self.blue
+    }
+
+    /// The alpha, in `0..=1`; one is opaque.
+    #[must_use]
+    pub const fn alpha(self) -> f32 {
+        self.alpha
+    }
+
+    /// Red, green, blue and alpha, in that order.
+    #[must_use]
+    pub const fn to_array(self) -> [f32; 4] {
+        [self.red, self.green, self.blue, self.alpha]
+    }
+}
+
+/// When the system shows a scroll bar.
+///
+/// Each host resolves its own setting into one of these: macOS's "Show scroll
+/// bars" through `NSScroller.preferredScrollerStyle` (which already follows
+/// the pointing device when the user chose "automatically"), Windows'
+/// "Always show scrollbars", GNOME's `overlay-scrolling`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum ScrollBarVisibility {
+    /// The bar shows while the content scrolls and fades once it stops: an
+    /// overlay scroller.
+    WhenScrolling,
+    /// The bar shows whenever the content is longer than its viewport.
+    Always,
+}
+
+/// What a click in a scroll bar's track, off the thumb, does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum ScrollTrackClick {
+    /// Scroll by a page toward the click.
+    Page,
+    /// Move the thumb to the spot clicked.
+    JumpToSpot,
+}
+
+/// Observed scroll-bar preferences, before a scroll bar applies its own
+/// policy; absent values leave that policy in charge.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ScrollBarPreferences {
+    visibility: Option<ScrollBarVisibility>,
+    track_click: Option<ScrollTrackClick>,
+}
+
+impl ScrollBarPreferences {
+    /// When the system shows a scroll bar.
+    #[must_use]
+    pub const fn visibility(&self) -> Option<ScrollBarVisibility> {
+        self.visibility
+    }
+
+    /// Record when the system shows a scroll bar.
+    #[must_use]
+    pub const fn with_visibility(mut self, value: ScrollBarVisibility) -> Self {
+        self.visibility = Some(value);
+        self
+    }
+
+    /// What a click in the track does.
+    #[must_use]
+    pub const fn track_click(&self) -> Option<ScrollTrackClick> {
+        self.track_click
+    }
+
+    /// Record what a click in the track does.
+    #[must_use]
+    pub const fn with_track_click(mut self, value: ScrollTrackClick) -> Self {
+        self.track_click = Some(value);
+        self
+    }
 }
 
 /// A finite, strictly positive multiplier of an animation's duration.
@@ -259,7 +415,8 @@ impl WheelPreferences {
 /// metrics can be reproduced by multiplying every authored font size. The
 /// consuming text policy resolves it separately from authored styles.
 /// Native pointer geometry is presentation-context dependent and is not guessed
-/// from a representative window by this host-wide value.
+/// from a representative window by this host-wide value. The accent colour
+/// and the scroll-bar behaviour are host-wide too (ADR-0358).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SystemPreferences {
     text_scale: Option<f64>,
@@ -271,6 +428,8 @@ pub struct SystemPreferences {
     regional: RegionalFormats,
     gestures: GesturePreferences,
     wheel: WheelPreferences,
+    accent_color: Option<SrgbColor>,
+    scroll_bars: ScrollBarPreferences,
 }
 
 impl SystemPreferences {
@@ -407,6 +566,37 @@ impl SystemPreferences {
         self.wheel = value;
         self
     }
+
+    /// The colour the user chose to tint controls and selections with.
+    ///
+    /// Host-wide, like every field here. `None` when the host has no such
+    /// setting (iOS, where the tint belongs to each application), reads none
+    /// (Android, whose dynamic colour is a palette rather than one colour),
+    /// or the user set none.
+    #[must_use]
+    pub const fn accent_color(&self) -> Option<SrgbColor> {
+        self.accent_color
+    }
+
+    /// Record the observed accent colour.
+    #[must_use]
+    pub const fn with_accent_color(mut self, value: SrgbColor) -> Self {
+        self.accent_color = Some(value);
+        self
+    }
+
+    /// Observed scroll-bar behaviour, before a scroll bar's own policy.
+    #[must_use]
+    pub const fn scroll_bars(&self) -> &ScrollBarPreferences {
+        &self.scroll_bars
+    }
+
+    /// Record the scroll-bar observations in this snapshot.
+    #[must_use]
+    pub const fn with_scroll_bars(mut self, value: ScrollBarPreferences) -> Self {
+        self.scroll_bars = value;
+        self
+    }
 }
 
 /// The fields of a [`SystemPreferences`], public: the boundary every
@@ -439,6 +629,20 @@ pub struct PreferenceParts {
     pub gestures: GestureParts,
     /// [`SystemPreferences::wheel`], taken apart.
     pub wheel: WheelParts,
+    /// [`SystemPreferences::accent_color`].
+    pub accent_color: Option<SrgbColor>,
+    /// [`SystemPreferences::scroll_bars`], taken apart.
+    pub scroll_bars: ScrollBarParts,
+}
+
+/// The fields of a [`ScrollBarPreferences`], public, for the same mirrors and
+/// for the same reason as [`PreferenceParts`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ScrollBarParts {
+    /// [`ScrollBarPreferences::visibility`].
+    pub visibility: Option<ScrollBarVisibility>,
+    /// [`ScrollBarPreferences::track_click`].
+    pub track_click: Option<ScrollTrackClick>,
 }
 
 /// The fields of a [`GesturePreferences`], public, for the same mirrors and
@@ -481,6 +685,8 @@ impl SystemPreferences {
             regional,
             gestures,
             wheel,
+            accent_color,
+            scroll_bars,
         } = self;
         PreferenceParts {
             text_scale,
@@ -492,6 +698,8 @@ impl SystemPreferences {
             regional: regional.into_parts(),
             gestures: gestures.into_parts(),
             wheel: wheel.into_parts(),
+            accent_color,
+            scroll_bars: scroll_bars.into_parts(),
         }
     }
 }
@@ -513,6 +721,8 @@ impl PreferenceParts {
             regional,
             gestures,
             wheel,
+            accent_color,
+            scroll_bars,
         } = self;
         let mut preferences = SystemPreferences {
             text_scale: None,
@@ -524,6 +734,9 @@ impl PreferenceParts {
             regional: regional.into_formats(),
             gestures: gestures.into_preferences(),
             wheel: wheel.into_preferences(),
+            // Valid by its type: `SrgbColor` is checked where it is built.
+            accent_color,
+            scroll_bars: scroll_bars.into_preferences(),
         };
         if let Some(scale) = text_scale {
             preferences = preferences.with_text_scale(scale)?;
@@ -600,6 +813,36 @@ impl WheelParts {
         WheelPreferences {
             vertical,
             horizontal_characters,
+        }
+    }
+}
+
+impl ScrollBarPreferences {
+    /// Take the observations apart into their fields.
+    #[must_use]
+    pub const fn into_parts(self) -> ScrollBarParts {
+        let Self {
+            visibility,
+            track_click,
+        } = self;
+        ScrollBarParts {
+            visibility,
+            track_click,
+        }
+    }
+}
+
+impl ScrollBarParts {
+    /// The observations these fields describe; every field is valid by its type.
+    #[must_use]
+    pub const fn into_preferences(self) -> ScrollBarPreferences {
+        let Self {
+            visibility,
+            track_click,
+        } = self;
+        ScrollBarPreferences {
+            visibility,
+            track_click,
         }
     }
 }

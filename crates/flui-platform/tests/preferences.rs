@@ -291,6 +291,81 @@ fn invalid_text_observations_cannot_enter_a_snapshot() {
     }
 }
 
+/// A colour enters a snapshot only as finite sRGB components and alpha in
+/// `0..=1`; negative zero reads as zero, so the same colour compares equal
+/// however a host spelled it. Fails if any out-of-range or non-finite
+/// component is admitted, or a component is clamped instead of refused.
+fn an_accent_colour_enters_only_as_finite_srgb_in_range() {
+    use flui_platform::SrgbColor;
+
+    let valid = [0.0, 0.25, 1.0];
+    let invalid = [
+        f64::NAN,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+        -f64::MIN_POSITIVE,
+        1.0_f64.next_up(),
+        255.0,
+    ];
+    for bad in invalid {
+        for position in 0..4 {
+            let mut components = valid.iter().copied().chain([1.0]).collect::<Vec<f64>>();
+            components[position] = bad;
+            assert_eq!(
+                SrgbColor::try_new(components[0], components[1], components[2], components[3]),
+                Err(InvalidPreference::Color),
+                "{bad} as component {position} is refused, not clamped"
+            );
+        }
+    }
+    let color = SrgbColor::try_new(0.0, 0.25, 1.0, 0.5).expect("in range");
+    assert_eq!(color.to_array(), [0.0, 0.25, 1.0, 0.5]);
+    assert_eq!(
+        SrgbColor::try_new(-0.0, 0.25, 1.0, 0.5),
+        Ok(color),
+        "negative zero is zero"
+    );
+    assert!(
+        SrgbColor::try_new(-0.0, 0.0, 0.0, 1.0)
+            .expect("in range")
+            .red()
+            .is_sign_positive()
+    );
+    assert_eq!(
+        SrgbColor::from_rgba8(0, 51, 255, 255),
+        SrgbColor::try_new(0.0, 0.2, 1.0, 1.0).expect("in range"),
+        "an 8-bit component is divided by 255"
+    );
+    let snapshot = SystemPreferences::default().with_accent_color(color);
+    assert_eq!(snapshot.accent_color(), Some(color));
+    assert_eq!(SystemPreferences::default().accent_color(), None);
+}
+
+/// Scroll-bar visibility and what a click in the track does are separate
+/// observations, each unknown until a host reads it.
+fn scroll_bar_observations_stay_apart_and_unknown_until_read() {
+    use flui_platform::{ScrollBarPreferences, ScrollBarVisibility, ScrollTrackClick};
+
+    let unknown = ScrollBarPreferences::default();
+    assert_eq!(unknown.visibility(), None);
+    assert_eq!(unknown.track_click(), None);
+    let always = unknown.with_visibility(ScrollBarVisibility::Always);
+    assert_eq!(always.visibility(), Some(ScrollBarVisibility::Always));
+    assert_eq!(
+        always.track_click(),
+        None,
+        "visibility says nothing of clicks"
+    );
+    let jumps = unknown.with_track_click(ScrollTrackClick::JumpToSpot);
+    assert_eq!(jumps.visibility(), None, "clicks say nothing of visibility");
+    assert_eq!(
+        SystemPreferences::default()
+            .with_scroll_bars(jumps)
+            .scroll_bars(),
+        &jumps
+    );
+}
+
 fn wheel_observations_keep_lines_pages_and_characters_apart() {
     use flui_platform::{WheelPreferences, WheelStep};
 
@@ -491,6 +566,14 @@ fn preferences_contract() {
             (
                 "wheel_observations_keep_lines_pages_and_characters_apart",
                 wheel_observations_keep_lines_pages_and_characters_apart as fn(),
+            ),
+            (
+                "an_accent_colour_enters_only_as_finite_srgb_in_range",
+                an_accent_colour_enters_only_as_finite_srgb_in_range as fn(),
+            ),
+            (
+                "scroll_bar_observations_stay_apart_and_unknown_until_read",
+                scroll_bar_observations_stay_apart_and_unknown_until_read as fn(),
             ),
             (
                 "regional_formats_join_the_locale_a_formatter_takes",

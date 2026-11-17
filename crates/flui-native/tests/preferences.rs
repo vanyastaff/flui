@@ -62,6 +62,35 @@ fn windows_reads_preferences_before_a_user_window_exists() {
         assert!(observed.gestures().native_mouse_geometry().is_some());
         assert!(observed.wheel().vertical().is_some());
         assert!(observed.wheel().horizontal_characters().is_some());
+        let accent = native_ui
+            .GetColorValue(windows::UI::ViewManagement::UIColorType::Accent)
+            .expect("native accent colour");
+        assert_eq!(
+            observed.accent_color(),
+            Some(flui_platform::SrgbColor::from_rgba8(
+                accent.R, accent.G, accent.B, accent.A
+            )),
+            "the accent is the one Windows reports"
+        );
+        assert_eq!(
+            observed.scroll_bars().visibility(),
+            Some(
+                if native_ui
+                    .AutoHideScrollBars()
+                    .expect("native scroll-bar setting")
+                {
+                    flui_platform::ScrollBarVisibility::WhenScrolling
+                } else {
+                    flui_platform::ScrollBarVisibility::Always
+                }
+            ),
+            "the scroll-bar visibility follows \"Always show scrollbars\""
+        );
+        assert_eq!(
+            observed.scroll_bars().track_click(),
+            None,
+            "Windows has no track-click setting"
+        );
     }
     // Repeated sampling must preserve the platform's outer COM lifetime so
     // a subsequent real native window can still initialize its text services.
@@ -198,7 +227,29 @@ fn preferences_contract() {
                 "setting_messages_wake_the_owner_without_a_user_window",
                 setting_messages_wake_the_owner_without_a_user_window as fn(),
             ),
+            #[cfg(target_os = "windows")]
+            (
+                "a_colorization_change_wakes_the_owner_without_a_user_window",
+                a_colorization_change_wakes_the_owner_without_a_user_window as fn(),
+            ),
         ],
+    );
+}
+
+#[cfg(target_os = "windows")]
+fn setting_messages_wake_the_owner_without_a_user_window() {
+    broadcast_wakes_the_owner_without_a_user_window(
+        windows::Win32::UI::WindowsAndMessaging::WM_SETTINGCHANGE,
+    );
+}
+
+/// A change of the colour DWM tints frames with, which follows the accent,
+/// marks the preferences stale as a setting change does. Red-check: observe
+/// `WM_SETTINGCHANGE` alone.
+#[cfg(target_os = "windows")]
+fn a_colorization_change_wakes_the_owner_without_a_user_window() {
+    broadcast_wakes_the_owner_without_a_user_window(
+        windows::Win32::UI::WindowsAndMessaging::WM_DWMCOLORIZATIONCOLORCHANGED,
     );
 }
 
@@ -207,7 +258,7 @@ fn preferences_contract() {
     unsafe_code,
     reason = "exercise native notification routing through only this platform's HWNDs"
 )]
-fn setting_messages_wake_the_owner_without_a_user_window() {
+fn broadcast_wakes_the_owner_without_a_user_window(message: u32) {
     use flui_native::Platform;
     use std::sync::{
         Arc,
@@ -217,7 +268,7 @@ fn setting_messages_wake_the_owner_without_a_user_window() {
     use windows::Win32::{
         Foundation::{HWND, LPARAM, WPARAM},
         System::Threading::GetCurrentThreadId,
-        UI::WindowsAndMessaging::{EnumThreadWindows, SendMessageW, WM_SETTINGCHANGE},
+        UI::WindowsAndMessaging::{EnumThreadWindows, SendMessageW},
     };
 
     fn top_levels() -> Vec<isize> {
@@ -278,7 +329,7 @@ fn setting_messages_wake_the_owner_without_a_user_window() {
                 unsafe {
                     SendMessageW(
                         HWND(raw as *mut _),
-                        WM_SETTINGCHANGE,
+                        message,
                         Some(WPARAM(0)),
                         Some(LPARAM(0)),
                     )

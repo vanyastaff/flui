@@ -22,12 +22,13 @@ use std::time::Duration;
 use flui_foundation::geometry::{DevicePixelRatio, Size};
 use flui_platform::{
     GesturePreferences, MotionPreference, NativeMouseGeometry, PreferenceQueryError,
-    SystemPreferences, WheelPreferences, WheelStep,
+    ScrollBarPreferences, ScrollBarVisibility, SrgbColor, SystemPreferences, WheelPreferences,
+    WheelStep,
 };
 use windows::Foundation::TypedEventHandler;
-use windows::UI::ViewManagement::{AccessibilitySettings, UISettings};
+use windows::UI::ViewManagement::{AccessibilitySettings, UIColorType, UISettings};
 use windows::Win32::Foundation::{
-    GetLastError, HWND, LPARAM, LRESULT, SetLastError, WIN32_ERROR, WPARAM,
+    E_NOINTERFACE, GetLastError, HWND, LPARAM, LRESULT, SetLastError, WIN32_ERROR, WPARAM,
 };
 use windows::Win32::System::WinRT::{
     RO_INIT_SINGLETHREADED, RoActivateInstance, RoInitialize, RoUninitialize,
@@ -37,7 +38,8 @@ use windows::Win32::UI::Input::KeyboardAndMouse::GetDoubleClickTime;
 use windows::Win32::UI::WindowsAndMessaging::{
     SM_CXDOUBLECLK, SM_CXDRAG, SM_CYDOUBLECLK, SM_CYDRAG, SPI_GETWHEELSCROLLCHARS,
     SPI_GETWHEELSCROLLLINES, SYSTEM_METRICS_INDEX, SYSTEM_PARAMETERS_INFO_ACTION,
-    SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SystemParametersInfoW, WM_SETTINGCHANGE,
+    SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SystemParametersInfoW, WM_DWMCOLORIZATIONCOLORCHANGED,
+    WM_SETTINGCHANGE,
 };
 use windows::core::{Interface, RuntimeName};
 
@@ -91,7 +93,11 @@ impl Subscriber for PreferenceBroadcasts {
         _wparam: WPARAM,
         _lparam: LPARAM,
     ) -> Option<LRESULT> {
-        if message == WM_SETTINGCHANGE {
+        // A setting change, or a change of the colour DWM tints frames with,
+        // which follows the accent; `UISettings.ColorValuesChanged` reports
+        // the same change, and whichever arrives first marks the snapshot
+        // stale.
+        if message == WM_SETTINGCHANGE || message == WM_DWMCOLORIZATIONCOLORCHANGED {
             self.0.notify();
         }
         None
@@ -106,8 +112,8 @@ pub(crate) struct PreferenceSource {
     invalidation: Arc<Invalidation>,
     ui: UISettings,
     accessibility: AccessibilitySettings,
-    text_token: Option<i64>,
-    motion_token: Option<i64>,
+    /// Each `UISettings` change event the source registered, with its token.
+    observers: Vec<(UiSettingsEvent, i64)>,
     cache: SampleCache,
     _entry: WinRtEntry,
 }
@@ -215,45 +221,17 @@ impl PreferenceSource {
             invalidation,
             ui,
             accessibility,
-            text_token: None,
-            motion_token: None,
+            observers: Vec::with_capacity(UiSettingsEvent::ALL.len()),
             cache: SampleCache::default(),
             _entry: entry,
         };
-        let text = Arc::clone(&source.invalidation);
-        source.text_token = Some(
-            source
-                .ui
-                .TextScaleFactorChanged(&TypedEventHandler::new(move |_, _| {
-                    os_entry(
-                        "the text-scale delegate",
-                        (),
-                        AfterPanic::Answer(|()| Ok(())),
-                        || {
-                            text.notify();
-                            Ok(())
-                        },
-                    )
-                }))
-                .map_err(native_error)?,
-        );
-        let motion = Arc::clone(&source.invalidation);
-        source.motion_token = Some(
-            source
-                .ui
-                .AnimationsEnabledChanged(&TypedEventHandler::new(move |_, _| {
-                    os_entry(
-                        "the animations delegate",
-                        (),
-                        AfterPanic::Answer(|()| Ok(())),
-                        || {
-                            motion.notify();
-                            Ok(())
-                        },
-                    )
-                }))
-                .map_err(native_error)?,
-        );
+        // Each registration is owned as soon as it succeeds: a later failure
+        // drops the source, which revokes the earlier ones.
+        for event in UiSettingsEvent::ALL {
+            if let Some(token) = event.observe(&source.ui, &source.invalidation)? {
+                source.observers.push((event, token));
+            }
+        }
         Ok(source)
     }
 
@@ -360,22 +338,79 @@ impl Drop for PreferenceSource {
         self.invalidation.accepting.store(false, Ordering::Release);
         // A failed revocation can retain the delegate. Its only capture is
         // ref-counted invalidation state, now inert; it never owns UI state.
-        for result in [
-            self.text_token
-                .take()
-                .map(|token| self.ui.RemoveTextScaleFactorChanged(token)),
-            self.motion_token
-                .take()
-                .map(|token| self.ui.RemoveAnimationsEnabledChanged(token)),
-        ]
-        .into_iter()
-        .flatten()
-        {
-            if let Err(error) = result {
+        for (event, token) in self.observers.drain(..) {
+            if let Err(error) = event.revoke(&self.ui, token) {
                 contain_owner_callback(
-                    || tracing::warn!(%error, "preference observer revocation failed"),
+                    || tracing::warn!(%error, ?event, "preference observer revocation failed"),
                 );
             }
+        }
+    }
+}
+
+/// A `UISettings` change event the source observes: each only marks the
+/// snapshot stale and wakes the owner, which reads every value again.
+#[derive(Clone, Copy, Debug)]
+enum UiSettingsEvent {
+    TextScale,
+    Animations,
+    /// The accent and the other UI colours.
+    Colors,
+    /// "Always show scrollbars" (Windows 10 1809).
+    AutoHideScrollBars,
+}
+
+impl UiSettingsEvent {
+    const ALL: [Self; 4] = [
+        Self::TextScale,
+        Self::Animations,
+        Self::Colors,
+        Self::AutoHideScrollBars,
+    ];
+
+    /// Register this event's delegate, which notifies `invalidation`; its
+    /// token, or `None` where this Windows has no such event.
+    fn observe(
+        self,
+        ui: &UISettings,
+        invalidation: &Arc<Invalidation>,
+    ) -> Result<Option<i64>, PlatformError> {
+        let delegate = |name: &'static str| {
+            let invalidation = Arc::clone(invalidation);
+            move || {
+                os_entry(name, (), AfterPanic::Answer(|()| Ok(())), || {
+                    invalidation.notify();
+                    Ok(())
+                })
+            }
+        };
+        let registered = match self {
+            Self::TextScale => {
+                let notify = delegate("the text-scale delegate");
+                ui.TextScaleFactorChanged(&TypedEventHandler::new(move |_, _| notify()))
+            }
+            Self::Animations => {
+                let notify = delegate("the animations delegate");
+                ui.AnimationsEnabledChanged(&TypedEventHandler::new(move |_, _| notify()))
+            }
+            Self::Colors => {
+                let notify = delegate("the colour-values delegate");
+                ui.ColorValuesChanged(&TypedEventHandler::new(move |_, _| notify()))
+            }
+            Self::AutoHideScrollBars => {
+                let notify = delegate("the scroll-bar delegate");
+                ui.AutoHideScrollBarsChanged(&TypedEventHandler::new(move |_, _| notify()))
+            }
+        };
+        unless_missing(registered)
+    }
+
+    fn revoke(self, ui: &UISettings, token: i64) -> windows::core::Result<()> {
+        match self {
+            Self::TextScale => ui.RemoveTextScaleFactorChanged(token),
+            Self::Animations => ui.RemoveAnimationsEnabledChanged(token),
+            Self::Colors => ui.RemoveColorValuesChanged(token),
+            Self::AutoHideScrollBars => ui.RemoveAutoHideScrollBarsChanged(token),
         }
     }
 }
@@ -512,6 +547,41 @@ fn sample(
         .with_wheel(wheel_preferences(
             wheel_count(SPI_GETWHEELSCROLLLINES)?,
             wheel_count(SPI_GETWHEELSCROLLCHARS)?,
+        ))
+        .with_accent_color(accent_color(
+            ui.GetColorValue(UIColorType::Accent)
+                .map_err(native_error)?,
         ));
+    let snapshot = match unless_missing(ui.AutoHideScrollBars())? {
+        Some(auto_hide) => snapshot.with_scroll_bars(scroll_bars(auto_hide)),
+        None => snapshot,
+    };
     Ok(snapshot)
+}
+
+/// `UISettings`' accent, an 8-bit sRGB colour with its alpha.
+fn accent_color(color: windows::UI::Color) -> SrgbColor {
+    SrgbColor::from_rgba8(color.R, color.G, color.B, color.A)
+}
+
+/// "Always show scrollbars" off lets scroll bars collapse while the content
+/// rests; on keeps them shown. Windows has no setting for a click in the
+/// track, which pages (Shift-click jumps), so that stays unobserved.
+fn scroll_bars(auto_hide: bool) -> ScrollBarPreferences {
+    ScrollBarPreferences::default().with_visibility(if auto_hide {
+        ScrollBarVisibility::WhenScrolling
+    } else {
+        ScrollBarVisibility::Always
+    })
+}
+
+/// A getter's value, or `None` where this Windows lacks the interface that
+/// carries it (an older `IUISettings` revision): no observation, not a
+/// failed read.
+fn unless_missing<T>(read: windows::core::Result<T>) -> Result<Option<T>, PlatformError> {
+    match read {
+        Ok(value) => Ok(Some(value)),
+        Err(error) if error.code() == E_NOINTERFACE => Ok(None),
+        Err(error) => Err(native_error(error)),
+    }
 }

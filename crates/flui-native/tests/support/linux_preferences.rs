@@ -125,6 +125,8 @@ pub mod linux {
         "quiet-without-keys",
         "quiet-without-portal",
         "late-backend",
+        "accent-color",
+        "overlay-scrolling",
     ];
 
     /// The X11 platform on the harness's X server, shared as `run_shared` takes it.
@@ -153,10 +155,11 @@ pub mod linux {
         );
     }
 
-    /// A portal answering the contrast and text-scale keys: `contrast` in
-    /// `org.freedesktop.appearance`, or GNOME's `high-contrast`, and GNOME's
-    /// `text-scaling-factor`. Motion and color scheme are present so a refresh
-    /// has nothing to retry.
+    /// A portal answering the contrast, text-scale, accent and overlay keys:
+    /// `contrast` in `org.freedesktop.appearance`, or GNOME's
+    /// `high-contrast`, GNOME's `text-scaling-factor`, the appearance
+    /// `accent-color` and GNOME's `overlay-scrolling`. Motion and color scheme
+    /// are present so a refresh has nothing to retry.
     struct Values {
         gnome: bool,
         high_contrast: AtomicBool,
@@ -164,6 +167,9 @@ pub mod linux {
         text_scale: std::sync::atomic::AtomicU64,
         /// Wakes whoever waits for the source to read `text-scaling-factor`.
         scale_read: Arc<tokio::sync::Notify>,
+        /// `accent-color`'s red, green and blue; out of range is unset.
+        accent: std::sync::Mutex<(f64, f64, f64)>,
+        overlay_scrolling: AtomicBool,
     }
 
     #[zbus::interface(name = "org.freedesktop.portal.Settings")]
@@ -190,6 +196,14 @@ pub mod linux {
                 ("org.gnome.desktop.interface", "text-scaling-factor") if scale != 0.0 => {
                     Ok(scale.into())
                 }
+                ("org.freedesktop.appearance", "accent-color") => {
+                    let accent = *self.accent.lock().expect("accent fixture");
+                    Ok(zbus::OwnedVariant::try_from(zbus::Variant::from(accent))
+                        .expect("an accent tuple is an owned value"))
+                }
+                ("org.gnome.desktop.interface", "overlay-scrolling") => {
+                    Ok(self.overlay_scrolling.load(Ordering::SeqCst).into())
+                }
                 _ => Err(SettingsError::NotFound("unknown setting".into())),
             }
         }
@@ -201,6 +215,9 @@ pub mod linux {
         Contrast(bool),
         /// `None` is no accepted observation.
         TextScale(Option<f64>),
+        /// `None` is no accent.
+        Accent(Option<flui_platform::SrgbColor>),
+        ScrollBars(flui_platform::ScrollBarVisibility),
     }
 
     impl Value {
@@ -208,6 +225,8 @@ pub mod linux {
             match self {
                 Self::Contrast(value) => preferences.high_contrast() == Some(value),
                 Self::TextScale(value) => preferences.text_scale() == value,
+                Self::Accent(value) => preferences.accent_color() == value,
+                Self::ScrollBars(value) => preferences.scroll_bars().visibility() == Some(value),
             }
         }
     }
@@ -217,6 +236,9 @@ pub mod linux {
     enum Change {
         Contrast(bool),
         TextScale(f64),
+        /// The user unset the accent: the portal reports `(-1, -1, -1)`.
+        UnsetAccent,
+        OverlayScrolling(bool),
     }
 
     impl Change {
@@ -225,9 +247,19 @@ pub mod linux {
             match self {
                 Self::Contrast(high) => Value::Contrast(high),
                 Self::TextScale(scale) => Value::TextScale(Some(scale)),
+                Self::UnsetAccent => Value::Accent(None),
+                Self::OverlayScrolling(true) => {
+                    Value::ScrollBars(flui_platform::ScrollBarVisibility::WhenScrolling)
+                }
+                Self::OverlayScrolling(false) => {
+                    Value::ScrollBars(flui_platform::ScrollBarVisibility::Always)
+                }
             }
         }
     }
+
+    /// The accent the accent case starts with.
+    const ACCENT: (f64, f64, f64) = (0.21, 0.52, 0.89);
 
     async fn emit_value(
         connection: &zbus::Connection,
@@ -269,6 +301,21 @@ pub mod linux {
                 Value::TextScale(None),
                 Change::TextScale(1.5),
             ),
+            "accent-color" => (
+                1.25,
+                None,
+                Value::Accent(Some(
+                    flui_platform::SrgbColor::try_new(ACCENT.0, ACCENT.1, ACCENT.2, 1.0)
+                        .expect("an accent in range"),
+                )),
+                Change::UnsetAccent,
+            ),
+            "overlay-scrolling" => (
+                1.25,
+                None,
+                Value::ScrollBars(flui_platform::ScrollBarVisibility::WhenScrolling),
+                Change::OverlayScrolling(false),
+            ),
             _ => (1.25, None, Value::Contrast(true), Change::Contrast(false)),
         };
         let scale_read = Arc::new(tokio::sync::Notify::new());
@@ -277,6 +324,8 @@ pub mod linux {
             high_contrast: AtomicBool::new(true),
             text_scale: std::sync::atomic::AtomicU64::new(f64::to_bits(initial_scale)),
             scale_read: Arc::clone(&scale_read),
+            accent: std::sync::Mutex::new(ACCENT),
+            overlay_scrolling: AtomicBool::new(true),
         };
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
@@ -365,6 +414,27 @@ pub mod linux {
                         "org.gnome.desktop.interface",
                         "text-scaling-factor",
                         zbus::Variant::from(scale),
+                    )
+                }
+                Change::UnsetAccent => {
+                    let unset = (-1.0_f64, -1.0_f64, -1.0_f64);
+                    *server.get().await.accent.lock().expect("accent fixture") = unset;
+                    (
+                        "org.freedesktop.appearance",
+                        "accent-color",
+                        zbus::Variant::from(unset),
+                    )
+                }
+                Change::OverlayScrolling(overlay) => {
+                    server
+                        .get()
+                        .await
+                        .overlay_scrolling
+                        .store(overlay, Ordering::SeqCst);
+                    (
+                        "org.gnome.desktop.interface",
+                        "overlay-scrolling",
+                        zbus::Variant::from(overlay),
                     )
                 }
             };
@@ -682,7 +752,12 @@ pub mod linux {
     pub fn run_case(case: &str) {
         if matches!(
             case,
-            "contrast" | "gnome-contrast" | "text-scale" | "text-scale-out-of-range"
+            "contrast"
+                | "gnome-contrast"
+                | "text-scale"
+                | "text-scale-out-of-range"
+                | "accent-color"
+                | "overlay-scrolling"
         ) {
             return run_value_case(case);
         }
