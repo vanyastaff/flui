@@ -32,17 +32,23 @@ impl ViewState<NotesScreen> for NotesState {
         let notes = self.notes;
         let title = self.title.clone();
         let add = move |ctx: &mut EventContext<'_>| {
-            let text = title.text();
-            if text.trim().is_empty() {
+            let text = title.text().trim().to_owned();
+            title.clear();
+            if text.is_empty() {
                 return Ok(());
             }
-            title.clear();
             notes.update(ctx, |list| list.push(text.clone()))
         };
+        let titles = notes.get(ctx);
+        let submit = add.clone();
         Column::new((
-            RawTextField::new(self.title.clone()).identifier("new-note"),
+            RawTextField::new(self.title.clone())
+                .identifier("new-note")
+                // Enter in the field adds the note too.
+                .on_submitted(move |ctx, _text| submit(ctx)),
             RawButton::new(Text::new("Add note")).on_pressed(add),
-            Column::new(notes.get(ctx).into_iter().map(Text::new).collect::<Vec<Text>>()),
+            Text::new(format!("{} notes", titles.len())),
+            Column::new(titles.into_iter().map(Text::new).collect::<Vec<Text>>()),
         ))
     }
 }
@@ -51,17 +57,25 @@ impl ViewState<NotesScreen> for NotesState {
 # t.enter_text(&find::id("new-note"), "Groceries");
 # t.tap(&find::button("Add note"));
 # t.expect(find::text("Groceries")).to_exist();
+# // A blank title adds nothing.
+# t.enter_text(&find::id("new-note"), "   ");
 # t.tap(&find::button("Add note"));
-# t.expect(find::text("Groceries")).to_have_count(1);
+# t.expect(find::text("1 notes")).to_exist();
+# // Enter in the field adds what it holds.
+# t.enter_text(&find::id("new-note"), "Talk outline");
+# t.press_keys(&["Enter"]);
+# t.expect(find::text("Talk outline")).to_exist();
+# t.expect(find::text("2 notes")).to_exist();
 ```
 
 - The controller is created with the state and shared by clone: the field edits it, the button's
   callback reads and clears it.
-- A callback receives an `EventContext`, the `ctx` a signal write takes. The empty-title check
-  returns before writing, so pressing the button with nothing typed changes nothing.
+- A callback receives an `EventContext`, the `ctx` a signal write takes. The blank-title check
+  returns before writing, so pressing the button with only spaces typed adds nothing.
+- The field's `on_submitted` runs when the user presses Enter in it; it calls a clone of the same
+  callback, since a closure whose captures are `Clone` is `Clone` too.
 - `identifier` names the field for tests and assistive technology without showing a label.
 
-A pointer is not the only way to press: the button also activates from the keyboard when it has
-focus, and the field's `on_submitted` runs when the user presses Enter in it.
+The button also activates from the keyboard when it has focus, with Enter or Space.
 
 Next, [Lists and keys](lists.md) shows the notes in a list that can grow past the window.

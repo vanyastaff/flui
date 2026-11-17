@@ -65,9 +65,11 @@ impl StatelessView for NotePage {
                         let _ = cancel.pop();
                     }),
                     RawButton::new(Text::new("Delete note")).on_pressed(move |_ctx| {
-                        // The dialog leaves first, so the note's page is on top when it pops.
-                        let _ = dialog.pop();
-                        let _ = note.pop();
+                        // The dialog leaves first, so the note's page is on top when it
+                        // pops; a press after the dialog has gone pops nothing.
+                        if let Ok(true) = dialog.pop() {
+                            let _ = note.pop();
+                        }
                     }),
                 ))
                 .boxed()
@@ -90,6 +92,9 @@ impl StatelessView for NotePage {
 # t.tap(&find::button("Delete"));
 # t.expect(find::text("Delete this note?")).to_exist();
 # t.tap(&find::button("Delete note"));
+# t.pump_and_settle();
+# t.expect(find::text("Delete this note?")).to_be_gone();
+# t.expect(find::button("Back")).to_be_gone();
 # t.expect(find::button("Open Groceries")).to_exist();
 ```
 
@@ -99,6 +104,7 @@ impl StatelessView for NotePage {
   `PageHandle::pop` closes the page it was taken in.
 - A dialog is a `PopupRoute` pushed with `push_popup`. It has no path, so it never enters the URL,
   and the page below stays built and visible under it.
-- Each navigation call returns a `Result`: it is refused while the tree builds, or once the page
-  has left its navigator. A button on the page can only be pressed while the page is there, so
-  these callbacks drop the result.
+- Each navigation call returns a `Result`: it is refused while the tree builds, or with
+  `PageError::Gone` once the page has left its navigator. A press that lands while a page is on
+  its way out gets `Gone`, which needs nothing done, so these callbacks drop the result. The
+  dialog pops the note only once its own `pop` succeeded.
