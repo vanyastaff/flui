@@ -394,7 +394,7 @@ impl UiRuntime {
             // happens inside it rather than after it (under the default
             // `Fifo` mode the block is a wait for the next vsync on the
             // Vulkan/Wayland path; the native AppKit backend returns from the
-            // present in ~42 µs — ADR-0058's per-backend facts. On the inline
+            // present in ~42 µs — ADR-0353's per-backend facts. On the inline
             // executor its turn runs synchronously inside `submit`, so the
             // call's own duration lands here either way). Sampling before the
             // call (as an

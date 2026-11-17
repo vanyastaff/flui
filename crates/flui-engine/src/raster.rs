@@ -16,7 +16,7 @@
 ///   on screen. The work was consumed producing the scene and the screen
 ///   never saw it, so a caller that treats this as "done" loses the frame
 ///   permanently: on a stack whose redraw rate is bounded by its own
-///   fallback deadline (ADR-0058), a frame classified this way is the last
+///   fallback deadline (ADR-0353), a frame classified this way is the last
 ///   wake the loop gets, and a cold start that hits it is a window that
 ///   stays blank with nothing left to come back for.
 ///
