@@ -1,14 +1,15 @@
 //! # flui-layer — the compositor layer tree
 //!
 //! The fourth of FLUI's five trees (View → Element → Render → **Layer** →
-//! Semantics). The paint walk in `flui-rendering` emits one [`LayerTree`] per
-//! frame; it is frozen into a [`Scene`], stamped into a [`SceneSnapshot`],
-//! moved by value to the raster side, and lowered to GPU work by
-//! `flui-engine`.
+//! Semantics). The paint walk in `flui-rendering` writes each frame's repaint
+//! boundaries into the retained scene ([`SceneOwner`]) through a
+//! [`SceneWriter`]; the published [`SceneVersion`] is frozen into a [`Scene`],
+//! stamped into a [`SceneSnapshot`], moved by value to the raster side, and
+//! lowered to GPU work by `flui-engine`.
 //!
 //! ```text
-//! RenderObject::paint  ──►  LayerTree  ──►  Scene  ──►  SceneSnapshot  ──►  flui-engine
-//!   (flui-rendering)       (this crate)                 (raster boundary)     (wgpu)
+//! RenderObject::paint  ──►  SceneWriter  ──►  SceneVersion  ──►  Scene  ──►  SceneSnapshot  ──►  flui-engine
+//!   (flui-rendering)        (this crate)                                    (raster boundary)     (wgpu)
 //! ```
 //!
 //! ## What is here
@@ -29,7 +30,7 @@
 //!   the per-frame package that crosses the raster boundary.
 //! - [`SceneOwner`] and [`SceneVersion`]: the retained scene (ADR-0304), a
 //!   persistent version changed by [`SceneOp`] patches applied all or
-//!   nothing; paint does not produce one yet.
+//!   nothing.
 //! - `testing::inspect` (feature `testing`): structural walkers for tests.
 //!
 //! ## Design

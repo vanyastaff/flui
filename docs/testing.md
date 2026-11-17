@@ -1320,7 +1320,7 @@ reaches what the check reads. `plan` decides this in its outputs, and each job i
 - `perf-gates` runs its baseline comparison (`cargo xtask perf --check`) when `perf_required` is
   set: a changed file under a source that runs for every node of a frame
   (`crates/flui-view/src/tree/`, `crates/flui-view/src/owner/`, `crates/flui-rendering/src/storage/`,
-  `crates/flui-rendering/src/pipeline/`, `crates/flui-layer/src/scene/`, `crates/flui-semantics/src/`),
+  `crates/flui-rendering/src/pipeline/`, `crates/flui-layer/src/`, `crates/flui-semantics/src/`),
   where one more allocation is a rise in every scenario, or a change to the baseline
   (`crates/flui-widgets/perf/baseline/`), the scenarios (`crates/flui-widgets/tests/perf.rs`),
   what counts for them (`crates/flui-testing/src/heap.rs`, `crates/flui-testing/src/control_cost.rs`),
