@@ -1491,13 +1491,12 @@ pub(crate) mod source {
                     bounds,
                     scale_factor,
                 )
-                .map(|info| {
+                .map_or_default(|info| {
                     vec![with_period(
                         info.with_primary(true).with_color(self.page_color(window)),
                         period,
                     )]
                 })
-                .unwrap_or_default()
             });
             Ok((displays, id))
         }
