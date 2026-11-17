@@ -2106,15 +2106,13 @@ fn scroll_factors(
             .f()?;
         Ok(Some((f64::from(x), f64::from(y), f64::from(density))))
     })?;
-    let (horizontal, vertical, density) = factors.ok_or_else(|| PreferenceQueryError::Native {
-        message: "Activity theme has no scroll factor observation".into(),
+    let (horizontal, vertical, density) = factors.ok_or_else(|| {
+        PreferenceQueryError::failed("Activity theme has no scroll factor observation".into())
     })?;
     let ratio =
         DevicePixelRatio::try_new(density).ok_or(flui_platform::InvalidPreference::PixelRatio)?;
     PixelFactors::from_physical(horizontal, vertical, ratio).ok_or_else(|| {
-        PreferenceQueryError::Native {
-            message: "Android returned invalid scroll factors".into(),
-        }
+        PreferenceQueryError::failed("Android returned invalid scroll factors".into())
     })
 }
 

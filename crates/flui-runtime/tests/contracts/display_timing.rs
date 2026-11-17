@@ -96,6 +96,12 @@ struct CountingWindow {
 }
 
 impl PlatformWindow for CountingWindow {
+    fn window_at(&self, _: flui_foundation::geometry::Point<f64>) -> flui_platform::WindowAt {
+        flui_platform::WindowAt::Unknown
+    }
+
+    fn reveal_after_first_frame(&self) {}
+
     fn id(&self) -> flui_platform::WindowId {
         self.inner.id()
     }

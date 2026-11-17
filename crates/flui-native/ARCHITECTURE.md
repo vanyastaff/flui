@@ -2556,7 +2556,7 @@ override) publishes it in its window state, a new revision only when it
 changed. One read failing neither discards nor delays the other's accepted
 value.
 
-The snapshot's `appearance` is the user's theme on every backend, never a
+The snapshot's `brightness` is the user's theme on every backend, never a
 value the backend chose for its own chrome, and the handler's `state_changed` announces
 it only when it changed. Windows reads `AppsUseLightTheme` and sets the DWM dark
 title-bar flag to match it on creation and on each `WM_SETTINGCHANGE` that

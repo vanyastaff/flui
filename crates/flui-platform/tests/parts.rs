@@ -8,12 +8,12 @@ use flui_foundation::geometry::{
     Bounds, DevicePixelRatio, DeviceSize, EdgeInsets, Point, Size, WindowMetrics,
 };
 use flui_platform::{
-    AppTitleBar, Availability, CapabilityAbsence, ColorGamut, DisplayColor, DisplayInfo,
-    DisplayKey, DisplayRegistry, GesturePreferences, HourCycle, KeyboardInset, Locale,
+    AppTitleBar, Availability, Brightness, CapabilityAbsence, ColorGamut, DisplayColor,
+    DisplayInfo, DisplayKey, DisplayRegistry, GesturePreferences, HourCycle, KeyboardInset, Locale,
     MeasurementSystem, MotionPreference, NumberingSystem, RegionOverride, RegionalFormats,
     SizeConstraints, SystemPreferences, TextWeightPreference, Weekday, WheelPreferences, WheelStep,
-    WindowAppearance, WindowCapabilities, WindowCapability, WindowCommand, WindowExecutionState,
-    WindowExtent, WindowFrame, WindowGeometry, WindowInsets, WindowMaterial, WindowMode,
+    WindowCapabilities, WindowCapability, WindowCommand, WindowExecutionState, WindowExtent,
+    WindowFocus, WindowFrame, WindowGeometry, WindowInsets, WindowMaterial, WindowMode,
     WindowState,
 };
 
@@ -101,13 +101,13 @@ fn a_window_state_round_trips_through_its_parts() {
     .with_normal_geometry(Some(WindowGeometry::unplaced(extent(400.0, 300.0))))
     .with_visible(true)
     .with_occluded(false)
-    .with_focused(true)
+    .with_focus(WindowFocus::Focused)
     .with_title(Some("Notes".to_owned()))
     .with_constraints(SizeConstraints::new(Some(extent(200.0, 100.0)), None))
     .with_resizable(false)
     .with_frame(WindowFrame::AppTitleBar(AppTitleBar::new()))
     .with_metrics(Some(metrics))
-    .with_appearance(WindowAppearance::Dark)
+    .with_brightness(Brightness::Dark)
     .with_insets(
         WindowInsets::try_new(
             EdgeInsets::new(24.0, 0.0, 34.0, 0.0),
@@ -119,7 +119,6 @@ fn a_window_state_round_trips_through_its_parts() {
     )
     .with_execution(WindowExecutionState::Suspended)
     .with_hovered(true)
-    .with_active(true)
     .with_capabilities(capabilities);
     let parts = state.clone().into_parts();
     assert_eq!(
@@ -156,7 +155,7 @@ fn parts_leave_the_revision_and_publication_to_the_publishing_window() {
                 .expect("the process has publications left"),
         );
     let published = first
-        .successor(first.clone().with_focused(true))
+        .successor(first.clone().with_focus(WindowFocus::Focused))
         .expect("a revision is left");
     let sample = published.clone().into_parts().into_state();
     assert_eq!(sample.revision.get(), 0, "a sample carries no revision");

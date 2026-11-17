@@ -22,7 +22,7 @@ pub(crate) use session::{LinuxNotices, LinuxPreferences, PortalSlot, SessionLoop
 mod session {
     use std::sync::{Arc, Weak};
 
-    use flui_platform::{SessionEndAnswer, SessionEndPhase, SystemNotice, WindowAppearance};
+    use flui_platform::{Brightness, SessionEndAnswer, SessionEndPhase, SystemNotice};
     use parking_lot::Mutex;
 
     use crate::owner::sources::SystemPreferenceSource;
@@ -31,7 +31,7 @@ mod session {
     /// snapshot, and the colour scheme every window follows.
     pub(crate) trait LinuxPreferences: SystemPreferenceSource + Send + Sync {
         /// The colour scheme the portal reports.
-        fn appearance(&self) -> WindowAppearance;
+        fn appearance(&self) -> Brightness;
     }
 
     /// A Linux loop as the sources of the host's notices reach it.
@@ -62,9 +62,9 @@ mod session {
         /// The colour scheme the portal reports; light while it is not
         /// running. The Wayland host's windows ask it when they open.
         #[cfg(wayland_host)]
-        pub(crate) fn appearance(&self) -> WindowAppearance {
+        pub(crate) fn appearance(&self) -> Brightness {
             self.source()
-                .map_or(WindowAppearance::Light, |source| source.appearance())
+                .map_or(Brightness::Light, |source| source.appearance())
         }
 
         /// The source, while the loop runs.

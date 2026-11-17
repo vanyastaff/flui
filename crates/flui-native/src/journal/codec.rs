@@ -30,15 +30,15 @@ use flui_platform::keyboard::Modifiers;
 use flui_platform::pointer::{PenTool, PointerButton, PointerButtons, PointerEvent, PointerKind};
 use flui_platform::text_store::TextStore;
 use flui_platform::{
-    AppTitleBar, Availability, CapabilityAbsence, CapabilityParts, CloseDecision, ColorGamut,
-    ControlsOffset, DisplayColor, DisplayId, DisplayInfo, DisplayParts, GestureParts, Headroom,
-    HourCycle, ImeEvent, InsetCurve, InsetMotion, InvalidPreference, KeyboardInset, Locale,
-    MeasurementSystem, MemoryPressureLevel, MotionPreference, NativeMouseGeometry,
+    AppTitleBar, Availability, Brightness, CapabilityAbsence, CapabilityParts, CloseDecision,
+    ColorGamut, ControlsOffset, DisplayColor, DisplayId, DisplayInfo, DisplayParts, GestureParts,
+    Headroom, HourCycle, ImeEvent, InsetCurve, InsetMotion, InvalidPreference, KeyboardInset,
+    Locale, MeasurementSystem, MemoryPressureLevel, MotionPreference, NativeMouseGeometry,
     NativeTouchGeometry, NumberingSystem, PlatformInput, PreferenceParts, RefreshPeriod,
     RegionOverride, RegionalParts, SessionEndPhase, SizeConstraints, SystemControls, SystemNotice,
-    SystemPreferences, TextWeightPreference, Weekday, WheelParts, WheelStep, WindowAppearance,
-    WindowCapability, WindowExecutionState, WindowExtent, WindowFrame, WindowGeometry,
-    WindowInsets, WindowInteraction, WindowMode, WindowState, WindowStateParts,
+    SystemPreferences, TextWeightPreference, Weekday, WheelParts, WheelStep, WindowCapability,
+    WindowExecutionState, WindowExtent, WindowFrame, WindowGeometry, WindowInsets,
+    WindowInteraction, WindowMode, WindowState, WindowStateParts,
 };
 use flui_protocol::native_recording as wire;
 use serde::Serialize;
@@ -2667,18 +2667,17 @@ fn window_state_to_wire(state: &RecordedWindowState) -> DtoResult<wire::WindowSt
         normal_geometry,
         visible,
         occluded,
-        focused,
+        focus,
         title,
         constraints: SizeConstraints { min, max },
         resizable,
         frame,
         display: _,
         metrics,
-        appearance,
+        brightness,
         insets,
         execution,
         hovered,
-        active,
         interaction,
         capabilities,
     } = (*state.parts).clone();
@@ -2696,7 +2695,7 @@ fn window_state_to_wire(state: &RecordedWindowState) -> DtoResult<wire::WindowSt
         normal_geometry: normal_geometry.map(geometry_to_wire),
         visible,
         occluded,
-        focused,
+        focused: focus.is_focused(),
         title,
         constraints: wire::SizeConstraints {
             min: min.map(|min| size_to_wire(min.get())),
@@ -2712,12 +2711,9 @@ fn window_state_to_wire(state: &RecordedWindowState) -> DtoResult<wire::WindowSt
                 scale: metrics.scale().get(),
             }
         }),
-        appearance: match appearance {
-            WindowAppearance::Light => wire::Appearance::Light,
-            WindowAppearance::Dark => wire::Appearance::Dark,
-            WindowAppearance::VibrantLight => wire::Appearance::VibrantLight,
-            WindowAppearance::VibrantDark => wire::Appearance::VibrantDark,
-            _ => return Err(DtoError::Unmirrored("WindowAppearance")),
+        appearance: match brightness {
+            Brightness::Light => wire::Appearance::Light,
+            Brightness::Dark => wire::Appearance::Dark,
         },
         safe_area: edges_to_wire(insets.safe_area()),
         keyboard: keyboard_to_wire(insets.keyboard())?,
@@ -2729,7 +2725,7 @@ fn window_state_to_wire(state: &RecordedWindowState) -> DtoResult<wire::WindowSt
             _ => return Err(DtoError::Unmirrored("WindowExecutionState")),
         },
         hovered,
-        active,
+        active: focus.is_active(),
         user_placing: match interaction {
             WindowInteraction::UserPlacing => Some(true),
             WindowInteraction::None => Some(false),
@@ -2862,7 +2858,12 @@ fn window_state_from_wire(wire: wire::WindowState) -> DtoResult<RecordedWindowSt
             .transpose()?,
         visible,
         occluded,
-        focused,
+        // A hidden window stands nowhere, as `WindowState::successor` publishes it.
+        focus: if visible {
+            flui_platform::WindowFocus::reported(focused, active)
+        } else {
+            flui_platform::WindowFocus::Inactive
+        },
         title,
         constraints: SizeConstraints::new(
             constraints
@@ -2878,11 +2879,11 @@ fn window_state_from_wire(wire: wire::WindowState) -> DtoResult<RecordedWindowSt
         frame: window_frame_from_wire(frame)?,
         display: None,
         metrics,
-        appearance: match appearance {
-            wire::Appearance::Light => WindowAppearance::Light,
-            wire::Appearance::Dark => WindowAppearance::Dark,
-            wire::Appearance::VibrantLight => WindowAppearance::VibrantLight,
-            wire::Appearance::VibrantDark => WindowAppearance::VibrantDark,
+        // The schema's vibrant values, which no host writes, are their theme:
+        // vibrancy is a material, not a theme.
+        brightness: match appearance {
+            wire::Appearance::Light | wire::Appearance::VibrantLight => Brightness::Light,
+            wire::Appearance::Dark | wire::Appearance::VibrantDark => Brightness::Dark,
             other => return Err(unread(other.name())),
         },
         insets,
@@ -2893,7 +2894,6 @@ fn window_state_from_wire(wire: wire::WindowState) -> DtoResult<RecordedWindowSt
             other => return Err(unread(other.name())),
         },
         hovered,
-        active,
         interaction: match user_placing {
             Some(true) => WindowInteraction::UserPlacing,
             Some(false) => WindowInteraction::None,

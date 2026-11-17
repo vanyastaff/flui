@@ -65,7 +65,8 @@ pub enum InputLatency {
 /// Window creation options.
 ///
 /// Adding an option is not a breaking change: the type is `#[non_exhaustive]`,
-/// so it is built from [`Default`] with the `with_*` methods.
+/// so it is built from [`Default`] with its builder methods, each named after
+/// the field it sets ([`title`](Self::title), [`size`](Self::size), …).
 ///
 /// # Geometry
 ///
@@ -96,7 +97,8 @@ pub struct WindowOptions {
     /// the window is on screen when `open_window` returns; with
     /// [`WindowReveal::AfterFirstFrame`] a backend that can defer keeps it
     /// invisible to the viewer until the embedder reports its first
-    /// presented frame, answering `is_visible() == true` meanwhile. `false`
+    /// presented frame, its snapshot's
+    /// [`WindowState::visible`](crate::WindowState::visible) `true` meanwhile. `false`
     /// stays hidden until shown explicitly, whatever `reveal` says.
     pub visible: bool,
     /// When a `visible: true` window first becomes visible to the viewer;
@@ -497,31 +499,6 @@ pub enum WindowExecutionState {
 
 // ==================== Value Types ====================
 
-/// Window appearance (light/dark theme)
-#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum WindowAppearance {
-    /// Light appearance (default)
-    #[default]
-    Light,
-    /// Dark appearance
-    Dark,
-    /// Vibrant light (macOS-style translucent light)
-    VibrantLight,
-    /// Vibrant dark (macOS-style translucent dark)
-    VibrantDark,
-}
-
-impl From<WindowAppearance> for crate::Brightness {
-    /// The light/dark half of an appearance; vibrancy is a material, not a theme.
-    fn from(appearance: WindowAppearance) -> Self {
-        match appearance {
-            WindowAppearance::Light | WindowAppearance::VibrantLight => Self::Light,
-            WindowAppearance::Dark | WindowAppearance::VibrantDark => Self::Dark,
-        }
-    }
-}
-
 /// The material the window system draws behind a window's content, which
 /// shows through the window's frame and wherever its content is transparent
 /// ([`WindowCommand::SetMaterial`](crate::WindowCommand::SetMaterial)).
@@ -554,18 +531,26 @@ pub enum CursorError {
     /// The backend has no pointer-cursor facility for this window.
     #[error("the window shows no pointer cursor: {0}")]
     Unsupported(#[from] Unsupported),
-    /// The backend rejected a concrete cursor update.
+    /// The window system refused or failed the cursor update, in the shape
+    /// every refusal of a window's window system takes
+    /// ([`ApplyError::Platform`](crate::ApplyError::Platform)).
     #[error("platform cursor update failed: {0}")]
-    Backend(String),
+    Platform(#[from] crate::PlatformFailure),
 }
 
 impl CursorError {
+    /// A window-system failure with this message.
+    #[must_use]
+    pub fn failed(message: String) -> Self {
+        Self::Platform(crate::PlatformFailure::Failed { message })
+    }
+
     /// What is not here, when that is why the cursor was not applied.
     #[must_use]
     pub const fn unsupported(&self) -> Option<Unsupported> {
         match self {
             Self::Unsupported(unsupported) => Some(*unsupported),
-            Self::Backend(_) => None,
+            Self::Platform(_) => None,
         }
     }
 }

@@ -98,7 +98,10 @@ fn a_panicking_layout_callback_costs_no_key_of_its_turn() {
         .admit_and_apply(WindowCommand::Activate)
         .expect("the window activates");
     fixture.settle();
-    assert!(fixture.window.state().focused, "the window has the focus");
+    assert!(
+        fixture.window.state().focus.is_focused(),
+        "the window has the focus"
+    );
     keyboard_layout::on_change(
         &fixture.platform,
         Box::new(|| panic!("the layout callback")),
@@ -427,7 +430,10 @@ fn losing_the_focus_ends_a_dead_key_and_releases_held_keys() {
             .admit_and_apply(WindowCommand::Activate)
             .expect("the window activates");
         fixture.settle();
-        assert!(fixture.window.state().focused, "the window has the focus");
+        assert!(
+            fixture.window.state().focus.is_focused(),
+            "the window has the focus"
+        );
     };
     activate(&mut fixture);
     let xtest = Xtest::new(&fixture);
@@ -526,7 +532,10 @@ fn a_window_follows_its_focus_when_a_handler_panics_at_its_loss() {
         .admit_and_apply(WindowCommand::Activate)
         .expect("the window activates");
     fixture.settle();
-    assert!(fixture.window.state().focused, "the window has the focus");
+    assert!(
+        fixture.window.state().focus.is_focused(),
+        "the window has the focus"
+    );
     let xtest = Xtest::new(&fixture);
     xtest.key(keycode::A, true);
     focus_elsewhere(&fixture);
@@ -535,7 +544,7 @@ fn a_window_follows_its_focus_when_a_handler_panics_at_its_loss() {
     }));
     assert!(turned.is_err(), "the handler's panic is raised");
     assert!(
-        !fixture.window.state().focused,
+        !fixture.window.state().focus.is_focused(),
         "the window heard its focus go"
     );
     fixture
@@ -791,7 +800,10 @@ fn xtest_keys_reach_the_focused_window() {
         .admit_and_apply(WindowCommand::Activate)
         .expect("the window activates");
     fixture.settle();
-    assert!(fixture.window.state().focused, "the window has the focus");
+    assert!(
+        fixture.window.state().focus.is_focused(),
+        "the window has the focus"
+    );
     handler.take_calls();
     let xtest = Xtest::new(&fixture);
     xtest.tap(keycode::A);
