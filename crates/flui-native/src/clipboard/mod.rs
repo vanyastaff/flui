@@ -17,7 +17,7 @@
 //!   `CLIPBOARD` selection on a connection of its own;
 //! - `headless`: a `MemoryClipboard`, one per loop.
 
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", test))]
 pub(crate) mod android;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub(crate) mod apple;

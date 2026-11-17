@@ -204,6 +204,7 @@ fn main() -> Result<(), flui::LaunchError> {
 #![deny(missing_docs)]
 
 pub mod app;
+mod book;
 pub mod interaction;
 pub mod painting;
 pub mod rendering;

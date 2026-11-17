@@ -168,7 +168,8 @@ final class FluiInputConnection extends BaseInputConnection {
 
     /**
      * Paste the clipboard into the mirror: through the view's content
-     * receiver where the platform has one (API 31), as committed text before.
+     * receiver where the platform has one (API 31), before it as the text
+     * {@link FluiView#clipText} admits.
      */
     private void paste() {
         ClipboardManager clipboard = (ClipboardManager) view.getContext()
@@ -181,11 +182,10 @@ final class FluiInputConnection extends BaseInputConnection {
             FluiContentReceiver.paste(view, clip);
             return;
         }
-        StringBuilder plain = new StringBuilder();
-        for (int index = 0; index < clip.getItemCount(); index++) {
-            plain.append(clip.getItemAt(index).coerceToText(view.getContext()));
+        CharSequence text = FluiView.clipText(clip);
+        if (text != null) {
+            view.receiveText(text);
         }
-        view.receiveText(plain);
     }
 
     @Override

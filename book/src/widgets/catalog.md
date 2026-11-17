@@ -11,35 +11,55 @@ moment a widget is added; the source directories do not). This page has no scree
 whether to commit them. Their displayed and accessible state changes when the parent
 rebuilds with the new value. Without a callback, the control is disabled.
 
-This illustrative excerpt belongs inside a `ViewState::build` method receiving `ctx`.
-Assume `self.volume: Signal<f64>` and `self.expansion: Signal<ExpansionState>` were created
-in `init_state`, initially `50.0` and `ExpansionState::Collapsed`. Read them in `build` and
-write from the event callback, as in the [first run](../getting-started/installation.md) counter.
-It is not a complete application:
+The view below keeps both values in signals its state is born with, reads them in `build` and
+writes them from the event callbacks, as in the [first run](../getting-started/installation.md)
+counter:
 
-```rust,ignore
+```rust
 use flui::prelude::*;
-use flui::widgets::column;
 
-let volume = self.volume;
-let expansion = self.expansion;
-let range = match NumericRange::try_new(volume.get(ctx), 0.0, 100.0, 5.0) {
-    Ok(range) => range,
-    Err(error) => return Text::new(format!("Invalid volume range: {error}")).boxed(),
-};
+#[derive(Clone, StatefulView)]
+struct SoundSettings;
 
-Column::new((
-    Slider::new(range)
-        .label("Volume")
-        .on_changed(move |ctx, proposed| volume.set(ctx, proposed)),
-    Disclosure::new(
-        expansion.get(ctx),
-        Text::new("Details"),
-        Text::new("Additional settings"),
-    )
-    .on_changed(move |ctx, proposed| expansion.set(ctx, proposed)),
-))
-.boxed()
+struct SoundSettingsState {
+    volume: Signal<f64>,
+    expansion: Signal<ExpansionState>,
+}
+
+impl StatefulView for SoundSettings {
+    type State = SoundSettingsState;
+
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> SoundSettingsState {
+        SoundSettingsState {
+            volume: ctx.signal(50.0),
+            expansion: ctx.signal(ExpansionState::Collapsed),
+        }
+    }
+}
+
+impl ViewState<SoundSettings> for SoundSettingsState {
+    fn build(&self, _view: &SoundSettings, ctx: &dyn BuildContext) -> impl IntoView {
+        let volume = self.volume;
+        let expansion = self.expansion;
+        let range = match NumericRange::try_new(volume.get(ctx), 0.0, 100.0, 5.0) {
+            Ok(range) => range,
+            Err(error) => return Text::new(format!("Invalid volume range: {error}")).boxed(),
+        };
+
+        Column::new((
+            Slider::new(range)
+                .label("Volume")
+                .on_changed(move |ctx, proposed| volume.set(ctx, proposed)),
+            Disclosure::new(
+                expansion.get(ctx),
+                Text::new("Details"),
+                Text::new("Additional settings"),
+            )
+            .on_changed(move |ctx, proposed| expansion.set(ctx, proposed)),
+        ))
+        .boxed()
+    }
+}
 ```
 
 `NumericRange::try_new(value, min, max, step)` returns a `Result`: every argument must be
