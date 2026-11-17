@@ -162,7 +162,7 @@ fn a_slow_provider_holds_no_owner_turn() {
     }
     assert_eq!(ready.len(), 2, "both intents, once");
     assert_eq!(ready[0].opened.files, [file(40)]);
-    assert!(ready[0].refused.is_empty());
+    assert_eq!(ready[0].refused, Vec::new());
     assert_eq!(ready[1].opened.urls, ["notes:///note/2"]);
     assert_eq!(documents.next_deadline(), None);
 }
@@ -196,11 +196,8 @@ fn every_accepted_document_ends_with_one_outcome() {
     openings.finish(jobs[0].ticket, Ok(file(41)));
     openings.finish(jobs[1].ticket, Err(OpenRefusal::GrantEnded));
     assert!(openings.take_ready().is_empty(), "one still opens");
-    assert!(
-        openings
-            .expire(now + OPEN_DEADLINE - Duration::from_millis(1))
-            .is_empty()
-    );
+    let just_before = now + OPEN_DEADLINE.saturating_sub(Duration::from_millis(1));
+    assert_eq!(openings.expire(just_before), Vec::new());
     assert_eq!(openings.expire(now + OPEN_DEADLINE), [jobs[2].ticket]);
     // What the cancelled open answers late is dropped.
     openings.finish(jobs[2].ticket, Ok(file(42)));

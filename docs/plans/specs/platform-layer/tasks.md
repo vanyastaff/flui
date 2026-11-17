@@ -8411,7 +8411,29 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
   читает столько же записей перечислителя (было 256), Web — столько же типов и файлов, Android
   копирует в Java не больше и читает по одной локальной ссылке (`clip::read_type_names`);
   `java_view::strings` отпускает каждую ссылку. `PROTOCOL` 5 → 6. Тесты, в скобках результат с
-  откатом: TODO.
+  откатом: `a_clipboard_read_takes_the_items_text_and_reads_no_provider` (копия до проверки длины —
+  скопировано 10 вместо 5); `a_java_paste_reads_no_provider_and_holds_the_reads_limit` (старая
+  вставка с `coerceToText` в `FluiInputConnection` — находка); `android_drag_mapping` /
+  `a_drag_offers_no_more_types_than_every_host_reads` (без предела и отпускания ссылок —
+  прочитано 10002 элемента вместо 100); `html_drag_drop_table` /
+  `a_hover_offers_no_more_types_than_every_host_reads` (без правила — 10001 тип вместо 99);
+  `a_slow_provider_holds_no_owner_turn` (открытие, дожидающееся провайдера, как прежний путь на
+  потоке владельца, — `accept` ждёт 10 с, падает); `a_refused_document_is_withdrawn_and_its_open_cancelled`
+  (то же — тест не укладывается во время); `a_document_open_answers_as_the_java_classes_state_it`
+  (`OPEN_GRANT_ENDED` как `Failed` — `Err(Failed)` вместо `Err(GrantEnded)`);
+  `a_paused_loop_blocks_until_it_is_woken` (без `open_deadline` в опросе — `None` вместо 900 мс);
+  `every_accepted_document_ends_with_one_outcome`, `a_provider_panic_fails_its_job_alone` — модель и
+  работник; `an_offer_keeps_each_type_once_and_no_more_than_its_bound` (Wayland по прежнему
+  правилу держит 100, а не 98). Прогнано: на Windows `cargo heli nextest` по затронутым модулям
+  `flui-native` (все новые проходят; два теста Win32 clipboard падают на общем системном буфере,
+  который трогают другие сессии, и `an_intent_opens_its_link_or_documents` падает на хосте Windows
+  и на `main`), clippy `--all-targets -D warnings`; в WSL 71 тест Android-моделей и Wayland,
+  clippy и `cargo doc -D warnings` на Linux, `cargo +nightly check --target aarch64-linux-android`.
+  Dex пересобран здесь (javac 21.0.12, android-35: android-36 не установлен). Должно на
+  устройстве (в строках `platform-parity.toml` «Plain-text clipboard», «Drop into the app», «Deep
+  links»): вставка URI-клипа и клипа больше предела, drag из чужого приложения с множеством
+  типов, документ облачного провайдера; на этой машине у закреплённого toolchain 1.100.0 нет
+  цели Android, а `rustup` не запускается.
 
 ## Чего нет в этой серии
 
