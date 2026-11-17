@@ -349,29 +349,31 @@ impl PreparedCloseRequest {
     }
 }
 
-/// Capacity and identity reservation held through joint native publication.
-pub(crate) struct ClosePublication<'a>(std::cell::RefMut<'a, Vec<PresentationCloseEntry>>);
+/// The router's reservation for one presentation, held through joint native
+/// publication: its address had no entry and the table has room for it. It
+/// holds the router, not a borrow of its table, so nothing that runs between
+/// the reservation and the publication finds the table busy. The native
+/// bindings publish it in the same call, with no code of another owner in
+/// between.
+pub(crate) struct ClosePublication<'a>(&'a CloseRequestRouter);
 
 impl ClosePublication<'_> {
-    pub(crate) fn publish(mut self, prepared: PreparedCloseRequest) {
-        self.0.push(prepared.0);
+    pub(crate) fn publish(self, prepared: PreparedCloseRequest) {
+        self.0.entries.borrow_mut().push(prepared.0);
     }
 }
 
 impl std::fmt::Debug for CloseRequestRouter {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // Formatting may run while a publication holds the table: it then
-        // says so instead of counting.
-        let mut debug = f.debug_struct("CloseRequestRouter");
-        match self.entries.try_borrow() {
-            Ok(entries) => debug.field("registered", &entries.len()),
-            Err(_) => debug.field("registered", &"<publishing>"),
-        };
-        debug.finish()
+        f.debug_struct("CloseRequestRouter")
+            .field("registered", &self.entries.borrow().len())
+            .finish()
     }
 }
 
 impl CloseRequestRouter {
+    /// Reserve `prepared`'s address and room for its entry; `None` when the
+    /// address already has one.
     pub(crate) fn publication(
         &self,
         prepared: &PreparedCloseRequest,
@@ -384,7 +386,7 @@ impl CloseRequestRouter {
             return None;
         }
         entries.reserve(1);
-        Some(ClosePublication(entries))
+        Some(ClosePublication(self))
     }
     /// An empty router.
     pub(crate) fn new() -> Self {

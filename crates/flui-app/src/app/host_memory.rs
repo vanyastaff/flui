@@ -25,7 +25,7 @@ use flui_foundation::panic::FirstPanic;
 
 /// Receivers an application registered, shared by the clones of its
 /// configuration.
-pub(crate) type SharedReceiver = Rc<dyn ReclaimMemory + Send>;
+pub(crate) type SharedReceiver = Rc<dyn ReclaimMemory>;
 
 /// What a host trims on a memory-pressure notice.
 #[derive(Default)]
@@ -58,37 +58,34 @@ impl ReclaimMemory for HostMemory {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-    use std::sync::Mutex;
+    use std::cell::RefCell;
+    use std::rc::Rc;
 
     use flui_foundation::memory::{MemoryPressureLevel, ReclaimMemory};
 
     use super::HostMemory;
 
-    struct Named(&'static str, Arc<Mutex<Vec<String>>>);
+    struct Named(&'static str, Rc<RefCell<Vec<String>>>);
 
     impl ReclaimMemory for Named {
         fn reclaim(&self, level: MemoryPressureLevel) {
-            self.1
-                .lock()
-                .expect("log")
-                .push(format!("{} {level:?}", self.0));
+            self.1.borrow_mut().push(format!("{} {level:?}", self.0));
         }
     }
 
     #[test]
     fn the_registered_receivers_are_trimmed_in_order_and_a_new_run_replaces_them() {
-        let log = Arc::new(Mutex::new(Vec::new()));
+        let log = Rc::new(RefCell::new(Vec::new()));
         let memory = HostMemory::default();
         memory.replace_receivers(vec![
-            std::rc::Rc::new(Named("assets", Arc::clone(&log))),
-            std::rc::Rc::new(Named("cache", Arc::clone(&log))),
+            Rc::new(Named("assets", Rc::clone(&log))),
+            Rc::new(Named("cache", Rc::clone(&log))),
         ]);
         memory.reclaim(MemoryPressureLevel::Critical);
-        memory.replace_receivers(vec![std::rc::Rc::new(Named("next run", Arc::clone(&log)))]);
+        memory.replace_receivers(vec![Rc::new(Named("next run", Rc::clone(&log)))]);
         memory.reclaim(MemoryPressureLevel::Moderate);
         assert_eq!(
-            *log.lock().expect("log"),
+            *log.borrow(),
             ["assets Critical", "cache Critical", "next run Moderate"]
         );
     }

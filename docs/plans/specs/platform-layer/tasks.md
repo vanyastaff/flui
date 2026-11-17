@@ -7960,11 +7960,16 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
   data-transfer в `AppRuntime` (`Arc<Mutex<_>>`, наружу не клонировался) и рендерер прямого режима
   (`Arc<Mutex<Renderer>>`, `Arc<Mutex<render_fn>>`) — теперь `Rc` с `Cell`/`RefCell`. Вместе с
   ними сделаны удаления flui-app из ADR-0323 §4: `CloseRequestHandler::new` без `Send + Sync`
-  (держится в `Rc`), `run_direct` без `Send`, `AppConfig::memory_reclaim` без `Sync`; восемь
-  записей ушли из `send-positions.toml`. Проверки `ThreadId` роутера и
-  `CloseRequestError::WrongThread` удалены: `AppRuntime` поточно-локален, так что
-  `owner_thread` либо пуст, либо равен текущему потоку, и вариант был недостижим; вместо проверок —
-  `assert_not_impl_any!(CloseRequestRouter, CloseRequestHandler: Send, Sync)`. Обновление `Cell`
+  (держится в `Rc`), `run_direct` без `Send`, `AppConfig::memory_reclaim` без `Send` и `Sync`
+  (приёмник вызывается только ходом владельца, держится в `Rc`; строка ADR-0323 §4 исправлена под
+  код); десять записей ушли из `send-positions.toml`. `AppConfig`, `Application` и
+  `CloseRequestHandler` больше не `Send`. Проверки `ThreadId` роутера и
+  `CloseRequestError::WrongThread` удалены: `AppRuntime` поточно-локален, так что поле было либо
+  пустым, либо равным текущему потоку, и вариант был недостижим; поле стало `hosts_loop: bool`,
+  поток диспетчеров берётся из `loop_thread()`, сравнения в `window_handle` и
+  `presented_host_window` ушли; вместо проверок —
+  `assert_not_impl_any!(CloseRequestRouter, CloseRequestHandler: Send, Sync)`; публикация роутера
+  держит роутер, а не заимствование таблицы. Обновление `Cell`
   — копия состояния в замыкании без доступа к ячейке (`update` у `FallbackWake` и
   `GpuLossLedger`), запись не теряется. Повторный вход: под блокировкой роутера, `HostMemory`,
   `FirstReveal`, `GpuLossLedger` и `BackgroundPace` чужой код не выполнялся (клон наружу до
@@ -7972,21 +7977,29 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
   внутри методов владельца. Реальный случай нашёлся в `FallbackWake::next_wake`: событие `tracing`
   об отказе от дедлайна шло под замком, и подписчик, читающий дедлайн, ждал замка своего же потока;
   теперь состояние записано до события. В прямом режиме замыкание приложения шло под замком
-  рендерера; теперь сцена строится со свободным рендерером, кадр, вызванный изнутри другого,
-  отвечает `Declined`, размер, пришедший во время кадра, применяется следующим кадром. Маркеры
+  рендерера; теперь кадры — модель `DirectFrames` над `DirectSurface`: сцена строится со свободной
+  поверхностью, сцена, построенная до смены размера, не рисуется, кадр просится снова
+  (`Declined`), кадр изнутри построения отвечает `Declined`, размер, пришедший во время рисования,
+  применяется следующим кадром. Маркеры
   «slice», «#558», «#559» и пункты плана в доках `lifecycle.rs`, `close_request.rs`, `config.rs`,
   `lib.rs`, `desktop.rs` заменены действующим контрактом. Тесты:
   `a_subscriber_reading_the_deadline_inside_its_abandonment_event_finds_it_gone`
   (`desktop_pacing_matrix`; на `FallbackWake` из `main` падает по таймауту 10 с — чтение внутри
-  события ждёт замка), `a_handler_that_closes_its_own_window_closes_it_once` (обработчик с
-  `Rc<Cell<_>>` закрывает своё окно изнутри ответа: одно закрытие, одно освобождение дерева) и
-  `a_memory_receiver_without_sync_is_reclaimed_per_notice` (приёмник с `Cell`) в `runner_close`, а
-  `a_refused_quit_waits_for_the_record_then_exits` считает в `Rc<Cell<_>>`: на `main` эти три не
-  компилируются (граница `Send + Sync`). Правило записано в `crates/flui-app/ARCHITECTURE.md`.
+  события ждёт замка); `a_scene_built_across_a_resize_is_not_drawn_and_the_frame_is_asked_again`
+  (без сверки размера первый кадр рисует при 1024 × 768 сцену для 800 × 600) и
+  `a_frame_asked_for_inside_the_build_declines` (модельные, `direct.rs`);
+  `a_close_from_a_thread_without_a_loop_is_refused` (поток без цикла получает `NoHostedRuntime`,
+  окно остаётся); `a_handler_that_closes_its_own_window_closes_it_once` (обработчик с
+  `Rc<Cell<_>>` закрывает своё окно изнутри ответа и находит роутер свободным: одно закрытие, одно
+  освобождение дерева; поведение то же, что на `main`, где обработчик тоже клонировался из-под
+  замка) и `an_owner_thread_memory_receiver_is_reclaimed_per_notice` (приёмник с `Cell` и
+  `Rc<RefCell<_>>`) в `runner_close`, а `a_refused_quit_waits_for_the_record_then_exits` считает в
+  `Rc<Cell<_>>`: на `main` эти три не компилируются (границы `Send + Sync`). Правило записано в
+  `crates/flui-app/ARCHITECTURE.md`.
   Остаются за замками то, что достаёт другой поток: `AppHandle` и `DeviceRetry`, вейкеры ожидающих
   окон, флаг и запросчик перерисовки, список перерисовок растра, эндпоинт агента, воркеры и
   сервисы, полосы хранилища и хуки разработки (`DevReload`, `DevAgent`; ADR-0311). Не собрано
-  здесь: Android, iOS, wasm (правки `android.rs`, `web.rs`, `gpu_loss.rs` — только CI).
+  здесь: Android, iOS, macOS (правка `android.rs` — только CI); wasm проверен типами в WSL.
 
 ## Чего нет в этой серии
 

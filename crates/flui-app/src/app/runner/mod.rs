@@ -222,7 +222,7 @@ fn presented_host_window(
 ) -> Option<Rc<dyn flui_native::HostWindow>> {
     host::APP_RUNTIME.with(|slot| {
         let state = slot.try_borrow().ok()?;
-        if state.owner_thread != Some(std::thread::current().id()) {
+        if !state.hosts_loop {
             return None;
         }
         let presented = find(&state.window_commands)?;
@@ -254,7 +254,8 @@ pub fn window_handle(
 ) -> Option<flui_view::WindowHandle> {
     host::APP_RUNTIME.with(|slot| {
         let state = slot.try_borrow().ok()?;
-        (state.owner_thread == Some(std::thread::current().id()))
+        state
+            .hosts_loop
             .then(|| state.window_commands.handle_for(address))
             .flatten()
     })
@@ -329,7 +330,7 @@ pub fn request_presentation_close(
     // presentation is gone".
     let (hosts_loop, router) = host::APP_RUNTIME.with(|slot| {
         let state = slot.borrow();
-        (state.owner_thread.is_some(), state.close_requests())
+        (state.hosts_loop, state.close_requests())
     });
     if !hosts_loop {
         return Err(CloseRequestError::NoHostedRuntime);

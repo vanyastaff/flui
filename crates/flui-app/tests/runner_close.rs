@@ -637,6 +637,30 @@ pub(crate) fn a_vetoed_close_disposes_nothing() {
     }
 }
 
+/// A thread that runs no loop asks to close a window the loop thread runs:
+/// it is answered `NoHostedRuntime`, and the window stays open until the
+/// loop thread closes it.
+pub(crate) fn a_close_from_a_thread_without_a_loop_is_refused() {
+    let observed = Observed::default();
+    let started = start(&observed);
+    let address = main_window_address(&started);
+
+    let answered = std::thread::spawn(move || request_presentation_close(address))
+        .join()
+        .expect("the request does not panic");
+    assert_eq!(
+        answered,
+        Err(flui_app::app::CloseRequestError::NoHostedRuntime)
+    );
+    started.run.run_owner_turn();
+    assert!(started.run.is_running(), "the window stayed open");
+    assert_eq!(observed.disposed.get(), 0, "nothing was disposed");
+
+    close(&started, CloseRoute::Program);
+    turn_until_stopped(&started.run, 4);
+    join_ok(started.run);
+}
+
 /// A handler that closes its own window from inside its answer re-enters
 /// the close-request router while the router is asking it: the window closes
 /// once, the tree is disposed once and the loop ends. The handler finds its
@@ -675,35 +699,32 @@ pub(crate) fn a_handler_that_closes_its_own_window_closes_it_once() {
     join_ok(started.run);
 }
 
-/// A memory receiver that keeps its own count in a `Cell`: it is `Send`, so
-/// a configuration takes it, and not `Sync`, which a receiver reclaimed on the
-/// owner thread alone does not need. It reports each reclaim, with its count
-/// so far, to `log`.
+/// A memory receiver with owner-thread state: its own count in a `Cell` and
+/// a log it shares by `Rc`, neither `Send` nor `Sync`, which a receiver
+/// reclaimed on the owner thread alone does not need. It reports each
+/// reclaim, with its count so far, to `log`.
 struct CountingReceiver {
     reclaimed: Cell<u32>,
-    log: Arc<Mutex<Vec<(u32, flui_foundation::memory::MemoryPressureLevel)>>>,
+    log: Rc<RefCell<Vec<(u32, flui_foundation::memory::MemoryPressureLevel)>>>,
 }
 
 impl flui_foundation::memory::ReclaimMemory for CountingReceiver {
     fn reclaim(&self, level: flui_foundation::memory::MemoryPressureLevel) {
         self.reclaimed.set(self.reclaimed.get() + 1);
-        self.log
-            .lock()
-            .expect("BUG: the receiver does not panic")
-            .push((self.reclaimed.get(), level));
+        self.log.borrow_mut().push((self.reclaimed.get(), level));
     }
 }
 
 /// The application's memory receiver is reclaimed once per memory-pressure
 /// notice, at the notice's level, and its state is its own.
-pub(crate) fn a_memory_receiver_without_sync_is_reclaimed_per_notice() {
+pub(crate) fn an_owner_thread_memory_receiver_is_reclaimed_per_notice() {
     use flui_foundation::memory::MemoryPressureLevel;
 
     let observed = Observed::default();
-    let log = Arc::new(Mutex::new(Vec::new()));
+    let log = Rc::new(RefCell::new(Vec::new()));
     let receiver = CountingReceiver {
         reclaimed: Cell::new(0),
-        log: Arc::clone(&log),
+        log: Rc::clone(&log),
     };
     let started = start_configured(&observed, move |config| config.memory_reclaim(receiver));
 
@@ -715,7 +736,7 @@ pub(crate) fn a_memory_receiver_without_sync_is_reclaimed_per_notice() {
     }
 
     assert_eq!(
-        *log.lock().expect("BUG: the receiver does not panic"),
+        *log.borrow(),
         [
             (1, MemoryPressureLevel::Moderate),
             (2, MemoryPressureLevel::Critical)
@@ -1604,8 +1625,12 @@ fn runner_close() {
                 a_handler_that_closes_its_own_window_closes_it_once,
             ),
             (
-                "a_memory_receiver_without_sync_is_reclaimed_per_notice",
-                a_memory_receiver_without_sync_is_reclaimed_per_notice,
+                "a_close_from_a_thread_without_a_loop_is_refused",
+                a_close_from_a_thread_without_a_loop_is_refused,
+            ),
+            (
+                "an_owner_thread_memory_receiver_is_reclaimed_per_notice",
+                an_owner_thread_memory_receiver_is_reclaimed_per_notice,
             ),
             (
                 "a_quit_nothing_refuses_ends_the_loop",

@@ -20,7 +20,6 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::Receiver;
-use std::thread::ThreadId;
 
 use flui_native::OwnerPlatform;
 use flui_painting::{FallbackOrder, FontCollection, HostFontFeed};
@@ -359,12 +358,11 @@ pub(crate) struct AppRuntime {
     /// trip's writes never release a later trip's hold.
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) background_writes: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
-    /// The thread that installed the first UI runtime hosted here; every dispatch
-    /// checks against this before touching the registry. Loop-scoped, not
-    /// per-UI runtime: every UI runtime this `AppRuntime` ever hosts lives on the same
-    /// owner thread (`APP_RUNTIME` is thread-local), so one shared value is
-    /// exact, not an approximation of a per-UI runtime concept.
-    pub(super) owner_thread: Option<ThreadId>,
+    /// Whether this thread hosts a loop: set when the first UI runtime is
+    /// installed and cleared at teardown. `APP_RUNTIME` is thread-local, so the
+    /// thread that hosts the loop is always the thread reading this; see
+    /// [`Self::loop_thread`].
+    pub(super) hosts_loop: bool,
     /// The loop-scoped owner-thread platform capability (ADR-0039 §6).
     /// Deliberately *not* cleared by UI runtime teardown — the loop may host
     /// another UI runtime before it exits (hot-restart does exactly this).
@@ -522,8 +520,8 @@ pub(crate) struct AppRuntime {
     /// left to continue after, as text, held until the exit order has
     /// written what the application persisted and then resumed.
     pub(super) terminal: Option<Box<dyn std::any::Any + Send>>,
-    /// What this host gives back on a memory-pressure notice: one receiver every
-    /// UI runtime it builds shares (`runner::host::build_lending_ui_runtime`).
+    /// What this host gives back on a memory-pressure notice: the receivers the
+    /// run start installs, reclaimed by the owner's turn for the notice.
     pub(super) host_memory: Rc<super::host_memory::HostMemory>,
     /// The run's window placements: where the host acquires the storage they
     /// are kept in, the windows that remember one and the writes still out
@@ -540,6 +538,12 @@ pub(crate) struct AppRuntime {
 }
 
 impl AppRuntime {
+    /// The thread the dispatchers of this loop are minted for: the current
+    /// one, when it hosts a loop.
+    pub(super) fn loop_thread(&self) -> Option<std::thread::ThreadId> {
+        self.hosts_loop.then(|| std::thread::current().id())
+    }
+
     /// Construct the composition root: cheap, side-effect-free.
     /// Called as the `APP_RUNTIME` TLS slot's own initializer (`runner.rs`),
     /// so simply *touching* the thread-local -- for any reason, on any
@@ -564,7 +568,7 @@ impl AppRuntime {
         Self {
             installed_host: InstalledHost::new(),
             owner_turn_wake: None,
-            owner_thread: None,
+            hosts_loop: false,
             owner_platform: None,
             owner_install_generation: 0,
             run_routes: Vec::new(),

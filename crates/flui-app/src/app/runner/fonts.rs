@@ -95,7 +95,7 @@ pub(super) fn announce_font_change() {
         }
         // No owner thread means no ui_runtime installed: a ui_runtime built later is
         // built over the collection as it is then.
-        let Some(owner_thread) = runtime.owner_thread else {
+        let Some(owner_thread) = runtime.loop_thread() else {
             return Vec::new();
         };
         runtime

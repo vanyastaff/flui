@@ -733,12 +733,12 @@ impl AppConfig {
     /// [`HostNotice::MemoryPressure`](flui_platform::HostNotice::MemoryPressure)
     /// hears the notice. The host has one set of receivers, read from the
     /// configuration the run starts with. A receiver is reclaimed on the
-    /// thread that runs the application and is never shared with another,
-    /// so it needs no `Sync`.
+    /// thread that runs the application and never leaves it, so it needs no
+    /// `Send` or `Sync` and may keep `Rc`, `Cell` and `RefCell` state.
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
     pub fn memory_reclaim(
         mut self,
-        receiver: impl flui_foundation::memory::ReclaimMemory + Send + 'static,
+        receiver: impl flui_foundation::memory::ReclaimMemory + 'static,
     ) -> Self {
         self.memory_reclaimers.0.push(std::rc::Rc::new(receiver));
         self

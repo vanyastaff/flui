@@ -245,10 +245,11 @@ where
     let owner_dispatch = installation.dispatcher();
     rollback.dispatcher = Some(owner_dispatch);
 
-    // 3c1. Wire this presentation into the close-request seam: the application's own answer to "may this window close?",
-    // plus the entry that makes the window closable programmatically
-    // afterwards. One shared implementation with
-    // `open_secondary_window`'s window — see that function's own doc.
+    // 3c1. Wire this presentation into the close-request seam: the
+    // application's own answer to "may this window close?", plus the entry
+    // that makes the window closable programmatically afterwards. One shared
+    // implementation with `open_secondary_window`'s window — see that
+    // function's own doc.
     installation.close_requests(config.close_request_handler.clone());
 
     // 3c2. The frame-pacing fallback (ADR-0353): a non-blocking bound on

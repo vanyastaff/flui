@@ -370,15 +370,15 @@ pub(super) struct FallbackGate {
 /// A stack whose present blocks at vsync, or whose compositor paces
 /// redraws (Wayland after `pre_present_notify`), never reaches this: the
 /// pump presents every time and the deadline is never armed.
+///
+/// Owner-thread state (ADR-0323 §1): the window's frame driver and the loop's
+/// wake-deadline query, both on the thread that opened the window, are all
+/// that reach it.
 #[cfg(all(
     not(target_os = "android"),
     not(target_os = "ios"),
     not(target_arch = "wasm32")
 ))]
-///
-/// Owner-thread state (ADR-0323 §1): the window's frame driver and the loop's
-/// wake-deadline query, both on the thread that opened the window, are all
-/// that reach it.
 #[derive(Debug)]
 pub(super) struct FallbackWake {
     state: std::cell::Cell<FallbackState>,
