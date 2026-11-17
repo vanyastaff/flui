@@ -8406,7 +8406,7 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
   ближайшему сроку (`LoopTurn::open_deadline`). Чтение байтов брошенного URI сначала спрашивает
   заявленный размер (`AssetFileDescriptor.getLength`) и отказывает до чтения, если он больше
   предела; поток по-прежнему останавливается на пределе. Типы drag ограничены одним правилом на
-  всех хостах (`drag::offers::MAX_OFFERED_TYPES` = 100, `MAX_TYPE_LEN` = 255, `offered_types`):
+  всех хостах (`host::MAX_OFFERED_TYPES` = 100, `MAX_TYPE_LEN` = 255, `offered_types`):
   X11 и Wayland берут общие константы (Wayland теперь считает события `offer`, повтор тоже), Windows
   читает столько же записей перечислителя (было 256), Web — столько же типов и файлов, Android
   копирует в Java не больше и читает по одной локальной ссылке (`clip::read_type_names`);

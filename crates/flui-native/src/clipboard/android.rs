@@ -58,7 +58,7 @@ pub(crate) trait ClipItem {
 /// What a read answers for `item`, the primary clip's first: its text, refused
 /// [`ClipboardError::TooLarge`](flui_platform::ClipboardError::TooLarge) on
 /// its length before either copy is made when it is past
-/// [`MAX_TEXT`](crate::host::MAX_TEXT) (the limit of every host's read), and
+/// `host::MAX_TEXT` (the limit of every host's read), and
 /// again on its UTF-8 bytes; `Ok(None)` for an item that holds no text.
 ///
 /// Besides the Java string, at most two copies of the text live in this

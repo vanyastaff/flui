@@ -1195,10 +1195,7 @@ const SHADOW: f64 = 48.0;
 ///
 /// The first failed JNI call.
 #[cfg(target_os = "android")]
-pub(crate) fn drag_types(
-    env: &mut Env<'_>,
-    array: &JObjectArray<'_>,
-) -> jni::errors::Result<Vec<String>> {
+fn drag_types(env: &mut Env<'_>, array: &JObjectArray<'_>) -> jni::errors::Result<Vec<String>> {
     if array.is_null() {
         return Ok(Vec::new());
     }
@@ -1253,6 +1250,14 @@ impl std::fmt::Debug for AndroidTransfer {
 
 #[cfg(target_os = "android")]
 impl ViewTransfer for AndroidTransfer {
+    fn mime_types(
+        &self,
+        env: &mut Env<'_>,
+        array: &JObjectArray<'_>,
+    ) -> jni::errors::Result<Vec<String>> {
+        drag_types(env, array)
+    }
+
     /// One `DragEvent` other than the drop, on the Java main thread: what the
     /// view answers. `position` is in logical pixels; `local` is whether this
     /// activity started the drag (for `ACTION_DRAG_ENDED`, whether the view

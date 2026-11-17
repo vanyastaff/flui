@@ -58,6 +58,19 @@ const VIEW_CLASS: &str = "dev.flui.platform.FluiView";
 ///
 /// [`DragTransport`]: flui_platform::data_transfer::DragTransport
 pub(crate) trait ViewTransfer: flui_platform::data_transfer::DragTransport {
+    /// The media types `nativeDrag` received, another application's, read
+    /// within the bounds every host's drag holds a source to; a `null` array
+    /// is empty.
+    ///
+    /// # Errors
+    ///
+    /// The first failed JNI call.
+    fn mime_types(
+        &self,
+        env: &mut Env<'_>,
+        array: &JObjectArray<'_>,
+    ) -> jni::errors::Result<Vec<String>>;
+
     /// One `DragEvent` other than the drop, of `action`, at `position` in
     /// logical pixels, offering `mime_types`; `local` is whether this activity
     /// started the drag and `result` the event's result. Returns what the view
@@ -784,8 +797,7 @@ fn view_accessibility(handle: jlong) -> Option<Arc<dyn ViewAccessibility>> {
 /// The strings of `array`, in order; a `null` array is empty and a `null`
 /// element is skipped. One element's local reference lives at a time. For an
 /// array FLUI's own Java side bounds (an intent's record); another
-/// application's media types are read by
-/// [`drag_types`](crate::drag::android::drag_types).
+/// application's media types are read by [`ViewTransfer::mime_types`].
 pub(crate) fn strings(
     env: &mut Env<'_>,
     array: &JObjectArray<'_>,
@@ -834,7 +846,7 @@ extern "system" fn native_drag<'local>(
             let Some(view) = bridge(handle) else {
                 return Ok(false);
             };
-            let mime_types = crate::drag::android::drag_types(env, &mime_types)?;
+            let mime_types = view.transfer.mime_types(env, &mime_types)?;
             let scale = view.scale();
             Ok(view.transfer.drag(
                 &view,

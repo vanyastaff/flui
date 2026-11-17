@@ -45,7 +45,7 @@ use wayland_client::protocol::wl_seat::WlSeat;
 use wayland_client::protocol::wl_surface::WlSurface;
 use wayland_client::{Connection, Dispatch, Proxy, QueueHandle, event_created_child};
 
-use crate::drag::offers::{MAX_OFFERED_TYPES, MAX_TYPE_LEN};
+use crate::host::{MAX_OFFERED_TYPES, MAX_TYPE_LEN};
 use crate::owner::linux::wayland::WaylandState;
 use crate::owner::slot::OwnerCell;
 

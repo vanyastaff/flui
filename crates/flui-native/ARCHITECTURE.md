@@ -6011,8 +6011,8 @@ reads such content:
   (`LoopTurn::open_deadline`). A provider that ignores the cancellation keeps the worker, and the
   documents behind it are refused at their own deadlines.
 - **A drag's types are bounded the same everywhere.** Every host's drag reads the first
-  `drag::offers::MAX_OFFERED_TYPES` types its source names and none past them, and leaves out a
-  type longer than `drag::offers::MAX_TYPE_LEN` bytes, which counts toward them
+  `host::MAX_OFFERED_TYPES` types its source names and none past them, and leaves out a
+  type longer than `host::MAX_TYPE_LEN` bytes, which counts toward them
   (`drag::offers::offered_types`): X11 reads that many atoms of `XdndTypeList`, Wayland that many
   `wl_data_offer.offer` events (a repeated name counts), Windows that many entries of the format
   enumerator, the Web that many `DataTransfer` types and files, and Android copies that many out of

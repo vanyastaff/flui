@@ -34,8 +34,9 @@
 //! [`Absent`] gets windows that hand out [`Absent`].
 
 mod clipboard;
+mod drag;
 
-#[cfg(any(wayland_host, x11_host, windows))]
+#[cfg(any(wayland_host, x11_host, windows, test))]
 pub(crate) use clipboard::MAX_TEXT;
 #[cfg(any(target_arch = "wasm32", wayland_host, x11_host, test))]
 pub(crate) use clipboard::owned_text;
@@ -53,6 +54,15 @@ pub(crate) use clipboard::{SharedClipboard, SyncClipboard};
     x11_host,
 ))]
 pub(crate) use clipboard::{admit_text, host_text};
+#[cfg(any(
+    windows,
+    target_os = "android",
+    target_arch = "wasm32",
+    x11_host,
+    wayland_host,
+    test
+))]
+pub(crate) use drag::{MAX_OFFERED_TYPES, MAX_TYPE_LEN};
 
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
