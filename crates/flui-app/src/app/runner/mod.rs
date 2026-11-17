@@ -426,7 +426,6 @@ where
         // Before anything starts, so a conflict starts nothing (ADR-0152 §1).
         install_capabilities(capabilities)?;
         tracing::info!(
-            title = %config.title,
             size = ?config.size,
             "Starting FLUI application"
         );

@@ -78,7 +78,10 @@ impl Forwarded {
         uris.extend(launch.files.iter().filter_map(|file| {
             let uri = crate::owner::file_uri::file_uri(&file.path);
             if uri.is_none() {
-                tracing::debug!(path = %file.path.display(), "a relative path is not forwarded");
+                tracing::debug!(
+                    extension = ?file.path.extension(),
+                    "a relative path is not forwarded"
+                );
             }
             uri
         }));

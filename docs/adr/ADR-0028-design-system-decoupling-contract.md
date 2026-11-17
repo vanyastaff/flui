@@ -22,8 +22,10 @@
 
 ## Context
 
-Flutter spent years unwinding `material`/`cupertino` assumptions out of its framework core, and
-froze its in-SDK design-system packages at 3.44 to continue them in `flutter/packages`. FLUI's
+Flutter spent years unwinding `material`/`cupertino` assumptions out of its framework core: it
+froze its in-SDK design libraries at 3.44, published them as the standalone `material_ui` and
+`cupertino_ui` packages from `flutter/packages` at 3.47, and deprecated the in-SDK libraries at
+3.50 ([breaking-change note](https://github.com/flutter/website/blob/f8b51edf2d20a1b9601f1f47747a9dc9b7acc3cc/sites/docs/src/content/release/breaking-changes/material-ui-and-cupertino-ui.md)). FLUI's
 tier table ([ADR-0081](ADR-0081-workspace-tiers-and-reach-facts.md)) already puts the design
 systems (tier pkg) above the widget catalog (tier K). Without an
 enforced rule the failure mode is gradual: a widget author reaches for a Material constant
@@ -48,7 +50,10 @@ colors — stays in the design crate that owns it.
 
 **Design-agnostic mechanism goes down, not sideways.** `WidgetState`/`WidgetStateProperty`/
 `WidgetStatesController`, `InheritedTheme`, and `Localizations`/`LocalizationsDelegate`/
-`Directionality` live in `flui-widgets`, matching Flutter 3.44's own downward moves.
+`Directionality` live in `flui-widgets`, as Flutter 3.50 keeps them in its widgets library
+(`widget_state.dart`, `inherited_theme.dart`, `localizations.dart`, `basic.dart` under
+[`packages/flutter/lib/src/widgets`](https://github.com/flutter/flutter/tree/ab2912035e/packages/flutter/lib/src/widgets))
+while its design libraries leave the SDK.
 
 **Platform-adaptive behavior is a capability seam, not a branch.** Where behavior varies by
 platform convention (scroll physics, selection handles, default cursor, word-jump and command

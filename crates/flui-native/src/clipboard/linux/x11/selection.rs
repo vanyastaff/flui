@@ -1509,7 +1509,7 @@ pub(super) fn run(mut selections: Selections, commands: Receiver<Command>, bell:
     match outcome {
         Ok(Ok(())) => {}
         Ok(Err(error)) => {
-            report(|| tracing::error!("the X11 clipboard's connection failed: {error}"));
+            report(|| tracing::error!(%error, "the X11 clipboard's connection failed"));
         }
         Err(payload) => contained(payload),
     }
@@ -1523,8 +1523,8 @@ pub(super) fn run(mut selections: Selections, commands: Receiver<Command>, bell:
 fn contained(payload: Box<dyn std::any::Any + Send>) {
     report(|| {
         tracing::error!(
-            "the X11 clipboard's thread panicked: {}",
-            crate::owner::panic_boundary::panic_payload_message(payload.as_ref())
+            panic = %crate::owner::panic_boundary::panic_payload_message(payload.as_ref()),
+            "the X11 clipboard's thread panicked"
         );
     });
     flui_foundation::panic::discard_payload(payload);
