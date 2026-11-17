@@ -2,7 +2,6 @@
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
-use std::sync::Arc;
 
 use flui_foundation::{PresentationAddress, panic::FirstPanic};
 use flui_runtime::owner::{
@@ -41,7 +40,7 @@ impl From<InstallError> for crate::app::AppWindowError {
             source @ (InstallError::Logical(_)
             | InstallError::Native(_)
             | InstallError::InitializationFailed) => Self::Mount {
-                source: Arc::new(source),
+                source: std::sync::Arc::new(source),
             },
         }
     }
