@@ -1079,7 +1079,8 @@ impl HeadlessHostWindow {
         // After the exit-policy consult, never before: a hook that inspects
         // the window it was just told about must not find its handler
         // already gone. Its fate is settled once the handler, which owns the
-        // renderer, let go: a keep its release made is the one reported.
+        // renderer, let go: a keep recorded before then, while the window was
+        // open or by that release, is the one reported.
         self.delivery.clear();
     }
 

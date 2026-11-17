@@ -249,7 +249,8 @@ impl SharedRasterHost {
     }
 
     /// Ask every attached window's host to keep its native window past its
-    /// close: the raster thread is dead or wedged, and a wedged thread may
+    /// close: the raster thread is wedged (it did not answer a detach or an
+    /// attach), and a wedged thread may
     /// still present over any surface it holds. Asked while the windows are
     /// open, so a close that comes later, by any path, already finds it
     /// (ADR-0305 §9). A host's panic is held in `caught`, and every other
@@ -2813,15 +2814,6 @@ impl RasterSlot {
             .unwrap_or(false);
         if died {
             self.renderer_dead = true;
-            // Before the window tells its runtime: a death the executor met
-            // on its own (a turn's panic, a wedged attach) keeps every
-            // window's native window past its close too.
-            #[cfg(not(target_arch = "wasm32"))]
-            {
-                let mut caught = FirstPanic::new();
-                self.host.keep_every_window(&mut caught);
-                self.host.hold_deferred(caught);
-            }
             ui_runtime.note_primary_device_recovery(Some(
                 flui_runtime::frame_failure::DeviceRecovery::Dead,
             ));

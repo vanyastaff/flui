@@ -91,9 +91,12 @@ impl WindowContext {
     /// context. Asked from inside one of the handler's own methods, the
     /// release, and the destruction with it, waits until that method returns.
     ///
-    /// Every step runs whichever user code before it panics (the hide's
-    /// handlers, a hook, `closed`), so a retirement once begun always
-    /// finishes; the first panic resumes at the end.
+    /// Every step runs whichever user code before it panics (a hook,
+    /// `closed`, a tracing subscriber), so a retirement once begun always
+    /// finishes; the first panic resumes at the end. The messages the hide
+    /// sends are handled in a nested window procedure, whose OS boundary
+    /// aborts the process on a panic (`AfterPanic::Abort`): no panic of
+    /// theirs reaches this function.
     ///
     /// # Safety
     ///
@@ -111,7 +114,7 @@ impl WindowContext {
             // to answer `closed` included.
             // SAFETY: `hwnd` is a live window of this thread (this function's
             // contract); no pointer is passed.
-            failure.contain(|| unsafe { ShowWindow(hwnd, SW_HIDE) });
+            let _was_visible = unsafe { ShowWindow(hwnd, SW_HIDE) };
         }
         // A modal loop the window ran ends with it, though its end message
         // never comes: its timer stops and the thread's code no longer asks
@@ -145,7 +148,10 @@ impl WindowContext {
             // never dereferenced.
             let marked = unsafe { SetPropW(hwnd, RETIRED, Some(flag)) };
             if let Err(error) = marked {
-                tracing::warn!(?hwnd, %error, "a retired window could not be marked retired");
+                // A subscriber is user code.
+                failure.contain(|| {
+                    tracing::warn!(?hwnd, %error, "a retired window could not be marked retired");
+                });
             }
         }
 

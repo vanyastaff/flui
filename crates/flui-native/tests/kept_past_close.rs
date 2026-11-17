@@ -1,9 +1,10 @@
-//! A window whose surface target is asked, while its close lets go of the
-//! handler, to keep the native window past the close
-//! (`SurfaceTarget::keep_past_close`, ADR-0305 §9), as `flui-app`'s raster
-//! host asks when a raster thread did not take the window's slot down: the
-//! window is closed to the application all the same, and the headless window
-//! reports the keep.
+//! A window whose surface target is asked to keep the native window past the
+//! close (`SurfaceTarget::keep_past_close`, ADR-0305 §9), as `flui-app`'s
+//! raster host asks of every window once a raster thread is dead or wedged:
+//! a keep recorded any time before the close settles the window's fate,
+//! usually while the window is still open, changes nothing until the close;
+//! the window is closed to the application all the same, and the headless
+//! window reports the keep.
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -28,8 +29,9 @@ impl Drop for KeepOnDrop {
 }
 
 /// A window of `platform`, the headless window behind it, and how many inputs
-/// reached its handler. The handler is the window's alone: `keep` is dropped
-/// with it, so the keep is asked while the close lets go of it.
+/// reached its handler. The handler is the window's alone: with `keep`, a
+/// [`KeepOnDrop`] is dropped with it, so the keep is asked while the close
+/// lets go of it.
 fn open(
     platform: &HeadlessPlatform,
     keep: bool,
@@ -54,11 +56,43 @@ fn open(
     (window, headless, inputs)
 }
 
-/// A keep asked while the close lets go of the handler is reported, and the
-/// window is closed to the application: out of the platform's windows, its
-/// handler released, and input simulated for it reaching nothing. Red-check:
-/// with `HeadlessSurface::keep_past_close` storing nothing, the window does
-/// not report the keep.
+/// A keep recorded while the window is open changes nothing until its close:
+/// the window stays in the platform's windows and its input reaches its
+/// handler. The close then reports the keep. Red-check: with
+/// `HeadlessSurface::keep_past_close` storing nothing, the close does not
+/// report the keep.
+fn a_keep_while_open_changes_nothing_until_the_close() {
+    let platform = HeadlessPlatform::new();
+    let open_windows = platform.open_windows();
+    let (window, headless, inputs) = open(&platform, false);
+    let id = window.id();
+
+    window.surface_target().keep_past_close();
+    headless.inject_event(PlatformInput::Ime(ImeEvent::Enabled));
+    assert!(
+        inputs.get() > 0,
+        "a kept open window's input reaches its handler"
+    );
+    assert!(
+        open_windows.get(id).is_some(),
+        "a kept open window stays open"
+    );
+
+    window
+        .admit_and_apply(WindowCommand::Close)
+        .expect("the window closes");
+    assert!(
+        headless.kept_past_close(),
+        "the keep recorded while open is reported at the close"
+    );
+    assert!(open_windows.get(id).is_none(), "the kept window closed");
+}
+
+/// A keep asked as late as it can come, while the close lets go of the
+/// handler, is reported, and the window is closed to the application: out of
+/// the platform's windows, its handler released, and input simulated for it
+/// reaching nothing. Red-check: with `HeadlessSurface::keep_past_close`
+/// storing nothing, the window does not report the keep.
 fn a_window_kept_past_its_close_is_closed_to_the_application() {
     let platform = HeadlessPlatform::new();
     let open_windows = platform.open_windows();
@@ -93,9 +127,8 @@ fn a_window_kept_past_its_close_is_closed_to_the_application() {
 
 /// A window closed with no keep reports none, and a keep asked after its
 /// close let go of the handler, when the native window is gone, does
-/// nothing. Red-check: with `complete_close` letting go of the handler by
-/// `clear()` and never settling the window's fate, the late keep is
-/// reported.
+/// nothing. Red-check: with `WindowDelivery::clear` letting go of the handler
+/// without settling the window's fate, the late keep is reported.
 fn a_keep_after_the_close_does_nothing() {
     let platform = HeadlessPlatform::new();
     let (window, headless, _inputs) = open(&platform, false);
@@ -119,6 +152,10 @@ fn kept_past_close_contracts() {
     super::run_table(
         "kept_past_close",
         &[
+            (
+                "a_keep_while_open_changes_nothing_until_the_close",
+                a_keep_while_open_changes_nothing_until_the_close,
+            ),
             (
                 "a_window_kept_past_its_close_is_closed_to_the_application",
                 a_window_kept_past_its_close_is_closed_to_the_application,

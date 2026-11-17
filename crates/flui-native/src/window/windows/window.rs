@@ -1780,7 +1780,8 @@ impl WindowsWindow {
 
     /// Close this window on its owner thread, where its teardown routed
     /// `DestroyDirect`: retired, its handler let go of, then destroyed, or
-    /// kept hidden when the handler's release asked for that
+    /// kept hidden when a keep was recorded before the handler let go,
+    /// usually while the window was open
     /// (`WindowContext::close_granted`).
     fn close_on_owner(&self) {
         let hwnd = self.hwnd;

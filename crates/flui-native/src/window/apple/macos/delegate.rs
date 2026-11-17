@@ -697,11 +697,10 @@ impl MacOSWindow {
         // `wgpu::Surface` is built from the window's surface target, and that
         // surface goes while the window's view is still there (ADR-0063).
         // The clear also retires the delivery, so the surface target answers
-        // `Unavailable` from here on.
-        self.delivery.clear();
-        // A keep recorded for the window, while it was open or as it closes,
-        // keeps its view past the close.
-        self.keep_native_if_kept();
+        // `Unavailable` from here on. A keep recorded for the window before
+        // the handler let go, usually while it was open, keeps its view past
+        // the close.
+        self.clear_then_keep_if_kept();
 
         // Match winit's own `windowWillClose:` handling: NIL the delegate
         // so no further delegate method can fire against a window this

@@ -84,8 +84,9 @@ pub trait SurfaceTarget: HasWindowHandle + HasDisplayHandle + Send + Sync + 'sta
     /// made from this target, so the native window it names must outlive the
     /// close (ADR-0305 §9).
     ///
-    /// Called on the owner thread once the raster thread is known dead or
-    /// wedged, for every window it served: usually while the window is open,
+    /// Called on the owner thread once the raster thread is known wedged (it
+    /// did not answer a detach or an attach), for every window it served:
+    /// usually while the window is open,
     /// or during its close for a window whose detach found the thread wedged.
     /// A later call does nothing. A keep on an open window only records it:
     /// the window keeps showing and taking input. Its close (by the

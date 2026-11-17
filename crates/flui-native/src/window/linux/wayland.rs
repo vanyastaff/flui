@@ -1383,7 +1383,12 @@ mod toplevel {
                 client_frame.destroy();
             }
             let roles = self.roles.borrow_mut().take();
+            let retirement = self.delivery.retirement();
             self.delivery.clear_then(move || {
+                // The `wl_surface` stays with its last holder either way
+                // (`WaylandSurface`'s `keep_past_close`); the fate is settled
+                // so that a later keep does nothing.
+                let _fate = retirement.settle();
                 if let Some(roles) = roles {
                     roles.destroy();
                 }

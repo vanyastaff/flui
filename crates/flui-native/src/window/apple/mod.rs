@@ -385,13 +385,51 @@ impl MainRetainedView {
 
     /// The kept view to message, on the main thread: `None` when no view was
     /// kept.
-    #[cfg(target_os = "macos")]
     pub(crate) fn object(
         &self,
         _main: objc2::MainThreadMarker,
     ) -> Option<&objc2::runtime::AnyObject> {
         self.0.as_ref().map(|kept| &*kept.0)
     }
+}
+
+/// Let go of a closing window's handler, then settle its native window's fate
+/// ([`Retirement::settle`](crate::owner::window_delivery::Retirement::settle)):
+/// once the handler, and the renderer it owns, let go, so a keep recorded
+/// before then (usually while the window was open, ADR-0305 §9) is the one
+/// that stands.
+///
+/// `view` is the window's content view, retained here so that it outlives
+/// the window's teardown however long the release waits behind a running
+/// method. When the fate is `Keep`, `hide` takes the view off screen and the
+/// +1 is never released: a raster thread that did not answer may still
+/// present to its Metal layer. Otherwise the view is released on the main
+/// thread.
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+pub(crate) fn clear_then_keep_if_kept(
+    delivery: &crate::owner::window_delivery::WindowDelivery,
+    view: MainRetainedView,
+    hide: fn(&objc2::runtime::AnyObject),
+) {
+    use crate::owner::window_delivery::NativeFate;
+
+    let retirement = delivery.retirement();
+    delivery.clear_then(move || {
+        if retirement.settle() != NativeFate::Keep {
+            return;
+        }
+        // The release completes on the owner thread, the main thread.
+        if let Some(main) = objc2::MainThreadMarker::new()
+            && let Some(object) = view.object(main)
+        {
+            hide(object);
+        }
+        #[expect(
+            clippy::mem_forget,
+            reason = "ADR-0305 §9: a raster thread that did not answer may still present to this view"
+        )]
+        std::mem::forget(view);
+    });
 }
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]

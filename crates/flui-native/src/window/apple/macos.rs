@@ -103,7 +103,7 @@ use crate::owner::apple::metal_layer::{LayerRefresh, NewRefresh};
 use crate::{
     owner::OpenWindowError,
     owner::slot::{OwnerCell, OwnerWeak},
-    owner::window_delivery::{NativeFate, Retirement, WindowDelivery},
+    owner::window_delivery::{Retirement, WindowDelivery},
     window::state::{
         ReportedFacts, Sample, SampledGeometry, WindowStateCell, mode_of, reported_frame,
     },
@@ -1146,8 +1146,9 @@ impl SurfaceTarget for MacOSSurface {
     /// showing and taking input. Its close, whichever way it comes
     /// (`windowWillClose:`, or the window's drop without one), then orders it
     /// out and keeps its view, and so the view's Metal layer, for the life of
-    /// the process (`MacOSWindow::keep_native`). A keep after the close
-    /// settled the window does nothing.
+    /// the process (`MacOSWindow::clear_then_keep_if_kept`), when the keep
+    /// came before the close let go of the handler. A keep after that does
+    /// nothing.
     fn keep_past_close(&self) {
         let _first = self.retirement.keep_past_close();
     }
@@ -1781,10 +1782,10 @@ impl Drop for MacOSWindow {
 
         // The window's surface targets and the features beside it outlive
         // it; from here on they hand out nothing of a view the release below
-        // may free. A window that closed set this already, and settled its
-        // fate there.
+        // may free. A window that closed set this already, and let go of its
+        // handler there.
         if !self.closed.swap(true, Ordering::SeqCst) {
-            self.keep_native_if_kept();
+            self.clear_then_keep_if_kept();
         }
 
         // The close delegate pins its native receiver in the outer autorelease
@@ -1818,27 +1819,25 @@ impl Drop for MacOSWindow {
 }
 
 impl MacOSWindow {
-    /// Settle the window's fate where it closes (`windowWillClose:`, or its
-    /// drop without one), once: when a keep was recorded for it
-    /// (`SurfaceTarget::keep_past_close`, ADR-0305 §9), order it out and take
-    /// a +1 on its view that nothing releases, so the view and its Metal
-    /// layer, which a raster thread that did not answer may still present
-    /// to, outlive the window's own release.
-    fn keep_native_if_kept(&self) {
-        if self.delivery.retirement().settle() != NativeFate::Keep {
-            return;
-        }
-        let kept = Retained::clone(&*self.view);
-        #[expect(
-            clippy::mem_forget,
-            reason = "ADR-0305 §9: a raster thread that did not answer may still present to this view"
-        )]
-        std::mem::forget(kept);
-        // SAFETY: `ns_window` is alive for the lifetime of `self`, messaged on
-        // the owner thread it was made on.
-        unsafe {
-            let _: () = msg_send![self.ns_window, orderOut: NIL];
-        }
+    /// Let go of the handler where the window closes (`windowWillClose:`, or
+    /// its drop without one), then settle its fate
+    /// ([`super::clear_then_keep_if_kept`]): when a keep was recorded for it
+    /// (`SurfaceTarget::keep_past_close`, ADR-0305 §9), the window is ordered
+    /// out and its view, and so the view's Metal layer, outlives the window's
+    /// own release.
+    fn clear_then_keep_if_kept(&self) {
+        // SAFETY: `self.view` is the window's content view, which the window
+        // holds while it lives.
+        let view = unsafe { super::MainRetainedView::retain(self.view_ptr()) };
+        super::clear_then_keep_if_kept(&self.delivery, view, |view| {
+            // SAFETY: `view` is a live `NSView`, messaged on the main thread;
+            // `window` answers nil once the view's window is gone, and a
+            // message to nil does nothing.
+            unsafe {
+                let window: ObjcId = msg_send![view, window];
+                let _: () = msg_send![window, orderOut: NIL];
+            }
+        });
     }
 
     /// The window's published state for a caller that reads it

@@ -1320,7 +1320,8 @@ fn a_window_the_raster_thread_refuses_is_refused_at_attach() {
 ///
 /// Red-check: decide from the slot's record after the deadline and the
 /// window is refused (`did not attach the slot`) while its surface is in
-/// the thread's hands.
+/// the thread's hands; leave an unanswered attach out of `try_with`'s
+/// `wedged` and the window is not kept past its close.
 #[test]
 fn a_window_whose_attach_the_raster_thread_does_not_answer_is_kept() {
     let (shared, slots, wakes) = threaded_host();
@@ -1333,11 +1334,12 @@ fn a_window_whose_attach_the_raster_thread_does_not_answer_is_kept() {
         ui_runtime_id: UiRuntimeId::new(1),
         presentation_id: PresentationId::new(2),
     };
+    let late = Arc::new(FakeWindow::new(2));
     let woken = wakes.load(std::sync::atomic::Ordering::SeqCst);
     let attached = shared
         .try_with(|host| {
             host.attach_target(
-                Arc::new(FakeWindow::new(2)),
+                Arc::clone(&late) as Arc<dyn flui_platform::SurfaceTarget>,
                 None,
                 other,
                 &crate::app::AppConfig::default(),
@@ -1350,6 +1352,11 @@ fn a_window_whose_attach_the_raster_thread_does_not_answer_is_kept() {
     assert!(
         wakes.load(std::sync::atomic::Ordering::SeqCst) > woken,
         "the death the attach found asks the open window for a frame"
+    );
+    assert_eq!(
+        late.kept_past_close(),
+        1,
+        "the window the thread did not attach is kept past its close"
     );
     let mut other_scene = TestScene::new(AT);
     let publication = other_scene.publication();
@@ -1737,7 +1744,8 @@ fn a_surface_whose_resize_panics_gets_one_retry() {
 /// Red-check: leave the dead executor's held frames in `drain_settled` and the
 /// held pointer down never replays; drop `settle_death` and the
 /// runtime reports no recovery; drop the keep from `DetachWait::wait`, or the
-/// target from the link, and the closed window is not kept.
+/// target from the link, and the closed window is not kept; drop the busy
+/// detach's `keep_every_window` and a window still open is not kept.
 #[test]
 fn a_wedged_raster_thread_quarantines_its_open_window() {
     // The thread wedges in this window's render, or in another window's
@@ -1860,6 +1868,12 @@ fn quarantine_one_window(wedged_here: bool, busy: bool) {
                 assert!(
                     closed.kept_past_close() > 0,
                     "a busy detach keeps the closed window past its close"
+                );
+                // Before the host is free again, so the host's own deferred
+                // detach has not run.
+                assert!(
+                    wedged_here || third.kept_past_close() > 0,
+                    "a busy detach keeps a window still open too"
                 );
             })
             .expect("the host is idle");

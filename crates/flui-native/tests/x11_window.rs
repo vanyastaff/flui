@@ -976,22 +976,12 @@ mod cases {
         );
     }
 
-    /// Asks its target to keep the native window when dropped, as the
-    /// renderer a window's handler owns does when its raster thread did not
-    /// answer its detach.
-    struct KeepOnDrop(Arc<dyn flui_platform::SurfaceTarget>);
-
-    impl Drop for KeepOnDrop {
-        fn drop(&mut self) {
-            self.0.keep_past_close();
-        }
-    }
-
-    /// A window whose handler's release asks to keep it past the close stays
-    /// on the server, unmapped, while the application sees it closed: its
-    /// handler let go of, its target handing out nothing. Red-check: with
-    /// `X11Window::retire` destroying the window whatever the release asked,
-    /// the server no longer has the kept window.
+    /// A window whose target was asked to keep it past the close while it was
+    /// open, as `flui-app`'s raster host asks once a raster thread is dead or
+    /// wedged, stays on the server, unmapped, once it closes, while the
+    /// application sees it closed: its handler let go of, its target handing
+    /// out nothing. Red-check: with `X11Window::retire` destroying the window
+    /// whatever was recorded, the server no longer has the kept window.
     fn a_window_kept_past_its_close_is_unmapped_not_destroyed() {
         let platform = X11Platform::try_new().expect("the X11 platform");
         let server = RustConnection::connect(None)
@@ -1003,13 +993,10 @@ mod cases {
             .expect("an X11 window opens");
         let xid = xid_of(window.as_ref());
         let target = window.surface_target();
-        let keep = KeepOnDrop(window.surface_target());
-        handler.react_to_close(move || {
-            let _released_with_the_handler = &keep;
-        });
         let released = Rc::downgrade(&handler);
         drop(handler);
         run_for(&platform, Duration::from_millis(200)).expect("the loop turns");
+        target.keep_past_close();
 
         window
             .admit_and_apply(WindowCommand::Close)

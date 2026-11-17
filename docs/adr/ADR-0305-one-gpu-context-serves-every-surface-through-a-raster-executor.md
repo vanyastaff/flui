@@ -482,7 +482,7 @@ executor and slot.
   (`take_executor_failure`) and logged, with no panic
   on its thread. A window closed while the thread does not answer its detach keeps its native
   window and its surface target until the process exits, since the wedged thread may still
-  present over them. Once the thread is known dead or wedged, the owner calls
+  present over them. Once the thread is known wedged (a detach or an attach it did not answer), the owner calls
   `SurfaceTarget::keep_past_close` on every window it served, open ones included, and a close by
   the user, a command or the exit then hides the native window instead of destroying it, so the
   window is closed to the application
