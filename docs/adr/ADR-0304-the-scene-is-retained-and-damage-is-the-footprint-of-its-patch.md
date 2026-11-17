@@ -624,8 +624,9 @@ consecutive versions. The patch damage must cover the diff damage.
   boundary) and `a_hot_reload_renews_every_scene_lineage`.
 - `cargo xtask perf` gains the scenario `caret_blink_in_10k_list` (to be added to
   `crates/flui-widgets/tests/perf.rs`, counts in `crates/flui-widgets/perf/baseline/`), whose
-  `nodes_painted`, `scene_ops` and `chunks_recorded` per blink are equal at 1,000 and 10,000
-  items.
+  `nodes_painted` and `scene_ops` per blink are equal at 1,000 and 10,000 items, and a
+  `flui-engine` test over the same scene records as many chunks (`chunks_recorded`) per blink at
+  both sizes; the engine counts its walk and recording per frame, which no perf scenario reads.
 
 ## Pros and cons of the options
 

@@ -28,17 +28,23 @@ pub(crate) struct RecordedContent {
     pub(crate) counters: RasterCounters,
 }
 
-/// The raster side's work for one frame, which the engine's gate tests read
-/// (ADR-0304 §9) and the frame's trace event carries. Fixed fields, so
-/// counting allocates nothing; each adds saturating.
+/// The raster side's work for one frame of the frame protocol, which the
+/// engine's gate tests read (ADR-0304 §9) and the frame's trace event
+/// carries; an offscreen slot's frame (`GpuContext`) keeps no count. Fixed
+/// fields, so counting allocates nothing; each adds saturating. A partial
+/// frame of several passes sums them: a node or chunk two rects reach counts
+/// once per pass.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) struct RasterCounters {
     /// The scene nodes the walk entered: a version's boundaries it did not
-    /// cull, a tree's layers.
+    /// cull (its effect entries are not nodes), or every layer of a tree it
+    /// reached, a layer that then draws nothing included.
     pub(crate) nodes_entered: u64,
-    /// The slots and chunks the walk asked its cull about.
+    /// The slots and chunks the walk asked its cull about; `0` for a tree,
+    /// which is walked whole.
     pub(crate) cull_tests: u64,
-    /// The chunks whose commands the frame recorded into the painter's IR.
+    /// The chunks of a version whose commands the frame recorded into the
+    /// painter's IR; `0` for a tree, whose pictures are layers, not chunks.
     pub(crate) chunks_recorded: u64,
     /// The passes a partial frame redrew its region in, one per rect of its
     /// [`RegionPlan`]; `0` for a full frame.
@@ -250,7 +256,9 @@ impl FrameProtocol {
 
     /// The plan for the next frame, applying a pending promotion to full.
     pub(crate) fn plan(&mut self, intermediate_required: bool) -> FramePlan {
-        // Every frame plans first, so a skipped or failed frame counts nothing.
+        // Every frame plans first, so a skipped or failed frame counts nothing;
+        // a plan asked for anything else (a slot asking whether it owes a
+        // frame) clears the count too.
         self.counters = RasterCounters::default();
         if std::mem::take(&mut self.force_full_next_frame) {
             self.damage.mark_full_repaint();
