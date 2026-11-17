@@ -373,7 +373,8 @@ pub mod platform {
             ResultTicketHold, ResultToken, RuntimeLocals, WindowCloseWatch, WindowLifetime,
             WindowRef,
         };
-        /// Scripted capability scenarios for tests.
+        /// Scripted capability scenarios for tests; with the `testing` feature.
+        #[cfg(feature = "testing")]
         pub mod scripted {
             pub use flui_platform::capability::scripted::{
                 AlreadyDriven, Answer, EventSubscription, Events, Expect, FailureReport,
