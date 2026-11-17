@@ -7629,6 +7629,7 @@ dependencies = [
  "toml",
  "walkdir",
  "wasmparser",
+ "windows 0.62.2",
 ]
 
 [[package]]
