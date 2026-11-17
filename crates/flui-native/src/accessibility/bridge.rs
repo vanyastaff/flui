@@ -247,6 +247,13 @@ impl BridgeShared {
     /// fragment published there is dropped; the composition root publishes a
     /// whole tree when told of an activation.
     #[must_use = "the update the adapter is to apply"]
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            clippy::unnecessary_wraps,
+            reason = "the web host has no activation to retain an update for; the other hosts do"
+        )
+    )]
     pub(crate) fn publish(&self, update: TreeUpdate) -> Option<TreeUpdate> {
         if update.tree.is_some() {
             *self.latest.lock() = Some(update.clone());
