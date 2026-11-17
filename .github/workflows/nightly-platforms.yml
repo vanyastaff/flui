@@ -7,7 +7,9 @@ name: Nightly platforms
 # this file or the live scenario, never on any other.
 #
 #   desktop — on windows-latest and macos-latest: flui-native's suite
-#             (`cargo xtask platform-test`: Win32, AppKit), the GPU readback
+#             (`cargo xtask platform-test`: Win32 on the run's own desktop,
+#             then the Win32 cases that need the input desktop on the
+#             runner's; AppKit), the GPU readback
 #             suites (`cargo xtask gpu-test`) on Direct3D 12, which a runner
 #             without a GPU answers with WARP (ADR-0244 §1), and on Metal, and
 #             the counter and acceptance scenarios on the desktop.
@@ -102,6 +104,18 @@ jobs:
 
       - name: cargo xtask platform-test
         run: cargo xtask platform-test
+
+      # On Windows the suite above ran on the run's own desktop (ADR-0355).
+      # The cases that need the desktop taking input (the foreground, the
+      # cursor, injected input) said they could not verify there; the runner
+      # has no user, so they run again on its own desktop.
+      - name: Win32 cases that need the input desktop
+        if: ${{ !cancelled() && matrix.os == 'windows-latest' }}
+        env:
+          FLUI_TEST_VISIBLE_DESKTOP: "1"
+        run: >-
+          cargo nextest run -p flui-native --locked --all-features --no-fail-fast
+          -E 'test(=contract::test_window_lifecycle_contract) | test(/^windows_foreground::/)'
 
       # `FLUI_REQUIRE_GPU` (set by the task) turns a missing adapter into a
       # failure. A Windows runner has no GPU, so Direct3D 12 answers with

@@ -308,10 +308,11 @@ and annotations, and refusals come back as tool errors with a code.
 `tests/native_windows.rs` adds a native Win32 fixture with writable and read-only edits,
 a checkbox, and wheel/drag observations. Its ignored `native_controls_through_mcp` test
 asserts actual text, focus, toggle, wheel direction and drag displacement through MCP; it
-requires an interactive desktop with no concurrent pointer or keyboard use:
+requires the desktop that takes input, with no concurrent pointer or keyboard use (nextest
+starts a test elsewhere unless `FLUI_TEST_VISIBLE_DESKTOP=1`, see `docs/testing.md`):
 
 ```bash
-cargo nextest run -p flui-desktop-mcp --test native_windows --run-ignored only native_controls_through_mcp --no-capture
+FLUI_TEST_VISIBLE_DESKTOP=1 cargo nextest run -p flui-desktop-mcp --test native_windows --run-ignored only native_controls_through_mcp --no-capture
 ```
 
 ## Relation to the other live checks

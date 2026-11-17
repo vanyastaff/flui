@@ -155,7 +155,8 @@ The first three are `cargo xtask gate`, the non-test half. Locally, `checks`
 skips typos, taplo or lychee with a message when they are not installed; CI
 passes `--strict`, which makes a missing one a failure. The flui-native step
 of `test` needs `xvfb-run` on Linux (`apt install xvfb`), runs without it on
-Windows, and is skipped with a message on macOS. Its `x11_window` harness, the
+Windows, on the run's own desktop ([The Windows test desktop](#the-windows-test-desktop)),
+and is skipped with a message on macOS. Its `x11_window` harness, the
 native X11 host's window conformance, starts an Xvfb and an openbox of its own
 and needs `openbox` too (`apt install openbox`). On Linux the native Wayland
 host's tests (`wayland_window::`) run in a step of their own against the
@@ -167,9 +168,9 @@ Xvfb and a Weston on its X11 backend of its own and drives them through XTest;
 it skips itself without `Xvfb` or `weston`, and fails then under
 `FLUI_REQUIRE_WAYLAND`. Which compositor runs which Wayland case is in
 [its own section](#which-compositor-runs-which-wayland-case). On Windows the Win32 window
-tests and the contract's share the desktop's foreground, and on macOS the
-AppKit window cases share it and its Spaces: each set runs one at a time
-(test group `desktop-foreground`).
+tests and the contract's share the run's desktop and which window is active on it, and on
+macOS the AppKit window cases share the desktop's foreground and its Spaces: each set runs one
+at a time (test group `desktop-foreground`).
 
 `flui_foundation::inspect::Untyped::new`, the untyped escape hatch that describes a field by its
 `Debug` text, is deprecated: each site outside a derive carries
@@ -234,6 +235,50 @@ its socket for the task. An output scaled past the largest scale a buffer is
 drawn at (`output * scale 20`) runs
 `a_window_draws_at_the_compositors_fractional_scale` on a hostile scale: the
 window draws at the largest.
+
+### The Windows test desktop
+
+On Windows, nextest starts every test on a desktop of its own (ADR-0355): `.config/nextest.toml`
+runs each test process through `test-desktop` (`tools/xtask/src/bin/test-desktop.rs`), which a
+setup script builds first. The desktop is `flui-test-<run id>` in the user's window station, one
+per nextest run, shared by that run's tests and gone when the last of them exits, crashed or not.
+A window there is never shown and no mouse or keyboard reaches it, while activation, focus,
+messages, hooks, DPI, the monitors, DWM, DXGI presentation, OLE drag and drop and the text
+services work as on the user's desktop. This holds for `cargo heli nextest run`,
+`cargo nextest run` and every `cargo xtask` task that runs nextest (`test`, `platform-test`,
+`gpu-test`); plain `cargo test` starts its tests on the caller's desktop.
+
+`FLUI_TEST_VISIBLE_DESKTOP=1` starts the tests on the caller's desktop instead, to watch them.
+
+The foreground, the cursor and injected input (`SendInput`, a synthetic pointer device) belong to
+the desktop that takes the user's input. A case that needs them checks
+(`on_the_input_desktop` in `crates/flui-native/tests/main.rs`), and on the test desktop prints
+`CANNOT_VERIFY` and returns:
+
+| Case | Needs |
+|------|-------|
+| `windows_foreground::an_activation_takes_the_foreground_only_when_it_is_handed_over` | the foreground lock between two processes, the shell's flash notice, `SendInput` |
+| the contract rows in `NEED_THE_INPUT_DESKTOP` (`crates/flui-native/tests/contract.rs`) | a window brought to the foreground, then injected touch, pen, mouse or wheel input and the cursor |
+
+They run with `FLUI_TEST_VISIBLE_DESKTOP=1`, and every night on the Windows runner, which has no
+user (`nightly-platforms.yml`). A test that reads the cursor only to have a position is handed one
+instead, as the touchpad tests are (`TestCursor`).
+
+The clipboard belongs to the window station, which the test desktop shares with the user: the
+clipboard tests (test group `system-clipboard`) write the user's clipboard, and a copy made while
+one runs can fail it. A window station of the run's own is not possible without administrator
+rights (ADR-0355 §3).
+
+Probes, which drive the real desktop on purpose, stay on the user's desktop and are run by hand:
+
+| Probe | What it does |
+|-------|--------------|
+| `text::windows::tsf::probe::text_services_probe` (flui-native, `#[ignore]`) | types into a real window through `SendInput` and a Japanese input method |
+| `tools/desktop-mcp`, the server | moves the pointer and types (enigo, `SendInput`), captures the screen (xcap) and reads UI Automation, on any application |
+| `tools/desktop-mcp/tests/native_windows.rs` and the `#[ignore]` tests of its `desktop` and `input::device` modules | drive the real pointer and keyboard against fixture windows |
+
+What a form of them that runs unattended would be is in
+[gaps](gaps.md#desktop-probes-drive-the-desktop-the-user-works-on).
 
 ### What `cargo xtask test` runs
 

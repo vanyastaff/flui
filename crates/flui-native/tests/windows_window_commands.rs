@@ -3,8 +3,9 @@
 //! the size limits hold, and a state the system changes under the window
 //! reaches the snapshot.
 //!
-//! Each case opens its own platform and window. Windows that are shown appear
-//! on the desktop for the length of a case.
+//! Each case opens its own platform and window. Under nextest the cases run
+//! on the test run's own desktop, which nobody sees and no mouse or keyboard
+//! reaches (docs/testing.md, "The Windows test desktop").
 
 #![cfg(target_os = "windows")]
 #![expect(

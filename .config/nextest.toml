@@ -14,6 +14,9 @@
 # Recommend the fixed runner without rejecting runners that support our config.
 nextest-version = { required = "0.9.133", recommended = "0.9.145" }
 
+# The Windows test desktop (below) is a setup script and a wrapper script.
+experimental = ["setup-scripts", "wrapper-scripts"]
+
 [profile.default]
 # Report a test as SLOW after 60 s and kill it after ten periods (10 min): a
 # bound for a genuinely hung test, well under the CI job's `timeout-minutes`,
@@ -23,6 +26,25 @@ slow-timeout = { period = "60s", terminate-after = 10 }
 # A test that has exited but left a child process holding stdout/stderr open
 # is reported as a leak after this grace period instead of hanging the run.
 leak-timeout = "1s"
+
+# The Windows test desktop (ADR-0355, docs/testing.md): on Windows every test
+# process starts through `test-desktop` (tools/xtask/src/bin/test-desktop.rs)
+# on the run's own desktop, where nobody sees its windows and no mouse or
+# keyboard reaches them. Every test, so a new one cannot be left out. The
+# setup script builds the program first (a no-op once it is built), into
+# `<target>/debug/` whatever profile the tests use. `FLUI_TEST_VISIBLE_DESKTOP=1`
+# starts the tests on the caller's desktop instead.
+[scripts.setup.build-test-desktop]
+command = "cargo build -p xtask --bin test-desktop --locked --quiet"
+
+[scripts.wrapper.test-desktop]
+command = { command-line = "debug/test-desktop.exe", relative-to = "target" }
+
+[[profile.default.scripts]]
+platform = 'cfg(windows)'
+filter = 'all()'
+setup = 'build-test-desktop'
+run-wrapper = 'test-desktop'
 
 # Nested-cargo tests: each runs a real `cargo` of its own on a project it
 # generates. The trybuild suites push every compile_fail case through rustc;
@@ -147,7 +169,7 @@ priority = 100
 [test-groups]
 gpu-readback = { max-threads = 1 }
 system-clipboard = { max-threads = 1 }
-# flui-native's Win32 and AppKit window tests share the one desktop's foreground
+# flui-native's Win32 and AppKit window tests share one desktop's activation
 # (and AppKit's Spaces; see `desktop-foreground` below).
 desktop-foreground = { max-threads = 1 }
 # xtask's binary test spawns the built `cargo xtask` binary, which runs
@@ -171,7 +193,9 @@ test-group = 'gpu-readback'
 priority = 90
 
 # flui-native's clipboard tests write the one system clipboard and read it
-# back (on Windows and macOS, and under Xvfb on Linux; the headless mocks match
+# back (on Windows and macOS, and under Xvfb on Linux; on Windows the clipboard
+# is the window station's, which the run's desktop shares with the user, so it
+# is the user's clipboard; the headless mocks match
 # the filter too and are cheap to serialize). nextest runs each test in its own
 # process, so the lock the Win32 clipboard tests take in their module (which
 # covers plain `cargo test`, where they share one process) cannot keep two of
@@ -181,13 +205,14 @@ priority = 90
 filter = 'package(flui-native) & test(/clipboard/)'
 test-group = 'system-clipboard'
 
-# flui-native's Win32 window tests show real windows on the one desktop, and a
-# shown window asks for the foreground; the foreground cases
-# (`windows_foreground::`, which run a second process) read where the
-# foreground is, so another test's window shown meanwhile takes it from under
-# them. They are modules of `platform_it`, run one process each, so no
-# in-process lock can keep them apart: the group runs them one at a time, the
-# contract's Win32 cases with them.
+# flui-native's Win32 window tests show real windows on the desktop the run's
+# tests share (the run's own, or the user's under `FLUI_TEST_VISIBLE_DESKTOP`),
+# and a shown window takes the activation there; a case that reads which
+# window is active, or, on the user's desktop, where the foreground is
+# (`windows_foreground::`, which runs a second process), would read another
+# test's window shown meanwhile. They are modules of `platform_it`, run one
+# process each, so no in-process lock can keep them apart: the group runs them
+# one at a time, the contract's Win32 cases with them.
 [[profile.default.overrides]]
 filter = 'package(flui-native) & binary(platform_it) & (test(/^windows_/) | test(/^contract::/))'
 test-group = 'desktop-foreground'

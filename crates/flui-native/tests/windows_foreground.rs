@@ -8,7 +8,10 @@
 //! The other application is this test binary started again as
 //! [`foreground_peer`]: a plain Win32 window that takes the foreground the
 //! way a user's click gives it, then answers the lines its starter writes.
-//! Its windows appear on the desktop for the length of the case.
+//! The foreground is the desktop's that takes the user's input, so the case
+//! runs only there (`FLUI_TEST_VISIBLE_DESKTOP=1`, docs/testing.md, "The
+//! Windows test desktop"); on the test run's own desktop it says it cannot
+//! verify and returns.
 
 #![cfg(target_os = "windows")]
 #![expect(
@@ -207,6 +210,14 @@ impl Drop for Peer {
 /// the window forward with the focus.
 #[test]
 fn an_activation_takes_the_foreground_only_when_it_is_handed_over() {
+    if !crate::on_the_input_desktop() {
+        eprintln!(
+            "CANNOT_VERIFY foreground hand-over: the foreground, the shell's flash notices and \
+             injected input belong to the desktop that takes the user's input \
+             (FLUI_TEST_VISIBLE_DESKTOP=1 runs it there)"
+        );
+        return;
+    }
     let platform = WindowsPlatform::try_new().expect("native Windows platform");
     let opened = crate::Opened::on(
         &platform,

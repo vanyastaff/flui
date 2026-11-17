@@ -251,6 +251,22 @@ mod native_windows {
     /// The process ids of the touch keyboard hosts that ran before the
     /// contract's first row, comma-separated: the hosts no row may end.
     const HOSTS_BEFORE: &str = "FLUI_NATIVE_WINDOW_CONTRACT_TOUCH_HOSTS_BEFORE";
+    /// The rows that bring their window to the foreground and inject real
+    /// input into it (a synthetic pointer device, `SendInput`) or read the
+    /// cursor. The foreground, the cursor and injected input belong to the
+    /// desktop that takes the user's input; on the test run's own desktop
+    /// these rows can verify nothing, so they run only on that one
+    /// (`FLUI_TEST_VISIBLE_DESKTOP=1`, docs/testing.md).
+    const NEED_THE_INPUT_DESKTOP: &[&str] = &[
+        "focus_loss_ends_a_touch_and_silences_its_tail",
+        "synthetic_touch_and_pen_reach_native_pointer_dispatch",
+        "two_injected_touches_arrive_as_one_pointer_frame",
+        "a_captured_native_pointer_session_replays_to_what_it_delivered",
+        "a_captured_native_mouse_session_replays_to_what_it_delivered",
+        "native_mouse_wheels_keep_hover_identity_and_signed_units",
+        "a_pointer_routed_mouse_hovers_the_window",
+        "a_leave_callback_that_hovers_again_keeps_the_hover",
+    ];
     const CASES: &[(&str, fn())] = &[
         (
             "touchpad_viewport_initialises_and_survives_its_messages",
@@ -789,8 +805,22 @@ mod native_windows {
                  its system-key and hover rows may fail while it runs"
             );
         }
+        for name in NEED_THE_INPUT_DESKTOP {
+            assert!(
+                CASES.iter().any(|(case, _)| case == name),
+                "{name} names no row of the contract"
+            );
+        }
+        let on_the_input_desktop = crate::on_the_input_desktop();
         let mut failures = Vec::new();
         for &(name, _) in CASES {
+            if !on_the_input_desktop && NEED_THE_INPUT_DESKTOP.contains(&name) {
+                eprintln!(
+                    "CANNOT_VERIFY {name}: it needs the desktop that takes the user's input \
+                     (FLUI_TEST_VISIBLE_DESKTOP=1 runs it there)"
+                );
+                continue;
+            }
             let outcome = std::panic::catch_unwind(|| run_child(name, &before));
             end_touch_keyboard_hosts_except(&before);
             if outcome.is_err() {

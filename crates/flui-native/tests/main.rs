@@ -99,6 +99,39 @@ fn win32_handle(window: &dyn flui_native::HostWindow) -> windows::Win32::Foundat
     windows::Win32::Foundation::HWND(handle.hwnd.get() as *mut std::ffi::c_void)
 }
 
+/// Whether this test runs on the desktop that takes the user's input, the one
+/// the foreground, the cursor and `SendInput` belong to. nextest starts a test
+/// on a desktop of its own, which does not (docs/testing.md, "The Windows test
+/// desktop"): a case that needs them says it cannot verify and returns there.
+#[cfg(target_os = "windows")]
+#[expect(
+    unsafe_code,
+    reason = "reads the thread's desktop and whether it takes input"
+)]
+fn on_the_input_desktop() -> bool {
+    use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::System::StationsAndDesktops::{
+        GetThreadDesktop, GetUserObjectInformationW, UOI_IO,
+    };
+    use windows::Win32::System::Threading::GetCurrentThreadId;
+    // SAFETY: the calling thread's own desktop, which is not closed.
+    let Ok(desktop) = (unsafe { GetThreadDesktop(GetCurrentThreadId()) }) else {
+        return false;
+    };
+    let mut takes_input = windows::core::BOOL(0);
+    // SAFETY: `takes_input` is a writable `BOOL`, the size passed.
+    let read = unsafe {
+        GetUserObjectInformationW(
+            HANDLE(desktop.0),
+            UOI_IO,
+            Some((&raw mut takes_input).cast()),
+            u32::try_from(std::mem::size_of::<windows::core::BOOL>()).expect("a BOOL's size"),
+            None,
+        )
+    };
+    read.is_ok() && takes_input.as_bool()
+}
+
 /// Runs every case even after one fails, then panics listing the failing case names.
 fn run_table(table: &str, cases: &[(&str, fn())]) {
     let failed: Vec<&str> = cases
