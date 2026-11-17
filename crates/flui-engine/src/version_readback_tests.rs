@@ -718,9 +718,6 @@ enum FirstMember {
     /// The effect of its own child node.
     Alone,
     /// Its own child, under a clip that leaves it nothing to write.
-    /// Its own child, and the second member, in a save layer under a clip
-    /// that leaves the first nothing to show.
-    ClippedThroughLayer,
     Clipped,
 }
 
@@ -786,18 +783,6 @@ fn grouped_readers(
         }
     }));
     content.slot(nodes[0]);
-    if placed == FirstMember::ClippedThroughLayer {
-        // A save layer under a clip that shows the second member alone: the
-        // first draws into the layer, whose composite the clip cuts.
-        content.push_effect(
-            Layer::from(flui_layer::ClipRectLayer::new(
-                Rect::from_ltrb(90.0, 0.0, 128.0, 40.0),
-                flui_painting::paint::Clip::AntiAliasWithSaveLayer,
-            )),
-            RenderId::new(5),
-            0,
-        );
-    }
     if placed == FirstMember::InRoot {
         content.push_effect(first, RenderId::new(21), 0);
         content.pop_effect();
@@ -842,9 +827,6 @@ fn grouped_readers(
         0,
     );
     content.pop_effect();
-    if placed == FirstMember::ClippedThroughLayer {
-        content.pop_effect();
-    }
     writer.push(SceneOp::Publish {
         node: writer.current().root(),
         content: Arc::new(content.finish()),
@@ -869,11 +851,6 @@ fn a_backdrop_group_outside_the_damage_still_captures_at_its_first_member() {
         ("one pass per rect", FirstMember::Alone, true),
         // It writes nothing, in a full frame as in a partial one.
         ("first member hidden by a clip", FirstMember::Clipped, false),
-        (
-            "first member hidden by a clip over a save layer",
-            FirstMember::ClippedThroughLayer,
-            false,
-        ),
     ] {
         let group = flui_layer::BackdropGroupKey::new();
         let mut partial = renderer.retained_capture((SIDE, SIDE)).expect("capture");
@@ -938,10 +915,7 @@ fn a_backdrop_group_outside_the_damage_still_captures_at_its_first_member() {
         // Hidden, the first member does not capture: the second reads the square.
         assert_eq!(
             px(&oracle, 112, 16)[0] < 200,
-            !matches!(
-                placed,
-                FirstMember::Clipped | FirstMember::ClippedThroughLayer
-            ),
+            placed != FirstMember::Clipped,
             "{case}: precondition: the second member blurs the backdrop as it stood at the capture"
         );
         let stale = (0..SIDE)

@@ -323,13 +323,10 @@ fn close_until<V: SceneVisitor>(
 }
 
 /// Record every consumer through the same layer semantics; GPU effects remain
-/// ordered IR. A version's slot whose subtree cannot reach `cull` is skipped:
-/// a partial frame passes its damage, a full frame its surface, so both skip
-/// the same subtrees that show nothing, whose effects (a backdrop group's
-/// capture) would otherwise split the two (ADR-0230).
+/// ordered IR. A partial frame passes its damage as `cull`.
 pub(crate) fn record_scene(
     scene: SceneContent<'_>,
-    cull: Rect<f64>,
+    cull: Option<Rect<f64>>,
     backend: &mut crate::layer_dispatcher::LayerDispatcher<'_>,
 ) -> crate::EngineResult<()> {
     struct Recorder<'a, 'b> {
@@ -455,7 +452,7 @@ pub(crate) fn record_scene(
         error: None,
         followers: Vec::new(),
     };
-    walk_scene(scene, Some(cull), &mut recorder);
+    walk_scene(scene, cull, &mut recorder);
     recorder.error.map_or(Ok(()), Err)
 }
 

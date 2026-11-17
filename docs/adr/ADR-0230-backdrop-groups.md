@@ -34,9 +34,7 @@ later grouped filters sample, including an earlier pane's own child: that is
 the contract, not an artifact.
 
 A partial frame keeps the capture where a full one makes it. The capture
-belongs to the group's first member that writes a pixel, and a partial frame
-records the members a full one does: a version's walk skips a subtree that
-shows nothing in both (ADR-0304 §9). Damage that meets one member
+belongs to the group's first member that writes a pixel. Damage that meets one member
 takes the rect over every member's read footprint (ADR-0304 §6), so the
 whole group lies in one rect of the region: the frame, and the one region
 pass that redraws the group, replay every member that writes in a full frame,

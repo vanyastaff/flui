@@ -268,10 +268,8 @@ impl GpuReplay {
         // A grouped filter reads the backdrop its group captured on this
         // surface; the first member that writes captures the whole readable
         // attachment; one that writes nothing has returned above. A partial
-        // frame captures where a full one does because both record the same
-        // members (a version's walk culls both by what a subtree shows,
-        // ADR-0304 §9) and the damage closure keeps every member of a group
-        // it meets inside one rect (ADR-0230).
+        // frame captures where a full one does because the damage closure
+        // keeps every member of a group it meets inside one rect (ADR-0230).
         let snapshot = match &op.group {
             Some(group) => Some(snapshots.capture(
                 group,

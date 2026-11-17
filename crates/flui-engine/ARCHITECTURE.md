@@ -225,13 +225,9 @@ A scene holding a retained `SceneVersion` is walked without building a tree
 layer over the entries under it, each chunk its recording, and each slot the
 child node where it stands, in the order `SceneVersion::flatten` would build
 (`a_version_walks_as_its_flattened_tree`). Each pass of a partial frame passes its
-rect, the whole pixels its scissor admits, and a full frame passes its surface.
-A slot whose subtree cannot reach it is skipped, so a subtree that shows
-nothing (off the surface, or under a clip that hides it) is skipped in both
-kinds of frame, and its side effects, such as a backdrop group's capture,
-cannot split them
-(`a_backdrop_group_outside_the_damage_still_captures_at_its_first_member`;
-`SceneVersion::subtree_cull`, which keeps the folded chains of the path it
+rect, the whole pixels its scissor admits, and a slot whose
+subtree cannot reach it is skipped
+(`SceneVersion::subtree_cull`, which keeps the folded chains of the path it
 walks, so a slot costs its own effects and not the depth of the tree), and
 the walk enters what the damage reaches
 (`a_partial_walk_enters_only_the_boundaries_its_damage_reaches`,

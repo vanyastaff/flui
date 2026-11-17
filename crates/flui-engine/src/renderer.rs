@@ -2034,14 +2034,7 @@ impl Renderer {
             // Reset per-frame clip/transform/opacity/layer state so that
             // partial-damage scissors from frame N cannot leak into frame N+1.
             backend.painter_mut().begin_frame_in_scope();
-            let (width, height) = backend.painter().size();
-            let surface = flui_foundation::geometry::Rect::from_xywh(
-                0.0,
-                0.0,
-                f64::from(width),
-                f64::from(height),
-            );
-            crate::layer_walk::record_scene(scene.content(), surface, &mut backend)?;
+            crate::layer_walk::record_scene(scene.content(), None, &mut backend)?;
             return Ok(crate::frame_protocol::RecordedContent::default());
         };
         let mut recorded = crate::frame_protocol::RecordedContent::default();
@@ -2070,7 +2063,7 @@ impl Renderer {
             // has COPY_SRC here: the swapchain image when the surface offers
             // it, the retained target (created with it) otherwise. A
             // version's walk skips the boundaries this rect cannot reach.
-            crate::layer_walk::record_scene(scene.content(), redrawn, &mut backend)?;
+            crate::layer_walk::record_scene(scene.content(), Some(redrawn), &mut backend)?;
 
             // An advanced shape (one that reads the destination) whose bounds
             // straddle the pass's rect was drawn clipped, so outside the rect
@@ -2976,12 +2969,8 @@ mod tests {
         );
         let mut backend = LayerDispatcher::new(&mut painter);
 
-        crate::layer_walk::record_scene(
-            flui_layer::SceneContent::Tree(&tree),
-            Rect::from_xywh(0.0, 0.0, f64::from(width), f64::from(height)),
-            &mut backend,
-        )
-        .expect("layer tree records");
+        crate::layer_walk::record_scene(flui_layer::SceneContent::Tree(&tree), None, &mut backend)
+            .expect("layer tree records");
         drop(backend);
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -3090,12 +3079,8 @@ mod tests {
         );
         let mut backend = LayerDispatcher::new(&mut painter);
 
-        crate::layer_walk::record_scene(
-            flui_layer::SceneContent::Tree(&tree),
-            Rect::from_xywh(0.0, 0.0, f64::from(width), f64::from(height)),
-            &mut backend,
-        )
-        .expect("layer tree records");
+        crate::layer_walk::record_scene(flui_layer::SceneContent::Tree(&tree), None, &mut backend)
+            .expect("layer tree records");
         drop(backend);
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
