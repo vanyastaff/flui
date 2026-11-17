@@ -23,7 +23,7 @@ use std::collections::BTreeMap;
 use std::rc::{Rc, Weak};
 
 use flui_foundation::geometry::{Axis, Rect, Vec2};
-use flui_foundation::{SaltedKey, Subscription, ViewKey};
+use flui_foundation::{SaltedKey, Subscription};
 use flui_interaction::focus::{
     EntryTarget, FocusCause, FocusNode, FocusNodeRegistration, KeyEventResult,
 };
@@ -818,9 +818,10 @@ impl ViewState<FocusableList> for FocusableListState {
 /// The marker around one built row of a focusable list. Not a Tab stop: focus
 /// goes to the row's first focusable descendant. It carries the row's key,
 /// salted, so the lazy sliver reconciles the row by its own key.
-#[derive(Clone)]
+#[derive(Clone, StatefulView)]
 pub(crate) struct ListItemFocus {
     index: usize,
+    #[view(key)]
     salted_key: Option<SaltedKey>,
     child: BoxedView,
 }
@@ -850,16 +851,6 @@ impl std::fmt::Debug for ListItemFocus {
         f.debug_struct("ListItemFocus")
             .field("index", &self.index)
             .finish_non_exhaustive()
-    }
-}
-
-impl View for ListItemFocus {
-    fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
-        ElementKind::stateful(self)
-    }
-
-    fn key(&self) -> Option<&dyn ViewKey> {
-        self.salted_key.as_ref().map(|key| key as &dyn ViewKey)
     }
 }
 

@@ -1373,7 +1373,11 @@ impl SceneWindow for IOSWindow {
                 self.0.lock().dispatching = false;
             }
         }
-        let _drain = Drain(&self.lifecycle);
+        let drain = Drain(&self.lifecycle);
+        // A panicking observation leaves none queued behind it: each one
+        // applies whichever one before it panics, so the queue is empty
+        // whenever no drain runs, and the first panic resumes once it is.
+        let mut failure = flui_foundation::panic::FirstPanic::new();
         loop {
             let next = self.lifecycle.lock().pending.pop_front();
             let Some((observation, generation)) = next else {
@@ -1383,8 +1387,10 @@ impl SceneWindow for IOSWindow {
                 self.lifecycle.lock().pending.clear();
                 break;
             }
-            self.apply_lifecycle(observation, generation);
+            failure.contain(|| self.apply_lifecycle(observation, generation));
         }
+        drop(drain);
+        failure.resume();
     }
 
     /// Fence the physical link before a queued ownership retirement can run.
@@ -1405,8 +1411,12 @@ impl SceneWindow for IOSWindow {
     }
 
     fn disconnect(&self, marker: MainThreadMarker) {
-        self.observe_lifecycle(LifecycleObservation::Detached);
-        self.detach_native(marker);
+        // The detach applies (its surface released) and the native window
+        // goes whichever of them panics; the first panic resumes after both.
+        let mut failure = flui_foundation::panic::FirstPanic::new();
+        failure.contain(|| self.observe_lifecycle(LifecycleObservation::Detached));
+        failure.contain(|| self.detach_native(marker));
+        failure.resume();
     }
 
     fn close_for_good(&self) {
@@ -1615,8 +1625,14 @@ impl IOSWindow {
                 }
             }
         }
+        // Each step below runs whichever one before it panics (a state
+        // publication's announcement, the handler's surface change): a
+        // background or detach releases the surface even when its snapshot's
+        // announcement panics, so UIKit never takes the layer from a handler
+        // still holding its surface. The first panic resumes at the end.
+        let mut failure = flui_foundation::panic::FirstPanic::new();
         // Execution, visibility and focus are published in one revision.
-        self.delivery.publish_state();
+        failure.contain(|| self.delivery.publish_state());
         let current = || {
             !self.closed.load(Ordering::SeqCst) && self.lifecycle.lock().generation == generation
         };
@@ -1631,34 +1647,39 @@ impl IOSWindow {
             // The surface goes after the snapshot that stops the frames.
             Background | Detached => {
                 if current()
-                    && let Some(failure) = self
-                        .delivery
-                        .dispatch_surface_immediate(SurfaceChange::Release)
+                    && let Some(released) = failure
+                        .contain(|| {
+                            self.delivery
+                                .dispatch_surface_immediate(SurfaceChange::Release)
+                        })
+                        .flatten()
                 {
-                    failure.resume();
+                    failure.record(released.into_payload());
                 }
             }
             // The surface comes back before the snapshot that runs the frames
-            // again.
+            // again. A panicking rebuild still lets the frames run again.
             Foreground => {
-                // A panicking rebuild still lets the frames run again; its
-                // panic resumes once they do.
-                let failure = self
-                    .delivery
-                    .dispatch_surface_immediate(SurfaceChange::Rebuild);
+                if let Some(rebuilt) = failure
+                    .contain(|| {
+                        self.delivery
+                            .dispatch_surface_immediate(SurfaceChange::Rebuild)
+                    })
+                    .flatten()
+                {
+                    failure.record(rebuilt.into_payload());
+                }
                 if current() {
                     self.lifecycle.lock().execution = WindowExecutionState::Running;
-                    self.delivery.publish_state();
+                    failure.contain(|| self.delivery.publish_state());
                     if current() {
                         self.set_frame_tick_paused(false);
                         self.request_redraw();
                     }
                 }
-                if let Some(failure) = failure {
-                    failure.resume();
-                }
             }
         }
+        failure.resume();
     }
 }
 

@@ -1,7 +1,7 @@
 use super::*;
 use crate::view::{IntoView, View, ViewExt};
 use crate::{BuildContext, BuildOwner, StatelessView};
-use flui_foundation::{ValueKey, ViewKey};
+use flui_foundation::ValueKey;
 
 /// A keyless leaf-ish stateless test view. `tag` distinguishes
 /// instances; the self-returning `build` is never driven here (the
@@ -37,8 +37,9 @@ impl View for TestView {
 /// A keyed stateless test view carrying a `ValueKey<u32>`. Reuses the
 /// same `StatelessElement` machinery; `key()` is overridden so the
 /// reconciler can match by key.
-#[derive(Clone)]
+#[derive(Clone, StatelessView)]
 struct KeyedView {
+    #[view(key)]
     key: ValueKey<u32>,
 }
 
@@ -53,16 +54,6 @@ impl KeyedView {
 impl StatelessView for KeyedView {
     fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
         self.clone().boxed()
-    }
-}
-
-impl View for KeyedView {
-    fn create_element(self: std::rc::Rc<Self>) -> crate::element::ElementKind {
-        crate::element::ElementKind::stateless(self)
-    }
-
-    fn key(&self) -> Option<&dyn ViewKey> {
-        Some(&self.key)
     }
 }
 

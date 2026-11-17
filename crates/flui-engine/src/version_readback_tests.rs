@@ -1160,6 +1160,130 @@ fn a_backdrop_filter_in_a_clipped_layer_reads_only_inside_the_clip() {
     }
 }
 
+/// Publishes `holder`, whose own content clips a box ending at `right` with
+/// an anti-aliased clip from 89.6, filled with `color`, and slots it in the
+/// root at the origin when `root_too`.
+fn content_clipped_box(
+    writer: &mut SceneWriter<'_>,
+    holder: SceneNodeId,
+    color: Color,
+    right: f64,
+    root_too: bool,
+) {
+    use flui_layer::{ClipRectLayer, Layer};
+    use flui_painting::paint::Clip;
+
+    let mut canvas = Canvas::new();
+    canvas.draw_rect(Rect::from_ltrb(70.0, 4.0, right, 28.0), &Paint::fill(color));
+    let mut content = BoundaryContent::builder();
+    content.push_effect(
+        Layer::from(ClipRectLayer::new(
+            Rect::from_ltrb(89.6, 0.0, 128.0, 40.0),
+            Clip::AntiAlias,
+        )),
+        RenderId::new(1),
+        0,
+    );
+    content.chunk(Arc::new(Chunk::new(
+        RenderId::new(2),
+        0,
+        writer.next_content_version().expect("a content version"),
+        canvas.finish(),
+    )));
+    content.pop_effect();
+    writer.push(SceneOp::Publish {
+        node: holder,
+        content: Arc::new(content.finish()),
+    });
+    if !root_too {
+        return;
+    }
+    writer.push(SceneOp::Place {
+        node: holder,
+        placement: Placement::try_new(Offset::ZERO).expect("a finite offset"),
+    });
+    let mut top = BoundaryContent::builder();
+    top.slot(holder);
+    let root = writer.current().root();
+    writer.push(SceneOp::Publish {
+        node: root,
+        content: Arc::new(top.finish()),
+    });
+}
+
+/// A box that a clip in its node's own content cuts away but for the pixel
+/// the clip's anti-aliased edge covers in part: a partial frame repaints
+/// that pixel as a full frame does.
+#[test]
+fn a_box_a_content_clip_shows_in_one_pixel_repaints_in_a_partial_frame() {
+    let Some(renderer) = crate::test_support::renderer_or_skip() else {
+        return;
+    };
+    for right in [89.3, 89.6] {
+        let mut partial = renderer.retained_capture((SIDE, SIDE)).expect("capture");
+        let mut owner = SceneOwner::new();
+        let holder = {
+            let mut writer = owner.writer();
+            let holder = writer.mint_node();
+            content_clipped_box(&mut writer, holder, Color::RED, right, true);
+            holder
+        };
+        owner.apply(SURFACE).expect("the scene applies");
+        apply(
+            &mut partial,
+            DamageRegion::Full(flui_layer::FullReason::FirstFrame),
+        );
+        partial
+            .render_scene(&Scene::of_version(owner.current().clone()))
+            .expect("the first frame renders");
+        partial.mark_dirty(Rect::from_ltrb(0.0, 0.0, 1.0, 1.0));
+        partial
+            .render_scene(&Scene::of_version(owner.current().clone()))
+            .expect("the warm-up renders");
+
+        content_clipped_box(&mut owner.writer(), holder, Color::BLUE, right, false);
+        owner.apply(SURFACE).expect("a recolour applies");
+        apply(&mut partial, owner.patch_damage());
+        partial
+            .render_scene(&Scene::of_version(owner.current().clone()))
+            .expect("the partial frame renders");
+        assert!(
+            matches!(partial.last_plan(), Some(FramePlan::RetainedPartial(_))),
+            "box to {right}: the frame is partial: {:?}",
+            partial.last_plan()
+        );
+        let mut full = renderer.retained_capture((SIDE, SIDE)).expect("capture");
+        apply(
+            &mut full,
+            DamageRegion::Full(flui_layer::FullReason::FirstFrame),
+        );
+        full.render_scene(&Scene::of_version(owner.current().clone()))
+            .expect("the full frame renders");
+        let (pixels, oracle) = (
+            partial.read_rgba().expect("readback"),
+            full.read_rgba().expect("readback"),
+        );
+        assert_ne!(
+            px(&oracle, 89, 16),
+            px(&oracle, 120, 16),
+            "box to {right}: the clip's edge pixel shows the box"
+        );
+        let stale = (0..SIDE)
+            .flat_map(|y| (0..SIDE).map(move |x| (x, y)))
+            .filter(|&(x, y)| {
+                px(&pixels, x, y)
+                    .iter()
+                    .zip(px(&oracle, x, y))
+                    .any(|(&a, b)| a.abs_diff(b) > 2)
+            })
+            .count();
+        assert_eq!(
+            stale, 0,
+            "box to {right}: pixels the partial frame drew unlike the full frame"
+        );
+    }
+}
+
 /// One full frame of stripes and bars in save layers nested under `clips` (each an
 /// x range), under an image filter's blur of `spread` when there is one,
 /// with a blur backdrop over `backdrop` after them.

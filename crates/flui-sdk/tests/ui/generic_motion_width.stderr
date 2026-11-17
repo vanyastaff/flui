@@ -9,3 +9,9 @@ error: #[derive(TwoWayConverter)] requires concrete field types; stable Rust can
   |
 7 | struct GenericArray<const N: usize>([f64; N]);
   |                                     ^^^^^^^^
+
+error: #[derive(TwoWayConverter)] requires a type without lifetime parameters: a vector's width cannot depend on one
+  --> tests/ui/generic_motion_width.rs:10:17
+   |
+10 | struct Borrowed<'a>(f64, std::marker::PhantomData<&'a ()>);
+   |                 ^^

@@ -40,7 +40,7 @@ restoration:
 |:--|:--|:--|
 | String-named routes (ADR-0024): `route`, `on_generate_route`, `on_unknown_route`, seven `*_named*` doors, `push_keyed`, `RouteKey<T>`, `RouteArguments` | the `named_route` and `navigator` modules of `crates/flui-widgets/src/navigator/` | none outside `flui-widgets`: its tests and `widgets_app.rs`'s docs |
 | Imperative pushes on `NavigatorHandle` (ADR-0019): `push`, `pop_with`, `remove_route`, `maybe_pop`, …, found from `build` through `maybe_of`/`maybe_of_root` | `crates/flui-widgets/src/navigator/navigator.rs` (38 `pub fn`) | `show_dialog`, popup menus, `OpenContainer`, Material's back button and app bar |
-| The typed `Router<R>` with `#[derive(Routable)]` | `crates/flui-widgets/src/router/`, `crates/flui-macros/src/derive_routable.rs` | the acceptance app (`tests/fixtures/acceptance_app/app.rs`: `Router::from_stack`, `WidgetsApp::router`) |
+| The typed `Router<R>` with `#[derive(Routable)]` | `crates/flui-widgets/src/router/`, `crates/flui-macros/src/derive/routable.rs` | the acceptance app (`tests/fixtures/acceptance_app/app.rs`: `Router::from_stack`, `WidgetsApp::router`) |
 
 A pop result crosses the stack as `Box<dyn Any + Send>` and `RouteResult<T>` shares an
 `Arc<Mutex<_>>` (`crates/flui-widgets/src/navigator/result.rs`), although only the owner thread
@@ -298,7 +298,7 @@ ADR-0027 §9's vocabulary closed: no second channel without a producer.
   patterns; `crates/flui-widgets/tests/routable_ui.rs` compiles the accepted shapes
   (`routable_ui/pass/`) and every rejection against its diagnostic (`routable_ui/fail/`); the
   pattern parser, specificity order and conflict detection in
-  `crates/flui-macros/src/derive_routable/pattern.rs`.
+  `crates/flui-macros/src/derive/routable/pattern.rs`.
 - §2: in `crates/flui-widgets/tests/router.rs`, rows of the `router_and_widgets_app` table of
   `tests/contracts.rs`: `router_opens_at_a_location_with_its_back_stack`,
   `a_deep_link_adds_its_lower_page_in_the_frame_its_top_settles`,

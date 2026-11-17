@@ -122,9 +122,12 @@ variant's fields.
   The query is part of the location only: `back_stack` opens the pages below without it. There
   is no `#` fragment.
 - **Compile-time rejections.** A struct, union or generic type; a tuple variant (nesting is a
-  `#[nest]` variant, below); a variant with no `#[route]`, with two, or with anything after the
-  pattern; a malformed pattern; a parameter without a field, a field without a parameter that is
-  not `#[query]`, a parameter that names a `#[query]` field, a malformed `#[query]`; a
+  `#[nest]` variant, below); `#[route]` on the type or on a field and `#[query]` on the type or on
+  a variant, where the derive could not act on them; a variant with no `#[route]`, with two, or
+  with anything after the pattern; a malformed pattern; a parameter without a field, a field
+  without a parameter that is not `#[query]`, a parameter that names a `#[query]` field, a
+  malformed, empty or doubled `#[query(...)]`, two fields of a variant that read one query key
+  (the second could not be told from the first in a location); a
   field type that is not `FromStr + Display` (plus `Default` for a query field that is neither
   `Option` nor `Vec`; reported on the field); and two patterns of the
   same shape (the same length, the same literals and parameters in the same places), because
@@ -408,8 +411,9 @@ ADR-0027 §9's vocabulary closed: no second channel without a producer.
   bare key, the prefixes without the query, defaults and `Param`);
   `crates/flui-widgets/tests/routable_ui.rs` compiles the accepted shapes
   (`routable_ui/pass/`) and every rejection against its diagnostic (`routable_ui/fail/`); the
-  pattern parser, specificity order and conflict detection in
-  `crates/flui-macros/src/derive_routable/pattern.rs`.
+  pattern parser, specificity order and shape comparison in
+  `crates/flui-macros/src/derive/routable/pattern.rs`, and the search for two patterns of one
+  shape in `routes` of `crates/flui-macros/src/derive/routable.rs`.
 - §2: in `crates/flui-widgets/tests/router.rs`, rows of the `router_and_widgets_app` table of
   `tests/contracts.rs`: `router_opens_at_a_location_with_its_back_stack`,
   `a_deep_link_adds_its_lower_page_in_the_frame_its_top_settles`,

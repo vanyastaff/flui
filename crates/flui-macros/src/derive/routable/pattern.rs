@@ -88,19 +88,10 @@ pub(crate) fn specificity(a: &[Segment], b: &[Segment]) -> Ordering {
     })
 }
 
-/// The first pair `(earlier, later)` of patterns with the same shape.
-pub(crate) fn first_conflict(patterns: &[Vec<Segment>]) -> Option<(usize, usize)> {
-    (0..patterns.len()).find_map(|later| {
-        (0..later)
-            .find(|&earlier| same_shape(&patterns[earlier], &patterns[later]))
-            .map(|earlier| (earlier, later))
-    })
-}
-
 /// Indices of `patterns` in the order they are tried.
-pub(crate) fn match_order(patterns: &[Vec<Segment>]) -> Vec<usize> {
+pub(crate) fn match_order(patterns: &[&[Segment]]) -> Vec<usize> {
     let mut order: Vec<usize> = (0..patterns.len()).collect();
-    order.sort_by(|&a, &b| specificity(&patterns[a], &patterns[b]));
+    order.sort_by(|&a, &b| specificity(patterns[a], patterns[b]));
     order
 }
 
@@ -112,14 +103,50 @@ mod tests {
         parse(pattern).unwrap_or_else(|error| panic!("{pattern:?} parses: {error}"))
     }
 
+    fn a_pattern_is_segments_or_the_reason_it_is_not() {
+        let literal = |text: &str| Segment::Literal(text.to_owned());
+        let param = |name: &str| Segment::Param(name.to_owned());
+        let accepted: [(&str, Vec<Segment>); 5] = [
+            ("/", Vec::new()),
+            ("/notes", vec![literal("notes")]),
+            ("/note/:id", vec![literal("note"), param("id")]),
+            ("/:type/x", vec![param("type"), literal("x")]),
+            (
+                "/\u{e9}t\u{e9}/a b",
+                vec![literal("\u{e9}t\u{e9}"), literal("a b")],
+            ),
+        ];
+        for (pattern, expected) in accepted {
+            assert_eq!(parse(pattern), Ok(expected), "{pattern:?}");
+        }
+        let refused: [(&str, &str); 11] = [
+            ("", "starts with `/`"),
+            ("notes", "starts with `/`"),
+            ("/notes/", "no trailing `/`"),
+            ("//notes", "no empty segment"),
+            ("/a//b", "no empty segment"),
+            ("/notes?tag=x", "no `?` query"),
+            ("/notes#top", "no `?` query"),
+            ("/a%20b", "no `?` query"),
+            ("/note/:", "`:` is not a parameter"),
+            ("/note/:my-id", "`:my-id` is not a parameter"),
+            ("/note/: id", "`: id` is not a parameter"),
+        ];
+        for (pattern, reason) in refused {
+            let error = parse(pattern).expect_err(pattern);
+            assert!(error.contains(reason), "{pattern:?}: {error}");
+        }
+    }
+
     fn match_order_puts_literals_before_parameters() {
-        let patterns = vec![
+        let patterns = [
             parsed("/s/:slug"),
             parsed("/:any/new"),
             parsed("/s/new"),
             parsed("/"),
             parsed("/tag/:name"),
         ];
+        let patterns: Vec<&[Segment]> = patterns.iter().map(Vec::as_slice).collect();
         let order: Vec<usize> = match_order(&patterns);
         // Root first; `/s/new` before `/s/:slug` although declared after it;
         // a leading literal before a leading parameter.
@@ -129,21 +156,24 @@ mod tests {
         assert!(rank(0) < rank(1), "{order:?}");
         assert!(rank(4) < rank(1), "{order:?}");
     }
-
-    fn first_conflict_names_the_later_duplicate() {
-        let patterns = vec![
-            parsed("/"),
-            parsed("/n/:a"),
-            parsed("/n/new"),
-            parsed("/n/:b"),
+    fn two_patterns_share_a_shape_when_they_match_the_same_locations() {
+        let cases: [(&str, &str, bool); 6] = [
+            ("/", "/", true),
+            ("/n/:a", "/n/:b", true),
+            ("/n/new", "/n/new", true),
+            ("/n/:a", "/n/new", false),
+            ("/n", "/n/:a", false),
+            ("/:a/n", "/n/:a", false),
         ];
-        assert_eq!(first_conflict(&patterns), Some((1, 3)));
-        assert_eq!(first_conflict(&patterns[..3]), None);
+        for (a, b, expected) in cases {
+            assert_eq!(same_shape(&parsed(a), &parsed(b)), expected, "{a} {b}");
+        }
     }
 
     #[test]
     fn route_pattern_contract() {
+        a_pattern_is_segments_or_the_reason_it_is_not();
         match_order_puts_literals_before_parameters();
-        first_conflict_names_the_later_duplicate();
+        two_patterns_share_a_shape_when_they_match_the_same_locations();
     }
 }

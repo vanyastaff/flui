@@ -3042,8 +3042,9 @@ mod tests {
         }
     }
 
-    #[derive(Clone)]
+    #[derive(Clone, StatelessView)]
     struct KeyedTransparentView {
+        #[view(key)]
         key: GlobalKey<()>,
     }
 
@@ -3053,18 +3054,9 @@ mod tests {
         }
     }
 
-    impl View for KeyedTransparentView {
-        fn create_element(self: std::rc::Rc<Self>) -> crate::element::ElementKind {
-            crate::element::ElementKind::stateless(self)
-        }
-
-        fn key(&self) -> Option<&dyn flui_foundation::ViewKey> {
-            Some(&self.key)
-        }
-    }
-
-    #[derive(Clone)]
+    #[derive(Clone, crate::StatefulView)]
     struct ActiveRetakePanicsOnActivate {
+        #[view(key)]
         key: GlobalKey<ActiveRetakePanicState>,
         armed: std::rc::Rc<std::cell::Cell<bool>>,
     }
@@ -3097,16 +3089,6 @@ mod tests {
         }
     }
 
-    impl View for ActiveRetakePanicsOnActivate {
-        fn create_element(self: std::rc::Rc<Self>) -> crate::element::ElementKind {
-            crate::element::ElementKind::stateful(self)
-        }
-
-        fn key(&self) -> Option<&dyn flui_foundation::ViewKey> {
-            Some(&self.key)
-        }
-    }
-
     #[derive(Clone)]
     struct TestView {
         #[expect(dead_code, reason = "exercised only by the derived Clone impl")]
@@ -3126,8 +3108,9 @@ mod tests {
     }
 
     /// A view carrying a `GlobalKey`, for subtree-removal fixtures.
-    #[derive(Clone)]
+    #[derive(Clone, StatelessView)]
     struct KeyedTestView {
+        #[view(key)]
         key: crate::key::GlobalKey<()>,
     }
 
@@ -3137,16 +3120,6 @@ mod tests {
                 name: "keyed-child".into(),
             }
             .boxed()
-        }
-    }
-
-    impl View for KeyedTestView {
-        fn create_element(self: std::rc::Rc<Self>) -> crate::element::ElementKind {
-            crate::element::ElementKind::stateless(self)
-        }
-
-        fn key(&self) -> Option<&dyn flui_foundation::ViewKey> {
-            Some(&self.key)
         }
     }
 
