@@ -8,6 +8,8 @@
   [ADR-0236](ADR-0236-display-snapshot-and-refresh-period.md) decision 8 only (the frame tick may be
   the frame's vsync instant) and [ADR-0058](ADR-0058-the-platform-paces-production-not-a-sleep.md)
   decision 0 only (the number of frames in flight is a setting whose default is 2)
+- **Superseded-by:** [ADR-0356](ADR-0356-a-surface-its-compositor-paces-presents-without-waiting-on-the-compositor.md)
+  decision 5 only: a surface its compositor paces (Wayland) presents in `Mailbox`, else `Immediate`.
 - **Related:** [ADR-0305](ADR-0305-one-gpu-context-serves-every-surface-through-a-raster-executor.md)
   §4 (a frame handed to a sink is stamped with its `FrameStamp`, which its settlement names) and §5
   (the latency setting is the window slot's), [ADR-0207](ADR-0207-host-input-boundary-and-timeline.md)

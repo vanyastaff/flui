@@ -124,7 +124,7 @@ fn rig(initial: Vec<OutputView>) -> Rig {
         })
     });
     signal.start().expect("the owner signal starts");
-    let displays = LinuxDisplays::new();
+    let displays = LinuxDisplays::new(Environment::current());
     let (session, script, doorbell, closed) = session(initial);
     let watcher = displays
         .watch_session(Protocol::X11, &signal, Box::new(session))
@@ -359,7 +359,7 @@ fn a_session_that_never_waits_still_stops() {
     let flood = Duration::from_secs(10);
     let signal = OwnerSignal::new(Arc::new(|| Ok(())));
     signal.start().expect("the owner signal starts");
-    let displays = LinuxDisplays::new();
+    let displays = LinuxDisplays::new(Environment::current());
     let watcher = displays
         .watch_session(
             Protocol::X11,

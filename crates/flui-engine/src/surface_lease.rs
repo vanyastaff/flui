@@ -8,6 +8,8 @@
 
 use std::sync::Arc;
 
+use flui_platform::FramePacing;
+
 use crate::error::{EngineError, EngineResult};
 use crate::window_target::WindowTarget;
 
@@ -44,6 +46,9 @@ use crate::window_target::WindowTarget;
 pub(crate) struct SurfaceLease<S> {
     surface: Option<S>,
     target: Arc<dyn WindowTarget>,
+    /// Who paces the target's surfaces: the target's word, read when the
+    /// lease was made, and the same for every surface it holds.
+    pacing: FramePacing,
 }
 
 /// Proof that a lease's surface has been released: the only source of the
@@ -111,6 +116,13 @@ impl<S> SurfaceLease<S> {
         }
     }
 
+    /// Who paces the surfaces the retained target makes, which picks their
+    /// present mode: fixed when the lease was made, so a reconfiguration
+    /// after the window retired its target presents as before.
+    pub(crate) const fn pacing(&self) -> FramePacing {
+        self.pacing
+    }
+
     /// The current surface, or `None` while [`SurfaceLease::release`] holds.
     pub(crate) fn surface(&self) -> Option<&S> {
         self.surface.as_ref()
@@ -130,11 +142,17 @@ impl<S> SurfaceLease<S> {
     ///
     /// The caller (`Renderer::new`) is required to have already called
     /// [`probe_target`] before doing the async work that produced `surface`
-    /// — re-probing here would only duplicate that check.
-    pub(crate) fn from_parts(target: Arc<dyn WindowTarget>, surface: S) -> Self {
+    /// — re-probing here would only duplicate that check. `pacing` is the
+    /// target's [`SurfaceTarget::frame_pacing`](flui_platform::SurfaceTarget::frame_pacing).
+    pub(crate) fn from_parts(
+        target: Arc<dyn WindowTarget>,
+        surface: S,
+        pacing: FramePacing,
+    ) -> Self {
         Self {
             surface: Some(surface),
             target,
+            pacing,
         }
     }
     #[cfg(all(test, feature = "testing", not(target_arch = "wasm32")))]
@@ -142,6 +160,7 @@ impl<S> SurfaceLease<S> {
         Self {
             surface: None,
             target,
+            pacing: FramePacing::Display,
         }
     }
 }
@@ -266,7 +285,11 @@ mod tests {
             log: Arc::clone(&log),
         });
         (
-            SurfaceLease::from_parts(target, RecordingSurface(Arc::clone(&log))),
+            SurfaceLease::from_parts(
+                target,
+                RecordingSurface(Arc::clone(&log)),
+                FramePacing::Display,
+            ),
             log,
         )
     }

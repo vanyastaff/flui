@@ -151,6 +151,10 @@ fn native_linux() {
                 "native_linux::an_app_runs_on_the_native_x11_host",
                 native_linux::an_app_runs_on_the_native_x11_host as fn(),
             ),
+            (
+                "native_linux::an_app_whose_window_is_never_drawn_still_quits",
+                native_linux::an_app_whose_window_is_never_drawn_still_quits as fn(),
+            ),
         ],
     );
 }

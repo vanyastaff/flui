@@ -212,6 +212,18 @@ compositor `WAYLAND_DISPLAY` names. No one compositor runs them all:
 | `wayland_window::` outside `optional` | headless Weston 13, in `cargo xtask test` | The conformance kit and `a_window_maximized_before_fullscreen_returns_to_normal` maximize a window. Sway tiles and, at 1.9, offers `xdg_wm_base` 2 with no `wm_capabilities`, so it carries out no maximize and the window cannot know. |
 | `wayland_window::optional::` | headless Weston 13, where each says what it skipped, then a headless sway, in `cargo xtask wayland-optional` | Their subjects are what a compositor may not offer: `xdg-decoration`, `wp_fractional_scale_v1`, `xdg-foreign`, `xdg-activation`, `zwlr_foreign_toplevel_manager_v1` (a window's app id read back), a seat. Weston 13 lacks all six. |
 | `a_window_moved_to_another_output_names_its_display` | none: a case of `optional`, it says under both runs that it skipped | It needs two outputs and a compositor that returns a window to the output it left: Weston on its X11 backend with `--output-count=2`. Sway leaves a window on the output it went fullscreen on. |
+| `wayland_scripted::` | the compositor of the case's own, in the Xvfb suite of `cargo xtask test` | What no installed compositor does on demand: `configure_bounds`, a seat older than `repeat_info`, a scale change while the host runs, a strict buffer-scale rule on cursors, frame callbacks never answered, an output removed with no `leave`, a configure storm, a connection closed mid-request. |
+
+The `wayland_scripted` harness and `flui-app`'s
+`native_linux::an_app_whose_window_is_never_drawn_still_quits` need no
+compositor installed: each case starts `flui-native`'s
+`testing::wayland_compositor::ScriptedCompositor`, a compositor on
+`wayland-server`'s pure-Rust backend at a socket of its own, which offers the
+globals and versions an `Offer` names and plays typed `Step`s, and connects
+the host to that socket (`WaylandPlatform::try_new_at`, or `WAYLAND_DISPLAY`
+naming its path for a child process). What the compositor heard from the
+host (`Heard`) is the readback. They load libwayland-client and libxkbcommon
+as the host does; the application case draws through Vulkan (lavapipe in CI).
 
 A case of `optional` that meets a compositor without its subject says in its
 output what it skipped and what it checked instead, and both Wayland runs
