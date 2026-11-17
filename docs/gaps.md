@@ -405,6 +405,14 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 - It is among the most-reported defects of comparable frameworks ([emilk/egui#903](https://github.com/emilk/egui/issues/903) is a fast-resize flicker). A reference run should record its trade-off in the row note: Flutter's Windows embedder blocks the platform thread for up to 100 ms for a frame at the new size.
 - Pass criteria: a scripted two-second border drag with every presented frame captured, content size equal to window size in every captured frame, callbacks counted during the modal loop, and the p99 frame time recorded.
 
+### A maximized Win32 window is restored to the rectangle the system scaled
+
+> **Environments:** Windows · **Who it hurts:** A user who changes the display scale, or moves a maximized window to a monitor of another scale, and then restores it · **Parity:** [Windows](platform-parity.md#windows)
+
+- A normal window keeps its content's logical size across a scale change (it answers `WM_GETDPISCALEDSIZE`), and so does the rectangle a fullscreen window returns to; the rectangle a maximized window returns to (`WINDOWPLACEMENT::rcNormalPosition`) is left to the system, which may scale it linearly, so the restored content can be a few pixels off its logical size.
+- What the system does to that rectangle cannot be observed without changing a scale, which no test on the development machine does; the run is owed in the `scale-factor-and-dpi-changes` row of `crates/flui-native/platform-parity.toml`.
+- A window without a frame is maximized to its monitor's work area through `WM_GETMINMAXINFO`, whose position and size Windows documents for the primary monitor and adjusts for another; only one monitor has run.
+
 ### No present-mode, queue-depth, VRR or tearing control
 
 > **Environments:** desktop, iOS, Android · **Who it hurts:** Games, drawing and latency-sensitive apps · **Parity:** [Displays and metrics](platform-parity.md#displays-and-metrics)

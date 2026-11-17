@@ -588,6 +588,8 @@ impl WindowsWindow {
                 }),
                 publish_hold: std::cell::Cell::new(0),
                 limits_waived: std::cell::Cell::new(false),
+                kept_logical: std::cell::Cell::default(),
+                app_bars: std::cell::Cell::new(None),
                 show_requests: std::cell::Cell::new(0),
                 visibility: super::proc::Visibility::new(),
                 in_size_move: std::cell::Cell::new(false),

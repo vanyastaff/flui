@@ -49,6 +49,8 @@ mod set;
 mod window;
 
 #[cfg(all(test, target_os = "windows"))]
+mod app_bar_tests;
+#[cfg(all(test, target_os = "windows"))]
 mod delivery_tests;
 
 #[cfg(windows)]

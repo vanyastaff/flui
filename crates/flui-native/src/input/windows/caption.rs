@@ -60,6 +60,30 @@ const fn is_caption_button(hit: u32) -> bool {
     matches!(hit, HT_MIN_BUTTON | HT_MAX_BUTTON | HT_CLOSE)
 }
 
+/// The pointer a non-client message names: the mouse, on the legacy route, or
+/// a pointer by the id its `wParam` carries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CaptionPointer {
+    Mouse,
+    Pointer(u32),
+}
+
+/// The pointer whose non-client move `message` is, when the move is over none
+/// of the caption buttons (the bar, a border): the hover a button saw of that
+/// pointer ends there. `None` for any other message, and for a move over a
+/// button, which [`client_message`] and [`client_mouse_message`] take.
+pub(crate) const fn move_off_the_buttons(message: u32, wparam: usize) -> Option<CaptionPointer> {
+    match message {
+        WM_NCPOINTERUPDATE if !is_caption_button(((wparam >> 16) & 0xffff) as u32) => {
+            Some(CaptionPointer::Pointer((wparam & 0xffff) as u32))
+        }
+        WM_NCMOUSEMOVE if !is_caption_button((wparam & 0xffff) as u32) => {
+            Some(CaptionPointer::Mouse)
+        }
+        _ => None,
+    }
+}
+
 /// The non-client mouse messages and the client ones they stand for
 /// (`winuser.h`).
 const WM_NCMOUSEMOVE: u32 = 0x00A0;
@@ -203,6 +227,57 @@ mod tests {
             ("a mouse message", 0x00A1, HT_MAX_BUTTON, None),
         ] {
             assert_eq!(client_message(message, hit), client, "{name}");
+        }
+    }
+
+    #[test]
+    fn a_move_off_the_buttons_names_its_pointer() {
+        let pointer = |hit: u32, id: usize| ((hit as usize) << 16) | id;
+        for (name, message, wparam, moved) in [
+            (
+                "a pointer over the bar",
+                WM_NCPOINTERUPDATE,
+                pointer(HT_CAPTION, 7),
+                Some(CaptionPointer::Pointer(7)),
+            ),
+            (
+                "a pointer over a border",
+                WM_NCPOINTERUPDATE,
+                pointer(HT_LEFT, 1),
+                Some(CaptionPointer::Pointer(1)),
+            ),
+            (
+                "the mouse over the bar",
+                WM_NCMOUSEMOVE,
+                HT_CAPTION as usize,
+                Some(CaptionPointer::Mouse),
+            ),
+            (
+                "a pointer over a button",
+                WM_NCPOINTERUPDATE,
+                pointer(HT_MAX_BUTTON, 7),
+                None,
+            ),
+            (
+                "the mouse over a button",
+                WM_NCMOUSEMOVE,
+                HT_CLOSE as usize,
+                None,
+            ),
+            (
+                "a press on the bar",
+                WM_NCLBUTTONDOWN,
+                HT_CAPTION as usize,
+                None,
+            ),
+            (
+                "a pointer press on the bar",
+                WM_NCPOINTERDOWN,
+                pointer(HT_CAPTION, 7),
+                None,
+            ),
+        ] {
+            assert_eq!(move_off_the_buttons(message, wparam), moved, "{name}");
         }
     }
 

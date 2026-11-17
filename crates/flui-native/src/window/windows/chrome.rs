@@ -164,17 +164,42 @@ pub(crate) const fn app_title_bar_client(
             ..defaulted
         };
     };
+    leave_auto_hide_bars(
+        Edges {
+            top: proposed.top.saturating_add(frame_overhang),
+            ..defaulted
+        },
+        auto_hide,
+    )
+}
+
+/// Where a window without a frame is maximized on a monitor `monitor` whose
+/// work area is `work`, relative to the monitor's top-left corner: the work
+/// area, so the taskbar stays uncovered, standing back from each edge in
+/// `auto_hide` ([`leave_auto_hide_bars`]), where the work area reaches the
+/// monitor's edge.
+pub(crate) const fn maximized_area(monitor: Edges, work: Edges, auto_hide: AutoHideEdges) -> Edges {
+    let area = leave_auto_hide_bars(work, auto_hide);
+    Edges {
+        left: area.left.saturating_sub(monitor.left),
+        top: area.top.saturating_sub(monitor.top),
+        right: area.right.saturating_sub(monitor.left),
+        bottom: area.bottom.saturating_sub(monitor.top),
+    }
+}
+
+/// `client`, which would cover the work area, standing
+/// [`AUTO_HIDE_BAR_REVEAL`] back from each edge in `auto_hide`, where an app
+/// bar hides itself and the pointer reaching the edge must still reveal it.
+pub(crate) const fn leave_auto_hide_bars(client: Edges, auto_hide: AutoHideEdges) -> Edges {
     const fn reveal(bar: bool) -> i32 {
         if bar { AUTO_HIDE_BAR_REVEAL } else { 0 }
     }
     Edges {
-        left: defaulted.left.saturating_add(reveal(auto_hide.left)),
-        top: proposed
-            .top
-            .saturating_add(frame_overhang)
-            .saturating_add(reveal(auto_hide.top)),
-        right: defaulted.right.saturating_sub(reveal(auto_hide.right)),
-        bottom: defaulted.bottom.saturating_sub(reveal(auto_hide.bottom)),
+        left: client.left.saturating_add(reveal(auto_hide.left)),
+        top: client.top.saturating_add(reveal(auto_hide.top)),
+        right: client.right.saturating_sub(reveal(auto_hide.right)),
+        bottom: client.bottom.saturating_sub(reveal(auto_hide.bottom)),
     }
 }
 
@@ -364,6 +389,41 @@ mod tests {
                 "{name}"
             );
         }
+    }
+
+    /// A frameless window maximized on a second monitor at x 1920: the work
+    /// area relative to the monitor's corner, the taskbar left out, and with
+    /// an auto-hide bar the reveal at its edge.
+    #[test]
+    fn a_frameless_window_is_maximized_to_the_work_area() {
+        let monitor = Edges {
+            left: 1920,
+            top: 0,
+            right: 3840,
+            bottom: 1080,
+        };
+        let with_taskbar = Edges {
+            bottom: 1032,
+            ..monitor
+        };
+        let relative = |left, top, right, bottom| Edges {
+            left,
+            top,
+            right,
+            bottom,
+        };
+        assert_eq!(
+            maximized_area(monitor, with_taskbar, AutoHideEdges::default()),
+            relative(0, 0, 1920, 1032)
+        );
+        let bottom_bar = AutoHideEdges {
+            bottom: true,
+            ..AutoHideEdges::default()
+        };
+        assert_eq!(
+            maximized_area(monitor, monitor, bottom_bar),
+            relative(0, 0, 1920, 1078)
+        );
     }
 
     #[test]

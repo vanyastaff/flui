@@ -162,6 +162,11 @@ struct InputWindow {
     message_clock: raw::MessageClock,
     /// Whether the mouse is over its client area.
     hovered: Cell<bool>,
+    /// The pointer whose last message went to one of the application's
+    /// caption buttons, until it moves off the buttons, into the content or
+    /// out of the window: the hover the buttons saw, which a move over the bar
+    /// or a border must end, since the application hears no message there.
+    caption_hover: Cell<Option<caption::CaptionPointer>>,
     /// The system id of the pointer frame last delivered whole: each other
     /// pointer's message of that frame delivers nothing.
     delivered_frame: Cell<Option<u32>>,
@@ -209,6 +214,7 @@ impl InputWindow {
             )),
             message_clock,
             hovered: Cell::new(false),
+            caption_hover: Cell::new(None),
             delivered_frame: Cell::new(None),
             modifiers: Cell::new(Modifiers::NONE),
             touchpad: direct_manipulation::TouchpadSlot::default(),
@@ -336,6 +342,7 @@ impl WindowMessages for InputWindows {
         ) || (msg == WM_TIMER && InputWindow::is_touchpad_timer(wparam.0))
             || caption_pointer(msg, wparam).is_some()
             || caption::client_mouse_message(msg, wparam.0).is_some()
+            || caption::move_off_the_buttons(msg, wparam.0).is_some()
             || msg == WM_NCMOUSELEAVE
     }
 
@@ -361,6 +368,17 @@ impl WindowMessages for InputWindows {
         // Held for the whole message: a callback that closes the window
         // drops the entry, not the input this message reaches.
         let input = self.by_handle(hwnd);
+        if let Some(moved) = caption::move_off_the_buttons(msg, wparam.0) {
+            // A move over the bar or a border: the default procedure's. Only
+            // the first one after the application's buttons saw this pointer
+            // ends the hover they saw.
+            if let Some(input) = input.filter(|input| input.caption_hover.get() == Some(moved))
+                && input.caption_buttons_are_the_applications()
+            {
+                input.end_caption_hover(hwnd, moved);
+            }
+            return None;
+        }
         let caption = caption_pointer(msg, wparam);
         let caption_mouse = caption::client_mouse_message(msg, wparam.0);
         if (caption.is_some() || caption_mouse.is_some())
@@ -378,6 +396,11 @@ impl WindowMessages for InputWindows {
             // would track the system's own button and promote them to mouse
             // messages, never sees them.
             if let Some(input) = input {
+                input
+                    .caption_hover
+                    .set(Some(caption::CaptionPointer::Pointer(
+                        (wparam.0 & 0xffff) as u32,
+                    )));
                 input.pointer_message(hwnd, client, wparam);
             }
             return Some(LRESULT(0));
@@ -385,6 +408,11 @@ impl WindowMessages for InputWindows {
         if let Some(stand_in) = caption_mouse {
             // The same button on the legacy mouse route: the client mouse
             // message it stands for, at its point in client coordinates.
+            if let Some(input) = &input {
+                input
+                    .caption_hover
+                    .set(Some(caption::CaptionPointer::Mouse));
+            }
             // SAFETY: the arguments as Win32 delivered them to the class's
             // procedure, which is `caption_mouse`'s contract too.
             return Some(unsafe { Self::caption_mouse(hwnd, stand_in, lparam, input.as_deref()) });
@@ -513,6 +541,8 @@ impl InputWindows {
             let answer = match msg {
                 WM_MOUSEMOVE => {
                     if let Some(ctx) = ctx {
+                        // In the content: the application hears where it is.
+                        ctx.caption_hover_moved_on(caption::CaptionPointer::Mouse);
                         // Its hover ends with `WM_MOUSELEAVE`.
                         ctx.mouse_moved(hwnd, wparam, lparam, TME_LEAVE);
                     }
@@ -574,6 +604,11 @@ impl InputWindows {
                 | windows::Win32::UI::WindowsAndMessaging::WM_POINTERLEAVE
                 | windows::Win32::UI::WindowsAndMessaging::WM_POINTERCAPTURECHANGED => {
                     if let Some(ctx) = ctx {
+                        // In the content, or out of the window: the
+                        // application hears it.
+                        ctx.caption_hover_moved_on(caption::CaptionPointer::Pointer(
+                            (wparam.0 & 0xffff) as u32,
+                        ));
                         ctx.pointer_message(hwnd, msg, wparam);
                     }
                     // Consume the native route: DefWindowProc would promote it
@@ -1027,8 +1062,54 @@ impl InputWindow {
         // takes the point by value and the handle it answers is only compared.
         let still_over =
             unsafe { GetCursorPos(&raw mut cursor).is_ok() && WindowFromPoint(cursor) == hwnd };
-        if !still_over {
-            self.set_hovered(false);
+        if still_over {
+            return;
+        }
+        // Settled before the leave below reaches user code.
+        self.set_hovered(false);
+        // Out of the window from a button: the hover the button saw ends.
+        if self.caption_hover.get() == Some(caption::CaptionPointer::Mouse) {
+            self.end_caption_hover(hwnd, caption::CaptionPointer::Mouse);
+        }
+    }
+
+    /// `pointer`'s message reached the application other than through a
+    /// caption button: whatever hover the buttons saw of it, the application
+    /// now hears where it is.
+    fn caption_hover_moved_on(&self, pointer: caption::CaptionPointer) {
+        if self.caption_hover.get() == Some(pointer) {
+            self.caption_hover.set(None);
+        }
+    }
+
+    /// The hover the application's caption buttons saw of `pointer` ends: it
+    /// moved over the bar or a border, which the application hears nothing of,
+    /// or out of the window. The pointer leaves the application's input at the
+    /// point it was last delivered at, once; the next the application hears of
+    /// it is its next move into the content or over a button. A pointer's
+    /// leave reads its packets, which the non-client message being handled
+    /// carries.
+    fn end_caption_hover(&self, hwnd: HWND, pointer: caption::CaptionPointer) {
+        use windows::Win32::UI::WindowsAndMessaging::WM_POINTERLEAVE;
+
+        self.caption_hover.set(None);
+        let inputs = match pointer {
+            caption::CaptionPointer::Mouse => {
+                raw::mouse_leave_input(&self.registry, self.message_clock.message_time())
+            }
+            caption::CaptionPointer::Pointer(raw) => raw::native_pointer_input(
+                hwnd,
+                WM_POINTERLEAVE,
+                (raw, raw::is_mouse_pointer(raw)),
+                self.scale_factor(),
+                &self.message_clock,
+                &self.registry,
+            ),
+        };
+        for input in inputs {
+            if self.registry.borrow().delivers(&input) {
+                self.delivery.dispatch_input(input);
+            }
         }
     }
 
@@ -2278,6 +2359,21 @@ mod raw {
         time: u64,
     ) -> Assembled {
         let reading = legacy_mouse_reading(ReadingAction::Move, wparam, lparam, scale_factor, time);
+        decode(&mut registry.borrow_mut(), &reading).unwrap_or_else(DecodeError::into_inputs)
+    }
+
+    /// The primary mouse leaving at the point last delivered: the hover a
+    /// caption button saw of it ends where the application hears no message.
+    pub(super) fn mouse_leave_input(registry: &RefCell<ContactRegistry>, time: u64) -> Assembled {
+        let reading = NativeReading::new(
+            MOUSE_CONTACT,
+            PointerKind::Mouse,
+            ReadingAction::Leave,
+            ReadingTime::epoch(EventTime::from_nanos(time)),
+        )
+        .on(SURFACE)
+        .with_primary(true)
+        .with_modifiers(message_modifiers());
         decode(&mut registry.borrow_mut(), &reading).unwrap_or_else(DecodeError::into_inputs)
     }
 

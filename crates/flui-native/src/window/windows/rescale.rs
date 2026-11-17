@@ -8,13 +8,21 @@
 //! off its logical size, and the error grows with each change. The window
 //! measures the frame at both DPIs instead and keeps the content.
 //!
+//! Each change rounds the content to whole device pixels, so a logical size
+//! read back from the rounded pixels at every change would still walk by a
+//! pixel over several changes (801 logical across 100%, 150%, 125% and back
+//! comes home as 802). The window keeps the logical size it rescaled from
+//! instead, for as long as its content is still that size in device pixels:
+//! a resize by the user or a command changes the pixels, and the kept size
+//! gives way to the new one.
+//!
 //! The pure half of the Win32 window: the frame at each DPI is an input (the
 //! window reads it from `AdjustWindowRectExForDpi`), so every host runs the
 //! tests; the window procedure answers the system with it (`proc`).
 
 #![forbid(unsafe_code)]
 
-use flui_foundation::geometry::DevicePixelRatio;
+use flui_foundation::geometry::{DevicePixelRatio, Size};
 
 use super::limits::PixelSize;
 use crate::window::state::device_extent;
@@ -27,10 +35,22 @@ pub(crate) struct FramedScale {
     pub(crate) frame: PixelSize,
 }
 
+/// A window's outer size at a new scale, and the logical size of its content
+/// there, which the window keeps for the next change.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct Rescaled {
+    pub(crate) outer: PixelSize,
+    pub(crate) logical: Size<f64>,
+}
+
 /// The outer size of a window that measures `outer` with the frame and scale
 /// of `from`, once it is at the scale of `to` with the frame it has there: its
 /// content at the same logical size, by the hosts' one extent rule
 /// ([`device_extent`]), and the frame of `to` around it.
+///
+/// The logical size is `kept`, the one the window rescaled from at its last
+/// change, on each side where the content still has that size's pixels at
+/// `from`; elsewhere it is the content's pixels over `from`'s scale.
 ///
 /// `None` when the content is no size at `from` (an outer size within its
 /// frame) or the result is past what Win32 holds: the system's own linear
@@ -39,19 +59,37 @@ pub(crate) fn rescaled_outer(
     outer: PixelSize,
     from: FramedScale,
     to: FramedScale,
-) -> Option<PixelSize> {
-    let side = |outer: i32, frame_from: i32, frame_to: i32| {
+    kept: Option<Size<f64>>,
+) -> Option<Rescaled> {
+    let side = |outer: i32, frame_from: i32, frame_to: i32, kept: Option<f64>| {
         let content = outer
             .checked_sub(frame_from)
             .filter(|content| *content > 0)?;
-        let logical = from.ratio.to_logical(f64::from(content));
-        let content = i32::try_from(device_extent(logical, to.ratio)?).ok()?;
-        content.checked_add(frame_to)
+        let logical = kept
+            .filter(|kept| {
+                device_extent(*kept, from.ratio)
+                    .is_some_and(|pixels| i64::from(pixels) == i64::from(content))
+            })
+            .unwrap_or_else(|| from.ratio.to_logical(f64::from(content)));
+        let rescaled = i32::try_from(device_extent(logical, to.ratio)?).ok()?;
+        Some((rescaled.checked_add(frame_to)?, logical))
     };
-    Some(PixelSize::new(
-        side(outer.width, from.frame.width, to.frame.width)?,
-        side(outer.height, from.frame.height, to.frame.height)?,
-    ))
+    let (width, logical_width) = side(
+        outer.width,
+        from.frame.width,
+        to.frame.width,
+        kept.map(|kept| kept.width),
+    )?;
+    let (height, logical_height) = side(
+        outer.height,
+        from.frame.height,
+        to.frame.height,
+        kept.map(|kept| kept.height),
+    )?;
+    Some(Rescaled {
+        outer: PixelSize::new(width, height),
+        logical: Size::new(logical_width, logical_height),
+    })
 }
 
 #[cfg(test)]
@@ -105,12 +143,14 @@ mod tests {
         };
         let start = PixelSize::new(816, 639);
         let mut rescaled = start;
+        let mut kept = None;
         let mut linear = start;
         let mut at = 96;
         let mut linear_drifted = false;
         for dpi in [144, 168, 120, 96] {
-            rescaled = rescaled_outer(rescaled, system_frame(at), system_frame(dpi))
+            let next = rescaled_outer(rescaled, system_frame(at), system_frame(dpi), kept)
                 .expect("a window with content");
+            (rescaled, kept) = (next.outer, Some(next.logical));
             linear = linearly_scaled(linear, at, dpi);
             at = dpi;
             assert_eq!(content_at(rescaled, dpi), wanted(dpi), "rescaled at {dpi}");
@@ -123,6 +163,56 @@ mod tests {
         );
     }
 
+    /// Every content side from 300 to 3000 logical pixels, moved across 100%,
+    /// 150%, 125% and back, comes home at the pixels it left: the window keeps
+    /// the logical size across the changes. Read back from the rounded pixels
+    /// at each change, 675 of those sides came home a pixel larger (801 as
+    /// 802).
+    #[test]
+    fn a_kept_logical_size_comes_home_across_several_changes() {
+        let frame = |dpi: u32| FramedScale {
+            ratio: ratio(dpi),
+            frame: PixelSize::new(0, 0),
+        };
+        let mut read_back_drifted = 0;
+        for side in 300..=3000 {
+            let start = PixelSize::new(side, side);
+            let (mut kept_outer, mut kept) = (start, None);
+            let mut read_back = start;
+            let mut at = 96;
+            for dpi in [144, 120, 96] {
+                let next = rescaled_outer(kept_outer, frame(at), frame(dpi), kept)
+                    .expect("a window with content");
+                (kept_outer, kept) = (next.outer, Some(next.logical));
+                read_back = rescaled_outer(read_back, frame(at), frame(dpi), None)
+                    .expect("a window with content")
+                    .outer;
+                at = dpi;
+            }
+            assert_eq!(kept_outer, start, "{side} logical comes home");
+            if read_back != start {
+                read_back_drifted += 1;
+            }
+        }
+        assert_eq!(read_back_drifted, 675, "the drift the kept size removes");
+    }
+
+    /// A resize between two changes gives the kept size way: the content's
+    /// pixels at the old scale are no longer the kept size's, so the new
+    /// content's own logical size is rescaled and kept.
+    #[test]
+    fn a_resize_gives_the_kept_logical_size_way() {
+        let frame = |dpi: u32| FramedScale {
+            ratio: ratio(dpi),
+            frame: PixelSize::new(0, 0),
+        };
+        let kept = Some(Size::new(801.0, 600.0));
+        let resized = rescaled_outer(PixelSize::new(1500, 900), frame(144), frame(96), kept)
+            .expect("a window with content");
+        assert_eq!(resized.outer, PixelSize::new(1000, 600));
+        assert_eq!(resized.logical, Size::new(1000.0, 600.0));
+    }
+
     #[test]
     fn a_window_with_no_content_or_past_win32_keeps_the_systems_answer() {
         let small = system_frame(96);
@@ -132,14 +222,14 @@ mod tests {
             ("shorter than its frame", PixelSize::new(816, 20)),
             ("negative", PixelSize::new(-1, 639)),
         ] {
-            assert_eq!(rescaled_outer(outer, small, large), None, "{name}");
+            assert_eq!(rescaled_outer(outer, small, large, None), None, "{name}");
         }
         let past = FramedScale {
             frame: PixelSize::new(i32::MAX, 0),
             ..large
         };
         assert_eq!(
-            rescaled_outer(PixelSize::new(816, 639), small, past),
+            rescaled_outer(PixelSize::new(816, 639), small, past, None),
             None,
             "an outer size past i32"
         );

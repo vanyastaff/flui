@@ -1553,6 +1553,87 @@ fn caption_buttons_take_the_legacy_mouse_messages_over_them() {
     assert!(!system.state().hovered);
 }
 
+/// The hover an application's caption button saw ends when the pointer moves
+/// on over the bar or a border, which the application hears nothing of: one
+/// leave, at the button, for the first such move, and none for the next.
+fn a_move_off_a_caption_button_ends_the_hover_it_saw() {
+    use flui_foundation::geometry::Rect;
+    use flui_platform::input_regions::{CaptionButton, InputRegion, InputRegionKind};
+    use flui_platform::pointer::PointerEvent;
+    use flui_platform::{AppTitleBar, PlatformInput, SystemControls};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        HTCAPTION, HTMINBUTTON, HTRIGHT, WM_NCMOUSEMOVE,
+    };
+
+    let platform = platform();
+    let frame =
+        WindowFrame::AppTitleBar(AppTitleBar::new().with_system_controls(SystemControls::Hidden));
+    let window = open(&platform, hidden().frame(frame));
+    window
+        .set_input_regions(&[InputRegion::new(
+            InputRegionKind::CaptionButton(CaptionButton::Minimize),
+            Rect::from_ltrb(520.0, 0.0, 560.0, 32.0),
+        )])
+        .expect("a Win32 window honours the chrome regions");
+    let scale = window.state().metrics.expect("drawable").scale().get();
+    let origin = client_origin_on_screen(&window);
+    let screen = |x: f64, y: f64| {
+        let x = origin.0 + (x * scale).round() as i32;
+        let y = origin.1 + (y * scale).round() as i32;
+        ((y as u32 & 0xffff) << 16 | (x as u32 & 0xffff)) as i32 as isize
+    };
+    let leaves = |window: &Opened| -> Vec<(f64, f64)> {
+        window
+            .handler
+            .inputs()
+            .iter()
+            .filter_map(PlatformInput::as_pointer)
+            .filter_map(|event| match event {
+                PointerEvent::Leave(signal) => {
+                    let at = signal.position.expect("where it left").get();
+                    Some((at.x, at.y))
+                }
+                _ => None,
+            })
+            .collect()
+    };
+    window.handler.take_calls();
+    send(
+        &window,
+        WM_NCMOUSEMOVE,
+        HTMINBUTTON as usize,
+        screen(540.0, 16.0),
+    );
+    assert_eq!(leaves(&window), [], "over the button, no leave");
+    send(
+        &window,
+        WM_NCMOUSEMOVE,
+        HTCAPTION as usize,
+        screen(300.0, 16.0),
+    );
+    let left = leaves(&window);
+    assert_eq!(
+        left.len(),
+        1,
+        "one leave for the move over the bar: {left:?}"
+    );
+    assert!(
+        near(left[0].0, 540.0) && near(left[0].1, 16.0),
+        "it leaves where the button last saw it: {left:?}"
+    );
+    send(
+        &window,
+        WM_NCMOUSEMOVE,
+        HTRIGHT as usize,
+        screen(641.0, 100.0),
+    );
+    assert_eq!(
+        leaves(&window).len(),
+        1,
+        "the next move has no hover to end"
+    );
+}
+
 fn geometry_win32_cannot_hold_is_refused() {
     let platform = platform();
     let window = open(&platform, options());
@@ -2879,6 +2960,10 @@ fn native_window_commands() {
         (
             "a_scale_change_keeps_the_contents_logical_size",
             a_scale_change_keeps_the_contents_logical_size,
+        ),
+        (
+            "a_move_off_a_caption_button_ends_the_hover_it_saw",
+            a_move_off_a_caption_button_ends_the_hover_it_saw,
         ),
         (
             "a_deferred_window_is_hidden_until_its_first_frame",

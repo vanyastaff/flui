@@ -188,9 +188,11 @@ pub(crate) fn window_class<H: WindowsHost>() -> Option<WindowClass> {
     Some(class)
 }
 
-/// FLUI's window class on this thread for the host the process registered
-/// the class for; `None` on a thread no owner of that host opened on.
-fn registered_class() -> Option<WindowClass> {
+/// What `part` reads of FLUI's window class on this thread for the host the
+/// process registered the class for, read inside the class list's borrow so
+/// only that part is cloned; `None` on a thread no owner of that host opened
+/// on.
+fn registered_class<T>(part: impl FnOnce(&WindowClass) -> T) -> Option<T> {
     let host = *WINDOW_CLASS.get()?.as_ref().ok()?;
     CLASS_ON_THREAD
         .try_with(|classes| {
@@ -198,7 +200,7 @@ fn registered_class() -> Option<WindowClass> {
                 .borrow()
                 .iter()
                 .find(|(made_for, _)| *made_for == host)
-                .map(|(_, class)| class.clone())
+                .map(|(_, class)| part(class))
         })
         .ok()
         .flatten()
@@ -208,21 +210,21 @@ fn registered_class() -> Option<WindowClass> {
 /// them for the host the process registered the class for; `None` on a thread
 /// no owner of that host opened on.
 pub(crate) fn thread_modal_loops() -> Option<Rc<ModalLoops>> {
-    registered_class().map(|class| class.modal_loops)
+    registered_class(|class| Rc::clone(&class.modal_loops))
 }
 
 /// What the input of FLUI's window class on this thread tells the other
 /// features of a window, for the host the process registered the class for;
 /// `None` on a thread no owner of that host opened on.
 pub(crate) fn window_inputs() -> Option<Rc<dyn WindowInputs>> {
-    registered_class().map(|class| class.input)
+    registered_class(|class| Rc::clone(&class.input))
 }
 
 /// What the text input of FLUI's window class on this thread holds of a
 /// window, for the host the process registered the class for; `None` on a
 /// thread no owner of that host opened on.
 pub(crate) fn window_texts() -> Option<Rc<dyn WindowTexts>> {
-    registered_class().map(|class| class.text)
+    registered_class(|class| Rc::clone(&class.text))
 }
 
 /// What the window's own hook of FLUI's window class on this thread tells the
@@ -230,7 +232,7 @@ pub(crate) fn window_texts() -> Option<Rc<dyn WindowTexts>> {
 /// registered the class for; `None` on a thread no owner of that host opened
 /// on.
 pub(crate) fn window_chrome() -> Option<Rc<dyn WindowChrome>> {
-    registered_class().map(|class| class.chrome)
+    registered_class(|class| Rc::clone(&class.chrome))
 }
 
 /// What the window tells the class's other hooks of its frame, read-only.

@@ -43,9 +43,9 @@ use windows::Win32::{
         IsWindowVisible, IsZoomed, MINMAXINFO, NCCALCSIZE_PARAMS, SC_KEYMENU, SC_RESTORE, SW_SHOW,
         SW_SHOWMAXIMIZED, SW_SHOWMINIMIZED, SWP_NOSIZE, SendMessageW, SetWindowLongPtrW,
         WA_INACTIVE, WINDOWPOS, WM_ACTIVATE, WM_APP, WM_CLOSE, WM_CREATE, WM_DESTROY,
-        WM_DPICHANGED, WM_ERASEBKGND, WM_GETDPISCALEDSIZE, WM_GETMINMAXINFO, WM_KILLFOCUS, WM_MOVE,
-        WM_NCCALCSIZE, WM_NCHITTEST, WM_PAINT, WM_SETCURSOR, WM_SETFOCUS, WM_SETTEXT,
-        WM_SETTINGCHANGE, WM_SHOWWINDOW, WM_SIZE, WM_STYLECHANGED, WM_SYSCOMMAND,
+        WM_DISPLAYCHANGE, WM_DPICHANGED, WM_ERASEBKGND, WM_GETDPISCALEDSIZE, WM_GETMINMAXINFO,
+        WM_KILLFOCUS, WM_MOVE, WM_NCCALCSIZE, WM_NCHITTEST, WM_PAINT, WM_SETCURSOR, WM_SETFOCUS,
+        WM_SETTEXT, WM_SETTINGCHANGE, WM_SHOWWINDOW, WM_SIZE, WM_STYLECHANGED, WM_SYSCOMMAND,
         WM_WINDOWPOSCHANGED, WM_WINDOWPOSCHANGING, WS_CAPTION, WS_MAXIMIZE, WS_MAXIMIZEBOX,
         WS_MINIMIZE, WS_OVERLAPPEDWINDOW, WS_POPUP, WS_THICKFRAME,
     },
@@ -357,6 +357,15 @@ pub(crate) struct WindowContext {
     /// Set while the window is being put into fullscreen, before its mode says
     /// so: the size limits do not apply to the rectangle it is given.
     pub limits_waived: std::cell::Cell<bool>,
+    /// The logical size the content kept at the window's last scale change,
+    /// and the one the rectangle a fullscreen window returns to kept
+    /// (`rescale::rescaled_outer`): each holds only while the pixels are still
+    /// that size's, so a resize gives it way.
+    pub(crate) kept_logical: std::cell::Cell<KeptLogical>,
+    /// The auto-hide app bars of the monitor the window was last maximized
+    /// on, as the shell answered, until the settings or the displays change
+    /// ([`Self::auto_hide_edges`]).
+    pub(crate) app_bars: std::cell::Cell<Option<MonitorAppBars>>,
     /// How many times the app asked for the window to be shown; see
     /// [`Self::note_show_request`].
     pub show_requests: std::cell::Cell<u32>,
@@ -508,6 +517,84 @@ impl WindowContext {
     /// Its caption buttons are then the application's.
     fn chrome_answers_the_hit_test(&self) -> bool {
         !self.frame.get().has_system_title_bar() && !self.mode.get().holds_fullscreen()
+    }
+
+    /// The edges holding an auto-hide app bar of the monitor `rect` lies on:
+    /// the ones the window measured for that monitor, or the shell's answer,
+    /// which it keeps until the settings or the displays change.
+    pub(crate) fn auto_hide_edges_at(&self, rect: &RECT) -> super::chrome::AutoHideEdges {
+        let Some((monitor, bounds)) = monitor_at(rect) else {
+            return super::chrome::AutoHideEdges::default();
+        };
+        if let Some(bars) = self.app_bars.get().filter(|bars| bars.monitor == monitor) {
+            return bars.edges;
+        }
+        let edges = shell_auto_hide_edges(bounds);
+        self.app_bars.set(Some(MonitorAppBars { monitor, edges }));
+        edges
+    }
+
+    /// The settings or the displays changed, so the app bars may have: an
+    /// auto-hide taskbar turned on or off, or moved to another edge, which
+    /// leaves the work area the whole monitor, so the system does not size
+    /// the window again. The window forgets what it measured, and a maximized
+    /// window without the system's title bar measures its client again when
+    /// its monitor's bars changed.
+    pub(crate) fn app_bars_may_have_changed(&self, hwnd: HWND) {
+        use windows::Win32::UI::WindowsAndMessaging::{
+            SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOOWNERZORDER, SWP_NOSIZE,
+            SWP_NOZORDER, SetWindowPos,
+        };
+
+        let measured = self.app_bars.take();
+        // SAFETY: a plain query of the live window the message was sent to.
+        let maximized = unsafe { IsZoomed(hwnd) }.as_bool();
+        let Some(measured) = measured.filter(|_| maximized && self.chrome_answers_the_hit_test())
+        else {
+            return;
+        };
+        let mut window = RECT::default();
+        // SAFETY: `window` is a stack local out-parameter.
+        if unsafe { GetWindowRect(hwnd, &raw mut window) }.is_err()
+            || self.auto_hide_edges_at(&window) == measured.edges
+        {
+            return;
+        }
+        let keep = SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_NOACTIVATE;
+        // A window without a frame takes the area it is maximized to again;
+        // one with an application's title bar measures its client again
+        // (the frame change sends `WM_NCCALCSIZE`).
+        let (rect, flags) = match self.frameless_maximized_area(hwnd) {
+            Some((monitor, area)) => (
+                RECT {
+                    left: monitor.left.saturating_add(area.left),
+                    top: monitor.top.saturating_add(area.top),
+                    right: monitor.left.saturating_add(area.right),
+                    bottom: monitor.top.saturating_add(area.bottom),
+                },
+                keep,
+            ),
+            None => (
+                RECT::default(),
+                keep | SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE,
+            ),
+        };
+        // SAFETY: plain integer and flag arguments on the live window, with
+        // `None` as the documented no-op z-order handle.
+        let placed = unsafe {
+            SetWindowPos(
+                hwnd,
+                None,
+                rect.left,
+                rect.top,
+                rect.right.saturating_sub(rect.left),
+                rect.bottom.saturating_sub(rect.top),
+                flags,
+            )
+        };
+        if let Err(error) = placed {
+            tracing::warn!(?hwnd, ?error, "SetWindowPos (app bars changed) failed");
+        }
     }
 
     /// What this context knows of the window beyond what Win32 reports.
@@ -824,7 +911,7 @@ impl WindowMessages for WindowProc {
             | WM_WINDOWPOSCHANGED | CLOSE_WINDOW | DELIVER_QUEUED | WM_SETTEXT
             | WM_STYLECHANGED | WM_GETMINMAXINFO | REQUEST_FRAME | WM_SETCURSOR | WM_SETFOCUS
             | WM_KILLFOCUS | WM_ACTIVATE | WM_SETTINGCHANGE | WM_NCCALCSIZE | WM_NCHITTEST
-            | WM_GETDPISCALEDSIZE => true,
+            | WM_GETDPISCALEDSIZE | WM_DISPLAYCHANGE => true,
             WM_TIMER => wparam.0 == MODAL_DEADLINE_TIMER,
             WM_SYSCOMMAND => {
                 (wparam.0 & 0xFFF0) == SC_KEYMENU as usize || is_user_placement_command(wparam)
@@ -1398,28 +1485,41 @@ impl WindowProc {
                 }
 
                 // A title bar of the application's: the caption and the top
-                // border go, the side and bottom borders stay the system's.
+                // border go, the side and bottom borders stay the system's,
+                // and a maximized one leaves an auto-hide taskbar the edge it
+                // slides in from.
                 WM_NCCALCSIZE => {
-                    if !(wparam.0 != 0
-                        && ctx.is_some_and(WindowContext::draws_app_title_bar)
-                        && has_caption(hwnd))
-                    {
+                    let Some(ctx) = ctx.filter(|ctx| {
+                        wparam.0 != 0 && ctx.draws_app_title_bar() && has_caption(hwnd)
+                    }) else {
                         return Some(DefWindowProcW(hwnd, msg, wparam, lparam));
-                    }
+                    };
+                    let maximized = IsZoomed(hwnd).as_bool();
                     // SAFETY: with a nonzero `wParam`, `lParam` points at the
                     // `NCCALCSIZE_PARAMS` the system owns for this call, valid
                     // and writable until the message returns; the default
                     // procedure reads and writes it before this does.
                     let params = lparam.0 as *mut NCCALCSIZE_PARAMS;
-                    let proposed = edges((*params).rgrc[0]);
+                    let proposed_rect = (*params).rgrc[0];
                     let answer = DefWindowProcW(hwnd, msg, wparam, lparam);
                     let defaulted = edges((*params).rgrc[0]);
-                    let maximized = IsZoomed(hwnd).as_bool().then(|| super::chrome::Maximized {
-                        frame_overhang: frame_thickness(hwnd),
-                        auto_hide: auto_hide_edges(hwnd),
-                    });
-                    let client =
-                        super::chrome::app_title_bar_client(proposed, defaulted, maximized);
+                    // The rectangle the window is about to take names the
+                    // monitor, not the one it is on: a window restored straight
+                    // to maximized is still parked off every monitor, and one
+                    // moved to another monitor maximized is still on the first.
+                    let auto_hide = if maximized {
+                        ctx.auto_hide_edges_at(&proposed_rect)
+                    } else {
+                        super::chrome::AutoHideEdges::default()
+                    };
+                    let client = super::chrome::app_title_bar_client(
+                        edges(proposed_rect),
+                        defaulted,
+                        maximized.then(|| super::chrome::Maximized {
+                            frame_overhang: frame_thickness(hwnd),
+                            auto_hide,
+                        }),
+                    );
                     (*params).rgrc[0] = RECT {
                         left: client.left,
                         top: client.top,
@@ -1556,6 +1656,17 @@ impl WindowProc {
                             }
                             ctx.publish_window_state(hwnd);
                         }
+                        // The taskbar's settings arrive here too: a bar set to
+                        // hide itself, or moved to another edge.
+                        ctx.app_bars_may_have_changed(hwnd);
+                    }
+                    DefWindowProcW(hwnd, msg, wparam, lparam)
+                }
+
+                // The monitors changed: what lies at their edges may have.
+                WM_DISPLAYCHANGE => {
+                    if let Some(ctx) = ctx {
+                        ctx.app_bars_may_have_changed(hwnd);
                     }
                     DefWindowProcW(hwnd, msg, wparam, lparam)
                 }
@@ -1698,51 +1809,59 @@ fn frame_thickness(hwnd: HWND) -> i32 {
     }
 }
 
-/// The edges of the monitor `hwnd` is on that hold an app bar set to hide
-/// itself, as the shell answers `ABM_GETAUTOHIDEBAREX` for each. An edge the
-/// shell cannot answer for (no shell, a monitor that cannot be read) reads as
-/// holding none.
-///
-/// Each answer is a message the shell's taskbar answers from another process,
-/// so the thread may run a message sent to one of its windows meanwhile; the
-/// caller holds no borrow across it.
-fn auto_hide_edges(hwnd: HWND) -> super::chrome::AutoHideEdges {
-    use windows::Win32::{
-        Graphics::Gdi::{
-            GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow,
-        },
-        UI::Shell::{
-            ABE_BOTTOM, ABE_LEFT, ABE_RIGHT, ABE_TOP, ABM_GETAUTOHIDEBAREX, APPBARDATA,
-            SHAppBarMessage,
-        },
+/// The monitor `rect` lies on most (the nearest when it lies on none), as a
+/// handle's integer and the monitor's rectangle; `None` when the monitor
+/// cannot be read.
+pub(super) fn monitor_at(rect: &RECT) -> Option<(isize, RECT)> {
+    use windows::Win32::Graphics::Gdi::{
+        GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromRect,
     };
 
-    let mut monitor = MONITORINFO {
+    let mut info = MONITORINFO {
         cbSize: std::mem::size_of::<MONITORINFO>() as u32,
         ..Default::default()
     };
-    // SAFETY: `monitor` is a stack local with `cbSize` set; the monitor handle
-    // comes from the live window.
-    let read = unsafe {
-        GetMonitorInfoW(
-            MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST),
-            &raw mut monitor,
-        )
-    };
-    if !read.as_bool() {
-        return super::chrome::AutoHideEdges::default();
+    // SAFETY: `rect` is a live reference read by the call; `info` is a stack
+    // local with `cbSize` set, which the call fills.
+    unsafe {
+        let monitor = MonitorFromRect(rect, MONITOR_DEFAULTTONEAREST);
+        GetMonitorInfoW(monitor, &raw mut info)
+            .as_bool()
+            .then_some((monitor.0 as isize, info.rcMonitor))
     }
-    let holds_bar = |edge: u32| {
+}
+
+/// The edges of the monitor `monitor` (its rectangle) that hold an app bar set
+/// to hide itself, as the shell answers: none at all unless the taskbar hides
+/// itself (`ABM_GETSTATE`), else each edge's `ABM_GETAUTOHIDEBAREX`. An edge
+/// the shell cannot answer for (no shell) reads as holding none.
+///
+/// Each answer is a message the shell's taskbar answers from another process,
+/// so the thread may run a message sent to one of its windows meanwhile, and
+/// a hung shell holds the caller until the system gives up on it; the window
+/// asks once per monitor until the settings or the displays change
+/// ([`WindowContext::auto_hide_edges_at`]), and holds no borrow across it.
+fn shell_auto_hide_edges(monitor: RECT) -> super::chrome::AutoHideEdges {
+    use windows::Win32::UI::Shell::{
+        ABE_BOTTOM, ABE_LEFT, ABE_RIGHT, ABE_TOP, ABM_GETAUTOHIDEBAREX, ABM_GETSTATE, ABS_AUTOHIDE,
+        APPBARDATA, SHAppBarMessage,
+    };
+
+    let ask = |message: u32, edge: u32| {
         let mut query = APPBARDATA {
             cbSize: std::mem::size_of::<APPBARDATA>() as u32,
             uEdge: edge,
-            rc: monitor.rcMonitor,
+            rc: monitor,
             ..Default::default()
         };
         // SAFETY: `query` is a stack local with `cbSize` set, read by the call
-        // and not kept; the answer is the bar's handle, or zero for none.
-        unsafe { SHAppBarMessage(ABM_GETAUTOHIDEBAREX, &raw mut query) != 0 }
+        // and not kept; the answer is a plain value.
+        unsafe { SHAppBarMessage(message, &raw mut query) }
     };
+    if ask(ABM_GETSTATE, 0) & ABS_AUTOHIDE as usize == 0 {
+        return super::chrome::AutoHideEdges::default();
+    }
+    let holds_bar = |edge: u32| ask(ABM_GETAUTOHIDEBAREX, edge) != 0;
     super::chrome::AutoHideEdges {
         left: holds_bar(ABE_LEFT),
         top: holds_bar(ABE_TOP),
@@ -2360,27 +2479,36 @@ impl WindowContext {
         // SAFETY: a plain style query of the live window the message was sent to.
         let style = unsafe { GetWindowLongPtrW(hwnd, GWL_STYLE) } as u32;
         let outer = super::limits::PixelSize::new(pending.cx, pending.cy);
-        let Some(rescaled) = self.rescaled_outer(hwnd, style, outer, self.scale.dpi(), to.get())
-        else {
+        let mut kept = self.kept_logical.get();
+        let Some(rescaled) = self.rescaled_outer(
+            hwnd,
+            style,
+            outer,
+            (self.scale.dpi(), to.get()),
+            kept.content,
+        ) else {
             return false;
         };
-        pending.cx = rescaled.width;
-        pending.cy = rescaled.height;
+        kept.content = Some(rescaled.logical);
+        self.kept_logical.set(kept);
+        pending.cx = rescaled.outer.width;
+        pending.cy = rescaled.outer.height;
         true
     }
 
-    /// The outer size of a window of `style` that is `outer` at `from` DPI,
-    /// once it is at `to` DPI with its content at the same logical size; the
-    /// frame is measured for `style` at each DPI. `None` where either DPI is
-    /// no screen's, the frame cannot be measured, or the content is no size.
+    /// The outer size of a window of `style` that is `outer` at the first DPI
+    /// of `dpis`, once it is at the second with its content at the same
+    /// logical size (`kept` where the pixels are still its); the frame is
+    /// measured for `style` at each DPI. `None` where either DPI is no
+    /// screen's, the frame cannot be measured, or the content is no size.
     fn rescaled_outer(
         &self,
         hwnd: HWND,
         style: u32,
         outer: super::limits::PixelSize,
-        from: u32,
-        to: u32,
-    ) -> Option<super::limits::PixelSize> {
+        (from, to): (u32, u32),
+        kept: Option<Size<f64>>,
+    ) -> Option<super::rescale::Rescaled> {
         use super::rescale::{FramedScale, rescaled_outer};
 
         // SAFETY: a plain style query of the live window.
@@ -2395,7 +2523,7 @@ impl WindowContext {
                 frame: super::limits::PixelSize::new(width, height),
             })
         };
-        rescaled_outer(outer, framed(from)?, framed(to)?)
+        rescaled_outer(outer, framed(from)?, framed(to)?, kept)
     }
 
     /// Give the window the rectangle its new DPI asks for; it was at `from`
@@ -2427,9 +2555,18 @@ impl WindowContext {
             // The frame is the one the window returns to; a way back whose
             // content is no size is scaled as the system would scale it.
             let ratio = f64::from(to) / f64::from(from);
-            let size = self
-                .rescaled_outer(hwnd, self.restore_style.get(), outer, from, to)
-                .map(|size| (size.width, size.height))
+            let mut kept = self.kept_logical.get();
+            let rescaled_bounds = self.rescaled_outer(
+                hwnd,
+                self.restore_style.get(),
+                outer,
+                (from, to),
+                kept.restore,
+            );
+            kept.restore = rescaled_bounds.map(|rescaled| rescaled.logical);
+            self.kept_logical.set(kept);
+            let size = rescaled_bounds
+                .map(|rescaled| (rescaled.outer.width, rescaled.outer.height))
                 .or_else(|| {
                     rescaled(bounds.size.width, ratio).zip(rescaled(bounds.size.height, ratio))
                 });
@@ -2486,6 +2623,24 @@ impl WindowContext {
             tracing::warn!(?hwnd, ?error, "SetWindowPos (DPI change) failed");
         }
     }
+}
+
+/// The logical sizes a window keeps across scale changes
+/// (`rescale::rescaled_outer`).
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub(crate) struct KeptLogical {
+    /// Its content's.
+    pub(crate) content: Option<Size<f64>>,
+    /// The content's of the rectangle a fullscreen window returns to.
+    pub(crate) restore: Option<Size<f64>>,
+}
+
+/// The auto-hide app bars of one monitor, as the shell answered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct MonitorAppBars {
+    /// The monitor's handle as an integer: compared, never dereferenced.
+    pub(crate) monitor: isize,
+    pub(crate) edges: super::chrome::AutoHideEdges,
 }
 
 /// What hides a window whose surface is shown.
@@ -2765,6 +2920,52 @@ impl WindowContext {
 }
 
 impl WindowContext {
+    /// The monitor of a window without a frame (no caption, no sizing border)
+    /// and where the window is maximized on it, relative to the monitor's
+    /// top-left corner as `MINMAXINFO::ptMaxPosition` takes it: the monitor's
+    /// work area, standing
+    /// back from each edge that holds an auto-hide app bar
+    /// ([`chrome::maximized_area`](super::chrome::maximized_area)). Left to
+    /// itself, the system maximizes such a window over the whole monitor,
+    /// taskbar included. `None` for a window with a frame, which the system
+    /// maximizes to the work area itself, for a fullscreen one, which covers
+    /// its monitor, or when the monitor cannot be read.
+    fn frameless_maximized_area(
+        &self,
+        hwnd: HWND,
+    ) -> Option<(super::chrome::Edges, super::chrome::Edges)> {
+        use windows::Win32::Graphics::Gdi::{
+            GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow,
+        };
+
+        // SAFETY: a plain style query of the live window.
+        let style = unsafe { GetWindowLongPtrW(hwnd, GWL_STYLE) } as u32;
+        if style & (WS_CAPTION.0 | WS_THICKFRAME.0) != 0 || !self.chrome_answers_the_hit_test() {
+            return None;
+        }
+        let mut monitor = MONITORINFO {
+            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+            ..Default::default()
+        };
+        // SAFETY: `monitor` is a stack local with `cbSize` set; the monitor
+        // handle comes from the live window.
+        let read = unsafe {
+            GetMonitorInfoW(
+                MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST),
+                &raw mut monitor,
+            )
+        };
+        if !read.as_bool() {
+            return None;
+        }
+        let auto_hide = self.auto_hide_edges_at(&monitor.rcMonitor);
+        let bounds = edges(monitor.rcMonitor);
+        Some((
+            bounds,
+            super::chrome::maximized_area(bounds, edges(monitor.rcWork), auto_hide),
+        ))
+    }
+
     /// The app's size limits as outer sizes at the window's current DPI, or
     /// `None` when there are none or the window is fullscreen (it covers its
     /// monitor whatever the limits say).
@@ -2825,6 +3026,12 @@ impl WindowContext {
     pub(super) fn fill_min_max_info(&self, hwnd: HWND, info: &mut MINMAXINFO) {
         use super::limits::{MinMaxInfo, PixelSize, constrain};
 
+        if let Some((_, area)) = self.frameless_maximized_area(hwnd) {
+            info.ptMaxPosition.x = area.left;
+            info.ptMaxPosition.y = area.top;
+            info.ptMaxSize.x = area.right.saturating_sub(area.left);
+            info.ptMaxSize.y = area.bottom.saturating_sub(area.top);
+        }
         let Some(limits) = self.outer_limits(hwnd) else {
             return;
         };
