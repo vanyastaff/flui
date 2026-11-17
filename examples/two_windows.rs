@@ -44,21 +44,31 @@ impl ViewState<WindowView> for WindowState {
                     RawButton::new(Text::new("Press"))
                         .on_pressed(move |ctx| presses.update(ctx, |n| *n += 1)),
                     SizedBox::height(16.0),
-                    RawButton::new(Text::new("Open another window")).on_pressed(move |ctx| {
-                        let opened = flui::open_window(
-                            AppConfig::new().title("Another window"),
-                            WindowPolicy::Isolated,
-                            WindowView,
-                        );
-                        let message = opened.err().map(|error| error.to_string());
-                        status.set(ctx, message.unwrap_or_default())
-                    }),
+                    RawButton::new(Text::new("Open another window"))
+                        .on_pressed(move |ctx| status.set(ctx, open_another())),
                     Text::new(status.get(ctx)),
                 ))
                 .main_axis_alignment(MainAxisAlignment::Center),
             ),
         )
     }
+}
+
+/// Open one more window beside this one, and answer why it did not open.
+#[cfg(not(any(target_os = "android", target_os = "ios", target_arch = "wasm32")))]
+fn open_another() -> String {
+    let opened = flui::open_window(
+        AppConfig::new().title("Another window"),
+        WindowPolicy::Isolated,
+        WindowView,
+    );
+    opened.err().map_or_else(String::new, |error| error.to_string())
+}
+
+/// A phone or a browser tab has one window.
+#[cfg(any(target_os = "android", target_os = "ios", target_arch = "wasm32"))]
+fn open_another() -> String {
+    String::from("This system has one window.")
 }
 
 fn main() -> Result<(), LaunchError> {

@@ -206,3 +206,42 @@ fn a_given_up_rebuild_holds_frames_until_the_application_asks_again() {
     assert!(lost.run_frame(), "the rebuilt device shows the whole tree");
     assert_eq!(lost.device.submits, submits + 1);
 }
+
+/// A dead renderer is reported once, even over a rebuild already given up,
+/// holds the frames for good, and a rebuild the application asks for leaves
+/// it as it is (ADR-0305 §9).
+///
+/// Red-check: report only a change into a held state (drop `newly_dead` in
+/// `note_primary_device_recovery`) and the death over the given-up rebuild
+/// is never reported.
+#[test]
+fn a_dead_renderer_is_reported_once_and_takes_no_rebuild() {
+    let lost = Lost::new();
+    lost.runtime
+        .note_primary_device_recovery(Some(DeviceRecovery::Abandoned { attempts: 10 }));
+    lost.runtime
+        .note_primary_device_recovery(Some(DeviceRecovery::Dead));
+    assert_eq!(
+        lost.reports().last(),
+        Some(&(DeviceRecovery::Dead, FailureDisposition::FrameDropped)),
+        "the death is reported over the given-up rebuild"
+    );
+    let reported = lost.reports().len();
+    lost.runtime
+        .note_primary_device_recovery(Some(DeviceRecovery::Dead));
+    assert_eq!(lost.reports().len(), reported, "the death is reported once");
+    let wakes = lost.wakes.load(Ordering::SeqCst);
+    assert!(
+        !lost.wants_a_frame(wakes),
+        "a dead renderer asks for no frame"
+    );
+    assert!(
+        !lost.runtime.retry_render_device(),
+        "a rebuild asked for changes nothing"
+    );
+    assert_eq!(
+        lost.runtime.primary_device_recovery(),
+        Some(DeviceRecovery::Dead)
+    );
+    assert!(!lost.wants_a_frame(wakes));
+}

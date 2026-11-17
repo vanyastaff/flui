@@ -1722,12 +1722,23 @@ fn a_surface_whose_resize_panics_gets_one_retry() {
 /// which a rebuild the application asks for leaves as it is, and the window
 /// keeps taking pointer input and lifecycle changes while it draws nothing.
 /// The window whose detach went unanswered keeps its surface target alive.
+/// The frame the death left either in the thread's render or in the
+/// window's inbox (settled `Failed` by the death) commits.
 ///
 /// Red-check: leave the dead executor's held frames in `drain_settled` and the
 /// held pointer down never replays; drop `settle_death` and the
 /// runtime reports no recovery.
 #[test]
 fn a_wedged_raster_thread_quarantines_its_open_window() {
+    // The thread wedges in this window's render, or in another window's
+    // while this window's frame waits in its inbox, which the death settles
+    // `Failed`.
+    for wedged_here in [true, false] {
+        quarantine_one_window(wedged_here);
+    }
+}
+
+fn quarantine_one_window(wedged_here: bool) {
     use flui_runtime::frame_failure::DeviceRecovery;
 
     let downs = std::rc::Rc::new(std::cell::Cell::new(0_usize));
@@ -1783,9 +1794,29 @@ fn a_wedged_raster_thread_quarantines_its_open_window() {
     // waits out the deadline. A pointer down that arrives meanwhile waits
     // for the commit of the frame the thread holds.
     let render = slots.hold_next_render();
+    if !wedged_here {
+        shared
+            .try_with(|host| {
+                host.attach_target(
+                    Arc::new(FakeWindow::new(3)),
+                    None,
+                    address(),
+                    &crate::app::AppConfig::default(),
+                    None,
+                    None,
+                )
+            })
+            .expect("the host is idle")
+            .expect("the scripted backend attaches any window");
+        let (_, verdict) = submit_threaded(&shared, &mut TestScene::new(AT));
+        assert_eq!(verdict, SubmitVerdict::Queued);
+        assert!(render.began_within(THREAD_WAIT), "the thread renders");
+    }
     ui_runtime.mark_primary_needs_full_repaint();
     let _ = slot.pump(&mut ui_runtime, web_time::Instant::now(), None);
-    assert!(render.began_within(THREAD_WAIT), "the thread renders");
+    if wedged_here {
+        assert!(render.began_within(THREAD_WAIT), "the thread renders");
+    }
     let id = at.presentation_id;
     let down = |ui_runtime: &mut crate::app::ui_runtime::UiRuntime| {
         ui_runtime.enter(|ui_runtime| {
@@ -1835,9 +1866,17 @@ fn a_wedged_raster_thread_quarantines_its_open_window() {
         !ui_runtime.retry_render_device(),
         "a rebuild asked for changes nothing"
     );
+    // A device health the window last saw is not reported over the death,
+    // and a given-up rebuild is not asked for again.
+    slot.device = DeviceHealth::Rebuilding { attempts: 2 };
     assert!(
         !slot.settle_device(&ui_runtime),
         "a dead renderer repaints nothing"
+    );
+    slot.device = DeviceHealth::GivenUp { attempts: 10 };
+    assert!(
+        !slot.device_retry_asked(&ui_runtime),
+        "a dead renderer asks for no rebuild"
     );
     assert_eq!(
         ui_runtime.primary_device_recovery(),

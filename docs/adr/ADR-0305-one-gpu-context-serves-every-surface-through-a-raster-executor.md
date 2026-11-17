@@ -468,8 +468,11 @@ executor and slot.
   thread wedged past the deadline holds the context, so every window stops drawing, not one: the
   owner asks every open window for a frame, and each window's wake settles the frames its slot
   still holds `NoPresent` (finished, nothing shown), so its UI runtime commits the tree they were
-  painted from and the input held for that commit replays; a frame submitted afterwards answers
-  `NoPresent` without reaching the executor. Each window tells its UI runtime once
+  painted from and the input held for that commit replays. Any settlement it drains after the
+  death that shows nothing (the `Failed` the death gave an inbox frame, a stale or withheld one)
+  answers `NoPresent` too, a frame submitted afterwards answers
+  `NoPresent` without reaching the executor, and the host reports no rebuild or restore deadline
+  a dead executor left. Each window tells its UI runtime once
   (`DeviceRecovery::Dead`, reported through the frame-failure handler as a lost device): the
   presentation attempts no frames and keeps taking input, lifecycle changes and the agent's
   requests against the tree it last painted. The failure itself (`ExecutorFailure::Wedged`, or a
@@ -692,7 +695,8 @@ the facade. Every production use of `with_backend` becomes:
   ADR-0267's `a_frame_dropped_on_a_lost_device_waits_out_the_backoff`,
   `a_failed_rebuild_is_reported_with_the_dropped_frame`,
   `a_given_up_rebuild_holds_frames_until_the_application_asks_again`,
-  `a_lost_device_waits_out_its_rebuild_backoff` and
+  `a_lost_device_waits_out_its_rebuild_backoff`,
+  `a_dead_renderer_is_reported_once_and_takes_no_rebuild` (§9) and
   `a_given_up_device_renders_again_when_the_application_asks`.
 - Runs: a platform's placement becomes threaded only with its row in `docs/platform-parity.md`
   (§10).
