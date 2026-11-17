@@ -27,15 +27,6 @@ use std::time::Duration;
 
 use web_time::Instant;
 
-/// The `xdg_toplevel` version from which the compositor says when it
-/// suspends a toplevel: one it does not show, covered by other windows among
-/// the reasons xdg-shell names.
-#[cfg_attr(
-    not(wayland_host),
-    expect(dead_code, reason = "the live host reads it; its tests build everywhere")
-)]
-pub(crate) const SUSPENSION_VERSION: u32 = 6;
-
 /// How long a window waits for a frame callback before it gives it up,
 /// while the compositor answered the last one.
 pub(crate) const CALLBACK_GRACE: Duration = Duration::from_secs(1);
@@ -54,7 +45,7 @@ const GRACES: flui_platform::Backoff =
 /// given up: [`CALLBACK_GRACE`] doubled once per callback given up, at most
 /// [`MAX_CALLBACK_GRACE`].
 pub(crate) fn grace(unanswered: u32) -> Duration {
-    GRACES.after(unanswered)
+    GRACES.delay(unanswered)
 }
 
 /// A frame callback that is out: when it was armed, its ticket, and the

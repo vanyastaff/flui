@@ -832,7 +832,7 @@ trait depends on `flui-platform` instead.
   capabilities' `reports_occlusion` (ADR-0357): native on AppKit; on X11
   while no compositing manager owns `_NET_WM_CM_S<n>` (the server reads a
   redirected window unobscured); on Wayland where the window's
-  `xdg_toplevel` is version 6 or newer (`frame::SUSPENSION_VERSION`), whose
+  `xdg_toplevel` is version 6 or newer (`SUSPENSION_VERSION`), whose
   `suspended` covers a toplevel the compositor does not show; absent on
   Win32, which tells no covering and tracks none, and on Android, iOS and the
   Web, whose window systems tell a stop or a hidden page and never a covering.

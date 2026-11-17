@@ -194,7 +194,7 @@ mod toplevel {
     use super::decoration::{Decoration, Drawn, FrameDrawer};
     #[cfg(any(test, feature = "testing"))]
     use super::foreign::PortalParent;
-    use super::frame::{Callbacks, Pacing, SUSPENSION_VERSION, Sight, first_live};
+    use super::frame::{Callbacks, Pacing, Sight, first_live};
     use super::presented;
     use super::scale::{self, BufferScale, ScaleTold, ToldScale, buffer_scale};
     use crate::executor::NativeExecutor;
@@ -203,6 +203,7 @@ mod toplevel {
     use crate::owner::OpenWindowError;
     use crate::owner::frame_timing::{PresentationReports, rebased};
     use crate::owner::linux::PortalSlot;
+    use crate::owner::linux::wayland::SUSPENSION_VERSION;
     use crate::owner::linux::wayland::activation::ActivationToken;
     use crate::owner::linux::wayland::{
         DragWindow, LastInput, LiveOutputs, LoopWaker, LoopWindow, OutputFacts, OutputName,

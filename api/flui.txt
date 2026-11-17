@@ -11993,6 +11993,16 @@ pub const fn flui::platform::Availability::is_available(self) -> bool
 variant flui::platform::Availability::Emulated // at 1
 variant flui::platform::Availability::Native // at 0
 variant flui::platform::Availability::Unavailable // at 2
+pub struct flui::platform::Backoff { .. }
+impl Clone for flui::platform::Backoff
+impl Copy for flui::platform::Backoff
+impl Eq for flui::platform::Backoff
+impl PartialEq for flui::platform::Backoff
+impl core::fmt::Debug for flui::platform::Backoff
+impl core::hash::Hash for flui::platform::Backoff
+impl core::marker::StructuralPartialEq for flui::platform::Backoff
+pub const fn flui::platform::Backoff::new(first: core::time::Duration, ceiling: core::time::Duration) -> Self
+pub fn flui::platform::Backoff::delay(self, misses: u32) -> core::time::Duration
 pub enum flui::platform::Brightness
 impl Clone for flui::platform::Brightness
 impl Copy for flui::platform::Brightness

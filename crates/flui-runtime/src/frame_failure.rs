@@ -247,7 +247,7 @@ const FAILURE_RETRY_MAX_DOUBLINGS: u32 = 10;
 /// [`FAILURE_RETRY_CAP`].
 pub(crate) fn failure_retry_delay(period: std::time::Duration, streak: u32) -> std::time::Duration {
     flui_platform::Backoff::new(period, FAILURE_RETRY_CAP)
-        .after(streak.saturating_sub(1).min(FAILURE_RETRY_MAX_DOUBLINGS))
+        .delay(streak.saturating_sub(1).min(FAILURE_RETRY_MAX_DOUBLINGS))
 }
 
 /// The last frame segment entered for one presentation.

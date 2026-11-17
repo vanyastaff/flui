@@ -20,7 +20,7 @@ use std::time::Duration;
 /// use flui_platform::Backoff;
 ///
 /// let backoff = Backoff::new(Duration::from_secs(1), Duration::from_secs(8));
-/// let waits: Vec<_> = (0..6).map(|misses| backoff.after(misses).as_secs()).collect();
+/// let waits: Vec<_> = (0..6).map(|misses| backoff.delay(misses).as_secs()).collect();
 /// assert_eq!(waits, [1, 2, 4, 8, 8, 8]);
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -38,17 +38,11 @@ impl Backoff {
         Self { first, ceiling }
     }
 
-    /// The longest wait of the schedule.
-    #[must_use]
-    pub const fn ceiling(self) -> Duration {
-        self.ceiling
-    }
-
     /// The wait after `misses` attempts in a row came to nothing: `first`
     /// doubled `misses` times, at most the ceiling. Any count, however large,
     /// answers the ceiling without overflow.
     #[must_use]
-    pub fn after(self, misses: u32) -> Duration {
+    pub fn delay(self, misses: u32) -> Duration {
         let factor = 1_u32.checked_shl(misses).unwrap_or(u32::MAX);
         self.first
             .checked_mul(factor)
