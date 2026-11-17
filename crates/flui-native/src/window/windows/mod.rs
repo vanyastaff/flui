@@ -16,6 +16,8 @@
 //! - [`sizing`]: the pure half too: the steps and the proportion a window
 //!   keeps while the user drags its frame, which Win32 has neither of;
 //! - `cursor`: the cursor the window shows and how it holds the pointer;
+//! - `holds`: the window context's grab and `WM_SIZING` handling, over
+//!   `cursor` and `sizing`;
 //! - `window`: [`WindowsWindow`], the handle a host hands out, how it opens
 //!   and what its commands ask of the OS;
 //! - `set`: [`WindowSet`], the windows of a platform, which the loop holds as
@@ -47,6 +49,8 @@ mod cloak;
 #[cfg(windows)]
 mod cursor;
 pub(crate) mod frame_timing;
+#[cfg(windows)]
+mod holds;
 pub(crate) mod limits;
 #[cfg(windows)]
 pub(crate) mod proc;
