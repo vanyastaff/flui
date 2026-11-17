@@ -249,31 +249,16 @@ struct ClosesAgainOnDetach {
     asked: Rc<RefCell<Vec<Result<(), flui_view::WindowClosed>>>>,
 }
 
+/// Born subscribed: the subscription lives as long as the state.
 struct ClosesAgainOnDetachState {
-    view: ClosesAgainOnDetach,
-    observation: Option<flui_view::LifecycleSubscription>,
+    _observation: flui_view::LifecycleSubscription,
 }
 
 impl StatefulView for ClosesAgainOnDetach {
     type State = ClosesAgainOnDetachState;
 
-    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
-        ClosesAgainOnDetachState {
-            view: self.clone(),
-            observation: None,
-        }
-    }
-}
-
-impl View for ClosesAgainOnDetach {
-    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
-        flui_view::element::ElementKind::stateful(self)
-    }
-}
-
-impl ViewState<ClosesAgainOnDetach> for ClosesAgainOnDetachState {
-    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        let ClosesAgainOnDetach { detached, asked } = self.view.clone();
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
+        let ClosesAgainOnDetach { detached, asked } = self.clone();
         let handle = ctx.window().expect("a hosted window has a handle");
         let (_, observation) = ctx
             .lifecycle_handle()
@@ -285,9 +270,19 @@ impl ViewState<ClosesAgainOnDetach> for ClosesAgainOnDetachState {
                 }
             })
             .expect("the presentation is open");
-        self.observation = Some(observation);
+        ClosesAgainOnDetachState {
+            _observation: observation,
+        }
     }
+}
 
+impl View for ClosesAgainOnDetach {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateful(self)
+    }
+}
+
+impl ViewState<ClosesAgainOnDetach> for ClosesAgainOnDetachState {
     fn build(&self, _view: &ClosesAgainOnDetach, _ctx: &dyn BuildContext) -> impl IntoView {
         flui_widgets::SizedBox::new(10.0, 10.0)
     }

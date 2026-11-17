@@ -15517,7 +15517,7 @@ pub const fn flui::prelude::AppLifecycleState::should_animate(self) -> bool
 pub const fn flui::prelude::AppLifecycleState::should_release_resources(self) -> bool
 pub const fn flui::prelude::AppLifecycleState::should_render(self) -> bool
 pub const fn flui::prelude::AppLifecycleState::should_save_state(self) -> bool
-pub fn flui::prelude::AppLifecycleState::most_active(states: impl core::iter::traits::collect::IntoIterator<Item = Self>) -> Self
+pub fn flui::prelude::AppLifecycleState::most_active(states: impl IntoIterator<Item = Self>) -> Self
 pub const fn flui::prelude::AppLifecycleState::try_from_u8(value: u8) -> Option<Self>
 variant flui::prelude::AppLifecycleState::Detached = 4 // at 4
 variant flui::prelude::AppLifecycleState::Hidden = 2 // at 2
@@ -23372,11 +23372,11 @@ impl core::marker::StructuralPartialEq for flui::testing::TestError
 variant flui::testing::TestError::Agent(Box<flui_protocol::error::ErrorObject>) // at 8
 variant flui::testing::TestError::Ambiguous { locator: Box<flui::testing::Locator>, count: usize, candidates: String } // at 2
 variant flui::testing::TestError::Idle { expected: String, locator: Box<flui::testing::Locator>, found: String, next_deadline: Option<core::time::Duration>, shown: String } // at 4
-variant flui::testing::TestError::InBackground // at 12
-variant flui::testing::TestError::InForeground // at 13
+variant flui::testing::TestError::InBackground // at 13
+variant flui::testing::TestError::InForeground // at 14
 variant flui::testing::TestError::KeptChanging { reads: usize } // at 9
 variant flui::testing::TestError::NoRenderObject { element: String } // at 10
-variant flui::testing::TestError::NotAPhone { platform: flui::platform::TargetPlatform } // at 11
+variant flui::testing::TestError::NotAPhone { platform: flui::platform::TargetPlatform } // at 12
 variant flui::testing::TestError::NotActionable { element: String, check: flui_protocol::act::ActionabilityCheck, covered_by: Option<String> } // at 3
 variant flui::testing::TestError::NotFound { locator: Box<flui::testing::Locator>, shown: String } // at 0
 variant flui::testing::TestError::NotSettled { frames: usize } // at 6
