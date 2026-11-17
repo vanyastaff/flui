@@ -8384,6 +8384,59 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
   `flui-system` без провайдера; отображение фильтров и суд над открытым файлом (`AssocIsDangerous`
   на Windows, Launch Services на macOS) для них записаны в ADR-0360 §2, §4 и `docs/gaps.md`.
 
+- [x] **LY147** — ветка `cli/apple-packaging-and-inputs`, решение по типам файлов — ADR-0361.
+  Находки проверены по `main`. Подтвердились: `Info.plist` macOS писал `1` и `1.0`, а
+  `macos_bundle` не передавал `[app] version` вовсе; `flui build ios --lib` при
+  `platforms/ios/flui.xcodeproj` шёл веткой `xcodebuild`; `join` объединял типы файлов без
+  проверки MIME; `apple_opening` экспортировал `png` как `com.example.notes.png` с `Owner`;
+  `[app] name` был `String`, и кавычка доходила до `settings.gradle.kts` (шаблоны HTML и JSON
+  уже экранировали и рендерятся из `web_page`). Уже исправлено на `main` до этой ветки: проверка
+  `Host` (только loopback, 421), предел соединений (`MAX_CONNECTIONS`, `MAX_REFUSALS`), привязка
+  к `127.0.0.1`, отказ обхода пути — их держат строки `dev_server_contract`; порт в `Host` не
+  сверяется (решение: перепривязка DNS идёт по имени, а не по порту). Построено: plist macOS
+  рендерится целиком из одной карты ключей тем же XML-рендером, что экранирует каждое значение,
+  `CFBundleVersion` и `CFBundleShortVersionString` — `major.minor.patch`, `FLUIVersion` — как
+  написано, как у iOS; `AppBundle.version` — `Option<AppVersion>`, бандл без `flui.toml` берёт
+  версию собранного пакета (`AppBundle::version_of`), имя с управляющим символом отказано.
+  Ветка `xcodebuild` и её копирование удалены: библиотека всегда идёт в XCFramework. Системный
+  тип (таблица `APPLE_SYSTEM_TYPES`: `public.png`, `com.adobe.pdf`, …) открывается своим
+  идентификатором с `Alternate` и не экспортируется; свой — экспорт и `Owner`; `flui doctor`
+  читает такой тип обратно (решение: не `UTImportedTypeDeclarations`, потому что Apple не
+  требует объявлять системные типы, — ADR-0361). `join` и `add_opening` идут через одно
+  `add_file_type`. `[app] name` — `ProjectName` при загрузке, `flui.toml` больше
+  `MAX_CONFIG_BYTES` отказан до разбора. Dev-сервер: файл сборки копируется с диска по мере
+  записи, ответ обрывается на `RESPONSE_WRITE`, страница больше `MAX_PAGE` — 500 до чтения.
+  Тесты (в скобках — откат, который их роняет): `the_macos_info_plist_states_the_application_version`
+  (golden; с зашитыми `1`/`1.0` — значения ключей); `a_library_build_beside_an_xcode_project_is_delivered_as_a_framework`
+  (старый `ios.rs` с этим тестом падает); `a_type_the_system_declares_is_opened_and_not_owned`
+  (без таблицы — `png` экспортирован); `declarations_joined_across_targets_give_an_extension_one_type`
+  (без проверки в `join` — два типа `.note`); `a_project_file_is_checked_when_it_loads` (откат
+  не запускался: со `String` имя с кавычкой принимается, без предела файл разбирается — по
+  построению); в `dev_server_contract`
+  строки `a large file is served whole and a page past its bound is refused` (без предела —
+  200) и `a client that stops reading is cut off at the write deadline` (без общего срока
+  записи модуль доходит целиком), новые строки UNC и диска в таблице обхода. Прогнано: Windows —
+  clippy `-p flui-cli --all-targets -D warnings`, nextest `flui-cli` 161 (кроме `agent::browser`
+  и `generated_*`), `parity_document_matches_its_source`. Должно на Mac (строка parity «Package
+  the OS installs»): `plutil -lint` и версия из Launch Services у собранного `.app`, PNG в «Open
+  With» без захвата умолчания, `--lib --universal` рядом с проектом Xcode.
+  Независимое чтение: FIFO в отдаваемом каталоге держал слот навсегда (открытие на чтение ждёт
+  писателя) — теперь не обычный файл отказан до открытия, на Unix открытие с `O_NONBLOCK`, тип
+  проверяется ещё раз на дескрипторе (строка `a special file is not opened`, в WSL без исправления
+  падает по таймауту чтения); номер сборки — `[app] build` (`BuildNumber`) для `versionCode` и
+  `CFBundleVersion`, одно правило `AppVersion::package_numbers`, release-сборка pre-release без
+  него отказана (`a_release_of_a_pre_release_needs_a_build_number`); пределы versionCode
+  проверяются при загрузке (`a_version_no_packager_takes_is_refused_when_read`); таблица
+  системных типов дополнена (Office, EPUB, vCard, iCalendar, CSS, JS, AAC, AIFF, AVI, MPEG,
+  AVIF, HEIF); тип, который объявляет только связанный крейт и не знает система, —
+  `UTImportedTypeDeclarations` с `Alternate` и предупреждением, свой тип крейта-приложения —
+  экспорт и `Owner` (решение: без признака владения импорт всех типов лишил бы приложение его
+  формата; правило как у схем и доменов — своё объявляет приложение; ADR-0361 §3–§4);
+  `[app] display_name` (`DisplayName`) — `CFBundleDisplayName`, `Name` desktop-записи, ярлык
+  Android, заголовок web; plist macOS решается до удаления прежнего бандла; запрет U+FFFE/U+FFFF
+  во всех именах XML (`is_xml_name_text`); `setsockopt` записи — только когда остаток сократился
+  на `WRITE_TIMEOUT_SLACK`.
+
 ## Чего нет в этой серии
 
 Часть функций из закрытого списка ядра (R1.4) на части ОС ещё отсутствует. Каждая — отдельная

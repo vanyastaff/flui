@@ -45,7 +45,7 @@ pub(crate) fn stage(
     let entry_path = applications.join(format!("{class}.desktop"));
     std::fs::write(
         &entry_path,
-        desktop_entry(&bundle.name, &class, executable, declarations),
+        desktop_entry(bundle.shown_name(), &class, executable, declarations),
     )?;
     written.push(entry_path);
     if let Some(package) = mime_package(declarations) {
@@ -241,6 +241,15 @@ mod tests {
             "no MimeType for an application that opens nothing"
         );
         assert!(!entry_only.path().join("share").join("mime").exists());
+
+        // The entry shows the display name `flui.toml` declares.
+        let mut shown = bundle;
+        shown.display_name =
+            Some(crate::types::DisplayName::try_new("My Notes").expect("a display name"));
+        let written =
+            stage(entry_only.path(), &shown, "notes", &web_only).expect("the entry is written");
+        let entry = std::fs::read_to_string(&written[0]).expect("the entry");
+        assert!(entry.contains("\nName=My Notes\n"), "{entry}");
     }
 
     /// The entry's file name and its `StartupWMClass`, read back from what

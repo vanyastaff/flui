@@ -1,5 +1,9 @@
 use std::path::PathBuf;
 
+use crate::build::app_version::{AppVersion, BuildNumber, PackageNumbers};
+use crate::build::error::{BuildError, BuildResult};
+use crate::types::DisplayName;
+
 /// Build context containing configuration and paths.
 ///
 /// Use [`BuilderContextBuilder`](crate::build::BuilderContextBuilder) to construct instances.
@@ -34,12 +38,19 @@ pub(crate) struct BuilderContext {
 /// Identity an application bundle is staged under.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct AppBundle {
-    /// Human-readable application name (the `.app` stem and `CFBundleName`).
+    /// The application's name (the `.app` stem and `CFBundleName`).
     pub(crate) name: String,
+    /// The name it is shown by (`CFBundleDisplayName`, the desktop entry's
+    /// `Name`), when `flui.toml` declares one ([`AppBundle::shown_name`]).
+    pub(crate) display_name: Option<DisplayName>,
     /// Reverse-DNS bundle identifier (`CFBundleIdentifier`).
     pub(crate) identifier: String,
-    /// Full application SemVer. Apple bundles store its numeric core separately.
-    pub(crate) version: String,
+    /// The version `flui.toml` declares (`[app] version`); `None` for a
+    /// bundle named from its directory, which takes the version of the
+    /// package the build compiled ([`AppBundle::package_numbers`]).
+    pub(crate) version: Option<AppVersion>,
+    /// The build number `flui.toml` declares (`[app] build`).
+    pub(crate) build: Option<BuildNumber>,
     /// Whether `identifier` derives from the id `flui.toml` declares, which
     /// every command compiles the application with (`FLUI_APP_ID`); not for
     /// one derived from the directory, which the application never carries.
@@ -50,22 +61,82 @@ impl AppBundle {
     /// Bundle metadata for the application `name` (the `.app` stem and
     /// `CFBundleName`) under `identifier`, which callers derive with
     /// [`AppId::apple_bundle_id`](crate::app_id::AppId::apple_bundle_id); the
-    /// identifier is not a declared one until [`declared`](Self::declared).
+    /// identifier is not a declared one until [`declared`](Self::declared),
+    /// and the bundle states the built package's version.
     #[must_use]
     pub(crate) fn new(name: &str, identifier: String) -> Self {
         Self {
             name: name.to_string(),
+            display_name: None,
             identifier,
-            version: "0.1.0".into(),
+            version: None,
+            build: None,
             declared: false,
         }
     }
 
-    /// The same bundle, its identifier derived from the declared id.
+    /// The bundle `app` (`flui.toml`'s `[app]`) declares, under `identifier`,
+    /// which callers derive from its id: its names, its version and build
+    /// number, the identifier a declared one.
+    #[must_use]
+    pub(crate) fn of_app(app: &crate::config::AppConfig, identifier: String) -> Self {
+        Self {
+            name: app.name.to_string(),
+            display_name: app.display_name.clone(),
+            identifier,
+            version: Some(app.version.clone()),
+            build: app.build,
+            declared: true,
+        }
+    }
+
+    /// The same bundle, its identifier derived from the declared id, as
+    /// [`AppBundle::of_app`] makes it.
+    #[cfg(test)]
     #[must_use]
     pub(crate) fn declared(mut self) -> Self {
         self.declared = true;
         self
+    }
+
+    /// The name the bundle is shown by: the declared display name, else its
+    /// name.
+    #[must_use]
+    pub(crate) fn shown_name(&self) -> &str {
+        self.display_name
+            .as_ref()
+            .map_or(self.name.as_str(), DisplayName::as_str)
+    }
+
+    /// The numbers a bundle built with `profile` states: from the declared
+    /// version and build number, else from the version of `package`, the
+    /// member the build compiled.
+    ///
+    /// # Errors
+    ///
+    /// [`BuildError::InvalidConfig`] when the bundle declares no version and
+    /// the build names no package, or the package's version is one no
+    /// packager takes; [`BuildError::AppVersion`] for a release build of a
+    /// pre-release without a build number.
+    pub(crate) fn package_numbers(
+        &self,
+        package: Option<&BuiltPackage>,
+        profile: Profile,
+    ) -> BuildResult<PackageNumbers> {
+        let version = match (&self.version, package) {
+            (Some(version), _) => version.clone(),
+            (None, Some(package)) => AppVersion::try_new(&package.version).map_err(|error| {
+                BuildError::invalid_config(format!("{}'s version", package.name), error.to_string())
+            })?,
+            (None, None) => {
+                return Err(BuildError::invalid_config(
+                    "bundle version",
+                    "flui.toml declares no `[app] version` and the build compiled no named \
+                     package",
+                ));
+            }
+        };
+        Ok(version.package_numbers(self.build, profile)?)
     }
 }
 
@@ -216,7 +287,7 @@ pub(crate) struct BuiltPackage {
 pub(crate) struct FinalArtifacts {
     /// Path to the delivered artifact: a file (APK, WASM, executable, etc.) or
     /// a bundle directory (`.app` or `.xcframework`). iOS library delivery
-    /// without a consumer Xcode project returns an XCFramework directory.
+    /// returns an XCFramework directory.
     pub(crate) app_binary: PathBuf,
     /// File size, or the sum of contained file sizes for a bundle, in bytes.
     pub(crate) size_bytes: u64,
