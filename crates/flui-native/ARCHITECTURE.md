@@ -1397,15 +1397,35 @@ trait depends on `flui-platform` instead.
   accepts work asks for no deadline. A turn whose dispatch recorded events
   ends before it would block, so they are applied first, and a flush the socket cut short makes the
   wait watch the socket for writing (`wait::before_poll`). A frame callback a
-  skipped present never committed is given up after `frame::CALLBACK_GRACE`.
+  skipped present never committed is given up after `frame::CALLBACK_GRACE`, so
+  a window the compositor does not draw is asked for one frame per grace and
+  no turn waits on it
+  (`wayland_scripted::a_window_the_compositor_never_draws_keeps_the_loop_turning`);
+  its renderer presents without waiting on the compositor either (ADR-0356).
+  A connection the compositor closes, while a window opens or after, fails
+  the open or ends the loop with `PlatformError::EventLoop`
+  (`wayland_scripted::a_compositor_that_hangs_up_while_a_window_opens_fails_the_open`,
+  `a_compositor_that_hangs_up_on_a_frame_ends_the_loop_with_an_error`).
   The loop belongs to the thread that made it: its event queue, window table
   and the outputs the compositor announces are `Rc`/`RefCell` state of that
   thread (ADR-0327 §5), while the objects' dispatch data stays `Send + Sync`,
   as `wayland-client` requires of it.
   The host and the display source connect to the one socket `WAYLAND_DISPLAY`
-  names. The window (`window::linux::wayland`) sizes its surface
+  names, read once: the host hands the display source the socket it connected
+  to (`WaylandHost::displays`), so the outputs are its compositor's whatever
+  the environment says later, and a test connects both to a compositor of its
+  own (`WaylandPlatform::try_new_at`). An output removed with no `leave` stops
+  holding a window three ways: the loop's live outputs, the window's entered
+  list and the display source's snapshot
+  (`wayland_scripted::an_output_removed_under_a_window_leaves_it_on_the_others`).
+  The window (`window::linux::wayland`) sizes its surface
   through `wp_viewport`, so a buffer of any size is valid during a resize and
-  each configure takes effect with a commit; its capabilities follow the
+  each configure takes effect with a commit; each time the window carries out
+  what it read, it acknowledges only the newest configure, whose size it
+  takes, so a burst costs one acknowledgement per read of the socket, not one
+  per configure (`wayland_scripted::a_configure_storm_settles_on_the_last_configure`:
+  200 sent before the loop turns, at most four acknowledged, in order); its
+  capabilities follow the
   compositor's `wm_capabilities` where it sends them (version 5); one that
   sends none (sway 1.9) is taken to offer every mode. A window tiled and in
   no mode takes the tiling's size, so `SetSize` is `NotOnThisDevice` while it
@@ -1413,6 +1433,7 @@ trait depends on `flui-platform` instead.
   opened at holds that size within the compositor's `configure_bounds`
   (version 4), each axis on its own; a size asked for or taken since is not
   held to them (`configure::Bounds`,
+  `wayland_scripted::a_window_opens_within_the_compositors_bounds`,
   `a_window_opens_within_the_compositors_bounds`). Its buffer is drawn at the
   compositor's fractional scale (`wp_fractional_scale_v1`), else the
   surface's preferred whole scale, else the largest of its outputs', and at
@@ -4334,7 +4355,8 @@ delivered in the same turn. A held key repeats on the client, by
 told its repeat and repeats at `repeat::UNTOLD`, 25 a second after 600 ms: its
 keymap, which a compositor sends first, carries the keyboard's version
 (`a_keyboard_never_told_its_repeat_still_repeats`,
-`a_keymap_of_an_old_keyboard_brings_its_repeat`).
+`a_keymap_of_an_old_keyboard_brings_its_repeat`, and against a version 3 seat
+`wayland_scripted::a_seat_too_old_to_tell_its_repeat_repeats_a_held_key`).
 
 What the translation decides is in the module docs of
 `input::linux::wayland`; the parts with a test of their own: a pointer frame
@@ -4374,7 +4396,11 @@ that divides it (`cursor::CursorBuffer::fit`,
 for each are `CursorBuffer::requests`, which the dispatch carries out one by
 one (`a_cursor_surface_is_sent_what_its_image_needs`). A window that publishes
 another scale tells the input (`WaylandInput::rescaled`), which draws a theme
-cursor over it again for that scale.
+cursor over it again for that scale
+(`wayland_scripted::a_theme_cursor_is_drawn_again_when_its_window_changes_scale`);
+a compositor that enforces the buffer-scale rule on the cursor surface keeps the
+connection open
+(`wayland_scripted::a_theme_cursor_its_scale_does_not_divide_goes_through_a_viewport`).
 
 Each seat's keyboard has its own keymap, window and repeat (`SeatKey` on
 every keyboard wire, `keyboards::Keyboards`); a key repeats only while its

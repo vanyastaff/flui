@@ -7380,6 +7380,52 @@ GPU-память простаивающего или невидимого окн
   каждого хоста свой (рабочая область монитора при открытии против configure Wayland), запись в
   `docs/gaps.md` и заметка строки `position-size-move-and-resize-events`.
 
+- [x] **LY150** — ветка `native/wayland-present-and-scripted-compositor`. Проверено на `main` @
+  `011f58f3b` в WSL (Ubuntu 24.04, Mesa 25.2.8, lavapipe). Блокировка present подтверждена дважды:
+  по источнику (`mesa-25.2.8 src/vulkan/wsi/wsi_common_wayland.c:3002`: без `wp_fifo_v1`
+  `vkQueuePresentKHR` в `Fifo` крутит `wl_display_dispatch_queue`, пока не придёт frame callback
+  прошлого present, без предела) и прогоном: приложение под композитором, который не отвечает на
+  frame callbacks, с `Fifo` не выполняет свой выход и убивается по бюджету. Построено:
+  `testing::wayland_compositor::ScriptedCompositor` (`flui-native`, фича `testing`, сервер на
+  чисто-Rust бэкенде `wayland-server` 0.31, уже бывшем в `Cargo.lock`) — свой сокет, свой поток,
+  глобалы и версии из `Offer` (`wl_compositor`, `xdg_wm_base`, `wl_shm`, `wp_viewporter`,
+  `wp_fractional_scale_manager_v1`, `wl_seat` любой версии, выходы), типизированные `Step`
+  (configure с границами, предпочтительный целый и дробный масштаб, вход и выход поверхности на
+  выход, снятие выхода без `leave`, указатель, клавиатура и клавиша, удержание frame callbacks,
+  разрыв), сбои `Offer::first_configure(None)` и `HangUp::{OnToplevel, OnFirstFrame}`, строгое
+  правило `wl_surface.invalid_size`; что услышал — `Heard`. `WaylandPlatform::try_new_at(socket)`;
+  источник дисплеев получает сокет от хоста (`WaylandHost::displays(socket)`,
+  `LinuxDisplays::new(Environment)`), а не читает окружение второй раз. Темп: `SurfaceTarget::frame_pacing`
+  (`FramePacing`, у Wayland — `Compositor`); движок читает его один раз при создании поверхности и
+  держит в аренде (`SurfaceLease::pacing`): такая поверхность берёт `Mailbox`, иначе `Immediate`,
+  остальные — `Fifo`; `Renderer::new` принимает `Arc<dyn SurfaceTarget>`. Решение —
+  ADR-0356 (заменяет первое предложение решения 0 ADR-0353, решение 5 ADR-0347, публичную границу
+  решения 1 ADR-0063, оговорку §5 ADR-0254 и столбец темпа
+  строки Wayland §4 ADR-0044). Тесты, в скобках результат с откатом: `wayland_scripted::`
+  `a_window_opens_within_the_compositors_bounds` (без записи `configure_bounds` — 1600×1000
+  вместо 1366×740); `a_theme_cursor_is_drawn_again_when_its_window_changes_scale` (без
+  `rescaled` — курсора масштаба 3 нет); `a_theme_cursor_its_scale_does_not_divide_goes_through_a_viewport`
+  (`fit` всегда `Scaled` — протокольная ошибка 2 на `wl_surface`); `a_seat_too_old_to_tell_its_repeat_repeats_a_held_key`
+  (без `keyboard_version` в разборе keymap — повтора нет);
+  `a_window_the_compositor_never_draws_keeps_the_loop_turning` (без отсрочки callback — 1 кадр
+  за 3,5 с); `a_window_the_compositor_never_configures_holds_nothing` (без `configured` в
+  `Pacing::due` — 50 кадров у неконфигурированного окна);
+  `a_fractional_scale_no_screen_has_leaves_the_window_at_its_scale` (без потолка `BufferScale::MAX`
+  — буфер 16000×12000); `an_output_removed_under_a_window_leaves_it_on_the_others` (падает только
+  при откате всех трёх путей: живые выходы цикла, список вошедших выходов окна, снимок источника
+  дисплеев — каждый один держат два других); `a_configure_storm_settles_on_the_last_configure`
+  (принимается первый configure хода — размер последнего не наступает);
+  `a_compositor_that_hangs_up_while_a_window_opens_fails_the_open` (ошибка roundtrip
+  проглочена — открытие удаётся); `a_compositor_that_hangs_up_on_a_frame_ends_the_loop_with_an_error`
+  (ошибки чтения, сброса и разбора в `wait` проглочены — цикл не видит разрыва).
+  `flui-engine` `surface_pacing::tests::the_pacer_chooses_the_present_mode`; `flui-app`
+  `native_linux::an_app_whose_window_is_never_drawn_still_quits` (Vulkan, `Fifo` у поверхности
+  Wayland — потомок не выходит за 45 с). Нестабильный `wayland_frame::a_press_on_the_frame_moves_and_resizes_with_its_serial`
+  сценарным композитором не воспроизвести: тест держится на интерактивном перемещении Weston и
+  вводе XTest, которых сценарный композитор не моделирует; оставлен. Долги: Wayland на запасном
+  GL (wgpu на Linux предлагает только `Fifo` и не ставит интервал обмена) — `docs/gaps.md`;
+  прогоны под mutter/KWin — заметки строк `position-size-move-and-resize-events`, `cursor-shapes`.
+
 - [x] **LY127** — ветка `native/win32-owner-thread-forms`. Находка подтверждена на `main` @
   `fbd43ebf2` чтением и компилятором: `WindowsLoop`, `WindowsPlatform` (`assert_not_impl_any!`) и
   `WindowsWindow` (сырой `HWND`, без `unsafe impl`; теперь тоже с `assert_not_impl_any!`) не

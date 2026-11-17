@@ -197,6 +197,9 @@ flui-view = { workspace = true, features = ["testing"] }
 # `testing::host_fed`, which the font-collection tests check the app's
 # collection with. Same dev-only feature-unification pattern.
 flui-painting = { workspace = true, features = ["testing"] }
+# The compositor `native_linux` runs an application's Wayland host against
+# (`testing::wayland_compositor`), which misbehaves on demand.
+flui-native = { workspace = true, features = ["testing"] }
 # The concrete render object and the animation controller the runner's
 # device-recovery, frame-pacing and dispatch tests mount; the UI runtime that
 # production code drives names them from `flui-runtime`.

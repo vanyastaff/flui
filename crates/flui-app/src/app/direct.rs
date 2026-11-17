@@ -141,8 +141,8 @@ pub fn run_direct(
                 }
             };
 
-        // 2. Create GPU renderer. `Renderer::new` takes ownership of a
-        // `WindowTarget`: the window's surface target, which it
+        // 2. Create GPU renderer. `Renderer::new` takes ownership of
+        // the window's surface target, which it
         // owns rather than borrows, so the renderer stays sound
         // even if this scope's `window` binding is dropped first.
         let phys_size = window
