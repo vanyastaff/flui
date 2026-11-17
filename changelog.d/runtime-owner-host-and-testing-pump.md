@@ -13,8 +13,8 @@
 ### Changed
 
 - **The widget harness is `flui_testing::widgets`** (`lay_out`, `LaidOut`,
-  `harness::mount`, `SignalProbe`); `flui::testing::widgets` names it as
-  before. Its frames are the realm's own `UiRealm::pump`, the mount included:
+  `harness::mount`, `SignalProbe`), outside the facade. Its frames are the
+  realm's own `UiRealm::pump`, the mount included:
   the tree sits under the realm's root `MediaQuery`, `VsyncScope`,
   `FocusTreeRoot` and `GestureArenaScope`, post-frame callbacks registered in
   `init_state` run at the end of the mount frame, `mount_with_ime` frames are

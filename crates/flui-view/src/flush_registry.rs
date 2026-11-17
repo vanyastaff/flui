@@ -728,6 +728,67 @@ impl FlushHost {
     }
 }
 
+impl FlushHost {
+    /// A handle another thread waits on for the writes in flight now, which
+    /// [`flush_within`](Self::flush_within) left to the IO pool: a phone's
+    /// host keeps the process running for them after its session end
+    /// returned. `None` when no write is in flight: bytes owed and not
+    /// started (a failed write, one the IO pool refused) would not move by
+    /// waiting, since nothing starts them off the owner thread. It starts no
+    /// write and runs no application code.
+    #[must_use]
+    pub fn writes_in_flight(&self) -> Option<WritesInFlight> {
+        let writing = self
+            .shared
+            .slots
+            .lock()
+            .entries
+            .values()
+            .any(|entry| entry.writing);
+        writing.then(|| WritesInFlight {
+            shared: Arc::clone(&self.shared),
+        })
+    }
+}
+
+/// The writes of a [`FlushHost`] that are in flight, for a thread to wait on
+/// ([`FlushHost::writes_in_flight`]).
+pub struct WritesInFlight {
+    shared: Arc<Shared>,
+}
+
+impl fmt::Debug for WritesInFlight {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("WritesInFlight").finish_non_exhaustive()
+    }
+}
+
+impl WritesInFlight {
+    /// Block the calling thread until no write is in flight or `deadline`
+    /// passes, and name every value whose bytes are not stored then: still
+    /// writing, owed, or failed. Empty when everything published is stored.
+    #[must_use]
+    pub fn wait_until(&self, deadline: Instant) -> Vec<StorageName> {
+        let mut slots = self.shared.slots.lock();
+        while slots.entries.values().any(|entry| entry.writing) {
+            if self
+                .shared
+                .write_ended
+                .wait_until(&mut slots, deadline)
+                .timed_out()
+            {
+                break;
+            }
+        }
+        slots
+            .entries
+            .iter()
+            .filter(|(_, entry)| !matches!(entry.state(), FlushState::Clean))
+            .map(|(key, _)| key.name)
+            .collect()
+    }
+}
+
 // In the crate: a published revision is the document's, and only the crate
 // names one (`Revision::new` is crate-private).
 #[cfg(test)]

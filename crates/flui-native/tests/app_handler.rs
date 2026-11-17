@@ -42,6 +42,49 @@ fn the_quit_is_heard_once() {
     assert_eq!(log.calls(), [AppCall::Ready, AppCall::Quit]);
 }
 
+/// A quit the user asks for is the handler's to decide: kept running, the
+/// platform and its window stay as they were; a panic keeps it running too;
+/// granted, the platform quits at its next owner turn.
+///
+/// Red-check: quit whatever the handler answers — the kept-running rows find
+/// the platform stopped.
+fn a_quit_the_user_asks_for_is_the_handlers_to_decide() {
+    use flui_native::QuitAnswer::{KeepRunning, Quit};
+    for (case, answer, panics) in [
+        ("kept running", KeepRunning, false),
+        ("a panicking handler", Quit, true),
+        ("granted", Quit, false),
+    ] {
+        let platform = HeadlessPlatform::new();
+        let events = platform.host_events();
+        let turns = platform.owner_turns();
+        let log = AppLog::new();
+        log.answer_quit_with(move || {
+            assert!(!panics, "deliberate quit-question panic under test");
+            answer
+        });
+        let owner = run_keeping_owner(Box::new(platform), &log);
+        let window = owner
+            .open_window(WindowOptions::default(), RecordingWindowHandler::new())
+            .expect("a headless window opens");
+        let expected = if panics { KeepRunning } else { answer };
+        assert_eq!(events.quit(), expected, "{case}");
+        turns.drive();
+        assert_eq!(turns.is_running(), expected == KeepRunning, "{case}");
+        assert_eq!(
+            log.count(AppCall::QuitAsked),
+            1,
+            "{case}: the handler was asked once"
+        );
+        assert_eq!(
+            log.count(AppCall::Quit),
+            usize::from(expected == Quit),
+            "{case}: only a granted quit reaches the quit report"
+        );
+        drop(window);
+    }
+}
+
 /// A reopen reaches the handler once per report.
 fn a_reopen_is_heard_once() {
     let platform = HeadlessPlatform::new();
@@ -469,6 +512,10 @@ fn app_handler_obligation_table() {
                 ready_bootstraps_once_and_its_failure_is_runs,
             ),
             ("the quit is heard once", the_quit_is_heard_once),
+            (
+                "a quit the user asks for is the handler's to decide",
+                a_quit_the_user_asks_for_is_the_handlers_to_decide,
+            ),
             ("a reopen is heard once", a_reopen_is_heard_once),
             (
                 "a session end returns the handler's answer",

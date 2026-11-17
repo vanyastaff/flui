@@ -612,28 +612,67 @@ impl RasterSender {
     /// Move `slot`'s undrained settlements, oldest first, into `into`, and
     /// answer how many moved.
     pub fn drain_settlements(&self, slot: SlotId, into: &mut Vec<SlotSettlement>) -> usize {
+        self.drain(slot, into, false).0
+    }
+
+    /// [`drain_settlements`](Self::drain_settlements) and
+    /// [`take_failure`](Self::take_failure) under one lock. A panic taken
+    /// here came with a settlement moved into `into`, marked; with a frame
+    /// the slot has not settled yet, which will settle unmarked; or with a
+    /// command that served no frame (a resize or a lifecycle call of its own
+    /// turn); never with a settlement an earlier drain took. An owner that
+    /// drains a raster thread's slot while the thread runs uses this, so it
+    /// can tell which of its frames may have lost their mark.
+    #[must_use]
+    pub fn drain_settlements_and_failure(
+        &self,
+        slot: SlotId,
+        into: &mut Vec<SlotSettlement>,
+    ) -> Option<SlotFailure> {
+        self.drain(slot, into, true).1
+    }
+
+    /// Drain `slot` into `into`, and take its failure under the same lock
+    /// when `take` is set.
+    fn drain(
+        &self,
+        slot: SlotId,
+        into: &mut Vec<SlotSettlement>,
+        take: bool,
+    ) -> (usize, Option<SlotFailure>) {
         if self.shared.health() == ExecutorHealth::Died {
             self.settle_after_death();
         }
         let Some(inbox) = self.inbox(slot) else {
-            return 0;
+            return (0, None);
         };
         let mut state = inbox.lock();
         let drained = state.settlements.len();
         into.extend(state.settlements.drain(..));
+        let failure = if take {
+            state.panicked = false;
+            state.failure.take()
+        } else {
+            None
+        };
         drop(state);
         if drained > 0 {
             // A full ring held the slot's next frame: a raster thread may start it.
             self.shared.ring();
         }
-        drained
+        (drained, failure)
     }
 
-    /// The first failure of `slot` since the last take.
+    /// The failure `slot` holds since the last take: the first, or the first
+    /// panic in place of a refusal held before it, since the owner reports a
+    /// panic and only logs a refusal. Taking it ends the slot's panic mark:
+    /// a panic the owner took is not a later frame's.
     #[must_use]
     pub fn take_failure(&self, slot: SlotId) -> Option<SlotFailure> {
         let inbox = self.inbox(slot)?;
-        inbox.lock().failure.take()
+        let mut state = inbox.lock();
+        state.panicked = false;
+        state.failure.take()
     }
 
     /// The executor died: settle each frame still pending in an inbox

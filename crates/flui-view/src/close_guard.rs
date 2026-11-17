@@ -49,7 +49,10 @@ pub enum CloseReason {
     /// The user asked: the window's close button, a keyboard shortcut, the
     /// window manager.
     User,
-    /// The application asked, by quitting through its own code.
+    /// The application is quitting: its own code asked
+    /// (`AppHandle::request_quit`), or the user asked the platform to quit it
+    /// (AppKit's Quit in the Dock, a quit Apple Event). Either way every
+    /// presentation is asked, and the quit waits for each one that refuses.
     Program,
     /// The operating system is ending the user's session: log off, restart,
     /// shut down.

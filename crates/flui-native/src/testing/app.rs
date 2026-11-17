@@ -9,7 +9,7 @@ use flui_platform::{Launch, Opened, SessionEndAnswer, SessionEndPhase, SystemNot
 
 use crate::error::BootstrapError;
 use crate::owner::OwnerPlatform;
-use crate::platform::{AppHandler, ExitAnswer, Platform};
+use crate::platform::{AppHandler, ExitAnswer, Platform, QuitAnswer};
 
 /// A handler whose bootstrap is `ready` and that has nothing to say about
 /// anything else: it ignores reports, lets a session end proceed, keeps the
@@ -63,6 +63,8 @@ pub enum AppCall {
     Ready,
     /// [`AppHandler::quit_requested`].
     Quit,
+    /// [`AppHandler::quit_asked`].
+    QuitAsked,
     /// [`AppHandler::reopen`].
     Reopen,
     /// [`AppHandler::opened`], with how many URLs and files it carried and
@@ -100,6 +102,7 @@ pub struct AppLog {
     reaction: RefCell<Option<Reaction>>,
     session_end: RefCell<Rc<dyn Fn(SessionEndPhase) -> SessionEndAnswer>>,
     exit: RefCell<Rc<dyn Fn() -> ExitAnswer>>,
+    quit: RefCell<Rc<dyn Fn() -> QuitAnswer>>,
     deadline: RefCell<Rc<dyn Fn() -> Option<web_time::Instant>>>,
     turn_deadline: RefCell<Rc<dyn Fn() -> Option<web_time::Instant>>>,
 }
@@ -115,6 +118,7 @@ impl AppLog {
             reaction: RefCell::new(None),
             session_end: RefCell::new(Rc::new(|_| SessionEndAnswer::Proceed)),
             exit: RefCell::new(Rc::new(|| ExitAnswer::KeepRunning)),
+            quit: RefCell::new(Rc::new(|| QuitAnswer::Quit)),
             deadline: RefCell::new(Rc::new(|| None)),
             turn_deadline: RefCell::new(Rc::new(|| None)),
         })
@@ -150,6 +154,12 @@ impl AppLog {
     /// [`ExitAnswer::KeepRunning`].
     pub fn answer_exit(&self, allow: bool) {
         self.answer_exit_with(move || allow);
+    }
+
+    /// Answer a quit the user or the system asked for with what `answer`
+    /// says when asked; [`QuitAnswer::Quit`] until told otherwise.
+    pub fn answer_quit_with(&self, answer: impl Fn() -> QuitAnswer + 'static) {
+        self.quit.replace(Rc::new(answer));
     }
 
     /// Answer the exit policy with `answer`.
@@ -248,6 +258,12 @@ impl AppHandler for AppLog {
 
     fn quit_requested(&self, owner: &OwnerPlatform) {
         self.heard(AppCall::Quit, owner);
+    }
+
+    fn quit_asked(&self, owner: &OwnerPlatform) -> QuitAnswer {
+        self.heard(AppCall::QuitAsked, owner);
+        let answer = self.quit.borrow().clone();
+        answer()
     }
 
     fn reopen(&self, owner: &OwnerPlatform) {

@@ -67,6 +67,19 @@ pub trait AppHandler: 'static {
     /// per run.
     fn quit_requested(&self, owner: &OwnerPlatform);
 
+    /// The user or the system asked the application to quit, apart from a
+    /// session end: AppKit's Quit (the Dock's menu, a quit Apple Event,
+    /// `terminate:` from any sender). The answer decides whether the platform
+    /// quits now ([`QuitAnswer`]). Asked on the owner thread outside the
+    /// native callback that heard the request, which the platform has already
+    /// answered by keeping the application running. The Win32, X11 and
+    /// Wayland hosts hear no such request (each of their closes reaches one
+    /// window's handler, and a session end reaches
+    /// [`session_end`](Self::session_end)); iOS, Android and the web cannot
+    /// be asked to quit; the headless host asks when a test reports one
+    /// ([`HeadlessHostEvents::quit`](crate::HeadlessHostEvents::quit)).
+    fn quit_asked(&self, owner: &OwnerPlatform) -> QuitAnswer;
+
     /// The user reopened the application: a click on its Dock icon (AppKit),
     /// or, on Linux and Windows, a later launch of one that keeps one
     /// instance which opens nothing, made while it shows no window: none is
@@ -149,6 +162,25 @@ pub enum ExitAnswer {
     /// hosts end the loop; the headless host keeps it running. A handler that
     /// panics is answered for this way too, on every host.
     HostDecides,
+}
+
+/// The application's answer to [`AppHandler::quit_asked`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a quit is carried out or it is not, and a `_` arm would quit or keep the application by accident"
+)]
+pub enum QuitAnswer {
+    /// Quit now: the platform closes every window, past their handlers, and
+    /// ends its loop. Also the answer before `ready` and after the loop
+    /// ended, when no handler can be asked.
+    Quit,
+    /// Keep running. The application refused, or asks its windows first and
+    /// quits itself ([`OwnerPlatform::quit`],
+    /// [`PlatformProxy::request_quit`](crate::PlatformProxy::request_quit))
+    /// once every one of them lets it. A handler that panics is answered for
+    /// this way: a panic is no consent to lose what the windows hold.
+    KeepRunning,
 }
 
 impl ExitAnswer {

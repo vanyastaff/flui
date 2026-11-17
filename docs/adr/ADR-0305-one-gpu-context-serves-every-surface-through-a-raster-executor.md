@@ -510,6 +510,42 @@ impl<B: RasterBackend + Send + 'static> RasterExecutor<B> {
   occluded; `docs/platform-parity.md` records the run. The occluded case is part of the budget
   on every platform, inline ones included, because one executor serves every window in both
   placements.
+- Threaded, the owner's host waits for the thread's answer to a window's attach
+  (`ExecutorHandle::await_attach`), so a window the thread refuses is refused at its attach as it
+  is inline; a thread that does not answer within the detach deadline is wedged at the attach as
+  at a detach (§9). Then, or when the thread died of anything else before it answered, the window
+  is not refused, since the thread or its queue may still hold its surface;
+  it draws nothing until §9's quarantine is built. It answers a frame `Queued`, or `QueuedReplacing` with the epoch the
+  slot's `SendReceipt::Replaced` names, keeps what each held frame's verdict needs (its version,
+  surface and retry), and its sink's in-flight limit is the placement's depth. A settlement
+  carries whether a call on its slot panicked since the previous settlement and the owner has
+  not taken it (`SlotSettlement::panicked`), which is how an owner that drains later
+  than the turn tells the frame a slot's panic came with; a slot holds a panic in place of a
+  refusal held before it, since the owner reports the one and only logs the other; a frame the
+  owner held unsettled when it took a panic, one that replaced it, and one drawn after a panicked
+  one of the same drain have their base forgotten; the owner takes a slot's panic with its
+  settlements under one lock (`RasterSender::drain_settlements_and_failure`) and forgets the base
+  after a drain that took one,
+  so the window's next frame draws in full. A surface whose
+  resize or upload panicked gets one retry, counted by surface (size and generation) rather than by
+  frame: the first frame that settles stale on it with the slot's panic (marked, or held unsettled
+  when the owner took that panic, or replacing one that was) is retried and any later one refused,
+  until a frame of the window settles any other way than a panicked render. The thread's
+  wake asks every attached window for a frame through its
+  `RedrawRequester`, each one contained; each window's wake drains its own slot's settlements
+  into `UiRuntime::settle_frame` first, before its frame gate and whatever the wake goes on to do,
+  and holds a panic of the code they ran for the end of that window's wake. Neither the window's
+  first-reveal fallback nor its pacing fallback arms while the thread holds a frame of the window:
+  its settlement does, a presented frame revealing the window and one that presented nothing
+  counting toward the reveal's fallback as a frame of the wake would. A window's detach waits for
+  the thread (`ExecutorHandle::detach`) once the host's borrow is released, or at once through the
+  host's link to the thread when it meets the host busy, since the window goes when the detach
+  returns.
+- Until a run makes a platform threaded, a debug build on Linux places the desktop loop's
+  executor on its raster thread when started with `FLUI_RASTER_PLACEMENT=threaded`; a release
+  build and every other host ignore the variable, Windows until the owner's wait services sent
+  messages (§9). It is the switch those runs are made with, and it goes when the first
+  platform's placement is threaded by the table above.
 - `render_lent` serves the hot-reload plugin's scene, lent by reference for the length of one
   call (`ScenePlugin::try_render_frame` in `crates/flui-app/src/app/hot_reload.rs`, through
   `RasterHost::render_lent` on Android).
@@ -624,7 +660,24 @@ the facade. Every production use of `with_backend` becomes:
   `a_command_sent_during_the_stop_comes_back_gone`; on the raster thread, in
   `crates/flui-engine/tests/raster_thread.rs`, `a_raster_thread_that_does_not_answer_a_detach_dies_at_its_deadline`
   `a_frame_queued_behind_a_wedged_render_settles_after_it` and
-  `a_frame_whose_resize_the_executor_died_during_is_not_rendered` (§9); ADR-0244's
+  `a_frame_whose_resize_the_executor_died_during_is_not_rendered` (§9),
+  `the_owner_waits_for_the_threads_answer_to_an_attach`,
+  `a_raster_thread_that_does_not_answer_an_attach_dies_at_its_deadline`,
+  `a_frame_that_panicked_settles_marked_so`, with
+  `crates/flui-engine/tests/raster_executor.rs`'s
+  `a_texture_panic_after_a_failed_resize_is_the_failure_held`,
+  `a_panic_takes_the_place_of_a_refusal_held_from_an_earlier_turn` and
+  `a_panic_marks_the_next_settlement_until_the_owner_takes_it` (§10); on the host's threaded
+  placement, in `crates/flui-app/src/app/runner/raster_host/tests.rs`,
+  `a_threaded_frame_is_queued_and_settles_through_the_windows_drain`,
+  `a_threaded_frame_replaces_the_one_waiting_behind_a_render`,
+  `a_threaded_windows_detach_returns_once_its_slot_is_down`,
+  `a_window_the_raster_thread_refuses_is_refused_at_attach`,
+  `a_window_whose_attach_the_raster_thread_does_not_answer_is_kept`,
+  `a_window_wake_settles_what_the_raster_thread_finished` and
+  `a_threaded_frame_that_did_not_present_counts_toward_the_first_reveal`, with the pacing it leaves in
+  `crates/flui-app/src/app/runner/frame_pacing.rs`'s `a_held_frame_arms_no_fallback` (§10);
+  ADR-0244's
   `gpu_backend_fallback_order`; and
   ADR-0267's `a_frame_dropped_on_a_lost_device_waits_out_the_backoff`,
   `a_failed_rebuild_is_reported_with_the_dropped_frame`,

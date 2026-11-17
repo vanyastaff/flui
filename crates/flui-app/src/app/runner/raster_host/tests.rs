@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use flui_engine::{
-    DeviceHealth, EngineError, SurfaceHold,
+    DeviceHealth, EngineError, RasterPlacement, SurfaceHold,
     testing::{FakeWindow, ScriptedAnswer, ScriptedSlots, SlotCall},
 };
 use flui_foundation::{
@@ -12,10 +12,11 @@ use flui_foundation::{
     geometry::{Offset, Rect},
 };
 use flui_layer::{DamageMode, DamageRegion, ScenePublication};
-use flui_runtime::sink::SubmitVerdict;
+use flui_runtime::sink::{FrameSettlement, SubmitVerdict};
 
 use super::{
-    RasterFactory, RasterHost, RasterSlot, RestorePace, SharedRasterHost, damage_mode_from,
+    RasterFactory, RasterHost, RasterSlot, RestorePace, SharedRasterHost, ThreadSettled,
+    damage_mode_from,
 };
 
 const SIZE: (u32, u32) = (640, 480);
@@ -30,9 +31,13 @@ fn address() -> PresentationAddress {
 /// A host over scripted slots with one window attached, unsized.
 fn host() -> (RasterHost, ScriptedSlots) {
     let slots = ScriptedSlots::new();
-    let mut host = RasterHost::new(RasterFactory::Scripted(slots.clone()));
+    let mut host = RasterHost::new(
+        RasterFactory::Scripted(slots.clone()),
+        RasterPlacement::Inline,
+    );
     host.attach_target(
         Arc::new(FakeWindow::new(1)),
+        None,
         address(),
         &crate::app::AppConfig::default(),
         None,
@@ -723,6 +728,7 @@ fn fill_the_lifecycle_queue(host: &mut RasterHost) {
     };
     host.attach_target(
         Arc::new(FakeWindow::new(2)),
+        None,
         other,
         &crate::app::AppConfig::default(),
         None,
@@ -796,7 +802,10 @@ fn what_the_full_queue_refused_is_sent_again() {
 #[test]
 fn a_surface_deadline_is_only_its_own_windows() {
     let slots = ScriptedSlots::new();
-    let shared = SharedRasterHost::new(RasterFactory::Scripted(slots.clone()));
+    let shared = SharedRasterHost::new(
+        RasterFactory::Scripted(slots.clone()),
+        RasterPlacement::Inline,
+    );
     let other = PresentationAddress {
         ui_runtime_id: UiRuntimeId::new(1),
         presentation_id: PresentationId::new(2),
@@ -806,6 +815,7 @@ fn a_surface_deadline_is_only_its_own_windows() {
             .try_with(|host| {
                 host.attach_target(
                     Arc::new(FakeWindow::new(window)),
+                    None,
                     at,
                     &crate::app::AppConfig::default(),
                     None,
@@ -864,6 +874,7 @@ pub(in crate::app::runner) fn owe_a_surface(
         .try_with(|host| {
             host.attach_target(
                 Arc::new(FakeWindow::new(window)),
+                None,
                 at,
                 &crate::app::AppConfig::default(),
                 None,
@@ -892,6 +903,7 @@ pub(in crate::app::runner) fn attach_a_window(
         .try_with(|host| {
             host.attach_target(
                 Arc::new(FakeWindow::new(window)),
+                None,
                 at,
                 &crate::app::AppConfig::default(),
                 None,
@@ -964,7 +976,10 @@ fn every_settled_verdict_maps_to_its_submit_verdict() {
 #[test]
 fn a_retired_executor_hands_its_windows_textures_to_their_next_slots() {
     let slots = ScriptedSlots::new();
-    let mut host = RasterHost::new(RasterFactory::Scripted(slots.clone()));
+    let mut host = RasterHost::new(
+        RasterFactory::Scripted(slots.clone()),
+        RasterPlacement::Inline,
+    );
     let registry = flui_layer::TextureRegistry::new(Arc::new(|| {}));
     let texture = registry.register().expect("a texture id");
     texture.submit_frame(flui_painting::paint::Image::from_rgba8(
@@ -975,6 +990,7 @@ fn a_retired_executor_hands_its_windows_textures_to_their_next_slots() {
     let attach = |host: &mut RasterHost| {
         host.attach_target(
             Arc::new(FakeWindow::new(1)),
+            None,
             address(),
             &crate::app::AppConfig::default(),
             Some(registry.clone()),
@@ -1046,5 +1062,650 @@ fn an_owner_replaced_device_is_never_given_up_to_the_application() {
     assert_eq!(
         host.device_health(),
         DeviceHealth::Rebuilding { attempts: 0 }
+    );
+}
+
+/// A host whose executor turns on its own raster thread over scripted slots,
+/// with one window attached whose redraw requests are counted.
+fn threaded_host() -> (
+    SharedRasterHost,
+    ScriptedSlots,
+    Arc<std::sync::atomic::AtomicUsize>,
+) {
+    threaded_host_at(address(), None)
+}
+
+/// [`threaded_host`] with its window at `at`, drawing `textures`.
+fn threaded_host_at(
+    at: PresentationAddress,
+    textures: Option<flui_layer::TextureRegistry>,
+) -> (
+    SharedRasterHost,
+    ScriptedSlots,
+    Arc<std::sync::atomic::AtomicUsize>,
+) {
+    let slots = ScriptedSlots::new();
+    let shared = SharedRasterHost::new(
+        RasterFactory::Scripted(slots.clone()),
+        RasterPlacement::Threaded,
+    );
+    let wakes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = Arc::clone(&wakes);
+    let redraw: Arc<dyn flui_platform::RedrawRequester> = Arc::new(move || {
+        counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    });
+    shared
+        .try_with(|host| {
+            host.attach_target(
+                Arc::new(FakeWindow::new(1)),
+                Some(redraw),
+                at,
+                &crate::app::AppConfig::default(),
+                textures,
+                None,
+            )
+        })
+        .expect("the host is idle")
+        .expect("the scripted backend attaches any window");
+    (shared, slots, wakes)
+}
+
+const THREAD_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Submit `scene`'s newest version through the shared host and answer its
+/// epoch and verdict.
+fn submit_threaded(
+    shared: &SharedRasterHost,
+    scene: &mut TestScene,
+) -> (flui_foundation::FrameEpoch, SubmitVerdict) {
+    let publication = scene.publication();
+    let epoch = scene.next_epoch();
+    let verdict = shared
+        .try_with(|host| host.submit(address(), SIZE, epoch, publication))
+        .expect("the host is idle");
+    (epoch, verdict)
+}
+
+/// Drain the window's settlements until `count` arrived, or the wait ends.
+fn settle_threaded(shared: &SharedRasterHost, count: usize) -> Vec<FrameSettlement> {
+    let started = std::time::Instant::now();
+    let mut settled = Vec::new();
+    while settled.len() < count && started.elapsed() < THREAD_WAIT {
+        shared
+            .try_with(|host| host.drain_settled(address(), &mut settled))
+            .expect("the host is idle");
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    settled
+}
+
+/// Whether `wakes` counted a redraw request within the wait.
+fn woken(wakes: &std::sync::atomic::AtomicUsize) -> bool {
+    let started = std::time::Instant::now();
+    while started.elapsed() < THREAD_WAIT {
+        if wakes.load(std::sync::atomic::Ordering::SeqCst) > 0 {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    false
+}
+
+/// On a raster thread, a frame is answered `Queued` and settles later, by
+/// its epoch, through the window's own drain; the settlement asks the window
+/// for a wake, and its sink lets two frames be in flight.
+///
+/// Red-check: answer the frame's receipt as an inline turn would (drop the
+/// `queue` branch of `RasterHost::submit`) and the frame is answered
+/// `Failed`, with nothing settled.
+#[test]
+fn a_threaded_frame_is_queued_and_settles_through_the_windows_drain() {
+    let (shared, slots, wakes) = threaded_host();
+    let mut scene = TestScene::new(AT);
+    let (epoch, verdict) = submit_threaded(&shared, &mut scene);
+    assert_eq!(verdict, SubmitVerdict::Queued);
+    let settled = settle_threaded(&shared, 1);
+    assert_eq!(
+        settled,
+        vec![FrameSettlement::new(
+            address(),
+            epoch,
+            SubmitVerdict::Presented
+        )]
+    );
+    assert!(woken(&wakes), "the settlement asks the window for a wake");
+    assert!(
+        !shared
+            .try_read(|host| host.has_pending(address()))
+            .expect("the host is idle"),
+        "the settled frame is no longer held"
+    );
+    assert_eq!(renders(&slots).len(), 1);
+    let mut frame = super::SlotFrame::new(shared.clone(), address(), SIZE);
+    assert_eq!(
+        flui_runtime::sink::FrameSink::in_flight_limit(&mut frame).get(),
+        2
+    );
+}
+
+/// A frame waiting in the slot's inbox behind one the thread renders is
+/// taken over by the next: answered `QueuedReplacing` with the epoch it
+/// replaced, which never settles, while the other two do.
+///
+/// Red-check: answer every accepted frame `Queued` and the third frame
+/// claims a place the replaced one still holds.
+#[test]
+fn a_threaded_frame_replaces_the_one_waiting_behind_a_render() {
+    let (shared, slots, _wakes) = threaded_host();
+    let held = slots.hold_next_render();
+    let mut scene = TestScene::new(AT);
+    let (first, verdict) = submit_threaded(&shared, &mut scene);
+    assert_eq!(verdict, SubmitVerdict::Queued);
+    assert!(
+        held.began_within(THREAD_WAIT),
+        "the thread renders the first frame"
+    );
+    scene.republish_child(AT, 3);
+    let (second, verdict) = submit_threaded(&shared, &mut scene);
+    assert_eq!(verdict, SubmitVerdict::Queued);
+    scene.republish_child(AT, 4);
+    let (third, verdict) = submit_threaded(&shared, &mut scene);
+    assert_eq!(verdict, SubmitVerdict::QueuedReplacing(second));
+    held.release();
+    let epochs: Vec<_> = settle_threaded(&shared, 2)
+        .into_iter()
+        .map(|settlement| (settlement.epoch, settlement.verdict))
+        .collect();
+    assert_eq!(
+        epochs,
+        vec![
+            (first, SubmitVerdict::Presented),
+            (third, SubmitVerdict::Presented)
+        ]
+    );
+}
+
+/// A window's detach on a raster thread returns only once the thread took
+/// its slot down, so the window's surface is never given back under a slot
+/// that still draws on it: whether the host is free, or busy with a call
+/// the window closed from.
+///
+/// Red-check: drop the shared host's wait for the thread's detaches (or the
+/// busy detach's wait through the link) and the detach returns while the
+/// thread is still rendering, before the release.
+#[test]
+fn a_threaded_windows_detach_returns_once_its_slot_is_down() {
+    for busy in [false, true] {
+        let (shared, slots, _wakes) = threaded_host();
+        let mut scene = TestScene::new(AT);
+        let held = slots.hold_next_render();
+        let (_, verdict) = submit_threaded(&shared, &mut scene);
+        assert_eq!(verdict, SubmitVerdict::Queued);
+        assert!(held.began_within(THREAD_WAIT), "the thread renders");
+        let released = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let releaser = {
+            let released = Arc::clone(&released);
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                released.store(true, std::sync::atomic::Ordering::SeqCst);
+                held.release();
+            })
+        };
+        if busy {
+            shared
+                .try_with(|_| {
+                    shared.detach(address());
+                    // Before the busy call ends: the window goes when the
+                    // detach returns, not when the host is free again.
+                    assert!(
+                        released.load(std::sync::atomic::Ordering::SeqCst),
+                        "the busy detach waited for the thread"
+                    );
+                })
+                .expect("the host is idle");
+        } else {
+            shared.detach(address());
+        }
+        assert!(
+            released.load(std::sync::atomic::Ordering::SeqCst),
+            "busy {busy}: the detach waited for the thread"
+        );
+        assert!(
+            slots
+                .calls()
+                .iter()
+                .any(|call| matches!(call, SlotCall::Detach(_))),
+            "busy {busy}: {:?}",
+            slots.calls()
+        );
+        releaser.join().expect("the releaser ends");
+    }
+}
+
+/// A window the raster thread refuses is refused at its attach, as inline:
+/// the owner waits for the thread's answer.
+///
+/// Red-check: accept the slot while the thread has not answered and the
+/// attach succeeds.
+#[test]
+fn a_window_the_raster_thread_refuses_is_refused_at_attach() {
+    let slots = ScriptedSlots::new();
+    slots.script_attach(ScriptedAnswer::Fail(EngineError::surface_creation(
+        std::io::Error::other("scripted refusal"),
+    )));
+    let shared = SharedRasterHost::new(RasterFactory::Scripted(slots), RasterPlacement::Threaded);
+    let attached = shared
+        .try_with(|host| {
+            host.attach_target(
+                Arc::new(FakeWindow::new(1)),
+                None,
+                address(),
+                &crate::app::AppConfig::default(),
+                None,
+                None,
+            )
+        })
+        .expect("the host is idle");
+    assert!(attached.is_err(), "the refusal reaches the window's attach");
+}
+
+/// A window whose attach the raster thread does not answer within the
+/// deadline is kept, not refused: the executor is dead, but the thread may
+/// still hold the window's surface, so the native window outlives it as a
+/// dead executor's windows do. Its frames draw nothing.
+///
+/// Red-check: decide from the slot's record after the deadline and the
+/// window is refused (`did not attach the slot`) while its surface is in
+/// the thread's hands.
+#[test]
+fn a_window_whose_attach_the_raster_thread_does_not_answer_is_kept() {
+    let (shared, slots, _wakes) = threaded_host();
+    let render = slots.hold_next_render();
+    let mut scene = TestScene::new(AT);
+    let (_epoch, verdict) = submit_threaded(&shared, &mut scene);
+    assert_eq!(verdict, SubmitVerdict::Queued);
+    assert!(render.began_within(THREAD_WAIT), "the thread renders");
+    let other = PresentationAddress {
+        ui_runtime_id: UiRuntimeId::new(1),
+        presentation_id: PresentationId::new(2),
+    };
+    let attached = shared
+        .try_with(|host| {
+            host.attach_target(
+                Arc::new(FakeWindow::new(2)),
+                None,
+                other,
+                &crate::app::AppConfig::default(),
+                None,
+                None,
+            )
+        })
+        .expect("the host is idle");
+    assert!(attached.is_ok(), "the window is kept: {:?}", attached.err());
+    let mut other_scene = TestScene::new(AT);
+    let publication = other_scene.publication();
+    let epoch = other_scene.next_epoch();
+    let verdict = shared
+        .try_with(|host| host.submit(other, SIZE, epoch, publication))
+        .expect("the host is idle");
+    assert!(
+        matches!(verdict, SubmitVerdict::Failed | SubmitVerdict::NotShown),
+        "a dead executor draws nothing: {verdict:?}"
+    );
+    render.release();
+}
+
+/// A frame held when the owner took a panic of its slot settles with its
+/// base forgotten, since its settlement may have lost the mark that pairs it
+/// with the panic: the window's next frame draws in full. A frame that
+/// replaces a tainted one inherits the taint, at any size, as it inherits
+/// its damage.
+///
+/// Red-check: move the base for a tainted frame, or drop the taint with the
+/// replaced frame, and the base shows the last frame.
+#[test]
+fn a_frame_held_when_its_slots_panic_was_taken_does_not_move_the_base() {
+    // (the size the replacing frame is measured at, if one replaces)
+    for replaced in [None, Some(SIZE), Some((320, 240))] {
+        let (shared, slots, _wakes) = threaded_host();
+        let render = slots.hold_next_render();
+        let mut scene = TestScene::new(AT);
+        let (_first, verdict) = submit_threaded(&shared, &mut scene);
+        assert_eq!(verdict, SubmitVerdict::Queued);
+        assert!(render.began_within(THREAD_WAIT), "the thread renders");
+        let taint = |shared: &SharedRasterHost| {
+            shared
+                .try_with(|host| {
+                    for held in &mut host
+                        .placed
+                        .as_mut()
+                        .expect("placed")
+                        .slots
+                        .get_mut(&address())
+                        .expect("attached")
+                        .pending
+                    {
+                        held.tainted = true;
+                    }
+                })
+                .expect("the host is idle");
+        };
+        let expected = if let Some(size) = replaced {
+            // The second waits behind the held render and is tainted; the
+            // third takes its place untainted by the owner.
+            let (_second, verdict) = submit_threaded(&shared, &mut scene);
+            assert_eq!(verdict, SubmitVerdict::Queued);
+            taint(&shared);
+            let publication = scene.publication();
+            let epoch = scene.next_epoch();
+            let verdict = shared
+                .try_with(|host| host.submit(address(), size, epoch, publication))
+                .expect("the host is idle");
+            assert!(
+                matches!(verdict, SubmitVerdict::QueuedReplacing(_)),
+                "{verdict:?}"
+            );
+            let carried = shared
+                .try_read(|host| {
+                    host.placed
+                        .as_ref()
+                        .and_then(|placed| placed.slots.get(&address()))
+                        .and_then(|slot| slot.pending.last())
+                        .is_some_and(|held| held.tainted)
+                })
+                .expect("the host is idle");
+            assert!(carried, "{size:?}: the replacement inherits the taint");
+            2
+        } else {
+            taint(&shared);
+            1
+        };
+        render.release();
+        let settled = settle_threaded(&shared, expected);
+        assert_eq!(
+            settled.len(),
+            expected,
+            "replaced {replaced:?}: {settled:?}"
+        );
+        let shown = shared
+            .try_read(|host| {
+                host.placed
+                    .as_ref()
+                    .and_then(|placed| placed.slots.get(&address()))
+                    .and_then(|slot| slot.base.shown_version())
+            })
+            .expect("the host is idle");
+        assert_eq!(shown, None, "replaced {replaced:?}: the base is forgotten");
+    }
+}
+
+/// A frame the raster thread draws after one whose texture upload panicked
+/// is drawn over an image that misses the upload: settled in the same drain
+/// as the panicked one, it does not move the base either.
+///
+/// Red-check: drop `torn` from `RasterHost::drain_settled` and the base
+/// shows the second frame.
+#[test]
+fn a_frame_drawn_after_a_panicked_upload_does_not_move_the_base() {
+    let registry = flui_layer::TextureRegistry::new(Arc::new(|| {}));
+    let texture = registry.register().expect("a texture id");
+    texture.submit_frame(flui_painting::paint::Image::from_rgba8(
+        1,
+        1,
+        vec![255, 0, 0, 255],
+    ));
+    let (shared, slots, _wakes) = threaded_host_at(address(), Some(registry));
+    slots.script_textures(ScriptedAnswer::Panic);
+    let render = slots.hold_next_render();
+    let mut scene = TestScene::new(AT);
+    let (_first, verdict) = submit_threaded(&shared, &mut scene);
+    assert_eq!(verdict, SubmitVerdict::Queued);
+    assert!(render.began_within(THREAD_WAIT), "the thread renders");
+    let (_second, verdict) = submit_threaded(&shared, &mut scene);
+    assert_eq!(verdict, SubmitVerdict::Queued);
+    render.release();
+    // Both settle before the window drains, so one drain holds both.
+    let undrained = || {
+        shared
+            .try_read(|host| {
+                let placed = host.placed.as_ref().expect("placed");
+                let slot = placed.slots.get(&address()).expect("attached").slot;
+                placed
+                    .sender
+                    .record(slot)
+                    .map_or(0, |record| record.undrained)
+            })
+            .expect("the host is idle")
+    };
+    let started = std::time::Instant::now();
+    while undrained() < 2 && started.elapsed() < THREAD_WAIT {
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    let mut settled = Vec::new();
+    shared
+        .try_with(|host| host.drain_settled(address(), &mut settled))
+        .expect("the host is idle");
+    assert_eq!(settled.len(), 2, "{settled:?}");
+    let shown = shared
+        .try_read(|host| {
+            host.placed
+                .as_ref()
+                .and_then(|placed| placed.slots.get(&address()))
+                .and_then(|slot| slot.base.shown_version())
+        })
+        .expect("the host is idle");
+    assert_eq!(shown, None, "the base is forgotten");
+}
+
+/// The placement switch takes `threaded` or `inline`, in any case, and keeps
+/// the executor inline for anything else.
+#[test]
+fn the_placement_variable_selects_the_placement() {
+    use super::placement_from;
+    for (value, placement) in [
+        (None, RasterPlacement::Inline),
+        (Some(""), RasterPlacement::Inline),
+        (Some("inline"), RasterPlacement::Inline),
+        (Some(" Threaded "), RasterPlacement::Threaded),
+        (Some("THREADED"), RasterPlacement::Threaded),
+        (Some("thread"), RasterPlacement::Inline),
+    ] {
+        assert_eq!(placement_from(value), placement, "{value:?}");
+    }
+}
+
+/// A window's wake hands what the raster thread settled to its UI runtime,
+/// which frees the frame's place: with two frames held the runtime produces
+/// no third, and once the wake settled them it does. The wake answers that a
+/// frame presented only for a frame the runtime held.
+///
+/// Red-check: return before the drain in `RasterSlot::settle` and the third
+/// frame never comes.
+#[test]
+fn a_window_wake_settles_what_the_raster_thread_finished() {
+    let mut ui_runtime = crate::app::ui_runtime::UiRuntime::for_test();
+    ui_runtime
+        .attach_root_widget(&flui_widgets::SizedBox::new(20.0, 20.0))
+        .expect("the root attaches");
+    let at = PresentationAddress {
+        ui_runtime_id: ui_runtime.id(),
+        presentation_id: ui_runtime.active_presentation_for_test(),
+    };
+    let (shared, slots, _wakes) = threaded_host_at(at, None);
+    // The first frame's render is held, so the second queues behind it
+    // instead of taking the place of a frame the thread has not begun.
+    let render = slots.hold_next_render();
+    let mut slot = RasterSlot {
+        host: shared.clone(),
+        address: at,
+        size: SIZE,
+        device: DeviceHealth::Healthy,
+    };
+    let held = |shared: &SharedRasterHost| {
+        shared
+            .try_read(|host| {
+                host.placed
+                    .as_ref()
+                    .and_then(|placed| placed.slots.get(&at))
+                    .map_or(0, |slot| slot.pending.len())
+            })
+            .expect("the host is idle")
+    };
+    let frame = |slot: &mut RasterSlot, ui_runtime: &mut crate::app::ui_runtime::UiRuntime| {
+        ui_runtime.mark_primary_needs_full_repaint();
+        let presented = slot.pump(ui_runtime, web_time::Instant::now(), None);
+        assert!(!presented, "a queued frame has not presented yet");
+    };
+    frame(&mut slot, &mut ui_runtime);
+    assert!(
+        render.began_within(THREAD_WAIT),
+        "the thread renders the first frame"
+    );
+    frame(&mut slot, &mut ui_runtime);
+    assert_eq!(held(&shared), 2, "two frames in flight");
+    frame(&mut slot, &mut ui_runtime);
+    assert_eq!(held(&shared), 2, "the runtime holds the third");
+    render.release();
+    let started = std::time::Instant::now();
+    let mut presented = false;
+    while held(&shared) > 0 && started.elapsed() < THREAD_WAIT {
+        let (settled, caught) = slot.settle(&mut ui_runtime);
+        assert!(
+            caught.into_payload().is_none(),
+            "nothing the settlements ran panicked"
+        );
+        presented |= settled == ThreadSettled::Presented;
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    assert!(presented, "the wake saw a frame the runtime held present");
+    frame(&mut slot, &mut ui_runtime);
+    assert_eq!(held(&shared), 1, "a settled place takes the next frame");
+    // A settlement the runtime holds no frame for is not this window's present.
+    let foreign = flui_runtime::sink::FrameSettlement::new(
+        at,
+        flui_foundation::FrameEpoch::ZERO,
+        SubmitVerdict::Presented,
+    );
+    assert_eq!(
+        ui_runtime.settle_frame(foreign),
+        flui_runtime::sink::Settled::Stale
+    );
+}
+
+/// A frame the raster thread finished without presenting counts toward the
+/// window's first reveal: the wake answers it not presented, which the
+/// reveal's fallback counts as a frame of the wake that presented nothing,
+/// so a window whose first frames the thread refuses is still shown.
+///
+/// Red-check: answer `Nothing` for a settlement that did not present and
+/// the test fails; the desktop wake reveals on `NotPresented` in
+/// `DesktopFrameDriver::after_settled`.
+#[test]
+fn a_threaded_frame_that_did_not_present_counts_toward_the_first_reveal() {
+    let mut ui_runtime = crate::app::ui_runtime::UiRuntime::for_test();
+    ui_runtime
+        .attach_root_widget(&flui_widgets::SizedBox::new(20.0, 20.0))
+        .expect("the root attaches");
+    let at = PresentationAddress {
+        ui_runtime_id: ui_runtime.id(),
+        presentation_id: ui_runtime.active_presentation_for_test(),
+    };
+    let (shared, slots, _wakes) = threaded_host_at(at, None);
+    slots.script_render(ScriptedAnswer::Fail(EngineError::GpuUnavailable));
+    let mut slot = RasterSlot {
+        host: shared,
+        address: at,
+        size: SIZE,
+        device: DeviceHealth::Healthy,
+    };
+    ui_runtime.mark_primary_needs_full_repaint();
+    let presented = slot.pump(&mut ui_runtime, web_time::Instant::now(), None);
+    assert!(!presented, "a queued frame has not presented yet");
+    let started = std::time::Instant::now();
+    let mut settled = ThreadSettled::Nothing;
+    while settled == ThreadSettled::Nothing && started.elapsed() < THREAD_WAIT {
+        let caught;
+        (settled, caught) = slot.settle(&mut ui_runtime);
+        assert!(
+            caught.into_payload().is_none(),
+            "nothing the settlements ran panicked"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    assert_eq!(settled, ThreadSettled::NotPresented);
+}
+
+/// A surface whose resize panics gets one retry, however its frames settle:
+/// the first frame that settles stale on it is retried, and any other that
+/// meets the panic on it (a frame queued behind the first, or the retry) is
+/// refused, a frame held when the slot's panic was taken counted as one that
+/// met it, until a frame settles any other way than a panicked render.
+///
+/// Red-check: drop the surface's record and a frame
+/// queued behind the first is retried too.
+#[test]
+fn a_surface_whose_resize_panics_gets_one_retry() {
+    let (mut host, _slots) = host();
+    let shown = TestScene::new(AT).publication().scene.id();
+    let placed = host.placed.as_mut().expect("placed");
+    let surface = flui_layer::SurfaceKey {
+        size: SIZE,
+        generation: flui_foundation::SurfaceGeneration::ZERO,
+    };
+    let frame = |epoch: u64, tainted: bool| super::PendingFrame {
+        epoch: {
+            let mut at = flui_foundation::FrameEpoch::ZERO;
+            for _ in 0..epoch {
+                at = at.next();
+            }
+            at
+        },
+        shown,
+        key: surface,
+        tainted,
+    };
+    let stale = Some(flui_engine::RasterVerdict::SurfaceStale);
+    let settle = |placed: &mut super::Placed,
+                  epoch: u64,
+                  settled: Option<flui_engine::RasterVerdict>,
+                  tainted: bool,
+                  turned: super::SlotTurn| {
+        RasterHost::settle_one(placed, address(), frame(epoch, tainted), settled, turned)
+    };
+    // The first frame on the surface whose resize panicked is retried.
+    assert_eq!(
+        settle(placed, 1, stale, false, super::SlotTurn::Panicked),
+        Some(SubmitVerdict::SurfaceStale)
+    );
+    // One queued behind it, and the retry, meet the panic again: refused.
+    assert_eq!(
+        settle(placed, 2, stale, false, super::SlotTurn::Panicked),
+        Some(SubmitVerdict::Refused)
+    );
+    // A frame whose turn settled nothing says nothing of the surface, and one
+    // held when the slot's panic was taken (whose own mark may be gone) is
+    // counted as the panicked one: refused, the retry spent.
+    assert_eq!(settle(placed, 3, None, false, super::SlotTurn::Clean), None);
+    assert_eq!(
+        settle(placed, 4, stale, true, super::SlotTurn::Clean),
+        Some(SubmitVerdict::Refused)
+    );
+    assert_eq!(
+        settle(placed, 5, stale, false, super::SlotTurn::Panicked),
+        Some(SubmitVerdict::Refused)
+    );
+    // A frame that settles without a panic ends the surface's retry.
+    assert_eq!(
+        settle(placed, 6, stale, false, super::SlotTurn::Clean),
+        Some(SubmitVerdict::SurfaceStale)
+    );
+    // A tainted frame can be the first on the surface: it takes the retry.
+    assert_eq!(
+        settle(placed, 7, stale, true, super::SlotTurn::Clean),
+        Some(SubmitVerdict::SurfaceStale)
+    );
+    assert_eq!(
+        settle(placed, 8, stale, false, super::SlotTurn::Panicked),
+        Some(SubmitVerdict::Refused)
     );
 }

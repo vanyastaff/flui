@@ -15,9 +15,7 @@ window's own input path, and `Tester::expect` waits while the application has a 
 due ([cookbook](../book/src/cookbook/testing.md)). `flui::testing::rendering::{RenderTester,
 BoxQueryRun}` tests a render object of one's own. The framework's own harnesses
 (`flui_testing::widgets::lay_out`, `HeadlessHost`, `HeadlessBinding`, gesture replay and the
-accessibility reader) stay in `flui-testing`; the facade keeps the ones it exported before
-`Tester` under the deprecated `flui::testing::harness`
-([gaps](gaps.md#the-facades-old-test-harnesses)).
+accessibility reader) stay in `flui-testing` and out of the facade.
 
 The `testing` feature is off by default. Independent consumer tests check that
 ordinary dependency graphs do not include the headless test driver. The tier
