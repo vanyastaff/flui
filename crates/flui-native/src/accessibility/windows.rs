@@ -177,6 +177,10 @@ impl crate::host::WindowAccessibility for WindowsAccessibility {
 
     /// The subclassed procedure sees `WM_SETFOCUS` and `WM_KILLFOCUS` itself.
     fn focus_changed(&self, _: bool) {}
+
+    /// UI Automation places the nodes from the window's client area, which it
+    /// reads through the HWND.
+    fn bounds_changed(&self, _: crate::host::ScreenBounds) {}
 }
 
 /// Each Win32 window subclasses its own procedure for UIA, on the thread

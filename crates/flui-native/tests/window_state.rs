@@ -650,6 +650,36 @@ fn the_user_resizing_and_moving_publish_too() {
     );
 }
 
+/// A headless window tells its accessibility bridge where it lies, as every
+/// native window does: in device pixels, from its opening, after a move and
+/// after a change of scale, and the content is the whole window, which this
+/// host draws no frame around.
+fn a_window_tells_its_bridge_where_it_lies() {
+    use flui_foundation::geometry::Bounds;
+    use flui_native::host::ScreenBounds;
+
+    let platform = HeadlessPlatform::new();
+    let window = open(&platform);
+    let bounds = |x, y, width, height| {
+        let window = Bounds::new(Point::new(x, y), Size::new(width, height));
+        Some(ScreenBounds::try_new(window, window).expect("a frameless window"))
+    };
+    let told = || mock(&window).window_system().accessibility_bounds;
+    let opened = window.state().content_size;
+    let (width, height) = (opened.width() as i32, opened.height() as i32);
+    assert_eq!(told(), bounds(0, 0, width, height), "as it opened");
+
+    mock(&window).simulate_move(Point::new(30.0, 40.0));
+    assert_eq!(told(), bounds(30, 40, width, height), "after a move");
+
+    mock(&window).simulate_scale_factor_change(2.0);
+    assert_eq!(
+        told(),
+        bounds(60, 80, 2 * width, 2 * height),
+        "after a change of scale, in device pixels"
+    );
+}
+
 fn a_window_without_position_reports_none() {
     let mut caps = WindowCapabilities::ALL.into_parts();
     caps.observes_position = flui_platform::Availability::Unavailable;
@@ -897,6 +927,10 @@ fn window_state_contract() {
             (
                 "the_user_resizing_and_moving_publish_too",
                 the_user_resizing_and_moving_publish_too as fn(),
+            ),
+            (
+                "a_window_tells_its_bridge_where_it_lies",
+                a_window_tells_its_bridge_where_it_lies as fn(),
             ),
             (
                 "a_window_without_position_reports_none",
