@@ -44,6 +44,7 @@ use std::time::Duration;
 use flui_foundation::geometry::{Bounds, DevicePixelRatio, Size};
 use flui_foundation::panic::FirstPanic;
 use flui_foundation::{ManualClock, PresentationId};
+use flui_platform::TextStoreHost;
 use flui_platform::capability::scripted::{AlreadyDriven, Scenario, ScenarioDriver};
 use flui_platform::data_transfer::{RepresentationDescriptor, TransferActions};
 use flui_platform::drag::{
@@ -55,7 +56,6 @@ use flui_platform::{
     CursorError, CursorIcon, DisplayId, PlatformInput, PlatformTextInput, PlatformWindow,
     Unsupported, UnsupportedReason, WindowId, WindowIdMint,
 };
-use flui_platform::TextStoreHost;
 
 use flui_runtime::dev_agent::DevAgentHost;
 use flui_runtime::frame_failure::{
