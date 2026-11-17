@@ -1437,10 +1437,46 @@ impl<'v> Folded<'v> {
     /// bounds: what [`Geometry::subtree_reach`] answers for it.
     pub(crate) fn subtree_reach(&self, geometry: Geometry<'v>) -> Reach {
         let record = geometry.record(self.key);
-        let mut out = match Reach::of(record.subtree()) {
+        let local = match Reach::of(record.subtree()) {
             Reach::Rect(rect) => mapped(&self.ctm, rect).spread(record.kernel()),
             other => other,
         };
+        self.outward(local)
+    }
+
+    /// Where `bounds`, in the space that holds `entry` of this node's
+    /// content, land on the surface: through the effects above the entry,
+    /// then this chain. `scratch` is a buffer the caller keeps between
+    /// calls.
+    pub(crate) fn entry_reach(
+        &self,
+        geometry: Geometry<'v>,
+        entry: EntryIndex,
+        bounds: Bounds,
+        scratch: &mut Links<'v>,
+    ) -> Reach {
+        scratch.steps.clear();
+        scratch.resolved.clear();
+        geometry.content_links(self.key, entry, scratch, 0);
+        if scratch.steps.is_empty() {
+            return self.outward(self.mapped(bounds));
+        }
+        let mut inner = self.clone();
+        inner.extend(scratch);
+        inner.outward(inner.mapped(bounds))
+    }
+
+    /// `bounds` under this chain's map, before the steps outside it.
+    fn mapped(&self, bounds: Bounds) -> Reach {
+        match Reach::of(bounds) {
+            Reach::Rect(rect) => mapped(&self.ctm, rect),
+            other => other,
+        }
+    }
+
+    /// `out`, cut, spread or grown by the steps outside this chain,
+    /// innermost first.
+    fn outward(&self, mut out: Reach) -> Reach {
         for step in self.outer.iter().rev() {
             out = match *step {
                 Outer::Clip(clip) => clipped(out, clip),

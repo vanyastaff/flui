@@ -21,7 +21,9 @@ fn clean_reads_reuse_the_observation() {
     );
     assert_eq!(
         cache
-            .read(&pending, || panic!("clean cache queried the OS"))
+            .read(&pending, || -> Result<SystemPreferences, PlatformError> {
+                panic!("clean cache queried the OS")
+            })
             .expect("cached read"),
         values(2.0)
     );
@@ -52,9 +54,11 @@ fn failed_refresh_is_not_a_stale_success() {
     pending.store(true, Ordering::Release);
     assert!(
         cache
-            .read_at(&pending, now, || Err(PlatformError::Preferences {
-                message: "injected read failure".into()
-            }))
+            .read_at(&pending, now, || Err::<SystemPreferences, _>(
+                PlatformError::Preferences {
+                    message: "injected read failure".into()
+                }
+            ))
             .is_err()
     );
     assert_eq!(
@@ -76,7 +80,9 @@ fn nested_read_cannot_publish_an_observation() {
         .read(&pending, || {
             assert!(
                 cache
-                    .read(&pending, || panic!("nested getter entered"))
+                    .read(&pending, || -> Result<SystemPreferences, PlatformError> {
+                        panic!("nested getter entered")
+                    })
                     .is_err()
             );
             Ok(values(2.0))
@@ -97,7 +103,7 @@ fn panic_preserves_refresh_and_releases_the_reader() {
         catch_unwind(AssertUnwindSafe(|| cache.read_at(
             &pending,
             now,
-            || panic!("injected getter panic")
+            || -> Result<SystemPreferences, PlatformError> { panic!("injected getter panic") }
         )))
         .is_err()
     );
@@ -113,11 +119,114 @@ fn panic_preserves_refresh_and_releases_the_reader() {
     );
 }
 
+/// Reads that keep failing are retried 0.1, 0.2, 0.4, 0.8, 1.6 and 3.2 s
+/// apart and then left until the system reports a change; a change starts
+/// the schedule over. Red-check: a fixed 100 ms retry for good.
+fn failed_reads_retry_on_a_doubling_schedule_and_stop() {
+    let cache = SampleCache::default();
+    let pending = AtomicBool::new(true);
+    let mut now = web_time::Instant::now();
+    let fail = || {
+        Err::<SystemPreferences, _>(PlatformError::Preferences {
+            message: "native read failed".into(),
+        })
+    };
+    let mut pauses = Vec::new();
+    // Bounded, so a schedule that never runs out fails here rather than hangs.
+    for _ in 0..20 {
+        assert!(cache.read_at(&pending, now, fail).is_err());
+        let Some(retry) = cache.retry.get() else {
+            break;
+        };
+        assert!(pending.load(Ordering::Acquire), "a retry is owed");
+        pauses.push((retry.read_after - now).as_millis());
+        now = retry.read_after;
+    }
+    assert_eq!(pauses, [100, 200, 400, 800, 1600, 3200]);
+    assert!(
+        !pending.load(Ordering::Acquire),
+        "every retry spent: nothing is owed until the system reports a change"
+    );
+    pending.store(true, Ordering::Release);
+    assert!(cache.read_at(&pending, now, fail).is_err());
+    assert_eq!(
+        cache
+            .retry
+            .get()
+            .map(|retry| (retry.read_after - now).as_millis()),
+        Some(100),
+        "a reported change starts the schedule over"
+    );
+}
+
+/// A getter that fails leaves the others' values committed and owes a
+/// retry of the read; the retry that answers everything settles it.
+/// Red-check: fail the whole read for one getter.
+fn an_unreadable_value_keeps_the_others_and_owes_a_retry() {
+    let cache = SampleCache::default();
+    let pending = AtomicBool::new(true);
+    let now = web_time::Instant::now();
+    let partial = Sample {
+        values: values(2.0),
+        complete: false,
+    };
+    assert_eq!(
+        cache
+            .read_at(&pending, now, || Ok(partial))
+            .expect("committed"),
+        values(2.0),
+        "the values that were read stand"
+    );
+    assert_eq!(
+        cache.retry.get().map(|retry| retry.read_after - now),
+        Some(RETRY_INTERVAL),
+        "the unread value is read again"
+    );
+    assert!(pending.load(Ordering::Acquire));
+    assert_eq!(
+        cache
+            .read_at(&pending, now + RETRY_INTERVAL, || Ok(values(3.0)))
+            .expect("complete retry"),
+        values(3.0)
+    );
+    assert!(cache.retry.get().is_none(), "a complete read settles");
+}
+
+/// Every `UISettings` change event this Windows offers is observed, the
+/// accent's and the scroll bars' included: a setting whose only notice is
+/// its own event is not missed. Red-check: drop an event from the list.
+fn every_settings_event_is_observed() {
+    let (signal, _) = counting_signal();
+    let source = PreferenceSource::try_new(&signal).expect("a native preference source");
+    let observed: Vec<UiSettingsEvent> = source.observers.iter().map(|(event, _)| *event).collect();
+    assert_eq!(
+        observed,
+        [
+            UiSettingsEvent::TextScale,
+            UiSettingsEvent::Animations,
+            UiSettingsEvent::Colors,
+            UiSettingsEvent::AutoHideScrollBars,
+        ]
+    );
+}
+
 #[test]
 fn native_preference_read_recovery() {
     crate::table_test::run_table(
         "native_preference_read_recovery",
         &[
+            (
+                "failed_reads_retry_on_a_doubling_schedule_and_stop",
+                failed_reads_retry_on_a_doubling_schedule_and_stop,
+            ),
+            (
+                "an_unreadable_value_keeps_the_others_and_owes_a_retry",
+                an_unreadable_value_keeps_the_others_and_owes_a_retry,
+            ),
+            (
+                "every_settings_event_is_observed",
+                every_settings_event_is_observed,
+            ),
             (
                 "unrelated_wakes_do_not_repeat_failed_native_reads",
                 unrelated_wakes_do_not_repeat_failed_native_reads,
@@ -152,17 +261,23 @@ fn unrelated_wakes_do_not_repeat_failed_native_reads() {
     let now = web_time::Instant::now();
     assert!(
         cache
-            .read_at(&pending, now, || Err(PlatformError::Preferences {
-                message: "native read failed".into(),
-            }))
+            .read_at(&pending, now, || Err::<SystemPreferences, _>(
+                PlatformError::Preferences {
+                    message: "native read failed".into(),
+                }
+            ))
             .is_err()
     );
     for offset in [0, 1, 20, 99] {
         assert!(
             cache
-                .read_at(&pending, now + Duration::from_millis(offset), || {
-                    panic!("another wake bypassed retry pacing")
-                })
+                .read_at(
+                    &pending,
+                    now + Duration::from_millis(offset),
+                    || -> Result<SystemPreferences, PlatformError> {
+                        panic!("another wake bypassed retry pacing")
+                    }
+                )
                 .is_err()
         );
     }

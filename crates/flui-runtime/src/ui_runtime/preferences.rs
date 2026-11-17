@@ -268,6 +268,12 @@ fn refresh(
                 data.motion = presentation.motion_policy();
                 data.preferred_locales = values.locales().map(Into::into);
                 data.regional_formats = values.regional().clone();
+                // Both are finite sRGB with straight alpha in 0..=1, each
+                // checked where the host built it.
+                data.accent_color = values.accent_color().map(|color| {
+                    flui_painting::styling::Color::from_rgba_f32_array(color.to_array())
+                });
+                data.scroll_bars = *values.scroll_bars();
             });
             if let Some(visual_update) = visual_update {
                 visual_update.notify_with(scope);

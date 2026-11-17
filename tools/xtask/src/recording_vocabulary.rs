@@ -218,6 +218,16 @@ const RECORDED: &[Recorded] = &[
         "crates/flui-platform/src/preferences.rs",
         "WheelStep",
     ),
+    repo(
+        "ScrollBarVisibility",
+        "crates/flui-platform/src/preferences.rs",
+        "ScrollBarVisibility",
+    ),
+    repo(
+        "ScrollTrackClick",
+        "crates/flui-platform/src/preferences.rs",
+        "ScrollTrackClick",
+    ),
     repo("Weekday", "crates/flui-platform/src/regional.rs", "Weekday"),
     repo(
         "HourCycle",

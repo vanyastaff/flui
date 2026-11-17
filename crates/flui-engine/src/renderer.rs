@@ -2079,7 +2079,8 @@ impl Renderer {
             // advanced-blend passes read from `render_texture`, which always
             // has COPY_SRC here: the swapchain image when the surface offers
             // it, the retained target (created with it) otherwise. A
-            // version's walk skips the boundaries this rect cannot reach.
+            // version's walk skips the boundaries and chunks this rect cannot
+            // reach.
             crate::layer_walk::record_scene(scene.content(), Some(redrawn), &mut backend)?;
 
             // An advanced shape (one that reads the destination) whose bounds
