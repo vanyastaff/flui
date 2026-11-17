@@ -272,9 +272,9 @@ fn platform_compiler_tests() -> Cmd {
     .args(["--locked", "--no-fail-fast"])
 }
 
-/// flui-native's suite on `host`: under Xvfb on Linux, directly on Windows
-/// (native Windows needs neither), skipped elsewhere. Compiler checks run
-/// separately in the nested stage.
+/// flui-native's suite on `host`: under Xvfb on Linux, on Windows on the run's
+/// own desktop, which `.config/nextest.toml` starts every test on (ADR-0355),
+/// skipped elsewhere. Compiler checks run separately in the nested stage.
 fn platform_suite(host: Host) -> Vec<Step> {
     match host {
         Host::Linux => vec![

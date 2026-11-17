@@ -4445,6 +4445,35 @@ manager reads as it maps it, so a window opened in a mode is mapped only once
 the property holds it. Logical numbers become 16-bit X11 coordinates and
 extents only when they are finite and fit (`window::linux::x11::placement`).
 
+A window answers what its window manager asks beyond its close, a policy the
+Wayland host holds too (`xdg_wm_base.ping`): it lists `_NET_WM_PING` and sends
+each ping back to the root as the loop hears it, on the owner thread and
+flushed at once, so an owner that hangs answers nothing and its window
+manager can offer to end it, and a long turn holds no answer back
+(`a_window_answers_the_window_managers_ping`); it names `WM_CLIENT_MACHINE`
+from `uname`, and `_NET_WM_PID` only beside it and only from the initial PID
+namespace, where the window manager's id for the process is the same
+(`protocols::ClientProcess`: inside Flatpak's or a container's namespace the
+id names another process outside it, and `NSpid` cannot tell where the
+sandbox mounts its own `/proc`). Where the server has SYNC it
+lists `_NET_WM_SYNC_REQUEST` and names two XSync counters, the basic one and
+the extended one. `protocols::ResizeSync` decides when they are set: a request
+waits for the configure after it; at the window's read a configure that asked
+no frame is answered at once, and otherwise the answer follows the next frame
+the loop delivers (`X11Window::deliver_frame`), on every exit of its handler,
+a panic included; under a window manager that lists `_NET_WM_FRAME_DRAWN` the
+extended counter is odd while each frame draws, and never rests above
+`i64::MAX - 1`. Each write is flushed at once, since the GPU driver may present
+on a connection of its own. The answer follows the frame's hand-over to the
+GPU, not its presentation: the host hears no presentation (Present's
+completion goes to the driver's connection), a FIFO swap chain presents at a
+later refresh and a raster thread may still be drawing, so a window manager
+may draw the new size once around content of the old size
+([gaps](../../docs/gaps.md#live-resize-is-unaudited-and-unscheduled);
+`a_synchronised_resize_is_answered_after_its_frame`,
+`a_window_manager_that_paces_frames_sees_each_one_drawn`,
+`openbox_paces_an_interactive_resize_by_the_windows_counter`).
+
 A window's identity is the `WindowId` the platform issues from its `WindowIdMint`;
 the X id only routes an event to the window that holds it now and is
 forgotten as the window closes, before the X window is destroyed. A close (the

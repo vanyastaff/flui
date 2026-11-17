@@ -177,6 +177,9 @@ host change needs `cargo heli nextest run -p flui-native` by hand.
 - Each worktree keeps its own `target/`: a shared `CARGO_TARGET_DIR` links another worktree's
   sources.
 - nextest skips doctests (`cargo test --doc`); GPU readback suites stay at one test thread.
+- On Windows nextest starts every test on a desktop of its own that nobody sees and no input
+  reaches; `FLUI_TEST_VISIBLE_DESKTOP=1` starts them on yours, where the cases that need the
+  foreground, the cursor or injected input run ([testing](docs/testing.md#the-windows-test-desktop)).
 - A flaky test usually touches process-global state (`flui-log`'s subscriber,
   `flui-foundation`'s key counters): lock that test module.
 - Pre-1.0 the MSRV tracks latest stable (`rust-toolchain.toml`).
