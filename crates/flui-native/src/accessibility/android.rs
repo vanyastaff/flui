@@ -55,6 +55,7 @@ use parking_lot::Mutex;
 use crate::accessibility::bridge::{Action, Activation, BridgeShared};
 use crate::owner::android::ActivityRef;
 use crate::owner::android::java_view::{JavaView, ViewAccessibility};
+use crate::owner::android::pending_exception::{ClearsPending, EnvSlot};
 use flui_semantics::platform::{
     AccessibilityActionListener, AccessibilityActivationListener, PlatformAccessibility,
     RouteChange, RouteChangeSupport,
@@ -126,27 +127,10 @@ fn raise(env: &mut JNIEnv<'_>, host: &JObject<'_>, events: Option<QueuedEvents>)
     }
 }
 
-/// Clears a Java exception the adapter left pending, also when it panicked:
-/// the adapter's JNI calls `unwrap`, and the provider's caller must see the
-/// answer, not a throw.
-struct ClearPending(*mut jni021::JNIEnv);
-
-impl Drop for ClearPending {
-    fn drop(&mut self) {
-        // SAFETY: the pointer is the environment of the native call this
-        // guard lives in, on its thread, as `with_env` below took it.
-        let Ok(env) = (unsafe { JNIEnv::from_raw(self.0) }) else {
-            return;
-        };
-        if env.exception_check().unwrap_or(false) {
-            let _ = env.exception_describe();
-            let _ = env.exception_clear();
-        }
-    }
-}
-
 /// Run `f` with the 0.21 environment and view behind the raw pointers of a
-/// JNI call (see the module doc), clearing what it leaves pending.
+/// JNI call (see the module doc), clearing what it leaves pending, also when
+/// it panics: the adapter's JNI calls `unwrap`, and the provider's caller
+/// must see the answer, not a throw ([`ClearsPending`]).
 ///
 /// # Safety
 ///
@@ -157,9 +141,12 @@ unsafe fn with_env<R>(
     host: jni::sys::jobject,
     f: impl FnOnce(&mut JNIEnv<'_>, &JObject<'_>) -> R,
 ) -> Option<R> {
+    // SAFETY: the caller's contract: the environment of a JNI call on this
+    // thread, which the guard, dropped at the end of this function, does not
+    // outlive.
+    let _clears = ClearsPending::new(unsafe { EnvSlot::new(env) });
     // jni 0.21 and 0.22 bind the same JNI types, each through its own jni-sys.
     let env = env.cast::<jni021::JNIEnv>();
-    let _clear = ClearPending(env);
     // SAFETY: the caller's contract; the environment is borrowed, not
     // attached or detached.
     let mut env = unsafe { JNIEnv::from_raw(env) }.ok()?;

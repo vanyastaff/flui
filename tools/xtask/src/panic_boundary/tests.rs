@@ -67,7 +67,7 @@ fn the_fixture_counts_every_kind() {
     };
     assert_eq!(
         Kind::ALL.map(count),
-        [16, 4, 6, 4, 1, 8],
+        [16, 4, 6, 4, 1, 10],
         "extern fns, Objective-C methods and destructors, COM methods, handlers, callbacks"
     );
     assert_eq!(

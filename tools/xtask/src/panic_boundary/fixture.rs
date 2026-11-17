@@ -8,7 +8,7 @@ pub(super) use crate::source_tree::Memory;
 pub(super) const ROOT: &str = "fixture/src/lib.rs";
 
 /// `(file, entry or item, kind)` of every planted finding.
-pub(super) const EXPECTED: [(&str, &str, Problem); 41] = [
+pub(super) const EXPECTED: [(&str, &str, Problem); 43] = [
     (WINDOWS, "planted", Unguarded),
     (WINDOWS, "first_then", Unguarded),
     (WINDOWS, "eager", Argument),
@@ -67,6 +67,8 @@ pub(super) const EXPECTED: [(&str, &str, Problem); 41] = [
         "run_on_java_main_thread in macro_rules! post_later",
         Unguarded,
     ),
+    (ANDROID, ".add_fd_with_callback", Unguarded),
+    (ANDROID, ".add_fd_with_callback", Unread),
     (POSTER, "run_on_java_main_thread in fn run", Unguarded),
     (IDENTITY_FILE, "fn os_entry", Identity),
     (IDENTITY_FILE, "use other::os_entry", Identity),
@@ -519,6 +521,19 @@ macro_rules! post_later {
         $app.run_on_java_main_thread(Box::new(|| {}))
     };
 }
+
+fn watch(looper: &ThreadLooper, fd: BorrowedFd<'_>, inbox: Inbox) {
+    // planted: a closure handed to an Android looper without a boundary
+    looper.add_fd_with_callback(fd, FdEvent::INPUT, |_, _| drain());
+    // silent: a looper callback through the boundary, called again and again,
+    // so it borrows its captures
+    looper.add_fd_with_callback(fd, FdEvent::INPUT, move |_, _| {
+        os_entry("an fd source", (), AfterPanic::Answer(|()| false), || inbox.drain())
+    });
+}
+
+// planted: a looper callback in a macro's tokens
+watch_later!(looper.add_fd_with_callback(fd, FdEvent::INPUT, |_, _| true));
 "#;
 
 const POSTER_FILE: &str = r#"

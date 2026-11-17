@@ -37,9 +37,11 @@
 //!   `dispatch*`, `jni`, `ndk`, `android_activity`, …, reached by its path or
 //!   through a name the file imports from it), such as an Objective-C block or
 //!   a WinRT delegate; a block or delegate constructor matched by name where a
-//!   glob import hides it; and a GCD work item (`exec_async`, `exec_sync`,
+//!   glob import hides it; a GCD work item (`exec_async`, `exec_sync`,
 //!   `exec_after`, `after`, `barrier_async`, `barrier_sync`), whose body must
-//!   move its captures into the boundary, so they drop inside it. A named
+//!   move its captures into the boundary, so they drop inside it; and an
+//!   Android looper's callback (the ndk's `add_fd_with_callback`, whose
+//!   trampoline aborts on a panic), called again and again. A named
 //!   constructor or method must be given the closure literal, so its body is
 //!   in view.
 //!
@@ -72,7 +74,7 @@
 //! **Limits.** Functions and constructors of OS crates are caught by their
 //! path; methods are not, since a receiver's type is out of the gate's
 //! reach, so a new OS method that takes a closure must be added to the GCD
-//! list, and a constructor reached through a glob import to the list of
+//! or looper list, and a constructor reached through a glob import to the list of
 //! callback types. A block's or delegate's captures live as long as the OS
 //! keeps the block and drop when it releases it, outside any call: they are
 //! kept to values whose destructor runs no user code.
@@ -84,7 +86,8 @@
 //!   nothing to catch there.
 //! - android-activity's glue: that crate holds the boundary of its own
 //!   procedures (it aborts with a log). The closures the crate posts to
-//!   Android's Java main thread through it are not: a call of
+//!   Android's Java main thread through it are not FLUI's to leave to it, since
+//!   it only logs their panic and loses what they owed: a call of
 //!   `run_on_java_main_thread` anywhere but `owner::android::main_thread`,
 //!   whose `post` runs the closure inside the boundary and reports every exit
 //!   but success, is a finding.

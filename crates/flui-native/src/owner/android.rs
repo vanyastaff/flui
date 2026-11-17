@@ -51,6 +51,10 @@ mod looper;
 #[cfg(any(target_os = "android", all(test, not(target_arch = "wasm32"))))]
 pub(crate) mod main_thread;
 pub(crate) mod ndk;
+// The guard a native method clears Java's pending exception with; its test
+// runs it inside the panic boundary, which wasm32 does not have.
+#[cfg(any(target_os = "android", all(test, not(target_arch = "wasm32"))))]
+pub(crate) mod pending_exception;
 pub(crate) mod poll;
 #[cfg(target_os = "android")]
 pub(crate) mod result_bridge;

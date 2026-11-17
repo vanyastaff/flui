@@ -2,13 +2,17 @@
 //! boundary and with the report it owes when it does not finish.
 //!
 //! `AndroidApp::run_on_java_main_thread` runs a closure under
-//! android-activity's own guard, which aborts the process on a panic.
+//! android-activity's own `catch_unwind`, which only logs a panic through the
+//! `log` crate and drops its payload: whatever the closure owed (an answer, a
+//! settled state, an event for the owner) is lost with no report.
 //! [`MainThreadWork`] runs its body inside [`os_entry`] and owes its `failed`
 //! report on every exit but success: the body's error, a panic in it, and
 //! being dropped unrun. The report runs inside the boundary too, so a panic
 //! there is logged and the thread goes on. [`post`] hands one to the Java
 //! main thread; every closure the Android host posts there goes through it,
-//! which `cargo xtask panic-boundary` holds.
+//! which `cargo xtask panic-boundary` holds. Java receives nothing from a
+//! posted closure, and an exception its JNI calls leave pending is caught by
+//! android-activity's attachment of the thread, so the Activity goes on.
 //!
 //! android-activity keeps a closure it cannot deliver (its callback state is
 //! leaked, not dropped), so on Android the report for work dropped unrun may

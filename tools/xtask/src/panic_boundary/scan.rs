@@ -105,10 +105,19 @@ const GCD_METHODS: [&str; 6] = [
     "barrier_sync",
 ];
 
+/// The ndk's methods that hand a closure to an Android looper, which calls it
+/// behind an `extern "C"` trampoline that aborts the process on a panic
+/// (`ThreadLooper` and `ForeignLooper::add_fd_with_callback`). A method's
+/// receiver has a type the gate cannot read, so they are matched by name, as
+/// GCD's are; unlike a GCD work item, a looper calls its closure again and
+/// again, so its captures cannot move into the boundary's body.
+const LOOPER_METHODS: [&str; 1] = ["add_fd_with_callback"];
+
 /// android-activity's method that runs a closure on Android's Java main
-/// thread under its own guard, which aborts the process on a panic. Only the
-/// posting module calls it: everything else posts through its `post`, which
-/// runs the closure inside the boundary and owes a report on each exit.
+/// thread under its own guard, which only logs a panic and loses what the
+/// closure owed. Only the posting module calls it: everything else posts
+/// through its `post`, which runs the closure inside the boundary and owes a
+/// report on each exit.
 const JAVA_MAIN_THREAD: &str = "run_on_java_main_thread";
 
 /// The one file that may call [`JAVA_MAIN_THREAD`].
@@ -997,15 +1006,18 @@ impl Collector<'_> {
                 }
                 TokenTree::Punct(dot) if dot.as_char() == '.' => {
                     if let Some(TokenTree::Ident(method)) = trees.get(at + 1)
-                        && GCD_METHODS.iter().any(|gcd| method == gcd)
+                        && GCD_METHODS
+                            .iter()
+                            .chain(&LOOPER_METHODS)
+                            .any(|named| method == named)
                     {
                         self.finding(
                             line(method.span()),
                             format!(".{method}"),
                             Problem::Unread,
                             format!(
-                                "a GCD work item in the tokens of `{name}!`, whose closure the \
-                                 gate cannot read; dispatch it outside the macro"
+                                "a closure handed to GCD or a looper in the tokens of `{name}!`, \
+                                 which the gate cannot read; hand it over outside the macro"
                             ),
                         );
                     }
@@ -1292,12 +1304,13 @@ impl<'ast> Visit<'ast> for Collector<'_> {
     }
 
     fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
-        if GCD_METHODS.iter().any(|gcd| call.method == gcd) {
+        let gcd = GCD_METHODS.iter().any(|gcd| call.method == gcd);
+        if gcd || LOOPER_METHODS.iter().any(|looper| call.method == looper) {
             self.closure_entry(
                 format!(".{}", call.method),
                 line(call.method.span()),
                 &call.args,
-                true,
+                gcd,
             );
         }
         visit::visit_expr_method_call(self, call);

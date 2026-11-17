@@ -1130,8 +1130,9 @@ trait depends on `flui-platform` instead.
   functions and constructors of OS crates by their path, but methods by name,
   since a receiver's type is out of its reach: a new OS method that takes a
   closure is added to its GCD list (`exec_async`, `exec_sync`, `exec_after`,
-  `after`, `barrier_*`, names the crate keeps for GCD), and a constructor a
-  glob import hides to its list of callback types. `wasm_bindgen` closures are
+  `after`, `barrier_*`, names the crate keeps for GCD) or its looper list
+  (the ndk's `add_fd_with_callback`, whose trampoline aborts on a panic), and
+  a constructor a glob import hides to its list of callback types. `wasm_bindgen` closures are
   out of its scope because wasm32 aborts on panic,
   android-activity's procedures contain their own, and `flui-hot-reload`'s
   plugin ABI is outside this crate. Tests: `owner::panic_boundary::tests` (the
@@ -5766,7 +5767,16 @@ Every closure the host sends to Android's Java main thread goes through
 `owner::android::main_thread::post` (or `run`, for a step whose only report is its failure, which
 calls `post`), which runs it inside `os_entry` and reports each exit but success; `cargo xtask
 panic-boundary` refuses the identifier `run_on_java_main_thread` anywhere else in a build, the
-tokens of macro calls and `macro_rules!` bodies included. android-activity keeps work it cannot deliver
+tokens of macro calls and `macro_rules!` bodies included. android-activity would only log a posted
+closure's panic and lose what it owed; under `post`, a work's report settles it (the insets query
+answers none, `FluiView`'s installation finishes as `Failed` unless the view got into the window,
+and the owner hears `Installed` either way). Every native method of `FluiView` is one call of
+`java_view`'s `jni_native`: Java receives the method's answer, or its "nothing" (`false`, `0`,
+`null`, no value) after a failed JNI call or a panic, and never a pending exception, which
+`owner::android::pending_exception::ClearsPending` describes to the log and clears on every exit
+(`a_native_method_leaves_no_exception_pending_on_any_exit`): each caller is a framework callback
+on the main thread that catches nothing, where an exception would end the process. A contained
+failure costs the one call; the Activity goes on. android-activity keeps work it cannot deliver
 rather than dropping it, so the dropped-unrun report may never come on Android: a launch reports
 `taken` from its body, and one the Java main thread has not taken within `HAND_OFF_LIMIT` ends as
 `HandOffFailed` at that deadline, which the loop's poll waits for (`LoopTurn::hand_off_deadline`);
