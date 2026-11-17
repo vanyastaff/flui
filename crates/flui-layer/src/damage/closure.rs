@@ -13,7 +13,9 @@ use flui_foundation::geometry::{Matrix4, Rect};
 use flui_painting::DamageExtent;
 use flui_painting::paint::ImageFilter;
 
-use crate::{DamageRect, DamageRegion, FullReason, Layer};
+use rustc_hash::FxHashMap;
+
+use crate::{BackdropGroupKey, DamageRect, DamageRegion, FullReason, Layer};
 
 /// The most rounds [`close_over`] runs before the frame is
 /// `Full(Unbounded)`: a chain of filters each exposing the next cannot turn
@@ -99,46 +101,100 @@ pub(crate) fn filter_closure(filter: &ImageFilter, ctm: &Matrix4, content: Rect<
     }
 }
 
+/// The closures of a frame's effects, and the backdrop groups they join.
+///
+/// The members of one [`BackdropGroupKey`] read one backdrop, captured where
+/// the first of them paints: damage that meets any member takes every
+/// member's footprint, so the first is redrawn where it captures and a later
+/// one never reads what was painted after that point.
+#[derive(Debug, Default, Clone)]
+pub struct Closures {
+    /// Each closure, with the index in `groups` of the group it joins.
+    entries: Vec<(Closure, Option<u32>)>,
+    /// The groups met so far, by first appearance.
+    groups: FxHashMap<BackdropGroupKey, u32>,
+}
+
+impl Closures {
+    /// No closures.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Adds a closure that joins no group.
+    pub fn push(&mut self, closure: Closure) {
+        self.entries.push((closure, None));
+    }
+
+    /// Adds [`read_closure`] of `effect`, joined to its backdrop group when
+    /// it is a grouped backdrop filter.
+    pub fn push_effect(&mut self, effect: &Layer, ctm: &Matrix4, content: Rect<f64>) {
+        let closure = read_closure(effect, ctm, content);
+        let group = match effect {
+            Layer::BackdropFilter(backdrop) => backdrop.group().map(|group| {
+                let next = u32::try_from(self.groups.len())
+                    .expect("BUG: a frame holds fewer than 2^32 backdrop groups");
+                *self.groups.entry(group.clone()).or_insert(next)
+            }),
+            _ => None,
+        };
+        self.entries.push((closure, group));
+    }
+
+    /// Forgets every closure, keeping the storage.
+    pub fn clear(&mut self) {
+        self.entries.clear();
+        self.groups.clear();
+    }
+}
+
 /// `damage` grown over every closure it meets, on a surface of `surface`
 /// device pixels.
 ///
 /// Damage that meets a closure's `reads ∪ writes`, unless one rect of the
-/// region already contains it, takes all of it. The joins and the region's
-/// merges repeat to a fixed point, at most [`MAX_CLOSURE_ROUNDS`] rounds,
-/// past which the answer is `Full(Unbounded)`. Damage that meets a
-/// [`Closure::Unbounded`] is `Full(Unbounded)`, and a closure that is not
-/// finite makes it `Full(NonFinite)`. `Unchanged` and `Full` damage come back
-/// as they are.
+/// region already contains it, takes all of it; damage that meets one
+/// member of a backdrop group takes every member's ([`Closures`]). The joins
+/// and the region's merges repeat to a fixed point, at most
+/// [`MAX_CLOSURE_ROUNDS`] rounds, past which the answer is
+/// `Full(Unbounded)`. Damage that meets a [`Closure::Unbounded`] is
+/// `Full(Unbounded)`, and a closure that is not finite makes it
+/// `Full(NonFinite)`. `Unchanged` and `Full` damage come back as they are.
 #[must_use]
-pub fn close_over(
-    damage: DamageRegion,
-    closures: impl IntoIterator<Item = Closure>,
-    surface: (u32, u32),
-) -> DamageRegion {
+pub fn close_over(damage: DamageRegion, closures: &Closures, surface: (u32, u32)) -> DamageRegion {
     let DamageRegion::Region(mut region) = damage else {
         return damage;
     };
-    let mut footprints: Vec<DamageRect> = Vec::new();
-    for closure in closures {
+    let mut footprints: Vec<(DamageRect, Option<u32>)> = Vec::new();
+    for &(closure, group) in &closures.entries {
         match closure {
             Closure::None => {}
             Closure::Unbounded => return DamageRegion::Full(FullReason::Unbounded),
             Closure::Bounded { reads, writes } => {
                 match DamageRect::try_covering(reads.union(&writes), surface) {
-                    Ok(Some(footprint)) => footprints.push(footprint),
+                    Ok(Some(footprint)) => footprints.push((footprint, group)),
                     Ok(None) => {}
                     Err(_) => return DamageRegion::Full(FullReason::NonFinite),
                 }
             }
         }
     }
+    // Which groups the damage meets, refreshed each round.
+    let mut met = vec![false; closures.groups.len()];
     for _ in 0..MAX_CLOSURE_ROUNDS {
-        let mut grew = false;
-        for &footprint in &footprints {
-            let rects = region.rects();
-            if rects.iter().any(|rect| rect.overlaps(footprint))
-                && !rects.iter().any(|rect| contains(*rect, footprint))
+        for &(footprint, group) in &footprints {
+            if let Some(group) = group
+                && region.rects().iter().any(|rect| rect.overlaps(footprint))
             {
+                met[group as usize] = true;
+            }
+        }
+        let mut grew = false;
+        for &(footprint, group) in &footprints {
+            let rects = region.rects();
+            let meets = group.is_some_and(|group| met[group as usize])
+                || rects.iter().any(|rect| rect.overlaps(footprint));
+            if meets && !rects.iter().any(|rect| contains(*rect, footprint)) {
                 region.insert(footprint);
                 grew = true;
             }

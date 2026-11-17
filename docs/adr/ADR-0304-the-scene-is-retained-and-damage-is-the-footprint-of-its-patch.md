@@ -338,7 +338,9 @@ pub enum Closure { None, Bounded { reads: Rect<f64>, writes: Rect<f64> }, Unboun
 `reads` is what the effect samples (for a blur, the kernel's reach as the renderer implements it,
 under the norm of the CTM) and `writes` what it changes; a chunk with `reads_destination` reads and
 writes its own bounds. Damage that meets an entry's `reads ∪ writes`, unless one rect of the
-region already contains it, joins `reads ∪ writes`. The joins and the region's merges repeat to a
+region already contains it, joins `reads ∪ writes`; damage that meets one member of a backdrop
+group joins every member's, since the group captures where its first member paints (ADR-0230).
+The entries of a frame are a `Closures` set, which `close_over` takes. The joins and the region's merges repeat to a
 fixed point, at most 64 rounds (the cap of `frame_protocol.rs:285-299`), past which the frame is
 `Full(Unbounded)`; damage that meets a `Closure::Unbounded` is `Full(Unbounded)`. A
 foreground image filter is read only once the region meets its node's subtree footprint, which holds

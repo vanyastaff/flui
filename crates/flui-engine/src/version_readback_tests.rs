@@ -709,3 +709,185 @@ fn a_backdrop_effect_in_the_gap_of_a_bounding_box_is_redrawn_whole() {
         "pixels the region frame drew unlike the full frame"
     );
 }
+
+/// A retained root holding a box (`nodes[0]`), then a backdrop group's two
+/// members with a white square painted between them. The first member is an
+/// effect of the root or, with `first_alone`, of its own child `nodes[1]`.
+/// Without `root_too` only the box's content is published, in `color`.
+fn grouped_readers(
+    writer: &mut SceneWriter<'_>,
+    nodes: [SceneNodeId; 2],
+    color: Color,
+    group: &flui_layer::BackdropGroupKey,
+    first_alone: bool,
+    root_too: bool,
+) {
+    use flui_layer::{BackdropFilterLayer, Layer};
+    use flui_painting::paint::{BlendMode, ImageFilter};
+
+    let picture = |writer: &mut SceneWriter<'_>, id: usize, paint: &dyn Fn(&mut Canvas)| {
+        let mut canvas = Canvas::new();
+        paint(&mut canvas);
+        Arc::new(Chunk::new(
+            RenderId::new(id),
+            0,
+            writer.next_content_version().expect("a content version"),
+            canvas.finish(),
+        ))
+    };
+    let mut boxed = BoundaryContent::builder();
+    boxed.chunk(picture(writer, 2, &|canvas| {
+        canvas.draw_rect(Rect::from_xywh(0.0, 0.0, 24.0, 24.0), &Paint::fill(color));
+    }));
+    writer.push(SceneOp::Publish {
+        node: nodes[0],
+        content: Arc::new(boxed.finish()),
+    });
+    if !root_too {
+        return;
+    }
+    writer.push(SceneOp::Place {
+        node: nodes[0],
+        placement: Placement::try_new(Offset::new(100.0, 100.0)).expect("a finite offset"),
+    });
+    let member = |bounds: Rect<f64>| {
+        Layer::from(
+            BackdropFilterLayer::new(ImageFilter::blur(3.0), BlendMode::SrcOver, bounds)
+                .with_group(Some(group.clone())),
+        )
+    };
+    let first = member(Rect::from_ltrb(8.0, 8.0, 24.0, 24.0));
+    let mut content = BoundaryContent::builder();
+    content.chunk(picture(writer, 20, &|canvas| {
+        canvas.draw_rect(
+            Rect::from_xywh(0.0, 0.0, f64::from(SIDE), f64::from(SIDE)),
+            &Paint::fill(Color::GREEN),
+        );
+        for x in (0..SIDE).step_by(8) {
+            canvas.draw_rect(
+                Rect::from_xywh(f64::from(x), 0.0, 4.0, f64::from(SIDE)),
+                &Paint::fill(Color::BLUE),
+            );
+        }
+    }));
+    content.slot(nodes[0]);
+    if first_alone {
+        let mut alone = BoundaryContent::builder();
+        alone.push_effect(first, RenderId::new(3), 0);
+        alone.pop_effect();
+        writer.push(SceneOp::Publish {
+            node: nodes[1],
+            content: Arc::new(alone.finish()),
+        });
+        writer.push(SceneOp::Place {
+            node: nodes[1],
+            placement: Placement::try_new(Offset::ZERO).expect("a finite offset"),
+        });
+        content.slot(nodes[1]);
+    } else {
+        content.push_effect(first, RenderId::new(21), 0);
+        content.pop_effect();
+    }
+    // Painted after the group's capture: the second member must not see it.
+    content.chunk(picture(writer, 22, &|canvas| {
+        canvas.draw_rect(
+            Rect::from_xywh(106.0, 106.0, 12.0, 12.0),
+            &Paint::fill(Color::WHITE),
+        );
+    }));
+    content.push_effect(
+        member(Rect::from_ltrb(104.0, 104.0, 120.0, 120.0)),
+        RenderId::new(23),
+        0,
+    );
+    content.pop_effect();
+    writer.push(SceneOp::Publish {
+        node: writer.current().root(),
+        content: Arc::new(content.finish()),
+    });
+}
+
+/// A version's backdrop group reads the backdrop as it stood at its first
+/// member, in a partial frame as in a full one: damage that meets only the
+/// second member still replays the first, which captures, so the second
+/// does not blur the square painted between them. Each row puts the first
+/// member somewhere the damage does not reach.
+#[test]
+fn a_backdrop_group_outside_the_damage_still_captures_at_its_first_member() {
+    let Some(renderer) = crate::test_support::renderer_or_skip() else {
+        return;
+    };
+    for (case, first_alone) in [
+        ("first member in the root", false),
+        ("first member in its own node", true),
+    ] {
+        let group = flui_layer::BackdropGroupKey::new();
+        let mut partial = renderer.retained_capture((SIDE, SIDE)).expect("capture");
+        let mut owner = SceneOwner::new();
+        let nodes: [SceneNodeId; 2] = {
+            let mut writer = owner.writer();
+            let nodes = std::array::from_fn(|_| writer.mint_node());
+            grouped_readers(&mut writer, nodes, Color::RED, &group, first_alone, true);
+            nodes
+        };
+        owner.apply(SURFACE).expect("the scene applies");
+        apply(
+            &mut partial,
+            DamageRegion::Full(flui_layer::FullReason::FirstFrame),
+        );
+        partial
+            .render_scene(&Scene::of_version(owner.current().clone()))
+            .expect("the first frame renders");
+        partial.mark_dirty(Rect::from_ltrb(0.0, 0.0, 1.0, 1.0));
+        partial
+            .render_scene(&Scene::of_version(owner.current().clone()))
+            .expect("the warm-up renders");
+
+        grouped_readers(
+            &mut owner.writer(),
+            nodes,
+            Color::BLUE,
+            &group,
+            first_alone,
+            false,
+        );
+        owner.apply(SURFACE).expect("a recolour applies");
+        apply(&mut partial, owner.patch_damage());
+        partial
+            .render_scene(&Scene::of_version(owner.current().clone()))
+            .expect("the partial frame renders");
+        assert!(
+            matches!(partial.last_plan(), Some(FramePlan::RetainedPartial(_))),
+            "{case}: the frame is partial: {:?}",
+            partial.last_plan()
+        );
+        let mut full = renderer.retained_capture((SIDE, SIDE)).expect("capture");
+        apply(
+            &mut full,
+            DamageRegion::Full(flui_layer::FullReason::FirstFrame),
+        );
+        full.render_scene(&Scene::of_version(owner.current().clone()))
+            .expect("the full frame renders");
+        let (pixels, oracle) = (
+            partial.read_rgba().expect("readback"),
+            full.read_rgba().expect("readback"),
+        );
+        assert!(
+            px(&oracle, 112, 112)[0] < 200,
+            "{case}: precondition: the second member blurs the backdrop without the white square"
+        );
+        let stale = (0..SIDE)
+            .flat_map(|y| (0..SIDE).map(move |x| (x, y)))
+            .filter(|&(x, y)| {
+                px(&pixels, x, y)
+                    .iter()
+                    .zip(px(&oracle, x, y))
+                    .any(|(&a, b)| a.abs_diff(b) > 2)
+            })
+            .count();
+        assert_eq!(
+            stale, 0,
+            "{case}: pixels the partial frame drew unlike the full frame"
+        );
+    }
+}

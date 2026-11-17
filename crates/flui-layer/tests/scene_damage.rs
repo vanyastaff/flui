@@ -8,11 +8,11 @@ use std::sync::Arc;
 use flui_foundation::geometry::{Matrix4, Offset, Point, Rect, Size};
 use flui_foundation::{LayerId, RenderId, SurfaceGeneration};
 use flui_layer::{
-    BackdropFilterLayer, BoundaryContent, Chunk, ClipRectLayer, Closure, ContentToken,
-    ContentVersion, DamageMode, DamageRect, DamageRegion, Entry, FollowerLayer, ImageFilterLayer,
-    Layer, LayerDiffer, LayerLink, LayerNode, LayerTree, LeaderClip, LeaderLayer, OffsetLayer,
-    OpacityLayer, PictureLayer, Placement, Region, Scene, SceneNodeId, SceneOp, SceneOwner,
-    SceneVersion, SubtreeCull, SurfaceKey, TransformLayer, close_over, read_closure,
+    BackdropFilterLayer, BackdropGroupKey, BoundaryContent, Chunk, ClipRectLayer, Closures,
+    ContentToken, ContentVersion, DamageMode, DamageRect, DamageRegion, Entry, FollowerLayer,
+    ImageFilterLayer, Layer, LayerDiffer, LayerLink, LayerNode, LayerTree, LeaderClip, LeaderLayer,
+    OffsetLayer, OpacityLayer, PictureLayer, Placement, Region, Scene, SceneNodeId, SceneOp,
+    SceneOwner, SceneVersion, SubtreeCull, SurfaceKey, TransformLayer, close_over,
     resolve_follower_transform,
 };
 use flui_painting::paint::{BlendMode, Clip, ImageFilter};
@@ -295,6 +295,61 @@ pub(crate) fn an_unattached_leader_never_shadows_the_attached_one() {
         covered(&damage, covering(300.0, 300.0, 320.0, 320.0)),
         "{damage:?}"
     );
+}
+
+/// Damage that meets one member of a backdrop group takes every member: the
+/// first member, far from the damage, is redrawn where the group captures.
+/// The same two filters without a group leave the far one alone.
+pub(crate) fn damage_under_one_backdrop_group_member_takes_every_member() {
+    for grouped in [true, false] {
+        let group = BackdropGroupKey::new();
+        let member = |x: f64| {
+            Layer::from(
+                BackdropFilterLayer::new(
+                    ImageFilter::blur(2.0),
+                    BlendMode::SrcOver,
+                    Rect::from_ltrb(x, 10.0, x + 40.0, 50.0),
+                )
+                .with_group(grouped.then(|| group.clone())),
+            )
+        };
+        let mut owner = SceneOwner::new();
+        let mut writer = owner.writer();
+        let root = writer.current().root();
+        let (first, card) = (writer.mint_node(), writer.mint_node());
+        let mut alone = BoundaryContent::builder();
+        alone.push_effect(member(10.0), RenderId::new(1), 0);
+        alone.pop_effect();
+        writer.push(publish(first, alone.finish()));
+        let version = writer.next_content_version().expect("a version");
+        let mut boxed = BoundaryContent::builder();
+        boxed.chunk(chunk(2, version, Rect::from_ltrb(500.0, 20.0, 520.0, 40.0)));
+        writer.push(publish(card, boxed.finish()));
+        let mut top = BoundaryContent::builder();
+        top.slot(card);
+        top.slot(first);
+        top.push_effect(member(490.0), RenderId::new(3), 0);
+        top.pop_effect();
+        writer.push(publish(root, top.finish()));
+        owner.apply(SURFACE).expect("two members and a card");
+
+        let mut writer = owner.writer();
+        let version = writer.next_content_version().expect("a version");
+        let mut boxed = BoundaryContent::builder();
+        boxed.chunk(chunk(2, version, Rect::from_ltrb(500.0, 20.0, 520.0, 40.0)));
+        writer.push(publish(card, boxed.finish()));
+        owner.apply(SURFACE).expect("the card repaints");
+        let damage = rects(owner.patch_damage());
+        assert!(
+            covered(&damage, covering(490.0, 10.0, 530.0, 50.0)),
+            "grouped {grouped}: the member over the card: {damage:?}"
+        );
+        assert_eq!(
+            covered(&damage, covering(10.0, 10.0, 50.0, 50.0)),
+            grouped,
+            "grouped {grouped}: the far member: {damage:?}"
+        );
+    }
 }
 
 /// A magnifier's bilinear read reaches half a source pixel past its source
@@ -1448,12 +1503,12 @@ impl Oracle {
         *self.ids.entry(key).or_insert_with(|| RenderId::new(next))
     }
 
-    fn diff(&mut self, version: &SceneVersion) -> (DamageRegion, Vec<Closure>) {
+    fn diff(&mut self, version: &SceneVersion) -> (DamageRegion, Closures) {
         let stamped = self.stamped(version);
         let mut baked = LayerTree::new(copy(stamped.get(stamped.root()).expect("a root"), None));
         let root = baked.root();
         bake(&stamped, stamped.root(), &mut baked, root);
-        let mut closures = Vec::new();
+        let mut closures = Closures::new();
         backdrops(&baked, baked.root(), Matrix4::IDENTITY, &mut closures);
         (self.differ.diff(&Scene::new(baked), SURFACE.size), closures)
     }
@@ -1553,14 +1608,14 @@ fn bake(tree: &LayerTree, from: LayerId, baked: &mut LayerTree, to: LayerId) {
 /// Whether `patch` covers `diff`. The differ answers one rect, which closes
 /// over every backdrop its bounding box meets, so the patch's region is
 /// compared the same way: its bounds, closed over the same backdrops.
-fn covers(patch: DamageRegion, diff: DamageRegion, closures: &[Closure]) -> bool {
+fn covers(patch: DamageRegion, diff: DamageRegion, closures: &Closures) -> bool {
     match (patch, diff) {
         (_, DamageRegion::Unchanged) | (DamageRegion::Full(_), _) => true,
         (_, DamageRegion::Full(_)) | (DamageRegion::Unchanged, DamageRegion::Region(_)) => false,
         (DamageRegion::Region(patch), DamageRegion::Region(diff)) => {
             match close_over(
                 DamageRegion::Region(Region::new(patch.bounds())),
-                closures.iter().copied(),
+                closures,
                 SURFACE.size,
             ) {
                 DamageRegion::Region(closed) => covered(&[closed.bounds()], diff.bounds()),
@@ -1572,7 +1627,7 @@ fn covers(patch: DamageRegion, diff: DamageRegion, closures: &[Closure]) -> bool
 }
 
 /// What each backdrop of `tree` reads and writes.
-fn backdrops(tree: &LayerTree, id: LayerId, parent: Matrix4, out: &mut Vec<Closure>) {
+fn backdrops(tree: &LayerTree, id: LayerId, parent: Matrix4, out: &mut Closures) {
     let layer = tree.get_layer(id).expect("a node of the tree");
     let ctm = if let Layer::Transform(transform) = layer {
         parent * *transform.transform()
@@ -1581,7 +1636,7 @@ fn backdrops(tree: &LayerTree, id: LayerId, parent: Matrix4, out: &mut Vec<Closu
         parent * Matrix4::translation(offset.dx, offset.dy, 0.0)
     };
     if let Layer::BackdropFilter(_) = layer {
-        out.push(read_closure(layer, &ctm, Rect::ZERO));
+        out.push_effect(layer, &ctm, Rect::ZERO);
     }
     for &child in tree.children(id).expect("a node of the tree") {
         backdrops(tree, child, ctm, out);

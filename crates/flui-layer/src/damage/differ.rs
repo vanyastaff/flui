@@ -10,7 +10,7 @@ use flui_painting::DamageExtent;
 use flui_painting::paint::ImageFilter;
 
 use super::DamageMode;
-use super::closure::{Closure, close_over, filter_closure, is_projective, read_closure};
+use super::closure::{Closure, Closures, close_over, filter_closure, is_projective};
 use crate::{
     ContentToken, DamageRect, DamageRegion, FullReason, Layer, LayerTree, Region, ResyncReason,
     Scene, resolve_follower_transform,
@@ -128,7 +128,7 @@ struct Frame {
     /// Content no token vouches for, in surface pixels.
     volatile: Option<Rect<f64>>,
     /// What each filter of the frame reads and writes ([`read_closure`]).
-    closures: Vec<Closure>,
+    closures: Closures,
 }
 
 /// A foreground image filter the walk is inside of, accumulating its input.
@@ -199,7 +199,7 @@ impl Frame {
             effects: Vec::new(),
             boundaries: HashMap::new(),
             volatile: None,
-            closures: Vec::new(),
+            closures: Closures::new(),
         };
         let mut filters: Vec<ForegroundFilter> = Vec::new();
         // (parent link, index into `frame.effects`): a persistent list, so a
@@ -378,7 +378,7 @@ impl Frame {
                     clipped = false;
                     frame
                         .closures
-                        .push(read_closure(layer, &ctx.transform, Rect::ZERO));
+                        .push_effect(layer, &ctx.transform, Rect::ZERO);
                     Some(DamageExtent::rect(backdrop.bounds()))
                 }
                 _ => None,
@@ -484,7 +484,7 @@ fn compare(previous: &Frame, current: &Frame, full_above: f64) -> DamageRegion {
     // all it reads and writes (ADR-0304 §6). The differ answers one rect.
     let rect = match close_over(
         DamageRegion::Region(Region::new(rect)),
-        current.closures.iter().copied(),
+        &current.closures,
         current.surface,
     ) {
         DamageRegion::Region(region) => region.bounds(),

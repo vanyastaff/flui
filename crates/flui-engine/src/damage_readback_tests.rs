@@ -3197,6 +3197,93 @@ fn a_backdrop_group_captures_once_per_region_pass() {
     }
 }
 
+/// On a hand-built tree, a backdrop group reads the backdrop as it stood at
+/// its first member, in a partial frame as in a full one. Damage that meets
+/// only the second member still makes the group capture at the first, so
+/// the second does not blur a box painted between the two. Each row puts
+/// the first member somewhere the damage, or a region pass, does not reach.
+#[test]
+fn a_backdrop_group_outside_the_damage_still_captures_at_its_first_member() {
+    use flui_layer::BackdropGroupKey;
+    let Some(renderer) = crate::test_support::renderer_or_skip() else {
+        return;
+    };
+    // (case, the first member in its own boundary, one pass per rect)
+    for (case, first_alone, by_rect) in [
+        ("first member under the root", false, false),
+        ("first member in its own boundary", true, false),
+        // The second pass's scissor leaves the first member out.
+        ("one pass per rect", false, true),
+    ] {
+        let (root, background, holder) = (
+            ContentToken::mint(),
+            ContentToken::mint(),
+            ContentToken::mint(),
+        );
+        let group = BackdropGroupKey::new();
+        let grouped = |bounds: Rect<f64>| {
+            Layer::from(
+                BackdropFilterLayer::new(ImageFilter::blur(3.0), BlendMode::SrcOver, bounds)
+                    .with_group(Some(group.clone())),
+            )
+        };
+        let build = |color: Color| {
+            backdrop_scene(&root, &background, &striped_backdrop, &|tree, root_id| {
+                tree.push_child(
+                    root_id,
+                    rect_picture(Rect::from_xywh(100.0, 100.0, 24.0, 24.0), color),
+                );
+                let first = grouped(Rect::from_ltrb(8.0, 8.0, 24.0, 24.0));
+                if first_alone {
+                    let alone = tree.push_child(
+                        root_id,
+                        LayerNode::new(Layer::from(OffsetLayer::new(Offset::ZERO)))
+                            .with_boundary(id(5), holder.clone()),
+                    );
+                    tree.push_child(alone, first);
+                } else {
+                    tree.push_child(root_id, first);
+                }
+                // Painted after the group's capture: the second member must
+                // not see it.
+                tree.push_child(
+                    root_id,
+                    rect_picture(Rect::from_xywh(106.0, 106.0, 12.0, 12.0), Color::WHITE),
+                );
+                tree.push_child(
+                    root_id,
+                    grouped(Rect::from_ltrb(104.0, 104.0, 120.0, 120.0)),
+                );
+            })
+        };
+        let (before, after) = (build(Color::RED), build(Color::BLUE));
+        let full = full_frame_pixels(&renderer, &after);
+        assert!(
+            px(&full, 112, 112)[0] < 200,
+            "{case}: precondition: the second member blurs the backdrop without the white box"
+        );
+        let partial = region_frame(
+            &renderer,
+            &before,
+            &after,
+            &[Rect::from_xywh(100.0, 100.0, 24.0, 24.0)],
+            by_rect,
+        );
+        assert!(
+            matches!(partial.last_plan(), Some(FramePlan::RetainedPartial(_))),
+            "{case}: the frame is partial: {:?}",
+            partial.last_plan()
+        );
+        if by_rect {
+            // The damage took the first member's footprint as a rect of its own.
+            assert_eq!(partial.region_passes(), 2, "{case}: one pass per member");
+        }
+        let pixels = partial.read_rgba().expect("readback");
+        let stale = mismatches(&pixels, &full, 2);
+        assert!(stale.is_empty(), "{case}: stale pixels at {stale:?}");
+    }
+}
+
 /// On a hand-built tree, an advanced-blend shape that straddles the second
 /// rect of a rect-by-rect frame was drawn cut by that pass's scissor, so the
 /// next frame repaints in full; one that lies inside its rect leaves the
