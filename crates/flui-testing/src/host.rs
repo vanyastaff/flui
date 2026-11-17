@@ -2844,8 +2844,7 @@ impl HeadlessHost {
         let settled = self
             .ui_runtime
             .as_ref()
-            .map(UiRuntime::settle_close_guards)
-            .unwrap_or_default();
+            .map_or_else(Default::default, UiRuntime::settle_close_guards);
         for (id, reason) in settled.due {
             if reason != CloseReason::Program {
                 first.contain(|| {

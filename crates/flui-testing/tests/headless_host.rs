@@ -4,14 +4,14 @@
 
 use std::cell::{Cell, RefCell};
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::rc::{Rc, Weak};
+use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use flui_foundation::geometry::Size;
 use flui_rendering::prelude::{BoxLayoutContext, BoxParentData, Leaf, PaintContext, RenderBox};
-use flui_testing::widgets::{LaidOut, lay_out, tight};
+use flui_testing::widgets::{lay_out, tight};
 use flui_testing::{HeadlessHost, HeadlessWindow};
 use flui_view::{
     AppLifecycleState, BuildContext, CloseReason, IntoView, LifecycleContext, RenderView,
