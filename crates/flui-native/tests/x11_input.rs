@@ -60,6 +60,10 @@ pub(crate) const CASES: &[(&str, fn())] = &[
         a_title_bar_of_the_applications_moves_and_resizes_through_the_window_manager,
     ),
     (
+        "openbox_paces_an_interactive_resize_by_the_windows_counter",
+        openbox_paces_an_interactive_resize_by_the_windows_counter,
+    ),
+    (
         "a_burst_of_motion_is_one_move_through_it",
         a_burst_of_motion_is_one_move_through_it,
     ),
@@ -1284,4 +1288,57 @@ fn a_title_bar_of_the_applications_moves_and_resizes_through_the_window_manager(
     xtest.click(1);
     assert_eq!(presses(&handler), ["down PRIMARY", "up PRIMARY"]);
     xtest.move_to_root(1270, 1010);
+}
+
+/// A real window manager paces an interactive resize by the window's counter:
+/// a drag on the right edge of a window with a title bar of its own hands the
+/// resize to openbox, which resets the counter, asks for a synchronised resize
+/// before each step and holds the next step until the counter has the step's
+/// value. The window answers each one, so the counter ends past its reset and
+/// the drag widens the window as far as the pointer went.
+fn openbox_paces_an_interactive_resize_by_the_windows_counter() {
+    use flui_foundation::geometry::{Rect, Size};
+    use flui_platform::input_regions::{InputRegion, InputRegionKind};
+    use flui_platform::{AppTitleBar, WindowFrame, WindowOptions};
+
+    use crate::cases::{counter_reader, counter_value, resize_counters};
+
+    park_pointer();
+    let mut fixture = X11Fixture::open_with_options(
+        WindowOptions::default()
+            .title("paced resize")
+            .size(Size::new(400.0, 300.0))
+            .frame(WindowFrame::AppTitleBar(AppTitleBar::new())),
+        RecordingWindowHandler::new() as Rc<dyn flui_platform::WindowHandler>,
+    );
+    let bar = InputRegion::new(
+        InputRegionKind::WindowMove,
+        Rect::from_ltrb(0.0, 0.0, 400.0, 32.0),
+    );
+    fixture
+        .window
+        .set_input_regions(&[bar])
+        .expect("the X11 host takes chrome regions");
+    fixture.settle();
+    let [basic, _] = resize_counters(&fixture.server, fixture.xid);
+    let reader = counter_reader();
+
+    let xtest = Xtest::new(&fixture);
+    xtest.move_to(398, 150);
+    xtest.send(BUTTON_PRESS_EVENT, 1, (0, 0));
+    for step in 1..=5 {
+        xtest.move_to(398 + step * 10, 150);
+    }
+    xtest.send(BUTTON_RELEASE_EVENT, 1, (0, 0));
+    fixture.settle();
+    assert!(
+        counter_value(&reader, basic) >= 1,
+        "openbox's requests were answered"
+    );
+    let widened = fixture.window.state().content_size.get();
+    assert!(
+        widened.width > 430.0 && widened.height == 300.0,
+        "the edge widened the window: {widened:?}"
+    );
+    Xtest::new(&fixture).move_to_root(1270, 1010);
 }

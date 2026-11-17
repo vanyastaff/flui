@@ -14,7 +14,11 @@
 //!   `WM_HINTS`;
 //! - [`placement`]: the window's outer rectangle from its content and the
 //!   frame the window manager put around it, the display it is on, and
-//!   logical numbers as the 16-bit coordinates and extents X11 takes.
+//!   logical numbers as the 16-bit coordinates and extents X11 takes;
+//! - [`protocols`]: what a window answers its window manager with beyond its
+//!   close: the machine its process runs on (`WM_CLIENT_MACHINE`), and when it
+//!   sets the XSync counters a synchronised resize waits on
+//!   (`_NET_WM_SYNC_REQUEST`).
 //!
 //! The live half:
 //!
@@ -22,6 +26,7 @@
 //!   platform's connection, and [`X11Windows`], the platform's windows, which
 //!   the loop holds as its `LoopWindows` (`owner::linux::x11`);
 
+pub(crate) mod protocols;
 #[cfg(all(target_os = "linux", feature = "x11"))]
 mod window;
 
@@ -385,6 +390,7 @@ pub(crate) mod support {
         pub maximized_vert: u32,
         pub fullscreen: u32,
         pub moveresize: u32,
+        pub frame_drawn: u32,
     }
 
     /// Which window manager runs on the screen.
@@ -417,6 +423,10 @@ pub(crate) mod support {
         /// It moves and resizes a window from a press on a title bar or a
         /// border the application draws (`_NET_WM_MOVERESIZE`).
         pub moves_and_resizes: bool,
+        /// It synchronises the frames a window draws with what it composites
+        /// (`_NET_WM_FRAME_DRAWN`), reading the window's extended XSync
+        /// counter: odd while a frame draws, even once it is drawn.
+        pub paces_frames: bool,
     }
 
     impl WindowManagerSupport {
@@ -435,6 +445,7 @@ pub(crate) mod support {
                 maximizes: lists(atoms.maximized_horz) && lists(atoms.maximized_vert),
                 fullscreen: lists(atoms.fullscreen),
                 moves_and_resizes: lists(atoms.moveresize),
+                paces_frames: lists(atoms.frame_drawn),
             }
         }
 
@@ -535,6 +546,7 @@ pub(crate) mod support {
             maximized_vert: 303,
             fullscreen: 304,
             moveresize: 305,
+            frame_drawn: 306,
         };
 
         /// What a window manager lists decides what a window honours: with no
@@ -595,13 +607,18 @@ pub(crate) mod support {
                 (
                     "everything",
                     Extended,
-                    &[302, 303, 304, 305, 999],
+                    &[302, 303, 304, 305, 306, 999],
                     [Native, Native, Native, Native],
                 ),
             ];
             for (case, manager, supported, [minimizes, maximizes, fullscreen, observes]) in table {
-                let honoured =
-                    capabilities(WindowManagerSupport::read(*manager, supported, &ATOMS));
+                let support = WindowManagerSupport::read(*manager, supported, &ATOMS);
+                assert_eq!(
+                    support.paces_frames,
+                    *manager == Extended && supported.contains(&ATOMS.frame_drawn),
+                    "{case}: frame synchronisation"
+                );
+                let honoured = capabilities(support);
                 assert_eq!(
                     honoured.minimizes().availability(),
                     *minimizes,
