@@ -208,9 +208,10 @@ fn a_receiver_the_os_keeps_stays_registered_and_inert() {
         pending: AtomicBool::new(false),
         signal: Arc::downgrade(&signal),
     });
-    let receiver = Receiver::try_new([
-        Rc::new(PreferenceBroadcasts(Arc::clone(&invalidation))) as Rc<dyn Subscriber>
-    ])
+    let receiver = Receiver::try_new(
+        [Rc::new(PreferenceBroadcasts(Arc::clone(&invalidation))) as Rc<dyn Subscriber>],
+        Rc::default(),
+    )
     .expect("receiver");
     let hwnd = receiver.hwnd_for_test();
     let (class, instance) = receiver.class_for_test();
@@ -282,7 +283,7 @@ fn a_delegate_that_outlives_its_source_is_inert() {
     );
 
     let successor = PreferenceSource::try_new(&signal).expect("successor");
-    let receiver = Receiver::try_new([successor.broadcasts()]).expect("receiver");
+    let receiver = Receiver::try_new([successor.broadcasts()], Rc::default()).expect("receiver");
     let woken = wakes.load(Ordering::SeqCst);
     receiver.send_with_for_test(WM_SETTINGCHANGE, 0, 0);
     assert!(successor.pending());

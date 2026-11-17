@@ -520,7 +520,9 @@ those entries through the same `own_effect_layers` constructor the paint walk
 uses, at the origin the record holds, and republishes the content at the same
 scene node through `SceneWriter::with_effects`, sharing the entry stream
 (`refresh_boundary`, `layer_patches_for` in `src/pipeline/owner/paint.rs`) —
-with the node still an ordinary non-boundary and nothing repainted.
+with the node still an ordinary non-boundary and nothing repainted. The pass
+stages only the new content and the boundary's placement
+(`Refreshed::Patched`); the committed record keeps every other field.
 
 **Alternatives:** promoting the node to its own repaint boundary — rejected on two grounds. (a) It buys
 nothing: the enclosing boundary's content is already what gets republished,

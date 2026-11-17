@@ -3,6 +3,7 @@
 
 use crate::owner::signal::OwnerSignal;
 use crate::owner::windows::WindowIdentity;
+use crate::owner::windows::modal_loop::ModalWake;
 use std::sync::{Arc, Weak};
 use windows::Win32::{
     Foundation::{ERROR_NOT_ENOUGH_QUOTA, HWND, LPARAM, WPARAM},
@@ -32,11 +33,16 @@ use windows::Win32::{
 ///
 /// Nothing is logged where a post is asked for: the asker may hold borrows a
 /// `tracing` subscriber takes again.
+///
+/// A post that went through knocks at the thread's modal loops
+/// ([`ModalWake`]): a drag loop resting in OLE dispatches no posted message,
+/// and its pacing dispatches them once knocked.
 #[derive(Clone)]
 pub(crate) struct OwnerQueue {
     signal: Weak<OwnerSignal>,
     /// The owner thread's Win32 id: only its windows are posted to.
     thread: u32,
+    modal: ModalWake,
 }
 
 /// Why a post reached no window.
@@ -50,13 +56,22 @@ pub(crate) enum PostRefusal {
 }
 
 impl OwnerQueue {
-    /// The queue of the owner thread behind `signal`; made on that thread.
-    pub(crate) fn new(signal: Weak<OwnerSignal>) -> Self {
+    /// The queue of the owner thread behind `signal`, whose modal loops
+    /// `modal` knocks at; made on that thread.
+    pub(crate) fn new(signal: Weak<OwnerSignal>, modal: ModalWake) -> Self {
         Self {
             signal,
             // SAFETY: a query of the calling thread's id.
             thread: unsafe { GetCurrentThreadId() },
+            modal,
         }
+    }
+
+    /// Work for the owner thread was handed over by another way than a post
+    /// (an invalidation the system folds into a paint): knock at its modal
+    /// loops.
+    pub(crate) fn wake_modal(&self) {
+        self.modal.wake();
     }
 
     /// Post `message`, naming `identity`, to `hwnd`, a window of the owner
@@ -82,7 +97,10 @@ impl OwnerQueue {
         // closed meanwhile only makes it fail.
         let refusal =
             match unsafe { PostMessageW(Some(hwnd), message, WPARAM(wparam), LPARAM(lparam)) } {
-                Ok(()) => return Ok(()),
+                Ok(()) => {
+                    self.modal.wake();
+                    return Ok(());
+                }
                 Err(refusal) => refusal,
             };
         if refusal.code() != ERROR_NOT_ENOUGH_QUOTA.to_hresult() {

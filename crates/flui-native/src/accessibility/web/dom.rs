@@ -119,7 +119,9 @@ impl crate::host::WindowAccessibility for WebAccessibility {
 
 impl PlatformAccessibility for WebAccessibility {
     fn publish(&self, update: TreeUpdate) {
-        self.shared.retain_if_self_contained(&update);
+        let Some(update) = self.shared.publish(update) else {
+            return;
+        };
         if !self.shared.is_active() {
             return;
         }

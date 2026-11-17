@@ -383,9 +383,11 @@ impl crate::host::WindowAccessibility for AndroidAccessibility {
 
 impl PlatformAccessibility for AndroidAccessibility {
     fn publish(&self, update: TreeUpdate) {
-        // Only self-contained updates may answer a late activation; see
-        // `BridgeShared`.
-        self.shared.retain_if_self_contained(&update);
+        // Retained when self-contained; one published from inside the
+        // activation is its answer and goes no further (`BridgeShared::publish`).
+        let Some(update) = self.shared.publish(update) else {
+            return;
+        };
         // An inactive adapter drops what it is handed, so nothing is posted;
         // the activation reads the retained update instead.
         if self.detached.load(Ordering::Acquire) || !self.shared.is_active() {

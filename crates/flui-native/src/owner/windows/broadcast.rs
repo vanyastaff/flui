@@ -7,6 +7,8 @@
 //! one answers.
 
 use std::{cell::Cell, rc::Rc};
+
+use super::ModalLoops;
 use windows::{
     Win32::{
         Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM},
@@ -70,6 +72,9 @@ struct Context {
     /// dispatch holds them while a subscriber's user code may free this
     /// context.
     subscribers: Rc<[Rc<dyn Subscriber>]>,
+    /// The modal loops running on the thread, which ask the deadlines again
+    /// after a subscriber ran.
+    modal_loops: Rc<ModalLoops>,
     hwnd: Cell<Option<HWND>>,
 }
 
@@ -98,12 +103,15 @@ impl Receiver {
             .expect("live receiver")
     }
 
-    /// A receiver whose messages `subscribers` hear, in this order.
+    /// A receiver whose messages `subscribers` hear, in this order, and which
+    /// tells `modal_loops` after each that the platform's code ran.
     pub(crate) fn try_new(
         subscribers: impl IntoIterator<Item = Rc<dyn Subscriber>>,
+        modal_loops: Rc<ModalLoops>,
     ) -> windows::core::Result<Self> {
         let context = Box::new(Context {
             subscribers: subscribers.into_iter().collect(),
+            modal_loops,
             hwnd: Cell::new(None),
         });
         let class: Vec<_> = format!("FLUIBroadcasts_{:p}\0", &*context)
@@ -288,6 +296,7 @@ unsafe fn receive(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> L
                 // platform, and nothing borrowed from userdata survives user
                 // code.
                 let subscribers = Rc::clone(&(*context).subscribers);
+                let _ask_again = ModalLoops::ask_again_after(&(*context).modal_loops);
                 for subscriber in subscribers.iter() {
                     match contain_os_entry(PROCEDURE, || {
                         subscriber.message(hwnd, message, wparam, lparam)
