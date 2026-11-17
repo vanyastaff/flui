@@ -593,8 +593,10 @@ pub(crate) struct CreatedWindow {
     /// The hooks of its class, which a feature tells a step of its own
     /// ([`window_step`]).
     pub(crate) hooks: WindowHooks,
-    /// The owner thread's COM apartment, when the window was opened with it.
-    pub(crate) apartment: Option<Rc<ComApartment>>,
+    /// The owner thread's COM apartment. A feature that keeps a COM object for
+    /// the window holds its own `Rc` of it, so COM stays entered until the
+    /// object is released, however long the window outlives the loop.
+    pub(crate) apartment: Rc<ComApartment>,
     /// The loop's drag-and-drop transport, which makes the window a drop
     /// target.
     pub(crate) drag: Arc<dyn HostDrag>,

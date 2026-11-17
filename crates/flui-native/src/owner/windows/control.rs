@@ -401,6 +401,10 @@ pub(crate) struct OwnerControl {
     pub(crate) wake: Arc<wake::OwnerWake>,
     gate: OwnerGate,
 }
+
+// `close` destroys the owner window with no thread check: only the type keeps
+// the control on the thread that created the window.
+static_assertions::assert_not_impl_any!(OwnerControl: Send, Sync);
 impl OwnerControl {
     /// Build the owner control under `identity`, which the caller reserved
     /// before any native acquisition of its own (see

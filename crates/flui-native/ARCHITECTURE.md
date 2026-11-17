@@ -3187,8 +3187,10 @@ process ends with the session, and the application was told what to save.
 
 A `WM_DESTROY` that leaves the platform tracking no top-level window does not
 ask the exit policy itself: it posts one coalesced message to the owner
-message-only window, and `request_exit_policy_reevaluation` posts the same
-message from any thread (refused once the owner window is closed). The owner
+message-only window, and `Platform::request_exit_policy_reevaluation` posts the
+same message (refused once the owner window is closed). Both run on the owner
+thread: another thread asks through `PlatformProxy`, whose request reaches the
+platform in an owner turn, so the coalescing flag is a `Cell`. The owner
 procedure then checks that no window is tracked and no quit is under way, asks
 the application's handler through the call point with no borrow held, and
 checks the window count again, since the handler may have opened a replacement

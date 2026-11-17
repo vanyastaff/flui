@@ -755,9 +755,8 @@ impl InputWindow {
 pub(super) fn create_host(
     hwnd: HWND,
     size: (i32, i32),
-    apartment: Option<Rc<ComApartment>>,
+    apartment: Rc<ComApartment>,
 ) -> Option<TouchpadHost> {
-    let apartment = apartment?;
     match TouchpadHost::create(hwnd, size, apartment) {
         Ok(host) => Some(host),
         Err(error) => {

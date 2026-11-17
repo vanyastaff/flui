@@ -597,6 +597,35 @@ fn a_window_registers_its_drop_target() {
     );
 }
 
+/// A window that outlives its platform revokes its drop target inside the
+/// thread's COM apartment: the registration, the window and its context keep
+/// OLE entered, whichever of the window's other COM users (its text services,
+/// its touchpad viewport) let go of it first.
+///
+/// Red-check: let the drop target, the wrapper and the context hold no
+/// apartment, and the revoke runs after the text services' retirement and the
+/// viewport's release left COM.
+fn a_window_that_outlives_its_platform_revokes_its_drop_target_inside_com() {
+    let platform = WindowsPlatform::try_new().expect("platform");
+    let window = platform
+        .open_window(
+            WindowOptions::default()
+                .title("flui outlives its platform")
+                .visible(false),
+            RecordingWindowHandler::new(),
+        )
+        .expect("window");
+    super::testing::REVOKED_IN_APARTMENT.set(None);
+    drop(platform);
+    window.close_now();
+    drop(window);
+    assert_eq!(
+        super::testing::REVOKED_IN_APARTMENT.get(),
+        Some(true),
+        "the window's drop target was revoked inside the COM apartment"
+    );
+}
+
 /// A drag over a window reaches it as an offer naming the session, the OS
 /// is answered from the feedback the window cached, and after the drop each
 /// representation is fetched from the source's data object.
@@ -1757,6 +1786,10 @@ fn ole_drag_and_drop_on_real_windows() {
             (
                 "a_window_registers_its_drop_target",
                 a_window_registers_its_drop_target,
+            ),
+            (
+                "a_window_that_outlives_its_platform_revokes_its_drop_target_inside_com",
+                a_window_that_outlives_its_platform_revokes_its_drop_target_inside_com,
             ),
             (
                 "a_drag_over_a_window_is_offered_answered_and_fetched",

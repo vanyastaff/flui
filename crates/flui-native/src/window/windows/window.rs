@@ -24,13 +24,14 @@ use windows::{
             WindowsAndMessaging::{
                 CW_USEDEFAULT, CreateWindowExW, DestroyWindow, GCLP_HBRBACKGROUND, GWL_EXSTYLE,
                 GWL_STYLE, GWLP_USERDATA, GetClientRect, GetWindowLongPtrW, GetWindowRect,
-                IDC_APPSTARTING, IDC_ARROW, IDC_CROSS, IDC_HAND, IDC_IBEAM, IDC_NO, IDC_SIZEALL,
-                IDC_SIZENESW, IDC_SIZENS, IDC_SIZENWSE, IDC_SIZEWE, IDC_WAIT, IsIconic,
-                IsWindowVisible, IsZoomed, LoadCursorW, SW_HIDE, SW_MAXIMIZE, SW_MINIMIZE,
-                SW_RESTORE, SW_SHOW, SW_SHOWMAXIMIZED, SW_SHOWMINIMIZED, SWP_FRAMECHANGED,
-                SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SetClassLongPtrW, SetCursor,
-                SetForegroundWindow, SetWindowLongPtrW, SetWindowPlacement, SetWindowPos,
-                SetWindowTextW, ShowWindow, WS_EX_APPWINDOW, WS_MAXIMIZE,
+                GetWindowThreadProcessId, IDC_APPSTARTING, IDC_ARROW, IDC_CROSS, IDC_HAND,
+                IDC_IBEAM, IDC_NO, IDC_SIZEALL, IDC_SIZENESW, IDC_SIZENS, IDC_SIZENWSE, IDC_SIZEWE,
+                IDC_WAIT, IsIconic, IsWindowVisible, IsZoomed, LoadCursorW, SW_HIDE, SW_MAXIMIZE,
+                SW_MINIMIZE, SW_RESTORE, SW_SHOW, SW_SHOWMAXIMIZED, SW_SHOWMINIMIZED,
+                SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
+                SetClassLongPtrW, SetCursor, SetForegroundWindow, SetWindowLongPtrW,
+                SetWindowPlacement, SetWindowPos, SetWindowTextW, ShowWindow, WS_EX_APPWINDOW,
+                WS_MAXIMIZE,
             },
         },
     },
@@ -48,9 +49,10 @@ use flui_platform::os_options::WindowsCornerPreference;
 use super::material::SystemBackdrop;
 use super::mode::NativeMode;
 use super::proc::{
-    FirstShow, FullscreenExit, OwnerTracking, WindowRecord, first_show_command, frame_style,
-    restyled, sample_state, to_screen, to_workspace,
+    FirstShow, FullscreenExit, OwnerTracking, first_show_command, frame_style, restyled,
+    sample_state, to_screen, to_workspace,
 };
+use super::record::WindowRecord;
 use super::set::{
     USER_DEFAULT_SCREEN_DPI, WindowSet, checked_logical_to_device, open_spot, outer_size,
     placement_of, restore_rectangle, workspace_origin,
@@ -95,16 +97,16 @@ pub struct WindowsWindow {
     /// owner-thread context, which refreshes it from the window messages.
     snapshot: Arc<WindowStateCell>,
 
-    /// The context allocation this wrapper installed in `hwnd`'s
-    /// `GWLP_USERDATA` slot at creation, kept ONLY as an identity token:
-    /// teardown compares it (as a value, never dereferencing through this
-    /// field) against the window's current slot so a wrapper that outlived
-    /// its native window cannot destroy or close whatever unrelated window
-    /// the OS recycled the handle value for — see
-    /// [`handle_names`](super::proc::handle_names). Dangling as a
-    /// VALUE once `WM_DESTROY` has run; that is fine for comparison and
-    /// exactly why it must never be dereferenced here.
-    context: *const super::proc::WindowContext,
+    /// The thread that created `hwnd` and the context allocation this
+    /// wrapper installed in its `GWLP_USERDATA` slot, kept ONLY as an
+    /// identity token: every command and the teardown compare them (as
+    /// values, never dereferencing) against the window's current thread and
+    /// slot, so a wrapper that outlived its native window cannot destroy or
+    /// close whatever unrelated window, of this process or another, the OS
+    /// recycled the handle value for — see
+    /// [`handle_names`](super::proc::handle_names). The address dangles once
+    /// `WM_DESTROY` has run; that is fine for comparison.
+    installed: super::proc::InstalledWindow,
 
     /// What the table's positions made for this window at construction: its
     /// accessibility bridge (UIA subclasses `hwnd` then, so a client that
@@ -125,6 +127,14 @@ pub struct WindowsWindow {
     /// The window's frame requests, shared with its context and its
     /// surfaces.
     frame_post: super::proc::FramePost,
+
+    /// The owner thread's COM apartment, kept entered while any wrapper of the
+    /// window lives. Declared last: the last wrapper's drop detaches the UIA
+    /// bridge and destroys the window, whose `WM_DESTROY` revokes its drop
+    /// target and retires its text services and touchpad viewport, all
+    /// before this field lets go, so none of them runs after
+    /// `OleUninitialize` when the window outlives the loop.
+    apartment: Rc<crate::owner::windows::com_apartment::ComApartment>,
 }
 
 // Owner-local (ADR-0327 §5): a wrapper, and every clone of it, stays on the
@@ -583,6 +593,7 @@ impl WindowsWindow {
                 dpi_streak: std::cell::Cell::default(),
                 mode: std::cell::Cell::new(NativeMode::Normal),
                 last_size: std::cell::Cell::new(initial_size),
+                _apartment: Rc::clone(&apartment),
                 cursor: std::cell::Cell::new(CursorIcon::default()),
                 restore_style: std::cell::Cell::new(0),
                 constraints: std::cell::Cell::new(constraints),
@@ -624,6 +635,10 @@ impl WindowsWindow {
             });
             let context_ptr = Box::into_raw(context);
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, context_ptr as isize);
+            let installed = super::proc::InstalledWindow {
+                thread: GetWindowThreadProcessId(hwnd, None),
+                context: context_ptr as isize,
+            };
             let this = super::proc::WindowRef::new(hwnd, identity);
             let positions = windows.positions;
 
@@ -635,13 +650,14 @@ impl WindowsWindow {
                 windows,
                 displays,
                 snapshot,
-                context: context_ptr,
+                installed,
                 // On the creating (owning) thread, as Win32 subclassing
                 // requires; `hwnd` was validated just above.
                 facets: positions.for_window(&this),
                 drag_source: Arc::clone(&drag).drag_source(this),
                 delivery: Arc::clone(&delivery),
                 frame_post,
+                apartment: Rc::clone(&apartment),
             });
             // The wrapper owns the window from here: a panic out of a hook
             // (or anything after it) drops it, which destroys the window and
@@ -671,7 +687,7 @@ impl WindowsWindow {
                     app_hooks: Rc::clone(&app_hooks),
                     preferences,
                     hooks: Rc::clone(&window_hooks),
-                    apartment: Some(apartment),
+                    apartment: Rc::clone(&apartment),
                     drag,
                 },
                 || this.with_context("window_created", |_| ()).is_some(),
@@ -770,7 +786,7 @@ impl WindowsWindow {
     /// destroyed, and not recycled by the OS for another window
     /// ([`handle_names`](super::proc::handle_names)).
     fn handle_is_its_window(&self) -> bool {
-        super::proc::handle_names(self.hwnd, self.context) == HandleNames::ItsWindow
+        super::proc::handle_names(self.hwnd, self.installed) == HandleNames::ItsWindow
     }
 
     /// Whether the handle still names this wrapper's window: after a call that
@@ -854,7 +870,7 @@ impl WindowsWindow {
     fn surface(&self) -> Win32Surface {
         Win32Surface {
             hwnd: self.hwnd.0 as isize,
-            context: self.context as isize,
+            installed: self.installed,
             retirement: self.delivery.retirement(),
             presented: self.delivery.presentation_reports(),
             frame_post: self.frame_post.clone(),
@@ -1256,9 +1272,9 @@ impl WindowsWindow {
     /// hidden until it is shown explicitly.
     fn hide_native(&self) {
         self.show_native(SW_HIDE);
-        self.state.set(WindowRecord {
+        self.state.update(|record| WindowRecord {
             visible: false,
-            ..self.state.get()
+            ..record
         });
         super::proc::with_window_context(self.hwnd, "hide", |ctx| {
             // The first frame no longer shows it; an explicit show still does.
@@ -1664,16 +1680,10 @@ impl WindowsWindow {
             SW_SHOWMAXIMIZED, SW_SHOWMINIMIZED, WPF_RESTORETOMAXIMIZED,
         };
         crate::owner::hwnd_affinity::show_owned_window(
-            || {
-                // The wrapper and its live context carry the same identity,
-                // minted once and never reused, so unlike the raw context
-                // address it cannot be recycled.
-                if self.owns_handle() {
-                    HandleNames::ItsWindow
-                } else {
-                    HandleNames::AnotherWindow
-                }
-            },
+            // The wrapper and its live context carry the same identity, minted
+            // once and never reused, so unlike the raw context address it
+            // cannot be recycled.
+            || self.owns_handle(),
             || {
                 super::proc::with_window_context(self.hwnd, "show", |ctx| {
                     ctx.note_show_request();
@@ -1757,7 +1767,7 @@ impl WindowsWindow {
     /// Close the window without asking the veto: a close command is not a
     /// close request.
     fn close_window(&self) {
-        match super::proc::handle_names(self.hwnd, self.context) {
+        match super::proc::handle_names(self.hwnd, self.installed) {
             HandleNames::ItsWindow => {
                 // SAFETY: `DestroyWindow` takes `self.hwnd` by value; the
                 // handle names this wrapper's live window, and the wrapper is
@@ -1839,22 +1849,22 @@ fn ask_attention(hwnd: HWND) {
 /// the thread presenting its frames and any thread that wants a frame hold
 /// of the window.
 ///
-/// It holds the window's handle and the address of its context as plain
-/// integers, never dereferenced, and the window's [`Retirement`], so it is
-/// `Send + Sync` with no `unsafe impl` and keeps nothing of the window alive.
-/// The window is there while its retirement has not started (`WM_DESTROY`
-/// starts it) and the identity probe still finds this window behind the
-/// handle: a destroyed handle, or one the OS recycled for another window,
-/// is not this window.
+/// It holds the window's handle, its creating thread and the address of its
+/// context as plain integers, never dereferenced, and the window's
+/// [`Retirement`], so it is `Send + Sync` with no `unsafe impl` and keeps
+/// nothing of the window alive. The window is there while its retirement has
+/// not started (`WM_DESTROY` starts it) and the identity probe still finds
+/// this window behind the handle: a destroyed handle, or one the OS recycled
+/// for another window of any thread or process, is not this window.
 ///
 /// [`Retirement`]: crate::owner::window_delivery::Retirement
 #[derive(Debug)]
 pub(crate) struct Win32Surface {
     /// The window handle, only probed, wrapped and posted to.
     hwnd: isize,
-    /// The address of the window's context, compared by the probe against
-    /// what the handle's `GWLP_USERDATA` holds now.
-    context: isize,
+    /// The window's creating thread and context address, compared by the
+    /// probe against the handle's thread and `GWLP_USERDATA` now.
+    installed: super::proc::InstalledWindow,
     retirement: crate::owner::window_delivery::Retirement,
     /// Where the presentations the renderer's swap chain reports go, for the
     /// window's next frame request.
@@ -1874,10 +1884,7 @@ impl Win32Surface {
     /// Whether the window this surface was made for is still there.
     fn is_live(&self) -> bool {
         !self.retirement.is_retired()
-            && super::proc::handle_names(
-                self.hwnd(),
-                self.context as *const super::proc::WindowContext,
-            ) == HandleNames::ItsWindow
+            && super::proc::handle_names(self.hwnd(), self.installed) == HandleNames::ItsWindow
     }
 }
 
@@ -2011,7 +2018,7 @@ impl Clone for WindowsWindow {
             displays: Arc::clone(&self.displays),
             snapshot: Arc::clone(&self.snapshot),
             // Same window, same identity token.
-            context: self.context,
+            installed: self.installed,
             // The clone shares the same window, so it shares what was made
             // for it: one bridge (one subclass hook per HWND, never two), and
             // one actuator, so a newer request replaces an older one
@@ -2020,6 +2027,7 @@ impl Clone for WindowsWindow {
             drag_source: Arc::clone(&self.drag_source),
             delivery: Arc::clone(&self.delivery),
             frame_post: self.frame_post.clone(),
+            apartment: Rc::clone(&self.apartment),
         }
     }
 }
@@ -2030,7 +2038,7 @@ impl Drop for WindowsWindow {
         if Rc::strong_count(&self.state) == 1 {
             tracing::debug!(hwnd = ?self.hwnd, "destroying the window");
 
-            match super::proc::handle_names(self.hwnd, self.context) {
+            match super::proc::handle_names(self.hwnd, self.installed) {
                 HandleNames::ItsWindow => {
                     // Detach the bridge (UIA's subclass) BEFORE destroying
                     // the window — Win32 wants subclasses removed while the

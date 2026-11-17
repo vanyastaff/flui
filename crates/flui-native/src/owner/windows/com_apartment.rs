@@ -23,6 +23,10 @@ pub(crate) struct ComApartment {
     _thread_affine: PhantomData<*const ()>,
 }
 
+// `Drop` calls `OleUninitialize` with no thread check: only the type keeps it
+// on the thread that entered.
+static_assertions::assert_not_impl_any!(ComApartment: Send, Sync);
+
 impl ComApartment {
     /// Enter the calling thread's STA, with OLE.
     ///

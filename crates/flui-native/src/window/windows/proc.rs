@@ -25,7 +25,7 @@ use std::{
 };
 
 use cursor_icon::CursorIcon;
-use flui_foundation::geometry::{Bounds, DevicePixelRatio, Point, Size};
+use flui_foundation::geometry::{Bounds, Point, Size};
 use flui_platform::{
     Brightness, SizeConstraints, WindowExtent, WindowGeometry, WindowId, WindowMode,
 };
@@ -52,6 +52,7 @@ use windows::Win32::{
 
 use super::frame_timing::{RefreshTiming, refresh_timing};
 use super::mode::NativeMode;
+use super::record::WindowRecord;
 use super::set::{WindowSet, checked_logical_to_device, restore_rectangle};
 use super::window::WindowsWindow;
 
@@ -327,6 +328,11 @@ pub(crate) struct WindowContext {
     /// chose it through `Win32Window::set_dark_mode` or `set_theme`, or opened
     /// with a theme of its own (`Win32WindowOptions::theme`).
     pub chrome_follows_system: std::cell::Cell<bool>,
+    /// The owner thread's COM apartment, kept entered until the context is
+    /// freed, after its window's `WM_DESTROY` ran every hook's teardown (the
+    /// drop target's revoke, the text services' retirement), even when the
+    /// last wrapper let go of the window inside that `WM_DESTROY`.
+    pub(crate) _apartment: Rc<crate::owner::windows::com_apartment::ComApartment>,
     /// Cursor selected by this exact window's presentation.
     pub cursor: std::cell::Cell<CursorIcon>,
     /// Window style bits before fullscreen (Windows-specific: WS_OVERLAPPEDWINDOW, etc.)
@@ -465,15 +471,10 @@ impl WindowContext {
     }
 
     /// Record what the window procedure learned of the window, before any
-    /// native or user code that can call back runs. The record is copied out,
-    /// changed and put back: `update` holds nothing, so a read of the record
-    /// it makes sees the last record set.
-    pub(crate) fn update_window_state(&self, update: impl FnOnce(&mut WindowRecord)) {
-        if let Some(state) = self.window_state.upgrade() {
-            let mut record = state.get();
-            update(&mut record);
-            state.set(record);
-        }
+    /// native or user code that can call back runs: `change` takes the record
+    /// and returns the next one ([`record::update`](super::record::update)).
+    pub(crate) fn update_window_state(&self, change: impl FnOnce(WindowRecord) -> WindowRecord) {
+        super::record::update(&self.window_state, change);
     }
 
     /// The window's published state for a caller that reads it
@@ -721,17 +722,17 @@ pub(crate) fn with_window_context_checked<R>(
     }
 }
 
-/// What `hwnd` names now for the wrapper that installed `expected_context`
-/// at creation: its own live window, no window, or a window the OS recycled
-/// the handle value for. The context pointer is compared as a value, never
-/// dereferenced, against the window's current class and `GWLP_USERDATA`
-/// slot, so the queries are sound from any thread: a surface target asks
-/// from the renderer's. Pure rule in
+/// What `hwnd` names now for the wrapper whose window `installed` describes:
+/// its own live window, no window, or a window the OS recycled the handle
+/// value for. The window's thread is compared with the one that created the
+/// wrapper's window, and the context pointer as a value, never dereferenced,
+/// with the window's current `GWLP_USERDATA` slot, so the queries are sound
+/// from any thread: a surface target asks from the renderer's. Pure rule in
 /// [`crate::owner::hwnd_affinity::handle_names`], which also states the
 /// pointer-ABA residual; this shell only performs the OS queries.
 pub(crate) fn handle_names(
     hwnd: HWND,
-    expected_context: *const WindowContext,
+    installed: InstalledWindow,
 ) -> crate::owner::hwnd_affinity::HandleNames {
     // SAFETY: see the identical queries in `with_window_context` — no
     // pointers dereferenced, no messages pumped.
@@ -743,10 +744,24 @@ pub(crate) fn handle_names(
     };
     crate::owner::hwnd_affinity::handle_names(
         owner_thread,
+        installed.thread,
         hwnd_names_flui_class(hwnd),
         slot,
-        expected_context as isize,
+        installed.context,
     )
+}
+
+/// What a wrapper recorded of its window when it installed it: the thread
+/// that created the window and the address of the context it put in the
+/// window's `GWLP_USERDATA` slot. Plain integers, only compared, never
+/// dereferenced: what [`handle_names`] tells this window from one the OS gave
+/// its handle since, from any thread.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct InstalledWindow {
+    /// The Win32 id of the thread that created the window.
+    pub(crate) thread: u32,
+    /// The context address installed in the window's slot.
+    pub(crate) context: isize,
 }
 
 /// Runs `handle` with the context of `hwnd`, borrowed for one message of its
@@ -1129,11 +1144,15 @@ impl WindowProc {
                         let prev_mode = ctx.mode.get();
                         if size_type != SIZE_MINIMIZED {
                             ctx.step(hwnd, WindowStep::Resized((width, height)));
-                            ctx.update_window_state(|state| {
-                                state.bounds.size = Size::new(
-                                    width as f64 / ctx.scale.scale(),
-                                    height as f64 / ctx.scale.scale(),
-                                );
+                            ctx.update_window_state(|record| WindowRecord {
+                                bounds: Bounds {
+                                    size: Size::new(
+                                        width as f64 / ctx.scale.scale(),
+                                        height as f64 / ctx.scale.scale(),
+                                    ),
+                                    ..record.bounds
+                                },
+                                ..record
                             });
                         }
 
@@ -1269,7 +1288,10 @@ impl WindowProc {
                         && let Some(ctx) = ctx
                     {
                         let shown = wparam.0 != 0;
-                        ctx.update_window_state(|state| state.visible = shown);
+                        ctx.update_window_state(|record| WindowRecord {
+                            visible: shown,
+                            ..record
+                        });
                         ctx.publish_window_state(hwnd);
                     }
                     // DefWindowProc continues the ordinary show/hide
@@ -1292,11 +1314,15 @@ impl WindowProc {
                     tracing::debug!("Window Moved: ({}, {})", x, y);
 
                     if let Some(ctx) = ctx {
-                        ctx.update_window_state(|state| {
-                            state.bounds.origin = Point::new(
-                                x as f64 / ctx.scale.scale(),
-                                y as f64 / ctx.scale.scale(),
-                            );
+                        ctx.update_window_state(|record| WindowRecord {
+                            bounds: Bounds {
+                                origin: Point::new(
+                                    x as f64 / ctx.scale.scale(),
+                                    y as f64 / ctx.scale.scale(),
+                                ),
+                                ..record.bounds
+                            },
+                            ..record
                         });
                         ctx.publish_window_state(hwnd);
                     }
@@ -1543,7 +1569,10 @@ impl WindowProc {
                     tracing::debug!("Window Focused");
 
                     if let Some(ctx) = ctx {
-                        ctx.update_window_state(|state| state.focused = true);
+                        ctx.update_window_state(|record| WindowRecord {
+                            focused: true,
+                            ..record
+                        });
                         ctx.publish_window_state(hwnd);
                     }
 
@@ -1554,7 +1583,10 @@ impl WindowProc {
                     tracing::debug!("Window Unfocused");
 
                     if let Some(ctx) = ctx {
-                        ctx.update_window_state(|state| state.focused = false);
+                        ctx.update_window_state(|record| WindowRecord {
+                            focused: false,
+                            ..record
+                        });
                         ctx.step(hwnd, WindowStep::FocusLost);
                         ctx.publish_window_state(hwnd);
                     }
@@ -1652,24 +1684,6 @@ impl Drop for PublishHold<'_> {
 #[inline]
 fn hiword(value: u32) -> u16 {
     ((value >> 16) & 0xFFFF) as u16
-}
-
-/// What the window procedure last recorded of a window: its bounds, scale,
-/// visibility and focus. `Copy`, so the wrapper and the context share it in a
-/// `Cell` that no read or update holds.
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct WindowRecord {
-    /// Current window bounds (logical pixels)
-    pub(crate) bounds: Bounds<f64>,
-
-    /// Current scale factor (DPI / 96)
-    pub(crate) scale_factor: DevicePixelRatio,
-
-    /// Is window visible?
-    pub(crate) visible: bool,
-
-    /// Is window focused?
-    pub(crate) focused: bool,
 }
 
 /// What the owner context knows about a window that Win32 does not say: the
@@ -2278,7 +2292,10 @@ impl WindowContext {
         // window once, at its new size.
         let hold = self.hold_publishing();
         let ratio = self.scale.ratio();
-        self.update_window_state(|state| state.scale_factor = ratio);
+        self.update_window_state(|record| WindowRecord {
+            scale_factor: ratio,
+            ..record
+        });
         self.apply_dpi_rectangle(hwnd, suggested, old_dpi, dpi.get());
         // The state callback the rectangle's `WM_SIZE` ran may have closed the
         // window: its resize and frame are then not for whatever window has
@@ -2300,11 +2317,15 @@ impl WindowContext {
                 (client.bottom - client.top).max(1),
             );
             if self.last_resize.get() != Some((size, new_scale)) {
-                self.update_window_state(|state| {
-                    state.bounds.size = Size::new(
-                        f64::from(size.width) / new_scale,
-                        f64::from(size.height) / new_scale,
-                    );
+                self.update_window_state(|record| WindowRecord {
+                    bounds: Bounds {
+                        size: Size::new(
+                            f64::from(size.width) / new_scale,
+                            f64::from(size.height) / new_scale,
+                        ),
+                        ..record.bounds
+                    },
+                    ..record
                 });
                 self.report_resize(size);
                 self.redraw_if_still_owned(hwnd);

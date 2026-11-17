@@ -16,9 +16,11 @@
 //! synchronization, and no ordering of the read alone can close that window
 //! (it is a time-of-check/time-of-use race).
 //!
-//! Whether a handle still names a wrapper's window ([`handle_names`]) asks no
-//! thread: the answer is the same from any thread, and a teardown runs only
-//! on the owner, where the wrapper lives.
+//! Whether a handle still names a wrapper's window ([`handle_names`]) compares
+//! the window's thread with the one that created the wrapper's window, never
+//! with the caller's: the answer is the same from any thread (a surface target
+//! asks from the renderer's), and a teardown runs only on the owner, where the
+//! wrapper lives.
 //!
 //! The decisions are pure rules over thread identities and slot state. They
 //! are compiled under `test` on every host, because the Win32 shells that
@@ -27,10 +29,11 @@
 //! actually get.
 //!
 //! Thread identities are Win32 thread ids (`GetCurrentThreadId`,
-//! `GetWindowThreadProcessId`): nonzero `u32`s, with `0` meaning "the HWND
-//! no longer names a live window" (`GetWindowThreadProcessId`'s documented
+//! `GetWindowThreadProcessId`): nonzero `u32`s, unique across every process
+//! of the system while their thread lives, with `0` meaning "the HWND no
+//! longer names a live window" (`GetWindowThreadProcessId`'s documented
 //! failure value), which is why [`OWNER_GONE`] is a valid `owner_thread`
-//! input and never a valid `current_thread` one.
+//! input and never a valid `current_thread` or `created_on` one.
 //!
 //! The owner's message-only window and every window of FLUI's class keep a
 //! context in that slot, so the rules are the owner thread's, and the window
@@ -38,8 +41,8 @@
 
 #![forbid(unsafe_code)]
 // Elsewhere than on Windows this file is compiled for its tests alone, which
-// reach the user-data rules and not the teardown rules only a Win32 shell
-// applies.
+// reach the user-data and handle rules but not the context ledger and the
+// class-name match only a Win32 shell applies.
 #![cfg_attr(
     not(windows),
     allow(
@@ -158,10 +161,11 @@ pub(crate) enum HandleNames {
     /// hand a renderer.
     Nothing,
     /// The handle names a live window that is not the one this wrapper
-    /// created: the OS recycled the handle value (a foreign class, or a
-    /// user-data value different from the context this wrapper installed).
-    /// Destroying, showing or drawing to it would reach an innocent window,
-    /// so nothing touches the handle; wrapper-side cleanup still proceeds.
+    /// created: the OS recycled the handle value (a window of another thread
+    /// or process, a foreign class, or a user-data value different from the
+    /// context this wrapper installed). Destroying, showing or drawing to it
+    /// would reach an innocent window, so nothing touches the handle;
+    /// wrapper-side cleanup still proceeds.
     AnotherWindow,
     /// The handle names the window this wrapper created, still alive. On the
     /// owner thread, where the wrapper lives, `DestroyWindow` may run
@@ -177,7 +181,12 @@ pub(crate) enum HandleNames {
 /// window the recycled handle now names:
 ///
 /// - `owner_thread` — `GetWindowThreadProcessId(hwnd)`; `0` ([`OWNER_GONE`])
-///   when the handle is dead. Only its liveness matters here.
+///   when the handle is dead.
+/// - `created_on` — the thread that created the wrapper's window, recorded
+///   when the window was made. A live window of any other thread is not the
+///   wrapper's: thread ids are unique across processes while their thread
+///   lives, so this keeps the answer inside the thread, and the process,
+///   that made the window.
 /// - `is_own_class` — whether the live window's class is this backend's
 ///   registered class.
 /// - `slot` — the raw `GWLP_USERDATA` value currently stored in the window
@@ -188,25 +197,26 @@ pub(crate) enum HandleNames {
 ///   slot (`0`, mid-`WM_DESTROY`) or a recycled window's foreign value both
 ///   answer [`HandleNames::AnotherWindow`].
 ///
-/// No thread decides the answer: a wrapper is neither `Send` nor `Sync`, so
-/// its teardown is on the owner thread, and a surface target asking from the
-/// renderer's thread needs only the identity.
+/// The caller's thread does not enter the answer: a wrapper is neither `Send`
+/// nor `Sync`, so its teardown is on the owner thread, and a surface target
+/// asking from the renderer's thread gets the same answer.
 ///
 /// Residual, stated rather than claimed closed: pointer-value ABA — the
 /// freed context allocation's address being reused for a *new* FLUI
-/// window's context while the OS also recycles the same numeric HWND —
-/// would pass this check. Both reuses must collide at once; the
-/// consequence is bounded to closing a window this same process owns.
+/// window's context on the same thread while the OS also recycles the same
+/// numeric HWND — would pass this check. Both reuses must collide at once;
+/// the consequence is bounded to closing a window of this same thread.
 #[must_use]
 pub(crate) fn handle_names(
     owner_thread: u32,
+    created_on: u32,
     is_own_class: bool,
     slot: isize,
     expected_slot: isize,
 ) -> HandleNames {
     if owner_thread == OWNER_GONE {
         HandleNames::Nothing
-    } else if !is_own_class || slot != expected_slot {
+    } else if owner_thread != created_on || !is_own_class || slot != expected_slot {
         HandleNames::AnotherWindow
     } else {
         HandleNames::ItsWindow
@@ -280,17 +290,22 @@ impl Default for ContextLedger {
     }
 }
 
-/// Run a reveal and focus request only while the wrapper still owns its HWND.
-/// Native reveal/focus calls may synchronously close or recycle the handle.
+/// Run a reveal and focus request only while the wrapper still owns its HWND
+/// (`owns`): before the show, after it and after the focus, since native
+/// reveal and focus calls may synchronously close or recycle the handle. A
+/// window no longer owned answers [`ApplyError::Closed`](flui_platform::ApplyError::Closed).
 #[cfg(target_os = "windows")]
 pub(crate) fn show_owned_window(
-    names: impl Fn() -> HandleNames,
+    owns: impl Fn() -> bool,
     show: impl FnOnce() -> Result<(), flui_platform::ApplyError>,
     focus: impl FnOnce(),
 ) -> Result<(), flui_platform::ApplyError> {
-    let check = || match names() {
-        HandleNames::ItsWindow => Ok(()),
-        HandleNames::Nothing | HandleNames::AnotherWindow => Err(flui_platform::ApplyError::Closed),
+    let check = || {
+        if owns() {
+            Ok(())
+        } else {
+            Err(flui_platform::ApplyError::Closed)
+        }
     };
     check()?;
     show()?;
@@ -310,41 +325,58 @@ mod tests {
     const HW_FOREIGN: u32 = 8;
 
     /// A handle names its wrapper's window only while the window lives, is of
-    /// the backend's class and holds the context the wrapper installed; no
-    /// thread enters the answer.
+    /// the thread that made it and of the backend's class, and holds the
+    /// context the wrapper installed. A window another thread or process got
+    /// the handle for, with the same class name and an equal slot value, is
+    /// not the wrapper's.
     #[test]
     fn a_handle_names_its_wrappers_window_only_while_its_slot_is_the_wrappers() {
         const INSTALLED: isize = 0x1000;
+        /// A thread of another process: a different id, since thread ids are
+        /// unique across the system while their threads live.
+        const OTHER_PROCESS: u32 = 4242;
         crate::table_test::run_table(
             "a_handle_names_its_wrappers_window_only_while_its_slot_is_the_wrappers",
             &[
                 ("dead_handle", || {
                     assert_eq!(
-                        handle_names(OWNER_GONE, false, 0, INSTALLED),
+                        handle_names(OWNER_GONE, HW_OWNER, false, 0, INSTALLED),
                         HandleNames::Nothing
                     );
                 }),
                 ("recycled_for_a_foreign_class", || {
                     assert_eq!(
-                        handle_names(HW_OWNER, false, INSTALLED, INSTALLED),
+                        handle_names(HW_OWNER, HW_OWNER, false, INSTALLED, INSTALLED),
                         HandleNames::AnotherWindow
                     );
                 }),
                 ("slot_cleared_by_wm_destroy", || {
                     assert_eq!(
-                        handle_names(HW_OWNER, true, 0, INSTALLED),
+                        handle_names(HW_OWNER, HW_OWNER, true, 0, INSTALLED),
                         HandleNames::AnotherWindow
                     );
                 }),
                 ("recycled_for_another_flui_window", || {
                     assert_eq!(
-                        handle_names(HW_OWNER, true, 0x2000, INSTALLED),
+                        handle_names(HW_OWNER, HW_OWNER, true, 0x2000, INSTALLED),
+                        HandleNames::AnotherWindow
+                    );
+                }),
+                ("recycled_for_a_window_of_another_thread", || {
+                    assert_eq!(
+                        handle_names(HW_FOREIGN, HW_OWNER, true, INSTALLED, INSTALLED),
+                        HandleNames::AnotherWindow
+                    );
+                }),
+                ("recycled_for_a_window_of_another_process", || {
+                    assert_eq!(
+                        handle_names(OTHER_PROCESS, HW_OWNER, true, INSTALLED, INSTALLED),
                         HandleNames::AnotherWindow
                     );
                 }),
                 ("its_own_window", || {
                     assert_eq!(
-                        handle_names(HW_OWNER, true, INSTALLED, INSTALLED),
+                        handle_names(HW_OWNER, HW_OWNER, true, INSTALLED, INSTALLED),
                         HandleNames::ItsWindow
                     );
                 }),

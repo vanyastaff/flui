@@ -302,19 +302,13 @@ impl WindowMessages for Tsf {
     /// Activate TSF for the window just installed, on its owner thread, and
     /// keep the connection: from here on the window offers its text-store
     /// host. A failure leaves the window without a host, and text input takes
-    /// the `WM_CHAR` path, as it does with no apartment (the platform's is
-    /// reachable on its owner thread only, where windows are opened). A
-    /// message the activation dispatched may have closed the window; its
-    /// connection is then deactivated at once, and the open fails.
+    /// the `WM_CHAR` path. The services keep the thread's COM apartment
+    /// entered until they are retired. A message the activation dispatched
+    /// may have closed the window; its connection is then deactivated at
+    /// once, and the open fails.
     fn created(&self, window: &CreatedWindow) {
         let hwnd = window.hwnd;
-        let Some(apartment) = window.apartment.clone() else {
-            tracing::warn!(
-                ?hwnd,
-                "no COM apartment for TSF; text input falls back to WM_CHAR"
-            );
-            return;
-        };
+        let apartment = Rc::clone(&window.apartment);
         let this = window.window();
         // Kept before TSF activates: a close the activation dispatches finds
         // the window and forgets it.
