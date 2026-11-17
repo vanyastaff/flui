@@ -212,30 +212,24 @@ impl std::fmt::Debug for SnackBarAction {
 
 /// Retains the one-shot claim across rebuilds. The installed press closure
 /// shares the latch so another activation before the next build is ignored.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct SnackBarActionState {
     triggered: Rc<Cell<bool>>,
-    /// Acquired in [`init_state`](ViewState::init_state), per ADR-0018
-    /// (`build` receives a `BuildContext`, which has no `rebuild_handle()`,
-    /// so it cannot be taken there even for a press closure) — `None` only in
-    /// the window between `create_state` and the first `init_state`, never
-    /// observed by `build`.
-    rebuild: Option<RebuildHandle>,
+    rebuild: RebuildHandle,
 }
 
 impl StatefulView for SnackBarAction {
     type State = SnackBarActionState;
 
-    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
-        SnackBarActionState::default()
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
+        SnackBarActionState {
+            triggered: Rc::new(Cell::new(false)),
+            rebuild: ctx.rebuild_handle(),
+        }
     }
 }
 
 impl ViewState<SnackBarAction> for SnackBarActionState {
-    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        self.rebuild = Some(ctx.rebuild_handle());
-    }
-
     fn build(&self, view: &SnackBarAction, ctx: &dyn BuildContext) -> impl IntoView {
         let theme = Theme::of(ctx);
         let colors = theme.color_scheme;
@@ -256,10 +250,7 @@ impl ViewState<SnackBarAction> for SnackBarActionState {
             let messenger = ScaffoldMessengerScope::maybe_of(ctx);
             let on_pressed = view.on_pressed.clone();
             let triggered = Rc::clone(&self.triggered);
-            let rebuild = self
-                .rebuild
-                .clone()
-                .expect("BUG: init_state runs before the first build");
+            let rebuild = self.rebuild.clone();
             button = button.on_pressed(move |ctx| {
                 if triggered.replace(true) {
                     return;

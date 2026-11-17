@@ -20,6 +20,7 @@
 //! configuration generation the executor's record requires at that moment.
 
 use std::cell::RefCell;
+use std::num::NonZeroUsize;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -34,7 +35,7 @@ use flui_foundation::geometry::DeviceSize;
 use flui_foundation::panic::FirstPanic;
 use flui_foundation::{FrameEpoch, FrameStamp, PresentationAddress, SurfaceGeneration};
 use flui_layer::{DamageMode, RasterBase, ScenePublication, SceneSnapshot, SurfaceKey};
-use flui_platform::{DisplayColor, PlatformWindow, RedrawRequester, SurfaceTarget};
+use flui_platform::{DisplayColor, FramePacing, PlatformWindow, RedrawRequester, SurfaceTarget};
 use flui_runtime::pump::SampledClock;
 use flui_runtime::sink::{FrameSink, SubmitVerdict};
 
@@ -645,6 +646,10 @@ struct HostSlot {
     /// The window's redraw requester, which a raster thread's settlement
     /// calls so the window's next wake drains it.
     redraw: Option<Arc<dyn RedrawRequester>>,
+    /// How many frames of the window the executor may hold unsettled
+    /// ([`in_flight_limit`]), by who paces the surface target, which says so
+    /// once, when the slot is attached.
+    in_flight_limit: NonZeroUsize,
     /// The frames a raster thread holds for the slot, oldest first: what the
     /// verdict of each needs once it settles (ADR-0305 §4).
     pending: Vec<PendingFrame>,
@@ -721,6 +726,28 @@ impl RestorePace {
             .min(Self::CEILING);
         self.attempts = self.attempts.saturating_add(1);
         self.next = Some(now.checked_add(wait).unwrap_or(now));
+    }
+}
+
+/// How many frames of one window an executor placed as `placement` may hold
+/// unsettled, where `pacing` says who paces the window's surface (ADR-0305
+/// §5).
+///
+/// A surface its display paces takes the placement's depth: a raster thread
+/// holds one frame rendering and one in its inbox, and the present, which
+/// waits for the display, paces both. A surface its compositor paces takes
+/// one frame whatever the placement. The host withholds such a window's next
+/// frame only from the present that arms its frame callback
+/// (`SurfaceTarget::pre_present_notify`) until the compositor answers it, and
+/// a raster thread presents after the wake that queued the frame has
+/// returned: a second frame taken meanwhile would be presented right behind
+/// the first, two in one refresh, of which the compositor shows one
+/// (ADR-0356). A pacing this host does not know yet is held as the display's
+/// is, as the engine presents it.
+fn in_flight_limit(placement: RasterPlacement, pacing: FramePacing) -> NonZeroUsize {
+    match pacing {
+        FramePacing::Compositor => NonZeroUsize::MIN,
+        FramePacing::Display | _ => placement.depth(),
     }
 }
 
@@ -898,6 +925,9 @@ impl RasterHost {
             surface_target,
             redraw,
         } = window;
+        // The target's word, read before anything is placed or attached: it
+        // is the platform's code.
+        let limit = in_flight_limit(self.placement, surface_target.frame_pacing());
         let target = if let Some(placed) = self.placed.as_ref() {
             SlotTarget::Window(placed.surfaces.create(Arc::clone(&surface_target))?)
         } else {
@@ -999,6 +1029,7 @@ impl RasterHost {
                 restore: RestorePace::default(),
                 panic: caught,
                 redraw,
+                in_flight_limit: limit,
                 pending: Vec::with_capacity(self.placement.depth().get()),
             },
         );
@@ -2288,6 +2319,16 @@ impl RasterHost {
         placed.settlements = settlements;
     }
 
+    /// How many frames of `address`'s window its sink may hold unsettled
+    /// ([`in_flight_limit`]); one for a window with no slot, whose frames
+    /// are refused.
+    fn in_flight_limit(&self, address: PresentationAddress) -> NonZeroUsize {
+        self.placed
+            .as_ref()
+            .and_then(|placed| placed.slots.get(&address))
+            .map_or(NonZeroUsize::MIN, |slot| slot.in_flight_limit)
+    }
+
     /// Whether `address`'s window holds frames a raster thread has not
     /// settled yet.
     #[cfg_attr(
@@ -2472,10 +2513,14 @@ impl FrameSink for SlotFrame {
         self.surface
     }
 
-    fn in_flight_limit(&mut self) -> std::num::NonZeroUsize {
-        // An inline turn settles each frame in its submit; a raster thread
-        // holds one frame rendering and one in its inbox (ADR-0305 §5).
-        self.host.placement.depth()
+    fn in_flight_limit(&mut self) -> NonZeroUsize {
+        // The slot's limit, fixed at its attach (ADR-0305 §5). A frame
+        // dispatched while the host is turning reads the least: its submit
+        // is answered `Retry`, so the host holds nothing of it.
+        let address = self.address;
+        self.host
+            .try_read(|host| host.in_flight_limit(address))
+            .unwrap_or(NonZeroUsize::MIN)
     }
 
     fn submit(&mut self, epoch: FrameEpoch, publication: ScenePublication) -> SubmitVerdict {

@@ -432,7 +432,7 @@ pub(crate) struct Indication {
     /// Notified on every animation tick and style change.
     repaint: Rc<ChangeNotifier>,
     /// Rebuilds the well, so a press attaches the painter.
-    rebuild: RefCell<Option<RebuildHandle>>,
+    rebuild: RebuildHandle,
     /// Whether the last build attached the painter.
     painted: Cell<bool>,
     /// Set by `dispose`: a disposed indication starts no state layer.
@@ -450,7 +450,13 @@ impl std::fmt::Debug for Indication {
 }
 
 impl Indication {
-    pub(crate) fn new(states: WidgetStatesController, style: IndicationStyle) -> Rc<Self> {
+    /// An indication over `states`; `rebuild` is the well's, which a press,
+    /// or the last run coming to rest, uses to attach or detach the painter.
+    pub(crate) fn new(
+        states: WidgetStatesController,
+        style: IndicationStyle,
+        rebuild: RebuildHandle,
+    ) -> Rc<Self> {
         Rc::new_cyclic(|this: &Weak<Self>| Self {
             states: RefCell::new(states),
             style: RefCell::new(style),
@@ -463,7 +469,7 @@ impl Indication {
             contacts: RefCell::new(Vec::new()),
             vsync: RefCell::new(None),
             repaint: Rc::new(ChangeNotifier::new()),
-            rebuild: RefCell::new(None),
+            rebuild,
             painted: Cell::new(false),
             disposed: Cell::new(false),
             this: Weak::clone(this),
@@ -499,17 +505,9 @@ impl Indication {
         Ok(())
     }
 
-    /// The handle a press, or the last run coming to rest, uses to attach
-    /// or detach the painter.
-    pub(crate) fn set_rebuild(&self, rebuild: RebuildHandle) {
-        *self.rebuild.borrow_mut() = Some(rebuild);
-    }
-
     fn schedule_rebuild(&self) {
-        let rebuild = self.rebuild.borrow().clone();
-        if let Some(rebuild) = rebuild {
-            rebuild.schedule(flui_sdk::view::RebuildReason::StateChange);
-        }
+        self.rebuild
+            .schedule(flui_sdk::view::RebuildReason::StateChange);
     }
 
     /// Whether anything is, or is about to be, visible: an idle well

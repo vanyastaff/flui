@@ -908,8 +908,8 @@ struct Shared {
     /// Each item's record, rebuilt from the keys by each build.
     records: RefCell<Records>,
     vsync: RefCell<Option<Vsync>>,
-    rebuild: RefCell<Option<RebuildHandle>>,
-    writer: RefCell<Option<WriterSource>>,
+    rebuild: RebuildHandle,
+    writer: WriterSource,
     announcer: RefCell<Option<Announcer>>,
     /// The localizations the list was last built with, for its announcements.
     strings: RefCell<Option<Rc<BoxedWidgetsLocalizations>>>,
@@ -920,17 +920,11 @@ struct Shared {
 
 impl Shared {
     fn write(&self, invoke: impl FnOnce(&mut EventContext<'_>)) {
-        let writer = self.writer.borrow().clone();
-        if let Some(writer) = writer {
-            writer.write(invoke);
-        }
+        self.writer.write(invoke);
     }
 
     fn schedule_rebuild(&self) {
-        let rebuild = self.rebuild.borrow().clone();
-        if let Some(rebuild) = rebuild {
-            rebuild.schedule(flui_view::RebuildReason::StateChange);
-        }
+        self.rebuild.schedule(flui_view::RebuildReason::StateChange);
     }
 
     /// The order the rows are shown in changed: they slide on the next
@@ -1253,7 +1247,7 @@ impl Shared {
 }
 
 impl Shared {
-    fn new(view: &Config) -> Rc<Self> {
+    fn new(view: &Config, ctx: &dyn LifecycleContext) -> Rc<Self> {
         let clock = AnimationController::builder(SLIDE)
             .debug_label("Reorderable.slide")
             .build_on(None);
@@ -1267,20 +1261,18 @@ impl Shared {
             generation: Cell::new(0),
             records: RefCell::new(HashMap::new()),
             vsync: RefCell::new(None),
-            rebuild: RefCell::new(None),
-            writer: RefCell::new(None),
+            rebuild: ctx.rebuild_handle(),
+            writer: ctx.writer_source(),
             announcer: RefCell::new(None),
             strings: RefCell::new(None),
             pipeline: RefCell::new(None),
         })
     }
 
-    /// Take the capabilities the rows' moves use.
+    /// Take the capabilities the rows' moves use that an ancestor provides.
     fn acquire(&self, ctx: &dyn LifecycleContext) {
-        *self.writer.borrow_mut() = Some(ctx.writer_source());
         *self.announcer.borrow_mut() = ctx.announcer();
         *self.pipeline.borrow_mut() = ctx.pipeline_owner().map(|owner| owner.downgrade());
-        *self.rebuild.borrow_mut() = Some(ctx.rebuild_handle());
         let vsync = VsyncScope::maybe_of(ctx);
         let rebound = {
             let mut clock = self.clock.borrow_mut();
@@ -1475,9 +1467,9 @@ impl View for ReorderableList {
 impl StatefulView for ReorderableList {
     type State = ReorderableListState;
 
-    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
         ReorderableListState {
-            shared: Shared::new(&self.config),
+            shared: Shared::new(&self.config, ctx),
         }
     }
 }
@@ -1523,9 +1515,9 @@ impl View for ReorderableGrid {
 impl StatefulView for ReorderableGrid {
     type State = ReorderableGridState;
 
-    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
         ReorderableGridState {
-            shared: Shared::new(&self.config),
+            shared: Shared::new(&self.config, ctx),
         }
     }
 }

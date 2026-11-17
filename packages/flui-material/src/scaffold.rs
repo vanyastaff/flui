@@ -453,18 +453,13 @@ impl_inherited_view!(ScaffoldScope);
 /// wiring" and "`ScaffoldMessenger` wiring" sections.
 pub struct ScaffoldState {
     handle: DrawerHandle,
-    /// Acquired in [`init_state`](ViewState::init_state), per ADR-0018 —
     /// `build_drawer_controller`'s `on_open_changed` closures capture a
-    /// clone of this stored handle: `build()` receives a `BuildContext`,
-    /// which has no `rebuild_handle()` — only `LifecycleContext` offers it.
-    /// `None` only in the window between `create_state` and the
-    /// first `init_state` — never observed by `build`, which always runs
-    /// after `init_state`.
-    rebuild: Option<RebuildHandle>,
-    /// This scaffold's own `ElementId`, captured in `init_state` (ctx is not
-    /// available in `dispose`) so `dispose` can unregister from
-    /// [`Self::messenger`] without a context.
-    element_id: Option<ElementId>,
+    /// clone of this handle: `build()` receives a `BuildContext`, which has
+    /// no `rebuild_handle()` — only `LifecycleContext` offers it (ADR-0018).
+    rebuild: RebuildHandle,
+    /// This scaffold's own `ElementId`, held because `dispose` receives no
+    /// context and unregisters from [`Self::messenger`] by it.
+    element_id: ElementId,
     /// The currently-registered [`ScaffoldMessengerHandle`] (if any) — see
     /// the module docs' "`ScaffoldMessenger` wiring" section.
     messenger: Option<ScaffoldMessengerHandle>,
@@ -483,11 +478,11 @@ impl std::fmt::Debug for ScaffoldState {
 impl StatefulView for Scaffold {
     type State = ScaffoldState;
 
-    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
         ScaffoldState {
             handle: DrawerHandle::new(),
-            rebuild: None,
-            element_id: None,
+            rebuild: ctx.rebuild_handle(),
+            element_id: ctx.element_id(),
             messenger: None,
         }
     }
@@ -495,8 +490,6 @@ impl StatefulView for Scaffold {
 
 impl ViewState<Scaffold> for ScaffoldState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        self.rebuild = Some(ctx.rebuild_handle());
-        self.element_id = Some(ctx.element_id());
         // The primary, guaranteed-to-run registration point — see this
         // method's own doc comment on `Self::sync_messenger_registration`
         // for why `did_change_dependencies` alone is not enough here.
@@ -511,8 +504,8 @@ impl ViewState<Scaffold> for ScaffoldState {
     }
 
     fn dispose(&mut self) {
-        if let (Some(messenger), Some(element_id)) = (self.messenger.take(), self.element_id) {
-            messenger.unregister_scaffold(element_id);
+        if let Some(messenger) = self.messenger.take() {
+            messenger.unregister_scaffold(self.element_id);
         }
     }
 
@@ -683,12 +676,8 @@ impl ScaffoldState {
         view: &Scaffold,
     ) -> DrawerController {
         let handle = self.handle.clone();
-        // Captured in `init_state`, not here — see `ScaffoldState::rebuild`'s
-        // own doc.
-        let rebuild = self
-            .rebuild
-            .clone()
-            .expect("BUG: init_state runs before the first build");
+        // Made in `create_state` — see `ScaffoldState::rebuild`.
+        let rebuild = self.rebuild.clone();
         let set_opened: fn(&DrawerHandle, bool) = match alignment {
             DrawerAlignment::Start => DrawerHandle::set_drawer_opened,
             DrawerAlignment::End => DrawerHandle::set_end_drawer_opened,
@@ -735,17 +724,12 @@ impl ScaffoldState {
         if !identity_changed {
             return;
         }
-        let element_id = self
-            .element_id
-            .expect("BUG: init_state always runs before this method (both its own call site and \
-                     did_change_dependencies, which the ViewState lifecycle guarantees runs after it)");
+        let element_id = self.element_id;
         if let Some(old) = &self.messenger {
             old.unregister_scaffold(element_id);
         }
         if let Some(new) = &new_messenger {
-            let rebuild = self.rebuild.clone().expect(
-                "BUG: init_state always runs before this method — see the identical note above",
-            );
+            let rebuild = self.rebuild.clone();
             new.register_scaffold(element_id, rebuild);
         }
         self.messenger = new_messenger;

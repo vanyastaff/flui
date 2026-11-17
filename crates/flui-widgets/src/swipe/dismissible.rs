@@ -768,13 +768,13 @@ pub struct DismissibleState {
     callbacks: Rc<RefCell<DismissCallbacks>>,
     /// The configuration the controller's stops were built from.
     config: Rc<RefCell<DismissConfig>>,
-    events: Option<Rc<DismissEvents>>,
+    events: Rc<DismissEvents>,
+    /// `dispose` drops it, so a retired row's controller tells no one.
     offset_listener: Option<flui_foundation::Subscription>,
-    watch: Option<OutWatch>,
-    uncover: Option<UncoverWatch>,
+    watch: OutWatch,
+    uncover: UncoverWatch,
     collapse: Rc<Collapse>,
     vsync: Rc<RefCell<Option<Vsync>>>,
-    rebuild: Option<RebuildHandle>,
     motion: Rc<Cell<Option<MotionPolicy>>>,
 }
 
@@ -791,21 +791,62 @@ impl std::fmt::Debug for DismissibleState {
 impl StatefulView for Dismissible {
     type State = DismissibleState;
 
-    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
+        let config = self.config();
+        let controller = AnchoredDragController::try_new(config.anchors(None), Stop::Closed)
+            .expect("BUG: every dismissible has a closed stop");
+        let callbacks = Rc::new(RefCell::new(DismissCallbacks::from(self)));
+        let events = Rc::new(DismissEvents {
+            controller: controller.clone(),
+            config: RefCell::new(UpdateConfig {
+                axis: config.direction.axis(),
+                thresholds: config.thresholds,
+                extent: None,
+            }),
+            delivered: Cell::new((0.0, false)),
+            writer: ctx.writer_source(),
+            post_frame: ctx.post_frame_handle(),
+            mounted: Cell::new(true),
+            callbacks: Rc::clone(&callbacks),
+            command: RefCell::new(None),
+            keep_alive: ctx.keep_alive_handle(),
+            slide_lease: RefCell::new(None),
+        });
+        let moved = Rc::downgrade(&events);
+        let offset_listener = controller.offset_listenable().listen(Rc::new(move || {
+            if let Some(events) = moved.upgrade() {
+                events.moved();
+            }
+        }));
+        let (geometry, config, collapse, vsync) = (
+            Rc::default(),
+            Rc::new(RefCell::new(config)),
+            Rc::default(),
+            Rc::default(),
+        );
+        let rebuild = ctx.rebuild_handle();
+        let uncover = UncoverWatch::new(&controller, rebuild.clone());
+        let rest_out = DismissibleState::rest_out(
+            Rc::downgrade(&events),
+            Rc::clone(&collapse),
+            Rc::clone(&geometry),
+            Rc::clone(&config),
+            Rc::clone(&vsync),
+            rebuild,
+        );
+        let watch = OutWatch::new(&controller, ctx.post_frame_handle(), rest_out);
         DismissibleState {
-            controller: AnchoredDragController::try_new(self.config().anchors(None), Stop::Closed)
-                .expect("BUG: every dismissible has a closed stop"),
-            geometry: Rc::default(),
+            controller,
+            geometry,
             origin: Rc::default(),
-            callbacks: Rc::new(RefCell::new(DismissCallbacks::from(self))),
-            config: Rc::new(RefCell::new(self.config())),
-            events: None,
-            offset_listener: None,
-            watch: None,
-            uncover: None,
-            collapse: Rc::default(),
-            vsync: Rc::default(),
-            rebuild: None,
+            callbacks,
+            config,
+            events,
+            offset_listener: Some(offset_listener),
+            watch,
+            uncover,
+            collapse,
+            vsync,
             motion: Rc::default(),
         }
     }
@@ -847,22 +888,14 @@ impl DismissibleState {
 
     /// What the row does on coming to rest out: once, it collapses, or
     /// reports its dismissal at once without a collapse.
-    fn rest_out(&self) -> Rc<dyn Fn(Stop)> {
-        let events = Rc::downgrade(
-            self.events
-                .as_ref()
-                .expect("BUG: Dismissible events exist from init_state"),
-        );
-        let (collapse, geometry, config, vsync) = (
-            Rc::clone(&self.collapse),
-            Rc::clone(&self.geometry),
-            Rc::clone(&self.config),
-            Rc::clone(&self.vsync),
-        );
-        let rebuild = self
-            .rebuild
-            .clone()
-            .expect("BUG: Dismissible acquires its RebuildHandle in init_state");
+    fn rest_out(
+        events: std::rc::Weak<DismissEvents>,
+        collapse: Rc<Collapse>,
+        geometry: Rc<RowGeometry>,
+        config: Rc<RefCell<DismissConfig>>,
+        vsync: Rc<RefCell<Option<Vsync>>>,
+        rebuild: RebuildHandle,
+    ) -> Rc<dyn Fn(Stop)> {
         Rc::new(move |stop| {
             let Some(events) = events.upgrade() else {
                 return;
@@ -903,7 +936,7 @@ impl ViewState<Dismissible> for DismissibleState {
                 &self.controller,
                 &self.geometry,
                 &self.config,
-                self.events.as_ref(),
+                Some(&self.events),
                 true,
             );
         }
@@ -911,42 +944,6 @@ impl ViewState<Dismissible> for DismissibleState {
 
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.geometry.acquire(ctx);
-        let (axis, thresholds) = {
-            let config = self.config.borrow();
-            (config.direction.axis(), config.thresholds)
-        };
-        let events = Rc::new(DismissEvents {
-            controller: self.controller.clone(),
-            config: RefCell::new(UpdateConfig {
-                axis,
-                thresholds,
-                extent: None,
-            }),
-            delivered: Cell::new((0.0, false)),
-            writer: ctx.writer_source(),
-            post_frame: ctx.post_frame_handle(),
-            mounted: Cell::new(true),
-            callbacks: Rc::clone(&self.callbacks),
-            command: RefCell::new(None),
-            keep_alive: ctx.keep_alive_handle(),
-            slide_lease: RefCell::new(None),
-        });
-        let moved = Rc::downgrade(&events);
-        self.offset_listener =
-            Some(self.controller.offset_listenable().listen(Rc::new(move || {
-                if let Some(events) = moved.upgrade() {
-                    events.moved();
-                }
-            })));
-        self.events = Some(events);
-        let rebuild = ctx.rebuild_handle();
-        self.uncover = Some(UncoverWatch::new(&self.controller, rebuild.clone()));
-        self.rebuild = Some(rebuild);
-        self.watch = Some(OutWatch::new(
-            &self.controller,
-            ctx.post_frame_handle(),
-            self.rest_out(),
-        ));
         self.did_change_dependencies(ctx);
     }
 
@@ -964,13 +961,12 @@ impl ViewState<Dismissible> for DismissibleState {
     /// alternative perform one command.
     fn build(&self, view: &Dismissible, ctx: &dyn BuildContext) -> impl IntoView {
         self.motion.set(MediaQuery::motion_of(ctx));
-        let events = self
+        let outgoing = self
             .events
-            .clone()
-            .expect("BUG: Dismissible initialized before build");
-        let outgoing = events.command.replace(Some(view.alternatives.handle(ctx)));
+            .command
+            .replace(Some(view.alternatives.handle(ctx)));
         drop(outgoing);
-        self.collapse.deliver_completion(&events);
+        self.collapse.deliver_completion(&self.events);
 
         let collapsing = self
             .collapse
@@ -1003,18 +999,12 @@ impl ViewState<Dismissible> for DismissibleState {
     }
 
     fn dispose(&mut self) {
-        if let Some(watch) = self.watch.take() {
-            watch.retire();
-        }
-        if let Some(uncover) = self.uncover.take() {
-            uncover.retire();
-        }
-        if let Some(events) = &self.events {
-            events.mounted.set(false);
-            // Queued deliveries may keep the events past the row.
-            let released = events.slide_lease.take();
-            drop(released);
-        }
+        self.watch.retire();
+        self.uncover.retire();
+        self.events.mounted.set(false);
+        // Queued deliveries may keep the events past the row.
+        let released = self.events.slide_lease.take();
+        drop(released);
         self.offset_listener.take();
         self.collapse.retire();
         self.geometry.release();
@@ -1038,11 +1028,11 @@ impl DismissibleState {
         let (down, origin_down) = (controller.clone(), Rc::clone(&self.origin));
         let (geometry, config) = (Rc::clone(&self.geometry), Rc::clone(&self.config));
         // Weak: the queued deliveries alone own a retired row's events.
-        let events = self.events.as_ref().map(Rc::downgrade);
+        let events = Rc::downgrade(&self.events);
         // Every Down reaches the row before its drag captures the contact.
         let card = Listener::new()
             .on_pointer_down(move |_ctx, _dispatch| {
-                let events = events.as_ref().and_then(std::rc::Weak::upgrade);
+                let events = events.upgrade();
                 Self::reanchor(&down, &geometry, &config, events.as_ref(), false);
                 origin_down.down(down.current());
             })

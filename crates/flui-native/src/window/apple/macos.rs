@@ -806,11 +806,11 @@ impl MacOSWindow {
             }
 
             tracing::info!(
-                "Created NSWindow {:p} with size {}x{} (scale: {})",
-                ns_window,
-                content.width(),
-                content.height(),
-                scale.get()
+                handle = ?ns_window,
+                width = content.width(),
+                height = content.height(),
+                scale = scale.get(),
+                "a window opened"
             );
 
             Ok(window)
@@ -2068,7 +2068,7 @@ impl Drop for MacOSWindow {
             on_owner_thread(self.owner, self.owner_is_main),
             "BUG: a macOS window is dropped on its owner thread"
         );
-        tracing::debug!("Closing NSWindow {:p}", self.ns_window);
+        tracing::debug!(handle = ?self.ns_window, "window closing");
 
         // The window's surface targets and the features beside it outlive
         // it; from here on they hand out nothing of a view the release below

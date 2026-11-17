@@ -344,7 +344,7 @@ impl WindowMessages for Tsf {
                 let failed = self.windows.take(window.identity);
                 drop(failed);
                 tracing::warn!(
-                    ?hwnd,
+                    handle = ?hwnd,
                     ?error,
                     "TSF did not activate for this window; text input falls back to WM_CHAR"
                 );

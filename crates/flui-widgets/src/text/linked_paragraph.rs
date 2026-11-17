@@ -144,15 +144,23 @@ impl View for LinkedParagraph {
 impl StatefulView for LinkedParagraph {
     type State = LinkedParagraphState;
 
-    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
         let live = Rc::new(LiveLinks {
             on_link: RefCell::new(Rc::clone(&self.on_link)),
             mounted: Cell::new(true),
             shown: RefCell::new(Vec::new()),
         });
+        let rebuild = ctx.rebuild_handle();
+        let mount = Mount {
+            policy: GesturePolicy::of(ctx),
+            writer: ctx.writer_source(),
+            pipeline: ctx.pipeline_owner(),
+            shown: shown_links_listener(&live, rebuild.clone()),
+            rebuild,
+        };
         LinkedParagraphState {
             live,
-            mount: None,
+            mount,
             anchor: SubtreeAnchor::new(),
             mounting: self.identities(),
             slots: Vec::new(),
@@ -161,7 +169,7 @@ impl StatefulView for LinkedParagraph {
     }
 }
 
-/// What the state acquired when it mounted, to build each link's parts.
+/// What the state acquired from its context, to build each link's parts.
 struct Mount {
     policy: GesturePolicy,
     writer: WriterSource,
@@ -192,7 +200,7 @@ struct LinkSlot {
 /// [`InlineSpan::links`] order.
 pub(super) struct LinkedParagraphState {
     live: Rc<LiveLinks>,
-    mount: Option<Mount>,
+    mount: Mount,
     /// Publishes the paragraph's render id, so a link's rect provider can
     /// measure its glyphs.
     anchor: SubtreeAnchor,
@@ -219,9 +227,7 @@ impl LinkedParagraphState {
     /// of the same identity, a new one gets a new slot and key, and the
     /// slots no link has any more are retired.
     fn reconcile(&mut self, identities: Vec<LinkIdentity>) {
-        let Some(mount) = &self.mount else {
-            return;
-        };
+        let mount = &self.mount;
         let mut outgoing: Vec<Option<LinkSlot>> = std::mem::take(&mut self.slots)
             .into_iter()
             .map(Some)
@@ -355,24 +361,14 @@ fn cancel<'a>(slots: impl IntoIterator<Item = &'a LinkSlot>) {
 }
 
 impl ViewState<LinkedParagraph> for LinkedParagraphState {
-    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        let rebuild = ctx.rebuild_handle();
-        self.mount = Some(Mount {
-            policy: GesturePolicy::of(ctx),
-            writer: ctx.writer_source(),
-            pipeline: ctx.pipeline_owner(),
-            shown: shown_links_listener(&self.live, rebuild.clone()),
-            rebuild,
-        });
+    fn init_state(&mut self, _ctx: &dyn LifecycleContext) {
         let mounting = std::mem::take(&mut self.mounting);
         self.reconcile(mounting);
     }
 
     fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
         let policy = GesturePolicy::of(ctx);
-        let Some(mount) = &mut self.mount else {
-            return;
-        };
+        let mount = &mut self.mount;
         mount.writer = ctx.writer_source();
         if mount.policy == policy {
             return;
@@ -406,10 +402,10 @@ impl ViewState<LinkedParagraph> for LinkedParagraphState {
     }
 
     fn build(&self, view: &LinkedParagraph, ctx: &dyn BuildContext) -> impl IntoView {
-        let links = self.mount.as_ref().map(|mount| LinkRouting {
+        let links = Some(LinkRouting {
             live: Rc::clone(&self.live),
-            writer: mount.writer.clone(),
-            shown: mount.shown.clone(),
+            writer: self.mount.writer.clone(),
+            shown: self.mount.shown.clone(),
             links: self
                 .slots
                 .iter()

@@ -7476,6 +7476,56 @@ GPU-память простаивающего или невидимого окн
   сценарий отзыва после `OleUninitialize` здесь не воспроизведён, удержание — по типам. Ожидание
   trybuild `owner_platform_is_not_send` не устарело: локально у тулчейна нет `rust-src`, и
   фрагменты из `$RUST/core` выпадают из вывода; на CI (с `rust-src`) оно верно.
+- [x] **LY154** — ветка `docs/platform-citations`. Цитаты Flutter читаются по коммиту тега 3.50.0,
+  `flutter/flutter@ab2912035e` (правило `owner/repo@sha` в ADR-0151, 0152, 0154, 0254, 0255 стоит;
+  рядом для читателя «3.50.0»); исходники читались через `gh` и неглубокий клон в `.flutter/`.
+  Ссылки на коммиты master (`6597889f57` в ADR-0151, 0152, 0154, 0254, 0255; `97cd226ec5` в
+  ADR-0261, 0262, 0265; `d8bd864cdb` в ADR-0345) переведены на этот коммит, и каждая перенесённая
+  ссылка прочитана построчно на теге, а не только сверена по SHA блоба: совпадение блоба с master
+  показало, что две ссылки были неверны и до переноса — `FlutterTextInputPlugin.mm:140-141`
+  (раскладка клавиатуры для URL; отдельный ответчик — `FlutterTextInputView`, `:793-815`, его
+  `becomeFirstResponder` `:1360`) и `history.dart:17-25,124` (строка 124 —
+  `MultiEntriesBrowserHistory`; `SingleEntryBrowserHistory` — `:234-250`, его запись-приманка
+  `:368-373`); строки `semantics/text_field.dart` сдвинулись (`:17-48`), `semantics_helper.dart`
+  238 → 234 (поведение master с `retirePlaceholders` ADR-0255 не использует); пояснение источника
+  ADR-0262 («по идентичности виджета») исправлено на «по restoration id». Остальные (`embedder.h`
+  12-48 и 1098-1148, `FlutterActivity.java:728-737`, `FlutterSceneDelegate.mm:32-101`,
+  `dom_manager.dart:16-46`, шаблон манифеста `:12`, `flutter_plugins.dart:1950-1993`,
+  `binding.dart:296-342`, `_keepAliveBucket`) говорят то, что им приписано. `f60eef8885` в
+  ADR-0340 — коммита нет во `flutter/flutter` (`gh` отвечает 422): источники переписаны на
+  `3.50.0` с номерами строк, утверждения (шаблон с `adjustResize`, `ImeSyncDeferringInsetsCallback`
+  с API 30) проверены. ADR-0332: правило `isCompatibleWith` пересказано по 3.50.0 (тристабильные
+  флаги, `isAccessibilityFocusBlocked`, `_traversalChildIdentifier`); ADR-0288: 3.50 отказывает в
+  `route` и точке входа только в release и только непроверенному отправителю
+  (`IntentUtils.java:29-96`), правило FLUI строже; ADR-0028: заморозка 3.44, `material_ui` и
+  `cupertino_ui` в 3.47, устаревание в 3.50; ADR-0037, 0076, 0048: ссылки на строки 3.50.0, каждое
+  утверждение о `focus_manager.dart`, `text_input.dart`, `overlay.dart` и `framework.dart` верно на
+  теге; ADR-0333: ссылка 3.27.0 вела в `flutter/flutter`, где движка в 3.27.0 не было, а «память
+  переиспользуется при сбросе билдера» на 3.50.0 неверно (`Build` отдаёт буфер списку) — фраза
+  заменена тем, что видно в `dl_storage.h`, `dl_builder.cc`, `dl_op_records.h`; ADR-0348: ссылки на
+  строки. Неверное о FLUI: «как веб-движок Flutter держит один элемент редактирования» в
+  `text/web.rs` и `ARCHITECTURE.md` — стратегия Flutter 3.50 по умолчанию создаёт элемент на
+  каждое соединение и убирает его (`text_editing.dart:1594`, `:1768`; элемент формы автозаполнения
+  остаётся, `:1763`), с семантикой правка идёт в собственном элементе узла
+  (`semantics/text_field.dart:128`, `:149`); FLUI держит один редактор, исправлено; ADR-0049 описывал backend winit
+  и «headless mock» — переписано по `Platform::request_exit_policy_reevaluation`. `docs/gaps.md`:
+  100 мс Windows-эмбеддера — `kWindowResizeTimeout` по тегу; записи о GPU-памяти простаивающего
+  окна и о живом resize на Windows уже на `main` и сверены с кодом (`RasterHost::reclaim` только
+  от давления памяти; `modal_loop`, `WM_GETDPISCALEDSIZE`, `UserPlacing`). Строка паритета
+  «Orientation lock»: Android 16 игнорирует фиксацию на дисплеях с наименьшей шириной от 600 dp у
+  приложения с API 36 без `PROPERTY_COMPAT_ALLOW_RESTRICTED_RESIZABILITY` (FLUI его не объявляет).
+  Журнал: эмодзи в сообщениях хостов не осталось; у событий окна Win32 и AppKit одно сообщение и
+  один набор полей, хэндл — поле `handle` (`a window opened`, `window moved`, `window resized`,
+  `window scale changed`); уровни: resize Android `info` → `debug`, «a window is opening» Win32,
+  Web и headless `info` → `debug`, resize AppKit `debug` → `trace`; заголовок окна не пишется ни в
+  строках открытия окна, ни в стартовых строках `flui-app`, путь из списка URI drag не пишется,
+  относительный путь single-instance Linux — только расширением; форматные сообщения цикла Android,
+  потока clipboard X11 и direct-режима — полями. headless больше не зовёт себя mock (док крейта
+  переписан по тому, что хост делает; `app_path` возвращает исполняемый файл процесса вместо
+  `/mock/app/path`). Тест: `a_headless_platform_names_the_executable_it_runs_in` — путь абсолютный
+  и указывает на файл (с откатом: `/mock/app/path` не абсолютен на Windows и не файл). Не тронуто: штампы «oracle tag `3.44.0`» в `flui-material`,
+  `flui-cupertino`, `flui-widgets`, ADR-0062, 0069, 0079 и `crates/flui-engine/CONTRIBUTING.md` —
+  слой виджетов, не платформы; перевод на 3.50 требует сверки каждого значения с `material_ui`.
 
 ## Отступление от порядка, решённое владельцем
 

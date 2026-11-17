@@ -787,11 +787,12 @@ impl std::fmt::Debug for ScaffoldMessengerHandle {
 }
 
 impl ScaffoldMessengerHandle {
-    /// A handle with an empty queue and no `Vsync`/rebuild wiring yet —
-    /// [`Self::attach`] (`ViewState::init_state`, per ADR-0018 — a
-    /// frame-phase-only capability may not be acquired from `build`) does
-    /// that.
-    fn new() -> Self {
+    /// A handle with an empty queue that writes through `writer`, and no
+    /// `Vsync` or post-frame wiring yet — [`Self::attach`]
+    /// (`ViewState::init_state`, per ADR-0018 — a frame-phase-only capability
+    /// may not be acquired from `build`) does that. [`Self::detach`] takes
+    /// the writer, so a handle that outlives its messenger writes nothing.
+    fn new(writer: WriterSource) -> Self {
         let entry_controller = AnimationController::builder(ENTRY_TRANSITION_DURATION)
             .debug_label("SnackBar.entry")
             .build_on(None);
@@ -804,7 +805,7 @@ impl ScaffoldMessengerHandle {
             attached: Cell::new(false),
             reconciling: Cell::new(false),
             post_frame: RefCell::new(None),
-            writer: RefCell::new(None),
+            writer: RefCell::new(Some(writer)),
             queue: RefCell::new(VecDeque::new()),
             last_entry_status: Cell::new(AnimationStatus::ReverseSettled),
             last_duration_status: Cell::new(AnimationStatus::ReverseSettled),
@@ -822,7 +823,6 @@ impl ScaffoldMessengerHandle {
     /// section for what the post-frame handle is for.
     pub(crate) fn attach(&self, ctx: &dyn LifecycleContext) {
         self.shared.attached.set(true);
-        *self.shared.writer.borrow_mut() = Some(ctx.writer_source());
         let core = Rc::downgrade(&self.shared);
         self.shared
             .entry_controller
@@ -1118,9 +1118,9 @@ impl std::fmt::Debug for ScaffoldMessengerState {
 impl StatefulView for ScaffoldMessenger {
     type State = ScaffoldMessengerState;
 
-    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
         ScaffoldMessengerState {
-            handle: ScaffoldMessengerHandle::new(),
+            handle: ScaffoldMessengerHandle::new(ctx.writer_source()),
         }
     }
 }

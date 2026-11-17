@@ -255,8 +255,8 @@ impl TargetConfig {
 struct TargetReceiver {
     config: RefCell<TargetConfig>,
     hovers: RefCell<Vec<(Option<DragIdentity>, Option<TransferActions>)>>,
-    rebuild: RefCell<Option<RebuildHandle>>,
-    writer: RefCell<Option<WriterSource>>,
+    rebuild_handle: RebuildHandle,
+    writer: WriterSource,
 }
 
 impl TargetReceiver {
@@ -272,17 +272,12 @@ impl TargetReceiver {
     }
 
     fn rebuild(&self) {
-        let rebuild = self.rebuild.borrow().clone();
-        if let Some(rebuild) = rebuild {
-            rebuild.schedule(flui_view::RebuildReason::StateChange);
-        }
+        self.rebuild_handle
+            .schedule(flui_view::RebuildReason::StateChange);
     }
 
     fn write(&self, invoke: impl FnOnce(&mut EventContext<'_>)) {
-        let writer = self.writer.borrow().clone();
-        if let Some(writer) = writer {
-            writer.write(invoke);
-        }
+        self.writer.write(invoke);
     }
 
     /// Ask `accept`, narrowed by what the drag allows here, and record the
@@ -412,13 +407,13 @@ impl std::fmt::Debug for DropTargetState {
 impl StatefulView for DropTarget {
     type State = DropTargetState;
 
-    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
         DropTargetState {
             receiver: Rc::new(TargetReceiver {
                 config: RefCell::new(TargetConfig::of(self)),
                 hovers: RefCell::new(Vec::new()),
-                rebuild: RefCell::new(None),
-                writer: RefCell::new(None),
+                rebuild_handle: ctx.rebuild_handle(),
+                writer: ctx.writer_source(),
             }),
             paste: Rc::new(PastePlace::default()),
         }
@@ -427,8 +422,6 @@ impl StatefulView for DropTarget {
 
 impl DropTargetState {
     fn acquire(&self, ctx: &dyn LifecycleContext) {
-        *self.receiver.rebuild.borrow_mut() = Some(ctx.rebuild_handle());
-        *self.receiver.writer.borrow_mut() = Some(ctx.writer_source());
         *self.paste.pipeline.borrow_mut() = ctx.pipeline_owner();
         *self.paste.drag_and_drop.borrow_mut() = ctx.drag_and_drop();
     }

@@ -185,7 +185,8 @@ pub trait FrameSink {
     /// While a presentation has this many pending, the runtime produces no frame for it and keeps
     /// its demand until a settlement frees a place (ADR-0305 §5). A sink that settles every frame
     /// in `submit` holds none, so the default of one gates nothing; a threaded raster side holds
-    /// two, one rendering and one waiting in its inbox.
+    /// two, one rendering and one waiting in its inbox, except one for a compositor-paced
+    /// surface, whose next frame waits for the callback the present arms.
     fn in_flight_limit(&mut self) -> NonZeroUsize {
         NonZeroUsize::MIN
     }

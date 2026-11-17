@@ -470,19 +470,16 @@ impl SelectionModel {
                 let _outcome = self.focus.request_focus();
             });
         }
-        let writer = self.writer.borrow().clone();
-        if let Some(writer) = writer {
-            failure.contain(|| {
-                writer.write(|ctx| {
-                    self.commit(
-                        ctx,
-                        selection.as_ref(),
-                        SelectionChangeCause::User(input),
-                        caret,
-                    );
-                });
+        failure.contain(|| {
+            self.writer.write(|ctx| {
+                self.commit(
+                    ctx,
+                    selection.as_ref(),
+                    SelectionChangeCause::User(input),
+                    caret,
+                );
             });
-        }
+        });
     }
 
     /// A press at `global` began a drag by `unit`: select that unit and
@@ -1077,10 +1074,9 @@ impl SelectionGesturesState {
                     let Some(model) = tapped.upgrade() else {
                         return;
                     };
-                    let writer = model.writer.borrow().clone();
-                    if let Some(writer) = writer {
-                        writer.write(|ctx| model.secondary_tapped(ctx, details.global_position));
-                    }
+                    model
+                        .writer
+                        .write(|ctx| model.secondary_tapped(ctx, details.global_position));
                 })
                 .build()
         };

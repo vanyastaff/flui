@@ -242,7 +242,9 @@ the dispatch layer moves there too.
   that finds the host already turning is answered `Retry`. Threaded (a debug
   build on Linux started with `FLUI_RASTER_PLACEMENT=threaded`,
   ADR-0305 §10), a frame is answered `Queued` or `QueuedReplacing`, two may be
-  in flight, the raster thread's wake asks every window for a frame, and each
+  in flight (one for a window whose compositor paces its surface, since only
+  the present arms the frame callback that withholds its next frame,
+  ADR-0305 §5), the raster thread's wake asks every window for a frame, and each
   window's wake hands its slot's settlements to `UiRuntime::settle_frame`
   before its frame gate (`RasterSlot::settle`): what they became paces the
   window and counts toward its first reveal, and a panic of the code they ran

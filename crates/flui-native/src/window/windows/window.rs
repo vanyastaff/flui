@@ -467,11 +467,11 @@ impl WindowsWindow {
             let _ = super::backdrop::apply_chrome(hwnd, chrome);
 
             tracing::info!(
-                "Created window HWND {:?} - {}x{} - scale: {}",
-                hwnd,
+                handle = ?hwnd,
                 width,
                 height,
-                scale_factor
+                scale = scale_factor,
+                "a window opened"
             );
 
             // Seed observations from the native client, not requested outer
@@ -757,7 +757,7 @@ impl WindowsWindow {
                 unsafe { SetWindowPlacement(hwnd, &raw const placement) }
             });
             if let Err(error) = placed {
-                tracing::warn!(?hwnd, ?error, "the opening rectangle could not be set");
+                tracing::warn!(handle = ?hwnd, ?error, "the opening rectangle could not be set");
             }
         }
         if mode == WindowMode::Fullscreen {
@@ -1338,7 +1338,7 @@ impl WindowsWindow {
             ctx.publish_window_state(hwnd);
         });
         if left.is_none() {
-            tracing::warn!(?hwnd, "cannot leave fullscreen: no usable window context");
+            tracing::warn!(handle = ?hwnd, "cannot leave fullscreen: no usable window context");
         }
     }
 
@@ -1921,7 +1921,7 @@ impl WindowsWindow {
             unsafe { ctx.close_granted(hwnd) };
         });
         if closed.is_none() {
-            tracing::debug!(?hwnd, "close: the window's context is gone already");
+            tracing::debug!(handle = ?hwnd, "close: the window's context is gone already");
         }
     }
 }

@@ -42,6 +42,10 @@ const CHILD_BUDGET: Duration = Duration::from_secs(90);
 /// after it is ready, from another thread.
 const QUIT_AFTER: &str = "FLUI_NATIVE_LINUX_QUIT_AFTER_MS";
 
+/// Set in the child's environment: where a debug build's desktop loop turns
+/// its raster executor, `inline` or `threaded` (ADR-0305 §10).
+const PLACEMENT: &str = "FLUI_RASTER_PLACEMENT";
+
 /// Every display server variable a session can name; the child's session
 /// names only the server its case started.
 const SESSION_VARIABLES: [&str; 4] = [
@@ -75,6 +79,27 @@ pub(crate) fn an_app_runs_on_the_native_wayland_host() {
 /// The child draws through Vulkan, whose `Fifo` present on Wayland waits for
 /// that frame callback.
 pub(crate) fn an_app_whose_window_is_never_drawn_still_quits() {
+    draw_unshown("inline");
+}
+
+/// A window drawn on the raster thread presents one frame per frame
+/// callback, as one drawn inline does: every buffer the compositor is
+/// handed comes with a frame callback of its own. The thread presents after
+/// the wake that queued the frame returned, so until then no callback holds
+/// the window's next frame back; taken then, that frame is presented right
+/// behind the first, with no callback, and the compositor is handed two
+/// buffers for each one it would show.
+///
+/// The placement is a debug build's switch (ADR-0305 §10); a release build
+/// draws this case inline.
+pub(crate) fn a_raster_thread_presents_one_frame_per_frame_callback() {
+    draw_unshown("threaded");
+}
+
+/// Run the animating application for four seconds, its executor placed as
+/// `placement` says, under a compositor that answers no frame callback, and
+/// check it quit having drawn frame after frame, each with its callback.
+fn draw_unshown(placement: &str) {
     use flui_native::testing::wayland_compositor::{Offer, ScriptedCompositor};
 
     // The compositor offers `wl_shm` alone, which a software Vulkan driver
@@ -96,6 +121,7 @@ pub(crate) fn an_app_whose_window_is_never_drawn_still_quits() {
         &[
             ("WAYLAND_DISPLAY", path_text(compositor.socket())),
             (QUIT_AFTER, "4000"),
+            (PLACEMENT, placement),
             ("WGPU_BACKEND", "vulkan"),
             ("VK_DRIVER_FILES", lavapipe),
             ("VK_ICD_FILENAMES", lavapipe),
@@ -106,7 +132,8 @@ pub(crate) fn an_app_whose_window_is_never_drawn_still_quits() {
     let heard = compositor.heard();
     assert!(
         heard.frames >= 3 && heard.withheld >= heard.frames,
-        "the window drew frame after frame, none of them shown: {heard:?}"
+        "{placement}: the window drew frame after frame, none of them shown and each with \
+         its frame callback: {heard:?}"
     );
 }
 

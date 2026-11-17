@@ -368,9 +368,9 @@ impl View for Focus {
 impl StatefulView for Focus {
     type State = FocusState;
 
-    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
         FocusState {
-            host: FocusHost::new(&self.config),
+            host: FocusHost::new(&self.config, ctx),
             anchor: SubtreeAnchor::new(),
             rect_provider: self.rect_provider.clone(),
             sliver: self.sliver,
@@ -693,7 +693,7 @@ impl View for FocusScope {
 impl StatefulView for FocusScope {
     type State = FocusScopeState;
 
-    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
         let scope = match &self.external_scope {
             Some(scope) => Rc::clone(scope),
             None => widget_owned_scope(),
@@ -704,11 +704,10 @@ impl StatefulView for FocusScope {
         FocusScopeState {
             scope,
             owns_scope: self.external_scope.is_none(),
-            focus_manager: None,
             attachment: None,
             parent: None,
             node_revision: Rc::new(Cell::new(0)),
-            rebuild_handle: None,
+            rebuild_handle: ctx.rebuild_handle(),
             focus_subscription: None,
             action_chain: None,
             context_registration: None,
@@ -733,15 +732,13 @@ pub struct FocusScopeState {
     /// replacement leaves the hosted scope behind the view, so a rebuild
     /// compares the view with this, not with the previous view.
     owns_scope: bool,
-    /// The presentation-local manager that owns this scope.
-    focus_manager: Option<Rc<FocusManager>>,
     /// Generation-checked ownership of this widget's scope attachment.
     attachment: Option<FocusAttachment>,
     /// The node this scope's backing node hangs under.
     parent: Option<Rc<FocusNode>>,
     /// Inherited-provider revision advanced by backing-node notifications.
     node_revision: Rc<Cell<u64>>,
-    rebuild_handle: Option<RebuildHandle>,
+    rebuild_handle: RebuildHandle,
     focus_subscription: Option<Subscription>,
     /// The `Actions` chain visible at this scope, recorded on its backing
     /// node: the node itself can hold the primary focus (ADR-0079).
@@ -761,11 +758,7 @@ impl std::fmt::Debug for FocusScopeState {
 impl FocusScopeState {
     fn add_focus_listener(&self, node: &Rc<FocusNode>) -> Subscription {
         let revision = Rc::clone(&self.node_revision);
-        let rebuild = self
-            .rebuild_handle
-            .as_ref()
-            .expect("BUG: FocusScope listener installed before init_state")
-            .clone();
+        let rebuild = self.rebuild_handle.clone();
         node.subscribe(move || {
             let next = revision
                 .get()
@@ -781,8 +774,6 @@ impl ViewState<FocusScope> for FocusScopeState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.scope
             .set_text_direction(Directionality::maybe_of(ctx).unwrap_or_default());
-        self.focus_manager = Some(ctx.focus_manager());
-        self.rebuild_handle = Some(ctx.rebuild_handle());
         self.focus_subscription = Some(self.add_focus_listener(self.scope.as_focus_node()));
         let parent = enclosing_focus_parent(ctx);
         self.attachment = Some(
@@ -901,8 +892,6 @@ impl ViewState<FocusScope> for FocusScopeState {
             let _ = attachment.detach();
         }
         self.parent = None;
-        self.rebuild_handle = None;
-        self.focus_manager = None;
     }
 
     fn build(&self, view: &FocusScope, _ctx: &dyn BuildContext) -> impl IntoView {

@@ -341,7 +341,7 @@ impl host::Window<HeadlessLoop> for HeadlessHostWindow {
         options: WindowOptions,
         handler: Rc<dyn WindowHandler>,
     ) -> Result<Rc<dyn HostWindow>, OpenWindowError> {
-        tracing::info!(?options, "Creating headless window");
+        tracing::debug!("a window is opening");
 
         let platform_state = std::rc::Rc::downgrade(&owner.state);
         owner.with_state(|state| {
@@ -370,8 +370,6 @@ impl host::Window<HeadlessLoop> for HeadlessHostWindow {
         std::sync::Arc::new(crate::display_connection::NoDisplay)
     }
 }
-
-// ==================== Mock Implementations ====================
 
 /// A simulated move of a window named a display its platform does not hold
 /// ([`HeadlessHostWindow::simulate_move_to`]).
