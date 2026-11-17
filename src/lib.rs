@@ -431,7 +431,8 @@ pub mod platform {
             ButtonDirection, ContactSize, HoverDistance, InputValueError, InvalidButtonNumber,
             MismatchedPointerSource, PenOrientation, PointerButtonEvent, PointerCancel,
             PointerDeviceChange, PointerSignal, Press, Pressure, Quantity, Release, SmartZoomEvent,
-            TangentialPressure, Twist,
+            SwipeOffset, TangentialPressure, TouchpadHoldEvent, TouchpadHoldPhase,
+            TouchpadSwipeEvent, TouchpadSwipePhase, Twist,
         };
     }
     /// The text store a text field shares with the system's input method.
