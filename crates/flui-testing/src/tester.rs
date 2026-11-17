@@ -636,8 +636,7 @@ impl Tester {
         self.host
             .sink()
             .layer_tree()
-            .map(scene_commands)
-            .unwrap_or_default()
+            .map_or_else(Vec::new, scene_commands)
     }
 
     // --- Acting -----------------------------------------------------------
