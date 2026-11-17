@@ -7,7 +7,8 @@
 //! The projection starts from [`SemanticsOwner::to_accesskit_tree_update`],
 //! exactly what the platform adapter is handed, and reads it through
 //! `accesskit_consumer`, the layer every AccessKit adapter sits on. Filtering
-//! (a hidden subtree dropped, a `GenericContainer` lifted into its parent),
+//! (a hidden subtree dropped, a `GenericContainer` lifted into its parent
+//! unless its author named it with an identifier, which a locator selects),
 //! the name a static text is given, and which UI Automation patterns a node
 //! offers are therefore the adapter's own predicates, not a second copy of
 //! them. What UI Automation reports for a node is what the desktop server
@@ -461,8 +462,9 @@ impl AgentFilter {
 
 /// AccessKit's common filter without its clipping rule: a focused node is
 /// kept, a hidden one and every node under it are left out, and a graft, a
-/// generic container or a text run is passed through. Matches
-/// `accesskit_consumer`'s `common_filter_base` and its walk up the parents.
+/// generic container its author did not name or a text run is passed
+/// through. Matches `accesskit_consumer`'s `common_filter_base` and its walk
+/// up the parents, with [`names_an_element`] kept.
 fn unclipped_filter(node: &NodeRef<'_>) -> FilterResult {
     if node.is_focused() {
         return FilterResult::Include;
@@ -471,10 +473,8 @@ fn unclipped_filter(node: &NodeRef<'_>) -> FilterResult {
         return FilterResult::ExcludeSubtree;
     }
     if node.is_graft()
-        || matches!(
-            node.role(),
-            accesskit::Role::GenericContainer | accesskit::Role::TextRun
-        )
+        || node.role() == accesskit::Role::TextRun
+        || (node.role() == accesskit::Role::GenericContainer && !names_an_element(node))
     {
         return FilterResult::ExcludeNode;
     }
@@ -485,6 +485,27 @@ fn unclipped_filter(node: &NodeRef<'_>) -> FilterResult {
         return FilterResult::ExcludeSubtree;
     }
     FilterResult::Include
+}
+
+/// Whether `node` is a generic container its author named with an identifier
+/// (ADR-0240): an element a locator selects, as `flutter_test`'s
+/// `find.bySemanticsIdentifier` selects a `Semantics(identifier:)` node.
+///
+/// The agent reads FLUI's semantics tree, so it keeps the node. The
+/// platform adapters' filter passes a generic container through with its
+/// `author_id`, and the published role stays generic: a named role would
+/// cut the descendant text that names a control around it.
+pub(crate) fn names_an_element(node: &NodeRef<'_>) -> bool {
+    node.role() == accesskit::Role::GenericContainer && node.author_id().is_some()
+}
+
+/// AccessKit's common filter, clipping included, with [`names_an_element`]
+/// kept: what actionability treats as shown.
+pub(crate) fn shown_filter(node: &NodeRef<'_>) -> FilterResult {
+    match accesskit_consumer::common_filter(node) {
+        FilterResult::ExcludeNode if names_an_element(node) => FilterResult::Include,
+        result => result,
+    }
 }
 
 /// A read's budget and what it left out.

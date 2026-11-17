@@ -1,5 +1,6 @@
 ### Fixed
 
-- A `Semantics` container named only by its identifier is published as a group, so `find::id`
-  and every OS automation client (UI Automation's `AutomationId`, `AXIdentifier`) find it: it was a
-  generic container, which AccessKit's filter drops with its identifier.
+- `find::id` and the agent find a `Semantics` container named only by its identifier. The agent
+  left it out as a generic container, as the OS adapters do, so a widget that publishes no
+  semantics of its own could not be selected by the identifier its author gave it. The tree the
+  OS adapters receive is unchanged.

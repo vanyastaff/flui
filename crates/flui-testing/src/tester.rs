@@ -148,8 +148,8 @@ pub enum TestError {
     /// Nothing matches the locator.
     #[error(
         "nothing matches {locator:?}.\nThe window shows:\n{shown}\nA widget that publishes no \
-         semantics is found by an identifier: give it one with `Semantics::identifier` and find \
-         it with `find::id`."
+         semantics is found by an identifier: wrap it in \
+         `Semantics::new().container(true).identifier(..)` and find it with `find::id`."
     )]
     NotFound {
         /// What was looked for.

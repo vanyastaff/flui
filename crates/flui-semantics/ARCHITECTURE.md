@@ -644,7 +644,7 @@ in `src/accesskit_translation/coverage_matrix.rs`; `collection_places_conflict_o
 **Rule.** `SemanticsOwner::read_wire` (`src/agent.rs`) answers an agent with ADR-0080 wire
 nodes projected from `to_accesskit_tree_update`, the update the platform adapter is handed,
 read through `accesskit_consumer`: `common_filter` without its clip rule decides which nodes
-appear (a hidden node drops its subtree, a `GenericContainer` is lifted into its parent, a
+appear (a hidden node drops its subtree, a `GenericContainer` is lifted into its parent unless its author named it with an identifier, a
 focused node is kept), so an agent reads every built node, a row a scrollable keeps past its
 viewport included, while a screen reader stops at the first row past each edge. A static text is named by its value, and the actions follow UI Automation's pattern predicates
 (`is_invocable`; `Toggle` for a toggled node that is not a selection item; `SelectionItem` as

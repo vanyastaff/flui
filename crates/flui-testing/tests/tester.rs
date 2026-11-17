@@ -1432,8 +1432,8 @@ fn draw_commands_place_a_command_through_a_transform_layer() {
 /// container with an identifier and nothing else forms a node the agent
 /// reports, as Flutter's `Semantics(identifier:)` does.
 ///
-/// Fails if translation publishes such a node as a generic container,
-/// which every AccessKit filter drops with its identifier.
+/// Fails if the agent leaves such a node out as a generic container, the
+/// way the OS adapters do, which drops its identifier with it.
 #[test]
 fn an_element_named_only_by_its_identifier_is_found() {
     let mut t = Tester::mount(

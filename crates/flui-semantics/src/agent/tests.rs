@@ -411,6 +411,31 @@ fn generic_containers_are_lifted_and_hidden_subtrees_dropped() {
     );
 }
 
+/// A generic container its author named with an identifier stays in the
+/// read, so a locator selects it by that identifier, and a control around it
+/// keeps the name its text gives it: the published role stays generic.
+#[test]
+fn a_named_generic_container_is_kept_and_its_control_keeps_its_name() {
+    let mut f = Fixture::new();
+    let root = f.add(None, 1, |_| {});
+    let button = f.add(Some(root), 2, |c| c.set_role(SemanticsRole::Button));
+    let swatch = f.add(Some(button), 3, |c| c.set_identifier("swatch"));
+    f.add(Some(swatch), 4, |c| c.set_label("Save"));
+
+    let tree = f.read(&ReadQuery::new());
+    assert_eq!(
+        outline(&tree.roots),
+        format!(
+            "- window [ref={}] [window=w1]\n  - button \"Save\" [ref={}]\n    - group [ref={}] \
+             [identifier=\"swatch\"]\n      - label \"Save\" [ref={}]\n",
+            e(1),
+            e(2),
+            e(3),
+            e(4)
+        )
+    );
+}
+
 /// A role ARIA forbids a name reaches an agent with its text as the
 /// description, as UI Automation reports it, rather than not at all.
 #[test]

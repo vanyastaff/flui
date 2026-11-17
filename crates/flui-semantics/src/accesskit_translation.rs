@@ -69,10 +69,8 @@ fn has_action(bits: u64, action: SemanticsAction) -> bool {
 /// whose size is declared (a lazy list's scroll container) is a [`Role::List`]:
 /// the size is read from the nearest ancestor the consumer keeps, and it keeps
 /// no [`Role::GenericContainer`]. A node that carries a label (a plain `Text`,
-/// a labelled `Semantics` wrapper) is a [`Role::Label`] — static text —, a
-/// node its author named with an identifier and nothing else is a
-/// [`Role::Group`], and any other
-/// node becomes [`Role::GenericContainer`], present in the tree
+/// a labelled `Semantics` wrapper) is a [`Role::Label`] — static text — and a
+/// node with neither becomes [`Role::GenericContainer`], present in the tree
 /// for structure but making no claim about what it is.
 ///
 /// The distinction is load-bearing at the OS boundary: AccessKit's consumer
@@ -90,13 +88,6 @@ pub(crate) fn resolve_role(data: &PublishView<'_>) -> Role {
     // beneath its regions (ADR-0214 §2 as amended).
     if data.attrs.text.is_some() || has_label(data.attrs) {
         Role::Label
-    } else if data.attrs.identifier.is_some() {
-        // A container its author named (ADR-0240) is an element an
-        // automation client selects by that name. Every adapter's filter
-        // drops a `GenericContainer` with its `author_id`, so it is a group:
-        // UI Automation keeps its `AutomationId`, as Flutter's
-        // `Semantics(identifier:)` keeps its node for a test driver.
-        Role::Group
     } else {
         Role::GenericContainer
     }

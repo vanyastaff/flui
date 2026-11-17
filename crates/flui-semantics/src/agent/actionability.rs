@@ -20,7 +20,7 @@
 //! receives the pointer when the node found is it or lies under it.
 
 use accesskit::{NodeId, TreeId};
-use accesskit_consumer::{FilterResult, NodeRef, TreeState, common_filter};
+use accesskit_consumer::{FilterResult, NodeRef, TreeState};
 use flui_foundation::RenderId;
 use flui_foundation::geometry::Rect as Bounds;
 use flui_protocol::{Actionability, ElementRef, LogicalPoint, LogicalRect, TreeRevision, outline};
@@ -147,7 +147,7 @@ impl<'s> Facts<'s> {
             }
         });
         let shown = shown.filter(|shown| !shown.is_empty());
-        let included = common_filter(&node) == FilterResult::Include;
+        let included = super::shown_filter(&node) == FilterResult::Include;
         let visible = included && shown.is_some();
         let default_point = shown.map(|shown| {
             let centre = shown.center();
@@ -209,7 +209,7 @@ fn reached_node<'s>(state: &'s TreeState, hit: &[RenderId]) -> Option<NodeRef<'s
     hit.iter().find_map(|render| {
         state
             .node_by_tree_local_id(NodeId(render.as_u64()), TreeId::ROOT)
-            .filter(|node| common_filter(node) == FilterResult::Include)
+            .filter(|node| super::shown_filter(node) == FilterResult::Include)
     })
 }
 
