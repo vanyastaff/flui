@@ -239,7 +239,7 @@ impl PlatformWindow for TestWindow {
         None
     }
 
-    fn haptics(&self) -> Option<Arc<dyn flui_platform::PlatformHaptics>> {
+    fn haptics(&self) -> Option<Arc<dyn flui_platform::haptics::PlatformHaptics>> {
         None
     }
 

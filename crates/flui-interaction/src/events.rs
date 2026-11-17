@@ -20,8 +20,8 @@ pub use keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, Modifiers, NamedKey}
 pub use pointer::{
     ButtonChange, CancelReason, DeviceId, InputValueError, PanZoomEvent, PanZoomPhase,
     PanZoomTransform, PointerButton, PointerButtons, PointerCancel, PointerEvent, PointerId,
-    PointerSource, PointerKind, PointerMove, PointerPosition, PointerPress, PointerRelease,
-    PointerRole, PointerSample, PointerSignal, ScrollDelta, ScrollEvent, ScrollInversion,
+    PointerKind, PointerMove, PointerPosition, PointerPress, PointerRelease, PointerRole,
+    PointerSample, PointerSignal, PointerSource, ScrollDelta, ScrollEvent, ScrollInversion,
     SmartZoomEvent, SwipeOffset, TouchpadHoldEvent, TouchpadHoldPhase, TouchpadSwipeEvent,
     TouchpadSwipePhase,
 };

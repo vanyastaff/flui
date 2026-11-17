@@ -26,7 +26,7 @@ fn pointer(raw: u64) -> PointerId {
 
 fn pen_kind() -> PointerKind {
     PointerKind::Pen {
-        tool: flui_platform::PenTool::Tip,
+        tool: flui_platform::pointer::PenTool::Tip,
     }
 }
 

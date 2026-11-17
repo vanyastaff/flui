@@ -55,7 +55,7 @@ use flui_platform::{
     CursorError, CursorIcon, DisplayId, PlatformInput, PlatformTextInput, PlatformWindow,
     Unsupported, UnsupportedReason, WindowId, WindowIdMint,
 };
-use flui_platform::{SessionEndAnswer, SessionEndPhase, TextStoreHost};
+use flui_platform::{SessionEndAnswer, SessionEndPhase, text_store::TextStoreHost};
 use flui_rendering::layer::{LayerTree, ScenePublication, SceneVersion};
 use flui_runtime::dev_agent::DevAgentHost;
 use flui_runtime::frame_failure::{
@@ -447,8 +447,8 @@ impl PlatformWindow for HeadlessWindow {
         Ok(())
     }
 
-    fn haptics(&self) -> Option<Arc<dyn flui_platform::PlatformHaptics>> {
-        Some(Arc::clone(&self.haptics) as Arc<dyn flui_platform::PlatformHaptics>)
+    fn haptics(&self) -> Option<Arc<dyn flui_platform::haptics::PlatformHaptics>> {
+        Some(Arc::clone(&self.haptics) as Arc<dyn flui_platform::haptics::PlatformHaptics>)
     }
 
     fn system_chrome(&self) -> Option<Arc<dyn flui_platform::PlatformSystemChrome>> {

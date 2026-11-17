@@ -17,8 +17,8 @@ use flui_interaction::{
 };
 use flui_platform::EventTime;
 use flui_platform::pointer::{
-    DeviceId, PointerDeviceChange, PointerEvent, PointerId, PointerSource, PointerKind,
-    PointerPosition, TouchpadSwipeEvent, TouchpadSwipePhase,
+    DeviceId, PointerDeviceChange, PointerEvent, PointerId, PointerKind, PointerPosition,
+    PointerSource, TouchpadSwipeEvent, TouchpadSwipePhase,
 };
 
 type Log = Rc<RefCell<Vec<String>>>;

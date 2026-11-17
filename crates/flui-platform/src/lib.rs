@@ -54,7 +54,7 @@
 //! ```
 //! use std::sync::{Arc, Mutex};
 //!
-//! use flui_platform::{PlatformHaptics, PlatformTextInput};
+//! use flui_platform::{haptics::PlatformHaptics, PlatformTextInput};
 //! use flui_platform::HapticFeedback;
 //! use flui_foundation::geometry::{Bounds, Point, Size};
 //!
@@ -165,9 +165,8 @@ pub use clipboard::{ClipboardError, ClipboardRead, ClipboardWrite, ClipboardWrit
 /// The pointer-cursor shape [`PlatformWindow::set_cursor`] takes: the
 /// `cursor-icon` crate's, which ADR-0089 allows in stable signatures.
 pub use cursor_icon::CursorIcon;
-pub use data_transfer::{DataTransferOffer, DragTransport, NullDragTransport};
 pub use display::{
-    ColorGamut, DisplayColor, DisplayId, DisplayIdsExhausted, DisplayDescription, DisplayKey,
+    ColorGamut, DisplayColor, DisplayDescription, DisplayId, DisplayIdsExhausted, DisplayKey,
     DisplayParts, DisplayRegistry, DisplayRevision, DisplayRevisionExhausted, DisplaySnapshot,
     DynamicRange, FrameRateHint, Headroom, InvalidHeadroom, InvalidRefreshPeriod, RefreshPeriod,
     SurfaceColorSpace, WindowDisplay,
@@ -176,7 +175,6 @@ pub use environment::{Environment, OsRelease};
 pub use event_time::EventTime;
 pub use frame_request::{FramePresented, FrameRequest};
 pub use haptic_feedback::HapticFeedback;
-pub use haptics::PlatformHaptics;
 pub use host_notice::{
     HostNotice, MemoryPressureLevel, SessionEndAnswer, SessionEndBlock, SessionEndBlockError,
     SessionEndPhase, SessionEndRequest, SessionEndSupport, SystemNotice,
@@ -185,7 +183,6 @@ pub use ime::ImeEvent;
 pub use input::{
     DispatchEventResult, DragDropEvent, EmptyPointerFrame, PlatformInput, PointerFrame,
 };
-pub use keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, Location, Modifiers, NamedKey};
 pub use launch_key::{LaunchKey, MAX_LAUNCH_KEY_LEN, PAGE_LAUNCH_GLOBAL};
 pub use locale::{InvalidLocale, Locale};
 pub use opened::{
@@ -193,14 +190,6 @@ pub use opened::{
 };
 pub use placement::{PlacementError, ResolvedPlacement, WindowPlacement};
 pub use platform_window::{PlatformWindow, WindowAt};
-pub use pointer::{
-    ButtonChange, CancelReason, DeviceId, PanZoomEvent, PanZoomPhase, PanZoomTransform, PenTool,
-    PointerButton, PointerButtons, PointerCancel, PointerEvent, PointerId, PointerSource,
-    PointerKind, PointerMove, PointerPosition, PointerPress, PointerRelease, PointerRole,
-    PointerSample, ScrollDelta, ScrollEvent, ScrollInversion, ScrollPhase, ScrollPrecision,
-    ScrollUnit, SmartZoomEvent, SwipeOffset, TouchpadHoldEvent, TouchpadHoldPhase,
-    TouchpadSwipeEvent, TouchpadSwipePhase,
-};
 pub use preferences::{
     Distance, DurationScale, FlingSpeeds, GestureGeometry, GestureParts, GesturePreferences,
     InvalidPreference, MotionPreference, NativeMouseGeometry, NativeTouchGeometry, PreferenceParts,
@@ -223,7 +212,6 @@ pub use system_chrome::{PlatformSystemChrome, SystemUiOverlayStyle};
 pub use system_failure::SystemFailure;
 pub use target_platform::TargetPlatform;
 pub use text_input::PlatformTextInput;
-pub use text_store::{TextStore, TextStoreEdit, TextStoreHost, TextStoreObserver, TextStoreRead};
 pub use unsupported::{Availability, CapabilityAbsence, Unsupported, UnsupportedReason};
 pub use window::{
     CursorError, InputLatency, InvalidWindowOption, OpeningGeometry, WindowExecutionState,

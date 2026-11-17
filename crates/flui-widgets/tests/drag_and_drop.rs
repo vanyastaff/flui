@@ -453,7 +453,7 @@ fn press_control(laid: &mut LaidOut, label: &str, pointer: Pointer) {
             .build(),
         Pointer::Virtual => flui_testing::replay::VirtualScript::new(
             "virtual press",
-            flui_platform::DeviceId::try_from(7_u64).expect("a nonzero device id"),
+            flui_platform::pointer::DeviceId::try_from(7_u64).expect("a nonzero device id"),
         )
         .press(at)
         .wait(wait)

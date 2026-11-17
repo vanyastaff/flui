@@ -56,8 +56,8 @@ use flui_interaction::events::{
 use flui_interaction::{HitTestResult, PointerEvent, PointerId};
 use flui_platform::pointer::{
     CancelReason, DeviceId, PanZoomEvent, PanZoomPhase, PanZoomTransform, PenTool, PointerButton,
-    PointerButtons, PointerCancel, PointerSource, PointerMove, PointerPosition, PointerPress,
-    PointerRelease, PointerRole, PointerSample, Pressure, ScrollDelta, ScrollEvent, ScrollPhase,
+    PointerButtons, PointerCancel, PointerMove, PointerPosition, PointerPress, PointerRelease,
+    PointerRole, PointerSample, PointerSource, Pressure, ScrollDelta, ScrollEvent, ScrollPhase,
     ScrollPrecision, ScrollUnit, SmartZoomEvent, SwipeOffset, TouchpadHoldEvent, TouchpadHoldPhase,
     TouchpadSwipeEvent, TouchpadSwipePhase,
 };
@@ -167,7 +167,8 @@ impl ScriptedPointer {
     #[must_use]
     pub fn to_event_at(self, base: EventTime) -> PointerEvent {
         let time = base + self.at;
-        let mut info = PointerSource::new(self.pointer, self.device).with_role(PointerRole::Primary);
+        let mut info =
+            PointerSource::new(self.pointer, self.device).with_role(PointerRole::Primary);
         if let Some(hardware) = self.hardware {
             info = info.with_device(hardware);
         }

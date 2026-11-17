@@ -1447,7 +1447,7 @@ impl PlatformWindow for WindowsWindow {
             .and_then(WindowTextInput::ime)
     }
 
-    fn haptics(&self) -> Option<Arc<dyn flui_platform::PlatformHaptics>> {
+    fn haptics(&self) -> Option<Arc<dyn flui_platform::haptics::PlatformHaptics>> {
         Some(Arc::clone(&self.facets.haptics))
     }
 

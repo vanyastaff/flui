@@ -81,7 +81,7 @@ pub(crate) struct HeldPresses(Mutex<Vec<HeldPress>>);
 /// One press sequence a headless window holds, and the contact holding it.
 #[derive(Debug, Clone, Copy)]
 struct HeldPress {
-    pointer: flui_platform::PointerId,
+    pointer: flui_platform::pointer::PointerId,
     press: flui_platform::pointer::PressId,
 }
 

@@ -12,8 +12,8 @@ use std::fmt::Write as _;
 use flui_platform::PlatformInput;
 use flui_platform::keyboard::Modifiers;
 use flui_platform::pointer::{
-    ButtonChange, PanZoomPhase, PenTool, PointerEvent, PointerSource, PointerKind, PointerRole,
-    PointerSample, TouchpadSwipePhase,
+    ButtonChange, PanZoomPhase, PenTool, PointerEvent, PointerKind, PointerRole, PointerSample,
+    PointerSource, TouchpadSwipePhase,
 };
 
 use codec::{CodecError, NativeRecording};

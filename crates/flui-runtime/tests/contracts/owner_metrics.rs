@@ -2347,7 +2347,7 @@ impl flui_platform::PlatformWindow for GeometryWindow {
         None
     }
 
-    fn haptics(&self) -> Option<std::sync::Arc<dyn flui_platform::PlatformHaptics>> {
+    fn haptics(&self) -> Option<std::sync::Arc<dyn flui_platform::haptics::PlatformHaptics>> {
         None
     }
 
@@ -2441,7 +2441,7 @@ impl flui_platform::PlatformWindow for RegionWindow {
     fn text_input(&self) -> Option<std::sync::Arc<dyn flui_platform::PlatformTextInput>> {
         None
     }
-    fn haptics(&self) -> Option<std::sync::Arc<dyn flui_platform::PlatformHaptics>> {
+    fn haptics(&self) -> Option<std::sync::Arc<dyn flui_platform::haptics::PlatformHaptics>> {
         None
     }
     fn system_chrome(&self) -> Option<std::sync::Arc<dyn flui_platform::PlatformSystemChrome>> {

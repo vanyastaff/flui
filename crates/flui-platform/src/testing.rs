@@ -8,7 +8,7 @@
 //! surface target of a double with no native surface.
 //!
 //! The doubles of the contracts this crate owns (ADR-0243 D4): `FakeHaptics`, the recording
-//! [`PlatformHaptics`](crate::PlatformHaptics) a scenario asserts against,
+//! [`PlatformHaptics`](crate::haptics::PlatformHaptics) a scenario asserts against,
 //! `ScriptedHttp`, the [`HttpClient`](crate::http::HttpClient) a headless host
 //! registers so no test reaches the network, and
 //! `ScriptedLauncher`, the scripted [`LauncherBackend`](crate::launch::LauncherBackend).
@@ -104,7 +104,7 @@ impl crate::SurfaceTarget for NoNativeSurface {
 /// #   }
 /// #   fn set_cursor(&self, _: CursorIcon) -> Result<(), CursorError> { Ok(()) }
 /// #   fn text_input(&self) -> Option<Arc<dyn PlatformTextInput>> { None }
-/// #   fn haptics(&self) -> Option<Arc<dyn PlatformHaptics>> { None }
+/// #   fn haptics(&self) -> Option<Arc<dyn haptics::PlatformHaptics>> { None }
 /// #   fn system_chrome(&self) -> Option<Arc<dyn PlatformSystemChrome>> { None }
 /// #   fn drag_source(&self) -> Option<Arc<dyn drag::PlatformDragSource>> { None }
 /// #   fn gesture_geometry(&self) -> Result<Option<GestureGeometry>, PreferenceQueryError> {

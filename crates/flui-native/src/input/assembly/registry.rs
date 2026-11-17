@@ -8,9 +8,9 @@ use flui_platform::EventTime;
 use flui_platform::input_capabilities::PointerKindSet;
 use flui_platform::pointer::{
     ButtonChange, CancelReason, ContactSize, DeviceId, PanZoomEvent, PenOrientation,
-    PointerButtons, PointerCancel, PointerDeviceChange, PointerEvent, PointerId, PointerSource,
-    PointerKind, PointerMove, PointerPosition, PointerPress, PointerRelease, PointerRole,
-    PointerSample, PointerSignal, PressId, Pressure, SwipeOffset, TangentialPressure,
+    PointerButtons, PointerCancel, PointerDeviceChange, PointerEvent, PointerId, PointerKind,
+    PointerMove, PointerPosition, PointerPress, PointerRelease, PointerRole, PointerSample,
+    PointerSignal, PointerSource, PressId, Pressure, SwipeOffset, TangentialPressure,
     TouchpadHoldEvent, TouchpadHoldPhase, TouchpadSwipeEvent, TouchpadSwipePhase, Twist,
 };
 

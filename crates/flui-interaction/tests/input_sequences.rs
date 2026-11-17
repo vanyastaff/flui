@@ -20,7 +20,7 @@ use flui_interaction::{
 use flui_platform::haptics::{HapticRequest, HapticTiming};
 use flui_platform::pointer::{DeviceId, ScrollPhase};
 use flui_platform::testing::FakeHaptics;
-use flui_platform::{HapticFeedback, PlatformHaptics};
+use flui_platform::{HapticFeedback, haptics::PlatformHaptics};
 use static_assertions::assert_impl_all;
 
 assert_impl_all!(InputSequenceId: Copy, Send, Sync, Ord, std::hash::Hash);

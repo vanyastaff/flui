@@ -460,7 +460,7 @@ impl flui_view::StatefulView for ComposingField {
 
 impl flui_view::ViewState<ComposingField> for ComposingFieldState {
     fn init_state(&mut self, ctx: &dyn flui_view::LifecycleContext) {
-        let store: Rc<dyn flui_platform::TextStore> = self.field.store.clone();
+        let store: Rc<dyn flui_platform::text_store::TextStore> = self.field.store.clone();
         self.token = Some(
             ctx.text_input_handle()
                 .expect("the window takes text input")

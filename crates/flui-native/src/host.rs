@@ -63,9 +63,9 @@ use flui_foundation::geometry::{Bounds, Size};
 use flui_platform::data_transfer::{DragTransport, NullDragTransport};
 use flui_platform::haptics::{HapticCapabilities, HapticOutcome, HapticPattern, HapticRequest};
 use flui_platform::{
-    AppDataDir, DeviceId, DisplaySnapshot, HapticFeedback, LaunchKey, PlatformHaptics,
-    PlatformSystemChrome, SystemPreferences, SystemUiOverlayStyle, Unsupported, UnsupportedReason,
-    WindowCapabilities, WindowHandler, WindowOptions,
+    AppDataDir, DisplaySnapshot, HapticFeedback, LaunchKey, PlatformSystemChrome,
+    SystemPreferences, SystemUiOverlayStyle, Unsupported, UnsupportedReason, WindowCapabilities,
+    WindowHandler, WindowOptions, haptics::PlatformHaptics, pointer::DeviceId,
 };
 use flui_semantics::platform::{
     AccessibilityActionListener, AccessibilityActivationListener, PlatformAccessibility,

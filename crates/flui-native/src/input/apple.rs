@@ -1351,8 +1351,8 @@ pub(crate) mod macos {
         use flui_platform::EventTime;
         use flui_platform::keyboard::{Key, KeyEvent, KeyPress, KeyState, Modifiers, NamedKey};
         use flui_platform::pointer::{
-            PanZoomEvent, PointerButton, PointerButtons, PointerEvent, PointerId, PointerSource,
-            PointerKind, PointerPosition, PointerRole, ScrollEvent, ScrollInversion, ScrollPhase,
+            PanZoomEvent, PointerButton, PointerButtons, PointerEvent, PointerId, PointerKind,
+            PointerPosition, PointerRole, PointerSource, ScrollEvent, ScrollInversion, ScrollPhase,
             SmartZoomEvent,
         };
         use objc2_app_kit::{NSEvent, NSEventModifierFlags, NSEventPhase, NSEventType};
@@ -1984,8 +1984,8 @@ pub(crate) mod ios {
 
     use flui_platform::EventTime;
     use flui_platform::pointer::{
-        PenOrientation, PenTool, PointerButton, PointerEvent, PointerId, PointerSource, PointerKind,
-        PointerPosition, PointerRole, ScrollEvent,
+        PenOrientation, PenTool, PointerButton, PointerEvent, PointerId, PointerKind,
+        PointerPosition, PointerRole, PointerSource, ScrollEvent,
     };
     use objc2::{msg_send, sel};
     use objc2_foundation::NSObjectProtocol;

@@ -339,7 +339,7 @@ impl Harness {
     /// # Panics
     ///
     /// As [`Self::store_host_calls`].
-    pub fn active_text_store(&self) -> Option<Rc<dyn flui_platform::TextStore>> {
+    pub fn active_text_store(&self) -> Option<Rc<dyn flui_platform::text_store::TextStore>> {
         self.store_host().focused_store()
     }
 

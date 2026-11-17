@@ -13,7 +13,7 @@ use flui_interaction::{HitTestEntry, InteractionLane, Offset, PointerTarget, Ren
 use flui_platform::pointer::{
     DeviceId, PointerEvent, PointerMove, PointerPosition, PointerRole, PointerSample, Pressure,
 };
-use flui_platform::{EventTime, Modifiers};
+use flui_platform::{EventTime, keyboard::Modifiers};
 
 thread_local! {
     /// The allocations made on this thread. The count is per thread because

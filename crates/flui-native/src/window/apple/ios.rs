@@ -1879,7 +1879,7 @@ impl PlatformWindow for IOSWindow {
         })
     }
 
-    fn haptics(&self) -> Option<Arc<dyn flui_platform::PlatformHaptics>> {
+    fn haptics(&self) -> Option<Arc<dyn flui_platform::haptics::PlatformHaptics>> {
         Some(Arc::clone(&self.facets.haptics))
     }
 

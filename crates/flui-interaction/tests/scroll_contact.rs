@@ -9,7 +9,8 @@ use flui_interaction::{
     HitTestEntry, HitTestResult, InteractionLane, PointerTarget, RenderId, ScrollTarget,
 };
 use flui_platform::{
-    EventTime, PointerEvent,
+    EventTime,
+    pointer::PointerEvent,
     pointer::{
         DeviceId, PointerId, PointerKind, PointerPosition, PointerSource, ScrollDelta, ScrollEvent,
         ScrollPhase, ScrollPrecision, ScrollUnit,

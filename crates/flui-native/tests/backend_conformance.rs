@@ -64,7 +64,9 @@ use flui_platform::pointer::{
     PointerRole, PointerSource, ScrollDelta, ScrollEvent, ScrollPrecision, ScrollUnit,
 };
 use flui_platform::text_store::{LockGrant, LockTiming, TextStore, Utf16Offset, Utf16Range};
-use flui_platform::{DeviceId, HapticFeedback, PlatformHaptics, Unsupported, UnsupportedReason};
+use flui_platform::{
+    HapticFeedback, Unsupported, UnsupportedReason, haptics::PlatformHaptics, pointer::DeviceId,
+};
 
 /// What a table answers for a request its actuator cannot play: this device
 /// has none for it.

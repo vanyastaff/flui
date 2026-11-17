@@ -1568,7 +1568,7 @@ fn locate(shared: &Shared, running: &Running, global: Offset<f64>) -> Over {
 
 /// A no-op view source: a window-scope view never asks the platform.
 fn no_source() -> Arc<dyn DragTransport> {
-    Arc::new(flui_platform::NullDragTransport)
+    Arc::new(flui_platform::data_transfer::NullDragTransport)
 }
 
 fn move_session(

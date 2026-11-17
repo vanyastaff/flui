@@ -16,8 +16,8 @@ use cursor_icon::CursorIcon;
 use flui_foundation::geometry::Point;
 
 use crate::{
-    AdmittedCommand, ApplyError, CursorError, PlatformHaptics, PlatformTextInput, RedrawRequester,
-    SurfaceTarget, Unsupported, WindowId, WindowState,
+    AdmittedCommand, ApplyError, CursorError, PlatformTextInput, RedrawRequester, SurfaceTarget,
+    Unsupported, WindowId, WindowState, haptics::PlatformHaptics,
 };
 
 /// What lies under a point given in one window's coordinates, as
@@ -98,10 +98,11 @@ pub enum WindowAt {
 /// use std::sync::Arc;
 ///
 /// use flui_foundation::geometry::Point;
+/// use flui_platform::haptics::PlatformHaptics;
 /// use flui_platform::input_regions::InputRegion;
 /// use flui_platform::{
 ///     AdmissionError, AdmittedCommand, ApplyError, CursorError, CursorIcon, FrameRateHint,
-///     GestureGeometry, PlatformHaptics, PlatformSystemChrome, PlatformTextInput, PlatformWindow,
+///     GestureGeometry, PlatformSystemChrome, PlatformTextInput, PlatformWindow,
 ///     PreferenceQueryError, RedrawRequester, SurfaceTarget, SwapChainStatistics, Unsupported,
 ///     UnsupportedReason, WindowAt, WindowCapabilities, WindowCommand, WindowExtent,
 ///     WindowGeometry, WindowId, WindowIdMint, WindowMaterial, WindowMode, WindowState,
@@ -253,7 +254,7 @@ pub enum WindowAt {
 /// use flui_platform::input_regions::InputRegion;
 /// use flui_platform::{
 ///     AdmittedCommand, ApplyError, CursorError, CursorIcon, FrameRateHint, GestureGeometry,
-///     PlatformHaptics, PlatformSystemChrome, PlatformTextInput, PlatformWindow,
+///     haptics::PlatformHaptics, PlatformSystemChrome, PlatformTextInput, PlatformWindow,
 ///     PreferenceQueryError, RedrawRequester, SurfaceTarget, Unsupported, UnsupportedReason,
 ///     WindowAt, WindowExtent, WindowGeometry, WindowId, WindowState,
 /// };

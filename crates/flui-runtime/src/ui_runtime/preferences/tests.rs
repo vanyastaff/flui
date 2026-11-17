@@ -89,7 +89,7 @@ impl PlatformWindow for Window {
         None
     }
 
-    fn haptics(&self) -> Option<Arc<dyn flui_platform::PlatformHaptics>> {
+    fn haptics(&self) -> Option<Arc<dyn flui_platform::haptics::PlatformHaptics>> {
         None
     }
 
@@ -382,7 +382,7 @@ impl PlatformWindow for HapticWindow {
     ) -> Result<(), flui_platform::ApplyError> {
         self.inner.apply(command)
     }
-    fn haptics(&self) -> Option<Arc<dyn flui_platform::PlatformHaptics>> {
+    fn haptics(&self) -> Option<Arc<dyn flui_platform::haptics::PlatformHaptics>> {
         Some(self.haptics.clone())
     }
     fn text_input(&self) -> Option<Arc<dyn flui_platform::PlatformTextInput>> {

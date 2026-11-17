@@ -190,7 +190,7 @@ impl PlatformWindow for DragWindow {
         None
     }
 
-    fn haptics(&self) -> Option<Arc<dyn flui_platform::PlatformHaptics>> {
+    fn haptics(&self) -> Option<Arc<dyn flui_platform::haptics::PlatformHaptics>> {
         None
     }
 
