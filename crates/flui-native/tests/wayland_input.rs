@@ -429,6 +429,30 @@ mod cases {
         turn_until(&platform, &window, &handler, "the grab let go", |_| {
             window.state().cursor_grab == CursorGrab::None
         });
+
+        // Held again, the pointer is let go of once the keyboard leaves: the
+        // kiosk shell gives a second window the keyboard as it maps it.
+        window
+            .admit_and_apply(WindowCommand::SetCursorGrab(CursorGrab::Confined))
+            .expect("the window confines the pointer again");
+        turn_until(&platform, &window, &handler, "the grab again", |_| {
+            window.state().cursor_grab == CursorGrab::Confined
+        });
+        let cover = platform
+            .open_window(
+                WindowOptions::default().title("taking the keyboard"),
+                RecordingWindowHandler::new() as _,
+            )
+            .expect("a second window opens");
+        turn_until(&platform, &cover, &handler, "the keyboard to leave", |_| {
+            !window.state().focus.is_focused()
+        });
+        assert_eq!(
+            window.state().cursor_grab,
+            CursorGrab::None,
+            "a window that lost the keyboard holds no pointer"
+        );
+        cover.close_for_cleanup();
         window.close_for_cleanup();
         run_for(&platform, Duration::from_millis(50)).expect("the loop turns");
     }

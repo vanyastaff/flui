@@ -1866,11 +1866,15 @@ impl PlatformWindow for X11Window {
             }
             // Only a window with the keyboard focus holds the pointer: one
             // without it holds none, which its snapshot shows.
+            // A hold the server refuses leaves none: the one the window held
+            // was let go of first, and the snapshot says so before the
+            // refusal is answered.
             WindowCommand::SetCursorGrab(grab) => {
-                if state.focus.is_focused() {
-                    self.input
-                        .hold_pointer(self.window_ref(), grab)
-                        .map_err(ApplyError::Platform)?;
+                if state.focus.is_focused()
+                    && let Err(refused) = self.input.hold_pointer(self.window_ref(), grab)
+                {
+                    self.refresh_state();
+                    return Err(ApplyError::Platform(refused));
                 }
             }
             WindowCommand::SetLevel(level) => self.set_level(level),

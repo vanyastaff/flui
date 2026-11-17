@@ -43,8 +43,8 @@ mod cases {
         WindowRequest, X11Platform,
     };
     use flui_platform::{
-        CloseDecision, PlatformWindow, WindowCommand, WindowHandler, WindowMode, WindowOptions,
-        WindowReveal,
+        CloseDecision, CursorGrab, PlatformWindow, WindowCommand, WindowHandler, WindowMode,
+        WindowOptions, WindowReveal,
     };
     use flui_testing::window_commands::AdmitAndApply as _;
     use flui_testing::window_conformance::{self, Readback, WindowFixture};
@@ -52,8 +52,8 @@ mod cases {
     use raw_window_handle::{HandleError, HasWindowHandle as _, RawWindowHandle};
     use x11rb::connection::Connection as _;
     use x11rb::protocol::xproto::{
-        AtomEnum, ClientMessageEvent, ConnectionExt as _, CreateWindowAux, EventMask, MapState,
-        PropMode, WindowClass,
+        AtomEnum, ClientMessageEvent, ConnectionExt as _, CreateWindowAux, EventMask, GrabMode,
+        GrabStatus, InputFocus, MapState, PropMode, WindowClass,
     };
     use x11rb::rust_connection::RustConnection;
     use x11rb::wrapper::ConnectionExt as _;
@@ -516,6 +516,8 @@ mod cases {
         /// `_NET_SUPPORTED` as the window manager left it, put back as the
         /// fixture goes.
         supported: Option<Vec<u32>>,
+        /// Windows of the test's own client, destroyed as the fixture goes.
+        others: Vec<u32>,
     }
 
     impl X11Fixture {
@@ -570,6 +572,7 @@ mod cases {
                 xid,
                 server,
                 supported: None,
+                others: Vec::new(),
             };
             fixture.settle();
             fixture
@@ -577,6 +580,71 @@ mod cases {
 
         pub(crate) fn root(&self) -> u32 {
             self.server.setup().roots[0].root
+        }
+
+        /// A window of the test's own client, mapped and managed by the
+        /// window manager (it set `WM_STATE`), which the fixture destroys as it
+        /// goes.
+        pub(crate) fn open_other_window(&mut self) -> u32 {
+            let server = &self.server;
+            let other = server.generate_id().expect("an id");
+            server
+                .create_window(
+                    x11rb::COPY_DEPTH_FROM_PARENT,
+                    other,
+                    self.root(),
+                    0,
+                    0,
+                    200,
+                    150,
+                    0,
+                    WindowClass::INPUT_OUTPUT,
+                    x11rb::COPY_FROM_PARENT,
+                    &CreateWindowAux::new(),
+                )
+                .expect("request");
+            server.map_window(other).expect("request");
+            server.flush().expect("flush");
+            let wm_state = atom(server, "WM_STATE");
+            until("the window manager to manage the other window", || {
+                let managed = server
+                    .get_property(false, other, wm_state, wm_state, 0, 2)
+                    .ok()
+                    .and_then(|cookie| cookie.reply().ok())
+                    .is_some_and(|reply| reply.value_len > 0);
+                let viewable = server
+                    .get_window_attributes(other)
+                    .ok()
+                    .and_then(|cookie| cookie.reply().ok())
+                    .is_some_and(|reply| reply.map_state == MapState::VIEWABLE);
+                managed && viewable
+            });
+            self.others.push(other);
+            self.settle();
+            other
+        }
+
+        /// Whether a client other than the test's holds the pointer: the
+        /// server refuses the test's own grab as already taken, and the test
+        /// lets go of one it took at once.
+        pub(crate) fn pointer_grabbed_elsewhere(&self) -> bool {
+            let (other, _) = RustConnection::connect(None).expect("the X server answers");
+            let status = other
+                .grab_pointer(
+                    false,
+                    self.root(),
+                    EventMask::NO_EVENT,
+                    GrabMode::ASYNC,
+                    GrabMode::ASYNC,
+                    x11rb::NONE,
+                    x11rb::NONE,
+                    x11rb::CURRENT_TIME,
+                )
+                .expect("request")
+                .reply()
+                .expect("the grab's answer")
+                .status;
+            status == GrabStatus::ALREADY_GRABBED
         }
     }
 
@@ -706,10 +774,39 @@ mod cases {
         fn has_native_surface(&self) -> bool {
             true
         }
+
+        /// The server's answer to a grab of the test's own: one it refuses as
+        /// already taken is the window's (no other client of the harness
+        /// grabs). The server says that a client holds the pointer, not how,
+        /// so a hold reads as `Confined`, the one the check asks of an X11
+        /// window, which confines before it locks.
+        fn held_grab(&self) -> Option<CursorGrab> {
+            Some(if self.pointer_grabbed_elsewhere() {
+                CursorGrab::Confined
+            } else {
+                CursorGrab::None
+            })
+        }
+
+        /// A window of the test's own client takes the focus from the
+        /// server (`SetInputFocus`), as a click on it would through the
+        /// window manager.
+        fn take_focus_away(&mut self) -> bool {
+            let other = self.open_other_window();
+            self.server
+                .set_input_focus(InputFocus::PARENT, other, x11rb::CURRENT_TIME)
+                .expect("request");
+            self.server.flush().expect("flush");
+            self.settle();
+            true
+        }
     }
 
     impl Drop for X11Fixture {
         fn drop(&mut self) {
+            for other in std::mem::take(&mut self.others) {
+                let _ = self.server.destroy_window(other);
+            }
             if let Some(supported) = self.supported.take() {
                 let root = self.root();
                 let supported_atom = atom(&self.server, "_NET_SUPPORTED");

@@ -96,7 +96,12 @@ pub(super) fn hold(
         window: id,
     };
     // Oneshot: the constraint holds while the window has the keyboard,
-    // and a new grab is asked for again.
+    // and a new grab is asked for again. Both constraints are the
+    // surface's: a lock holds the pointer at its surface-local place and a
+    // confinement keeps it in the surface's input region (no region asked:
+    // all of it), so the compositor carries them with the window as it
+    // moves, resizes or changes scale, and nothing here follows the
+    // window's geometry.
     let lifetime = zwp_pointer_constraints_v1::Lifetime::Oneshot;
     let constraint = if locked {
         let relative = relative.ok_or_else(|| refused("relative pointer motion"))?;

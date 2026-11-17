@@ -1803,10 +1803,15 @@ mod toplevel {
                 // The seats' input constrains the pointer of the seat whose
                 // keyboard is in the window; one in no seat's keyboard holds
                 // nothing.
-                WindowCommand::SetCursorGrab(grab) => self
-                    .input
-                    .hold_pointer(self.id, grab)
-                    .map_err(ApplyError::Platform)?,
+                // A refusal (a compositor that withdrew the constraint
+                // globals) leaves the hold the window had ended, which the
+                // snapshot says before the refusal is answered.
+                WindowCommand::SetCursorGrab(grab) => {
+                    if let Err(refused) = self.input.hold_pointer(self.id, grab) {
+                        self.refresh_state();
+                        return Err(ApplyError::Platform(refused));
+                    }
+                }
                 // xdg-shell has no levels: every window is at the normal one.
                 WindowCommand::SetLevel(WindowLevel::Normal) => {}
                 // `admit` refuses what a Wayland window cannot do.
