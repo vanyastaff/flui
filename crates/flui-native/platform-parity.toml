@@ -455,7 +455,7 @@ id = "pipeline-cache-kept-between-launches"
 feature = 'Pipeline cache kept between launches'
 status = { windows = "partial", macos = "na", wayland = "partial", x11 = "partial", ios = "na", android = "partial", web = "na", headless = "na" }
 note = "On Vulkan the GPU context creates its pipelines through a `wgpu::PipelineCache` whose data it saves in the application's machine-local storage and loads at the next launch (ADR-0305 §1); Metal, D3D12, GLES and WebGPU have no such cache in wgpu, and Windows has it only where it runs on Vulkan. Run on lavapipe only, which stores nothing in the cache but its header. Owed: on an Android device and on a desktop Vulkan driver, the first frame of a second launch timed against the first, and a corrupt value starting cold."
-evidence = "`gpu_context::tests` on lavapipe: a finished warm-up saves an envelope for the adapter's key, the next context is seeded from it, a retiring context saves, a corrupt value is emptied and the context starts cold, a device rebuild starts a cold cache; `pipeline_store::tests` refuse a truncated, extended, re-hashed, other-adapter or oversized value. lavapipe's cache data is the 96-byte header alone, so no launch has been timed."
+evidence = "`gpu_context::tests` on lavapipe: a finished warm-up saves an envelope for the adapter's key, the next context is seeded from it, a corrupt value is emptied and the context starts cold, a device rebuild starts a cold cache; `pipeline_store::tests` refuse a truncated, extended, altered, other-adapter or oversized value. lavapipe's cache data is the 96-byte header alone, so no launch has been timed."
 
 [[group.section.row]]
 id = "presentation-feedback-when-each-frame-reached-the-screen"

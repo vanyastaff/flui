@@ -110,6 +110,11 @@ impl Default for SharedRasterHost {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+mod bounded_wait;
+#[cfg(not(target_arch = "wasm32"))]
+use bounded_wait::{PIPELINE_CACHE_LOAD_BOUND, wait_within};
+
 /// What a window's detach needs of a raster thread without the host: the
 /// thread, its sender and each window's slot. The host writes it as it
 /// places the executor and attaches and detaches slots, with no code of
@@ -1144,14 +1149,26 @@ impl RasterHost {
         let display =
             super::host::with_owner_platform(flui_native::OwnerPlatform::display_connection)
                 .ok_or_else(|| refused("no platform owns this thread"))?;
-        let storage = super::host::host_storage();
-        pollster::block_on(async move {
-            let mut bootstrap = flui_engine::GpuContext::bootstrap(display, Some(first)).await?;
-            if let Some(storage) = storage {
-                bootstrap.context.load_pipeline_cache(storage).await;
+        let mut bootstrap =
+            pollster::block_on(flui_engine::GpuContext::bootstrap(display, Some(first)))?;
+        if let Some(storage) = super::host::host_storage() {
+            // The read runs on the application's IO pool, which may be one
+            // the owner thread itself drives: past the bound the context
+            // starts with no cache rather than wait for a read that cannot
+            // come.
+            let loaded = wait_within(
+                bootstrap.context.load_pipeline_cache(storage),
+                PIPELINE_CACHE_LOAD_BOUND,
+            );
+            if loaded.is_none() {
+                tracing::warn!(
+                    target: "flui.gpu",
+                    event = "pipeline_cache_load_timed_out",
+                    "the pipeline cache was not read in time; the GPU context starts without one"
+                );
             }
-            Ok::<_, EngineError>(bootstrap)
-        })
+        }
+        Ok(bootstrap)
     }
 
     /// The web cannot wait on its owner thread: its runner awaits the

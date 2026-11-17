@@ -342,22 +342,6 @@ pub struct GpuContext {
 static_assertions::assert_impl_all!(GpuContext: Send);
 static_assertions::assert_not_impl_any!(GpuContext: Sync);
 
-/// A retiring context saves its pipeline cache, for the pipelines built
-/// since the warm-up saved it.
-#[cfg(not(target_arch = "wasm32"))]
-impl Drop for GpuContext {
-    fn drop(&mut self) {
-        // Joined first, so the warm-up's save is accepted before this one,
-        // which holds everything it held, and this one is the value kept.
-        self.warmup = None;
-        if let Some(store) = &self.pipeline_store
-            && !self.domain.is_lost()
-        {
-            store.save();
-        }
-    }
-}
-
 /// The application's one GPU context, the factory its windows' surfaces are
 /// made with, and the first window's surface when there was one
 /// ([`GpuContext::bootstrap`]).
@@ -820,11 +804,10 @@ impl GpuContext {
     }
 
     /// Create the driver's pipeline cache from the data `storage` kept for
-    /// this adapter, and save the cache's data there from now on: once the
-    /// first format's pipelines are built, off the frame path, and when the
-    /// context is dropped. A driver without a disk cache of its own
-    /// (Android's Vulkan drivers) then compiles a pipeline once, not at every
-    /// launch.
+    /// this adapter, and save the cache's data there once the first format's
+    /// pipelines are built, off the frame path. A driver without a disk cache
+    /// of its own (Android's Vulkan drivers) then compiles those pipelines
+    /// once, not at every launch.
     ///
     /// Call it once, after [`Self::bootstrap`] and before the first slot
     /// attaches: a pipeline built before it is not in the cache. It does
@@ -3122,7 +3105,7 @@ mod tests {
     /// the context still runs, as an envelope for this adapter's key.
     ///
     /// Red-check: drop the save from the worker `warm_pipelines` starts and
-    /// nothing is stored until the context retires.
+    /// nothing is stored.
     #[test]
     #[cfg(not(target_arch = "wasm32"))]
     fn a_finished_warm_up_saves_the_pipeline_cache_for_this_adapter() {
@@ -3194,27 +3177,6 @@ mod tests {
         assert_eq!(next.pipeline_cache_seeded(), Some(true));
     }
 
-    /// A context that retires saves its cache, so pipelines built after the
-    /// warm-up, or with no warm-up at all, reach the next launch.
-    ///
-    /// Red-check: drop the save from `GpuContext`'s `Drop` and nothing is
-    /// stored.
-    #[test]
-    #[cfg(not(target_arch = "wasm32"))]
-    fn a_retiring_context_saves_its_pipeline_cache() {
-        use crate::pipeline_store::{PIPELINE_CACHE, decode};
-
-        let storage = flui_testing::storage::MemoryStorage::new();
-        let Some((context, key)) = cached_context_or_skip(&storage) else {
-            return;
-        };
-        drop(context);
-        let stored = storage
-            .contents(&PIPELINE_CACHE)
-            .expect("the retiring context saved its cache");
-        assert!(matches!(decode(&key, &stored), Ok(Some(_))));
-    }
-
     /// A device rebuild leaves the lost device's cache and starts a cold one
     /// on the new device, which the context goes on creating its pipelines
     /// through and saving.
@@ -3225,9 +3187,12 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     fn a_device_rebuild_restarts_the_pipeline_cache_cold() {
         let storage = flui_testing::storage::MemoryStorage::new();
-        let Some((first, _)) = cached_context_or_skip(&storage) else {
+        let Some((mut first, _)) = cached_context_or_skip(&storage) else {
             return;
         };
+        // The first context's warm-up saves the cache the second is seeded from.
+        first.warm_pipelines(wgpu::TextureFormat::Rgba8Unorm);
+        first.join_warmup();
         drop(first);
         let Some((context, _)) = cached_context_or_skip(&storage) else {
             panic!("the second context is on the same adapter as the first");

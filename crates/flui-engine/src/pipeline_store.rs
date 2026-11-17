@@ -5,9 +5,11 @@
 //! hands its data back on request. Desktop drivers keep a disk cache of their
 //! own; Android's Vulkan drivers do not, and there every launch would compile
 //! every pipeline again. [`PipelineStore::load`] seeds a context's cache with
-//! what the last run saved, and [`PipelineStore::save`] writes it back: at the
-//! end of the pipeline warm-up, off the frame path, and when the context
-//! retires, for the pipelines built since.
+//! what the last run saved, and [`PipelineStore::save`] writes it back at the
+//! end of the pipeline warm-up, off the frame path. Pipelines built after
+//! that (a second format, effects and variants built on first use) are not
+//! saved: the platform stops admitting storage writes before the context
+//! retires, so a save there would be refused.
 //!
 //! The value is one [`Storage`] name, [`PIPELINE_CACHE`], written with
 //! [`WriteMode::Replace`]: the platform store stages each write in a file of

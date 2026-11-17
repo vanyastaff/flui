@@ -172,11 +172,14 @@ pub struct GpuContext {
   only the payload's header, so a truncated, extended or altered value, or another adapter's, is
   the envelope's to refuse; a refused value is emptied at once and the context starts cold,
   without failing, and a driver update is wgpu's and the driver's to refuse inside the payload.
-  The worker saves the cache after handing the warm-up's library over, off the frame path, and
-  the context saves it again when it retires; the platform store stages and renames, so a crash
-  mid-write leaves the previous value or none. A lost device's data is not saved, and a rebuild
-  starts a cold cache on the new device. This is what a driver without a disk cache of its own
-  (Android's Vulkan drivers) needs between launches; lavapipe stores only a header in it.
+  The worker saves the cache after handing the warm-up's library over, off the frame path; the
+  platform store stages and renames, so a crash mid-write leaves the previous value or none.
+  Pipelines built later (another format, effects, variants built on first use) are not saved:
+  the runners stop admitting storage writes before the context retires. The load waits a bounded
+  time on the owner thread and starts cold past it, since an IO pool may run on that thread. A
+  lost device's data is not saved, and a rebuild starts a cold cache on the new device. This is
+  what a driver without a disk cache of its own (Android's Vulkan drivers) needs between
+  launches; lavapipe stores only a header in it.
 - **An atlas entry ages by queue submission.** The glyph atlas and the image cache stamp an entry
   with the submission that last used it; the counter advances once per `queue.submit`, and an
   entry used at or after the start of the oldest shown slot's latest frame is immune from
@@ -701,7 +704,7 @@ the facade. Every production use of `with_backend` becomes:
   - the persisted cache of §1: `pipeline_store::tests::bytes_the_envelope_does_not_prove_are_refused_with_their_reason`,
     `a_corrupt_stored_pipeline_cache_is_emptied_and_the_context_starts_cold`,
     `a_finished_warm_up_saves_the_pipeline_cache_for_this_adapter`,
-    `a_saved_pipeline_cache_seeds_the_next_context`, `a_retiring_context_saves_its_pipeline_cache`
+    `a_saved_pipeline_cache_seeds_the_next_context`
     and `a_device_rebuild_restarts_the_pipeline_cache_cold`;
   - `a_hidden_slot_is_not_acquired_and_settles_not_shown`.
 - Tests to be added through the public API, without a GPU, in `flui-engine`'s `tests/` against
