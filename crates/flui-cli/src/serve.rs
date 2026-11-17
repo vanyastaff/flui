@@ -36,7 +36,9 @@
 //! at once with the current generation. The page is served with the generation it
 //! is, which its first poll waits past. A request's head must arrive
 //! within `REQUEST_HEAD`, and a response must be written within
-//! `RESPONSE_WRITE`, however slowly the client reads. A file of the build is
+//! `RESPONSE_WRITE`, however slowly the client reads. Only a regular file is
+//! served: a FIFO, a socket or a device is a 404 and is never opened (a FIFO
+//! opened for reading would wait for a writer). A file of the build is
 //! copied from disk as it is written, never read whole; the page, which is
 //! read whole to carry the reload script, is answered 500 past `MAX_PAGE`
 //! before it is read. Every response is `nosniff`.
@@ -700,7 +702,13 @@ fn serve_file(root: &Path, request_path: &str, navigation: bool, generation: u64
 /// is a file, its canonical path, every link followed, is still under
 /// `root`'s, and it ends in `relative` as written: on a file system that
 /// ignores case, `/PKG/APP.JS` names no file, so a type is never decided on
-/// another spelling of the file's name. Whether it is a file is asked of the
+/// another spelling of the file's name.
+///
+/// Anything but a regular file (a FIFO, a socket, a device) is refused before
+/// it is opened: opening a FIFO for reading waits for a writer, which would
+/// hold the connection's place for good. On Unix the open is also
+/// non-blocking, so a regular file swapped for a FIFO between the check and
+/// the open returns at once, and whether it is a file is asked again of the
 /// opened handle, so the answer is about what is served.
 fn open_inside(root: &Path, relative: &Path) -> Option<(std::fs::File, u64)> {
     let root = root.canonicalize().ok()?;
@@ -708,7 +716,17 @@ fn open_inside(root: &Path, relative: &Path) -> Option<(std::fs::File, u64)> {
     if !(path.starts_with(&root) && path.ends_with(relative)) {
         return None;
     }
-    let file = std::fs::File::open(&path).ok()?;
+    if !std::fs::symlink_metadata(&path).ok()?.is_file() {
+        return None;
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.custom_flags(rustix::fs::OFlags::NONBLOCK.bits().cast_signed());
+    }
+    let file = options.open(&path).ok()?;
     let metadata = file.metadata().ok()?;
     metadata.is_file().then_some((file, metadata.len()))
 }
@@ -826,7 +844,11 @@ fn write_response(
     head_only: bool,
     until: Instant,
 ) -> io::Result<()> {
-    let mut writer = DeadlineWriter { stream, until };
+    let mut writer = DeadlineWriter {
+        stream,
+        until,
+        timeout_set: None,
+    };
     write!(
         writer,
         "HTTP/1.1 {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\n\r\n",
@@ -845,10 +867,19 @@ fn write_response(
     writer.flush()
 }
 
-/// A stream whose writes end at `until`, however slowly the client reads.
+/// How far a write may run past its response's deadline: the socket's
+/// timeout is set again only once the time left has shrunk by this much
+/// since it was last set, so a large body costs a handful of system calls,
+/// not one per piece.
+const WRITE_TIMEOUT_SLACK: Duration = Duration::from_millis(250);
+
+/// A stream whose writes end at `until` (within `WRITE_TIMEOUT_SLACK`),
+/// however slowly the client reads.
 struct DeadlineWriter<'a> {
     stream: &'a mut TcpStream,
     until: Instant,
+    /// The write timeout last set on the socket.
+    timeout_set: Option<Duration>,
 }
 
 impl Write for DeadlineWriter<'_> {
@@ -860,7 +891,13 @@ impl Write for DeadlineWriter<'_> {
                 "the response took too long to write",
             ));
         }
-        self.stream.set_write_timeout(Some(left))?;
+        if self
+            .timeout_set
+            .is_none_or(|set| set.saturating_sub(left) > WRITE_TIMEOUT_SLACK)
+        {
+            self.stream.set_write_timeout(Some(left))?;
+            self.timeout_set = Some(left);
+        }
         self.stream.write(buf)
     }
 
@@ -1508,8 +1545,42 @@ mod tests {
             received < module_len,
             "the whole module was written past the deadline ({received} bytes with the head)"
         );
-        let (head, _) = get(server.addr, "GET", "/pkg/missing.wasm");
-        assert!(head.starts_with("HTTP/1.1 404"), "{head}");
+    }
+
+    /// A FIFO or a socket in the served directory is no file: it is answered
+    /// 404 at once, never opened, so it holds no connection's place. (Opening
+    /// a FIFO for reading waits for a writer.)
+    fn a_special_file_is_not_opened() {
+        #[cfg(unix)]
+        {
+            let (dir, server) = fixture();
+            let fifo = dir.path().join("pkg/pipe.wasm");
+            let made = std::process::Command::new("mkfifo")
+                .arg(&fifo)
+                .status()
+                .is_ok_and(|status| status.success());
+            assert!(made, "mkfifo made {}", fifo.display());
+            let _socket = std::os::unix::net::UnixListener::bind(dir.path().join("pkg/s.wasm"))
+                .expect("a socket in the served directory");
+            for target in ["/pkg/pipe.wasm", "/pkg/s.wasm"] {
+                let started = Instant::now();
+                for response in [
+                    get(server.addr, "GET", target),
+                    navigate(server.addr, target),
+                ] {
+                    assert!(
+                        response.0.starts_with("HTTP/1.1 404"),
+                        "{target}: {}",
+                        response.0
+                    );
+                }
+                assert!(
+                    started.elapsed() < Duration::from_secs(5),
+                    "{target} answered at once, not after a wait: {:?}",
+                    started.elapsed()
+                );
+            }
+        }
     }
 
     fn a_build_served_under_its_base_path_is_reached_only_there() {
@@ -1596,6 +1667,7 @@ mod tests {
                 "a client that stops reading is cut off at the write deadline",
                 a_client_that_stops_reading_is_cut_off_at_the_write_deadline,
             ),
+            ("a special file is not opened", a_special_file_is_not_opened),
             (
                 "missing files traversal and directories are 404 and head has no body",
                 missing_files_traversal_and_directories_are_404_and_head_has_no_body,

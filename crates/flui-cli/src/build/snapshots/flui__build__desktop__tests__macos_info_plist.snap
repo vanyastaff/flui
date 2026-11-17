@@ -7,7 +7,7 @@ expression: plist
 <plist version="1.0">
 <dict>
     <key>CFBundleDisplayName</key>
-    <string>R&amp;D &quot;Notes&quot; &lt;β&gt;</string>
+    <string>My &quot;R&amp;D&quot; Notes</string>
     <key>CFBundleDocumentTypes</key>
     <array>
         <dict>
@@ -40,7 +40,7 @@ expression: plist
     <key>CFBundleIdentifier</key>
     <string>com.example.notes</string>
     <key>CFBundleName</key>
-    <string>R&amp;D &quot;Notes&quot; &lt;β&gt;</string>
+    <string>R&amp;D &lt;β&gt;</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
@@ -59,7 +59,7 @@ expression: plist
         </dict>
     </array>
     <key>CFBundleVersion</key>
-    <string>1.4.2</string>
+    <string>17</string>
     <key>FLUIVersion</key>
     <string>1.4.2-beta.1+build.7</string>
     <key>LSMinimumSystemVersion</key>

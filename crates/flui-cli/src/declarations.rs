@@ -490,6 +490,10 @@ pub(crate) struct Declarations {
     url_schemes: BTreeMap<UrlScheme, BTreeSet<String>>,
     associated_domains: BTreeMap<AssociatedDomain, BTreeSet<String>>,
     file_types: BTreeMap<FileType, BTreeSet<String>>,
+    /// The file types the application crate itself declares, which an Apple
+    /// bundle may export as its own (ADR-0361); a type only a dependency
+    /// declares is one the application opens, not one it defines.
+    application_file_types: BTreeSet<FileType>,
     /// Whether a graph joined here links `flui-native` with its
     /// `single-instance` feature, the code that hands a later launch on
     /// Linux and Windows to the running instance.
@@ -717,23 +721,24 @@ impl Declarations {
         }
         self.add_android(package, declares.schema, &declares.android)?;
         self.add_apple(name, &declares.apple)?;
-        self.add_opening(name, declares.schema, Opening::of_declares(&declares))?;
+        self.add_opening(name, role, declares.schema, Opening::of_declares(&declares))?;
         for (feature, part) in &declares.features {
             if features.contains(feature) {
                 self.add_android(package, declares.schema, &part.android)?;
                 self.add_apple(name, &part.apple)?;
-                self.add_opening(name, declares.schema, Opening::of_part(part))?;
+                self.add_opening(name, role, declares.schema, Opening::of_part(part))?;
             }
         }
         Ok(())
     }
 
-    /// Add what `crate_name`'s table, which states `schema`, says the
-    /// application opens. Two crates giving one extension two types is
-    /// refused: the system can open a file by one type only.
+    /// Add what `crate_name`'s table, a crate of `role` that states `schema`,
+    /// says the application opens. Two crates giving one extension two types
+    /// is refused: the system can open a file by one type only.
     fn add_opening(
         &mut self,
         crate_name: &str,
+        role: CrateRole,
         schema: u32,
         opening: Opening<'_>,
     ) -> BuildResult<()> {
@@ -756,6 +761,9 @@ impl Declarations {
         for file_type in opening.file_types {
             self.add_file_type(file_type.clone(), [crate_name.to_owned()])
                 .map_err(refused)?;
+            if role == CrateRole::Application {
+                self.application_file_types.insert(file_type.clone());
+            }
         }
         for scheme in opening.url_schemes {
             self.url_schemes
@@ -925,15 +933,28 @@ impl Declarations {
                 .or_default()
                 .extend(crates);
         }
+        self.application_file_types
+            .extend(other.application_file_types);
         self.one_instance |= other.one_instance;
         Ok(())
     }
 
     /// What one crate's `[package.metadata.flui.declares]`, given as TOML,
     /// declares of the parts no crate directory resolves: what the
-    /// application opens and its accessed APIs.
+    /// application opens and its accessed APIs. The crate is the application.
     #[cfg(test)]
     pub(crate) fn of_table(crate_name: &str, table: &str) -> Self {
+        Self::of_table_as(crate_name, CrateRole::Application, table)
+    }
+
+    /// [`Declarations::of_table`] for a crate the application depends on.
+    #[cfg(test)]
+    pub(crate) fn of_dependency_table(crate_name: &str, table: &str) -> Self {
+        Self::of_table_as(crate_name, CrateRole::Dependency, table)
+    }
+
+    #[cfg(test)]
+    fn of_table_as(crate_name: &str, role: CrateRole, table: &str) -> Self {
         let declares: Declares =
             toml::from_str(table).expect("BUG: a test's declarations table parses");
         let mut declarations = Self::default();
@@ -941,9 +962,20 @@ impl Declarations {
             .add_apple(crate_name, &declares.apple)
             .expect("BUG: a test's accessed APIs are well formed");
         declarations
-            .add_opening(crate_name, declares.schema, Opening::of_declares(&declares))
+            .add_opening(
+                crate_name,
+                role,
+                declares.schema,
+                Opening::of_declares(&declares),
+            )
             .expect("BUG: a test's opened types are well formed");
         declarations
+    }
+
+    /// Whether the application crate itself declares `file_type`, rather
+    /// than only a crate it links.
+    pub(crate) fn is_application_type(&self, file_type: &FileType) -> bool {
+        self.application_file_types.contains(file_type)
     }
 
     /// Every URL scheme the application opens, in order, with the crates

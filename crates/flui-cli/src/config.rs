@@ -5,8 +5,10 @@
 //!
 //! ```toml
 //! [app]
-//! name = "my_app"
+//! name = "my_app"                  # a crate-like name, checked when the file loads
+//! display_name = "My App"          # optional: the name the application is shown by
 //! version = "0.1.0"
+//! build = 12                       # optional: the store build number; a release of a pre-release needs it
 //! id = "com.example.my_app"
 //!
 //! [build]
@@ -44,10 +46,10 @@
 use crate::app_id::AppId;
 use crate::build::android_signing::AndroidReleaseKey;
 use crate::build::app_floor::{AppFloors, PlatformsConfig};
-use crate::build::app_version::AppVersion;
+use crate::build::app_version::{AppVersion, BuildNumber};
 use crate::build::web_page::{BaseHref, ThemeColor, WebPage};
 use crate::error::{CliError, CliResult, ResultExt};
-use crate::types::ProjectName;
+use crate::types::{DisplayName, ProjectName};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
@@ -120,7 +122,7 @@ impl WebConfig {
 #[must_use]
 pub(crate) fn web_page(project: Option<&Project>) -> WebPage {
     project.map_or_else(WebPage::default, |Project { config, dir }| WebPage {
-        title: Some(config.app.name.to_string()),
+        title: Some(config.app.shown_name().to_owned()),
         description: config.web.description.clone(),
         theme_color: config.web.theme_color.clone(),
         base_href: config.web.base_href.clone(),
@@ -311,12 +313,32 @@ pub(crate) struct AppConfig {
     /// file loads, so a quote, a `$`, a slash or a space never reaches the
     /// Kotlin, XML, JSON or HTML it is written into.
     pub(crate) name: ProjectName,
+    /// The name the application is shown by, free text (`"My Notes"`); the
+    /// [`name`](Self::name) when absent ([`AppConfig::shown_name`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) display_name: Option<DisplayName>,
     /// The application's version, SemVer, from which every package's version
     /// is derived ([`AppVersion`]).
     pub(crate) version: AppVersion,
+    /// The build number both stores compare (`versionCode`,
+    /// `CFBundleVersion`), when the project declares one; a release build of
+    /// a pre-release needs it ([`AppVersion::package_numbers`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) build: Option<BuildNumber>,
     /// The application identifier (reverse-DNS, `com.example.my_app`), from
     /// which every platform name is derived ([`AppId`]).
     pub(crate) id: AppId,
+}
+
+impl AppConfig {
+    /// The name the application is shown by: `[app] display_name`, else
+    /// `[app] name`.
+    #[must_use]
+    pub(crate) fn shown_name(&self) -> &str {
+        self.display_name
+            .as_ref()
+            .map_or(self.name.as_str(), DisplayName::as_str)
+    }
 }
 
 /// Build configuration.
@@ -466,7 +488,9 @@ mod tests {
         FluiConfig {
             app: AppConfig {
                 name: ProjectName::new("my-app").expect("a project name"),
+                display_name: None,
                 version: AppVersion::try_new("0.1.0").expect("a SemVer version"),
+                build: None,
                 id: AppId::try_new("com.example.my_app").expect("an identifier"),
             },
             build: BuildConfig {
@@ -620,6 +644,42 @@ mod tests {
             let loaded = FluiConfig::load_from(&path);
             assert_eq!(loaded.is_ok(), accepted, "{name}: {loaded:?}");
         }
+        // The shown name is free text within its bound; the version is one
+        // every packager takes; the build number is one both stores take.
+        let with_app =
+            |lines: &str| format!("[app]\nname = \"notes\"\nid = \"com.example.notes\"\n{lines}\n");
+        let too_long = format!(
+            "version = \"1.2.3\"\ndisplay_name = \"{}\"",
+            "a".repeat(DisplayName::MAX_CHARS + 1)
+        );
+        for (lines, accepted) in [
+            (
+                "version = \"1.2.3\"\ndisplay_name = \"My \\\"R&D\\\" Notes\"",
+                true,
+            ),
+            ("version = \"1.2.3\"\ndisplay_name = \"\"", false),
+            ("version = \"1.2.3\"\ndisplay_name = \"a\\u0001\"", false),
+            ("version = \"1.2.3\"\ndisplay_name = \"a\\uFFFF\"", false),
+            (too_long.as_str(), false),
+            ("version = \"1.200.0\"", false),
+            ("version = \"0.0.0\"", false),
+            ("version = \"2.0.0-beta.1\"\nbuild = 41", true),
+            ("version = \"1.2.3\"\nbuild = 0", false),
+            ("version = \"1.2.3\"\nbuild = 2100000001", false),
+            ("version = \"1.2.3\"\nbuild = -1", false),
+        ] {
+            std::fs::write(&path, with_app(lines)).expect("write flui.toml");
+            let loaded = FluiConfig::load_from(&path);
+            assert_eq!(loaded.is_ok(), accepted, "{lines}: {loaded:?}");
+        }
+        std::fs::write(
+            &path,
+            with_app("version = \"1.2.3\"\ndisplay_name = \"My Notes\""),
+        )
+        .expect("write flui.toml");
+        let loaded = FluiConfig::load_from(&path).expect("a display name");
+        assert_eq!(loaded.app.shown_name(), "My Notes");
+        assert_eq!(sample().app.shown_name(), "my-app");
         let mut oversized = with_name("\"notes\"");
         oversized.push_str(&"#".repeat(MAX_CONFIG_BYTES));
         std::fs::write(&path, oversized).expect("write flui.toml");

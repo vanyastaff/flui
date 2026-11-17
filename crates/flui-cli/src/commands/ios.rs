@@ -147,11 +147,10 @@ pub(super) fn configured_bundle(root: &Path) -> CliResult<Option<AppBundle>> {
     match std::fs::symlink_metadata(&path) {
         Ok(_) => {
             let config = crate::config::FluiConfig::load_from(&path)?;
-            Ok(Some(
-                AppBundle::new(&config.app.name, config.app.id.apple_bundle_id())
-                    .declared()
-                    .version(config.app.version),
-            ))
+            Ok(Some(AppBundle::of_app(
+                &config.app,
+                config.app.id.apple_bundle_id(),
+            )))
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(CliError::context(error, "read application config")),

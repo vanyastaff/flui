@@ -308,8 +308,12 @@ and `extractNativeLibs="false"`), the library stored under `lib/<abi>/`,
 project strips with the same one.
 
 The APK's `versionName` is `[app] version` and its `versionCode` is
-`major * 10000 + minor * 100 + patch`, so a minor or patch above 99 is
-refused. A debug build is signed with the debug keystore Android Studio uses
+`[app] build` when `flui.toml` declares it, else
+`major * 10000 + minor * 100 + patch`, so a version with a minor or patch above
+99 is refused when `flui.toml` loads. The Apple bundles state the same build
+number as `CFBundleVersion`. A release build of a pre-release (`1.4.0-beta.2`)
+needs `[app] build`: every pre-release and the release would otherwise share
+one build number, which a store refuses the second time. A debug build is signed with the debug keystore Android Studio uses
 (`ANDROID_USER_HOME`, else `.android` in your home; created on first use). A
 release build is signed with the key `flui.toml` names:
 
@@ -439,8 +443,10 @@ flui devices --json | jq -r 'select(.event=="device" and .platform=="ios") | .id
 
 ```toml
 [app]
-name = "my_app"
+name = "my_app"            # letters, digits, `-` and `_`; checked when the file loads
+display_name = "My App"    # optional: the name the application is shown by
 version = "0.1.0"
+build = 12                 # optional: the store build number (versionCode, CFBundleVersion)
 id = "com.example.my_app"
 
 [build]

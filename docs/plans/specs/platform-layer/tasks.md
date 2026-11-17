@@ -8420,6 +8420,22 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
   и `generated_*`), `parity_document_matches_its_source`. Должно на Mac (строка parity «Package
   the OS installs»): `plutil -lint` и версия из Launch Services у собранного `.app`, PNG в «Open
   With» без захвата умолчания, `--lib --universal` рядом с проектом Xcode.
+  Независимое чтение: FIFO в отдаваемом каталоге держал слот навсегда (открытие на чтение ждёт
+  писателя) — теперь не обычный файл отказан до открытия, на Unix открытие с `O_NONBLOCK`, тип
+  проверяется ещё раз на дескрипторе (строка `a special file is not opened`, в WSL без исправления
+  падает по таймауту чтения); номер сборки — `[app] build` (`BuildNumber`) для `versionCode` и
+  `CFBundleVersion`, одно правило `AppVersion::package_numbers`, release-сборка pre-release без
+  него отказана (`a_release_of_a_pre_release_needs_a_build_number`); пределы versionCode
+  проверяются при загрузке (`a_version_no_packager_takes_is_refused_when_read`); таблица
+  системных типов дополнена (Office, EPUB, vCard, iCalendar, CSS, JS, AAC, AIFF, AVI, MPEG,
+  AVIF, HEIF); тип, который объявляет только связанный крейт и не знает система, —
+  `UTImportedTypeDeclarations` с `Alternate` и предупреждением, свой тип крейта-приложения —
+  экспорт и `Owner` (решение: без признака владения импорт всех типов лишил бы приложение его
+  формата; правило как у схем и доменов — своё объявляет приложение; ADR-0361 §3–§4);
+  `[app] display_name` (`DisplayName`) — `CFBundleDisplayName`, `Name` desktop-записи, ярлык
+  Android, заголовок web; plist macOS решается до удаления прежнего бандла; запрет U+FFFE/U+FFFF
+  во всех именах XML (`is_xml_name_text`); `setsockopt` записи — только когда остаток сократился
+  на `WRITE_TIMEOUT_SLACK`.
 
 ## Чего нет в этой серии
 

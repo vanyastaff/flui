@@ -12,9 +12,9 @@
   marker-delimited blocks: the CLI writes the manifest whole, §4); its other manifest lines stand
 - **Superseded-by:** [ADR-0351](ADR-0351-a-linux-window-and-its-desktop-entry-carry-the-application-id.md)
   for §4's condition on the Linux desktop entry only (every Linux build writes it, with
-  `StartupWMClass`); [ADR-0361](ADR-0361-an-apple-bundle-owns-only-the-file-types-the-system-does-not-declare.md)
-  for §4's Apple file types only (a type the system declares is opened by its identifier and not
-  exported)
+  `StartupWMClass`); [ADR-0361](ADR-0361-a-package-owns-only-the-file-types-its-application-defines-and-states-one-build-number.md)
+  for §4's Apple file types only (only a type the application crate declares and the system does
+  not is exported and owned)
 - **Related:** [ADR-0280](ADR-0280-http-is-a-capability-of-the-host.md) (the HTTP capability, whose Android
   stack needs the network permission); [ADR-0088](ADR-0088-official-packages-sdk-and-facade.md)
   (facade features)

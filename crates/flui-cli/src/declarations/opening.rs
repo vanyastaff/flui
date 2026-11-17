@@ -185,32 +185,56 @@ pub(crate) fn apple_system_type_extensions(identifier: &str) -> &'static [&'stat
 /// Uniform Type Identifiers framework), with the file extensions they claim.
 /// A bundle that exported one of these under its own identifier would claim
 /// to own every PNG or PDF on the machine.
-const APPLE_SYSTEM_TYPES: [(&str, &[&str]); 25] = [
+const APPLE_SYSTEM_TYPES: [(&str, &[&str]); 43] = [
+    // Images.
     ("public.png", &["png"]),
     ("public.jpeg", &["jpg", "jpeg"]),
     ("com.compuserve.gif", &["gif"]),
     ("public.tiff", &["tif", "tiff"]),
     ("public.heic", &["heic"]),
+    ("public.heif", &["heif"]),
+    ("public.avif", &["avif"]),
     ("com.microsoft.bmp", &["bmp"]),
     ("org.webmproject.webp", &["webp"]),
     ("com.microsoft.ico", &["ico"]),
     ("public.svg-image", &["svg"]),
+    // Documents.
     ("com.adobe.pdf", &["pdf"]),
+    ("public.rtf", &["rtf"]),
+    ("org.idpf.epub-container", &["epub"]),
+    ("org.openxmlformats.wordprocessingml.document", &["docx"]),
+    ("org.openxmlformats.spreadsheetml.sheet", &["xlsx"]),
+    ("org.openxmlformats.presentationml.presentation", &["pptx"]),
+    ("com.microsoft.word.doc", &["doc"]),
+    ("com.microsoft.excel.xls", &["xls"]),
+    ("com.microsoft.powerpoint.ppt", &["ppt"]),
+    ("public.vcard", &["vcf"]),
+    ("com.apple.ical.ics", &["ics"]),
+    // Text and source.
     ("public.plain-text", &["txt"]),
     ("public.json", &["json"]),
     ("public.xml", &["xml"]),
     ("public.yaml", &["yaml", "yml"]),
     ("public.html", &["html", "htm"]),
+    ("public.css", &["css"]),
+    ("com.netscape.javascript-source", &["js"]),
     ("public.comma-separated-values-text", &["csv"]),
-    ("public.rtf", &["rtf"]),
+    // Archives.
     ("public.zip-archive", &["zip"]),
     ("org.gnu.gnu-zip-archive", &["gz"]),
     ("public.tar-archive", &["tar"]),
+    // Audio.
     ("public.mp3", &["mp3"]),
+    ("public.aac-audio", &["aac"]),
+    ("public.aiff-audio", &["aif", "aiff"]),
     ("com.microsoft.waveform-audio", &["wav"]),
     ("com.apple.m4a-audio", &["m4a"]),
+    // Video.
     ("public.mpeg-4", &["mp4"]),
+    ("com.apple.m4v-video", &["m4v"]),
     ("com.apple.quicktime-movie", &["mov"]),
+    ("public.avi", &["avi"]),
+    ("public.mpeg", &["mpg", "mpeg"]),
 ];
 
 /// A file extension without its `.`: 1 to 32 ASCII letters and digits, kept
@@ -265,7 +289,7 @@ impl TryFrom<String> for MimeType {
 }
 
 /// The name a file type is shown by: 1 to 64 characters, none a control
-/// character.
+/// character or one an XML file cannot carry.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize)]
 #[serde(try_from = "String")]
 struct TypeName(String);
@@ -274,11 +298,14 @@ impl TryFrom<String> for TypeName {
     type Error = String;
 
     fn try_from(name: String) -> Result<Self, String> {
-        if (1..=64).contains(&name.chars().count()) && !name.chars().any(char::is_control) {
+        if (1..=64).contains(&name.chars().count())
+            && crate::build::util::xml::is_xml_name_text(&name)
+        {
             Ok(Self(name))
         } else {
             Err(format!(
-                "`{}` is not a file type's name: 1 to 64 characters, no control character",
+                "`{}` is not a file type's name: 1 to 64 characters, no control character \
+                 and no U+FFFE or U+FFFF",
                 name.escape_debug()
             ))
         }
@@ -358,6 +385,10 @@ mod tests {
             ),
             (
                 "extension = \"note\"\nmime = \"text/plain\"\nname = \"a\\nb\"",
+                "not a file type's name",
+            ),
+            (
+                "extension = \"note\"\nmime = \"text/plain\"\nname = \"a\\uFFFF\"",
                 "not a file type's name",
             ),
             (
