@@ -112,8 +112,8 @@ struct Live {
     callback: RefCell<Terminal<Option<ValueCallback<f64>>>>,
     focus: Terminal<Rc<FocusNode>>,
     /// Made in `create_state`; `dispose` withdraws it, so a gesture handler
-    /// that outlives the state finds `None` and admits no context.
-    writer: RefCell<Terminal<Option<WriterSource>>>,
+    /// that outlives the state reads it only past the `mounted` check.
+    writer: RefCell<Terminal<WriterSource>>,
 }
 impl Drop for Live {
     fn drop(&mut self) {
@@ -144,10 +144,7 @@ impl Live {
             && size.height > 0.0
     }
     fn admits_context(&self, ctx: &EventContext<'_>) -> bool {
-        self.writer
-            .borrow()
-            .as_ref()
-            .is_some_and(|writer| writer.check_context(ctx).is_ok())
+        self.mounted.get() && self.writer.borrow().check_context(ctx).is_ok()
     }
     fn propose(&self, ctx: &mut EventContext<'_>, value: f64) {
         if !self.usable() || !self.admits_context(ctx) || !self.range.get().contains(value) {
@@ -225,7 +222,7 @@ impl StatefulView for Slider {
                 down_x: Cell::new(None),
                 callback: RefCell::new(callback),
                 focus: Terminal::new(FocusNode::with_debug_label("Slider")),
-                writer: RefCell::new(Terminal::new(Some(ctx.writer_source()))),
+                writer: RefCell::new(Terminal::new(ctx.writer_source())),
             })),
             rebuild: ctx.rebuild_handle(),
         }

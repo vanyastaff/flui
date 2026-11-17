@@ -528,7 +528,7 @@ impl StatefulView for AnimatedSwitcher {
 
     fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
         // The initial entry is added without animating. FLUI splits controller
-        // construction (here, no `BuildContext` yet) from vsync/listener
+        // construction (here) from vsync/listener
         // registration (`init_state`, below) — see `ChildEntry::new`'s doc.
         let current_entry = self.child.clone().map(|child| {
             ChildEntry::new(
