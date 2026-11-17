@@ -43,12 +43,17 @@ impl DisplayFrame {
     /// right and bottom: wide enough that no `i32` origin plus an extent
     /// overflows.
     fn edges(self) -> [i64; 4] {
+        // A display's extent is finite and positive, but one a recording or a
+        // logical source supplies can be any such number: its side is held
+        // at 2^40 device pixels, far past any panel, so every sum and
+        // difference below stays inside `i64`.
+        const LONGEST: f64 = 1_099_511_627_776.0;
         let side = |logical: f64| {
             #[expect(
                 clippy::cast_possible_truncation,
-                reason = "a display's extent over its scale is a whole number of pixels far inside i64"
+                reason = "a whole number held between 0 and 2^40 just before"
             )]
-            let pixels = snap(self.scale.to_device(logical)) as i64;
+            let pixels = snap(self.scale.to_device(logical)).clamp(0.0, LONGEST) as i64;
             pixels
         };
         let (x, y) = (i64::from(self.origin.x), i64::from(self.origin.y));
@@ -146,7 +151,7 @@ pub(crate) fn display_of_rect(
         let [l, t, r, b] = frame.edges();
         let width = (right.min(r) - left.max(l)).max(0);
         let height = (bottom.min(b) - top.max(t)).max(0);
-        // Each side is below 2^34, so the product needs 128 bits, not 64.
+        // Each side is below 2^42, so the product needs 128 bits, not 64.
         i128::from(width) * i128::from(height)
     };
     let distance = |frame: &DisplayFrame| {
