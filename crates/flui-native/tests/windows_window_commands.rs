@@ -3,8 +3,9 @@
 //! the size limits hold, and a state the system changes under the window
 //! reaches the snapshot.
 //!
-//! Each case opens its own platform and window. Windows that are shown appear
-//! on the desktop for the length of a case.
+//! Each case opens its own platform and window. Under nextest the cases run
+//! on the test run's own desktop, which nobody sees and no mouse or keyboard
+//! reaches (docs/testing.md, "The Windows test desktop").
 
 #![cfg(target_os = "windows")]
 #![expect(
@@ -3183,18 +3184,6 @@ fn native_window_commands() {
             deadlines_are_delivered_while_the_window_is_moved,
         ),
         (
-            "an_idle_modal_loop_with_no_deadline_asks_nothing",
-            an_idle_modal_loop_with_no_deadline_asks_nothing,
-        ),
-        (
-            "a_deadline_a_turn_sets_during_an_idle_modal_loop_is_delivered_in_it",
-            a_deadline_a_turn_sets_during_an_idle_modal_loop_is_delivered_in_it,
-        ),
-        (
-            "a_redraw_from_another_thread_is_painted_in_an_idle_modal_loop",
-            a_redraw_from_another_thread_is_painted_in_an_idle_modal_loop,
-        ),
-        (
             "a_locked_session_or_a_cloak_occludes_a_shown_window",
             a_locked_session_or_a_cloak_occludes_a_shown_window,
         ),
@@ -3241,6 +3230,32 @@ fn native_window_commands() {
         ),
     ];
     crate::run_table("native_window_commands", cases);
+}
+
+/// The cases that hold a modal loop idle and count what ran on the owner
+/// thread meanwhile, in a process of their own: the cases above leave their
+/// windows shown until the process ends, and on a desktop where no window is
+/// in the foreground (the run's own, which takes no input) the system moves
+/// the activation among those windows while the loop stands, so each window
+/// is sent `WM_NCACTIVATE`, `WM_GETICON` and `WM_PAINT`, and the platform's
+/// code runs for each as it must.
+#[test]
+fn native_idle_modal_loops() {
+    let cases: &[(&str, fn())] = &[
+        (
+            "an_idle_modal_loop_with_no_deadline_asks_nothing",
+            an_idle_modal_loop_with_no_deadline_asks_nothing,
+        ),
+        (
+            "a_deadline_a_turn_sets_during_an_idle_modal_loop_is_delivered_in_it",
+            a_deadline_a_turn_sets_during_an_idle_modal_loop_is_delivered_in_it,
+        ),
+        (
+            "a_redraw_from_another_thread_is_painted_in_an_idle_modal_loop",
+            a_redraw_from_another_thread_is_painted_in_an_idle_modal_loop,
+        ),
+    ];
+    crate::run_table("native_idle_modal_loops", cases);
 }
 
 /// Limits with these bounds.

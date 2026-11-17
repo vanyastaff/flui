@@ -762,3 +762,11 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 
 - When a phone's session end leaves writes in flight, the process is held until they end (ADR-0350 §2). A value owed but not started then (an earlier write failed, or the IO pool refused it) is not written in the background: nothing starts a write off the owner thread, and the owner gets no turns while an Android Activity is stopped. The value is named in the log as unstored.
 - The entry closes when the hold starts and retries the owed values within its window, with a headless test of a failed write stored in the background.
+
+### Desktop probes drive the desktop the user works on
+
+> **Environments:** Windows · **Who it hurts:** Contributors whose machine runs the probes, and the probes, which fail when the user moves the mouse · **Parity:** none (test infrastructure)
+
+- nextest runs every Windows test on a desktop of its own ([`testing.md`](testing.md#the-windows-test-desktop), ADR-0355), but injected input and the cursor belong to the desktop that takes the user's input. `windows_foreground`, the contract rows in `NEED_THE_INPUT_DESKTOP`, flui-native's `text_services_probe` and desktop-mcp's `#[ignore]` tests therefore run only on the user's desktop, by hand or on the nightly runner, and a person using the mouse or keyboard meanwhile breaks them; desktop-mcp's server drives whatever desktop it runs on.
+- A form that runs unattended on the test desktop sends what the probe injects as the window messages input becomes (`WM_POINTER*`, `WM_KEYDOWN`/`WM_CHAR` through the window's own queue) or acts through UI Automation patterns, and reads positions from the window instead of the cursor; what only real input proves (the foreground lock, the input method's own keyboard hook, the OS's pointer routing) stays a run on a device. A separate session for the probes (a loopback remote session, Windows Sandbox) would give them a desktop that takes input without the user's, at the cost of a sign-in or an optional Windows feature.
+- The entry closes when each listed case either runs on the test desktop with what it proves unchanged or is a row of `crates/flui-native/platform-parity.toml` run on a device.
