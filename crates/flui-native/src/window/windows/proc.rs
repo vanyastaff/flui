@@ -718,7 +718,7 @@ pub(crate) fn with_window_context_checked<R>(
         UserDataVerdict::Refuse(reason) => {
             tracing::debug!(
                 op,
-                hwnd = ?hwnd,
+                handle = ?hwnd,
                 ?reason,
                 "refusing to touch this window's native context"
             );
@@ -919,12 +919,12 @@ impl WindowProc {
                     {
                         tracing::warn!(%error, "pointer device notifications unavailable");
                     }
-                    tracing::debug!(?hwnd, "WM_CREATE");
+                    tracing::debug!(handle = ?hwnd, "WM_CREATE");
                     LRESULT(0)
                 }
 
                 WM_CLOSE => {
-                    tracing::debug!(?hwnd, "WM_CLOSE");
+                    tracing::debug!(handle = ?hwnd, "WM_CLOSE");
 
                     if let Some(ctx) = ctx {
                         // Ask the handler whether the close proceeds;
@@ -946,12 +946,12 @@ impl WindowProc {
                         // destroys or keeps it. A raster thread may still
                         // present over a kept one.
                         tracing::debug!(
-                            ?hwnd,
+                            handle = ?hwnd,
                             "WM_CLOSE for a retired window: left to its retirement"
                         );
                     } else if let Err(error) = DestroyWindow(hwnd) {
                         tracing::warn!(
-                            ?hwnd,
+                            handle = ?hwnd,
                             ?error,
                             "DestroyWindow failed on WM_CLOSE (no WindowContext)"
                         );
@@ -961,7 +961,7 @@ impl WindowProc {
                 }
 
                 WM_DESTROY => {
-                    tracing::debug!(?hwnd, "WM_DESTROY");
+                    tracing::debug!(handle = ?hwnd, "WM_DESTROY");
 
                     // A close the window granted retired it before destroying
                     // it, and cleared its slot: this finds no context. One
@@ -1096,7 +1096,7 @@ impl WindowProc {
                         // Handle the state transition
                         let new_mode = match size_type {
                             SIZE_MINIMIZED => {
-                                tracing::debug!(?hwnd, "window minimized");
+                                tracing::debug!(handle = ?hwnd, "window minimized");
                                 // A fullscreen window that is minimized comes back
                                 // fullscreen, so it keeps what it returns to.
                                 let candidate = NativeMode::Minimized {
@@ -1115,7 +1115,7 @@ impl WindowProc {
                                     candidate
                                 } else {
                                     tracing::warn!(
-                                        ?hwnd,
+                                        handle = ?hwnd,
                                         from = ?prev_mode,
                                         "a minimize from this mode is not a transition; ignored"
                                     );
@@ -1123,7 +1123,7 @@ impl WindowProc {
                                 }
                             }
                             SIZE_MAXIMIZED => {
-                                tracing::debug!(?hwnd, width, height, "window maximized");
+                                tracing::debug!(handle = ?hwnd, width, height, "window maximized");
                                 let candidate = NativeMode::Maximized;
                                 if prev_mode.is_fullscreen() {
                                     // A fullscreen window covers its monitor as a
@@ -1134,7 +1134,7 @@ impl WindowProc {
                                     candidate
                                 } else {
                                     tracing::warn!(
-                                        ?hwnd,
+                                        handle = ?hwnd,
                                         from = ?prev_mode,
                                         "a maximize from this mode is not a transition; ignored"
                                     );
@@ -1151,9 +1151,9 @@ impl WindowProc {
                                 // on every live-resize drag step.
                                 ctx.last_size.set(size);
                                 if prev_mode.is_minimized() || prev_mode.is_maximized() {
-                                    tracing::debug!(?hwnd, width, height, "window restored");
+                                    tracing::debug!(handle = ?hwnd, width, height, "window restored");
                                 } else {
-                                    tracing::trace!(?hwnd, width, height, "window resized");
+                                    tracing::trace!(handle = ?hwnd, width, height, "window resized");
                                 }
                                 match prev_mode {
                                     // A resize does not end fullscreen.
@@ -1169,7 +1169,7 @@ impl WindowProc {
                             _ => {
                                 // A resize that keeps the mode (`SIZE_MAXSHOW`,
                                 // `SIZE_MAXHIDE`).
-                                tracing::trace!(?hwnd, width, height, "window resized");
+                                tracing::trace!(handle = ?hwnd, width, height, "window resized");
                                 if prev_mode.is_normal() {
                                     ctx.last_size.set(size);
                                 }
@@ -1248,7 +1248,7 @@ impl WindowProc {
                     } else {
                         (get_x_lparam(lparam), get_y_lparam(lparam))
                     };
-                    tracing::debug!(x, y, "the window moved");
+                    tracing::debug!(handle = ?hwnd, x, y, "window moved");
 
                     if let Some(ctx) = ctx {
                         ctx.update_window_state(|record| WindowRecord {
@@ -1976,7 +1976,7 @@ impl WindowsWindow {
                         normal.bottom - normal.top,
                         SWP_FRAMECHANGED | SWP_NOZORDER | SWP_NOACTIVATE,
                     ) {
-                        tracing::warn!(?hwnd, ?error, "the window left fullscreen in place");
+                        tracing::warn!(handle = ?hwnd, ?error, "the window left fullscreen in place");
                     }
                 } else {
                     // The frame is measured again for the restored style, then
@@ -1993,7 +1993,7 @@ impl WindowsWindow {
                         0,
                         SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
                     ) {
-                        tracing::warn!(?hwnd, ?error, "the restored frame was not measured");
+                        tracing::warn!(handle = ?hwnd, ?error, "the restored frame was not measured");
                     }
                     let show = match exit {
                         FullscreenExit::Normal => SW_SHOWNORMAL,
@@ -2005,7 +2005,7 @@ impl WindowsWindow {
                         SetWindowPlacement(hwnd, &raw const placement)
                     });
                     if let Err(error) = placed {
-                        tracing::warn!(?hwnd, ?error, ?exit, "the window left fullscreen in place");
+                        tracing::warn!(handle = ?hwnd, ?error, ?exit, "the window left fullscreen in place");
                     }
                 }
             }
@@ -2013,7 +2013,7 @@ impl WindowsWindow {
             ctx.publish_window_state(hwnd);
         });
         if left.is_none() {
-            tracing::warn!(?hwnd, "cannot leave fullscreen: no usable window context");
+            tracing::warn!(handle = ?hwnd, "cannot leave fullscreen: no usable window context");
         }
     }
 
@@ -2059,7 +2059,7 @@ impl WindowsWindow {
                 let mut rect = RECT::default();
                 if let Err(error) = GetWindowRect(hwnd, &raw mut rect) {
                     tracing::warn!(
-                        ?hwnd,
+                        handle = ?hwnd,
                         ?error,
                         "GetWindowRect failed entering fullscreen; restore bounds will be zeroed"
                     );
@@ -2120,7 +2120,7 @@ impl WindowsWindow {
                 };
                 if let Err(error) = GetMonitorInfoW(monitor, &raw mut monitor_info).ok() {
                     tracing::warn!(
-                        ?hwnd,
+                        handle = ?hwnd,
                         ?error,
                         "GetMonitorInfoW failed entering fullscreen; monitor rect will be zeroed"
                     );
@@ -2145,7 +2145,7 @@ impl WindowsWindow {
                     monitor_rect.bottom - monitor_rect.top,
                     SWP_FRAMECHANGED | SWP_NOACTIVATE,
                 ) {
-                    tracing::warn!(?hwnd, ?error, "SetWindowPos (enter fullscreen) failed");
+                    tracing::warn!(handle = ?hwnd, ?error, "SetWindowPos (enter fullscreen) failed");
                 }
                 ctx.limits_waived.set(false);
                 ctx.mode.set(NativeMode::Fullscreen { restore_bounds });
@@ -2154,7 +2154,7 @@ impl WindowsWindow {
             ctx.publish_window_state(hwnd);
         });
         if entered.is_none() {
-            tracing::warn!(?hwnd, "cannot enter fullscreen: no usable window context");
+            tracing::warn!(handle = ?hwnd, "cannot enter fullscreen: no usable window context");
         }
     }
 }
@@ -2219,7 +2219,7 @@ impl WindowContext {
         let old_dpi = self.scale.dpi();
         self.scale.rescale(dpi);
         let new_scale = self.scale.scale();
-        tracing::info!(dpi = dpi.get(), new_scale, "DPI changed");
+        tracing::info!(handle = ?hwnd, scale = new_scale, "window scale changed");
         // The display's scale changed, so its snapshot entry did.
         self.displays.invalidate();
         self.step(hwnd, WindowStep::Rescaled);
@@ -2434,7 +2434,7 @@ impl WindowContext {
         };
         self.limits_waived.set(false);
         if let Err(error) = moved {
-            tracing::warn!(?hwnd, ?error, "SetWindowPos (DPI change) failed");
+            tracing::warn!(handle = ?hwnd, ?error, "SetWindowPos (DPI change) failed");
         }
     }
 }

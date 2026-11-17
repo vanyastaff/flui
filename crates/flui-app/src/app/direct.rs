@@ -100,7 +100,6 @@ pub fn run_direct(
     let _installation = super::logging::init_managed_logging(&config);
 
     tracing::info!(
-        title = %config.title,
         size = ?config.size,
         "Starting FLUI direct render mode"
     );
@@ -166,7 +165,7 @@ pub fn run_direct(
         let mut renderer = match renderer {
             Ok(r) => r,
             Err(e) => {
-                tracing::error!("GPU init failed: {:?}", e);
+                tracing::error!(error = ?e, "GPU init failed");
                 return Err(anyhow::anyhow!(e).context("GPU initialization failed"));
             }
         };
@@ -222,10 +221,10 @@ pub fn run_direct(
             );
             frames.resize(w, h);
             tracing::debug!(
-                "Window resized to {}x{} (scale: {})",
-                w,
-                h,
-                metrics.scale().get()
+                width = w,
+                height = h,
+                scale = metrics.scale().get(),
+                "window resized"
             );
         });
 
@@ -315,7 +314,7 @@ impl DirectSurface for Renderer {
 
         if let Err(e) = self.render_scene(scene) {
             if e.recoverability() == Recoverability::Recoverable {
-                tracing::warn!("Recoverable render error (will retry): {}", e);
+                tracing::warn!(error = %e, "recoverable render error, will retry");
             } else {
                 // Covers both Fatal (renderer must be recreated) and
                 // Unrecoverable (surface misconfig / resource I/O / text error:

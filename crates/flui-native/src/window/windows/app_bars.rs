@@ -200,7 +200,7 @@ impl WindowContext {
             )
         };
         if let Err(error) = placed {
-            tracing::warn!(?hwnd, ?error, "SetWindowPos (app bars changed) failed");
+            tracing::warn!(handle = ?hwnd, ?error, "SetWindowPos (app bars changed) failed");
         }
     }
 }

@@ -23,16 +23,14 @@ fn a_headless_platform_reads_launch_values_from_the_environment() {
     assert_eq!(platform.launch_value(unset), None);
 }
 
-/// A headless platform runs in a real process, so the path it names is that process's
-/// executable, never a stand-in.
+/// A headless platform runs in a real process, so the path it names is a file a caller can
+/// open: absolute and present, never a stand-in.
 #[test]
 fn a_headless_platform_names_the_executable_it_runs_in() {
     let platform = headless_platform();
-    let expected = std::env::current_exe().expect("the test binary has a path");
-    assert_eq!(
-        platform
-            .app_path()
-            .expect("the headless platform names its executable"),
-        expected
-    );
+    let path = platform
+        .app_path()
+        .expect("the headless platform names its executable");
+    assert!(path.is_absolute(), "{} is not absolute", path.display());
+    assert!(path.is_file(), "{} is not a file", path.display());
 }

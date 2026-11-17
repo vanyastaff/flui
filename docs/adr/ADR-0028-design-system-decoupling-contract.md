@@ -52,7 +52,7 @@ colors — stays in the design crate that owns it.
 `WidgetStatesController`, `InheritedTheme`, and `Localizations`/`LocalizationsDelegate`/
 `Directionality` live in `flui-widgets`, as Flutter 3.50 keeps them in its widgets library
 (`widget_state.dart`, `inherited_theme.dart`, `localizations.dart`, `basic.dart` under
-[`packages/flutter/lib/src/widgets`](https://github.com/flutter/flutter/tree/3.50.0/packages/flutter/lib/src/widgets))
+[`packages/flutter/lib/src/widgets`](https://github.com/flutter/flutter/tree/ab2912035e/packages/flutter/lib/src/widgets))
 while its design libraries leave the SDK.
 
 **Platform-adaptive behavior is a capability seam, not a branch.** Where behavior varies by

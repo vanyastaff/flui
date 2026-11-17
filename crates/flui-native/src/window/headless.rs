@@ -341,7 +341,7 @@ impl host::Window<HeadlessLoop> for HeadlessHostWindow {
         options: WindowOptions,
         handler: Rc<dyn WindowHandler>,
     ) -> Result<Rc<dyn HostWindow>, OpenWindowError> {
-        tracing::info!(?options, "Creating headless window");
+        tracing::debug!("a window is opening");
 
         let platform_state = std::rc::Rc::downgrade(&owner.state);
         owner.with_state(|state| {

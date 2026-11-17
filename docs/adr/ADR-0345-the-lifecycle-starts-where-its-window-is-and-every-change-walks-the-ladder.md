@@ -7,8 +7,8 @@
   [ADR-0248](ADR-0248-leaving-detached-enters-from-paused.md) whole (the ladder out of `Detached`)
 - **Related:** [ADR-0237](ADR-0237-window-state-and-host-notices.md) (Android's three signals),
   [ADR-0123](ADR-0123-exceptional-presentation-close.md) (terminal close)
-- **Sources:** `flutter/flutter@3.50.0`
-  [`packages/flutter/lib/src/services/binding.dart:296-342`](https://github.com/flutter/flutter/blob/3.50.0/packages/flutter/lib/src/services/binding.dart#L296-L342)
+- **Sources:** Flutter 3.50.0, `flutter/flutter@ab2912035e`
+  [`packages/flutter/lib/src/services/binding.dart:296-342`](https://github.com/flutter/flutter/blob/ab2912035e/packages/flutter/lib/src/services/binding.dart#L296-L342)
   (the initial state and the generated transitions)
 
 ## Context and problem statement

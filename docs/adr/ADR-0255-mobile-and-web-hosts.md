@@ -41,7 +41,7 @@
 - **Sources:** other projects are read at pinned commits and cited as `owner/repo@sha path:line`:
   AOSP (`aosp-mirror/platform_frameworks_base@1cdfff555f`, a mirror last pushed 2025-11-12),
   AccessKit (`AccessKit/accesskit@a39329d28`), android-activity v0.6.1
-  (`rust-mobile/android-activity@b4ddf059b`), Flutter (`flutter/flutter@3.50.0`), Slint
+  (`rust-mobile/android-activity@b4ddf059b`), Flutter 3.50.0 (`flutter/flutter@ab2912035e`), Slint
   (`slint-ui/slint@277e7676ce`), Compose Multiplatform
   (`JetBrains/compose-multiplatform-core@13b7599795`), winit
   (`rust-windowing/winit@1893565716`) and MDN's browser-compat-data
@@ -73,8 +73,8 @@ That need is now the owner's list.
 The manifest and the packager are behind the framework as well: the template declares three of
 the eleven `configChanges` values Flutter's declares
 (`crates/flui-cli/templates/android/AndroidManifest.xml`;
-[flutter/flutter@3.50.0
-packages/flutter_tools/templates/app/android.tmpl/app/src/main/AndroidManifest.xml.tmpl:12](https://github.com/flutter/flutter/blob/3.50.0/packages/flutter_tools/templates/app/android.tmpl/app/src/main/AndroidManifest.xml.tmpl#L12)), and
+[flutter/flutter@ab2912035e
+packages/flutter_tools/templates/app/android.tmpl/app/src/main/AndroidManifest.xml.tmpl:12](https://github.com/flutter/flutter/blob/ab2912035e/packages/flutter_tools/templates/app/android.tmpl/app/src/main/AndroidManifest.xml.tmpl#L12)), and
 an Activity the system recreates is a new `android_main` and a whole new Rust runtime
 (`crates/flui-app/src/app/runner/android.rs:441-447`); the SDK-tools packager sets `targetSdk` to
 the newest installed platform (`crates/flui-cli/src/build/android_package.rs:70-97,147-148`), so
@@ -95,8 +95,8 @@ page is a static scaffold copied once; there is no accessibility tree, no routin
 host, and the dev server answers 404 to any path that is not a file
 (`crates/flui-cli/src/serve.rs:262-301`). The textarea sets no `font-size` (iOS Safari zooms the
 page on focus below 16 px, which Flutter documents and guards against:
-[flutter/flutter@3.50.0
-engine/src/flutter/lib/web_ui/lib/src/engine/semantics/text_field.dart:12-46](https://github.com/flutter/flutter/blob/3.50.0/engine/src/flutter/lib/web_ui/lib/src/engine/semantics/text_field.dart#L12-L46)) and no
+[flutter/flutter@ab2912035e
+engine/src/flutter/lib/web_ui/lib/src/engine/semantics/text_field.dart:17-48](https://github.com/flutter/flutter/blob/ab2912035e/engine/src/flutter/lib/web_ui/lib/src/engine/semantics/text_field.dart#L17-L48)) and no
 `enterkeyhint` (`crates/flui-native/src/text/web.rs:634-665`).
 
 The question this record answers: how do Android, iOS and the Web host FLUI, so that accessibility,
@@ -202,8 +202,8 @@ text-input paths its platform requires.
      nothing to pop must not hold one ([Android's predictive back
      guide](https://developer.android.com/guide/navigation/custom-back/predictive-back-gesture));
      Flutter registers only while the framework can pop
-     ([flutter/flutter@3.50.0
-     engine/src/flutter/shell/platform/android/io/flutter/embedding/android/FlutterActivity.java:728-737](https://github.com/flutter/flutter/blob/3.50.0/engine/src/flutter/shell/platform/android/io/flutter/embedding/android/FlutterActivity.java#L728-L737)).
+     ([flutter/flutter@ab2912035e
+     engine/src/flutter/shell/platform/android/io/flutter/embedding/android/FlutterActivity.java:728-737](https://github.com/flutter/flutter/blob/ab2912035e/engine/src/flutter/shell/platform/android/io/flutter/embedding/android/FlutterActivity.java#L728-L737)).
      "Can the app pop" is a bit the owner publishes like the other
      state the view answers from, and the same contract serves iOS (decision 14) and the Web
      (decision 19). Each API above the floor is a gate under ADR-0244 decision 4.
@@ -314,8 +314,8 @@ text-input paths its platform requires.
 11. **Text input is a separate invisible responder view.** A Rust-defined view conforming to
     `UITextInput`, with `UITextInteraction` for the system selection UI, backed by the shared
     `TextStore` host (ADR-0090, ADR-0135). It is separate from `FluiView`, which does not become the
-    first responder; Flutter and Compose make the same split ([flutter/flutter@3.50.0
-    engine/src/flutter/shell/platform/darwin/ios/framework/Source/FlutterTextInputPlugin.mm:140-141](https://github.com/flutter/flutter/blob/3.50.0/engine/src/flutter/shell/platform/darwin/ios/framework/Source/FlutterTextInputPlugin.mm#L140-L141);
+    first responder; Flutter and Compose make the same split ([flutter/flutter@ab2912035e
+    engine/src/flutter/shell/platform/darwin/ios/framework/Source/FlutterTextInputPlugin.mm:793-815](https://github.com/flutter/flutter/blob/ab2912035e/engine/src/flutter/shell/platform/darwin/ios/framework/Source/FlutterTextInputPlugin.mm#L793-L815), its own `becomeFirstResponder` at `:1360`;
     [JetBrains/compose-multiplatform-core@13b7599795
     compose/ui/ui-uikit/src/iosMain/objc/CMPUIKitUtils/CMPUIKitObjcUtils/CMPTextInputView.h:20](https://github.com/JetBrains/compose-multiplatform-core/blob/13b7599795/compose/ui/ui-uikit/src/iosMain/objc/CMPUIKitUtils/CMPUIKitObjcUtils/CMPTextInputView.h#L20)).
     `UITextInput` carries marked text,
@@ -339,8 +339,8 @@ text-input paths its platform requires.
     `scene:openURLContexts:`, `scene:continueUserActivity:` and
     `windowScene:performActionForShortcutItem:`. They reach the app as events in FLUI's types
     (decision 8). Flutter's scene delegate forwards the same four
-    ([flutter/flutter@3.50.0
-    engine/src/flutter/shell/platform/darwin/ios/framework/Source/FlutterSceneDelegate.mm:32-101](https://github.com/flutter/flutter/blob/3.50.0/engine/src/flutter/shell/platform/darwin/ios/framework/Source/FlutterSceneDelegate.mm#L32-L101));
+    ([flutter/flutter@ab2912035e
+    engine/src/flutter/shell/platform/darwin/ios/framework/Source/FlutterSceneDelegate.mm:32-101](https://github.com/flutter/flutter/blob/ab2912035e/engine/src/flutter/shell/platform/darwin/ios/framework/Source/FlutterSceneDelegate.mm#L32-L101));
     FLUI's has none of them (`crates/flui-native/src/owner/apple/ios.rs`).
 
 14. **Keyboard, back and the plist.**
@@ -380,9 +380,9 @@ text-input paths its platform requires.
 
 18. **Accessibility is a parallel ARIA DOM written in Rust.** AccessKit lists its web adapter as
     planned ([AccessKit/accesskit@a39329d28 README.md:45-48](https://github.com/AccessKit/accesskit/blob/a39329d28/README.md#L45-L48)); Flutter builds a parallel DOM with a
-    lazy placeholder and its semantics host last ([flutter/flutter@3.50.0
-    engine/src/flutter/lib/web_ui/lib/src/engine/view_embedder/dom_manager.dart:16-46](https://github.com/flutter/flutter/blob/3.50.0/engine/src/flutter/lib/web_ui/lib/src/engine/view_embedder/dom_manager.dart#L16-L46),
-    [.../semantics/semantics_helper.dart:234](https://github.com/flutter/flutter/blob/3.50.0/engine/src/flutter/lib/web_ui/lib/src/engine/semantics/semantics_helper.dart#L234)). A `PlatformAccessibility` implementation for the Web
+    lazy placeholder and its semantics host last ([flutter/flutter@ab2912035e
+    engine/src/flutter/lib/web_ui/lib/src/engine/view_embedder/dom_manager.dart:16-46](https://github.com/flutter/flutter/blob/ab2912035e/engine/src/flutter/lib/web_ui/lib/src/engine/view_embedder/dom_manager.dart#L16-L46),
+    [.../semantics/semantics_helper.dart:234](https://github.com/flutter/flutter/blob/ab2912035e/engine/src/flutter/lib/web_ui/lib/src/engine/semantics/semantics_helper.dart#L234)). A `PlatformAccessibility` implementation for the Web
     consumes `TreeUpdate` through
     `accesskit_consumer` and maintains one element per node with its role and ARIA attributes, in the
     semantics host. It is enabled lazily, from a hidden focusable placeholder control that
@@ -390,8 +390,8 @@ text-input paths its platform requires.
 
 19. **Routing is the History API, with a single entry.** `pushState`, `replaceState` and `popstate` are
     the baseline. A single-entry strategy keeps a fake entry so that Back always produces a `popstate`
-    and never leaves the app unasked (Flutter's `SingleEntryBrowserHistory`: [flutter/flutter@3.50.0
-    engine/src/flutter/lib/web_ui/lib/src/engine/navigation/history.dart:17-25,124](https://github.com/flutter/flutter/blob/3.50.0/engine/src/flutter/lib/web_ui/lib/src/engine/navigation/history.dart#L17-L25)); this feeds the
+    and never leaves the app unasked (Flutter's `SingleEntryBrowserHistory`: [flutter/flutter@ab2912035e
+    engine/src/flutter/lib/web_ui/lib/src/engine/navigation/history.dart:234-250,368-373](https://github.com/flutter/flutter/blob/ab2912035e/engine/src/flutter/lib/web_ui/lib/src/engine/navigation/history.dart#L234-L250)); this feeds the
     same "can the app pop" contract (decision 3).
     The Navigation API (Chrome 102, Firefox 147, Safari 26.2; [mdn/browser-compat-data@5da921db9
     api/Navigation.json](https://github.com/mdn/browser-compat-data/blob/5da921db9/api/Navigation.json)) is a refinement. `flui run`'s server

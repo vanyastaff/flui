@@ -182,7 +182,7 @@ it. Flutter 3.50 is narrower: a release build ignores an intent's `route` and en
 when it cannot verify the sender as the app itself (an activity that is not exported, a launcher
 of the app's own UID from API 34, the app's own calling package below it), and debug and profile
 builds take them from any sender
-([`IntentUtils.java:29-96`](https://github.com/flutter/flutter/blob/3.50.0/engine/src/flutter/shell/platform/android/io/flutter/embedding/android/IntentUtils.java#L29-L96)).
+([`IntentUtils.java:29-96`](https://github.com/flutter/flutter/blob/ab2912035e/engine/src/flutter/shell/platform/android/io/flutter/embedding/android/IntentUtils.java#L29-L96)).
 `a_build_without_the_agent_reads_no_launch_value`,
 which only a build without debug assertions compiles, shows it: CI's `test-without-agent` job runs it.
 

@@ -873,7 +873,7 @@ evidence = 'Status-bar icon style from `AnnotatedRegion<SystemUiOverlayStyle>` (
 id = "orientation-lock"
 feature = 'Orientation lock'
 status = { windows = "na", macos = "na", wayland = "na", x11 = "na", ios = "missing", android = "missing", web = "missing", headless = "missing" }
-note = 'Android 16 ignores it on displays at least 600 dp wide for an app targeting API 36, as a FLUI app does (it declares no `PROPERTY_COMPAT_ALLOW_RESTRICTED_RESIZABILITY` opt-out, which API 37 drops) ([Android 16 behavior changes](https://developer.android.com/about/versions/16/behavior-changes-16#ignore-orientation))'
+note = 'Android 16 ignores it on displays whose smallest width is at least 600 dp for an app targeting API 36, as a FLUI app does (it declares no `PROPERTY_COMPAT_ALLOW_RESTRICTED_RESIZABILITY` opt-out, which API 37 drops) ([Android 16 behavior changes](https://developer.android.com/about/versions/16/behavior-changes-16#ignore-orientation))'
 
 [[group.section.row]]
 id = "haptics"

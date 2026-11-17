@@ -615,7 +615,7 @@ impl AndroidLoop {
                 }
             },
             Err(e) => {
-                tracing::error!("Failed to get input events: {:?}", e);
+                tracing::error!(error = ?e, "Android: the input events could not be read");
             }
         }
         // A hover exit no press continued in this drain was a leave.
@@ -977,7 +977,7 @@ impl host::Loop for AndroidLoop {
                             self.running.set(false);
                         }
                         MainEvent::WindowResized { .. } => {
-                            tracing::debug!("Android: window resized");
+                            tracing::debug!("window resized");
                             // Cloned out of its cell: the resize observer runs
                             // embedder code that may call back into the platform.
                             let window = self.window.borrow().clone();

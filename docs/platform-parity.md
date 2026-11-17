@@ -368,7 +368,7 @@ Quality bar: 2 of 16 met (no process-global state, one monotonic clock); 9 partl
 | Feature | Windows | macOS | Wayland | X11 | iOS | Android | Web | Headless | Notes |
 |:--|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:--|
 | Status and navigation bars, immersive mode | — | — | — | — | 🟡 | ✅ | ❌ | ❌ | Status-bar icon style ran on Android; iOS is type-checked only, and no host has navigation-bar or immersive control. |
-| Orientation lock | — | — | — | — | ❌ | ❌ | ❌ | ❌ | Android 16 ignores it on displays at least 600 dp wide for an app targeting API 36, as a FLUI app does (it declares no `PROPERTY_COMPAT_ALLOW_RESTRICTED_RESIZABILITY` opt-out, which API 37 drops) ([Android 16 behavior changes](https://developer.android.com/about/versions/16/behavior-changes-16#ignore-orientation)) |
+| Orientation lock | — | — | — | — | ❌ | ❌ | ❌ | ❌ | Android 16 ignores it on displays whose smallest width is at least 600 dp for an app targeting API 36, as a FLUI app does (it declares no `PROPERTY_COMPAT_ALLOW_RESTRICTED_RESIZABILITY` opt-out, which API 37 drops) ([Android 16 behavior changes](https://developer.android.com/about/versions/16/behavior-changes-16#ignore-orientation)) |
 | Haptics | 🟡 | 🟡 | — | — | 🟡 | 🟡 | 🟡 | ✅ | Both tiers and the frame queue ship (ADR-0210); macOS, iOS and the Android envelopes never ran on a device, and no haptic pen has vibrated. |
 | System sounds, alert beep | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | — | ❌ |  |
 

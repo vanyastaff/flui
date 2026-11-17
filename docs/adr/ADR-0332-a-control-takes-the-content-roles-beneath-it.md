@@ -10,9 +10,9 @@
   [ADR-0322](ADR-0322-a-control-mounts-one-element-for-its-behaviours.md) (a control is one node, which makes
   its semantics one configuration over its child)
 - **Sources:** Flutter 3.50.0 `SemanticsConfiguration.isCompatibleWith`
-  (<https://github.com/flutter/flutter/blob/3.50.0/packages/flutter/lib/src/semantics/semantics.dart#L6848-L6897>)
+  (<https://github.com/flutter/flutter/blob/ab2912035e/packages/flutter/lib/src/semantics/semantics.dart#L6848-L6897>)
   and `SemanticsFlags.hasConflictingFlags`
-  (<https://github.com/flutter/flutter/blob/3.50.0/engine/src/flutter/lib/ui/semantics.dart#L1636-L1661>):
+  (<https://github.com/flutter/flutter/blob/ab2912035e/engine/src/flutter/lib/ui/semantics.dart#L1636-L1661>):
   two configurations conflict when both handle one action, both set one of the tri-state flags
   (checked, selected, enabled, toggled, expanded, required, focused) or the same boolean flag,
   only one blocks accessibility focus, or both carry a value, a range bound, an explicit role or

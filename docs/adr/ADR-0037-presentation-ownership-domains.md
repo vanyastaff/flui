@@ -246,7 +246,7 @@ policy-free abstraction with two production consumers and its own ADR.
 
 Flutter reference points, read at 3.50.0: focus nodes retain their owning
 manager and key events walk the focused chain
-([`focus_manager.dart:660, 2272-2278`](https://github.com/flutter/flutter/blob/3.50.0/packages/flutter/lib/src/widgets/focus_manager.dart#L2272-L2278));
+([`focus_manager.dart:660, 2272-2278`](https://github.com/flutter/flutter/blob/ab2912035e/packages/flutter/lib/src/widgets/focus_manager.dart#L2272-L2278));
 text input has one current connection, which the next `attach` replaces
-([`text_input.dart:2115-2130`](https://github.com/flutter/flutter/blob/3.50.0/packages/flutter/lib/src/services/text_input.dart#L2115-L2130)).
+([`text_input.dart:2115-2130`](https://github.com/flutter/flutter/blob/ab2912035e/packages/flutter/lib/src/services/text_input.dart#L2115-L2130)).
 FLUI keeps those behaviors; the ownership topology is its own.
