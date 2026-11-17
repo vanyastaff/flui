@@ -15,6 +15,7 @@
 use flui_platform::CommandRefusal;
 use flui_platform::WindowFrame;
 use flui_testing::window_commands::AdmitAndApply as _;
+use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::{
     Arc,
@@ -44,13 +45,14 @@ use windows::Win32::{
             GetActiveWindow, GetFocus, SetFocus, VK_ESCAPE, VK_F11, VK_RETURN, VK_RIGHT,
         },
         WindowsAndMessaging::{
-            DispatchMessageW, GWL_STYLE, GetClientRect, GetWindowLongPtrW, GetWindowRect,
+            DispatchMessageW, GUI_INMOVESIZE, GUITHREADINFO, GWL_STYLE, GetClientRect,
+            GetGUIThreadInfo, GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId,
             HWND_TOPMOST, IsIconic, IsWindowVisible, IsZoomed, MSG, PM_REMOVE, PeekMessageW,
             PostMessageW, SC_MOVE, SC_SIZE, SW_MINIMIZE, SW_RESTORE, SWP_NOACTIVATE, SWP_NOMOVE,
             SWP_NOSIZE, SWP_NOZORDER, SendMessageW, SetWindowLongPtrW, SetWindowPos,
             SetWindowTextW, ShowWindow, TranslateMessage, WA_ACTIVE, WA_INACTIVE, WM_ACTIVATE,
-            WM_CLOSE, WM_DPICHANGED, WM_KEYDOWN, WM_SYSCOMMAND, WM_WTSSESSION_CHANGE, WS_CAPTION,
-            WS_MAXIMIZEBOX, WS_THICKFRAME, WTS_SESSION_LOCK, WTS_SESSION_UNLOCK,
+            WM_CLOSE, WM_DPICHANGED, WM_GETOBJECT, WM_KEYDOWN, WM_SYSCOMMAND, WM_WTSSESSION_CHANGE,
+            WS_CAPTION, WS_MAXIMIZEBOX, WS_THICKFRAME, WTS_SESSION_LOCK, WTS_SESSION_UNLOCK,
         },
     },
 };
@@ -1481,6 +1483,265 @@ fn deadlines_are_delivered_while_the_window_is_moved() {
     );
 }
 
+/// Whether the thread `thread` runs Win32's modal size-move loop.
+fn in_move_size(thread: u32) -> bool {
+    let mut info = GUITHREADINFO {
+        cbSize: std::mem::size_of::<GUITHREADINFO>() as u32,
+        ..Default::default()
+    };
+    // SAFETY: `info` is a live local with its size set, which the call fills.
+    unsafe { GetGUIThreadInfo(thread, &raw mut info) }.is_ok()
+        && (info.flags & GUI_INMOVESIZE) == GUI_INMOVESIZE
+}
+
+/// The span a keyboard move loop of the window behind `address` stood idle,
+/// on the thread `thread`, as [`hold_an_idle_move_loop`] measured it.
+#[derive(Clone, Copy, Debug)]
+struct IdleSpan {
+    from: Instant,
+    to: Instant,
+    /// The loop ran at both ends of the span.
+    in_loop: bool,
+}
+
+/// From another thread: once the thread `thread` runs the move loop of the
+/// window behind `address`, let it rest for `idle` (calling `midway` halfway),
+/// end it with Escape and ask the run to quit. The span is written to `span`.
+fn hold_an_idle_move_loop(
+    address: isize,
+    thread: u32,
+    idle: Duration,
+    midway: impl FnOnce() + Send + 'static,
+    quit: flui_native::PlatformProxy,
+    span: Arc<std::sync::Mutex<Option<IdleSpan>>>,
+) -> std::thread::JoinHandle<()> {
+    std::thread::spawn(move || {
+        let entered = Instant::now();
+        while !in_move_size(thread) && entered.elapsed() < Duration::from_secs(3) {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        // The loop's first delivery, and what the move itself ran, settle.
+        std::thread::sleep(Duration::from_millis(100));
+        let from = Instant::now();
+        let started = in_move_size(thread);
+        std::thread::sleep(idle / 2);
+        midway();
+        std::thread::sleep(idle / 2);
+        let to = Instant::now();
+        let in_loop = started && in_move_size(thread);
+        *span.lock().expect("span") = Some(IdleSpan { from, to, in_loop });
+        let ending = Instant::now();
+        while in_move_size(thread) && ending.elapsed() < Duration::from_secs(3) {
+            // SAFETY: a post to a window of this process; one that is gone
+            // fails the call.
+            let _ = unsafe {
+                PostMessageW(
+                    Some(HWND(address as *mut _)),
+                    WM_KEYDOWN,
+                    WPARAM(usize::from(VK_ESCAPE.0)),
+                    LPARAM(0x0001_0001),
+                )
+            };
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let _ = quit.request_quit();
+    })
+}
+
+/// Start the keyboard move loop of `window` from the main loop, outside any
+/// callback of the bootstrap: the post is dispatched once the bootstrap
+/// returned.
+fn post_move_loop(window: &Rc<dyn HostWindow>) {
+    // SAFETY: a post to the live window of this thread.
+    unsafe {
+        PostMessageW(
+            Some(hwnd_of(window)),
+            WM_SYSCOMMAND,
+            WPARAM(SC_MOVE as usize),
+            LPARAM(0),
+        )
+    }
+    .expect("the move is posted");
+}
+
+/// A move loop left idle, with no deadline asked for, asks the application's
+/// handler for none: it sets no timer until the platform's code runs again.
+/// Red-check: answer "no deadline" with a timer at the frame pace, and the
+/// handler is asked every 16 ms of the half second.
+fn an_idle_modal_loop_with_no_deadline_asks_nothing() {
+    let asks = Rc::new(std::cell::RefCell::new(Vec::new()));
+    let span = Arc::new(std::sync::Mutex::new(None));
+    let kept = Rc::new(std::cell::RefCell::new(None));
+    let (heard, measured, holder) = (Rc::clone(&asks), Arc::clone(&span), Rc::clone(&kept));
+    Box::new(platform())
+        .run(crate::app::with_log(move |log, owner| {
+            log.react(move |call, _| {
+                if call == crate::app::AppCall::WakeDeadline {
+                    heard.borrow_mut().push(Instant::now());
+                }
+            });
+            let window = Opened::ready(&owner, options());
+            settle();
+            let hwnd = hwnd_of(&window);
+            // SAFETY: a plain query of the live window.
+            let thread = unsafe { GetWindowThreadProcessId(hwnd, None) };
+            let mover = hold_an_idle_move_loop(
+                hwnd.0 as isize,
+                thread,
+                Duration::from_millis(500),
+                || {},
+                owner.proxy(),
+                measured,
+            );
+            post_move_loop(&window);
+            *holder.borrow_mut() = Some((window, mover));
+            Ok(())
+        }))
+        .expect("the Win32 loop");
+    if let Some((window, mover)) = kept.borrow_mut().take() {
+        mover.join().expect("the moving thread");
+        window.close_for_cleanup();
+    }
+    let span = span
+        .lock()
+        .expect("span")
+        .expect("the move loop was held idle");
+    assert!(span.in_loop, "the move loop ran through the span: {span:?}");
+    let idle_asks = asks
+        .borrow()
+        .iter()
+        .filter(|at| **at > span.from && **at < span.to)
+        .count();
+    assert!(
+        idle_asks <= 2,
+        "{idle_asks} questions in the {:?} the loop stood idle",
+        span.to - span.from
+    );
+}
+
+/// A deadline an owner turn sets while a move loop stands idle is delivered
+/// inside the loop: the turn ran the platform's code, after which the loop
+/// asks the deadlines again. Red-check: leave the owner window's procedure
+/// without telling the modal loops, and the frame comes only after the loop.
+fn a_deadline_a_turn_sets_during_an_idle_modal_loop_is_delivered_in_it() {
+    let span = Arc::new(std::sync::Mutex::new(None));
+    let deadline = Rc::new(Cell::new(None::<Instant>));
+    let frames = Rc::new(std::cell::RefCell::new(Vec::new()));
+    let kept = Rc::new(std::cell::RefCell::new(None));
+    let (measured, holder) = (Arc::clone(&span), Rc::clone(&kept));
+    let (answered, armed, drawn) = (
+        Rc::clone(&deadline),
+        Rc::clone(&deadline),
+        Rc::clone(&frames),
+    );
+    let cleared = Rc::clone(&deadline);
+    Box::new(platform())
+        .run(crate::app::with_log(move |log, owner| {
+            log.answer_deadline_with(move || answered.get());
+            let window = Opened::ready(&owner, options());
+            settle();
+            window.handler.react_to_frame(move |_| {
+                if cleared.take().is_some() {
+                    drawn.borrow_mut().push(Instant::now());
+                }
+            });
+            owner
+                .on_wake(Box::new(move || {
+                    armed.set(Some(Instant::now() + Duration::from_millis(60)));
+                }))
+                .expect("the owner takes a wake callback");
+            let hwnd = hwnd_of(&window);
+            // SAFETY: a plain query of the live window.
+            let thread = unsafe { GetWindowThreadProcessId(hwnd, None) };
+            let waker = owner.proxy();
+            let mover = hold_an_idle_move_loop(
+                hwnd.0 as isize,
+                thread,
+                Duration::from_millis(600),
+                move || {
+                    let _ = waker.wake();
+                },
+                owner.proxy(),
+                measured,
+            );
+            post_move_loop(&window);
+            *holder.borrow_mut() = Some((window, mover));
+            Ok(())
+        }))
+        .expect("the Win32 loop");
+    if let Some((window, mover)) = kept.borrow_mut().take() {
+        mover.join().expect("the moving thread");
+        window.close_for_cleanup();
+    }
+    let span = span
+        .lock()
+        .expect("span")
+        .expect("the move loop was held idle");
+    assert!(span.in_loop, "the move loop ran through the span: {span:?}");
+    let frames = frames.borrow();
+    assert!(
+        frames.iter().any(|at| *at > span.from && *at < span.to),
+        "the deadline's frame came inside the loop's idle span {span:?}: {frames:?}"
+    );
+}
+
+/// A screen reader's first question (`WM_GETOBJECT` for the UIA root) runs the
+/// activation listener inside AccessKit's own handling of it. A listener that
+/// publishes a whole tree there answers the question with it, and the window
+/// reports an assistive technology attached. Red-check: hand the publish to
+/// the adapter during the activation, which re-borrows the state AccessKit
+/// holds across it: the panic is contained, and the window reports itself
+/// inactive with AccessKit active.
+fn a_tree_published_inside_the_activation_answers_it() {
+    use accesskit::{Node, NodeId, Role, TreeId, TreeInfo, TreeUpdate};
+    use windows::Win32::UI::Accessibility::UiaRootObjectId;
+
+    let platform = platform();
+    let window = open(&platform, hidden());
+    let accessibility = window
+        .window
+        .accessibility()
+        .expect("a Win32 window answers UI Automation");
+    let publisher = Arc::downgrade(&accessibility);
+    let published = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&published);
+    accessibility.set_activation_listener(Arc::new(move |active| {
+        let Some(publisher) = publisher.upgrade().filter(|_| active) else {
+            return;
+        };
+        counted.fetch_add(1, Ordering::SeqCst);
+        let root = NodeId(1);
+        let mut node = Node::new(Role::Window);
+        node.set_label("inside the activation".to_string());
+        publisher.publish(TreeUpdate {
+            nodes: vec![(root, node)],
+            tree: Some(TreeInfo::new(root)),
+            tree_id: TreeId::ROOT,
+            focus: root,
+        });
+    }));
+    // SAFETY: a message to the live window on its own thread, with no pointer.
+    let answer = unsafe {
+        SendMessageW(
+            hwnd_of(&window),
+            WM_GETOBJECT,
+            Some(WPARAM(0)),
+            Some(LPARAM(UiaRootObjectId as isize)),
+        )
+    };
+    assert_eq!(
+        published.load(Ordering::SeqCst),
+        1,
+        "the listener published"
+    );
+    assert!(
+        accessibility.is_active(),
+        "the window reports the screen reader that asked"
+    );
+    assert_ne!(answer.0, 0, "the question got the tree's root");
+    window.close_for_cleanup();
+}
+
 // --- the snapshot against what Win32 says ----------------------------------
 
 /// What Win32 says of the window, read with its own queries.
@@ -2206,6 +2467,58 @@ fn a_locked_session_or_a_cloak_occludes_a_shown_window() {
     assert_eq!(*events.lock().expect("log"), [false, true, false, true]);
 }
 
+/// The thread's one subscription to cloak changes serves each of its
+/// windows: a cloak of either is that window's alone, heard once, and the
+/// window opened first still hears one after the other closed.
+fn each_window_hears_its_own_cloak() {
+    let platform = platform();
+    let (first, second) = (open(&platform, options()), open(&platform, options()));
+    settle();
+    let (first_events, second_events) = (record_visibility(&first), record_visibility(&second));
+    let cloak = |window: &Opened, on: bool| {
+        let value = BOOL::from(on);
+        // SAFETY: `value` is a live `BOOL`, the size `DWMWA_CLOAK` reads.
+        unsafe {
+            DwmSetWindowAttribute(
+                hwnd_of(window),
+                DWMWA_CLOAK,
+                (&raw const value).cast(),
+                std::mem::size_of::<BOOL>() as u32,
+            )
+        }
+        .expect("the window cloaks");
+    };
+    let heard = |events: &Arc<std::sync::Mutex<Vec<bool>>>, count: usize| {
+        pump_until(Duration::from_secs(1), || {
+            events.lock().expect("log").len() == count
+        })
+    };
+    cloak(&second, true);
+    assert!(
+        heard(&second_events, 1),
+        "the second window hears its cloak"
+    );
+    cloak(&second, false);
+    assert!(heard(&second_events, 2));
+    settle();
+    assert_eq!(*second_events.lock().expect("log"), [false, true]);
+    assert!(
+        first_events.lock().expect("log").is_empty(),
+        "the first window heard the second's cloak"
+    );
+
+    second.close_for_cleanup();
+    settle();
+    cloak(&first, true);
+    assert!(
+        heard(&first_events, 1),
+        "the first window still hears its cloak once the second closed"
+    );
+    cloak(&first, false);
+    assert!(heard(&first_events, 2));
+    assert_eq!(*first_events.lock().expect("log"), [false, true]);
+}
+
 /// A close command closes the window without asking the should-close veto: a
 /// command is not a close request.
 fn a_close_command_asks_no_veto() {
@@ -2500,8 +2813,24 @@ fn native_window_commands() {
             deadlines_are_delivered_while_the_window_is_moved,
         ),
         (
+            "an_idle_modal_loop_with_no_deadline_asks_nothing",
+            an_idle_modal_loop_with_no_deadline_asks_nothing,
+        ),
+        (
+            "a_deadline_a_turn_sets_during_an_idle_modal_loop_is_delivered_in_it",
+            a_deadline_a_turn_sets_during_an_idle_modal_loop_is_delivered_in_it,
+        ),
+        (
             "a_locked_session_or_a_cloak_occludes_a_shown_window",
             a_locked_session_or_a_cloak_occludes_a_shown_window,
+        ),
+        (
+            "each_window_hears_its_own_cloak",
+            each_window_hears_its_own_cloak,
+        ),
+        (
+            "a_tree_published_inside_the_activation_answers_it",
+            a_tree_published_inside_the_activation_answers_it,
         ),
         ("the_win32_window_conforms", the_win32_window_conforms),
         (

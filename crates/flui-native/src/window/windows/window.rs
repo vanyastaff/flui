@@ -235,6 +235,7 @@ impl WindowsWindow {
             notices,
             window_hooks,
             preferences,
+            modal_loops,
             ..
         } = shares;
         // A title bar of the application's is one this host draws the frame for.
@@ -273,6 +274,7 @@ impl WindowsWindow {
             drag,
             window_hooks,
             preferences,
+            modal_loops,
         )
     }
 
@@ -401,6 +403,7 @@ impl WindowsWindow {
         drag: Arc<dyn crate::owner::windows::HostDrag>,
         window_hooks: crate::owner::windows::WindowHooks,
         preferences: Rc<dyn crate::owner::windows::control::OwnerPreferences>,
+        modal_loops: Rc<crate::owner::windows::ModalLoops>,
     ) -> Result<Rc<Self>, OpenWindowError> {
         let (width, height) = (requested.width, requested.height);
         // SAFETY: `hwnd` is the valid handle `create_native` just returned
@@ -585,7 +588,6 @@ impl WindowsWindow {
                 limits_waived: std::cell::Cell::new(false),
                 show_requests: std::cell::Cell::new(0),
                 visibility: super::proc::Visibility::new(),
-                cloak_watch: super::proc::CloakWatch::start(),
                 in_size_move: std::cell::Cell::new(false),
                 in_system_command: std::cell::Cell::new(false),
                 in_app_command: std::cell::Cell::new(false),
@@ -598,6 +600,7 @@ impl WindowsWindow {
                         Rc::clone(&frames),
                         std::sync::Weak::clone(&app_hooks.borrow().signal),
                     ),
+                    Rc::clone(&modal_loops),
                 ),
                 ledger: std::cell::RefCell::new(crate::owner::hwnd_affinity::ContextLedger::new()),
                 identity,
@@ -658,6 +661,7 @@ impl WindowsWindow {
                     hooks: Rc::clone(&window_hooks),
                     apartment,
                     drag,
+                    modal_loops,
                 },
                 || this.with_context("window_created", |_| ()).is_some(),
             )

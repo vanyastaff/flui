@@ -31,7 +31,8 @@ fn hosted_receiver_of(signal: &Arc<OwnerSignal>) -> (Receiver, Rc<HostEvents>, R
         notices,
         OwnerQueue::new(Arc::downgrade(signal)),
     ));
-    let receiver = Receiver::try_new([Rc::clone(&host) as Rc<dyn Subscriber>]).expect("receiver");
+    let receiver = Receiver::try_new([Rc::clone(&host) as Rc<dyn Subscriber>], Rc::default())
+        .expect("receiver");
     (receiver, host, app, run)
 }
 

@@ -18,10 +18,13 @@
 //! the message loop with no window callback in progress, and everything the
 //! loop delivers reaches its window as a fresh callback. While it runs, the
 //! main loop that waits for wake deadlines and dispatches paints is suspended
-//! under OLE's, which dispatches neither while the pointer rests; a pacing
-//! thread ([`ModalPacer`]) has the owner window deliver due deadlines and
-//! paint every invalidated window instead, so every runtime on the thread
-//! keeps animating and a second window repaints.
+//! under OLE's, which dispatches neither while the pointer rests; the owner's
+//! pacing of the loop, entered for the session with a thread for its clock
+//! (`owner::windows::modal_loop`), has the owner window deliver due deadlines
+//! and paint every invalidated window instead, so every runtime on the thread
+//! keeps animating and a second window repaints. A drop target's event is the
+//! platform's code that OLE's loop runs directly, so it tells the thread's
+//! modal loops it ran, and the pacing asks the deadlines again.
 //!
 //! Reentrancy: user code runs inside `DoDragDrop` (every window callback, and
 //! the session's provider when a target fetches), so no `RefCell` borrow or
@@ -512,9 +515,7 @@ use std::{
     cell::{Cell, RefCell},
     collections::HashMap,
     rc::Rc,
-    sync::atomic::{AtomicBool, Ordering},
     sync::{Arc, OnceLock},
-    time::Duration,
 };
 
 #[cfg(windows)]
@@ -543,13 +544,7 @@ use windows::Win32::{
             RegisterDragDrop, ReleaseStgMedium, RevokeDragDrop,
         },
     },
-    UI::{
-        Input::KeyboardAndMouse::GetKeyState,
-        WindowsAndMessaging::{
-            MSG, MsgWaitForMultipleObjects, PM_NOREMOVE, PM_QS_SENDMESSAGE, PeekMessageW,
-            QS_SENDMESSAGE, SMTO_NORMAL, SendMessageTimeoutW, WM_NCDESTROY,
-        },
-    },
+    UI::{Input::KeyboardAndMouse::GetKeyState, WindowsAndMessaging::WM_NCDESTROY},
 };
 #[cfg(windows)]
 use windows_core::{ComObject, HSTRING};
@@ -557,10 +552,10 @@ use windows_core::{ComObject, HSTRING};
 #[cfg(windows)]
 use crate::{
     drag::offers::OfferTable,
-    owner::modal_pace::MODAL_FRAME_PACE_MS,
     owner::panic_boundary::contain_owner_callback,
     owner::slot::OwnerSlot,
     owner::windows::control::{OwnerMessages, OwnerPost, OwnerWindow},
+    owner::windows::modal_loop::{ModalPacing, PaceClock, PacerThread},
     owner::windows::{CreatedWindow, DropTarget, HostDrag, WindowMessages, WindowRef, WindowTable},
 };
 #[cfg(windows)]
@@ -578,10 +573,6 @@ const HTML_FORMAT_NAME: &str = "HTML Format";
 /// Posted to the owner window: run the session [`OleTransfer::start`] recorded.
 #[cfg(windows)]
 const START_DRAG: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 21;
-/// Sent to the owner window while `DoDragDrop` runs: deliver the frames that
-/// are due; answered with the milliseconds until the next request.
-#[cfg(windows)]
-const MODAL_FRAME: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 22;
 
 /// The offers minted for drags over this platform's windows.
 #[derive(Default)]
@@ -702,7 +693,8 @@ impl OleTransfer {
         }
     }
 
-    /// Whether `DoDragDrop` is running on this thread.
+    /// Whether `DoDragDrop` is running on this thread, read by a test.
+    #[cfg(test)]
     fn is_running(&self) -> bool {
         self.owner().is_some_and(|owner| owner.running.get())
     }
@@ -791,7 +783,7 @@ impl OleTransfer {
 
     /// Run the accepted session's `DoDragDrop`, from the owner window's
     /// [`START_DRAG`] message, and tell the session how it ended.
-    fn run_pending(&self, owner_window: HWND) {
+    fn run_pending(&self, owner_window: &OwnerWindow) {
         let Some(owner) = self.owner() else {
             return;
         };
@@ -804,13 +796,21 @@ impl OleTransfer {
         // The buttons held at the start: a release since then drops the
         // session where the pointer is, at OLE's first question.
         let source = com::DropSource::new(began);
-        Self::run_session(&owner, owner_window, request, source.into());
+        Self::run_session(
+            &owner,
+            owner_window.hwnd(),
+            owner_window.modal_pacing(),
+            request,
+            source.into(),
+        );
     }
 
-    /// Run `request`'s modal loop with `drop_source` deciding when it ends.
+    /// Run `request`'s modal loop with `drop_source` deciding when it ends,
+    /// its frames paced by `pacing`, the owner window's.
     fn run_session(
         owner: &OwnerDrag,
         owner_window: HWND,
+        pacing: Option<Rc<ModalPacing>>,
         request: OsDragRequest,
         drop_source: windows::Win32::System::Ole::IDropSource,
     ) {
@@ -824,7 +824,7 @@ impl OleTransfer {
         let data: IDataObject = com::SourceData::new(&terms, provider).into();
         owner.running.set(true);
         let running = RunningSession(owner);
-        let pacer = ModalPacer::start(owner_window);
+        let paced = PacedSession::enter(pacing, owner_window);
         let mut effect = DROPEFFECT_NONE;
         // SAFETY: both interfaces are live objects of this apartment, held
         // across the call; `effect` is a live local the call writes once.
@@ -837,10 +837,8 @@ impl OleTransfer {
                 &raw mut effect,
             )
         };
-        // Not running first, so a frame request the pacer is sending as it
-        // stops is answered at once.
         drop(running);
-        drop(pacer);
+        drop(paced);
         let action = actions_of(effect.0) & allowed;
         let end = if result == DRAGDROP_S_DROP && !action.is_empty() {
             OsDragEnd::Dropped(action)
@@ -869,97 +867,35 @@ impl Drop for RunningSession<'_> {
     }
 }
 
-/// Asks the owner window for frames while `DoDragDrop` runs.
-///
-/// The OLE loop waits only for input and for messages sent from other
-/// threads: while the pointer rests it dispatches no posted message, timer or
-/// paint, so neither a timer nor a posted wake on this thread would ever be
-/// seen. A pacing thread sends [`MODAL_FRAME`] instead, which the loop's wait
-/// does dispatch; the owner window delivers what is due and answers with how
-/// many milliseconds to wait before the next one.
+/// The owner window's pacing of OLE's loop, entered for one session: OLE's
+/// loop dispatches no timer and no posted message while the pointer rests,
+/// so the pacing's clock is a thread that sends the owner window its delivery
+/// message, and the session's end exits it.
 #[cfg(windows)]
-struct ModalPacer {
-    stop: Arc<AtomicBool>,
-    thread: Option<std::thread::JoinHandle<()>>,
-}
+struct PacedSession(Option<Rc<ModalPacing>>);
 
 #[cfg(windows)]
-impl ModalPacer {
-    fn start(owner_window: HWND) -> Option<Self> {
-        let address = owner_window.0 as isize;
-        let stop = Arc::new(AtomicBool::new(false));
-        let stopping = Arc::clone(&stop);
-        let spawned = std::thread::Builder::new()
-            .name("flui-drag-frames".into())
-            .spawn(move || {
-                let mut wait = MODAL_FRAME_PACE_MS;
-                loop {
-                    std::thread::park_timeout(Duration::from_millis(u64::from(wait)));
-                    if stopping.load(Ordering::Acquire) {
-                        break;
-                    }
-                    let mut answer = 0_usize;
-                    // SAFETY: a message with no pointer payload, sent to the
-                    // owner window, which outlives the session this thread
-                    // paces; `answer` is a live local the call writes. The
-                    // timeout bounds the wait if the owner thread is busy.
-                    let sent = unsafe {
-                        SendMessageTimeoutW(
-                            HWND(address as *mut _),
-                            MODAL_FRAME,
-                            WPARAM(0),
-                            LPARAM(0),
-                            SMTO_NORMAL,
-                            100,
-                            Some(&raw mut answer),
-                        )
-                    };
-                    wait = u32::try_from(answer)
-                        .ok()
-                        .filter(|millis| sent.0 != 0 && (1..=MODAL_FRAME_PACE_MS).contains(millis))
-                        .unwrap_or(MODAL_FRAME_PACE_MS);
-                }
-            });
-        match spawned {
-            Ok(thread) => Some(Self {
-                stop,
-                thread: Some(thread),
-            }),
-            Err(error) => {
-                tracing::warn!(%error, "no frames while the drag rests: the pacing thread did not start");
-                None
-            }
+impl PacedSession {
+    fn enter(pacing: Option<Rc<ModalPacing>>, owner_window: HWND) -> Self {
+        if let Some(pacing) = &pacing {
+            pacing.enter(|| PacerThread::start(owner_window).map(PaceClock::Thread));
         }
+        Self(pacing)
     }
 }
 
 #[cfg(windows)]
-impl Drop for ModalPacer {
+impl Drop for PacedSession {
     fn drop(&mut self) {
-        self.stop.store(true, Ordering::Release);
-        let Some(thread) = self.thread.take() else {
-            return;
-        };
-        thread.thread().unpark();
-        // A frame request already being sent waits for this thread: keep
-        // answering sent messages until the pacer has gone.
-        while !thread.is_finished() {
-            let mut msg = MSG::default();
-            // SAFETY: `PM_QS_SENDMESSAGE` with `PM_NOREMOVE` only dispatches
-            // messages other threads sent this one; `msg` is a live local.
-            // The wait takes no handles and lasts at most a millisecond.
-            unsafe {
-                let _ = PeekMessageW(&raw mut msg, None, 0, 0, PM_NOREMOVE | PM_QS_SENDMESSAGE);
-                MsgWaitForMultipleObjects(None, false, 1, QS_SENDMESSAGE);
-            }
+        if let Some(pacing) = &self.0 {
+            pacing.exit();
         }
-        let _ = thread.join();
     }
 }
 
 /// Drag and drop's part of the owner window: a session runs from its
-/// [`START_DRAG`], its modal loop's frames come from its [`MODAL_FRAME`], and a
-/// session that has not started is cancelled as it is destroyed.
+/// [`START_DRAG`], and a session that has not started is cancelled as it is
+/// destroyed.
 #[cfg(windows)]
 impl OwnerMessages for OleTransfer {
     fn attach(&self, owner: OwnerPost) {
@@ -967,21 +903,10 @@ impl OwnerMessages for OleTransfer {
     }
 
     fn message(&self, owner: &OwnerWindow, message: u32) -> Option<LRESULT> {
-        match message {
-            START_DRAG => {
-                self.run_pending(owner.hwnd());
-                Some(LRESULT(0))
-            }
-            MODAL_FRAME => {
-                if !self.is_running() {
-                    return Some(LRESULT(0));
-                }
-                Some(LRESULT(
-                    owner.deliver_modal_frames().map_or(0, |wait| wait as isize),
-                ))
-            }
-            _ => None,
-        }
+        (message == START_DRAG).then(|| {
+            self.run_pending(owner);
+            LRESULT(0)
+        })
     }
 
     fn destroyed(&self) {

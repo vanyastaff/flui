@@ -175,9 +175,12 @@ impl PlatformAccessibility for WindowsAccessibility {
                 "publishing an accessibility update"
             );
         }
-        // Same retention contract as the AT-SPI bridge: only self-contained
-        // updates may answer a late activation — see `BridgeShared`.
-        self.shared.retain_if_self_contained(&update);
+        // Retained when self-contained; inside the activation's own call the
+        // adapter's subclass state is borrowed, and the update is its answer
+        // instead ([`BridgeShared::publish`]).
+        let Some(update) = self.shared.publish(update) else {
+            return;
+        };
         // AccessKit's contract: `QueuedEvents` must be raised OUTSIDE any
         // lock the tree state lives behind, because UIA event handlers can
         // re-enter. Hence the explicit guard drop before `raise`. A

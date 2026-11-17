@@ -16,6 +16,8 @@
 //! - `proc`: the window's context in its `GWLP_USERDATA` slot and the
 //!   window's own messages, the hook `WindowProc` the host registers on FLUI's
 //!   window class;
+//! - `cloak`: the owner thread's one subscription to cloak changes, the hook
+//!   `CloakWatch` the host registers beside it;
 //! - `backdrop`: what the desktop window manager draws around and behind the
 //!   window, and the extension trait that sets it.
 
@@ -30,6 +32,8 @@
 #[cfg(windows)]
 pub(crate) mod backdrop;
 pub(crate) mod chrome;
+#[cfg(windows)]
+mod cloak;
 pub(crate) mod frame_timing;
 pub(crate) mod limits;
 #[cfg(windows)]
@@ -42,6 +46,8 @@ mod window;
 #[cfg(all(test, target_os = "windows"))]
 mod delivery_tests;
 
+#[cfg(windows)]
+pub(crate) use cloak::CloakWatch;
 #[cfg(windows)]
 pub(crate) use set::WindowSet;
 #[cfg(windows)]

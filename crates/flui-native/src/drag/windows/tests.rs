@@ -564,6 +564,17 @@ fn platform_over(transport: &Arc<OleTransfer>) -> WindowsPlatform {
     .expect("platform")
 }
 
+/// The pacing of a modal loop run from `platform`'s owner window, which a
+/// session the owner window started runs under.
+fn owner_pacing(platform: &WindowsPlatform) -> Rc<crate::owner::windows::modal_loop::ModalPacing> {
+    platform
+        .owner()
+        .owner_control
+        .shares("a drag session's pacing")
+        .expect("the owner's state")
+        .modal_pacing
+}
+
 fn owner_window(transport: &OleTransfer) -> HWND {
     transport
         .owner_window
@@ -1071,6 +1082,7 @@ fn a_second_window_repaints_while_the_modal_loop_rests() {
     OleTransfer::run_session(
         &owner,
         owner_window(&transport),
+        Some(owner_pacing(&platform)),
         request(&ended),
         scripted(decide),
     );
@@ -1119,6 +1131,7 @@ fn a_drag_into_a_window_of_this_process_drops_through_the_loop() {
     OleTransfer::run_session(
         &owner,
         owner_window(&transport),
+        Some(owner_pacing(&platform)),
         request(&ended),
         scripted(decide),
     );
@@ -1224,6 +1237,7 @@ fn a_provider_whose_capture_panics_on_drop_is_contained() {
     OleTransfer::run_session(
         &owner,
         owner_window(&transport),
+        Some(owner_pacing(&platform)),
         hostile_request(&ended),
         scripted(|| DRAGDROP_S_CANCEL),
     );

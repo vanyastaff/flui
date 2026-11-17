@@ -90,7 +90,7 @@ mod objects {
     use super::super::OleTransfer;
     use super::SourceEntry;
     use crate::owner::window_delivery::WindowDelivery;
-    use crate::owner::windows::{WindowRef, WindowScale};
+    use crate::owner::windows::{ModalLoops, WindowRef, WindowScale};
 
     // Every object here holds owner-thread state (`Rc`, `Cell`, `RefCell`, a
     // `!Send` provider): `Agile = false` withholds `IAgileObject` and the
@@ -136,6 +136,10 @@ mod objects {
         /// The offer of the drag over the window, and what its source
         /// permitted at the last event.
         pub(super) over: Cell<Option<(DataTransferId, TransferActions)>>,
+        /// The modal loops running on the thread: OLE's loop calls the
+        /// target directly, outside every procedure that tells them the
+        /// platform's code ran, so its dispatch tells them itself.
+        pub(super) modal_loops: Rc<ModalLoops>,
     }
 }
 
@@ -407,6 +411,7 @@ impl WindowDropTarget {
             scale: window.scale.clone(),
             revoked: Cell::new(false),
             over: Cell::new(None),
+            modal_loops: Rc::clone(&window.modal_loops),
         }
     }
 
@@ -438,9 +443,11 @@ impl WindowDropTarget {
                 })
         });
         // Dispatch is the window's own: it queues behind a callback already
-        // running and contains the callback's panics.
+        // running and contains the callback's panics. What it ran may have
+        // moved a deadline, which the drag loop's pacing then asks again.
         if let Some(event) = event(position) {
             self.delivery.dispatch_input(PlatformInput::DragDrop(event));
+            self.modal_loops.ran();
         }
     }
 

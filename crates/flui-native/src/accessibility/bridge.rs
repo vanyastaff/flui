@@ -37,6 +37,10 @@ pub(crate) struct Activation(pub(crate) Arc<BridgeShared>);
 
 #[cfg(not(target_arch = "wasm32"))]
 impl ActivationHandler for Activation {
+    /// Marks the bridge active, tells the composition root, then answers the
+    /// retained tree. A tree the listener publishes while it is told is the
+    /// answer: the adapter is in the middle of this call, so the publish is
+    /// retained and not handed to it ([`BridgeShared::publish`]).
     fn request_initial_tree(&mut self) -> Option<TreeUpdate> {
         os_entry(
             "AccessKit's activation",
@@ -47,8 +51,8 @@ impl ActivationHandler for Activation {
                 // *before* reading the retained tree. The listener typically
                 // enables semantics, and on a cold start that is what will
                 // produce the first tree at all; reading first would answer
-                // `None` even when a synchronous listener could have supplied
-                // one.
+                // `None` even when a synchronous listener supplied one.
+                let _activating = self.0.activating();
                 self.0.notify_activation(true);
                 self.0.retained()
             },
@@ -120,8 +124,28 @@ pub(crate) struct BridgeShared {
     /// every activation, so this retained answer is at worst one full
     /// publish behind and is corrected within a frame.
     latest: Mutex<Option<TreeUpdate>>,
+    /// The thread running the adapter's activation ([`Activation`]), while it
+    /// runs. The adapter holds its own state across that call (a `RefCell`
+    /// borrow under UIA and NSAccessibility, a mutex under AT-SPI), so a
+    /// publish the listener makes there must not reach it.
+    activation_thread: Mutex<Option<std::thread::ThreadId>>,
     activation_listener: Mutex<Option<AccessibilityActivationListener>>,
     action_listener: Mutex<Option<AccessibilityActionListener>>,
+}
+
+/// Marks an activation running on the current thread until it drops, panic
+/// included.
+#[cfg(not(target_arch = "wasm32"))]
+struct Activating<'a> {
+    thread: &'a Mutex<Option<std::thread::ThreadId>>,
+    previous: Option<std::thread::ThreadId>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Drop for Activating<'_> {
+    fn drop(&mut self) {
+        *self.thread.lock() = self.previous;
+    }
 }
 
 impl BridgeShared {
@@ -170,12 +194,39 @@ impl BridgeShared {
         }
     }
 
-    /// Retain `update` for late activations **iff it is self-contained**
-    /// (carries tree metadata). A fragment must never become the answer to
-    /// a fresh screen reader — see the `latest` field doc.
-    pub(crate) fn retain_if_self_contained(&self, update: &TreeUpdate) {
+    /// Mark the adapter's activation running on this thread until the guard
+    /// drops.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn activating(&self) -> Activating<'_> {
+        let previous = self
+            .activation_thread
+            .lock()
+            .replace(std::thread::current().id());
+        Activating {
+            thread: &self.activation_thread,
+            previous,
+        }
+    }
+
+    /// What of a published `update` the adapter is handed. A self-contained
+    /// update (one carrying tree metadata) is retained for late activations;
+    /// a fragment never is, since it must not become the answer to a fresh
+    /// screen reader (see the `latest` field doc). The update comes back for
+    /// the adapter, except when it is published on the thread running the
+    /// adapter's activation, from inside the listener: the adapter holds its
+    /// state across that call and would re-enter it, so the update goes no
+    /// further, and the activation answers it from the retained tree. A
+    /// fragment published there is dropped; the composition root publishes a
+    /// whole tree when told of an activation.
+    #[must_use = "the update the adapter is to apply"]
+    pub(crate) fn publish(&self, update: TreeUpdate) -> Option<TreeUpdate> {
         if update.tree.is_some() {
             *self.latest.lock() = Some(update.clone());
+        }
+        let activating = *self.activation_thread.lock();
+        match activating {
+            Some(thread) if thread == std::thread::current().id() => None,
+            _ => Some(update),
         }
     }
 
@@ -249,5 +300,102 @@ mod tests {
             1,
             "the next activation is told"
         );
+    }
+}
+
+/// The activation as AccessKit's adapters run it, which the web host has none
+/// of.
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod activation_tests {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use accesskit::{ActivationHandler, Node, NodeId, Role, TreeId, TreeInfo, TreeUpdate};
+    use parking_lot::Mutex;
+
+    use super::{Activation, BridgeShared};
+
+    /// A whole tree of one button labelled `label`.
+    fn tree(label: &str) -> TreeUpdate {
+        let root = NodeId(1);
+        let mut node = Node::new(Role::Button);
+        node.set_label(label.to_string());
+        TreeUpdate {
+            nodes: vec![(root, node)],
+            tree: Some(TreeInfo::new(root)),
+            tree_id: TreeId::ROOT,
+            focus: root,
+        }
+    }
+
+    /// The label of the root of `update`.
+    fn label(update: &TreeUpdate) -> Option<&str> {
+        update.nodes.first().and_then(|(_, node)| node.label())
+    }
+
+    /// The adapters hold their own state across the activation (a `RefCell`
+    /// borrow under UIA and NSAccessibility, a mutex under AT-SPI), so a tree
+    /// the listener publishes from inside it is the activation's answer and
+    /// never reaches the adapter there; once the activation returned, a
+    /// publish reaches the adapter again. A fragment published there answers
+    /// nothing. Red-check: let `publish` hand the update on during the
+    /// activation (the listener sees it come back, as the adapter would).
+    #[test]
+    fn a_tree_published_from_inside_the_activation_is_its_answer() {
+        let shared = Arc::new(BridgeShared::new());
+        let _ = shared.publish(tree("stale"));
+        let passed_on = Arc::new(Mutex::new(Vec::new()));
+        let inside = Arc::clone(&shared);
+        let log = Arc::clone(&passed_on);
+        shared.set_activation_listener(Arc::new(move |active| {
+            if !active {
+                return;
+            }
+            let mut fragment = tree("fragment");
+            fragment.tree = None;
+            for update in [tree("Submit"), fragment] {
+                if let Some(update) = inside.publish(update) {
+                    log.lock().push(update);
+                }
+            }
+        }));
+
+        let answer = Activation(Arc::clone(&shared))
+            .request_initial_tree()
+            .expect("the activation answers a tree");
+        assert_eq!(label(&answer), Some("Submit"), "the tree published inside");
+        assert!(
+            passed_on.lock().is_empty(),
+            "nothing published inside the activation reached the adapter"
+        );
+        assert!(shared.is_active());
+
+        let after = shared
+            .publish(tree("later"))
+            .expect("a publish after the activation reaches the adapter");
+        assert_eq!(label(&after), Some("later"));
+    }
+
+    /// The activation marks only its own thread: a publish another thread
+    /// makes while it runs reaches the adapter, which serializes it itself.
+    #[test]
+    fn a_publish_on_another_thread_during_the_activation_reaches_the_adapter() {
+        let shared = Arc::new(BridgeShared::new());
+        let inside = Arc::clone(&shared);
+        let passed_on = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&passed_on);
+        shared.set_activation_listener(Arc::new(move |_| {
+            let elsewhere = Arc::clone(&inside);
+            let counted = Arc::clone(&counted);
+            std::thread::spawn(move || {
+                if elsewhere.publish(tree("elsewhere")).is_some() {
+                    counted.fetch_add(1, Ordering::SeqCst);
+                }
+            })
+            .join()
+            .expect("the publishing thread");
+        }));
+        let _ = Activation(Arc::clone(&shared)).request_initial_tree();
+        assert_eq!(passed_on.load(Ordering::SeqCst), 1);
     }
 }

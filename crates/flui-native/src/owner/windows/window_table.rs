@@ -83,6 +83,11 @@ impl<T> WindowTable<T> {
             .map(|kept| update(&mut kept.value))
     }
 
+    /// Whether the table keeps a value for no window.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.windows.borrow().is_empty()
+    }
+
     /// The window `hwnd` names, while the table keeps a value for it.
     pub(crate) fn window_of(&self, hwnd: HWND) -> Option<WindowRef> {
         self.windows

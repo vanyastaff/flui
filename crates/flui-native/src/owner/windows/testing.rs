@@ -66,6 +66,7 @@ impl<C: ClassHooks> WindowsHost for QuietHost<C> {
             hooks: C::hooks(),
             input: Rc::new(NoInputs),
             text: Rc::new(NoTexts),
+            modal_loops: Rc::default(),
         }
     }
 
@@ -282,5 +283,30 @@ pub(crate) struct NoTexts;
 impl WindowTexts for NoTexts {
     fn store_host(&self, _window: WindowRef) -> Option<Rc<dyn TextStoreHost>> {
         None
+    }
+}
+
+/// A window as the class's hooks are told of it, under an identity of its
+/// own and with no native window behind it: for a hook that keeps only what
+/// names the window.
+pub(crate) fn created_window() -> CreatedWindow {
+    CreatedWindow {
+        hwnd: HWND::default(),
+        identity: super::WindowIdentity::mint_from(super::WindowIdentity::source()),
+        client_size: (0, 0),
+        scale: super::WindowScale::unscaled(),
+        delivery: Arc::new(crate::owner::window_delivery::WindowDelivery::new(
+            flui_testing::window_handler::RecordingWindowHandler::new(),
+            flui_platform::input_capabilities::InputCapabilities::UNAVAILABLE,
+        )),
+        app_hooks: Rc::new(std::cell::RefCell::new(super::AppHooks::new(
+            Arc::new(AppDelivery::new()),
+            std::sync::Weak::new(),
+        ))),
+        preferences: Rc::new(NoPreferences),
+        hooks: Rc::new([]),
+        apartment: None,
+        drag: Arc::new(NoDrag),
+        modal_loops: Rc::default(),
     }
 }

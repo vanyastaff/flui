@@ -28,7 +28,7 @@ use crate::storage::UserDataDirs;
 use crate::text::windows::Tsf;
 use crate::version::gate::windows::WindowsBuild;
 use crate::window::windows::proc::WindowProc;
-use crate::window::windows::{WindowSet, WindowsWindow};
+use crate::window::windows::{CloakWatch, WindowSet, WindowsWindow};
 
 /// The Windows host's table.
 #[derive(Debug)]
@@ -60,26 +60,33 @@ impl WindowsHost for Windows {
 
     /// The text services, which hear a window's moves before its procedure
     /// answers them and answer nothing themselves; the window's own messages;
+    /// the thread's one subscription to cloak changes, which answers nothing;
     /// its input (the mouse, pointers, wheel, keyboard and keyboard layout,
     /// and the precision touchpad's hit test and pacing timer); the session,
     /// whose lock and unlock it answers; and the drop target, which answers
     /// nothing. The hooks list disjoint messages
     /// (`the_window_hooks_answer_disjoint_messages`); what none answers gets
-    /// the default procedure. A created window activates TSF, then gets its
-    /// input with its touchpad viewport, then hears its session, then
-    /// registers its drop target. The text services are the class's text,
-    /// which the window hands out.
+    /// the default procedure. A created window activates TSF, is watched for
+    /// cloaks, then gets its input with its touchpad viewport, then hears its
+    /// session, then registers its drop target. The text services are the
+    /// class's text, which the window hands out.
     fn window_class() -> WindowClass {
         let input = InputWindows::new();
         let text = Tsf::new();
         let hooks: WindowHooks = Rc::new([
             Rc::clone(&text) as Rc<dyn WindowMessages>,
             Rc::new(WindowProc),
+            Rc::new(CloakWatch::default()),
             Rc::clone(&input) as Rc<dyn WindowMessages>,
             Rc::new(SessionWindows::default()),
             DropTargetRegistration::new(),
         ]);
-        WindowClass { hooks, input, text }
+        WindowClass {
+            hooks,
+            input,
+            text,
+            modal_loops: Rc::default(),
+        }
     }
 
     fn preferences(owner: &OwnerSeeds<'_>) -> Result<Rc<dyn OwnerPreferences>, PlatformError> {
