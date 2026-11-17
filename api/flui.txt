@@ -11983,6 +11983,16 @@ pub const fn flui::platform::Availability::is_available(self) -> bool
 variant flui::platform::Availability::Emulated // at 1
 variant flui::platform::Availability::Native // at 0
 variant flui::platform::Availability::Unavailable // at 2
+pub struct flui::platform::Backoff { .. }
+impl Clone for flui::platform::Backoff
+impl Copy for flui::platform::Backoff
+impl Eq for flui::platform::Backoff
+impl PartialEq for flui::platform::Backoff
+impl core::fmt::Debug for flui::platform::Backoff
+impl core::hash::Hash for flui::platform::Backoff
+impl core::marker::StructuralPartialEq for flui::platform::Backoff
+pub const fn flui::platform::Backoff::new(first: core::time::Duration, ceiling: core::time::Duration) -> Self
+pub fn flui::platform::Backoff::delay(self, misses: u32) -> core::time::Duration
 pub enum flui::platform::Brightness
 impl Clone for flui::platform::Brightness
 impl Copy for flui::platform::Brightness
@@ -12024,15 +12034,16 @@ field flui::platform::CapabilityParts::activates: flui::platform::WindowCapabili
 field flui::platform::CapabilityParts::app_title_bar: flui::platform::WindowCapability // at 6
 field flui::platform::CapabilityParts::closes: flui::platform::WindowCapability // at 13
 field flui::platform::CapabilityParts::enters_fullscreen: flui::platform::WindowCapability // at 9
-field flui::platform::CapabilityParts::frame_rate_hint: flui::platform::Availability // at 21
+field flui::platform::CapabilityParts::frame_rate_hint: flui::platform::Availability // at 22
 field flui::platform::CapabilityParts::hides: flui::platform::WindowCapability // at 10
 field flui::platform::CapabilityParts::material: flui::platform::WindowCapability // at 14
 field flui::platform::CapabilityParts::maximizes: flui::platform::WindowCapability // at 8
 field flui::platform::CapabilityParts::minimizes: flui::platform::WindowCapability // at 7
-field flui::platform::CapabilityParts::observes_minimized: flui::platform::Availability // at 19
-field flui::platform::CapabilityParts::observes_position: flui::platform::Availability // at 18
-field flui::platform::CapabilityParts::places_at_open: flui::platform::Availability // at 20
+field flui::platform::CapabilityParts::observes_minimized: flui::platform::Availability // at 20
+field flui::platform::CapabilityParts::observes_position: flui::platform::Availability // at 19
+field flui::platform::CapabilityParts::places_at_open: flui::platform::Availability // at 21
 field flui::platform::CapabilityParts::reports_keyboard_inset: flui::platform::WindowCapability // at 16
+field flui::platform::CapabilityParts::reports_occlusion: flui::platform::WindowCapability // at 18
 field flui::platform::CapabilityParts::reports_presentation: flui::platform::WindowCapability // at 15
 field flui::platform::CapabilityParts::reports_system_gestures: flui::platform::WindowCapability // at 17
 field flui::platform::CapabilityParts::sets_constraints: flui::platform::WindowCapability // at 3
@@ -13601,6 +13612,7 @@ pub const fn flui::platform::WindowCapabilities::observes_position(&self) -> flu
 pub const fn flui::platform::WindowCapabilities::permits(&self, command: &flui::platform::WindowCommand) -> bool
 pub const fn flui::platform::WindowCapabilities::places_at_open(&self) -> flui::platform::Availability
 pub const fn flui::platform::WindowCapabilities::reports_keyboard_inset(&self) -> flui::platform::WindowCapability
+pub const fn flui::platform::WindowCapabilities::reports_occlusion(&self) -> flui::platform::WindowCapability
 pub const fn flui::platform::WindowCapabilities::reports_presentation(&self) -> flui::platform::WindowCapability
 pub const fn flui::platform::WindowCapabilities::reports_system_gestures(&self) -> flui::platform::WindowCapability
 pub const fn flui::platform::WindowCapabilities::revision(&self) -> flui::platform::WindowRevision
@@ -33166,15 +33178,16 @@ field flui_protocol::native_recording::Capabilities::activates: flui_protocol::n
 field flui_protocol::native_recording::Capabilities::app_title_bar: flui_protocol::native_recording::Capability // at 6
 field flui_protocol::native_recording::Capabilities::closes: flui_protocol::native_recording::Capability // at 13
 field flui_protocol::native_recording::Capabilities::enters_fullscreen: flui_protocol::native_recording::Capability // at 9
-field flui_protocol::native_recording::Capabilities::frame_rate_hint: flui_protocol::native_recording::Availability // at 21
+field flui_protocol::native_recording::Capabilities::frame_rate_hint: flui_protocol::native_recording::Availability // at 22
 field flui_protocol::native_recording::Capabilities::hides: flui_protocol::native_recording::Capability // at 10
 field flui_protocol::native_recording::Capabilities::material: flui_protocol::native_recording::Capability // at 14
 field flui_protocol::native_recording::Capabilities::maximizes: flui_protocol::native_recording::Capability // at 8
 field flui_protocol::native_recording::Capabilities::minimizes: flui_protocol::native_recording::Capability // at 7
-field flui_protocol::native_recording::Capabilities::observes_minimized: flui_protocol::native_recording::Availability // at 19
-field flui_protocol::native_recording::Capabilities::observes_position: flui_protocol::native_recording::Availability // at 18
-field flui_protocol::native_recording::Capabilities::places_at_open: flui_protocol::native_recording::Availability // at 20
+field flui_protocol::native_recording::Capabilities::observes_minimized: flui_protocol::native_recording::Availability // at 20
+field flui_protocol::native_recording::Capabilities::observes_position: flui_protocol::native_recording::Availability // at 19
+field flui_protocol::native_recording::Capabilities::places_at_open: flui_protocol::native_recording::Availability // at 21
 field flui_protocol::native_recording::Capabilities::reports_keyboard_inset: flui_protocol::native_recording::Capability // at 16
+field flui_protocol::native_recording::Capabilities::reports_occlusion: flui_protocol::native_recording::Capability // at 18
 field flui_protocol::native_recording::Capabilities::reports_presentation: flui_protocol::native_recording::Capability // at 15
 field flui_protocol::native_recording::Capabilities::reports_system_gestures: flui_protocol::native_recording::Capability // at 17
 field flui_protocol::native_recording::Capabilities::sets_constraints: flui_protocol::native_recording::Capability // at 3

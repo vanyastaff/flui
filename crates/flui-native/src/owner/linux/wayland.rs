@@ -47,9 +47,10 @@ pub(crate) use event_loop::ShownCursor;
 #[cfg(all(target_os = "linux", feature = "wayland"))]
 pub(crate) use event_loop::{
     CursorGlobals, DragWindow, FramePointer, LastInput, LiveOutputs, LoopWaker, LoopWindow,
-    MAX_OUTPUTS, PresentationTime, SeatInput, SeatText, SeatWindow, SeatWindowText, TextEvent,
-    TextRecorder, TextWire, WaylandClipboard, WaylandDisplays, WaylandDrag, WaylandHost,
-    WaylandInput, WaylandLoop, WaylandState, WindowSeed, WindowTable, bindable,
+    MAX_OUTPUTS, PresentationTime, SUSPENSION_VERSION, SeatInput, SeatText, SeatWindow,
+    SeatWindowText, TextEvent, TextRecorder, TextWire, WaylandClipboard, WaylandDisplays,
+    WaylandDrag, WaylandHost, WaylandInput, WaylandLoop, WaylandState, WindowSeed, WindowTable,
+    bindable,
 };
 #[cfg(all(target_os = "linux", feature = "wayland"))]
 pub(crate) use outputs::{OnOutputs, OutputFacts};
@@ -927,6 +928,10 @@ mod event_loop {
     /// The newest `xdg_wm_base`: version 5 announces what the compositor lets
     /// a toplevel do, version 6 says when it is suspended.
     const WM_BASE_VERSION: u32 = 6;
+    /// The `xdg_wm_base` (and `xdg_toplevel`) version from which the
+    /// compositor says when it suspends a toplevel: one it does not show,
+    /// covered by other windows among the reasons xdg-shell names.
+    pub(crate) const SUSPENSION_VERSION: u32 = 6;
     /// The newest `wl_output`; the loop binds every output only so that a
     /// surface's `enter` and `leave` name one.
     const OUTPUT_VERSION: u32 = 4;
@@ -2576,6 +2581,12 @@ mod event_loop {
         /// (`xdg-activation`).
         pub(crate) fn offers_activation(&self) -> bool {
             self.protocol.activation.is_some()
+        }
+
+        /// Whether the compositor's `xdg_wm_base` is new enough to say when it
+        /// suspends a toplevel, so a window reports a covering.
+        pub(crate) fn tells_suspension(&self) -> bool {
+            self.protocol.wm_base.version() >= SUSPENSION_VERSION
         }
 
         /// Run turns for `span` on the owner thread, for a test that drives
