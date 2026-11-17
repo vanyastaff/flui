@@ -7,10 +7,13 @@
 
 use proc_macro2::{Span, TokenStream};
 use quote::{format_ident, quote, quote_spanned};
+use syn::meta::ParseNestedMeta;
 use syn::{
-    Data, DeriveInput, Expr, Fields, GenericParam, Ident, LitStr, Path, Type, ext::IdentExt,
-    parse_quote, spanned::Spanned, visit::Visit,
+    Attribute, Data, DeriveInput, Expr, Fields, GenericParam, Ident, LitStr, Member, Path, Type,
+    ext::IdentExt, parse_quote, spanned::Spanned,
 };
+
+use crate::generics::mentions_param;
 
 /// A field's `default` attribute.
 enum DefaultAttr {
@@ -20,14 +23,89 @@ enum DefaultAttr {
     Expr(Expr),
 }
 
+/// A field's `level` attribute: the runtime's `Level` variant it names.
+#[derive(Clone, Copy)]
+enum Level {
+    Summary,
+    Detail,
+    Debug,
+}
+
+impl Level {
+    fn parse(ident: &Ident) -> syn::Result<Self> {
+        match ident.to_string().as_str() {
+            "summary" => Ok(Self::Summary),
+            "detail" => Ok(Self::Detail),
+            "debug" => Ok(Self::Debug),
+            _ => Err(syn::Error::new(
+                ident.span(),
+                "expected `summary`, `detail` or `debug`",
+            )),
+        }
+    }
+
+    fn variant(self) -> Ident {
+        format_ident!(
+            "{}",
+            match self {
+                Self::Summary => "Summary",
+                Self::Detail => "Detail",
+                Self::Debug => "Debug",
+            }
+        )
+    }
+}
+
+/// A field's `unit` attribute: the runtime's `Unit` variant it names.
+#[derive(Clone, Copy)]
+enum Unit {
+    LogicalPx,
+    DevicePx,
+    Seconds,
+    Degrees,
+    Radians,
+    Fraction,
+}
+
+impl Unit {
+    fn parse(ident: &Ident) -> syn::Result<Self> {
+        match ident.to_string().as_str() {
+            "logical_px" => Ok(Self::LogicalPx),
+            "device_px" => Ok(Self::DevicePx),
+            "seconds" => Ok(Self::Seconds),
+            "degrees" => Ok(Self::Degrees),
+            "radians" => Ok(Self::Radians),
+            "fraction" => Ok(Self::Fraction),
+            _ => Err(syn::Error::new(
+                ident.span(),
+                "expected `logical_px`, `device_px`, `seconds`, `degrees`, `radians` or `fraction`",
+            )),
+        }
+    }
+
+    fn variant(self) -> Ident {
+        format_ident!(
+            "{}",
+            match self {
+                Self::LogicalPx => "LogicalPx",
+                Self::DevicePx => "DevicePx",
+                Self::Seconds => "Seconds",
+                Self::Degrees => "Degrees",
+                Self::Radians => "Radians",
+                Self::Fraction => "Fraction",
+            }
+        )
+    }
+}
+
 /// What `#[inspect(...)]` says about one field.
 #[derive(Default)]
 struct FieldAttrs {
     skip: bool,
     name: Option<LitStr>,
     default: Option<DefaultAttr>,
-    level: Option<Ident>,
-    unit: Option<Ident>,
+    level: Option<Level>,
+    unit: Option<Unit>,
     with: Option<Path>,
     debug: bool,
 }
@@ -35,49 +113,36 @@ struct FieldAttrs {
 impl FieldAttrs {
     fn parse(field: &syn::Field) -> syn::Result<Self> {
         let mut attrs = Self::default();
-        for attr in &field.attrs {
-            if !attr.path().is_ident("inspect") {
-                continue;
-            }
+        for attr in inspect_attributes(&field.attrs) {
             attr.parse_nested_meta(|meta| {
                 if meta.path.is_ident("skip") {
-                    attrs.skip = true;
+                    set_flag(&mut attrs.skip, &meta)
                 } else if meta.path.is_ident("debug") {
-                    attrs.debug = true;
+                    set_flag(&mut attrs.debug, &meta)
                 } else if meta.path.is_ident("name") {
-                    attrs.name = Some(meta.value()?.parse()?);
+                    let name: LitStr = meta.value()?.parse()?;
+                    set_once(&mut attrs.name, name, &meta)
                 } else if meta.path.is_ident("default") {
-                    attrs.default = Some(if meta.input.peek(syn::Token![=]) {
+                    let default = if meta.input.peek(syn::Token![=]) {
                         DefaultAttr::Expr(meta.value()?.parse()?)
                     } else {
                         DefaultAttr::Type
-                    });
+                    };
+                    set_once(&mut attrs.default, default, &meta)
                 } else if meta.path.is_ident("level") {
-                    let level: Ident = meta.value()?.parse()?;
-                    if !matches!(level.to_string().as_str(), "summary" | "detail" | "debug") {
-                        return Err(syn::Error::new(
-                            level.span(),
-                            "expected `summary`, `detail` or `debug`",
-                        ));
-                    }
-                    attrs.level = Some(level);
+                    let level = Level::parse(&meta.value()?.parse()?)?;
+                    set_once(&mut attrs.level, level, &meta)
                 } else if meta.path.is_ident("unit") {
-                    let unit: Ident = meta.value()?.parse()?;
-                    if unit_variant(&unit).is_none() {
-                        return Err(syn::Error::new(
-                            unit.span(),
-                            "expected `logical_px`, `device_px`, `seconds`, `degrees`, `radians` or `fraction`",
-                        ));
-                    }
-                    attrs.unit = Some(unit);
+                    let unit = Unit::parse(&meta.value()?.parse()?)?;
+                    set_once(&mut attrs.unit, unit, &meta)
                 } else if meta.path.is_ident("with") {
-                    attrs.with = Some(meta.value()?.parse()?);
+                    let with: Path = meta.value()?.parse()?;
+                    set_once(&mut attrs.with, with, &meta)
                 } else {
-                    return Err(meta.error(
+                    Err(meta.error(
                         "unsupported inspect attribute; expected `skip`, `name`, `default`, `level`, `unit`, `with` or `debug`",
-                    ));
+                    ))
                 }
-                Ok(())
             })?;
         }
         let span = field.span();
@@ -110,67 +175,99 @@ impl FieldAttrs {
     }
 }
 
-fn unit_variant(unit: &Ident) -> Option<&'static str> {
-    Some(match unit.to_string().as_str() {
-        "logical_px" => "LogicalPx",
-        "device_px" => "DevicePx",
-        "seconds" => "Seconds",
-        "degrees" => "Degrees",
-        "radians" => "Radians",
-        "fraction" => "Fraction",
-        _ => return None,
-    })
+fn inspect_attributes(attrs: &[Attribute]) -> impl Iterator<Item = &Attribute> {
+    attrs.iter().filter(|attr| attr.path().is_ident("inspect"))
 }
 
-/// Whether a type names one of the given type parameters.
-struct MentionsParam<'a> {
-    params: &'a [&'a Ident],
-    found: bool,
-}
-
-impl<'ast> Visit<'ast> for MentionsParam<'_> {
-    fn visit_path(&mut self, path: &'ast syn::Path) {
-        if let Some(first) = path.segments.first()
-            && self.params.iter().any(|param| first.ident == **param)
-        {
-            self.found = true;
-        }
-        syn::visit::visit_path(self, path);
+/// Store an attribute's value; a second one for the same field is an error, since only one
+/// could take effect.
+fn set_once<T>(slot: &mut Option<T>, value: T, meta: &ParseNestedMeta<'_>) -> syn::Result<()> {
+    if slot.replace(value).is_some() {
+        return Err(given_twice(meta));
     }
+    Ok(())
 }
 
-fn mentions(ty: &Type, params: &[&Ident]) -> bool {
-    let mut visitor = MentionsParam {
-        params,
-        found: false,
-    };
-    visitor.visit_type(ty);
-    visitor.found
+fn set_flag(flag: &mut bool, meta: &ParseNestedMeta<'_>) -> syn::Result<()> {
+    if std::mem::replace(flag, true) {
+        return Err(given_twice(meta));
+    }
+    Ok(())
+}
+
+fn given_twice(meta: &ParseNestedMeta<'_>) -> syn::Error {
+    meta.error("this inspect attribute is given twice for the field")
+}
+
+/// `#[inspect(...)]` describes a field: on the type or on a variant it would do nothing, so it
+/// is refused there.
+fn refuse_item_attributes(attrs: &[Attribute]) -> syn::Result<()> {
+    inspect_attributes(attrs).next().map_or(Ok(()), |attr| {
+        Err(syn::Error::new_spanned(
+            attr,
+            "`#[inspect(...)]` describes a field; write it on the field it describes",
+        ))
+    })
 }
 
 /// One field to describe.
 struct Described<'a> {
     attrs: FieldAttrs,
     ty: &'a Type,
-    /// The field's name as written: the identifier, or the position of a tuple field.
-    name: String,
+    /// The name the field reports under: its `name` attribute, or else its identifier
+    /// (`r#` stripped) or its position in a tuple.
+    reported: String,
     /// The expression that borrows the field: `&self.width`, or a binding of a `match` arm.
     access: TokenStream,
     span: Span,
 }
 
-impl Described<'_> {
-    /// The name the field reports under: its `name` attribute, or its own name.
-    fn reported(&self) -> String {
-        self.attrs
-            .name
-            .as_ref()
-            .map_or_else(|| self.name.clone(), LitStr::value)
+/// What the derive describes: a struct's fields, or the fields of each of an enum's variants.
+enum Shape<'a> {
+    Struct(Vec<Described<'a>>),
+    Enum(Vec<(&'a syn::Variant, Vec<Described<'a>>)>),
+}
+
+impl<'a> Shape<'a> {
+    /// Read the type's fields and their attributes. Every refusal the derive makes of its
+    /// input is made here, before any path of the runtime is looked up.
+    fn parse(input: &'a DeriveInput) -> syn::Result<Self> {
+        refuse_item_attributes(&input.attrs)?;
+        match &input.data {
+            Data::Struct(data) => Ok(Self::Struct(described(
+                &data.fields,
+                None,
+                |member, _| quote!(&self.#member),
+            )?)),
+            Data::Enum(data) => data
+                .variants
+                .iter()
+                .map(|variant| {
+                    refuse_item_attributes(&variant.attrs)?;
+                    let fields = described(&variant.fields, Some("variant"), |_, index| {
+                        let binding = variant_binding(index);
+                        quote!(#binding)
+                    })?;
+                    Ok((variant, fields))
+                })
+                .collect::<syn::Result<Vec<_>>>()
+                .map(Self::Enum),
+            Data::Union(_) => Err(syn::Error::new(
+                input.span(),
+                "`#[derive(Inspect)]` does not support unions: which field is live is unknown; implement `Inspect` by hand",
+            )),
+        }
     }
+}
+
+/// The name a `match` arm binds a variant's field at `index` to.
+fn variant_binding(index: usize) -> Ident {
+    format_ident!("__inspect_{}", index)
 }
 
 /// Expand `#[derive(Inspect)]`.
 pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
+    let shape = Shape::parse(input)?;
     let foundation = crate::runtime_path::Runtime::Foundation.resolve(input.ident.span())?;
     let runtime: Path = parse_quote!(#foundation::inspect);
     let ident = &input.ident;
@@ -186,39 +283,30 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
         .collect();
     let mut bounds: Vec<TokenStream> = Vec::new();
 
-    let body = match &input.data {
-        Data::Struct(data) => {
-            let fields = described(&data.fields, None, |name, _| {
-                let member: syn::Member =
-                    syn::parse_str(name).expect("BUG: a field name parses as a member");
-                quote!(&self.#member)
-            })?;
-            let calls = field_calls(&fields, &runtime, &type_params, &mut bounds);
+    let body = match &shape {
+        Shape::Struct(fields) => {
+            let calls = field_calls(fields, &runtime, &type_params, &mut bounds);
             quote!(#(#calls)*)
         }
-        Data::Enum(data) => {
-            let mut arms = Vec::with_capacity(data.variants.len());
-            for variant in &data.variants {
+        Shape::Enum(variants) if variants.is_empty() => quote!(match *self {}),
+        Shape::Enum(variants) => {
+            let arms = variants.iter().map(|(variant, fields)| {
                 let variant_ident = &variant.ident;
                 let variant_name = variant_ident.unraw().to_string();
-                let fields = described(&variant.fields, Some("variant"), |_, index| {
-                    let binding = format_ident!("__inspect_{}", index);
-                    quote!(#binding)
-                })?;
-                let bindings = variant.fields.iter().enumerate().map(|(index, field)| {
-                    let binding = format_ident!("__inspect_{}", index);
-                    field
-                        .ident
-                        .as_ref()
-                        .map_or_else(|| quote!(#binding), |name| quote!(#name: #binding))
+                let bindings = variant.fields.members().enumerate().map(|(index, member)| {
+                    let binding = variant_binding(index);
+                    match member {
+                        Member::Named(name) => quote!(#name: #binding),
+                        Member::Unnamed(_) => quote!(#binding),
+                    }
                 });
                 let pattern = match &variant.fields {
                     Fields::Named(_) => quote!(Self::#variant_ident { #(#bindings),* }),
                     Fields::Unnamed(_) => quote!(Self::#variant_ident ( #(#bindings),* )),
                     Fields::Unit => quote!(Self::#variant_ident),
                 };
-                let calls = field_calls(&fields, &runtime, &type_params, &mut bounds);
-                arms.push(quote! {
+                let calls = field_calls(fields, &runtime, &type_params, &mut bounds);
+                quote! {
                     #[allow(unused_variables, reason = "a skipped field is bound and not read")]
                     #pattern => {
                         out.value(
@@ -227,19 +315,11 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
                         );
                         #(#calls)*
                     }
-                });
-            }
-            if arms.is_empty() {
-                quote!(match *self {})
-            } else {
-                quote!(match self { #(#arms)* })
-            }
-        }
-        Data::Union(_) => {
-            return Err(syn::Error::new(
-                input.span(),
-                "`#[derive(Inspect)]` does not support unions: which field is live is unknown; implement `Inspect` by hand",
-            ));
+                }
+            });
+            // Collected here: the arms borrow `bounds`, which the `where` clause reads next.
+            let arms: Vec<TokenStream> = arms.collect();
+            quote!(match self { #(#arms)* })
         }
     };
 
@@ -262,18 +342,8 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
         }
     });
 
-    let fieldless_enum = match &input.data {
-        Data::Enum(data) if !data.variants.is_empty() => data
-            .variants
-            .iter()
-            .all(|variant| matches!(variant.fields, Fields::Unit)),
-        _ => false,
-    };
-    let to_value = fieldless_enum.then(|| {
-        let Data::Enum(data) = &input.data else {
-            unreachable!("BUG: only an enum is a fieldless enum")
-        };
-        let arms = data.variants.iter().map(|variant| {
+    let to_value = fieldless_variants(&input.data).map(|variants| {
+        let arms = variants.map(|variant| {
             let variant_ident = &variant.ident;
             let name = variant_ident.unraw().to_string();
             quote!(Self::#variant_ident => #name)
@@ -309,6 +379,20 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
     })
 }
 
+/// The variants of an enum that has some and whose variants all carry no field: the shape
+/// that is a value of its own.
+fn fieldless_variants(data: &Data) -> Option<impl Iterator<Item = &syn::Variant>> {
+    let Data::Enum(data) = data else {
+        return None;
+    };
+    let fieldless = !data.variants.is_empty()
+        && data
+            .variants
+            .iter()
+            .all(|variant| matches!(variant.fields, Fields::Unit));
+    fieldless.then(|| data.variants.iter())
+}
+
 /// The fields to describe, with their attributes; skipped fields are left out.
 ///
 /// Two fields may not report under one name, nor under one the derive writes itself
@@ -316,26 +400,21 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
 fn described<'a>(
     fields: &'a Fields,
     reserved: Option<&str>,
-    access: impl Fn(&str, usize) -> TokenStream,
+    access: impl Fn(&Member, usize) -> TokenStream,
 ) -> syn::Result<Vec<Described<'a>>> {
     let mut out: Vec<Described<'a>> = Vec::with_capacity(fields.len());
-    for (index, field) in fields.iter().enumerate() {
+    for (index, (field, member)) in fields.iter().zip(fields.members()).enumerate() {
         let attrs = FieldAttrs::parse(field)?;
         if attrs.skip {
             continue;
         }
-        let name = field
-            .ident
-            .as_ref()
-            .map_or_else(|| index.to_string(), |ident| ident.unraw().to_string());
-        let written = field
-            .ident
-            .as_ref()
-            .map_or_else(|| index.to_string(), ToString::to_string);
-        let reported = attrs
-            .name
-            .as_ref()
-            .map_or_else(|| name.clone(), LitStr::value);
+        let reported = attrs.name.as_ref().map_or_else(
+            || match &member {
+                Member::Named(ident) => ident.unraw().to_string(),
+                Member::Unnamed(position) => position.index.to_string(),
+            },
+            LitStr::value,
+        );
         if reserved == Some(reported.as_str()) {
             return Err(syn::Error::new(
                 field.span(),
@@ -344,7 +423,7 @@ fn described<'a>(
                 ),
             ));
         }
-        if out.iter().any(|other| other.reported() == reported) {
+        if out.iter().any(|other| other.reported == reported) {
             return Err(syn::Error::new(
                 field.span(),
                 format!(
@@ -353,10 +432,10 @@ fn described<'a>(
             ));
         }
         out.push(Described {
-            access: access(&written, index),
+            access: access(&member, index),
             attrs,
             ty: &field.ty,
-            name,
+            reported,
             span: field.ty.span(),
         });
     }
@@ -375,8 +454,8 @@ fn field_calls(
         .map(|(index, field)| {
             let ty = field.ty;
             let access = &field.access;
-            let name = field.reported();
-            let generic = mentions(ty, type_params);
+            let name = &field.reported;
+            let generic = mentions_param(ty, type_params);
             let start = if let Some(with) = &field.attrs.with {
                 quote_spanned!(field.span=> out.value(#name, #with(#access)))
             } else if field.attrs.debug {
@@ -390,22 +469,12 @@ fn field_calls(
                 }
                 quote_spanned!(field.span=> out.field(#name, #access))
             };
-            let level = field.attrs.level.as_ref().map(|level| {
-                let variant = format_ident!(
-                    "{}",
-                    match level.to_string().as_str() {
-                        "summary" => "Summary",
-                        "detail" => "Detail",
-                        _ => "Debug",
-                    }
-                );
+            let level = field.attrs.level.map(|level| {
+                let variant = level.variant();
                 quote!(.level(#runtime::Level::#variant))
             });
-            let unit = field.attrs.unit.as_ref().map(|unit| {
-                let variant = format_ident!(
-                    "{}",
-                    unit_variant(unit).expect("BUG: the unit was checked when parsed")
-                );
+            let unit = field.attrs.unit.map(|unit| {
+                let variant = unit.variant();
                 quote!(.unit(#runtime::Unit::#variant))
             });
             let (default_let, default_call) = match &field.attrs.default {
@@ -437,4 +506,59 @@ fn field_calls(
             }
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use syn::parse_quote;
+
+    use super::*;
+
+    // What an accepted derive writes is tested from a consuming crate: expansion resolves the
+    // runtime path from the consuming manifest, which this crate lacks. A refusal is made
+    // before that lookup, so `expand` answers with it here.
+    #[test]
+    fn an_inspect_attribute_that_would_do_nothing_is_refused() {
+        let cases: [(&str, DeriveInput, &str); 6] = [
+            (
+                "on the type",
+                parse_quote! { #[inspect(skip)] struct S { width: f64 } },
+                "describes a field",
+            ),
+            (
+                "on a variant",
+                parse_quote! { enum E { #[inspect(name = "a")] A } },
+                "describes a field",
+            ),
+            (
+                "a name given twice",
+                parse_quote! { struct S { #[inspect(name = "a", name = "b")] width: f64 } },
+                "given twice",
+            ),
+            (
+                "a level given in two attributes",
+                parse_quote! {
+                    struct S { #[inspect(level = detail)] #[inspect(level = debug)] width: f64 }
+                },
+                "given twice",
+            ),
+            (
+                "a flag given twice",
+                parse_quote! { enum E { A(#[inspect(debug, debug)] f64) } },
+                "given twice",
+            ),
+            (
+                "a default given both ways",
+                parse_quote! { struct S { #[inspect(default, default = 1.0)] width: f64 } },
+                "given twice",
+            ),
+        ];
+        for (case, input, expected) in cases {
+            let error = match expand(&input) {
+                Ok(_) => panic!("BUG: `{case}` expands"),
+                Err(error) => error.to_string(),
+            };
+            assert!(error.contains(expected), "{case}: {error}");
+        }
+    }
 }

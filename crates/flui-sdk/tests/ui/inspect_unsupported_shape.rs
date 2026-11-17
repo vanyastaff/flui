@@ -36,4 +36,22 @@ struct Renamed {
     height: f64,
 }
 
+#[derive(Inspect)]
+#[inspect(skip)]
+struct OnTheType {
+    width: f64,
+}
+
+#[derive(Inspect)]
+enum OnAVariant {
+    #[inspect(name = "round")]
+    Circle,
+}
+
+#[derive(Inspect)]
+struct NamedTwice {
+    #[inspect(name = "w", name = "width")]
+    width: f64,
+}
+
 fn main() {}

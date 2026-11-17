@@ -87,7 +87,7 @@ serde_json = { workspace = true }
 
 toml = "1.1"
 # Rewrites the one key `flui` manages in a project's `.cargo/config.toml`, keeping the rest.
-toml_edit = "0.25"
+toml_edit = { workspace = true, features = ["parse", "display"] }
 
 # Utilities
 which = { workspace = true }

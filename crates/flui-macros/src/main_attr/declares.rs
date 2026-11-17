@@ -47,7 +47,7 @@ impl<T> Declared<T> {
                 quote! {
                     {
                         const PART: &[#ty] = &[#(#list),*];
-                        if cfg!(feature = #feature) { PART } else { &[] }
+                        if ::core::cfg!(feature = #feature) { PART } else { &[] }
                     }
                 }
             });

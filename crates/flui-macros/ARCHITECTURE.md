@@ -49,6 +49,9 @@ manifest, in this order:
 3. The `flui` facade, whose runtime modules serve an application.
 
 Every step honors Cargo renames without per-derive configuration attributes.
+`#[flui::main]` skips the first step and looks up `flui-app`, then the facade:
+a package has no entry function, so the SDK does not re-export the application
+runtime.
 
 The SDK comes first because `proc-macro-crate` reads `[dependencies]` and
 `[dev-dependencies]` alike: a package with the facade or an internal crate as a
@@ -68,6 +71,23 @@ Owner unit tests cover expansion inside libraries; the consumer integration test
 `external_consumers_extend_and_test_through_the_facade` (`tests/facade_consumer.rs` at the root)
 covers facade-only and renamed-facade manifests. SDK-only manifests and the SDK beside a facade
 dev-dependency are **Unasserted:** no test pins this.
+
+### An attribute that would do nothing is a compile error
+
+A derive registers its helper attribute (`view`, `inspect`, `route`, `query`)
+for the whole item, so rustc accepts it anywhere inside: on the type, a
+variant or a field. Each derive reads its input into a typed description
+before it looks up a runtime path, and that reading refuses every place and
+every repetition it could not act on: `#[view(site)]` on an enum's field,
+`#[inspect(...)]` on a type or a variant, one `inspect` key twice on a field.
+Accepting them would leave the author with a view that reports no creation
+site, or a field that reports under a name they did not expect, and no
+diagnostic. Because the refusals precede the manifest lookup they are unit
+tests of `expand` in this crate
+(`a_misplaced_view_attribute_is_refused_with_its_place`,
+`an_inspect_attribute_that_would_do_nothing_is_refused`); the trybuild cases
+`view_attribute_placement` in `flui-view` and `inspect_unsupported_shape` in
+`flui-sdk` pin what the author sees.
 
 ### Inspect derive: the field type is the mapping
 

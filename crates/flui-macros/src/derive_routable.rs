@@ -70,7 +70,7 @@ enum QueryKind {
     Defaulted,
 }
 
-/// Entry point for `#[proc_macro_derive(Routable, attributes(route))]`.
+/// Expand `#[derive(Routable)]`.
 pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
     let Data::Enum(data) = &input.data else {
         return Err(syn::Error::new(
@@ -107,7 +107,7 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
         return Err(errors);
     }
 
-    let patterns: Vec<Vec<Segment>> = routes.iter().map(|r| r.segments.clone()).collect();
+    let patterns: Vec<&[Segment]> = routes.iter().map(|r| r.segments.as_slice()).collect();
     if let Some((earlier, later)) = pattern::first_conflict(&patterns) {
         return Err(syn::Error::new(
             routes[later].literal.span(),
@@ -208,7 +208,7 @@ fn route(variant: &Variant) -> syn::Result<Route<'_>> {
                 format!(
                     "derive(Routable) takes unit and named-field variants; name the fields of \
                      `{}`. A tuple variant that nests a child route type (`#[nest]`) is not \
-                     supported yet, see ADR-0330's implementation series",
+                     supported yet",
                     variant.ident
                 ),
             ));

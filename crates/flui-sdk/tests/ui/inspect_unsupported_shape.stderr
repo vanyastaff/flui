@@ -33,3 +33,21 @@ error: another field already reports as `width`; give one of them another name w
    |
 35 |     #[inspect(name = "width")]
    |     ^
+
+error: `#[inspect(...)]` describes a field; write it on the field it describes
+  --> tests/ui/inspect_unsupported_shape.rs:40:1
+   |
+40 | #[inspect(skip)]
+   | ^^^^^^^^^^^^^^^^
+
+error: `#[inspect(...)]` describes a field; write it on the field it describes
+  --> tests/ui/inspect_unsupported_shape.rs:47:5
+   |
+47 |     #[inspect(name = "round")]
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: this inspect attribute is given twice for the field
+  --> tests/ui/inspect_unsupported_shape.rs:53:27
+   |
+53 |     #[inspect(name = "w", name = "width")]
+   |                           ^^^^^^^^^^^^^^

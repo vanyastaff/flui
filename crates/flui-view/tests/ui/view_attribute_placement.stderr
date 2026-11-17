@@ -1,0 +1,23 @@
+error: `#[view(...)]` marks a field of a struct; an enum's variants and a union's fields take none
+  --> tests/ui/view_attribute_placement.rs:11:9
+   |
+11 |         #[view(site)]
+   |         ^^^^^^^^^^^^^
+
+error: expected `inspect`; `site` marks a field
+  --> tests/ui/view_attribute_placement.rs:17:8
+   |
+17 | #[view(site)]
+   |        ^^^^
+
+error: expected `site`; `inspect` goes on the type
+  --> tests/ui/view_attribute_placement.rs:24:12
+   |
+24 |     #[view(inspect)]
+   |            ^^^^^^^
+
+error: only one field can be marked `#[view(site)]`
+  --> tests/ui/view_attribute_placement.rs:32:12
+   |
+32 |     #[view(site)]
+   |            ^^^^

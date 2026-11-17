@@ -56,7 +56,7 @@ pub(crate) fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenS
 
         // The manifest the declarations come from: naming it makes Cargo
         // compile the crate again when it changes.
-        const _: &[u8] = include_bytes!(#manifest);
+        const _: &[u8] = ::core::include_bytes!(#manifest);
 
         // What the function returns is one an entry may: checked on every
         // target, so a signature Android would refuse fails on the desktop too.
