@@ -24,9 +24,34 @@ pub(crate) struct RecordedContent {
     /// it: outside that rect the retained pixels under it may be stale, so
     /// the next frame renders in full.
     pub(crate) straddled: bool,
+    /// The work the frame's walk and recording did.
+    pub(crate) counters: RasterCounters,
+}
+
+/// The raster side's work for one frame, which the engine's gate tests read
+/// (ADR-0304 §9) and the frame's trace event carries. Fixed fields, so
+/// counting allocates nothing; each adds saturating.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct RasterCounters {
+    /// The scene nodes the walk entered: a version's boundaries it did not
+    /// cull, a tree's layers.
+    pub(crate) nodes_entered: u64,
+    /// The slots and chunks the walk asked its cull about.
+    pub(crate) cull_tests: u64,
+    /// The chunks whose commands the frame recorded into the painter's IR.
+    pub(crate) chunks_recorded: u64,
     /// The passes a partial frame redrew its region in, one per rect of its
     /// [`RegionPlan`]; `0` for a full frame.
-    pub(crate) region_passes: u32,
+    pub(crate) region_passes: u64,
+}
+
+impl std::ops::AddAssign for RasterCounters {
+    fn add_assign(&mut self, rhs: Self) {
+        self.nodes_entered = self.nodes_entered.saturating_add(rhs.nodes_entered);
+        self.cull_tests = self.cull_tests.saturating_add(rhs.cull_tests);
+        self.chunks_recorded = self.chunks_recorded.saturating_add(rhs.chunks_recorded);
+        self.region_passes = self.region_passes.saturating_add(rhs.region_passes);
+    }
 }
 
 /// The colour a frame starts from: the full clear pass and the clear a
@@ -128,9 +153,9 @@ pub(crate) struct FrameProtocol {
     /// protocol ([`Self::end_unmanaged`]).
     force_full_next_frame: bool,
     font_source: FontSource,
-    /// The passes the last frame [`Self::run`] recorded redrew its region
-    /// in; `0` after a full frame or one that failed.
-    region_passes: u32,
+    /// What the last frame [`Self::run`] was handed did: zero after a skipped
+    /// frame or one that failed.
+    counters: RasterCounters,
     /// How a partial frame's region is planned: [`RegionPlan::of`], or rect
     /// by rect where a test asked for it (`plan_rect_by_rect`, test builds only).
     plan_region: RegionPlanner,
@@ -150,7 +175,7 @@ impl FrameProtocol {
             retained: RetainedTarget::default(),
             force_full_next_frame: false,
             font_source: FontSource::Ordinary,
-            region_passes: 0,
+            counters: RasterCounters::default(),
             plan_region: RegionPlan::of,
         }
     }
@@ -225,6 +250,8 @@ impl FrameProtocol {
 
     /// The plan for the next frame, applying a pending promotion to full.
     pub(crate) fn plan(&mut self, intermediate_required: bool) -> FramePlan {
+        // Every frame plans first, so a skipped or failed frame counts nothing.
+        self.counters = RasterCounters::default();
         if std::mem::take(&mut self.force_full_next_frame) {
             self.damage.mark_full_repaint();
             tracing::trace!("promoting this frame to a full repaint");
@@ -358,7 +385,6 @@ impl FrameProtocol {
             return Ok(());
         }
         self.force_full_next_frame = true;
-        self.region_passes = 0;
         let _submission_scope = domain.begin_frame_scope()?;
         let steps = FrameCleanup(steps);
         let mut encoder = domain
@@ -416,16 +442,22 @@ impl FrameProtocol {
             self.retained.commit(candidate);
         }
         self.force_full_next_frame = recorded.straddled;
-        self.region_passes = recorded.region_passes;
-        tracing::trace!(region_passes = self.region_passes, "frame submitted");
+        self.counters = recorded.counters;
+        tracing::trace!(
+            nodes_entered = self.counters.nodes_entered,
+            cull_tests = self.counters.cull_tests,
+            chunks_recorded = self.counters.chunks_recorded,
+            region_passes = self.counters.region_passes,
+            "frame submitted"
+        );
         Ok(())
     }
 
-    /// The passes the last frame run redrew its region in: one per rect of
-    /// its [`RegionPlan`], `0` after a full frame or one that failed.
+    /// What the last frame run did; zero after a skipped frame or one that
+    /// failed.
     #[cfg(test)]
-    pub(crate) fn region_passes(&self) -> u32 {
-        self.region_passes
+    pub(crate) fn counters(&self) -> RasterCounters {
+        self.counters
     }
 
     /// The frame presented: the damage it covered is paid.
