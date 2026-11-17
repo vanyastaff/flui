@@ -81,9 +81,11 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 - The panic boundary's Apple entries (AppKit and UIKit methods, blocks, GCD work items) are
   type-checked only: no panic has been seen contained on a Mac or an iPhone
   ([#1840](https://github.com/vanyastaff/flui/issues/1840)).
-- The panic boundary's Android entries (`FluiView`'s native methods, the closures posted to the
-  Java main thread) are type-checked, and their models run on Linux; no deliberate panic has been
-  seen contained on a device, nor a native method returning with its exception cleared.
+- The panic boundary's Android entries (the native methods of FLUI's Java classes, the closures
+  posted to the Java main thread, `FluiView`'s installation) are type-checked, and their models run
+  on Linux through the code Android runs; no deliberate panic has been seen contained on a device,
+  nor a native method returning with its exception cleared. The run needs an Android target for the
+  pinned toolchain, which the Windows build host does not have.
 - The macOS extension `flui::native::macos` is type-checked only beyond its backdrop: the
   `AppKitWindow` commands (tabs, level, collection behavior, shadow), the application's alpha kept
   through a deferred first reveal, their case
