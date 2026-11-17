@@ -88,6 +88,18 @@ mod cases {
             a_window_destroyed_by_another_client_closes_and_lets_go,
         ),
         (
+            "a_window_kept_past_its_close_is_unmapped_not_destroyed",
+            a_window_kept_past_its_close_is_unmapped_not_destroyed,
+        ),
+        (
+            "a_keep_the_handler_release_makes_is_honoured",
+            a_keep_the_handler_release_makes_is_honoured,
+        ),
+        (
+            "a_close_whose_handler_panics_still_releases_the_window",
+            a_close_whose_handler_panics_still_releases_the_window,
+        ),
+        (
             "a_covered_window_reads_occluded_and_shown",
             a_covered_window_reads_occluded_and_shown,
         ),
@@ -1085,6 +1097,141 @@ mod cases {
         assert!(
             handler.take_calls().is_empty(),
             "a destroyed window delivers nothing more"
+        );
+    }
+
+    /// Asks its target to keep the native window when dropped: a renderer a
+    /// window's handler owns, asking as the close lets go of the handler.
+    struct KeepOnDrop(Arc<dyn flui_platform::SurfaceTarget>);
+
+    impl Drop for KeepOnDrop {
+        fn drop(&mut self) {
+            self.0.keep_past_close();
+        }
+    }
+
+    /// When a window's keep past the close is recorded.
+    #[derive(Clone, Copy)]
+    enum KeepAt {
+        /// While the window is open, as `flui-app`'s raster host asks once a
+        /// raster thread is wedged.
+        Open,
+        /// By the handler's own release, the latest a keep can come.
+        HandlerRelease,
+    }
+
+    /// Close a window whose keep is recorded `at`, and check that it stays on
+    /// the server, unmapped, while the application sees it closed: its
+    /// handler let go of, its target handing out nothing.
+    fn close_a_kept_window(at: KeepAt) {
+        let platform = X11Platform::try_new().expect("the X11 platform");
+        let server = RustConnection::connect(None)
+            .expect("the X server answers")
+            .0;
+        let handler = RecordingWindowHandler::new();
+        let window = platform
+            .open_window(WindowOptions::default(), Rc::clone(&handler) as _)
+            .expect("an X11 window opens");
+        let xid = xid_of(window.as_ref());
+        let target = window.surface_target();
+        if let KeepAt::HandlerRelease = at {
+            let keep = KeepOnDrop(window.surface_target());
+            handler.react_to_close(move || {
+                let _released_with_the_handler = &keep;
+            });
+        }
+        let released = Rc::downgrade(&handler);
+        drop(handler);
+        run_for(&platform, Duration::from_millis(200)).expect("the loop turns");
+        if let KeepAt::Open = at {
+            target.keep_past_close();
+        }
+
+        window
+            .admit_and_apply(WindowCommand::Close)
+            .expect("the window closes");
+        run_for(&platform, Duration::from_millis(200)).expect("the loop turns");
+
+        assert!(
+            released.upgrade().is_none(),
+            "the close let go of the handler"
+        );
+        assert!(
+            matches!(target.window_handle(), Err(HandleError::Unavailable)),
+            "a kept window's target hands out no handle"
+        );
+        let attributes = server
+            .get_window_attributes(xid)
+            .expect("request")
+            .reply()
+            .expect("a kept window stays on the server");
+        assert_eq!(
+            attributes.map_state,
+            MapState::UNMAPPED,
+            "a kept window is unmapped"
+        );
+    }
+
+    /// A window kept while it was open is unmapped, not destroyed, once it
+    /// closes. Red-check: with `X11Window::retire` destroying the window
+    /// whatever was recorded, the server no longer has the kept window.
+    fn a_window_kept_past_its_close_is_unmapped_not_destroyed() {
+        close_a_kept_window(KeepAt::Open);
+    }
+
+    /// A keep the handler's release makes is honoured: the fate settles after
+    /// the release. Red-check: with `X11Window::retire` settling the fate
+    /// before the release, the server no longer has the kept window.
+    fn a_keep_the_handler_release_makes_is_honoured() {
+        close_a_kept_window(KeepAt::HandlerRelease);
+    }
+
+    /// A handler whose `closed` panics does not cut the close short: the panic
+    /// reaches the caller, and the handler is still let go of and the X
+    /// window destroyed. Red-check: with `X11Window::close` running its steps
+    /// uncontained, the handler stays held and the server keeps the window.
+    fn a_close_whose_handler_panics_still_releases_the_window() {
+        let platform = X11Platform::try_new().expect("the X11 platform");
+        let server = RustConnection::connect(None)
+            .expect("the X server answers")
+            .0;
+        let handler = RecordingWindowHandler::new();
+        let window = platform
+            .open_window(WindowOptions::default(), Rc::clone(&handler) as _)
+            .expect("an X11 window opens");
+        let xid = xid_of(window.as_ref());
+        handler.react_to_close(|| panic!("a handler's `closed` panics"));
+        let released = Rc::downgrade(&handler);
+        drop(handler);
+        run_for(&platform, Duration::from_millis(200)).expect("the loop turns");
+
+        let closing = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            window
+                .admit_and_apply(WindowCommand::Close)
+                .expect("the window closes");
+            run_for(&platform, Duration::from_millis(200)).expect("the loop turns");
+        }));
+        let Err(payload) = closing else {
+            panic!("the handler's panic reaches the caller");
+        };
+        assert_eq!(
+            payload.downcast_ref::<&str>(),
+            Some(&"a handler's `closed` panics"),
+            "the panic that reaches the caller is the handler's"
+        );
+        run_for(&platform, Duration::from_millis(200)).expect("the loop turns");
+
+        assert!(
+            released.upgrade().is_none(),
+            "the close let go of the handler despite its panic"
+        );
+        assert!(
+            server
+                .get_window_attributes(xid)
+                .expect("request")
+                .reply()
+                .is_err(),
+            "the close destroyed the X window despite the handler's panic"
         );
     }
 

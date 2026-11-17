@@ -70,6 +70,8 @@ impl crate::SurfaceTarget for NoNativeSurface {
         _: crate::SwapChainStatistics,
     ) {
     }
+
+    fn keep_past_close(&self) {}
 }
 
 /// The per-frame verbs of a window double whose window system takes neither

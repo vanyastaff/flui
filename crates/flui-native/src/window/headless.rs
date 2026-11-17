@@ -571,6 +571,9 @@ impl flui_platform::RedrawRequester for HeadlessRedraw {
 /// keeps each one's frame for the simulated window system.
 struct HeadlessSurface {
     presents: Arc<HeadlessPresents>,
+    /// Where a keep past the close is recorded
+    /// ([`HeadlessHostWindow::kept_past_close`]).
+    retirement: crate::owner::window_delivery::Retirement,
 }
 
 impl raw_window_handle::HasWindowHandle for HeadlessSurface {
@@ -596,6 +599,15 @@ impl flui_platform::SurfaceTarget for HeadlessSurface {
         _: flui_platform::SwapChainStatistics,
     ) {
         self.presents.presenting(frame);
+    }
+
+    /// Records the keep, which may come while the window is still open, and
+    /// changes nothing else; the window's close settles it and reports it
+    /// ([`HeadlessHostWindow::kept_past_close`]). There is no native window to
+    /// hide, so the close goes on as any other. A keep after the close let go
+    /// of the handler does nothing.
+    fn keep_past_close(&self) {
+        let _first = self.retirement.keep_past_close();
     }
 }
 
@@ -1081,17 +1093,36 @@ impl HeadlessHostWindow {
             state.visible = false;
             state.closed = true;
         }
+        // The steps below run user code (the state publication, `closed` and
+        // the deliveries queued ahead of it, the facets' detach, the exit
+        // policy, the handler's release). Every step runs whichever one
+        // before it panics: `closed` is already set, so nothing later
+        // releases what this close skips. The first panic resumes at the end.
+        let mut failure = flui_foundation::panic::FirstPanic::new();
         // Hidden and detached, in one revision, before the window is gone.
-        self.publish_state();
-        self.delivery.dispatch_close();
+        failure.contain(|| self.publish_state());
+        failure.contain(|| self.delivery.dispatch_close());
         // What the window-level positions put on the window goes with it.
-        self.facets.text.detach();
-        self.facets.accessibility.detach();
-        self.notify_closed();
+        failure.contain(|| self.facets.text.detach());
+        failure.contain(|| self.facets.accessibility.detach());
+        failure.contain(|| self.notify_closed());
         // After the exit-policy consult, never before: a hook that inspects
         // the window it was just told about must not find its handler
-        // already gone.
-        self.delivery.clear();
+        // already gone. Its fate is settled once the handler, which owns the
+        // renderer, let go: a keep recorded before then, while the window was
+        // open or by that release, is the one reported.
+        failure.contain(|| self.delivery.clear());
+        failure.resume();
+    }
+
+    /// Whether the window's surface target was asked, before the close let
+    /// go of the window's handler, to keep the native window past the close
+    /// ([`SurfaceTarget::keep_past_close`](flui_platform::SurfaceTarget::keep_past_close)):
+    /// what a native host then hides instead of destroying. The window is
+    /// closed to the application all the same.
+    #[must_use]
+    pub fn kept_past_close(&self) -> bool {
+        self.delivery.retirement().is_kept()
     }
 
     /// Removes this window from the platform's own tracking and, only once
@@ -1480,6 +1511,7 @@ impl PlatformWindow for HeadlessHostWindow {
     fn surface_target(&self) -> Arc<dyn flui_platform::SurfaceTarget> {
         Arc::new(HeadlessSurface {
             presents: Arc::clone(&self.presents),
+            retirement: self.delivery.retirement(),
         })
     }
 

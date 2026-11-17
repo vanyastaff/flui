@@ -1413,23 +1413,32 @@ impl SceneWindow for IOSWindow {
         if self.closed.swap(true, Ordering::SeqCst) {
             return;
         }
-        self.begin_retirement();
+        // Every step below runs whichever one before it panics (the state
+        // publication, the surface release, `closed` and the deliveries
+        // queued ahead of it, the handler's release, the facets' detach):
+        // `closed` is already set, so nothing later releases what this close
+        // skips. The first panic resumes at the end.
+        let mut failure = flui_foundation::panic::FirstPanic::new();
+        failure.contain(|| self.begin_retirement());
         // A closed window's snapshot is detached, hidden and unfocused.
-        self.delivery.publish_state();
-        let failure = self
-            .delivery
-            .dispatch_surface_immediate(SurfaceChange::Release);
-        crate::owner::panic_boundary::contain_owner_callback(|| self.delivery.dispatch_close());
-        crate::owner::panic_boundary::contain_owner_callback(|| self.delivery.clear());
-        self.facets.text.detach();
-        self.facets.accessibility.detach();
+        failure.contain(|| self.delivery.publish_state());
+        if let Some(released) = failure
+            .contain(|| {
+                self.delivery
+                    .dispatch_surface_immediate(SurfaceChange::Release)
+            })
+            .flatten()
+        {
+            failure.record(released.into_payload());
+        }
+        failure.contain(|| self.delivery.dispatch_close());
+        failure.contain(|| self.clear_then_keep_if_kept());
+        failure.contain(|| self.facets.text.detach());
+        failure.contain(|| self.facets.accessibility.detach());
         if let Some(marker) = MainThreadMarker::new() {
-            self.detach_native(marker);
+            failure.contain(|| self.detach_native(marker));
         }
-        // The release's panic is the first failure; the close finished first.
-        if let Some(failure) = failure {
-            failure.resume();
-        }
+        failure.resume();
     }
 }
 
@@ -1521,6 +1530,31 @@ impl IOSWindow {
     fn read_state(&self) -> crate::owner::window_delivery::Publication {
         self.snapshot
             .refresh(&self.delivery, || self.sample_state())
+    }
+
+    /// Let go of the handler where the window closes (`close_for_good`, or
+    /// its drop without one), then settle its fate
+    /// ([`super::clear_then_keep_if_kept`]): when a keep was recorded for it
+    /// (`SurfaceTarget::keep_past_close`, ADR-0305 §9), its view is hidden
+    /// and, with its Metal layer, outlives the window's teardown. The teardown
+    /// takes the view out of its window and hides the window as for any close.
+    fn clear_then_keep_if_kept(&self) {
+        let view = match MainThreadMarker::new() {
+            Some(marker) => {
+                let view: *const FluiView = Retained::as_ptr(&self.native.get(marker).view);
+                // SAFETY: the window holds its view while it lives.
+                unsafe { super::MainRetainedView::retain(view.cast_mut().cast::<AnyObject>()) }
+            }
+            // Off the main thread nothing is retained (nil).
+            // SAFETY: nil is a valid argument.
+            None => unsafe { super::MainRetainedView::retain(std::ptr::null_mut()) },
+        };
+        super::clear_then_keep_if_kept(&self.delivery, view, |view| {
+            // SAFETY: `view` is a live `UIView`, messaged on the main thread.
+            unsafe {
+                let _: () = msg_send![view, setHidden: true];
+            }
+        });
     }
 
     fn detach_native(&self, marker: MainThreadMarker) {
@@ -1953,9 +1987,15 @@ impl PlatformWindow for IOSWindow {
 
 impl Drop for IOSWindow {
     /// The surface targets outlive the window: they hand out nothing from
-    /// here on, before the view the window holds is released.
+    /// here on, before the view the window holds is released. A window
+    /// dropped without its close lets go of its handler here, and its fate
+    /// settles once the handler let go.
     fn drop(&mut self) {
-        self.closed.store(true, Ordering::SeqCst);
+        if !self.closed.swap(true, Ordering::SeqCst) {
+            // A handler method queued ahead of the release may panic: the
+            // drop still finishes.
+            crate::owner::panic_boundary::contain_owner_callback(|| self.clear_then_keep_if_kept());
+        }
     }
 }
 
@@ -2079,6 +2119,15 @@ impl SurfaceTarget for IOSSurface {
         _: Option<flui_foundation::FrameStamp>,
         _: flui_platform::SwapChainStatistics,
     ) {
+    }
+
+    /// Records the keep and changes nothing else: a window still open keeps
+    /// showing and taking input. Its close (`IOSWindow::close_for_good`, or
+    /// the window's drop without one), once the handler let go, then hides
+    /// its view and keeps it, and so the view's Metal layer, for the life of
+    /// the process. A keep after the handler let go does nothing.
+    fn keep_past_close(&self) {
+        let _first = self.retirement.keep_past_close();
     }
 }
 

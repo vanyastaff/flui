@@ -17,13 +17,13 @@ use windows::{
         UI::{
             HiDpi::{GetDpiForSystem, GetDpiForWindow},
             WindowsAndMessaging::{
-                CW_USEDEFAULT, CreateWindowExW, DestroyWindow, GCLP_HBRBACKGROUND, GWL_EXSTYLE,
-                GWL_STYLE, GWLP_USERDATA, GetClientRect, GetWindowLongPtrW, GetWindowRect,
-                IsIconic, IsWindowVisible, IsZoomed, SW_HIDE, SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE,
-                SW_SHOW, SW_SHOWMAXIMIZED, SW_SHOWMINIMIZED, SWP_FRAMECHANGED, SWP_NOACTIVATE,
-                SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SetClassLongPtrW, SetForegroundWindow,
-                SetWindowLongPtrW, SetWindowPlacement, SetWindowPos, SetWindowTextW, ShowWindow,
-                WS_EX_APPWINDOW, WS_MAXIMIZE,
+                CW_USEDEFAULT, CreateWindowExW, GCLP_HBRBACKGROUND, GWL_EXSTYLE, GWL_STYLE,
+                GWLP_USERDATA, GetClientRect, GetWindowLongPtrW, GetWindowRect, IsIconic,
+                IsWindowVisible, IsZoomed, SW_HIDE, SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE, SW_SHOW,
+                SW_SHOWMAXIMIZED, SW_SHOWMINIMIZED, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE,
+                SWP_NOSIZE, SWP_NOZORDER, SetClassLongPtrW, SetForegroundWindow, SetWindowLongPtrW,
+                SetWindowPlacement, SetWindowPos, SetWindowTextW, ShowWindow, WS_EX_APPWINDOW,
+                WS_MAXIMIZE,
             },
         },
     },
@@ -92,7 +92,7 @@ pub struct WindowsWindow {
     /// its native window cannot destroy or close whatever unrelated window
     /// the OS recycled the handle value for — see
     /// [`teardown_route`](super::proc::teardown_route). Dangling as a
-    /// VALUE once `WM_DESTROY` has run; that is fine for comparison and
+    /// VALUE once the window retired; that is fine for comparison and
     /// exactly why it must never be dereferenced here.
     context: *const super::proc::WindowContext,
 
@@ -420,9 +420,11 @@ impl WindowsWindow {
         // operate on that same freshly created, still-valid `hwnd`.
         // `Box::into_raw(context)` intentionally leaks the allocation into
         // the `GWLP_USERDATA` slot — ownership transfers to the window and is
-        // reclaimed by the `WM_DESTROY` arm of `WindowProc`, the hook every
-        // Windows host registers on the class (`platform.rs`, `Box::from_raw`);
-        // a window destroyed by any path that skips `WM_DESTROY`
+        // reclaimed after the window's retirement (`WindowContext::retire`:
+        // a granted close, or the `WM_DESTROY` arm of `WindowProc`, the hook
+        // every Windows host registers on the class), at the last borrow's
+        // `Box::from_raw`;
+        // a window destroyed by any path that skips the retirement
         // (process-exit teardown) leaks the
         // allocation rather than double-frees or dangles it. `ShowWindow`/
         // `UpdateWindow` again only need a valid `hwnd`, which holds here.
@@ -623,6 +625,7 @@ impl WindowsWindow {
                     Rc::clone(&modal_loops),
                 ),
                 ledger: std::cell::RefCell::new(crate::owner::hwnd_affinity::ContextLedger::new()),
+                retiring: std::cell::Cell::new(false),
                 identity,
                 displays: Arc::clone(&displays),
                 appearance: std::cell::Cell::new(appearance),
@@ -1869,19 +1872,7 @@ impl WindowsWindow {
     fn close_window(&self) {
         use crate::owner::hwnd_affinity::TeardownRoute;
         match super::proc::teardown_route(self.hwnd, self.context) {
-            TeardownRoute::DestroyDirect => {
-                // SAFETY: `DestroyWindow` takes `self.hwnd` by value; the
-                // route just established this is the owning thread, the only
-                // one Win32 permits the call from, and where `WM_DESTROY`
-                // (handled in `platform.rs`, reclaiming the `GWLP_USERDATA`
-                // allocation) is dispatched synchronously before the call
-                // returns.
-                unsafe {
-                    if let Err(error) = DestroyWindow(self.hwnd) {
-                        tracing::warn!(hwnd = ?self.hwnd, ?error, "DestroyWindow (WindowCommand::Close) failed");
-                    }
-                }
-            }
+            TeardownRoute::DestroyDirect => self.close_on_owner(),
             TeardownRoute::PostClose => {
                 // Cross-thread close cannot call `DestroyWindow` (Win32
                 // forbids it off the creating thread), so the owner thread
@@ -1903,6 +1894,24 @@ impl WindowsWindow {
                      (recycled by the OS); leaving its new owner untouched"
                 );
             }
+        }
+    }
+
+    /// Close this window on its owner thread, where its teardown routed
+    /// `DestroyDirect`: retired, its handler let go of, then destroyed, or
+    /// kept hidden when a keep was recorded before the handler let go,
+    /// usually while the window was open
+    /// (`WindowContext::close_granted`).
+    fn close_on_owner(&self) {
+        let hwnd = self.hwnd;
+        let closed = super::proc::with_window_context(hwnd, "close", |ctx| {
+            // SAFETY: the gate handed the context `hwnd`'s slot holds, the one
+            // this wrapper installed (the route compared it, and no message
+            // was dispatched since), borrowed on its owner thread.
+            unsafe { ctx.close_granted(hwnd) };
+        });
+        if closed.is_none() {
+            tracing::debug!(?hwnd, "close: the window's context is gone already");
         }
     }
 }
@@ -1983,8 +1992,8 @@ fn ask_attention(hwnd: HWND) {
 /// It holds the window's handle and the address of its context as plain
 /// integers, never dereferenced, and the window's [`Retirement`], so it is
 /// `Send + Sync` with no `unsafe impl` and keeps nothing of the window alive.
-/// The window is there while its retirement has not started (`WM_DESTROY`
-/// starts it) and the identity probe still finds this window behind the
+/// The window is there while its retirement has not started (a granted close
+/// or `WM_DESTROY` starts it) and the identity probe still finds this window behind the
 /// handle: a destroyed handle, or one the OS recycled for another window,
 /// is not this window.
 ///
@@ -2044,7 +2053,7 @@ impl HasWindowHandle for Win32Surface {
         // a pointer (`borrow_raw`'s guarantee covers only pointers): a window
         // destroyed after the probe makes later calls with it fail, and the
         // window's handler hears `surface_changed(Release)` before its
-        // `WM_DESTROY` runs.
+        // retirement lets go of it.
         Ok(unsafe { raw_window_handle::WindowHandle::borrow_raw(RawWindowHandle::Win32(handle)) })
     }
 }
@@ -2128,6 +2137,16 @@ impl flui_platform::SurfaceTarget for Win32Surface {
         );
         self.presented.report(presented);
     }
+
+    /// Records the keep and changes nothing else: a window still open keeps
+    /// showing and taking input. Its granted close, whichever way it comes,
+    /// then hides the `HWND` and keeps it for the life of the process instead
+    /// of destroying it (`WindowContext::close_granted`), so a swap chain made
+    /// for it stays one over a live window. A keep after a `WM_DESTROY` the
+    /// OS sent on its own, or after the window was destroyed, does nothing.
+    fn keep_past_close(&self) {
+        let _first = self.retirement.keep_past_close();
+    }
 }
 
 impl flui_platform::RedrawRequester for Win32Surface {
@@ -2182,20 +2201,12 @@ impl Drop for WindowsWindow {
                     // `Arc` still held elsewhere degrades to a no-op.
                     self.facets.accessibility.detach();
 
-                    // SAFETY: `DestroyWindow` takes `self.hwnd` by value;
-                    // the route just established this is the owning thread
+                    // The route just established this is the owning thread
                     // and that the handle still names THIS wrapper's window
                     // (a never-created or already-destroyed handle routes
-                    // `AlreadyGone`, a recycled one `StaleHandle`), where
-                    // `WM_DESTROY` (handled in `platform.rs`) retires the
-                    // `GWLP_USERDATA` allocation synchronously within this
-                    // call, the ledger freeing it at the outermost borrow
-                    // release.
-                    unsafe {
-                        if let Err(error) = DestroyWindow(self.hwnd) {
-                            tracing::warn!(hwnd = ?self.hwnd, ?error, "DestroyWindow failed in Drop");
-                        }
-                    }
+                    // `AlreadyGone`, a recycled one `StaleHandle`): the
+                    // last wrapper closes it as a close command does.
+                    self.close_on_owner();
                 }
                 TeardownRoute::PostClose => {
                     // Off the owning thread `DestroyWindow` is forbidden and

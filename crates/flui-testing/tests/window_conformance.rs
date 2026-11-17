@@ -251,6 +251,8 @@ impl flui_platform::SurfaceTarget for BlockingSurface {
     ) {
         std::thread::sleep(std::time::Duration::from_secs(3));
     }
+
+    fn keep_past_close(&self) {}
 }
 
 /// A headless window under `capabilities`, with `fault` applied to how the
