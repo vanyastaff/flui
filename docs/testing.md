@@ -262,7 +262,11 @@ messages, hooks, DPI, the monitors, DWM, DXGI presentation, OLE drag and drop an
 services work as on the user's desktop. No window there is in the foreground: the system moves
 the activation among a process's shown windows when one of them enters a modal loop, so a case
 that counts what ran during an idle modal loop runs in a process with no other shown window
-(`windows_window_commands::native_idle_modal_loops`). This holds for `cargo heli nextest run`,
+(`windows_window_commands::native_idle_modal_loops`). A window the activation moves to goes
+above the others of its band, a topmost one above a window raised topmost after it, so a case
+that asks which window is under a point (`WindowFromPoint`, OLE's `DoDragDrop` loop) hides the
+windows the cases before it opened: a dropped platform leaves its windows open
+(`no_case_leaves_a_window_shown` in `drag::windows::tests`). This holds for `cargo heli nextest run`,
 `cargo nextest run` and every `cargo xtask` task that runs nextest (`test`, `platform-test`,
 `gpu-test`); plain `cargo test` starts its tests on the caller's desktop.
 `windows_test_desktop::nextest_starts_a_test_on_the_runs_own_desktop` fails when a test nextest
