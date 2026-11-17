@@ -8,7 +8,7 @@ use std::task::{Context, Waker};
 use std::time::{Duration, Instant};
 
 use flui_foundation::geometry::{Bounds, DevicePixelRatio, Point, Size};
-use flui_platform::{AppTitleBar, WindowFrame, WindowOptions};
+use flui_platform::{AppTitleBar, PlacementOffset, WindowFrame, WindowOptions};
 use flui_platform::{
     DisplayId, DisplayInfo, DisplayKey, DisplayRegistry, DisplaySnapshot, Storage, StorageError,
     StorageFuture, StorageName, Stored, WindowCapabilities, WindowExtent, WindowGeometry,
@@ -94,6 +94,7 @@ impl Fixture {
         WindowPlacement::from_bytes(&bytes)
             .expect("a placement was stored")
             .offset
+            .map(PlacementOffset::get)
     }
 }
 
@@ -145,7 +146,7 @@ fn a_recall_reads_what_storage_answers_and_checks_it() {
     let now = Instant::now();
     let placement = WindowPlacement::new(
         Some("key-main".into()),
-        Some(Point::new(40.0, 30.0)),
+        Some(PlacementOffset::try_new(Point::new(40.0, 30.0)).expect("a finite offset")),
         extent(800.0, 600.0),
         WindowMode::Maximized,
         DevicePixelRatio::ONE,
@@ -205,7 +206,7 @@ fn a_recall_waits_until_its_bound_and_then_never_takes_the_answer() {
     let storage = MemoryStorage::new();
     let placement = WindowPlacement::new(
         None,
-        Some(Point::new(40.0, 30.0)),
+        Some(PlacementOffset::try_new(Point::new(40.0, 30.0)).expect("a finite offset")),
         extent(800.0, 600.0),
         WindowMode::Normal,
         DevicePixelRatio::ONE,
@@ -573,7 +574,7 @@ fn a_reopened_window_takes_over_the_write_in_flight() {
         storage
             .contents(&NAME)
             .and_then(|bytes| WindowPlacement::from_bytes(&bytes).ok())
-            .and_then(|placement| placement.offset),
+            .and_then(|placement| placement.offset.map(PlacementOffset::get)),
         Some(Point::new(500.0, 80.0)),
         "the reopened window's placement is the last one stored"
     );
@@ -708,7 +709,7 @@ fn storage_code_runs_with_nothing_borrowed() {
             let stored = inner
                 .contents(&NAME)
                 .and_then(|bytes| WindowPlacement::from_bytes(&bytes).ok())
-                .and_then(|placement| placement.offset);
+                .and_then(|placement| placement.offset.map(PlacementOffset::get));
             assert_eq!(
                 stored,
                 Some(Point::new(100.0, 80.0)),
@@ -722,7 +723,7 @@ fn storage_code_runs_with_nothing_borrowed() {
         let stored = inner
             .contents(&NAME)
             .and_then(|bytes| WindowPlacement::from_bytes(&bytes).ok())
-            .and_then(|placement| placement.offset);
+            .and_then(|placement| placement.offset.map(PlacementOffset::get));
         assert_eq!(
             stored,
             Some(Point::new(300.0, 80.0)),
@@ -735,7 +736,7 @@ fn restore_opens_the_window_where_it_was_and_back_onto_a_display() {
     let mut options = WindowOptions::default();
     let placement = WindowPlacement::new(
         Some("key-main".into()),
-        Some(Point::new(1800.0, 900.0)),
+        Some(PlacementOffset::try_new(Point::new(1800.0, 900.0)).expect("a finite offset")),
         extent(800.0, 600.0),
         WindowMode::Normal,
         DevicePixelRatio::ONE,
@@ -765,7 +766,7 @@ fn restore_fits_the_outer_size_and_hands_a_maximized_window_its_normal_bounds() 
     let mut options = WindowOptions::default();
     let placement = WindowPlacement::new(
         Some("key-main".into()),
-        Some(Point::new(100.0, 80.0)),
+        Some(PlacementOffset::try_new(Point::new(100.0, 80.0)).expect("a finite offset")),
         extent(5000.0, 600.0),
         WindowMode::Maximized,
         DevicePixelRatio::ONE,
@@ -799,7 +800,7 @@ fn restore_keeps_the_configured_normal_bounds_for_a_frame_that_is_no_extent() {
     let mut options = WindowOptions::default().normal_geometry(Some(configured));
     let placement = WindowPlacement::new(
         Some("key-main".into()),
-        Some(Point::new(100.0, 80.0)),
+        Some(PlacementOffset::try_new(Point::new(100.0, 80.0)).expect("a finite offset")),
         extent(800.0, 600.0),
         WindowMode::Maximized,
         DevicePixelRatio::ONE,
@@ -821,7 +822,7 @@ fn restore_asks_the_platform_for_what_it_can_place() {
     let mut options = WindowOptions::default();
     let placement = WindowPlacement::new(
         Some("key-main".into()),
-        Some(Point::new(100.0, 80.0)),
+        Some(PlacementOffset::try_new(Point::new(100.0, 80.0)).expect("a finite offset")),
         extent(800.0, 600.0),
         WindowMode::Normal,
         DevicePixelRatio::ONE,
@@ -846,7 +847,7 @@ fn restore_asks_the_platform_for_what_it_can_place() {
 fn restore_fits_the_frame_the_window_opens_with() {
     let placement = WindowPlacement::new(
         Some("key-main".into()),
-        Some(Point::new(100.0, 80.0)),
+        Some(PlacementOffset::try_new(Point::new(100.0, 80.0)).expect("a finite offset")),
         extent(5000.0, 600.0),
         WindowMode::Normal,
         DevicePixelRatio::ONE,
@@ -1014,7 +1015,7 @@ fn a_placement_already_stored_is_not_written_again() {
     let storage = MemoryStorage::new();
     let placement = WindowPlacement::new(
         Some("key-main".into()),
-        Some(Point::new(100.0, 80.0)),
+        Some(PlacementOffset::try_new(Point::new(100.0, 80.0)).expect("a finite offset")),
         extent(800.0, 600.0),
         WindowMode::Normal,
         DevicePixelRatio::ONE,
@@ -1082,7 +1083,10 @@ fn closing_writes_the_held_placement_without_waiting_for_the_interval() {
     settle(&[Rc::new(fixture.recorder)], now, BUDGET, || {});
     let stored = WindowPlacement::from_bytes(&storage.contents(&NAME).expect("stored"))
         .expect("a placement");
-    assert_eq!(stored.offset, Some(Point::new(250.0, 90.0)));
+    assert_eq!(
+        stored.offset.map(PlacementOffset::get),
+        Some(Point::new(250.0, 90.0))
+    );
 }
 
 fn a_flush_keeps_going_until_storage_holds_the_newest_placement() {
@@ -1104,7 +1108,7 @@ fn a_flush_keeps_going_until_storage_holds_the_newest_placement() {
     let stored = WindowPlacement::from_bytes(&storage.contents(&NAME).expect("stored"))
         .expect("a placement");
     assert_eq!(
-        stored.offset,
+        stored.offset.map(PlacementOffset::get),
         Some(Point::new(250.0, 90.0)),
         "the answer to the older write is not the end of the flush"
     );

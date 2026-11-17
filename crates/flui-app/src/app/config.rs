@@ -136,8 +136,8 @@ pub struct AppConfig {
     /// cheap `None` check per frame; snapshot collection, percentile reduction,
     /// and line formatting run only while the overlay is enabled.
     ///
-    /// `From<&AppConfig> for flui_platform::WindowOptions` drops this field —
-    /// it is a compositing concern, not a window-creation one.
+    /// [`window_options`](Self::window_options) drops this field: it is a
+    /// compositing concern, not a window-creation one.
     pub show_performance_overlay: bool,
 
     /// How many frames a window's swapchain holds ahead of the display (ADR-0347).
@@ -497,11 +497,21 @@ impl AppConfig {
         self
     }
 
-    /// The window options this configuration opens its window with, on
-    /// `displays`: the [`From`] conversion, with [`position`](Self::position)
-    /// placed on the primary display (the first where none is marked), which
-    /// a conversion without displays cannot name.
-    pub(crate) fn window_options_on(
+    /// The window options this configuration opens a window with, among
+    /// `displays`: every window field of the configuration, with
+    /// [`position`](Self::position) placed on the primary display (the first
+    /// where none is marked). Without displays, or among none, the options
+    /// name no position and the system places the window.
+    ///
+    /// `visible` and `reveal` are not the configuration's to set and keep the
+    /// options' own defaults: on screen when the window opens
+    /// ([`WindowReveal::AtOpen`](flui_platform::WindowReveal::AtOpen)).
+    /// [`AfterFirstFrame`](flui_platform::WindowReveal::AfterFirstFrame) is a
+    /// promise to call `reveal_after_first_frame`, which only the runner that
+    /// keeps it opts into at its own open site, so nothing opens a window at
+    /// alpha 0 that no one will reveal.
+    #[must_use]
+    pub fn window_options(
         &self,
         displays: Option<&flui_platform::DisplaySnapshot>,
     ) -> flui_platform::WindowOptions {
@@ -518,7 +528,17 @@ impl AppConfig {
             )
             .ok()
         });
-        flui_platform::WindowOptions::from(self).position(position)
+        flui_platform::WindowOptions::default()
+            .title(self.title.clone())
+            .size(self.size)
+            .position(position)
+            .resizable(self.resizable)
+            .frame(self.frame)
+            .min_size(self.min_size)
+            .max_size(self.max_size)
+            .mode(self.mode)
+            .input_latency(self.input_latency)
+            .os_options(os_options_for(self))
     }
 
     /// Set the mode the window opens in.
@@ -774,32 +794,6 @@ impl AppConfig {
     }
 }
 
-impl From<&AppConfig> for flui_platform::WindowOptions {
-    fn from(config: &AppConfig) -> Self {
-        // `visible` and `reveal` are not the configuration's to set, so they
-        // keep the options' own defaults: on screen when the window opens
-        // (`AtOpen`). `AfterFirstFrame` is a PROMISE to call
-        // `reveal_after_first_frame`, and this conversion is shared by callers
-        // that keep it (the desktop runner, through `FirstReveal`) and callers
-        // that do not (`run_direct`, the bare `open_secondary_window`). The
-        // paths that keep it opt in at their own open site
-        // (`runner::desktop::OpeningWindow::open`), so nothing can open a
-        // window at alpha 0 that no one will ever reveal. The position is
-        // measured on a display, which only an open site with the displays
-        // can name (`AppConfig::window_options_on`).
-        Self::default()
-            .title(config.title.clone())
-            .size(config.size)
-            .resizable(config.resizable)
-            .frame(config.frame)
-            .min_size(config.min_size)
-            .max_size(config.max_size)
-            .mode(config.mode)
-            .input_latency(config.input_latency)
-            .os_options(os_options_for(config))
-    }
-}
-
 /// A size in whole logical pixels as a window extent.
 fn window_extent(width: u32, height: u32) -> flui_platform::WindowExtent {
     flui_platform::WindowExtent::try_new(Size::new(f64::from(width), f64::from(height)))
@@ -845,11 +839,11 @@ mod tests {
     /// in, and an application's own Android options are kept as they are.
     #[test]
     fn the_android_colour_mode_follows_the_requested_surface_colour() {
-        use flui_platform::WindowOptions;
         use flui_platform::os_options::{AndroidColorMode, AndroidWindowOptions, OsWindowOptions};
 
         let mode = |config: &AppConfig| {
-            WindowOptions::from(config)
+            config
+                .window_options(None)
                 .os_options
                 .android
                 .map(|android| android.color_mode)

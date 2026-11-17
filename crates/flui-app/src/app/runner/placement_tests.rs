@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use flui_foundation::ManualClock;
 use flui_foundation::geometry::{DevicePixelRatio, Point, Size};
+use flui_platform::PlacementOffset;
 use flui_platform::capability::ProviderContext;
 use flui_platform::{
     PlatformWindow, Storage, StorageName, Unsupported, WindowExtent, WindowInteraction, WindowMode,
@@ -28,7 +29,7 @@ const NAME: StorageName = StorageName::machine_local("window-main");
 fn stored() -> WindowPlacement {
     WindowPlacement::new(
         None,
-        Some(Point::new(40.0, 30.0)),
+        Some(PlacementOffset::try_new(Point::new(40.0, 30.0)).expect("a finite offset")),
         WindowExtent::try_new(Size::new(640.0, 480.0)).expect("a finite extent"),
         WindowMode::Normal,
         DevicePixelRatio::ONE,
@@ -84,9 +85,6 @@ fn recording() -> usize {
     APP_RUNTIME.with(|slot| slot.borrow().placement.shared().live.borrow().len())
 }
 
-/// A window that remembers its placement reads the stored one once, before
-/// it opens: installing the window, which starts the recorder from that
-/// placement, asks storage for nothing more.
 /// A configured position is whole logical pixels of the primary display: the
 /// configuration alone names no display, so the runner places it on the
 /// owner's primary display when it opens the window, and the window's first
@@ -109,6 +107,9 @@ fn a_configured_position_opens_on_the_primary_display() {
     run.join().expect("the run ends");
 }
 
+/// A window that remembers its placement reads the stored one once, before
+/// it opens: installing the window, which starts the recorder from that
+/// placement, asks storage for nothing more.
 #[test]
 fn a_remembered_placement_is_read_once_before_the_window_opens() {
     let storage = MemoryStorage::new();

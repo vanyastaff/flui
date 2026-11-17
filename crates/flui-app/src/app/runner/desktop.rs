@@ -87,7 +87,8 @@ impl OpeningWindow {
             .and_then(RememberedPlacement::deadline)
     }
 
-    /// Open the window on `owner`: [`From<&AppConfig>`]'s options, where the
+    /// Open the window on `owner`: [`AppConfig::window_options`] among the
+    /// owner's displays, where the
     /// window was last time when it remembers a placement and the read found
     /// one in time, with the reveal deferred to the first presented frame.
     ///
@@ -95,16 +96,16 @@ impl OpeningWindow {
     /// `PlatformWindow::reveal_after_first_frame`, and
     /// [`install_desktop_window`] is what keeps it (the [`FirstReveal`]
     /// policy wired into its frame closure), so only the windows it installs
-    /// open this way. `run_direct` and the bare `open_secondary_window`
-    /// convert `AppConfig` directly and reveal at open, because nothing in
-    /// them would ever perform the reveal.
+    /// open this way. `run_direct` and the bare `open_secondary_window` take
+    /// the same options and reveal at open, because nothing in them would ever
+    /// perform the reveal.
     pub(super) fn open(
         &self,
         config: &AppConfig,
         owner: &flui_native::OwnerPlatform,
     ) -> Result<flui_native::WindowOpen, flui_native::OpenWindowError> {
         let mut options = config
-            .window_options_on(owner.display_snapshot().ok().as_ref())
+            .window_options(owner.display_snapshot().ok().as_ref())
             .reveal(flui_platform::WindowReveal::AfterFirstFrame);
         if let Some(remembered) = &self.remembered {
             remembered.restore_into(&mut options, owner);

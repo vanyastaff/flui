@@ -29,8 +29,10 @@ pub(crate) mod frame {
     /// (`contentMaxSize` defaults to `CGFLOAT_MAX`, or `FLT_MAX` on older systems).
     const UNLIMITED_FROM: f64 = 1.0e30;
 
-    /// The outer top-left of a window whose frame AppKit reports as `frame`, in
-    /// global logical pixels. `primary_height` is the height of the primary screen
+    /// The outer top-left of a window whose frame AppKit reports as `frame`, as
+    /// a point of AppKit's flipped desktop: points from the primary screen's
+    /// top-left corner, which [`position_on`] turns into a position on a
+    /// screen. `primary_height` is the height of the primary screen
     /// (`NSScreen.screens[0]`), whose bottom-left corner is AppKit's origin.
     ///
     /// `None` when a number is not finite: a position is never published from a

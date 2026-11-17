@@ -24,12 +24,18 @@
 - `DisplayInfo` carries `origin: DesktopOrigin` and `bounds: DisplayBounds` in place of the
   `bounds` and `usable_bounds` device-pixel rectangles, whose unit changed with the platform
   (logical on Wayland, points times the screen's scale on macOS).
-- `WindowCommand::SetSize`, `WindowHandle::set_size`, `WindowOptions::size` and
-  `AppConfig::size` take a `WindowExtent`; a size with no area is still refused at admission or
-  open. `WindowPlacement` holds its size as a `WindowExtent` and its scale as a
+- `WindowCommand::SetSize`, `WindowHandle::set_size` and `WindowOptions::size` take a
+  `WindowExtent`; a size with no area is still refused at admission or open. The `AppConfig::size`
+  field is a `WindowExtent`, which its builder (`size(width, height)` in whole logical pixels, as
+  before) fills. `WindowPlacement` holds its size as a `WindowExtent` and its scale as a
   `DevicePixelRatio`; its stored format is unchanged.
-- `AppConfig::position(x, y)` takes whole logical pixels of the primary display, and the runner
-  places the window there when it opens it; no configured position refuses a start.
+- `AppConfig::position(x, y)` takes whole logical pixels of the primary display (the field is a
+  `Point<i32>`), and every window the configuration opens is placed there: the main window,
+  `run_direct`'s and a secondary window. No configured position refuses a start.
+- A window placement is not written from a window whose host reports positions and published
+  none for it (a Win32 sample that missed a monitor plugged in since the last read): the placement
+  stored before stays. A Win32 window on such a monitor has the monitors read again before its
+  state is published, so it publishes its position.
 - The headless host keeps a window's position on its display: `simulate_move` moves it within its
   display, maximize fills the display's usable area and fullscreen the whole display.
 - Native recordings write a position as `{display, at}` and a display as `origin`, `extent` and
@@ -40,3 +46,5 @@
 - `WindowOptions::display` and its builder: a position names its display.
 - `WindowOption::Position`: a position is a place by its type.
 - `DisplayInfo::with_usable_bounds`.
+- `From<&AppConfig> for WindowOptions`: `AppConfig::window_options(displays)` builds a window's
+  options, with the configured position placed on the primary display of `displays`.

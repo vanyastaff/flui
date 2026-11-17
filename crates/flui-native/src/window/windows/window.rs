@@ -497,6 +497,7 @@ impl WindowsWindow {
 
             let constraints = opening.constraints;
             let capabilities = windows.capabilities();
+            let (display, desktop) = super::geometry::window_display(&*displays, hwnd);
             let snapshot = Arc::new(WindowStateCell::open(sample_state(
                 hwnd,
                 state.get(),
@@ -504,8 +505,8 @@ impl WindowsWindow {
                     mode: NativeMode::Normal,
                     restore_style: 0,
                     constraints,
-                    display: displays.display_of_window(hwnd),
-                    desktop: displays.published(),
+                    display,
+                    desktop,
                     appearance,
                     active: false,
                     hovered: false,

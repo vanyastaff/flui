@@ -377,7 +377,7 @@ pub(crate) fn restore_into(
         return;
     };
     options.size = resolved.size;
-    options.position = resolved.position;
+    options.position = resolved.position();
     options.mode = resolved.mode;
     // A window that opens away from normal returns to the bounds it was
     // remembered at: outer, so the content size plus the frame. A frame
@@ -388,7 +388,7 @@ pub(crate) fn restore_into(
         return;
     }
     match WindowGeometry::try_new(
-        resolved.position,
+        resolved.position(),
         Size::new(
             resolved.size.width() + frame.width,
             resolved.size.height() + frame.height,

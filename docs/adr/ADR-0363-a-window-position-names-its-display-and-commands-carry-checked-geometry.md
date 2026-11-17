@@ -74,7 +74,8 @@ corner.
 - `WindowGeometry` holds `Option<WindowPosition>`; `WindowState::outer`,
   `WindowState::normal_geometry`, `WindowOptions::position`, the position of
   `WindowOptions::normal_geometry`, `WindowCommand::SetPosition` and
-  `ResolvedPlacement::position` are that type.
+  `ResolvedPlacement::position()` are that type; a resolved placement's display is the one
+  `ResolvedPlacement::display` names, which its position is built on.
 - A snapshot's outer position is measured on the window's display, the one holding the largest
   part of it (the nearest when it touches none). `WindowState::successor` sets
   `WindowState::display` to the display a sample's position names: the two are one fact. A window
@@ -95,9 +96,15 @@ corner.
   placed by the window system, and `SetPosition` answers `ApplyError::DisplayGone(id)`. A
   snapshot keeps naming the display its window was on until the window system reports where the
   window went.
+- A host that observes positions publishes one for every placed window: Win32 reads its monitors
+  again when a window is on one its published snapshot lacks, before the sample is published, and
+  X11's first snapshot holds the place its window was created at, or none. A window placement is
+  never written from a state with no position on such a host, so a sample that lost the place
+  keeps the placement stored before.
 - `flui-app`'s `AppConfig::position(x, y)` takes whole logical pixels of the primary display (the
-  first where none is primary); the runner turns it into a `WindowPosition` when it opens the
-  window, so no configured position refuses a start.
+  first where none is primary); `AppConfig::window_options(displays)`, the one way to build a
+  window's options from the configuration, turns it into a `WindowPosition` at every open site,
+  so no configured position refuses a start.
 
 ### §2 A display's bounds are its own logical pixels
 
@@ -108,7 +115,8 @@ corner.
   `whole` or `from_device`, which refuse anything else with `InvalidDisplayBounds`;
 - `origin: DesktopOrigin`: where its corner sits in the window system's desktop, in that window
   system's unit (device pixels on Windows, X11 and Android; points on macOS and iOS; the
-  compositor's logical units on Wayland; the browser's screen coordinates on the web). It orders
+  compositor's logical units on Wayland; the browser's screen coordinates, CSS pixels, on the
+  web). It orders
   the displays and is never a logical position; no arithmetic mixes it with one.
 - `DisplayInfo::from_device` builds a display of a device-pixel desktop.
 
@@ -118,8 +126,10 @@ corner.
 already are: a size that is not finite cannot be put in a command, and admission refuses one with
 no area (`InvalidGeometry::Empty`). `WindowCommand::validate` and `WindowOptions::geometry` check
 only what the types do not say (an area, the limits' order); `WindowOption::Position` is gone.
-`WindowPlacement` holds its size as a `WindowExtent` and its scale as a `DevicePixelRatio`; its
-stored format is unchanged.
+`WindowPlacement` holds its size as a `WindowExtent`, its offset as a `PlacementOffset` (finite,
+`try_new`) and its scale as a `DevicePixelRatio`; its stored format is unchanged. A host measures a
+sampled rectangle's sides as the exact `f64` difference of its edges: an inverted one is refused,
+never saturated.
 
 ### §4 The wire carries the display
 
@@ -149,11 +159,15 @@ to the replay's id. Protocol 0.25 is a break (`BREAKING`).
   `position_must_be_finite`, `size_must_be_finite_and_positive`,
   `an_opening_is_refused_for_what_a_command_is_refused_for`,
   `display_bounds_are_logical_pixels_of_the_display`,
-  `a_panel_along_the_top_moves_the_offset_not_the_position`.
+  `a_panel_along_the_top_moves_the_offset_not_the_position`,
+  `from_state_remembers_nothing_a_placing_host_could_not_place`.
+- `flui-app`'s `config_to_options_keeps_every_field` (`the_position_is_kept`).
 - `flui-native`'s `a_position_converts_through_its_own_display`,
   `a_window_spanning_two_displays_has_one_pixel_and_two_names`,
   `a_rectangle_is_on_the_display_holding_most_of_it` (the shared conversion),
-  `open_geometry` (Win32 opening), `a_position_set_on_a_normal_window_moves_it` and
+  `open_geometry` (Win32 opening), `sampled_geometry` (Win32 reading back, on a desktop of
+  mixed scales and a negative origin), `window_display` (Win32 reading its monitors again),
+  `a_position_set_on_a_normal_window_moves_it` and
   `a_position_on_a_display_the_host_does_not_hold_is_refused` (Win32, real windows),
   `open_plan_places_by_display_origin_and_scale` and `a_window_is_on_the_display_it_overlaps_most`
   (X11), `a_position_on_a_display_becomes_a_global_one` (AppKit),

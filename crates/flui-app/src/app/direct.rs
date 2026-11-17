@@ -131,7 +131,7 @@ pub fn run_direct(
         // 1. Open window. `Ready` is guaranteed inside `on_ready`
         // (ADR-0039 §1).
         let options = owner_platform_installed(|owner| {
-            config.window_options_on(owner.display_snapshot().ok().as_ref())
+            config.window_options(owner.display_snapshot().ok().as_ref())
         });
         let routes = crate::app::runner::window_routes::WindowRoutes::new();
         let window =

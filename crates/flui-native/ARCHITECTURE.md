@@ -4038,9 +4038,10 @@ promise only a frame-loop owner can keep, and the promise is selected at the
 one place that keeps it: `flui-app`'s desktop runner asks for
 `AfterFirstFrame` at its two open sites (the main window and a content-bearing
 secondary window, through `runner::desktop::OpeningWindow::open`), whose
-frame closure performs the reveal. Its shared `From<&AppConfig> for
-WindowOptions` conversion stays at `AtOpen` on purpose — `run_direct` and the
-bare `open_secondary_window` use it and have no frame loop that would reveal.
+frame closure performs the reveal. The options every open site builds
+(`AppConfig::window_options`) stay at `AtOpen` on purpose — `run_direct` and
+the bare `open_secondary_window` use them and have no frame loop that would
+reveal.
 A direct consumer of this crate — the platform probes — likewise has no first frame to report, and a window
 whose reveal waits for a call that never comes is a window nobody sees. The
 default `WindowReveal::AtOpen` therefore leaves alpha untouched and those

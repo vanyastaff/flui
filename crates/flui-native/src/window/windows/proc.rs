@@ -25,9 +25,7 @@ use std::{
 };
 
 use flui_foundation::geometry::{Bounds, Point, Size};
-use flui_platform::{
-    Brightness, SizeConstraints, WindowExtent, WindowGeometry, WindowId, WindowMode,
-};
+use flui_platform::{Brightness, SizeConstraints, WindowExtent, WindowId, WindowMode};
 use windows::Win32::{
     Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, SIZE, WPARAM},
     Graphics::{
@@ -50,6 +48,7 @@ use windows::Win32::{
 };
 
 use super::frame_timing::{RefreshTiming, refresh_timing};
+use super::geometry::{DeviceRects, sampled_geometry, window_display};
 use super::mode::NativeMode;
 use super::record::WindowRecord;
 use super::set::{WindowSet, checked_logical_to_device, restore_rectangle};
@@ -66,10 +65,7 @@ use crate::owner::windows::{
     WindowChrome, WindowHooks, WindowIdentity, WindowMessages, WindowStep, window_step,
 };
 use crate::owner::windows::{get_x_lparam, get_y_lparam};
-use crate::window::desktop::{DisplayFrame, display_of_rect};
-use crate::window::state::{
-    ReportedFacts, Sample, SampledGeometry, WindowStateCell, mode_of, reported_frame,
-};
+use crate::window::state::{ReportedFacts, Sample, WindowStateCell, mode_of, reported_frame};
 
 /// Posted to a window nothing paints, so its frame still runs: a hidden window
 /// never receives `WM_PAINT`. It names the window's identity ([`FramePost`]).
@@ -544,12 +540,13 @@ impl WindowContext {
 
     /// What this context knows of the window beyond what Win32 reports.
     pub(crate) fn tracking(&self, hwnd: HWND) -> OwnerTracking {
+        let (display, desktop) = window_display(&*self.displays, hwnd);
         OwnerTracking {
             mode: self.mode.get(),
             restore_style: self.restore_style.get(),
             constraints: self.constraints.get(),
-            display: self.displays.display_of_window(hwnd),
-            desktop: self.displays.published(),
+            display,
+            desktop,
             occluded: self.visibility.occluded(),
             appearance: self.appearance.get(),
             active: self.active.get(),
@@ -1847,14 +1844,6 @@ pub(crate) fn sample_state(hwnd: HWND, record: WindowRecord, tracking: OwnerTrac
             },
         )
     };
-    let content = if have_client {
-        Size::new(
-            f64::from(client.right - client.left) / scale,
-            f64::from(client.bottom - client.top) / scale,
-        )
-    } else {
-        cached
-    };
     // The rectangle the window returns to: Win32's own for a maximized or
     // minimized window (`rcNormalPosition`), and for a fullscreen one the
     // rectangle it was given on entering, taken from the same source.
@@ -1866,42 +1855,18 @@ pub(crate) fn sample_state(hwnd: HWND, record: WindowRecord, tracking: OwnerTrac
         NativeMode::Maximized | NativeMode::Minimized { .. } => restore_rectangle(hwnd),
         NativeMode::Normal => None,
     };
-    // The window's position is measured on the display it is on, through that
-    // display's origin and scale; its extents are in its own logical pixels.
-    let display_frame = display.and_then(|id| DisplayFrame::find(&desktop, id));
-    let geometry = (|| {
-        let content = WindowExtent::try_new(if mode.is_minimized() { cached } else { content })?;
-        let outer = if have_window && !mode.is_minimized() {
-            WindowGeometry::try_new(
-                display_frame.and_then(|frame| frame.position(Point::new(window.left, window.top))),
-                Size::new(
-                    f64::from(window.right.saturating_sub(window.left)) / scale,
-                    f64::from(window.bottom.saturating_sub(window.top)) / scale,
-                ),
-            )?
-        } else {
-            WindowGeometry::unplaced(content)
-        };
-        // The rectangle the window returns to is on the display that holds
-        // most of it, which need not be the one the window is on now.
-        let normal = restore
-            .map(|bounds| {
-                WindowGeometry::try_new(
-                    display_of_rect(&desktop, bounds)
-                        .and_then(|frame| frame.position(bounds.origin)),
-                    Size::new(
-                        f64::from(bounds.size.width) / scale,
-                        f64::from(bounds.size.height) / scale,
-                    ),
-                )
-            })
-            .transpose()?;
-        Ok(SampledGeometry {
-            outer,
-            content,
-            normal,
-        })
-    })();
+    let geometry = sampled_geometry(
+        DeviceRects {
+            window: (have_window && !mode.is_minimized()).then_some(window),
+            client: have_client.then_some(client),
+            restore,
+            cached,
+            minimized: mode.is_minimized(),
+            scale: scale_factor,
+        },
+        display,
+        &desktop,
+    );
     Sample::read(geometry, |state| {
         let state = state
             .with_mode(mode_of(mode.flags()))
@@ -1917,7 +1882,10 @@ pub(crate) fn sample_state(hwnd: HWND, record: WindowRecord, tracking: OwnerTrac
             metrics: have_client
                 .then(|| {
                     flui_foundation::geometry::WindowMetrics::try_new(
-                        Size::new(client.right - client.left, client.bottom - client.top),
+                        Size::new(
+                            client.right.checked_sub(client.left)?,
+                            client.bottom.checked_sub(client.top)?,
+                        ),
                         scale,
                     )
                     .ok()

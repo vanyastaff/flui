@@ -56,6 +56,8 @@ mod close;
 mod cursor;
 pub(crate) mod frame_timing;
 #[cfg(windows)]
+mod geometry;
+#[cfg(windows)]
 mod holds;
 pub(crate) mod limits;
 #[cfg(windows)]
@@ -75,7 +77,7 @@ mod app_bar_tests;
 #[cfg(all(test, target_os = "windows"))]
 mod delivery_tests;
 #[cfg(all(test, target_os = "windows"))]
-mod open_tests;
+mod geometry_tests;
 
 #[cfg(windows)]
 pub(crate) use cloak::CloakWatch;

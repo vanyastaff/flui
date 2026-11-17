@@ -26,6 +26,10 @@ pub(crate) struct OpenPlan {
     /// The outer top-left corner in the desktop's device pixels; `None` lets
     /// the window manager place the window.
     pub position: Option<Point<i32>>,
+    /// Where [`position`](Self::position) is, read back on the display it was
+    /// converted through: the position a window created there has before
+    /// the window system first reports it. `None` exactly when `position` is.
+    pub placed: Option<WindowPosition>,
     /// The content size in logical pixels.
     pub content_size: Size<f64>,
     /// The scale the content is sized at: that of the display the window
@@ -137,14 +141,17 @@ impl OpenPlan {
         };
         let hidden_until_first_frame =
             options.visible && options.reveal == WindowReveal::AfterFirstFrame;
-        let position = if capabilities.places_at_open().is_available() {
-            at.zip(frame)
-                .and_then(|(at, frame)| frame.to_desktop(at.at()))
+        let placed = if capabilities.places_at_open().is_available() {
+            at.zip(frame).and_then(|(at, frame)| {
+                let pixel = frame.to_desktop(at.at())?;
+                Some((pixel, frame.position(pixel)?))
+            })
         } else {
             None
         };
         Self {
-            position,
+            position: placed.map(|(pixel, _)| pixel),
+            placed: placed.map(|(_, position)| position),
             content_size,
             scale,
             mode,
@@ -341,7 +348,20 @@ mod tests {
             let planned = plan(&options().position(position));
             assert_eq!(planned.position, expected, "{case}");
             assert_eq!(planned.scale, ratio(scale), "{case}: scale");
+            // What the window has before its first report is where it was
+            // created, on the display it was converted through.
+            assert_eq!(
+                planned.placed.map(WindowPosition::display),
+                expected.and(position.map(WindowPosition::display)),
+                "{case}: placed on its display"
+            );
         }
+        let snapped = plan(&options().position(Some(on(DESK.right, 0.4, 0.6))));
+        assert_eq!(
+            snapped.placed,
+            Some(on(DESK.right, 0.0, 1.0)),
+            "the pixel it was created at"
+        );
     }
 
     #[test]
@@ -351,6 +371,7 @@ mod tests {
         let capabilities = capabilities.into_capabilities();
         let planned = plan_with(&options(), &capabilities, Size::new(0.0, 0.0));
         assert_eq!(planned.position, None);
+        assert_eq!(planned.placed, None, "no position it was not created at");
         assert_eq!(planned.content_size, Size::new(800.0, 600.0));
     }
 

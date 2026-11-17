@@ -2393,8 +2393,9 @@ impl MacOSWindow {
         let snapshot = self
             .displays
             .get()
-            .map(|displays| displays.published())
-            .unwrap_or_else(flui_platform::DisplaySnapshot::empty);
+            .map_or_else(flui_platform::DisplaySnapshot::empty, |displays| {
+                displays.published()
+            });
         let screen = snapshot
             .get(at.display())
             .ok_or(ApplyError::DisplayGone(at.display()))?;

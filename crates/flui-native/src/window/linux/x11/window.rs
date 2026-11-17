@@ -2523,11 +2523,15 @@ impl X11Windows {
         let window_ref = WindowRef { xid, id };
         let facets = self.positions.for_window(&window_ref);
         let capabilities = capabilities(support);
-        // Until the first read of the server: what was asked for, or an empty
-        // window where that describes none.
+        // Until the first read of the server: the window as it was created, at
+        // the place the plan put it on its display, or at none where the plan
+        // placed nothing (a display the snapshot lacks, a host that does not
+        // place at open) or the place left the server's 16-bit coordinates
+        // and the window was created at the root's corner; an empty window
+        // where that describes none.
+        let placed = position.and(plan.placed);
         let initial = WindowState::new(
-            WindowGeometry::try_new(opening.position, plan.content_size)
-                .unwrap_or(WindowGeometry::EMPTY),
+            WindowGeometry::try_new(placed, plan.content_size).unwrap_or(WindowGeometry::EMPTY),
             flui_platform::WindowExtent::try_new(plan.content_size).unwrap_or_default(),
         )
         .with_capabilities(capabilities);

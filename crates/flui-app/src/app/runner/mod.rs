@@ -364,14 +364,15 @@ where
 
 /// The one check of an application's window options, before any runner
 /// starts, on every platform: the numbers a window command would refuse (a
-/// size or position that is not finite, a size or limit that encloses no
-/// area, a minimum above the maximum) refuse the start, naming the option.
-/// A host checks the options of every window it opens later itself
-/// (`WindowOptions::geometry`).
+/// size or limit that encloses no area, a minimum above the maximum) refuse
+/// the start, naming the option. A configured position is whole pixels and is
+/// always a place, so none is refused here. A host checks the options of
+/// every window it opens later itself (`WindowOptions::geometry`).
 pub(in crate::app) fn check_window_options(
     config: &crate::app::AppConfig,
 ) -> Result<(), LaunchError> {
-    flui_platform::WindowOptions::from(config)
+    config
+        .window_options(None)
         .geometry()
         .map(drop)
         .map_err(LaunchError::InvalidWindowOption)

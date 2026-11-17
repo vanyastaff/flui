@@ -6,8 +6,9 @@ use std::sync::LazyLock;
 use flui_foundation::geometry::{Bounds, DevicePixelRatio, Point, Size};
 use flui_platform::{
     Availability, DisplayId, DisplayInfo, DisplayKey, DisplayRegistry, DisplaySnapshot,
-    PlacementError, ResolvedPlacement, WindowCapabilities, WindowCapability, WindowExtent,
-    WindowGeometry, WindowMode, WindowPlacement, WindowPosition, WindowState,
+    InvalidGeometry, PlacementError, PlacementOffset, ResolvedPlacement, WindowCapabilities,
+    WindowCapability, WindowExtent, WindowGeometry, WindowMode, WindowPlacement, WindowPosition,
+    WindowState,
 };
 
 /// Two device pixels per logical pixel.
@@ -81,7 +82,7 @@ const FRAME: Size<f64> = Size::new(16.0, 39.0);
 fn placement(display: Option<&str>, offset: (f64, f64), size: (f64, f64)) -> WindowPlacement {
     WindowPlacement::new(
         display.map(str::to_owned),
-        Some(Point::new(offset.0, offset.1)),
+        Some(PlacementOffset::try_new(Point::new(offset.0, offset.1)).expect("a finite offset")),
         ext(size.0, size.1),
         WindowMode::Normal,
         DevicePixelRatio::ONE,
@@ -102,20 +103,20 @@ fn the_display_is_found_by_its_key() {
     let on_right = resolved(&placement(Some("key-right"), (100.0, 50.0), (800.0, 600.0)));
     assert_eq!(on_right.display, DESK.right);
     assert_eq!(
-        on_right.position.map(WindowPosition::display),
+        on_right.position().map(WindowPosition::display),
         Some(DESK.right),
         "the position is on the display it resolved to"
     );
     // Relative to that display, whatever the other displays' scales are.
     assert_eq!(
-        on_right.position.map(WindowPosition::at),
+        on_right.position().map(WindowPosition::at),
         Some(Point::new(100.0, 50.0))
     );
     assert_eq!(on_right.size, Size::new(800.0, 600.0));
     let on_left = resolved(&placement(Some("key-left"), (100.0, 50.0), (800.0, 600.0)));
     assert_eq!(on_left.display, DESK.left);
     assert_eq!(
-        on_left.position.map(WindowPosition::at),
+        on_left.position().map(WindowPosition::at),
         Some(Point::new(100.0, 50.0))
     );
 }
@@ -128,7 +129,7 @@ fn a_missing_display_falls_back_to_the_primary() {
     ));
     assert_eq!(gone.display, DESK.left);
     assert_eq!(
-        gone.position.map(WindowPosition::at),
+        gone.position().map(WindowPosition::at),
         Some(Point::new(100.0, 50.0))
     );
 }
@@ -137,7 +138,7 @@ fn a_window_without_a_key_opens_on_the_primary() {
     let keyless = resolved(&placement(None, (10.0, 20.0), (800.0, 600.0)));
     assert_eq!(keyless.display, DESK.left);
     assert_eq!(
-        keyless.position.map(WindowPosition::at),
+        keyless.position().map(WindowPosition::at),
         Some(Point::new(10.0, 20.0))
     );
 }
@@ -155,7 +156,7 @@ fn a_window_wider_than_the_work_area_is_cut_to_it() {
     let wide = resolved(&placement(Some("key-left"), (300.0, 0.0), (5000.0, 600.0)));
     assert_eq!(wide.size, Size::new(1920.0, 600.0));
     assert_eq!(
-        wide.position.map(WindowPosition::at),
+        wide.position().map(WindowPosition::at),
         Some(Point::new(0.0, 0.0))
     );
     let tall = resolved(&placement(Some("key-left"), (0.0, 0.0), (800.0, 2000.0)));
@@ -174,7 +175,7 @@ fn the_outer_size_with_its_frame_is_what_fits() {
         "1920 outer is 1904 inside"
     );
     assert_eq!(
-        wide.position.map(WindowPosition::at),
+        wide.position().map(WindowPosition::at),
         Some(Point::new(0.0, 0.0))
     );
     let tall = resolved_with(
@@ -192,7 +193,7 @@ fn the_outer_size_with_its_frame_is_what_fits() {
     );
     // The 816 x 639 outer window ends exactly at the work area's edge.
     assert_eq!(
-        near_edge.position.map(WindowPosition::at),
+        near_edge.position().map(WindowPosition::at),
         Some(Point::new(1104.0, 401.0))
     );
 }
@@ -204,7 +205,7 @@ fn a_window_off_the_edge_is_shifted_back_onto_the_display() {
         (800.0, 600.0),
     ));
     assert_eq!(
-        past.position.map(WindowPosition::at),
+        past.position().map(WindowPosition::at),
         Some(Point::new(1120.0, 440.0))
     );
     let before = resolved(&placement(
@@ -213,13 +214,13 @@ fn a_window_off_the_edge_is_shifted_back_onto_the_display() {
         (800.0, 600.0),
     ));
     assert_eq!(
-        before.position.map(WindowPosition::at),
+        before.position().map(WindowPosition::at),
         Some(Point::new(0.0, 0.0))
     );
     let right = resolved(&placement(Some("key-right"), (5000.0, 0.0), (800.0, 600.0)));
     // The right display is 1920 logical pixels wide in its own scale.
     assert_eq!(
-        right.position.map(WindowPosition::at),
+        right.position().map(WindowPosition::at),
         Some(Point::new(1120.0, 0.0))
     );
 }
@@ -227,7 +228,7 @@ fn a_window_off_the_edge_is_shifted_back_onto_the_display() {
 fn a_window_moved_to_another_scale_keeps_its_physical_size() {
     let moved = WindowPlacement::new(
         Some("key-unplugged".into()),
-        Some(Point::new(0.0, 0.0)),
+        Some(PlacementOffset::try_new(Point::new(0.0, 0.0)).expect("a finite offset")),
         ext(400.0, 300.0),
         WindowMode::Normal,
         scale(2.0),
@@ -236,7 +237,7 @@ fn a_window_moved_to_another_scale_keeps_its_physical_size() {
     assert_eq!(resolved(&moved).size, Size::new(800.0, 600.0));
     let same = WindowPlacement::new(
         Some("key-right".into()),
-        Some(Point::new(0.0, 0.0)),
+        Some(PlacementOffset::try_new(Point::new(0.0, 0.0)).expect("a finite offset")),
         ext(400.0, 300.0),
         WindowMode::Normal,
         scale(2.0),
@@ -247,7 +248,7 @@ fn a_window_moved_to_another_scale_keeps_its_physical_size() {
 fn a_minimized_window_opens_normal_or_maximized() {
     let minimized = WindowPlacement::new(
         None,
-        Some(Point::new(0.0, 0.0)),
+        Some(PlacementOffset::try_new(Point::new(0.0, 0.0)).expect("a finite offset")),
         ext(800.0, 600.0),
         WindowMode::Minimized,
         DevicePixelRatio::ONE,
@@ -260,7 +261,7 @@ fn a_minimized_window_opens_normal_or_maximized() {
 fn a_mode_the_window_cannot_enter_becomes_normal() {
     let full = WindowPlacement::new(
         None,
-        Some(Point::new(0.0, 0.0)),
+        Some(PlacementOffset::try_new(Point::new(0.0, 0.0)).expect("a finite offset")),
         ext(800.0, 600.0),
         WindowMode::Fullscreen,
         DevicePixelRatio::ONE,
@@ -281,7 +282,7 @@ fn without_places_at_open_size_and_mode_stay_but_position_goes() {
     let capabilities = capabilities.into_capabilities();
     let maximized = WindowPlacement::new(
         Some("key-left".into()),
-        Some(Point::new(100.0, 100.0)),
+        Some(PlacementOffset::try_new(Point::new(100.0, 100.0)).expect("a finite offset")),
         ext(800.0, 600.0),
         WindowMode::Maximized,
         DevicePixelRatio::ONE,
@@ -289,7 +290,7 @@ fn without_places_at_open_size_and_mode_stay_but_position_goes() {
     let result = maximized
         .resolve(&DESK.displays, &capabilities, NO_FRAME)
         .expect("resolves");
-    assert_eq!(result.position, None);
+    assert_eq!(result.position(), None);
     assert_eq!(result.size, Size::new(800.0, 600.0));
     assert_eq!(result.mode, WindowMode::Maximized);
 }
@@ -304,7 +305,7 @@ fn a_placement_without_a_position_stays_unpositioned() {
     );
     let result = resolved(&unplaced);
     assert_eq!(result.display, DESK.right);
-    assert_eq!(result.position, None);
+    assert_eq!(result.position(), None);
 }
 
 fn displays_that_cannot_hold_a_window_are_not_candidates() {
@@ -349,18 +350,21 @@ fn displays_that_cannot_hold_a_window_are_not_candidates() {
 }
 
 fn a_placement_that_describes_no_window_resolves_to_nothing() {
-    // A size that is not finite and a scale no display has cannot be held at
-    // all ([`WindowExtent`], [`DevicePixelRatio`]); what is left to refuse is
-    // a size with no area and an offset that is not finite.
-    for bad in [
-        placement(None, (0.0, 0.0), (800.0, 0.0)),
-        placement(None, (f64::INFINITY, 0.0), (800.0, 600.0)),
-        placement(None, (0.0, f64::NAN), (800.0, 600.0)),
-    ] {
-        assert_eq!(
-            bad.resolve(&DESK.displays, &WindowCapabilities::ALL, NO_FRAME),
-            None,
-            "{bad:?}"
+    // A size or offset that is not finite and a scale no display has cannot
+    // be held at all ([`WindowExtent`], [`PlacementOffset`],
+    // [`DevicePixelRatio`]); what is left to refuse is a size with no area.
+    let empty = placement(None, (0.0, 0.0), (800.0, 0.0));
+    assert_eq!(
+        empty.resolve(&DESK.displays, &WindowCapabilities::ALL, NO_FRAME),
+        None
+    );
+    for (x, y) in [(f64::INFINITY, 0.0), (0.0, f64::NAN)] {
+        assert!(
+            matches!(
+                PlacementOffset::try_new(Point::new(x, y)),
+                Err(InvalidGeometry::Position { .. })
+            ),
+            "({x}, {y})"
         );
     }
 }
@@ -433,7 +437,7 @@ fn placement_resolve() {
 fn sample() -> WindowPlacement {
     WindowPlacement::new(
         Some("monitor 100%\nsecond".into()),
-        Some(Point::new(-120.5, 80.0)),
+        Some(PlacementOffset::try_new(Point::new(-120.5, 80.0)).expect("a finite offset")),
         ext(800.25, 600.0),
         WindowMode::Minimized,
         scale(1.5),
@@ -554,7 +558,10 @@ fn from_state_remembers_the_normal_bounds_relative_to_the_usable_area() {
     );
     let captured = WindowPlacement::from_state(&state, &DESK.displays, false).expect("usable");
     assert_eq!(captured.display.as_deref(), Some("key-right"));
-    assert_eq!(captured.offset, Some(Point::new(100.0, 50.0)));
+    assert_eq!(
+        captured.offset.map(PlacementOffset::get),
+        Some(Point::new(100.0, 50.0))
+    );
     assert_eq!(captured.size, Size::new(800.0, 600.0));
     assert_eq!(captured.scale, two());
 
@@ -573,7 +580,10 @@ fn from_state_remembers_the_normal_bounds_relative_to_the_usable_area() {
     let captured = WindowPlacement::from_state(&maximized, &DESK.displays, false).expect("usable");
     assert_eq!(captured.mode, WindowMode::Maximized);
     assert_eq!(captured.display.as_deref(), Some("key-right"));
-    assert_eq!(captured.offset, Some(Point::new(200.0, 100.0)));
+    assert_eq!(
+        captured.offset.map(PlacementOffset::get),
+        Some(Point::new(200.0, 100.0))
+    );
     assert_eq!(captured.size, Size::new(800.0, 600.0));
 }
 
@@ -599,12 +609,15 @@ fn a_panel_along_the_top_moves_the_offset_not_the_position() {
     let at = on(id, 300.0, 72.0);
     let state = window(Some(at), Size::new(816.0, 639.0), Size::new(800.0, 600.0));
     let captured = WindowPlacement::from_state(&state, &displays, false).expect("usable");
-    assert_eq!(captured.offset, Some(Point::new(300.0, 40.0)));
+    assert_eq!(
+        captured.offset.map(PlacementOffset::get),
+        Some(Point::new(300.0, 40.0))
+    );
     let back = captured
         .resolve(&displays, &WindowCapabilities::ALL, NO_FRAME)
         .expect("the display holds it");
     assert_eq!(
-        back.position,
+        back.position(),
         Some(at),
         "the same position on the same display"
     );
@@ -616,6 +629,19 @@ fn from_state_keeps_no_position_the_system_did_not_report() {
     let captured = WindowPlacement::from_state(&unplaced, &DESK.displays, false).expect("usable");
     assert_eq!(captured.offset, None);
     assert_eq!(captured.display.as_deref(), Some("key-right"));
+}
+
+/// A host that reports where its windows are and published no position for
+/// one (a sample that could not find its monitor) has lost the place: nothing
+/// is remembered, so an empty offset never overwrites the placement before.
+fn from_state_remembers_nothing_a_placing_host_could_not_place() {
+    let unplaced = window(None, Size::new(816.0, 639.0), Size::new(800.0, 600.0))
+        .with_display(Some(DESK.right))
+        .with_capabilities(WindowCapabilities::ALL);
+    assert_eq!(
+        WindowPlacement::from_state(&unplaced, &DESK.displays, false),
+        None
+    );
 }
 
 /// A position on a display the snapshot does not hold (a monitor plugged in
@@ -695,6 +721,10 @@ fn placement_codec() {
             (
                 "from_state_remembers_nothing_on_a_display_the_snapshot_lacks",
                 from_state_remembers_nothing_on_a_display_the_snapshot_lacks,
+            ),
+            (
+                "from_state_remembers_nothing_a_placing_host_could_not_place",
+                from_state_remembers_nothing_a_placing_host_could_not_place,
             ),
             (
                 "a_panel_along_the_top_moves_the_offset_not_the_position",

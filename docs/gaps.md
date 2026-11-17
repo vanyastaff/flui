@@ -169,6 +169,14 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 
   What no run covers: on a desktop X11 window manager (the native X11 host hears a covering as `VisibilityNotify`, run with a full-screen window of another client over it on Xvfb, `a_covered_window_reads_occluded_and_shown`, which the conformance cannot read back), and on AppKit by hand; Cmd-H on macOS takes `isVisible` from the application's windows, so a hidden application reads as hidden, not occluded.
 - Placement restore ran only on Windows; live resize is not audited.
+- **A snapshot names its display twice.** `WindowState::display` and the display its outer
+  position names are two public fields, kept equal only by `WindowState::successor`: a state
+  built with `WindowState::new` and `with_display` can name one display in the field and
+  another in the position. The field is the only fact a host without positions has (Wayland,
+  Android, iOS, the web), so it cannot go; deriving it from the position where there is one
+  makes `display` a method over a private field, a change to every reader of the snapshot
+  (sixteen files across the hosts, the runtime and the engine), to `WindowStateParts` and to
+  the native recording's window state.
 - **The snapshot against the window system** (`window_conformance`'s `the_snapshot_agrees_with_the_window_system`: metrics, focus, activation, visibility and capabilities read back by the fixture's own means) ran on headless, on Win32, on AppKit (an M1, macOS 27.0, 2026-10-27), and on the native Linux hosts in CI, the X11 host under openbox on Xvfb and the Wayland host on Weston.
   - UIKit: not run, type-checked only, queued in [#1840](https://github.com/vanyastaff/flui/issues/1840).
   - Web: not run; the browser suite has no fixture that reads the canvas back apart from the window.

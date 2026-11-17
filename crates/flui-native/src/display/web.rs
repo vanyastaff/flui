@@ -1599,10 +1599,10 @@ pub(crate) mod source {
     /// `devicePixelRatio`, which is the display's scale and does not include page
     /// zoom: bounds describe the physical screen and stay put while the page is
     /// zoomed. The reported scale is `scale_override` (the window's pixel ratio, zoom
-    /// included, for the screen the window is on) or else that same ratio. Origins
-    /// are converted the same way: the coordinate space of a mixed-ratio layout is
-    /// the browser's, and the origin is therefore the browser's value in that
-    /// screen's device pixels, not a global device layout.
+    /// included, for the screen the window is on) or else that same ratio. The
+    /// origin is the browser's own value in CSS pixels: the coordinate space of a
+    /// mixed-ratio layout is the browser's, and a screen's device pixels are not
+    /// a space its neighbours share.
     fn screen_info(
         screen: &JsValue,
         id: DisplayId,
@@ -1634,10 +1634,17 @@ pub(crate) mod source {
             .filter(|label| !label.is_empty())
             .unwrap_or_else(|| "Browser Screen".to_string());
         let is_primary = is_primary(screen);
-        Some(
+        let mut info =
             crate::display::source::device_display(id, label, bounds, usable, scale_factor)?
-                .with_primary(is_primary),
-        )
+                .with_primary(is_primary);
+        // The extents are the screen's device pixels over the page's ratio;
+        // the origin is where the browser lays the screen out, in CSS pixels,
+        // the one space its screens of different ratios share.
+        info.origin = flui_platform::DesktopOrigin::new(
+            device_pixels(number("left", 0.0), 1.0),
+            device_pixels(number("top", 0.0), 1.0),
+        );
+        Some(info)
     }
 
     fn with_period(info: DisplayInfo, period: Option<RefreshPeriod>) -> DisplayInfo {

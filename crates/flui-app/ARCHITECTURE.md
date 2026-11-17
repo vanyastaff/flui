@@ -600,11 +600,12 @@ run with nothing borrowed.
   restored placement opens at the `WindowPosition` `resolve` gives, on the
   display it chose; a configured `AppConfig::position` is whole logical
   pixels of the primary display (the first where none is marked), which
-  `AppConfig::window_options_on` turns into a position against the owner's
-  display snapshot at the open site, since a conversion with no displays
-  (`From<&AppConfig> for WindowOptions`) can name none. A window remembered
-  while its position names a display the snapshot lacks keeps the placement
-  stored before.
+  `AppConfig::window_options` turns into a position against the owner's
+  display snapshot at every open site (the main window, `run_direct`, a
+  secondary window, Android and the web); it is the one way to build a
+  window's options from the configuration. A window state with no position
+  stores nothing, and one whose position names a display the snapshot lacks
+  keeps the placement stored before.
 - **Only the user overwrites a placement the run could not read.** After a
   read that timed out, was refused or panicked, the recorder holds
   `StoredPlacement::Unknown`, which owes nothing until a change the host

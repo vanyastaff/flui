@@ -940,6 +940,15 @@ async fn web_lists_screens_only_with_granted_permission() {
         // ScreenDetailed reports, which does not.
         assert_eq!(main.scale_factor.get(), 1.0);
         assert_eq!(device_size(main).0, 3840);
+        // The origin is where the browser lays a screen out, in CSS pixels:
+        // the side screen at CSS left 1920 with its own ratio of 1.5 is at
+        // 1920, not at its 2880 device pixels.
+        let side = snapshot
+            .displays()
+            .iter()
+            .find(|display| !display.is_primary)
+            .expect("the side screen");
+        assert_eq!(side.origin, flui_platform::DesktopOrigin::new(1920, 0));
         running.quit();
         settle().await;
     }

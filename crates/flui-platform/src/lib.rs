@@ -194,7 +194,7 @@ pub use locale::{InvalidLocale, Locale};
 pub use opened::{
     Launch, MAX_OPENED_ITEMS, MAX_OPENED_URL_LEN, OpenTarget, Opened, OpenedFile, OpenedOverflow,
 };
-pub use placement::{PlacementError, ResolvedPlacement, WindowPlacement};
+pub use placement::{PlacementError, PlacementOffset, ResolvedPlacement, WindowPlacement};
 pub use platform_window::{PlatformWindow, WindowAt};
 pub use pointer::{
     ButtonChange, CancelReason, DeviceId, PanZoomEvent, PanZoomPhase, PanZoomTransform, PenTool,

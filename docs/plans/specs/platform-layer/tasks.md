@@ -8405,7 +8405,14 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
   `(pixel − origin) / scale`), `display_of_rect` в 128 битах; AppKit — угол экрана в точках;
   headless держит позицию на своём дисплее; позиция на дисплее, которого снимок не держит, —
   `ApplyError::DisplayGone`, при открытии — место выбирает система. `AppConfig::position(x, y)` —
-  целые логические пиксели основного дисплея, раннер ставит их при открытии. Протокол 0.25
+  целые логические пиксели основного дисплея; `AppConfig::window_options(displays)` — единственный
+  способ построить опции окна (преобразование `From<&AppConfig>` удалено), им открываются главное
+  окно, `run_direct`, вторичное окно, Android и web. Окно Win32 на мониторе, которого нет в
+  снимке, перечитывает мониторы до публикации (`window_display`); геометрия выборки Win32 —
+  чистая `sampled_geometry` (стороны — точная разность в `f64`, прямоугольник возврата в масштабе
+  своего дисплея); первый снимок X11 — место, где окно создано (`OpenPlan::placed`), или никакого;
+  размещение не пишется из состояния без позиции у хоста, который позиции наблюдает; смещение
+  размещения — `PlacementOffset`; `ResolvedPlacement::position()` строится на его `display`. Протокол 0.25
   (разрыв, `Break::required` для полей, заменивших удалённые), формат нативной записи 3. Тесты (в
   скобках — откат, который их роняет): `a_position_set_on_a_normal_window_moves_it` (Win32,
   настоящее окно, угол против `GetMonitorInfoW`/`GetDpiForMonitor`; без подачи `DisplayFrame` в
@@ -8413,10 +8420,15 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
   `a_position_on_a_display_the_host_does_not_hold_is_refused` (Win32);
   `a_position_lands_on_the_display_it_names` (headless; без отказа `DisplayGone` команда
   принимается); `a_configured_position_opens_on_the_primary_display` (`flui-app`; без
-  `window_options_on` окно открывается в (0, 0)); `a_position_names_the_display_the_window_is_on`,
+  `window_options` окно открывается в (0, 0)); `the_position_is_kept` (`flui-app`; без позиции в
+  `window_options` — `None`); `sampled_geometry` (Win32, три монитора разного масштаба и
+  отрицательное начало; деление пикселя на масштаб окна роняет каждую строку);
+  `window_display` (Win32; без перечитывания дисплея нет);
+  `a_position_names_the_display_the_window_is_on`,
   `display_bounds_are_logical_pixels_of_the_display`,
   `a_panel_along_the_top_moves_the_offset_not_the_position`,
-  `from_state_remembers_nothing_on_a_display_the_snapshot_lacks` (`flui-platform`);
+  `from_state_remembers_nothing_on_a_display_the_snapshot_lacks`,
+  `from_state_remembers_nothing_a_placing_host_could_not_place` (`flui-platform`);
   `a_position_converts_through_its_own_display`,
   `a_window_spanning_two_displays_has_one_pixel_and_two_names`,
   `a_rectangle_is_on_the_display_holding_most_of_it`, `open_geometry`,
@@ -8428,7 +8440,9 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
   `an_intent_opens_its_link_or_documents` читает путь `file:` по-windows,
   `the_driver_agent_contains_every_failure` застаёт прежнего драйвера); WSL: набор X11 и headless
   под Xvfb с openbox (1144), окна Wayland на Weston (20), сценарный композитор (15);
-  проверка типов macOS, Android и wasm32 на nightly. iOS — только CI. Должно на устройствах (в
+  проверка типов macOS, Android и wasm32 на nightly. iOS — только CI. Тест начала экрана web в CSS
+  (`web_lists_screens_only_with_granted_permission`) — только CI (в WSL нет wasm-bindgen).
+  Открыто в `docs/gaps.md`: `WindowState::display` и дисплей позиции — два поля. Должно на устройствах (в
   строке `position-size-move-and-resize-events`): два монитора разного DPI на Windows, отключение
   монитора под окном, второй экран macOS.
 
