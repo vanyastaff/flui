@@ -970,6 +970,13 @@ impl AppRuntime {
         self.service_registry.reopen();
     }
 
+    /// The application's lifecycle the services watch
+    /// ([`ServiceContext::lifecycle`](super::lifecycle::ServiceContext::lifecycle)).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn service_lifecycle(&self) -> Rc<super::lifecycle::ServiceLifecycle> {
+        self.service_registry.lifecycle()
+    }
+
     /// The staged service shutdown: stop admission, cancel
     /// every running service, then join each until `join_by` — run at
     /// full loop-exit teardown BEFORE [`Self::shutdown_execution`], so

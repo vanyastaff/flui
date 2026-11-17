@@ -1536,6 +1536,11 @@ variant flui::app::LifecycleHook::Mount // at 4
 variant flui::app::LifecycleHook::Provide // at 11
 variant flui::app::LifecycleHook::UnmountRenderObject // at 9
 variant flui::app::LifecycleHook::Update // at 6
+pub struct flui::app::LifecycleWatch { .. }
+impl Clone for flui::app::LifecycleWatch
+impl core::fmt::Debug for flui::app::LifecycleWatch
+pub async fn flui::app::LifecycleWatch::changed(&mut self) -> Option<flui::prelude::AppLifecycleState>
+pub fn flui::app::LifecycleWatch::current(&self) -> flui::prelude::AppLifecycleState
 reexport flui::app::MotionOverride => flui::animation::MotionOverride
 #[non_exhaustive] pub enum flui::app::PanicText
 impl Clone for flui::app::PanicText
@@ -1648,6 +1653,7 @@ variant flui::app::SegmentPhase::Tail // at 3
 pub struct flui::app::ServiceContext { .. }
 impl core::fmt::Debug for flui::app::ServiceContext
 pub fn flui::app::ServiceContext::cancellation(&self) -> &flui::app::CancellationSignal
+pub fn flui::app::ServiceContext::lifecycle(&self) -> &flui::app::LifecycleWatch
 pub fn flui::app::ServiceContext::spawner(&self) -> &flui::app::TaskSpawner
 pub struct flui::app::ServiceDefinition { .. }
 impl Clone for flui::app::ServiceDefinition
@@ -23736,12 +23742,15 @@ pub struct flui::testing::TestWindow { .. }
 impl Clone for flui::testing::TestWindow
 impl Default for flui::testing::TestWindow
 impl core::fmt::Debug for flui::testing::TestWindow
+pub fn flui::testing::TestWindow::capability<C: flui::platform::capability::Capability>(self, provider: impl flui::platform::capability::CapabilityProvider<C>) -> Self
 pub const fn flui::testing::TestWindow::new(width: u32, height: u32) -> Self
 pub fn flui::testing::TestWindow::platform(self, platform: flui::platform::TargetPlatform) -> Self
+pub fn flui::testing::TestWindow::plugin(self, plugin: impl flui::platform::capability::Plugin) -> Self
 pub fn flui::testing::TestWindow::storage(self, storage: flui::testing::MemoryStorage) -> Self
 pub fn flui::testing::TestWindow::without_storage(self) -> Self
 pub struct flui::testing::Tester { .. }
 impl core::fmt::Debug for flui::testing::Tester
+pub fn flui::testing::Tester::background(&mut self)
 pub fn flui::testing::Tester::cancel_composition(&mut self)
 pub fn flui::testing::Tester::clock(&self) -> &flui::testing::HostClock
 pub fn flui::testing::Tester::commit_composition(&mut self, text: &str)
@@ -23753,6 +23762,7 @@ pub fn flui::testing::Tester::end_session(&mut self)
 pub fn flui::testing::Tester::enter_text(&mut self, locator: &flui::testing::Locator, text: &str)
 pub fn flui::testing::Tester::expect(&mut self, locator: flui::testing::Locator) -> flui::testing::Expectation<'_>
 pub fn flui::testing::Tester::find_all(&mut self, locator: &flui::testing::Locator) -> Vec<flui::testing::Match>
+pub fn flui::testing::Tester::foreground(&mut self)
 pub fn flui::testing::Tester::inspect_render(&mut self) -> flui::testing::InspectReading
 pub fn flui::testing::Tester::inspect_widgets(&mut self) -> flui::testing::InspectReading
 pub fn flui::testing::Tester::is_closed(&self) -> bool
@@ -35832,6 +35842,7 @@ impl flui_runtime::pump::FrameClockSource for flui::foundation::ManualClock
 pub struct flui_runtime::pump::FrameOutcome { .. }
 impl Clone for flui_runtime::pump::FrameOutcome
 impl Copy for flui_runtime::pump::FrameOutcome
+impl Default for flui_runtime::pump::FrameOutcome
 impl Eq for flui_runtime::pump::FrameOutcome
 impl PartialEq for flui_runtime::pump::FrameOutcome
 impl core::fmt::Debug for flui_runtime::pump::FrameOutcome
@@ -36006,7 +36017,6 @@ pub fn flui_runtime::ui_runtime::UiRuntime::set_pointer_resampling(&self, id: fl
 pub fn flui_runtime::ui_runtime::UiRuntime::settle_close_guards(&self) -> flui_runtime::ui_runtime::presentation_lifecycle::SettledCloses
 pub fn flui_runtime::ui_runtime::UiRuntime::settle_frame(&mut self, settlement: flui_runtime::sink::FrameSettlement) -> flui_runtime::sink::Settled
 pub fn flui_runtime::ui_runtime::UiRuntime::settle_text_sizing(&self, work: flui_runtime::ui_runtime::text_preparation::TextSizingWork, outcome: flui_runtime::ui_runtime::text_preparation::TextSizingSettlement) -> bool
-pub fn flui_runtime::ui_runtime::UiRuntime::stop_presentation_for_test(&self, id: flui::foundation::PresentationId)
 pub fn flui_runtime::ui_runtime::UiRuntime::stop_presentations(&self)
 pub fn flui_runtime::ui_runtime::UiRuntime::synchronize_window_lifecycle(&self)
 pub fn flui_runtime::ui_runtime::UiRuntime::synchronize_window_snapshot(&self, id: flui::foundation::PresentationId, execution: flui::platform::WindowExecutionState, focused: bool, visible: bool)

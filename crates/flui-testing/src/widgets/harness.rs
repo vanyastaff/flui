@@ -95,6 +95,17 @@ pub fn mount_with_ime(root: impl View) -> Harness {
     )
 }
 
+/// [`mount_with_ime`], on a window that names `platform`, as
+/// [`mount_on`] names it.
+pub fn mount_with_ime_on(root: impl View, platform: flui_platform::TargetPlatform) -> Harness {
+    mount_in(
+        root,
+        HeadlessWindow::new(SURFACE.0, SURFACE.1)
+            .with_text_store_host()
+            .with_platform(platform),
+    )
+}
+
 /// [`mount`], with a window that offers a recording push-model text input:
 /// the UI runtime's presentation enables the IME and reports the
 /// candidate area ([`Harness::cursor_area_calls`],

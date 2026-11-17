@@ -47,7 +47,7 @@ use flui_view::dev_agent::{AgentAnswer, AgentWindow, DevAgentHook, InputLease};
 use flui_view::{CloseReason, View};
 use parking_lot::Mutex;
 
-use crate::host::KitStorage;
+use crate::host::{AppRegistrations, KitStorage};
 use crate::storage::{MemoryStorage, RunId};
 use crate::{HeadlessDevAgent, HeadlessHost, HeadlessWindow};
 
@@ -74,14 +74,30 @@ const VISIBLE_READS: usize = 4;
 const DUE_NOW_FRAMES: u32 = 8;
 
 /// The window a [`Tester`] mounts its view in: its logical size, the
-/// platform whose conventions the application follows, and the storage its
-/// documents are kept in.
-#[derive(Debug, Clone)]
+/// platform whose conventions the application follows, the storage its
+/// documents are kept in, and the capability providers the application
+/// registers.
+#[derive(Clone)]
 pub struct TestWindow {
     width: u32,
     height: u32,
     platform: Option<flui_platform::TargetPlatform>,
     storage: WindowStorage,
+    registrations: AppRegistrations,
+}
+
+impl std::fmt::Debug for TestWindow {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let (overrides, plugins) = self.registrations.counts();
+        f.debug_struct("TestWindow")
+            .field("width", &self.width)
+            .field("height", &self.height)
+            .field("platform", &self.platform)
+            .field("storage", &self.storage)
+            .field("overrides", &overrides)
+            .field("plugins", &plugins)
+            .finish()
+    }
 }
 
 /// Where a [`TestWindow`]'s application keeps its documents.
@@ -105,7 +121,33 @@ impl TestWindow {
             height,
             platform: None,
             storage: WindowStorage::Fresh,
+            registrations: AppRegistrations::new(),
         }
+    }
+
+    /// Register `plugin`'s providers, as `Application::plugin` does: a widget
+    /// acquires what it provides and nothing else does. A
+    /// [`restart`](Tester::restart) registers it again.
+    ///
+    /// The mount panics when two registrations conflict, as a run fails
+    /// before its platform starts.
+    #[must_use]
+    pub fn plugin(mut self, plugin: impl flui_platform::capability::Plugin) -> Self {
+        self.registrations.plugin(plugin);
+        self
+    }
+
+    /// Provide the capability `C` with `provider`, in place of the built-in
+    /// one and of any plugin's, as `Application::capability` does.
+    ///
+    /// The mount panics when two registrations conflict.
+    #[must_use]
+    pub fn capability<C: flui_platform::capability::Capability>(
+        mut self,
+        provider: impl flui_platform::capability::CapabilityProvider<C>,
+    ) -> Self {
+        self.registrations.capability::<C, _>(provider);
+        self
     }
 
     /// Follow `platform`'s conventions (chords, handles, menus, transitions)
@@ -343,12 +385,13 @@ impl Tester {
         let windows = Arc::new(Mutex::new(Vec::new()));
         let mut agent = HeadlessDevAgent::attach(Windows(Arc::clone(&windows)));
         let (run_storage, run) = storage.as_ref().map(MemoryStorage::for_run).unzip();
-        let mut host = HeadlessHost::with_storage(
+        let mut host = HeadlessHost::with_application(
             headless,
             run_storage.map(|storage| KitStorage {
                 host: Arc::new(storage),
                 provided: None,
             }),
+            config.registrations.clone(),
         )
         .with_dev_agent(&mut agent);
         host.attach(&view)
@@ -1076,10 +1119,47 @@ impl Tester {
     }
 
     /// The window becomes hidden (`false`) or shown again (`true`), as when
-    /// the user minimizes it or switches away on a phone; then the frame that
-    /// reports it runs.
+    /// the user minimizes it or another window covers it on a desktop; then
+    /// the frame that reports it runs. Its focus and whether it may run stay
+    /// as they were: a phone's trip to the background is
+    /// [`background`](Self::background).
     pub fn set_window_visible(&mut self, visible: bool) {
         self.host.set_window_visible(visible);
+        self.run_due_now();
+    }
+
+    /// The application leaves the screen as on a phone, in the order Android
+    /// and UIKit report it: the window loses the focus, its execution is
+    /// suspended, it is hidden, and then the session-ended notice arrives and
+    /// what the documents published is written, as a phone reports the end
+    /// of its session on each trip to the background (ADR-0350 §2). The
+    /// window stays open; [`foreground`](Self::foreground) brings it back.
+    /// Then the frame that reports it runs.
+    ///
+    /// # Panics
+    ///
+    /// With the first panic of a notice subscriber or the write.
+    pub fn background(&mut self) {
+        let window = self.host.primary_window();
+        self.host.set_window_focused(false);
+        self.host
+            .set_window_execution(window, flui_platform::WindowExecutionState::Suspended);
+        self.host.set_window_visible(false);
+        let _answer = self
+            .host
+            .end_session(flui_platform::SessionEndPhase::Ending);
+        self.run_due_now();
+    }
+
+    /// The application comes back to the screen as on a phone, in the order
+    /// Android and UIKit report it: the window is shown, it may run again,
+    /// and it takes the focus. Then the frame that reports it runs.
+    pub fn foreground(&mut self) {
+        let window = self.host.primary_window();
+        self.host.set_window_visible(true);
+        self.host
+            .set_window_execution(window, flui_platform::WindowExecutionState::Running);
+        self.host.set_window_focused(true);
         self.run_due_now();
     }
 

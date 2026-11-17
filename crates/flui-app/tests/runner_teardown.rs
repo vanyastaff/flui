@@ -152,6 +152,65 @@ pub(crate) fn a_hung_service_and_compute_job_end_within_the_exit_budget() {
         "the exit took {took:?}, past the six-second budget"
     );
 }
+/// A service watches the application's lifecycle from its own thread: the
+/// window's suspension pauses the application, its return resumes it, and
+/// once the last window's runtime retires the application is detached.
+///
+/// Fails against a runner that never feeds the services' lifecycle: the
+/// watch stays `Detached` throughout.
+pub(crate) fn a_service_watches_the_application_pause_and_resume() {
+    use flui_platform::WindowExecutionState::{Running, Suspended};
+    use flui_scheduler::AppLifecycleState::{Detached, Paused, Resumed};
+
+    let (watches, watched) = std::sync::mpsc::channel();
+    let watcher = ServiceDefinition::new(
+        "watcher",
+        ServiceLifetime::StopsWithLastWindow,
+        move |context| {
+            watches
+                .send(context.lifecycle().clone())
+                .expect("the test waits for the watch");
+            let cancelled = context.cancellation().clone();
+            Box::pin(async move { cancelled.cancelled().await })
+        },
+    );
+    let run = HeadlessRun::start(
+        Application::new().config(
+            AppConfig::new()
+                .exit_policy(ExitPolicy::OnLastWindowClosed)
+                .service(watcher),
+        ),
+        flui_widgets::SizedBox::new(10.0, 10.0),
+    );
+    run.run_owner_turn();
+    let watch = watched
+        .recv_timeout(Duration::from_secs(5))
+        .expect("the service started with the loop");
+    let window = run.open_windows().pop().expect("the main window is open");
+    window.simulate_focus(true);
+    run.run_owner_turn();
+    assert_eq!(watch.current(), Resumed, "the focused window runs");
+
+    window.simulate_focus(false);
+    window.simulate_execution_state(Suspended);
+    run.run_owner_turn();
+    assert_eq!(watch.current(), Paused, "the suspended window pauses it");
+
+    window.simulate_execution_state(Running);
+    window.simulate_focus(true);
+    run.run_owner_turn();
+    assert_eq!(watch.current(), Resumed, "its return resumes it");
+
+    assert!(window.simulate_close(), "the application lets it close");
+    run.run_owner_turn();
+    assert_eq!(
+        watch.current(),
+        Detached,
+        "the last runtime retired with its window"
+    );
+    run.join().expect("an ordinary close returns Ok");
+}
+
 #[test]
 fn runner_teardown() {
     crate::run_table(
@@ -173,6 +232,10 @@ fn runner_teardown() {
             (
                 "a_hung_service_and_compute_job_end_within_the_exit_budget",
                 a_hung_service_and_compute_job_end_within_the_exit_budget,
+            ),
+            (
+                "a_service_watches_the_application_pause_and_resume",
+                a_service_watches_the_application_pause_and_resume,
             ),
             (
                 "teardown_panic_flushes_the_registry_before_resuming",

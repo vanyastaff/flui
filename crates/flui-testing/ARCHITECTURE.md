@@ -48,6 +48,35 @@ substrate driver over raw owners, which the raw-owner suites still use.
   `tests/runtime_driver.rs` fail against a harness that drives the pipeline
   itself (the root `MediaQuery`, the commit gate, the owner inbox, the
   window's cursor).
+- **A headless close is a runner's close.** `HeadlessHost` keeps no window
+  apart: a window another one outlives closes through
+  `UiRuntime::close_presentation_entered`, which removes it and moves the OS
+  focus to a survivor, and the last window stops its presentation and drops
+  the UI runtime, as the owner retires a runtime whose last presentation
+  closed, so what the runtime held to answer ends as `OwnerRetired`. The host
+  keeps the primary window's double readable after it closed; a pump of a
+  retired host moves time, the scenario, the writes and the background lanes
+  only. `closing_the_focused_window_moves_the_focus_to_a_survivor` and the
+  last-window row of `a_read_pending_when_its_runtime_drops_ends_as_owner_retired`
+  pin both. The widget harness closes through the same path.
+- **The built-ins are a runner's built-ins.** Without a registry of the test's
+  own, the host registers what `flui-app` registers on the primary window's
+  platform with the test build's features: the clipboard and background lanes,
+  the primary selection only on Linux, scripted HTTP only with this crate's
+  `http` feature (the facade's `http` forwards it), and the application's
+  overrides and plugins a `TestWindow` carries, in the runner's tiers
+  (`a_runtime_without_a_primary_selection_answers_not_registered`,
+  `a_plugin_the_test_registers_answers_and_an_override_replaces_it`). The
+  native-window capability is `flui-app`'s and above this crate: a test of a
+  widget that reaches `flui::native` runs on `flui_app::testing`.
+- **A phone's trip is delivered in a phone's order.** `Tester::background`
+  reports focus lost, execution suspended, hidden, then the session's
+  `Ending` (the session-ended notice, then the documents' write) with the
+  window kept open, as Android's `onPause`/`onStop` and a UIKit scene entering
+  the background do (ADR-0350 §2); `Tester::foreground` reports shown, running,
+  focused. `HeadlessHost::set_window_execution`, `notify` and `leave_unshown`
+  are the single entries for execution, system notices and a surface that
+  shows nothing.
 - **A scale change has one runtime entry.** `HeadlessHost::set_scale_factor`
   updates its native-window stand-in and surface dimensions through
   `UiRuntime::apply_window_observation` with a `Metrics` observation, the

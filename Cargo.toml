@@ -850,7 +850,7 @@ system = ["dep:flui-system"]
 # over rustls on Linux and the BSDs, which have none (ADR-0280). Off, a widget
 # acquiring `HttpCapability` is refused as not registered and the application
 # links no HTTP client or TLS stack.
-http = ["flui-app/http"]
+http = ["flui-app/http", "flui-testing?/http"]
 
 # === One instance per user session ===
 # `Application::single_instance` (ADR-0254 §4): on Linux and Windows a later

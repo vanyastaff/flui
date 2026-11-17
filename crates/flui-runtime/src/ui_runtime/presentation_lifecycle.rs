@@ -520,15 +520,6 @@ impl UiRuntime {
         }
     }
 
-    /// Begin closing presentation `id` without removing it from the UI runtime,
-    /// so a test can observe what a closing presentation still accepts.
-    /// Production closes through [`Self::close_presentation_entered`], which
-    /// stops and removes it in one step.
-    #[cfg(any(test, feature = "testing"))]
-    pub fn stop_presentation_for_test(&self, id: PresentationId) {
-        self.stop_presentation_after_failure(id, FirstPanic::new());
-    }
-
     /// Seed a new UI runtime: its primary presentation, then the scheduler's
     /// aggregate from it, so the scheduler does not start from a state no
     /// presentation was in (ADR-0345). Nothing has subscribed yet.

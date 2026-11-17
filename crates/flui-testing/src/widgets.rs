@@ -343,7 +343,23 @@ fn surface_for(constraints: &BoxConstraints) -> (u32, u32) {
 /// with `UnconstrainedBox`, so a `ListBody` or `Flex` does not see the
 /// clamped surface and trip "must have unlimited space along its main axis".
 pub fn lay_out(root: impl View, constraints: BoxConstraints) -> LaidOut {
-    mount_laid_out(root, constraints, None)
+    mount_laid_out(
+        root,
+        constraints,
+        None,
+        flui_platform::TargetPlatform::Unknown,
+    )
+}
+
+/// Like [`lay_out`], in a window that names `platform`: the tree follows its
+/// conventions, and the host provides what a runner provides there, the
+/// primary selection on Linux among it.
+pub fn lay_out_on(
+    root: impl View,
+    constraints: BoxConstraints,
+    platform: flui_platform::TargetPlatform,
+) -> LaidOut {
+    mount_laid_out(root, constraints, None, platform)
 }
 
 /// Like [`lay_out`], with `storage` as the UI runtime's byte storage: the tree's
@@ -362,6 +378,7 @@ pub fn lay_out_with_storage(
             host: Arc::new(storage),
             provided: None,
         }),
+        flui_platform::TargetPlatform::Unknown,
     )
 }
 
@@ -382,6 +399,7 @@ pub fn lay_out_with_provided_storage(
             host: Arc::new(host),
             provided: Some(Arc::new(provided)),
         }),
+        flui_platform::TargetPlatform::Unknown,
     )
 }
 
@@ -389,6 +407,7 @@ fn mount_laid_out(
     root: impl View,
     constraints: BoxConstraints,
     storage: Option<KitStorage>,
+    platform: flui_platform::TargetPlatform,
 ) -> LaidOut {
     let logical_root_type = root.view_type_id();
     let surface = surface_for(&constraints);
@@ -414,7 +433,9 @@ fn mount_laid_out(
     );
     // Every platform window has an input method: the kit's plays a push-model
     // one, so [`LaidOut::dispatch_ime`] reaches the focused field.
-    let window = HeadlessWindow::new(surface.0, surface.1).with_text_input();
+    let window = HeadlessWindow::new(surface.0, surface.1)
+        .with_text_input()
+        .with_platform(platform);
     let host = WidgetHost::mount(wrapped, window, storage);
     let pipeline_owner = host.pipeline().clone();
 
@@ -565,38 +586,29 @@ impl LaidOut {
         self.host.ui_runtime().set_window_visible(visible);
     }
 
-    /// Ask to close the tree's presentation for `reason`, as its platform
-    /// does. The presentation's close guard is asked first: a close it
-    /// refuses is recorded and nothing changes, and the pump after its last
-    /// hold is released carries the close out. Otherwise the presentation
-    /// closes now: its lifecycle observers are told it is detached, its held
-    /// input is dropped, and later lifecycle updates are ignored. The tree
-    /// stays mounted until this `LaidOut` drops. `true` when it closed now.
-    pub fn request_close(&self, reason: flui_view::CloseReason) -> bool {
-        let runtime = self.host.ui_runtime();
-        if runtime
-            .ui_runtime()
-            .close_refused(runtime.ui_runtime().presentation_id(), reason)
-        {
-            return false;
-        }
-        runtime
-            .ui_runtime()
-            .enter(flui_runtime::ui_runtime::UiRuntime::stop_presentations);
-        true
+    /// Ask to close the tree's window for `reason`, as its platform does
+    /// ([`HeadlessHost::request_close`](crate::HeadlessHost::request_close)).
+    /// The window's close guard is asked first: a close it refuses is
+    /// recorded and nothing changes, and the pump after its last hold is
+    /// released carries the close out. Otherwise the window closes now: its
+    /// composition is committed, its lifecycle observers are told it is
+    /// detached, and, being the host's only window, it retires the UI runtime
+    /// as a real host does, disposing the tree and ending what the runtime
+    /// still held to answer. `true` when it closed now.
+    pub fn request_close(&mut self, reason: flui_view::CloseReason) -> bool {
+        let host = self.host.ui_runtime_mut();
+        let window = host.primary_window();
+        host.request_close(window, reason)
     }
 
-    /// Whether the tree's presentation has closed: a close carried out at
-    /// once by [`request_close`](Self::request_close), one carried out by a
-    /// pump after its last hold was released or a decision closed it, or a
-    /// session end. A close refused and still recorded is not one.
+    /// Whether the tree's window has closed: a close carried out at once by
+    /// [`request_close`](Self::request_close), one carried out by a pump
+    /// after its last hold was released or a decision closed it, or a session
+    /// end. A close refused and still recorded is not one.
     #[must_use]
     pub fn is_closed(&self) -> bool {
-        let runtime = self.host.ui_runtime();
-        runtime
-            .ui_runtime()
-            .presentation_closing_for_test(runtime.ui_runtime().presentation_id())
-            .unwrap_or(true)
+        let host = self.host.ui_runtime();
+        host.is_closed(host.primary_window())
     }
 
     /// End the session the tree runs in, as the operating system does at log

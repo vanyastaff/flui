@@ -579,6 +579,8 @@ struct Opened {
     note: Option<flui_view::persist::Persisted<Note>>,
     hold: Option<flui_view::CloseHold>,
     lifecycle: Vec<flui_view::AppLifecycleState>,
+    /// How many session-ended notices reached the window.
+    session_ended: usize,
     _observation: Option<flui_view::LifecycleSubscription>,
     _notices: Option<flui_view::HostNoticeSubscription>,
 }
@@ -630,10 +632,14 @@ impl ViewState<Notebook> for NotebookState {
         let lifecycle = Rc::clone(&self.0.opened);
         let save_on_detach = self.0.save_on_detach;
         let panic_at_session_end = self.0.panic_at_session_end;
+        let noticed = Rc::clone(&self.0.opened);
         let notices = ctx
             .lifecycle_handle()
             .expect("a hosted window has a lifecycle")
             .subscribe_notices(move |notice| {
+                if matches!(notice, flui_platform::HostNotice::SessionEnded) {
+                    noticed.borrow_mut().session_ended += 1;
+                }
                 assert!(
                     !(panic_at_session_end
                         && matches!(notice, flui_platform::HostNotice::SessionEnded)),
@@ -665,6 +671,7 @@ impl ViewState<Notebook> for NotebookState {
             note: Some(flui_view::persist::Persisted::open(ctx)),
             hold: self.0.hold_close.then(|| guard.hold()),
             lifecycle: Vec::new(),
+            session_ended: 0,
             _observation: Some(observation),
             _notices: Some(notices),
         };
@@ -849,6 +856,107 @@ fn showing_an_unfocused_window_leaves_it_unfocused() {
         Some(&Inactive),
         "the OS focus never came back"
     );
+}
+
+/// A trip to the background walks the lifecycle down to `Paused` in a
+/// phone's order and tells the application its session may end, with the
+/// window still open; the return walks it back up to `Resumed`.
+///
+/// Fails against a tester that only hides the window: the application stops
+/// at `Hidden` and hears nothing of its session.
+#[test]
+fn a_trip_to_the_background_pauses_the_application_and_its_return_resumes_it() {
+    use flui_view::AppLifecycleState::{Hidden, Inactive, Paused, Resumed};
+
+    let (view, opened) = notebook(false);
+    let mut t = Tester::mount(view);
+    opened.borrow_mut().lifecycle.clear();
+
+    t.background();
+    assert_eq!(opened.borrow().lifecycle, [Inactive, Hidden, Paused]);
+    assert_eq!(
+        opened.borrow().session_ended,
+        1,
+        "a phone reports its session may end on each trip to the background"
+    );
+    assert!(
+        !t.is_closed(),
+        "the window stays open for the user's return"
+    );
+
+    opened.borrow_mut().lifecycle.clear();
+    t.foreground();
+    assert_eq!(opened.borrow().lifecycle, [Hidden, Inactive, Resumed]);
+}
+
+/// The capability a widget acquires.
+struct GreetingCapability;
+
+impl flui_platform::capability::Capability for GreetingCapability {
+    type Handle = &'static str;
+    const NAME: &'static str = "test-greeting";
+}
+
+/// A plugin that provides [`GreetingCapability`] with its greeting.
+struct Greets(&'static str);
+
+impl flui_platform::capability::Plugin for Greets {
+    fn register(&self, registrar: &mut flui_platform::capability::CapabilityRegistrar) {
+        let greeting = self.0;
+        registrar.provide::<GreetingCapability>(
+            move |_: &flui_platform::capability::ProviderContext<'_>| Ok(greeting),
+        );
+    }
+}
+
+/// Shows the greeting [`GreetingCapability`] answers, or the refusal's
+/// reason.
+#[derive(Clone, StatefulView)]
+struct Greeter;
+
+struct GreeterState {
+    shown: String,
+}
+
+impl StatefulView for Greeter {
+    type State = GreeterState;
+
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
+        GreeterState {
+            shown: match ctx.capability::<GreetingCapability>() {
+                Ok(greeting) => greeting.to_owned(),
+                Err(refusal) => format!("{:?}", refusal.reason),
+            },
+        }
+    }
+}
+
+impl ViewState<Greeter> for GreeterState {
+    fn build(&self, _view: &Greeter, _ctx: &dyn BuildContext) -> impl IntoView {
+        Center::new().child(Text::new(self.shown.clone()))
+    }
+}
+
+/// A plugin the test registers answers the application's widget, an
+/// override answers in its place, and a relaunch registers both again;
+/// without either the widget is refused, as in a run without them.
+#[test]
+fn a_plugin_the_test_registers_answers_and_an_override_replaces_it() {
+    let mut t = Tester::mount(Greeter);
+    t.expect(find::text("NotRegistered")).to_exist();
+
+    let mut t = Tester::mount_in(Greeter, TestWindow::default().plugin(Greets("hello")));
+    t.expect(find::text("hello")).to_exist();
+
+    let window = TestWindow::default()
+        .plugin(Greets("hello"))
+        .capability::<GreetingCapability>(|_: &flui_platform::capability::ProviderContext<'_>| {
+            Ok("overridden")
+        });
+    let mut t = Tester::mount_in(Greeter, window);
+    t.expect(find::text("overridden")).to_exist();
+    let mut t = t.restart();
+    t.expect(find::text("overridden")).to_exist();
 }
 
 /// A restart is the user quitting and opening the application again: a write
