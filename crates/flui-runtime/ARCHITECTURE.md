@@ -290,7 +290,7 @@ host.
   deadlines without animation sampling or a presentation segment. Preparation runs
   inside owner admission; the host background dispatcher does no prior drain.
   Whether a wake
-  becomes a pump is the host's per-backend wake gate (ADR-0058), not the
+  becomes a pump is the host's per-backend wake gate (ADR-0353), not the
   UI runtime's. Pinned by `ui_runtime/tests/pump_transaction.rs`, each test failing
   against a pump that skips or reorders the phase it names; `flui-app`'s
   `runner_frame_ordering` scan pins that every runner goes through it.

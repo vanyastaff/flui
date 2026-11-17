@@ -123,7 +123,7 @@ before `flui-testing` and `flui-sdk`. It owns:
   per pump: it is the scheduler's frame timestamp and the time the UI runtime's `Vsync` controllers
   tick at, after projection through each presentation's `MotionClock` (ADR-0176/0195).
   Scheduler tickers are retired under ADR-0175; they are not a second animation clock.
-  Whether a wake becomes a frame stays the runner's per-backend wake gate (ADR-0058); a wake
+  Whether a wake becomes a frame stays the runner's per-backend wake gate (ADR-0353); a wake
   with frames disabled calls `UiRuntime::pump_background` (clear the frame latch, then poll the
   async driver) and runs no frame;
 - `ExecutionServices` and the UI runtime's instances of runtime-owned capabilities

@@ -4,7 +4,8 @@
 //! the buffer any size, so the buffer is drawn at the scale the compositor
 //! prefers: a fractional one where it offers `wp_fractional_scale_v1`
 //! (`preferred_scale`, as a numerator over 120), else the whole one `wl_surface`
-//! version 6 prefers, else that of the output the surface entered.
+//! version 6 prefers, else the largest of the outputs the surface is on
+//! (`OnOutputs`).
 //! Without the viewporter the buffer is the surface's size: scale 1, and
 //! the compositor scales it.
 //!
@@ -29,6 +30,7 @@ use flui_platform::MAX_SURFACE_EXTENT;
 
 use crate::display::scale::{RefusedScale, ScaleStreak};
 use crate::host::ScreenBounds;
+use crate::owner::linux::wayland::outputs::OnOutputs;
 
 /// The scale a surface's buffer is drawn at: the scale the compositor
 /// named, up to [`Self::MAX`].
@@ -161,29 +163,29 @@ impl<T: Copy> ToldScale<T> {
 }
 
 /// What the compositor said of the scale a surface is drawn at, each a ratio
-/// a screen can have by its type.
+/// a screen can have by its type, and the outputs the surface is on.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub(crate) struct ScaleTold {
     /// `wp_fractional_scale_v1.preferred_scale`.
     pub(crate) fractional: Option<DevicePixelRatio>,
     /// `wl_surface.preferred_buffer_scale`.
     pub(crate) preferred: Option<DevicePixelRatio>,
-    /// The scale of the output the surface is on.
-    pub(crate) output: Option<DevicePixelRatio>,
+    /// The outputs the surface is on, whose densest scale is the fallback.
+    pub(crate) outputs: OnOutputs,
 }
 
 /// The scale a window's buffers are drawn at: the compositor's (the
-/// fractional scale, else the preferred one, else the output's), fitted so
-/// that `drawn`, the logical size of everything drawn at it (the content,
-/// and the frame around it where the window draws one), fits the largest
-/// surface.
+/// fractional scale, else the preferred one, else the densest output's),
+/// fitted so that `drawn`, the logical size of everything drawn at it (the
+/// content, and the frame around it where the window draws one), fits the
+/// largest surface.
 pub(crate) fn buffer_scale(viewported: bool, told: ScaleTold, drawn: Size<f64>) -> BufferScale {
     if !viewported {
         return BufferScale::ONE;
     }
     told.fractional
         .or(told.preferred)
-        .or(told.output)
+        .or(told.outputs.densest)
         .map_or(BufferScale::ONE, BufferScale::of)
         .fitted(drawn)
 }
@@ -212,9 +214,9 @@ mod tests {
     use super::*;
 
     /// What a window holds after the compositor told it `fractional` (each a
-    /// numerator over 120) and `preferred` in turn, on an output of scale
-    /// `output`: each event through the hosts' one rule, as the window's
-    /// handlers send it.
+    /// numerator over 120) and `preferred` in turn, the densest output it is
+    /// on of scale `output`: each event through the hosts' one rule, as the
+    /// window's handlers send it.
     fn told(fractional: &[u32], preferred: &[i32], output: Option<f64>) -> ScaleTold {
         let mut held_fractional = ToldScale::default();
         for &numerator in fractional {
@@ -227,7 +229,10 @@ mod tests {
         ScaleTold {
             fractional: held_fractional.ratio(),
             preferred: held_preferred.ratio(),
-            output: output.map(|scale| DevicePixelRatio::try_new(scale).expect("a ratio")),
+            outputs: OnOutputs {
+                first: None,
+                densest: output.map(|scale| DevicePixelRatio::try_new(scale).expect("a ratio")),
+            },
         }
     }
 

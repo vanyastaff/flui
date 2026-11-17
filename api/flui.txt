@@ -35954,6 +35954,9 @@ pub fn flui_runtime::ui_runtime::UiRuntime::gestures(&self) -> &flui_interaction
 pub fn flui_runtime::ui_runtime::UiRuntime::handle_input_addressed(&self, presentation_id: flui::foundation::PresentationId, input: flui::platform::PlatformInput) -> bool
 pub fn flui_runtime::ui_runtime::UiRuntime::handle_input_on(&self, presentation_id: flui::foundation::PresentationId, surface: flui_interaction::ids::InputSurface, input: flui::platform::PlatformInput) -> bool
 pub fn flui_runtime::ui_runtime::UiRuntime::handle_window_hover_addressed(&self, presentation_id: flui::foundation::PresentationId, inside: bool)
+pub fn flui_runtime::ui_runtime::UiRuntime::has_pending_due_work(&self) -> bool
+pub fn flui_runtime::ui_runtime::UiRuntime::has_pending_input_work(&self) -> bool
+pub fn flui_runtime::ui_runtime::UiRuntime::has_pending_tree_work(&self) -> bool
 pub fn flui_runtime::ui_runtime::UiRuntime::has_pending_work(&self) -> bool
 pub fn flui_runtime::ui_runtime::UiRuntime::id(&self) -> flui::foundation::UiRuntimeId
 pub fn flui_runtime::ui_runtime::UiRuntime::input_taps(&self) -> &flui_runtime::input_tap::InputTaps
