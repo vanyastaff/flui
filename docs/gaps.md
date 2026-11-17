@@ -695,14 +695,6 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 - `StatefulView::create_state` receives the `LifecycleContext`, so a state can be built with its signals and capability handles bound; `Signal::default()` is gone. Production states still hold an `Option` (a `WriterSource`, a focus or text-input handle, a rebuild handle) that `init_state` fills with `self.field = Some(ctx.…)` and that `build` unwraps: `rg 'self\.[a-z_]+ = Some\((ctx|ctx)\.' crates packages` lists them.
 - The check is that search finding no production state, each field a plain handle made in `create_state`.
 
-### A Tester reads the whole scene's drawing, not one element's
-
-> **Environments:** all · **Who it hurts:** Application authors who check what a widget painted beside other widgets · **Parity:** none (API shape)
-
-- `Tester::draw_commands` returns every draw command of the window's last submitted scene, so a test that checks one painter's output picks it out of everything the window drew. The pieces of a narrower read exist: a chunk is one render object's run (ADR-0304 §2) and its picture layer carries that `RenderId` (`LayerNode::render_id`), and in the in-process agent a located element's handle `e<N>` is the forming render object's packed `RenderId` (`crates/flui-semantics/src/identity.rs`), absent for an authored region. What the Tester lacks is the render subtree's ids under that object without a cap: `inspect.render` stops at 4096 nodes. Selecting by the element's rect is no substitute, since a painter may draw outside its own bounds.
-- The shape is `draw_commands(&Locator)`: the located render object and its descendants select the picture layers whose render object is among them, as `flutter_test`'s `paints` matcher reads one render object's painting. The form without a locator is then deleted, a breaking change allowed before 1.0.
-- The check is a test that reads one of two painted siblings' commands by its locator and finds none of the other's.
-
 ### No widget hot reload on Android and the Web
 
 > **Environments:** Android, Web · **Who it hurts:** Developers who iterate on widget code on a phone or in a browser · **Parity:** none yet (hot reload has no row)

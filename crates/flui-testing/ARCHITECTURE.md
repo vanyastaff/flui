@@ -126,7 +126,12 @@ substrate driver over raw owners, which the raw-owner suites still use.
   `element.actionability` and delivers input with `input.inject`, so it
   hit-tests and walks no tree itself and proves what the driver would. The
   one exception is `Tester::draw_commands`, which reads the scene the
-  headless host received, because the agent's protocol carries no drawing.
+  headless host received, because the agent's protocol carries no drawing;
+  it locates through the agent and selects the picture layers whose render
+  object `inspect.render` lists under the element, and refuses a subtree
+  past one inspection rather than return part of its drawing
+  (`draw_commands_read_one_element_and_none_of_its_sibling`,
+  `draw_commands_refuse_a_subtree_past_one_inspection`).
   Each read first runs the frames due now at zero duration, so its answer comes
   from the tree that work committed. An expectation pumps a frame only while
   `time_to_next_frame` is zero (a scheduled frame or pending work); with
