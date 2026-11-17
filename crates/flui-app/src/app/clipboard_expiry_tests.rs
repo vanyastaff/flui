@@ -23,7 +23,7 @@ use super::{CLEAR_RETRY, ClipboardExpiries, MAX_CLEAR_RETRIES};
 /// A host clipboard whose operating system the test speaks for: the entry of
 /// this application's it holds, and the answers it gives a clear.
 #[derive(Default)]
-struct ScriptedHost {
+struct HostClipboard {
     /// The expiring entry the clipboard holds; `None` once anything else was
     /// copied over it or it was cleared.
     held: Cell<Option<ClipboardEntryId>>,
@@ -36,7 +36,7 @@ struct ScriptedHost {
     panics_at: Cell<Option<ClipboardEntryId>>,
 }
 
-impl ScriptedHost {
+impl HostClipboard {
     /// Another application copies: no entry of ours is there any more.
     fn copy_from_elsewhere(&self) {
         self.held.set(None);
@@ -62,7 +62,7 @@ impl ScriptedHost {
     }
 }
 
-impl NativeClipboard for ScriptedHost {
+impl NativeClipboard for HostClipboard {
     fn read_text(&self, answer: Resolver<ClipboardRead>) {
         let _ = answer.resolve(Ok(None));
     }
@@ -124,7 +124,7 @@ impl Owner {
 
 /// One loop's clipboard under test.
 struct Run {
-    host: Rc<ScriptedHost>,
+    host: Rc<HostClipboard>,
     clock: ManualClock,
     owner: Owner,
     expiries: Rc<ClipboardExpiries>,
@@ -132,7 +132,7 @@ struct Run {
 
 impl Run {
     fn new() -> Self {
-        let host = Rc::new(ScriptedHost::default());
+        let host = Rc::new(HostClipboard::default());
         let clock = ManualClock::new();
         let expiries = ClipboardExpiries::new(
             Rc::clone(&host) as Rc<dyn NativeClipboard>,

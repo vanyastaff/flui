@@ -8384,6 +8384,49 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
   `flui-system` без провайдера; отображение фильтров и суд над открытым файлом (`AssocIsDangerous`
   на Windows, Launch Services на macOS) для них записаны в ADR-0360 §2, §4 и `docs/gaps.md`.
 
+- [x] **LY152** — ветка `platform/concealed-clipboard-expiry`, решение — ADR-0362. Находка
+  подтверждена на `main` @ `b68c2ddfa` чтением: `ClipboardWrite::concealed` только держал запись
+  вне истории, ничто её не стирало (`rg -i 'expir|clear' crates/flui-native/src/clipboard`
+  пусто по этому смыслу), хотя хосты Windows, macOS и Linux уже слышат блокировку сессии.
+  Построено: `ClipboardWrite::expires_after(ClipboardExpiry)` (скрытая запись с новым
+  `ClipboardEntryId` из `AtomicIdMint` процесса; `ClipboardExpiry::try_new` — от секунды до суток,
+  иначе `ClipboardExpiryError`), `ExpiryClearing` (`AtTimeAndLock`, `AtTime`, `Unavailable`) через
+  `ClipboardHandle::expiry_clearing`; `NativeClipboard` получил `expiry_clearing`, `clear_expired`
+  и `clear_expired_before_exit`. Правило — в шве, один раз (`flui-app` `ClipboardExpiries`):
+  каждая истекающая запись должна одну очистку к своему сроку, срок входит в
+  `AppRuntime::turn_deadline` на всех хостах (маршрут ставится с владельцем везде), ход владельца
+  спрашивает очистки, чей срок наступил; очистка называет свою запись, поэтому вторая запись
+  заменяет срок первой, а очистка первой ничего не делает; `SessionLocked` и `Sleep` спрашивают
+  все очистки сразу, до подписчиков; конец цикла просит хост стереть оставшееся в пределах
+  `EXIT_CLIPBOARD_BOUND`; неудача «пока нельзя» повторяется по `CLEAR_RETRY` (`Backoff`), не
+  больше `MAX_CLEAR_RETRIES`. Хосты сравнивают токен ОС при очистке (`ExpiringRecord`): Win32 —
+  номер последовательности и владелец, прочитанные после закрытия сессии записи (проверка
+  на настоящем буфере показала, что закрытие сдвигает номер), очистка в одной сессии; X11 —
+  `SetSelectionOwner(None, время владения)`, сервер её игнорирует, если выделение взяли позже,
+  очистка, спрошенная за записью, ждёт её метки времени; Wayland — уничтожение источника;
+  macOS и iOS — `changeCount` (iOS ещё `UIPasteboardOptionExpirationDate`), Android — метки
+  писателя и записи в extras описания клипа (API 24+, `clearPrimaryClip` с API 28, без фокуса —
+  `Unseen`): у трёх последних проверка и очистка — два вызова, гонка записана; Web —
+  `Unavailable`. Тесты, в скобках — результат с откатом: таблица `clipboard_expiry`
+  (`a_clear_is_owed_at_its_time_and_served_once`, `another_applications_copy_survives_the_time`,
+  `a_second_expiring_write_replaces_the_firsts_time`,
+  `nothing_is_owed_without_an_expiry_or_a_conditional_clear`, `a_session_lock_clears_now`,
+  `a_panicking_clear_costs_no_other_clear`, `a_clear_the_host_could_not_do_is_tried_again`,
+  `the_loop_end_clears_an_owed_entry`; без сдерживания в `ask_each` вторая очистка теряется);
+  `an_expiry_is_at_least_a_second_and_at_most_a_day`,
+  `an_expiring_write_is_concealed_and_names_its_own_entry` (`flui-platform`);
+  `an_expiring_entry_is_cleared_only_while_it_is_still_there`,
+  `a_record_forgets_an_entry_its_token_no_longer_matches` (в памяти);
+  `an_expiring_entry_is_cleared_only_under_its_stamp` (скриптованные ответы Win32) и
+  `an_expiring_entry_clears_only_while_the_clipboard_still_holds_it` (настоящий буфер Windows 11,
+  сохранён и возвращён; со штампом внутри сессии — `NotHeld` вместо `Cleared`);
+  `an_expiring_entry_is_given_up_only_while_the_clipboard_still_holds_it` (Xvfb в WSL; очистка,
+  поданная за ждущей записью без отсрочки, — `NotHeld` вместо `Cleared`);
+  шаг истечения в `the_selection_crosses_between_clients` (Weston 13 в WSL). macOS и Android —
+  проверка типов nightly в WSL, iOS — только CI. Должно на устройствах (строка «Concealed
+  clipboard entries clear themselves» в `platform-parity.toml`, `docs/gaps.md`): блокировка сессии
+  на каждом хосте, macOS, срок iOS после конца процесса, Android на API 24, 28, 29+.
+
 ## Чего нет в этой серии
 
 Часть функций из закрытого списка ядра (R1.4) на части ОС ещё отсутствует. Каждая — отдельная
