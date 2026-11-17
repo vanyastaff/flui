@@ -8,8 +8,8 @@ use std::num::NonZeroU64;
 use std::sync::Arc;
 
 use super::{
-    ClipSource, DRAG_FLAG_GLOBAL, DRAG_FLAG_GLOBAL_URI_READ, ViewRead, clip_parts, delivered,
-    incoming_allowed, offered, source_end,
+    ClipSource, DRAG_FLAG_GLOBAL, DRAG_FLAG_GLOBAL_URI_READ, TypeNames, ViewRead, clip_parts,
+    delivered, incoming_allowed, offered, read_type_names, source_end,
 };
 use flui_foundation::{DragSessionId, UiRuntimeId};
 use flui_platform::data_transfer::{
@@ -327,11 +327,108 @@ fn the_source_learns_how_its_drag_ended() {
     );
 }
 
+/// The `String[]` another application's description filled, as JNI hands
+/// it over: each element read makes a local reference, which the stand-in
+/// counts while it lives, and each copy is counted.
+struct Elements {
+    names: Vec<Option<String>>,
+    live: usize,
+    most_live: usize,
+    asked: usize,
+}
+
+impl Elements {
+    fn new(names: Vec<Option<String>>) -> Self {
+        Self {
+            names,
+            live: 0,
+            most_live: 0,
+            asked: 0,
+        }
+    }
+}
+
+impl TypeNames for Elements {
+    type Element = String;
+    type Error = std::convert::Infallible;
+
+    fn len(&mut self) -> Result<usize, Self::Error> {
+        Ok(self.names.len())
+    }
+
+    fn element(&mut self, index: usize) -> Result<Option<String>, Self::Error> {
+        self.asked += 1;
+        let element = self.names[index].clone();
+        if element.is_some() {
+            self.live += 1;
+            self.most_live = self.most_live.max(self.live);
+        }
+        Ok(element)
+    }
+
+    fn text(&mut self, element: &String) -> Result<String, Self::Error> {
+        Ok(element.clone())
+    }
+
+    fn release(&mut self, _element: String) {
+        self.live -= 1;
+    }
+}
+
+/// A drag from another application names any number of media types, of any
+/// length: its offer is read from the first `MAX_OFFERED_TYPES` alone, an
+/// over-long one among them left out and counted, a `null` skipped, and one
+/// element's local reference lives at a time, so the native frame stays
+/// bounded however many it named.
+fn a_drag_offers_no_more_types_than_every_host_reads() {
+    use crate::drag::offers::{MAX_OFFERED_TYPES, MAX_TYPE_LEN};
+
+    let long = format!("application/{}", "x".repeat(MAX_TYPE_LEN));
+    let mut names: Vec<Option<String>> = vec![Some(long.clone()), None];
+    names.extend((0..10_000).map(|n| Some(format!("application/x-{n}"))));
+    let mut elements = Elements::new(names);
+    let read = read_type_names(&mut elements).expect("an infallible array");
+    assert_eq!(
+        elements.asked, MAX_OFFERED_TYPES,
+        "nothing past the bound is read"
+    );
+    assert_eq!(elements.most_live, 1, "one local reference at a time");
+    assert_eq!(read.len(), MAX_OFFERED_TYPES - 2);
+    assert!(!read.contains(&long), "an over-long type is left out");
+
+    // `FluiView` copies no more across than the library reads.
+    let view = crate::owner::android::java_host::java_source("dev.flui.platform.FluiView");
+    for stated in [
+        format!("static final int MAX_OFFERED_TYPES = {MAX_OFFERED_TYPES};"),
+        format!("static final int MAX_TYPE_LENGTH = {MAX_TYPE_LEN};"),
+        "Math.min(description.getMimeTypeCount(), MAX_OFFERED_TYPES)".to_owned(),
+    ] {
+        assert!(view.contains(&stated), "{stated:?} in FluiView");
+    }
+
+    // The model holds the same rule over what it is handed.
+    let many: Vec<String> = (0..10_000).map(|n| format!("application/x-{n}")).collect();
+    let offer = offered(std::iter::once(long.as_str()).chain(many.iter().map(String::as_str)));
+    assert_eq!(offer.len(), MAX_OFFERED_TYPES - 1);
+    assert_eq!(
+        offer
+            .last()
+            .map(|(_, descriptor)| descriptor.format.clone()),
+        Some(TransferFormat::Custom {
+            mime: Mime::new(&format!("application/x-{}", MAX_OFFERED_TYPES - 2))
+        })
+    );
+}
+
 #[test]
 fn android_drag_mapping() {
     crate::table_test::run_table(
         "android_drag_mapping",
         &[
+            (
+                "a_drag_offers_no_more_types_than_every_host_reads",
+                a_drag_offers_no_more_types_than_every_host_reads,
+            ),
             (
                 "a_description_offers_its_media_types",
                 a_description_offers_its_media_types,

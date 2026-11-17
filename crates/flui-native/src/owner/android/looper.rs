@@ -256,6 +256,9 @@ pub struct AndroidLoop {
     /// The owner's end of `FluiHost`'s queue, bound on the Java main thread
     /// at start (ADR-0255 decision 2).
     host_queue: Arc<java_host::HostQueue>,
+    /// The intents waiting for their `content:` documents, which a worker
+    /// opens off this thread.
+    documents: RefCell<super::documents::Documents<java_host::JavaSignal>>,
     /// The Activity's requests for results, which providers reach through
     /// the bridge `android_platform` hands out.
     results: Rc<super::result_bridge::ResultBridge>,
@@ -334,6 +337,7 @@ impl AndroidLoop {
         Self {
             java_view,
             host_queue,
+            documents: RefCell::default(),
             results,
             app,
             notices: H::notices(&app_delivery),
@@ -420,6 +424,15 @@ impl AndroidLoop {
         }
         self.java_view.detach();
         self.host_queue.detach();
+        // The documents still opening are refused; nobody is left to hear
+        // their intents.
+        let retired = self.documents.borrow_mut().retire();
+        if let Some(signal) = retired.cancel {
+            super::documents::CancelSignal::cancel(&*signal);
+        }
+        for ready in retired.ready {
+            log_refusals(&ready.refused);
+        }
         // The requests still open end, and a provider's later ones are
         // refused: the Activity is gone with this loop.
         self.results.end();
@@ -498,19 +511,59 @@ impl AndroidLoop {
             let event = match entry {
                 java_host::HostEntry::TrimMemory(level) => ActivityEvent::TrimMemory(level),
                 java_host::HostEntry::Intent(intent) => {
-                    let opened = super::intent::Opening::of(intent)
-                        .opened(|uri| self.host_queue.open_document(uri));
-                    if !opened.is_empty() {
-                        // Before `ready` the delivery holds it, and a cold
-                        // one joins the launch.
-                        self.app_delivery
-                            .opened(opened)
-                            .or_contain((), "what an intent opened");
-                    }
+                    self.accept_intent(super::intent::Opening::of(intent));
                     continue;
                 }
             };
             self.activity_callbacks.react(event).deliver(self);
+        }
+        self.deliver_opened();
+    }
+
+    /// Accept what an intent opens: its `content:` documents are opened off
+    /// this thread, and it is delivered, after the intents before it, once
+    /// each has an outcome ([`Self::deliver_opened`]).
+    fn accept_intent(&self, opening: super::intent::Opening) {
+        let app = self.app.clone();
+        let signal = Arc::downgrade(&self.owner_signal);
+        let accepted =
+            self.documents
+                .borrow_mut()
+                .accept(opening, std::time::Instant::now(), |opener| {
+                    java_host::spawn_documents(app, opener, signal)
+                });
+        match accepted {
+            Ok(None) => {}
+            Ok(Some(error)) => tracing::warn!(
+                target: "flui_native::android",
+                %error,
+                "no thread to open an intent's documents; they are refused"
+            ),
+            Err(super::documents::Busy) => tracing::warn!(
+                target: "flui_native::android",
+                waiting = super::documents::MAX_WAITING_INTENTS,
+                "an intent arrived while as many wait for their documents as may; it is dropped"
+            ),
+        }
+    }
+
+    /// Deliver the intents whose documents all have an outcome, in the order
+    /// they arrived, logging why each document left out was not opened, and
+    /// cancel the open of a document past its deadline.
+    fn deliver_opened(&self) {
+        let turn = self.documents.borrow_mut().turn(std::time::Instant::now());
+        if let Some(signal) = turn.cancel {
+            super::documents::CancelSignal::cancel(&*signal);
+        }
+        for ready in turn.ready {
+            log_refusals(&ready.refused);
+            if !ready.opened.is_empty() {
+                // Before `ready` the delivery holds it, and a cold one joins
+                // the launch.
+                self.app_delivery
+                    .opened(ready.opened)
+                    .or_contain((), "what an intent opened");
+            }
         }
     }
 
@@ -623,6 +676,17 @@ impl AndroidLoop {
         for event in held {
             delivery.dispatch_input(event);
         }
+    }
+}
+
+/// Log why each document an intent named was not opened.
+fn log_refusals(refused: &[super::documents::OpenRefusal]) {
+    for refusal in refused {
+        tracing::warn!(
+            target: "flui_native::android",
+            ?refusal,
+            "a document an intent named was not opened"
+        );
     }
 }
 
@@ -819,6 +883,7 @@ impl host::Loop for AndroidLoop {
                             wake_deadline: [wake_deadline, turn_wait].into_iter().flatten().min(),
                             next_preference_sample: self.next_sample(next_preference_sample),
                             hand_off_deadline: self.results.next_deadline(),
+                            open_deadline: self.documents.borrow().next_deadline(),
                         },
                         web_time::Instant::now(),
                     );

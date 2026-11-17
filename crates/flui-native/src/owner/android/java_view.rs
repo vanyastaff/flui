@@ -782,7 +782,10 @@ fn view_accessibility(handle: jlong) -> Option<Arc<dyn ViewAccessibility>> {
 }
 
 /// The strings of `array`, in order; a `null` array is empty and a `null`
-/// element is skipped.
+/// element is skipped. One element's local reference lives at a time. For an
+/// array FLUI's own Java side bounds (an intent's record); another
+/// application's media types are read by
+/// [`drag_types`](crate::drag::android::drag_types).
 pub(crate) fn strings(
     env: &mut Env<'_>,
     array: &JObjectArray<'_>,
@@ -796,7 +799,9 @@ pub(crate) fn strings(
         let element = array.get_element(env, index)?;
         let text = env.cast_local::<JString<'_>>(element)?;
         if !text.is_null() {
-            out.push(text.try_to_string(env)?);
+            let copied = text.try_to_string(env);
+            env.delete_local_ref(text);
+            out.push(copied?);
         }
     }
     Ok(out)
@@ -829,7 +834,7 @@ extern "system" fn native_drag<'local>(
             let Some(view) = bridge(handle) else {
                 return Ok(false);
             };
-            let mime_types = strings(env, &mime_types)?;
+            let mime_types = crate::drag::android::drag_types(env, &mime_types)?;
             let scale = view.scale();
             Ok(view.transfer.drag(
                 &view,

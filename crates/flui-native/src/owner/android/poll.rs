@@ -27,6 +27,9 @@ pub(crate) struct LoopTurn {
     /// When the oldest request for a result the Java main thread has not
     /// taken is due to end, resumed or not.
     pub(crate) hand_off_deadline: Option<Instant>,
+    /// When the earliest intent still waiting for its documents is due to
+    /// refuse the ones not opened, resumed or not.
+    pub(crate) open_deadline: Option<Instant>,
 }
 
 /// The longest wait `ALooper_pollOnce` takes: its timeout is `i32` milliseconds,
@@ -61,7 +64,7 @@ pub(crate) fn poll_timeout(turn: LoopTurn, now: Instant) -> Option<Duration> {
         turn.wake_deadline.filter(|deadline| *deadline > now)
     };
     let sample = turn.next_preference_sample.filter(|_| turn.resumed);
-    [deadline, sample, turn.hand_off_deadline]
+    [deadline, sample, turn.hand_off_deadline, turn.open_deadline]
         .into_iter()
         .flatten()
         .min()
@@ -110,6 +113,7 @@ mod tests {
             wake_deadline,
             next_preference_sample: Some(now + ms(500)),
             hand_off_deadline: None,
+            open_deadline: None,
         };
         let awaiting = |wake_deadline| LoopTurn {
             awaiting_vsync: true,
@@ -122,6 +126,7 @@ mod tests {
             wake_deadline,
             next_preference_sample: None,
             hand_off_deadline: None,
+            open_deadline: None,
         };
         for (case, turn, expected) in [
             (
@@ -168,6 +173,14 @@ mod tests {
                     ..turn(false, false, None)
                 },
                 Some(ms(700)),
+            ),
+            (
+                "paused, an intent's documents due to be refused",
+                LoopTurn {
+                    open_deadline: Some(now + ms(900)),
+                    ..turn(false, false, None)
+                },
+                Some(ms(900)),
             ),
             (
                 "paused, a deadline that needs a frame is already behind",

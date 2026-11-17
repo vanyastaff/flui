@@ -85,13 +85,14 @@ mod clip {
     /// order: text, HTML and a URI list as themselves, FLUI's identity with its
     /// parameters (declared length zero), and any other media type as the bytes
     /// of the clip's URI. Intents, duplicates and names that are not media types
-    /// are not announced.
+    /// are not announced, and nothing past the types every host's drag reads
+    /// ([`offered_types`](crate::drag::offers::offered_types)).
     #[must_use]
     pub(super) fn offered<'a>(
         mime_types: impl IntoIterator<Item = &'a str>,
     ) -> Vec<(ClipSource, RepresentationDescriptor)> {
         let mut offered: Vec<(ClipSource, RepresentationDescriptor)> = Vec::new();
-        for mime in mime_types {
+        for mime in crate::drag::offers::offered_types(mime_types) {
             if mime == MIMETYPE_TEXT_INTENT {
                 continue;
             }
@@ -118,6 +119,58 @@ mod clip {
             ));
         }
         offered
+    }
+
+    /// The Java side of the `String[]` of media types `FluiView.mimeTypes`
+    /// copies out of another application's `ClipDescription`: the calls
+    /// [`read_type_names`] makes, which a native method's environment answers
+    /// on Android and a stand-in in the tests.
+    pub(super) trait TypeNames {
+        /// A local reference to one element.
+        type Element;
+        /// A failed JNI call.
+        type Error;
+
+        /// How many elements the array has.
+        fn len(&mut self) -> Result<usize, Self::Error>;
+
+        /// A new local reference to element `index`; `None` for a `null`.
+        fn element(&mut self, index: usize) -> Result<Option<Self::Element>, Self::Error>;
+
+        /// The text of `element`, copied into this process.
+        fn text(&mut self, element: &Self::Element) -> Result<String, Self::Error>;
+
+        /// Let go of `element`'s local reference.
+        fn release(&mut self, element: Self::Element);
+    }
+
+    /// The media types of `names`, read as the drag's offer is
+    /// ([`offered_types`](crate::drag::offers::offered_types)): at most the
+    /// first [`MAX_OFFERED_TYPES`](crate::drag::offers::MAX_OFFERED_TYPES)
+    /// elements, a `null` skipped, one longer than
+    /// [`MAX_TYPE_LEN`](crate::drag::offers::MAX_TYPE_LEN) bytes left out.
+    /// One element's local reference lives at a time, so a native frame holds
+    /// a bounded number however many the other application named (the local
+    /// reference table of API 23 to 25 holds 512 for the whole thread).
+    ///
+    /// # Errors
+    ///
+    /// The first failed call; the array's other elements are not read.
+    pub(super) fn read_type_names<A: TypeNames>(names: &mut A) -> Result<Vec<String>, A::Error> {
+        let len = names.len()?.min(crate::drag::offers::MAX_OFFERED_TYPES);
+        let mut read = Vec::with_capacity(len);
+        for index in 0..len {
+            let Some(element) = names.element(index)? else {
+                continue;
+            };
+            let text = names.text(&element);
+            names.release(element);
+            let text = text?;
+            if text.len() <= crate::drag::offers::MAX_TYPE_LEN {
+                read.push(text);
+            }
+        }
+        Ok(read)
     }
 
     /// What `FluiView` answered a read of the held clip with.
@@ -1127,13 +1180,61 @@ use crate::{
     version::gate::android::{AndroidApi, DragSource},
 };
 #[cfg(target_os = "android")]
-use clip::{ClipSource, ViewRead, clip_parts, delivered, source_end};
+use clip::{ClipSource, TypeNames, ViewRead, clip_parts, delivered, read_type_names, source_end};
 #[cfg(target_os = "android")]
 use drops::{ACTION_DRAG_ENDED, After, Drops, Requested, Spawn, UriRead, java_key};
 
 /// The size of the drag shadow, in logical pixels.
 #[cfg(target_os = "android")]
 const SHADOW: f64 = 48.0;
+
+/// The media types `nativeDrag` received ([`read_type_names`]): a `null`
+/// array is empty.
+///
+/// # Errors
+///
+/// The first failed JNI call.
+#[cfg(target_os = "android")]
+pub(crate) fn drag_types(
+    env: &mut Env<'_>,
+    array: &JObjectArray<'_>,
+) -> jni::errors::Result<Vec<String>> {
+    if array.is_null() {
+        return Ok(Vec::new());
+    }
+    read_type_names(&mut JavaTypeNames { env, array })
+}
+
+/// A native method's environment over the array `nativeDrag` received.
+#[cfg(target_os = "android")]
+struct JavaTypeNames<'a, 'env, 'array> {
+    env: &'a mut Env<'env>,
+    array: &'a JObjectArray<'array>,
+}
+
+#[cfg(target_os = "android")]
+impl<'env> TypeNames for JavaTypeNames<'_, 'env, '_> {
+    type Element = JString<'env>;
+    type Error = jni::errors::Error;
+
+    fn len(&mut self) -> jni::errors::Result<usize> {
+        self.array.len(self.env)
+    }
+
+    fn element(&mut self, index: usize) -> jni::errors::Result<Option<JString<'env>>> {
+        let element = self.array.get_element(self.env, index)?;
+        let text = self.env.cast_local::<JString<'_>>(element)?;
+        Ok((!text.is_null()).then_some(text))
+    }
+
+    fn text(&mut self, element: &JString<'env>) -> jni::errors::Result<String> {
+        element.try_to_string(self.env)
+    }
+
+    fn release(&mut self, element: JString<'env>) {
+        self.env.delete_local_ref(element);
+    }
+}
 
 /// The platform's drag-and-drop transport (see the module doc).
 #[cfg(target_os = "android")]

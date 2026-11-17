@@ -8383,6 +8383,35 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
   настоящие GTK и KDE file chooser и `OpenURI` на рабочем столе. macOS, iOS, Android и Web в
   `flui-system` без провайдера; отображение фильтров и суд над открытым файлом (`AssocIsDangerous`
   на Windows, Launch Services на macOS) для них записаны в ADR-0360 §2, §4 и `docs/gaps.md`.
+- [x] **LY136** — ветка `native/android-bounded-reads`. Проверено на `main` @ `eeb70bf8d`: все три
+  находки подтверждены чтением. Чтение clipboard звало `coerceToText` у первого элемента
+  (`clipboard/android.rs`), вставка ниже API 31 — у каждого (`FluiInputConnection.paste`), то есть
+  поток URI-элемента читался целиком на потоке владельца (и на Java main thread) до любой проверки
+  размера; документы `content:` из intent открывались `HostQueue::open_document` на потоке
+  владельца, до 64 на intent; `FluiView.mimeTypes` копировал все типы `ClipDescription`, а
+  `java_view::strings` держал по локальной ссылке на тип в одном кадре. Решение (новое правило ADR
+  не нужно; записано в `crates/flui-native/ARCHITECTURE.md`, раздел «Another application's
+  content is read off the owner thread, its size first»): чтение clipboard берёт текст элемента
+  (`getText`, модель `clipboard::android::item_text` за трейтом вызовов Java) — URI- и
+  intent-элемент текста не держит и читается `Ok(None)`, как буфер без текстового представления на
+  каждом другом хосте, провайдер не открывается; вставка из клавиатуры берёт тот же текст
+  (`FluiView.clipText`) под тем же пределом `MAX_TEXT` (`FluiView.MAX_PASTED_BYTES`), приёмник
+  содержимого возвращает то, что не взял; ни один класс не зовёт `coerceToText`. Документы intent
+  открывает рабочий поток (`owner/android/documents.rs`): владелец принимает intent под тикетом (не
+  больше `MAX_WAITING_INTENTS`, дальше — отказ целиком), каждый документ — работа со своим тикетом,
+  intents доставляются по порядку прихода, когда у каждого документа есть исход; исход ровно один —
+  файл или `OpenRefusal` (`Failed`, `GrantEnded` на `SecurityException`, `TimedOut` после
+  `OPEN_DEADLINE` с отменой через `CancellationSignal` — односторонний binder-вызов, `Retired`,
+  `NoThread`), поздний ответ отброшенного документа закрывает дескриптор, поллинг просыпается к
+  ближайшему сроку (`LoopTurn::open_deadline`). Чтение байтов брошенного URI сначала спрашивает
+  заявленный размер (`AssetFileDescriptor.getLength`) и отказывает до чтения, если он больше
+  предела; поток по-прежнему останавливается на пределе. Типы drag ограничены одним правилом на
+  всех хостах (`drag::offers::MAX_OFFERED_TYPES` = 100, `MAX_TYPE_LEN` = 255, `offered_types`):
+  X11 и Wayland берут общие константы (Wayland теперь считает события `offer`, повтор тоже), Windows
+  читает столько же записей перечислителя (было 256), Web — столько же типов и файлов, Android
+  копирует в Java не больше и читает по одной локальной ссылке (`clip::read_type_names`);
+  `java_view::strings` отпускает каждую ссылку. `PROTOCOL` 5 → 6. Тесты, в скобках результат с
+  откатом: TODO.
 
 ## Чего нет в этой серии
 
