@@ -402,7 +402,8 @@ executor runs each command under its own catch, in both placements.
   ended, since the request blocks for as long as the driver takes. The executor's record
   publishes the state as
   `DeviceHealth { Healthy, Rebuilding { attempts }, GivenUp { attempts } }`, which the host maps to
-  ADR-0267's `DeviceRecovery { Pending, Failed, Abandoned }`, with when the next rebuild may run
+  ADR-0267's `DeviceRecovery { Pending, Failed, Abandoned }` (an executor's death is `Dead`, §9),
+  with when the next rebuild may run
   (`RasterSender::device_retry_at`, for the host's wake) and why the last one failed
   (`RasterSender::take_device_failure`); that record is what `is_device_lost` reads instead of the
   backend (`raster_lane.rs:289`). A loss that this turn's own frames meet is published after the
@@ -463,16 +464,29 @@ executor and slot.
   (`MsgWaitForMultipleObjectsEx` with `QS_SENDMESSAGE`): a present can send a message to the
   window's thread, and a message thread that waits on the render thread without serving it
   deadlocks (Microsoft's DXGI guidance, below).
-- On a timeout the window is quarantined, not closed: the presentation leaves, its window and
-  target are kept until the process exits, and the executor is marked `Died`. A raster thread
-  wedged past the deadline holds the context, so every window stops drawing, not one; the
-  application learns it from `ExecutorHealth`, from the `Failed` settlement of each frame still in
-  an inbox, and from `ExecutorFailure::Wedged`, which the owner takes from its sender
-  (`take_executor_failure`) and reports as it reports a device's failure, with no panic on its
-  thread.
+- On a timeout the window is quarantined, not closed, and the executor is marked `Died`. A raster
+  thread wedged past the deadline holds the context, so every window stops drawing, not one: the
+  owner asks every open window for a frame, and each window's wake settles the frames its slot
+  still holds `NoPresent` (finished, nothing shown), so its UI runtime commits the tree they were
+  painted from and the input held for that commit replays. Any settlement it drains after the
+  death that shows nothing (the `Failed` the death gave an inbox frame, a stale or withheld one)
+  answers `NoPresent` too, a frame submitted afterwards answers
+  `NoPresent` without reaching the executor, and the host reports no rebuild or restore deadline
+  a dead executor left. Each window tells its UI runtime once
+  (`DeviceRecovery::Dead`, reported through the frame-failure handler as a lost device): the
+  presentation keeps building and laying out its frames, which the host answers without drawing,
+  so it keeps taking input, lifecycle changes and the agent's requests and its semantics tree
+  follows the application; the death releases a given-up rebuild's hold and asks for a frame,
+  which commits a tree that a frame dropped before the death left uncommitted. The failure itself
+  (`ExecutorFailure::Wedged`, or a turn's panic) is taken from the sender once
+  (`take_executor_failure`) and logged, with no panic
+  on its thread. A window closed while the thread does not answer its detach keeps its native
+  window and its surface target until the process exits, since the wedged thread may still
+  present over them.
 - `Died` is terminal for the application's rendering, as a dead runtime is under ADR-0258 §2: the
   owner does not bootstrap a second context while the wedged thread still holds the first and its
-  quarantined windows, and the application decides whether to exit.
+  quarantined windows, `retry_render_device` leaves a dead renderer as it is, and the application
+  decides whether to exit.
 
 §10. **One executor, two placements, per platform.**
 
@@ -515,7 +529,7 @@ impl<B: RasterBackend + Send + 'static> RasterExecutor<B> {
   is inline; a thread that does not answer within the detach deadline is wedged at the attach as
   at a detach (§9). Then, or when the thread died of anything else before it answered, the window
   is not refused, since the thread or its queue may still hold its surface;
-  it draws nothing until §9's quarantine is built. It answers a frame `Queued`, or `QueuedReplacing` with the epoch the
+  it is quarantined as §9 says. It answers a frame `Queued`, or `QueuedReplacing` with the epoch the
   slot's `SendReceipt::Replaced` names, keeps what each held frame's verdict needs (its version,
   surface and retry), and its sink's in-flight limit is the placement's depth. A settlement
   carries whether a call on its slot panicked since the previous settlement and the owner has
@@ -660,7 +674,8 @@ the facade. Every production use of `with_backend` becomes:
   `a_command_sent_during_the_stop_comes_back_gone`; on the raster thread, in
   `crates/flui-engine/tests/raster_thread.rs`, `a_raster_thread_that_does_not_answer_a_detach_dies_at_its_deadline`
   `a_frame_queued_behind_a_wedged_render_settles_after_it` and
-  `a_frame_whose_resize_the_executor_died_during_is_not_rendered` (§9),
+  `a_frame_whose_resize_the_executor_died_during_is_not_rendered` and
+  `a_scene_dropped_at_the_death_panics_into_its_own_slot` (§9),
   `the_owner_waits_for_the_threads_answer_to_an_attach`,
   `a_raster_thread_that_does_not_answer_an_attach_dies_at_its_deadline`,
   `a_frame_that_panicked_settles_marked_so`, with
@@ -675,14 +690,16 @@ the facade. Every production use of `with_backend` becomes:
   `a_window_the_raster_thread_refuses_is_refused_at_attach`,
   `a_window_whose_attach_the_raster_thread_does_not_answer_is_kept`,
   `a_window_wake_settles_what_the_raster_thread_finished` and
-  `a_threaded_frame_that_did_not_present_counts_toward_the_first_reveal`, with the pacing it leaves in
+  `a_threaded_frame_that_did_not_present_counts_toward_the_first_reveal` and
+  `a_wedged_raster_thread_quarantines_its_open_window` (§9), with the pacing it leaves in
   `crates/flui-app/src/app/runner/frame_pacing.rs`'s `a_held_frame_arms_no_fallback` (§10);
   ADR-0244's
   `gpu_backend_fallback_order`; and
   ADR-0267's `a_frame_dropped_on_a_lost_device_waits_out_the_backoff`,
   `a_failed_rebuild_is_reported_with_the_dropped_frame`,
   `a_given_up_rebuild_holds_frames_until_the_application_asks_again`,
-  `a_lost_device_waits_out_its_rebuild_backoff` and
+  `a_lost_device_waits_out_its_rebuild_backoff`,
+  `a_dead_renderer_is_reported_once_and_its_frames_go_on` (§9) and
   `a_given_up_device_renders_again_when_the_application_asks`.
 - Runs: a platform's placement becomes threaded only with its row in `docs/platform-parity.md`
   (§10).

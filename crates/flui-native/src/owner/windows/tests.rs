@@ -285,20 +285,23 @@ impl Subscriber for Listener {
 /// case, 0 when none gives one.
 #[test]
 fn broadcast_subscribers_hear_a_message_in_order() {
-    let receiver = super::broadcast::Receiver::try_new([
-        Rc::new(Listener {
-            name: "first",
-            answers: &[(BOTH_ANSWER, 7)],
-            after_panic: None,
-            panics_on: Some(WM_APP + 0x53),
-        }) as Rc<dyn Subscriber>,
-        Rc::new(Listener {
-            name: "second",
-            answers: &[(BOTH_ANSWER, 9), (SECOND_ANSWERS, 11)],
-            after_panic: Some((WM_APP + 0x53, 1)),
-            panics_on: None,
-        }),
-    ])
+    let receiver = super::broadcast::Receiver::try_new(
+        [
+            Rc::new(Listener {
+                name: "first",
+                answers: &[(BOTH_ANSWER, 7)],
+                after_panic: None,
+                panics_on: Some(WM_APP + 0x53),
+            }) as Rc<dyn Subscriber>,
+            Rc::new(Listener {
+                name: "second",
+                answers: &[(BOTH_ANSWER, 9), (SECOND_ANSWERS, 11)],
+                after_panic: Some((WM_APP + 0x53, 1)),
+                panics_on: None,
+            }),
+        ],
+        Rc::default(),
+    )
     .expect("receiver");
     let send = |message| {
         HEARD.with(|heard| heard.borrow_mut().clear());
@@ -386,12 +389,15 @@ impl tracing::Subscriber for Logged {
 /// subscribers in one generic containment again, or answer 0 after a panic.
 #[test]
 fn a_failing_subscriber_is_logged_and_a_session_end_still_granted() {
-    let receiver = super::broadcast::Receiver::try_new([Rc::new(Listener {
-        name: "failing",
-        answers: &[],
-        after_panic: None,
-        panics_on: Some(WM_QUERYENDSESSION),
-    }) as Rc<dyn Subscriber>])
+    let receiver = super::broadcast::Receiver::try_new(
+        [Rc::new(Listener {
+            name: "failing",
+            answers: &[],
+            after_panic: None,
+            panics_on: Some(WM_QUERYENDSESSION),
+        }) as Rc<dyn Subscriber>],
+        Rc::default(),
+    )
     .expect("receiver");
     let log = Arc::new(Mutex::new(Vec::new()));
     let answer = tracing::subscriber::with_default(Logged(Arc::clone(&log)), || {

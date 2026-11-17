@@ -122,32 +122,7 @@ impl Default for MountOwners {
     }
 }
 
-/// Which build capabilities the bootstrap installs on the `BuildOwner` before
-/// the mount build pass.
-///
-/// Installation must happen *before* the mount, not after: a
-/// `ViewState::init_state` runs inside that first `build_scope` and already
-/// asks for these handles. A `FutureBuilder`/`StreamBuilder` that subscribes
-/// there would silently never poll if the async driver arrived late.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-#[non_exhaustive]
-pub enum BuildCapabilities {
-    /// The full set — async driver, post-frame, owner-local post-frame,
-    /// lifecycle observation, and interaction dispatch.
-    #[default]
-    Installed,
-    /// Only the async driver.
-    ///
-    /// Does not install post-frame, lifecycle, or interaction handles, so a test can assert
-    /// how code behaves when `LifecycleContext::post_frame_handle()` returns
-    /// `None` — a real, reachable configuration for an embedder that drives
-    /// frames itself. The async driver still goes in: withholding it too
-    /// would change *which* capability the test is about, since the mount
-    /// `build_scope` depends on it.
-    AsyncDriverOnly,
-}
-
-/// Root constraints and capability policy for a bootstrap.
+/// Root constraints for a bootstrap.
 #[derive(Debug, Clone, Copy)]
 pub struct MountOptions {
     /// Seeds the root view's size — it is never installed on the pipeline
@@ -159,18 +134,14 @@ pub struct MountOptions {
     /// instead. [`HeadlessBinding::mount_root`] installs a fresh value every
     /// call, which is what marks the root dirty for that frame's layout.
     pub constraints: BoxConstraints,
-    /// Which capabilities the `BuildOwner` carries into the mount pass.
-    pub capabilities: BuildCapabilities,
 }
 
 impl MountOptions {
-    /// Bootstrap under `constraints`, with the full capability set.
+    /// Bootstrap under `constraints`; the bootstrap installs every build
+    /// capability before the mount pass.
     #[must_use]
     pub fn new(constraints: BoxConstraints) -> Self {
-        Self {
-            constraints,
-            capabilities: BuildCapabilities::Installed,
-        }
+        Self { constraints }
     }
 
     /// Bootstrap under constraints forcing exactly `width` × `height` logical
@@ -184,13 +155,6 @@ impl MountOptions {
     #[must_use]
     pub fn loose(max: f64) -> Self {
         Self::new(BoxConstraints::loose(Size::new(max, max)))
-    }
-
-    /// Override the capability policy (see [`BuildCapabilities`]).
-    #[must_use]
-    pub fn capabilities(mut self, capabilities: BuildCapabilities) -> Self {
-        self.capabilities = capabilities;
-        self
     }
 }
 
@@ -268,8 +232,7 @@ impl HeadlessBinding {
     ///
     /// In order, and every step's position is load-bearing:
     ///
-    /// 1. install the build capabilities named by
-    ///    [`MountOptions::capabilities`] — **before** the mount, because
+    /// 1. install the build capabilities — **before** the mount, because
     ///    `init_state` asks for them during it;
     /// 2. wrap `root` in [`RootRenderView`] (same production shape as
     ///    [`flui_view::WidgetsBinding::attach_root_widget`]) and mount it
@@ -294,7 +257,7 @@ impl HeadlessBinding {
     ///    build-during-layout content;
     /// 7. run the lazy-sliver service pass, as every pumped frame's pipeline
     ///    does;
-    /// 8. bind the owners under the requested capability policy, retaining the
+    /// 8. bind the owners with the binding's own capabilities, retaining the
     ///    committed layer tree.
     ///
     /// # What the bootstrap is NOT
@@ -333,18 +296,11 @@ impl HeadlessBinding {
             pipeline_owner,
         } = owners;
 
-        match options.capabilities {
-            BuildCapabilities::Installed => {
-                self.install_build_capabilities(&mut build_owner);
-                // Before the mount, not after the bind: a `ViewState::init_state`
-                // running in the `build_scope` below is exactly where the
-                // capability is supposed to be acquired.
-                self.install_hit_test_capability(&mut build_owner, &pipeline_owner);
-            }
-            BuildCapabilities::AsyncDriverOnly => {
-                build_owner.set_async_driver(self.async_driver());
-            }
-        }
+        self.install_build_capabilities(&mut build_owner);
+        // Before the mount, not after the bind: a `ViewState::init_state`
+        // running in the `build_scope` below is exactly where the
+        // capability is supposed to be acquired.
+        self.install_hit_test_capability(&mut build_owner, &pipeline_owner);
 
         let view_size = root_view_size(&options.constraints);
         let root_render_view = RootRenderView::new(root.clone(), view_size.0, view_size.1);
@@ -438,16 +394,12 @@ impl HeadlessBinding {
         });
 
         let painted = committed_layer_tree.is_some();
-        // Through the capability-aware door: the public `bind_tree*` installs
-        // the full set unconditionally, which would undo an `AsyncDriverOnly`
-        // request the moment the bootstrap finished.
-        self.bind_tree_with_capabilities(
+        self.bind_tree_with_scene(
             build_owner,
             tree,
             pipeline_owner,
             committed_layer_tree,
             scene,
-            options.capabilities,
         );
 
         Mounted {

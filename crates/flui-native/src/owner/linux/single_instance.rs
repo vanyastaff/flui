@@ -727,19 +727,13 @@ mod tests {
     use flui_platform::{Launch, OpenTarget, Opened, OpenedFile};
 
     use super::{Forwarded, launch_token, object_path, platform_data, startup_time, token_of};
-    use crate::owner::single_instance::instance_name;
 
-    /// An app id in reverse DNS is the application's bus name, whose object
-    /// path GApplication derives (the rules of the name are
-    /// `an_app_id_in_reverse_dns_names_the_instance`'s).
+    /// An app id is the application's bus name, whose object path
+    /// GApplication derives (the rules of the name are `AppId`'s).
     #[test]
     fn an_app_id_names_the_bus_name_and_object_path() {
-        assert_eq!(
-            instance_name("com.example.Notes")
-                .map(object_path)
-                .as_deref(),
-            Some("/com/example/Notes")
-        );
+        let app_id = flui_foundation::AppId::try_new("com.example.Notes").expect("an app id");
+        assert_eq!(object_path(app_id.as_str()), "/com/example/Notes");
         assert_eq!(object_path("org.my-app.Notes_2"), "/org/my_app/Notes_2");
     }
 

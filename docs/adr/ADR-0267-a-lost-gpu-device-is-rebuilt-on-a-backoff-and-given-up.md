@@ -81,6 +81,7 @@ pub enum DeviceRecovery {
     Pending,                       // no rebuild has run yet
     Failed { attempts: u32 },      // the last `attempts` rebuilds failed; another is armed
     Abandoned { attempts: u32 },   // given up after `attempts` failed rebuilds
+    Dead,                          // the renderer stopped for good (ADR-0305 §9); no rebuild helps
 }
 ```
 

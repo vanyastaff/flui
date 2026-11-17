@@ -14,8 +14,8 @@
 //! API a session runs with FLUI's own drop source, which answers OLE from the
 //! button state OLE passes it, so a case could not choose when and where it
 //! drops. The decidable rules behind these cases (`continue_drag`, the format
-//! and effect mapping) run beside `crossing`, the modal frame pace beside
-//! `owner::modal_pace`.
+//! and effect mapping) run beside `crossing`, the rule of when the modal loop
+//! asks for frames beside `owner::modal_pace`.
 
 use flui_testing::window_commands::AdmitAndApply as _;
 use flui_testing::window_handler::RecordingWindowHandler;
@@ -564,6 +564,17 @@ fn platform_over(transport: &Arc<OleTransfer>) -> WindowsPlatform {
     .expect("platform")
 }
 
+/// The pacing of a modal loop run from `platform`'s owner window, which a
+/// session the owner window started runs under.
+fn owner_pacing(platform: &WindowsPlatform) -> Rc<crate::owner::windows::modal_loop::ModalPacing> {
+    platform
+        .owner()
+        .owner_control
+        .shares("a drag session's pacing")
+        .expect("the owner's state")
+        .modal_pacing
+}
+
 fn owner_window(transport: &OleTransfer) -> HWND {
     transport
         .owner_window
@@ -1071,6 +1082,7 @@ fn a_second_window_repaints_while_the_modal_loop_rests() {
     OleTransfer::run_session(
         &owner,
         owner_window(&transport),
+        Some(owner_pacing(&platform)),
         request(&ended),
         scripted(decide),
     );
@@ -1081,6 +1093,133 @@ fn a_second_window_repaints_while_the_modal_loop_rests() {
         during.get() >= 3,
         "the second window drew {} frames while the loop rested",
         during.get()
+    );
+}
+
+/// While `DoDragDrop` runs with the pointer resting and no deadline asked
+/// for, a redraw another thread asks of a second window (a raster thread, a
+/// decoder) is painted, and a wake another thread gives the owner runs its
+/// turn: work accepted from another thread reaches the drag loop's pacing,
+/// which otherwise sleeps. Red-check: leave the cross-thread requests without
+/// waking the pacing, and the window draws nothing and the turn never runs
+/// while the loop rests.
+fn work_from_another_thread_reaches_a_resting_drag_loop() {
+    let transport = OleTransfer::new();
+    let platform = platform_over(&transport);
+    let source = open(&platform, "flui drag source", |_| {});
+    let second = open(&platform, "flui second window", |_| {});
+    let app = crate::owner::app_delivery::testing::AppLog::new();
+    app.answer_deadline(None);
+    let _run = crate::owner::app_delivery::testing::bind(Arc::clone(&platform.owner().app), app);
+    let _ = pump_until(|| false, Duration::from_millis(50));
+    let frames = Arc::new(AtomicU64::new(0));
+    let counted = Arc::clone(&frames);
+    second.handler.react_to_frame(move |_| {
+        counted.fetch_add(1, Ordering::Relaxed);
+    });
+    let turns = Rc::new(Cell::new(0_u64));
+    let turned = Rc::clone(&turns);
+    // The platform is not run: its owner takes turns once started, as a run
+    // starts it.
+    let _ = platform.owner().owner_control.signal.start();
+    platform
+        .owner()
+        .owner_control
+        .signal
+        .register_in(
+            &platform
+                .owner()
+                .owner_control
+                .shares("the owner's turns")
+                .expect("the owner's state")
+                .turn,
+            Box::new(move || turned.set(turned.get() + 1)),
+        )
+        .expect("the owner takes a turn callback");
+    let redraw = second.host.redraw_requester();
+    let signal = Arc::clone(&platform.owner().owner_control.signal);
+    let release = Arc::new(AtomicBool::new(false));
+    let asking = Arc::new(AtomicBool::new(true));
+    let (released, still_asking) = (Arc::clone(&release), Arc::clone(&asking));
+    // Asks for a redraw every 30 ms and wakes the owner every 150 ms for 1.5
+    // s, then lets the loop end.
+    let asker = std::thread::spawn(move || {
+        let started = Instant::now();
+        let mut asked = 0_u32;
+        while started.elapsed() < Duration::from_millis(1_500)
+            && still_asking.load(Ordering::Acquire)
+        {
+            std::thread::sleep(Duration::from_millis(30));
+            redraw.request_redraw();
+            asked += 1;
+            if asked.is_multiple_of(5) {
+                let _ = signal.wake();
+            }
+        }
+        released.store(true, Ordering::Release);
+    });
+    let _poke = Poke::new(Arc::clone(&release), raise(source.hwnd));
+    let (in_loop, turns_in_loop) = (Arc::clone(&frames), Rc::clone(&turns));
+    let before = frames.load(Ordering::Relaxed);
+    let turns_before = turns.get();
+    let during = Rc::new(Cell::new((0, 0)));
+    let measured = Rc::clone(&during);
+    let decide = move || {
+        measured.set((
+            in_loop.load(Ordering::Relaxed) - before,
+            turns_in_loop.get() - turns_before,
+        ));
+        DRAGDROP_S_CANCEL
+    };
+    let ended = Rc::new(Cell::new(None));
+    let owner = transport.owner().expect("owner state");
+    OleTransfer::run_session(
+        &owner,
+        owner_window(&transport),
+        Some(owner_pacing(&platform)),
+        request(&ended),
+        scripted(decide),
+    );
+    asking.store(false, Ordering::Release);
+    asker.join().expect("the asking thread");
+    assert_eq!(ended.get(), Some(OsDragEnd::Cancelled));
+    let (drawn, turned) = during.get();
+    assert!(
+        drawn >= 10,
+        "the second window drew {drawn} frames for 50 redraws while the loop rested"
+    );
+    assert!(
+        turned >= 3,
+        "the owner ran {turned} turns for 10 wakes while the loop rested"
+    );
+}
+
+/// OLE calls a window's drop target directly, outside FLUI's procedures: the
+/// target's method tells the thread's modal loops that the platform's code
+/// ran, and a running pacing whose timer had stopped asks again. Red-check:
+/// leave `com_method` without the guard, and the timer stays stopped.
+fn a_com_entry_asks_a_running_modal_loop_again() {
+    use crate::owner::modal_pace::PaceTimer;
+
+    let transport = OleTransfer::new();
+    let platform = platform_over(&transport);
+    let transfer = platform.data_transfer();
+    let target = open(&platform, "flui drop target", answering(&transfer, None));
+    let pacing = owner_pacing(&platform);
+    pacing.enter(|| None);
+    // A delivery with nothing due, as on a resting loop: the timer stops.
+    assert!(pacing.tick());
+    assert_eq!(pacing.timer(), PaceTimer::Stopped, "nothing is due");
+
+    // SAFETY: OLE's own call shape on the live target, with no drag over it.
+    unsafe { target.ole.DragLeave() }.expect("DragLeave");
+    let asked = pacing.timer();
+    pacing.exit();
+    target.host.close_now();
+    let _ = pump_until(|| false, Duration::from_millis(50));
+    assert!(
+        matches!(asked, PaceTimer::Armed { .. }),
+        "the drop target's method asked the pacing again: {asked:?}"
     );
 }
 
@@ -1119,6 +1258,7 @@ fn a_drag_into_a_window_of_this_process_drops_through_the_loop() {
     OleTransfer::run_session(
         &owner,
         owner_window(&transport),
+        Some(owner_pacing(&platform)),
         request(&ended),
         scripted(decide),
     );
@@ -1224,6 +1364,7 @@ fn a_provider_whose_capture_panics_on_drop_is_contained() {
     OleTransfer::run_session(
         &owner,
         owner_window(&transport),
+        Some(owner_pacing(&platform)),
         hostile_request(&ended),
         scripted(|| DRAGDROP_S_CANCEL),
     );
@@ -1658,12 +1799,20 @@ fn ole_drag_and_drop_on_real_windows() {
                 a_second_window_repaints_while_the_modal_loop_rests,
             ),
             (
+                "work_from_another_thread_reaches_a_resting_drag_loop",
+                work_from_another_thread_reaches_a_resting_drag_loop,
+            ),
+            (
                 "a_drag_into_a_window_of_this_process_drops_through_the_loop",
                 a_drag_into_a_window_of_this_process_drops_through_the_loop,
             ),
             (
                 "a_window_finds_the_window_of_this_process_under_a_point",
                 a_window_finds_the_window_of_this_process_under_a_point,
+            ),
+            (
+                "a_com_entry_asks_a_running_modal_loop_again",
+                a_com_entry_asks_a_running_modal_loop_again,
             ),
             (
                 "a_provider_whose_capture_panics_on_drop_is_contained",

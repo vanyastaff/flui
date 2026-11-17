@@ -33,7 +33,24 @@ impl DesktopBuilder {
     }
 }
 
+/// Whether `triple` names a desktop Linux target (Android's triples name
+/// `linux` too, and are not one).
+pub(crate) fn is_linux_triple(triple: &str) -> bool {
+    triple.contains("-linux-") && !triple.contains("android")
+}
+
 impl DesktopBuilder {
+    /// The environment cargo builds the application for `target` with: the
+    /// floors `ctx` names, and never an application id. The id reaches the
+    /// build only from the project's cargo configuration, which every `flui`
+    /// command writes from the `[app] id` of `flui.toml` (ADR-0351), so one
+    /// application is compiled with one identity whichever command, target or
+    /// example builds it, and an application without a declared id is
+    /// compiled with none.
+    pub(crate) fn cargo_env(ctx: &BuilderContext, target: &str) -> Vec<(&'static str, String)> {
+        ctx.floors.cargo_env(target)
+    }
+
     pub(crate) fn validate_environment() -> BuildResult<()> {
         // Just need cargo
         crate::build::util::check_command_exists("cargo")?;
@@ -62,7 +79,7 @@ impl DesktopBuilder {
         // or files needs the code that keeps one instance of it, read from
         // the member the build compiles.
         let package = selected.built_package();
-        if target.contains("-linux-") || target.contains("-windows-") {
+        if is_linux_triple(&target) || target.contains("-windows-") {
             Declarations::collect(
                 Build::at(&ctx.workspace_root).selecting(Selection::of_built(Some(&package))),
                 &[&target],
@@ -76,7 +93,7 @@ impl DesktopBuilder {
             args.push(profile_flag.to_string());
         }
 
-        let env = ctx.floors.cargo_env(&target);
+        let env = Self::cargo_env(ctx, &target);
         let executable = cargo::build_artifact(&ctx.workspace_root, &args, &selected, &env).await?;
 
         Ok(BuildArtifacts {
@@ -176,11 +193,10 @@ impl DesktopBuilder {
     /// Linux one, else the host's when the build names none and runs on
     /// Linux; `None` for any other desktop.
     fn linux_target(ctx: &BuilderContext) -> BuildResult<Option<String>> {
-        let is_linux = |triple: &str| triple.contains("-linux-") && !triple.contains("android");
         match &ctx.platform {
             crate::build::platform::Platform::Desktop {
                 target: Some(target),
-            } => Ok(is_linux(target).then(|| target.clone())),
+            } => Ok(is_linux_triple(target).then(|| target.clone())),
             crate::build::platform::Platform::Desktop { target: None }
                 if cfg!(target_os = "linux") =>
             {

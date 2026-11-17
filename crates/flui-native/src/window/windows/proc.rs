@@ -37,22 +37,17 @@ use windows::Win32::{
         Gdi::{BeginPaint, ClientToScreen, EndPaint, InvalidateRect, PAINTSTRUCT, ScreenToClient},
     },
     System::Threading::GetCurrentThreadId,
-    UI::{
-        Accessibility::{HWINEVENTHOOK, SetWinEventHook, UnhookWinEvent},
-        WindowsAndMessaging::{
-            CHILDID_SELF, DefWindowProcW, DestroyWindow, EVENT_OBJECT_CLOAKED,
-            EVENT_OBJECT_UNCLOAKED, GWL_EXSTYLE, GWL_STYLE, GWLP_USERDATA, GetClientRect,
-            GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, HTCLIENT, IsIconic,
-            IsWindowVisible, IsZoomed, KillTimer, MINMAXINFO, NCCALCSIZE_PARAMS, OBJID_WINDOW,
-            SC_KEYMENU, SC_RESTORE, SW_SHOW, SW_SHOWMAXIMIZED, SW_SHOWMINIMIZED, SWP_NOSIZE,
-            SendMessageW, SetTimer, SetWindowLongPtrW, WA_INACTIVE, WINDOWPOS,
-            WINEVENT_OUTOFCONTEXT, WM_ACTIVATE, WM_APP, WM_CLOSE, WM_CREATE, WM_DESTROY,
-            WM_DPICHANGED, WM_ERASEBKGND, WM_GETMINMAXINFO, WM_KILLFOCUS, WM_MOVE, WM_NCCALCSIZE,
-            WM_NCHITTEST, WM_PAINT, WM_SETCURSOR, WM_SETFOCUS, WM_SETTEXT, WM_SETTINGCHANGE,
-            WM_SHOWWINDOW, WM_SIZE, WM_STYLECHANGED, WM_SYSCOMMAND, WM_WINDOWPOSCHANGED,
-            WM_WINDOWPOSCHANGING, WS_CAPTION, WS_MAXIMIZE, WS_MAXIMIZEBOX, WS_MINIMIZE,
-            WS_OVERLAPPEDWINDOW, WS_POPUP, WS_THICKFRAME,
-        },
+    UI::WindowsAndMessaging::{
+        DefWindowProcW, DestroyWindow, GWL_EXSTYLE, GWL_STYLE, GWLP_USERDATA, GetClientRect,
+        GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, HTCLIENT, IsIconic,
+        IsWindowVisible, IsZoomed, MINMAXINFO, NCCALCSIZE_PARAMS, SC_KEYMENU, SC_RESTORE, SW_SHOW,
+        SW_SHOWMAXIMIZED, SW_SHOWMINIMIZED, SWP_NOSIZE, SendMessageW, SetWindowLongPtrW,
+        WA_INACTIVE, WINDOWPOS, WM_ACTIVATE, WM_APP, WM_CLOSE, WM_CREATE, WM_DESTROY,
+        WM_DPICHANGED, WM_ERASEBKGND, WM_GETMINMAXINFO, WM_KILLFOCUS, WM_MOVE, WM_NCCALCSIZE,
+        WM_NCHITTEST, WM_PAINT, WM_SETCURSOR, WM_SETFOCUS, WM_SETTEXT, WM_SETTINGCHANGE,
+        WM_SHOWWINDOW, WM_SIZE, WM_STYLECHANGED, WM_SYSCOMMAND, WM_WINDOWPOSCHANGED,
+        WM_WINDOWPOSCHANGING, WS_CAPTION, WS_MAXIMIZE, WS_MAXIMIZEBOX, WS_MINIMIZE,
+        WS_OVERLAPPEDWINDOW, WS_POPUP, WS_THICKFRAME,
     },
 };
 
@@ -62,11 +57,12 @@ use super::set::{WindowSet, checked_logical_to_device, restore_rectangle};
 use super::window::WindowsWindow;
 
 use crate::owner::hwnd_affinity::ContextLedger;
-use crate::owner::panic_boundary::{AfterPanic, os_entry};
 use crate::owner::window_delivery::{Publication, WindowDelivery};
 use crate::owner::windows::HostDisplays;
 use crate::owner::windows::control::{OwnerPreferences, OwnerQueue, PostRefusal};
-use crate::owner::windows::modal_loop::MODAL_DEADLINE_TIMER;
+use crate::owner::windows::modal_loop::{
+    MODAL_DEADLINE_TIMER, ModalPacing, PaceClock, kill_window_timer,
+};
 use crate::owner::windows::{
     WindowHooks, WindowIdentity, WindowMessages, WindowStep, window_destroyed, window_step,
 };
@@ -183,6 +179,9 @@ impl FramePost {
             // SAFETY: as above; an invalidation of a window that closed
             // meanwhile fails and draws nothing.
             let _ = unsafe { InvalidateRect(Some(hwnd), None, false) };
+            // A drag loop resting in OLE dispatches no paint: its pacing
+            // paints the window once knocked.
+            self.0.queue.wake_modal();
         } else {
             self.0.ask();
         }
@@ -367,8 +366,6 @@ pub(crate) struct WindowContext {
     /// What occludes a shown window in its snapshot: a cloak or a locked
     /// session.
     pub(crate) visibility: Visibility,
-    /// The window's subscription to cloak changes.
-    pub(crate) cloak_watch: CloakWatch,
     /// Set between `WM_ENTERSIZEMOVE` and `WM_EXITSIZEMOVE`: a live resize,
     /// whose `WM_SIZE` renders at once.
     pub in_size_move: std::cell::Cell<bool>,
@@ -385,8 +382,9 @@ pub(crate) struct WindowContext {
     /// The client size, in device pixels, and the scale the last resize
     /// callback delivered.
     pub last_resize: std::cell::Cell<Option<(Size<i32>, f64)>>,
-    /// Delivers wake deadlines while a modal loop runs for the window.
-    pub modal_pacing: crate::owner::windows::modal_loop::ModalPacing,
+    /// Delivers wake deadlines while a modal loop runs for the window, and
+    /// reaches the modal loops running on the thread.
+    pub(crate) modal_pacing: Rc<ModalPacing>,
     /// Borrow ledger deferring this context's free past every live borrow
     /// on the owner thread — see [`ContextLedger`] for the reentrancy
     /// hazard (a framework callback closing the window from inside a
@@ -907,6 +905,10 @@ impl WindowProc {
                     tracing::debug!("WM_DESTROY for HWND {:?}", hwnd);
 
                     if let Some(ctx) = ctx {
+                        // A modal loop the window ran ends with it, though its
+                        // end message never comes: its timer stops and the
+                        // thread's code no longer asks it again.
+                        ctx.modal_pacing.abandon();
                         // While the window and its callbacks still exist: what
                         // the input holds of the window ends as cancelled and
                         // its touchpad viewport is released, a drag over it
@@ -1013,7 +1015,7 @@ impl WindowProc {
 
                 windows::Win32::UI::WindowsAndMessaging::WM_EXITSIZEMOVE => {
                     if let Some(ctx) = ctx {
-                        ctx.exit_modal_loop(hwnd);
+                        ctx.exit_modal_loop();
                         ctx.in_size_move.set(false);
                         ctx.step(hwnd, WindowStep::SizeMoveEnded);
                         // The snapshot ends the user's placement here: the next
@@ -1033,7 +1035,7 @@ impl WindowProc {
 
                 windows::Win32::UI::WindowsAndMessaging::WM_EXITMENULOOP => {
                     if let Some(ctx) = ctx {
-                        ctx.exit_modal_loop(hwnd);
+                        ctx.exit_modal_loop();
                     }
                     DefWindowProcW(hwnd, msg, wparam, lparam)
                 }
@@ -2431,120 +2433,31 @@ fn session_locked_now() -> bool {
     locked.unwrap_or(false)
 }
 
-/// The window's subscription to the cloak changes of its thread's windows;
-/// unsubscribed when dropped, which happens on the owner thread with the
-/// window's context.
-pub(crate) struct CloakWatch(Option<HWINEVENTHOOK>);
-
-impl CloakWatch {
-    /// Subscribe on the calling thread, the window's owner. Without a
-    /// subscription the window is never seen as cloaked.
-    pub(crate) fn start() -> Self {
-        // Every source, not this thread's: the shell cloaks the windows of a
-        // virtual desktop it switches away from, so the event comes from its
-        // thread. `cloak_changed` keeps only this thread's FLUI windows.
-        //
-        // SAFETY: `cloak_changed` has the `WINEVENTPROC` signature and stays
-        // valid for the process; an out-of-context hook runs it on the thread
-        // that installed it, this one, while it takes messages.
-        let hook = unsafe {
-            SetWinEventHook(
-                EVENT_OBJECT_CLOAKED,
-                EVENT_OBJECT_UNCLOAKED,
-                None,
-                Some(cloak_changed),
-                0,
-                0,
-                WINEVENT_OUTOFCONTEXT,
-            )
-        };
-        if hook.is_invalid() {
-            tracing::warn!("cloak changes unavailable: a cloaked window stays visible");
-            return Self(None);
-        }
-        Self(Some(hook))
-    }
-
-    fn is(&self, hook: HWINEVENTHOOK) -> bool {
-        self.0 == Some(hook)
-    }
-}
-
-impl Drop for CloakWatch {
-    fn drop(&mut self) {
-        if let Some(hook) = self.0.take() {
-            // SAFETY: the hook this watch installed on this thread, released
-            // once.
-            let _ = unsafe { UnhookWinEvent(hook) };
-        }
-    }
-}
-
-/// Every window of the thread has its own hook, and each event reaches all of
-/// them: a window takes only the events of its own hook about itself. The
-/// context gate refuses another thread's or process's window.
-unsafe extern "system" fn cloak_changed(
-    hook: HWINEVENTHOOK,
-    _event: u32,
-    hwnd: HWND,
-    object: i32,
-    child: i32,
-    _thread: u32,
-    _time: u32,
-) {
-    // The visibility callback is user code. As in `window_proc`, the state
-    // behind a panic mid-dispatch may be torn: it is logged, then the process
-    // aborts.
-    os_entry("the cloak-change hook", hwnd, AfterPanic::Abort, || {
-        if object != OBJID_WINDOW.0 || child != CHILDID_SELF as i32 {
-            return;
-        }
-        let _ = with_window_context(hwnd, "cloak change", |ctx| {
-            if ctx.cloak_watch.is(hook) {
-                ctx.refresh_cloaked(hwnd);
-            }
-        });
-    });
-}
-
 /// Wake deadlines while the system runs a modal loop for the window (moving
 /// or sizing it, its menus): a timer of the window delivers what is due while
 /// the main loop waits (`owner::windows::modal_loop`).
 impl WindowContext {
     /// A modal loop for the window starts.
     pub(crate) fn enter_modal_loop(&self, hwnd: HWND) {
-        if self.modal_pacing.enter() {
-            arm_modal_timer(hwnd, crate::owner::modal_pace::MODAL_FRAME_PACE_MS);
-        }
+        self.modal_pacing
+            .enter(|| Some(PaceClock::WindowTimer(hwnd)));
     }
 
     /// A modal loop for the window ends.
-    pub(crate) fn exit_modal_loop(&self, hwnd: HWND) {
-        if self.modal_pacing.exit() {
-            // SAFETY: a plain call on the window's handle; a timer that is
-            // not set fails harmlessly.
-            let _ = unsafe { KillTimer(Some(hwnd), MODAL_DEADLINE_TIMER) };
-        }
+    pub(crate) fn exit_modal_loop(&self) {
+        self.modal_pacing.exit();
     }
 
-    /// The pacing timer fired: deliver what is due and arm it again.
+    /// The pacing timer fired: deliver what is due and set it for the next
+    /// delivery, or stop a timer that fired as its loop ended. The delivery
+    /// runs user code; the pacing is cloned out, since that code may close
+    /// the window.
     pub(crate) fn pace_modal_loop(&self, hwnd: HWND) {
-        if !self.modal_pacing.running() {
-            // SAFETY: as in `exit_modal_loop`.
-            let _ = unsafe { KillTimer(Some(hwnd), MODAL_DEADLINE_TIMER) };
-            return;
-        }
-        let wait = self.modal_pacing.frames().deliver();
-        if self.modal_pacing.running() {
-            arm_modal_timer(hwnd, wait);
+        let pacing = Rc::clone(&self.modal_pacing);
+        if !pacing.tick() {
+            kill_window_timer(hwnd);
         }
     }
-}
-
-fn arm_modal_timer(hwnd: HWND, millis: u32) {
-    // SAFETY: a plain call on the window's handle with no callback: the
-    // timer posts `WM_TIMER`, and setting it again replaces it.
-    let _ = unsafe { SetTimer(Some(hwnd), MODAL_DEADLINE_TIMER, millis, None) };
 }
 
 /// What is still owed of a window's first show.

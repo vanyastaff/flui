@@ -8,7 +8,9 @@
 //! `element.actionability`, and delivers input with `input.inject` through
 //! the window's input lease, the synthetic path a driver takes. Nothing here
 //! hit-tests, walks a tree or reads a render object itself, so what a test
-//! proves is what assistive technology, the driver and an agent see.
+//! proves is what assistive technology, the driver and an agent see. The one
+//! exception is [`Tester::draw_commands`], which reads the scene the host
+//! received: the agent's protocol carries no drawing.
 //!
 //! # Time
 //!
@@ -614,6 +616,27 @@ impl Tester {
             .unwrap_or_else(|error| panic!("{}", TestError::from(error)));
         self.answered(call)
             .unwrap_or_else(|error| panic!("{error}"))
+    }
+
+    /// Every draw command of the window's last submitted scene, in paint
+    /// order: what a paint test samples at a virtual time. Each command's
+    /// `transform` places it in the window, its canvas transform composed
+    /// with every offset and transform of the layers above it; a command
+    /// under a follower its leader does not place is left out, as it is not
+    /// painted. The frames due now run first, as for every read; a scene that
+    /// painted nothing new keeps the last one.
+    ///
+    /// This is the one read that does not go through the window's agent: the
+    /// agent's protocol carries no drawing, so the tester reads the scene the
+    /// headless host received. The commands are the whole scene's
+    /// ([gaps](https://github.com/vanyastaff/flui/blob/main/docs/gaps.md#a-tester-reads-the-whole-scenes-drawing-not-one-elements)).
+    #[must_use]
+    pub fn draw_commands(&mut self) -> Vec<flui_painting::DrawCommandBuf> {
+        self.run_due_now();
+        self.host
+            .sink()
+            .layer_tree()
+            .map_or_else(Vec::new, scene_commands)
     }
 
     // --- Acting -----------------------------------------------------------
@@ -1450,5 +1473,128 @@ fn chord_keys(chord: &str) -> Vec<&str> {
     match chord.strip_suffix("++") {
         Some(held) if !held.is_empty() => held.split('+').chain(["+"]).collect(),
         _ => chord.split('+').collect(),
+    }
+}
+
+/// Every draw command of `tree`, in paint order, each placed in the tree's
+/// root coordinates; what [`Tester::draw_commands`] reads.
+///
+/// Pre-order is paint order: a parent keeps its children in the order they
+/// paint, a repaint boundary's content under its slot. An explicit stack,
+/// children pushed last first, so a deep chain of effects cannot overflow
+/// the test thread's stack. A follower its leader does not place is skipped
+/// with its subtree, as the engine skips it.
+fn scene_commands(tree: &flui_rendering::layer::LayerTree) -> Vec<flui_painting::DrawCommandBuf> {
+    use flui_foundation::geometry::Matrix4;
+    use flui_rendering::layer::{Layer, resolve_follower_transform};
+
+    let mut commands = Vec::new();
+    let mut pending = vec![(tree.root(), Matrix4::IDENTITY)];
+    while let Some((id, above)) = pending.pop() {
+        let Some(node) = tree.get(id) else { continue };
+        let local = match node.layer() {
+            Layer::Picture(picture) => {
+                commands.extend(picture.picture().iter().map(|command| {
+                    let mut command = command.to_buf();
+                    command.transform = above * command.transform;
+                    command
+                }));
+                Matrix4::IDENTITY
+            }
+            Layer::Transform(layer) => *layer.transform(),
+            Layer::Follower(_) => match resolve_follower_transform(tree, id) {
+                Some(transform) => transform,
+                None => continue,
+            },
+            layer => {
+                let offset = layer.local_translation();
+                Matrix4::translation(offset.dx, offset.dy, 0.0)
+            }
+        };
+        let placed = above * local;
+        pending.extend(node.children().iter().rev().map(|&child| (child, placed)));
+    }
+    commands
+}
+
+#[cfg(test)]
+mod tests {
+    use flui_foundation::geometry::{Matrix4, Offset, Point, Rect, Size};
+    use flui_painting::{Canvas, DrawOp, Paint, styling::Color};
+    use flui_rendering::layer::{
+        FollowerLayer, Layer, LayerLink, LayerTree, LeaderLayer, OffsetLayer, PictureLayer,
+    };
+
+    fn swatch(shade: u8) -> Layer {
+        let mut canvas = Canvas::new();
+        canvas.draw_rect(
+            Rect::from_origin_size(Point::ZERO, Size::new(1.0, 1.0)),
+            &Paint::fill(Color::rgb(shade, 0, 0)),
+        );
+        Layer::Picture(PictureLayer::new(canvas.finish()))
+    }
+
+    fn placed(tree: &LayerTree) -> Vec<(u8, Matrix4)> {
+        super::scene_commands(tree)
+            .into_iter()
+            .filter_map(|command| match command.op {
+                DrawOp::Rect { paint, .. } => {
+                    let shade = (paint.color.to_rgba_f32_array()[0] * 255.0).round();
+                    #[expect(
+                        clippy::cast_possible_truncation,
+                        clippy::cast_sign_loss,
+                        reason = "a channel the test wrote as a u8"
+                    )]
+                    let shade = shade as u8;
+                    Some((shade, command.transform))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// A follower is placed by its leader, and one with no leader is left
+    /// out with its subtree while the drawing after it is still read.
+    ///
+    /// Fails if the walk places a follower by its own translation (zero),
+    /// takes its resolved transform as the window's or applies the
+    /// follower's ancestors twice, reads an unplaced follower's subtree, or
+    /// stops at it.
+    #[test]
+    fn followers_are_placed_by_their_leader_or_left_out() {
+        let led = LayerLink::new();
+        let unled = LayerLink::new();
+        let mut tree = LayerTree::new(Layer::Offset(OffsetLayer::zero()));
+        let root = tree.root();
+        tree.push_child(
+            root,
+            Layer::Leader(LeaderLayer::with_offset(
+                led,
+                Size::new(5.0, 5.0),
+                Offset::new(30.0, 40.0),
+            )),
+        );
+        // Under a slot of its own, as an overlay boundary is: the resolved
+        // transform is relative to that slot, which the walk applies above it.
+        let slot = tree.push_child(
+            root,
+            Layer::Offset(OffsetLayer::new(Offset::new(100.0, 0.0))),
+        );
+        let follower = tree.push_child(slot, Layer::Follower(FollowerLayer::new(led)));
+        tree.push_child(follower, swatch(1));
+        let hidden = tree.push_child(
+            root,
+            Layer::Follower(FollowerLayer::new(unled).with_show_when_unlinked(false)),
+        );
+        tree.push_child(hidden, swatch(2));
+        tree.push_child(root, swatch(3));
+
+        assert_eq!(
+            placed(&tree),
+            [
+                (1, Matrix4::translation(30.0, 40.0, 0.0)),
+                (3, Matrix4::IDENTITY),
+            ]
+        );
     }
 }

@@ -154,13 +154,17 @@ impl PlatformAccessibility for UnixAccessibility {
         // from here shows the real interface immediately instead of an empty
         // window until something next changes. Incremental updates are not
         // retained — see `BridgeShared` for why a fragment must never answer
-        // an activation.
+        // an activation. One published from inside the activation, on the
+        // AT-SPI thread that holds the adapter's state, is that activation's
+        // answer and goes no further (`BridgeShared::publish`).
         //
         // Exactly one clone, and it buys that retention. `update_if_active`
         // takes a factory, so the owned value moves into the adapter only when
         // something is attached; with nobody listening the closure never runs
         // and the value is simply dropped.
-        self.shared.retain_if_self_contained(&update);
+        let Some(update) = self.shared.publish(update) else {
+            return;
+        };
         self.adapter.lock().publish(update);
     }
 

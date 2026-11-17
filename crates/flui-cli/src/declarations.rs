@@ -948,8 +948,8 @@ impl Declarations {
     /// [`BuildError::InvalidConfig`] naming what the application opens and
     /// the feature to turn on.
     pub(crate) fn require_one_instance(&self, target: &str) -> BuildResult<()> {
-        let desktop = target.contains("-windows-")
-            || (target.contains("-linux-") && !target.contains("android"));
+        let desktop =
+            target.contains("-windows-") || crate::build::desktop::is_linux_triple(target);
         if !desktop || self.one_instance {
             return Ok(());
         }

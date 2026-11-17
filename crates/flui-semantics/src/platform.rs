@@ -47,6 +47,10 @@ use accesskit::{ActionRequest, TreeUpdate};
 /// interested listeners). Assembly costs a tree walk per frame, so leaving
 /// it on unconditionally would charge every user for a feature almost none of
 /// them have enabled.
+///
+/// The listener may publish from inside the call: a whole tree it publishes
+/// as it is told of an attach answers the assistive technology's first
+/// question.
 pub type AccessibilityActivationListener = Arc<dyn Fn(bool) + Send + Sync>;
 
 /// Receives an action requested by assistive technology.

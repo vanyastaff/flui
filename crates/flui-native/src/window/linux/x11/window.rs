@@ -106,7 +106,7 @@ use x11rb::protocol::xproto::{
 };
 use x11rb::wrapper::ConnectionExt as _;
 
-use super::hints::{motif_hints, size_limits};
+use super::hints::{WM_HINTS, motif_hints, size_limits};
 use super::mode::{NetWmState, NetWmStateAtoms, WmState, mode_flags, with_mode};
 use super::placement::{
     FrameExtents, device_coordinate, device_extent, display_of, logical_geometry, outer_bounds,
@@ -122,13 +122,14 @@ use crate::input::regions::presses::{
 use crate::owner::OpenWindowError;
 use crate::owner::OpenWindows;
 use crate::owner::linux::x11::{
-    Doorbell, HostDisplays, InputTarget, LoopDrag, LoopInput, LoopText, LoopWindows, PeerInterest,
-    PeerSelect, WindowRef, WindowScale, X11Connection, X11Loop,
+    Doorbell, HostDisplays, InputTarget, LoopDrag, LoopInput, LoopText, LoopWindows, PeerHeard,
+    PeerInterest, PeerSelect, WindowRef, WindowScale, X11Connection, X11Loop,
 };
 use crate::owner::slot::OwnerWeak;
 use crate::owner::wake_deadline::FrameCount;
 use crate::owner::window_delivery::{Publication, Retirement, WindowDelivery};
 use crate::text::WindowTextInput;
+use crate::window::linux::class::AppClass;
 use crate::window::plan::{FrameInset, OpenPlan, PlacementDisplay};
 use crate::window::state::{
     ReportedFacts, Sample, SampledGeometry, WindowStateCell, mode_of, not_carried_out,
@@ -176,6 +177,9 @@ pub(crate) struct WindowAtoms {
     net_wm_window_type: xproto::Atom,
     net_wm_window_type_normal: xproto::Atom,
     motif_wm_hints: xproto::Atom,
+    /// The application id a window claims (GTK's, which shells read beside
+    /// `WM_CLASS`).
+    gtk_application_id: xproto::Atom,
     /// The request a window manager moves or resizes a window by, from a press
     /// on a title bar or border the application draws.
     net_wm_moveresize: xproto::Atom,
@@ -194,7 +198,7 @@ impl WindowAtoms {
     /// [`PlatformError::Init`](crate::PlatformError::Init) when the server
     /// does not answer.
     pub(crate) fn intern(connection: &X11Connection) -> Result<Self, crate::PlatformError> {
-        const NAMES: [&[u8]; 22] = [
+        const NAMES: [&[u8]; 23] = [
             b"WM_PROTOCOLS",
             b"WM_DELETE_WINDOW",
             b"WM_STATE",
@@ -215,6 +219,7 @@ impl WindowAtoms {
             b"_NET_WM_WINDOW_TYPE",
             b"_NET_WM_WINDOW_TYPE_NORMAL",
             b"_MOTIF_WM_HINTS",
+            b"_GTK_APPLICATION_ID",
             b"_NET_WM_MOVERESIZE",
             b"MANAGER",
         ];
@@ -257,6 +262,7 @@ impl WindowAtoms {
             net_wm_window_type,
             net_wm_window_type_normal,
             motif_wm_hints,
+            gtk_application_id,
             net_wm_moveresize,
             manager,
         ] = atoms;
@@ -283,6 +289,7 @@ impl WindowAtoms {
             net_wm_window_type,
             net_wm_window_type_normal,
             motif_wm_hints,
+            gtk_application_id,
             net_wm_moveresize,
             wm_selection,
             manager,
@@ -1868,6 +1875,8 @@ pub struct X11Windows {
     positions: WindowPositions<WindowRef>,
     connection: Arc<X11Connection>,
     atoms: WindowAtoms,
+    /// The class every window carries in `WM_CLASS`.
+    class: AppClass,
     table: RefCell<WindowTable>,
     /// A window closed since the loop last asked.
     closed: Cell<bool>,
@@ -1904,14 +1913,16 @@ impl std::fmt::Debug for X11Windows {
 
 impl X11Windows {
     /// The windows of `connection`, each handing out what `positions` make,
-    /// with the atoms interned on it. Hears the root window's property changes
-    /// from here on (the window manager's support and the active window) and
-    /// the messages sent to its structure (a window manager announcing
-    /// itself, ICCCM §2.8), and reads what the window manager supports.
+    /// with the atoms interned on it, and each carrying `class`. Hears the
+    /// root window's property changes from here on (the window manager's
+    /// support and the active window) and the messages sent to its structure
+    /// (a window manager announcing itself, ICCCM §2.8), and reads what the
+    /// window manager supports.
     pub(crate) fn new(
         positions: WindowPositions<WindowRef>,
         connection: Arc<X11Connection>,
         atoms: WindowAtoms,
+        class: AppClass,
     ) -> Self {
         // The root window's mask is this connection's: a feature that needs
         // more of the root's events adds them here, since a second
@@ -1930,6 +1941,7 @@ impl X11Windows {
         let windows = Self {
             positions,
             atoms,
+            class,
             table: RefCell::default(),
             closed: Cell::new(false),
             frames: FrameCount::default(),
@@ -2055,14 +2067,14 @@ impl X11Windows {
         }
         // A window whose end goes unheard (a peer's no longer there, a call
         // off the owner thread) names no window manager the platform follows.
-        let heard = match self.connection.hear_peer(
-            window,
-            PeerInterest::WindowManager,
-            EventMask::STRUCTURE_NOTIFY,
-        ) {
-            PeerSelect::Sent(selected) => selected.is_ok_and(|cookie| cookie.check().is_ok()),
-            PeerSelect::Unchanged | PeerSelect::OffOwnerThread => false,
-        };
+        let heard = matches!(
+            self.connection.hear_peer(
+                window,
+                PeerInterest::WindowManager,
+                EventMask::STRUCTURE_NOTIFY,
+            ),
+            PeerHeard::Heard
+        );
         if heard && still(window) {
             return true;
         }
@@ -2276,7 +2288,7 @@ impl X11Windows {
             .delivery
             .publish_through_owner(&window, X11Window::publish_at_the_turns_read);
 
-        window.write_properties(position);
+        window.write_properties(position, &self.class);
         if opens_in != WindowMode::Normal {
             window.seed_mode(opens_in);
         }
@@ -2378,25 +2390,33 @@ impl X11Windows {
 
 impl X11Window {
     /// Write what the window manager reads as it maps the window: the
-    /// protocols the window takes, its title, class, process, type, size
+    /// protocols the window takes, its title, `class` and the application id
+    /// it claims, that it takes the input focus, its process, type, size
     /// hints and decorations.
-    fn write_properties(&self, position: Option<(i16, i16)>) {
+    fn write_properties(&self, position: Option<(i16, i16)>, class: &AppClass) {
         let xcb = self.xcb();
         let atoms = &self.atoms;
         let (title, decorated) = {
             let record = self.record.borrow();
             (record.title.clone(), record.frame.has_system_title_bar())
         };
-        let class = std::env::current_exe()
-            .ok()
-            .and_then(|path| {
-                path.file_stem()
-                    .map(|stem| stem.to_string_lossy().into_owned())
-            })
-            .unwrap_or_else(|| "flui".to_owned());
-        // WM_CLASS: the instance, then the class, each ended by a zero.
-        let wm_class = format!("{class}\0{class}\0");
+        let claimed = class.application_id().map(|app_id| {
+            xcb.change_property8(
+                PropMode::REPLACE,
+                self.xid,
+                atoms.gtk_application_id,
+                atoms.utf8_string,
+                app_id.as_bytes(),
+            )
+        });
         let written = [
+            xcb.change_property32(
+                PropMode::REPLACE,
+                self.xid,
+                AtomEnum::WM_HINTS,
+                AtomEnum::WM_HINTS,
+                &WM_HINTS,
+            ),
             xcb.change_property32(
                 PropMode::REPLACE,
                 self.xid,
@@ -2409,7 +2429,7 @@ impl X11Window {
                 self.xid,
                 AtomEnum::WM_CLASS,
                 AtomEnum::STRING,
-                wm_class.as_bytes(),
+                &class.wm_class(),
             ),
             xcb.change_property32(
                 PropMode::REPLACE,
@@ -2426,7 +2446,7 @@ impl X11Window {
                 &[atoms.net_wm_window_type_normal],
             ),
         ];
-        if let Some(error) = written.into_iter().find_map(Result::err) {
+        if let Some(error) = written.into_iter().chain(claimed).find_map(Result::err) {
             tracing::debug!(%error, "cannot set an X11 window's properties");
         }
         self.write_title(&title);

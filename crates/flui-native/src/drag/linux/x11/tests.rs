@@ -498,7 +498,8 @@ impl Target {
         })
     }
 
-    /// Hand the transfer every event its connection has.
+    /// Hand the transfer every event its connection has, as the loop does:
+    /// a destroyed window first as such, then as an event.
     fn deliver_events(&self) {
         while let Some(event) = self
             .connection
@@ -506,6 +507,10 @@ impl Target {
             .poll_for_event()
             .expect("the connection holds")
         {
+            if let Event::DestroyNotify(destroyed) = &event {
+                self.connection.peer_destroyed(destroyed.window);
+                self.drag.window_destroyed(destroyed.window);
+            }
             self.drag.event(&event);
         }
         self.drag.expire(web_time::Instant::now());
@@ -997,8 +1002,22 @@ fn a_refused_drop_finishes_unaccepted_and_exits() {
     assert_same!(heard.last(), Some(&DragDropEvent::Exited { id }));
 }
 
+/// What the target's connection selects on `window`.
+fn selected_on(target: &Target, window: xproto::Window) -> EventMask {
+    let selected = target
+        .connection
+        .xcb()
+        .get_window_attributes(window)
+        .expect("the request is sent")
+        .reply()
+        .expect("the window's attributes")
+        .your_event_mask;
+    EventMask::from(u32::from(selected))
+}
+
 /// A drag that leaves retires its offer: the window hears it leave, and a
-/// request for it is stale.
+/// request for it is stale. The source's window, heard for its end while
+/// the drag is over the window, is let go of at the turn's end.
 #[test]
 fn a_drag_that_leaves_retires_its_offer() {
     let _server = server();
@@ -1011,6 +1030,11 @@ fn a_drag_that_leaves_retires_its_offer() {
     source.enter(target.xid, &[atoms.utf8]);
     source.position(target.xid, (20, 30), 10, atoms.copy);
     source.expect_message(&target, atoms.status);
+    assert_eq!(
+        selected_on(&target, source.window),
+        EventMask::STRUCTURE_NOTIFY,
+        "the source's end is heard while it hovers"
+    );
     source.send(target.xid, atoms.leave, [source.window, 0, 0, 0, 0]);
     let deadline = Instant::now() + STEP;
     while target.heard().len() < 2 {
@@ -1028,6 +1052,275 @@ fn a_drag_that_leaves_retires_its_offer() {
         .request(id, RepresentationIndex(0), TransferLimits::default());
     assert_same!(
         target.resolve(&source, request, |_, _| {}),
+        Err(TransferError::StaleOffer(id))
+    );
+    assert_eq!(
+        selected_on(&target, source.window),
+        EventMask::NO_EVENT,
+        "a source no drag names is no longer heard"
+    );
+}
+
+/// Close `source`'s connection, as a source that crashes or is killed, and
+/// wait until the server has destroyed its window.
+fn kill(source: Source) {
+    let window = source.window;
+    drop(source);
+    let (probe, _) = RustConnection::connect(None).expect("the X server answers");
+    let deadline = Instant::now() + STEP;
+    while probe
+        .get_window_attributes(window)
+        .expect("the request is sent")
+        .reply()
+        .is_ok()
+    {
+        assert!(
+            Instant::now() < deadline,
+            "the source's window outlived its connection"
+        );
+        std::thread::sleep(Duration::from_millis(2));
+    }
+}
+
+/// Turn the target until `request` is resolved.
+fn settle(target: &Target, mut request: TransferRequest) -> Result<TransferPayload, TransferError> {
+    let deadline = Instant::now() + STEP;
+    let mut context = Context::from_waker(Waker::noop());
+    loop {
+        if let Poll::Ready(result) = std::pin::Pin::new(&mut request).poll(&mut context) {
+            return result;
+        }
+        assert!(Instant::now() < deadline, "the request was never resolved");
+        target.deliver_events();
+        std::thread::sleep(Duration::from_millis(2));
+    }
+}
+
+/// A source that goes without `XdndLeave` (it crashes, or is killed) ends
+/// the drag over the window as if it left: hovering, the window hears
+/// `Exited` and the offer is stale; gone before its enter was heard, or
+/// owning no `XdndSelection` by then (as a dead source whose window's id
+/// another client took), it leaves nothing hovering. Either way the window
+/// is free for the next drag, which no answer to the dead source holds up.
+#[test]
+fn a_source_that_goes_ends_its_hover() {
+    #[derive(Debug, Clone, Copy)]
+    enum Goes {
+        /// After the window heard `Entered` and the source its answer.
+        WhileHovering,
+        /// Before the target's connection read its enter.
+        BeforeItsEnterIsHeard,
+        /// Its window stays, but nobody owns `XdndSelection` at its enter.
+        LeavingItsSelectionUnowned,
+    }
+
+    let _server = server();
+    for goes in [
+        Goes::WhileHovering,
+        Goes::BeforeItsEnterIsHeard,
+        Goes::LeavingItsSelectionUnowned,
+    ] {
+        let Some(target) = Target::open(1.0) else {
+            return;
+        };
+        target.answer(Some(TransferActions::COPY));
+        let source = Source::new();
+        let (utf8, copy, status) = (source.atoms.utf8, source.atoms.copy, source.atoms.status);
+        if let Goes::LeavingItsSelectionUnowned = goes {
+            source
+                .connection
+                .set_selection_owner(NONE, source.atoms.selection, CURRENT_TIME)
+                .expect("the selection is let go of");
+        }
+        source.enter(target.xid, &[utf8]);
+        source.position(target.xid, (20, 30), 10, copy);
+        let kept = match goes {
+            Goes::WhileHovering => {
+                source.expect_message(&target, status);
+                kill(source);
+                None
+            }
+            Goes::BeforeItsEnterIsHeard => {
+                kill(source);
+                None
+            }
+            Goes::LeavingItsSelectionUnowned => {
+                // Its position is answered, so the enter before it was heard.
+                source.expect_message(&target, status);
+                Some(source)
+            }
+        };
+
+        let hovering = |heard: &[DragDropEvent]| {
+            matches!(
+                heard.last(),
+                Some(DragDropEvent::Entered { .. } | DragDropEvent::Moved { .. })
+            )
+        };
+        let deadline = Instant::now() + STEP;
+        loop {
+            target.deliver_events();
+            if !hovering(&target.heard()) {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "{goes:?}: the window still hovers after its source went: {:?}",
+                target.heard()
+            );
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        let heard = target.heard();
+        match goes {
+            Goes::WhileHovering => {
+                let id = entered(&heard);
+                assert_eq!(heard.len(), 2, "Entered, then Exited: {heard:?}");
+                assert_same!(heard.last(), Some(&DragDropEvent::Exited { id }));
+                let request =
+                    target
+                        .drag
+                        .request(id, RepresentationIndex(0), TransferLimits::default());
+                assert_same!(settle(&target, request), Err(TransferError::StaleOffer(id)));
+            }
+            Goes::BeforeItsEnterIsHeard | Goes::LeavingItsSelectionUnowned => {
+                assert!(heard.is_empty(), "{goes:?}: nothing to tell: {heard:?}");
+            }
+        }
+        drop(kept);
+
+        // The next drag is offered as any first one is.
+        let next = Source::new();
+        next.enter(target.xid, &[next.atoms.utf8]);
+        next.position(target.xid, (20, 30), 11, next.atoms.copy);
+        let answered = next.expect_message(&target, next.atoms.status);
+        assert_eq!(
+            answered,
+            model::status(target.xid, Some(next.atoms.copy)),
+            "{goes:?}"
+        );
+    }
+}
+
+/// The loop itself hands a source's `DestroyNotify` to the drag: a window
+/// the platform opened, turned by the loop as `run` turns it, hears `Exited`
+/// when the source of the drag over it goes.
+#[test]
+fn the_loop_ends_a_drag_whose_source_goes() {
+    use flui_platform::WindowOptions;
+    use raw_window_handle::{HasWindowHandle as _, RawWindowHandle};
+
+    use crate::platform::Platform as _;
+
+    let _server = server();
+    let present = std::env::var_os("DISPLAY").is_some_and(|display| !display.is_empty());
+    let Some(platform) = present
+        .then(crate::X11Platform::try_new)
+        .and_then(Result::ok)
+    else {
+        eprintln!("skipped: no X server answers; CI runs this under xvfb-run");
+        return;
+    };
+    let handler = RecordingWindowHandler::new();
+    let window = platform
+        .open_window(WindowOptions::default(), handler.clone())
+        .expect("an X11 window opens");
+    let target = window.surface_target();
+    let handle = target.window_handle().expect("an open window has a handle");
+    let RawWindowHandle::Xcb(handle) = handle.as_raw() else {
+        panic!("an X11 window hands out an XCB handle");
+    };
+    let xid = handle.window.get();
+    let heard = || -> Vec<DragDropEvent> {
+        handler
+            .inputs()
+            .into_iter()
+            .filter_map(|input| match input {
+                PlatformInput::DragDrop(event) => Some(event),
+                _ => None,
+            })
+            .collect()
+    };
+    let turn_until = |what: &str, done: &dyn Fn() -> bool| {
+        let deadline = Instant::now() + STEP;
+        while !done() {
+            assert!(Instant::now() < deadline, "{what}: {:?}", heard());
+            platform
+                .owner()
+                .pump_for(Duration::from_millis(5))
+                .expect("the loop turns");
+        }
+    };
+
+    let source = Source::new();
+    source.enter(xid, &[source.atoms.utf8]);
+    source.position(xid, (20, 30), 10, source.atoms.copy);
+    turn_until("the window never heard the drag enter", &|| {
+        matches!(heard().first(), Some(DragDropEvent::Entered { .. }))
+    });
+    let id = entered(&heard());
+    kill(source);
+    turn_until("the window still hovers after its source went", &|| {
+        heard().len() > 1
+    });
+    assert_same!(heard().last(), Some(&DragDropEvent::Exited { id }));
+}
+
+/// A source that goes after its drop was accepted leaves the offer the
+/// window's to conclude: a fetch under way, and every request after, is
+/// answered `SourceGone` at once, not timed out against a source that
+/// cannot answer.
+#[test]
+fn a_dropped_offer_whose_source_goes_answers_gone_at_once() {
+    let _server = server();
+    let Some(target) = Target::open(1.0) else {
+        return;
+    };
+    target.answer(Some(TransferActions::COPY));
+    let source = Source::new();
+    let atoms = &source.atoms;
+    source.enter(target.xid, &[atoms.utf8]);
+    source.position(target.xid, (20, 30), 10, atoms.copy);
+    source.expect_message(&target, atoms.status);
+    source.send(target.xid, atoms.drop, [source.window, 0, 11, 0, 0]);
+    let deadline = Instant::now() + STEP;
+    while !target
+        .heard()
+        .iter()
+        .any(|event| matches!(event, DragDropEvent::Dropped { .. }))
+    {
+        assert!(Instant::now() < deadline, "the window heard no drop");
+        target.deliver_events();
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    let id = entered(&target.heard());
+    // A fetch under way: the source is asked, and never answers.
+    let under_way = target
+        .drag
+        .request(id, RepresentationIndex(0), TransferLimits::default());
+    let deadline = Instant::now() + STEP;
+    while !matches!(source.poll(), Some(Event::SelectionRequest(_))) {
+        assert!(Instant::now() < deadline, "the source was never asked");
+        target.deliver_events();
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    kill(source);
+
+    let started = Instant::now();
+    assert_same!(settle(&target, under_way), Err(TransferError::SourceGone));
+    assert!(
+        started.elapsed() < super::TRANSFER_TIMEOUT,
+        "answered as the source went, not at the fetch's timeout"
+    );
+    let after = target
+        .drag
+        .request(id, RepresentationIndex(0), TransferLimits::default());
+    assert_same!(settle(&target, after), Err(TransferError::SourceGone));
+    target.drag.conclude_drop(id);
+    let concluded = target
+        .drag
+        .request(id, RepresentationIndex(0), TransferLimits::default());
+    assert_same!(
+        settle(&target, concluded),
         Err(TransferError::StaleOffer(id))
     );
 }

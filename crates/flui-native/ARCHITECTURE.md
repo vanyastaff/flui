@@ -298,7 +298,12 @@ trait depends on `flui-platform` instead.
     size, position and their limits, DPI, focus, paint, the cursor, the
     title, the modal size-move and menu loops with their deadline timer, the
     setting changes, the frame, close and delivery requests posted to it and the
-    keyboard's system-menu command), the input
+    keyboard's system-menu command), the cloak watch
+    (`window::windows::CloakWatch`: the thread's one out-of-context WinEvent
+    subscription to cloak changes, held from the first window announced to the
+    last destroyed, whose callback finds the window by its handle; it answers
+    nothing. Test: `one_cloak_subscription_serves_every_window_of_the_thread`,
+    `each_window_hears_its_own_cloak`), the input
     (`input::windows::InputWindows`: mouse, pointer, wheel, keyboard,
     characters and the keyboard layout, and the precision touchpad's hit
     test and pacing timer, with the DirectManipulation viewport it gives each
@@ -365,20 +370,63 @@ trait depends on `flui-platform` instead.
     `the_displays_and_the_preferences_hear_every_change_in_either_order`,
     `display_broadcasts_mark_the_monitors_stale_and_wake_until_detached`.
   - The owner's message-only window answers its own messages (the wake, the
-    exit policy) and offers any other, in order, to the `OwnerMessages` hooks
+    exit policy, and `MODAL_FRAME`, the clock of the pacing of a modal loop
+    run from it) and offers any other, in order, to the `OwnerMessages` hooks
     of the objects the loop holds: today the drag transport the table makes
     (`WindowsHost::drag`). It answers `START_DRAG`, from which a session's
-    `DoDragDrop` runs on a fresh owner turn, and `MODAL_FRAME`, for which the
-    owner delivers the frames due while the modal loop runs
-    (`owner::windows::modal_loop::ModalFrames`, which the owner window holds
-    and hands a hook weakly), and it cancels a session that has not started
-    when the window is destroyed. Every hook hears that end, each in a
-    boundary of its own, so one that panics leaves the next told. A window's
-    `DefWindowProc` move and size loops deliver through a `ModalFrames` of
-    their own, at the owner's modal pace (`owner::modal_pace`). Tests:
+    `DoDragDrop` runs on a fresh owner turn under the owner window's pacing,
+    and it cancels a session that has not started when the window is
+    destroyed. Every hook hears that end, each in a boundary of its own, so one
+    that panics leaves the next told. Tests:
     `ole_drag_and_drop_on_real_windows`,
-    `a_due_deadline_gets_one_modal_frame_per_generation`,
     `every_owner_hook_hears_the_window_go_after_one_panics`.
+  - **A modal loop asks for frames by the main loop's rule, and polls for
+    nothing.** While a modal loop stands in for the main loop (OLE's drag
+    loop, `DefWindowProc`'s move, size and menu loops, the system menu
+    included), a `owner::windows::modal_loop::ModalPacing` of the window (or
+    of the owner window, for the drag loop) delivers what the main loop would
+    (`ModalFrames`: a due wake deadline once per frame generation, a due turn
+    deadline as one owner turn, the invalid windows painted) each time its
+    clock fires: a timer of the window, or for OLE's loop, which dispatches no
+    timer while the pointer rests, a thread that sends the owner window
+    `MODAL_FRAME`. The clock is set by the pure `owner::modal_pace::PaceTimer`:
+    for the earliest deadline the last delivery armed, and within
+    `ASK_AGAIN_MS` of the platform's code running on the thread, since that
+    code may have moved a deadline, as the main loop asks again each time its
+    queue runs dry. Every entry of the platform's code on the owner thread
+    tells the thread's `ModalLoops` (kept by FLUI's window class on the thread)
+    after it ran: the class's procedure after each window message but the
+    pacing timer's own, the owner window's after every message but
+    `MODAL_FRAME` (a guard, so a contained panic tells it too), the broadcast
+    receiver after its subscribers, the cloak hook, and the COM objects the OS
+    calls directly: every OLE vtable method (`com_method`, `com_hresult`: a
+    drop target's event, a drop source's question, a fetch running the
+    provider), every TSF text-store method that reads or edits the document
+    (`document_method`), and the UIA activation and action handlers on the
+    owner thread. The text store's methods that read no document, and the
+    input scope, run no application code and tell nothing. What another thread
+    hands the owner knocks at `ModalLoops::wake` once handed over: a window's
+    post through the owner queue, an invalidation of a shown window, the owner
+    signal's wake (posted or set on its fallback event). The system's loops
+    dispatch posted messages and paints themselves, which tell the loops as
+    they run; OLE's drag loop dispatches neither while the pointer rests, so
+    the knock sets its pacing thread to deliver at once, and that delivery
+    dispatches the posted messages of FLUI's range (at most
+    `POSTED_PER_DELIVERY`, then another delivery), drives the owner's turn and
+    paints. With no deadline and nothing run or handed over, no clock is set:
+    a menu left open asks the handler nothing. A window destroyed in its loop
+    ends its pacing. Tests: `a_delivery_sets_the_timer_for_what_is_due_and_nothing_else`,
+    `platform_code_asks_again_without_holding_the_timer_back`,
+    `a_due_deadline_gets_one_modal_frame_per_generation`,
+    `a_delivery_that_panics_leaves_the_pacing_asking_again`,
+    `an_idle_modal_loop_with_no_deadline_asks_nothing`,
+    `a_deadline_a_turn_sets_during_an_idle_modal_loop_is_delivered_in_it`,
+    `a_redraw_from_another_thread_is_painted_in_an_idle_modal_loop`,
+    `deadlines_are_delivered_while_the_window_is_moved`,
+    `a_second_window_repaints_while_the_modal_loop_rests`,
+    `work_from_another_thread_reaches_a_resting_drag_loop`,
+    `a_com_entry_asks_a_running_modal_loop_again`. Not run: the system menu by
+    the mouse, a drag held still over a window of another process.
 
   On Android the table implements `owner::android::AndroidHost`, which makes
   what the loop holds (the displays, the preference source, the notice
@@ -571,6 +619,21 @@ trait depends on `flui-platform` instead.
   (`accessibility::android`). The view reaches it through a `BridgeSlot`
   (`owner::android::bridge_slot`), which a closing window empties only of
   its own bridge.
+
+  Every adapter publishes through `BridgeShared::publish`, which retains a
+  whole tree for a late activation and decides what the adapter is handed.
+  AccessKit calls the activation handler while it holds its own state (the
+  subclass `RefCell` under UIA, the view's under NSAccessibility, the adapter
+  mutex under AT-SPI), and the handler tells the composition root there; a
+  publish the listener makes on that thread, from inside the activation, is
+  therefore retained and not handed on, and the activation answers it. A
+  publish another thread makes meanwhile reaches the adapter, which
+  serializes it. The bridge keeps each activating thread's own depth, so
+  activations of one bridge on two threads, ending in either order, never
+  clear or leave each other's marks. Tests: `a_tree_published_from_inside_the_activation_is_its_answer`,
+  `a_publish_on_another_thread_during_the_activation_reaches_the_adapter`,
+  `overlapping_activations_on_two_threads_keep_each_others_marks`,
+  `a_tree_published_inside_the_activation_answers_it` (UIA on a real window).
 
   The table's positions make the accessibility adapter and the actuator a
   window hands out (`host::Accessibility::for_window`,
@@ -2680,8 +2743,10 @@ Both paths drive the same owner-turn slot and quit policy. A strong `OwnedHandle
 owner spans every wait; closing admission prevents a retired proxy from posting.
 The event contains no callback or UI state and requires no polling thread.
 If both the post and kernel signal fail, the caller still receives an error and
-OwnerSignal retains its debt. A third-party modal loop does not wait on this
-private event; fallback delivery resumes when FLUI regains its loop.
+OwnerSignal retains its debt. The system's move, size and menu loops and a
+third-party modal loop do not wait on this private event; fallback delivery
+resumes when FLUI regains its loop. OLE's drag loop does not wait on it either,
+but the wake knocks at its pacing, whose delivery drives the owner's turn.
 
 Every other message the host posts to a window of its owner thread carries
 accepted work: a hidden or minimized window's frame request, the deliveries
@@ -4439,7 +4504,21 @@ action (an `XdndActionAsk` reads the source's `XdndActionList`); each
 position is answered `XdndStatus` from the feedback the target cached while
 hearing it, asking for every movement; a drop resolves the action from that
 feedback, and a refusal answers `XdndFinished` at once while the window hears
-`Exited`. Types map to representations in the pure `drag::linux::x11::model`: text
+`Exited`. A source that crashes, or destroys its window without `XdndLeave`,
+says nothing else, so from its enter until its hover ends and its offers are
+concluded the drag hears its window's end (`PeerInterest::DropSource`). Every
+feature that hears another client's window for its end selects with a checked
+request (`select_checked`: a window already gone is told only by the refusal,
+and `hear_peer` then drops its entry), and a source whose `XdndSelection`
+nobody owns at its enter is taken as gone, which also covers a dead source's
+id reused by another client. The loop hands every `DestroyNotify` to
+`LoopDrag::window_destroyed` in its own containment; the hover ends as if the
+source left, and a dropped offer of it answers `SourceGone` until concluded
+(`the_loop_ends_a_drag_whose_source_goes`, `a_source_that_goes_ends_its_hover`,
+`a_dropped_offer_whose_source_goes_answers_gone_at_once`). The drag stops
+hearing a source nothing names at the end of the loop's turn, on the owner
+thread where the table of peer windows is. Types map to representations in the
+pure `drag::linux::x11::model`: text
 once, in the reader's preferred form, HTML (UTF-8, or UTF-16 behind its mark),
 every other media type as named. A request converts `XdndSelection` at the
 drag's last time into a window made for that fetch and destroyed as it ends,
@@ -4601,6 +4680,24 @@ so one leaving lets go of nothing another holds. Tests:
 `the_pointer_on_a_frame_asks_for_what_it_pressed`,
 `a_window_has_the_frame_its_compositor_leaves_it` (Weston and sway), and
 `tests/wayland_frame.rs` on Weston's desktop shell through XTest.
+
+### A Linux window carries the class its host decided once, from the application id
+
+A Linux host is started with the application's `flui_foundation::AppId`, or
+without one (`CurrentHost::start_with`, `start_single`), and decides at start
+the `window::linux::class::AppClass` every window carries: the id, or the
+executable's stem in ASCII (`flui_foundation::executable_class`). A Wayland
+window sets it with `xdg_toplevel.set_app_id` before its first commit; an X11
+window writes it as both halves of `WM_CLASS`, claims it as
+`_GTK_APPLICATION_ID` when it is an id, and writes `WM_HINTS` with `InputHint`
+set. The desktop entry `flui build linux` writes is named by the same class and
+names it as `StartupWMClass` (ADR-0351). The single-instance bus name, mutex
+and pipe are the id itself: its grammar is a D-Bus name's and its length fits
+the pipe's 256 characters (`APP_ID_MAX_LEN`), so the host checks nothing
+again. Tests:
+`a_window_is_classed_by_the_application_id_or_the_executable`, and
+`a_window_carries_the_application_id_it_was_started_with` on Xvfb with
+openbox and under sway (read through `zwlr_foreign_toplevel_manager_v1`).
 
 ### Linux displays come from the compositor on a connection of their own, and a window names its display by native number
 
@@ -5392,13 +5489,15 @@ are released and cancels on Escape or on another button.
 `DoDragDrop`'s loop waits for input and for messages other threads send, and
 nothing else: while the pointer rests it dispatches no posted message, timer or
 paint, so the main loop's deadline delivery and a `WM_TIMER` would both stall.
-A pacing thread sends `MODAL_FRAME` to the owner window instead, which the
-loop's wait does dispatch; the transport's hook asks the owner
-(`OwnerWindow::deliver_modal_frames`), which delivers a due wake deadline as the
-main loop would (once per frame generation), sends `WM_PAINT` to every
-invalidated window with `UpdateWindow`, and answers how long to wait by the
-owner's modal pace (`owner::modal_pace`, which `DefWindowProc`'s move
-and size loops share). The session's
+The session runs under the owner window's modal pacing, whose clock is a
+thread that sends `MODAL_FRAME` to the owner window, which the loop's wait does
+dispatch: the owner delivers a due wake deadline as the main loop would (once
+per frame generation), sends `WM_PAINT` to every invalidated window with
+`UpdateWindow`, and sets the thread for the next delivery by the rule every
+modal loop shares (see "A modal loop asks for frames by the main loop's rule"):
+with nothing due the thread sleeps until the thread runs the platform's code (a
+drop target's event, a window message) or another thread hands the owner work, and
+a knocked delivery dispatches the posted work and the owner's turn too. The session's
 callbacks run with no `RefCell` borrow or lock held across a COM call or a
 dispatch: the provider is leased out of the data object while it runs, so a
 fetch from inside it is refused rather than reentered, and every COM method
@@ -5421,7 +5520,7 @@ window's frames while the loop rests, a drop into a FLUI window through the
 real loop, woken by posted mouse moves rather than the system pointer, and
 `window_at` across two placed real windows.
 `ole_drag_drop_contracts` pins the pure half everywhere, and
-`the_modal_loop_waits_for_the_next_deadline_within_a_frame` the pace. Not run: a drag to
+`a_delivery_sets_the_timer_for_what_is_due_and_nothing_else` the pace. Not run: a drag to
 or from another process (Explorer, a browser), a held mouse button, pen or
 touch, and a whole `flui-app` with two runtimes.
 

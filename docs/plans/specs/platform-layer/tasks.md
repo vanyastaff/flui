@@ -375,7 +375,7 @@ GPU-память простаивающего или невидимого окн
 | **LY122** | **Clipboard Win32 переживает занятый буфер и читает не на потоке владельца.** Сейчас `ClipboardSession::open` (`crates/flui-native/src/clipboard/windows.rs`) зовёт `OpenClipboard` один раз: пока менеджер буфера, `rdpclip.exe` или Office держит его несколько миллисекунд, чтение отвечает `Unavailable`, а запись логируется и теряется — `write_now` возвращает `()`, вызывающий не узнаёт; тестовый помощник того же файла повторяет попытку, production — нет. Предположительно: `read_text` отвечает своему `Resolver` синхронно, и `GetClipboardData` у владельца с отложенной отрисовкой, который завис, вешает поток UI. После: ограниченный повтор открытия; `write_now` возвращает `Result<(), ClipboardError>`, и отказ записи доходит до вызывающего; чтение и запись идут на потоке `flui-clipboard` и разрешают свой `Resolver` оттуда | — | `crates/flui-native/src/{clipboard/windows.rs,host/clipboard.rs}` | `workspace`, `globals` | поток держит буфер 20 мс, начатая в это время запись удаётся после закрытия; при подтверждении — владелец с отложенным форматом, не отвечающий `WM_RENDERFORMAT`: `read_text` возвращается сразу; каждый падает при откате | W |
 | **LY123** | **Отказанный post на Win32 не теряет принятой работы; кадры скрытого окна сливаются.** Было: запасной путь через событие ядра был только у `WAKE` сигнала владельца, а `crates/flui-native/ARCHITECTURE.md` обещал его всей доставке; `DELIVER_QUEUED`, `EXIT_POLICY`, `CLOSE_WINDOW` разрешённого закрытия, `REQUEST_FRAME`, `TOGGLE_FULLSCREEN` и `LOW_MEMORY` (последний ждал следующего сообщения приёмника) при отказе `PostMessageW` терялись — на полной очереди это подтверждено прогоном. Скрытое или свёрнутое окно ставило `REQUEST_FRAME` на каждый `request_redraw`: тысяча пробуждений — тысяча кадров. Построено: каждый такой post идёт через `OwnerQueue::post` (`owner/windows/control/queue.rs`); отказанный по квоте отдаётся сигналу владельца (`run_outside_turn`, с его запасным событием), и следующий ход, отпустив своё состояние, посылает сообщение `SendMessageW` прямо в процедуру окна; сообщения называют окно идентичностью. Каждый вид post окна (`WindowPost`: кадр скрытого окна, доставки с чужих потоков) поставлен не больше одного раза, пока окно его не взяло. Часть находки про срок кадра на `main` уже не верна: `redraw_for_deadline` зовёт кадр скрытого окна напрямую, без post | — | `crates/flui-native/src/{window/windows/proc.rs,window/windows/window.rs,owner/windows/control.rs,owner/window_delivery.rs}`, `crates/flui-native/ARCHITECTURE.md` | `module-dag`, `globals`, `panic-boundary` | `failed_native_posts_still_deliver_owner_turns_and_quit` с отказом в пути post окна: доставка с рабочего потока на скрытое окно доходит, закрытие последнего окна кончает цикл; тысяча `request_redraw` на скрытом окне и один ход — один `frame_requested`; каждый падает при откате | W |
 | **LY124** | **Полноэкранный режим решает приложение, и выход из него возвращает прежнее состояние.** Сейчас только хост Windows держит встроенную клавишу F11 (`WindowConfiguration::default`, `crates/flui-native/src/window/config.rs`; тип `pub(crate)`, отключить нельзя): приложение, обработавшее F11 без запрета действия по умолчанию, ещё и переключает режим, а комментарий о «conventional» F11 на всех платформах неверен. Выход по переключателю (F11, `toggle_fullscreen`, `set_fullscreen(false)`) возвращает развёрнутое окно в `Normal`: `NativeMode::Fullscreen` хранит только прямоугольник, тогда как AppKit, Weston, Chromium и winit возвращают развёрнутым. После: клавиши в хосте нет, полноэкранность — `WindowCommand::SetMode`, клавиша — дело фреймворка или приложения; режим помнит, во что вернуться; явный `SetMode(Normal)` по-прежнему кончает в `Normal` | — | `crates/flui-native/src/window/{config.rs,windows/mod.rs,windows/proc.rs,windows/set.rs}`, `crates/flui-native/tests/windows_window_commands.rs` | `module-dag`, `file-length` | F11, на которое обработчик ответил без запрета, не меняет `state().mode`; строка `windows_window_commands`: `SetMode(Maximized)`, дважды `toggle_fullscreen()` — `IsZoomed` и `mode == Maximized`; каждый падает при откате | W |
-| **LY125** | **Windows: модальный цикл не опрашивает, один хук cloak на все окна, слушатель активации может публиковать.** Сейчас `modal_frame_wait_ms(None, _)` отвечает 16 мс (`crates/flui-native/src/owner/modal_pace.rs`): открытое системное меню опрашивает обработчик и все окна 60 раз в секунду, пока открыто. Каждое окно ставит свой процессный out-of-context хук `SetWinEventHook` на cloak (`window/windows/proc.rs`): N окон — N хуков, каждый будит каждое событие cloak любого процесса. Латентно: синхронный слушатель активации, публикующий внутри `request_initial_tree`, снова занимает `RefCell` AccessKit (`accessibility/{bridge.rs,windows.rs}`), паника сдерживается, но мост считает себя неактивным, когда AccessKit активен. После: без срока таймер снят, ход владельца ставит его, когда срок появился; один хук на поток владельца с поиском окна по handle; публикация внутри активации удерживается и отдаётся из `retained()`, доки слушателя запрещают синхронную публикацию | LY123 | `crates/flui-native/src/{owner/modal_pace.rs,owner/windows/modal_loop.rs,owner/windows/control.rs,window/windows/proc.rs,accessibility/bridge.rs,accessibility/windows.rs}` | `module-dag`, `globals`, `panic-boundary` | `modal_frame_wait_ms(None, now)` — «без таймера», ход, поставивший срок в модальном цикле, ставит таймер; два окна — одна установка хука; слушатель, публикующий полное дерево в активации: первый `WM_GETOBJECT` отвечает им, `is_active()` истинно; каждый падает при откате | W |
+| **LY125** | **Windows: модальный цикл не опрашивает, один хук cloak на все окна, слушатель активации может публиковать.** Сейчас `modal_frame_wait_ms(None, _)` отвечает 16 мс (`crates/flui-native/src/owner/modal_pace.rs`): открытое системное меню опрашивает обработчик и все окна 60 раз в секунду, пока открыто. Каждое окно ставит свой процессный out-of-context хук `SetWinEventHook` на cloak (`window/windows/proc.rs`): N окон — N хуков, каждый будит каждое событие cloak любого процесса. Латентно: синхронный слушатель активации, публикующий внутри `request_initial_tree`, снова занимает `RefCell` AccessKit (`accessibility/{bridge.rs,windows.rs}`), паника сдерживается, но мост считает себя неактивным, когда AccessKit активен. После: без срока таймер снят, ход владельца ставит его, когда срок появился; один хук на поток владельца с поиском окна по handle; публикация внутри активации удерживается и отдаётся из `retained()`, доки слушателя говорят, что публиковать из него можно | LY123 | `crates/flui-native/src/{owner/modal_pace.rs,owner/windows/modal_loop.rs,owner/windows/control.rs,window/windows/proc.rs,accessibility/bridge.rs,accessibility/windows.rs}` | `module-dag`, `globals`, `panic-boundary` | `modal_frame_wait_ms(None, now)` — «без таймера», ход, поставивший срок в модальном цикле, ставит таймер; два окна — одна установка хука; слушатель, публикующий полное дерево в активации: первый `WM_GETOBJECT` отвечает им, `is_active()` истинно; каждый падает при откате | W |
 | **LY126** | **Своя рамка Windows: автоскрываемая панель задач, смена масштаба без дрейфа размера, старые сообщения заголовка.** Все три предположительны, и задача начинается с подтверждения каждого. Развёрнутое окно `AppTitleBar` делает клиент ровно рабочей областью (`window/windows/chrome.rs`), и автоскрываемая панель задач перестаёт выезжать: вставки по `ABM_GETAUTOHIDEBAREX` нет. `WM_GETDPISCALEDSIZE` не обрабатывается, `WM_DPICHANGED` берёт линейно масштабированный внешний прямоугольник, и логический размер содержимого дрейфует после 96→144→96. Кнопки заголовка переводят только `WM_NCPOINTER*`: если `EnableMouseInPointer` не удался, `WM_NCLBUTTONDOWN` над `HTMAXBUTTON` уходит в `DefWindowProc`, который рисует классическую кнопку поверх кнопки приложения. После: развёрнутое окно отступает 2 px у края с автоскрываемой панелью; `WM_GETDPISCALEDSIZE` отвечает размером из логического клиента (`outer_size`), пока окно не развёрнуто; `WM_NCMOUSEMOVE`, `WM_NCLBUTTONDOWN`/`UP` и `WM_NCMOUSELEAVE` над тремя кодами идут тем же путём, что `WM_NCPOINTER*` | LY125 | `crates/flui-native/src/{window/windows/chrome.rs,window/windows/proc.rs,window/windows/set.rs,input/windows/caption.rs}` | `module-dag`, `file-length` | чистое правило `app_title_bar_client` с автоскрытием снизу оставляет 2 px; `outer_size` при двух DPI возвращает логический клиент, нативная строка с парой `WM_GETDPISCALEDSIZE`/`WM_DPICHANGED`; строки сообщений мыши в `only_pointer_messages_over_a_caption_button_become_the_applications`; каждый падает при откате | W |
 | **LY127** | **Windows: форм для `Send`-платформы, которой нет, не осталось.** Сейчас платформа и окно Windows `!Send` (`assert_not_impl_any!`), но живы `ApartmentHold` с `unsafe impl Send`/`Sync`, проверками потока и путём утечки (`owner/windows/com_apartment.rs`, запись в списке `send-impls`, который только сокращается), ветка «dropped off owner» в `OwnerControl::close` и `TeardownRoute::PostClose` в `WindowsWindow::drop`, который, будь достижим, спрашивал бы вето обработчика через `WM_CLOSE`; `com_apartment.rs` и `ARCHITECTURE.md` говорят, что платформа `Send`. После: `apartment: Rc<ComApartment>`, мёртвые ветки удалены, запись `send-impls` снята, документы описывают владельца `!Send` (ADR-0327 §5) | LY125 | `crates/flui-native/src/{owner/windows/com_apartment.rs,owner/windows.rs,owner/windows/control.rs,window/windows/window.rs,owner/hwnd_affinity.rs}`, `tools/xtask/allowlists/send-impls.toml`, `crates/flui-native/ARCHITECTURE.md` | `send-impls`, `globals`, `module-dag` | компилятор и `send-impls` с коротким списком; набор Windows зелёный до и после | W |
 | **LY128** | **Окно Linux несёт id приложения, и desktop entry ему соответствует.** Сейчас id приложения (`FLUI_APP_ID`, имя шины single-instance) до окна не доходит: `set_app_id` в `crates/flui-native` нет, X11 пишет `WM_CLASS` из основы имени исполняемого файла (`window/linux/x11/window.rs`), а desktop entry не несёт `StartupWMClass` (`crates/flui-cli/src/build/linux_desktop.rs`) — док и панель задач не сопоставляют окно с записью, а запуск с токеном активации кончается уведомлением «готово» вместо фокуса. X11 не пишет `WM_HINTS` (input hint). `docs/gaps.md` называет это «не проверено», хотя поведения нет. После: хост узнаёт id при старте; Wayland зовёт `xdg_toplevel.set_app_id` до первого commit, X11 пишет `WM_CLASS` (экземпляр и класс по id), `_GTK_APPLICATION_ID` и `WM_HINTS`; desktop entry несёт `StartupWMClass`; без id — нынешняя основа имени | — | `crates/flui-native/src/{lib.rs,owner/linux/*,window/linux/wayland.rs,window/linux/x11/window.rs}`, передача `AppIdentity` в `crates/flui-app`, `crates/flui-cli/src/build/linux_desktop.rs`, `docs/gaps.md` | `module-dag`, `workspace`, `reach` | `tests/wayland_window.rs`: `app_id` из дерева sway; `tests/x11_window.rs`: `WM_CLASS` и `WM_HINTS` на Xvfb; golden desktop entry со `StartupWMClass`; каждый падает при откате | L; Dev: Linux (GNOME, KDE) |
@@ -7074,6 +7074,105 @@ GPU-память простаивающего или невидимого окн
   устройствах не нужно: поведение хостов не меняется, кроме момента, когда Win32 и X11
   рассогласованы, — он теперь публикуется `Focused`, как и раньше по полю `focused`.
 
+- [x] **LY125** — ветка `native/win32-idle-and-reentry`. Все три находки подтверждены на `main`
+  @ `9e309039d` тестами, падающими на старом коде. Модальный цикл: без срока таймер ставился
+  каждые 16 мс, и цикл перемещения, простоявший полсекунды, спрашивал обработчик 18 раз; так же
+  опрашивал поток темпа drag-цикла OLE (тот же класс, исправлен вместе). Построено: чистое правило
+  `owner::modal_pace::PaceTimer` — таймер ставится на самый ранний срок последней доставки и в
+  пределах `ASK_AGAIN_MS` после того, как на потоке выполнился код платформы; без срока и без
+  кода таймера нет, верхней границы в 16 мс нет. Часы — таймер окна или, для цикла OLE, поток,
+  шлющий окну владельца `MODAL_FRAME` (`ModalPacing`, `PaceClock`, `PacerThread` в
+  `owner/windows/modal_loop.rs`); `MODAL_FRAME` теперь сообщение самого окна владельца, хук drag
+  только входит в темп на время сессии. О выполненном коде говорят `ModalLoops` потока, которые
+  держит класс окна FLUI: процедура класса после каждого сообщения, кроме своего таймера темпа,
+  процедура окна владельца после каждого сообщения, кроме `MODAL_FRAME` (охранник — и после
+  сдержанной паники), приёмник рассылок, хук cloak и событие drop-цели. Окно, уничтоженное в
+  своём цикле, кончает темп. Хук cloak: один на поток — хук класса `CloakWatch`
+  (`window/windows/cloak.rs`) держит подписку от первого окна до последнего, колбэк находит окно
+  по handle; поле окна и фильтр «свой хук» удалены. Активация: подтверждена на UIA и прочитана в
+  исходниках AccessKit — NSAccessibility держит тот же `RefCell`, AT-SPI держит мьютекс адаптера
+  (там публикация из слушателя — взаимная блокировка), iOS заимствование отпускает. Решение
+  расходится со строкой: публикацию из слушателя не запрещаем, а поддерживаем — все адаптеры
+  публикуют через `BridgeShared::publish`, которое внутри активации на её потоке только удерживает
+  дерево, и активация отвечает им; доки слушателя (`flui-semantics`) это говорят.
+  Тесты, в скобках результат с откатом: `a_delivery_sets_the_timer_for_what_is_due_and_nothing_else`,
+  `platform_code_asks_again_without_holding_the_timer_back` (с темпом 16 мс без срока — первая
+  строка падает); `an_idle_modal_loop_with_no_deadline_asks_nothing` в `native_window_commands`
+  (18 вопросов за 500 мс вместо не больше 2);
+  `a_deadline_a_turn_sets_during_an_idle_modal_loop_is_delivered_in_it` (без сообщения из
+  процедуры окна владельца кадр приходит только после цикла);
+  `one_cloak_subscription_serves_every_window_of_the_thread` (подписка на каждое окно — второе
+  окно получает другой хук), `each_window_hears_its_own_cloak`;
+  `a_tree_published_from_inside_the_activation_is_its_answer`,
+  `a_publish_on_another_thread_during_the_activation_reaches_the_adapter`,
+  `a_tree_published_inside_the_activation_answers_it` на настоящем окне UIA (без удержания —
+  паника сдержана, `is_active()` ложно). `modal_frame_tests` переписан под срок вместо
+  миллисекунд. Проверки: Windows — clippy `-p flui-native --all-targets -D warnings`, nextest
+  `-p flui-native`, `xtask checks`, `doc-strict`. Не запущено: системное меню мышью, drag,
+  стоящий над окном другого процесса; адаптеры macOS, iOS, Android, Linux и web изменены одной
+  строкой каждый и на этой машине не собраны (Linux — в WSL, см. PR).
+  По независимому чтению исправлено: работа, отданная владельцу с другого потока, в покоящемся
+  drag-цикле OLE не доходила (перерисовка с чужого потока — 0 кадров против 48 на базе). Теперь
+  каждая такая передача стучит в `ModalLoops::wake` (`ModalWake`: post через `OwnerQueue`,
+  инвалидация показанного окна, пробуждение сигнала владельца, отправленное или через запасное
+  событие); стук ставит поток темпа OLE на немедленную доставку, и доставка исполняет посланные
+  сообщения диапазона FLUI (не больше `POSTED_PER_DELIVERY`), ход владельца и отрисовку. Системные
+  циклы перемещения, размера и меню сами исполняют посланное и отрисовку. Код через COM (каждый
+  метод OLE, методы TSF, читающие и правящие документ, обработчики UIA на потоке владельца)
+  сообщает циклам сам. Активация моста считает глубину каждого потока отдельно, а не один слот.
+  Тесты (с откатом): `work_from_another_thread_reaches_a_resting_drag_loop` (без стука — 0 кадров
+  на 50 перерисовок; без доставки посланного и хода — 0 ходов на 10 пробуждений),
+  `a_redraw_from_another_thread_is_painted_in_an_idle_modal_loop`,
+  `a_com_entry_asks_a_running_modal_loop_again` (без охранника — таймер остаётся `Stopped`),
+  `overlapping_activations_on_two_threads_keep_each_others_marks` (один общий слот — публикация
+  второй активации доходит до адаптера).
+
+- [x] **LY130** — ветка `native/xdnd-source-watch`. Находка подтверждена на `main` @ `cd0c88cd0`
+  прогоном в WSL под Xvfb: источник, чьё соединение закрыто посреди наведения, оставлял окно в
+  `Entered` с живым предложением до следующего drag, а запрос принятого drop от ушедшего
+  источника ждал `TRANSFER_TIMEOUT` и отвечал `TimedOut`. Построено: `PeerInterest::DropSource`;
+  `enter` слушает `StructureNotify` окна источника проверенным запросом (окно, ушедшее до выбора,
+  узнаётся только по отказу `BadWindow`, и наведение кончается сразу); цикл отдаёт каждый
+  `DestroyNotify` в `LoopDrag::window_destroyed` в своей изоляции паники, так что паника
+  обработчика окна не отнимает событие у окон; наведение кончается как `Exited`, а принятый drop
+  остаётся окну до `conclude_drop`, и его запросы сразу отвечают `SourceGone` (события
+  «отменён» после `Dropped` в словаре нет, а повторный `Exited` после `Dropped` нарушил бы
+  порядок событий; `XdndFinished` мёртвому окну не шлётся). Источник забывается в конце хода
+  цикла на потоке владельца (`State::released`), когда его не называет ни наведение, ни живое
+  предложение; `conclude_drop` с другого потока будит цикл. Старый слух `DestroyNotify` в
+  `session_event` источника перенесён туда же (`requestor_gone` из `window_destroyed`). Класс:
+  писатель `INCR` буфера X11 слушает и уничтожение запрашивающего и отпускает его передачи сразу,
+  а не по сроку. Тесты, в скобках результат с откатом: `a_source_that_goes_ends_its_hover`
+  (строка «пока наводит» — окно наводит 10 с, тест падает; строка «до чтения enter» без
+  проверки выбора — `Entered` без `Exited`); `a_dropped_offer_whose_source_goes_answers_gone_at_once`
+  (`TimedOut` через 5 с вместо `SourceGone`); `a_drag_that_leaves_retires_its_offer` (маска на
+  окне источника — 0 вместо `STRUCTURE_NOTIFY`); `a_requestor_that_goes_lets_go_of_its_transfers`
+  (следующему отказано, `NONE`). Проверено и найдено верным: источник drag FLUI при ушедшей цели
+  ограничен `FINISH_TIMEOUT` после отпускания и сменой цели при движении; чтение буфера X11 при
+  ушедшем владельце — общим сроком чтения `TRANSFER_TIMEOUT` (ICCCM не даёт читателю окна
+  владельца); на Wayland композитор шлёт `leave`, когда источник ушёл, а чтение принятого drop
+  получает конец канала — протокол не отличает ушедший источник от пустого ответа. Источник,
+  который кончает drag без `XdndLeave`, но окно оставляет, по-прежнему держит наведение до
+  следующего `XdndEnter`: такого источника показать не удалось, все известные (GTK, Qt) шлют
+  `XdndLeave` при отмене. Прогонов на устройствах не нужно.
+  Доведение после чтения (PR #2692): каждое слушание чужого окна ради его конца — одна форма,
+  `select_checked` (`owner::linux::x11`), на соединении платформы и на своём соединении буфера;
+  `X11Connection::hear_peer` проверяет выбор сам и отвечает `PeerHeard`, а окно, которого уже
+  нет (`Gone`), уносит свою запись из таблицы, другой отказ возвращает прежнюю маску интереса;
+  перешли менеджер окон, запрашивающий `INCR` источника drag и источник XDND. Источник, чьим
+  `XdndSelection` при входе никто не владеет, считается ушедшим: так узнаётся и мёртвый
+  источник, чей id занял новый клиент (равенство владельца окну из сообщений не требуется:
+  источник FLUI называет окно визита, а выделением владеет окно сессии). Паника второго шага
+  `enter` складывается за первой (`FirstPanic`); `window_destroyed` для окна, которое никто не
+  называет, не шлёт ничего. Писатель буфера отказывает запрашивающему, ушедшему до ответа.
+  Тесты, в скобках результат с откатом: `the_loop_ends_a_drag_whose_source_goes` (цикл без вызова
+  `window_destroyed` — окно наводит 10 с); строка «выделение без владельца» в
+  `a_source_that_goes_ends_its_hover` (без проверки — `Entered` без `Exited`);
+  `features_that_hear_one_peer_window_keep_each_others_events` (без отката записи — интерес на
+  ушедшем окне остаётся); строка «до ответа» в `a_requestor_that_goes_lets_go_of_its_transfers`
+  (следующему отказано). Windows (источник OLE, упавший при наведении) не прогонялся: запись в
+  `docs/gaps.md` («No native drag and drop») и заметка строки `drop-into-the-app`.
+
 ## Отступление от порядка, решённое владельцем
 
 - 2026-10-21: LY22 ждёт свои зависимости (LY24, LY9, text-ime, teardown), хотя ни одна ветка не
@@ -7285,6 +7384,43 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
   `presentation-feedback-when-each-frame-reached-the-screen`. Только CI компилирует правки в
   `owner/apple/metal_layer.rs`, `owner/apple/macos/content_view.rs`, `window/apple/{macos,ios,mod}.rs`,
   `window/android.rs`, `window/web.rs`, `tests/appkit_window.rs`.
+
+- [x] **LY128** — ветка `native/linux-app-identity`, решение — ADR-0351 (заменяет условие desktop
+  entry в ADR-0307 §4, оговорку ADR-0254 §4 о неверном id и сигнатуру `start_with` в ADR-0327 §3).
+  Подтверждено на `main` @ `ac3b1ee58`: `set_app_id` в `flui-native` нет, X11 писал `WM_CLASS` из
+  основы имени исполняемого файла и не писал `WM_HINTS`, desktop entry писалась только при схеме
+  или типе файла и без `StartupWMClass`; хост брал id строкой и проверял своей грамматикой
+  (`instance_name`), предупреждая и продолжая при отказе. Одно тождество: `AppId` и `AppIdError`
+  переехали в `flui-foundation` (`flui::app` экспортирует оба, реэкспорта из `flui-log` нет,
+  `IdentityError` оставил отказы имени показа); длина — не больше `APP_ID_MAX_LEN` = 231, по самому
+  тесному имени, где стоит id: канал Windows `\.\pipe\flui-<id>-<сессия>` (256 знаков), а более
+  длинный id — `AppIdError::TooLong` в `AppId::try_new` (CLI держит ту же границу, тест
+  `the_cli_and_the_framework_accept_the_same_identifiers`). `CurrentHost::start_with(executor,
+  Option<&AppId>)` и `start_single(executor, &AppId)`; `instance_name` и путь предупреждения
+  удалены. Хост Linux решает `window::linux::class::AppClass` один раз при старте (id или основа
+  имени в ASCII, `flui_foundation::executable_class`); Wayland зовёт `set_app_id` до первого
+  commit, X11 пишет `WM_CLASS` (экземпляр и класс), `_GTK_APPLICATION_ID` при id и `WM_HINTS`
+  (`InputHint`, input `True`). Тождество компилируется только объявленное: `FLUI_APP_ID` приходит
+  лишь из конфигурации cargo, которую каждая команда пишет из `[app] id` в `flui.toml`; выведенный
+  из каталога `dev.flui.<каталог>` не компилируется никогда. `flui build linux` пишет
+  `<класс>.desktop` для каждой сборки со `StartupWMClass=<класс>` (`MimeType` — только когда есть
+  что открывать), где класс — объявленный id или основа имени исполняемого файла, как её несёт окно.
+  Тесты: `a_window_carries_the_application_id_it_was_started_with` в `x11_window` (Xvfb + openbox:
+  при откате `WM_CLASS` к основе имени — падает на «the instance and the class», при откате
+  `WM_HINTS` — на «32-bit hints») и в `wayland_window::optional` (headless sway 1.9, другой клиент
+  читает app id через `zwlr_foreign_toplevel_manager_v1`, новый предмет `foreign-toplevel` в
+  `SWAY_OFFERS`; без `set_app_id` — `None` вместо id; Weston пропускает),
+  `a_window_is_classed_by_the_application_id_or_the_executable`,
+  `the_entry_is_named_by_what_the_window_carries` (два примера одного каталога без id — две записи,
+  `counter.desktop` и `todo.desktop`), `a_build_compiles_no_application_id_in_by_itself` (окружение
+  cargo ни одной цели не несёт `FLUI_APP_ID`), `the_cli_and_the_framework_class_an_executable_alike`,
+  `an_executable_is_classed_in_ascii`, `a_linux_desktop_registers_what_the_application_opens`,
+  `an_app_id_is_a_reverse_dns_name_every_platform_accepts` (перенесён в `flui-foundation`).
+  Прогоны 2026-11-16 (WSL Ubuntu 24.04): весь `x11_window` (38 случаев), весь
+  `wayland_window::optional` под sway с `FLUI_REQUIRE_COMPOSITOR` из `SWAY_OFFERS`, clippy Linux
+  с `--all-features`. Не запущено и записано в строке паритета
+  `app-identity-aumid-bundle-id-desktop-file`: сопоставление окна с установленной записью в сессиях
+  GNOME и KDE; AppUserModelID на Windows не ставится (`docs/gaps.md`).
 
 ### Доведение до приёмки
 
