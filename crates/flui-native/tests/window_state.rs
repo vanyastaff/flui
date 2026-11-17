@@ -709,7 +709,11 @@ fn a_position_lands_on_the_display_it_names() {
         .expect("the platform holds the display");
     let moved = window.state();
     assert_eq!(moved.outer.position(), Some(asked));
-    assert_eq!(moved.display, Some(right), "the window is on the display it was put on");
+    assert_eq!(
+        moved.display,
+        Some(right),
+        "the window is on the display it was put on"
+    );
     let told = mock(&window)
         .window_system()
         .accessibility_bounds
@@ -725,9 +729,15 @@ fn a_position_lands_on_the_display_it_names() {
         .expect("an id");
     assert_eq!(
         window.admit_and_apply(WindowCommand::SetPosition(position(gone, 1.0, 1.0))),
-        Err(CommandRefusal::Apply(flui_platform::ApplyError::DisplayGone(gone)))
+        Err(CommandRefusal::Apply(
+            flui_platform::ApplyError::DisplayGone(gone)
+        ))
     );
-    assert_eq!(window.state().outer.position(), Some(asked), "it stays where it was");
+    assert_eq!(
+        window.state().outer.position(),
+        Some(asked),
+        "it stays where it was"
+    );
 }
 
 /// A headless window tells its accessibility bridge where it lies, as every

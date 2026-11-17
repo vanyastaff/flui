@@ -6,7 +6,7 @@ use std::os::fd::BorrowedFd;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
-use flui_foundation::geometry::{Bounds, Point, Size};
+use flui_foundation::geometry::Size;
 use flui_platform::DisplayKey;
 
 use super::*;
@@ -77,13 +77,14 @@ struct Rig {
 }
 
 fn view(output: u32) -> OutputView {
-    let bounds = Bounds::new(Point::new(0, 0), Size::new(1920, 1080));
+    let bounds = flui_platform::DisplayBounds::whole(Size::new(1920.0, 1080.0)).expect("a display");
     OutputView {
         identity: Identity::Keyed(DisplayKey::X11Output(output)),
         natives: vec![output + 100],
         name: format!("Output {output}"),
+        origin: flui_platform::DesktopOrigin::default(),
         bounds,
-        usable_bounds: bounds,
+
         scale_factor: flui_foundation::geometry::DevicePixelRatio::ONE,
         refresh_period: None,
         is_primary: false,

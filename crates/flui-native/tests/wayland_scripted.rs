@@ -329,9 +329,9 @@ mod cases {
         ));
         let session = Session::open(
             offer,
-            WindowOptions::default()
-                .title("bounded")
-                .size(Size::new(1600.0, 1000.0)),
+            WindowOptions::default().title("bounded").size(
+                flui_platform::WindowExtent::try_new(Size::new(1600.0, 1000.0)).expect("an extent"),
+            ),
         );
         session.turn_until("the window's first frame", |session| {
             session.compositor.heard().frames > 0
