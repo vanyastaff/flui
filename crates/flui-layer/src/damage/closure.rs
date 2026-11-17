@@ -149,6 +149,7 @@ impl Closures {
     /// the same group here: a member that joins or leaves a group between the
     /// two frames moves the group's capture, so the damage takes the group as
     /// either frame holds it.
+    #[cfg(any(test, feature = "testing"))]
     pub(crate) fn extend_groups(&mut self, other: &Closures) {
         let mut remap = vec![0_u32; other.groups.len()];
         for (key, &index) in &other.groups {
