@@ -2004,7 +2004,7 @@ fn a_recording_spliced_after_another_prefix_equals_one_recorded_there() {
     // (row, first chunk in frame one, in frame two, the kept chunk, its
     // rounded clip's radius in each frame)
     type Radii = Option<(f64, f64)>;
-    let rows: [(&str, Painting, Painting, Painting, Radii); 8] = [
+    let rows: [(&str, Painting, Painting, Painting, Radii); 9] = [
         (
             "a rect after a path, then after a rect",
             path,
@@ -2038,6 +2038,20 @@ fn a_recording_spliced_after_another_prefix_equals_one_recorded_there() {
             path,
             rect,
             |canvas| paint_triangle(canvas, Offset::new(40.0, 40.0)),
+            None,
+        ),
+        (
+            "a path, a rect and a path after a path, then after a rect",
+            path,
+            rect,
+            |canvas| {
+                paint_triangle(canvas, Offset::new(40.0, 40.0));
+                canvas.draw_rect(
+                    Rect::from_xywh(70.0, 40.0, 10.0, 10.0),
+                    &Paint::fill(Color::RED),
+                );
+                paint_triangle(canvas, Offset::new(90.0, 40.0));
+            },
             None,
         ),
         (

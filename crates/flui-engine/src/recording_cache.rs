@@ -279,20 +279,39 @@ impl ChunkRecording {
     }
 }
 
-/// Which arena a run's range indexes, as an index into a base table.
-fn arena(run: &DrawRun) -> usize {
-    match run {
-        DrawRun::Rect(_) => 0,
-        DrawRun::Circle(_) => 1,
-        DrawRun::Arc(_) => 2,
-        DrawRun::Shadow(_) => 3,
-        DrawRun::LinearGradient(_) => 4,
-        DrawRun::RadialGradient(_) => 5,
-        DrawRun::SweepGradient(_) => 6,
-        DrawRun::Tess(_) => 7,
-        DrawRun::CachedImage(_) => 8,
-        DrawRun::ExternalImage(_) => 9,
-        DrawRun::Glyph(_) => 10,
+/// Where each arena a run's range indexes begins: the segment's lengths at a
+/// mark or at a splice, which a range is made relative to or rebased by.
+#[derive(Clone, Copy)]
+struct ArenaBases {
+    rects: usize,
+    circles: usize,
+    arcs: usize,
+    shadows: usize,
+    linear_gradients: usize,
+    radial_gradients: usize,
+    sweep_gradients: usize,
+    tess_batches: usize,
+    cached_images: usize,
+    external_images: usize,
+    glyphs: usize,
+}
+
+impl ArenaBases {
+    /// The base of the arena `run` indexes.
+    fn of(&self, run: &DrawRun) -> usize {
+        match run {
+            DrawRun::Rect(_) => self.rects,
+            DrawRun::Circle(_) => self.circles,
+            DrawRun::Arc(_) => self.arcs,
+            DrawRun::Shadow(_) => self.shadows,
+            DrawRun::LinearGradient(_) => self.linear_gradients,
+            DrawRun::RadialGradient(_) => self.radial_gradients,
+            DrawRun::SweepGradient(_) => self.sweep_gradients,
+            DrawRun::Tess(_) => self.tess_batches,
+            DrawRun::CachedImage(_) => self.cached_images,
+            DrawRun::ExternalImage(_) => self.external_images,
+            DrawRun::Glyph(_) => self.glyphs,
+        }
     }
 }
 
@@ -627,31 +646,33 @@ impl DrawSegment {
             });
         }
 
-        let bases = [
-            mark.rects,
-            mark.circles,
-            mark.arcs,
-            mark.shadows,
-            mark.linear_gradients,
-            mark.radial_gradients,
-            mark.sweep_gradients,
-            mark.tess_batches.len,
-            mark.cached_images,
-            mark.external_images,
-            mark.glyphs,
-        ];
+        // Ranges index the recording's own arenas. Its first tessellated
+        // batch is the growth of the batch before the mark when that grew.
+        let bases = ArenaBases {
+            rects: mark.rects,
+            circles: mark.circles,
+            arcs: mark.arcs,
+            shadows: mark.shadows,
+            linear_gradients: mark.linear_gradients,
+            radial_gradients: mark.radial_gradients,
+            sweep_gradients: mark.sweep_gradients,
+            tess_batches: mark.tess_batches.len - usize::from(first_batch_grew),
+            cached_images: mark.cached_images,
+            external_images: mark.external_images,
+            glyphs: mark.glyphs,
+        };
         let fresh_runs = runs.get(mark.runs.len..)?;
         let mut captured_runs = Vec::with_capacity(fresh_runs.len() + 1);
         if let (Some(end), Some(last)) = (mark.runs.extent, mark.runs.len.checked_sub(1)) {
             let last = &runs.get(last)?.kind;
             let now = range(last);
             if now.end > end {
-                let base = bases[arena(last)];
+                let base = bases.of(last);
                 captured_runs.push(with_range(last, relative(end..now.end, base)?));
             }
         }
         for run in fresh_runs {
-            let base = bases[arena(&run.kind)];
+            let base = bases.of(&run.kind);
             captured_runs.push(with_range(&run.kind, relative(range(&run.kind), base)?));
         }
 
@@ -813,19 +834,19 @@ impl DrawSegment {
         ] = offsets;
         let reclip = !same_clip(clip, &ambient.clip);
         let entry = ambient.clip;
-        let bases = [
-            self.rect_batch.instances.len(),
-            self.circle_batch.instances.len(),
-            self.arc_batch.instances.len(),
-            self.shadow_batch.instances.len(),
-            self.linear_gradient_batch.instances.len(),
-            self.radial_gradient_batch.instances.len(),
-            self.sweep_gradient_batch.instances.len(),
-            self.tess_batches.len(),
-            self.cached_images.len(),
-            self.external_images.len(),
-            self.glyph_batch.instances.len(),
-        ];
+        let mut bases = ArenaBases {
+            rects: self.rect_batch.instances.len(),
+            circles: self.circle_batch.instances.len(),
+            arcs: self.arc_batch.instances.len(),
+            shadows: self.shadow_batch.instances.len(),
+            linear_gradients: self.linear_gradient_batch.instances.len(),
+            radial_gradients: self.radial_gradient_batch.instances.len(),
+            sweep_gradients: self.sweep_gradient_batch.instances.len(),
+            tess_batches: self.tess_batches.len(),
+            cached_images: self.cached_images.len(),
+            external_images: self.external_images.len(),
+            glyphs: self.glyph_batch.instances.len(),
+        };
 
         extend_clipped(&mut self.rect_batch.instances, rects, reclip, entry);
         extend_clipped(&mut self.circle_batch.instances, circles, reclip, entry);
@@ -923,14 +944,17 @@ impl DrawSegment {
         };
         let mut captured_runs = runs.iter();
         let mut pending: Option<DrawRun> = None;
-        let mut absorbed = 0;
         let leads = *first_batch_grew
             || matches!(runs.first(), Some(DrawRun::Tess(range)) if range.start == 0);
         let mut later_batches = tess_batches.iter();
         if leads && let Some(first) = later_batches.next() {
             let before = self.tess_batches.len();
             self.push_tess_batch(rebase_batch(first), ambient.chain.clone());
-            absorbed = usize::from(self.tess_batches.len() == before);
+            // A first batch the last one absorbed moves every later batch
+            // down one.
+            if self.tess_batches.len() == before {
+                bases.tess_batches -= 1;
+            }
             if !*first_batch_grew
                 && let Some(DrawRun::Tess(range)) = captured_runs.next()
                 && range.end > 1
@@ -940,12 +964,7 @@ impl DrawSegment {
         }
         self.tess_batches.extend(later_batches.map(rebase_batch));
         let rebase_run = |run: &DrawRun| {
-            let index = arena(run);
-            let base = if index == 7 {
-                bases[7] - absorbed
-            } else {
-                bases[index]
-            };
+            let base = bases.of(run);
             let range = range(run);
             with_range(run, range.start + base..range.end + base)
         };
