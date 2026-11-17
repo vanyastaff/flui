@@ -953,41 +953,44 @@ impl WebWindow {
         let Some(registration) = registration else {
             return;
         };
-        registration.fence();
+        // The registration is taken, so no later retirement runs: every step
+        // below runs whichever one before it panics (a drag's or a facet's
+        // detach, the frame slot's retirement, a listener's drop, `closed`,
+        // the handler's release). The first panic resumes at the end.
+        let mut failure = flui_foundation::panic::FirstPanic::new();
+        failure.contain(|| registration.fence());
         let drag = self.drag.borrow_mut().take();
         if let Some(drag) = drag {
-            drag.retire();
+            failure.contain(|| drag.retire());
         }
         let facets = self.facets.borrow_mut().take();
         if let Some(facets) = facets {
-            facets.text.detach();
-            facets.accessibility.detach();
+            failure.contain(|| facets.text.detach());
+            failure.contain(|| facets.accessibility.detach());
+            failure.contain(|| drop(facets));
         }
         let retire_frame_slot = self.retire_frame_slot.borrow_mut().take();
         if let Some(retire) = retire_frame_slot {
-            retire();
+            failure.contain(retire);
         }
-        drop(registration);
+        failure.contain(|| drop(registration));
         // Every listener is gone and the text input and accessibility took
         // their elements out: the root goes, or the page canvas's hosts.
         let root = self.root.borrow_mut().take();
-        drop(root);
-        struct Clear<'a>(&'a WindowDelivery);
-        impl Drop for Clear<'_> {
-            fn drop(&mut self) {
-                self.0.clear();
-            }
-        }
-        let _clear = Clear(&self.delivery);
+        failure.contain(|| drop(root));
         if notify_close {
-            self.delivery.dispatch_close();
+            failure.contain(|| self.delivery.dispatch_close());
         }
+        failure.contain(|| self.delivery.clear());
+        failure.resume();
     }
 }
 
 impl Drop for WebWindow {
     fn drop(&mut self) {
-        self.retire(false);
+        // A panic out of a drop while unwinding aborts: the retirement's is
+        // contained here.
+        crate::owner::panic_boundary::contain_owner_callback(|| self.retire(false));
     }
 }
 
@@ -1581,6 +1584,13 @@ impl flui_platform::SurfaceTarget for WebSurface {
         _: flui_platform::SwapChainStatistics,
     ) {
     }
+
+    /// Does nothing. The surface names the page's canvas element, which the
+    /// page owns and a close leaves in the document, and this target, leaked,
+    /// holds the element; no native window is destroyed to keep. On the
+    /// page's one thread no raster thread runs beside the owner either
+    /// (ADR-0305 §10), so none can be left presenting after the close.
+    fn keep_past_close(&self) {}
 }
 
 #[wasm_bindgen(inline_js = "

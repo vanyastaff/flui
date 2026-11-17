@@ -41,13 +41,13 @@ use windows::Win32::{
         DefWindowProcW, DestroyWindow, GWL_EXSTYLE, GWL_STYLE, GWLP_USERDATA, GetClientRect,
         GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, HTCLIENT, IsIconic,
         IsWindowVisible, IsZoomed, MINMAXINFO, NCCALCSIZE_PARAMS, SC_KEYMENU, SC_RESTORE, SW_SHOW,
-        SW_SHOWMAXIMIZED, SW_SHOWMINIMIZED, SWP_NOSIZE, SendMessageW, SetWindowLongPtrW,
-        WA_INACTIVE, WINDOWPOS, WM_ACTIVATE, WM_APP, WM_CLOSE, WM_CREATE, WM_DESTROY,
-        WM_DISPLAYCHANGE, WM_DPICHANGED, WM_ERASEBKGND, WM_GETDPISCALEDSIZE, WM_GETMINMAXINFO,
-        WM_KILLFOCUS, WM_MOVE, WM_NCCALCSIZE, WM_NCHITTEST, WM_PAINT, WM_SETCURSOR, WM_SETFOCUS,
-        WM_SETTEXT, WM_SETTINGCHANGE, WM_SHOWWINDOW, WM_SIZE, WM_STYLECHANGED, WM_SYSCOMMAND,
-        WM_WINDOWPOSCHANGED, WM_WINDOWPOSCHANGING, WS_CAPTION, WS_MAXIMIZE, WS_MAXIMIZEBOX,
-        WS_MINIMIZE, WS_OVERLAPPEDWINDOW, WS_POPUP, WS_THICKFRAME,
+        SW_SHOWMAXIMIZED, SW_SHOWMINIMIZED, SWP_NOSIZE, SendMessageW, WA_INACTIVE, WINDOWPOS,
+        WM_ACTIVATE, WM_APP, WM_CLOSE, WM_CREATE, WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED,
+        WM_ERASEBKGND, WM_GETDPISCALEDSIZE, WM_GETMINMAXINFO, WM_KILLFOCUS, WM_MOVE, WM_NCCALCSIZE,
+        WM_NCHITTEST, WM_PAINT, WM_SETCURSOR, WM_SETFOCUS, WM_SETTEXT, WM_SETTINGCHANGE,
+        WM_SHOWWINDOW, WM_SIZE, WM_STYLECHANGED, WM_SYSCOMMAND, WM_WINDOWPOSCHANGED,
+        WM_WINDOWPOSCHANGING, WS_CAPTION, WS_MAXIMIZE, WS_MAXIMIZEBOX, WS_MINIMIZE,
+        WS_OVERLAPPEDWINDOW, WS_POPUP, WS_THICKFRAME,
     },
 };
 
@@ -64,8 +64,7 @@ use crate::owner::windows::modal_loop::{
     MODAL_DEADLINE_TIMER, ModalPacing, PaceClock, kill_window_timer,
 };
 use crate::owner::windows::{
-    WindowChrome, WindowHooks, WindowIdentity, WindowMessages, WindowStep, window_destroyed,
-    window_step,
+    WindowChrome, WindowHooks, WindowIdentity, WindowMessages, WindowStep, window_step,
 };
 use crate::owner::windows::{get_x_lparam, get_y_lparam};
 use crate::window::state::{
@@ -277,7 +276,8 @@ pub(crate) struct WindowContext {
     /// [`Self::publish_window_state`].
     pub snapshot: Arc<WindowStateCell>,
     /// Asks the owner to consult the exit policy once this window's
-    /// `WM_DESTROY` leaves the platform tracking no window.
+    /// retirement (`WindowContext::retire`) leaves the platform tracking no
+    /// window.
     pub exit_policy: crate::owner::windows::control::ExitPolicyRequest,
     /// The owner thread's queue the window posts its own work to: a close
     /// granted behind a running method.
@@ -290,8 +290,8 @@ pub(crate) struct WindowContext {
     /// The platform's monitors: a DPI change invalidates their snapshot.
     pub displays: Arc<dyn HostDisplays>,
     /// Per-window callbacks for event delivery, shared with the features the
-    /// class's hooks announced the window to and released by `WM_DESTROY` on
-    /// the owner thread.
+    /// class's hooks announced the window to and released by the window's
+    /// retirement (`WindowContext::retire`) on the owner thread.
     pub delivery: Arc<WindowDelivery>,
     /// The hooks of the window's class, which the window tells of its steps.
     pub(crate) hooks: WindowHooks,
@@ -403,6 +403,10 @@ pub(crate) struct WindowContext {
     /// (the affinity gates enforce that), and every borrow is a short
     /// non-reentrant method call.
     pub ledger: std::cell::RefCell<ContextLedger>,
+    /// Set once the window's retirement began (`WindowContext::retire`): a
+    /// close its callbacks ask for while it runs finds the window closing
+    /// and does nothing.
+    pub(crate) retiring: std::cell::Cell<bool>,
 }
 
 /// The compositor's last and next refresh around now, from the desktop window manager's timing
@@ -578,7 +582,7 @@ fn hwnd_names_flui_class(hwnd: HWND) -> bool {
 /// [`ContextLedger`] on acquisition and, on release, frees the allocation
 /// iff it was the outermost borrow of a retired context. This is what makes
 /// holding `&WindowContext` across reentrant message dispatch sound — a
-/// nested `WM_DESTROY` (a framework callback closing the window from inside
+/// nested retirement (a framework callback closing the window from inside
 /// a dispatch) only *retires* the context; the memory outlives every frame
 /// still borrowing it.
 struct ContextGuard {
@@ -635,7 +639,8 @@ impl Drop for ContextGuard {
 ///
 /// This is the gate that discharges the HWND thread-affinity obligation on
 /// `WindowsWindow`'s `Send`/`Sync` impls: the context box is freed exactly
-/// once, by `WM_DESTROY` on the window's owning thread, so a dereference is
+/// once, after the window's retirement (a granted close, or `WM_DESTROY`) on
+/// the window's owning thread, so a dereference is
 /// sound only when made **on that same thread** (where it is serialized with
 /// the free by same-thread message dispatch) against a live window of our
 /// own class with a non-null slot. Every decision is delegated to the pure,
@@ -645,7 +650,7 @@ impl Drop for ContextGuard {
 /// The borrow is guarded, not fragile: `f` may make calls that re-enter
 /// `window_proc` on this same thread (an `SetWindowPos` inside the
 /// fullscreen toggle, a dispatched framework callback that closes the
-/// window). If such reentrancy reaches `WM_DESTROY`, the context is only
+/// window). If such reentrancy reaches the window's retirement, the context is only
 /// *retired* — its free is deferred, via the [`ContextLedger`], to the
 /// outermost [`ContextGuard`] release — so the reference stays valid for
 /// the whole closure; post-retirement it merely describes a window that is
@@ -694,11 +699,11 @@ pub(crate) fn with_window_context_checked<R>(
             // window (owner == current, both live), the window is of our
             // class (so the non-null slot value is the `Box::into_raw`
             // pointer `WindowsWindow::try_new` installed, not a foreign
-            // protocol's), and the slot is non-null (so `WM_DESTROY` has
-            // not retired it). Between the slot read above and this
+            // protocol's), and the slot is non-null (so the window's
+            // retirement has not retired it). Between the slot read above and this
             // acquisition no message dispatch happens on this thread, so
             // the context cannot have been retired-and-freed in between;
-            // once the guard is held, any reentrant `WM_DESTROY` inside
+            // once the guard is held, any reentrant retirement inside
             // `f` defers the free past the guard's drop (see
             // `ContextGuard`).
             let guard = unsafe { ContextGuard::acquire(slot as *mut WindowContext) };
@@ -752,13 +757,13 @@ pub(crate) fn teardown_route(
 
 /// Runs `handle` with the context of `hwnd`, borrowed for one message of its
 /// window procedure: `None` before the context is installed and after
-/// `WM_DESTROY` retired it. `handle` also gets the slot's value, against which
+/// the window's retirement cleared it. `handle` also gets the slot's value, against which
 /// a hook can tell, after a callback, that the window closed and another took
 /// its handle.
 ///
 /// The borrow survives reentrant dispatch: a hook holds it across framework
 /// callbacks, and a callback may close the window — running a nested
-/// `WM_DESTROY` frame on this same thread that RETIRES the context (clears the
+/// retirement on this same thread that RETIRES the context (clears the
 /// slot, marks the ledger) without freeing it; the free happens when the
 /// outermost borrow, possibly this one, ends (see `ContextGuard`).
 ///
@@ -870,7 +875,7 @@ impl WindowProc {
     /// `WNDPROC` for the message being handled — Win32 guarantees
     /// `hwnd`/`msg`/`wparam`/`lparam` are well-formed for that message, and
     /// always dispatches on the thread that owns the window's message queue,
-    /// so the `GWLP_USERDATA` writes below do not race `WM_DESTROY`'s
+    /// so the `GWLP_USERDATA` writes below do not race the retirement's
     /// clear+free precisely because both run here, serialized by that
     /// same-thread dispatch guarantee.
     unsafe fn handle(
@@ -911,15 +916,25 @@ impl WindowProc {
                         // Ask the handler whether the close proceeds;
                         // `KeepOpen` vetoes it. Asked behind a running method
                         // (a `WM_CLOSE` sent from inside `input`), it is kept
-                        // for now and destroyed later, by the posted
+                        // for now and closed later, by the posted
                         // `CLOSE_WINDOW` naming this window, if granted.
                         let close_later = granted_close(hwnd, ctx.identity, ctx.queue.clone());
                         if ctx.delivery.dispatch_close_request(close_later)
                             == flui_platform::CloseDecision::Close
-                            && let Err(error) = DestroyWindow(hwnd)
                         {
-                            tracing::warn!(?hwnd, ?error, "DestroyWindow failed on WM_CLOSE");
+                            // SAFETY: `ctx` is `hwnd`'s context, borrowed for
+                            // this message on its owner thread.
+                            ctx.close_granted(hwnd);
                         }
+                    } else if super::close::is_retired(hwnd) {
+                        // Retired by a granted close: kept past it, or
+                        // waiting for its handler's release, whose end
+                        // destroys or keeps it. A raster thread may still
+                        // present over a kept one.
+                        tracing::debug!(
+                            ?hwnd,
+                            "WM_CLOSE for a retired window: left to its retirement"
+                        );
                     } else if let Err(error) = DestroyWindow(hwnd) {
                         tracing::warn!(
                             ?hwnd,
@@ -934,94 +949,16 @@ impl WindowProc {
                 WM_DESTROY => {
                     tracing::debug!("WM_DESTROY for HWND {:?}", hwnd);
 
+                    // A close the window granted retired it before destroying
+                    // it, and cleared its slot: this finds no context. One
+                    // that finds a context is the OS's own (the session
+                    // ends, code that is not FLUI's destroys the window),
+                    // and the window retires while Win32 destroys it: the
+                    // HWND stays valid until `WM_NCDESTROY`.
                     if let Some(ctx) = ctx {
-                        // A modal loop the window ran ends with it, though its
-                        // end message never comes: its timer stops and the
-                        // thread's code no longer asks it again.
-                        ctx.modal_pacing.abandon();
-                        // While the window and its callbacks still exist: what
-                        // the input holds of the window ends as cancelled and
-                        // its touchpad viewport is released, a drag over it
-                        // leaves it and OLE no longer offers it one, and the
-                        // session no longer reports to it.
-                        let hooks = Rc::clone(&ctx.hooks);
-                        window_destroyed(&hooks, WindowRef::new(hwnd, ctx.identity));
-
-                        // Fire the handler's `closed`
-                        ctx.delivery.dispatch_close();
-
-                        // Release every remaining registered callback now,
-                        // while the HWND is still valid (Win32 only frees it
-                        // after this handler returns, at `WM_NCDESTROY`).
-                        // Without this, the frame callback registered via
-                        // `WindowHandler::frame_requested` — which in `flui-app`'s wiring
-                        // owns this window's GPU renderer, whose
-                        // `wgpu::Surface` is built from the window's surface
-                        // target — stays alive past the window it draws into:
-                        // window (through its handler) → frame closure →
-                        // raster lane → renderer → surface. Calling it
-                        // here, before the swapchain-owning callback's
-                        // native window is gone, releases the surface while
-                        // it is still valid to destroy.
-                        //
-                        // The destruction trace rides on the clear: a close
-                        // from inside one of this window's own callbacks
-                        // only queues it behind that callback, and the
-                        // surface is released when the queued clear runs,
-                        // so the trace is ordered after the release however
-                        // the close arrived.
-                        let window_id = ctx.window_id.get();
-                        ctx.delivery.clear_then(move || {
-                            tracing::debug!(
-                                target: "flui.platform",
-                                event = "native_window_destroyed",
-                                window_id,
-                            );
-                        });
-
-                        // The hooks hear that the close callbacks ran, while
-                        // the HWND is still valid and before the context
-                        // retires: the text input deactivates TSF for the
-                        // window now that the presentation is closed and its
-                        // field unfocused (ADR-0135 §3).
-                        ctx.step(hwnd, WindowStep::Closed);
-
-                        // Retire the context: clear the slot FIRST, so no
-                        // new borrow can be minted (`with_window_context`
-                        // and this function's own entry both refuse a null
-                        // slot), then mark the ledger. The allocation is
-                        // NOT freed here — this frame's own `guard` still
-                        // borrows it, and so may outer frames when this
-                        // `WM_DESTROY` arrived reentrantly (a framework
-                        // callback closing the window from inside another
-                        // arm's dispatch). The free happens exactly once,
-                        // at the outermost `ContextGuard` release — in the
-                        // common case, this frame's own guard dropping at
-                        // the end of this function (see `ContextGuard`).
-                        // `window_proc` never runs concurrently with itself
-                        // for the same `hwnd` (Win32 dispatches on the one
-                        // owning thread), so slot clear + retire need no
-                        // further ordering.
-                        SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
-                        ctx.ledger.borrow_mut().retire();
-
-                        // Retire tracking only after userdata: the removed Arc
-                        // may be the last wrapper. Its Drop must see cleared userdata and
-                        // cannot recursively destroy this in-flight HWND.
-                        let removed = ctx
-                            .windows
-                            .upgrade()
-                            .and_then(|windows| windows.remove(hwnd, ctx.identity));
-                        let last_window_closed = removed.as_ref().is_some_and(|(_, empty)| *empty);
-                        drop(removed);
-                        // The last tracked window is gone: the owner decides,
-                        // on its own turn, whether the loop ends. Not here —
-                        // this `WM_DESTROY` may be nested inside embedder
-                        // code that closed the window, and the hook
-                        // re-enters the embedder.
-                        if last_window_closed {
-                            ctx.exit_policy.post();
-                        }
+                        // SAFETY: `ctx` is `hwnd`'s context, borrowed for
+                        // this message on its owner thread.
+                        ctx.retire(hwnd, super::close::NativeEnd::Destroying);
                     }
 
                     LRESULT(0)
@@ -1359,14 +1296,12 @@ impl WindowProc {
                 // window it closes, so a handle reused since is left alone,
                 // and it asks no veto, unlike `WM_CLOSE`.
                 CLOSE_WINDOW => {
-                    if ctx.is_some_and(|ctx| ctx.identity.halves() == (wparam.0, lparam.0))
-                        && let Err(error) = DestroyWindow(hwnd)
+                    if let Some(ctx) = ctx
+                        && ctx.identity.halves() == (wparam.0, lparam.0)
                     {
-                        tracing::warn!(
-                            ?hwnd,
-                            ?error,
-                            "DestroyWindow (posted WindowCommand::Close) failed"
-                        );
+                        // SAFETY: `ctx` is `hwnd`'s context, borrowed for
+                        // this message on its owner thread.
+                        ctx.close_granted(hwnd);
                     }
                     LRESULT(0)
                 }

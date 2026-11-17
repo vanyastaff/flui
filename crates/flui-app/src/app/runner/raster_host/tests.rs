@@ -656,6 +656,8 @@ impl flui_platform::SurfaceTarget for CountingNoSurface {
         _: flui_platform::SwapChainStatistics,
     ) {
     }
+
+    fn keep_past_close(&self) {}
 }
 
 impl CountingNoSurface {
@@ -1318,7 +1320,8 @@ fn a_window_the_raster_thread_refuses_is_refused_at_attach() {
 ///
 /// Red-check: decide from the slot's record after the deadline and the
 /// window is refused (`did not attach the slot`) while its surface is in
-/// the thread's hands.
+/// the thread's hands; leave an unanswered attach out of `try_with`'s
+/// `wedged` and the window is not kept past its close.
 #[test]
 fn a_window_whose_attach_the_raster_thread_does_not_answer_is_kept() {
     let (shared, slots, wakes) = threaded_host();
@@ -1331,11 +1334,12 @@ fn a_window_whose_attach_the_raster_thread_does_not_answer_is_kept() {
         ui_runtime_id: UiRuntimeId::new(1),
         presentation_id: PresentationId::new(2),
     };
+    let late = Arc::new(FakeWindow::new(2));
     let woken = wakes.load(std::sync::atomic::Ordering::SeqCst);
     let attached = shared
         .try_with(|host| {
             host.attach_target(
-                Arc::new(FakeWindow::new(2)),
+                Arc::clone(&late) as Arc<dyn flui_platform::SurfaceTarget>,
                 None,
                 other,
                 &crate::app::AppConfig::default(),
@@ -1348,6 +1352,11 @@ fn a_window_whose_attach_the_raster_thread_does_not_answer_is_kept() {
     assert!(
         wakes.load(std::sync::atomic::Ordering::SeqCst) > woken,
         "the death the attach found asks the open window for a frame"
+    );
+    assert_eq!(
+        late.kept_past_close(),
+        1,
+        "the window the thread did not attach is kept past its close"
     );
     let mut other_scene = TestScene::new(AT);
     let publication = other_scene.publication();
@@ -1726,24 +1735,30 @@ fn a_surface_whose_resize_panics_gets_one_retry() {
 /// runtime `DeviceRecovery::Dead` (ADR-0305 §9),
 /// which a rebuild the application asks for leaves as it is, and the window
 /// keeps taking pointer input and lifecycle changes while it draws nothing.
-/// The window whose detach went unanswered keeps its surface target alive.
+/// The window whose detach went unanswered keeps its surface target alive,
+/// and its native window is kept past its close, whether the host was free
+/// or busy with the call the window closed from.
 /// The frame the death left either in the thread's render or in the
 /// window's inbox (settled `Failed` by the death) commits.
 ///
 /// Red-check: leave the dead executor's held frames in `drain_settled` and the
 /// held pointer down never replays; drop `settle_death` and the
-/// runtime reports no recovery.
+/// runtime reports no recovery; drop the keep from `DetachWait::wait`, or the
+/// target from the link, and the closed window is not kept; drop the busy
+/// detach's `keep_every_window` and a window still open is not kept.
 #[test]
 fn a_wedged_raster_thread_quarantines_its_open_window() {
     // The thread wedges in this window's render, or in another window's
     // while this window's frame waits in its inbox, which the death settles
     // `Failed`.
     for wedged_here in [true, false] {
-        quarantine_one_window(wedged_here);
+        for busy in [false, true] {
+            quarantine_one_window(wedged_here, busy);
+        }
     }
 }
 
-fn quarantine_one_window(wedged_here: bool) {
+fn quarantine_one_window(wedged_here: bool, busy: bool) {
     use flui_runtime::frame_failure::DeviceRecovery;
 
     let downs = std::rc::Rc::new(std::cell::Cell::new(0_usize));
@@ -1763,6 +1778,9 @@ fn quarantine_one_window(wedged_here: bool) {
     };
     let (shared, slots, wakes) = threaded_host_at(at, None);
     let closed = Arc::new(FakeWindow::new(2));
+    // A window still open when the thread wedges, attached only when the
+    // thread wedges in another window's render.
+    let third = Arc::new(FakeWindow::new(3));
     let other = PresentationAddress {
         ui_runtime_id: UiRuntimeId::new(7),
         presentation_id: PresentationId::new(7),
@@ -1803,7 +1821,7 @@ fn quarantine_one_window(wedged_here: bool) {
         shared
             .try_with(|host| {
                 host.attach_target(
-                    Arc::new(FakeWindow::new(3)),
+                    Arc::clone(&third) as Arc<dyn flui_platform::SurfaceTarget>,
                     None,
                     address(),
                     &crate::app::AppConfig::default(),
@@ -1841,16 +1859,52 @@ fn quarantine_one_window(wedged_here: bool) {
     assert_eq!(downs.get(), 0, "the down waits for the held frame's commit");
     let woken = wakes.load(std::sync::atomic::Ordering::SeqCst);
     let held = Arc::strong_count(&closed);
-    shared.detach(other);
+    if busy {
+        // Closed from inside a call that holds the host: the wait runs
+        // through the link, which keeps the window's target too.
+        shared
+            .try_with(|_| {
+                shared.detach(other);
+                assert!(
+                    closed.kept_past_close() > 0,
+                    "a busy detach keeps the closed window past its close"
+                );
+                // Before the host is free again, so the host's own deferred
+                // detach has not run.
+                assert!(
+                    wedged_here || third.kept_past_close() > 0,
+                    "a busy detach keeps a window still open too"
+                );
+            })
+            .expect("the host is idle");
+        assert!(
+            Arc::strong_count(&closed) >= held - 1,
+            "the closed window's target outlives the detach the thread did not answer"
+        );
+    } else {
+        shared.detach(other);
+        // The link lets go of its clone; the slot's is leaked.
+        assert_eq!(
+            Arc::strong_count(&closed),
+            held - 1,
+            "the closed window's target outlives the detach the thread did not answer"
+        );
+        assert_eq!(
+            closed.kept_past_close(),
+            1,
+            "the host is asked to keep the closed window's native window past its close"
+        );
+    }
     assert!(
         wakes.load(std::sync::atomic::Ordering::SeqCst) > woken,
         "the death asks the open window for a frame"
     );
-    assert_eq!(
-        Arc::strong_count(&closed),
-        held,
-        "the closed window's target outlives the detach the thread did not answer"
-    );
+    if !wedged_here {
+        assert!(
+            third.kept_past_close() > 0,
+            "a window still open is kept too, before any close of it"
+        );
+    }
     // The window's wake settles what the dead executor never will, and
     // tells its runtime the renderer is dead.
     let (_, caught) = slot.settle(&mut ui_runtime);

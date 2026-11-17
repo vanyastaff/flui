@@ -13332,6 +13332,7 @@ impl core::hash::Hash for flui::platform::SurfaceColorSpace
 impl core::marker::StructuralPartialEq for flui::platform::SurfaceColorSpace
 pub const fn flui::platform::SurfaceColorSpace::new(gamut: flui::platform::ColorGamut, dynamic_range: flui::platform::DynamicRange) -> Self
 pub trait flui::platform::SurfaceTarget: raw_window_handle::borrowed::HasWindowHandle + raw_window_handle::borrowed::HasDisplayHandle + Send + Sync + 'static
+fn flui::platform::SurfaceTarget::keep_past_close(&self)
 fn flui::platform::SurfaceTarget::pre_present_notify(&self, frame: Option<flui::foundation::FrameStamp>, statistics: flui::platform::SwapChainStatistics)
 #[non_exhaustive] pub enum flui::platform::SwapChainStatistics
 impl Clone for flui::platform::SwapChainStatistics

@@ -254,6 +254,8 @@ mod tests {
             _statistics: SwapChainStatistics,
         ) {
         }
+
+        fn keep_past_close(&self) {}
     }
 
     fn window(display: Handle, window: Option<c_ulong>) -> Arc<dyn SurfaceTarget> {
