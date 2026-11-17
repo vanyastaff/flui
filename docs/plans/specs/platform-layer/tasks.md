@@ -7200,6 +7200,30 @@ GPU-память простаивающего или невидимого окн
   проверяющий правило на курсоре), `position-size-move-and-resize-events` (композитор с
   `configure_bounds`: mutter, KWin) и `keyboard-keys-modifiers-repeat-dead-keys` (seat версии 3
   не предлагает ни один); в `docs/gaps.md` — окно больше рабочей области на Win32 и X11.
+  Доведение после чтения (PR #2701): каждое исправление проверено там, где оно входит в хост.
+  Версия клавиатуры едет в `Wire::Keymap` (композитор шлёт keymap первым), `Keyboards::keyboard_version`
+  вызывается в разборе keymap; `RepeatSettings` (частота `Option<NonZeroU32>`, задержка
+  `Duration`) — один тип для `repeat_info`, `Keyboards::configure` и `KeyRepeat::configure`.
+  Запросы поверхности курсора — `CursorBuffer::requests`, диспетчер исполняет их по одному;
+  масштаб курсора — `NonZeroU32`. `OnOutputs` конкретен и живёт в `owner::linux::wayland::outputs`
+  с `OutputFacts`; `WaylandDisplays::on_outputs` читает один снимок за вызов; первым берётся
+  первый живой выход, и выход, которого нет в снимке, оставляет окно без дисплея, а не на
+  следующем; `ScaleTold` несёт `OnOutputs`. Перевод размера и границ из геометрии окна в
+  содержимое — `Sizing::configure_geometry`. Окно, опубликовавшее другой масштаб, говорит вводу
+  (`WaylandInput::rescaled`), и курсор темы перерисовывается. Масштаб окна — его собственный
+  факт (доки `WindowState::metrics`, `ARCHITECTURE.md`). Тесты, в скобках результат с откатом
+  строки: `a_keymap_of_an_old_keyboard_brings_its_repeat` (без вызова в разборе keymap — повтора
+  нет); `a_cursor_surface_is_sent_what_its_image_needs` (без `BufferScale(1)` и дальше — список
+  обрывается); `a_window_opens_within_the_compositors_bounds` (границы без вычета заголовка —
+  740 вместо 703); `a_buffer_is_drawn_at_the_scale_the_compositor_prefers` (масштаб первого
+  выхода вместо наибольшего — 1.0 вместо 3.0); `a_window_is_on_its_first_output_and_drawn_for_the_densest`
+  (свёртка без максимума — 1.0 вместо 2.0; первый из выходов со сведениями — дисплей выхода 2
+  вместо `None`). Не проверены тестом: ветка `ConfigureBounds` диспетчера и перерисовка курсора
+  при смене масштаба (нет композитора, который шлёт границы или меняет масштаб на ходу при
+  курсоре темы) — `docs/gaps.md`, до сценарного композитора LY150. Ограничение размера при
+  открытии по рабочей области на швах Win32, X11 и headless не построено: источник границы у
+  каждого хоста свой (рабочая область монитора при открытии против configure Wayland), запись в
+  `docs/gaps.md` и заметка строки `position-size-move-and-resize-events`.
 
 ## Отступление от порядка, решённое владельцем
 

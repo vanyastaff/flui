@@ -296,6 +296,17 @@ impl Bounds {
     }
 }
 
+/// What a configure gives the window geometry: `xdg_toplevel.configure`'s
+/// size (an axis of zero left to the window) and states, and the
+/// `configure_bounds` before it (an axis of zero bounds nothing).
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub(crate) struct GeometryConfigure {
+    pub(crate) width: i32,
+    pub(crate) height: i32,
+    pub(crate) states: ToplevelStates,
+    pub(crate) bounds: (i32, i32),
+}
+
 /// The content size of a window as its client and compositor decide it.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct Sizing {
@@ -343,14 +354,36 @@ impl Sizing {
         self.states
     }
 
-    /// Take a configure of `width` by `height` with `states`. Each axis
-    /// is zero on its own where the compositor leaves it to the client
-    /// (xdg-shell), and keeps the window's own extent, held within
-    /// `bounds` while that is still the size the window opened at. A
-    /// window the compositor sizes takes the size it is given; one in
-    /// normal mode takes a size asked for meanwhile, else the
-    /// compositor's suggestion within `constraints`, else returns to the
-    /// size it had in normal mode. Returns whether the content size
+    /// Take `told`, a configure of the window geometry, whose content is the
+    /// geometry less what `content_of` takes off (the title bar of a frame
+    /// the window draws itself): off its size and off its bounds alike.
+    /// Returns whether the content size changed.
+    pub(crate) fn configure_geometry(
+        &mut self,
+        told: GeometryConfigure,
+        constraints: SizeConstraints,
+        content_of: impl Fn(i32, i32) -> (i32, i32),
+    ) -> bool {
+        let (width, height) = content_of(told.width, told.height);
+        let (bound_width, bound_height) = content_of(told.bounds.0, told.bounds.1);
+        self.configure(
+            width,
+            height,
+            told.states,
+            constraints,
+            Bounds::told(bound_width, bound_height),
+        )
+    }
+
+    /// Take a configure of `width` by `height` content with `states`. Each
+    /// axis is zero on its own where the compositor leaves it to the client
+    /// (xdg-shell), and keeps the window's own extent, held within `bounds`
+    /// while that is still the size the window opened at. A window the
+    /// compositor sizes takes the size it is given; one in normal mode
+    /// takes a size asked for meanwhile, else the compositor's suggestion,
+    /// else returns to the size it had in normal mode, each held within
+    /// `constraints` (limits changed while the compositor sized the window
+    /// hold the size it returns to). Returns whether the content size
     /// changed.
     pub(crate) fn configure(
         &mut self,
@@ -639,6 +672,35 @@ mod tests {
             Size::new(1366.0, 740.0),
             "the size it opened at, held, once it is the window's again"
         );
+
+        // The bounds and the size are the window geometry's: a title bar the
+        // window draws itself comes off both.
+        let title_bar = |width: i32, height: i32| {
+            if height > 0 {
+                (width, (height - 37).max(1))
+            } else {
+                (width, height)
+            }
+        };
+        let mut sizing = opened();
+        let first = GeometryConfigure {
+            bounds: (1366, 740),
+            ..GeometryConfigure::default()
+        };
+        assert!(sizing.configure_geometry(first, none, title_bar));
+        assert_eq!(
+            sizing.content(),
+            Size::new(1366.0, 703.0),
+            "the bounds less the title bar"
+        );
+        let maximized_geometry = GeometryConfigure {
+            width: 1920,
+            height: 1080,
+            states: maximized,
+            bounds: (1366, 740),
+        };
+        assert!(sizing.configure_geometry(maximized_geometry, none, title_bar));
+        assert_eq!(sizing.content(), Size::new(1920.0, 1043.0));
     }
 
     /// Every capability of a Wayland window whose compositor offers

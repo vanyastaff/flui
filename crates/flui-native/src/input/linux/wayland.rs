@@ -66,6 +66,7 @@ pub mod repeat {
 
     #![forbid(unsafe_code)]
 
+    use std::num::NonZeroU32;
     use std::time::Duration;
 
     use web_time::Instant;
@@ -81,35 +82,35 @@ pub mod repeat {
 
     /// The `wl_keyboard` version from which the compositor tells the repeat
     /// (`repeat_info`).
-    pub const TOLD_SINCE: u32 = 4;
+    pub(crate) const TOLD_SINCE: u32 = 4;
 
     /// The repeat of a keyboard whose compositor never tells one: 25 a second
     /// after 600 ms, the X server's rate and about its delay, which
     /// smithay-client-toolkit takes as well.
     pub const UNTOLD: RepeatSettings = RepeatSettings {
-        rate: 25,
-        delay: 600,
+        rate: NonZeroU32::new(25),
+        delay: Duration::from_millis(600),
     };
 
-    /// A keyboard's repeat as `wl_keyboard.repeat_info` carries it.
+    /// A keyboard's repeat.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub struct RepeatSettings {
-        /// Repeats a second; zero or less turns repeat off.
-        pub rate: i32,
-        /// Milliseconds a key is held before its first repeat.
-        pub delay: i32,
+        /// Repeats a second; `None` where repeat is off.
+        pub rate: Option<NonZeroU32>,
+        /// How long a key is held before its first repeat.
+        pub delay: Duration,
     }
 
     impl RepeatSettings {
-        /// What a keyboard of `version` repeats at before its compositor
-        /// says: [`UNTOLD`] below [`TOLD_SINCE`], which it never says, else
-        /// nothing until its `repeat_info` comes.
+        /// The settings of a `wl_keyboard.repeat_info` of `rate` repeats a
+        /// second after `delay` milliseconds: a rate of zero or less turns
+        /// repeat off, and a negative delay is none (the largest `i32` is
+        /// some 24 days).
         #[must_use]
-        pub const fn before_told(version: u32) -> Option<Self> {
-            if version < TOLD_SINCE {
-                Some(UNTOLD)
-            } else {
-                None
+        pub fn told(rate: i32, delay: i32) -> Self {
+            Self {
+                rate: u32::try_from(rate).ok().and_then(NonZeroU32::new),
+                delay: Duration::from_millis(u64::try_from(delay).unwrap_or(0)),
             }
         }
     }
@@ -132,14 +133,11 @@ pub mod repeat {
     }
 
     impl KeyRepeat {
-        /// The compositor's settings: `rate` repeats a second after `delay`
-        /// milliseconds. A rate of zero or less turns repeat off, and stops
-        /// the key held.
-        pub fn configure(&mut self, rate: i32, delay: i32) {
-            let rate = u32::try_from(rate).ok().filter(|rate| *rate > 0);
-            // A negative delay is no delay; the largest `i32` is some 24 days.
-            let delay = Duration::from_millis(u64::try_from(delay).unwrap_or(0));
-            self.timing = rate.map(|rate| (delay, interval(rate)));
+        /// Repeat as `settings` say; repeat turned off stops the key held.
+        pub fn configure(&mut self, settings: RepeatSettings) {
+            self.timing = settings
+                .rate
+                .map(|rate| (settings.delay, interval(rate.get())));
             if self.timing.is_none() {
                 self.held = None;
             }
@@ -200,7 +198,7 @@ pub mod repeat {
             let start = Instant::now();
             let ms = Duration::from_millis;
             let mut repeat = KeyRepeat::default();
-            repeat.configure(25, 600);
+            repeat.configure(RepeatSettings::told(25, 600));
             repeat.press(30, true, start);
             assert_eq!(repeat.due(), Some(start + ms(600)));
             assert_eq!(repeat.take_due(start + ms(599)), None, "before the delay");
@@ -219,7 +217,7 @@ pub mod repeat {
             repeat.press(31, false, start);
             assert_eq!(repeat.due(), None, "another key pressed");
             repeat.press(30, true, start);
-            repeat.configure(0, 600);
+            repeat.configure(RepeatSettings::told(0, 600));
             assert_eq!(repeat.due(), None, "repeat turned off");
             repeat.press(30, true, start);
             assert_eq!(repeat.due(), None, "off until turned on");
@@ -233,7 +231,7 @@ pub mod repeat {
         fn a_compositor_rate_cannot_spin_the_loop() {
             let start = Instant::now();
             let mut repeat = KeyRepeat::default();
-            repeat.configure(i32::MAX, 0);
+            repeat.configure(RepeatSettings::told(i32::MAX, 0));
             repeat.press(30, true, start);
             assert_eq!(repeat.take_due(start), Some(30));
             let next = repeat.due().expect("still held");
@@ -246,10 +244,10 @@ pub mod repeat {
             assert_eq!(interval(u32::MAX), Duration::from_millis(1));
             assert_eq!(interval(25), Duration::from_millis(40));
 
-            repeat.configure(25, -5);
+            repeat.configure(RepeatSettings::told(25, -5));
             repeat.press(30, true, start);
             assert_eq!(repeat.due(), Some(start), "a negative delay is none");
-            repeat.configure(25, i32::MAX);
+            repeat.configure(RepeatSettings::told(25, i32::MAX));
             repeat.press(30, true, start);
             assert!(
                 repeat.due().is_some_and(|due| due > start),
@@ -270,7 +268,7 @@ pub mod keyboards {
 
     use web_time::Instant;
 
-    use super::repeat::{KeyRepeat, RepeatSettings};
+    use super::repeat::{KeyRepeat, RepeatSettings, TOLD_SINCE, UNTOLD};
     use super::wire::SeatKey;
     use crate::input::assembly::NativeSurface;
 
@@ -306,16 +304,16 @@ pub mod keyboards {
         }
 
         /// `seat`'s compositor repeat settings.
-        pub fn configure(&mut self, seat: SeatKey, rate: i32, delay: i32) {
-            self.seat(seat).repeat.configure(rate, delay);
+        pub fn configure(&mut self, seat: SeatKey, settings: RepeatSettings) {
+            self.seat(seat).repeat.configure(settings);
         }
 
-        /// `seat`'s keyboard object was made at `version`: one too old to be
-        /// told its repeat takes [`UNTOLD`](super::repeat::UNTOLD), and a
-        /// newer one keeps what it has until its `repeat_info` comes.
-        pub fn made(&mut self, seat: SeatKey, version: u32) {
-            if let Some(settings) = RepeatSettings::before_told(version) {
-                self.configure(seat, settings.rate, settings.delay);
+        /// `seat`'s keyboard is an object of `version` (its keymap says so): one
+        /// too old to be told its repeat takes [`UNTOLD`], and a newer one
+        /// keeps what it has until its `repeat_info` comes.
+        pub fn keyboard_version(&mut self, seat: SeatKey, version: u32) {
+            if version < TOLD_SINCE {
+                self.configure(seat, UNTOLD);
             }
         }
 
@@ -418,7 +416,7 @@ pub mod keyboards {
             let start = Instant::now();
             let mut keyboards = Keyboards::default();
             for seat in [A, B] {
-                keyboards.configure(seat, 25, 400);
+                keyboards.configure(seat, RepeatSettings::told(25, 400));
             }
             keyboards.focus(A, Some(FIRST));
             keyboards.focus(B, Some(SECOND));
@@ -444,7 +442,7 @@ pub mod keyboards {
         fn a_key_with_no_window_does_not_repeat() {
             let start = Instant::now();
             let mut keyboards = Keyboards::default();
-            keyboards.configure(A, 25, 400);
+            keyboards.configure(A, RepeatSettings::told(25, 400));
             assert_eq!(keyboards.press(A, 30, true, start), None);
             assert_eq!(keyboards.due(), None);
             keyboards.focus(A, Some(FIRST));
@@ -463,14 +461,14 @@ pub mod keyboards {
             let start = Instant::now();
             let ms = Duration::from_millis;
             let mut keyboards = Keyboards::default();
-            keyboards.made(A, 3);
+            keyboards.keyboard_version(A, 3);
             keyboards.focus(A, Some(FIRST));
             keyboards.press(A, 30, true, start);
             assert_eq!(keyboards.due(), Some(start + ms(600)), "after 600 ms");
             assert_eq!(keyboards.take_due(start + ms(600)), [(A, 30, FIRST)]);
             assert_eq!(keyboards.due(), Some(start + ms(640)), "then 25 a second");
 
-            keyboards.made(B, 4);
+            keyboards.keyboard_version(B, 4);
             keyboards.focus(B, Some(SECOND));
             keyboards.press(B, 30, true, start);
             assert_eq!(
@@ -478,8 +476,8 @@ pub mod keyboards {
                 [(A, 30, FIRST)],
                 "B's compositor has not told its repeat yet"
             );
-            keyboards.configure(B, 40, 300);
-            keyboards.made(B, 9);
+            keyboards.configure(B, RepeatSettings::told(40, 300));
+            keyboards.keyboard_version(B, 9);
             keyboards.press(B, 30, true, start);
             assert_eq!(
                 keyboards.take_due(start + ms(300)),
@@ -497,6 +495,8 @@ pub mod cursor {
 
     #![forbid(unsafe_code)]
 
+    use std::num::NonZeroU32;
+
     use cursor_icon::CursorIcon;
 
     /// The theme size a cursor is drawn at where `XCURSOR_SIZE` names none.
@@ -507,20 +507,21 @@ pub mod cursor {
     /// window scale it is handed is already bounded by the window's buffer
     /// scale (`window::linux::wayland::scale::BufferScale::MAX`), which
     /// happens to be the same number, but this function takes any scale.
-    const MAX_THEME_SCALE: i32 = 8;
+    const MAX_THEME_SCALE: NonZeroU32 = NonZeroU32::new(8).expect("BUG: eight is not zero");
 
-    /// The integer buffer scale a theme cursor is drawn at on a window of
-    /// `scale` device pixels per logical pixel: rounded up, so it is never
-    /// blurred, and one for a scale that is not a positive finite number.
+    /// The integer scale a theme cursor is drawn for on a window of `scale`
+    /// device pixels per logical pixel: rounded up, so it is never blurred,
+    /// at most [`MAX_THEME_SCALE`], and one for a scale that is not a
+    /// positive finite number.
     #[must_use]
-    pub fn theme_scale(scale: f64) -> i32 {
+    pub fn theme_scale(scale: f64) -> NonZeroU32 {
         if !scale.is_finite() || scale <= 1.0 {
-            return 1;
+            return NonZeroU32::MIN;
         }
-        let ceiling = scale.ceil().min(f64::from(MAX_THEME_SCALE));
-        #[expect(clippy::cast_possible_truncation, reason = "a whole number in 2..=8")]
-        let whole = ceiling as i32;
-        whole
+        (2..=MAX_THEME_SCALE.get())
+            .filter_map(NonZeroU32::new)
+            .find(|whole| f64::from(whole.get()) >= scale)
+            .unwrap_or(MAX_THEME_SCALE)
     }
 
     /// How a theme image goes on a cursor surface. `wl_surface.attach`
@@ -535,17 +536,42 @@ pub mod cursor {
     )]
     pub enum CursorBuffer {
         /// At this buffer scale, which divides both sides of the image.
-        Scaled(i32),
+        Scaled(NonZeroU32),
         /// At buffer scale one, shown through a viewport at this logical
         /// size, which no buffer size makes invalid.
         Viewported {
             /// The scale the image was drawn for.
-            scale: i32,
+            scale: NonZeroU32,
             /// The surface's logical width.
             width: i32,
             /// The surface's logical height.
             height: i32,
         },
+    }
+
+    /// A request a cursor surface is sent to show an image, in the order
+    /// [`CursorBuffer::requests`] lists them.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    #[expect(
+        clippy::exhaustive_enums,
+        reason = "the requests of `wl_surface` and `wp_viewport` a cursor image needs"
+    )]
+    pub enum SurfaceRequest {
+        /// Make the surface's viewport (`wp_viewporter.get_viewport`).
+        MakeViewport,
+        /// `wp_viewport.set_destination` to this logical size, or unset
+        /// (`None`), which leaves the buffer scale to size the surface.
+        Destination(Option<(i32, i32)>),
+        /// `wl_surface.set_buffer_scale` (version 3).
+        BufferScale(i32),
+        /// `wl_surface.attach` of the image.
+        Attach,
+        /// `wl_surface.damage_buffer` of the whole image (version 4).
+        DamageBuffer(i32, i32),
+        /// `wl_surface.damage` of the whole image, before version 4.
+        Damage(i32, i32),
+        /// `wl_surface.commit`.
+        Commit,
     }
 
     impl CursorBuffer {
@@ -557,20 +583,17 @@ pub mod cursor {
         /// both, which shows the cursor larger than the theme meant and never
         /// breaks the connection.
         #[must_use]
-        pub fn fit(width: u32, height: u32, scale: i32, viewported: bool) -> Self {
-            let scale = scale.clamp(1, MAX_THEME_SCALE);
-            let divides = |by: i32| {
-                let by = by.unsigned_abs();
-                width.is_multiple_of(by) && height.is_multiple_of(by)
-            };
+        pub fn fit(width: u32, height: u32, scale: NonZeroU32, viewported: bool) -> Self {
+            let scale = scale.min(MAX_THEME_SCALE);
+            let divides =
+                |by: NonZeroU32| width.is_multiple_of(by.get()) && height.is_multiple_of(by.get());
             if divides(scale) {
                 return Self::Scaled(scale);
             }
             if viewported {
                 // Rounded to the nearest logical pixel, and one at least.
                 let logical = |pixels: u32| {
-                    let by = scale.unsigned_abs();
-                    let extent = pixels.saturating_add(by / 2) / by;
+                    let extent = pixels.saturating_add(scale.get() / 2) / scale;
                     i32::try_from(extent.max(1)).unwrap_or(i32::MAX)
                 };
                 return Self::Viewported {
@@ -579,12 +602,16 @@ pub mod cursor {
                     height: logical(height),
                 };
             }
-            Self::Scaled((1..scale).rev().find(|by| divides(*by)).unwrap_or(1))
+            let below = (1..scale.get())
+                .rev()
+                .filter_map(NonZeroU32::new)
+                .find(|by| divides(*by));
+            Self::Scaled(below.unwrap_or(NonZeroU32::MIN))
         }
 
         /// The image's pixels per logical pixel.
         #[must_use]
-        pub const fn scale(self) -> i32 {
+        pub const fn scale(self) -> NonZeroU32 {
             match self {
                 Self::Scaled(scale) | Self::Viewported { scale, .. } => scale,
             }
@@ -594,9 +621,53 @@ pub mod cursor {
         /// `wl_pointer.set_cursor` takes it.
         #[must_use]
         pub fn surface_point(self, x: u32, y: u32) -> (i32, i32) {
-            let scale = self.scale().unsigned_abs();
+            let scale = self.scale();
             let local = |at: u32| i32::try_from(at / scale).unwrap_or(i32::MAX);
             (local(x), local(y))
+        }
+
+        /// What a cursor surface of `version` is sent to show an image of
+        /// `width` by `height` pixels this way, `with_viewport` where it
+        /// already has one: a viewport made where it needs one and lacks it,
+        /// a destination set or unset, the buffer scale (one through a
+        /// viewport), the image attached, damaged whole and committed.
+        #[must_use]
+        pub fn requests(
+            self,
+            width: u32,
+            height: u32,
+            with_viewport: bool,
+            version: u32,
+        ) -> Vec<SurfaceRequest> {
+            let mut requests = Vec::with_capacity(6);
+            let buffer_scale = match self {
+                Self::Scaled(scale) => {
+                    if with_viewport {
+                        requests.push(SurfaceRequest::Destination(None));
+                    }
+                    scale
+                }
+                Self::Viewported { width, height, .. } => {
+                    if !with_viewport {
+                        requests.push(SurfaceRequest::MakeViewport);
+                    }
+                    requests.push(SurfaceRequest::Destination(Some((width, height))));
+                    NonZeroU32::MIN
+                }
+            };
+            if version >= 3 {
+                let scale = i32::try_from(buffer_scale.get()).unwrap_or(i32::MAX);
+                requests.push(SurfaceRequest::BufferScale(scale));
+            }
+            requests.push(SurfaceRequest::Attach);
+            let extent = |pixels: u32| i32::try_from(pixels).unwrap_or(i32::MAX);
+            requests.push(if version >= 4 {
+                SurfaceRequest::DamageBuffer(extent(width), extent(height))
+            } else {
+                SurfaceRequest::Damage(extent(width), extent(height))
+            });
+            requests.push(SurfaceRequest::Commit);
+            requests
         }
     }
 
@@ -698,12 +769,17 @@ pub mod cursor {
                 (f64::NAN, 1),
                 (f64::INFINITY, 1),
             ] {
-                assert_eq!(theme_scale(scale), expected, "{scale}");
+                assert_eq!(theme_scale(scale).get(), expected, "{scale}");
             }
             let names = theme_names(CursorIcon::Pointer);
             assert_eq!(names.first(), Some(&"pointer"));
             assert!(names.contains(&"hand2"), "{names:?}");
             assert_eq!(theme_names(CursorIcon::Default).first(), Some(&"default"));
+        }
+
+        /// A scale as a test writes it.
+        fn by(scale: u32) -> NonZeroU32 {
+            NonZeroU32::new(scale).expect("a test scale is not zero")
         }
 
         /// A theme image goes on the cursor surface so that its buffer is
@@ -716,50 +792,107 @@ pub mod cursor {
             use CursorBuffer::{Scaled, Viewported};
 
             for (case, (width, height), scale, viewported, expected) in [
-                ("one", (24, 24), 1, false, Scaled(1)),
-                ("a multiple", (48, 48), 2, false, Scaled(2)),
-                ("a multiple, viewported", (96, 96), 3, true, Scaled(3)),
+                ("one", (24, 24), 1, false, Scaled(by(1))),
+                ("a multiple", (48, 48), 2, false, Scaled(by(2))),
+                ("a multiple, viewported", (96, 96), 3, true, Scaled(by(3))),
                 (
                     "64 at 3, viewported",
                     (64, 64),
                     3,
                     true,
                     Viewported {
-                        scale: 3,
+                        scale: by(3),
                         width: 21,
                         height: 21,
                     },
                 ),
-                ("64 at 3", (64, 64), 3, false, Scaled(2)),
-                ("48 at 5", (48, 48), 5, false, Scaled(4)),
-                ("an odd side", (32, 33), 2, false, Scaled(1)),
+                ("64 at 3", (64, 64), 3, false, Scaled(by(2))),
+                ("48 at 5", (48, 48), 5, false, Scaled(by(4))),
+                ("an odd side", (32, 33), 2, false, Scaled(by(1))),
                 (
                     "a side below the scale",
                     (1, 1),
                     3,
                     true,
                     Viewported {
-                        scale: 3,
+                        scale: by(3),
                         width: 1,
                         height: 1,
                     },
                 ),
-                ("past the largest scale", (96, 96), 12, false, Scaled(8)),
-                ("no scale", (24, 24), 0, false, Scaled(1)),
+                ("past the largest scale", (96, 96), 12, false, Scaled(by(8))),
             ] {
-                let fitted = CursorBuffer::fit(width, height, scale, viewported);
+                let fitted = CursorBuffer::fit(width, height, by(scale), viewported);
                 assert_eq!(fitted, expected, "{case}");
-                if let Scaled(by) = fitted {
+                if let Scaled(scale) = fitted {
                     assert!(
-                        width % by.unsigned_abs() == 0 && height % by.unsigned_abs() == 0,
-                        "{case}: a buffer scale of {by} for {width}x{height}"
+                        width.is_multiple_of(scale.get()) && height.is_multiple_of(scale.get()),
+                        "{case}: a buffer scale of {scale} for {width}x{height}"
                     );
                 }
             }
-            assert_eq!(Scaled(2).surface_point(9, 30), (4, 15), "the hotspot");
+            assert_eq!(Scaled(by(2)).surface_point(9, 30), (4, 15), "the hotspot");
             assert_eq!(
-                CursorBuffer::fit(64, 64, 3, true).surface_point(7, 63),
+                CursorBuffer::fit(64, 64, by(3), true).surface_point(7, 63),
                 (2, 21)
+            );
+        }
+
+        /// What the cursor surface is sent for each way an image goes on it:
+        /// through a viewport, a destination and buffer scale one, the
+        /// viewport made the first time; back at a buffer scale, the
+        /// destination unset first, so the buffer scale sizes the surface
+        /// again; and the requests an older surface lacks left out.
+        #[test]
+        fn a_cursor_surface_is_sent_what_its_image_needs() {
+            use SurfaceRequest::{
+                Attach, BufferScale, Commit, Damage, DamageBuffer, Destination, MakeViewport,
+            };
+
+            let viewported = CursorBuffer::fit(64, 64, by(3), true);
+            assert_eq!(
+                viewported.requests(64, 64, false, 6),
+                [
+                    MakeViewport,
+                    Destination(Some((21, 21))),
+                    BufferScale(1),
+                    Attach,
+                    DamageBuffer(64, 64),
+                    Commit,
+                ],
+                "the first image through a viewport"
+            );
+            assert_eq!(
+                viewported.requests(64, 64, true, 6),
+                [
+                    Destination(Some((21, 21))),
+                    BufferScale(1),
+                    Attach,
+                    DamageBuffer(64, 64),
+                    Commit,
+                ],
+                "a viewport made before"
+            );
+            assert_eq!(
+                CursorBuffer::Scaled(by(2)).requests(48, 48, true, 6),
+                [
+                    Destination(None),
+                    BufferScale(2),
+                    Attach,
+                    DamageBuffer(48, 48),
+                    Commit,
+                ],
+                "back at a buffer scale"
+            );
+            assert_eq!(
+                CursorBuffer::Scaled(by(2)).requests(48, 48, false, 3),
+                [BufferScale(2), Attach, Damage(48, 48), Commit],
+                "a surface of version 3 has no `damage_buffer`"
+            );
+            assert_eq!(
+                CursorBuffer::Scaled(by(1)).requests(24, 24, false, 1),
+                [Attach, Damage(24, 24), Commit],
+                "nor before it a buffer scale"
             );
         }
     }
