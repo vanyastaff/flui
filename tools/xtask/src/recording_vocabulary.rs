@@ -152,6 +152,11 @@ const RECORDED: &[Recorded] = &[
         "PanZoomPhase",
     ),
     repo(
+        "MotionAcceleration",
+        "crates/flui-platform/src/pointer/raw_motion.rs",
+        "MotionAcceleration",
+    ),
+    repo(
         "TouchpadHoldPhase",
         "crates/flui-platform/src/pointer/touchpad.rs",
         "TouchpadHoldPhase",

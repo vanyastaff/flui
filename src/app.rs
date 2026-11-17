@@ -22,10 +22,10 @@ pub use flui_app::__entry;
 // Work off the frame: compute and I/O pools, and on native targets services and tasks.
 #[cfg(not(target_arch = "wasm32"))]
 pub use flui_app::{
-    CancellationSignal, JoinTimeout, PublishError, ServiceContext, ServiceDefinition,
-    ServiceEvents, ServiceFuture, ServiceLifetime, ServicePublisher, ServiceStartError,
-    TaskContext, TaskHandle, TaskOutcome, TaskSpawner, WorkerGeneration, WorkerHandle,
-    service_events,
+    CancellationSignal, JoinTimeout, LifecycleWatch, PublishError, ServiceContext,
+    ServiceDefinition, ServiceEvents, ServiceFuture, ServiceLifetime, ServicePublisher,
+    ServiceStartError, TaskContext, TaskHandle, TaskOutcome, TaskSpawner, WorkerGeneration,
+    WorkerHandle, service_events,
 };
 pub use flui_app::{
     ComputeJob, DeterministicExecutors, HostComputePool, HostExecutors, HostIoPool, IoFuture,

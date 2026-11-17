@@ -7074,6 +7074,57 @@ GPU-память простаивающего или невидимого окн
   устройствах не нужно: поведение хостов не меняется, кроме момента, когда Win32 и X11
   рассогласованы, — он теперь публикуется `Focused`, как и раньше по полю `focused`.
 
+- [ ] **LY121** — ветка `platform/cursor-and-window-commands`, решение — ADR-0354 (заменяет в
+  ADR-0343 решение 2 только набор взаимодействий и правило, по которому потребитель считает
+  изменение пользовательским). Отсутствие всего перечисленного подтверждено на `main` @
+  `6befd2792` чтением кода. Курсор — значение области: `set_cursor(&Cursor)`, где `Cursor` —
+  `Icon`, `Image(CursorImage)` или `Hidden`; видимость не отдельная команда, а курсор области
+  (иначе два источника одного факта и счётчик процесса на AppKit и Win32 — решение и причина в
+  ADR-0354 §1). `CursorImage` проверяется при сборке (сторона `1..=MAX_SIDE`, стороны до
+  пикселей, четыре байта на пиксель, hotspot внутри) и делит пиксели, хост держит последний
+  нативный курсор и сравнивает `==`; способность — `Availability` `cursor_image`. Захват —
+  `SetCursorGrab(CursorGrab::{None, Confined, Locked})` со слотами `confines_cursor`/`locks_cursor`,
+  `None` без слота; факт `WindowState::cursor_grab`, который `successor` сбрасывает у окна без
+  фокуса клавиатуры; каждый хост отпускает захват системы окон при потере фокуса, скрытии и
+  закрытии; при `Locked` курсор скрыт, перемещения отброшены, движение — `PointerEvent::RawMotion`
+  (`MotionDelta`, `MotionAcceleration`), собранное одной функцией `ContactRegistry::raw_motion`.
+  Уровень — `SetLevel(WindowLevel)` со слотами `keeps_on_top`/`keeps_on_bottom` и факт снимка
+  `level`; шаг и пропорция — `SetResizeIncrements(Option<WindowExtent>)` и
+  `SetAspectRatio(Option<AspectRatio>)` (два `NonZeroU32` в несократимом виде), запросы, а не
+  факты. Живой resize — `WindowInteraction::UserResizing` (не отдельный `resizing: bool`: две
+  формы одного факта), `is_user` читает оба взаимодействия; регистратор размещения считает по
+  `is_user` (иначе Win32 перестал бы запоминать размер, изменённый рамкой). Хосты: Win32 — образ
+  (`CreateIconIndirect`), скрытие, `ClipCursor` + raw input (`WM_INPUT`), `WS_EX_TOPMOST` и
+  удержание снизу в `WM_WINDOWPOSCHANGING`, шаг и пропорция в `WM_SIZING` (чистая половина
+  `window/windows/sizing.rs` с таблицей), `UserResizing` с первого `WM_SIZING`; X11 — Render-курсор,
+  `GrabPointer`, `XI_RawMotion`, `_NET_WM_STATE_ABOVE`/`BELOW`, `WM_NORMAL_HINTS`; Wayland — буфер
+  `wl_shm`, `zwp_pointer_constraints_v1` и `zwp_relative_pointer_manager_v1` там, где композитор их
+  даёт (иначе `NOT_ON_THIS_DEVICE`), `resizing` из configure, уровней/шага/пропорции нет
+  (`NOT_ON_THIS_PLATFORM`); AppKit — `NSCursor` из образа, прозрачный курсор, lock через
+  `CGAssociateMouseAndMouseCursorPosition`, `NSWindow.level`, `contentResizeIncrements`,
+  `contentAspectRatio`, live resize из делегата; веб — CSS `url(data:…)`, `cursor: none`, pointer
+  lock с `movementX/Y`; iOS и Android — lock `NOT_YET_ON_THIS_HOST`, остальное
+  `NOT_ON_THIS_PLATFORM`; headless моделирует всё. Запись: протокол 0.24 (разрыв ADR-0342: новый
+  вариант `raw_motion`), формат записи ввода 6, нативная запись несёт новые способности,
+  `cursor_grab`, `level`, `user_resizing`. Тесты (каждый падает при откате): таблица
+  `window_command_validate` — `admit_refuses_exactly_when_the_capability_is_unavailable` (восемь
+  новых строк), `restoring_normal_needs_no_capability`, `a_grab_is_published_only_for_a_focused_window`
+  (без сброса в `successor` падает), `a_cursor_image_holds_only_what_a_window_system_shows`,
+  `an_aspect_ratio_is_held_in_lowest_terms`, `a_resize_step_must_enclose_an_area`; conformance —
+  проверка `a_grab_ends_with_the_focus` и неисправность `KeepsTheGrabWithoutFocus`, которую она
+  ловит (`a_grab_kept_after_the_focus_went_is_caught`), `a_headless_grab_ends_with_the_focus`;
+  Win32 — `a_resize_by_the_frame_is_a_live_resize_until_the_loop_ends` (без ветки `UserResizing`
+  падает), `a_grab_is_held_while_focused_and_let_go_with_the_focus`,
+  `a_frame_drag_keeps_the_steps_and_the_proportion`, `a_level_is_what_win32_holds`;
+  `an_unread_placement_is_overwritten_only_by_the_user` (строка «a resize by the frame»; без
+  `is_user` падает); X11 и Wayland — живые случаи в `x11_input` и `wayland_input` (образ, скрытие,
+  Confined → Locked → None, уровни). Строимое осталось: lock на iOS (`prefersPointerLocked`) и
+  Android (`requestPointerCapture`), просьба виджета об образе и скрытом курсоре (`CursorRequest`
+  несёт только иконку) — запись `docs/gaps.md` «A widget cannot ask for a cursor image or none…».
+  Прогоны на устройствах — заметки строк `cursor-shapes`, `pointer-grab-confined-and-locked`,
+  `window-level-resize-steps-and-proportion` в `platform-parity.toml`. macOS, Android и wasm32
+  проверены `cargo +nightly check` в WSL; iOS не собирался.
+
 - [x] **LY125** — ветка `native/win32-idle-and-reentry`. Все три находки подтверждены на `main`
   @ `9e309039d` тестами, падающими на старом коде. Модальный цикл: без срока таймер ставился
   каждые 16 мс, и цикл перемещения, простоявший полсекунды, спрашивал обработчик 18 раз; так же
@@ -7425,6 +7476,66 @@ GPU-память простаивающего или невидимого окн
   сценарий отзыва после `OleUninitialize` здесь не воспроизведён, удержание — по типам. Ожидание
   trybuild `owner_platform_is_not_send` не устарело: локально у тулчейна нет `rust-src`, и
   фрагменты из `$RUST/core` выпадают из вывода; на CI (с `rust-src`) оно верно.
+- [ ] **LY145** — ветка `testing/headless-fidelity`. Проверено на `main` @ `817b30989`.
+  Закрытие: `HeadlessHost` больше не держит основное окно отдельно — открытые окна одним списком,
+  основное читается и после закрытия; окно, которое переживает другое, закрывается через
+  `close_presentation_entered` (снимается, фокус ОС переходит к выжившему), последнее
+  останавливает представление и роняет `UiRuntime`, как владелец отставляет runtime без
+  представлений, так что удержанные ответы кончаются `OwnerRetired`, их замыкания не исполняются
+  (`is_retired`; накачка отставленного хоста двигает только время, сценарий, записи и фоновые
+  дорожки). Тем же путём закрывает и `LaidOut::request_close` (теперь `&mut self`; старый путь
+  «только остановить» был второй его формой); `UiRuntime::stop_presentation_for_test` удалён.
+  Встроенные возможности — как у runner: primary selection только на Linux (по платформе
+  основного окна), сценарный HTTP только с фичей `http` у `flui-testing`, которую фасадный `http`
+  включает вместе с `flui-app/http`; возможность нативного окна принадлежит `flui-app` и выше
+  этого крейта — тест виджета с `flui::native` идёт на `flui_app::testing` (записано в
+  `ARCHITECTURE.md`). Плагины и override: `TestWindow::plugin`, `TestWindow::capability` (в
+  ярусах runner, перезапуск регистрирует заново). Жизненный цикл: `set_window_execution`,
+  `notify` (сон, пробуждение, блокировка, давление памяти), `leave_unshown` с `UnshownFrame`
+  (не готова, снята, потеряна, устройство потеряно, сбой, отказ) вместо `defer_presents`;
+  `end_session(Ending)` доставляет уведомление о конце сеанса до записи, как runner;
+  `Tester::background`/`foreground` в порядке Android и UIKit, окно остаётся открытым
+  (ADR-0350 §2); доки `set_window_visible` больше не обещают фон телефона. Сервисы:
+  `ServiceContext::lifecycle` — `LifecycleWatch` (наиболее активное состояние живых runtime,
+  `Detached` без них, `current`/`changed`), его кормит runner там, где строит каждый runtime;
+  давление памяти сервис уже получает через `AppConfig::memory_reclaim` — эта половина находки
+  опровергнута. Нативный headless-хост (`flui-native`) уже доставляет исполнение, поверхность и
+  уведомления (`simulate_execution_state`, `simulate_surface_change`,
+  `HeadlessHostEvents::notice`) — для него находка устарела. Тесты, в скобках результат с
+  откатом: `closing_the_focused_window_moves_the_focus_to_a_survivor` (TAB уходит в закрытое
+  окно); строка последнего окна в `a_read_pending_when_its_runtime_drops_ends_as_owner_retired`
+  (замыкание исполняется); `a_dialog_of_the_last_window_ends_with_its_runtime` (заменил
+  `a_dialog_ends_when_its_window_begins_to_close`, который проверял остановку без отставки);
+  строки платформ в `a_runtime_without_a_primary_selection_answers_not_registered` и строка
+  Windows в `a_middle_press_pastes_the_primary_selection_where_it_lands` (вставка проходит под
+  Windows); `a_plugin_the_test_registers_answers_and_an_override_replaces_it` (`NotRegistered`);
+  `a_trip_to_the_background_pauses_the_application_and_its_return_resumes_it` (лестница
+  останавливается на `Hidden`, уведомления нет); `an_unshown_frame_is_recovered_as_its_reason_says`
+  (кадр засчитан показанным); `a_system_notice_reaches_the_subscribers`;
+  `a_service_watches_the_application_pause_and_resume` (`Detached` всё время). Тесты выделения и
+  средней кнопки называют `TargetPlatform::Linux` (`lay_out_on`, `harness::mount_with_ime_on`).
+  По независимому чтению: закрытие, которого просит виджет (`WindowHandle::request_close`), идёт
+  в очередь и исполняется на следующем ходе после вопроса стражу, как в очереди окна runner
+  (`a_close_a_widget_asks_for_is_carried_out_at_the_next_turn`); каждое созревшее закрытие
+  исполняется в сдерживании, первая паника — после всех
+  (`every_due_close_is_carried_out_past_one_that_panics`); созревшее закрытие `Program` — согласие
+  на выход, само ничего не закрывает
+  (`a_held_program_close_is_consent_to_a_quit_and_closes_nothing`); выход `request_quit` опрашивает
+  все окна, откладывается на записанном отказе и отменяется оставленным окном
+  (`a_quit_nothing_holds_closes_every_window`, `a_quit_a_hold_refuses_waits_for_its_release`,
+  `a_quit_a_window_stays_open_for_is_cancelled`); конец сеанса следует платформе окна: десктоп
+  закрывает и отставляет, телефон оставляет окна и отвечает `Block`, пока записи в полёте
+  (`a_session_end_follows_the_platform_the_window_names`,
+  `a_trip_to_the_background_with_a_write_in_flight_holds_the_process`); поездка в фон — только на
+  телефоне и одна до возврата (`a_window_that_names_no_phone_has_no_trip_to_the_background`);
+  закрытое окно не слышит ввода и фактов, команды его ручки отвечают `Closed`;
+  `close_delivery_is_idempotent` теперь действительно пробует повторное закрытие из наблюдателя;
+  `LifecycleWatch` кончается с циклом, следующий запуск получает свежий
+  (`a_service_watches_the_application_pause_and_resume`); ранг состояний —
+  `AppLifecycleState::most_active`, общий с агрегатом runtime. Строка не отмечена: headless-хост
+  зеркалит ход владельца runner, а не вызывает его (`flui-testing` ниже `flui-app`), и остаётся
+  без обработчика закрытия приложения, уведомления `SessionEnding`, возможности нативного окна и
+  моста хоста — запись `docs/gaps.md` «The headless host mirrors the runner's owner turn».
 - [x] **LY154** — ветка `docs/platform-citations`. Цитаты Flutter читаются по коммиту тега 3.50.0,
   `flutter/flutter@ab2912035e` (правило `owner/repo@sha` в ADR-0151, 0152, 0154, 0254, 0255 стоит;
   рядом для читателя «3.50.0»); исходники читались через `gh` и неглубокий клон в `.flutter/`.
@@ -8162,6 +8273,116 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
   окон, флаг и запросчик перерисовки, список перерисовок растра, эндпоинт агента, воркеры и
   сервисы, полосы хранилища и хуки разработки (`DevReload`, `DevAgent`; ADR-0311). Не собрано
   здесь: Android, iOS, macOS (правка `android.rs` — только CI); wasm проверен типами в WSL.
+- [x] **LY135** — ветка `native/android-main-thread-boundary`. Проверено на `main` @ `7b065dc08`:
+  главная часть находки уже исправлена в #2654 — каждое замыкание на Java main thread идёт через
+  `owner::android::main_thread::post`/`run` внутри `os_entry` с отчётом о каждом выходе, кроме
+  успеха, а гейт `panic-boundary` отказывает идентификатору `run_on_java_main_thread` вне `fn post`
+  этого модуля (запрос insets на панике отвечает `Ready(None)`). Ложной оставалась заметка о
+  android-activity в доке `main_thread.rs` и константе гейта («прерывает процесс»): 0.6.1
+  (`main_callbacks.rs`) ловит панику замыкания, только логирует через `log` и теряет долг
+  замыкания; доки исправлены. Остаток класса подтверждён чтением. Установка `FluiView` шла через
+  `run`: паника после установки вида (событие `tracing` — чужой код) оставляла окно без
+  `Installed`, паника до неё — `Pending` навсегда, а паника между возвратом `FluiView.install` и
+  записью `Ready` оставляла вид в окне, который `detach` уже не находил; `detach` с ошибкой
+  освобождал handle, который вид ещё называл. Теперь установка — `ViewInstall`
+  (`owner/android/view_install.rs`), машина состояний над её вызовами JNI (`ViewHost`): handle
+  освобождается, только когда ни один вид окна его не называет — отказ или установка,
+  остановившаяся после передачи handle, спрашивает окно о виде с этим handle (`FluiView.handle()`),
+  снимает его и освобождает handle; окно, которое не прочесть, и `detach` с ошибкой оставляют
+  handle. Владелец слышит `Installed` один раз, после записи состояния и до лога; `Pending` и
+  `Failed` читались одинаково — стадия одна, `Absent`. Захваты отправленной работы
+  (`MainThreadWork`) теперь уничтожаются внутри границы на каждом выходе: отчёт после успеха, тело
+  работы, сброшенной без запуска. Обратное направление: `nativeDrag` и `nativeImeState` читали
+  строки через `EnvUnowned::with_env`, который сам ловит панику — её полезная нагрузка молча
+  ронялась вне `discard_payload` и без лога, а ошибка JNI оставляла исключение Java висеть, и
+  фреймворковый колбэк над нативным методом (слушатель drag, input connection) бросал его на
+  главном потоке — процесс падал. Решение (новое правило не нужно, ADR-0151 §16 — «ответ, понятный
+  ОС»; записано в `crates/flui-native/ARCHITECTURE.md`): каждый нативный метод классов FLUI
+  (14 у `FluiView`, `FluiHost.nativeWake`) — один вызов `owner::android::native_call::jni_native`,
+  обобщённого над `JniCall` (на Android — `EnvUnowned`, в тестах — заместитель): граница, страж
+  `ClearsPending`, тело, выбор ответа — «ничто» метода (`false`, `0`, `null`, без значения) на
+  ошибку JNI или панику, и никогда — висящее исключение; среда берётся через `AttachGuard`, без
+  типа исхода с недостижимой паникой. Activity продолжает работу. Тот же страж заменил
+  `ClearPending` моста доступности. Гейт `panic-boundary`: нативный метод JNI (внешняя функция,
+  чей первый параметр — среда) — только один вызов `jni_native`, сам `jni_native` — один вызов
+  `os_entry`, другие функции и импорты под этим именем — находка; замыкание, отданное лупер-у
+  Android методом ndk `add_fd_with_callback`, — вход ОС (в крейте таких нет, правило — для
+  первого). Тесты, в скобках результат с откатом:
+  `a_native_method_answers_and_leaves_no_exception_pending_on_any_exit` (без стража —
+  `ThrowsThenAnswers` отвечает `(Some(7), true)`);
+  `every_exit_of_the_installation_frees_only_handles_no_view_names` (без снятия остановившейся
+  установки — `[None]` вместо `[Some(Freed)]`) и
+  `a_failed_detach_keeps_the_handle_and_a_late_installation_installs_nothing`;
+  `every_capture_of_posted_work_is_destroyed_inside_the_boundary` (с отчётом, сброшенным вне
+  границы после успеха, и с телом, сброшенным вне границы без запуска, — паника деструктора
+  выходит наружу); самотест гейта: прямой `os_entry` и чужой адаптер у нативного метода, второй
+  `jni_native` и его импорт, голый и макросный `add_fd_with_callback` (без правила JNI —
+  `Direct`/`Adapted` `MISSED`; без списка лупера — оба `MISSED`), строка
+  `the_jni_adapter_calls_the_boundary` в `panic_boundary_contract`, счёт фикстуры 16/8 →
+  20/10. Код Android проверен типами в WSL (`cargo +nightly check --target
+  aarch64-linux-android`), clippy под Android — только CI. Прогон на устройстве с намеренной
+  паникой в нативном методе и в отправленном замыкании не сделан: у закреплённого 1.100.0 на
+  Windows нет цели Android, её добавление требует `rustup`, а 1.99.0 с целью не собирает
+  workspace; долг записан в строке паники `platform-parity.toml` и в `docs/gaps.md`.
+
+- [x] **LY144** — ветка `system/filters-and-launch-policy`, решение — ADR-0360. Находки
+  подтверждены на `main` @ `d139b8188` чтением кода: `literal_glob` выдавал `*.png` без сложения
+  регистра; `with_extension("tar.gz")` отказывал (точка была запрещена); `current_filter` не
+  уходил и не читался; `ExternalUri` пропускал всё, кроме шести схем; тело `OpenURI`, `OpenFile`
+  и `OpenDirectory` строилось с `String::new()` вместо родителя (находка «предположительно»
+  подтверждена). Построено: `ExternalUri::try_new(uri: &str, allowed: &[Scheme])` — длина до
+  копирования; без символов, которые RFC 3986 велит кодировать (пробел, `"`, `<`, `>`, `` ` ``,
+  `{`, `|`, `}`, `^`, `\`: оболочка Windows подставляет URI в командную строку обработчика как
+  есть — `UnencodedCharacter`) и без скрытых (управляющие, двунаправленные, нулевой ширины, мягкий
+  перенос, BOM, пробелы и разделители вне ASCII — `HiddenCharacter`); схема из `allowed` без учёта
+  регистра ASCII, никогда не из `REFUSED_SCHEMES` (`Scheme::try_new` их не строит; `Scheme` —
+  `Eq` и `Hash`); у схем с авторитетом (`http`, `https`, `ftp`, `ws`, `wss`, `file`) `//`
+  обязателен (`MissingAuthority`: браузер читает `https:bank@evil` как авторитет), в авторитете нет
+  пользователя (`Credentials`); запрос `mailto` — только `to`, `cc`, `bcc`, `subject`, `body`
+  (`MailtoField`); процент-коды не раскрываются. `Launcher` решает по одному пути, без файловой
+  системы на потоке владельца: путь абсолютный, на Windows допустим только префикс буквы диска
+  (`Disk`, `VerbatimDisk`), любой другой — `NotLocal` (в том числе `\\?\GLOBALROOT\Device\Mup\…`);
+  `open_path` отказывает имени из `RUNNABLE_EXTENSIONS` или с CLSID (`.{…}`), читая имя как
+  Windows (без хвостовых точек и пробелов и без `:потока`) — `NotADocument`; показ и корзина
+  разрешены. Список — нижняя граница, не политика: бэкенд открывает файл вне потока владельца и
+  судит открытое. Launcher портала открывает файл на потоке портала, судит дескриптор
+  (`/proc/self/fd`: разрешённое имя и бит исполнения обычного файла) и отдаёт порталу этот же
+  дескриптор — подмена ссылки между проверкой и открытием ничего не меняет. `FileFilter`:
+  расширение — части из букв, цифр ASCII, `-`, `_`, `+`, через одиночную точку (`tar.gz`), хранится
+  без ведущей точки в нижнем регистре и один раз; MIME — два имени RFC 6838 или `тип/*`; границы
+  `MAX_PATTERN_LEN`, `MAX_NAME_LEN`, `MAX_PATTERNS`, `MAX_PER_REQUEST`; два фильтра с одним именем
+  отказаны. `DialogError::InvalidRequest(MalformedRequest)` называет причину. Портал получает
+  каждое расширение в нижнем и верхнем регистре (`*.png`, `*.PNG`, как шлют приложения GTK), имя в
+  смешанном регистре на чувствительной к регистру ФС не показывается (`docs/gaps.md`), и первый
+  фильтр как `current_filter`; сохранение отвечает `SaveLocation` с индексом выбранного фильтра
+  (портал сообщает фильтр значением — бэкенд находит его по имени; чужое имя — `None`); индекс вне
+  фильтров запроса — `MalformedAnswer` у handle для любого бэкенда. Launcher портала берёт окно
+  виджета и называет его `parent_window`, пока окно открыто. Схемы, объявленные приложением
+  (ADR-0307), в умолчание не вошли: это схемы, которые приложение принимает. Тесты (в скобках —
+  откат, который их роняет; таблицы называют каждую неверную строку):
+  `external_uri_admits_only_the_schemes_its_caller_names` (каждая проверка схемы, авторитета,
+  пользователя, `mailto`, кодирования и скрытых символов отдельно роняет свои строки);
+  `a_scheme_is_named_once_whatever_its_case_and_never_a_refused_one`;
+  `opening_a_program_a_script_or_a_shortcut_is_refused_without_asking_the_system` (без проверки
+  имени `setup.exe` доходит до системы, без CLSID — `readme.txt.{…}`);
+  `only_a_drive_letter_is_a_local_path` (Windows, по строке на каждый вид `Prefix`; со старым
+  запрет-списком до системы доходит `\\?\GLOBALROOT\…`); `a_filter_keeps_each_pattern_once_as_the_dialog_compares_it`
+  (без нижнего регистра и дедупликации — `["TAR.GZ", "tar.gz", "Zip", "zip"]`);
+  `a_malformed_request_is_refused_without_showing_a_dialog` (без каждой границы и проверки имён —
+  её строка); `a_save_reports_the_filter_selected_when_the_user_accepted` (без проверки индекса
+  доходит `Some(2)` при двух фильтрах); на Linux против подставного портала
+  `the_dialogs_reach_the_file_chooser_and_answer_its_picks` (без `current_filter` и без верхнего
+  регистра), `a_save_dialog_reports_the_filter_the_portal_says_was_selected` (без чтения
+  `current_filter` — `None` вместо `Some(1)`) и
+  `a_file_that_would_run_is_judged_by_what_was_opened_and_never_handed_on` (без суда над
+  дескриптором ссылка `report.pdf` → `evil.desktop` открывается); модульные
+  `a_filter_becomes_globs_then_mime_types` и
+  `a_launch_is_attached_to_its_widgets_window_while_it_is_open` (без родителя — `""`). Прогнано:
+  `flui-system` на Windows через `cargo heli nextest` (25), в WSL (4 модульных и 35
+  интеграционных, с подставным порталом). Должно на устройствах (в строках `platform-parity.toml`):
+  настоящие GTK и KDE file chooser и `OpenURI` на рабочем столе. macOS, iOS, Android и Web в
+  `flui-system` без провайдера; отображение фильтров и суд над открытым файлом (`AssocIsDangerous`
+  на Windows, Launch Services на macOS) для них записаны в ADR-0360 §2, §4 и `docs/gaps.md`.
 
 ## Чего нет в этой серии
 
@@ -8337,6 +8558,7 @@ LY104–LY113 и задачи второго прохода LY114–LY154 сво
 | `submit_reports_a_refusal_and_a_closed_window` | LY42 | под этим именем не был; `a_refused_command_is_never_queued`, `a_closed_window_answers_closed` (`crates/flui-app/src/app/window_control_tests.rs`) |
 | `a_window_step_and_its_destruction_reach_every_hook_in_order` | LY29 | снят самой LY29, как запись и говорит |
 | `a_state_change_survives_a_failed_callback` | LY41 | снят в #1915 вместе с `owner::handlers`; паника при доставке фактов окна — `a_panicking_delivery_keeps_the_later_facts` (`flui-app`, `owner_dispatch/state_follow_tests.rs`) |
+| `a_dialog_ends_when_its_window_begins_to_close` | LY143 | снят в LY145: последнее окно отставляет runtime; правило держат `a_dialog_ends_with_its_window` и `a_dialog_of_the_last_window_ends_with_its_runtime` (`crates/flui-system/tests/dialogs.rs`) |
 | `KeyboardSource` | LY83 | под этим именем в коде не был; источник раскладки — `KeymapSource` (`input/linux/xkb.rs`) |
 | `owner/handlers.rs` | LY26 | удалён в #2650; точка вызова — `owner/call_point.rs`, доставка окна — `owner/window_delivery.rs` |
 | `window_placement.rs` | LY27 | с #1864 — `window/windows/` (`window.rs`, `set.rs`, `proc.rs`) |

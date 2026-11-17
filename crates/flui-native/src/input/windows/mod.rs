@@ -39,12 +39,12 @@ use windows::Win32::{
         },
         WindowsAndMessaging::{
             DM_POINTERHITTEST, DefWindowProcW, ISMEX_NOSEND, InSendMessageEx, WM_CAPTURECHANGED,
-            WM_CHAR, WM_INPUTLANGCHANGE, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP,
-            WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL,
-            WM_NCDESTROY, WM_NCMOUSELEAVE, WM_POINTERCAPTURECHANGED, WM_POINTERDEVICECHANGE,
-            WM_POINTERDOWN, WM_POINTERENTER, WM_POINTERLEAVE, WM_POINTERUP, WM_POINTERUPDATE,
-            WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_TIMER, WM_XBUTTONDOWN,
-            WM_XBUTTONUP,
+            WM_CHAR, WM_INPUT, WM_INPUTLANGCHANGE, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN,
+            WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE,
+            WM_MOUSEWHEEL, WM_NCDESTROY, WM_NCMOUSELEAVE, WM_POINTERCAPTURECHANGED,
+            WM_POINTERDEVICECHANGE, WM_POINTERDOWN, WM_POINTERENTER, WM_POINTERLEAVE, WM_POINTERUP,
+            WM_POINTERUPDATE, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_TIMER,
+            WM_XBUTTONDOWN, WM_XBUTTONUP,
         },
     },
 };
@@ -191,6 +191,14 @@ struct InputWindow {
     /// Physical keys held down whose press an input method took
     /// (`VK_PROCESSKEY`): their release is no key either.
     keys_taken_by_input_method: RefCell<raw::HeldKeys>,
+    /// Whether the window holds the pointer in place
+    /// (`WindowStep::PointerLocked`): the mouse's motion is then its raw
+    /// input, and no mouse move is delivered.
+    locked: Cell<bool>,
+    /// The last absolute position a raw report gave, in virtual-desktop
+    /// pixels, for a device that reports positions (a remote session, a
+    /// tablet in mouse mode); cleared when a lock begins.
+    raw_absolute: Cell<Option<(i32, i32)>>,
     /// Whether the window is destroyed: a callback can close it, and a later
     /// window can take its handle.
     gone: Cell<bool>,
@@ -222,6 +230,8 @@ impl InputWindow {
             pressed_as: RefCell::default(),
             keys_taken_by_input_method: RefCell::default(),
             gone: Cell::new(false),
+            locked: Cell::new(false),
+            raw_absolute: Cell::new(None),
         }
     }
 
@@ -296,6 +306,10 @@ impl WindowMessages for InputWindows {
             // The double-click rectangle is measured at the window's scale, and
             // the double-click time and size are settings too.
             WindowStep::Rescaled | WindowStep::SettingChanged => input.measure_clicks(),
+            WindowStep::PointerLocked(locked) => {
+                input.locked.set(locked);
+                input.raw_absolute.set(None);
+            }
             WindowStep::ScaleApplied | WindowStep::SessionLocked(_) | WindowStep::Closed => {}
         }
     }
@@ -338,6 +352,7 @@ impl WindowMessages for InputWindows {
                 | WM_SYSKEYUP
                 | WM_CHAR
                 | WM_INPUTLANGCHANGE
+                | WM_INPUT
                 | DM_POINTERHITTEST
         ) || (msg == WM_TIMER && InputWindow::is_touchpad_timer(wparam.0))
             || caption_pointer(msg, wparam).is_some()
@@ -836,6 +851,18 @@ impl InputWindows {
                     DefWindowProcW(hwnd, msg, wparam, lparam)
                 }
 
+                // The mouse's raw input, registered while the window holds
+                // the pointer in place: its motion is the locked pointer's.
+                // The default procedure frees the input either way.
+                WM_INPUT => {
+                    if let Some(ctx) = ctx
+                        && ctx.locked.get()
+                    {
+                        ctx.raw_mouse_motion(lparam);
+                    }
+                    DefWindowProcW(hwnd, msg, wparam, lparam)
+                }
+
                 // Not an input message: the next hook's, or the default
                 // procedure's.
                 _ => return None,
@@ -1019,6 +1046,10 @@ impl InputWindow {
         lparam: LPARAM,
         tracking: TRACKMOUSEEVENT_FLAGS,
     ) {
+        // A locked pointer's motion is its raw input, not a move.
+        if self.locked.get() {
+            return;
+        }
         let time = self.message_clock.message_time();
         let mut leave = TRACKMOUSEEVENT {
             cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32,
@@ -1165,6 +1196,18 @@ impl InputWindow {
             self.set_hovered(hovered);
         }
         for input in inputs {
+            // A locked pointer's motion is its raw input, not a move.
+            if mouse
+                && self.locked.get()
+                && matches!(
+                    input,
+                    flui_platform::PlatformInput::Pointer(
+                        flui_platform::pointer::PointerEvent::Move(_)
+                    )
+                )
+            {
+                continue;
+            }
             let deliver = self.registry.borrow().delivers(&input);
             if deliver {
                 self.delivery.dispatch_input(input);
@@ -1172,6 +1215,94 @@ impl InputWindow {
         }
         if mouse && message == WM_POINTERCAPTURECHANGED {
             self.reconcile_hover(hwnd);
+        }
+    }
+
+    /// `WM_INPUT` while the window holds the pointer in place: the mouse's
+    /// motion as the locked pointer's raw motion. A relative report is the
+    /// device's own counts; an absolute one (a remote session, a tablet in
+    /// mouse mode) is the cursor's move across the virtual desktop since the
+    /// last, which the system has already accelerated. A report that is not
+    /// the mouse's, or moved nothing, delivers nothing.
+    fn raw_mouse_motion(&self, lparam: LPARAM) {
+        use flui_platform::pointer::{MotionAcceleration, MotionDelta};
+        use windows::Win32::UI::Input::{
+            GetRawInputData, HRAWINPUT, MOUSE_MOVE_ABSOLUTE, MOUSE_VIRTUAL_DESKTOP, RAWINPUT,
+            RAWINPUTHEADER, RID_INPUT, RIM_TYPEMOUSE,
+        };
+        use windows::Win32::UI::WindowsAndMessaging::{
+            GetSystemMetrics, SM_CXSCREEN, SM_CXVIRTUALSCREEN, SM_CYSCREEN, SM_CYVIRTUALSCREEN,
+        };
+
+        let time = self.message_clock.message_time();
+        let mut input = RAWINPUT::default();
+        let mut size = std::mem::size_of::<RAWINPUT>() as u32;
+        // SAFETY: `lparam` is the `HRAWINPUT` of the `WM_INPUT` being handled
+        // (this function's caller); the buffer is a live `RAWINPUT`, `size`
+        // its length, and the call writes at most that many bytes.
+        let read = unsafe {
+            GetRawInputData(
+                HRAWINPUT(lparam.0 as *mut core::ffi::c_void),
+                RID_INPUT,
+                Some((&raw mut input).cast()),
+                &raw mut size,
+                std::mem::size_of::<RAWINPUTHEADER>() as u32,
+            )
+        };
+        if read == u32::MAX || read == 0 || input.header.dwType != RIM_TYPEMOUSE.0 {
+            return;
+        }
+        // SAFETY: the header says the union holds the mouse's report.
+        let mouse = unsafe { input.data.mouse };
+        let (dx, dy, acceleration) = if mouse.usFlags.0 & MOUSE_MOVE_ABSOLUTE.0 != 0 {
+            let virtual_desktop = mouse.usFlags.0 & MOUSE_VIRTUAL_DESKTOP.0 != 0;
+            // SAFETY: plain metric queries.
+            let (width, height) = unsafe {
+                if virtual_desktop {
+                    (
+                        GetSystemMetrics(SM_CXVIRTUALSCREEN),
+                        GetSystemMetrics(SM_CYVIRTUALSCREEN),
+                    )
+                } else {
+                    (GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN))
+                }
+            };
+            // Normalized to 0..=65535 across the desktop.
+            let at = (
+                (i64::from(mouse.lLastX) * i64::from(width) / 65_535) as i32,
+                (i64::from(mouse.lLastY) * i64::from(height) / 65_535) as i32,
+            );
+            let Some(before) = self.raw_absolute.replace(Some(at)) else {
+                return;
+            };
+            (
+                f64::from(at.0) - f64::from(before.0),
+                f64::from(at.1) - f64::from(before.1),
+                MotionAcceleration::System,
+            )
+        } else {
+            (
+                f64::from(mouse.lLastX),
+                f64::from(mouse.lLastY),
+                MotionAcceleration::None,
+            )
+        };
+        if dx == 0.0 && dy == 0.0 {
+            return;
+        }
+        let Ok(delta) = MotionDelta::try_new(dx, dy) else {
+            return;
+        };
+        let motion = self.registry.borrow().raw_motion(
+            raw::SURFACE,
+            None,
+            raw::MOUSE_CONTACT,
+            crate::input::assembly::ReadingTime::epoch(flui_platform::EventTime::from_nanos(time)),
+            delta,
+            acceleration,
+        );
+        if let Some(motion) = motion {
+            self.delivery.dispatch_input(motion);
         }
     }
 
@@ -1441,6 +1572,7 @@ mod raw {
             PointerEvent::PanZoom(pan_zoom) => pan_zoom.time,
             PointerEvent::TouchpadSwipe(swipe) => swipe.time,
             PointerEvent::SmartZoom(zoom) => zoom.time,
+            PointerEvent::RawMotion(motion) => motion.time,
             PointerEvent::DeviceAdded(change) | PointerEvent::DeviceRemoved(change) => change.time,
             // A variant the vocabulary adds has no known time until it is named here.
             _ => return None,
@@ -1480,7 +1612,7 @@ mod raw {
     /// messages (a host that keeps them, or a cursor moved by `SetCursorPos`)
     /// and the wheel, which always comes as `WM_MOUSEWHEEL` — reads as this one
     /// contact, so its hover, presses and scrolls share one pointer.
-    const MOUSE_CONTACT: NativeContact = NativeContact(1 << 32);
+    pub(super) const MOUSE_CONTACT: NativeContact = NativeContact(1 << 32);
 
     /// The contact a `WM_POINTER` id reads as, `mouse` when it is the mouse's.
     fn pointer_contact(mouse: bool, raw: u32) -> NativeContact {

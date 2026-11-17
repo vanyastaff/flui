@@ -37,13 +37,13 @@ use flui_platform::keyboard::{
     Code, ImeComposition, Key, KeyEvent, KeyPress, KeyState, Location, Modifiers, NamedKey,
 };
 use flui_platform::pointer::{
-    ButtonChange, CancelReason, ContactSize, DeviceId, HoverDistance, PanZoomEvent, PanZoomPhase,
-    PanZoomTransform, PenOrientation, PenTool, PointerButton, PointerButtonEvent, PointerButtons,
-    PointerCancel, PointerDeviceChange, PointerEvent, PointerId, PointerKind, PointerMove,
-    PointerPosition, PointerRole, PointerSample, PointerSignal, PointerSource, Pressure,
-    ScrollDelta, ScrollEvent, ScrollInversion, ScrollPhase, ScrollPrecision, ScrollUnit,
-    SmartZoomEvent, SwipeOffset, TangentialPressure, TouchpadHoldEvent, TouchpadHoldPhase,
-    TouchpadSwipeEvent, TouchpadSwipePhase, Twist,
+    ButtonChange, CancelReason, ContactSize, DeviceId, HoverDistance, MotionAcceleration,
+    MotionDelta, PanZoomEvent, PanZoomPhase, PanZoomTransform, PenOrientation, PenTool,
+    PointerButton, PointerButtonEvent, PointerButtons, PointerCancel, PointerDeviceChange,
+    PointerEvent, PointerId, PointerKind, PointerMove, PointerPosition, PointerRole, PointerSample,
+    PointerSignal, PointerSource, Pressure, RawMotion, ScrollDelta, ScrollEvent, ScrollInversion,
+    ScrollPhase, ScrollPrecision, ScrollUnit, SmartZoomEvent, SwipeOffset, TangentialPressure,
+    TouchpadHoldEvent, TouchpadHoldPhase, TouchpadSwipeEvent, TouchpadSwipePhase, Twist,
 };
 use flui_platform::{
     Brightness, DragDropEvent, EventTime, GestureParts, HourCycle, ImeEvent, InsetCurve,
@@ -847,6 +847,20 @@ impl TryConvert<&PointerEvent> for rec::PointerEvent {
                     modifiers: modifiers_dto(zoom.modifiers),
                 })
             }
+            PointerEvent::RawMotion(motion) => Self::RawMotion(rec::RawMotion {
+                pointer: (&motion.pointer).try_convert_into()?,
+                t: motion.time.as_nanos(),
+                at: motion.position.map(|at| {
+                    let point = at.get();
+                    [point.x, point.y]
+                }),
+                dx: motion.delta.x(),
+                dy: motion.delta.y(),
+                unaccelerated: match motion.acceleration {
+                    MotionAcceleration::None => true,
+                    MotionAcceleration::System => false,
+                },
+            }),
             PointerEvent::DeviceAdded(change) => Self::DeviceAdded(device_change_dto(change)?),
             PointerEvent::DeviceRemoved(change) => Self::DeviceRemoved(device_change_dto(change)?),
             _ => return Err(unmirrored("PointerEvent")),
@@ -991,6 +1005,22 @@ impl TryConvert<rec::PointerEvent> for PointerEvent {
                 )
                 .with_modifiers(modifiers(&zoom.modifiers)?),
             ),
+            rec::PointerEvent::RawMotion(motion) => {
+                let event = RawMotion::new(
+                    motion.pointer.try_convert_into()?,
+                    EventTime::from_nanos(motion.t),
+                    MotionDelta::try_new(motion.dx, motion.dy).map_err(invalid)?,
+                    if motion.unaccelerated {
+                        MotionAcceleration::None
+                    } else {
+                        MotionAcceleration::System
+                    },
+                );
+                Self::RawMotion(match motion.at {
+                    Some([x, y]) => event.with_position(position(x, y)?),
+                    None => event,
+                })
+            }
             rec::PointerEvent::DeviceAdded(change) => Self::DeviceAdded(device_change(change)?),
             rec::PointerEvent::DeviceRemoved(change) => Self::DeviceRemoved(device_change(change)?),
         })

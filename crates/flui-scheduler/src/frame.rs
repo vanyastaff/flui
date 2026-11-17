@@ -287,6 +287,30 @@ pub enum AppLifecycleState {
 }
 
 impl AppLifecycleState {
+    /// The most active of `states`, as the state of something they make up
+    /// together (an application of several windows, a runtime of several
+    /// presentations): `Resumed` over `Inactive` over `Hidden` over `Paused`,
+    /// and `Detached` when `states` is empty or holds nothing else.
+    #[must_use]
+    pub fn most_active(states: impl IntoIterator<Item = Self>) -> Self {
+        states
+            .into_iter()
+            .max_by_key(|state| state.activity())
+            .unwrap_or(Self::Detached)
+    }
+
+    /// How active the state is: the higher, the more of the application the
+    /// user sees and reaches.
+    const fn activity(self) -> u8 {
+        match self {
+            Self::Resumed => 4,
+            Self::Inactive => 3,
+            Self::Hidden => 2,
+            Self::Paused => 1,
+            Self::Detached => 0,
+        }
+    }
+
     /// Try to convert from u8 representation
     ///
     /// Returns `None` if the value is not a valid discriminant.

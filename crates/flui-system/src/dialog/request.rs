@@ -5,10 +5,23 @@ use std::path::{Path, PathBuf};
 /// A named set of files an open or save dialog offers to filter by: "Images"
 /// with `png` and `jpg`.
 ///
-/// Built without checks; [`FileDialogs`](super::FileDialogs) refuses a
-/// request whose filter is malformed with
-/// [`DialogError::InvalidRequest`](super::DialogError::InvalidRequest),
-/// before the system is asked.
+/// One meaning on every host (ADR-0360): a file matches when its name ends
+/// in `.` and one of the extensions, compared ignoring ASCII case
+/// (`PHOTO.PNG` matches `png`, `a.tar.gz` matches `tar.gz`), or when its type
+/// is one of the MIME types. A host whose dialog matches otherwise maps each
+/// pattern to its own, or refuses the request. The portal is the one host
+/// that falls short: its backends match globs case-sensitively, so it sends
+/// each extension in lower and in upper case, and a name in mixed case
+/// (`Photo.Png`) on a case-sensitive file system is not shown.
+///
+/// Patterns are kept as the dialog will compare them: an extension without
+/// its leading `.` and a MIME type in ASCII lower case, and one added twice
+/// is kept once. The rest is checked when the request is shown, before the
+/// system is asked or anything is copied for it:
+/// [`FileDialogs`](super::FileDialogs) refuses a malformed filter, or too
+/// many filters or patterns, with
+/// [`DialogError::InvalidRequest`](super::DialogError::InvalidRequest)
+/// naming what is wrong.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct FileFilter {
@@ -18,6 +31,20 @@ pub struct FileFilter {
 }
 
 impl FileFilter {
+    /// The longest extension or MIME type a filter takes, in bytes: a file
+    /// name is at most 255 bytes on the systems FLUI supports, and RFC 6838
+    /// §4.2 bounds a MIME type's two names at 127 bytes each.
+    pub const MAX_PATTERN_LEN: usize = 255;
+
+    /// The longest name a filter shows, in bytes: a dialog shows one line.
+    pub const MAX_NAME_LEN: usize = 255;
+
+    /// The most extensions and MIME types one filter holds, together.
+    pub const MAX_PATTERNS: usize = 64;
+
+    /// The most filters one request offers.
+    pub const MAX_PER_REQUEST: usize = 64;
+
     /// A filter named `name` that matches nothing until extensions or MIME
     /// types are added.
     #[must_use]
@@ -29,21 +56,33 @@ impl FileFilter {
         }
     }
 
-    /// Also match files ending in `.extension`; a leading `.` is dropped.
+    /// Also match files whose name ends in `.extension`, ignoring ASCII
+    /// case. A leading `.` is dropped; an extension may have several parts
+    /// (`tar.gz`), each of ASCII letters, digits, `-`, `_` and `+`, so no
+    /// host reads one of its characters as a wildcard or a separator.
     #[must_use]
     pub fn with_extension(mut self, extension: impl Into<String>) -> Self {
-        let extension: String = extension.into();
-        let extension = extension
-            .strip_prefix('.')
-            .map_or(extension.clone(), str::to_owned);
-        self.extensions.push(extension);
+        let mut extension: String = extension.into();
+        if extension.starts_with('.') {
+            extension.remove(0);
+        }
+        extension.make_ascii_lowercase();
+        if !self.extensions.contains(&extension) {
+            self.extensions.push(extension);
+        }
         self
     }
 
-    /// Also match files of the MIME type `mime_type`, such as `image/png`.
+    /// Also match files of the MIME type `mime_type`, such as `image/png`,
+    /// or of every subtype of a type, such as `image/*`. Compared ignoring
+    /// ASCII case, as RFC 2045 §5.1 compares them; no parameters.
     #[must_use]
     pub fn with_mime_type(mut self, mime_type: impl Into<String>) -> Self {
-        self.mime_types.push(mime_type.into());
+        let mut mime_type: String = mime_type.into();
+        mime_type.make_ascii_lowercase();
+        if !self.mime_types.contains(&mime_type) {
+            self.mime_types.push(mime_type);
+        }
         self
     }
 
@@ -53,42 +92,145 @@ impl FileFilter {
         &self.name
     }
 
-    /// The extensions it matches, without their `.`.
+    /// The extensions it matches, without their `.`, in ASCII lower case.
     #[must_use]
     pub fn extensions(&self) -> &[String] {
         &self.extensions
     }
 
-    /// The MIME types it matches.
+    /// The MIME types it matches, in ASCII lower case.
     #[must_use]
     pub fn mime_types(&self) -> &[String] {
         &self.mime_types
     }
 
-    /// Whether the filter has a name, matches something, and every
-    /// extension and MIME type is well formed.
-    pub(super) fn is_valid(&self) -> bool {
-        let extension_ok = |extension: &String| {
-            !extension.is_empty()
-                && !extension.chars().any(|c| {
-                    c.is_control() || c.is_whitespace() || matches!(c, '.' | '/' | '\\' | '*')
-                })
-        };
-        let token_ok = |token: &str| {
-            !token.is_empty()
-                && token
-                    .chars()
-                    .all(|c| c.is_ascii_alphanumeric() || "!#$&-^_.+".contains(c))
-        };
-        let mime_ok = |mime: &String| {
-            mime.split_once('/')
-                .is_some_and(|(kind, sub)| token_ok(kind) && token_ok(sub))
-        };
-        !self.name.trim().is_empty()
-            && (!self.extensions.is_empty() || !self.mime_types.is_empty())
-            && self.extensions.iter().all(extension_ok)
-            && self.mime_types.iter().all(mime_ok)
+    /// The first thing wrong with the filter: its name, matching nothing, or
+    /// an extension or MIME type that is not one.
+    fn check(&self) -> Result<(), MalformedRequest> {
+        if self.name.len() > Self::MAX_NAME_LEN
+            || self.name.trim().is_empty()
+            || self.name.chars().any(char::is_control)
+        {
+            return Err(MalformedRequest::FilterName);
+        }
+        if self.extensions.is_empty() && self.mime_types.is_empty() {
+            return Err(MalformedRequest::EmptyFilter);
+        }
+        if self.extensions.len() + self.mime_types.len() > Self::MAX_PATTERNS {
+            return Err(MalformedRequest::TooManyPatterns);
+        }
+        if !self
+            .extensions
+            .iter()
+            .all(|extension| is_extension(extension))
+        {
+            return Err(MalformedRequest::Extension);
+        }
+        if !self
+            .mime_types
+            .iter()
+            .all(|mime_type| is_mime_type(mime_type))
+        {
+            return Err(MalformedRequest::MimeType);
+        }
+        Ok(())
     }
+}
+
+/// Whether `extension` is one: at most [`FileFilter::MAX_PATTERN_LEN`]
+/// bytes, parts of ASCII letters, digits, `-`, `_` and `+` joined by single
+/// dots.
+fn is_extension(extension: &str) -> bool {
+    extension.len() <= FileFilter::MAX_PATTERN_LEN
+        && extension.split('.').all(|part| {
+            !part.is_empty()
+                && part
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '+'))
+        })
+}
+
+/// Whether `mime_type` is one: at most [`FileFilter::MAX_PATTERN_LEN`]
+/// bytes, a type and a subtype that are RFC 6838 §4.2 names, or a type and
+/// `*`.
+fn is_mime_type(mime_type: &str) -> bool {
+    let is_name = |name: &str| {
+        let mut characters = name.chars();
+        characters
+            .next()
+            .is_some_and(|first| first.is_ascii_alphanumeric())
+            && characters.all(|c| c.is_ascii_alphanumeric() || "!#$&-^_.+".contains(c))
+    };
+    mime_type.len() <= FileFilter::MAX_PATTERN_LEN
+        && mime_type
+            .split_once('/')
+            .is_some_and(|(kind, subtype)| is_name(kind) && (subtype == "*" || is_name(subtype)))
+}
+
+/// The first thing wrong with `filters`: a malformed filter, or two that
+/// show one name, which the user could not tell apart and which a system
+/// that reports the selected filter by its value (the portal) could not
+/// tell apart either.
+fn check_filters(filters: &[FileFilter]) -> Result<(), MalformedRequest> {
+    if filters.len() > FileFilter::MAX_PER_REQUEST {
+        return Err(MalformedRequest::TooManyFilters);
+    }
+    for (index, filter) in filters.iter().enumerate() {
+        filter.check()?;
+        let name = filter.name.trim();
+        if filters[..index]
+            .iter()
+            .any(|earlier| earlier.name.trim() == name)
+        {
+            return Err(MalformedRequest::DuplicateFilterName);
+        }
+    }
+    Ok(())
+}
+
+/// What is wrong with a dialog request that
+/// [`FileDialogs`](super::FileDialogs) refuses before the system is asked:
+/// the reason [`DialogError::InvalidRequest`](super::DialogError::InvalidRequest)
+/// carries.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum MalformedRequest {
+    /// A filter's name is blank, longer than [`FileFilter::MAX_NAME_LEN`],
+    /// or holds a control character.
+    #[error("a filter has no name to show")]
+    FilterName,
+    /// A filter has neither an extension nor a MIME type.
+    #[error("a filter matches nothing")]
+    EmptyFilter,
+    /// A filter holds more than [`FileFilter::MAX_PATTERNS`] extensions and
+    /// MIME types.
+    #[error("a filter holds too many patterns")]
+    TooManyPatterns,
+    /// A request offers more than [`FileFilter::MAX_PER_REQUEST`] filters.
+    #[error("the request offers too many filters")]
+    TooManyFilters,
+    /// An extension is empty, longer than [`FileFilter::MAX_PATTERN_LEN`],
+    /// or holds a character outside ASCII letters, digits, `-`, `_`, `+` and
+    /// the single dots between its parts (a wildcard, a separator).
+    #[error("an extension is not one")]
+    Extension,
+    /// A MIME type is not a type and a subtype (or `*`) of RFC 6838 names,
+    /// or is longer than [`FileFilter::MAX_PATTERN_LEN`].
+    #[error("a MIME type is not one")]
+    MimeType,
+    /// Two filters of one request show the same name.
+    #[error("two filters show the same name")]
+    DuplicateFilterName,
+    /// A folder dialog was given filters: it shows no files to filter.
+    #[error("a folder dialog takes no filters")]
+    FiltersOnFolders,
+    /// The suggested name is blank, `.` or `..`, or holds a path separator
+    /// or a control character: a name, not a path.
+    #[error("the suggested name is not a file name")]
+    SuggestedName,
+    /// The folder the dialog opens in is relative.
+    #[error("the dialog's folder is not absolute")]
+    RelativeDirectory,
 }
 
 /// What an open dialog picks.
@@ -186,10 +328,23 @@ impl OpenRequest {
         self.multiple
     }
 
-    pub(super) fn is_valid(&self) -> bool {
-        self.filters.iter().all(FileFilter::is_valid)
-            && (!self.picks_folders() || self.filters.is_empty())
-            && self.directory.as_deref().is_none_or(Path::is_absolute)
+    /// The first thing wrong with the request, which no dialog is shown
+    /// for.
+    pub(super) fn check(&self) -> Result<(), MalformedRequest> {
+        if self.picks_folders() && !self.filters.is_empty() {
+            return Err(MalformedRequest::FiltersOnFolders);
+        }
+        check_filters(&self.filters)?;
+        check_directory(self.directory.as_deref())
+    }
+}
+
+/// A dialog's folder is absolute, when it has one.
+fn check_directory(directory: Option<&Path>) -> Result<(), MalformedRequest> {
+    if directory.is_none_or(Path::is_absolute) {
+        Ok(())
+    } else {
+        Err(MalformedRequest::RelativeDirectory)
     }
 }
 
@@ -251,8 +406,10 @@ impl SaveRequest {
         self
     }
 
-    pub(super) fn is_valid(&self) -> bool {
-        let name_ok = |name: &String| {
+    /// The first thing wrong with the request, which no dialog is shown
+    /// for.
+    pub(super) fn check(&self) -> Result<(), MalformedRequest> {
+        let is_name = |name: &String| {
             !name.trim().is_empty()
                 && !name
                     .chars()
@@ -260,9 +417,49 @@ impl SaveRequest {
                 && name != "."
                 && name != ".."
         };
-        self.filters.iter().all(FileFilter::is_valid)
-            && self.suggested_name.as_ref().is_none_or(name_ok)
-            && self.directory.as_deref().is_none_or(Path::is_absolute)
+        check_filters(&self.filters)?;
+        if !self.suggested_name.as_ref().is_none_or(is_name) {
+            return Err(MalformedRequest::SuggestedName);
+        }
+        check_directory(self.directory.as_deref())
+    }
+}
+
+/// Where the user chose to save: the file, and the filter that was
+/// selected when they accepted.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SaveLocation {
+    file: PickedFile,
+    filter: Option<usize>,
+}
+
+impl SaveLocation {
+    /// The user chose `file` with the request's filter at `filter` selected;
+    /// `None` when the request offered no filter or the system does not say.
+    #[must_use]
+    pub fn new(file: PickedFile, filter: Option<usize>) -> Self {
+        Self { file, filter }
+    }
+
+    /// The file to write.
+    #[must_use]
+    pub fn file(&self) -> &PickedFile {
+        &self.file
+    }
+
+    /// The index, in the request's [`filters`](SaveRequest::filters), of the
+    /// filter selected when the user accepted: the format an application
+    /// writes when the name the user typed has no extension. `None` when the
+    /// request offered none or the system does not report it.
+    #[must_use]
+    pub fn filter(&self) -> Option<usize> {
+        self.filter
+    }
+
+    /// The file to write, without the filter.
+    #[must_use]
+    pub fn into_file(self) -> PickedFile {
+        self.file
     }
 }
 

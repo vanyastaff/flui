@@ -34,7 +34,7 @@
 //! raised by the next pump, before it frames. A lifecycle panic the tree recovered from (an `ErrorView`
 //! substitution) is not raised: the frame it happened in completed.
 
-use std::cell::OnceCell;
+use std::num::NonZeroU32;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -50,13 +50,13 @@ use flui_platform::drag::{
     DragError, OsDragEnd, OsDragParts, OsDragRequest, OsDragStart, PlatformDragSource,
 };
 use flui_platform::input_regions::{DeviceInputRegion, InputRegion};
+use flui_platform::text_store::TextStoreHost;
 use flui_platform::text_store::TextStoreStatus;
 use flui_platform::{
-    CursorError, CursorIcon, DisplayId, PlatformInput, PlatformTextInput, PlatformWindow,
+    Cursor, CursorError, CursorIcon, DisplayId, PlatformInput, PlatformTextInput, PlatformWindow,
     Unsupported, UnsupportedReason, WindowId, WindowIdMint,
 };
-use flui_platform::{SessionEndAnswer, SessionEndPhase, text_store::TextStoreHost};
-use flui_rendering::layer::{LayerTree, ScenePublication, SceneVersion};
+
 use flui_runtime::dev_agent::DevAgentHost;
 use flui_runtime::frame_failure::{
     FailureDisposition, FrameFailureDetail, FrameFailureHandler, FrameFailureKind,
@@ -64,7 +64,7 @@ use flui_runtime::frame_failure::{
 };
 use flui_runtime::presentation::PresentationWindow;
 use flui_runtime::pump::FrameOutcome;
-use flui_runtime::sink::{FrameSink, SubmitVerdict};
+
 use flui_runtime::ui_runtime::{RuntimeHostServices, UiRuntime};
 use flui_scheduler::{ClockSource, PostFrameHandle};
 use flui_semantics::platform::{
@@ -74,11 +74,18 @@ use flui_semantics::platform::{
 use flui_view::__runtime::{FlushHost, FlushWrite, OwnerNotify};
 use flui_view::CloseReason;
 use flui_view::dev_agent::DevAgentHook;
-use flui_view::persist::{StorageCapability, StorageHandle};
 use parking_lot::Mutex;
 
 use crate::a11y::A11yTree;
 use crate::text_store_host::RecordingTextStoreHost;
+
+mod registrations;
+mod sink;
+mod turn;
+
+pub(crate) use registrations::AppRegistrations;
+use registrations::{Registry, compose_registry};
+pub use sink::{HeadlessSink, UnshownFrame};
 
 /// The window a [`HeadlessHost`] presents into: window 1 at scale factor 1 (a
 /// window [opened](HeadlessHost::open_window) beside it takes the next
@@ -92,12 +99,14 @@ pub struct HeadlessWindow {
     id: WindowId,
     size: flui_platform::WindowExtent,
     scale_factor: Mutex<DevicePixelRatio>,
-    cursor: Mutex<CursorIcon>,
+    cursor: Mutex<Cursor>,
     text_input: Option<Arc<RecordingTextInput>>,
     text_store_host: bool,
     gesture_preset: flui_interaction::GestureProfiles,
     platform: flui_platform::TargetPlatform,
     display: Mutex<Option<DisplayId>>,
+    /// Whether the platform lets the window run, as the test last reported it.
+    execution: Mutex<flui_platform::WindowExecutionState>,
     /// What covers the window, as the test last reported it.
     insets: Mutex<flui_platform::WindowInsets>,
     /// The revision of the state [`PlatformWindow::state`] reports: advanced by
@@ -116,6 +125,8 @@ pub struct HeadlessWindow {
     /// The frame and mode the window was set to and the close requests it received,
     /// through its `WindowHandle` or a command applied to it.
     chrome: Mutex<KitChrome>,
+    /// Whether the host closed the window: its commands answer `Closed`.
+    closed: AtomicBool,
 }
 
 impl std::fmt::Debug for HeadlessWindow {
@@ -236,12 +247,18 @@ impl HeadlessWindow {
         std::mem::take(&mut self.chrome.lock().unobserved)
     }
 
-    /// How many times the window was asked to close through its `WindowHandle`. The
-    /// window has no close-request handler of its own: a test closes it with
-    /// [`LaidOut::request_close`](crate::widgets::LaidOut::request_close).
+    /// How many times the window was asked to close through its
+    /// `WindowHandle`, one closed window's asks included. The host's next
+    /// turn carries an ask out ([`HeadlessHost::pump`]); this count only
+    /// observes them.
     #[must_use]
     pub fn close_requests(&self) -> usize {
         self.chrome.lock().close_requests
+    }
+
+    /// Whether the host closed the window.
+    fn is_closed(&self) -> bool {
+        self.closed.load(Ordering::Relaxed)
     }
 }
 impl HeadlessWindow {
@@ -259,12 +276,13 @@ impl HeadlessWindow {
             ))
             .expect("BUG: a side in whole pixels is finite and not negative"),
             scale_factor: Mutex::new(DevicePixelRatio::ONE),
-            cursor: Mutex::new(CursorIcon::Default),
+            cursor: Mutex::new(Cursor::Icon(CursorIcon::Default)),
             text_input: None,
             text_store_host: false,
             gesture_preset: flui_interaction::GestureSettings::default().into(),
             platform: flui_platform::TargetPlatform::Unknown,
             display: Mutex::new(None),
+            execution: Mutex::new(flui_platform::WindowExecutionState::Running),
             insets: Mutex::new(flui_platform::WindowInsets::ZERO),
             revision: Mutex::new(flui_platform::WindowRevision::ZERO),
             input_regions: Mutex::default(),
@@ -273,6 +291,7 @@ impl HeadlessWindow {
             reports_presentation: false,
             capabilities: Self::published_capabilities(false),
             chrome: Mutex::default(),
+            closed: AtomicBool::new(false),
         }
     }
 
@@ -348,8 +367,8 @@ impl HeadlessWindow {
 
     /// The last cursor the UI runtime set on this window.
     #[must_use]
-    pub fn cursor(&self) -> CursorIcon {
-        *self.cursor.lock()
+    pub fn cursor(&self) -> Cursor {
+        self.cursor.lock().clone()
     }
 
     /// Every IME cursor area the UI runtime reported, in delivery order; `None`
@@ -442,8 +461,8 @@ impl PlatformWindow for HeadlessWindow {
             .map(|input| Arc::clone(input) as Arc<dyn PlatformTextInput>)
     }
 
-    fn set_cursor(&self, cursor: CursorIcon) -> Result<(), CursorError> {
-        *self.cursor.lock() = cursor;
+    fn set_cursor(&self, cursor: &Cursor) -> Result<(), CursorError> {
+        cursor.clone_into(&mut self.cursor.lock());
         Ok(())
     }
 
@@ -492,6 +511,7 @@ impl PlatformWindow for HeadlessWindow {
         .with_focus(flui_platform::WindowFocus::Focused)
         .with_display(*self.display.lock())
         .with_insets(*self.insets.lock())
+        .with_execution(*self.execution.lock())
         .with_metrics(
             flui_foundation::geometry::WindowMetrics::from_logical(
                 extent.get(),
@@ -695,104 +715,6 @@ impl PlatformAccessibility for HeadlessAccessibility {
     }
 }
 
-/// The frame sink of a [`HeadlessHost`]: a surface of fixed size that
-/// presents every scene and keeps the last version, unless told to defer
-/// some.
-///
-/// The version is flattened into a layer tree only when a test reads it, so a
-/// frame costs the sink nothing that grows with the tree.
-#[derive(Debug)]
-pub struct HeadlessSink {
-    size: (u32, u32),
-    last: Option<(SceneVersion, OnceCell<Option<LayerTree>>)>,
-    submits: u64,
-    deferred: u32,
-    /// The epochs of the frames presented most recently, oldest first, at
-    /// most [`PRESENTED_KEPT`].
-    presented: std::collections::VecDeque<flui_foundation::FrameEpoch>,
-}
-
-/// How many presented frames a [`HeadlessSink`] remembers for a presentation
-/// report to name.
-const PRESENTED_KEPT: usize = 16;
-
-impl HeadlessSink {
-    /// A `width` × `height` surface that has presented nothing yet.
-    #[must_use]
-    pub(crate) fn new(width: u32, height: u32) -> Self {
-        Self {
-            size: (width, height),
-            last: None,
-            submits: 0,
-            deferred: 0,
-            // Its room is taken here, so a frame that presents allocates nothing.
-            presented: std::collections::VecDeque::with_capacity(PRESENTED_KEPT),
-        }
-    }
-
-    /// The epoch of the frame presented last, which a presentation report
-    /// may name ([`HeadlessHost::report_presented`]).
-    #[must_use]
-    pub fn last_presented(&self) -> Option<flui_foundation::FrameEpoch> {
-        self.presented.back().copied()
-    }
-
-    /// Whether the frame of `epoch` is one of the frames presented recently.
-    fn presented(&self, epoch: flui_foundation::FrameEpoch) -> bool {
-        self.presented.contains(&epoch)
-    }
-
-    /// The layer tree the pipeline's frame node paints in the last version
-    /// submitted, rooted at its device-pixel-ratio layer and retained across
-    /// frames that painted nothing.
-    #[must_use]
-    pub fn layer_tree(&self) -> Option<&LayerTree> {
-        let (version, tree) = self.last.as_ref()?;
-        tree.get_or_init(|| {
-            let root = version.node(version.root())?;
-            let frame = root.content().slots().next()?;
-            version.flatten_node(frame)
-        })
-        .as_ref()
-    }
-
-    /// The last version submitted.
-    #[must_use]
-    pub fn version(&self) -> Option<&SceneVersion> {
-        self.last.as_ref().map(|(version, _)| version)
-    }
-
-    /// How many scenes have been submitted, not counting deferred ones.
-    #[must_use]
-    pub fn submits(&self) -> u64 {
-        self.submits
-    }
-}
-
-impl FrameSink for HeadlessSink {
-    fn surface_size(&mut self) -> (u32, u32) {
-        self.size
-    }
-
-    fn submit(
-        &mut self,
-        epoch: flui_foundation::FrameEpoch,
-        publication: ScenePublication,
-    ) -> SubmitVerdict {
-        if let Some(deferred) = self.deferred.checked_sub(1) {
-            self.deferred = deferred;
-            return SubmitVerdict::Retry;
-        }
-        self.last = Some((publication.scene, OnceCell::new()));
-        self.submits = self.submits.saturating_add(1);
-        if self.presented.len() == PRESENTED_KEPT {
-            self.presented.pop_front();
-        }
-        self.presented.push_back(epoch);
-        SubmitVerdict::Presented
-    }
-}
-
 /// A development-agent hook attached the way a runner's event loop attaches
 /// it: once, when this value is built, and detached when it is dropped.
 ///
@@ -835,15 +757,21 @@ impl std::fmt::Debug for HeadlessDevAgent {
 /// documents published (ADR-0260).
 pub use flui_view::__runtime::SESSION_END_BUDGET;
 
-/// The capabilities a headless host provides when it is given no registry:
-/// the clipboard, the primary selection and HTTP, each scripted by the test,
-/// so no test reaches the network. All of them are on the host's scenario,
-/// whose clock the host alone drives: HTTP reports an unscripted URL there.
+/// The capabilities a headless host provides when it is given no registry,
+/// each scripted by the test, so no test reaches the network: what a runner
+/// provides on the platform the primary window names, with the features the
+/// test's build has. The clipboard and the background lanes always; the
+/// primary selection only where the platform has one (Linux, as X11 and
+/// Wayland have it); HTTP only with this crate's `http` feature, which the
+/// facade's `http` turns on with the runner's. All of them are on the host's
+/// scenario, whose clock the host alone drives: HTTP reports an unscripted
+/// URL there.
 struct ScriptedBuiltIns {
     clock: HostClock,
     clipboard: crate::ScriptedClipboard,
     primary_selection: crate::ScriptedPrimarySelection,
     background: HeadlessBackground,
+    #[cfg(feature = "http")]
     http: crate::ScriptedHttp,
 }
 
@@ -897,7 +825,9 @@ impl ScriptedBuiltIns {
     /// The built-ins on the scenario `driver` moves.
     fn on(driver: ScenarioDriver) -> Self {
         let scenario = driver.scenario();
+        #[cfg(feature = "http")]
         let http = crate::ScriptedHttp::default();
+        #[cfg(feature = "http")]
         http.report_to(scenario.failure_report());
         let clipboard = crate::ScriptedClipboard::on(scenario);
         let primary_selection = crate::ScriptedPrimarySelection::on(scenario);
@@ -908,15 +838,23 @@ impl ScriptedBuiltIns {
             clipboard,
             primary_selection,
             background: HeadlessBackground::default(),
+            #[cfg(feature = "http")]
             http,
         }
     }
 
-    fn registrar(&self) -> flui_platform::capability::CapabilityRegistrar {
+    /// The providers a runner registers on `platform`.
+    fn registrar(
+        &self,
+        platform: flui_platform::TargetPlatform,
+    ) -> flui_platform::capability::CapabilityRegistrar {
         let mut registrar = flui_platform::capability::CapabilityRegistrar::new();
         self.clipboard.register(&mut registrar);
-        self.primary_selection.register(&mut registrar);
+        if platform == flui_platform::TargetPlatform::Linux {
+            self.primary_selection.register(&mut registrar);
+        }
         self.background.register(&mut registrar);
+        #[cfg(feature = "http")]
         self.http.register(&mut registrar);
         registrar
     }
@@ -978,21 +916,24 @@ impl HeadlessBackground {
 /// See the [module docs](self).
 #[doc(alias = "HeadlessRuntime")]
 pub struct HeadlessHost {
-    ui_runtime: UiRuntime,
+    /// The UI runtime, until the host's last window closes: a real host
+    /// retires its UI runtime then, and so does this one
+    /// ([`close_presentation`](Self::close_presentation)).
+    ui_runtime: Option<UiRuntime>,
     clock: ManualClock,
     sink: HeadlessSink,
-    window: Rc<HeadlessWindow>,
-    accessibility: Arc<HeadlessAccessibility>,
+    /// The window the UI runtime was built on, kept after it closed so a
+    /// test still reads what its double recorded.
+    primary: HostWindow,
     scripted: ScriptedBuiltIns,
-    /// The windows opened beside the primary one, in opening order.
-    secondary: Vec<SecondaryWindow>,
+    /// The windows open, in opening order: the primary first while it is.
+    open: Vec<HostWindow>,
     /// Issues the id of every window the host opens, the primary first,
     /// never one twice: a window opened after another closed has an id of
     /// its own.
     window_ids: WindowIdMint,
     /// The surfaces embedded in the primary window, in minting order.
     embedded: Vec<flui_interaction::InputSurface>,
-    text_store_host: Option<Rc<RecordingTextStoreHost>>,
     /// Dropped-frame reports not yet raised, as the text a raised failure
     /// carries: those of the pump in progress, and any the UI runtime made
     /// between pumps, which the next pump raises before it frames.
@@ -1006,22 +947,32 @@ pub struct HeadlessHost {
     /// The registry's writes waiting for the next pump to run them, as a
     /// runner's IO pool runs them.
     flush_writes: Arc<Mutex<Vec<FlushWrite>>>,
-    /// Whether the primary window was closed.
-    primary_closed: bool,
+    /// The closes the windows' widgets asked for, which the next turn
+    /// carries out.
+    close_asks: CloseAsks,
+    /// Where a quit the application or the user asked for stands.
+    quit: QuitAsk,
+    /// Whether a phone's session end answered `Block` and holds the
+    /// background until its writes end.
+    background_hold: bool,
+    /// How many such holds were released.
+    session_end_releases: usize,
 }
 
 impl std::fmt::Debug for HeadlessHost {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("HeadlessHost")
             .field("ui_runtime", &self.ui_runtime)
-            .field("window", &self.window)
+            .field("window", &self.primary.window)
+            .field("open", &self.open.len())
             .field("sink", &self.sink)
             .finish_non_exhaustive()
     }
 }
 
 /// The storage a headless host gives its UI runtime: the host's own, and
-/// the storage the application provides as the [`StorageCapability`] in its
+/// the storage the application provides as the
+/// [`StorageCapability`](flui_view::persist::StorageCapability) in its
 /// place, if any. The host's flush writes each document's bytes to the
 /// storage that document acquired.
 #[derive(Clone)]
@@ -1054,13 +1005,14 @@ impl HeadlessHost {
         window: HeadlessWindow,
         registry: flui_runtime::capability::CapabilityRegistry,
     ) -> Self {
-        Self::assemble(window, None, Some(registry), None)
+        Self::assemble(window, None, Registry::Given(registry), None)
     }
 
     /// [`Self::new`], its widgets acquiring what `plugin` registers beside
-    /// the host's [`clipboard`](Self::clipboard) and
-    /// [`primary_selection`](Self::primary_selection): how a package tests its
-    /// plugin on a headless host (ADR-0152).
+    /// the host's built-ins (the [`clipboard`](Self::clipboard), and the
+    /// [`primary_selection`](Self::primary_selection) where the window's
+    /// platform has one): how a package tests its plugin on a headless host
+    /// (ADR-0152).
     ///
     /// # Panics
     ///
@@ -1076,7 +1028,8 @@ impl HeadlessHost {
 
     /// [`Self::with_plugin`] on `scenario`: the host drives the scenario's
     /// clock (frames, deadlines and scheduled changes on one timeline), and
-    /// its clipboard, primary selection and HTTP client are on it, so a
+    /// its built-ins (the clipboard, the primary selection and the HTTP
+    /// client, each where it is registered) are on it, so a
     /// plugin whose doubles are on `scenario` answers on the same timeline as
     /// everything else (ADR-0154 §10). A scenario drives one host at a time:
     /// time moves only through that host.
@@ -1112,24 +1065,47 @@ impl HeadlessHost {
         plugin: &dyn flui_platform::capability::Plugin,
     ) -> Result<Self, AlreadyDriven> {
         let scripted = ScriptedBuiltIns::on(scenario.drive()?);
-        let registry = flui_runtime::capability::CapabilityRegistry::builder()
-            .built_ins(scripted.registrar())
-            .plugin(plugin)
-            .build()
-            .unwrap_or_else(|conflict| panic!("the plugin's registrations conflict: {conflict}"));
-        Ok(Self::assemble(window, None, Some(registry), Some(scripted)))
+        let registry = compose_registry(
+            &scripted,
+            window.platform,
+            None,
+            &AppRegistrations::new(),
+            Some(plugin),
+        );
+        Ok(Self::assemble(
+            window,
+            None,
+            Registry::Given(registry),
+            Some(scripted),
+        ))
     }
 
     /// [`Self::new`], its widgets acquiring `storage` as
-    /// the [`StorageCapability`].
+    /// the [`StorageCapability`](flui_view::persist::StorageCapability).
     pub(crate) fn with_storage(window: HeadlessWindow, storage: Option<KitStorage>) -> Self {
-        Self::assemble(window, storage, None, None)
+        Self::with_application(window, storage, AppRegistrations::default())
+    }
+
+    /// [`Self::with_storage`], with what the application registers over the
+    /// built-ins: its overrides and its plugins, as a runner builds the
+    /// registry of an `Application` (ADR-0152).
+    ///
+    /// # Panics
+    ///
+    /// When the application's registrations conflict, as a run fails before
+    /// its platform starts; and as [`Self::new`].
+    pub(crate) fn with_application(
+        window: HeadlessWindow,
+        storage: Option<KitStorage>,
+        application: AppRegistrations,
+    ) -> Self {
+        Self::assemble(window, storage, Registry::Composed(application), None)
     }
 
     fn assemble(
         mut window: HeadlessWindow,
         storage: Option<KitStorage>,
-        capabilities: Option<flui_runtime::capability::CapabilityRegistry>,
+        registry: Registry,
         scripted: Option<ScriptedBuiltIns>,
     ) -> Self {
         #[expect(
@@ -1183,31 +1159,12 @@ impl HeadlessHost {
             &fonts,
             ClockSource::Manual(clock.clone()),
         );
-        let registry = capabilities.unwrap_or_else(|| {
-            let mut built_ins = scripted.registrar();
-            let mut overrides = flui_platform::capability::CapabilityRegistrar::new();
-            if let Some(KitStorage { host, provided }) = &storage {
-                let host = Arc::clone(host);
-                built_ins.provide::<StorageCapability>(
-                    move |_: &flui_platform::capability::ProviderContext<'_>| {
-                        Ok(StorageHandle::new(Arc::clone(&host)))
-                    },
-                );
-                if let Some(provided) = provided {
-                    let provided = Arc::clone(provided);
-                    overrides.provide::<StorageCapability>(
-                        move |_: &flui_platform::capability::ProviderContext<'_>| {
-                            Ok(StorageHandle::new(Arc::clone(&provided)))
-                        },
-                    );
-                }
+        let registry = match registry {
+            Registry::Given(registry) => registry,
+            Registry::Composed(application) => {
+                compose_registry(&scripted, platform, storage.as_ref(), &application, None)
             }
-            flui_runtime::capability::CapabilityRegistry::builder()
-                .overrides(overrides)
-                .built_ins(built_ins)
-                .build()
-                .expect("BUG: one built-in and one override per capability cannot conflict")
-        });
+        };
         host = host.with_capabilities(registry);
         if let Some(flush) = &flush {
             host = host.with_flush_registry(flush.registry());
@@ -1233,7 +1190,13 @@ impl HeadlessHost {
             host,
         )
         .expect("BUG: interaction lane identity exhausted");
-        install_window_control(&ui_runtime, ui_runtime.presentation_id(), &window);
+        let close_asks = CloseAsks::default();
+        install_window_control(
+            &ui_runtime,
+            ui_runtime.presentation_id(),
+            &window,
+            &close_asks,
+        );
         let failures = Arc::new(Mutex::new(Vec::new()));
         ui_runtime.set_frame_failure_detail(FrameFailureDetail::Verbatim);
         let recorded = Arc::clone(&failures);
@@ -1242,23 +1205,54 @@ impl HeadlessHost {
                 recorded.lock().push(text);
             }
         })));
-        Self {
-            ui_runtime,
-            clock,
-            sink: HeadlessSink::new(surface.0, surface.1),
+        let primary = HostWindow {
+            id: ui_runtime.presentation_id(),
             window,
             accessibility,
-            scripted,
             text_store_host,
-            secondary: Vec::new(),
+        };
+        Self {
+            ui_runtime: Some(ui_runtime),
+            clock,
+            sink: HeadlessSink::new(surface.0, surface.1),
+            open: vec![primary.clone()],
+            primary,
+            scripted,
             window_ids,
             embedded: Vec::new(),
             failures,
             presented: None,
             flush,
             flush_writes,
-            primary_closed: false,
+            close_asks,
+            quit: QuitAsk::None,
+            background_hold: false,
+            session_end_releases: 0,
         }
+    }
+
+    /// [`ui_runtime`](Self::ui_runtime), to change.
+    ///
+    /// # Panics
+    ///
+    /// Once the host's last window closed, which retired it.
+    fn ui_runtime_mut(&mut self) -> &mut UiRuntime {
+        self.ui_runtime
+            .as_mut()
+            .expect("a host whose last window closed has retired its UI runtime; `try_ui_runtime` answers None then")
+    }
+
+    /// Whether the host's last window closed, retiring its UI runtime as a
+    /// real host does: what the UI runtime still held to answer ended as
+    /// [`OwnerRetired`](flui_platform::capability::OwnerRetired), and a
+    /// [`pump`](Self::pump) moves only time, the scenario, the writes and
+    /// the background lanes, as [`time_to_next_frame`](Self::time_to_next_frame)
+    /// and [`pump_until_settled`](Self::pump_until_settled) wait for. An entry
+    /// that reaches the UI runtime (input, semantics, a window's attachment)
+    /// panics on a retired host.
+    #[must_use]
+    pub fn is_retired(&self) -> bool {
+        self.ui_runtime.is_none()
     }
 
     /// Report that the primary window's frame of `frame` reached the screen
@@ -1285,12 +1279,15 @@ impl HeadlessHost {
         at: flui_platform::EventTime,
         refresh: Option<flui_platform::RefreshPeriod>,
     ) -> bool {
-        if !self.window.reports_presentation || !self.sink.presented(frame) {
+        if !self.primary.window.reports_presentation
+            || !self.sink.presented(frame)
+            || self.is_closed(self.primary_window())
+        {
             return false;
         }
         let address = flui_foundation::PresentationAddress {
-            ui_runtime_id: self.ui_runtime.id(),
-            presentation_id: self.ui_runtime.presentation_id(),
+            ui_runtime_id: self.ui_runtime().id(),
+            presentation_id: self.primary.id,
         };
         // The double draws on one surface, its first.
         let stamp = flui_foundation::FrameStamp::new(
@@ -1314,9 +1311,7 @@ impl HeadlessHost {
     /// Does nothing when the hook is not attached.
     #[must_use]
     pub fn with_dev_agent(self, agent: &mut HeadlessDevAgent) -> Self {
-        agent
-            .host
-            .publish(&self.ui_runtime, self.ui_runtime.presentation_id());
+        agent.host.publish(self.ui_runtime(), self.primary.id);
         self
     }
 
@@ -1330,8 +1325,8 @@ impl HeadlessHost {
     ///
     /// If `window` was not opened by this host.
     pub fn serve_window(&self, window: HeadlessWindowId, agent: &mut HeadlessDevAgent) {
-        let presentation = self.secondary_of(window).id;
-        agent.host.publish(&self.ui_runtime, presentation);
+        let presentation = self.open_window_of(window).id;
+        agent.host.publish(self.ui_runtime(), presentation);
     }
 
     /// Attach `view` as the UI runtime's root widget, the root view sized to the
@@ -1348,11 +1343,7 @@ impl HeadlessHost {
     where
         V: flui_view::View + Clone + 'static,
     {
-        self.ui_runtime.attach_root_widget_with_size(
-            &flui_widgets::app_root(view.clone()),
-            self.window.size.width(),
-            self.window.size.height(),
-        )
+        self.attach_to(self.primary_window(), view)
     }
 
     /// Advance the clock by `dt`, then run one frame through
@@ -1382,6 +1373,11 @@ impl HeadlessHost {
         // Background work runs before the frame, so an answer it posts
         // settles in this pump.
         self.scripted.background.drain_unless_held();
+        if self.is_retired() {
+            // The last window closed in an earlier turn or in this one's
+            // settle: there is nothing left to frame.
+            return FrameOutcome::default();
+        }
         // A frame or mode a widget set reaches the UI runtime before the frame, as a
         // window system's state notice does. Walked by position rather than
         // over a collected list, so an idle pump asks nothing of the heap.
@@ -1403,16 +1399,18 @@ impl HeadlessHost {
         if let Some(presented) = self.presented.take() {
             request = request.presented(presented);
         }
-        let primary = self.ui_runtime.presentation_id();
-        for presentation in
-            std::iter::once(primary).chain(self.secondary.iter().map(|secondary| secondary.id))
-        {
-            self.ui_runtime.note_frame_request(presentation, request);
+        for window in &self.open {
+            self.ui_runtime().note_frame_request(window.id, request);
         }
         let mut frame_clock = self.clock.clone();
         let Self {
-            ui_runtime, sink, ..
-        } = self;
+            ui_runtime: Some(ui_runtime),
+            sink,
+            ..
+        } = self
+        else {
+            unreachable!("BUG: a host that is not retired holds its UI runtime");
+        };
         #[expect(
             clippy::disallowed_methods,
             reason = "ADR-0287: the kit keeps a pump's panic to settle failures before resuming"
@@ -1442,12 +1440,12 @@ impl HeadlessHost {
         }
     }
 
-    /// Defer the next `frames` submits, as a surface not yet ready to show
-    /// its window defers them (`SubmitVerdict::Retry`): those frames render,
-    /// their tree stays uncommitted, and pointer input waits for the first
-    /// presented frame to be dispatched (ADR-0048).
-    pub fn defer_presents(&mut self, frames: u32) {
-        self.sink.deferred = frames;
+    /// Leave the next `frames` frames unshown for the reason `how` names, as
+    /// a real surface does: those frames render, their tree stays
+    /// uncommitted, and the UI runtime recovers as `how` says. Replaces what
+    /// an earlier call left to come; `frames` of 0 shows every frame again.
+    pub fn leave_unshown(&mut self, frames: u32, how: UnshownFrame) {
+        self.sink.unshown = NonZeroU32::new(frames).map(|frames| (frames, how));
     }
 
     /// Deliver `input` to the UI runtime's primary presentation, as a runner
@@ -1464,12 +1462,18 @@ impl HeadlessHost {
     /// With the first panic a dispatch raised; a later one is logged and
     /// discarded.
     pub fn dispatch(&self, input: PlatformInput) {
-        self.dispatch_to(self.ui_runtime.presentation_id(), input);
+        self.dispatch_to(self.primary_window(), input);
     }
 
-    /// [`dispatch`](Self::dispatch) to `presentation`'s window.
-    fn dispatch_to(&self, presentation: PresentationId, input: PlatformInput) {
-        self.dispatch_on_to(presentation, flui_interaction::InputSurface::Window, input);
+    /// [`dispatch`](Self::dispatch) `input` as `window` reported it. Keyboard
+    /// input goes to the window that holds the OS focus, whichever window
+    /// reported it, as on every real host.
+    ///
+    /// # Panics
+    ///
+    /// As [`dispatch`](Self::dispatch).
+    pub fn dispatch_to(&self, window: HeadlessWindowId, input: PlatformInput) {
+        self.dispatch_on_to(window.0, flui_interaction::InputSurface::Window, input);
     }
 
     /// [`dispatch`](Self::dispatch) as `surface` of `presentation`'s window.
@@ -1479,7 +1483,11 @@ impl HeadlessHost {
         surface: flui_interaction::InputSurface,
         input: PlatformInput,
     ) {
-        self.ui_runtime.enter(|ui_runtime| {
+        // A real host routes nothing to a window that closed.
+        if !self.is_open(HeadlessWindowId(presentation)) {
+            return;
+        }
+        self.ui_runtime().enter(|ui_runtime| {
             #[expect(
                 clippy::disallowed_methods,
                 reason = "ADR-0287: the kit keeps the input panic so the flush still runs"
@@ -1512,7 +1520,7 @@ impl HeadlessHost {
         });
         // The dispatch is over: the OS drag sessions it decided on start here,
         // as a host's outermost callback starts them (ADR-0211 §7).
-        self.ui_runtime.enter_pending_os_drags();
+        self.ui_runtime().enter_pending_os_drags();
     }
 
     /// Set exactly this window's presentation policy through the runtime owner.
@@ -1524,14 +1532,14 @@ impl HeadlessHost {
         window: HeadlessWindowId,
         policy: crate::PointerResampling,
     ) -> Result<(), crate::PointerResamplingError> {
-        self.ui_runtime.set_pointer_resampling(window.0, policy)
+        self.ui_runtime().set_pointer_resampling(window.0, policy)
     }
 
     /// The pointer left the window: the UI runtime sweeps hover state, so every
     /// hovered region gets its exit and the cursor resets.
     pub fn dispatch_hover_left(&self) {
         self.observe(
-            self.ui_runtime.presentation_id(),
+            self.primary.id,
             flui_runtime::owner::WindowObservation::Hover(false),
         );
     }
@@ -1540,14 +1548,14 @@ impl HeadlessHost {
     /// the next [`pump`](Self::pump) turns semantics on and assembles the
     /// tree.
     pub fn enable_semantics(&self) {
-        self.accessibility.attach();
+        self.primary.accessibility.attach();
     }
 
     /// Detach assistive technology from the window, as a platform adapter
     /// does when the last screen reader goes: the next [`pump`](Self::pump)
     /// stops collecting semantics unless a development agent still asks.
     pub fn disable_semantics(&self) {
-        self.accessibility.detach();
+        self.primary.accessibility.detach();
     }
 
     /// Whether the window's pipeline holds a semantics tree: assistive
@@ -1556,8 +1564,8 @@ impl HeadlessHost {
     /// the next pump has run.
     #[must_use]
     pub fn collects_semantics(&self) -> bool {
-        self.ui_runtime
-            .presentation_collects_semantics_for_test(self.ui_runtime.presentation_id())
+        self.ui_runtime()
+            .presentation_collects_semantics_for_test(self.primary.id)
             .expect("BUG: a headless ui_runtime's window stays resident while the ui_runtime lives")
     }
 
@@ -1567,7 +1575,7 @@ impl HeadlessHost {
     /// owner inbox for the next pump to apply.
     #[must_use]
     pub fn accessibility_action_listener(&self) -> Option<AccessibilityActionListener> {
-        self.accessibility.action.lock().clone()
+        self.primary.accessibility.action.lock().clone()
     }
 
     /// Move the screen reader's cursor to `node` of the published tree, or
@@ -1581,6 +1589,7 @@ impl HeadlessHost {
     /// window opens.
     pub fn move_assistive_focus(&self, node: Option<accesskit::NodeId>) {
         let listener = self
+            .primary
             .accessibility
             .assistive_focus
             .lock()
@@ -1596,12 +1605,24 @@ impl HeadlessHost {
     /// points are the host's (ADR-0083 §2), and `flui-runtime` is not an
     /// embedder API, so a test reaches the UI runtime only through this host.
     pub(crate) fn enter<R>(&self, f: impl FnOnce(&UiRuntime) -> R) -> R {
-        self.ui_runtime.enter(f)
+        self.ui_runtime().enter(f)
     }
 
     /// The hosted UI runtime.
+    ///
+    /// # Panics
+    ///
+    /// Once the host's last window closed, which retired it.
     pub(crate) fn ui_runtime(&self) -> &UiRuntime {
-        &self.ui_runtime
+        self.try_ui_runtime().expect(
+            "a host whose last window closed has retired its UI runtime; `try_ui_runtime` \
+             answers None then",
+        )
+    }
+
+    /// The hosted UI runtime, `None` once the host's last window closed.
+    pub(crate) fn try_ui_runtime(&self) -> Option<&UiRuntime> {
+        self.ui_runtime.as_ref()
     }
 
     /// The owner-local post-frame handle the UI runtime installed on its build
@@ -1616,7 +1637,7 @@ impl HeadlessHost {
     /// UI runtime's presentation always does.
     #[must_use]
     pub fn post_frame_handle(&self) -> PostFrameHandle {
-        self.ui_runtime
+        self.ui_runtime()
             .widgets()
             .with_build_owner(|owner| owner.post_frame_handle().cloned())
             .expect("BUG: a ui_runtime's presentation installs its owner-local post-frame handle")
@@ -1625,7 +1646,7 @@ impl HeadlessHost {
     /// Ask the UI runtime for a frame, as a widget's `setState` would: the next
     /// [`pump`](Self::pump) runs the pipeline even with nothing dirty.
     pub fn request_frame(&self) {
-        self.ui_runtime.request_redraw();
+        self.ui_runtime().request_redraw();
     }
 
     /// Apply application motion policy to this host's UI runtime and all its
@@ -1667,14 +1688,14 @@ impl HeadlessHost {
     /// The window the UI runtime presents into.
     #[must_use]
     pub fn window(&self) -> &HeadlessWindow {
-        &self.window
+        &self.primary.window
     }
 
     /// The pull-model host the UI runtime's presentation speaks to, for a window
     /// built [`HeadlessWindow::with_text_store_host`].
     #[must_use]
     pub fn text_store_host(&self) -> Option<&Rc<RecordingTextStoreHost>> {
-        self.text_store_host.as_ref()
+        self.primary.text_store_host.as_ref()
     }
 
     /// The scenario whose clock the host frames on and whose due changes
@@ -1692,13 +1713,18 @@ impl HeadlessHost {
 
     /// The HTTP client the UI runtime hands its widgets: every request
     /// answers what the test scripted for its URL, and no request reaches the
-    /// network.
+    /// network. Registered only with this crate's `http` feature, as a
+    /// runner registers HTTP only with its own.
+    #[cfg(feature = "http")]
     #[must_use]
     pub fn http(&self) -> crate::ScriptedHttp {
         self.scripted.http.clone()
     }
 
-    /// The primary selection the UI runtime hands its widgets.
+    /// The primary selection the UI runtime hands its widgets where the
+    /// primary window's platform has one (Linux); elsewhere a widget is
+    /// refused it, as on that platform, and what this double is told reaches
+    /// nobody.
     #[must_use]
     pub fn primary_selection(&self) -> crate::ScriptedPrimarySelection {
         self.scripted.primary_selection.clone()
@@ -1710,17 +1736,13 @@ impl HeadlessHost {
         &self,
         window: HeadlessWindowId,
     ) -> Option<&Rc<RecordingTextStoreHost>> {
-        if window == self.primary_window() {
-            self.text_store_host.as_ref()
-        } else {
-            self.secondary_of(window).text_store_host.as_ref()
-        }
+        self.host_window(window).text_store_host.as_ref()
     }
 
     /// The window the UI runtime was built on.
     #[must_use]
     pub fn primary_window(&self) -> HeadlessWindowId {
-        HeadlessWindowId(self.ui_runtime.presentation_id())
+        HeadlessWindowId(self.primary.id)
     }
 
     /// Ask to close `window` for `reason`, as its platform does when the user
@@ -1729,11 +1751,19 @@ impl HeadlessHost {
     /// nothing is torn down, and the pump after the last hold is released
     /// carries it out. `true` when the window closed now; `false` when the
     /// guard refused or the window is already gone.
+    ///
+    /// A [`CloseReason::Program`] close a guard recorded is, when it comes
+    /// due, the window's consent to a quit ([`request_quit`](Self::request_quit)),
+    /// as a runner treats it: it closes nothing alone.
+    ///
+    /// A window another one outlives is removed and the OS focus moves to a
+    /// survivor; the last one retires the UI runtime, as on a real host
+    /// ([`is_retired`](Self::is_retired)).
     pub fn request_close(&mut self, window: HeadlessWindowId, reason: CloseReason) -> bool {
-        if self.ui_runtime.close_refused(window.0, reason) {
+        if !self.is_open(window) || self.ui_runtime().close_refused(window.0, reason) {
             return false;
         }
-        self.ui_runtime.commit_composition_for_close(window.0);
+        self.ui_runtime().commit_composition_for_close(window.0);
         self.close_presentation(window.0)
     }
 
@@ -1743,98 +1773,16 @@ impl HeadlessHost {
     /// is not one.
     #[must_use]
     pub fn is_closed(&self, window: HeadlessWindowId) -> bool {
-        self.ui_runtime
-            .presentation_closing_for_test(window.0)
-            .unwrap_or(true)
+        !self.is_open(window)
+            || self
+                .ui_runtime()
+                .presentation_closing_for_test(window.0)
+                .unwrap_or(true)
     }
 
-    /// The session ends now, in the order a runner carries it out: the
-    /// session-ended notice reaches every subscriber, then every window
-    /// closes and what the documents published is written, as in
-    /// [`quit_now`](Self::quit_now).
-    ///
-    /// Each step runs whatever an earlier one's user code did: the first
-    /// panic resumes once the write is done.
-    pub(crate) fn end_session_now(&mut self) {
-        let mut first = FirstPanic::new();
-        first.contain(|| {
-            self.ui_runtime
-                .deliver_host_notice(&flui_platform::HostNotice::SessionEnded);
-        });
-        self.quit_into(&mut first);
-        first.resume();
-    }
-
-    /// The application quits now: each window commits its composition and
-    /// closes past every hold, so its Detached observers publish what they
-    /// keep, and then what the documents published is written. A write a
-    /// storage holds is not waited for, since nothing on this thread can
-    /// finish it: it stays with the storage, which decides it when its hold
-    /// is released or dropped, and what any document still owes then is
-    /// lost, as at an exit the write outlasts.
-    ///
-    /// Each step runs whatever an earlier one's user code did: the first
-    /// panic resumes once the write is done.
-    pub(crate) fn quit_now(&mut self) {
-        let mut first = FirstPanic::new();
-        self.quit_into(&mut first);
-        first.resume();
-    }
-
-    /// Close every window, then write what the documents published without
-    /// waiting for a held write; a panic goes to `first`.
-    fn quit_into(&mut self, first: &mut FirstPanic) {
-        for id in self.presentation_ids() {
-            first.contain(|| self.ui_runtime.commit_composition_for_close(id));
-            first.contain(|| self.close_presentation(id));
-        }
-        first.contain(|| self.write_published());
-    }
-
-    /// Run the queued registry writes until none finishes, then write what
-    /// every document still owes and run what that queued. A write the
-    /// storage holds is not waited for: nothing on this thread can finish it,
-    /// and while any write is in flight the flush starts none, so what a
-    /// document still owes then, a retry included, is not written.
-    fn write_published(&self) {
-        self.run_flush_writes();
-        if let Some(flush) = &self.flush {
-            let _report = flush.flush_within(std::time::Instant::now());
-        }
-        self.run_flush_writes();
-    }
-
-    /// One phase of the user's session ending, as the operating system reports
-    /// it (ADR-0260). `Query` asks every window's guard for the session's
-    /// end and answers [`Block`](SessionEndAnswer::Block) when one refuses;
-    /// `Cancelled` withdraws only those session-end records; `Ending` writes
-    /// what the documents published, not waiting for a write the storage
-    /// holds.
-    pub fn end_session(&self, phase: SessionEndPhase) -> SessionEndAnswer {
-        let windows = self.presentation_ids();
-        match phase {
-            SessionEndPhase::Query => {
-                let mut answer = SessionEndAnswer::Proceed;
-                for id in windows {
-                    if self.ui_runtime.close_refused(id, CloseReason::SessionEnd) {
-                        answer = SessionEndAnswer::Block;
-                    }
-                }
-                answer
-            }
-            SessionEndPhase::Cancelled => {
-                for id in windows {
-                    self.ui_runtime.withdraw_close(id, CloseReason::SessionEnd);
-                }
-                SessionEndAnswer::Proceed
-            }
-            SessionEndPhase::Ending => {
-                self.write_published();
-                SessionEndAnswer::Proceed
-            }
-            // A phase added later asks this host nothing.
-            _ => SessionEndAnswer::Proceed,
-        }
+    /// Whether `window` is one of the windows open now.
+    fn is_open(&self, window: HeadlessWindowId) -> bool {
+        self.open.iter().any(|open| open.id == window.0)
     }
 
     /// Open `window` beside the existing ones, as a runner installs a
@@ -1862,7 +1810,7 @@ impl HeadlessHost {
         let platform = window.platform;
         let window = Rc::new(window);
         let accessibility = Arc::new(HeadlessAccessibility::default());
-        let presentation = self.ui_runtime.assemble_presentation(
+        let presentation = self.ui_runtime().assemble_presentation(
             PresentationWindow::new(
                 Rc::clone(&window) as Rc<dyn PlatformWindow>,
                 Some(Arc::clone(&accessibility) as Arc<dyn PlatformAccessibility>),
@@ -1875,14 +1823,14 @@ impl HeadlessHost {
             .with_gesture_profiles(gesture_preset)
             .with_platform(platform),
         );
-        let id = self.ui_runtime.install_presentation(presentation);
-        install_window_control(&self.ui_runtime, id, &window);
+        let id = self.ui_runtime_mut().install_presentation(presentation);
+        install_window_control(self.ui_runtime(), id, &window, &self.close_asks);
         let seed = window.state();
-        self.secondary.push(SecondaryWindow {
-            text_store_host,
+        self.open.push(HostWindow {
             id,
             window,
             accessibility,
+            text_store_host,
         });
         // The window reports itself as it opened, as a native host does once
         // it is installed: the change it makes to the application's lifecycle
@@ -1898,8 +1846,8 @@ impl HeadlessHost {
         HeadlessWindowId(id)
     }
 
-    /// Attach `view` as the root widget of `window`. The primary window's
-    /// root is attached with [`attach`](Self::attach).
+    /// Attach `view` as the root widget of `window`, wrapped as
+    /// [`attach`](Self::attach) wraps the primary window's.
     ///
     /// # Errors
     ///
@@ -1907,7 +1855,7 @@ impl HeadlessHost {
     ///
     /// # Panics
     ///
-    /// If `window` was not opened by this host.
+    /// If `window` was not opened by this host or has closed.
     pub fn attach_to<V>(
         &self,
         window: HeadlessWindowId,
@@ -1916,13 +1864,10 @@ impl HeadlessHost {
     where
         V: flui_view::View + Clone + 'static,
     {
-        if window == self.primary_window() {
-            return self.attach(view);
-        }
-        // The same root the primary window gets: the catalog's keyboard
-        // bindings, then this window's own `MediaQuery` and its size.
-        let size = self.secondary_of(window).window.size;
-        self.ui_runtime.attach_root_widget_with_size_to(
+        // Every window's root is the same: the catalog's keyboard bindings,
+        // then this window's own `MediaQuery` and its size.
+        let size = self.open_window_of(window).window.size;
+        self.ui_runtime().attach_root_widget_with_size_to(
             window.0,
             &flui_widgets::app_root(view.clone()),
             size.width(),
@@ -1947,7 +1892,7 @@ impl HeadlessHost {
         window: HeadlessWindowId,
         intent: flui_view::navigation::NavigationIntent,
     ) -> Result<(), flui_view::navigation::NavigationRefused> {
-        self.ui_runtime.navigate(window.0, intent)
+        self.ui_runtime().navigate(window.0, intent)
     }
 
     /// Open `url` in `window`, as a runner opens a URL the platform hands
@@ -1966,13 +1911,13 @@ impl HeadlessHost {
         window: HeadlessWindowId,
         url: &str,
     ) -> Result<(), flui_view::navigation::OpenUrlRefused> {
-        self.ui_runtime.open_url(window.0, url)
+        self.ui_runtime().open_url(window.0, url)
     }
 
     /// Set the URL schemes and associated domains the application declares,
     /// which [`open_url`](Self::open_url) admits; a fresh host declares none.
     pub fn set_open_declarations(&self, declarations: flui_view::navigation::OpenDeclarations) {
-        self.ui_runtime.set_open_declarations(declarations);
+        self.ui_runtime().set_open_declarations(declarations);
     }
 
     /// Run as a page of `origin` (`https://app.example.com`), as the web
@@ -1986,7 +1931,7 @@ impl HeadlessHost {
         &self,
         origin: &str,
     ) -> Result<(), flui_view::navigation::OpenUrlRefused> {
-        self.ui_runtime.set_page_origin(origin)
+        self.ui_runtime().set_page_origin(origin)
     }
 
     /// Attach assistive technology to `window`; see
@@ -2072,17 +2017,13 @@ impl HeadlessHost {
 
     /// Deliver `display` as the display `window` is on, as a runner delivers
     /// the one it derived from the platform's display snapshot: its refresh
-    /// period is what the UI runtime paces `window`'s presentation by.
-    ///
-    /// # Panics
-    ///
-    /// If `window` was not opened by this host.
+    /// period is what the UI runtime paces `window`'s presentation by. A
+    /// window that closed hears nothing, as on a real host.
     pub fn set_window_display(
         &self,
         window: HeadlessWindowId,
         display: Option<flui_platform::WindowDisplay>,
     ) {
-        let _ = self.window_of(window);
         self.observe(
             window.0,
             flui_runtime::owner::WindowObservation::Display(
@@ -2093,13 +2034,9 @@ impl HeadlessHost {
 
     /// Report that `window` gained OS focus, as a backend's focus callback
     /// does: keyboard input goes to its presentation from now on, whatever
-    /// window it is stamped for, and the window that held focus loses it.
-    ///
-    /// # Panics
-    ///
-    /// If `window` was not opened by this host.
+    /// window it is stamped for, and the window that held focus loses it. A
+    /// window that closed hears nothing, as on a real host.
     pub fn focus_window(&self, window: HeadlessWindowId) {
-        let _ = self.window_of(window);
         self.observe(
             window.0,
             flui_runtime::owner::WindowObservation::Focus(true),
@@ -2126,7 +2063,7 @@ impl HeadlessHost {
     /// preference source delivers one (ADR-0172): gesture timing, motion and
     /// text values reach the windows' new sequences from now on.
     pub fn set_system_preferences(&self, values: flui_platform::SystemPreferences) {
-        self.ui_runtime
+        self.ui_runtime()
             .enter(|ui_runtime| ui_runtime.apply_system_preferences_for_test(values));
     }
 
@@ -2136,7 +2073,7 @@ impl HeadlessHost {
     /// focus and execution state stay as they were.
     pub fn set_window_visible(&self, visible: bool) {
         self.observe(
-            self.ui_runtime.presentation_id(),
+            self.primary.id,
             flui_runtime::owner::WindowObservation::Visibility(visible),
         );
     }
@@ -2149,21 +2086,62 @@ impl HeadlessHost {
     /// moves the OS focus between windows this host opened.
     pub fn set_window_focused(&self, focused: bool) {
         self.observe(
-            self.ui_runtime.presentation_id(),
+            self.primary.id,
             flui_runtime::owner::WindowObservation::Focus(focused),
         );
+    }
+
+    /// Report whether the platform lets `window` run, as a phone's host
+    /// reports its activity or scene pausing and resuming (Android's
+    /// `onPause`/`onResume`, a UIKit scene entering the background, a page
+    /// frozen by the browser): the window's state says so, and the host
+    /// delivers `WindowObservation::Execution(execution)`, which suspends
+    /// (`Paused`) or resumes the window's lifecycle. Its focus and visibility
+    /// stay as they were. A window that closed hears nothing, as on a real
+    /// host.
+    pub fn set_window_execution(
+        &self,
+        window: HeadlessWindowId,
+        execution: flui_platform::WindowExecutionState,
+    ) {
+        let Some(open) = self.open.iter().find(|open| open.id == window.0) else {
+            return;
+        };
+        *open.window.execution.lock() = execution;
+        self.observe(
+            window.0,
+            flui_runtime::owner::WindowObservation::Execution(execution),
+        );
+    }
+
+    /// Deliver `notice` to every subscriber of the application, as a host
+    /// delivers the system's notices: the machine about to sleep or waking,
+    /// the session locked or unlocked, or the system asking for memory back.
+    /// A session's end has its own entries
+    /// ([`end_session`](Self::end_session)).
+    ///
+    /// A retired host has no subscriber left to tell.
+    ///
+    /// # Panics
+    ///
+    /// With the first panic of a subscriber, once every subscriber heard the
+    /// notice.
+    pub fn notify(&self, notice: flui_platform::SystemNotice) {
+        if let Some(runtime) = self.try_ui_runtime() {
+            runtime.deliver_host_notice(&flui_platform::HostNotice::from(notice));
+        }
     }
 
     /// Report `insets` as what covers `window`, as a host reports a change of
     /// its safe area, keyboard or system gesture regions: the presentation's
     /// `MediaQuery` carries them from the next [`pump`](Self::pump), and a
-    /// moving keyboard is sampled at each frame's time until it settles.
-    ///
-    /// # Panics
-    ///
-    /// If `window` was not opened by this host.
+    /// moving keyboard is sampled at each frame's time until it settles. A
+    /// window that closed hears nothing, as on a real host.
     pub fn set_window_insets(&self, window: HeadlessWindowId, insets: flui_platform::WindowInsets) {
-        *self.window_of(window).insets.lock() = insets;
+        let Some(open) = self.open.iter().find(|open| open.id == window.0) else {
+            return;
+        };
+        *open.window.insets.lock() = insets;
         self.observe(
             window.0,
             flui_runtime::owner::WindowObservation::Insets(insets),
@@ -2204,7 +2182,7 @@ impl HeadlessHost {
     /// observe it to watch the arena decide what this host dispatches.
     #[must_use]
     pub fn arena(&self) -> &flui_interaction::GestureArena {
-        self.ui_runtime.gestures().arena()
+        self.ui_runtime().gestures().arena()
     }
 
     /// Install a tap from `factory` on this host's runtime for the rest of
@@ -2219,14 +2197,14 @@ impl HeadlessHost {
         &self,
         factory: &flui_runtime::InputTapFactory,
     ) -> Result<(), flui_foundation::IdExhausted> {
-        factory.install_on(&self.ui_runtime)
+        factory.install_on(self.ui_runtime())
     }
 
     /// The UI runtime's tap registry: [`record`](crate::recording::record)
     /// into it to record everything this host applies (ADR-0215 §1).
     #[must_use]
     pub fn input_taps(&self) -> &flui_runtime::InputTaps {
-        self.ui_runtime.input_taps()
+        self.ui_runtime().input_taps()
     }
 
     /// Where a native journal sends its lines for this host's recordings of the `native` layer
@@ -2235,7 +2213,7 @@ impl HeadlessHost {
     #[must_use]
     pub fn attach_native_journal(&self) -> flui_runtime::ui_runtime::NativeLines {
         let lines = flui_runtime::ui_runtime::NativeLines::default();
-        self.ui_runtime.attach_native_journal(&lines);
+        self.ui_runtime().attach_native_journal(&lines);
         lines
     }
 
@@ -2251,7 +2229,7 @@ impl HeadlessHost {
     ) -> crate::recording::RecordingHeader {
         let mut header = crate::recording::RecordingHeader::starting(
             crate::recording::RecordingClock::Virtual,
-            &self.ui_runtime.recording_start(),
+            &self.ui_runtime().recording_start(),
         );
         header.privacy = privacy;
         header
@@ -2268,7 +2246,7 @@ impl HeadlessHost {
     pub fn embed_surface(
         &mut self,
     ) -> Result<flui_interaction::InputSurface, flui_interaction::SurfaceIdsExhausted> {
-        let surface = self.ui_runtime.gestures().embed_surface()?;
+        let surface = self.ui_runtime().gestures().embed_surface()?;
         self.embedded.push(surface);
         Ok(surface)
     }
@@ -2280,7 +2258,7 @@ impl HeadlessHost {
     ///
     /// As [`dispatch`](Self::dispatch).
     pub fn dispatch_on(&self, surface: flui_interaction::InputSurface, input: PlatformInput) {
-        self.dispatch_on_to(self.ui_runtime.presentation_id(), surface, input);
+        self.dispatch_on_to(self.primary.id, surface, input);
     }
 
     /// Replay `recording` on this host, row by row on its virtual clock, and
@@ -2328,7 +2306,7 @@ impl HeadlessHost {
                 self.set_scale_factor(id, window.scale_factor);
             }
             if let Some(profiles) = &window.gesture_profiles {
-                self.ui_runtime
+                self.ui_runtime()
                     .replace_gesture_profiles(presentation, profiles.clone());
             }
         }
@@ -2365,12 +2343,12 @@ impl HeadlessHost {
                             self.size_sink_to_primary();
                         }
                         HostInput::Accessibility(request) => {
-                            self.ui_runtime.enter(|ui_runtime| {
+                            self.ui_runtime().enter(|ui_runtime| {
                                 ui_runtime.dispatch_accessibility(presentation, request);
                             });
                         }
                         HostInput::AssistiveFocus(node) => {
-                            self.ui_runtime.enter(|ui_runtime| {
+                            self.ui_runtime().enter(|ui_runtime| {
                                 ui_runtime.dispatch_assistive_focus(presentation, *node);
                             });
                         }
@@ -2399,7 +2377,7 @@ impl HeadlessHost {
     ///
     /// With the first panic a delivered input or frame raised.
     pub fn run_script(&mut self, script: &crate::replay::PointerScript) {
-        let window = self.ui_runtime.presentation_id();
+        let window = self.primary_window();
         let base = self.event_now();
         for (step, input) in script.steps().iter().zip(script.inputs_from(base)) {
             self.advance_to(base + step.at());
@@ -2453,7 +2431,14 @@ impl HeadlessHost {
     /// wait for input alone.
     #[must_use]
     pub fn time_to_next_frame(&self) -> Option<Duration> {
-        let runtime = &self.ui_runtime;
+        let Some(runtime) = &self.ui_runtime else {
+            // A retired host frames nothing: its loop wakes for the
+            // background lanes and the scenario alone.
+            if self.background_runs_next_pump() {
+                return Some(Duration::ZERO);
+            }
+            return self.scenario_wait();
+        };
         let now = flui_foundation::MonotonicClock::now(&self.clock);
         // A dropped frame waiting for its retry runs nothing sooner, though a
         // gesture deadline before it still wakes the loop.
@@ -2465,7 +2450,8 @@ impl HeadlessHost {
                 || runtime.scheduler().is_frame_scheduled()
                 || runtime.has_pending_work()
                 || self.background_runs_next_pump()
-                || self.observations_pending())
+                || self.observations_pending()
+                || self.turn_owed())
         {
             return Some(Duration::ZERO);
         }
@@ -2517,6 +2503,17 @@ impl HeadlessHost {
         self.scripted.background.pending()
     }
 
+    /// Whether the host owes a turn, as a runner's owner is woken for one: a
+    /// close a widget asked for, or a quit to ask the windows or to commit.
+    fn turn_owed(&self) -> bool {
+        !self.close_asks.borrow().is_empty()
+            || match &self.quit {
+                QuitAsk::None => false,
+                QuitAsk::Asked => true,
+                QuitAsk::Deferred(waiting) => waiting.is_empty(),
+            }
+    }
+
     /// Whether a window changed since the host last told the UI runtime: the next pump
     /// delivers the change, so the host is not settled.
     fn observations_pending(&self) -> bool {
@@ -2562,13 +2559,17 @@ impl HeadlessHost {
         max_frames: usize,
     ) -> Result<usize, NotSettled> {
         for frames in 0..=max_frames {
-            let runtime = &self.ui_runtime;
-            if !runtime.needs_redraw()
-                && !runtime.scheduler().is_frame_scheduled()
-                && !runtime.has_pending_work()
+            // A retired host owes only its background work and the scenario.
+            let runtime_idle = self.ui_runtime.as_ref().is_none_or(|runtime| {
+                !runtime.needs_redraw()
+                    && !runtime.scheduler().is_frame_scheduled()
+                    && !runtime.has_pending_work()
+                    && runtime.next_wake().is_none()
+            });
+            if runtime_idle
                 && self.pending_background() == 0
                 && !self.observations_pending()
-                && runtime.next_wake().is_none()
+                && !self.turn_owed()
                 && self.scenario_wait().is_none()
             {
                 return Ok(frames);
@@ -2587,6 +2588,10 @@ impl HeadlessHost {
         presentation: PresentationId,
         observation: flui_runtime::owner::WindowObservation,
     ) {
+        // A real host hears nothing more of a window that closed.
+        if !self.is_open(HeadlessWindowId(presentation)) {
+            return;
+        }
         if let flui_runtime::owner::WindowObservation::Metrics(metrics) = observation {
             *self
                 .window_of(HeadlessWindowId(presentation))
@@ -2594,17 +2599,17 @@ impl HeadlessHost {
                 .lock() = metrics.scale();
         }
         let address = flui_foundation::PresentationAddress {
-            ui_runtime_id: self.ui_runtime.id(),
+            ui_runtime_id: self.ui_runtime().id(),
             presentation_id: presentation,
         };
-        self.ui_runtime.enter(|ui_runtime| {
+        self.ui_runtime().enter(|ui_runtime| {
             ui_runtime.apply_window_observation(address, observation, &|_| {});
         });
     }
 
     /// Size the sink to the primary window's device size.
     fn size_sink_to_primary(&mut self) {
-        let physical = self.window.physical_size_i32();
+        let physical = self.primary.window.physical_size_i32();
         self.sink.size = (
             u32::try_from(physical.width).expect("BUG: a window's device size is positive"),
             u32::try_from(physical.height).expect("BUG: a window's device size is positive"),
@@ -2613,15 +2618,12 @@ impl HeadlessHost {
 
     /// The presentation of the window `window` names.
     fn presentation_of(&self, window: WindowId) -> PresentationId {
-        if self.window.id == window {
-            return self.ui_runtime.presentation_id();
-        }
-        self.secondary
-            .iter()
-            .find(|secondary| secondary.window.id == window)
+        std::iter::once(&self.primary)
+            .chain(&self.open)
+            .find(|open| open.window.id == window)
             .map_or_else(
                 || panic!("the recording names {window:?}, a window this host has not opened"),
-                |secondary| secondary.id,
+                |open| open.id,
             )
     }
 
@@ -2638,7 +2640,7 @@ impl HeadlessHost {
                 .iter()
                 .copied()
                 .find(|embedded| {
-                    presentation == self.ui_runtime.presentation_id()
+                    presentation == self.primary.id
                         && matches!(embedded, flui_interaction::InputSurface::Embedded(id) if id.get() == raw)
                 })
                 .unwrap_or_else(|| {
@@ -2661,100 +2663,82 @@ impl HeadlessHost {
         )
     }
 
-    /// Every window's presentation, the primary first.
-    /// The owner turn's settle, before its frame: carry out the closes the
-    /// windows' guards now let through, run the registry's queued writes and
-    /// wake what they resolved.
-    fn settle_lifecycle(&mut self) {
-        for (id, _reason) in self.ui_runtime.settle_close_guards().due {
-            self.close_presentation(id);
-        }
-        self.run_flush_writes();
-        if let Some(flush) = &self.flush {
-            for waker in flush.settle() {
-                waker.wake();
-            }
-        }
-    }
-
-    /// Poll the queued registry writes, keeping those still waiting for their
-    /// storage, until a pass finishes none: a finished write may queue the
-    /// revision published behind it, which the next pass runs. The queue's
-    /// lock is not held while a write runs.
-    fn run_flush_writes(&self) {
-        let mut ctx = std::task::Context::from_waker(std::task::Waker::noop());
-        loop {
-            let writes = std::mem::take(&mut *self.flush_writes.lock());
-            let queued = writes.len();
-            let waiting: Vec<FlushWrite> = writes
-                .into_iter()
-                .filter_map(|mut write| write.as_mut().poll(&mut ctx).is_pending().then_some(write))
-                .collect();
-            let finished_any = waiting.len() < queued;
-            self.flush_writes.lock().extend(waiting);
-            if !finished_any {
-                return;
-            }
-        }
-    }
-
-    /// Close presentation `id`: a secondary window's presentation is closed
-    /// and removed, as a runner closes a window; the primary one stops and
-    /// its tree stays mounted for the test to inspect, as a runner's last
-    /// window stays until the loop's teardown. `false` when it is already
-    /// closed.
+    /// Close presentation `id`, as a runner closes a window: a window another
+    /// one outlives is closed and removed, and the OS focus moves to a
+    /// survivor; the last window stops its presentation and retires the UI
+    /// runtime with it, as a real host retires its UI runtime when its last
+    /// window closes, so whatever the UI runtime still held to answer ends as
+    /// [`OwnerRetired`](flui_platform::capability::OwnerRetired). `false`
+    /// when the window is already closed.
+    ///
+    /// # Panics
+    ///
+    /// With the first panic of the code the close runs (observers,
+    /// disposers, destructors), once the close is done.
     fn close_presentation(&mut self, id: PresentationId) -> bool {
-        if id == self.ui_runtime.presentation_id() {
-            if std::mem::replace(&mut self.primary_closed, true) {
-                return false;
-            }
-            self.ui_runtime
-                .enter(|ui_runtime| ui_runtime.stop_presentation_for_test(id));
-            return true;
+        let Some(position) = self.open.iter().position(|window| window.id == id) else {
+            return false;
+        };
+        let closed = self.open.remove(position);
+        closed.window.closed.store(true, Ordering::Relaxed);
+        // A window that is gone holds no quit.
+        self.quit_consented(id);
+        if !self.open.is_empty() {
+            return self.ui_runtime_mut().close_presentation_entered(id);
         }
-        self.secondary.retain(|secondary| secondary.id != id);
-        self.ui_runtime.close_presentation_entered(id)
+        let runtime = self
+            .ui_runtime
+            .take()
+            .expect("BUG: a host with an open window holds its UI runtime");
+        // The presentation stops inside the runtime's scope, so its Detached
+        // observers run as on a real host, and the runtime is then dropped,
+        // which retires what it still owes; a panic in either is kept and
+        // the other still runs (ADR-0281).
+        let mut first = FirstPanic::new();
+        first.contain(|| runtime.enter(UiRuntime::stop_presentations));
+        first.contain(move || drop(runtime));
+        first.resume();
+        true
     }
 
+    /// The presentations of the open windows, in opening order.
     fn presentation_ids(&self) -> Vec<PresentationId> {
-        std::iter::once(self.ui_runtime.presentation_id())
-            .chain(self.secondary.iter().map(|secondary| secondary.id))
-            .collect()
+        self.open.iter().map(|window| window.id).collect()
     }
 
     /// The presentation at `position` of [`presentation_ids`](Self::presentation_ids)'s order.
     fn presentation_at(&self, position: usize) -> Option<PresentationId> {
-        match position.checked_sub(1) {
-            None => Some(self.ui_runtime.presentation_id()),
-            Some(secondary) => self.secondary.get(secondary).map(|secondary| secondary.id),
-        }
+        self.open.get(position).map(|window| window.id)
     }
 
-    /// The window `window` names: the primary one or one the host
-    /// [opened](Self::open_window) and has not closed.
+    /// The window `window` names: the primary one, open or closed, or one
+    /// the host [opened](Self::open_window) and has not closed.
     ///
     /// # Panics
     /// When `window` names a secondary window that closed.
     #[must_use]
     pub fn window_of(&self, window: HeadlessWindowId) -> &HeadlessWindow {
-        if window == self.primary_window() {
-            return &self.window;
-        }
-        &self.secondary_of(window).window
+        &self.host_window(window).window
     }
 
     fn accessibility_of(&self, window: HeadlessWindowId) -> &HeadlessAccessibility {
-        if window == self.primary_window() {
-            return &self.accessibility;
-        }
-        &self.secondary_of(window).accessibility
+        &self.host_window(window).accessibility
     }
 
-    fn secondary_of(&self, window: HeadlessWindowId) -> &SecondaryWindow {
-        self.secondary
+    /// The primary window, open or closed, or an open one.
+    fn host_window(&self, window: HeadlessWindowId) -> &HostWindow {
+        if window == self.primary_window() {
+            return &self.primary;
+        }
+        self.open_window_of(window)
+    }
+
+    /// The open window `window` names.
+    fn open_window_of(&self, window: HeadlessWindowId) -> &HostWindow {
+        self.open
             .iter()
-            .find(|secondary| secondary.id == window.0)
-            .expect("a HeadlessWindowId names a window this host opened")
+            .find(|open| open.id == window.0)
+            .expect("a HeadlessWindowId names a window this host opened and has not closed")
     }
 }
 
@@ -2771,32 +2755,63 @@ pub struct NotSettled {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct HeadlessWindowId(PresentationId);
 
+/// The closes the windows' widgets asked for since the host's last turn, in
+/// order, which the turn carries out as a runner's window queue does.
+type CloseAsks = Rc<std::cell::RefCell<Vec<PresentationId>>>;
+
+/// Where a quit stands, as a runner's application control keeps it.
+#[derive(Debug)]
+enum QuitAsk {
+    /// No quit is asked.
+    None,
+    /// A quit is asked; the next turn asks the windows.
+    Asked,
+    /// The windows that refused with a record; the quit goes ahead once
+    /// each has consented.
+    Deferred(Vec<PresentationId>),
+}
+
 /// The host's control of a [`HeadlessWindow`], behind the `WindowHandle` its
 /// widgets reach through `LifecycleContext::window`, as a runner installs one
-/// for each window it opens. The double honours its frame and mode commands, at once.
-struct HeadlessWindowControl(Rc<HeadlessWindow>);
+/// for each window it opens. The double honours its frame and mode commands
+/// at once and answers [`Closed`](flui_platform::SubmitError::Closed) once its
+/// window closed; a close it is asked for waits for the host's next turn.
+struct HeadlessWindowControl {
+    window: Rc<HeadlessWindow>,
+    presentation: PresentationId,
+    close_asks: CloseAsks,
+}
 
 impl flui_platform::WindowControl for HeadlessWindowControl {
     fn state(&self) -> flui_platform::WindowState {
-        self.0.state()
+        self.window.state()
     }
 
     fn submit(
         &self,
         command: flui_platform::WindowCommand,
     ) -> Result<(), flui_platform::SubmitError> {
-        let admitted = command.admit(&self.0.capabilities())?;
+        if self.window.is_closed() {
+            return Err(flui_platform::SubmitError::Closed);
+        }
+        let admitted = command.admit(&self.window.capabilities())?;
         let command = admitted
-            .against(&self.0.capabilities())
+            .against(&self.window.capabilities())
             .expect("BUG: the double's capabilities never move");
-        self.0
+        self.window
             .take(command)
             .expect("BUG: the double carries out every command its capabilities honour");
         Ok(())
     }
 
+    /// Counted as the window's observation, and queued for the host's next
+    /// turn, which asks the window's guard and closes it (a window already
+    /// gone has nothing left to close), as a runner's window queue does.
     fn request_close(&self) {
-        self.0.chrome.lock().close_requests += 1;
+        self.window.chrome.lock().close_requests += 1;
+        if !self.window.is_closed() {
+            self.close_asks.borrow_mut().push(self.presentation);
+        }
     }
 }
 
@@ -2806,20 +2821,27 @@ fn install_window_control(
     ui_runtime: &UiRuntime,
     presentation: PresentationId,
     window: &Rc<HeadlessWindow>,
+    close_asks: &CloseAsks,
 ) {
-    let source = flui_view::__runtime::WindowSource::new(HeadlessWindowControl(Rc::clone(window)));
+    let source = flui_view::__runtime::WindowSource::new(HeadlessWindowControl {
+        window: Rc::clone(window),
+        presentation,
+        close_asks: Rc::clone(close_asks),
+    });
     assert!(
         ui_runtime.install_window(presentation, source),
         "BUG: the window's presentation was just installed"
     );
 }
 
-/// A window [`HeadlessHost::open_window`] installed beside the primary one.
-struct SecondaryWindow {
-    text_store_host: Option<Rc<RecordingTextStoreHost>>,
+/// A window of a [`HeadlessHost`]: its presentation and what the host plays
+/// for it.
+#[derive(Clone)]
+struct HostWindow {
     id: PresentationId,
     window: Rc<HeadlessWindow>,
     accessibility: Arc<HeadlessAccessibility>,
+    text_store_host: Option<Rc<RecordingTextStoreHost>>,
 }
 
 /// The text a dropped-frame report raises with; `None` for a contained

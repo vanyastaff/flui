@@ -21,7 +21,7 @@
 
 /// The input recording format's major version. It changes only with an incompatible change;
 /// unknown fields are skipped within one version.
-pub const FORMAT_VERSION: u32 = 5;
+pub const FORMAT_VERSION: u32 = 6;
 
 /// The header field that names the format and its major version.
 pub const VERSION_KEY: &str = "flui_recording";
@@ -835,6 +835,29 @@ pub struct SmartZoom {
     pub modifiers: Vec<String>,
 }
 
+/// A locked pointer's motion.
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct RawMotion {
+    /// The pointer the event belongs to.
+    pub pointer: PointerInfo,
+    /// The event time, in nanoseconds.
+    pub t: u64,
+    /// Where the locked pointer rests, in logical pixels, when the platform says.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub at: Option<[f64; 2]>,
+    /// The motion to the right.
+    pub dx: f64,
+    /// The motion down.
+    pub dy: f64,
+    /// Whether the motion is before the system's pointer acceleration.
+    pub unaccelerated: bool,
+}
+
 /// A trackpad pan-zoom event.
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -951,6 +974,9 @@ pub enum PointerEvent {
     /// A trackpad smart-zoom.
     #[cfg_attr(feature = "serde", serde(rename = "smart_zoom"))]
     SmartZoom(SmartZoom),
+    /// A locked pointer's motion.
+    #[cfg_attr(feature = "serde", serde(rename = "raw_motion"))]
+    RawMotion(RawMotion),
     /// A pointer device appeared.
     #[cfg_attr(feature = "serde", serde(rename = "device_added"))]
     DeviceAdded(DeviceChange),

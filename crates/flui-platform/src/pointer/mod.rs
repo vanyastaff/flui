@@ -21,6 +21,9 @@
 //!   trackpad's two-finger double-tap; [`TouchpadHoldEvent`] is fingers resting on a touchpad,
 //!   which stops whatever coasts; [`TouchpadSwipeEvent`] is a swipe of three fingers or more,
 //!   a gesture of its own with a cumulative travel, never a scroll.
+//! - **A locked pointer.** While a window holds the pointer in place
+//!   ([`CursorGrab::Locked`](crate::CursorGrab::Locked)) its motion is a [`RawMotion`]: a
+//!   [`MotionDelta`], before or after the system's acceleration, instead of moves.
 //!
 //! Every number is a validated newtype ([`PointerPosition`], [`Pressure`], [`PenOrientation`],
 //! [`ScrollDelta`], [`PanZoomTransform`], …) whose fallible constructor states its NaN,
@@ -57,6 +60,7 @@
 
 mod buttons;
 mod pan_zoom;
+mod raw_motion;
 mod sample;
 mod scroll;
 mod touchpad;
@@ -67,6 +71,7 @@ use core::num::{NonZeroU8, NonZeroU64, TryFromIntError};
 
 pub use buttons::{InvalidButtonNumber, PointerButton, PointerButtons};
 pub use pan_zoom::{PanZoomEvent, PanZoomPhase, PanZoomTransform, SmartZoomEvent};
+pub use raw_motion::{MotionAcceleration, MotionDelta, RawMotion};
 pub use sample::PointerSample;
 pub use scroll::{
     ScrollDelta, ScrollEvent, ScrollInversion, ScrollPhase, ScrollPrecision, ScrollUnit,
@@ -877,6 +882,11 @@ pub enum PointerEvent {
     /// The platform's smart zoom: a two-finger double-tap on a trackpad. One discrete
     /// event, offered to the innermost target that claims it.
     SmartZoom(SmartZoomEvent),
+    /// A locked pointer's device moved
+    /// ([`CursorGrab::Locked`](crate::CursorGrab::Locked)): it arrives
+    /// instead of [`Move`](Self::Move) while the window holds the pointer in
+    /// place, and never otherwise.
+    RawMotion(RawMotion),
     /// A pointer device was connected.
     DeviceAdded(PointerDeviceChange),
     /// A pointer device was disconnected. A backend cancels each of its active contacts with

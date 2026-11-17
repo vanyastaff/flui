@@ -271,8 +271,8 @@ mod queue {
     use crate::owner::android::activity_results::Answer;
     use crate::owner::android::java_view::strings;
     use crate::owner::android::main_thread;
+    use crate::owner::android::native_call::jni_native;
     use crate::owner::android::result_bridge::{HeldIntent, drain_answers};
-    use crate::owner::panic_boundary::{AfterPanic, os_entry};
     use crate::owner::signal::OwnerSignal;
 
     /// What the native wake reaches: the flag the owner takes before it
@@ -668,24 +668,24 @@ mod queue {
 
     #[expect(unsafe_code, reason = "the handle is a Box this module leaked")]
     extern "system" fn native_wake<'local>(
-        _env: EnvUnowned<'local>,
+        mut env: EnvUnowned<'local>,
         _class: JClass<'local>,
         handle: jlong,
     ) {
-        os_entry(
+        jni_native(
             "FluiHost.nativeWake",
-            (),
-            AfterPanic::Answer(|()| ()),
-            || {
-                if handle == 0 {
-                    return;
+            &mut env,
+            |()| (),
+            |_| {
+                if handle != 0 {
+                    // SAFETY: a non-zero handle is a `Box<Arc<Inbox>>` from
+                    // `HostQueue::bind`. `FluiHost` passes it only on the Java
+                    // main thread, and `free_handle` frees it on that thread only
+                    // once `FluiHost` no longer names it, so it is live here.
+                    let inbox = unsafe { &*(handle as *const Arc<Inbox>) };
+                    inbox.wake();
                 }
-                // SAFETY: a non-zero handle is a `Box<Arc<Inbox>>` from
-                // `HostQueue::bind`. `FluiHost` passes it only on the Java main
-                // thread, and `free_handle` frees it on that thread only once
-                // `FluiHost` no longer names it, so it is live here.
-                let inbox = unsafe { &*(handle as *const Arc<Inbox>) };
-                inbox.wake();
+                Ok(())
             },
         );
     }

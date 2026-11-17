@@ -989,15 +989,27 @@ trait depends on `flui-platform` instead.
   `a_turn_deadline_asks_no_window_for_a_frame`, `a_past_turn_deadline_gives_one_turn`,
   `a_past_turn_deadline_does_not_spin_the_win32_loop` and
   `a_due_turn_deadline_wakes_the_owner_from_a_modal_loop` hold it.
-- **A window states when the user places it (ADR-0343 §2).** Each host fills
-  `ReportedFacts::interaction` on the report that carries a change: Win32
-  `UserPlacing` inside its size-move loop and while the default procedure
-  carries out an `SC_MAXIMIZE`, `SC_MINIMIZE` or `SC_RESTORE` the user worked,
-  and publishes `None` when either ends; a system command the window sends
-  itself for an application's command is marked by its sender
-  (`WindowContext::in_app_command`) and is not the user's. The headless host
-  states what `HeadlessHostWindow::simulate_interaction` said; every other
-  host `Unknown` ([gaps](../../docs/gaps.md#only-win32-says-when-the-user-places-a-window-and-not-for-every-placement)).
+- **A window states when the user places or resizes it (ADR-0343 §2,
+  ADR-0354 §4).** Each host fills `ReportedFacts::interaction` on the report
+  that carries a change: Win32 `UserPlacing` inside its size-move loop and
+  while the default procedure carries out an `SC_MAXIMIZE`, `SC_MINIMIZE` or
+  `SC_RESTORE` the user worked, `UserResizing` from the loop's first
+  `WM_SIZING`, and publishes `None` when either ends; a system command the
+  window sends itself for an application's command is marked by its sender
+  (`WindowContext::in_app_command`) and is not the user's. AppKit states
+  `UserResizing` between `windowWillStartLiveResize:` and
+  `windowDidEndLiveResize:`, Wayland while a configure carries `resizing`. The
+  headless host states what `HeadlessHostWindow::simulate_interaction` said;
+  every other host `Unknown` ([gaps](../../docs/gaps.md#only-win32-says-when-the-user-places-a-window-and-not-for-every-placement)).
+- **A grab is the desktop's, so it ends with the focus (ADR-0354 §2).** Each
+  host takes `CursorGrab::Confined`/`Locked` only for a window with the
+  keyboard focus and lets it go on focus loss, hide and close, before it
+  publishes: Win32's `ClipCursor` is the desktop's and outlives a window that
+  forgets it, so `WindowContext::let_pointer_go` runs on `WM_KILLFOCUS` and
+  `WM_DESTROY`. A locked pointer is not shown, its moves are dropped, and its
+  motion is built by `ContactRegistry::raw_motion` from the backend's mouse
+  contact (Win32 `WM_INPUT`, X11 `XI_RawMotion`, Wayland
+  `zwp_relative_pointer_v1`, AppKit's deltas, the web's `movementX/Y`).
 - **The application's handler is passed to `run` (ADR-0254 §4).**
   `AppHandler` (in `platform.rs`) has one method per obligation:
   `ready(OwnerPlatform)`, `quit_requested`, `quit_asked`, `reopen`, `session_end`,
@@ -1118,8 +1130,9 @@ trait depends on `flui-platform` instead.
   functions and constructors of OS crates by their path, but methods by name,
   since a receiver's type is out of its reach: a new OS method that takes a
   closure is added to its GCD list (`exec_async`, `exec_sync`, `exec_after`,
-  `after`, `barrier_*`, names the crate keeps for GCD), and a constructor a
-  glob import hides to its list of callback types. `wasm_bindgen` closures are
+  `after`, `barrier_*`, names the crate keeps for GCD) or its looper list
+  (the ndk's `add_fd_with_callback`, whose trampoline aborts on a panic), and
+  a constructor a glob import hides to its list of callback types. `wasm_bindgen` closures are
   out of its scope because wasm32 aborts on panic,
   android-activity's procedures contain their own, and `flui-hot-reload`'s
   plugin ABI is outside this crate. Tests: `owner::panic_boundary::tests` (the
@@ -1381,7 +1394,14 @@ trait depends on `flui-platform` instead.
   deadline that came due is offered to the windows as frame requests once and
   armed again only after a frame ran (`owner::wake_deadline::WakeDeadline`,
   the X11 and Win32 loops' rule), so a window that declines its frames, or one
-  the compositor does not draw, leaves the loop idle; a loop that no longer
+  the compositor does not draw, leaves the loop idle. The loop wakes for a
+  wake deadline no sooner than a window can take a frame (`wait::FrameHold`,
+  `wait::deadline_wake`): not before a frame callback out is answered or given
+  up, and not by time while the compositor alone can release every window
+  (unconfigured or suspended), so a deadline that moves on each answer polls
+  no window
+  (`wayland_scripted::a_moving_wake_deadline_polls_no_window_the_compositor_never_draws`);
+  a loop that no longer
   accepts work asks for no deadline. A turn whose dispatch recorded events
   ends before it would block, so they are applied first, and a flush the socket cut short makes the
   wait watch the socket for writing (`wait::before_poll`). A frame callback a
@@ -5754,7 +5774,24 @@ Every closure the host sends to Android's Java main thread goes through
 `owner::android::main_thread::post` (or `run`, for a step whose only report is its failure, which
 calls `post`), which runs it inside `os_entry` and reports each exit but success; `cargo xtask
 panic-boundary` refuses the identifier `run_on_java_main_thread` anywhere else in a build, the
-tokens of macro calls and `macro_rules!` bodies included. android-activity keeps work it cannot deliver
+tokens of macro calls and `macro_rules!` bodies included. android-activity would only log a posted
+closure's panic and lose what it owed; under `post`, a work's report settles it (the insets query
+answers none), and every capture of the work, the report's included, is destroyed inside the
+boundary on every exit, since the last reference to a host object may be one of them
+(`every_capture_of_posted_work_is_destroyed_inside_the_boundary`). `FluiView`'s installation is
+`owner::android::view_install::ViewInstall` over the JNI calls it makes: the handle the view names
+its bridge by is freed only once no view in the window names it, so an installation that Java
+refused, or that stopped short after Java took the handle, asks the window for the view naming it
+(`FluiView.handle()`), detaches it and frees the handle, and keeps the handle when the window cannot
+be read; a `detach` that fails keeps it too
+(`every_exit_of_the_installation_frees_only_handles_no_view_names`). Every native method of
+FluiView's classes is one call of `owner::android::native_call::jni_native`, which `cargo xtask
+panic-boundary` holds them to: Java receives the method's answer, or its "nothing" (`false`, `0`,
+`null`, no value) after a failed JNI call or a panic, and never a pending exception, which
+`ClearsPending` describes to the log and clears on every exit
+(`a_native_method_answers_and_leaves_no_exception_pending_on_any_exit`): each caller is a
+framework callback on the main thread that catches nothing, where an exception would end the
+process. A contained failure costs the one call; the Activity goes on. android-activity keeps work it cannot deliver
 rather than dropping it, so the dropped-unrun report may never come on Android: a launch reports
 `taken` from its body, and one the Java main thread has not taken within `HAND_OFF_LIMIT` ends as
 `HandOffFailed` at that deadline, which the loop's poll waits for (`LoopTurn::hand_off_deadline`);

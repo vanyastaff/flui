@@ -21,13 +21,14 @@ use flui_platform::keyboard::{
     Code, ImeComposition, Key, KeyEvent, KeyPress, KeyState, Location, Modifiers, NamedKey,
 };
 use flui_platform::pointer::{
-    ButtonChange, CancelReason, ContactSize, DeviceId, HoverDistance, PanZoomEvent, PanZoomPhase,
-    PanZoomTransform, PenOrientation, PenTool, PointerButton, PointerButtons, PointerCancel,
-    PointerDeviceChange, PointerEvent, PointerId, PointerKind, PointerMove, PointerPosition,
-    PointerPress, PointerRelease, PointerRole, PointerSample, PointerSignal, PointerSource,
-    Pressure, ScrollDelta, ScrollEvent, ScrollInversion, ScrollPhase, ScrollPrecision, ScrollUnit,
-    SmartZoomEvent, SwipeOffset, TangentialPressure, TouchpadHoldEvent, TouchpadHoldPhase,
-    TouchpadSwipeEvent, TouchpadSwipePhase, Twist,
+    ButtonChange, CancelReason, ContactSize, DeviceId, HoverDistance, MotionAcceleration,
+    MotionDelta, PanZoomEvent, PanZoomPhase, PanZoomTransform, PenOrientation, PenTool,
+    PointerButton, PointerButtons, PointerCancel, PointerDeviceChange, PointerEvent, PointerId,
+    PointerKind, PointerMove, PointerPosition, PointerPress, PointerRelease, PointerRole,
+    PointerSample, PointerSignal, PointerSource, Pressure, RawMotion, ScrollDelta, ScrollEvent,
+    ScrollInversion, ScrollPhase, ScrollPrecision, ScrollUnit, SmartZoomEvent, SwipeOffset,
+    TangentialPressure, TouchpadHoldEvent, TouchpadHoldPhase, TouchpadSwipeEvent,
+    TouchpadSwipePhase, Twist,
 };
 use flui_platform::{
     Brightness, DragDropEvent, EventTime, GesturePreferences, HourCycle, ImeEvent, InsetCurve,
@@ -531,6 +532,25 @@ fn sample(enumeration: &str, variant: &str) -> Option<Vec<InputRecord>> {
         ("PointerEvent", "SmartZoom") => one(pointer_event(PointerEvent::SmartZoom(
             SmartZoomEvent::new(touch(), at(16), position(9.0, 10.0)),
         ))),
+        ("PointerEvent", "RawMotion") | ("MotionAcceleration", "None") => {
+            one(pointer_event(PointerEvent::RawMotion(
+                RawMotion::new(
+                    info(PointerKind::Mouse, PointerRole::Primary),
+                    at(17),
+                    MotionDelta::try_new(-4.0, 2.5).expect("finite"),
+                    MotionAcceleration::None,
+                )
+                .with_position(position(11.0, 12.0)),
+            )))
+        }
+        ("MotionAcceleration", "System") => {
+            one(pointer_event(PointerEvent::RawMotion(RawMotion::new(
+                info(PointerKind::Mouse, PointerRole::Primary),
+                at(18),
+                MotionDelta::try_new(0.5, 0.0).expect("finite"),
+                MotionAcceleration::System,
+            ))))
+        }
         ("PointerEvent", "DeviceAdded") => one(pointer_event(PointerEvent::DeviceAdded(
             PointerDeviceChange::new(
                 DeviceId::try_from(9_u64).expect("nonzero"),

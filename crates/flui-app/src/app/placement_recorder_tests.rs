@@ -366,8 +366,8 @@ fn user_placing(state: WindowState) -> WindowState {
 /// hold against everything the report carrying the change does not state was
 /// the user: where it opened, a display change, a scale change, a window
 /// manager's adjustment after the window opened, an application's command in
-/// two reports, and a change in the report after one by the user. A move or a
-/// mode change whose own report says the user's is written.
+/// two reports, and a change in the report after one by the user. A move, a
+/// resize or a mode change whose own report says the user's is written.
 fn an_unread_placement_is_overwritten_only_by_the_user() {
     let not_the_user: [ChangeSinceOpen; 6] = [
         ("a display change", |recorder, now| {
@@ -414,10 +414,23 @@ fn an_unread_placement_is_overwritten_only_by_the_user() {
             recorder.observe(&scaled(at(400.0, 80.0), 1.0), &displays(), now);
         }),
     ];
-    let the_user: [ChangeSinceOpen; 2] = [
+    let the_user: [ChangeSinceOpen; 3] = [
         ("a drag of the frame", |recorder, now| {
             recorder.observe(
                 &user_placing(scaled(at(400.0, 80.0), 1.0)),
+                &displays(),
+                now,
+            );
+        }),
+        ("a resize by the frame", |recorder, now| {
+            let resized = WindowState::new(
+                WindowGeometry::try_new(Some(Point::new(100.0, 80.0)), Size::new(1016.0, 739.0))
+                    .expect("a finite rectangle"),
+                flui_platform::WindowExtent::try_new(Size::new(1000.0, 700.0))
+                    .expect("a finite size"),
+            );
+            recorder.observe(
+                &scaled(resized, 1.0).with_interaction(WindowInteraction::UserResizing),
                 &displays(),
                 now,
             );

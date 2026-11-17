@@ -105,6 +105,10 @@ mod cases {
                 "a_second_layout_callback_replaces_the_first",
                 a_second_layout_callback_replaces_the_first,
             ),
+            trial(
+                "a_focused_window_holds_the_pointer_as_it_asks",
+                a_focused_window_holds_the_pointer_as_it_asks,
+            ),
         ];
         libtest_mimic::run(&arguments, trials).exit();
     }
@@ -315,7 +319,7 @@ mod cases {
         // compositor has it, from the cursor theme where it has not (Weston
         // 13).
         window
-            .set_cursor(CursorIcon::Pointer)
+            .set_cursor(&flui_platform::Cursor::Icon(CursorIcon::Pointer))
             .expect("the window shows a cursor");
         run_for(&platform, Duration::from_millis(20)).expect("the loop turns");
         let shown = cursor_report(&platform).expect("a cursor was shown");
@@ -324,9 +328,131 @@ mod cases {
             "the pointer cursor, by shape (4) or from the theme: {shown:?}"
         );
         eprintln!("cursor: {shown:?}");
+        // An application's image is a buffer on the cursor surface, at the
+        // window's scale; a hidden cursor is no surface.
+        let image = flui_platform::CursorImage::try_new(16, 16, (2, 3), vec![0xff; 16 * 16 * 4])
+            .expect("a 16x16 image");
+        for (cursor, name) in [
+            (flui_platform::Cursor::Image(image), "image"),
+            (flui_platform::Cursor::Hidden, "hidden"),
+        ] {
+            window
+                .set_cursor(&cursor)
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            run_for(&platform, Duration::from_millis(20)).expect("the loop turns");
+            let shown = cursor_report(&platform).expect("a cursor was shown");
+            assert_eq!(shown.name, name, "{shown:?}");
+        }
 
         #[cfg(all(debug_assertions, feature = "native-capture"))]
         hold_recording(recorder, &pointer);
+        window.close_for_cleanup();
+        run_for(&platform, Duration::from_millis(50)).expect("the loop turns");
+    }
+
+    /// A window with the keyboard holds the pointer as it asks, once the
+    /// compositor carries the constraint out: confined, then locked, its
+    /// motion arriving as raw motion and as no move, then let go.
+    fn a_focused_window_holds_the_pointer_as_it_asks(session: &Session) {
+        use flui_platform::{CursorGrab, WindowCommand};
+
+        let platform = WaylandPlatform::try_new().expect("the harness's Weston answers");
+        let handler = RecordingWindowHandler::new();
+        let window = platform
+            .open_window(
+                WindowOptions::default().title("grab"),
+                Rc::clone(&handler) as _,
+            )
+            .expect("a Wayland window opens");
+        turn_until(
+            &platform,
+            &window,
+            &handler,
+            "the window on the output",
+            |_| window.state().visible && window.state().focus.is_focused(),
+        );
+        let screen = session.screen();
+        let (x, root, origin) = (&screen.connection, screen.root, screen.origin);
+        let move_to = |dx: i16, dy: i16| {
+            x.xtest_fake_input(
+                MOTION_NOTIFY_EVENT,
+                0,
+                x11rb::CURRENT_TIME,
+                root,
+                origin.0 + dx,
+                origin.1 + dy,
+                0,
+            )
+            .expect("request");
+            x.flush().expect("flush");
+        };
+        move_to(100, 120);
+        // Weston carries a constraint out on a surface the user last clicked.
+        for kind in [BUTTON_PRESS_EVENT, BUTTON_RELEASE_EVENT] {
+            x.xtest_fake_input(kind, 1, x11rb::CURRENT_TIME, root, 0, 0, 0)
+                .expect("request");
+        }
+        x.flush().expect("flush");
+        turn_until(&platform, &window, &handler, "the click", |_| {
+            pointer_events(&handler)
+                .iter()
+                .any(|event| matches!(event, PointerEvent::Up(_)))
+        });
+        assert!(
+            window.state().capabilities.locks_cursor().is_available(),
+            "Weston offers pointer constraints and relative motion"
+        );
+        for grab in [CursorGrab::Confined, CursorGrab::Locked] {
+            window
+                .admit_and_apply(WindowCommand::SetCursorGrab(grab))
+                .unwrap_or_else(|error| panic!("{grab:?}: {error}"));
+            turn_until(&platform, &window, &handler, "the grab", |_| {
+                window.state().cursor_grab == grab
+            });
+        }
+        let before = pointer_events(&handler).len();
+        move_to(140, 150);
+        turn_until(&platform, &window, &handler, "the raw motion", |_| {
+            pointer_events(&handler)[before..]
+                .iter()
+                .any(|event| matches!(event, PointerEvent::RawMotion(_)))
+        });
+        assert!(
+            !pointer_events(&handler)[before..]
+                .iter()
+                .any(|event| matches!(event, PointerEvent::Move(_))),
+            "a locked pointer moves by no move"
+        );
+        window
+            .admit_and_apply(WindowCommand::SetCursorGrab(CursorGrab::None))
+            .expect("the window lets the pointer go");
+        turn_until(&platform, &window, &handler, "the grab let go", |_| {
+            window.state().cursor_grab == CursorGrab::None
+        });
+
+        // Held again, the pointer is let go of once the keyboard leaves: the
+        // kiosk shell gives a second window the keyboard as it maps it.
+        window
+            .admit_and_apply(WindowCommand::SetCursorGrab(CursorGrab::Confined))
+            .expect("the window confines the pointer again");
+        turn_until(&platform, &window, &handler, "the grab again", |_| {
+            window.state().cursor_grab == CursorGrab::Confined
+        });
+        let cover = platform
+            .open_window(
+                WindowOptions::default().title("taking the keyboard"),
+                RecordingWindowHandler::new() as _,
+            )
+            .expect("a second window opens");
+        turn_until(&platform, &cover, &handler, "the keyboard to leave", |_| {
+            !window.state().focus.is_focused()
+        });
+        assert_eq!(
+            window.state().cursor_grab,
+            CursorGrab::None,
+            "a window that lost the keyboard holds no pointer"
+        );
+        cover.close_for_cleanup();
         window.close_for_cleanup();
         run_for(&platform, Duration::from_millis(50)).expect("the loop turns");
     }
@@ -409,20 +535,25 @@ mod cases {
         };
         let deadline = Instant::now() + Duration::from_secs(10);
         let mut raised = 0;
-        while !keys().contains(&KeyState::Down(KeyPress::First)) {
+        // The compositor may hand the release over in a later read than the
+        // press; a release the panicking turn dropped never comes.
+        while !keys().contains(&KeyState::Up) {
             let turned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 run_for(&platform, Duration::from_millis(20))
             }));
             if turned.is_err() {
                 raised += 1;
             }
-            assert!(Instant::now() < deadline, "the press never came");
+            assert!(
+                Instant::now() < deadline,
+                "the release never came: the press's panic dropped it"
+            );
         }
         assert_eq!(raised, 1, "the press's panic left the loop once");
         assert_eq!(
             keys(),
             [KeyState::Down(KeyPress::First), KeyState::Up],
-            "the release the turn took was dropped with the press's panic"
+            "the press and its release each reached the handler once"
         );
         window.close_for_cleanup();
         run_for(&platform, Duration::from_millis(50)).expect("the loop turns");

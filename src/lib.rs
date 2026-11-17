@@ -331,12 +331,13 @@ pub mod native {
 /// ```
 pub mod platform {
     pub use flui_platform::{
-        AdmissionError, AdmittedCommand, AppDataDir, AppTitleBar, ApplyError, Availability,
-        Brightness, CapabilityAbsence, CapabilityParts, ClipboardError, ClipboardRead,
-        ClipboardWrite, ClipboardWritten, ColorGamut, CommandRefusal, Concealment, ControlsOffset,
-        CopiedAside, CursorError, CursorIcon, DisplayColor, DisplayDescription, DisplayId,
-        DisplayParts, DisplayRevision, DisplayRevisionExhausted, DisplaySnapshot, Distance,
-        DragDropEvent, DurationScale, DxgiFrameStatistics, DxgiShown, DxgiStatistics, DynamicRange,
+        AdmissionError, AdmittedCommand, AppDataDir, AppTitleBar, ApplyError, AspectRatio,
+        Availability, Brightness, CapabilityAbsence, CapabilityParts, ClipboardError,
+        ClipboardRead, ClipboardWrite, ClipboardWritten, ColorGamut, CommandRefusal, Concealment,
+        ControlsOffset, CopiedAside, Cursor, CursorError, CursorGrab, CursorIcon, CursorImage,
+        CursorImageError, DisplayColor, DisplayDescription, DisplayId, DisplayParts,
+        DisplayRevision, DisplayRevisionExhausted, DisplaySnapshot, Distance, DragDropEvent,
+        DurationScale, DxgiFrameStatistics, DxgiShown, DxgiStatistics, DynamicRange,
         EmptyPointerFrame, Environment, FlingSpeeds, FramePacing, FramePresented, FrameRateHint,
         FrameRequest, GestureGeometry, GestureParts, GesturePreferences, HapticFeedback, Headroom,
         HostNotice, HourCycle, ImeEvent, InputLatency, InsetCurve, InsetMotion, InvalidAppDataDir,
@@ -356,8 +357,8 @@ pub mod platform {
         TargetPlatform, TextWeightPreference, Unsupported, UnsupportedReason, Weekday, WheelParts,
         WheelPreferences, WheelStep, WindowAt, WindowCapabilities, WindowCapability, WindowCommand,
         WindowDisplay, WindowExecutionState, WindowExtent, WindowFocus, WindowFrame,
-        WindowGeometry, WindowId, WindowInsets, WindowInteraction, WindowMaterial, WindowMode,
-        WindowOption, WindowOptions, WindowPlacement, WindowReveal, WindowRevision,
+        WindowGeometry, WindowId, WindowInsets, WindowInteraction, WindowLevel, WindowMaterial,
+        WindowMode, WindowOption, WindowOptions, WindowPlacement, WindowReveal, WindowRevision,
         WindowRevisionExhausted, WindowState, WindowStateParts, WriteMode,
     };
     /// Capabilities: what an application registers, and the contracts a provider and a host meet.
@@ -423,17 +424,17 @@ pub mod platform {
     pub mod launch {
         pub use flui_platform::launch::{
             ExternalUri, InvalidUri, LaunchError, LaunchResult, Launcher, LauncherBackend,
-            MAX_EXTERNAL_URI_LEN, REFUSED_SCHEMES,
+            MAX_EXTERNAL_URI_LEN, REFUSED_SCHEMES, Scheme,
         };
     }
     /// Pointer events as the host delivers them; the vocabulary widgets use is in `flui::interaction`.
     pub mod pointer {
         pub use flui_platform::pointer::{
             ButtonDirection, ContactSize, HoverDistance, InputValueError, InvalidButtonNumber,
-            MismatchedPointerSource, PenOrientation, PointerButtonEvent, PointerCancel,
-            PointerDeviceChange, PointerSignal, Press, Pressure, Quantity, Release, SmartZoomEvent,
-            SwipeOffset, TangentialPressure, TouchpadHoldEvent, TouchpadHoldPhase,
-            TouchpadSwipeEvent, TouchpadSwipePhase, Twist,
+            MismatchedPointerSource, MotionAcceleration, MotionDelta, PenOrientation,
+            PointerButtonEvent, PointerCancel, PointerDeviceChange, PointerSignal, Press, Pressure,
+            Quantity, RawMotion, Release, SmartZoomEvent, SwipeOffset, TangentialPressure,
+            TouchpadHoldEvent, TouchpadHoldPhase, TouchpadSwipeEvent, TouchpadSwipePhase, Twist,
         };
     }
     /// The text store a text field shares with the system's input method.

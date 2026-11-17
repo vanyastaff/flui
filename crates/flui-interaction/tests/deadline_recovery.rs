@@ -67,7 +67,7 @@ impl flui_platform::PlatformWindow for WakeWindow {
 
     fn reveal_after_first_frame(&self) {}
 
-    fn set_cursor(&self, _: flui_platform::CursorIcon) -> Result<(), flui_platform::CursorError> {
+    fn set_cursor(&self, _: &flui_platform::Cursor) -> Result<(), flui_platform::CursorError> {
         Ok(())
     }
     fn state(&self) -> flui_platform::WindowState {

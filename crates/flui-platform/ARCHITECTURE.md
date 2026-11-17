@@ -200,6 +200,24 @@ this one path (ADR-0151 §9).
   every command absent as `CapabilityAbsence::WITHDRAWN`, reports kept, nothing
   admitted, and so in every later snapshot) while the window's other
   facts publish on.
+- **The cursor is a value of the region that asked for it; a grab lasts while the focus does
+  (ADR-0354).** `set_cursor` takes a `Cursor` (`Icon`, `Image`, `Hidden`): hidden is a cursor,
+  shown over that window until the next one, never a window-wide switch beside it, so nothing
+  must remember to show it again. A `CursorImage` is checked where it is built (each side
+  `1..=CursorImage::MAX_SIDE`, sides before pixels, four bytes per pixel, the hotspot a pixel)
+  and shares its pixels, so a host keeps the last native cursor it made and compares with `==`;
+  `cursor_image` is a verb's `Availability`, answered as the frame-rate hint is
+  (`a_cursor_image_holds_only_what_a_window_system_shows`). `SetCursorGrab(Confined | Locked)`
+  is admitted against `confines_cursor`/`locks_cursor`, `SetCursorGrab(None)` and
+  `SetLevel(Normal)` against nothing, as the normal mode; `WindowState::cursor_grab` is
+  `None` for every window without the keyboard focus, which `successor` holds
+  (`a_grab_is_published_only_for_a_focused_window`) and every host's window system holds too
+  (the conformance check `a_grab_ends_with_the_focus`). A locked pointer's motion is
+  `PointerEvent::RawMotion` instead of moves. The level is a snapshot fact (`WindowLevel`); the
+  resize steps and the proportion (`AspectRatio`, lowest terms) are requests the window system
+  holds during the user's resize, not facts, as the material. A live resize is
+  `WindowInteraction::UserResizing`, and `WindowInteraction::is_user` is the one reading of "the
+  user changed it".
 - **A window is opened with its handler (ADR-0254 §4).** `WindowHandler` has
   one required method per obligation (`input`, `state_changed`,
   `frame_requested`, `close_requested`, `closed`, `surface_changed`) and no
@@ -401,6 +419,19 @@ What a service's own error does not name is `SystemFailure`: an OS error code, a
 response code, a bus failure, or an answer outside the system's contract. `LaunchError::Failed`
 and `flui-system`'s `DialogError::Failed` carry it, so no backend invents a number or guesses a
 named variant for a code it cannot read.
+
+### A launch is decided at the seam, by what its caller allows
+
+`launch` holds the launch policy for every backend, the scripted double included, so no backend
+re-implements it (ADR-0360). A URI reaches a backend only as an `ExternalUri`, built from the
+schemes its caller names (`&[Scheme::HTTPS]`): bounded before it is read, with no character it
+must percent-encode and no hidden one, an authority's `//` written and no user in it, a `mailto`
+query of the five admitted fields, and never a scheme of `REFUSED_SCHEMES`, which no `Scheme` can
+be. `Launcher`'s path verbs, from the path alone and with no file system call on the owner
+thread, refuse a relative path and any Windows prefix but a drive letter, and `open_path` refuses
+a name that `runs_when_opened` (`RUNNABLE_EXTENSIONS`, a class id). That name list is the floor; a
+backend opens the file off the owner thread and judges what it opened, by its resolved name and
+by its own system, before it hands it on.
 
 ### A capability's double is built from one scenario primitive
 

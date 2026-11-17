@@ -3183,7 +3183,7 @@ fn a_backdrop_group_takes_one_rect_of_a_region_frame() {
         Some(1),
         "both corners join the rect over the group"
     );
-    assert_eq!(partial.region_passes(), 1);
+    assert_eq!(partial.counters().region_passes, 1);
     let pixels = partial.read_rgba().expect("readback");
     let full = full_frame_pixels(&renderer, &after);
     let stale = mismatches(&pixels, &full, 2);
@@ -3270,7 +3270,7 @@ fn a_backdrop_group_outside_the_damage_still_captures_at_its_first_member() {
         );
         if by_rect {
             // The group's members share one rect, the far box has its own.
-            assert_eq!(partial.region_passes(), 2, "{case}: two passes");
+            assert_eq!(partial.counters().region_passes, 2, "{case}: two passes");
         }
         let pixels = partial.read_rgba().expect("readback");
         let stale = mismatches(&pixels, &full, 2);
@@ -3328,7 +3328,11 @@ fn a_shape_straddling_a_region_pass_repaints_the_next_frame_in_full() {
         };
         let (before, after) = (build(Color::RED), build(Color::BLUE));
         let mut capture = region_frame(&renderer, &before, &after, &rects, true);
-        assert_eq!(capture.region_passes(), 2, "{case}: one pass per rect");
+        assert_eq!(
+            capture.counters().region_passes,
+            2,
+            "{case}: one pass per rect"
+        );
         capture.mark_dirty(Rect::from_xywh(4.0, 4.0, 1.0, 1.0));
         capture
             .render_scene(&after)

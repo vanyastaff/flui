@@ -9,7 +9,7 @@ use std::sync::Arc;
 use flui_native::{HeadlessHostWindow, HeadlessPlatform, HostWindow, Platform};
 use flui_platform::input_capabilities::InputCapabilities;
 use flui_platform::{
-    AdmittedCommand, ApplyError, CommandRefusal, CursorError, CursorIcon, PlatformSystemChrome,
+    AdmittedCommand, ApplyError, CommandRefusal, Cursor, CursorError, PlatformSystemChrome,
     PlatformTextInput, PlatformWindow, WindowCommand, WindowFrame, WindowId, WindowMode,
     WindowState, haptics::PlatformHaptics,
 };
@@ -207,7 +207,7 @@ impl PlatformWindow for Faulty {
         }
     }
 
-    fn set_cursor(&self, cursor: CursorIcon) -> Result<(), CursorError> {
+    fn set_cursor(&self, cursor: &Cursor) -> Result<(), CursorError> {
         self.0.set_cursor(cursor)
     }
     fn text_input(&self) -> Option<Arc<dyn PlatformTextInput>> {
@@ -334,6 +334,10 @@ enum Fault {
     /// The host publishes the window's capabilities anew on every read, so a
     /// command admitted against its snapshot never opens.
     RepublishesOnEveryRead,
+    /// The window publishes that it lost the focus, and its window system
+    /// still holds the grab the window took: a host that reads the focus
+    /// change and never lets the pointer go (a Win32 cursor clip left behind).
+    KeepsTheGrabWithoutFocus,
 }
 
 impl Fixture {
@@ -447,6 +451,27 @@ impl WindowFixture for Fixture {
                 }
             }
         }
+    }
+
+    /// The grab the simulated window system holds.
+    fn held_grab(&self) -> Option<flui_platform::CursorGrab> {
+        Some(self.mock().window_system().cursor_grab)
+    }
+
+    /// The simulated window system moves the focus elsewhere; with
+    /// [`Fault::KeepsTheGrabWithoutFocus`] only the report says so.
+    fn take_focus_away(&mut self) -> bool {
+        match self.fault {
+            Some(Fault::KeepsTheGrabWithoutFocus) => {
+                let unfocused = self
+                    .model
+                    .state()
+                    .with_focus(flui_platform::WindowFocus::Inactive);
+                self.mock().simulate_state(unfocused);
+            }
+            _ => self.mock().simulate_focus(false),
+        }
+        true
     }
 
     /// The user's close, through the simulated window system.
@@ -755,6 +780,58 @@ fn a_window_hidden_by_minimizing_is_caught_whatever_its_readback_says() {
     assert_eq!(checks, ["accepted_commands_converge"]);
 }
 
+/// A window that publishes its focus loss and leaves its window system
+/// holding the pointer is caught: the grab ends with the focus in the window
+/// system, not only in the snapshot.
+fn a_grab_kept_after_the_focus_went_is_caught() {
+    let checks = caught(Fault::KeepsTheGrabWithoutFocus);
+    assert_eq!(checks, ["a_grab_ends_with_the_focus"]);
+}
+
+/// A headless window that holds the pointer lets it go with the focus, and
+/// its snapshot says so at the revision the focus went.
+fn a_headless_grab_ends_with_the_focus() {
+    let fixture = Fixture::new(WindowCapabilities::ALL, None);
+    let window = Rc::clone(&fixture.window);
+    WindowCommand::SetCursorGrab(flui_platform::CursorGrab::Locked)
+        .admit_and_apply(&*window)
+        .expect("a focused headless window takes a lock");
+    assert_eq!(
+        window.state().cursor_grab,
+        flui_platform::CursorGrab::Locked
+    );
+    fixture.mock().simulate_focus(false);
+    assert_eq!(window.state().cursor_grab, flui_platform::CursorGrab::None);
+    assert_eq!(
+        fixture.mock().window_system().cursor_grab,
+        flui_platform::CursorGrab::None
+    );
+    fixture.mock().simulate_focus(true);
+    assert_eq!(
+        window.state().cursor_grab,
+        flui_platform::CursorGrab::None,
+        "the focus coming back takes no grab of its own"
+    );
+    // A grab a window without the focus asks for is refused by the window
+    // system: the command is carried out as a request, and the snapshot says
+    // nothing is held.
+    fixture.mock().simulate_focus(false);
+    let before = window.state().revision;
+    WindowCommand::SetCursorGrab(flui_platform::CursorGrab::Confined)
+        .admit_and_apply(&*window)
+        .expect("a grab is a request a window takes");
+    assert_eq!(window.state().cursor_grab, flui_platform::CursorGrab::None);
+    assert_eq!(
+        fixture.mock().window_system().cursor_grab,
+        flui_platform::CursorGrab::None
+    );
+    assert_eq!(
+        window.state().revision,
+        before,
+        "nothing held, nothing changed"
+    );
+}
+
 /// The snapshot's occlusion is the window system's, and is compared only
 /// while the window is shown and not minimized.
 fn the_snapshot_follows_the_window_systems_occlusion() {
@@ -800,6 +877,14 @@ fn window_conformance_checks() {
             (
                 "a_window_hidden_by_minimizing_is_caught_whatever_its_readback_says",
                 a_window_hidden_by_minimizing_is_caught_whatever_its_readback_says as fn(),
+            ),
+            (
+                "a_grab_kept_after_the_focus_went_is_caught",
+                a_grab_kept_after_the_focus_went_is_caught as fn(),
+            ),
+            (
+                "a_headless_grab_ends_with_the_focus",
+                a_headless_grab_ends_with_the_focus as fn(),
             ),
             (
                 "the_snapshot_follows_the_window_systems_occlusion",

@@ -159,6 +159,49 @@ pub(crate) mod mode {
         (atoms != current).then_some(atoms)
     }
 
+    /// The `_NET_WM_STATE` atoms a window's level is kept by, as the server
+    /// numbered them.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(crate) struct LevelAtoms {
+        /// `_NET_WM_STATE_ABOVE`.
+        pub above: u32,
+        /// `_NET_WM_STATE_BELOW`.
+        pub below: u32,
+    }
+
+    /// The level `_NET_WM_STATE`'s `atoms` keep a window at: above the
+    /// others, below them, or neither. A property that names both says
+    /// neither, as EWMH leaves that pair to no window manager.
+    pub(crate) fn level_of(atoms: &[u32], known: &LevelAtoms) -> flui_platform::WindowLevel {
+        use flui_platform::WindowLevel;
+        match (atoms.contains(&known.above), atoms.contains(&known.below)) {
+            (true, false) => WindowLevel::AlwaysOnTop,
+            (false, true) => WindowLevel::AlwaysOnBottom,
+            _ => WindowLevel::Normal,
+        }
+    }
+
+    /// The `_NET_WM_STATE` a window not mapped yet holds to be mapped at
+    /// `level`, from the atoms it holds now (`current`): the level atoms
+    /// replaced, every other kept, as [`with_mode`] does for the mode.
+    /// `None` when the property already says so.
+    pub(crate) fn with_level(
+        current: &[u32],
+        level: flui_platform::WindowLevel,
+        known: &LevelAtoms,
+    ) -> Option<Vec<u32>> {
+        use flui_platform::WindowLevel;
+        let wanted: &[u32] = match level {
+            WindowLevel::Normal => &[],
+            WindowLevel::AlwaysOnTop => &[known.above],
+            WindowLevel::AlwaysOnBottom => &[known.below],
+        };
+        let mut atoms = current.to_vec();
+        atoms.retain(|atom| *atom != known.above && *atom != known.below);
+        atoms.extend_from_slice(wanted);
+        (atoms != current).then_some(atoms)
+    }
+
     #[cfg(test)]
     mod tests {
         use flui_platform::WindowMode;
@@ -360,6 +403,60 @@ pub(crate) mod mode {
                 );
             }
         }
+
+        const LEVELS: LevelAtoms = LevelAtoms {
+            above: 305,
+            below: 306,
+        };
+
+        /// A window's level is what `_NET_WM_STATE` keeps it at, and a window
+        /// not mapped yet asks for its level there: the level atoms are
+        /// replaced, the mode's and the others kept, and a property that
+        /// already says so is not written again.
+        #[test]
+        fn a_window_is_kept_at_the_level_its_state_property_names() {
+            use flui_platform::WindowLevel::{AlwaysOnBottom, AlwaysOnTop, Normal};
+
+            // (case, atoms held, level read)
+            let read: &[(&str, &[u32], flui_platform::WindowLevel)] = &[
+                ("no atoms", &[], Normal),
+                ("above", &[OTHER, 305], AlwaysOnTop),
+                ("below", &[306, 302, 303], AlwaysOnBottom),
+                ("both is neither", &[305, 306], Normal),
+                ("only other states", &[OTHER, 304], Normal),
+            ];
+            for (case, atoms, expected) in read {
+                assert_eq!(level_of(atoms, &LEVELS), *expected, "{case}");
+            }
+
+            /// A case, the atoms held, the level, the atoms written.
+            type Row = (
+                &'static str,
+                &'static [u32],
+                flui_platform::WindowLevel,
+                Option<&'static [u32]>,
+            );
+            let written: &[Row] = &[
+                ("above from nothing", &[], AlwaysOnTop, Some(&[305])),
+                ("below replaces above", &[305], AlwaysOnBottom, Some(&[306])),
+                ("normal clears below", &[306], Normal, Some(&[])),
+                ("normal from nothing", &[], Normal, None),
+                ("above again", &[305], AlwaysOnTop, None),
+                (
+                    "the mode and other states are kept",
+                    &[302, 303, OTHER, 306],
+                    AlwaysOnTop,
+                    Some(&[302, 303, OTHER, 305]),
+                ),
+            ];
+            for (case, current, level, expected) in written {
+                assert_eq!(
+                    with_level(current, *level, &LEVELS).as_deref(),
+                    *expected,
+                    "{case}"
+                );
+            }
+        }
     }
 }
 
@@ -390,6 +487,8 @@ pub(crate) mod support {
         pub maximized_vert: u32,
         pub fullscreen: u32,
         pub moveresize: u32,
+        pub above: u32,
+        pub below: u32,
         pub frame_drawn: u32,
     }
 
@@ -423,6 +522,10 @@ pub(crate) mod support {
         /// It moves and resizes a window from a press on a title bar or a
         /// border the application draws (`_NET_WM_MOVERESIZE`).
         pub moves_and_resizes: bool,
+        /// It keeps a window above the others (`_NET_WM_STATE_ABOVE`).
+        pub above: bool,
+        /// It keeps a window below the others (`_NET_WM_STATE_BELOW`).
+        pub below: bool,
         /// It synchronises the frames a window draws with what it composites
         /// (`_NET_WM_FRAME_DRAWN`), reading the window's extended XSync
         /// counter: odd while a frame draws, even once it is drawn.
@@ -456,6 +559,8 @@ pub(crate) mod support {
                 maximizes: lists(atoms.maximized_horz) && lists(atoms.maximized_vert),
                 fullscreen: lists(atoms.fullscreen),
                 moves_and_resizes: lists(atoms.moveresize),
+                above: lists(atoms.above),
+                below: lists(atoms.below),
                 paces_frames: lists(atoms.frame_drawn),
                 composited: false,
             }
@@ -544,6 +649,20 @@ pub(crate) mod support {
         };
         capabilities.maximizes = from_the_window_manager(support.maximizes);
         capabilities.enters_fullscreen = from_the_window_manager(support.fullscreen);
+        // A grab is the server's (`GrabPointer`, confined to the window); a
+        // lock is that grab with a blank cursor, the pointer put back where
+        // it was locked, and its motion read from XInput 2's raw events.
+        capabilities.confines_cursor = Native;
+        capabilities.locks_cursor = Native;
+        // The levels are `_NET_WM_STATE_ABOVE` and `_NET_WM_STATE_BELOW`, which
+        // a window manager that lists them keeps; the resize steps and the
+        // proportion are `WM_NORMAL_HINTS`, which any window manager holds.
+        capabilities.keeps_on_top = from_the_window_manager(support.above);
+        capabilities.keeps_on_bottom = from_the_window_manager(support.below);
+        capabilities.sets_resize_increments = from_the_window_manager(support.managed());
+        capabilities.sets_aspect_ratio = from_the_window_manager(support.managed());
+        // A Render picture made into a cursor.
+        capabilities.cursor_image = Availability::Native;
         capabilities.into_capabilities()
     }
 
@@ -562,7 +681,9 @@ pub(crate) mod support {
             maximized_vert: 303,
             fullscreen: 304,
             moveresize: 305,
-            frame_drawn: 306,
+            above: 306,
+            below: 307,
+            frame_drawn: 308,
         };
 
         /// What a window manager lists decides what a window honours: with no
@@ -599,7 +720,7 @@ pub(crate) mod support {
                 (
                     "a list where no window manager answers the check",
                     Icccm,
-                    &[302, 303, 304, 305],
+                    &[302, 303, 304, 305, 306, 307],
                     [Native, Unavailable, Unavailable, Native],
                 ),
                 (
@@ -623,7 +744,7 @@ pub(crate) mod support {
                 (
                     "everything",
                     Extended,
-                    &[302, 303, 304, 305, 306, 999],
+                    &[302, 303, 304, 305, 306, 307, 308, 999],
                     [Native, Native, Native, Native],
                 ),
             ];
@@ -775,7 +896,7 @@ pub(crate) mod support {
 
             let honoured = capabilities(WindowManagerSupport::read(
                 WindowManager::Extended,
-                &[302, 303, 304, 305],
+                &[302, 303, 304, 305, 306, 307],
                 &ATOMS,
             ));
             assert_eq!(
@@ -796,6 +917,12 @@ pub(crate) mod support {
                     activates: Native,
                     closes: Native,
                     material: WindowCapability::NOT_ON_THIS_PLATFORM,
+                    confines_cursor: Native,
+                    locks_cursor: Native,
+                    keeps_on_top: Native,
+                    keeps_on_bottom: Native,
+                    sets_resize_increments: Native,
+                    sets_aspect_ratio: Native,
                     reports_presentation: WindowCapability::NOT_ON_THIS_PLATFORM,
                     reports_keyboard_inset: WindowCapability::NOT_ON_THIS_PLATFORM,
                     reports_system_gestures: WindowCapability::NOT_ON_THIS_PLATFORM,
@@ -804,6 +931,7 @@ pub(crate) mod support {
                     observes_minimized: Availability::Native,
                     places_at_open: Availability::Native,
                     frame_rate_hint: Availability::Unavailable,
+                    cursor_image: Availability::Native,
                 }
             );
         }
@@ -1126,7 +1254,7 @@ pub(crate) mod hints {
     #![forbid(unsafe_code)]
 
     use flui_foundation::geometry::{DevicePixelRatio, Size};
-    use flui_platform::{SizeConstraints, WindowExtent};
+    use flui_platform::{AspectRatio, SizeConstraints, WindowExtent};
 
     use crate::window::state::device_limits;
 
@@ -1163,6 +1291,50 @@ pub(crate) mod hints {
         SizeLimits {
             min: limits.min.map(signed),
             max: limits.max.map(signed),
+        }
+    }
+
+    /// What a window asks of the user's resize in `WM_NORMAL_HINTS` beside
+    /// its limits, in device pixels.
+    #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+    pub(crate) struct ResizeSteps {
+        /// `PResizeInc`: the step of the width and of the height.
+        pub increment: Option<(i32, i32)>,
+        /// `PBaseSize`: the size the steps count from, the window's minimum.
+        pub base: Option<(i32, i32)>,
+        /// `PAspect`: the proportion, width to height, as both its least and
+        /// its greatest.
+        pub aspect: Option<(i32, i32)>,
+    }
+
+    /// The steps `step` (logical pixels) and the proportion `aspect` at
+    /// `scale`, the steps counted from the device minimum `min` where the
+    /// window has one. A step is at least one device pixel; a proportion
+    /// whose terms an `i32` does not hold is halved once, which brings any
+    /// `u32` within it.
+    pub(crate) fn resize_steps(
+        step: Option<WindowExtent>,
+        aspect: Option<AspectRatio>,
+        min: Option<(i32, i32)>,
+        scale: DevicePixelRatio,
+    ) -> ResizeSteps {
+        let device = |logical: f64| {
+            crate::window::state::device_extent(logical, scale).map_or(1, u32::cast_signed)
+        };
+        let increment = step.map(|step| (device(step.width()), device(step.height())));
+        let aspect = aspect.map(|ratio| {
+            let (width, height) = (ratio.width().get(), ratio.height().get());
+            let halve = i32::try_from(width.max(height)).is_err();
+            let term = |term: u32| {
+                let term = if halve { (term >> 1).max(1) } else { term };
+                i32::try_from(term).unwrap_or(i32::MAX)
+            };
+            (term(width), term(height))
+        });
+        ResizeSteps {
+            increment,
+            base: increment.and(min),
+            aspect,
         }
     }
 
@@ -1295,6 +1467,106 @@ pub(crate) mod hints {
                         constraints,
                         resizable,
                         content,
+                        DevicePixelRatio::try_new(scale).expect("a positive ratio")
+                    ),
+                    expected,
+                    "{case}"
+                );
+            }
+        }
+
+        /// The resize steps are device pixels at the window's scale, counted
+        /// from its minimum where it has one, and the proportion is its
+        /// lowest terms, as both the least and the greatest.
+        #[test]
+        fn a_window_asks_its_resize_steps_and_proportion() {
+            use std::num::NonZeroU32;
+
+            let ratio = |width: u32, height: u32| {
+                AspectRatio::new(
+                    NonZeroU32::new(width).expect("non-zero"),
+                    NonZeroU32::new(height).expect("non-zero"),
+                )
+            };
+            let cell = WindowExtent::try_new(Size::new(8.0, 16.0)).expect("an extent");
+            let sliver = WindowExtent::try_new(Size::new(0.25, 0.25)).expect("an extent");
+            // (case, step, proportion, minimum, scale, steps)
+            let table = [
+                (
+                    "nothing asked",
+                    None,
+                    None,
+                    Some((200, 150)),
+                    1.0,
+                    ResizeSteps::default(),
+                ),
+                (
+                    "a step from the minimum",
+                    Some(cell),
+                    None,
+                    Some((200, 150)),
+                    1.0,
+                    ResizeSteps {
+                        increment: Some((8, 16)),
+                        base: Some((200, 150)),
+                        aspect: None,
+                    },
+                ),
+                (
+                    "a step at a scale, with no minimum",
+                    Some(cell),
+                    None,
+                    None,
+                    2.0,
+                    ResizeSteps {
+                        increment: Some((16, 32)),
+                        base: None,
+                        aspect: None,
+                    },
+                ),
+                (
+                    "a step under a pixel is one",
+                    Some(sliver),
+                    None,
+                    None,
+                    1.0,
+                    ResizeSteps {
+                        increment: Some((1, 1)),
+                        base: None,
+                        aspect: None,
+                    },
+                ),
+                (
+                    "a proportion alone keeps no base",
+                    None,
+                    Some(ratio(32, 18)),
+                    Some((200, 150)),
+                    1.0,
+                    ResizeSteps {
+                        increment: None,
+                        base: None,
+                        aspect: Some((16, 9)),
+                    },
+                ),
+                (
+                    "terms past an i32 are halved",
+                    None,
+                    Some(ratio(u32::MAX, 1)),
+                    None,
+                    1.0,
+                    ResizeSteps {
+                        increment: None,
+                        base: None,
+                        aspect: Some((i32::MAX, 1)),
+                    },
+                ),
+            ];
+            for (case, step, aspect, min, scale, expected) in table {
+                assert_eq!(
+                    resize_steps(
+                        step,
+                        aspect,
+                        min,
                         DevicePixelRatio::try_new(scale).expect("a positive ratio")
                     ),
                     expected,

@@ -12,12 +12,11 @@
 
 use std::sync::Arc;
 
-use cursor_icon::CursorIcon;
 use flui_foundation::geometry::Point;
 
 use crate::{
-    AdmittedCommand, ApplyError, CursorError, PlatformTextInput, RedrawRequester, SurfaceTarget,
-    Unsupported, WindowId, WindowState, haptics::PlatformHaptics,
+    AdmittedCommand, ApplyError, Cursor, CursorError, PlatformTextInput, RedrawRequester,
+    SurfaceTarget, Unsupported, WindowId, WindowState, haptics::PlatformHaptics,
 };
 
 /// What lies under a point given in one window's coordinates, as
@@ -98,11 +97,10 @@ pub enum WindowAt {
 /// use std::sync::Arc;
 ///
 /// use flui_foundation::geometry::Point;
-/// use flui_platform::haptics::PlatformHaptics;
 /// use flui_platform::input_regions::InputRegion;
 /// use flui_platform::{
-///     AdmissionError, AdmittedCommand, ApplyError, CursorError, CursorIcon, FrameRateHint,
-///     GestureGeometry, PlatformSystemChrome, PlatformTextInput, PlatformWindow,
+///     AdmissionError, AdmittedCommand, ApplyError, Cursor, CursorError, FrameRateHint,
+///     GestureGeometry, haptics::PlatformHaptics, PlatformSystemChrome, PlatformTextInput, PlatformWindow,
 ///     PreferenceQueryError, RedrawRequester, SurfaceTarget, SwapChainStatistics, Unsupported,
 ///     UnsupportedReason, WindowAt, WindowCapabilities, WindowCommand, WindowExtent,
 ///     WindowGeometry, WindowId, WindowIdMint, WindowMaterial, WindowMode, WindowState,
@@ -165,7 +163,7 @@ pub enum WindowAt {
 ///         command.against(&self.capabilities)?;
 ///         Ok(())
 ///     }
-///     fn set_cursor(&self, _cursor: CursorIcon) -> Result<(), CursorError> {
+///     fn set_cursor(&self, _cursor: &Cursor) -> Result<(), CursorError> {
 ///         Err(Unsupported::new(UnsupportedReason::NotOnThisPlatform).into())
 ///     }
 ///     fn text_input(&self) -> Option<Arc<dyn PlatformTextInput>> {
@@ -253,7 +251,7 @@ pub enum WindowAt {
 /// use flui_foundation::geometry::Point;
 /// use flui_platform::input_regions::InputRegion;
 /// use flui_platform::{
-///     AdmittedCommand, ApplyError, CursorError, CursorIcon, FrameRateHint, GestureGeometry,
+///     AdmittedCommand, ApplyError, Cursor, CursorError, FrameRateHint, GestureGeometry,
 ///     haptics::PlatformHaptics, PlatformSystemChrome, PlatformTextInput, PlatformWindow,
 ///     PreferenceQueryError, RedrawRequester, SurfaceTarget, Unsupported, UnsupportedReason,
 ///     WindowAt, WindowExtent, WindowGeometry, WindowId, WindowState,
@@ -288,7 +286,7 @@ pub enum WindowAt {
 ///         command.against(&self.state().capabilities)?;
 ///         Ok(())
 ///     }
-///     fn set_cursor(&self, _cursor: CursorIcon) -> Result<(), CursorError> {
+///     fn set_cursor(&self, _cursor: &Cursor) -> Result<(), CursorError> {
 ///         Err(Unsupported::new(UnsupportedReason::NotOnThisPlatform).into())
 ///     }
 ///     fn text_input(&self) -> Option<Arc<dyn PlatformTextInput>> {
@@ -569,7 +567,7 @@ pub trait PlatformWindow {
     ///     fn set_input_regions(&self, _: &[InputRegion]) -> Result<(), Unsupported> {
     ///         Err(Unsupported::new(UnsupportedReason::NotOnThisPlatform))
     ///     }
-    ///     fn set_cursor(&self, _: CursorIcon) -> Result<(), CursorError> { Ok(()) }
+    ///     fn set_cursor(&self, _: &Cursor) -> Result<(), CursorError> { Ok(()) }
     ///     fn set_frame_rate_hint(&self, _: FrameRateHint) -> Result<(), Unsupported> {
     ///         Err(Unsupported::new(UnsupportedReason::NotOnThisPlatform))
     ///     }
@@ -578,17 +576,26 @@ pub trait PlatformWindow {
     /// ```
     fn reveal_after_first_frame(&self);
 
-    /// Apply the cursor selected by this window's presentation.
+    /// Show `cursor` while the pointer is over this window: the cursor its
+    /// presentation selected for the hovered region, a system icon, an image
+    /// of the application's, or none.
     ///
     /// This is deliberately window-scoped: a process-global cursor setter
     /// cannot identify which of several presentations owns the hovered region.
+    /// A hidden cursor is hidden over this window alone and comes back with
+    /// the next cursor the window is given. A verb, sent when the hovered
+    /// region asks for another cursor, not a
+    /// [`WindowCommand`](crate::WindowCommand) (ADR-0254 §3). Owner thread
+    /// only.
     ///
     /// # Errors
     ///
     /// Returns [`CursorError::Unsupported`] when this window backend has no
-    /// pointer-cursor facility, or [`CursorError::Platform`] when the window
-    /// system refuses or fails the update.
-    fn set_cursor(&self, cursor: CursorIcon) -> Result<(), CursorError>;
+    /// pointer-cursor facility, or for a [`Cursor::Image`] exactly when the
+    /// window's [`WindowCapabilities::cursor_image`](crate::WindowCapabilities::cursor_image)
+    /// is `Unavailable`; [`CursorError::Platform`] when the window system
+    /// refuses or fails the update.
+    fn set_cursor(&self, cursor: &Cursor) -> Result<(), CursorError>;
 
     /// Tell the system which refresh rate this window wants from its display.
     ///

@@ -107,14 +107,18 @@ pub(crate) trait SceneVisitor {
 
 /// Walks `scene` from its root in paint order. A version's slot whose
 /// subtree or chunk whose bounds cannot reach `cull`, in surface pixels, is
-/// skipped; a tree is walked whole.
+/// skipped; a tree is walked whole. Answers how many slots and chunks the
+/// walk asked the cull about.
 pub(crate) fn walk_scene<V: SceneVisitor>(
     scene: SceneContent<'_>,
     cull: Option<Rect<f64>>,
     visitor: &mut V,
-) {
+) -> u64 {
     match scene {
-        SceneContent::Tree(tree) => walk_layer_tree(tree, tree.root(), visitor),
+        SceneContent::Tree(tree) => {
+            walk_layer_tree(tree, tree.root(), visitor);
+            0
+        }
         SceneContent::Version(version) => walk_version(version, cull, visitor),
     }
 }
@@ -191,12 +195,18 @@ enum Visit {
 
 /// Walk `version` from its root, visiting what `flatten` would build in the
 /// same order, without building it. A slot's subtree or a chunk that cannot
-/// reach `cull` is skipped.
+/// reach `cull` is skipped. Answers how many slots and chunks it asked the
+/// cull about.
 ///
 /// Termination: a version's slots form a tree (`SceneOwner::apply` refuses a
 /// cycle and a second parent), so every node is entered at most once.
-fn walk_version<V: SceneVisitor>(version: &SceneVersion, cull: Option<Rect<f64>>, visitor: &mut V) {
+fn walk_version<V: SceneVisitor>(
+    version: &SceneVersion,
+    cull: Option<Rect<f64>>,
+    visitor: &mut V,
+) -> u64 {
     let mut cull = cull.map(|rect| version.subtree_cull(rect));
+    let mut tested: u64 = 0;
     let mut stack = vec![Visit::Node(version.root())];
     while let Some(visit) = stack.pop() {
         match visit {
@@ -268,7 +278,10 @@ fn walk_version<V: SceneVisitor>(version: &SceneVersion, cull: Option<Rect<f64>>
                             });
                         }
                         Entry::Chunk { chunk, .. } => {
-                            if cull.as_mut().is_some_and(|cull| !cull.meets_chunk(at)) {
+                            if cull.as_mut().is_some_and(|cull| {
+                                tested = tested.saturating_add(1);
+                                !cull.meets_chunk(at)
+                            }) {
                                 continue;
                             }
                             let item = Item::Chunk(chunk.commands());
@@ -277,7 +290,10 @@ fn walk_version<V: SceneVisitor>(version: &SceneVersion, cull: Option<Rect<f64>>
                             }
                         }
                         Entry::Slot { node: child, .. } => {
-                            if cull.as_mut().is_some_and(|cull| !cull.meets(*child)) {
+                            if cull.as_mut().is_some_and(|cull| {
+                                tested = tested.saturating_add(1);
+                                !cull.meets(*child)
+                            }) {
                                 continue;
                             }
                             stack.push(Visit::Entries {
@@ -297,6 +313,7 @@ fn walk_version<V: SceneVisitor>(version: &SceneVersion, cull: Option<Rect<f64>>
             }
         }
     }
+    tested
 }
 
 /// Exits the open effects of `node` above `parent`, innermost first.
@@ -327,16 +344,18 @@ fn close_until<V: SceneVisitor>(
 }
 
 /// Record every consumer through the same layer semantics; GPU effects remain
-/// ordered IR. A partial frame passes its damage as `cull`.
+/// ordered IR. A partial frame passes its damage as `cull`. Answers what the
+/// walk and the recording did.
 pub(crate) fn record_scene(
     scene: SceneContent<'_>,
     cull: Option<Rect<f64>>,
     backend: &mut crate::layer_dispatcher::LayerDispatcher<'_>,
-) -> crate::EngineResult<()> {
+) -> crate::EngineResult<crate::frame_protocol::RasterCounters> {
     struct Recorder<'a, 'b> {
         backend: &'a mut crate::layer_dispatcher::LayerDispatcher<'b>,
         error: Option<crate::EngineError>,
         followers: Vec<SiteKey>,
+        counters: crate::frame_protocol::RasterCounters,
     }
     impl Recorder<'_, '_> {
         fn enter_layer(&mut self, site: Site<'_>, layer: &Layer) -> Step {
@@ -417,6 +436,9 @@ pub(crate) fn record_scene(
                 return Step::SkipSubtree;
             }
             self.backend.flush_active_transform();
+            if matches!(site, Site::Node | Site::Tree(..)) {
+                self.counters.nodes_entered = self.counters.nodes_entered.saturating_add(1);
+            }
             let step = match item {
                 Item::Layer(layer) => self.enter_layer(site, layer),
                 Item::Placed(offset) => {
@@ -424,6 +446,7 @@ pub(crate) fn record_scene(
                     Step::Descend
                 }
                 Item::Chunk(commands) => {
+                    self.counters.chunks_recorded = self.counters.chunks_recorded.saturating_add(1);
                     crate::dispatch::dispatch_commands(*commands, self.backend);
                     Step::Descend
                 }
@@ -455,9 +478,14 @@ pub(crate) fn record_scene(
         backend,
         error: None,
         followers: Vec::new(),
+        counters: crate::frame_protocol::RasterCounters::default(),
     };
-    walk_scene(scene, cull, &mut recorder);
-    recorder.error.map_or(Ok(()), Err)
+    let cull_tests = walk_scene(scene, cull, &mut recorder);
+    if let Some(error) = recorder.error {
+        return Err(error);
+    }
+    recorder.counters.cull_tests = cull_tests;
+    Ok(recorder.counters)
 }
 
 #[cfg(test)]

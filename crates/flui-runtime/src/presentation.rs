@@ -22,7 +22,7 @@ use flui_layer::{PerformanceOverlayLayer, PerformanceOverlayOption, PerformanceS
 #[cfg(any(test, feature = "testing"))]
 use flui_platform::PlatformTextInput;
 use flui_platform::text_store::TextStoreHost;
-use flui_platform::{CursorError, CursorIcon, PlatformWindow};
+use flui_platform::{Cursor, CursorError, CursorIcon, PlatformWindow};
 use flui_rendering::binding::RendererBinding as _;
 use flui_rendering::pipeline::PipelineCell;
 use flui_rendering::pipeline::PipelineOwner;
@@ -802,7 +802,7 @@ impl PresentationState {
                     );
                     return;
                 };
-                if let Err(error) = window.set_cursor(cursor) {
+                if let Err(error) = window.set_cursor(&Cursor::Icon(cursor)) {
                     match error {
                         CursorError::Unsupported(unsupported) => {
                             tracing::trace!(
@@ -2020,7 +2020,9 @@ impl PresentationState {
     /// multiple of [`IN_FLIGHT_FLOOR`](crate::ui_runtime::IN_FLIGHT_FLOOR) since the oldest
     /// pending frame was handed to its sink, so a lost settlement wake costs at most that interval, and a
     /// frame that never settles wakes the owner once per interval, not on every read
-    /// (ADR-0305 §5).
+    /// (ADR-0305 §5). A host whose raster thread has settled every pending frame of this
+    /// presentation, and so already woke it, leaves the floor out
+    /// (`UiRuntime::next_wake_owing_floors`).
     pub(crate) fn in_flight_floor(&self) -> Option<Instant> {
         let queued = self.pending_frames.borrow().front()?.submitted_at();
         let floor = crate::ui_runtime::IN_FLIGHT_FLOOR;
@@ -2572,7 +2574,7 @@ impl PresentationState {
         }
         if let Some(window) = &window {
             failure.invoke(|| {
-                let _ = window.set_cursor(CursorIcon::Default);
+                let _ = window.set_cursor(&Cursor::Icon(CursorIcon::Default));
             });
         }
 

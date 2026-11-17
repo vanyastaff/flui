@@ -974,6 +974,13 @@ impl AppRuntime {
         self.service_registry.reopen();
     }
 
+    /// The application's lifecycle the services watch
+    /// ([`ServiceContext::lifecycle`](super::lifecycle::ServiceContext::lifecycle)).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn service_lifecycle(&self) -> Rc<super::lifecycle::ServiceLifecycle> {
+        self.service_registry.lifecycle()
+    }
+
     /// The staged service shutdown: stop admission, cancel
     /// every running service, then join each until `join_by` — run at
     /// full loop-exit teardown BEFORE [`Self::shutdown_execution`], so
@@ -1084,10 +1091,18 @@ impl AppRuntime {
     #[cfg(not(target_arch = "wasm32"))]
     #[must_use]
     pub(super) fn next_wake(&self) -> Option<web_time::Instant> {
+        // A floor whose window the raster thread has settled and asked for
+        // its frame is that window's to serve (`RasterHost::floor_owed`).
+        // While the host is turning the floor stands: that turn answers it.
+        let floor_owed = |address| {
+            self.raster_host
+                .try_read(|host| host.floor_owed(address))
+                .unwrap_or(true)
+        };
         let runtime = self
             .installed_host
             .logical()
-            .next_wake()
+            .next_wake_owing_floors(&floor_owed)
             .expect("BUG: wake deadline read before owner checkout returned");
         #[cfg(all(
             not(target_os = "android"),
