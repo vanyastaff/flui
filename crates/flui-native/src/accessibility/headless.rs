@@ -113,7 +113,9 @@ impl crate::host::WindowAccessibility for FakeAccessibility {
 
     fn focus_changed(&self, _: bool) {}
 
-    /// A headless window is on no screen.
+    /// The window keeps what it told
+    /// ([`HeadlessWindowSystem::accessibility_bounds`](crate::HeadlessWindowSystem::accessibility_bounds)),
+    /// where a test reads it.
     fn bounds_changed(&self, _: crate::host::ScreenBounds) {}
 }
 

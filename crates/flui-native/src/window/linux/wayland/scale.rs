@@ -192,17 +192,19 @@ pub(crate) fn buffer_scale(viewported: bool, told: ScaleTold, drawn: Size<f64>) 
 /// compositor keeps the window's position to itself: the window at the
 /// origin, and the content of `metrics` below the title bar of `header`
 /// logical pixels the window draws itself (zero where it draws none), both
-/// at the content's scale.
-pub(crate) fn unplaced_bounds(metrics: WindowMetrics, header: f64) -> ScreenBounds {
+/// at the content's scale. `None` where the window and its title bar are
+/// taller than a coordinate holds.
+pub(crate) fn unplaced_bounds(metrics: WindowMetrics, header: f64) -> Option<ScreenBounds> {
     let content = metrics.physical();
     let header = device_size(Size::new(0.0, header), metrics.scale()).height;
-    ScreenBounds {
-        outer: Bounds::new(
+    ScreenBounds::try_new(
+        Bounds::new(
             Point::new(0, 0),
-            Size::new(content.width, content.height.saturating_add(header)),
+            Size::new(content.width, content.height.checked_add(header)?),
         ),
-        content: Bounds::new(Point::new(0, header), content),
-    }
+        Bounds::new(Point::new(0, header), content),
+    )
+    .ok()
 }
 
 #[cfg(test)]
@@ -483,7 +485,7 @@ mod tests {
             let metrics = metrics.expect("a window's metrics");
             assert_eq!(
                 unplaced_bounds(metrics, header),
-                ScreenBounds { outer, content },
+                ScreenBounds::try_new(outer, content).ok(),
                 "{case}"
             );
         }

@@ -159,9 +159,10 @@ impl crate::host::WindowAccessibility for UnixAccessibility {
     /// place the nodes from it, and without it every window sits at the
     /// screen's origin.
     fn bounds_changed(&self, bounds: ScreenBounds) {
-        self.adapter
-            .lock()
-            .window_bounds(accesskit_rect(bounds.outer), accesskit_rect(bounds.content));
+        self.adapter.lock().window_bounds(
+            accesskit_rect(bounds.outer()),
+            accesskit_rect(bounds.content()),
+        );
     }
 }
 
@@ -303,14 +304,17 @@ mod tests {
         let log = Arc::clone(&told);
         let bridge = UnixAccessibility::over(move |_| Box::new(ToldLog(log)));
         let bounds = |x, y, width, height| Bounds::new(Point::new(x, y), Size::new(width, height));
-        bridge.bounds_changed(ScreenBounds {
-            outer: bounds(195, 120, 410, 335),
-            content: bounds(200, 150, 400, 300),
-        });
-        bridge.bounds_changed(ScreenBounds {
-            outer: bounds(i32::MAX, i32::MIN, i32::MAX, 1),
-            content: bounds(i32::MAX, i32::MIN, i32::MAX, 1),
-        });
+        let screen = |outer, content| {
+            ScreenBounds::try_new(outer, content).expect("the content lies within the window")
+        };
+        bridge.bounds_changed(screen(
+            bounds(195, 120, 410, 335),
+            bounds(200, 150, 400, 300),
+        ));
+        bridge.bounds_changed(screen(
+            bounds(i32::MAX, i32::MIN, i32::MAX, 1),
+            bounds(i32::MAX, i32::MIN, i32::MAX, 1),
+        ));
         let far = f64::from(i32::MAX) * 2.0;
         let edge = accesskit::Rect::new(
             f64::from(i32::MAX),

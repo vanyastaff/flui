@@ -1351,7 +1351,14 @@ trait depends on `flui-platform` instead.
   nothing of its window's position, so the window is at the origin and its
   content below the title bar it draws itself (`scale::unplaced_bounds`),
   while the X11 window passes its frame's and its content's rectangles on the
-  root each time a read of the server finds them changed. AT-SPI's screen
+  root each time a read of the server finds them changed. That read follows
+  the events the server sends the window (`ConfigureNotify`, including the
+  synthetic one ICCCM 4.1.5 has a window manager send when it moves a frame,
+  `ReparentNotify`, `_NET_FRAME_EXTENTS`, the focus), so a manager that moves
+  a frame without telling the client leaves the old position until the next
+  such event ([gaps](../../docs/gaps.md)). The headless window passes its
+  simulated rectangle, which `HeadlessWindowSystem::accessibility_bounds`
+  reports. AT-SPI's screen
   coordinates of a node are the content's origin plus the node's place; the
   bridge reaches the adapter through `AtSpiAdapter`, the three calls it makes
   of `accesskit_unix::Adapter`. `Activate` is a request with an
@@ -2549,15 +2556,20 @@ other values to NoPreference. A missing key permits the GNOME
 `org.gnome.desktop.interface/enable-animations` fallback, and with neither key
 motion is unobserved, as every other key without a value is; failed reads
 preserve the last accepted snapshot. Settings v1 uses its double-variant `Read`
-reply. The watch never polls. A refresh is retried only after a read that
-fails in a way that passes by itself (the call timed out, no reply, the
-portal's `Failed`), on `READ_RETRIES`' doubling schedule, which runs out and
-which unrelated notifications cannot postpone; a missing key, a portal without
-the Settings interface and a portal not on the bus (`ServiceUnknown`) wait for
-the next `SettingChanged` or `NameOwnerChanged`, each of which refreshes the
-same observation set and starts the schedule over. A session bus that does
-not answer, or a connection that ends, is tried again on `CONNECT_RETRIES`'
-schedule, and once that runs out the watch ends with the observation it has.
+reply. The watch never polls. A refresh is retried on `READ_RETRIES`' doubling
+schedule, which runs out and which unrelated notifications cannot postpone,
+after a read that fails in a way that passes by itself (the call timed out, no
+reply, the portal's `Failed`), and after a refresh in which the portal answered
+no setting at all: `xdg-desktop-portal` folds a backend that has not started
+or has gone into `NotFound` for every key, and the backend's return changes no
+owner on the bus and sends no signal. A key missing beside others that answer,
+a portal without the Settings interface and a portal not on the bus
+(`ServiceUnknown`) wait for the next `SettingChanged` or `NameOwnerChanged`,
+each of which refreshes the same observation set and starts the schedule over.
+A session bus that does not answer, or a connection that ends before the portal
+answered on it, is tried again on `CONNECT_RETRIES`' schedule, which only a
+connection the portal answered on starts over, and once it runs out the watch
+ends with the observation it has.
 Shutdown fences owner admission before cancelling the task, whose state holds
 no strong owner/source cycle.
 

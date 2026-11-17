@@ -634,10 +634,11 @@ impl X11Window {
         let frame = support.kept(read.frame);
         let mode = mode_of(support.kept(mode_flags(read.wm_state, read.net_state)));
         let outer = outer_bounds(read.origin, read.content, frame);
-        record.bounds = Some(ScreenBounds {
-            outer,
-            content: Bounds::new(read.origin, read.content),
-        });
+        // The frame extents are not negative, so the content lies within
+        // the outer rectangle unless that saturated; such a read is not told.
+        if let Ok(bounds) = ScreenBounds::try_new(outer, Bounds::new(read.origin, read.content)) {
+            record.bounds = Some(bounds);
+        }
         let display = snapshot
             .as_ref()
             .and_then(|snapshot| display_of(snapshot, outer).or_else(|| snapshot.primary()));

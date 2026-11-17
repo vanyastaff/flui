@@ -1951,7 +1951,7 @@ mod toplevel {
                 let header = applied.own_header(self.decoration(&applied), self.viewported);
                 let scale = self.buffer_scale(&applied);
                 scale::metrics(applied.sizing.content(), scale)
-                    .map(|metrics| scale::unplaced_bounds(metrics, header))
+                    .and_then(|metrics| scale::unplaced_bounds(metrics, header))
             };
             if let Some(bounds) = bounds
                 && self.bridge_bounds.replace(Some(bounds)) != Some(bounds)

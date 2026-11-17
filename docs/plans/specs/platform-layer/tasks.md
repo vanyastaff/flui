@@ -7373,28 +7373,41 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
   `NotFound` на всё) насчитал 21 вызов Settings за 3 с после первого чтения, `quiet-without-portal`
   (портала на шине нет) — 15; узел X11-окна, сдвинутого в (200, 150), читался клиентом AT-SPI в
   (10, 20) вместо (210, 170). Портал: `read_motion` без обоих ключей даёт «нет наблюдения»
-  (`Ok(None)`), как прочие ключи; повтор только у ошибок, проходящих сами (`heals_by_itself`:
-  истёк `method_timeout`, `NoReply`, `Timeout`/`TimedOut`, портальный `Failed`), по
-  удваивающемуся расписанию `READ_RETRIES` (1–16 с, пять раз), которое сигнал или смена владельца
-  начинают заново; `ServiceUnknown`, нет метода или ключа — ждут `SettingChanged` или
-  `NameOwnerChanged`; шина, которая не отвечает или закрылась, — `CONNECT_RETRIES` (1–32 с, шесть
-  раз), затем наблюдение кончается. Правило записано в `crates/flui-native/ARCHITECTURE.md`.
-  AT-SPI: `WindowAccessibility::bounds_changed(ScreenBounds)` на шве — обязательный метод каждого
-  моста (Win32, AppKit, UIKit, Android и Web ничего не делают: их адаптер берёт положение у окна
-  или вида сам); мост Linux зовёт `Adapter::set_root_window_bounds`. Окно X11 передаёт внешний
-  прямоугольник рамки и прямоугольник содержимого на корне при каждом чтении сервера, где они
-  изменились; окно Wayland — себя в начале координат и содержимое под своей полосой заголовка
-  (`scale::unplaced_bounds`), при каждом ходе, где это изменилось. Тесты, каждый падает при
-  откате: `quiet-without-keys` и `quiet-without-portal` в `linux_preferences` (монитор шины
-  считает вызовы), `a_bus_that_never_answers_is_asked_a_bounded_number_of_times` (при бесконечном
-  повторе наблюдение не кончается за 5 с), `a_node_is_placed_where_its_window_moved_on_the_screen`
-  (два сдвига, клиент AT-SPI читает `GetExtents(Screen)`) и продолжение
-  `a_wayland_window_reads_back_its_tree` (Weston: содержимое на 37 логических пикселей ниже верха,
-  при откате (10, 10) вместо (10, 47)) в `linux_atspi`; таблицы
-  `only_a_failure_that_passes_by_itself_is_retried`, `a_backoff_doubles_and_runs_out`,
+  (`Ok(None)`), как прочие ключи; повтор по удваивающемуся расписанию `READ_RETRIES` (1–16 с, пять
+  раз), которое сигнал или смена владельца начинают заново, — у ошибок, проходящих сами
+  (`heals_by_itself`: истёк `method_timeout`, `NoReply`, `Timeout`/`TimedOut`, портальный
+  `Failed`), и у обновления, где портал не ответил ни на один ключ: `xdg-desktop-portal`
+  (`desktop-portal/settings.c`, `settings_handle_read_one`) сводит любую ошибку бэкенда к
+  `NotFound`, а возвращение бэкенда не меняет владельца имени и не шлёт сигнала. Ключ, которого нет
+  рядом с отвечающими, `ServiceUnknown`, нет метода — ждут `SettingChanged` или
+  `NameOwnerChanged`; шина, которая не отвечает или закрылась прежде, чем портал на ней ответил, —
+  `CONNECT_RETRIES` (1–32 с, шесть раз; заново только после соединения, где портал ответил), затем
+  наблюдение кончается. Правило записано в `crates/flui-native/ARCHITECTURE.md`. AT-SPI:
+  `WindowAccessibility::bounds_changed(ScreenBounds)` на шве — обязательный метод каждого моста
+  (Win32, AppKit, UIKit, Android и Web ничего не делают: их адаптер берёт положение у окна или вида
+  сам); `ScreenBounds::try_new` отказывает отрицательному размеру и содержимому вне окна; мост
+  Linux зовёт `Adapter::set_root_window_bounds`. Окно X11 передаёт внешний прямоугольник рамки и
+  прямоугольник содержимого на корне при каждом чтении сервера, где они изменились (чтение идёт по
+  `ConfigureNotify`, `ReparentNotify`, `_NET_FRAME_EXTENTS`, фокусу; менеджер, двигающий рамку без
+  синтетического `ConfigureNotify` ICCCM 4.1.5, оставляет старое место до следующего такого
+  события — записано в `docs/gaps.md`); окно Wayland — себя в начале координат и содержимое под
+  своей полосой заголовка (`scale::unplaced_bounds`); безголовое окно — свой смоделированный
+  прямоугольник (`HeadlessWindowSystem::accessibility_bounds`). Тесты, каждый падает при откате:
+  `quiet-without-keys` (портал отвечает только `color-scheme`) и `quiet-without-portal` в
+  `linux_preferences` (монитор шины считает вызовы), `late-backend` (портал отвечает `NotFound`
+  на всё, затем без сигнала — reduced motion; при «нет ответа — улажено» владелец не слышит его
+  30 с), `a_bus_that_never_answers_is_asked_a_bounded_number_of_times` (при бесконечном повторе
+  наблюдение не кончается за 5 с), `a_node_is_placed_where_its_window_moved_on_the_screen` (под
+  openbox, окно в рамке, два сдвига; клиент AT-SPI читает `GetExtents(Screen)`, при откате (10, 20)
+  вместо (211, 190)) и продолжение `a_wayland_window_reads_back_its_tree` (Weston на масштабе 2:
+  при откате (20, 20, 200, 60) вместо (20, 94, 200, 60)) в `linux_atspi`,
+  `a_window_tells_its_bridge_where_it_lies` в `window_state`; таблицы
+  `only_a_failure_that_passes_by_itself_is_retried`, `a_portal_that_answers_nothing_is_read_again`,
+  `only_a_connection_the_portal_answered_on_starts_the_schedule_over`,
+  `a_backoff_doubles_and_runs_out`, `screen_bounds_hold_their_content_within_the_window`,
   `the_bridge_tells_the_adapter_where_the_window_is`,
   `an_unplaced_window_has_its_content_below_its_own_title_bar`. Прогоны 2026-11-16 (WSL Ubuntu
-  24.04): весь `linux_preferences` (19 случаев), весь `linux_atspi` (7), набор `flui-native` как в
+  24.04): весь `linux_preferences` (20 случаев), весь `linux_atspi` (7), набор `flui-native` как в
   CI под `xvfb-run` (976 тестов), `wayland_window` под Weston (падает лишь
   `optional::a_window_moved_to_another_output_names_its_display`, как и на `main`). Не запущено:
   обзор мышью Orca и лупа в настоящей сессии (строка паритета `tree-and-actions`).

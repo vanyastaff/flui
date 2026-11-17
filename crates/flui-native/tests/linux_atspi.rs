@@ -216,8 +216,10 @@ mod cases {
             }
             if wayland {
                 children.0.push(
+                    // At scale 2, so the device pixels a node is placed in
+                    // differ from the logical pixels it is laid out in.
                     Command::new("weston")
-                        .args(["--backend=headless", "--idle-time=0"])
+                        .args(["--backend=headless", "--idle-time=0", "--scale=2"])
                         .arg(format!("--socket={WESTON_SOCKET}"))
                         .stdout(Stdio::null())
                         .stderr(Stdio::null())
@@ -597,23 +599,57 @@ mod cases {
         /// Turn the loop, act on the X window from another client, and turn
         /// the loop until the window has heard what `act` did.
         fn on_the_server(&self, act: impl FnOnce(&RustConnection, u32)) {
-            use raw_window_handle::{HasWindowHandle as _, RawWindowHandle};
             use x11rb::connection::Connection as _;
             let Host::X11(platform) = &self.host else {
                 panic!("only an X11 window is acted on through the X server")
             };
+            let (connection, _) = RustConnection::connect(None).expect("the X server answers");
+            flui_native::testing::x11::run_for(platform, Duration::from_millis(100))
+                .expect("the loop turns");
+            act(&connection, self.xid());
+            connection.flush().expect("flush");
+            flui_native::testing::x11::run_for(platform, Duration::from_millis(200))
+                .expect("the loop turns");
+        }
+
+        /// The X window of an X11 fixture.
+        fn xid(&self) -> u32 {
+            use raw_window_handle::{HasWindowHandle as _, RawWindowHandle};
             let target = self.window.surface_target();
             let handle = target.window_handle().expect("an open window has a handle");
             let RawWindowHandle::Xcb(handle) = handle.as_raw() else {
                 panic!("an X11 window hands out an XCB handle")
             };
-            let (connection, _) = RustConnection::connect(None).expect("the X server answers");
-            flui_native::testing::x11::run_for(platform, Duration::from_millis(100))
-                .expect("the loop turns");
-            act(&connection, handle.window.get());
-            connection.flush().expect("flush");
-            flui_native::testing::x11::run_for(platform, Duration::from_millis(200))
-                .expect("the loop turns");
+            handle.window.get()
+        }
+
+        /// Where the X server has the window's content on the root, read by
+        /// another client.
+        fn content_origin(&self) -> (i32, i32) {
+            use x11rb::connection::Connection as _;
+            use x11rb::protocol::xproto::ConnectionExt as _;
+            let (connection, screen) = RustConnection::connect(None).expect("the X server answers");
+            let root = connection.setup().roots[screen].root;
+            let origin = connection
+                .translate_coordinates(self.xid(), root, 0, 0)
+                .expect("request")
+                .reply()
+                .expect("the window is on the root");
+            (i32::from(origin.dst_x), i32::from(origin.dst_y))
+        }
+
+        /// Whether the window's parent is not the root: a window manager put
+        /// it in a frame.
+        fn reparented(&self) -> bool {
+            use x11rb::connection::Connection as _;
+            use x11rb::protocol::xproto::ConnectionExt as _;
+            let (connection, screen) = RustConnection::connect(None).expect("the X server answers");
+            let tree = connection
+                .query_tree(self.xid())
+                .expect("request")
+                .reply()
+                .expect("the window's tree");
+            tree.parent != connection.setup().roots[screen].root
         }
     }
 
@@ -875,6 +911,17 @@ mod cases {
         // The compositor tells no client where its window is: the window is
         // at the screen's origin, and its content below the title bar the
         // window draws itself where the compositor draws none.
+        // A window enters an output, and takes its scale, once it has shown
+        // a frame.
+        fixture.turn();
+        fixture
+            .window
+            .surface_target()
+            .pre_present_notify(None, flui_platform::SwapChainStatistics::None);
+        assert!(
+            flui_native::testing::wayland::present(fixture.window.as_ref()),
+            "the window draws a frame"
+        );
         fixture.turn();
         let state = fixture.window.state();
         let scale = state
@@ -882,11 +929,18 @@ mod cases {
             .expect("a configured window has metrics")
             .scale()
             .get();
+        assert!(
+            scale > 1.0,
+            "the session's Weston runs at scale 2, so device and logical pixels differ"
+        );
         let header = state.outer.size().height - state.content_size.height();
         assert!(
             header > 0.0,
             "Weston draws no frame, so the window draws its own title bar"
         );
+        // The tree is laid out at the window's scale, as a presentation's.
+        fixture.owner.set_device_pixel_ratio(scale);
+        fixture.owner.flush();
         let device = |logical: f64| (logical * scale).round() as i32;
         assert_eq!(
             screen_extents(session, &window),
@@ -925,6 +979,9 @@ mod cases {
     /// moved, its screen extents are the window's content origin plus the
     /// node's place in the window, not the node's place alone.
     fn a_node_is_placed_where_its_window_moved_on_the_screen(session: &Session) {
+        // Under a reparenting window manager, where one is installed: the
+        // window sits in its frame, and the manager moves the frame.
+        let manager = WindowManager::start();
         let name = session.marked("Placed");
         let mut fixture = Fixture::new(&name);
         fixture.add(Some(1), 2, (10.0, 20.0, 100.0, 30.0), |c| {
@@ -933,16 +990,115 @@ mod cases {
         });
         fixture.owner.flush();
         let window = session.window(&name);
-        // No window manager runs on the session's X server: the content's
-        // origin is where the window is moved to.
-        fixture.move_to(200, 150);
-        assert_eq!(screen_extents(session, &window), (210, 170, 100, 30));
-        fixture.move_to(320, 40);
-        assert_eq!(
-            screen_extents(session, &window),
-            (330, 60, 100, 30),
-            "each move reaches the bus"
-        );
+        if manager.is_some() {
+            let deadline = Instant::now() + PATIENCE;
+            while !fixture.reparented() {
+                assert!(
+                    Instant::now() < deadline,
+                    "timed out waiting for the window manager to frame the window"
+                );
+                fixture.turn();
+            }
+        }
+        for (x, y) in [(200, 150), (320, 40)] {
+            fixture.move_to(x, y);
+            // Where the X server puts the content, which a frame offsets
+            // from where the window was asked to go.
+            let (left, top) = fixture.content_origin();
+            if manager.is_none() {
+                assert_eq!((left, top), (x, y), "no frame offsets the content");
+            }
+            assert_eq!(
+                screen_extents(session, &window),
+                (left + 10, top + 20, 100, 30),
+                "the node at its place in the content moved to ({x}, {y})"
+            );
+        }
+        drop(manager);
+    }
+
+    /// An openbox on the session's X server, stopped when dropped; none
+    /// where openbox is not installed, which fails where
+    /// `FLUI_REQUIRE_WINDOW_MANAGER` is set.
+    struct WindowManager(Child);
+
+    impl WindowManager {
+        fn start() -> Option<Self> {
+            use x11rb::connection::Connection as _;
+            use x11rb::protocol::xproto::{ConnectionExt as _, CreateWindowAux, WindowClass};
+            if !available("openbox") {
+                assert!(
+                    std::env::var_os("FLUI_REQUIRE_WINDOW_MANAGER").is_none(),
+                    "FLUI_REQUIRE_WINDOW_MANAGER is set and openbox is missing"
+                );
+                eprintln!("no openbox: the window is moved with no frame around it");
+                return None;
+            }
+            let manager = Self(
+                Command::new("openbox")
+                    .arg("--sm-disable")
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .process_group(0)
+                    .spawn()
+                    .expect("openbox starts"),
+            );
+            // Ready once it manages a window: a probe mapped now gets the
+            // `WM_STATE` only a window manager sets (see `x11_window.rs`).
+            let (connection, screen) = RustConnection::connect(None).expect("the X server answers");
+            let root = connection.setup().roots[screen].root;
+            let probe = connection.generate_id().expect("an id");
+            connection
+                .create_window(
+                    x11rb::COPY_DEPTH_FROM_PARENT,
+                    probe,
+                    root,
+                    0,
+                    0,
+                    10,
+                    10,
+                    0,
+                    WindowClass::INPUT_OUTPUT,
+                    x11rb::COPY_FROM_PARENT,
+                    &CreateWindowAux::new(),
+                )
+                .expect("request");
+            let wm_state = connection
+                .intern_atom(false, b"WM_STATE")
+                .expect("request")
+                .reply()
+                .expect("an atom")
+                .atom;
+            let deadline = Instant::now() + PATIENCE;
+            loop {
+                // Mapped again until it is managed: a map before the window
+                // manager redirected the root's maps is not one it hears of.
+                let _ = connection.map_window(probe);
+                let _ = connection.flush();
+                std::thread::sleep(Duration::from_millis(20));
+                if connection
+                    .get_property(false, probe, wm_state, wm_state, 0, 2)
+                    .ok()
+                    .and_then(|cookie| cookie.reply().ok())
+                    .is_some_and(|reply| reply.value_len > 0)
+                {
+                    break;
+                }
+                assert!(Instant::now() < deadline, "timed out waiting for openbox");
+            }
+            connection.destroy_window(probe).expect("request");
+            connection.flush().expect("flush");
+            Some(manager)
+        }
+    }
+
+    impl Drop for WindowManager {
+        fn drop(&mut self) {
+            let _ = Command::new("kill")
+                .args(["-KILL", "--", &format!("-{}", self.0.id())])
+                .status();
+            let _ = self.0.wait();
+        }
     }
 
     /// A live region is announced when its own label changes, when a label
