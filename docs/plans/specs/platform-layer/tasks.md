@@ -7074,6 +7074,57 @@ GPU-память простаивающего или невидимого окн
   устройствах не нужно: поведение хостов не меняется, кроме момента, когда Win32 и X11
   рассогласованы, — он теперь публикуется `Focused`, как и раньше по полю `focused`.
 
+- [ ] **LY121** — ветка `platform/cursor-and-window-commands`, решение — ADR-0352 (заменяет в
+  ADR-0343 решение 2 только набор взаимодействий и правило, по которому потребитель считает
+  изменение пользовательским). Отсутствие всего перечисленного подтверждено на `main` @
+  `6befd2792` чтением кода. Курсор — значение области: `set_cursor(&Cursor)`, где `Cursor` —
+  `Icon`, `Image(CursorImage)` или `Hidden`; видимость не отдельная команда, а курсор области
+  (иначе два источника одного факта и счётчик процесса на AppKit и Win32 — решение и причина в
+  ADR-0352 §1). `CursorImage` проверяется при сборке (сторона `1..=MAX_SIDE`, стороны до
+  пикселей, четыре байта на пиксель, hotspot внутри) и делит пиксели, хост держит последний
+  нативный курсор и сравнивает `==`; способность — `Availability` `cursor_image`. Захват —
+  `SetCursorGrab(CursorGrab::{None, Confined, Locked})` со слотами `confines_cursor`/`locks_cursor`,
+  `None` без слота; факт `WindowState::cursor_grab`, который `successor` сбрасывает у окна без
+  фокуса клавиатуры; каждый хост отпускает захват системы окон при потере фокуса, скрытии и
+  закрытии; при `Locked` курсор скрыт, перемещения отброшены, движение — `PointerEvent::RawMotion`
+  (`MotionDelta`, `MotionAcceleration`), собранное одной функцией `ContactRegistry::raw_motion`.
+  Уровень — `SetLevel(WindowLevel)` со слотами `keeps_on_top`/`keeps_on_bottom` и факт снимка
+  `level`; шаг и пропорция — `SetResizeIncrements(Option<WindowExtent>)` и
+  `SetAspectRatio(Option<AspectRatio>)` (два `NonZeroU32` в несократимом виде), запросы, а не
+  факты. Живой resize — `WindowInteraction::UserResizing` (не отдельный `resizing: bool`: две
+  формы одного факта), `is_user` читает оба взаимодействия; регистратор размещения считает по
+  `is_user` (иначе Win32 перестал бы запоминать размер, изменённый рамкой). Хосты: Win32 — образ
+  (`CreateIconIndirect`), скрытие, `ClipCursor` + raw input (`WM_INPUT`), `WS_EX_TOPMOST` и
+  удержание снизу в `WM_WINDOWPOSCHANGING`, шаг и пропорция в `WM_SIZING` (чистая половина
+  `window/windows/sizing.rs` с таблицей), `UserResizing` с первого `WM_SIZING`; X11 — Render-курсор,
+  `GrabPointer`, `XI_RawMotion`, `_NET_WM_STATE_ABOVE`/`BELOW`, `WM_NORMAL_HINTS`; Wayland — буфер
+  `wl_shm`, `zwp_pointer_constraints_v1` и `zwp_relative_pointer_manager_v1` там, где композитор их
+  даёт (иначе `NOT_ON_THIS_DEVICE`), `resizing` из configure, уровней/шага/пропорции нет
+  (`NOT_ON_THIS_PLATFORM`); AppKit — `NSCursor` из образа, прозрачный курсор, lock через
+  `CGAssociateMouseAndMouseCursorPosition`, `NSWindow.level`, `contentResizeIncrements`,
+  `contentAspectRatio`, live resize из делегата; веб — CSS `url(data:…)`, `cursor: none`, pointer
+  lock с `movementX/Y`; iOS и Android — lock `NOT_YET_ON_THIS_HOST`, остальное
+  `NOT_ON_THIS_PLATFORM`; headless моделирует всё. Запись: протокол 0.18 (разрыв ADR-0342: новый
+  вариант `raw_motion`), формат записи ввода 5, нативная запись несёт новые способности,
+  `cursor_grab`, `level`, `user_resizing`. Тесты (каждый падает при откате): таблица
+  `window_command_validate` — `admit_refuses_exactly_when_the_capability_is_unavailable` (восемь
+  новых строк), `restoring_normal_needs_no_capability`, `a_grab_is_published_only_for_a_focused_window`
+  (без сброса в `successor` падает), `a_cursor_image_holds_only_what_a_window_system_shows`,
+  `an_aspect_ratio_is_held_in_lowest_terms`, `a_resize_step_must_enclose_an_area`; conformance —
+  проверка `a_grab_ends_with_the_focus` и неисправность `KeepsTheGrabWithoutFocus`, которую она
+  ловит (`a_grab_kept_after_the_focus_went_is_caught`), `a_headless_grab_ends_with_the_focus`;
+  Win32 — `a_resize_by_the_frame_is_a_live_resize_until_the_loop_ends` (без ветки `UserResizing`
+  падает), `a_grab_is_held_while_focused_and_let_go_with_the_focus`,
+  `a_frame_drag_keeps_the_steps_and_the_proportion`, `a_level_is_what_win32_holds`;
+  `an_unread_placement_is_overwritten_only_by_the_user` (строка «a resize by the frame»; без
+  `is_user` падает); X11 и Wayland — живые случаи в `x11_input` и `wayland_input` (образ, скрытие,
+  Confined → Locked → None, уровни). Строимое осталось: lock на iOS (`prefersPointerLocked`) и
+  Android (`requestPointerCapture`), просьба виджета об образе и скрытом курсоре (`CursorRequest`
+  несёт только иконку) — запись `docs/gaps.md` «A widget cannot ask for a cursor image or none…».
+  Прогоны на устройствах — заметки строк `cursor-shapes`, `pointer-grab-confined-and-locked`,
+  `window-level-resize-steps-and-proportion` в `platform-parity.toml`. macOS, Android и wasm32
+  проверены `cargo +nightly check` в WSL; iOS не собирался.
+
 ## Отступление от порядка, решённое владельцем
 
 - 2026-10-21: LY22 ждёт свои зависимости (LY24, LY9, text-ime, teardown), хотя ни одна ветка не

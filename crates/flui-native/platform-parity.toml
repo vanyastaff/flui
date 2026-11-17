@@ -564,7 +564,19 @@ evidence = 'No gamepad vocabulary in the contract and no source on any host. And
 id = "cursor-shapes"
 feature = 'Cursor shapes'
 status = { windows = "partial", macos = "partial", wayland = "partial", x11 = "partial", ios = "missing", android = "missing", web = "partial", headless = "yes" }
-note = 'No iPad pointer styles or Android `PointerIcon`; no custom image or hide-until-move'
+note = 'No iPad pointer styles or Android `PointerIcon`. A cursor image of the application (`Cursor::Image`) and no cursor (`Cursor::Hidden`) are built on Windows, macOS, Wayland, X11 and the Web and reach no widget yet ([gaps](gaps.md#a-widget-cannot-ask-for-a-cursor-image-or-none-and-the-pointer-grabs-have-run-on-no-device)); none has run on a device but the headless host'
+
+[[group.section.row]]
+id = "pointer-grab-confined-and-locked"
+feature = 'Pointer grab: confined and locked, with raw motion'
+status = { windows = "partial", macos = "partial", wayland = "partial", x11 = "partial", ios = "missing", android = "missing", web = "partial", headless = "yes" }
+note = 'A grab holds only while the window has the keyboard focus and ends with it (ADR-0352 §2). Windows confines and locks with its cursor clip and raw input (`a_grab_is_held_while_focused_and_let_go_with_the_focus`, which needs the test process in the foreground, and the conformance check `a_grab_ends_with_the_focus`), never with a physical mouse or a remote session; macOS and the Web lock only (no confine API), type-checked, never run; X11 confines and locks with a pointer grab and XInput 2 raw motion, run on Xvfb, where XTest motion is not held to the grab; Wayland confines and locks through `zwp_pointer_constraints_v1` and `zwp_relative_pointer_manager_v1` where the compositor offers them, run on Weston only; iOS (`prefersPointerLocked`) and Android (`requestPointerCapture`) are not built'
+
+[[group.section.row]]
+id = "window-level-resize-steps-and-proportion"
+feature = 'Window level, resize steps and proportion'
+status = { windows = "partial", macos = "partial", wayland = "na", x11 = "partial", ios = "na", android = "na", web = "na", headless = "yes" }
+note = 'Windows keeps a window on top with `WS_EX_TOPMOST` (granted to a window of the foreground) and below by the host, and holds the steps and the proportion in `WM_SIZING` (`a_frame_drag_keeps_the_steps_and_the_proportion`, `a_level_is_what_win32_holds`), never with a user drag; macOS uses `NSWindow.level`, `contentResizeIncrements` and `contentAspectRatio` (AppKit holds one of the two at a time), type-checked only; X11 writes `_NET_WM_STATE_ABOVE`/`BELOW` and `WM_NORMAL_HINTS`, run on Xvfb; xdg-shell, UIKit, Android and the browser have no levels, steps or proportion'
 
 [[group.section.row]]
 id = "system-back-and-history"

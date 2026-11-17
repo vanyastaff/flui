@@ -2,6 +2,7 @@
 
 - **Status:** Accepted (2026-11-15)
 - **Date:** 2026-11-15
+- **Superseded-by:** [ADR-0352](ADR-0352-a-window-shows-the-cursor-its-region-asks-for-holds-the-pointer-only-while-focused-and-says-when-the-user-resizes-it.md) for decision 2's set of interactions and the rule a consumer counts the user's change by (`UserResizing` beside `UserPlacing`, read through `WindowInteraction::is_user`)
 - **Related:** [ADR-0254](ADR-0254-window-contract.md) decision 4 (one required handler method
   per obligation; `turn_deadline` is one more), [ADR-0058](ADR-0058-the-platform-paces-production-not-a-sleep.md)
   (the wake deadline a frame serves), [ADR-0338](ADR-0338-the-host-acquires-capabilities-from-the-launch-registry.md)
