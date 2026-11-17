@@ -1608,7 +1608,7 @@ mod cases {
             .expect("the focus")
             .focus;
         assert_eq!(focus, fixture.xid, "the server focused the window");
-        assert!(fixture.window.state().focused);
+        assert!(fixture.window.state().focus.is_focused());
 
         drop(started_again);
         fixture.settle();

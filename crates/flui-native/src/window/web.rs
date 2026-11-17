@@ -35,8 +35,8 @@ use crate::{
     window::state::{ReportedFacts, Sample, SampledGeometry, WindowStateCell},
 };
 use flui_platform::{
-    AdmittedCommand, ApplyError, CursorError, PlatformWindow, Unsupported, UnsupportedReason,
-    WindowAppearance, WindowCapabilities, WindowCommand, WindowExecutionState, WindowGeometry,
+    AdmittedCommand, ApplyError, Brightness, CursorError, PlatformWindow, Unsupported,
+    UnsupportedReason, WindowCapabilities, WindowCommand, WindowExecutionState, WindowGeometry,
     WindowId, WindowMode, WindowOptions, WindowState,
 };
 
@@ -174,14 +174,13 @@ fn sample_state(
             })
             // A page cannot hide its canvas from the user: it is shown.
             .with_visible(true)
-            .with_focused(focused)
             .with_title(Some(title))
             .with_resizable(false)
             .with_frame(flui_platform::WindowFrame::None)
             .with_display(display);
         ReportedFacts {
             metrics,
-            appearance: page_appearance(),
+            brightness: page_appearance(),
             // The viewport's unsafe bands where they cover the canvas, and the
             // keyboard over it.
             insets: flui_platform::WindowInsets::ZERO
@@ -192,7 +191,7 @@ fn sample_state(
             occluded: hidden,
             hovered,
             // A page has no activation apart from the canvas's focus.
-            active: focused,
+            focus: flui_platform::WindowFocus::reported(focused, focused),
             capabilities: page_capabilities(),
             // The user can resize the browser window, which this host does
             // not read as a placement: it cannot tell.
@@ -291,11 +290,11 @@ fn safe_area_over(
 }
 
 /// The user's color scheme as the page sees it (`prefers-color-scheme`).
-fn page_appearance() -> WindowAppearance {
+fn page_appearance() -> Brightness {
     if dark_scheme_query().is_some_and(|query| query.matches()) {
-        WindowAppearance::Dark
+        Brightness::Dark
     } else {
-        WindowAppearance::Light
+        Brightness::Light
     }
 }
 
@@ -1375,6 +1374,21 @@ impl PlatformWindow for WebWindow {
         self.id
     }
 
+    /// A page is told no gesture distances; the consumer keeps its own.
+    fn gesture_geometry(
+        &self,
+    ) -> Result<Option<flui_platform::GestureGeometry>, flui_platform::PreferenceQueryError> {
+        Ok(None)
+    }
+
+    /// A page's canvas shares no desktop with other windows of the process.
+    fn window_at(&self, _: flui_foundation::geometry::Point<f64>) -> flui_platform::WindowAt {
+        flui_platform::WindowAt::Unknown
+    }
+
+    /// The canvas is on the page from the start; there is no reveal to defer.
+    fn reveal_after_first_frame(&self) {}
+
     /// Served by the page's next animation frame: the request marks the
     /// window's frame demand, and the platform's `requestAnimationFrame` loop,
     /// which runs only while a frame is asked for, delivers it; a loop that
@@ -1493,7 +1507,7 @@ impl PlatformWindow for WebWindow {
         self.canvas
             .style()
             .set_property("cursor", cursor.name())
-            .map_err(|error| CursorError::Backend(format!("{error:?}")))
+            .map_err(|error| CursorError::failed(format!("{error:?}")))
     }
 }
 

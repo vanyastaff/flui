@@ -27,7 +27,7 @@ use std::{
 use cursor_icon::CursorIcon;
 use flui_foundation::geometry::{Bounds, DevicePixelRatio, Point, Size};
 use flui_platform::{
-    SizeConstraints, WindowAppearance, WindowExtent, WindowGeometry, WindowId, WindowMode,
+    Brightness, SizeConstraints, WindowExtent, WindowGeometry, WindowId, WindowMode,
 };
 use parking_lot::Mutex;
 use windows::Win32::{
@@ -319,7 +319,7 @@ pub(crate) struct WindowContext {
     /// The user's app theme as last sampled, which the window reports in
     /// the snapshot; the chrome is drawn in it while
     /// `chrome_follows_system`.
-    pub appearance: std::cell::Cell<WindowAppearance>,
+    pub appearance: std::cell::Cell<Brightness>,
     /// Whether the last `WM_ACTIVATE` made the window the active one of its
     /// desktop: it, or a window it owns, has the keyboard.
     pub(crate) active: std::cell::Cell<bool>,
@@ -1610,7 +1610,7 @@ pub(crate) struct OwnerTracking {
     pub(crate) occluded: bool,
     /// The user's theme as `WM_SETTINGCHANGE` last read it: never the
     /// dark-mode flag this host sets on the chrome to match (ADR-0222).
-    pub(crate) appearance: WindowAppearance,
+    pub(crate) appearance: Brightness,
     /// Whether the last `WM_ACTIVATE` made the window the active one.
     pub(crate) active: bool,
     /// Whether the mouse is over the window, as its input last reported it.
@@ -1791,7 +1791,6 @@ pub(crate) fn sample_state(
         let state = state
             .with_mode(mode_of(mode.flags()))
             .with_visible(visible)
-            .with_focused(focused)
             .with_title(window_text(hwnd))
             .with_constraints(constraints)
             .with_resizable(style & WS_THICKFRAME.0 != 0)
@@ -1809,7 +1808,7 @@ pub(crate) fn sample_state(
                     .ok()
                 })
                 .flatten(),
-            appearance,
+            brightness: appearance,
             // A desktop window has no safe area, and Win32 never suspends one.
             insets: flui_platform::WindowInsets::ZERO,
             execution: flui_platform::WindowExecutionState::Running,
@@ -1817,7 +1816,7 @@ pub(crate) fn sample_state(
             // others it does not report.
             occluded,
             hovered,
-            active,
+            focus: flui_platform::WindowFocus::reported(focused, active),
             capabilities,
             interaction,
         }

@@ -1264,7 +1264,7 @@ impl WaylandInput for SeatInput {
             })
             .unwrap_or(false);
         if !known {
-            return Err(CursorError::Backend(
+            return Err(CursorError::failed(
                 "the window is not open on this Wayland loop".to_owned(),
             ));
         }

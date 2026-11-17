@@ -85,8 +85,8 @@ use flui_foundation::geometry::{DevicePixelRatio, Point, Size, WindowMetrics};
 use flui_foundation::panic::FirstPanic;
 use flui_platform::input_regions::ResizeEdge;
 use flui_platform::{
-    AdmittedCommand, ApplyError, CloseDecision, CursorError, DisplaySnapshot, PlatformTextInput,
-    PlatformWindow, SizeConstraints, Unsupported, UnsupportedReason, WindowAppearance,
+    AdmittedCommand, ApplyError, Brightness, CloseDecision, CursorError, DisplaySnapshot,
+    PlatformTextInput, PlatformWindow, SizeConstraints, Unsupported, UnsupportedReason,
     WindowCapabilities, WindowCommand, WindowFrame, WindowGeometry, WindowHandler, WindowId,
     WindowIdMint, WindowMode, WindowOptions, WindowState,
 };
@@ -478,10 +478,10 @@ impl X11Window {
     }
 
     /// The colour scheme the system applies, as the platform last heard it.
-    fn appearance(&self) -> WindowAppearance {
+    fn appearance(&self) -> Brightness {
         self.windows
             .upgrade()
-            .map_or(WindowAppearance::Light, |windows| windows.appearance.get())
+            .map_or(Brightness::Light, |windows| windows.appearance.get())
     }
 
     /// The display snapshot, or none when it cannot be read.
@@ -578,8 +578,8 @@ impl X11Window {
         // this one afterwards.
         let (focus_changed, resized) = {
             let mut record = self.record.borrow_mut();
-            let focus_changed =
-                std::mem::replace(&mut record.focus_told, state.focused) != state.focused;
+            let focus_changed = std::mem::replace(&mut record.focus_told, state.focus.is_focused())
+                != state.focus.is_focused();
             // A change of a size known before: the first one an `Expose`
             // paints.
             let content = state.metrics.map(WindowMetrics::physical);
@@ -591,7 +591,9 @@ impl X11Window {
             (focus_changed, resized)
         };
         if focus_changed {
-            self.facets.accessibility.focus_changed(state.focused);
+            self.facets
+                .accessibility
+                .focus_changed(state.focus.is_focused());
         }
         if resized {
             self.request_redraw();
@@ -615,8 +617,7 @@ impl X11Window {
             // what it last published stands, short of what it was asked.
             let mut state = self.cell.published();
             state.visible = false;
-            state.focused = false;
-            state.active = false;
+            state.focus = flui_platform::WindowFocus::Inactive;
             return Sample::from(state);
         };
         // What a window manager wrote on the window stands while one runs.
@@ -671,7 +672,6 @@ impl X11Window {
             let state = state
                 .with_mode(mode)
                 .with_visible(visible)
-                .with_focused(read.focused)
                 .with_title(Some(record.title.clone()))
                 .with_constraints(record.constraints)
                 .with_resizable(record.resizable)
@@ -679,16 +679,21 @@ impl X11Window {
                 .with_display(display.map(|display| display.id));
             ReportedFacts {
                 metrics,
-                appearance: self.appearance(),
+                brightness: self.appearance(),
                 insets: flui_platform::WindowInsets::ZERO,
                 execution: flui_platform::WindowExecutionState::Running,
                 occluded,
                 hovered: self.delivery.hovered(),
-                active: if support.extended() {
-                    read.active
-                } else {
-                    read.focused
-                },
+                // The window manager names the active window after the focus
+                // moved, so the two can disagree for a read: the focus wins.
+                focus: flui_platform::WindowFocus::reported(
+                    read.focused,
+                    if support.extended() {
+                        read.active
+                    } else {
+                        read.focused
+                    },
+                ),
                 capabilities,
                 // A move or resize the window manager runs for the user is
                 // not read yet (docs/gaps.md).
@@ -1656,6 +1661,19 @@ impl PlatformWindow for X11Window {
         self.id
     }
 
+    /// The X server states no gesture distances; the consumer keeps its own.
+    fn gesture_geometry(
+        &self,
+    ) -> Result<Option<flui_platform::GestureGeometry>, flui_platform::PreferenceQueryError> {
+        Ok(None)
+    }
+
+    /// The stacking of this process's windows is not read yet, so the window
+    /// under a point is not known.
+    fn window_at(&self, _: Point<f64>) -> flui_platform::WindowAt {
+        flui_platform::WindowAt::Unknown
+    }
+
     fn request_redraw(&self) {
         self.mark_redraw();
     }
@@ -1875,7 +1893,7 @@ pub struct X11Windows {
     support_unread: Cell<bool>,
     /// A window is marked and has not read itself since.
     unread: Cell<bool>,
-    appearance: Cell<WindowAppearance>,
+    appearance: Cell<Brightness>,
     /// The window that had the focus last, whether or not it still has: the
     /// one a forwarded launch brings forward.
     last_focused: Cell<Option<WindowId>>,
@@ -1932,7 +1950,7 @@ impl X11Windows {
             window_manager: Cell::new(None),
             support_unread: Cell::new(false),
             unread: Cell::new(false),
-            appearance: Cell::new(WindowAppearance::Light),
+            appearance: Cell::new(Brightness::Light),
             last_focused: Cell::new(None),
             forwarded_activation: Cell::new(None),
             connection,
@@ -2515,7 +2533,7 @@ impl LoopWindows for X11Windows {
         self.mark_all();
     }
 
-    fn observe_appearance(&self, appearance: WindowAppearance) {
+    fn observe_appearance(&self, appearance: Brightness) {
         let changed = self.appearance.replace(appearance) != appearance;
         if changed {
             self.mark_all();

@@ -7011,6 +7011,37 @@ GPU-память простаивающего или невидимого окн
   истечении; записано в `docs/gaps.md` («Leaving fullscreen publishes a mode in between on
   AppKit, X11 and Wayland»). Проверки и непрогнанное — в теле PR #2680.
 
+- [x] **LY118** — ветка `platform/window-vocabulary`, решение — ADR-0349 (заменяет в ADR-0254 §2
+  абзац о `reveal_after_first_frame`). Все находки подтверждены на `main` @ `ac3b1ee58` чтением кода.
+  Тема окна — `WindowState::brightness: Brightness`; `WindowAppearance` с `From` удалён (его
+  `Vibrant*` не производил ни один хост), материал — `WindowMaterial`. Журнал и протокол не
+  меняются: поле `appearance` и четыре значения остаются, читатель берёт `vibrant_*` как их тему.
+  Фокус и активность — одно `WindowState::focus: WindowFocus` (`Inactive`, `Active`, `Focused`)
+  вместо `focused` и `active`: «фокус без активности» не строится. Предположение подтвердилось:
+  Win32 шлёт `WM_ACTIVATE(WA_INACTIVE)` до `WM_KILLFOCUS`, X11 читает `XGetInputFocus` и
+  `_NET_ACTIVE_WINDOW`, который менеджер окон пишет позже. Каждый хост (Win32, X11, Wayland,
+  AppKit, UIKit, Android, веб, headless, двойник `flui-testing`) читает свои два отчёта через
+  `WindowFocus::reported`, где побеждает фокус; `successor` публикует скрытое окно `Inactive`;
+  журнал пишет `is_focused`/`is_active` и читает пару через `reported`. Отказ системы окон —
+  одна форма: `CursorError::Platform(PlatformFailure)` и `PreferenceQueryError::Platform(PlatformFailure)`
+  вместо `Backend(String)` и `Native { message }` (у каждой ошибки `failed`). У методов
+  `PlatformWindow` нет тел по умолчанию: `gesture_geometry`, `window_at` и
+  `reveal_after_first_frame` обязательны у каждого хоста и двойника; `gesture_geometry` остаётся
+  единственным запросом рядом со `state()` (системная настройка в масштабе окна, может не
+  ответить и повторяется). `reveal_after_first_frame` остаётся методом: успех показа знает только
+  встраивающий, запись в `docs/gaps.md` о расхождении с ADR-0254 §2 снята. `flui_platform::testing`
+  существует только с фичей `testing`; примеры трейта пишут свою цель без поверхности. Документы
+  переписаны: `crates/flui-platform/ARCHITECTURE.md` (корень крейта и его модули, долг `ui-events`
+  снят, правило одного факта и одной формы отказа), `WindowOptions` (имена строителей, без
+  `is_visible()`), `text_input.rs` (`PlatformSystemChrome` есть), сводка `PlatformWindow`.
+  Тесты: `focus_implies_activation_and_a_hidden_window_has_neither` (таблица
+  `window_command_validate`; без строки `successor`, сбрасывающей фокус, скрытое окно публикуется
+  `Focused` и `Active`); `compile_fail`-доктест `reveal_after_first_frame` (окно без метода не
+  компилируется, E0046); строка conformance `the_snapshot_agrees_with_the_window_system` сравнивает
+  `focus` с двумя отчётами системы через `reported`. Строимого не осталось, прогонов на
+  устройствах не нужно: поведение хостов не меняется, кроме момента, когда Win32 и X11
+  рассогласованы, — он теперь публикуется `Focused`, как и раньше по полю `focused`.
+
 ## Отступление от порядка, решённое владельцем
 
 - 2026-10-21: LY22 ждёт свои зависимости (LY24, LY9, text-ime, teardown), хотя ни одна ветка не

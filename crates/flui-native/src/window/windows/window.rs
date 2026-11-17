@@ -1344,7 +1344,7 @@ impl WindowsWindow {
         // not reachable here since `?` returns before it.
         unsafe {
             let handle = LoadCursorW(None, resource)
-                .map_err(|error| CursorError::Backend(error.to_string()))?;
+                .map_err(|error| CursorError::failed(error.to_string()))?;
             SetCursor(Some(handle));
         }
         Ok(())
@@ -1517,7 +1517,7 @@ impl PlatformWindow for WindowsWindow {
             Ok(())
         })
         .ok_or_else(|| {
-            CursorError::Backend(
+            CursorError::failed(
                 "the native window is closed, or set_cursor was called off its owning thread"
                     .to_string(),
             )

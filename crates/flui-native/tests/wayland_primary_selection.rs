@@ -159,7 +159,9 @@ mod cases {
             2,
             "the compositor's request asked the selection once, at a turn"
         );
-        first.until("the keyboard to come back", || first.window.state().focused);
+        first.until("the keyboard to come back", || {
+            first.window.state().focus.is_focused()
+        });
         assert!(
             !selection.owns(),
             "the second client's selection replaced the first's"
@@ -252,7 +254,7 @@ mod cases {
     /// hint exactly while the latest write is concealed (ADR-0152 §6).
     fn a_change_of_concealment_under_one_input_sets_a_new_source(_: &Session) {
         let first = Client::open("first");
-        first.until("the keyboard", || first.window.state().focused);
+        first.until("the keyboard", || first.window.state().focus.is_focused());
         let clipboard = first.platform.clipboard();
         let hint = || selection_offers_concealed_hint(&first.platform);
         write_unobserved(&*clipboard, ClipboardWrite::text("plain"));

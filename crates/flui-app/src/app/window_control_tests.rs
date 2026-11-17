@@ -357,6 +357,18 @@ impl PlatformWindow for RecordingWindow {
     }
     flui_platform::window_takes_no_frame_verbs!();
 
+    fn gesture_geometry(
+        &self,
+    ) -> Result<Option<flui_platform::GestureGeometry>, flui_platform::PreferenceQueryError> {
+        Ok(None)
+    }
+
+    fn window_at(&self, _: flui_foundation::geometry::Point<f64>) -> flui_platform::WindowAt {
+        flui_platform::WindowAt::Unknown
+    }
+
+    fn reveal_after_first_frame(&self) {}
+
     fn set_cursor(&self, _: CursorIcon) -> Result<(), CursorError> {
         Ok(())
     }
@@ -370,7 +382,7 @@ impl PlatformWindow for RecordingWindow {
             flui_platform::WindowExtent::try_new(Size::new(10.0, 10.0)).expect("a finite extent");
         WindowState::new(flui_platform::WindowGeometry::unplaced(extent), extent)
             .with_visible(true)
-            .with_focused(true)
+            .with_focus(flui_platform::WindowFocus::Focused)
             .with_capabilities(self.capabilities)
     }
     fn apply(&self, command: AdmittedCommand) -> Result<(), ApplyError> {

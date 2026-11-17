@@ -4,6 +4,9 @@
 - **Date:** 2026-10-20
 - **Superseded-by:** [ADR-0277](ADR-0277-a-window-publishes-its-insets-and-the-keyboards-motion.md)
   in part: the snapshot field `safe_area` is `insets: WindowInsets`.
+- **Superseded-by:** [ADR-0349](ADR-0349-the-window-contract-states-each-fact-in-one-shape-and-every-window-says-what-it-does.md)
+  for §2's paragraph on `reveal_after_first_frame`: the reveal stays a required method the
+  embedder calls
 - **Superseded-by:** [ADR-0339](ADR-0339-an-opened-url-has-one-destination-decided-at-the-runner.md)
   for §4's clause that the first instance hears a later launch after `reopen` whenever it shows no
   window: only a launch that opens nothing asks for the reopen
