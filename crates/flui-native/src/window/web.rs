@@ -1618,13 +1618,12 @@ impl PlatformWindow for WebWindow {
                     .as_ref()
                     .filter(|(kept, _)| kept == image)
                     .map(|(_, value)| value.clone());
-                match kept {
-                    Some(value) => value,
-                    None => {
-                        let value = image_cursor(image)?;
-                        *self.cursor_image.borrow_mut() = Some((image.clone(), value.clone()));
-                        value
-                    }
+                if let Some(value) = kept {
+                    value
+                } else {
+                    let value = image_cursor(image)?;
+                    *self.cursor_image.borrow_mut() = Some((image.clone(), value.clone()));
+                    value
                 }
             }
         };
