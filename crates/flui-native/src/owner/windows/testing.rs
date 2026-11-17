@@ -315,7 +315,8 @@ pub(crate) fn created_window() -> CreatedWindow {
         ))),
         preferences: Rc::new(NoPreferences),
         hooks: Rc::new([]),
-        apartment: None,
+        apartment: super::com_apartment::ComApartment::enter()
+            .expect("the test thread enters its COM apartment"),
         drag: Arc::new(NoDrag),
     }
 }

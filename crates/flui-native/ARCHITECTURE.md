@@ -2796,9 +2796,8 @@ but the wake knocks at its pacing, whose delivery drives the owner's turn.
 
 Every other message the host posts to a window of its owner thread carries
 accepted work: a hidden or minimized window's frame request, the deliveries
-another thread raised for a window, a close (granted behind a running method,
-commanded from another thread, or asked by a wrapper dropped off its thread),
-the exit policy's request and the low-memory
+another thread raised for a window, a close the handler granted behind a
+running method, the exit policy's request and the low-memory
 report. Each goes through `OwnerQueue::post`, and names its window by identity
 in its parameters, which the procedure checks. A post to a handle that is no
 window of the owner thread is refused (`PostRefusal`). A post the thread's
@@ -2966,11 +2965,15 @@ file list, the locale), never forcing another owner's delayed rendering of
 anything else and never setting OLE's private formats again; a restore that
 fails is reported, never panicked on.
 
-### Win32 callbacks live in the window's owner-thread context; off-owner registration is refused
+### Win32 callbacks live in the window's owner-thread context
 
-Registration methods take
-`&self` on `Send + Sync` traits, so any thread can call them. ADR-0082 §4 step
-one for Win32 makes that safe without changing a signature.
+`WindowsPlatform`, `WindowsLoop` and `WindowsWindow` are neither `Send` nor
+`Sync` (ADR-0327 §5, pinned by `assert_not_impl_any!` beside each), so every
+registration, command and teardown they take runs on the thread that created
+them, and none of them carries a thread check or a cross-thread fallback of its
+own. What crosses a thread crosses by its type: the owner signal's wake and
+`OwnerPost` (behind the `Send + Sync` `DragTransport`), the frame and delivery
+posts a window makes to itself, the surface target, the pacer of a modal loop.
 
 - **Storage.** A window's handler lives in its `WindowDelivery`, an
   owner-thread slot the window shares with its `WindowContext`; it is set
@@ -2981,17 +2984,30 @@ one for Win32 makes that safe without changing a signature.
   window, shared by every window context; the owner-turn callback lives in that context's `OwnerTurnSlot`.
   Both contexts sit behind `GWLP_USERDATA`, are reached only through the
   owner-thread gates (`with_window_context_checked`, `OwnerControl::shares`),
-  and are freed by `WM_DESTROY` / `WM_NCDESTROY` on the owner thread. A
-  platform dropped off its owner thread without running keeps the owner window,
-  so its `OwnerControlContext` and the handlers in it are leaked, never freed
-  on the wrong thread. Both are pinned `!Send + !Sync`.
-- **Refusal.** A registration from any thread but the owner, on a window that
-  is gone, or on a handle the OS recycled for another window, is refused. The
-  callback is dropped right there, on the registering thread, so it never runs
-  on the owner and is never freed by a thread that did not create it. A
-  foreign-thread refusal logs an error ("registration refused"): the caller has
-  just lost a callback. An off-owner `open_window` returns
-  `OpenWindowError::Backend`.
+  and are freed by `WM_DESTROY` / `WM_NCDESTROY` on the owner thread, where the
+  loop's `OwnerControl::close` and the last wrapper's drop destroy their
+  windows. The gates keep their thread check, because the slot is a raw pointer
+  and the handles another thread holds reach the same window handle. What the
+  window procedure records of a window (bounds, scale, visibility, focus) is a
+  `Copy` record in an `Rc<Cell<_>>` the wrappers and the context share
+  (`window/windows/record.rs`): an update takes the record and returns the next
+  one, so no read or update holds it
+  (`a_read_inside_a_record_update_sees_the_last_record_set`); the exit policy's
+  coalescing flag is a `Cell` as well. The COM apartment is an
+  `Rc<ComApartment>`, and every COM user of the thread that can outlive the
+  loop holds one: each window's wrapper and context, its drop-target
+  registration, its text services and its touchpad viewport
+  (`a_window_that_outlives_its_platform_revokes_its_drop_target_inside_com`).
+  A drag source holds none: its `DoDragDrop` runs from the owner window, which
+  lives no longer than the loop that holds its own `Rc`.
+- **Refusal.** A registration on a window that is gone, or on a handle the OS
+  recycled for another window, is refused, and the callback is dropped right
+  there. Whether a handle still names its wrapper's window is
+  `hwnd_affinity::handle_names` (`Nothing`, `AnotherWindow`, `ItsWindow`): the
+  window's thread against the one that created it (which keeps the answer in
+  this process), its class and its slot against what the wrapper installed,
+  never the caller's thread
+  (`a_handle_names_its_wrappers_window_only_while_its_slot_is_the_wrappers`).
 - **Restore through the call point.** Dispatching the window-event or
   keyboard-layout handler goes through `owner::call_point::call`: it is taken
   out of its slot, run with no borrow held, and put back only if the slot is
@@ -3002,9 +3018,6 @@ one for Win32 makes that safe without changing a signature.
   the handler: it drops contained, or stays alive when the teardown runs
   during an unwind. The owner hooks the delivery holds weakly are declared
   before the teardown guard, so they outlive it.
-
-The other backends still store `Send` callbacks behind locks until their own
-steps.
 
 Tests (pull-request CI only type-checks Win32; the nightly `windows-latest` run executes them): the owner-affinity refusal order is pinned
 by `refusal_precedence_is_gone_then_foreign_thread_then_class_then_slot`
@@ -3194,8 +3207,10 @@ process ends with the session, and the application was told what to save.
 
 A `WM_DESTROY` that leaves the platform tracking no top-level window does not
 ask the exit policy itself: it posts one coalesced message to the owner
-message-only window, and `request_exit_policy_reevaluation` posts the same
-message from any thread (refused once the owner window is closed). The owner
+message-only window, and `Platform::request_exit_policy_reevaluation` posts the
+same message (refused once the owner window is closed). Both run on the owner
+thread: another thread asks through `PlatformProxy`, whose request reaches the
+platform in an owner turn, so the coalescing flag is a `Cell`. The owner
 procedure then checks that no window is tracked and no quit is under way, asks
 the application's handler through the call point with no borrow held, and
 checks the window count again, since the handler may have opened a replacement
@@ -3821,7 +3836,7 @@ turns in the `OwnerTurnSlot` (`!Send`) the host's loop keeps and passes to
 is not `Send` and closing or dropping the last `Arc<OwnerSignal>` on another
 thread never drops it there. Each host clears the slot on the owner as it
 quits. Win32 keeps it in its owner control context, which `WM_NCDESTROY`
-frees, and a platform dropped off its owner leaks it with the context; AppKit
+frees on the thread the loop never leaves; AppKit
 keeps it main-thread-bound in its loop control, made on main the first time
 the owner needs it. Test, headless only:
 `an_owner_turn_callback_keeps_owner_local_state_until_the_quit`.

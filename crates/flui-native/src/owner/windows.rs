@@ -94,8 +94,7 @@ pub(crate) use crate::owner::wake_deadline::FrameCount;
 use crate::owner::wake_deadline::{TurnDeadline, WakeDeadline};
 use crate::{
     error::PlatformError, host, owner::OpenWindows, owner::OwnerHooks, owner::OwnerPlatform,
-    owner::hwnd_affinity::UserDataRefusal, owner::window_delivery::WindowDelivery,
-    platform::AppHandler, platform::Platform,
+    owner::window_delivery::WindowDelivery, platform::AppHandler, platform::Platform,
 };
 use broadcast::Subscriber;
 use com_apartment::ComApartment;
@@ -594,8 +593,10 @@ pub(crate) struct CreatedWindow {
     /// The hooks of its class, which a feature tells a step of its own
     /// ([`window_step`]).
     pub(crate) hooks: WindowHooks,
-    /// The owner thread's COM apartment, when the window was opened with it.
-    pub(crate) apartment: Option<Rc<ComApartment>>,
+    /// The owner thread's COM apartment. A feature that keeps a COM object for
+    /// the window holds its own `Rc` of it, so COM stays entered until the
+    /// object is released, however long the window outlives the loop.
+    pub(crate) apartment: Rc<ComApartment>,
     /// The loop's drag-and-drop transport, which makes the window a drop
     /// target.
     pub(crate) drag: Arc<dyn HostDrag>,
@@ -936,21 +937,17 @@ pub struct WindowsLoop {
     /// as the table made them.
     pub(crate) displays: Arc<dyn HostDisplays>,
 
-    /// Records the owner thread so the thread-affine Win32 operations below
-    /// can `debug_assert` their caller (ADR-0039). Bound at construction —
-    /// the message-only window's queue belongs to the constructing thread —
-    /// and re-asserted by `run`. Pre-run window creation on that same
-    /// thread (the Win32 examples) stays legal.
-    pub(crate) affinity: flui_foundation::OwnerAffinity,
-
     /// The owner thread's COM apartment. Declared last, so it is released
-    /// after everything above; each window's text services hold their own
-    /// clone, so COM outlives the platform while any of them is alive.
-    pub(crate) apartment: com_apartment::ApartmentHold,
+    /// after everything above; each window's text services and touchpad
+    /// viewport hold their own `Rc`, so COM outlives the platform while any of
+    /// them is alive.
+    pub(crate) apartment: Rc<ComApartment>,
 }
 
-// Owner-local (ADR-0327 §5): the loop, its window set and its message-only
-// window belong to the thread that built them.
+// Owner-local (ADR-0327 §5): the loop, its window set, its message-only
+// window and its COM apartment belong to the thread that built them, so the
+// thread-affine Win32 calls it makes (`PostQuitMessage`, `DestroyWindow`,
+// `OleUninitialize`) run there with no thread check of their own.
 static_assertions::assert_not_impl_any!(WindowsLoop: Send, Sync);
 
 impl std::fmt::Debug for WindowsLoop {
@@ -1004,9 +1001,8 @@ impl WindowsLoop {
         // Enter this thread's STA for drag-and-drop, clipboard and TSF. The
         // apartment is a value: an early return below releases it, and once
         // built it lives until the platform and every window's text services
-        // are gone (see `com_apartment`). This thread is also the one the
-        // platform's `affinity` binds to below.
-        let apartment = com_apartment::ComApartment::enter().map_err(|hr| PlatformError::Init {
+        // are gone (see `com_apartment`).
+        let apartment = ComApartment::enter().map_err(|hr| PlatformError::Init {
             message: format!("Failed to initialize COM: {hr:?}"),
         })?;
 
@@ -1086,23 +1082,18 @@ impl WindowsLoop {
 
         tracing::info!("Windows platform initialized");
 
-        let platform = Self {
+        // The message-only window above was just created on this thread, so
+        // its queue belongs here: the owner is decided at construction, and
+        // the loop, being neither `Send` nor `Sync`, never leaves it.
+        Ok(Self {
             owner_control,
             app,
             drag,
             message_window,
             windows,
             displays,
-            affinity: flui_foundation::OwnerAffinity::new(),
-            apartment: com_apartment::ApartmentHold::new(apartment),
-        };
-        // The message-only window above was just created on THIS thread, so
-        // its message queue already belongs here — the owner is decided at
-        // construction, not at `run`. A later `run` on another thread trips
-        // the foreign re-bind assertion instead of silently accepting a
-        // thread that cannot service the HWND.
-        platform.affinity.bind_current();
-        Ok(platform)
+            apartment,
+        })
     }
 
     /// Register FLUI's window class with `window_proc::<H>` as its procedure,
@@ -1352,25 +1343,16 @@ impl WindowsLoop {
 
     /// Registers the keyboard layout callback in the owner-thread hooks.
     ///
-    /// Off the owner thread, or once the platform has shut down, the
-    /// registration is refused and `callback` is dropped here, on the
-    /// calling thread. A replaced callback is dropped through the call point
-    /// after the `RefCell` borrow ends, since its destructor may re-enter the
-    /// platform, in a boundary of its own: a capture that panics in `Drop`
-    /// must not unwind into the host.
+    /// Once the platform has shut down, the registration is refused and
+    /// `callback` is dropped here. A replaced callback is dropped through the
+    /// call point after the `RefCell` borrow ends, since its destructor may
+    /// re-enter the platform, in a boundary of its own: a capture that panics
+    /// in `Drop` must not unwind into the host.
     pub(crate) fn register_layout_callback(&self, op: &'static str, callback: Box<dyn FnMut()>) {
         match self.owner_control.shares(op) {
             Ok(shares) => {
                 let slot = Rc::clone(&shares.app_hooks.borrow().keyboard_layout_changed);
                 slot.register(callback);
-            }
-            Err(UserDataRefusal::ForeignThread) => {
-                tracing::error!(
-                    op,
-                    "platform callback registration refused: platform delivery are registered \
-                     on the owner thread; the callback was dropped on the calling thread"
-                );
-                drop(callback);
             }
             Err(reason) => {
                 tracing::debug!(
@@ -1391,11 +1373,6 @@ impl host::Loop for WindowsLoop {
         handler: Rc<dyn AppHandler>,
     ) -> Result<(), PlatformError> {
         tracing::info!("Running Windows platform");
-
-        // Idempotent from the constructing thread; a `run` migrated to a
-        // different thread is a bug the re-bind assertion surfaces (the
-        // message-only window's queue is bound to the constructing thread).
-        self.affinity.bind_current();
 
         struct RunGuard(Rc<WindowsLoop>);
         impl Drop for RunGuard {
@@ -1446,15 +1423,11 @@ impl host::Loop for WindowsLoop {
 
     fn quit(&self) {
         self.owner_control.close_signal();
-        // PostQuitMessage posts to the CALLING thread's message queue — off
-        // the owner thread it silently quits nothing (ADR-0039).
-        self.affinity.debug_assert_owner("WindowsLoop::quit");
         tracing::info!("Quitting Windows platform");
         // SAFETY: `PostQuitMessage` takes a plain `i32` exit code, no
-        // pointer arguments; the `debug_assert_owner` above documents (in
-        // debug builds) that this runs on the thread whose queue it posts
-        // to — posting from elsewhere is a logic bug (silently posts to the
-        // wrong queue), not memory-unsafety.
+        // pointer arguments. It posts to the calling thread's queue, which is
+        // the loop's: the loop is neither `Send` nor `Sync`, so `quit` runs
+        // on the thread that built it (ADR-0327 §5).
         unsafe {
             PostQuitMessage(0);
         }

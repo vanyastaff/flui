@@ -185,7 +185,8 @@ fn created(hwnd: HWND) -> CreatedWindow {
         ))),
         preferences: Rc::new(NoPreferences),
         hooks: test_hooks(),
-        apartment: None,
+        apartment: super::com_apartment::ComApartment::enter()
+            .expect("the test thread enters its COM apartment"),
         drag: Arc::new(super::testing::NoDrag),
     }
 }

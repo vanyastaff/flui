@@ -24,6 +24,7 @@ use std::rc::Rc;
 use flui_foundation::panic::FirstPanic;
 use windows::Win32::{
     Foundation::{HANDLE, HWND},
+    System::Threading::GetCurrentThreadId,
     UI::WindowsAndMessaging::{
         DestroyWindow, GWLP_USERDATA, GetPropW, RemovePropW, SW_HIDE, SetPropW, SetWindowLongPtrW,
         ShowWindow,
@@ -32,7 +33,7 @@ use windows::Win32::{
 use windows::core::{PCWSTR, w};
 
 use super::proc::WindowContext;
-use crate::owner::hwnd_affinity::TeardownRoute;
+use crate::owner::hwnd_affinity::HandleNames;
 use crate::owner::window_delivery::NativeFate;
 use crate::owner::windows::{WindowRef, WindowStep, window_destroyed};
 
@@ -236,13 +237,20 @@ fn end_granted(hwnd: HWND, fate: NativeFate) {
     // The release may have waited behind a running method, in which the OS
     // could destroy the window and give its handle to another: only a live
     // FLUI window of this thread whose slot is cleared, the retired one, is
-    // touched.
-    if super::proc::teardown_route(hwnd, std::ptr::null()) != TeardownRoute::DestroyDirect {
+    // touched: the retired window is the one whose cleared slot (context
+    // `0`) names it, on the thread that runs this.
+    // SAFETY: no arguments; the calling thread's id.
+    let this_thread = unsafe { GetCurrentThreadId() };
+    let retired = super::proc::InstalledWindow {
+        thread: this_thread,
+        context: 0,
+    };
+    if super::proc::handle_names(hwnd, retired) != HandleNames::ItsWindow {
         return;
     }
     match fate {
         NativeFate::Destroy => {
-            // SAFETY: the route just established a live window of this thread
+            // SAFETY: `handle_names` just established a live window of this thread
             // (the only one Win32 permits the call from) whose slot is
             // cleared, so its `WM_DESTROY` finds no context. The mark goes
             // before the window, as Win32 asks of a property it was given;

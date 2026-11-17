@@ -289,8 +289,8 @@ enum Close {
     /// `WindowCommand::Close` on the owner thread, whose exit-policy post is
     /// refused.
     Command,
-    /// The posted close a granted close, a close command from another thread
-    /// and a wrapper dropped off its thread take.
+    /// The posted close a close the handler granted behind a running method
+    /// takes.
     Posted,
 }
 

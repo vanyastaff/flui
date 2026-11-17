@@ -280,7 +280,7 @@ impl WindowMessages for InputWindows {
         if let Some(host) = direct_manipulation::create_host(
             window.hwnd,
             window.client_size,
-            window.apartment.clone(),
+            std::rc::Rc::clone(&window.apartment),
         ) {
             input.touchpad.install(host);
         }
