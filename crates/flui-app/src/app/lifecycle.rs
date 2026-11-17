@@ -1015,8 +1015,8 @@ pub enum ServiceLifetime {
 /// included.
 pub type ServiceFuture = Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
 
-/// What a service receives when started: its cancellation signal and the
-/// capability to spawn tasks and workers.
+/// What a service receives when started: its cancellation signal, the
+/// capability to spawn tasks and workers, and the application's lifecycle.
 ///
 /// The shutdown contract lives here: a service **must** observe
 /// [`Self::cancellation`] and return within the registry's deadline —
@@ -1028,6 +1028,7 @@ pub type ServiceFuture = Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
 pub struct ServiceContext {
     signal: CancellationSignal,
     spawner: TaskSpawner,
+    lifecycle: LifecycleWatch,
 }
 
 impl ServiceContext {
@@ -1043,6 +1044,132 @@ impl ServiceContext {
     #[must_use]
     pub fn spawner(&self) -> &TaskSpawner {
         &self.spawner
+    }
+
+    /// The application's lifecycle, as the service reads it from its own
+    /// thread (clone it into the future): a service that polls or keeps
+    /// timers pauses them while the application is
+    /// [`Paused`](flui_scheduler::AppLifecycleState::Paused) or
+    /// [`Hidden`](flui_scheduler::AppLifecycleState::Hidden), as a phone
+    /// expects of work its user no longer sees.
+    #[must_use]
+    pub fn lifecycle(&self) -> &LifecycleWatch {
+        &self.lifecycle
+    }
+}
+
+/// The application's lifecycle as a service reads it: the most active state
+/// any of the application's UI runtimes is in, `Detached` while none is.
+///
+/// Latest-wins and pull-only, like the other service streams: a reader sees
+/// the state now ([`current`](Self::current)) or waits for the next change
+/// ([`changed`](Self::changed)), and a state that came and went between two
+/// reads is not replayed. `Send` and cheap to clone; publishing never waits
+/// for a reader.
+#[derive(Clone, Debug)]
+pub struct LifecycleWatch {
+    state: tokio::sync::watch::Receiver<flui_scheduler::AppLifecycleState>,
+}
+
+impl LifecycleWatch {
+    /// The application's lifecycle now.
+    #[must_use]
+    pub fn current(&self) -> flui_scheduler::AppLifecycleState {
+        *self.state.borrow()
+    }
+
+    /// Wait for the lifecycle to change from the state this watch last
+    /// returned, and return the new one; `None` once the application's loop
+    /// has ended and no change can follow.
+    pub async fn changed(&mut self) -> Option<flui_scheduler::AppLifecycleState> {
+        self.state.changed().await.ok()?;
+        Some(*self.state.borrow_and_update())
+    }
+}
+
+/// The owner's side of [`LifecycleWatch`]: the state each live UI runtime's
+/// scheduler last reported, folded into the most active one and published to
+/// every watch.
+///
+/// Owner-thread state; the watches it publishes to are read from any thread.
+#[derive(Debug)]
+pub(crate) struct ServiceLifecycle {
+    /// Where the lifecycle is published, until the loop ends: dropping it
+    /// ends every watch's [`changed`](LifecycleWatch::changed).
+    published:
+        std::cell::RefCell<Option<tokio::sync::watch::Sender<flui_scheduler::AppLifecycleState>>>,
+    runtimes: std::cell::RefCell<
+        rustc_hash::FxHashMap<flui_foundation::UiRuntimeId, flui_scheduler::AppLifecycleState>,
+    >,
+}
+
+impl ServiceLifecycle {
+    fn new() -> Self {
+        let (published, _) =
+            tokio::sync::watch::channel(flui_scheduler::AppLifecycleState::Detached);
+        Self {
+            published: std::cell::RefCell::new(Some(published)),
+            runtimes: std::cell::RefCell::default(),
+        }
+    }
+
+    /// A watch of the published lifecycle; once the loop has ended, a watch
+    /// that reads `Detached` and whose `changed` answers `None` at once.
+    pub(crate) fn watch(&self) -> LifecycleWatch {
+        let state = match self.published.borrow().as_ref() {
+            Some(published) => published.subscribe(),
+            None => tokio::sync::watch::channel(flui_scheduler::AppLifecycleState::Detached).1,
+        };
+        LifecycleWatch { state }
+    }
+
+    /// The loop ends: `Detached` is published last, and every watch's
+    /// `changed` answers `None` from then on. Later notes publish nothing.
+    pub(crate) fn close(&self) {
+        let published = self.published.borrow_mut().take();
+        self.runtimes.borrow_mut().clear();
+        if let Some(published) = published {
+            // Told with no borrow held: a reader's waker runs here.
+            published.send_if_modified(|state| {
+                std::mem::replace(state, flui_scheduler::AppLifecycleState::Detached)
+                    != flui_scheduler::AppLifecycleState::Detached
+            });
+            drop(published);
+        }
+    }
+
+    /// Whether the loop this lifecycle belonged to has ended.
+    pub(crate) fn is_closed(&self) -> bool {
+        self.published.borrow().is_none()
+    }
+
+    /// `runtime`'s scheduler is in `state` now.
+    pub(crate) fn note(
+        &self,
+        runtime: flui_foundation::UiRuntimeId,
+        state: flui_scheduler::AppLifecycleState,
+    ) {
+        self.runtimes.borrow_mut().insert(runtime, state);
+        self.publish();
+    }
+
+    /// `runtime` has retired.
+    pub(crate) fn forget(&self, runtime: flui_foundation::UiRuntimeId) {
+        self.runtimes.borrow_mut().remove(&runtime);
+        self.publish();
+    }
+
+    /// Publish the most active state of the live runtimes, when it changed.
+    /// The table's borrow ends before the watches are told.
+    fn publish(&self) {
+        let most_active = flui_scheduler::AppLifecycleState::most_active(
+            self.runtimes.borrow().values().copied(),
+        );
+        let Some(published) = self.published.borrow().clone() else {
+            return;
+        };
+        published
+            .send_if_modified(|published| std::mem::replace(published, most_active) != most_active);
     }
 }
 
@@ -1214,6 +1341,8 @@ pub(crate) struct ServiceRegistry {
     /// before the notifier is installed still fires it at completion.
     /// Read-and-clone at fire time, lock never held across the call.
     exit_notifier: ExitNotifierSlot,
+    /// The application's lifecycle, which each service's context watches.
+    lifecycle: std::cell::RefCell<std::rc::Rc<ServiceLifecycle>>,
 }
 
 /// The shared exit-notifier slot — see [`ServiceRegistry::exit_notifier`].
@@ -1225,6 +1354,7 @@ impl fmt::Debug for ServiceRegistry {
             .field("accepting", &self.accepting)
             .field("services", &self.services.len())
             .field("exit_notifier", &self.exit_notifier.lock().is_some())
+            .field("lifecycle", &self.lifecycle)
             .finish()
     }
 }
@@ -1251,7 +1381,19 @@ impl ServiceRegistry {
             accepting: true,
             services: Vec::new(),
             exit_notifier: Arc::new(parking_lot::Mutex::new(None)),
+            lifecycle: std::cell::RefCell::new(std::rc::Rc::new(ServiceLifecycle::new())),
         }
+    }
+
+    /// The application's lifecycle the services watch, for the runner to
+    /// feed from each UI runtime it builds: the current loop's, a fresh one
+    /// once the last loop's ended with its [`shutdown`](Self::shutdown).
+    pub(crate) fn lifecycle(&self) -> std::rc::Rc<ServiceLifecycle> {
+        let mut lifecycle = self.lifecycle.borrow_mut();
+        if lifecycle.is_closed() {
+            *lifecycle = std::rc::Rc::new(ServiceLifecycle::new());
+        }
+        std::rc::Rc::clone(&lifecycle)
     }
 
     /// Install the keep-alive completion notifier — see the
@@ -1297,6 +1439,7 @@ impl ServiceRegistry {
         let context = ServiceContext {
             signal,
             spawner: TaskSpawner::new(services),
+            lifecycle: self.lifecycle().watch(),
         };
         Ok(ServiceAdmission {
             name: definition.name,
@@ -1504,6 +1647,10 @@ impl ServiceRegistry {
     /// flush window.
     pub(crate) fn shutdown(&mut self, join_by: Instant) -> ServiceShutdownReport {
         self.accepting = false;
+        // The loop is over: a service waiting on the lifecycle hears it end
+        // before it is asked to stop, and a next loop starts a fresh one.
+        let lifecycle = std::rc::Rc::clone(&self.lifecycle.borrow());
+        lifecycle.close();
         for slot in &self.services {
             slot.signal.cancel();
         }

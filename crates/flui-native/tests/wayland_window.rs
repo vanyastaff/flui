@@ -62,6 +62,8 @@ struct WaylandFixture {
     handler: Rc<RecordingWindowHandler>,
     /// How many of the frames the window asked for were drawn.
     drawn: Cell<usize>,
+    /// A second window that took the activation, closed as the fixture goes.
+    cover: Option<Rc<dyn HostWindow>>,
 }
 
 impl WaylandFixture {
@@ -78,6 +80,7 @@ impl WaylandFixture {
             window,
             handler,
             drawn: Cell::new(0),
+            cover: None,
         };
         fixture.settle();
         fixture
@@ -227,6 +230,55 @@ impl WindowFixture for WaylandFixture {
         true
     }
 
+    /// A compositor tells no client of another's pointer constraint: the
+    /// `confined` and `locked` it sends reach the window alone, and are the
+    /// snapshot's own source, so the fixture has nothing apart from it to read
+    /// and leaves the grab check to the snapshot.
+    fn held_grab(&self) -> Option<flui_platform::CursorGrab> {
+        None
+    }
+
+    /// A second window, which the compositor activates as it maps it (Weston
+    /// and sway give a new toplevel the keyboard), takes the keyboard from the
+    /// first. Where the compositor moves no activation (no seat), it is
+    /// closed again and the fixture has no lever.
+    fn take_focus_away(&mut self) -> bool {
+        /// `xdg_toplevel.state`'s `activated`.
+        const ACTIVATED: u32 = 4;
+
+        let activated = |window: &dyn HostWindow| {
+            compositor_report(window)
+                .expect("a Wayland window")
+                .states
+                .contains(&ACTIVATED)
+        };
+        let cover = self
+            .platform
+            .open_window(
+                WindowOptions::default().title("taking the focus"),
+                RecordingWindowHandler::new() as _,
+            )
+            .expect("a second window opens");
+        for _ in 0..20 {
+            run_for(&self.platform, Duration::from_millis(50)).expect("the loop turns");
+            cover
+                .surface_target()
+                .pre_present_notify(None, flui_platform::SwapChainStatistics::None);
+            let _ = present(cover.as_ref());
+            if activated(cover.as_ref()) && !activated(self.window.as_ref()) {
+                break;
+            }
+        }
+        let moved = activated(cover.as_ref()) && !activated(self.window.as_ref());
+        if moved {
+            self.cover = Some(cover);
+        } else {
+            cover.close_for_cleanup();
+        }
+        self.settle();
+        moved
+    }
+
     /// A frame drawn as the renderer would into a window of its own (the
     /// compositor shows no frame of a window an earlier check minimized, and
     /// Wayland cannot bring it back), then the next asked for, turning the
@@ -287,6 +339,9 @@ impl WindowFixture for WaylandFixture {
 
 impl Drop for WaylandFixture {
     fn drop(&mut self) {
+        if let Some(cover) = self.cover.take() {
+            cover.close_for_cleanup();
+        }
         self.window.close_for_cleanup();
         self.settle();
     }

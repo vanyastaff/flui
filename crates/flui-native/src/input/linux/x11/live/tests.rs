@@ -9,7 +9,7 @@ use cursor_icon::CursorIcon;
 use flui_platform::DispatchEventResult;
 use flui_platform::input_capabilities::InputCapabilities;
 use flui_platform::{
-    CloseDecision, FrameOutcome, FrameRequest, PlatformInput, SurfaceChange, WindowHandler,
+    CloseDecision, Cursor, FrameOutcome, FrameRequest, PlatformInput, SurfaceChange, WindowHandler,
     WindowId,
 };
 
@@ -51,7 +51,7 @@ impl Drop for ResetsTheCursor {
     fn drop(&mut self) {
         if let Some(input) = self.input.upgrade() {
             // Refused or not, it must not find the input borrowed.
-            drop(input.set_cursor(self.window, CursorIcon::Default));
+            drop(input.set_cursor(self.window, &Cursor::Icon(CursorIcon::Default)));
         }
         self.dropped.set(true);
     }

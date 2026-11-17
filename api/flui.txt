@@ -1535,6 +1535,11 @@ variant flui::app::LifecycleHook::Mount // at 4
 variant flui::app::LifecycleHook::Provide // at 11
 variant flui::app::LifecycleHook::UnmountRenderObject // at 9
 variant flui::app::LifecycleHook::Update // at 6
+pub struct flui::app::LifecycleWatch { .. }
+impl Clone for flui::app::LifecycleWatch
+impl core::fmt::Debug for flui::app::LifecycleWatch
+pub async fn flui::app::LifecycleWatch::changed(&mut self) -> Option<flui::prelude::AppLifecycleState>
+pub fn flui::app::LifecycleWatch::current(&self) -> flui::prelude::AppLifecycleState
 reexport flui::app::MotionOverride => flui::animation::MotionOverride
 #[non_exhaustive] pub enum flui::app::PanicText
 impl Clone for flui::app::PanicText
@@ -1647,6 +1652,7 @@ variant flui::app::SegmentPhase::Tail // at 3
 pub struct flui::app::ServiceContext { .. }
 impl core::fmt::Debug for flui::app::ServiceContext
 pub fn flui::app::ServiceContext::cancellation(&self) -> &flui::app::CancellationSignal
+pub fn flui::app::ServiceContext::lifecycle(&self) -> &flui::app::LifecycleWatch
 pub fn flui::app::ServiceContext::spawner(&self) -> &flui::app::TaskSpawner
 pub struct flui::app::ServiceDefinition { .. }
 impl Clone for flui::app::ServiceDefinition
@@ -6593,13 +6599,14 @@ impl core::fmt::Debug for flui::interaction::PointerEvent
 impl core::marker::StructuralPartialEq for flui::interaction::PointerEvent
 variant flui::interaction::PointerEvent::ButtonChange(flui::interaction::ButtonChange) // at 1
 variant flui::interaction::PointerEvent::Cancel(flui::platform::PointerCancel) // at 4
-variant flui::interaction::PointerEvent::DeviceAdded(flui::platform::pointer::PointerDeviceChange) // at 12
-variant flui::interaction::PointerEvent::DeviceRemoved(flui::platform::pointer::PointerDeviceChange) // at 13
+variant flui::interaction::PointerEvent::DeviceAdded(flui::platform::pointer::PointerDeviceChange) // at 13
+variant flui::interaction::PointerEvent::DeviceRemoved(flui::platform::pointer::PointerDeviceChange) // at 14
 variant flui::interaction::PointerEvent::Down(flui::interaction::PointerPress) // at 0
 variant flui::interaction::PointerEvent::Enter(flui::platform::pointer::PointerSignal) // at 5
 variant flui::interaction::PointerEvent::Leave(flui::platform::pointer::PointerSignal) // at 6
 variant flui::interaction::PointerEvent::Move(flui::interaction::PointerMove) // at 3
 variant flui::interaction::PointerEvent::PanZoom(flui::interaction::PanZoomEvent) // at 9
+variant flui::interaction::PointerEvent::RawMotion(flui::platform::pointer::RawMotion) // at 12
 variant flui::interaction::PointerEvent::Scroll(flui::interaction::ScrollEvent) // at 7
 variant flui::interaction::PointerEvent::SmartZoom(flui::platform::SmartZoomEvent) // at 11
 variant flui::interaction::PointerEvent::TouchpadHold(flui::platform::TouchpadHoldEvent) // at 8
@@ -11440,6 +11447,18 @@ pub fn flui::platform::ApplyError::failed(message: String) -> Self
 variant flui::platform::ApplyError::Closed // at 0
 variant flui::platform::ApplyError::Platform(flui::platform::PlatformFailure) // at 2
 variant flui::platform::ApplyError::Superseded { command: flui::platform::WindowCommand } // at 1
+pub struct flui::platform::AspectRatio { .. }
+impl Clone for flui::platform::AspectRatio
+impl Copy for flui::platform::AspectRatio
+impl Eq for flui::platform::AspectRatio
+impl PartialEq for flui::platform::AspectRatio
+impl core::fmt::Debug for flui::platform::AspectRatio
+impl core::hash::Hash for flui::platform::AspectRatio
+impl core::marker::StructuralPartialEq for flui::platform::AspectRatio
+pub const fn flui::platform::AspectRatio::height(self) -> core::num::nonzero::NonZeroU32
+pub const fn flui::platform::AspectRatio::new(width: core::num::nonzero::NonZeroU32, height: core::num::nonzero::NonZeroU32) -> Self
+pub const fn flui::platform::AspectRatio::width(self) -> core::num::nonzero::NonZeroU32
+pub fn flui::platform::AspectRatio::get(self) -> f64
 pub enum flui::platform::Availability
 impl Clone for flui::platform::Availability
 impl Copy for flui::platform::Availability
@@ -11502,23 +11521,30 @@ pub struct flui::platform::CapabilityParts
 field flui::platform::CapabilityParts::activates: flui::platform::WindowCapability // at 12
 field flui::platform::CapabilityParts::app_title_bar: flui::platform::WindowCapability // at 6
 field flui::platform::CapabilityParts::closes: flui::platform::WindowCapability // at 13
+field flui::platform::CapabilityParts::confines_cursor: flui::platform::WindowCapability // at 15
+field flui::platform::CapabilityParts::cursor_image: flui::platform::Availability // at 29
 field flui::platform::CapabilityParts::enters_fullscreen: flui::platform::WindowCapability // at 9
-field flui::platform::CapabilityParts::frame_rate_hint: flui::platform::Availability // at 22
+field flui::platform::CapabilityParts::frame_rate_hint: flui::platform::Availability // at 28
 field flui::platform::CapabilityParts::hides: flui::platform::WindowCapability // at 10
+field flui::platform::CapabilityParts::keeps_on_bottom: flui::platform::WindowCapability // at 18
+field flui::platform::CapabilityParts::keeps_on_top: flui::platform::WindowCapability // at 17
+field flui::platform::CapabilityParts::locks_cursor: flui::platform::WindowCapability // at 16
 field flui::platform::CapabilityParts::material: flui::platform::WindowCapability // at 14
 field flui::platform::CapabilityParts::maximizes: flui::platform::WindowCapability // at 8
 field flui::platform::CapabilityParts::minimizes: flui::platform::WindowCapability // at 7
-field flui::platform::CapabilityParts::observes_minimized: flui::platform::Availability // at 20
-field flui::platform::CapabilityParts::observes_position: flui::platform::Availability // at 19
-field flui::platform::CapabilityParts::places_at_open: flui::platform::Availability // at 21
-field flui::platform::CapabilityParts::reports_keyboard_inset: flui::platform::WindowCapability // at 16
-field flui::platform::CapabilityParts::reports_occlusion: flui::platform::WindowCapability // at 18
-field flui::platform::CapabilityParts::reports_presentation: flui::platform::WindowCapability // at 15
-field flui::platform::CapabilityParts::reports_system_gestures: flui::platform::WindowCapability // at 17
+field flui::platform::CapabilityParts::observes_minimized: flui::platform::Availability // at 26
+field flui::platform::CapabilityParts::observes_position: flui::platform::Availability // at 25
+field flui::platform::CapabilityParts::places_at_open: flui::platform::Availability // at 27
+field flui::platform::CapabilityParts::reports_keyboard_inset: flui::platform::WindowCapability // at 22
+field flui::platform::CapabilityParts::reports_occlusion: flui::platform::WindowCapability // at 24
+field flui::platform::CapabilityParts::reports_presentation: flui::platform::WindowCapability // at 21
+field flui::platform::CapabilityParts::reports_system_gestures: flui::platform::WindowCapability // at 23
+field flui::platform::CapabilityParts::sets_aspect_ratio: flui::platform::WindowCapability // at 20
 field flui::platform::CapabilityParts::sets_constraints: flui::platform::WindowCapability // at 3
 field flui::platform::CapabilityParts::sets_frame: flui::platform::WindowCapability // at 5
 field flui::platform::CapabilityParts::sets_position: flui::platform::WindowCapability // at 1
 field flui::platform::CapabilityParts::sets_resizable: flui::platform::WindowCapability // at 4
+field flui::platform::CapabilityParts::sets_resize_increments: flui::platform::WindowCapability // at 19
 field flui::platform::CapabilityParts::sets_size: flui::platform::WindowCapability // at 2
 field flui::platform::CapabilityParts::sets_title: flui::platform::WindowCapability // at 0
 field flui::platform::CapabilityParts::shows: flui::platform::WindowCapability // at 11
@@ -11623,6 +11649,16 @@ impl Eq for flui::platform::CopiedAside
 impl PartialEq for flui::platform::CopiedAside
 impl core::fmt::Debug for flui::platform::CopiedAside
 impl core::marker::StructuralPartialEq for flui::platform::CopiedAside
+pub enum flui::platform::Cursor
+impl Clone for flui::platform::Cursor
+impl Eq for flui::platform::Cursor
+impl From<cursor_icon::CursorIcon> for flui::platform::Cursor
+impl PartialEq for flui::platform::Cursor
+impl core::fmt::Debug for flui::platform::Cursor
+impl core::marker::StructuralPartialEq for flui::platform::Cursor
+variant flui::platform::Cursor::Hidden // at 2
+variant flui::platform::Cursor::Icon(cursor_icon::CursorIcon) // at 0
+variant flui::platform::Cursor::Image(flui::platform::CursorImage) // at 1
 #[non_exhaustive] pub enum flui::platform::CursorError
 impl Clone for flui::platform::CursorError
 impl Eq for flui::platform::CursorError
@@ -11637,7 +11673,43 @@ pub const fn flui::platform::CursorError::unsupported(&self) -> Option<flui::pla
 pub fn flui::platform::CursorError::failed(message: String) -> Self
 variant flui::platform::CursorError::Platform(flui::platform::PlatformFailure) // at 1
 variant flui::platform::CursorError::Unsupported(flui::platform::Unsupported) // at 0
+pub enum flui::platform::CursorGrab
+impl Clone for flui::platform::CursorGrab
+impl Copy for flui::platform::CursorGrab
+impl Default for flui::platform::CursorGrab
+impl Eq for flui::platform::CursorGrab
+impl PartialEq for flui::platform::CursorGrab
+impl core::fmt::Debug for flui::platform::CursorGrab
+impl core::hash::Hash for flui::platform::CursorGrab
+impl core::marker::StructuralPartialEq for flui::platform::CursorGrab
+variant flui::platform::CursorGrab::Confined // at 1
+variant flui::platform::CursorGrab::Locked // at 2
+variant flui::platform::CursorGrab::None // at 0
 reexport flui::platform::CursorIcon => cursor_icon::CursorIcon
+pub struct flui::platform::CursorImage { .. }
+impl Clone for flui::platform::CursorImage
+impl Eq for flui::platform::CursorImage
+impl PartialEq for flui::platform::CursorImage
+impl core::fmt::Debug for flui::platform::CursorImage
+pub const flui::platform::CursorImage::MAX_SIDE: u16 = 128
+pub const fn flui::platform::CursorImage::height(&self) -> u16
+pub const fn flui::platform::CursorImage::hotspot(&self) -> (u16, u16)
+pub const fn flui::platform::CursorImage::width(&self) -> u16
+pub fn flui::platform::CursorImage::rgba(&self) -> &[u8]
+pub fn flui::platform::CursorImage::try_new(width: u16, height: u16, hotspot: (u16, u16), rgba: impl Into<alloc::rcs::arc::Arc<[u8]>>) -> Result<Self, flui::platform::CursorImageError>
+#[non_exhaustive] pub enum flui::platform::CursorImageError
+impl Clone for flui::platform::CursorImageError
+impl Copy for flui::platform::CursorImageError
+impl Eq for flui::platform::CursorImageError
+impl PartialEq for flui::platform::CursorImageError
+impl core::error::Error for flui::platform::CursorImageError
+impl core::fmt::Debug for flui::platform::CursorImageError
+impl core::fmt::Display for flui::platform::CursorImageError
+impl core::marker::StructuralPartialEq for flui::platform::CursorImageError
+variant flui::platform::CursorImageError::Empty { width: u16, height: u16 } // at 0
+variant flui::platform::CursorImageError::HotspotOutside { x: u16, y: u16 } // at 3
+variant flui::platform::CursorImageError::PixelCount { expected: usize, found: usize } // at 2
+variant flui::platform::CursorImageError::TooLarge { width: u16, height: u16 } // at 1
 pub struct flui::platform::DataTransferOffer { .. }
 impl Clone for flui::platform::DataTransferOffer
 impl core::fmt::Debug for flui::platform::DataTransferOffer
@@ -12481,7 +12553,7 @@ fn flui::platform::PlatformWindow::id(&self) -> flui::platform::WindowId
 fn flui::platform::PlatformWindow::redraw_requester(&self) -> alloc::rcs::arc::Arc<dyn flui::platform::RedrawRequester>
 fn flui::platform::PlatformWindow::request_redraw(&self)
 fn flui::platform::PlatformWindow::reveal_after_first_frame(&self)
-fn flui::platform::PlatformWindow::set_cursor(&self, cursor: cursor_icon::CursorIcon) -> Result<(), flui::platform::CursorError>
+fn flui::platform::PlatformWindow::set_cursor(&self, cursor: &flui::platform::Cursor) -> Result<(), flui::platform::CursorError>
 fn flui::platform::PlatformWindow::set_frame_rate_hint(&self, hint: flui::platform::FrameRateHint) -> Result<(), flui::platform::Unsupported>
 fn flui::platform::PlatformWindow::set_input_regions(&self, regions: &[flui::platform::input_regions::InputRegion]) -> Result<(), flui::platform::Unsupported>
 fn flui::platform::PlatformWindow::state(&self) -> flui::platform::WindowState
@@ -13201,11 +13273,16 @@ pub const fn flui::platform::WindowCapabilities::activates(&self) -> flui::platf
 pub const fn flui::platform::WindowCapabilities::app_title_bar(&self) -> flui::platform::WindowCapability
 pub const fn flui::platform::WindowCapabilities::capability(&self, command: &flui::platform::WindowCommand) -> flui::platform::WindowCapability
 pub const fn flui::platform::WindowCapabilities::closes(&self) -> flui::platform::WindowCapability
+pub const fn flui::platform::WindowCapabilities::confines_cursor(&self) -> flui::platform::WindowCapability
+pub const fn flui::platform::WindowCapabilities::cursor_image(&self) -> flui::platform::Availability
 pub const fn flui::platform::WindowCapabilities::enters_fullscreen(&self) -> flui::platform::WindowCapability
 pub const fn flui::platform::WindowCapabilities::frame_rate_hint(&self) -> flui::platform::Availability
 pub const fn flui::platform::WindowCapabilities::hides(&self) -> flui::platform::WindowCapability
 pub const fn flui::platform::WindowCapabilities::into_parts(self) -> flui::platform::CapabilityParts
 pub const fn flui::platform::WindowCapabilities::is_withdrawn(&self) -> bool
+pub const fn flui::platform::WindowCapabilities::keeps_on_bottom(&self) -> flui::platform::WindowCapability
+pub const fn flui::platform::WindowCapabilities::keeps_on_top(&self) -> flui::platform::WindowCapability
+pub const fn flui::platform::WindowCapabilities::locks_cursor(&self) -> flui::platform::WindowCapability
 pub const fn flui::platform::WindowCapabilities::material(&self) -> flui::platform::WindowCapability
 pub const fn flui::platform::WindowCapabilities::maximizes(&self) -> flui::platform::WindowCapability
 pub const fn flui::platform::WindowCapabilities::minimizes(&self) -> flui::platform::WindowCapability
@@ -13218,10 +13295,12 @@ pub const fn flui::platform::WindowCapabilities::reports_occlusion(&self) -> flu
 pub const fn flui::platform::WindowCapabilities::reports_presentation(&self) -> flui::platform::WindowCapability
 pub const fn flui::platform::WindowCapabilities::reports_system_gestures(&self) -> flui::platform::WindowCapability
 pub const fn flui::platform::WindowCapabilities::revision(&self) -> flui::platform::WindowRevision
+pub const fn flui::platform::WindowCapabilities::sets_aspect_ratio(&self) -> flui::platform::WindowCapability
 pub const fn flui::platform::WindowCapabilities::sets_constraints(&self) -> flui::platform::WindowCapability
 pub const fn flui::platform::WindowCapabilities::sets_frame(&self) -> flui::platform::WindowCapability
 pub const fn flui::platform::WindowCapabilities::sets_position(&self) -> flui::platform::WindowCapability
 pub const fn flui::platform::WindowCapabilities::sets_resizable(&self) -> flui::platform::WindowCapability
+pub const fn flui::platform::WindowCapabilities::sets_resize_increments(&self) -> flui::platform::WindowCapability
 pub const fn flui::platform::WindowCapabilities::sets_size(&self) -> flui::platform::WindowCapability
 pub const fn flui::platform::WindowCapabilities::sets_title(&self) -> flui::platform::WindowCapability
 pub const fn flui::platform::WindowCapabilities::shows(&self) -> flui::platform::WindowCapability
@@ -13253,12 +13332,16 @@ pub fn flui::platform::WindowCommand::validate(&self) -> Result<(), flui::platfo
 variant flui::platform::WindowCommand::Activate // at 9
 variant flui::platform::WindowCommand::Close // at 10
 variant flui::platform::WindowCommand::Hide // at 8
+variant flui::platform::WindowCommand::SetAspectRatio(Option<flui::platform::AspectRatio>) // at 15
 variant flui::platform::WindowCommand::SetConstraints(flui::platform::SizeConstraints) // at 3
+variant flui::platform::WindowCommand::SetCursorGrab(flui::platform::CursorGrab) // at 12
 variant flui::platform::WindowCommand::SetFrame(flui::platform::WindowFrame) // at 5
+variant flui::platform::WindowCommand::SetLevel(flui::platform::WindowLevel) // at 13
 variant flui::platform::WindowCommand::SetMaterial(flui::platform::WindowMaterial) // at 11
 variant flui::platform::WindowCommand::SetMode(flui::platform::WindowMode) // at 6
 variant flui::platform::WindowCommand::SetPosition(flui::geometry::Point<f64>) // at 1
 variant flui::platform::WindowCommand::SetResizable(bool) // at 4
+variant flui::platform::WindowCommand::SetResizeIncrements(Option<flui::platform::WindowExtent>) // at 14
 variant flui::platform::WindowCommand::SetSize(flui::geometry::Size<f64>) // at 2
 variant flui::platform::WindowCommand::SetTitle(String) // at 0
 variant flui::platform::WindowCommand::Show // at 7
@@ -13392,9 +13475,23 @@ impl PartialEq for flui::platform::WindowInteraction
 impl core::fmt::Debug for flui::platform::WindowInteraction
 impl core::hash::Hash for flui::platform::WindowInteraction
 impl core::marker::StructuralPartialEq for flui::platform::WindowInteraction
+pub const fn flui::platform::WindowInteraction::is_user(self) -> bool
 variant flui::platform::WindowInteraction::None // at 1
 variant flui::platform::WindowInteraction::Unknown // at 0
 variant flui::platform::WindowInteraction::UserPlacing // at 2
+variant flui::platform::WindowInteraction::UserResizing // at 3
+pub enum flui::platform::WindowLevel
+impl Clone for flui::platform::WindowLevel
+impl Copy for flui::platform::WindowLevel
+impl Default for flui::platform::WindowLevel
+impl Eq for flui::platform::WindowLevel
+impl PartialEq for flui::platform::WindowLevel
+impl core::fmt::Debug for flui::platform::WindowLevel
+impl core::hash::Hash for flui::platform::WindowLevel
+impl core::marker::StructuralPartialEq for flui::platform::WindowLevel
+variant flui::platform::WindowLevel::AlwaysOnBottom // at 2
+variant flui::platform::WindowLevel::AlwaysOnTop // at 1
+variant flui::platform::WindowLevel::Normal // at 0
 pub enum flui::platform::WindowMaterial
 impl Clone for flui::platform::WindowMaterial
 impl Copy for flui::platform::WindowMaterial
@@ -13520,9 +13617,10 @@ impl core::fmt::Display for flui::platform::WindowRevisionExhausted
 impl core::marker::StructuralPartialEq for flui::platform::WindowRevisionExhausted
 #[non_exhaustive] pub struct flui::platform::WindowState
 field flui::platform::WindowState::brightness: flui::platform::Brightness // at 14
-field flui::platform::WindowState::capabilities: flui::platform::WindowCapabilities // at 19
+field flui::platform::WindowState::capabilities: flui::platform::WindowCapabilities // at 21
 field flui::platform::WindowState::constraints: flui::platform::SizeConstraints // at 9
 field flui::platform::WindowState::content_size: flui::platform::WindowExtent // at 2
+field flui::platform::WindowState::cursor_grab: flui::platform::CursorGrab // at 19
 field flui::platform::WindowState::display: Option<flui::platform::DisplayId> // at 12
 field flui::platform::WindowState::execution: flui::platform::WindowExecutionState // at 16
 field flui::platform::WindowState::focus: flui::platform::WindowFocus // at 7
@@ -13530,6 +13628,7 @@ field flui::platform::WindowState::frame: flui::platform::WindowFrame // at 11
 field flui::platform::WindowState::hovered: bool // at 17
 field flui::platform::WindowState::insets: flui::platform::WindowInsets // at 15
 field flui::platform::WindowState::interaction: flui::platform::WindowInteraction // at 18
+field flui::platform::WindowState::level: flui::platform::WindowLevel // at 20
 field flui::platform::WindowState::metrics: Option<flui::geometry::WindowMetrics> // at 13
 field flui::platform::WindowState::mode: flui::platform::WindowMode // at 3
 field flui::platform::WindowState::normal_geometry: Option<flui::platform::WindowGeometry> // at 4
@@ -13551,6 +13650,7 @@ pub fn flui::platform::WindowState::successor_from(&self, sample: Self, mint: fl
 pub fn flui::platform::WindowState::with_brightness(self, brightness: flui::platform::Brightness) -> Self
 pub fn flui::platform::WindowState::with_capabilities(self, capabilities: flui::platform::WindowCapabilities) -> Self
 pub fn flui::platform::WindowState::with_constraints(self, constraints: flui::platform::SizeConstraints) -> Self
+pub fn flui::platform::WindowState::with_cursor_grab(self, cursor_grab: flui::platform::CursorGrab) -> Self
 pub fn flui::platform::WindowState::with_display(self, display: Option<flui::platform::DisplayId>) -> Self
 pub fn flui::platform::WindowState::with_execution(self, execution: flui::platform::WindowExecutionState) -> Self
 pub fn flui::platform::WindowState::with_focus(self, focus: flui::platform::WindowFocus) -> Self
@@ -13558,6 +13658,7 @@ pub fn flui::platform::WindowState::with_frame(self, frame: flui::platform::Wind
 pub fn flui::platform::WindowState::with_hovered(self, hovered: bool) -> Self
 pub fn flui::platform::WindowState::with_insets(self, insets: flui::platform::WindowInsets) -> Self
 pub fn flui::platform::WindowState::with_interaction(self, interaction: flui::platform::WindowInteraction) -> Self
+pub fn flui::platform::WindowState::with_level(self, level: flui::platform::WindowLevel) -> Self
 pub fn flui::platform::WindowState::with_metrics(self, metrics: Option<flui::geometry::WindowMetrics>) -> Self
 pub fn flui::platform::WindowState::with_mode(self, mode: flui::platform::WindowMode) -> Self
 pub fn flui::platform::WindowState::with_normal_geometry(self, normal_geometry: Option<flui::platform::WindowGeometry>) -> Self
@@ -13567,9 +13668,10 @@ pub fn flui::platform::WindowState::with_title(self, title: Option<String>) -> S
 pub fn flui::platform::WindowState::with_visible(self, visible: bool) -> Self
 pub struct flui::platform::WindowStateParts
 field flui::platform::WindowStateParts::brightness: flui::platform::Brightness // at 13
-field flui::platform::WindowStateParts::capabilities: flui::platform::CapabilityParts // at 18
+field flui::platform::WindowStateParts::capabilities: flui::platform::CapabilityParts // at 20
 field flui::platform::WindowStateParts::constraints: flui::platform::SizeConstraints // at 8
 field flui::platform::WindowStateParts::content_size: flui::platform::WindowExtent // at 1
+field flui::platform::WindowStateParts::cursor_grab: flui::platform::CursorGrab // at 18
 field flui::platform::WindowStateParts::display: Option<flui::platform::DisplayId> // at 11
 field flui::platform::WindowStateParts::execution: flui::platform::WindowExecutionState // at 15
 field flui::platform::WindowStateParts::focus: flui::platform::WindowFocus // at 6
@@ -13577,6 +13679,7 @@ field flui::platform::WindowStateParts::frame: flui::platform::WindowFrame // at
 field flui::platform::WindowStateParts::hovered: bool // at 16
 field flui::platform::WindowStateParts::insets: flui::platform::WindowInsets // at 14
 field flui::platform::WindowStateParts::interaction: flui::platform::WindowInteraction // at 17
+field flui::platform::WindowStateParts::level: flui::platform::WindowLevel // at 19
 field flui::platform::WindowStateParts::metrics: Option<flui::geometry::WindowMetrics> // at 12
 field flui::platform::WindowStateParts::mode: flui::platform::WindowMode // at 2
 field flui::platform::WindowStateParts::normal_geometry: Option<flui::platform::WindowGeometry> // at 3
@@ -14925,6 +15028,25 @@ impl core::error::Error for flui::platform::pointer::MismatchedPointerInfo
 impl core::fmt::Debug for flui::platform::pointer::MismatchedPointerInfo
 impl core::fmt::Display for flui::platform::pointer::MismatchedPointerInfo
 impl core::marker::StructuralPartialEq for flui::platform::pointer::MismatchedPointerInfo
+pub enum flui::platform::pointer::MotionAcceleration
+impl Clone for flui::platform::pointer::MotionAcceleration
+impl Copy for flui::platform::pointer::MotionAcceleration
+impl Eq for flui::platform::pointer::MotionAcceleration
+impl PartialEq for flui::platform::pointer::MotionAcceleration
+impl core::fmt::Debug for flui::platform::pointer::MotionAcceleration
+impl core::hash::Hash for flui::platform::pointer::MotionAcceleration
+impl core::marker::StructuralPartialEq for flui::platform::pointer::MotionAcceleration
+variant flui::platform::pointer::MotionAcceleration::None // at 0
+variant flui::platform::pointer::MotionAcceleration::System // at 1
+pub struct flui::platform::pointer::MotionDelta { .. }
+impl Clone for flui::platform::pointer::MotionDelta
+impl Copy for flui::platform::pointer::MotionDelta
+impl PartialEq for flui::platform::pointer::MotionDelta
+impl core::fmt::Debug for flui::platform::pointer::MotionDelta
+impl core::marker::StructuralPartialEq for flui::platform::pointer::MotionDelta
+pub const fn flui::platform::pointer::MotionDelta::x(self) -> f64
+pub const fn flui::platform::pointer::MotionDelta::y(self) -> f64
+pub fn flui::platform::pointer::MotionDelta::try_new(x: f64, y: f64) -> Result<Self, flui::platform::pointer::InputValueError>
 reexport flui::platform::pointer::PanZoomEvent => flui::interaction::PanZoomEvent
 reexport flui::platform::pointer::PanZoomPhase => flui::interaction::PanZoomPhase
 reexport flui::platform::pointer::PanZoomTransform => flui::interaction::PanZoomTransform
@@ -15026,14 +15148,27 @@ variant flui::platform::pointer::Quantity::Altitude // at 3
 variant flui::platform::pointer::Quantity::Azimuth // at 4
 variant flui::platform::pointer::Quantity::ContactSize // at 6
 variant flui::platform::pointer::Quantity::HoverDistance // at 8
+variant flui::platform::pointer::Quantity::Motion // at 11
 variant flui::platform::pointer::Quantity::Position // at 0
 variant flui::platform::pointer::Quantity::Pressure // at 1
 variant flui::platform::pointer::Quantity::Rotation // at 10
 variant flui::platform::pointer::Quantity::Scale // at 9
 variant flui::platform::pointer::Quantity::ScrollDelta // at 7
-variant flui::platform::pointer::Quantity::SwipeOffset // at 11
+variant flui::platform::pointer::Quantity::SwipeOffset // at 12
 variant flui::platform::pointer::Quantity::TangentialPressure // at 2
 variant flui::platform::pointer::Quantity::Twist // at 5
+#[non_exhaustive] pub struct flui::platform::pointer::RawMotion
+field flui::platform::pointer::RawMotion::acceleration: flui::platform::pointer::MotionAcceleration // at 4
+field flui::platform::pointer::RawMotion::delta: flui::platform::pointer::MotionDelta // at 3
+field flui::platform::pointer::RawMotion::pointer: flui::interaction::PointerInfo // at 0
+field flui::platform::pointer::RawMotion::position: Option<flui::interaction::PointerPosition> // at 2
+field flui::platform::pointer::RawMotion::time: flui::interaction::EventTime // at 1
+impl Clone for flui::platform::pointer::RawMotion
+impl PartialEq for flui::platform::pointer::RawMotion
+impl core::fmt::Debug for flui::platform::pointer::RawMotion
+impl core::marker::StructuralPartialEq for flui::platform::pointer::RawMotion
+pub const fn flui::platform::pointer::RawMotion::new(pointer: flui::interaction::PointerInfo, time: flui::interaction::EventTime, delta: flui::platform::pointer::MotionDelta, acceleration: flui::platform::pointer::MotionAcceleration) -> Self
+pub const fn flui::platform::pointer::RawMotion::with_position(self, position: flui::interaction::PointerPosition) -> Self
 pub struct flui::platform::pointer::Release;
 impl Clone for flui::platform::pointer::Release
 impl Copy for flui::platform::pointer::Release
@@ -15592,6 +15727,7 @@ pub const fn flui::prelude::AppLifecycleState::should_animate(self) -> bool
 pub const fn flui::prelude::AppLifecycleState::should_release_resources(self) -> bool
 pub const fn flui::prelude::AppLifecycleState::should_render(self) -> bool
 pub const fn flui::prelude::AppLifecycleState::should_save_state(self) -> bool
+pub fn flui::prelude::AppLifecycleState::most_active(states: impl IntoIterator<Item = Self>) -> Self
 pub const fn flui::prelude::AppLifecycleState::try_from_u8(value: u8) -> Option<Self>
 variant flui::prelude::AppLifecycleState::Detached = 4 // at 4
 variant flui::prelude::AppLifecycleState::Hidden = 2 // at 2
@@ -23482,8 +23618,11 @@ impl core::marker::StructuralPartialEq for flui::testing::TestError
 variant flui::testing::TestError::Agent(Box<flui_protocol::error::ErrorObject>) // at 8
 variant flui::testing::TestError::Ambiguous { locator: Box<flui::testing::Locator>, count: usize, candidates: String } // at 2
 variant flui::testing::TestError::Idle { expected: String, locator: Box<flui::testing::Locator>, found: String, next_deadline: Option<core::time::Duration>, shown: String } // at 4
+variant flui::testing::TestError::InBackground // at 13
+variant flui::testing::TestError::InForeground // at 14
 variant flui::testing::TestError::KeptChanging { reads: usize } // at 9
 variant flui::testing::TestError::NoRenderObject { element: String } // at 10
+variant flui::testing::TestError::NotAPhone { platform: flui::platform::TargetPlatform } // at 12
 variant flui::testing::TestError::NotActionable { element: String, check: flui_protocol::act::ActionabilityCheck, covered_by: Option<String> } // at 3
 variant flui::testing::TestError::NotFound { locator: Box<flui::testing::Locator>, shown: String } // at 0
 variant flui::testing::TestError::NotSettled { frames: usize } // at 6
@@ -23495,12 +23634,15 @@ pub struct flui::testing::TestWindow { .. }
 impl Clone for flui::testing::TestWindow
 impl Default for flui::testing::TestWindow
 impl core::fmt::Debug for flui::testing::TestWindow
+pub fn flui::testing::TestWindow::capability<C: flui::platform::capability::Capability>(self, provider: impl flui::platform::capability::CapabilityProvider<C>) -> Self
 pub const fn flui::testing::TestWindow::new(width: u32, height: u32) -> Self
 pub fn flui::testing::TestWindow::platform(self, platform: flui::platform::TargetPlatform) -> Self
+pub fn flui::testing::TestWindow::plugin(self, plugin: impl flui::platform::capability::Plugin) -> Self
 pub fn flui::testing::TestWindow::storage(self, storage: flui::testing::MemoryStorage) -> Self
 pub fn flui::testing::TestWindow::without_storage(self) -> Self
 pub struct flui::testing::Tester { .. }
 impl core::fmt::Debug for flui::testing::Tester
+pub fn flui::testing::Tester::background(&mut self) -> flui::platform::SessionEndAnswer
 pub fn flui::testing::Tester::cancel_composition(&mut self)
 pub fn flui::testing::Tester::clock(&self) -> &flui::testing::HostClock
 pub fn flui::testing::Tester::commit_composition(&mut self, text: &str)
@@ -23508,10 +23650,11 @@ pub fn flui::testing::Tester::compose(&mut self, text: &str, caret: Option<u32>)
 pub fn flui::testing::Tester::drag(&mut self, locator: &flui::testing::Locator, dx: f64, dy: f64, duration: core::time::Duration)
 pub fn flui::testing::Tester::drag_from(&mut self, start: flui::testing::LogicalPoint, dx: f64, dy: f64, duration: core::time::Duration)
 pub fn flui::testing::Tester::draw_commands(&mut self, locator: &flui::testing::Locator) -> Vec<flui::painting::DrawCommandBuf>
-pub fn flui::testing::Tester::end_session(&mut self)
+pub fn flui::testing::Tester::end_session(&mut self) -> flui::platform::SessionEndAnswer
 pub fn flui::testing::Tester::enter_text(&mut self, locator: &flui::testing::Locator, text: &str)
 pub fn flui::testing::Tester::expect(&mut self, locator: flui::testing::Locator) -> flui::testing::Expectation<'_>
 pub fn flui::testing::Tester::find_all(&mut self, locator: &flui::testing::Locator) -> Vec<flui::testing::Match>
+pub fn flui::testing::Tester::foreground(&mut self)
 pub fn flui::testing::Tester::inspect_render(&mut self) -> flui::testing::InspectReading
 pub fn flui::testing::Tester::inspect_widgets(&mut self) -> flui::testing::InspectReading
 pub fn flui::testing::Tester::is_closed(&self) -> bool
@@ -23529,12 +23672,14 @@ pub fn flui::testing::Tester::read(&mut self, locator: &flui::testing::Locator) 
 pub fn flui::testing::Tester::rect(&mut self, locator: &flui::testing::Locator) -> flui::testing::LogicalRect
 pub fn flui::testing::Tester::relaunch_after_kill(self) -> Self
 pub fn flui::testing::Tester::request_close(&mut self) -> bool
+pub fn flui::testing::Tester::request_quit(&mut self)
 pub fn flui::testing::Tester::restart(self) -> Self
 pub fn flui::testing::Tester::semantics(&mut self) -> flui::testing::Tree
 pub fn flui::testing::Tester::set_window_focused(&mut self, focused: bool)
 pub fn flui::testing::Tester::set_window_visible(&mut self, visible: bool)
 pub fn flui::testing::Tester::storage(&self) -> Option<&flui::testing::MemoryStorage>
 pub fn flui::testing::Tester::tap(&mut self, locator: &flui::testing::Locator)
+pub fn flui::testing::Tester::try_background(&mut self) -> Result<flui::platform::SessionEndAnswer, flui::testing::TestError>
 pub fn flui::testing::Tester::try_cancel_composition(&mut self) -> Result<(), flui::testing::TestError>
 pub fn flui::testing::Tester::try_commit_composition(&mut self, text: &str) -> Result<(), flui::testing::TestError>
 pub fn flui::testing::Tester::try_compose(&mut self, text: &str, caret: Option<u32>) -> Result<(), flui::testing::TestError>
@@ -23543,6 +23688,7 @@ pub fn flui::testing::Tester::try_drag_from(&mut self, start: flui::testing::Log
 pub fn flui::testing::Tester::try_draw_commands(&mut self, locator: &flui::testing::Locator) -> Result<Vec<flui::painting::DrawCommandBuf>, flui::testing::TestError>
 pub fn flui::testing::Tester::try_enter_text(&mut self, locator: &flui::testing::Locator, text: &str) -> Result<(), flui::testing::TestError>
 pub fn flui::testing::Tester::try_find_all(&mut self, locator: &flui::testing::Locator) -> Result<Vec<flui::testing::Match>, flui::testing::TestError>
+pub fn flui::testing::Tester::try_foreground(&mut self) -> Result<(), flui::testing::TestError>
 pub fn flui::testing::Tester::try_is_visible(&mut self, locator: &flui::testing::Locator) -> Result<bool, flui::testing::TestError>
 pub fn flui::testing::Tester::try_key_down(&mut self, key: &str) -> Result<(), flui::testing::TestError>
 pub fn flui::testing::Tester::try_key_up(&mut self, key: &str) -> Result<(), flui::testing::TestError>
@@ -24562,12 +24708,16 @@ pub fn flui::view::WindowHandle::activate(&self) -> Result<(), flui::platform::S
 pub fn flui::view::WindowHandle::hide(&self) -> Result<(), flui::platform::SubmitError>
 pub fn flui::view::WindowHandle::is_open(&self) -> bool
 pub fn flui::view::WindowHandle::request_close(&self) -> Result<(), flui::view::WindowClosed>
+pub fn flui::view::WindowHandle::set_aspect_ratio(&self, ratio: Option<flui::platform::AspectRatio>) -> Result<(), flui::platform::SubmitError>
 pub fn flui::view::WindowHandle::set_constraints(&self, constraints: flui::platform::SizeConstraints) -> Result<(), flui::platform::SubmitError>
+pub fn flui::view::WindowHandle::set_cursor_grab(&self, grab: flui::platform::CursorGrab) -> Result<(), flui::platform::SubmitError>
 pub fn flui::view::WindowHandle::set_frame(&self, frame: flui::platform::WindowFrame) -> Result<(), flui::platform::SubmitError>
+pub fn flui::view::WindowHandle::set_level(&self, level: flui::platform::WindowLevel) -> Result<(), flui::platform::SubmitError>
 pub fn flui::view::WindowHandle::set_material(&self, material: flui::platform::WindowMaterial) -> Result<(), flui::platform::SubmitError>
 pub fn flui::view::WindowHandle::set_mode(&self, mode: flui::platform::WindowMode) -> Result<(), flui::platform::SubmitError>
 pub fn flui::view::WindowHandle::set_position(&self, at: flui::geometry::Point<f64>) -> Result<(), flui::platform::SubmitError>
 pub fn flui::view::WindowHandle::set_resizable(&self, on: bool) -> Result<(), flui::platform::SubmitError>
+pub fn flui::view::WindowHandle::set_resize_increments(&self, step: Option<flui::platform::WindowExtent>) -> Result<(), flui::platform::SubmitError>
 pub fn flui::view::WindowHandle::set_size(&self, size: flui::geometry::Size<f64>) -> Result<(), flui::platform::SubmitError>
 pub fn flui::view::WindowHandle::set_title(&self, title: impl Into<String>) -> Result<(), flui::platform::SubmitError>
 pub fn flui::view::WindowHandle::show(&self) -> Result<(), flui::platform::SubmitError>
@@ -32339,13 +32489,14 @@ impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::input_recording::P
 variant flui_protocol::input_recording::PointerEvent::ButtonPressed(flui_protocol::input_recording::ButtonEvent) // at 1
 variant flui_protocol::input_recording::PointerEvent::ButtonReleased(flui_protocol::input_recording::ButtonEvent) // at 2
 variant flui_protocol::input_recording::PointerEvent::Cancel { pointer: flui_protocol::input_recording::PointerInfo, t: u64, reason: flui_protocol::input_recording::CancelReason } // at 5
-variant flui_protocol::input_recording::PointerEvent::DeviceAdded(flui_protocol::input_recording::DeviceChange) // at 13
-variant flui_protocol::input_recording::PointerEvent::DeviceRemoved(flui_protocol::input_recording::DeviceChange) // at 14
+variant flui_protocol::input_recording::PointerEvent::DeviceAdded(flui_protocol::input_recording::DeviceChange) // at 14
+variant flui_protocol::input_recording::PointerEvent::DeviceRemoved(flui_protocol::input_recording::DeviceChange) // at 15
 variant flui_protocol::input_recording::PointerEvent::Down(flui_protocol::input_recording::ButtonEvent) // at 0
 variant flui_protocol::input_recording::PointerEvent::Enter(flui_protocol::input_recording::Signal) // at 6
 variant flui_protocol::input_recording::PointerEvent::Leave(flui_protocol::input_recording::Signal) // at 7
 variant flui_protocol::input_recording::PointerEvent::Move { pointer: flui_protocol::input_recording::PointerInfo, buttons: Vec<u8>, modifiers: Vec<String>, current: flui_protocol::input_recording::Sample, coalesced: Vec<flui_protocol::input_recording::Sample>, predicted: Vec<flui_protocol::input_recording::Sample> } // at 4
 variant flui_protocol::input_recording::PointerEvent::PanZoom(flui_protocol::input_recording::PanZoom) // at 10
+variant flui_protocol::input_recording::PointerEvent::RawMotion(flui_protocol::input_recording::RawMotion) // at 13
 variant flui_protocol::input_recording::PointerEvent::Scroll(flui_protocol::input_recording::Scroll) // at 8
 variant flui_protocol::input_recording::PointerEvent::SmartZoom(flui_protocol::input_recording::SmartZoom) // at 12
 variant flui_protocol::input_recording::PointerEvent::TouchpadHold(flui_protocol::input_recording::TouchpadHold) // at 9
@@ -32403,6 +32554,20 @@ impl core::marker::StructuralPartialEq for flui_protocol::input_recording::Profi
 impl schemars::JsonSchema for flui_protocol::input_recording::Profile
 impl serde_core::ser::Serialize for flui_protocol::input_recording::Profile
 impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::input_recording::Profile
+pub struct flui_protocol::input_recording::RawMotion
+field flui_protocol::input_recording::RawMotion::at: Option<[f64; 2]> // at 2
+field flui_protocol::input_recording::RawMotion::dx: f64 // at 3
+field flui_protocol::input_recording::RawMotion::dy: f64 // at 4
+field flui_protocol::input_recording::RawMotion::pointer: flui_protocol::input_recording::PointerInfo // at 0
+field flui_protocol::input_recording::RawMotion::t: u64 // at 1
+field flui_protocol::input_recording::RawMotion::unaccelerated: bool // at 5
+impl Clone for flui_protocol::input_recording::RawMotion
+impl PartialEq for flui_protocol::input_recording::RawMotion
+impl core::fmt::Debug for flui_protocol::input_recording::RawMotion
+impl core::marker::StructuralPartialEq for flui_protocol::input_recording::RawMotion
+impl schemars::JsonSchema for flui_protocol::input_recording::RawMotion
+impl serde_core::ser::Serialize for flui_protocol::input_recording::RawMotion
+impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::input_recording::RawMotion
 pub enum flui_protocol::input_recording::RemainderHandoff
 impl Clone for flui_protocol::input_recording::RemainderHandoff
 impl Copy for flui_protocol::input_recording::RemainderHandoff
@@ -32988,7 +33153,9 @@ impl schemars::JsonSchema for flui_protocol::native_recording::Availability
 impl serde_core::ser::Serialize for flui_protocol::native_recording::Availability
 impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::native_recording::Availability
 pub const flui_protocol::native_recording::Availability::ALL: &'static [Self] = _
+pub const fn flui_protocol::native_recording::Availability::is_unavailable(&self) -> bool
 pub const fn flui_protocol::native_recording::Availability::name(self) -> &'static str
+pub const fn flui_protocol::native_recording::Availability::unavailable() -> Self
 variant flui_protocol::native_recording::Availability::Emulated // at 1
 variant flui_protocol::native_recording::Availability::Native // at 0
 variant flui_protocol::native_recording::Availability::Unavailable // at 2
@@ -33035,23 +33202,30 @@ pub struct flui_protocol::native_recording::Capabilities
 field flui_protocol::native_recording::Capabilities::activates: flui_protocol::native_recording::Capability // at 12
 field flui_protocol::native_recording::Capabilities::app_title_bar: flui_protocol::native_recording::Capability // at 6
 field flui_protocol::native_recording::Capabilities::closes: flui_protocol::native_recording::Capability // at 13
+field flui_protocol::native_recording::Capabilities::confines_cursor: flui_protocol::native_recording::Capability // at 15
+field flui_protocol::native_recording::Capabilities::cursor_image: flui_protocol::native_recording::Availability // at 29
 field flui_protocol::native_recording::Capabilities::enters_fullscreen: flui_protocol::native_recording::Capability // at 9
-field flui_protocol::native_recording::Capabilities::frame_rate_hint: flui_protocol::native_recording::Availability // at 22
+field flui_protocol::native_recording::Capabilities::frame_rate_hint: flui_protocol::native_recording::Availability // at 28
 field flui_protocol::native_recording::Capabilities::hides: flui_protocol::native_recording::Capability // at 10
+field flui_protocol::native_recording::Capabilities::keeps_on_bottom: flui_protocol::native_recording::Capability // at 18
+field flui_protocol::native_recording::Capabilities::keeps_on_top: flui_protocol::native_recording::Capability // at 17
+field flui_protocol::native_recording::Capabilities::locks_cursor: flui_protocol::native_recording::Capability // at 16
 field flui_protocol::native_recording::Capabilities::material: flui_protocol::native_recording::Capability // at 14
 field flui_protocol::native_recording::Capabilities::maximizes: flui_protocol::native_recording::Capability // at 8
 field flui_protocol::native_recording::Capabilities::minimizes: flui_protocol::native_recording::Capability // at 7
-field flui_protocol::native_recording::Capabilities::observes_minimized: flui_protocol::native_recording::Availability // at 20
-field flui_protocol::native_recording::Capabilities::observes_position: flui_protocol::native_recording::Availability // at 19
-field flui_protocol::native_recording::Capabilities::places_at_open: flui_protocol::native_recording::Availability // at 21
-field flui_protocol::native_recording::Capabilities::reports_keyboard_inset: flui_protocol::native_recording::Capability // at 16
-field flui_protocol::native_recording::Capabilities::reports_occlusion: flui_protocol::native_recording::Capability // at 18
-field flui_protocol::native_recording::Capabilities::reports_presentation: flui_protocol::native_recording::Capability // at 15
-field flui_protocol::native_recording::Capabilities::reports_system_gestures: flui_protocol::native_recording::Capability // at 17
+field flui_protocol::native_recording::Capabilities::observes_minimized: flui_protocol::native_recording::Availability // at 26
+field flui_protocol::native_recording::Capabilities::observes_position: flui_protocol::native_recording::Availability // at 25
+field flui_protocol::native_recording::Capabilities::places_at_open: flui_protocol::native_recording::Availability // at 27
+field flui_protocol::native_recording::Capabilities::reports_keyboard_inset: flui_protocol::native_recording::Capability // at 22
+field flui_protocol::native_recording::Capabilities::reports_occlusion: flui_protocol::native_recording::Capability // at 24
+field flui_protocol::native_recording::Capabilities::reports_presentation: flui_protocol::native_recording::Capability // at 21
+field flui_protocol::native_recording::Capabilities::reports_system_gestures: flui_protocol::native_recording::Capability // at 23
+field flui_protocol::native_recording::Capabilities::sets_aspect_ratio: flui_protocol::native_recording::Capability // at 20
 field flui_protocol::native_recording::Capabilities::sets_constraints: flui_protocol::native_recording::Capability // at 3
 field flui_protocol::native_recording::Capabilities::sets_frame: flui_protocol::native_recording::Capability // at 5
 field flui_protocol::native_recording::Capabilities::sets_position: flui_protocol::native_recording::Capability // at 1
 field flui_protocol::native_recording::Capabilities::sets_resizable: flui_protocol::native_recording::Capability // at 4
+field flui_protocol::native_recording::Capabilities::sets_resize_increments: flui_protocol::native_recording::Capability // at 19
 field flui_protocol::native_recording::Capabilities::sets_size: flui_protocol::native_recording::Capability // at 2
 field flui_protocol::native_recording::Capabilities::sets_title: flui_protocol::native_recording::Capability // at 0
 field flui_protocol::native_recording::Capabilities::shows: flui_protocol::native_recording::Capability // at 11
@@ -33182,6 +33356,21 @@ impl core::marker::StructuralPartialEq for flui_protocol::native_recording::Coun
 impl schemars::JsonSchema for flui_protocol::native_recording::Counter
 impl serde_core::ser::Serialize for flui_protocol::native_recording::Counter
 impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::native_recording::Counter
+#[non_exhaustive] pub enum flui_protocol::native_recording::CursorGrab
+impl Clone for flui_protocol::native_recording::CursorGrab
+impl Copy for flui_protocol::native_recording::CursorGrab
+impl Eq for flui_protocol::native_recording::CursorGrab
+impl PartialEq for flui_protocol::native_recording::CursorGrab
+impl core::fmt::Debug for flui_protocol::native_recording::CursorGrab
+impl core::hash::Hash for flui_protocol::native_recording::CursorGrab
+impl core::marker::StructuralPartialEq for flui_protocol::native_recording::CursorGrab
+impl schemars::JsonSchema for flui_protocol::native_recording::CursorGrab
+impl serde_core::ser::Serialize for flui_protocol::native_recording::CursorGrab
+impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::native_recording::CursorGrab
+pub const flui_protocol::native_recording::CursorGrab::ALL: &'static [Self] = _
+pub const fn flui_protocol::native_recording::CursorGrab::name(self) -> &'static str
+variant flui_protocol::native_recording::CursorGrab::Confined // at 0
+variant flui_protocol::native_recording::CursorGrab::Locked // at 1
 #[non_exhaustive] pub enum flui_protocol::native_recording::CutReason
 impl Clone for flui_protocol::native_recording::CutReason
 impl Copy for flui_protocol::native_recording::CutReason
@@ -34198,6 +34387,21 @@ impl core::marker::StructuralPartialEq for flui_protocol::native_recording::Wind
 impl schemars::JsonSchema for flui_protocol::native_recording::WindowGeometry
 impl serde_core::ser::Serialize for flui_protocol::native_recording::WindowGeometry
 impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::native_recording::WindowGeometry
+#[non_exhaustive] pub enum flui_protocol::native_recording::WindowLevel
+impl Clone for flui_protocol::native_recording::WindowLevel
+impl Copy for flui_protocol::native_recording::WindowLevel
+impl Eq for flui_protocol::native_recording::WindowLevel
+impl PartialEq for flui_protocol::native_recording::WindowLevel
+impl core::fmt::Debug for flui_protocol::native_recording::WindowLevel
+impl core::hash::Hash for flui_protocol::native_recording::WindowLevel
+impl core::marker::StructuralPartialEq for flui_protocol::native_recording::WindowLevel
+impl schemars::JsonSchema for flui_protocol::native_recording::WindowLevel
+impl serde_core::ser::Serialize for flui_protocol::native_recording::WindowLevel
+impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::native_recording::WindowLevel
+pub const flui_protocol::native_recording::WindowLevel::ALL: &'static [Self] = _
+pub const fn flui_protocol::native_recording::WindowLevel::name(self) -> &'static str
+variant flui_protocol::native_recording::WindowLevel::AlwaysOnBottom // at 1
+variant flui_protocol::native_recording::WindowLevel::AlwaysOnTop // at 0
 pub struct flui_protocol::native_recording::WindowMetrics
 field flui_protocol::native_recording::WindowMetrics::physical: [i32; 2] // at 0
 field flui_protocol::native_recording::WindowMetrics::scale: f64 // at 1
@@ -34229,15 +34433,17 @@ variant flui_protocol::native_recording::WindowMode::Normal // at 0
 pub struct flui_protocol::native_recording::WindowState
 field flui_protocol::native_recording::WindowState::active: bool // at 20
 field flui_protocol::native_recording::WindowState::appearance: flui_protocol::native_recording::Appearance // at 14
-field flui_protocol::native_recording::WindowState::capabilities: flui_protocol::native_recording::Capabilities // at 22
+field flui_protocol::native_recording::WindowState::capabilities: flui_protocol::native_recording::Capabilities // at 25
 field flui_protocol::native_recording::WindowState::constraints: flui_protocol::native_recording::SizeConstraints // at 9
 field flui_protocol::native_recording::WindowState::content_size: [f64; 2] // at 2
+field flui_protocol::native_recording::WindowState::cursor_grab: Option<flui_protocol::native_recording::CursorGrab> // at 23
 field flui_protocol::native_recording::WindowState::display: Option<u64> // at 12
 field flui_protocol::native_recording::WindowState::execution: flui_protocol::native_recording::Execution // at 18
 field flui_protocol::native_recording::WindowState::focused: bool // at 7
 field flui_protocol::native_recording::WindowState::frame: flui_protocol::native_recording::WindowFrame // at 11
 field flui_protocol::native_recording::WindowState::hovered: bool // at 19
 field flui_protocol::native_recording::WindowState::keyboard: Option<flui_protocol::native_recording::KeyboardInset> // at 16
+field flui_protocol::native_recording::WindowState::level: Option<flui_protocol::native_recording::WindowLevel> // at 24
 field flui_protocol::native_recording::WindowState::metrics: Option<flui_protocol::native_recording::WindowMetrics> // at 13
 field flui_protocol::native_recording::WindowState::mode: flui_protocol::native_recording::WindowMode // at 3
 field flui_protocol::native_recording::WindowState::normal_geometry: Option<flui_protocol::native_recording::WindowGeometry> // at 4
@@ -34249,6 +34455,7 @@ field flui_protocol::native_recording::WindowState::safe_area: [f64; 4] // at 15
 field flui_protocol::native_recording::WindowState::system_gestures: [f64; 4] // at 17
 field flui_protocol::native_recording::WindowState::title: Option<String> // at 8
 field flui_protocol::native_recording::WindowState::user_placing: Option<bool> // at 21
+field flui_protocol::native_recording::WindowState::user_resizing: bool // at 22
 field flui_protocol::native_recording::WindowState::visible: bool // at 5
 impl Clone for flui_protocol::native_recording::WindowState
 impl PartialEq for flui_protocol::native_recording::WindowState
@@ -35765,6 +35972,7 @@ impl flui_runtime::pump::FrameClockSource for flui::foundation::ManualClock
 pub struct flui_runtime::pump::FrameOutcome { .. }
 impl Clone for flui_runtime::pump::FrameOutcome
 impl Copy for flui_runtime::pump::FrameOutcome
+impl Default for flui_runtime::pump::FrameOutcome
 impl Eq for flui_runtime::pump::FrameOutcome
 impl PartialEq for flui_runtime::pump::FrameOutcome
 impl core::fmt::Debug for flui_runtime::pump::FrameOutcome
@@ -35859,6 +36067,7 @@ pub fn flui_runtime::ui_runtime::UiRuntime::attach_root_widget_to_for_test<V>(&s
 pub fn flui_runtime::ui_runtime::UiRuntime::attach_root_widget_with_size<V>(&self, view: &V, width: f64, height: f64) -> Result<(), flui::view::AttachError> where V: flui::prelude::View + Clone + 'static
 pub fn flui_runtime::ui_runtime::UiRuntime::attach_root_widget_with_size_to<V>(&self, id: flui::foundation::PresentationId, view: &V, width: f64, height: f64) -> Result<(), flui::view::AttachError> where V: flui::prelude::View + Clone + 'static
 pub fn flui_runtime::ui_runtime::UiRuntime::close_presentation_entered(&mut self, id: flui::foundation::PresentationId) -> bool
+pub fn flui_runtime::ui_runtime::UiRuntime::close_recorded(&self, id: flui::foundation::PresentationId, reason: flui::app::CloseReason) -> bool
 pub fn flui_runtime::ui_runtime::UiRuntime::close_refused(&self, id: flui::foundation::PresentationId, reason: flui::app::CloseReason) -> bool
 pub fn flui_runtime::ui_runtime::UiRuntime::command_sender(&self) -> flui_runtime::ui_runtime::commands::UiCommandSender
 pub fn flui_runtime::ui_runtime::UiRuntime::commit_composition_for_close(&self, id: flui::foundation::PresentationId)
@@ -35939,7 +36148,6 @@ pub fn flui_runtime::ui_runtime::UiRuntime::set_pointer_resampling(&self, id: fl
 pub fn flui_runtime::ui_runtime::UiRuntime::settle_close_guards(&self) -> flui_runtime::ui_runtime::presentation_lifecycle::SettledCloses
 pub fn flui_runtime::ui_runtime::UiRuntime::settle_frame(&mut self, settlement: flui_runtime::sink::FrameSettlement) -> flui_runtime::sink::Settled
 pub fn flui_runtime::ui_runtime::UiRuntime::settle_text_sizing(&self, work: flui_runtime::ui_runtime::text_preparation::TextSizingWork, outcome: flui_runtime::ui_runtime::text_preparation::TextSizingSettlement) -> bool
-pub fn flui_runtime::ui_runtime::UiRuntime::stop_presentation_for_test(&self, id: flui::foundation::PresentationId)
 pub fn flui_runtime::ui_runtime::UiRuntime::stop_presentations(&self)
 pub fn flui_runtime::ui_runtime::UiRuntime::synchronize_window_lifecycle(&self)
 pub fn flui_runtime::ui_runtime::UiRuntime::synchronize_window_snapshot(&self, id: flui::foundation::PresentationId, execution: flui::platform::WindowExecutionState, focused: bool, visible: bool)

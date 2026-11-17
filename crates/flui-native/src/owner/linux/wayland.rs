@@ -55,6 +55,22 @@ pub(crate) use event_loop::{
 #[cfg(all(target_os = "linux", feature = "wayland"))]
 pub(crate) use outputs::{OnOutputs, OutputFacts};
 
+/// What the compositor offers a window's pointer, as the seats' input bound
+/// it (`WaylandInput::pointer_offer`):
+/// shared memory for a cursor image's buffer, and the pointer constraints and
+/// relative motion a grab is made of. The window's capabilities follow it
+/// (`window::linux::wayland::configure::pointer_reported`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct PointerOffer {
+    /// `wl_shm`, which a cursor image is a buffer of.
+    pub(crate) shared_memory: bool,
+    /// `zwp_pointer_constraints_v1`, which confines and locks a pointer.
+    pub(crate) constraints: bool,
+    /// `zwp_relative_pointer_manager_v1`, which reports a locked pointer's
+    /// motion.
+    pub(crate) relative_motion: bool,
+}
+
 pub(crate) mod user_input {
     //! What the seats' input keeps of the user inputs a later request names
     //! ([`Inputs`]): the last one, which an activation token names, and each
@@ -871,7 +887,8 @@ mod event_loop {
     use flui_platform::data_transfer::DragTransport;
     use flui_platform::drag::PlatformDragSource;
     use flui_platform::{
-        CursorError, DisplaySnapshot, SessionEndAnswer, SessionEndPhase, SystemNotice, WindowId,
+        Cursor, CursorError, CursorGrab, DisplaySnapshot, PlatformFailure, SessionEndAnswer,
+        SessionEndPhase, SystemNotice, WindowId,
     };
     use rustc_hash::FxHashMap;
     use rustix::event::{EventfdFlags, PollFd, PollFlags, Timespec, eventfd, poll};
@@ -900,6 +917,7 @@ mod event_loop {
     use wayland_protocols::xdg::shell::client::xdg_wm_base::{self, XdgWmBase};
     use web_time::Instant;
 
+    use super::PointerOffer;
     use super::activation::{ActivationToken, LAUNCH_TOKEN_VARIABLE, launch_token};
     use super::outputs::OnOutputs;
     use super::user_input::{Inputs, UserInput};
@@ -1259,8 +1277,29 @@ mod event_loop {
         ///
         /// # Errors
         /// [`CursorError::Unsupported`] when the compositor takes no cursor
-        /// shape from the host.
-        fn set_cursor(&self, id: WindowId, cursor: CursorIcon) -> Result<(), CursorError>;
+        /// shape from the host, or no image ([`PointerOffer`]).
+        fn set_cursor(&self, id: WindowId, cursor: &Cursor) -> Result<(), CursorError>;
+
+        /// Constrain the pointer of the seat whose keyboard is in the window
+        /// `id` as `grab` asks, after letting go of what the window held;
+        /// [`CursorGrab::None`] only lets go. A window in no seat's keyboard
+        /// holds nothing. The input lets a grab go itself when the keyboard
+        /// leaves the window, and the compositor ends it when it ends the
+        /// constraint.
+        ///
+        /// # Errors
+        /// [`PlatformFailure::Failed`] when the compositor offers no
+        /// constraint of that kind.
+        fn hold_pointer(&self, id: WindowId, grab: CursorGrab) -> Result<(), PlatformFailure>;
+
+        /// What the window `id` holds of the pointer now: a grab the
+        /// compositor said it carries out (`confined`, `locked`), none
+        /// before it did or after it ended it.
+        fn pointer_grab(&self, id: WindowId) -> CursorGrab;
+
+        /// What the compositor offers the windows' pointer, as the input
+        /// bound it.
+        fn pointer_offer(&self) -> PointerOffer;
 
         /// The window `id` is drawn at another scale: a cursor theme image
         /// shown over it is drawn again for that scale.
@@ -2583,6 +2622,11 @@ mod event_loop {
             self.protocol.activation.is_some()
         }
 
+        /// What the compositor offers a window's pointer: shared memory for
+        /// a cursor image, the constraints and relative motion of a grab.
+        pub(crate) fn pointer_offer(&self) -> PointerOffer {
+            self.input.pointer_offer()
+        }
         /// Whether the compositor's `xdg_wm_base` is new enough to say when it
         /// suspends a toplevel, so a window reports a covering.
         pub(crate) fn tells_suspension(&self) -> bool {

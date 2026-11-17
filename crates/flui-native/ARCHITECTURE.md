@@ -989,15 +989,27 @@ trait depends on `flui-platform` instead.
   `a_turn_deadline_asks_no_window_for_a_frame`, `a_past_turn_deadline_gives_one_turn`,
   `a_past_turn_deadline_does_not_spin_the_win32_loop` and
   `a_due_turn_deadline_wakes_the_owner_from_a_modal_loop` hold it.
-- **A window states when the user places it (ADR-0343 §2).** Each host fills
-  `ReportedFacts::interaction` on the report that carries a change: Win32
-  `UserPlacing` inside its size-move loop and while the default procedure
-  carries out an `SC_MAXIMIZE`, `SC_MINIMIZE` or `SC_RESTORE` the user worked,
-  and publishes `None` when either ends; a system command the window sends
-  itself for an application's command is marked by its sender
-  (`WindowContext::in_app_command`) and is not the user's. The headless host
-  states what `HeadlessHostWindow::simulate_interaction` said; every other
-  host `Unknown` ([gaps](../../docs/gaps.md#only-win32-says-when-the-user-places-a-window-and-not-for-every-placement)).
+- **A window states when the user places or resizes it (ADR-0343 §2,
+  ADR-0354 §4).** Each host fills `ReportedFacts::interaction` on the report
+  that carries a change: Win32 `UserPlacing` inside its size-move loop and
+  while the default procedure carries out an `SC_MAXIMIZE`, `SC_MINIMIZE` or
+  `SC_RESTORE` the user worked, `UserResizing` from the loop's first
+  `WM_SIZING`, and publishes `None` when either ends; a system command the
+  window sends itself for an application's command is marked by its sender
+  (`WindowContext::in_app_command`) and is not the user's. AppKit states
+  `UserResizing` between `windowWillStartLiveResize:` and
+  `windowDidEndLiveResize:`, Wayland while a configure carries `resizing`. The
+  headless host states what `HeadlessHostWindow::simulate_interaction` said;
+  every other host `Unknown` ([gaps](../../docs/gaps.md#only-win32-says-when-the-user-places-a-window-and-not-for-every-placement)).
+- **A grab is the desktop's, so it ends with the focus (ADR-0354 §2).** Each
+  host takes `CursorGrab::Confined`/`Locked` only for a window with the
+  keyboard focus and lets it go on focus loss, hide and close, before it
+  publishes: Win32's `ClipCursor` is the desktop's and outlives a window that
+  forgets it, so `WindowContext::let_pointer_go` runs on `WM_KILLFOCUS` and
+  `WM_DESTROY`. A locked pointer is not shown, its moves are dropped, and its
+  motion is built by `ContactRegistry::raw_motion` from the backend's mouse
+  contact (Win32 `WM_INPUT`, X11 `XI_RawMotion`, Wayland
+  `zwp_relative_pointer_v1`, AppKit's deltas, the web's `movementX/Y`).
 - **The application's handler is passed to `run` (ADR-0254 §4).**
   `AppHandler` (in `platform.rs`) has one method per obligation:
   `ready(OwnerPlatform)`, `quit_requested`, `quit_asked`, `reopen`, `session_end`,

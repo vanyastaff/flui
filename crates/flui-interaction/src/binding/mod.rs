@@ -2081,7 +2081,10 @@ impl GestureBinding {
             PointerEvent::TouchpadSwipe(swipe) => {
                 self.handle_touchpad_swipe(surface, event, swipe, hit_test_fn);
             }
-            PointerEvent::TouchpadHold(_) => {
+            // A touchpad hold, like a locked pointer's motion, goes where its
+            // contact went, the target its press found, or where the pointer
+            // rests: the view that holds the pointer turns with it either way.
+            PointerEvent::TouchpadHold(_) | PointerEvent::RawMotion(_) => {
                 let panic = if self.contacts.contains(pointer_id) {
                     self.dispatch_on_cached_route(pointer_id, event)
                 } else {

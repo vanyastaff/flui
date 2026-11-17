@@ -1260,10 +1260,7 @@ impl PlatformWindow for WithDragSource {
     fn surface_target(&self) -> Arc<dyn flui_platform::SurfaceTarget> {
         self.window.surface_target()
     }
-    fn set_cursor(
-        &self,
-        cursor: flui_platform::CursorIcon,
-    ) -> Result<(), flui_platform::CursorError> {
+    fn set_cursor(&self, cursor: &flui_platform::Cursor) -> Result<(), flui_platform::CursorError> {
         self.window.set_cursor(cursor)
     }
     fn set_frame_rate_hint(

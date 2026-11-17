@@ -276,10 +276,11 @@ fn a_dialog_ends_with_its_window() {
     );
 }
 
+/// The last window's close retires its runtime, as on a real host: the
+/// system's dialog is taken down, and the caller, gone with the runtime,
+/// hears nothing, even from an answer released after the close.
 #[test]
-fn a_dialog_ends_when_its_window_begins_to_close() {
-    // The primary headless window stops without being removed, so only the
-    // start of the close can tell the dialog.
+fn a_dialog_of_the_last_window_ends_with_its_runtime() {
     let (dialogs, plugin) = scripted();
     let (mut host, handle) = acquire::<FileDialogCapability>(&plugin);
     let handle = handle.expect("the scripted plugin provides dialogs");
@@ -289,9 +290,17 @@ fn a_dialog_ends_when_its_window_begins_to_close() {
     turn(&mut host);
     let primary = host.primary_window();
     assert!(host.request_close(primary, CloseReason::User));
+    assert!(host.is_retired(), "the last close retires the runtime");
+    assert_eq!(dialogs.dismissed(), 1, "the system's dialog was taken down");
+    assert!(
+        !dialogs.release_save(Ok(None)),
+        "nothing of the closed window is left to answer"
+    );
     turn(&mut host);
-    assert_eq!(*held.borrow(), Some(Ok(Err(DialogError::WindowClosed))));
-    assert_eq!(dialogs.dismissed(), 1);
+    assert!(
+        held.borrow().is_none(),
+        "the caller's closure went with the runtime, unrun"
+    );
 }
 
 #[test]
