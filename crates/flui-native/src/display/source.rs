@@ -13,6 +13,39 @@ use parking_lot::Mutex;
 
 use crate::error::PlatformError;
 
+/// A display a window system lays out in device pixels (Win32, X11,
+/// Android), from its rectangle and usable area in the desktop's device
+/// pixels: the one rule every such source reads a display's bounds by.
+///
+/// A usable area that reaches past the display (a work area a window manager
+/// sent for the whole desktop) leaves the display usable as a whole, with a
+/// warning; a display with no area is left out of the snapshot (`None`),
+/// with a warning, and its windows name no display.
+#[cfg(any(windows, target_os = "linux", target_os = "android", test))]
+pub(crate) fn device_display(
+    id: DisplayId,
+    name: String,
+    display: flui_foundation::geometry::Bounds<i32>,
+    usable: flui_foundation::geometry::Bounds<i32>,
+    scale: flui_foundation::geometry::DevicePixelRatio,
+) -> Option<DisplayInfo> {
+    match DisplayInfo::from_device(id, name.clone(), display, usable, scale) {
+        Ok(info) => Some(info),
+        Err(refused) => {
+            tracing::warn!(
+                %refused,
+                display = %name,
+                "a display's usable area is not inside it; the whole display is usable"
+            );
+            DisplayInfo::from_device(id, name, display, display, scale)
+                .inspect_err(|refused| {
+                    tracing::warn!(%refused, "a display with no area is left out of the snapshot");
+                })
+                .ok()
+        }
+    }
+}
+
 /// The gamut of a display whose platform reports only whether it shows the
 /// wide gamut, which on Apple and Android is Display P3.
 #[cfg(any(target_os = "android", target_os = "ios", target_os = "macos", test))]

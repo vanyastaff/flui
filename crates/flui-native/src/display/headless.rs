@@ -38,12 +38,13 @@ pub struct DisplaySpec {
 
 impl DisplaySpec {
     /// A standard-range sRGB display of `width` by `height` device pixels at
-    /// scale 1 whose refresh period is unknown.
+    /// scale 1 whose refresh period is unknown. A side below one pixel is one
+    /// pixel: every display has an area.
     #[must_use]
     pub fn new(name: impl Into<String>, width: i32, height: i32) -> Self {
         Self {
             name: name.into(),
-            size: Size::new(width, height),
+            size: Size::new(width.max(1), height.max(1)),
             scale_factor: DevicePixelRatio::ONE,
             refresh_period: None,
             persistent_key: None,
@@ -135,9 +136,11 @@ pub(crate) fn laid_out(specs: Vec<DisplaySpec>) -> DisplaySnapshot {
                 .expect("BUG: a fresh registry has ids for the displays a test names");
             let bounds = Bounds::new(Point::new(next_x, 0), spec.size);
             next_x = next_x.saturating_add(spec.size.width);
-            let mut info = DisplayInfo::new(id, spec.name, bounds, spec.scale_factor)
-                .with_primary(index == 0)
-                .with_color(spec.color);
+            let mut info =
+                DisplayInfo::from_device(id, spec.name, bounds, bounds, spec.scale_factor)
+                    .expect("BUG: `DisplaySpec::new` holds every side at one pixel or more")
+                    .with_primary(index == 0)
+                    .with_color(spec.color);
             if let Some(period) = spec.refresh_period {
                 info = info.with_refresh_period(period);
             }
@@ -173,7 +176,25 @@ fn apply(
             display.refresh_period =
                 period.and_then(|period| flui_platform::RefreshPeriod::try_from(period).ok());
         }
-        DisplayChange::ScaleFactor(scale_factor) => display.scale_factor = scale_factor,
+        DisplayChange::ScaleFactor(scale_factor) => {
+            // The panel keeps its device pixels; its logical bounds are
+            // those pixels over the new scale.
+            let bounds = display.bounds;
+            // Two ratios between 1/32 and 32: the factor is positive and at
+            // most 1024, and multiplying every edge by one positive factor
+            // keeps the usable area inside the extent.
+            let factor = display.scale_factor.get() / scale_factor.get();
+            let rescaled = flui_platform::DisplayBounds::try_new(
+                Size::new(
+                    bounds.extent().width * factor,
+                    bounds.extent().height * factor,
+                ),
+                bounds.usable().scale_from_origin(factor),
+            )
+            .expect("BUG: an area rescaled by a ratio of two display scales is still an area");
+            display.bounds = rescaled;
+            display.scale_factor = scale_factor;
+        }
         DisplayChange::Name(name) => display.name = name,
         DisplayChange::Color(color) => display.color = color,
     }

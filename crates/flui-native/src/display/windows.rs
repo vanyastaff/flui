@@ -559,6 +559,10 @@ pub(crate) mod source {
             self.source.invalidate();
         }
 
+        fn published(&self) -> DisplaySnapshot {
+            self.source.published()
+        }
+
         /// The one the window's nearest monitor is in the last sample, by native
         /// key.
         ///
@@ -648,10 +652,16 @@ pub(crate) mod source {
                 if let Some(refused) = refused {
                     refused.report();
                 }
-                let mut display =
-                    DisplayInfo::new(id, monitor.device_name.clone(), monitor.bounds, ratio)
-                        .with_usable_bounds(monitor.usable_bounds)
-                        .with_primary(monitor.is_primary);
+                let Some(display) = crate::display::source::device_display(
+                    id,
+                    monitor.device_name.clone(),
+                    monitor.bounds,
+                    monitor.usable_bounds,
+                    ratio,
+                ) else {
+                    continue;
+                };
+                let mut display = display.with_primary(monitor.is_primary);
                 // The monitor's interface path names this monitor on this machine
                 // across restarts, so a window remembered on it finds it again.
                 if let Some(interface) = monitor_interface_path(&monitor.device_name) {
@@ -969,17 +979,21 @@ pub(crate) mod source {
                     GetDpiForMonitor(hmonitor, MDT_EFFECTIVE_DPI, &raw mut dpi_x, &raw mut dpi_y);
 
                 let device_name = wide_to_string(&monitor_info.szDevice);
+                // A rectangle whose sides do not fit an `i32` is no monitor.
+                let bounds_of = |rect: RECT| {
+                    Some(Bounds {
+                        origin: Point::new(rect.left, rect.top),
+                        size: Size::new(
+                            rect.right.checked_sub(rect.left)?,
+                            rect.bottom.checked_sub(rect.top)?,
+                        ),
+                    })
+                };
                 Some(Self {
                     handle: hmonitor.0 as isize,
                     device_name,
-                    bounds: Bounds {
-                        origin: Point::new(rc.left, rc.top),
-                        size: Size::new(rc.right - rc.left, rc.bottom - rc.top),
-                    },
-                    usable_bounds: Bounds {
-                        origin: Point::new(rc_work.left, rc_work.top),
-                        size: Size::new(rc_work.right - rc_work.left, rc_work.bottom - rc_work.top),
-                    },
+                    bounds: bounds_of(rc)?,
+                    usable_bounds: bounds_of(rc_work)?,
                     dpi: dpi_x,
                     // MONITORINFOF_PRIMARY = 1
                     is_primary: (monitor_info.monitorInfo.dwFlags & 1) != 0,

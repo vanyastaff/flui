@@ -66,6 +66,7 @@ use crate::owner::windows::{
     WindowChrome, WindowHooks, WindowIdentity, WindowMessages, WindowStep, window_step,
 };
 use crate::owner::windows::{get_x_lparam, get_y_lparam};
+use crate::window::desktop::{DisplayFrame, display_of_rect};
 use crate::window::state::{
     ReportedFacts, Sample, SampledGeometry, WindowStateCell, mode_of, reported_frame,
 };
@@ -548,6 +549,7 @@ impl WindowContext {
             restore_style: self.restore_style.get(),
             constraints: self.constraints.get(),
             display: self.displays.display_of_window(hwnd),
+            desktop: self.displays.published(),
             occluded: self.visibility.occluded(),
             appearance: self.appearance.get(),
             active: self.active.get(),
@@ -1694,12 +1696,15 @@ fn hiword(value: u32) -> u16 {
 /// mode it tracks from `WM_SIZE` and its own fullscreen toggle, the style a
 /// fullscreen window returns to, the limits the app set and the display the
 /// window is on.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub(crate) struct OwnerTracking {
     pub(crate) mode: NativeMode,
     pub(crate) restore_style: u32,
     pub(crate) constraints: SizeConstraints,
     pub(crate) display: Option<flui_platform::DisplayId>,
+    /// The displays as last published: what the window's position, and the
+    /// position of the rectangle it returns to, are measured on.
+    pub(crate) desktop: flui_platform::DisplaySnapshot,
     /// Whether a cloak or a locked session hides the window from the screen.
     pub(crate) occluded: bool,
     /// The user's theme as `WM_SETTINGCHANGE` last read it: never the
@@ -1795,6 +1800,7 @@ pub(crate) fn sample_state(hwnd: HWND, record: WindowRecord, tracking: OwnerTrac
         restore_style,
         constraints,
         display,
+        desktop,
         occluded,
         appearance,
         active,
@@ -1860,29 +1866,28 @@ pub(crate) fn sample_state(hwnd: HWND, record: WindowRecord, tracking: OwnerTrac
         NativeMode::Maximized | NativeMode::Minimized { .. } => restore_rectangle(hwnd),
         NativeMode::Normal => None,
     };
+    // The window's position is measured on the display it is on, through that
+    // display's origin and scale; its extents are in its own logical pixels.
+    let display_frame = display.and_then(|id| DisplayFrame::find(&desktop, id));
     let geometry = (|| {
         let content = WindowExtent::try_new(if mode.is_minimized() { cached } else { content })?;
         let outer = if have_window && !mode.is_minimized() {
             WindowGeometry::try_new(
-                Some(Point::new(
-                    f64::from(window.left) / scale,
-                    f64::from(window.top) / scale,
-                )),
+                display_frame.and_then(|frame| frame.position(Point::new(window.left, window.top))),
                 Size::new(
-                    f64::from(window.right - window.left) / scale,
-                    f64::from(window.bottom - window.top) / scale,
+                    f64::from(window.right.saturating_sub(window.left)) / scale,
+                    f64::from(window.bottom.saturating_sub(window.top)) / scale,
                 ),
             )?
         } else {
             WindowGeometry::unplaced(content)
         };
+        // The rectangle the window returns to is on the display that holds
+        // most of it, which need not be the one the window is on now.
         let normal = restore
             .map(|bounds| {
                 WindowGeometry::try_new(
-                    Some(Point::new(
-                        f64::from(bounds.origin.x) / scale,
-                        f64::from(bounds.origin.y) / scale,
-                    )),
+                    display_of_rect(&desktop, bounds).and_then(|frame| frame.position(bounds.origin)),
                     Size::new(
                         f64::from(bounds.size.width) / scale,
                         f64::from(bounds.size.height) / scale,

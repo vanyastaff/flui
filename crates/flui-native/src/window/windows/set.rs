@@ -17,7 +17,7 @@ use windows::Win32::{
 
 use flui_platform::{
     CapabilityAbsence, PlatformWindow, Unsupported, WindowCapabilities, WindowHandler,
-    WindowIdMint, WindowOptions,
+    WindowIdMint, WindowOptions, WindowPosition,
 };
 
 use super::frame_timing::{DisplayAdapter, presentation_absence};
@@ -31,6 +31,7 @@ use crate::owner::OpenWindows;
 use crate::owner::windows::{ClassWindows, WindowsLoop};
 use crate::version::gate::Since;
 use crate::version::gate::windows::WindowsBuild;
+use crate::window::desktop::DisplayFrame;
 use crate::window::state::device_extent;
 
 /// The windows of FLUI's class the platform tracks, keyed by HWND, and what
@@ -379,16 +380,21 @@ impl crate::host::Window<WindowsLoop> for WindowsWindow {
 /// DPI constants
 pub(crate) const USER_DEFAULT_SCREEN_DPI: u32 = 96;
 
-/// Convert logical pixels to device pixels
-#[inline]
-pub(crate) fn logical_to_device(logical: f64, scale_factor: f64) -> i32 {
-    (logical * scale_factor).round() as i32
-}
-
 /// The largest device coordinate or extent a window command may name. It
 /// leaves room below `i32::MAX` for the frame `AdjustWindowRectExForDpi` adds
 /// and for an origin plus a size.
 pub(crate) const DEVICE_COORDINATE_LIMIT: i32 = 0x3FFF_0000;
+
+/// The desktop pixel position `at` on `frame` names, as a Win32 coordinate:
+/// `None` past [`DEVICE_COORDINATE_LIMIT`] either way, which a command is
+/// refused for and an opening places nothing at.
+pub(crate) fn desktop_point(frame: DisplayFrame, at: Point<f64>) -> Option<(i32, i32)> {
+    let pixel = frame.to_desktop(at)?;
+    let within = |coordinate: i32| {
+        (-DEVICE_COORDINATE_LIMIT..=DEVICE_COORDINATE_LIMIT).contains(&coordinate)
+    };
+    (within(pixel.x) && within(pixel.y)).then_some((pixel.x, pixel.y))
+}
 
 /// Convert logical pixels to device pixels, or `None` when the result is not
 /// a finite device value within [`DEVICE_COORDINATE_LIMIT`]: geometry Win32
@@ -474,18 +480,30 @@ pub(crate) struct OpenSpot {
 /// `WindowOptions::geometry`) and its `options` into physical pixels.
 ///
 /// `opening.content` is the content size, so `outer_of` (the window frame at a
-/// DPI) turns it into the outer size. `opening.position` and
-/// `options.normal_geometry` are relative to the origin of `target`'s usable
-/// area in that display's logical pixels and convert through that display's own
-/// scale; with no `target` they are global logical pixels at `system_scale`.
+/// DPI) turns it into the outer size, at the scale of the display the window
+/// opens on: the one its position names, else the one the rectangle it
+/// returns to names, else the system's (`system_scale`). Each position
+/// converts through its own display's origin and scale in `desktop`
+/// ([`DisplayFrame`]); a position on a display `desktop` no longer holds, or
+/// one past what a Win32 coordinate holds, places nothing, and the system
+/// places the window.
 pub(crate) fn open_spot(
     options: &WindowOptions,
     opening: &flui_platform::OpeningGeometry,
-    target: Option<&flui_platform::DisplayInfo>,
+    desktop: &flui_platform::DisplaySnapshot,
     system_scale: DevicePixelRatio,
     outer_of: impl Fn(u32, (i32, i32)) -> (i32, i32),
 ) -> OpenSpot {
-    let ratio = target.map_or(system_scale, |display| display.scale_factor);
+    let frame_of =
+        |position: WindowPosition| DisplayFrame::find(desktop, position.display());
+    let returns_to = options
+        .normal_geometry
+        .and_then(flui_platform::WindowGeometry::position);
+    let target = opening
+        .position
+        .and_then(frame_of)
+        .or_else(|| returns_to.and_then(frame_of));
+    let ratio = target.map_or(system_scale, DisplayFrame::scale);
     let scale = ratio.get();
     let dpi = ((scale * f64::from(USER_DEFAULT_SCREEN_DPI)).round() as u32).max(1);
     // The hosts' one extent rule; a side that is no size stays none.
@@ -495,26 +513,19 @@ pub(crate) fn open_spot(
         extent(opening.content.height()),
     );
     let outer = outer_of(dpi, content);
-    let anchor = target.map_or((0, 0), |display| {
-        (
-            display.usable_bounds.origin.x,
-            display.usable_bounds.origin.y,
-        )
-    });
-    let place = |at: Point<f64>| {
-        (
-            anchor.0.saturating_add(logical_to_device(at.x, scale)),
-            anchor.1.saturating_add(logical_to_device(at.y, scale)),
-        )
-    };
-    let origin = opening.position.map(place);
+    let place = |at: WindowPosition| desktop_point(frame_of(at)?, at.at());
+    let origin = opening.position.and_then(place);
     let normal = options.normal_geometry.and_then(|geometry| {
-        let (left, top) = geometry.position().map(place).or(origin)?;
+        let (left, top) = geometry.position().and_then(place).or(origin)?;
+        // The rectangle is in the logical pixels of the display it returns
+        // to; a side past a Win32 coordinate places no rectangle.
+        let ratio = returns_to.and_then(frame_of).map_or(ratio, DisplayFrame::scale);
+        let side = |logical: f64| checked_logical_to_device(logical, ratio.get());
         Some((
             left,
             top,
-            left.saturating_add(logical_to_device(geometry.size().width, scale)),
-            top.saturating_add(logical_to_device(geometry.size().height, scale)),
+            left.checked_add(side(geometry.size().width)?)?,
+            top.checked_add(side(geometry.size().height)?)?,
         ))
     });
     OpenSpot {

@@ -15,7 +15,7 @@ use std::{
 };
 
 use crate::host::MemoryClipboard;
-use flui_foundation::geometry::{Bounds, Point, Size};
+use flui_foundation::geometry::Point;
 use flui_foundation::{ClaimSlot, DataTransferId, claim_slot};
 use flui_platform::data_transfer::{DropFeedback, RepresentationDescriptor, TransferActions};
 use flui_platform::drag::{OsDragEndHook, OsDragProvider, OsDragStart, PlatformDragSource};
@@ -367,21 +367,11 @@ impl HeadlessState {
         self.displays.lock().snapshot.get(id).is_some()
     }
 
-    /// The bounds of display `id` in the logical pixels of its own scale.
-    pub(crate) fn display_bounds(&self, id: DisplayId) -> Option<Bounds<f64>> {
-        let display = self.displays.lock().snapshot.get(id)?.clone();
-        let scale = display.scale_factor.get();
-        let device = display.bounds;
-        Some(Bounds::new(
-            Point::new(
-                f64::from(device.origin.x) / scale,
-                f64::from(device.origin.y) / scale,
-            ),
-            Size::new(
-                f64::from(device.size.width) / scale,
-                f64::from(device.size.height) / scale,
-            ),
-        ))
+    /// Display `id` as the system describes it now: its bounds in its own
+    /// logical pixels, its place on the simulated desktop (device pixels,
+    /// displays laid left to right) and its scale.
+    pub(crate) fn display(&self, id: DisplayId) -> Option<flui_platform::DisplayInfo> {
+        self.displays.lock().snapshot.get(id).cloned()
     }
 
     /// The drag source a window opened now hands out, reading the presses

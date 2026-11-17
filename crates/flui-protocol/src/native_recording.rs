@@ -1283,10 +1283,14 @@ pub struct Display {
     pub label: u64,
     /// Its name, a label, never an identity.
     pub name: String,
-    /// Its bounds in global device pixels: x, y, width, height.
-    pub bounds: [i32; 4],
-    /// The area windows can occupy: x, y, width, height.
-    pub usable_bounds: [i32; 4],
+    /// Where its top-left corner sits in the window system's desktop, in that window system's
+    /// own units: x, y. It orders the displays and is never a logical position.
+    pub origin: [i32; 2],
+    /// Its extent in its own logical pixels: width, height.
+    pub extent: [f64; 2],
+    /// The area windows can occupy, in its own logical pixels from its top-left corner: left,
+    /// top, right, bottom.
+    pub usable: [f64; 4],
     /// Device pixels per logical pixel.
     pub scale_factor: f64,
     /// The period of its mode, in nanoseconds, when known.
@@ -1588,17 +1592,29 @@ impl Availability {
     }
 }
 
-/// A window rectangle in logical pixels.
+/// Where a window's outer top-left corner is: a point of one display, in that display's logical
+/// pixels from its top-left corner.
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct WindowPosition {
+    /// The display, by label, as a `platform` recording of the same session writes it.
+    pub display: u64,
+    /// The point: x, y.
+    pub at: [f64; 2],
+}
+
+/// A window rectangle: its position on a display, and its size in logical pixels.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct WindowGeometry {
-    /// The top-left corner in global coordinates, where the OS reports one.
+    /// The outer top-left corner, where the OS reports one.
     #[cfg_attr(
         feature = "serde",
         serde(default, skip_serializing_if = "Option::is_none")
     )]
-    pub position: Option<[f64; 2]>,
+    pub position: Option<WindowPosition>,
     /// Width and height.
     pub size: [f64; 2],
 }

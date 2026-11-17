@@ -38,7 +38,7 @@ use flui_platform::{
     AdmittedCommand, ApplyError, CapabilityAbsence, Cursor, CursorError, PlatformFailure,
     PlatformWindow, SizeConstraints, Unsupported, UnsupportedReason, WindowCapabilities,
     WindowCommand, WindowFrame, WindowId, WindowMaterial, WindowMode, WindowOptions, WindowReveal,
-    WindowState,
+    WindowPosition, WindowState,
 };
 
 use flui_platform::os_options::WindowsCornerPreference;
@@ -59,6 +59,7 @@ use crate::owner::hwnd_affinity::HandleNames;
 use crate::owner::windows::WINDOW_CLASS_NAME;
 use crate::text::WindowTextInput;
 use crate::version::gate::Since;
+use crate::window::desktop::DisplayFrame;
 use crate::window::state::{WindowStateCell, device_extent};
 use crate::{
     owner::OpenWindowError, owner::window_delivery::WindowDelivery, owner::windows::AppHooks,
@@ -358,12 +359,11 @@ impl WindowsWindow {
 
             // The options' size is the content size: ask Win32 for the outer
             // window that holds it at the target display's DPI, and place it
-            // on the display the options name.
-            let snapshot = displays.snapshot().ok();
-            let target = options
-                .display
-                .and_then(|id| snapshot.as_ref().and_then(|snapshot| snapshot.get(id)));
-            let spot = open_spot(options, opening, target, system_scale, |dpi, content| {
+            // where its position names, on that position's display.
+            let desktop = displays
+                .snapshot()
+                .unwrap_or_else(|_| displays.published());
+            let spot = open_spot(options, opening, &desktop, system_scale, |dpi, content| {
                 outer_size(
                     style.0,
                     ex_style.0,
@@ -516,6 +516,7 @@ impl WindowsWindow {
                     restore_style: 0,
                     constraints,
                     display: displays.display_of_window(hwnd),
+                    desktop: displays.published(),
                     appearance,
                     active: false,
                     hovered: false,
@@ -1024,19 +1025,24 @@ impl WindowsWindow {
         }
     }
 
-    /// Move the window's outer top-left corner to `at`, global logical pixels.
+    /// Move the window's outer top-left corner to `at`, a point of a display
+    /// that converts through that display's own origin and scale, whichever
+    /// display the window is on now.
     ///
     /// Like the size, the position is the window's **normal** one: a maximized
     /// or minimized window keeps its mode and takes the position when it is
     /// restored, and a fullscreen window takes it for the bounds it returns to.
     ///
     /// # Errors
-    /// [`ApplyError::Platform`] for a position beyond what
-    /// Win32 can represent, before any call; [`ApplyError::Platform`]
+    /// [`ApplyError::DisplayGone`] for a display the published snapshot no
+    /// longer holds, and [`ApplyError::Platform`] for a position beyond what
+    /// Win32 can represent, both before any call; [`ApplyError::Platform`]
     /// when Win32 refuses or fails the move.
-    fn set_outer_position(&self, at: Point<f64>) -> Result<(), ApplyError> {
-        let scale = self.state.get().scale_factor.get();
-        let (x, y) = device_pair(at.x, at.y, scale)?;
+    fn set_outer_position(&self, at: WindowPosition) -> Result<(), ApplyError> {
+        let frame = DisplayFrame::find(&self.displays.published(), at.display())
+            .ok_or(ApplyError::DisplayGone(at.display()))?;
+        let (x, y) = super::set::desktop_point(frame, at.at())
+            .ok_or(ApplyError::Platform(PlatformFailure::OutOfRange))?;
         let fullscreen = super::proc::with_window_context(self.hwnd, "set_outer_position", |ctx| {
             let mode = ctx.mode.get();
             mode.fullscreen_bounds().is_some_and(|restore_bounds| {
@@ -1577,7 +1583,7 @@ impl PlatformWindow for WindowsWindow {
         match command {
             WindowCommand::SetTitle(title) => self.set_native_title(&title),
             WindowCommand::SetPosition(at) => self.set_outer_position(at)?,
-            WindowCommand::SetSize(size) => self.set_inner_size(size)?,
+            WindowCommand::SetSize(size) => self.set_inner_size(size.get())?,
             WindowCommand::SetConstraints(constraints) => self.set_constraints(constraints),
             WindowCommand::SetResizable(on) => {
                 let frame = super::proc::with_window_context(self.hwnd, "set_resizable", |ctx| {
