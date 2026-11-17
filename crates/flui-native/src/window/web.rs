@@ -1581,6 +1581,13 @@ impl flui_platform::SurfaceTarget for WebSurface {
         _: flui_platform::SwapChainStatistics,
     ) {
     }
+
+    /// Does nothing. The surface names the page's canvas element, which the
+    /// page owns and a close leaves in the document, and this target, leaked,
+    /// holds the element; no native window is destroyed to keep. On the
+    /// page's one thread no raster thread runs beside the owner either
+    /// (ADR-0305 §10), so none can be left presenting after the close.
+    fn keep_past_close(&self) {}
 }
 
 #[wasm_bindgen(inline_js = "

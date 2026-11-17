@@ -127,7 +127,7 @@ use crate::owner::linux::x11::{
 };
 use crate::owner::slot::OwnerWeak;
 use crate::owner::wake_deadline::FrameCount;
-use crate::owner::window_delivery::{Publication, Retirement, WindowDelivery};
+use crate::owner::window_delivery::{NativeFate, Publication, Retirement, WindowDelivery};
 use crate::text::WindowTextInput;
 use crate::window::linux::class::AppClass;
 use crate::window::plan::{FrameInset, OpenPlan, PlacementDisplay};
@@ -1457,21 +1457,34 @@ impl X11Window {
     /// outlive its window. The retirement the release starts makes the
     /// surface target and the redraw requester answer for a window that is
     /// gone.
+    ///
+    /// A release that asked to keep the window past the close
+    /// ([`X11Surface`]'s `keep_past_close`) leaves it unmapped instead, never
+    /// destroyed: a raster thread that did not answer may still present over
+    /// it. The platform's table no longer names it, so the events the server
+    /// still sends for it reach no window.
     fn retire(&self) {
-        let destroy = match self.native.replace(NativeWindow::Released) {
+        let retirement = self.delivery.retirement();
+        match self.native.replace(NativeWindow::Released) {
             NativeWindow::Released => return,
-            NativeWindow::Live => true,
-            NativeWindow::DestroyedByServer => false,
-        };
+            NativeWindow::Live => {}
+            NativeWindow::DestroyedByServer => {
+                // Nothing is left to destroy or keep: a keep the release
+                // makes does nothing.
+                let _gone = retirement.settle();
+                self.delivery.clear();
+                return;
+            }
+        }
         let connection = Arc::clone(&self.connection);
         let xid = self.xid;
         self.delivery.clear_then(move || {
-            if !destroy {
-                return;
-            }
-            let destroyed = connection.xcb().destroy_window(xid);
-            if let Err(error) = destroyed.and_then(|_| connection.xcb().flush()) {
-                tracing::debug!(%error, "cannot destroy an X11 window");
+            let ended = match retirement.settle() {
+                NativeFate::Destroy => connection.xcb().destroy_window(xid),
+                NativeFate::Keep => connection.xcb().unmap_window(xid),
+            };
+            if let Err(error) = ended.and_then(|_| connection.xcb().flush()) {
+                tracing::debug!(%error, "cannot destroy or unmap a retired X11 window");
             }
         });
     }
@@ -1647,6 +1660,15 @@ impl flui_platform::SurfaceTarget for X11Surface {
         _: Option<flui_foundation::FrameStamp>,
         _: flui_platform::SwapChainStatistics,
     ) {
+    }
+
+    /// The window's retirement then unmaps the X window instead of
+    /// destroying it (`X11Window::retire`), and this target, leaked, keeps
+    /// the connection the window and the surface's display live on. A keep
+    /// after the retirement destroyed the window, or after another client
+    /// did, does nothing.
+    fn keep_past_close(&self) {
+        let _first = self.retirement.keep_past_close();
     }
 }
 

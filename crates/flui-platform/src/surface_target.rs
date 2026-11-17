@@ -79,6 +79,24 @@ pub trait SurfaceTarget: HasWindowHandle + HasDisplayHandle + Send + Sync + 'sta
     /// [`FrameRequest::presented`](crate::FrameRequest::presented). A presenter
     /// that reads nothing passes [`SwapChainStatistics::None`].
     fn pre_present_notify(&self, frame: Option<FrameStamp>, statistics: SwapChainStatistics);
+
+    /// A raster thread that did not answer may still present over a surface
+    /// made from this target, so the native window it names must outlive the
+    /// close (ADR-0305 §9).
+    ///
+    /// Called on the owner thread when the window's renderer lets go of its
+    /// slot, which is during the window's close on every host (the close
+    /// releases the window's handler, and the handler owns the renderer), and
+    /// before the target is leaked for the life of the process; a later call
+    /// does nothing. The close under way then hides the native window instead
+    /// of destroying it, and keeps what its handles name. The window stays
+    /// closed to the application: its handler is released, it is in no window
+    /// list, it takes no input, and the handle queries keep answering
+    /// [`HandleError::Unavailable`](raw_window_handle::HandleError::Unavailable).
+    /// A host called after its native window is already gone (destroyed by
+    /// the OS or another client), or whose surface names no native window
+    /// (the web), does nothing, and says so where it implements this.
+    fn keep_past_close(&self);
 }
 
 /// The platform's connection to its window system, which the one GPU instance

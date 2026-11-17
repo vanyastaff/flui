@@ -1613,6 +1613,17 @@ mod toplevel {
                 },
             );
         }
+
+        /// Nothing more for the close to do: it destroys only the window's
+        /// role objects (the toplevel and its `xdg_surface`), so the
+        /// compositor unmaps the window either way, and the `wl_surface` a
+        /// surface is made over goes only with its last holder, which this
+        /// target is. The target, leaked, keeps it and the connection its
+        /// `wl_display` lives on; a present over the role-less surface shows
+        /// nothing. The keep is recorded all the same.
+        fn keep_past_close(&self) {
+            let _first = self.retirement.keep_past_close();
+        }
     }
 
     /// A Wayland window's redraw requester: it marks the frame asked for

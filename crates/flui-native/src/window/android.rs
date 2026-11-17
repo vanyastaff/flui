@@ -1085,6 +1085,17 @@ impl flui_platform::SurfaceTarget for AndroidSurface {
         _: flui_platform::SwapChainStatistics,
     ) {
     }
+
+    /// Nothing more to do: the Activity's window is the system's to destroy,
+    /// and the surface a raster thread may still present over was made from
+    /// the handle this target last handed out, whose `ANativeWindow` it holds
+    /// a counted reference to (`kept`). The target, leaked, never releases
+    /// it, and hands out no other once retired, so that `ANativeWindow`
+    /// stays valid for the life of the process, whatever the glue does with
+    /// its own reference. The keep is recorded all the same.
+    fn keep_past_close(&self) {
+        let _first = self.retirement.keep_past_close();
+    }
 }
 
 mod insets {

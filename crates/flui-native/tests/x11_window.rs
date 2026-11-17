@@ -85,6 +85,10 @@ mod cases {
             a_window_destroyed_by_another_client_closes_and_lets_go,
         ),
         (
+            "a_window_kept_past_its_close_is_unmapped_not_destroyed",
+            a_window_kept_past_its_close_is_unmapped_not_destroyed,
+        ),
+        (
             "a_covered_window_reads_occluded_and_shown",
             a_covered_window_reads_occluded_and_shown,
         ),
@@ -969,6 +973,66 @@ mod cases {
         assert!(
             handler.take_calls().is_empty(),
             "a destroyed window delivers nothing more"
+        );
+    }
+
+    /// Asks its target to keep the native window when dropped, as the
+    /// renderer a window's handler owns does when its raster thread did not
+    /// answer its detach.
+    struct KeepOnDrop(Arc<dyn flui_platform::SurfaceTarget>);
+
+    impl Drop for KeepOnDrop {
+        fn drop(&mut self) {
+            self.0.keep_past_close();
+        }
+    }
+
+    /// A window whose handler's release asks to keep it past the close stays
+    /// on the server, unmapped, while the application sees it closed: its
+    /// handler let go of, its target handing out nothing. Red-check: with
+    /// `X11Window::retire` destroying the window whatever the release asked,
+    /// the server no longer has the kept window.
+    fn a_window_kept_past_its_close_is_unmapped_not_destroyed() {
+        let platform = X11Platform::try_new().expect("the X11 platform");
+        let server = RustConnection::connect(None)
+            .expect("the X server answers")
+            .0;
+        let handler = RecordingWindowHandler::new();
+        let window = platform
+            .open_window(WindowOptions::default(), Rc::clone(&handler) as _)
+            .expect("an X11 window opens");
+        let xid = xid_of(window.as_ref());
+        let target = window.surface_target();
+        let keep = KeepOnDrop(window.surface_target());
+        handler.react_to_close(move || {
+            let _released_with_the_handler = &keep;
+        });
+        let released = Rc::downgrade(&handler);
+        drop(handler);
+        run_for(&platform, Duration::from_millis(200)).expect("the loop turns");
+
+        window
+            .admit_and_apply(WindowCommand::Close)
+            .expect("the window closes");
+        run_for(&platform, Duration::from_millis(200)).expect("the loop turns");
+
+        assert!(
+            released.upgrade().is_none(),
+            "the close let go of the handler"
+        );
+        assert!(
+            matches!(target.window_handle(), Err(HandleError::Unavailable)),
+            "a kept window's target hands out no handle"
+        );
+        let attributes = server
+            .get_window_attributes(xid)
+            .expect("request")
+            .reply()
+            .expect("a kept window stays on the server");
+        assert_eq!(
+            attributes.map_state,
+            MapState::UNMAPPED,
+            "a kept window is unmapped"
         );
     }
 

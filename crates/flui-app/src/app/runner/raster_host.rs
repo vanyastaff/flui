@@ -123,7 +123,9 @@ struct ThreadLink {
         RasterSender,
         Redraws,
     )>,
-    slots: rustc_hash::FxHashMap<PresentationAddress, SlotId>,
+    /// Each window's slot, with the target its surfaces were made over, which a
+    /// detach that finds the thread wedged keeps past the window's close.
+    slots: rustc_hash::FxHashMap<PresentationAddress, (SlotId, Arc<dyn SurfaceTarget>)>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -132,12 +134,13 @@ impl ThreadLink {
     /// holds it.
     fn detach_wait(&self, address: PresentationAddress) -> Option<DetachWait> {
         let (handle, sender, redraws) = self.thread.as_ref()?;
+        let (slot, target) = self.slots.get(&address)?;
         Some(DetachWait {
             handle: handle.upgrade()?,
             sender: sender.clone(),
-            slot: *self.slots.get(&address)?,
+            slot: *slot,
             redraws: redraws.clone(),
-            target: None,
+            target: Arc::clone(target),
         })
     }
 }
@@ -412,20 +415,20 @@ struct DetachWait {
     /// The windows a death this wait finds wakes, each to settle what the
     /// executor will not and to report it dead.
     redraws: Redraws,
-    /// What the window's surfaces were made over, for a detach the host
-    /// sent; `None` for the wait of a window that closed while the host was
-    /// busy, whose slot the host's own detach keeps.
-    target: Option<Arc<dyn SurfaceTarget>>,
+    /// What the window's surfaces were made over: a thread that does not
+    /// answer may still present over it.
+    target: Arc<dyn SurfaceTarget>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 impl DetachWait {
     /// Wait until the thread took the slot down, at most
     /// [`flui_engine::DETACH_DEADLINE`]; answers whether it did. A thread
-    /// that does not answer dies, and every window still attached is asked
-    /// for a frame, whose wake quarantines it (ADR-0305 §9). A panic of the
-    /// log's subscriber or of a window's redraw requester is held in
-    /// `caught`.
+    /// that does not answer dies: the window's native window is kept past its
+    /// close and the target is leaked, and every window still attached is
+    /// asked for a frame, whose wake quarantines it (ADR-0305 §9). A panic of
+    /// the host's keep, the log's subscriber or a window's redraw requester
+    /// is held in `caught`, and the target is leaked after any of them.
     fn wait(self, caught: &mut FirstPanic) -> bool {
         match self
             .handle
@@ -433,20 +436,21 @@ impl DetachWait {
         {
             Ok(()) => true,
             Err(failure) => {
+                // First, before any code that is not the host's: the native
+                // window the wedged thread may still present to outlives
+                // the close.
+                let _kept = caught.contain(|| self.target.keep_past_close());
                 let _logged = caught.contain(|| {
                     tracing::error!(%failure, "raster host: the raster thread did not take a window's slot down");
                 });
                 let _woken = caught.contain(|| self.redraws.wake());
-                if let Some(target) = self.target {
-                    // The wedged thread may still present to a surface made
-                    // over the target, so the target lives until the process
-                    // exits (ADR-0305 §9).
-                    #[expect(
-                        clippy::mem_forget,
-                        reason = "ADR-0305 §9: a raster thread that did not answer may still present over this target"
-                    )]
-                    std::mem::forget(target);
-                }
+                // The target lives until the process exits, so the handles
+                // the wedged thread holds stay the host's (ADR-0305 §9).
+                #[expect(
+                    clippy::mem_forget,
+                    reason = "ADR-0305 §9: a raster thread that did not answer may still present over this target"
+                )]
+                std::mem::forget(self.target);
                 false
             }
         }
@@ -947,6 +951,8 @@ impl RasterHost {
         let carried = self.carried.remove(&address).unwrap_or_default();
         let mut base = RasterBase::default();
         base.set_mode(damage_mode());
+        #[cfg(not(target_arch = "wasm32"))]
+        let link_target = Arc::clone(&surface_target);
         placed.slots.insert(
             address,
             HostSlot {
@@ -969,7 +975,11 @@ impl RasterHost {
         placed.redraws.follow(&placed.slots);
         #[cfg(not(target_arch = "wasm32"))]
         if placed.executor.inline().is_none() {
-            let _replaced = self.link.borrow_mut().slots.insert(address, slot);
+            let _replaced = self
+                .link
+                .borrow_mut()
+                .slots
+                .insert(address, (slot, link_target));
         }
         // A death the attach found wakes every window, this one included,
         // once the host is released: each wake quarantines its window.
@@ -1220,7 +1230,7 @@ impl RasterHost {
                 sender: placed.sender.clone(),
                 slot: slot.slot,
                 redraws: placed.redraws.clone(),
-                target: Some(Arc::clone(&slot.surface_target)),
+                target: Arc::clone(&slot.surface_target),
             });
         }
         let _turned = caught.contain(|| placed.executor.turn());

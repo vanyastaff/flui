@@ -2076,6 +2076,25 @@ impl SurfaceTarget for IOSSurface {
         _: flui_platform::SwapChainStatistics,
     ) {
     }
+
+    /// Hides the view at once, inside the close; the close takes it out of
+    /// its window and hides the window as for any close, and this target,
+    /// leaked, keeps its +1 on the view (`MainRetainedView`), and so the
+    /// view's Metal layer, for the life of the process. Off the main thread
+    /// and on a second call it does nothing.
+    fn keep_past_close(&self) {
+        if !self.retirement.keep_past_close() {
+            return;
+        }
+        let Some(main) = MainThreadMarker::new() else {
+            return;
+        };
+        if let Some(view) = self.view.object(main) {
+            // SAFETY: `view` is the live `UIView` this target retains,
+            // messaged on the main thread.
+            let _: () = unsafe { msg_send![view, setHidden: true] };
+        }
+    }
 }
 
 /// Owner-thread session notification. A connection carries explicit completion

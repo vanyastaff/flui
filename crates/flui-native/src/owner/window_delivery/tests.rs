@@ -2,7 +2,9 @@
 //! (ADR-0254 §4): the capability snapshot comes first, a delivery raised
 //! inside a method waits for it in order, a panicking method keeps the queue
 //! behind it and its own payload, a close can be vetoed, `closed` is the last
-//! call, and the window lets go of its handler when it is cleared.
+//! call, the window lets go of its handler when it is cleared, and its native
+//! window is kept past the close only when a keep came before its host settled
+//! its fate.
 
 use std::cell::{Cell, RefCell};
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -17,7 +19,7 @@ use flui_platform::{
 };
 use flui_testing::window_handler::{HandlerCall, RecordingWindowHandler};
 
-use super::WindowDelivery;
+use super::{NativeFate, WindowDelivery};
 use crate::owner::frame_timing::frame_request_now;
 
 fn ime() -> PlatformInput {
@@ -601,6 +603,36 @@ fn the_run_hook_follows_every_run_an_unwinding_one_too() {
     assert_eq!(runs(), 3, "a run that unwinds");
 }
 
+/// A keep that reaches the window before its host settles the native
+/// window's fate keeps it, once; the settle answers `Keep` every time after.
+/// A keep after the settle, or after a settle the OS's destruction made,
+/// changes nothing, and the settle goes on answering `Destroy`. Red-check:
+/// with `Retirement::keep_past_close` storing nothing, or `settle` answering
+/// `Destroy` whatever the keep did, the first assertions fail.
+fn a_keep_before_the_settle_keeps_the_native_window_once() {
+    let (delivery, _handler) = window();
+    let retirement = delivery.retirement();
+    assert!(!retirement.is_kept(), "nothing kept before a keep");
+    assert!(retirement.keep_past_close(), "the first keep keeps it");
+    assert!(!retirement.keep_past_close(), "a second keep does nothing");
+    assert!(
+        delivery.retirement().is_kept(),
+        "every clone of the retirement reads the keep"
+    );
+    assert_eq!(retirement.settle(), NativeFate::Keep);
+    assert_eq!(retirement.settle(), NativeFate::Keep, "the fate stays");
+
+    let (delivery, _handler) = window();
+    let retirement = delivery.retirement();
+    assert_eq!(retirement.settle(), NativeFate::Destroy);
+    assert!(
+        !retirement.keep_past_close(),
+        "a keep after the window was destroyed does nothing"
+    );
+    assert!(!retirement.is_kept());
+    assert_eq!(retirement.settle(), NativeFate::Destroy, "the fate stays");
+}
+
 /// One row per obligation of a window's handler, as its window delivers
 /// them.
 #[test]
@@ -657,6 +689,10 @@ fn window_handler_obligation_table() {
         (
             "a frame counts when the handler runs",
             a_frame_counts_when_the_handler_runs,
+        ),
+        (
+            "a keep before the settle keeps the native window once",
+            a_keep_before_the_settle_keeps_the_native_window_once,
         ),
     ];
     let mut failures = Vec::new();

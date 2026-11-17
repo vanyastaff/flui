@@ -1141,6 +1141,33 @@ impl SurfaceTarget for MacOSSurface {
             content_view::layer_presenting(view, frame);
         }
     }
+
+    /// Orders the view's window out at once, inside the close
+    /// (`windowWillClose:`), and this target, leaked, keeps its +1 on the
+    /// window's view (`MainRetainedView`), and so the view's Metal layer, for
+    /// the life of the process: the window's own release lets go only of the
+    /// window's reference. Off the main thread, for a view that left its
+    /// window, and on a second call it does nothing.
+    fn keep_past_close(&self) {
+        if !self.retirement.keep_past_close() {
+            return;
+        }
+        let Some(main) = MainThreadMarker::new() else {
+            return;
+        };
+        let Some(view) = self.view.object(main) else {
+            return;
+        };
+        // SAFETY: `view` is the live view this target retains, messaged on
+        // the main thread; `window` answers nil once the view left its
+        // window, and the window it answers is alive while it holds the view.
+        unsafe {
+            let window: ObjcId = msg_send![objc_address(view), window];
+            if window != NIL {
+                let _: () = msg_send![window, orderOut: NIL];
+            }
+        }
+    }
 }
 
 /// How many owner-lane turns a deferred redraw request may take before it is
