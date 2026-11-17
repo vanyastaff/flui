@@ -520,7 +520,7 @@ impl UiRuntime {
     /// whose attachment later retired, contribute until the next owner turn.
     pub fn has_pending_work(&self) -> bool {
         // Input work before due work: a gesture deadline that comes due
-        // between the two reads is then counted by one of them.
+        // between the two reads is then counted at least once.
         self.has_pending_tree_work() || self.has_pending_input_work() || self.has_pending_due_work()
     }
 

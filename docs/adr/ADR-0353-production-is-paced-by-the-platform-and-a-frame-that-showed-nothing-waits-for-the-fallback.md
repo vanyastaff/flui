@@ -126,14 +126,19 @@ one fallback. Tree work is not dirty only with `holds_work` too, so tree work th
 frame that left none (a link opened, a tap's state change) runs at once. Due work is never masked:
 it runs on the wake its own deadline brings, so a timer or a long press is not served late and its
 wake is not skipped and re-armed. The runtime reads input work before due work, so a gesture
-deadline that comes due between the two reads is counted by one of them. An inbox redraw, an armed
+deadline that comes due between the two reads is counted at least once. An inbox redraw, an armed
 raster attempt (`next_attempt_at`, a device rebuild or a surface restore) and the due fallback
 count at once. A frame's immediate retry (a panicking resize asking again) is tree work that frame
 left, so it waits for the fallback and cannot spin; a dropped frame's paced retry is due work at
-its backoff deadline. With no fallback armed, every pending work is dirty at once. Input is
-dispatched when it arrives (the platform input callback calls `handle_input_addressed` directly);
-only the frame that would show it waits, at most one fallback (0.95 display period). A deadline
-source must be in the dirty predicate and self-clearing, or its wake arrives and is skipped: each
+its backoff deadline. A frame that presents nothing and arms no deferral (nothing keeps the gate
+open) leaves a pending fallback in place but releases its `holds_work` once it left no tree work
+(`FallbackWake::release_held_work`), so tree work after it runs at once. With no fallback armed,
+every pending work is dirty at once. A press, a release or a key is dispatched when it arrives
+(the platform input callback calls `handle_input_addressed` directly), and only the frame that
+would show its effect waits. Pointer motion is coalesced or resampled and delivered by the frame,
+so on a window whose last frame showed nothing, its handlers run with that frame, at most one
+fallback (0.95 display period) late. A deadline source must be in the dirty predicate and
+self-clearing, or its wake arrives and is skipped: each
 desktop loop turns the fallback's deadline into the frame it was asked for (`WakeDeadline::take_due`
 on Win32, X11 and Wayland; the wake pump's `WakeThenLook` on AppKit). The fallback is desktop's:
 Android paces a rendering wake by its choreographer and iOS by its display link, and both pass an
@@ -179,9 +184,9 @@ frozen. That belongs to a wall-clock timer service, not to pacing.
 
 - Good, because every sink that showed nothing is bounded to one frame per 0.95 period, with one
   predicate and no knowledge of the sink's kind.
-- Good, because input and new work are unaffected: input is dispatched on arrival, and work that
-  arrives after a frame that left none runs at once; its frame waits at most one
-  fallback.
+- Good, because discrete input is unaffected: a press, a release or a key is dispatched on arrival,
+  and tree work that arrives after a frame that left none runs at once. Pointer motion and the
+  frames that show input wait at most one fallback, and only on a window that showed nothing.
 - Bad, because the frame after a non-presenting one is up to 0.95 of a period late even when the
   work is real; that frame would have been shown at the next vsync at best.
 
@@ -211,9 +216,11 @@ Tests in `crates/flui-app/src/app/runner/frame_pacing.rs`, rows of `desktop_paci
   records the tree work its frame left; the echo and that tree work wait, a held press waits even
   when the frame left no tree work, due work runs on its own wake, the due fallback runs the frame,
   tree work after a frame that left none runs at once, as do an inbox redraw and an armed raster
-  attempt; red when tree work counts past a pending fallback that holds work, and red when input
+  attempt, and a frame that ran out the held work releases it; red when tree work counts past a
+  pending fallback that holds work, and red when input
   work counts past any pending fallback), in `flui-runtime`'s contracts,
-  `a_dropped_frames_retry_is_due_work_and_a_repaint_is_tree_work` (the split of
+  `a_dropped_frames_retry_is_due_work_and_a_repaint_is_tree_work` and
+  `a_pointer_move_is_input_work_and_neither_tree_nor_due_work` (the split of
   `has_pending_work`), and in `flui-app`'s `app_it`,
   `a_resize_that_keeps_panicking_is_not_retried_forever` (a panicking resize is retried once, at
   the fallback's deadline, not on every period).

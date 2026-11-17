@@ -307,3 +307,48 @@ fn a_dropped_frames_retry_is_due_work_and_a_repaint_is_tree_work() {
     );
     assert!(!runtime.has_pending_due_work(), "and nothing is due");
 }
+
+/// A pointer move is input work: the frame that delivers it is the one a
+/// runner paces behind any pending fallback, and it is neither tree work that
+/// would make a later fallback hold the tree nor due work with an instant of
+/// its own (ADR-0353 decision 4).
+///
+/// Red-check: count pending motion as tree work and the move shows as tree
+/// work.
+#[test]
+fn a_pointer_move_is_input_work_and_neither_tree_nor_due_work() {
+    let mut lost = Lost::new();
+    lost.device.lost = false;
+    lost.wait_out_the_backoff();
+    assert!(lost.run_frame(), "the retried frame presents");
+    assert!(
+        !lost.runtime.has_pending_work(),
+        "a presented frame leaves nothing pending"
+    );
+    let at = flui_foundation::geometry::Offset::new(5.0, 5.0);
+    let touch = flui_platform::PointerKind::Touch;
+    for event in [
+        flui_interaction::events::make_down_event(at, touch).expect("finite touch"),
+        flui_interaction::events::make_move_event(
+            flui_foundation::geometry::Offset::new(9.0, 9.0),
+            touch,
+        )
+        .expect("finite touch"),
+    ] {
+        lost.runtime.enter(|runtime| {
+            runtime.handle_input_addressed(
+                runtime.presentation_id(),
+                flui_platform::PlatformInput::Pointer(event),
+            );
+        });
+    }
+    assert!(
+        lost.runtime.has_pending_input_work(),
+        "the move waits for the frame that delivers it"
+    );
+    assert!(
+        !lost.runtime.has_pending_tree_work(),
+        "and is not tree work"
+    );
+    assert!(!lost.runtime.has_pending_due_work(), "nor due work");
+}

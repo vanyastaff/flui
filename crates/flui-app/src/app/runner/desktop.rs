@@ -473,6 +473,13 @@ impl DesktopWakeDeadlines {
         )
     }
 
+    /// After a pump that presented nothing and armed no deferral: a pending
+    /// fallback stops holding tree work once the pump left none.
+    pub(super) fn settle_after_no_present(&self, ui_runtime: &crate::app::ui_runtime::UiRuntime) {
+        self.fallback
+            .release_held_work(ui_runtime.has_pending_tree_work());
+    }
+
     /// The earliest armed deadline: the pacing fallback and the first
     /// reveal; the loop counts the raster work of each window whose frames
     /// run itself (`RasterHost::wake_deadline`). `period` is the
@@ -702,6 +709,8 @@ impl DesktopFrameDriver {
                         "frame presented nothing with the gate open; deferring the next \
                          ticker wake"
                     );
+                } else {
+                    self.deadlines.settle_after_no_present(ui_runtime);
                 }
                 // The reveal runs platform code: after the deferral is
                 // armed, so a panic there leaves the wake paced.

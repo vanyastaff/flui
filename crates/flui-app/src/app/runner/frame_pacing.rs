@@ -172,7 +172,8 @@ pub(super) struct PendingWork {
 #[cfg(not(target_arch = "wasm32"))]
 impl PendingWork {
     /// What `ui_runtime` has pending now. Input work is read before due work,
-    /// so a gesture deadline that comes between the reads is counted once.
+    /// so a gesture deadline that comes between the reads is counted at least
+    /// once.
     pub(super) fn of(ui_runtime: &crate::app::ui_runtime::UiRuntime) -> Self {
         Self {
             tree: ui_runtime.has_pending_tree_work(),
@@ -478,6 +479,15 @@ impl FallbackWake {
         state.delivered_at = None;
         state.holds_work = left_work;
         anchored
+    }
+
+    /// A pump ran and presented nothing, and nothing keeps the gate open, so
+    /// no deadline is armed for it. A pending deadline stays, but the tree work
+    /// it held is gone once this frame left none: tree work that arrives later
+    /// is new and runs at once.
+    pub(super) fn release_held_work(&self, left_work: bool) {
+        let mut state = self.state.lock();
+        state.holds_work &= left_work;
     }
 
     /// The instant the platform's wake-deadline hook should wake the loop
@@ -796,6 +806,21 @@ mod desktop_pacing_tests {
         assert!(
             frame_is_dirty(false, false, none, Some(now), holding),
             "nor does an armed raster attempt"
+        );
+        fallback.release_held_work(true);
+        assert!(
+            fallback.gate(now).holds_work,
+            "a frame that left tree work keeps it held"
+        );
+        fallback.release_held_work(false);
+        let released = fallback.gate(now);
+        assert!(
+            released.pending && !released.holds_work,
+            "a frame that ran out the held work releases it; the deadline stays"
+        );
+        assert!(
+            frame_is_dirty(false, false, tree, None, released),
+            "and tree work that arrives after it runs at once"
         );
         let due = fallback.gate(now + period);
         assert!(
