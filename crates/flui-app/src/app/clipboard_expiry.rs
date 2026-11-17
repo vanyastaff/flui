@@ -1,4 +1,4 @@
-//! Expiring clipboard entries (ADR-0362): when the host is asked to clear the
+//! Expiring clipboard entries (ADR-0363): when the host is asked to clear the
 //! entry of an expiring write, if the clipboard still holds it.
 //!
 //! The rule lives here, at the seam, for every host; a host knows only how to
@@ -19,14 +19,18 @@
 //! nothing. Where the second write failed, the first entry is still there and
 //! its own clear takes it at its time.
 //!
-//! A session lock, or the machine going to sleep, serves every owed clear
-//! now. The loop's end asks the host to clear whatever entry is still there
-//! within the exit's budget ([`NativeClipboard::clear_expired_before_exit`]).
-//! A clear the host could not do for now (the clipboard held by another
-//! process, out of sight in the background) is owed again on
-//! [`CLEAR_RETRY`], at most [`MAX_CLEAR_RETRIES`] times.
+//! A session lock, or the machine going to sleep, asks the host to clear
+//! whatever expiring entry of the application's it still holds
+//! ([`ExpiredEntry::Any`]), once any expiring write was made, whatever is
+//! still owed; so does the loop's end, within its own budget
+//! ([`NativeClipboard::clear_expired_before_exit`]). A clear the host could not
+//! see the clipboard for ([`ExpiredClear::Unseen`]: Android, for an
+//! application without input focus) stays owed until the application is next
+//! in front ([`ClipboardExpiries::in_front`]); one the host could not reach
+//! the clipboard for is owed again on [`CLEAR_RETRY`], at most
+//! [`MAX_CLEAR_RETRIES`] times.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
 use std::time::Duration;
 
@@ -37,35 +41,73 @@ use flui_platform::capability::CompletionSource;
 use flui_platform::{Backoff, ClipboardEntryId, ClipboardWrite, ExpiryClearing};
 use web_time::Instant;
 
-/// When a clear the host could not do for now is tried again: one second
-/// after the first miss, doubling, at most a minute apart.
+/// When a clear the host could not reach the clipboard for is tried again:
+/// one second after the first miss, doubling, at most a minute apart.
 pub(crate) const CLEAR_RETRY: Backoff =
     Backoff::new(Duration::from_secs(1), Duration::from_secs(60));
 
-/// How many times a clear the host could not do is tried again before it is
-/// given up with a warning: with [`CLEAR_RETRY`], about four minutes.
+/// How many times a clear the host could not reach the clipboard for is tried
+/// again before it is given up with a warning: with [`CLEAR_RETRY`], the last
+/// attempt comes 183 seconds after the first.
 pub(crate) const MAX_CLEAR_RETRIES: u32 = 8;
 
 /// The most clears owed at once. Each expiring write owes one until its time;
 /// past this many the oldest is given up, whose entry the writes after it
-/// replaced unless every one of them failed.
+/// replaced unless every one of them failed; a lock and the loop's end still
+/// clear it.
 pub(crate) const MAX_OWED: usize = 16;
 
 /// The expiring entries of one loop's clipboard: the clears owed, and the host
 /// clipboard that serves them.
 pub(crate) struct ClipboardExpiries {
     native: Rc<dyn NativeClipboard>,
-    clock: Rc<dyn MonotonicClock>,
+    clock: RefCell<Rc<dyn MonotonicClock>>,
     owed: RefCell<Vec<Owed>>,
+    /// How many expiring writes the handles made: a lock's clear is
+    /// [`ExpiredEntry::Any`], valid only while no later one was made.
+    expiring_writes: Cell<u64>,
+    /// Where the latest expiring write's answers settle, which a lock's clear
+    /// answers through; `None` until an expiring write is made.
+    latest_writer: RefCell<Option<CompletionSource>>,
 }
 
-/// One clear owed: the entry, when it is due, how many attempts missed, and
-/// where its answer settles (the writer's UI runtime).
+/// One clear owed: what it clears, when, how many attempts missed, and where
+/// its answer settles.
 struct Owed {
-    entry: ClipboardEntryId,
-    due: Instant,
+    which: Which,
+    due: Due,
     misses: u32,
     completions: CompletionSource,
+}
+
+/// What an owed clear clears.
+#[derive(Clone, Copy, Debug)]
+enum Which {
+    /// The entry this write made, at its time.
+    Entry(ClipboardEntryId),
+    /// Whatever expiring entry the host holds, asked at a lock while
+    /// `expiring_writes` was `writes`: a later expiring write makes it stale,
+    /// so an older wake never clears a newer entry.
+    Any { writes: u64 },
+}
+
+impl Which {
+    fn entry(self) -> ExpiredEntry {
+        match self {
+            Self::Entry(entry) => ExpiredEntry::Entry(entry),
+            Self::Any { .. } => ExpiredEntry::Any,
+        }
+    }
+}
+
+/// When an owed clear is asked.
+#[derive(Clone, Copy, Debug)]
+enum Due {
+    /// At this instant, through the turn deadline.
+    At(Instant),
+    /// When the application is next in front: the host could not see the
+    /// clipboard before. No deadline wakes the loop for it.
+    InFront,
 }
 
 impl ClipboardExpiries {
@@ -73,9 +115,22 @@ impl ClipboardExpiries {
     pub(crate) fn new(native: Rc<dyn NativeClipboard>, clock: Rc<dyn MonotonicClock>) -> Rc<Self> {
         Rc::new(Self {
             native,
-            clock,
+            clock: RefCell::new(clock),
             owed: RefCell::new(Vec::new()),
+            expiring_writes: Cell::new(0),
+            latest_writer: RefCell::new(None),
         })
+    }
+
+    /// Time the entries on `clock` from now on.
+    #[cfg(all(test, feature = "testing"))]
+    pub(crate) fn set_clock(&self, clock: Rc<dyn MonotonicClock>) {
+        self.clock.replace(clock);
+    }
+
+    fn now(&self) -> Instant {
+        let clock = Rc::clone(&self.clock.borrow());
+        clock.now()
     }
 
     /// The host clipboard the entries are cleared on.
@@ -93,13 +148,20 @@ impl ClipboardExpiries {
         if self.native.expiry_clearing() == ExpiryClearing::Unavailable {
             return;
         }
+        self.expiring_writes.set(
+            self.expiring_writes
+                .get()
+                .checked_add(1)
+                .expect("BUG: a loop makes fewer than 2^64 expiring clipboard writes"),
+        );
+        self.latest_writer.replace(Some(completions.clone()));
         // `ClipboardExpiry` is at most a day, which no clock overflows.
-        let due = self.clock.now() + expiry.get();
+        let due = self.now() + expiry.get();
         let given_up = {
             let mut owed = self.owed.borrow_mut();
             owed.push(Owed {
-                entry,
-                due,
+                which: Which::Entry(entry),
+                due: Due::At(due),
                 misses: 0,
                 completions: completions.clone(),
             });
@@ -107,43 +169,65 @@ impl ClipboardExpiries {
         };
         if let Some(given_up) = given_up {
             tracing::debug!(
-                entry = given_up.entry.get(),
+                which = ?given_up.which,
                 "more than {MAX_OWED} expiring clipboard writes owed a clear: the oldest is given up"
             );
         }
     }
 
     /// The earliest owed clear's time, part of the loop's turn deadline;
-    /// `None` when nothing is owed, or while a turn holds the list (it asks
-    /// again).
+    /// `None` when nothing is owed at a time.
     pub(crate) fn next_due(&self) -> Option<Instant> {
         self.owed
-            .try_borrow()
-            .ok()?
+            .borrow()
             .iter()
-            .map(|owed| owed.due)
+            .filter_map(|owed| match owed.due {
+                Due::At(at) => Some(at),
+                Due::InFront => None,
+            })
             .min()
     }
 
     /// The owner's turn: ask the host for every clear due by now.
     pub(crate) fn serve(self: &Rc<Self>) {
-        let now = self.clock.now();
-        let due: Vec<Owed> = {
-            let mut owed = self.owed.borrow_mut();
-            let (due, later) = std::mem::take(&mut *owed)
-                .into_iter()
-                .partition(|owed| owed.due <= now);
-            *owed = later;
-            due
-        };
+        let now = self.now();
+        let due = self.take(|due| matches!(due, Due::At(at) if at <= now));
         self.ask_each(due);
     }
 
-    /// The user's session locked, or the machine is going to sleep: every
-    /// owed clear is asked now, each of its own entry.
+    /// The application is in front again: ask the host for every clear it
+    /// could not see the clipboard for.
+    pub(crate) fn in_front(self: &Rc<Self>) {
+        let waiting = self.take(|due| matches!(due, Due::InFront));
+        self.ask_each(waiting);
+    }
+
+    /// The user's session locked, or the machine is going to sleep: once any
+    /// expiring write was made, the host is asked to clear whatever expiring
+    /// entry it still holds, and nothing else is owed.
     pub(crate) fn session_locked(self: &Rc<Self>) {
         let owed = std::mem::take(&mut *self.owed.borrow_mut());
-        self.ask_each(owed);
+        drop(owed);
+        let Some(completions) = self.latest_writer.borrow().clone() else {
+            return;
+        };
+        let writes = self.expiring_writes.get();
+        self.ask_each(vec![Owed {
+            which: Which::Any { writes },
+            due: Due::At(self.now()),
+            misses: 0,
+            completions,
+        }]);
+    }
+
+    /// The owed clears whose time `due` says has come, out of the list.
+    fn take(&self, due: impl Fn(Due) -> bool) -> Vec<Owed> {
+        let mut owed = self.owed.borrow_mut();
+        let (taken, later) = std::mem::take(&mut *owed)
+            .into_iter()
+            .partition(|owed| due(owed.due));
+        *owed = later;
+        taken
     }
 
     /// Ask the host for each of `owed`, every one asked though the host
@@ -156,33 +240,35 @@ impl ClipboardExpiries {
         first.resume();
     }
 
-    /// The loop ends: where a clear is still owed, ask the host to clear
-    /// whatever entry it still holds, waiting at most `within`. `None` when
-    /// nothing was owed. The web's page has no loop end to ask at.
+    /// The loop ends: once any expiring write was made, ask the host to clear
+    /// whatever expiring entry it still holds, waiting at most `within`.
+    /// `None` when no expiring write was made. The web's page has no loop end
+    /// to ask at.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn before_exit(&self, within: Duration) -> Option<ExpiredClear> {
-        let owed = std::mem::take(&mut *self.owed.borrow_mut());
-        if owed.is_empty() {
-            return None;
-        }
-        drop(owed);
+        drop(std::mem::take(&mut *self.owed.borrow_mut()));
+        self.latest_writer.borrow().as_ref()?;
         let cleared = self.native.clear_expired_before_exit(within);
         tracing::debug!(
             ?cleared,
-            "the loop's end cleared the expiring clipboard entry"
+            "the loop's end asked for the expiring clipboard entry's clear"
         );
         Some(cleared)
     }
 
-    /// Ask the host to clear `owed`'s entry if it is still there, with nothing
-    /// borrowed: the host's answer may come at once.
+    /// Ask the host to clear what `owed` names if it is still there, with
+    /// nothing borrowed: the host's answer may come at once. A lock's clear
+    /// made stale by a later expiring write is dropped.
     fn ask(self: &Rc<Self>, owed: Owed) {
         let Owed {
-            entry,
+            which,
             misses,
             completions,
             ..
         } = owed;
+        if self.is_stale(which) {
+            return;
+        }
         let (completion, answer) = completions.pending::<ExpiredClear>();
         let expiries: Weak<Self> = Rc::downgrade(self);
         completion.on_complete(move |answered| {
@@ -191,30 +277,41 @@ impl ClipboardExpiries {
             let (Ok(cleared), Some(expiries)) = (answered, expiries.upgrade()) else {
                 return;
             };
-            expiries.answered(entry, misses, completions.clone(), cleared);
+            expiries.answered(which, misses, completions.clone(), cleared);
         });
-        self.native
-            .clear_expired(ExpiredEntry::Entry(entry), answer);
+        self.native.clear_expired(which.entry(), answer);
     }
 
-    /// The host answered the clear of `entry` after `misses` attempts missed.
+    /// Whether `which` is a lock's clear a later expiring write made stale.
+    fn is_stale(&self, which: Which) -> bool {
+        matches!(which, Which::Any { writes } if writes != self.expiring_writes.get())
+    }
+
+    /// The host answered the clear of `which` after `misses` attempts missed.
     fn answered(
         &self,
-        entry: ClipboardEntryId,
+        which: Which,
         misses: u32,
         completions: CompletionSource,
         cleared: ExpiredClear,
     ) {
+        if cleared == ExpiredClear::Unseen && !self.is_stale(which) {
+            // Owed until the application can see the clipboard, which no
+            // time decides.
+            self.owed.borrow_mut().push(Owed {
+                which,
+                due: Due::InFront,
+                misses,
+                completions,
+            });
+            return;
+        }
         if !cleared.is_worth_a_retry() {
             if matches!(cleared, ExpiredClear::Cleared | ExpiredClear::NotHeld) {
-                tracing::debug!(
-                    entry = entry.get(),
-                    ?cleared,
-                    "an expiring clipboard entry's clear"
-                );
+                tracing::debug!(?which, ?cleared, "an expiring clipboard entry's clear");
             } else {
                 tracing::warn!(
-                    entry = entry.get(),
+                    ?which,
                     ?cleared,
                     "an expiring clipboard entry could not be cleared"
                 );
@@ -223,16 +320,16 @@ impl ClipboardExpiries {
         }
         if misses >= MAX_CLEAR_RETRIES {
             tracing::warn!(
-                entry = entry.get(),
+                ?which,
                 ?cleared,
                 "an expiring clipboard entry could not be cleared after {MAX_CLEAR_RETRIES} retries"
             );
             return;
         }
-        let due = self.clock.now() + CLEAR_RETRY.delay(misses);
+        let due = self.now() + CLEAR_RETRY.delay(misses);
         self.owed.borrow_mut().push(Owed {
-            entry,
-            due,
+            which,
+            due: Due::At(due),
             misses: misses + 1,
             completions,
         });

@@ -58,7 +58,7 @@ pub trait ClipboardBackend: 'static {
     /// What this host does with an
     /// [expiring](ClipboardWrite::expires_after) write: whether the entry is
     /// cleared at its time and when the session locks, if the clipboard
-    /// still holds it then (ADR-0362). Constant for a backend.
+    /// still holds it then (ADR-0363). Constant for a backend.
     fn expiry_clearing(&self) -> ExpiryClearing;
 }
 

@@ -92,7 +92,7 @@ pub enum ClipboardError {
 
 /// One write to the clipboard: its text, and whether the clipboard keeps it
 /// out of the user's clipboard history and cloud sync (ADR-0152 §6), and
-/// clears it after a time (ADR-0362).
+/// clears it after a time (ADR-0363).
 ///
 /// A password manager writes a secret [`concealed`](Self::concealed): the
 /// paste still works, but the entry is not kept or shown by the system's
@@ -147,7 +147,7 @@ impl ClipboardWrite {
     /// The same write, concealed, and cleared `after` it is asked for, and
     /// when the user's session locks, if the clipboard still holds this
     /// entry then: a later copy, by this application or another one, is
-    /// never cleared (ADR-0362). What the host can do is its
+    /// never cleared (ADR-0363). What the host can do is its
     /// [`ExpiryClearing`].
     ///
     /// The write is named by a new [`ClipboardEntryId`]; a clone of it names
@@ -271,7 +271,7 @@ pub enum ClipboardExpiryError {
 /// The entry one expiring clipboard write makes, unique in the process and
 /// never reissued: the host records it with the operating system's token
 /// for the entry when the write lands, and clears the clipboard for it only
-/// while both still match (ADR-0362).
+/// while both still match (ADR-0363).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ClipboardEntryId(std::num::NonZeroU64);
 
@@ -308,8 +308,13 @@ pub enum ExpiryClearing {
     /// sleeps), if the clipboard still holds it.
     AtTimeAndLock,
     /// Cleared at its time if the clipboard still holds it; the host hears no
-    /// session lock (iOS, Android).
+    /// session lock (iOS).
     AtTime,
+    /// Cleared at its time if the application can see the clipboard then,
+    /// and otherwise when it is next in front, if the clipboard still holds
+    /// it; the host hears no session lock (Android, where only the
+    /// application with input focus sees the clipboard).
+    AtTimeOrInFront,
     /// The host cannot clear an entry only while it is still there (the
     /// web's clipboard has no such form): the write is a concealed one that
     /// stays until something replaces it.

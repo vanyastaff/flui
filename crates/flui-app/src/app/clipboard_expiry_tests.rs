@@ -258,22 +258,69 @@ fn nothing_is_owed_without_an_expiry_or_a_conditional_clear() {
     assert_eq!(run.asked(), Vec::<ExpiredEntry>::new());
 }
 
-/// A session lock asks every owed clear now, each of its own entry, and
-/// leaves nothing owed for the time.
+/// A session lock asks the host once to clear whatever expiring entry it
+/// holds, and leaves nothing owed for the time.
 #[test]
 fn a_session_lock_clears_now() {
     let run = Run::new();
-    let first = run.write(expiring(30)).expect("an expiring write");
-    let second = run.write(expiring(60)).expect("an expiring write");
+    run.write(expiring(30)).expect("an expiring write");
+    run.write(expiring(60)).expect("an expiring write");
     run.turn_at(secs(5));
     run.expiries.session_locked();
     run.owner.turn();
-    assert_eq!(
-        run.asked(),
-        [ExpiredEntry::Entry(first), ExpiredEntry::Entry(second)]
-    );
+    assert_eq!(run.asked(), [ExpiredEntry::Any]);
     assert_eq!(run.host.held.get(), None, "the entry still held is cleared");
     assert_eq!(run.due_in(), None);
+}
+
+/// A lock clears an entry no clear is owed for any more: here one whose
+/// retries ran out while another process held the clipboard.
+#[test]
+fn a_lock_clears_an_entry_no_longer_owed() {
+    let run = Run::new();
+    run.write(expiring(30)).expect("an expiring write");
+    let attempts = usize::try_from(MAX_CLEAR_RETRIES).expect("a small count") + 1;
+    run.host.refusals.borrow_mut().extend(std::iter::repeat_n(
+        ExpiredClear::Failed(ClipboardError::Unavailable),
+        attempts,
+    ));
+    let mut at = secs(30);
+    run.turn_at(at);
+    for misses in 0..MAX_CLEAR_RETRIES {
+        at += CLEAR_RETRY.delay(misses);
+        run.turn_at(at);
+    }
+    assert_eq!(run.due_in(), None, "given up after the last retry");
+    assert!(run.host.held.get().is_some(), "the entry is still there");
+    run.expiries.session_locked();
+    run.owner.turn();
+    assert_eq!(run.asked().last(), Some(&ExpiredEntry::Any));
+    assert_eq!(run.host.held.get(), None);
+}
+
+/// A lock's clear the host could not do is retried only while no later
+/// expiring write was made: the older wake never clears the newer entry.
+#[test]
+fn a_lock_retry_never_clears_a_later_entry() {
+    let run = Run::new();
+    run.write(expiring(30)).expect("an expiring write");
+    run.host
+        .refusals
+        .borrow_mut()
+        .push_back(ExpiredClear::Failed(ClipboardError::Unavailable));
+    run.expiries.session_locked();
+    run.owner.turn();
+    assert_eq!(run.due_in(), Some(CLEAR_RETRY.delay(0)));
+    let later = run.write(expiring(60)).expect("an expiring write");
+    run.turn_at(CLEAR_RETRY.delay(0));
+    assert_eq!(
+        run.asked(),
+        [ExpiredEntry::Any],
+        "the stale retry is dropped"
+    );
+    assert_eq!(run.host.held.get(), Some(later));
+    run.turn_at(CLEAR_RETRY.delay(0) + secs(60));
+    assert_eq!(run.asked().last(), Some(&ExpiredEntry::Entry(later)));
 }
 
 /// A host whose clear panics at one entry still gets every other clear owed
@@ -284,14 +331,15 @@ fn a_panicking_clear_costs_no_other_clear() {
     let first = run.write(expiring(30)).expect("an expiring write");
     let second = run.write(expiring(30)).expect("an expiring write");
     run.host.panics_at.set(Some(first));
+    run.clock.advance(secs(30));
     #[expect(
         clippy::disallowed_methods,
         reason = "ADR-0287: the test catches the host's panic to assert what was asked"
     )]
-    let lock = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        run.expiries.session_locked();
+    let turn = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        run.expiries.serve();
     }));
-    assert!(lock.is_err(), "the host's panic reaches the turn");
+    assert!(turn.is_err(), "the host's panic reaches the turn");
     run.owner.turn();
     assert_eq!(
         run.asked(),
@@ -300,16 +348,39 @@ fn a_panicking_clear_costs_no_other_clear() {
     assert_eq!(run.host.held.get(), None, "the second entry is cleared");
 }
 
-/// A clear the host could not do for now is owed again on the retry
-/// schedule, and given up after the last retry; one the host refused for
-/// good is not tried again.
+/// A clear the host could not see the clipboard for waits, with no deadline,
+/// until the application is next in front, and is asked then.
+#[test]
+fn an_unseen_clear_waits_for_the_application_in_front() {
+    let run = Run::new();
+    let entry = run.write(expiring(30)).expect("an expiring write");
+    run.host
+        .refusals
+        .borrow_mut()
+        .push_back(ExpiredClear::Unseen);
+    run.turn_at(secs(30));
+    assert_eq!(run.due_in(), None, "no time wakes the loop for it");
+    run.turn_at(secs(3600));
+    assert_eq!(run.asked().len(), 1, "no turn asks it again");
+    run.expiries.in_front();
+    run.owner.turn();
+    assert_eq!(
+        run.asked(),
+        [ExpiredEntry::Entry(entry), ExpiredEntry::Entry(entry)]
+    );
+    assert_eq!(run.host.held.get(), None, "cleared once in front");
+}
+
+/// A clear the host could not reach the clipboard for is owed again on the
+/// retry schedule, and given up after the last retry; one the host refused
+/// for good is not tried again.
 #[test]
 fn a_clear_the_host_could_not_do_is_tried_again() {
     let run = Run::new();
     run.write(expiring(30)).expect("an expiring write");
     run.host.refusals.borrow_mut().extend([
         ExpiredClear::Failed(ClipboardError::Unavailable),
-        ExpiredClear::Unseen,
+        ExpiredClear::Failed(ClipboardError::Timeout),
     ]);
     run.turn_at(secs(30));
     assert_eq!(run.due_in(), Some(CLEAR_RETRY.delay(0)));
@@ -323,10 +394,10 @@ fn a_clear_the_host_could_not_do_is_tried_again() {
     let run = Run::new();
     run.write(expiring(30)).expect("an expiring write");
     let retries = usize::try_from(MAX_CLEAR_RETRIES).expect("a small count") + 1;
-    run.host
-        .refusals
-        .borrow_mut()
-        .extend(std::iter::repeat_n(ExpiredClear::Unseen, retries));
+    run.host.refusals.borrow_mut().extend(std::iter::repeat_n(
+        ExpiredClear::Failed(ClipboardError::Unavailable),
+        retries,
+    ));
     run.turn_at(secs(30));
     let mut at = secs(30);
     for misses in 0..MAX_CLEAR_RETRIES {
@@ -350,11 +421,12 @@ fn a_clear_the_host_could_not_do_is_tried_again() {
     );
 }
 
-/// The loop's end asks the host for whatever entry is still there while a
-/// clear is owed, and asks nothing when none is.
+/// The loop's end asks the host for whatever expiring entry is still there
+/// once any expiring write was made, owed or not, and asks nothing before.
 #[test]
-fn the_loop_end_clears_an_owed_entry() {
+fn the_loop_end_clears_an_expiring_entry() {
     let run = Run::new();
+    run.write(ClipboardWrite::text("plain"));
     assert_eq!(run.expiries.before_exit(secs(1)), None);
     assert_eq!(run.host.exits.get(), 0);
     run.write(expiring(30)).expect("an expiring write");
@@ -364,4 +436,18 @@ fn the_loop_end_clears_an_owed_entry() {
     );
     assert_eq!(run.host.exits.get(), 1);
     assert_eq!(run.due_in(), None);
+
+    // An entry whose clear was given up is still asked for at the end.
+    let run = Run::new();
+    run.write(expiring(30)).expect("an expiring write");
+    run.host
+        .refusals
+        .borrow_mut()
+        .push_back(ExpiredClear::Failed(ClipboardError::Gone));
+    run.turn_at(secs(30));
+    assert_eq!(run.due_in(), None);
+    assert_eq!(
+        run.expiries.before_exit(secs(1)),
+        Some(ExpiredClear::Cleared)
+    );
 }

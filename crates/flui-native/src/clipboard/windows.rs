@@ -32,7 +32,7 @@
 //! An expiring write that lands is recorded on the thread with the
 //! clipboard's sequence number and owner, read once its session closed
 //! (closing a session that changed the clipboard moves the number again),
-//! and only while the thread's window still owns it (ADR-0362). A
+//! and only while the thread's window still owns it (ADR-0363). A
 //! conditional clear opens the clipboard, which shuts every other process out
 //! until it closes, and empties it only while the owner is still the thread's
 //! window and the sequence number is still the recorded one: the check and

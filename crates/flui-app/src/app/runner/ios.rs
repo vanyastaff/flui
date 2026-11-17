@@ -127,24 +127,32 @@ fn scene_event(event: IOSSceneEvent) -> Result<(), flui_native::BootstrapError> 
 }
 
 fn drive_owner() {
+    // Each step of the turn is contained on its own, so a panic in one costs
+    // the turn none of the others (the lease poll below drives the frames);
+    // the first resumes once the turn's work is done.
+    let mut first = flui_foundation::panic::FirstPanic::new();
     // The owner's turn starts with the commands application code queued for
     // its windows: this wake is the one a command asks for.
-    super::owner_dispatch::apply_queued_window_commands(std::thread::current().id());
-    super::host::drive_native_text_sizing();
-    super::host::serve_clipboard_expiries();
+    first.contain(|| {
+        super::owner_dispatch::apply_queued_window_commands(std::thread::current().id());
+    });
+    first.contain(super::host::drive_native_text_sizing);
+    first.contain(super::host::serve_clipboard_expiries);
     // What an opened URL's loan returned is routed here, outside the
     // destructor that returned it.
-    super::host::route_owed_opened_urls();
+    first.contain(super::host::route_owed_opened_urls);
     // The background task the session end held for its writes ends once they
     // did.
-    super::host::release_finished_background_writes();
-    if let Some(mut lease) = lease_controller() {
-        lease
-            .controller
-            .as_mut()
-            .expect("BUG: live controller lease")
-            .poll();
-    }
+    first.contain(super::host::release_finished_background_writes);
+    first.contain(|| {
+        if let Some(mut lease) = lease_controller() {
+            lease
+                .controller
+                .as_mut()
+                .expect("BUG: live controller lease")
+                .poll();
+        }
+    });
     // A continuation exists to make progress on roots already carried across
     // the previous finite owner turn. Generating another Pump for every
     // retained scene here could consume the whole budget before that FIFO is
@@ -169,6 +177,7 @@ fn drive_owner() {
             let _ = with_owner_platform(|owner| owner.proxy().wake());
         },
     );
+    first.resume();
 }
 
 fn stop_process() {

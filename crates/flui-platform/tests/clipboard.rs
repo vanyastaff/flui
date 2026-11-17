@@ -1,5 +1,5 @@
 //! The clipboard write's contract: how long an expiring entry may live, and
-//! what an expiring write is (ADR-0362).
+//! what an expiring write is (ADR-0363).
 
 use std::time::Duration;
 

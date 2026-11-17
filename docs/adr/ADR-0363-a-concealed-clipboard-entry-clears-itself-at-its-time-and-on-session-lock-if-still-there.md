@@ -1,4 +1,4 @@
-# ADR-0362: A concealed clipboard entry clears itself at its time and on session lock, if still there
+# ADR-0363: A concealed clipboard entry clears itself at its time and on session lock, if still there
 
 - **Status:** Accepted (2026-11-17)
 - **Date:** 2026-11-17
@@ -70,7 +70,8 @@ it the entry is no momentary secret, and every clock adds it without overflow) a
 rest with `ClipboardExpiryError`. `ClipboardWrite::expiry` and `ClipboardWrite::entry` read them
 back. The write's `Debug` shows its length and how it is kept, never its text.
 
-What a host does with it is `ExpiryClearing` (`AtTimeAndLock`, `AtTime`, `Unavailable`), which
+What a host does with it is `ExpiryClearing` (`AtTimeAndLock`, `AtTime`, `AtTimeOrInFront`,
+`Unavailable`), which
 `ClipboardHandle::expiry_clearing` hands an application, as `concealment` does for concealment.
 
 ### §2 The rule, at the seam
@@ -86,16 +87,24 @@ writer's UI runtime:
   host answers `ExpiredClear::NotHeld`: a second expiring write replaces the first's time, and
   the first's clear does nothing; where the second failed, the first entry is still there and
   its own clear takes it.
-- `SystemNotice::SessionLocked` and `SystemNotice::Sleep` serve every owed clear at once, before
-  the application's subscribers hear the notice.
-- The loop's end asks the host to clear whatever entry is still there
-  (`NativeClipboard::clear_expired_before_exit`), within the services' part of the exit deadline
-  and at most `EXIT_CLIPBOARD_BOUND`.
-- A clear the host could not do for now (`ExpiredClear::is_worth_a_retry`: the clipboard held by
-  another process, out of sight in the background) is owed again on `CLEAR_RETRY`, at most
-  `MAX_CLEAR_RETRIES` times. At most `MAX_OWED` clears are owed at once; past it the oldest is
-  given up.
+- `SystemNotice::SessionLocked` and `SystemNotice::Sleep` ask the host once, before the
+  application's subscribers hear the notice and contained apart from them, to clear whatever
+  expiring entry it still holds (`ExpiredEntry::Any`), once any expiring write was made, whatever
+  is still owed; the owed clears end there. A retry of that clear is dropped once a later
+  expiring write is made, so the lock's wake never clears the newer entry.
+- The loop's end does the same (`NativeClipboard::clear_expired_before_exit`) right after the UI
+  runtimes retire and before the flush, within a budget of its own, `EXIT_CLIPBOARD_BOUND`.
+- A clear the host could not see the clipboard for (`ExpiredClear::Unseen`: Android, without
+  input focus) stays owed, with no deadline, until the application is next in front (its
+  lifecycle `Resumed`), and is asked then; the entry's identity still decides, so a clipboard
+  that changed meanwhile is left alone.
+- A clear the host could not reach the clipboard for (`ExpiredClear::is_worth_a_retry`: held by
+  another process) is owed again on `CLEAR_RETRY`, at most `MAX_CLEAR_RETRIES` times. At most
+  `MAX_OWED` clears are owed at once; past it the oldest is given up, which a lock and the loop's
+  end still clear.
 - No clear is owed where the host answers `ExpiryClearing::Unavailable`.
+- The rule runs each clear contained apart, resuming the first panic once all were asked; every
+  runner's owner turn contains it apart from the turn's other steps.
 
 ### §3 The host seam
 
@@ -104,14 +113,16 @@ and `clear_expired_before_exit(Duration) -> ExpiredClear`. A clear is served in 
 writes (ADR-0337 §3): one asked after a write is checked against what that write left. When an
 expiring write lands, the host records its entry with the operating system's token; any other
 write that lands forgets it; a clear clears only while the recorded entry is the one named and the
-token still matches (`ExpiringRecord`, the pure part every host with a token shares).
+token still matches (`ExpiringRecord`, the pure part every host with a token shares). Where the
+system tells observers inside the clear (UIKit's change notification), the record forgets the
+entry before the system is asked, with no borrow held across the call.
 
 | Host | Token | The check and the clear | Lock | The loop's end |
 |------|-------|-------------------------|------|----------------|
 | Win32 | `GetClipboardSequenceNumber` and `GetClipboardOwner`, read after the write's session closed (closing it moves the number), recorded only while the thread's window owns it | one open session: no other process can change the clipboard between the stamp and `EmptyClipboard` | `WM_WTSSESSION_CHANGE` | cleared if still there, waited for within the bound: the entry outlives the process otherwise |
 | macOS | `NSPasteboard.changeCount` | two calls on the owner lane: a copy another process makes between them is cleared too | `com.apple.screenIsLocked` | cleared if still there |
 | iOS | `UIPasteboard.changeCount`, and `UIPasteboardOptionExpirationDate` on the item | UIKit removes the item at its time, after the process too, and only that item; the loop's own clear is two calls, as macOS | none: `AtTime` | the expiration date stands |
-| Android | the writer mark and the entry number in the clip description's extras, beside `EXTRA_IS_SENSITIVE` (from API 24; below it `Unavailable`) | two binder calls (`getPrimaryClipDescription`, then `clearPrimaryClip` from API 28, an empty clip before); without input focus the system hands no description, and the clear answers `Unseen` | none: `AtTime` | cleared if still there and in sight |
+| Android | the writer mark and the entry number in the clip description's extras, beside `EXTRA_IS_SENSITIVE` (from API 24; below it `Unavailable`) | two binder calls (`getPrimaryClipDescription`, then `clearPrimaryClip` from API 28, an empty clip before); without input focus the system hands no description, and the clear answers `Unseen`, served when the application is next in front | none: `AtTimeOrInFront` | cleared if still there and in sight |
 | X11 | the selection's ownership time and the owned content | `SetSelectionOwner(None, CLIPBOARD, time)`, which the server ignores once another client took the selection later: one step of the server | logind | the selection ends with the clipboard's connection |
 | Wayland | the source the seat's selection was set with, and the write it answers | the source is destroyed; the compositor serves requests in order, so a selection set first has already cancelled it, and one set after takes the cleared selection | logind | the selection ends with the connection |
 | Web | none | no conditional form: `Unavailable`, `ExpiredClear::Unsupported` | none | the entry stays |
@@ -129,7 +140,8 @@ concealment marker is what keeps one out (ADR-0152 §6), and the compositor's ow
 - Bad, because macOS, iOS and Android check and clear in two calls: a copy made in the
   microseconds between them is cleared with the entry. Their systems offer no atomic form.
 - Bad, because an Android application in the background cannot see the clipboard: its clear
-  waits for the retry schedule and is given up after the last retry.
+  waits until the application is next in front, and one never brought back leaves the entry to
+  the system (Android 13 and later clear the clipboard after an hour).
 - Bad, because the web clears nothing, and iOS and Android hear no lock.
 - Neutral, because `NativeClipboard` implementors outside the hosts (test doubles) answer three
   more methods.
@@ -141,8 +153,13 @@ concealment marker is what keeps one out (ADR-0152 §6), and the compositor's ow
 - The rule: `a_clear_is_owed_at_its_time_and_served_once`,
   `another_applications_copy_survives_the_time`, `a_second_expiring_write_replaces_the_firsts_time`,
   `nothing_is_owed_without_an_expiry_or_a_conditional_clear`, `a_session_lock_clears_now`,
-  `a_clear_the_host_could_not_do_is_tried_again` and `the_loop_end_clears_an_owed_entry` in
+  `a_lock_clears_an_entry_no_longer_owed`, `a_lock_retry_never_clears_a_later_entry`,
+  `a_panicking_clear_costs_no_other_clear`, `an_unseen_clear_waits_for_the_application_in_front`,
+  `a_clear_the_host_could_not_do_is_tried_again` and `the_loop_end_clears_an_expiring_entry` in
   `flui-app`'s `clipboard_expiry`, over a host whose operating system the test speaks for.
+- The wiring, through the desktop runner on the headless platform:
+  `an_expiring_write_clears_at_its_turn_deadline`, `a_session_lock_clears_an_expiring_entry` and
+  `the_loop_end_clears_an_expiring_entry` in `flui-app`'s runner.
 - The record: `a_record_forgets_an_entry_its_token_no_longer_matches` and
   `an_expiring_entry_is_cleared_only_while_it_is_still_there` (the in-memory clipboard).
 - Win32: `an_expiring_entry_is_cleared_only_under_its_stamp` over scripted stamps, and

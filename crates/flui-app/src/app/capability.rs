@@ -30,7 +30,7 @@ use flui_view::background::{Background, BackgroundCapability};
 use flui_view::persist::{StorageCapability, StorageHandle};
 
 /// The slot the owner platform's clipboard is installed in for a loop's life,
-/// with the expiring entries owed a clear on it (ADR-0362).
+/// with the expiring entries owed a clear on it (ADR-0363).
 pub(crate) type ClipboardSlot = Rc<RefCell<Option<Rc<ClipboardExpiries>>>>;
 
 /// The capability providers an application registers before it runs
@@ -159,7 +159,7 @@ impl CapabilityProvider<ClipboardCapability> for PlatformClipboard {
 }
 
 /// A handle's view of the host's clipboard: an expiring write owes the loop
-/// its clear (ADR-0362), answered through the handle's UI runtime.
+/// its clear (ADR-0363), answered through the handle's UI runtime.
 struct NativeBackend {
     expiries: Rc<ClipboardExpiries>,
     completions: CompletionSource,

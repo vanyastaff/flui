@@ -14,6 +14,14 @@ mod android;
 #[cfg(any(windows, test))]
 mod associations;
 #[cfg(all(
+    test,
+    feature = "testing",
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+mod clipboard_expiry_tests;
+#[cfg(all(
     not(target_os = "android"),
     not(target_os = "ios"),
     not(target_arch = "wasm32")

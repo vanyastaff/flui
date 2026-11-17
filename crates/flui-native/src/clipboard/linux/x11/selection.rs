@@ -28,7 +28,7 @@
 //!   refused.
 //! - **Clearing an expiring entry.** A clear waits for the write asked
 //!   before it, then gives the clipboard up at the time the window took it,
-//!   if the clipboard still holds the entry it names (ADR-0362): the server
+//!   if the clipboard still holds the entry it names (ADR-0363): the server
 //!   ignores the release once another client took the selection later, so
 //!   no copy made since is lost.
 //! - **Reading.** While the application owns the clipboard a read answers
@@ -146,7 +146,7 @@ pub(super) enum Command {
     /// Answer with the selection's text.
     Read(Name, Owed<Option<Arc<str>>>),
     /// Let go of the clipboard if it still holds this expiring entry, once
-    /// the write asked before it owned or failed (ADR-0362).
+    /// the write asked before it owned or failed (ADR-0363).
     ClearExpired(ExpiredEntry, OwedClear),
     /// Let go of everything and end.
     Stop,

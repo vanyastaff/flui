@@ -52,8 +52,12 @@ pub struct MacOSClipboard {
     /// `None` = general pasteboard; `Some(name)` = named pasteboard (tests).
     pasteboard: Option<String>,
     /// The last expiring entry this clipboard landed, with the pasteboard's
-    /// `changeCount` after it (ADR-0362). Read and written only on the owner
-    /// lane, which serializes every operation; the lock never waits.
+    /// `changeCount` after it (ADR-0363). A lock, not an owner cell: this
+    /// type is called from any thread and runs each operation on its owner
+    /// lane, which is the main thread in production but a serial queue of its
+    /// own in tests, so no one thread owns the record. The lane serializes
+    /// every operation, so the lock never waits, and it is held across no
+    /// AppKit call.
     expiring: parking_lot::Mutex<ExpiringRecord<isize>>,
     /// Owner lane every operation is routed through.
     owner: &'static dispatch::Queue,
@@ -224,7 +228,8 @@ impl SyncClipboard for MacOSClipboard {
                 // The change count moves when the pasteboard changes hands
                 // (the clear above), not per type set: read after the write,
                 // it is the entry's until any process clears it again.
-                expiring.lock().landed(entry, pasteboard.changeCount());
+                let count = pasteboard.changeCount();
+                expiring.lock().landed(entry, count);
                 Ok(())
             } else {
                 tracing::error!(len = text.len(), "Failed to write text to clipboard");
@@ -250,12 +255,16 @@ impl SyncClipboard for MacOSClipboard {
     fn clear_expired_now(&self, entry: ExpiredEntry) -> ExpiredClear {
         let expiring = &self.expiring;
         self.with_pasteboard_on_owner(|pasteboard| {
-            let mut expiring = expiring.lock();
-            match expiring.decide(entry, &pasteboard.changeCount()) {
+            let count = pasteboard.changeCount();
+            let decision = expiring.lock().decide(entry, &count);
+            match decision {
                 ClearDecision::NotHeld => ExpiredClear::NotHeld,
                 ClearDecision::Clear => {
-                    let count = pasteboard.clearContents();
-                    expiring.landed(None, count);
+                    // The record forgets the entry before AppKit is asked,
+                    // with the lock released, so nothing the clear sets off
+                    // finds it held.
+                    expiring.lock().landed(None, count);
+                    pasteboard.clearContents();
                     ExpiredClear::Cleared
                 }
             }

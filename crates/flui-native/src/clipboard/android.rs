@@ -22,13 +22,14 @@ use crate::host::{
     ClearDecision, ExpiredClear, ExpiredEntry, ExpiringRecord, SyncClipboard, admit_text, host_text,
 };
 use crate::owner::android::activity::with_activity;
+use crate::owner::slot::OwnerCell;
 use crate::version::gate::android::{AndroidApi, ClearPrimaryClip, ClipExtras};
 
 /// The system clipboard of the Activity `app` runs.
 ///
 /// An expiring write's clip carries, beside `EXTRA_IS_SENSITIVE`, this
 /// clipboard's writer mark and the entry's number in its description's
-/// extras (ADR-0362). The clear reads the primary clip's description and
+/// extras (ADR-0363). The clear reads the primary clip's description and
 /// clears only while both still match: two binder calls, so a copy another
 /// application makes between them is cleared with the entry; every other
 /// later copy carries other extras. From Android 10 the system hands an
@@ -43,9 +44,10 @@ pub(crate) struct AndroidClipboard {
     /// entry number another process's FLUI application wrote is not ours.
     writer: i64,
     /// The last expiring entry this clipboard landed, with the marks its clip
-    /// carries. The platform shares the clipboard across threads, but only
-    /// the owner thread writes and clears it; the lock never waits.
-    expiring: parking_lot::Mutex<ExpiringRecord<ClipMarks>>,
+    /// carries: the owner thread's alone. The platform keeps the clipboard in
+    /// its `Send + Sync` state, so the record is an owner cell, which every
+    /// other thread reaches as nothing.
+    expiring: OwnerCell<ExpiringRecord<ClipMarks>>,
 }
 
 /// The marks an expiring clip carries in its description's extras: the
@@ -68,7 +70,7 @@ impl AndroidClipboard {
             app,
             api,
             writer: writer_mark(),
-            expiring: parking_lot::Mutex::default(),
+            expiring: OwnerCell::new(),
         }
     }
 }
@@ -219,9 +221,9 @@ impl SyncClipboard for AndroidClipboard {
             Err(ClipboardError::Unavailable)
         });
         if written.is_ok() {
-            self.expiring
-                .lock()
-                .landed(entry, marks.unwrap_or(ClipMarks::NONE));
+            self.expiring.with(|expiring| {
+                expiring.landed(entry, marks.unwrap_or(ClipMarks::NONE));
+            });
         }
         written
     }
@@ -237,11 +239,14 @@ impl SyncClipboard for AndroidClipboard {
         }
     }
 
-    /// From API 24 a clip carries the marks the clear compares; Android
-    /// gives an application no notice of the screen locking.
+    /// From API 24 a clip carries the marks the clear compares. From Android
+    /// 10 only the application with input focus sees the clipboard, so a
+    /// time that comes in the background clears when the application is next
+    /// in front; Android gives an application no notice of the screen
+    /// locking.
     fn expiry_clearing(&self) -> ExpiryClearing {
         if self.api.since::<ClipExtras>().is_some() {
-            ExpiryClearing::AtTime
+            ExpiryClearing::AtTimeOrInFront
         } else {
             ExpiryClearing::Unavailable
         }
@@ -263,9 +268,12 @@ impl SyncClipboard for AndroidClipboard {
             let Some(marks) = primary_marks(env, &manager)? else {
                 return Ok(ExpiredClear::Unseen);
             };
-            match expiring.lock().decide(entry, &marks) {
-                ClearDecision::NotHeld => return Ok(ExpiredClear::NotHeld),
-                ClearDecision::Clear => {}
+            let decision = expiring.with(|expiring| expiring.decide(entry, &marks));
+            match decision {
+                // Off the owner thread the record is out of reach.
+                None => return Ok(ExpiredClear::Failed(ClipboardError::Gone)),
+                Some(ClearDecision::NotHeld) => return Ok(ExpiredClear::NotHeld),
+                Some(ClearDecision::Clear) => {}
             }
             if clears {
                 env.call_method(&manager, jni_str!("clearPrimaryClip"), jni_sig!("()V"), &[])?;
@@ -290,7 +298,10 @@ impl SyncClipboard for AndroidClipboard {
                     &[JValue::Object(&clip)],
                 )?;
             }
-            expiring.lock().landed(None, ClipMarks::NONE);
+            // Forgotten once the clear succeeded, so a failed one keeps the
+            // entry for its retry. The system tells clip listeners through
+            // the main looper, never inside the call, so no write lands here.
+            expiring.with(|expiring| expiring.landed(None, ClipMarks::NONE));
             Ok(ExpiredClear::Cleared)
         });
         cleared.unwrap_or_else(|error| {
@@ -360,7 +371,7 @@ fn primary_marks(
 
 /// Mark `clip` sensitive: `ClipDescription.EXTRA_IS_SENSITIVE` in its
 /// description's extras (ADR-0152 §6), and, for an expiring write, `marks`
-/// beside it (ADR-0362). The sensitive key is the constant's value, which a
+/// beside it (ADR-0363). The sensitive key is the constant's value, which a
 /// system before API 33 does not name but keyboards read all the same. A
 /// clip that could not be marked is not written: the error ends the write
 /// before `setPrimaryClip`.

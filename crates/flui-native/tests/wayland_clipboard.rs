@@ -183,7 +183,7 @@ mod cases {
         );
         // An expiring entry is cleared by destroying its source while it is
         // still the selection, and a second clear finds nothing of the
-        // application's (ADR-0362). The compositor stops offering that
+        // application's (ADR-0363). The compositor stops offering that
         // source: a compositor without a clipboard of its own then offers
         // nothing, while Weston's clipboard module, which copied the first
         // form the source offered, offers its copy, without the hint.

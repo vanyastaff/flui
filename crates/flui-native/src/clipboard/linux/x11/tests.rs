@@ -1270,7 +1270,7 @@ fn expiring(text: &str) -> ClipboardWrite {
 /// An expiring entry is given up while the clipboard still holds it, and a
 /// client that reads finds nothing; a copy another client made after it is
 /// left alone; a clear asked right behind its write waits for the write to
-/// own the selection (ADR-0362).
+/// own the selection (ADR-0363).
 #[test]
 fn an_expiring_entry_is_given_up_only_while_the_clipboard_still_holds_it() {
     let Some(_server) = server() else {

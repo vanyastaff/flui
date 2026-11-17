@@ -11997,7 +11997,8 @@ impl core::hash::Hash for flui::platform::ExpiryClearing
 impl core::marker::StructuralPartialEq for flui::platform::ExpiryClearing
 variant flui::platform::ExpiryClearing::AtTime // at 1
 variant flui::platform::ExpiryClearing::AtTimeAndLock // at 0
-variant flui::platform::ExpiryClearing::Unavailable // at 2
+variant flui::platform::ExpiryClearing::AtTimeOrInFront // at 2
+variant flui::platform::ExpiryClearing::Unavailable // at 3
 pub struct flui::platform::FlingSpeeds { .. }
 impl Clone for flui::platform::FlingSpeeds
 impl Copy for flui::platform::FlingSpeeds

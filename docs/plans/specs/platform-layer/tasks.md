@@ -8384,7 +8384,7 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
   `flui-system` без провайдера; отображение фильтров и суд над открытым файлом (`AssocIsDangerous`
   на Windows, Launch Services на macOS) для них записаны в ADR-0360 §2, §4 и `docs/gaps.md`.
 
-- [x] **LY152** — ветка `platform/concealed-clipboard-expiry`, решение — ADR-0362. Находка
+- [x] **LY152** — ветка `platform/concealed-clipboard-expiry`, решение — ADR-0363. Находка
   подтверждена на `main` @ `b68c2ddfa` чтением: `ClipboardWrite::concealed` только держал запись
   вне истории, ничто её не стирало (`rg -i 'expir|clear' crates/flui-native/src/clipboard`
   пусто по этому смыслу), хотя хосты Windows, macOS и Linux уже слышат блокировку сессии.
@@ -8425,7 +8425,21 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
   шаг истечения в `the_selection_crosses_between_clients` (Weston 13 в WSL). macOS и Android —
   проверка типов nightly в WSL, iOS — только CI. Должно на устройствах (строка «Concealed
   clipboard entries clear themselves» в `platform-parity.toml`, `docs/gaps.md`): блокировка сессии
-  на каждом хосте, macOS, срок iOS после конца процесса, Android на API 24, 28, 29+.
+  на каждом хосте, macOS, срок iOS после конца процесса, Android на API 24, 28, 29+. После
+  независимого чтения: очистка при блокировке и доставка уведомления сдержаны порознь (одна
+  `FirstPanic`), шаги хода владельца Android и iOS тоже; блокировка и конец цикла просят хост
+  стереть любую истекающую запись (`ExpiredEntry::Any`), как только она была, независимо от
+  долгов, а повтор очистки при блокировке снимается после новой истекающей записи; конец цикла
+  стирает до сброса со своим бюджетом; `Unseen` ждёт, пока приложение снова впереди
+  (`ExpiryClearing::AtTimeOrInFront`, по `Resumed`), без повторов по времени; iOS забывает
+  запись до вызова UIKit, без заимствования через вызов; Android держит запись в `OwnerCell`,
+  macOS — под замком с причиной у объявления; часы истечения подменяемы
+  (`ClipboardExpiries::set_clock`). Новые тесты: `a_lock_clears_an_entry_no_longer_owed`,
+  `a_lock_retry_never_clears_a_later_entry`, `an_unseen_clear_waits_for_the_application_in_front`,
+  `the_loop_end_clears_an_expiring_entry` (таблица) и проводка через хост без окон —
+  `an_expiring_write_clears_at_its_turn_deadline`, `a_session_lock_clears_an_expiring_entry`,
+  `the_loop_end_clears_an_expiring_entry` (`runner::clipboard_expiry_tests`, каждый красный без
+  своей строки проводки). Решение — ADR-0363 (номер 0362 занят).
 
 ## Чего нет в этой серии
 

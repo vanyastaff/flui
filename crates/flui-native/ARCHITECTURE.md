@@ -3028,7 +3028,7 @@ fails is reported, never panicked on.
 
 `NativeClipboard::clear_expired` clears the clipboard for an expiring write's
 entry (`ClipboardWrite::expires_after`) only while the clipboard still holds it
-(ADR-0362 §3); when to ask is the composition root's rule, not a host's. A
+(ADR-0363 §3); when to ask is the composition root's rule, not a host's. A
 clear is served in order with the writes, so one asked after a write is
 checked against what that write left (the X11 thread holds a clear behind a
 write that waits for its timestamp). When an expiring write lands the host
@@ -3052,7 +3052,8 @@ the in-memory clipboard share).
 - **Android.** A writer mark (the process's random hash seed) and the entry's
   number in the clip description's extras; the clear reads the description and
   clears in a second binder call. Without input focus the system hands no
-  description: `ExpiredClear::Unseen`, which the composition root retries.
+  description: `ExpiredClear::Unseen`, which the composition root asks again when
+  the application is next in front (`ExpiryClearing::AtTimeOrInFront`).
 - **X11.** The window gives the selection up at the time it took it, which the
   server ignores once another client took it later: one step of the server.
 - **Wayland.** The entry's source is destroyed; the compositor serves requests

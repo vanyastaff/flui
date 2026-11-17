@@ -1061,6 +1061,9 @@ pub(crate) fn install_owner_platform(
                         std::thread::current().id(),
                     );
                 });
+                // An expiring clipboard entry's clear is no window's work: it
+                // is served whether or not a UI runtime is installed.
+                commands.contain(serve_clipboard_expiries);
                 let host = APP_RUNTIME.with(|slot| slot.borrow().installed_host.clone());
                 super::owner_dispatch::with_owner_callback(|_| {
                     let current = || {
@@ -1109,7 +1112,6 @@ pub(crate) fn install_owner_platform(
                     // What an opened URL's loan returned is routed here,
                     // outside the destructor that returned it.
                     if current() {
-                        first.contain(serve_clipboard_expiries);
                         route_owed_opened_urls();
                         // A phone's background hold is released once its
                         // writes ended; the headless host stands in for one.
@@ -1660,11 +1662,14 @@ impl flui_native::AppHandler for RunnerHandler {
     fn host_notice(&self, _: &flui_native::OwnerPlatform, notice: flui_platform::SystemNotice) {
         // System notices (ADR-0237): every UI runtime's subscribers receive
         // them from the owner thread.
+        // The clipboard clears before the application hears the lock, each
+        // contained on its own: a host's panic in the clear costs no
+        // subscriber the notice, and a subscriber's costs no clear.
         contained((), "host notice", || {
-            // The clipboard clears before the application hears the lock,
-            // whatever its subscribers do.
-            clear_clipboard_expiries_on_lock(notice);
-            super::owner_dispatch::deliver_host_notice(&notice.into());
+            let mut first = flui_foundation::panic::FirstPanic::new();
+            first.contain(|| clear_clipboard_expiries_on_lock(notice));
+            first.contain(|| super::owner_dispatch::deliver_host_notice(&notice.into()));
+            first.resume();
         });
     }
 
@@ -1864,7 +1869,7 @@ pub(super) fn install_wake_deadline_hook() {
 
 /// Route the loop's turn deadline to this owner installation's
 /// `AppRuntime::turn_deadline`, on every host: an expiring clipboard entry's
-/// clear (ADR-0362), and on the desktop the owner turns window placements
+/// clear (ADR-0363), and on the desktop the owner turns window placements
 /// need, which no frame serves and the main window waiting for its placement
 /// read has none for. A later installation's route answers for itself.
 fn install_turn_deadline_route() {
@@ -1873,7 +1878,7 @@ fn install_turn_deadline_route() {
         |routes| &mut routes.turn_deadline,
         Rc::new(move || {
             APP_RUNTIME.with(|slot| {
-                let state = slot.try_borrow().ok()?;
+                let state = slot.borrow();
                 (state.owner_install_generation == installed)
                     .then(|| state.turn_deadline())
                     .flatten()
@@ -1883,7 +1888,7 @@ fn install_turn_deadline_route() {
 }
 
 /// The owner's turn serves the expiring clipboard entries' clears due by now
-/// (ADR-0362); the host's answers settle at a later turn.
+/// (ADR-0363); the host's answers settle at a later turn.
 pub(super) fn serve_clipboard_expiries() {
     let expiries = APP_RUNTIME.with(|slot| slot.borrow().clipboard_expiries());
     if let Some(expiries) = expiries {
@@ -1891,8 +1896,17 @@ pub(super) fn serve_clipboard_expiries() {
     }
 }
 
-/// The user's session locked, or the machine is going to sleep: every
-/// expiring clipboard entry still owed a clear is cleared now (ADR-0362).
+/// The application is in front again: the expiring clipboard entries the
+/// host could not see the clipboard for are asked again (ADR-0363).
+pub(super) fn clipboard_expiries_in_front() {
+    let expiries = APP_RUNTIME.with(|slot| slot.borrow().clipboard_expiries());
+    if let Some(expiries) = expiries {
+        expiries.in_front();
+    }
+}
+
+/// The user's session locked, or the machine is going to sleep: the host is
+/// asked to clear whatever expiring entry it still holds (ADR-0363).
 fn clear_clipboard_expiries_on_lock(notice: flui_platform::SystemNotice) {
     if !matches!(
         notice,

@@ -24,7 +24,7 @@ use flui_platform::{
 ///
 /// Requests are served in the order they are asked: a read or a clear asked
 /// after a write is served once that write landed or failed (ADR-0337 §3,
-/// ADR-0362).
+/// ADR-0363).
 pub trait NativeClipboard {
     /// Read the clipboard's text and answer `answer`: `Ok(None)` when it
     /// holds no text, a [`ClipboardError`](flui_platform::ClipboardError) when
@@ -42,7 +42,7 @@ pub trait NativeClipboard {
     /// host records its [entry](ClipboardWrite::entry) with the operating
     /// system's token for it, which
     /// [`clear_expired`](Self::clear_expired) compares; any other write that
-    /// lands forgets the record (ADR-0362).
+    /// lands forgets the record (ADR-0363).
     fn write(&self, write: ClipboardWrite, answer: Resolver<ClipboardWritten>);
 
     /// What this host does with a concealed write.
@@ -55,7 +55,7 @@ pub trait NativeClipboard {
 
     /// Clear the clipboard if it still holds the entry `entry` names, as the
     /// host recorded it when its write landed and as the operating system
-    /// shows it now, and answer what was done (ADR-0362). Never clears a
+    /// shows it now, and answer what was done (ADR-0363). Never clears a
     /// later copy, by this application or another one. Each host states
     /// where the check and the clear are one step of the operating system
     /// and where a copy made between them can still be taken for the entry.
@@ -71,7 +71,7 @@ pub trait NativeClipboard {
     fn clear_expired_before_exit(&self, within: Duration) -> ExpiredClear;
 }
 
-/// Which expiring entry a conditional clear may clear (ADR-0362).
+/// Which expiring entry a conditional clear may clear (ADR-0363).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ExpiredEntry {
@@ -133,7 +133,7 @@ impl ExpiredClear {
 /// The entry of the last expiring write a host landed, with the operating
 /// system's token for it then (a sequence number, a change count, a marker
 /// the entry carries): the pure part of every host's conditional clear
-/// (ADR-0362). A host compares the token the operating system shows at the
+/// (ADR-0363). A host compares the token the operating system shows at the
 /// clear with the recorded one; any other write that lands forgets it.
 #[derive(Debug)]
 pub(crate) struct ExpiringRecord<T> {

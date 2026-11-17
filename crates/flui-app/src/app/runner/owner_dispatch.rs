@@ -1060,8 +1060,9 @@ pub(crate) const EXIT_BUDGET: std::time::Duration = std::time::Duration::from_se
 pub(crate) const SERVICE_SHUTDOWN_DEADLINE: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// The longest the loop's end waits for the host to clear an expiring
-/// clipboard entry still owed its clear (ADR-0362): the Win32 clipboard
-/// thread may be waiting out another process that holds the clipboard.
+/// clipboard entry (ADR-0363), a budget of its own ahead of the exit
+/// deadline's: the Win32 clipboard thread may be waiting out another process
+/// that holds the clipboard.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) const EXIT_CLIPBOARD_BOUND: std::time::Duration = std::time::Duration::from_millis(500);
 
@@ -1312,6 +1313,17 @@ pub(super) fn teardown_platform_ui_runtime_logged(log: &mut dyn FnMut(TeardownSt
     retire_installed_host(&mut first_panic);
     log(TeardownStep::UiRuntimes);
 
+    // An expiring clipboard entry still on the clipboard is cleared now, if
+    // it is still there (ADR-0363), before the flush can spend the exit's
+    // deadline: within a budget of its own, `EXIT_CLIPBOARD_BOUND`, which only
+    // the hosts whose clipboard outlives the process wait out.
+    first_panic.contain(|| {
+        let expiries = APP_RUNTIME.with(|slot| slot.borrow().clipboard_expiries());
+        if let Some(expiries) = expiries {
+            expiries.before_exit(EXIT_CLIPBOARD_BOUND);
+        }
+    });
+
     // The framework's part of the exit runs against one deadline taken
     // here, after the application code above (ADR-0258 §7). The flush
     // registry is written first, whether or not a failure is held: the
@@ -1342,21 +1354,6 @@ pub(super) fn teardown_platform_ui_runtime_logged(log: &mut dyn FnMut(TeardownSt
         }
     }
     log(TeardownStep::Flush);
-
-    // An expiring clipboard entry still owed its clear is cleared now if the
-    // clipboard still holds it (ADR-0362): on the hosts whose clipboard
-    // outlives the process, within the services' part of the deadline and at
-    // most `EXIT_CLIPBOARD_BOUND`.
-    first_panic.contain(|| {
-        let expiries = APP_RUNTIME.with(|slot| slot.borrow().clipboard_expiries());
-        if let Some(expiries) = expiries {
-            let within = exit
-                .services()
-                .saturating_duration_since(std::time::Instant::now())
-                .min(EXIT_CLIPBOARD_BOUND);
-            expiries.before_exit(within);
-        }
-    });
 
     // Service-lifecycle shutdown BEFORE the pools close: the
     // registry cancels every application service cooperatively and joins
