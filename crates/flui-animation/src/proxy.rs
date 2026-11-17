@@ -271,7 +271,7 @@ where
     }
     fn listen_with_recovery(
         &self,
-        relay: flui_foundation::notifier::ListenerObserver,
+        relay: flui_foundation::ListenerObserver,
     ) -> flui_foundation::Subscription {
         self.inner.channels.listen_with_recovery(relay)
     }

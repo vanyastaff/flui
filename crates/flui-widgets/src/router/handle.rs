@@ -3,7 +3,7 @@
 use std::fmt;
 use std::rc::Rc;
 
-use flui_foundation::notifier::{Listenable, ListenerObserver};
+use flui_foundation::{Listenable, ListenerObserver};
 use flui_foundation::{ListenerCallback, MutatedDuringBuild, Subscription};
 
 use super::routable::Routable;

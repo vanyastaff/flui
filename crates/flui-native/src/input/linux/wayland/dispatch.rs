@@ -23,8 +23,8 @@ use std::sync::{Arc, OnceLock, Weak};
 use std::time::Duration;
 
 use cursor_icon::CursorIcon;
+use flui_foundation::IdMint;
 use flui_foundation::panic::FirstPanic;
-use flui_foundation::sequence::IdMint;
 use flui_platform::input_capabilities::InputCapabilities;
 use flui_platform::keyboard::{KeyEvent, KeyPress, KeyState};
 use flui_platform::pointer::{PenTool, PointerEvent, PointerKind};
@@ -2839,7 +2839,7 @@ mod tests {
     fn a_label_past_the_last_is_none() {
         use std::num::NonZeroU64;
 
-        use flui_foundation::sequence::IdMint;
+        use flui_foundation::IdMint;
 
         use crate::owner::slot::OwnerCell;
 

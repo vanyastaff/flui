@@ -8,8 +8,8 @@ use std::{
     rc::Rc,
 };
 
+use flui_foundation::Listenable;
 use flui_foundation::geometry::{Bounds, Offset, Point, Rect};
-use flui_foundation::notifier::Listenable;
 use flui_foundation::panic::FirstPanic;
 use flui_interaction::PointerDispatch;
 use flui_interaction::events::PointerEventExt;
@@ -828,7 +828,7 @@ pub struct EditableTextState {
     /// The single notifier that drives the inner `AnimatedBuilder`.  Fires on
     /// text changes (forwarded from the controller listener) **and** on focus
     /// changes (forwarded from the FocusManager listener).
-    rebuild_notifier: flui_foundation::notifier::ChangeNotifier,
+    rebuild_notifier: flui_foundation::ChangeNotifier,
     /// ID for the focus-change listener we added to the [`FocusManager`], so
     /// dispose removes exactly ours.
     focus_listening: Option<flui_foundation::Subscription>,
@@ -968,7 +968,7 @@ impl StatefulView for EditableText {
             parent: None,
             controller: Rc::new(RefCell::new(self.controller.clone())),
             controller_listener_id: None,
-            rebuild_notifier: flui_foundation::notifier::ChangeNotifier::new(),
+            rebuild_notifier: flui_foundation::ChangeNotifier::new(),
             focus_listening: None,
             ime_focus_listening: None,
             ime_focus_transition: None,

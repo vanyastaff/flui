@@ -11,7 +11,7 @@
 //! ```rust
 //! use std::{cell::Cell, rc::Rc};
 //!
-//! use flui_foundation::notifier::{ChangeNotifier, Listenable};
+//! use flui_foundation::{ChangeNotifier, Listenable};
 //!
 //! let notifier = ChangeNotifier::new();
 //! let count = Rc::new(Cell::new(0));
@@ -63,7 +63,7 @@ pub type ListenerObserver = Rc<dyn Fn(&mut RecoveryScope<'_>)>;
 /// ```rust
 /// use std::{cell::Cell, rc::Rc};
 ///
-/// use flui_foundation::notifier::{ChangeNotifier, Listenable};
+/// use flui_foundation::{ChangeNotifier, Listenable};
 ///
 /// let notifier = ChangeNotifier::new();
 /// let count = Rc::new(Cell::new(0));
@@ -102,7 +102,7 @@ pub trait Listenable {
 /// # Example
 ///
 /// ```rust
-/// use flui_foundation::notifier::{Listenable, ValueListenable, ValueNotifier};
+/// use flui_foundation::{Listenable, ValueListenable, ValueNotifier};
 ///
 /// fn current<T: std::fmt::Debug>(
 ///     listenable: &impl ValueListenable<T>,

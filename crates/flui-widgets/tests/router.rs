@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use crate::common::{LaidOut, child_process, lay_out_animated, tight};
 use flui_animation::Vsync;
-use flui_foundation::notifier::Listenable;
+use flui_foundation::Listenable;
 use flui_painting::styling::Color;
 use flui_view::environment::VsyncScope;
 use flui_widgets::__test_access::{Navigator, NavigatorHandle, NavigatorObserver, SimpleRoute};

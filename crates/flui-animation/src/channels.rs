@@ -2,8 +2,8 @@
 
 use std::rc::Rc;
 
-use flui_foundation::notifier::ListenerObserver;
-use flui_foundation::notifier::NotificationCallback;
+use flui_foundation::ListenerObserver;
+use flui_foundation::NotificationCallback;
 use flui_foundation::panic::RecoveryScope;
 use flui_foundation::{ChangeNotifier, ListenerCallback, ListenerId, Notifier, Subscription};
 

@@ -17,7 +17,7 @@ use std::rc::{Rc, Weak};
 
 use flui_foundation::ListenerCallback;
 use flui_foundation::geometry::{Point, Size};
-use flui_foundation::notifier::{ChangeNotifier, Listenable, ListenerObserver};
+use flui_foundation::{ChangeNotifier, Listenable, ListenerObserver};
 use flui_layer::{LayerLink, SceneVersion};
 use flui_scheduler::PostFrameHandle;
 

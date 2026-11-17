@@ -197,7 +197,7 @@ fn the_snapshot_sink_is_where_allocation_happens() {
 #[test]
 fn a_notifier_is_one_allocation_and_a_plain_listener_one_more() {
     use flui_foundation::ListenerCallback;
-    use flui_foundation::notifier::Notifier;
+    use flui_foundation::Notifier;
     use std::rc::Rc;
 
     let before = allocations();
