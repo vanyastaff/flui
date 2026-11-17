@@ -1617,7 +1617,7 @@ fn paint_text(canvas: &mut Canvas, word: &str, at: Offset<f64>) {
     painter.paint(canvas, at);
 }
 
-fn paint_gradient(canvas: &mut Canvas, rect: Rect<f64>) {
+fn paint_gradient(canvas: &mut Canvas, rect: Rect<f64>, [from, to]: [Color; 2]) {
     use flui_painting::paint::{Shader, TileMode};
 
     canvas.draw_rect(
@@ -1625,7 +1625,7 @@ fn paint_gradient(canvas: &mut Canvas, rect: Rect<f64>) {
         &Paint::fill(Color::WHITE).with_shader(Shader::linear_gradient(
             Offset::new(rect.left(), rect.top()),
             Offset::new(rect.right(), rect.top()),
-            vec![Color::RED, Color::BLUE],
+            vec![from, to],
             None,
             TileMode::Clamp,
         )),
@@ -1655,11 +1655,12 @@ fn paint_image(canvas: &mut Canvas, rect: Rect<f64>) {
     );
 }
 
-/// The chunks of [`mixed_scene`]: text, rects, a gradient, a path and an
-/// image, each its own chunk.
-const MIXED_CHUNKS: u64 = 5;
+/// The chunks of [`mixed_scene`].
+const MIXED_CHUNKS: u64 = 8;
 
-/// A root of text, rects, a gradient, a path and an image, one chunk each.
+/// A root of text, rects, a gradient, a path and an image, then text, a
+/// gradient and a path again, one chunk each: the later ones replay onto
+/// arenas the earlier ones filled.
 fn mixed_scene() -> SceneVersion {
     let mut owner = SceneOwner::new();
     let chunks = {
@@ -1679,13 +1680,30 @@ fn mixed_scene() -> SceneVersion {
                 );
             }),
             chunk_of(&mut writer, 4, |canvas| {
-                paint_gradient(canvas, Rect::from_xywh(4.0, 50.0, 60.0, 12.0));
+                paint_gradient(
+                    canvas,
+                    Rect::from_xywh(4.0, 50.0, 60.0, 12.0),
+                    [Color::RED, Color::BLUE],
+                );
             }),
             chunk_of(&mut writer, 5, |canvas| {
                 paint_triangle(canvas, Offset::new(70.0, 50.0));
             }),
             chunk_of(&mut writer, 6, |canvas| {
                 paint_image(canvas, Rect::from_xywh(4.0, 70.0, 16.0, 16.0));
+            }),
+            chunk_of(&mut writer, 7, |canvas| {
+                paint_text(canvas, "again", Offset::new(30.0, 70.0));
+            }),
+            chunk_of(&mut writer, 8, |canvas| {
+                paint_gradient(
+                    canvas,
+                    Rect::from_xywh(4.0, 96.0, 60.0, 12.0),
+                    [Color::GREEN, Color::BLACK],
+                );
+            }),
+            chunk_of(&mut writer, 9, |canvas| {
+                paint_triangle(canvas, Offset::new(70.0, 96.0));
             }),
         ]
     };
@@ -1970,8 +1988,13 @@ fn a_recording_spliced_after_another_prefix_equals_one_recorded_there() {
         );
     };
     let path: Painting = |canvas| paint_triangle(canvas, Offset::new(10.0, 40.0));
-    let gradient: Painting =
-        |canvas| paint_gradient(canvas, Rect::from_xywh(10.0, 60.0, 40.0, 8.0));
+    let gradient: Painting = |canvas| {
+        paint_gradient(
+            canvas,
+            Rect::from_xywh(10.0, 60.0, 40.0, 8.0),
+            [Color::RED, Color::BLUE],
+        )
+    };
     let text: Painting = |canvas| paint_text(canvas, "ab", Offset::new(10.0, 80.0));
     // (row, first chunk in frame one, in frame two, the kept chunk, its
     // rounded clip's radius in each frame)
@@ -1991,7 +2014,7 @@ fn a_recording_spliced_after_another_prefix_equals_one_recorded_there() {
             None,
         ),
         (
-            "a path after a rect, then after a path",
+            "a path, a rect and a path after a rect, then after a path",
             rect,
             path,
             |canvas| {
@@ -2000,6 +2023,7 @@ fn a_recording_spliced_after_another_prefix_equals_one_recorded_there() {
                     Rect::from_xywh(70.0, 40.0, 10.0, 10.0),
                     &Paint::fill(Color::RED),
                 );
+                paint_triangle(canvas, Offset::new(90.0, 40.0));
             },
             None,
         ),
@@ -2015,7 +2039,11 @@ fn a_recording_spliced_after_another_prefix_equals_one_recorded_there() {
             rect,
             gradient,
             |canvas| {
-                paint_gradient(canvas, Rect::from_xywh(60.0, 60.0, 40.0, 8.0));
+                paint_gradient(
+                    canvas,
+                    Rect::from_xywh(60.0, 60.0, 40.0, 8.0),
+                    [Color::GREEN, Color::BLACK],
+                );
                 canvas.draw_rect(
                     Rect::from_xywh(70.0, 70.0, 10.0, 10.0),
                     &Paint::fill(Color::GREEN),
