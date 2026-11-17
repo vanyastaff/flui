@@ -265,13 +265,18 @@ impl LayerCompositor {
     /// composite once, so what lies past that bound is never shown, and the
     /// scene's cull skips a node there. An image filter between a clip and
     /// the scope draws the clip's pixels from the input it requires, so the
-    /// bound grows by that input on the way in. `None` when no such clip
+    /// bound grows by that input on the way in. Each layer's clip is rounded
+    /// out before the next meets it: two layers whose exact clips do not meet
+    /// can both show, in part, the pixel their edges share. `None` when no such clip
     /// encloses the scope.
     pub(super) fn composite_clip_bounds(&self) -> crate::EngineResult<Option<Rect<f64>>> {
         let mut bounds: Option<Rect<f64>> = None;
         for layer in &self.layer_stack {
             if let Some(rect) = match &layer.composite_clip {
-                Some(clip) => clip.chain.root_bounds()?.map(pixels_of),
+                Some(clip) => clip
+                    .chain
+                    .root_bounds()?
+                    .map(flui_foundation::geometry::cover),
                 None => None,
             } {
                 bounds = Some(match bounds {
@@ -282,7 +287,9 @@ impl LayerCompositor {
             if let (Some(filter), Some(shown)) = (&layer.image_filter, bounds)
                 && !shown.is_empty()
             {
-                bounds = Some(pixels_of(filter.required_input(shown)?));
+                bounds = Some(flui_foundation::geometry::cover(
+                    filter.required_input(shown)?,
+                ));
             }
         }
         Ok(bounds)
@@ -442,15 +449,4 @@ impl LayerCompositor {
             }
         }
     }
-}
-
-/// The whole pixels `rect` touches: a composite clip shows a pixel its edge
-/// covers in part, and the scene's cull rounds each clip the same way.
-fn pixels_of(rect: Rect<f64>) -> Rect<f64> {
-    Rect::from_ltrb(
-        rect.left().floor(),
-        rect.top().floor(),
-        rect.right().ceil(),
-        rect.bottom().ceil(),
-    )
 }

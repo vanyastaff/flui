@@ -350,18 +350,14 @@ pub(crate) fn map_out_spread(links: &Links<'_>, reach: Reach, kernel: f64) -> Re
     out
 }
 
-/// The whole device pixels a clip mapped to the surface touches. The
-/// renderer multiplies a pixel's coverage by the clip's, so content in a
+/// The whole device pixels a clip mapped to the surface touches, an
+/// over-report for a hard clip, which snaps. The
+/// renderer multiplies a pixel's coverage by an anti-aliased clip's, so content in a
 /// pixel the clip's edge covers in part shows there even where its exact
 /// geometry misses the clip.
 fn pixels_of(clip: Reach) -> Reach {
     match clip {
-        Reach::Rect(rect) => Reach::rect(Rect::from_ltrb(
-            rect.left().floor(),
-            rect.top().floor(),
-            rect.right().ceil(),
-            rect.bottom().ceil(),
-        )),
+        Reach::Rect(rect) => Reach::rect(flui_foundation::geometry::cover(rect)),
         other => other,
     }
 }

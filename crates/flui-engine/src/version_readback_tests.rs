@@ -1187,12 +1187,12 @@ fn clipped_stripes(
                 &Paint::fill(color),
             );
         }
-        // White bars across, one over row 16, so a column also blurs along
+        // Black bars across, one over row 16, so a column also blurs along
         // its length.
         for y in [7.0, 15.0, 23.0, 31.0] {
             canvas.draw_rect(
                 Rect::from_xywh(60.0, y, f64::from(SIDE) - 60.0, 2.0),
-                &Paint::fill(Color::WHITE),
+                &Paint::fill(Color::BLACK),
             );
         }
         let stripes = Arc::new(Chunk::new(
@@ -1304,6 +1304,11 @@ fn a_backdrop_filter_filters_the_pixel_a_clip_edge_shows_in_part() {
     ] {
         let with = clipped_stripes(&renderer, clips, None, backdrop);
         let without = clipped_stripes(&renderer, clips, None, None);
+        assert_ne!(
+            px(&without, edge, 16),
+            px(&without, 0, 16),
+            "{case}: precondition: the clips show the pixel their edges cover in part"
+        );
         if clips.len() == 1 {
             assert!(
                 row_differs(&with, &without, edge + 1..edge + 2),

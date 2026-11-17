@@ -1759,7 +1759,8 @@ pub(crate) fn a_cull_asked_in_walk_order_answers_as_one_asked_alone() {
 }
 
 /// A node under a clip whose fractional edge covers a pixel in part is
-/// damaged in that pixel, where its exact geometry misses the clip: the
+/// kept by a cull of that pixel and
+/// damaged in it, where its exact geometry misses the clip: the
 /// renderer shows the node's ink there at the product of both coverages.
 pub(crate) fn damage_under_a_fractional_clip_edge_takes_the_shared_pixel() {
     let mut owner = SceneOwner::new();
@@ -1797,5 +1798,13 @@ pub(crate) fn damage_under_a_fractional_clip_edge_takes_the_shared_pixel() {
     assert!(
         covered(&damage, covering(89.0, 4.0, 90.0, 28.0)),
         "the pixel the clip's edge shares with the box: {damage:?}"
+    );
+    // A partial frame redrawing only that pixel walks into the node.
+    assert!(
+        owner
+            .current()
+            .subtree_cull(Rect::from_ltrb(89.0, 4.0, 90.0, 28.0))
+            .meets(node),
+        "the cull keeps the node for the shared pixel"
     );
 }
