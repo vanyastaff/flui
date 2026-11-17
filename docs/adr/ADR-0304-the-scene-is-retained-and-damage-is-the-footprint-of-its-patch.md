@@ -467,13 +467,16 @@ held version and culls nodes by their subtree footprint. For a `Region` it plans
 enum RegionPlan { Bounds(DamageRect), Rects(Region) }
 ```
 
-`Bounds` clears and redraws what meets the region's bounding box under one scissor; `Rects` clears
-and redraws each rect under its own scissor, culling against that rect, at most `Region::MAX`
-passes, counted as `region_passes`. `Bounds` is planned for one rect, or when the bounding box is at
-most twice the region's area (a hypothesis to measure). Both keep one invariant: no pixel outside
-the plan's rects is written, and every chunk that meets a written pixel is drawn there in paint
-order. One scissor around the region with culling per rect breaks it: the pixels between the rects
-are cleared and not redrawn, or drawn and blended twice.
+`Bounds` clears and redraws what meets the region's bounding box under one scissor. `Rects` records
+the frame once, culled against the union of the rects, and replays it once per rect under that
+rect's scissor and clear: at most `Region::MAX` passes, counted as `region_passes`. Damage is closed
+over the backdrop readers of what the plan redraws, so a `Bounds` plan closes over its box. The
+planner takes `Bounds` for one rect, and takes `Rects` only where a measurement on hardware of the
+record-once frame shows it cheaper; until that measurement exists it takes `Bounds` for every
+region ([docs/gaps.md](../gaps.md#accepted-adr-sections-not-built-yet)). Both keep one invariant: no
+pixel outside the plan's rects is written, and every chunk that meets a written pixel is drawn there
+in paint order. One scissor around the region with culling per rect breaks it: the pixels between
+the rects are cleared and not redrawn, or drawn and blended twice.
 
 A chunk's IR outlives the frame in a recording cache:
 

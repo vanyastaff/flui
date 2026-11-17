@@ -12,9 +12,22 @@ use crate::device_domain::DeviceDomain;
 use flui_foundation::geometry::Rect;
 use std::sync::Arc;
 
-use crate::damage::{DamageTracker, FramePlan, plan_frame};
+use crate::damage::{DamageTracker, FramePlan, RegionPlan, RegionPlanner, plan_frame};
 use crate::error::EngineResult;
 use crate::retained_target::RetainedTarget;
+
+/// What recording one frame's content found.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[must_use = "a straddling shape owes the next frame a full repaint"]
+pub(crate) struct RecordedContent {
+    /// Whether an advanced shape straddled the rect of the pass that drew
+    /// it: outside that rect the retained pixels under it may be stale, so
+    /// the next frame renders in full.
+    pub(crate) straddled: bool,
+    /// The passes a partial frame redrew its region in, one per rect of its
+    /// [`RegionPlan`]; `0` for a full frame.
+    pub(crate) region_passes: u32,
+}
 
 /// The colour a frame starts from: the full clear pass and the clear a
 /// partial frame draws inside its damage both paint it, so the background a
@@ -40,9 +53,9 @@ pub(crate) trait FrameSteps {
 
     /// Records and encodes the frame's content into `(view, texture)`;
     /// `retained` says the target is the retained texture rather than the
-    /// surface, `partial` the damage a partial frame scissors to. Returns
-    /// whether an advanced shape straddled that damage, in which case the
-    /// next frame renders in full.
+    /// surface, `partial` how a partial frame redraws its region. Answers
+    /// what the recording found, an advanced shape straddling a pass's rect
+    /// among it, in which case the next frame renders in full.
     ///
     /// # Errors
     /// The content pass's failure, which is the frame's.
@@ -51,9 +64,9 @@ pub(crate) trait FrameSteps {
         view: &wgpu::TextureView,
         texture: &wgpu::Texture,
         retained: bool,
-        partial: Option<Rect<f64>>,
+        partial: Option<&RegionPlan>,
         encoder: &mut wgpu::CommandEncoder,
-    ) -> EngineResult<bool>;
+    ) -> EngineResult<RecordedContent>;
 
     /// Copies the whole retained texture onto the surface's view.
     fn blit(
@@ -115,6 +128,12 @@ pub(crate) struct FrameProtocol {
     /// protocol ([`Self::end_unmanaged`]).
     force_full_next_frame: bool,
     font_source: FontSource,
+    /// The passes the last frame [`Self::run`] recorded redrew its region
+    /// in; `0` after a full frame or one that failed.
+    region_passes: u32,
+    /// How a partial frame's region is planned: [`RegionPlan::of`], or rect
+    /// by rect where a test asked for it ([`Self::plan_rect_by_rect`]).
+    plan_region: RegionPlanner,
 }
 
 impl Default for FrameProtocol {
@@ -131,6 +150,8 @@ impl FrameProtocol {
             retained: RetainedTarget::default(),
             force_full_next_frame: false,
             font_source: FontSource::Ordinary,
+            region_passes: 0,
+            plan_region: RegionPlan::of,
         }
     }
 
@@ -167,9 +188,15 @@ impl FrameProtocol {
         )
     }
 
-    /// Adds `rect` to the damage owed.
-    pub(crate) fn mark_dirty(&mut self, rect: Rect<f64>) {
-        self.damage.mark_dirty(rect);
+    /// Adds the whole pixels `rect` touches on a surface of `surface` to the
+    /// damage owed; a rect that is not finite owes a full repaint.
+    pub(crate) fn mark_dirty(&mut self, rect: Rect<f64>, surface: (u32, u32)) {
+        self.damage.mark_dirty(rect, surface);
+    }
+
+    /// Adds a publication's region to the damage owed, rect by rect.
+    pub(crate) fn mark_region(&mut self, region: &flui_layer::Region) {
+        self.damage.mark_region(region);
     }
 
     /// Owes a full repaint.
@@ -206,88 +233,101 @@ impl FrameProtocol {
             &self.damage,
             self.retained.is_valid(),
             intermediate_required,
+            self.plan_region,
         )
     }
 
     /// Reconstruct every backdrop input before it reads the candidate target.
     /// Retained pixels outside damage contain the previous frame's *final*
     /// composition, including later siblings, not the current ordered backdrop.
+    ///
+    /// The damage is closed as the frame will redraw it: the closure of a
+    /// region holds each read footprint it joined inside one rect, which a
+    /// pass per rect redraws whole, but a plan that redraws the bounding box
+    /// also redraws the gap between the rects, where a reader the rects did
+    /// not meet is cut by the box's scissor. So a region planned as its box
+    /// is closed as the box itself, and the frame redraws exactly what was
+    /// closed.
     pub(crate) fn include_backdrop_dependencies(
         &mut self,
         scene: &flui_layer::Scene,
         size: (u32, u32),
     ) {
-        use flui_foundation::geometry::Matrix4;
-        use flui_layer::{DamageRect, DamageRegion, Layer, Region};
+        use flui_layer::{DamageRegion, SceneContent};
 
-        let Some(damage) = self.damage.damage_rect() else {
+        let Some(region) = self.damage.region() else {
             return;
         };
-        let region = match DamageRect::try_covering(damage, size) {
-            Ok(Some(rect)) => DamageRegion::Region(Region::new(rect)),
-            Ok(None) => return,
-            Err(_) => {
-                self.damage.mark_full_repaint();
-                return;
-            }
-        };
-        let tree = match scene.content() {
-            flui_layer::SceneContent::Tree(tree) => tree,
+        let closed = match scene.content() {
             // A retained version closes the damage over its own filters and
             // destination-reading chunks, reading only those (ADR-0304 §6):
             // each publication's damage was closed under its version, and the
             // damage owed here may join several.
-            flui_layer::SceneContent::Version(version) => {
-                self.apply_closed(region, version.close_damage(region, size));
-                return;
+            SceneContent::Version(version) => {
+                self.close_as_planned(region, |damage| version.close_damage(damage, size))
+            }
+            SceneContent::Tree(tree) => {
+                let closures = tree_backdrop_closures(tree);
+                // Growing one read region can expose a second filter: the
+                // fixed point is reached before the partial clear and any
+                // recording, not next frame (ADR-0304 §6).
+                self.close_as_planned(region, |damage| {
+                    flui_layer::close_over(damage, closures.iter().copied(), size)
+                })
             }
         };
-        let mut stack = vec![(tree.root(), Matrix4::IDENTITY)];
-        let mut closures = Vec::new();
-        while let Some((id, parent)) = stack.pop() {
-            let Some(node) = tree.get(id) else {
-                continue;
-            };
-            let layer = node.layer();
-            let transform = match layer {
-                Layer::Transform(layer) => parent * *layer.transform(),
-                Layer::Follower(_) => {
-                    let Some(follower) = flui_layer::resolve_follower_transform(tree, id) else {
-                        continue;
-                    };
-                    parent * follower
-                }
-                _ => {
-                    let offset = layer.local_translation();
-                    parent * Matrix4::translation(offset.dx, offset.dy, 0.0)
-                }
-            };
-            // Clips and isolation are ignored: extra repaint is safe, a missing
-            // input is not. Replay still admits its exact read footprint.
-            if let Layer::BackdropFilter(_) = layer {
-                closures.push(flui_layer::read_closure(layer, &transform, Rect::ZERO));
-            }
-            stack.extend(node.children().iter().map(|&child| (child, transform)));
-        }
-        // Growing one read region can expose a second filter: the fixed point
-        // is reached before the partial clear and any recording, not next
-        // frame (ADR-0304 §6).
-        let closed = flui_layer::close_over(region, closures, size);
-        self.apply_closed(region, closed);
+        self.apply_closed(DamageRegion::Region(region), closed);
     }
 
-    /// Marks what closing `region` added: the damage keeps its own rect when
-    /// no closure joined it, because the covering rect's outward rounding is
-    /// not damage.
+    /// `region` closed by `close` over what its plan redraws: a plan that
+    /// redraws the bounding box closes the box itself, which holds every
+    /// pixel the rects would add (closing only grows damage), and a closure
+    /// that adds a rect outside the box is planned and closed again. One rect
+    /// closes to one rect (a footprint that meets it merges into it), so a
+    /// box is a fixed point after one round; the bound only keeps the loop
+    /// finite.
+    fn close_as_planned(
+        &self,
+        region: flui_layer::Region,
+        close: impl Fn(flui_layer::DamageRegion) -> flui_layer::DamageRegion,
+    ) -> flui_layer::DamageRegion {
+        use flui_layer::{DamageRegion, Region};
+
+        let plan_region = self.plan_region;
+        let mut planned = region;
+        for _ in 0..Region::MAX {
+            if let RegionPlan::Bounds(bounds) = plan_region(planned) {
+                planned = Region::new(bounds);
+            }
+            let closed = close(DamageRegion::Region(planned));
+            let DamageRegion::Region(current) = closed else {
+                return closed;
+            };
+            match plan_region(current) {
+                RegionPlan::Bounds(bounds) if current.rects() != [bounds] => planned = current,
+                RegionPlan::Bounds(_) | RegionPlan::Rects(_) => return closed,
+            }
+        }
+        DamageRegion::Full(flui_layer::FullReason::Unbounded)
+    }
+
+    /// Marks what closing `region` added, rect by rect.
     fn apply_closed(&mut self, region: flui_layer::DamageRegion, closed: flui_layer::DamageRegion) {
         use flui_layer::DamageRegion;
         match closed {
             DamageRegion::Region(closed) if DamageRegion::Region(closed) != region => {
-                self.damage.mark_dirty(closed.bounds().to_rect());
+                self.damage.mark_region(&closed);
             }
             DamageRegion::Region(_) | DamageRegion::Unchanged => {}
             DamageRegion::Full(_) => self.damage.mark_full_repaint(),
         }
+    }
+
+    /// Plans every later partial frame rect by rect, the plan production
+    /// does not switch on yet ([`RegionPlan::of`]).
+    #[cfg(test)]
+    pub(crate) fn plan_rect_by_rect(&mut self) {
+        self.plan_region = RegionPlan::rect_by_rect;
     }
 
     /// Runs `plan` (not [`FramePlan::Skip`]) against `surface`, whose texture
@@ -297,9 +337,9 @@ impl FrameProtocol {
     ///   does not see the frame and stops being valid.
     /// - A retained plan renders into a separate candidate. Failure or unwind
     ///   preserves the committed pixels and forces a full retry.
-    /// - Only a partial frame skips the full clear: it clears inside its
-    ///   damage instead (`damage::begin_partial`), keeping the retained
-    ///   pixels outside it.
+    /// - Only a partial frame skips the full clear: each pass of its
+    ///   [`RegionPlan`] clears inside its own rect instead
+    ///   (`damage::begin_partial`), keeping the retained pixels outside them.
     ///
     /// # Errors
     /// The content pass's failure.
@@ -318,6 +358,7 @@ impl FrameProtocol {
             return Ok(());
         }
         self.force_full_next_frame = true;
+        self.region_passes = 0;
         let _submission_scope = domain.begin_frame_scope()?;
         let steps = FrameCleanup(steps);
         let mut encoder = domain
@@ -338,12 +379,12 @@ impl FrameProtocol {
                 ),
                 None,
             ),
-            FramePlan::RetainedPartial(damage) => (
+            FramePlan::RetainedPartial(region) => (
                 Some(
                     self.retained
                         .begin_encoded(domain, size, format, true, &mut encoder)?,
                 ),
-                Some(damage),
+                Some(region),
             ),
         };
         let (view, texture) = match retained.as_ref() {
@@ -353,10 +394,13 @@ impl FrameProtocol {
         if partial.is_none() {
             steps.0.clear(view, &mut encoder)?;
         }
-        let straddled =
-            steps
-                .0
-                .content(view, texture, retained.is_some(), partial, &mut encoder)?;
+        let recorded = steps.0.content(
+            view,
+            texture,
+            retained.is_some(),
+            partial.as_ref(),
+            &mut encoder,
+        )?;
         let mut permits = Vec::new();
         if let Some(candidate) = retained.as_ref() {
             permits = candidate.submission_permits();
@@ -371,8 +415,17 @@ impl FrameProtocol {
         if let Some(candidate) = retained {
             self.retained.commit(candidate);
         }
-        self.force_full_next_frame = straddled;
+        self.force_full_next_frame = recorded.straddled;
+        self.region_passes = recorded.region_passes;
+        tracing::trace!(region_passes = self.region_passes, "frame submitted");
         Ok(())
+    }
+
+    /// The passes the last frame run redrew its region in: one per rect of
+    /// its [`RegionPlan`], `0` after a full frame or one that failed.
+    #[cfg(test)]
+    pub(crate) fn region_passes(&self) -> u32 {
+        self.region_passes
     }
 
     /// The frame presented: the damage it covered is paid.
@@ -402,4 +455,40 @@ impl FrameProtocol {
     pub(crate) fn retained_texture(&self) -> Option<&wgpu::Texture> {
         self.retained.texture()
     }
+}
+
+/// The read closure of every backdrop filter in `tree`, under its transform.
+///
+/// Clips and isolation are ignored: extra repaint is safe, a missing input
+/// is not. Replay still admits its exact read footprint.
+fn tree_backdrop_closures(tree: &flui_layer::LayerTree) -> Vec<flui_layer::Closure> {
+    use flui_foundation::geometry::Matrix4;
+    use flui_layer::Layer;
+
+    let mut stack = vec![(tree.root(), Matrix4::IDENTITY)];
+    let mut closures = Vec::new();
+    while let Some((id, parent)) = stack.pop() {
+        let Some(node) = tree.get(id) else {
+            continue;
+        };
+        let layer = node.layer();
+        let transform = match layer {
+            Layer::Transform(layer) => parent * *layer.transform(),
+            Layer::Follower(_) => {
+                let Some(follower) = flui_layer::resolve_follower_transform(tree, id) else {
+                    continue;
+                };
+                parent * follower
+            }
+            _ => {
+                let offset = layer.local_translation();
+                parent * Matrix4::translation(offset.dx, offset.dy, 0.0)
+            }
+        };
+        if let Layer::BackdropFilter(_) = layer {
+            closures.push(flui_layer::read_closure(layer, &transform, Rect::ZERO));
+        }
+        stack.extend(node.children().iter().map(|&child| (child, transform)));
+    }
+    closures
 }

@@ -338,7 +338,7 @@ impl WindowSlot {
         frame: FrameStamp,
     ) -> EngineResult<PresentDisposition> {
         match damage {
-            DamageRegion::Region(region) => self.frame.mark_dirty(region.bounds().to_rect()),
+            DamageRegion::Region(region) => self.frame.mark_region(&region),
             DamageRegion::Unchanged => {}
             DamageRegion::Full(_) => self.frame.mark_full_repaint(),
         }
