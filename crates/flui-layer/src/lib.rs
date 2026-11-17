@@ -1,9 +1,10 @@
 //! # flui-layer — the compositor layer tree
 //!
 //! The fourth of FLUI's five trees (View → Element → Render → **Layer** →
-//! Semantics). The paint walk in `flui-rendering` writes each frame's repaint
-//! boundaries into the retained scene ([`SceneOwner`]) through a
-//! [`SceneWriter`]; the published [`SceneVersion`] is frozen into a [`Scene`],
+//! Semantics). The paint walk in `flui-rendering` writes the repaint boundaries
+//! a frame repaints into the retained scene ([`SceneOwner`]) through a
+//! [`SceneWriter`], whose patch `flui-runtime` applies all or nothing; the
+//! published [`SceneVersion`] is frozen into a [`Scene`],
 //! stamped into a [`SceneSnapshot`], moved by value to the raster side, and
 //! lowered to GPU work by `flui-engine`.
 //!
@@ -26,7 +27,7 @@
 //!   transform or [`Layer::local_translation`], the one place the set of
 //!   translating variants is written down.
 //! - [`SceneBuilder`]: push/pop construction for hand-authored scenes.
-//! - [`Scene`] and [`SceneSnapshot`] / [`DamageRegion`]: the frozen tree and
+//! - [`Scene`] and [`SceneSnapshot`] / [`DamageRegion`]: a frozen version or tree and
 //!   the per-frame package that crosses the raster boundary.
 //! - [`SceneOwner`] and [`SceneVersion`]: the retained scene (ADR-0304), a
 //!   persistent version changed by [`SceneOp`] patches applied all or
@@ -37,7 +38,7 @@
 //!
 //! A closed `enum` (the GPU backend's exhaustive `match` is the contract); a
 //! per-frame arena keyed by 1-based [`LayerId`] with no removal; a leader
-//! index on the tree; and a `Scene` that is a frozen tree, not an engine
+//! index on the tree; and a `Scene` that is a frozen version or tree, not an engine
 //! handle. The reference-parity accounting is in this crate's
 //! `ARCHITECTURE.md`.
 //!

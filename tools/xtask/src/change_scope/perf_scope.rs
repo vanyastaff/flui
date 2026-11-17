@@ -12,9 +12,10 @@
 /// The source roots whose code runs for every element or render node of a
 /// frame: the element tree's storage, the element
 /// owners' build walk, the render tree's storage, the pipeline owner's
-/// layout, paint and semantics passes, the layer crate (the retained scene
-/// the paint pass writes each repaint boundary into, and the layers, damage
-/// and regions its patch and walk compute for every frame), and the
+/// layout, paint and semantics passes, the layer crate (whose retained scene
+/// takes each repainted boundary, and whose layers, damage and regions its
+/// patch and walk compute each frame; its hand-built scene and test kit come
+/// along as one root), and the
 /// semantics model those passes merge.
 pub(super) const PER_NODE: [&str; 6] = [
     "crates/flui-view/src/tree/",
