@@ -21,7 +21,7 @@ use flui_interaction::{
 use flui_layer::{PerformanceOverlayLayer, PerformanceOverlayOption, PerformanceSample};
 #[cfg(any(test, feature = "testing"))]
 use flui_platform::PlatformTextInput;
-use flui_platform::TextStoreHost;
+use flui_platform::text_store::TextStoreHost;
 use flui_platform::{Cursor, CursorError, CursorIcon, PlatformWindow};
 use flui_rendering::binding::RendererBinding as _;
 use flui_rendering::pipeline::PipelineCell;

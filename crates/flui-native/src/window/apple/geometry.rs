@@ -19,11 +19,11 @@ pub(crate) mod frame {
     //! measures a window's outer top-left on a display, in that display's
     //! logical pixels from its corner (ADR-0364): on macOS a screen's logical
     //! pixels are points, and a screen publishes its corner in that flipped
-    //! desktop ([`DisplayInfo::origin`]), so a position on it is the desktop
+    //! desktop ([`DisplayDescription::origin`]), so a position on it is the desktop
     //! point less the corner, with no scale between them.
 
     use flui_foundation::geometry::{Bounds, Point, Size};
-    use flui_platform::{DisplayInfo, SizeConstraints, WindowExtent, WindowPosition};
+    use flui_platform::{DisplayDescription, SizeConstraints, WindowExtent, WindowPosition};
 
     /// Any content limit at or beyond this counts as AppKit's "no limit"
     /// (`contentMaxSize` defaults to `CGFLOAT_MAX`, or `FLT_MAX` on older systems).
@@ -80,7 +80,10 @@ pub(crate) mod frame {
     /// Position `at`, whose display is `display`, as a point of AppKit's
     /// flipped desktop: the screen's corner plus `at`. `None` for a point past
     /// the finite numbers.
-    pub(crate) fn desktop_point(at: WindowPosition, display: &DisplayInfo) -> Option<Point<f64>> {
+    pub(crate) fn desktop_point(
+        at: WindowPosition,
+        display: &DisplayDescription,
+    ) -> Option<Point<f64>> {
         let corner = display.origin.get();
         let point = Point::new(
             f64::from(corner.x) + at.at().x,
@@ -95,7 +98,7 @@ pub(crate) mod frame {
     /// the screen's extent.
     pub(crate) fn position_on(
         desktop: Point<f64>,
-        display: &DisplayInfo,
+        display: &DisplayDescription,
     ) -> Option<WindowPosition> {
         let corner = display.origin.get();
         WindowPosition::try_new(
@@ -254,7 +257,7 @@ pub(crate) mod frame {
 
         /// A screen whose corner sits at `corner` in AppKit's flipped desktop,
         /// at `scale`.
-        fn display(scale: f64, corner: (i32, i32)) -> DisplayInfo {
+        fn display(scale: f64, corner: (i32, i32)) -> DisplayDescription {
             use flui_platform::{
                 DesktopOrigin, DisplayBounds, DisplayId, DisplayKey, DisplayRegistry,
             };
@@ -262,7 +265,7 @@ pub(crate) mod frame {
             let id: DisplayId = DisplayRegistry::new()
                 .mint(&DisplayKey::MacosUuid([1; 16]))
                 .expect("a fresh registry has ids");
-            DisplayInfo::new(
+            DisplayDescription::new(
                 id,
                 "test".to_string(),
                 DesktopOrigin::new(corner.0, corner.1),

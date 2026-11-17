@@ -57,7 +57,7 @@
   change only with the state, bad numbers are refused, and a closed window refuses.
 - **`WindowOptions`** gains `display`, `position`, `mode` and `normal_geometry`, is
   `#[non_exhaustive]` and is built with `with_*` methods, and its `size` is the content size;
-  **`DisplayInfo`** gains `persistent_key` (`with_persistent_key`), a string that names a display
+  **`DisplayDescription`** gains `persistent_key` (`with_persistent_key`), a string that names a display
   across restarts.
 - **`flui-native`**: the headless platform takes `with_window_capabilities` and
   `with_window_policy` (`HeadlessWindowPolicy`: a largest window size, a host that declines to

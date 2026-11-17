@@ -10,9 +10,9 @@ use std::time::{Duration, Instant};
 use flui_foundation::geometry::{Bounds, DevicePixelRatio, Point, Size};
 use flui_platform::{AppTitleBar, PlacementOffset, WindowFrame, WindowOptions};
 use flui_platform::{
-    DisplayId, DisplayInfo, DisplayKey, DisplayRegistry, DisplaySnapshot, Storage, StorageError,
-    StorageFuture, StorageName, Stored, WindowCapabilities, WindowExtent, WindowGeometry,
-    WindowInteraction, WindowMode, WindowPlacement, WindowPosition, WindowState,
+    DisplayDescription, DisplayId, DisplayKey, DisplayRegistry, DisplaySnapshot, Storage,
+    StorageError, StorageFuture, StorageName, Stored, WindowCapabilities, WindowExtent,
+    WindowGeometry, WindowInteraction, WindowMode, WindowPlacement, WindowPosition, WindowState,
 };
 use flui_testing::storage::MemoryStorage;
 use flui_view::persist::StorageHandle;
@@ -324,7 +324,7 @@ fn a_display_change_alone_measures_the_window_again() {
 /// The displays the host sampled, with the usable area starting `left`
 /// pixels in.
 fn displays_with_left_edge(left: i32) -> DisplaySnapshot {
-    let display = DisplayInfo::from_device(
+    let display = DisplayDescription::from_device(
         main_display(),
         "main",
         Bounds::new(Point::new(0, 0), Size::new(1920, 1080)),

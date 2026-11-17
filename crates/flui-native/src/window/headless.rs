@@ -18,11 +18,11 @@ use flui_platform::input_regions::{DeviceInputRegion, InputRegion};
 use flui_platform::text_store::TextStoreHost;
 use flui_platform::{
     AdmittedCommand, ApplyError, Brightness, Cursor, CursorError, CursorGrab, DispatchEventResult,
-    DisplayId, DisplayInfo, PlatformHaptics, PlatformInput, PlatformTextInput, PlatformWindow,
+    DisplayDescription, DisplayId, PlatformInput, PlatformTextInput, PlatformWindow,
     SizeConstraints, SurfaceChange, Unsupported, UnsupportedReason, WindowCapabilities,
     WindowCommand, WindowFocus, WindowFrame, WindowGeometry, WindowHandler, WindowId, WindowIdMint,
     WindowInteraction, WindowLevel, WindowMaterial, WindowMode, WindowOptions, WindowPosition,
-    WindowState,
+    WindowState, haptics::PlatformHaptics,
 };
 use parking_lot::Mutex;
 
@@ -669,7 +669,7 @@ struct HeadlessWindowSetup {
     text_store_host: Option<TextStoreHostFactory>,
     /// The display the window opens on, as the system describes it; `None`
     /// when the platform has none.
-    display: Option<DisplayInfo>,
+    display: Option<DisplayDescription>,
     /// Where on that display the window opens, in its logical pixels.
     position: Point<f64>,
     capabilities: WindowCapabilities,
@@ -762,7 +762,7 @@ struct DesktopFrame {
 }
 
 impl DesktopFrame {
-    fn of(display: &DisplayInfo) -> Self {
+    fn of(display: &DisplayDescription) -> Self {
         let origin = display.origin.get();
         Self {
             origin: Point::new(f64::from(origin.x), f64::from(origin.y)),
@@ -1095,13 +1095,13 @@ impl HeadlessHostWindow {
 
     /// Display `id` as the platform describes it now; `None` when the
     /// platform is gone or holds no such display.
-    fn display(&self, id: DisplayId) -> Option<DisplayInfo> {
+    fn display(&self, id: DisplayId) -> Option<DisplayDescription> {
         self.platform_state.upgrade()?.borrow_mut().display(id)
     }
 
     /// The window's display as the platform describes it now; `None` when
     /// the window is on none, or the platform is gone or no longer holds it.
-    fn current_display(&self) -> Option<DisplayInfo> {
+    fn current_display(&self) -> Option<DisplayDescription> {
         let display = self.state.borrow_mut().display?;
         self.display(display)
     }

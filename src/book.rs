@@ -25,6 +25,12 @@ chapters! {
     introduction => "README.md",
     installation => "getting-started/installation.md",
     contributing => "getting-started/contributing.md",
+    first_app => "tutorial/first-app.md",
+    // the tutorial checks what each screen shows through `flui::testing`
+    #[cfg(feature = "testing")]
+    screen_layout => "tutorial/layout.md",
+    #[cfg(feature = "testing")]
+    adding_state => "tutorial/state.md",
     overview => "concepts/overview.md",
     view_element_render => "concepts/view-element-render.md",
     keys => "concepts/keys.md",

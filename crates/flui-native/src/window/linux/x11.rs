@@ -1173,12 +1173,12 @@ pub(crate) mod placement {
             );
         }
 
-        fn display(name: &str, x: i32, scale: f64) -> flui_platform::DisplayInfo {
+        fn display(name: &str, x: i32, scale: f64) -> flui_platform::DisplayDescription {
             let id = DisplayRegistry::new()
                 .mint(&DisplayKey::Unkeyed)
                 .expect("an id");
             let bounds = Bounds::new(Point::new(x, 0), Size::new(1920, 1080));
-            flui_platform::DisplayInfo::from_device(id, name, bounds, bounds, ratio(scale))
+            flui_platform::DisplayDescription::from_device(id, name, bounds, bounds, ratio(scale))
                 .expect("a display")
         }
 

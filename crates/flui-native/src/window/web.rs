@@ -1588,7 +1588,7 @@ impl PlatformWindow for WebWindow {
         self.drag.borrow().as_ref().map(|drag| drag.source())
     }
 
-    fn haptics(&self) -> Option<Arc<dyn flui_platform::PlatformHaptics>> {
+    fn haptics(&self) -> Option<Arc<dyn flui_platform::haptics::PlatformHaptics>> {
         self.facets
             .borrow()
             .as_ref()

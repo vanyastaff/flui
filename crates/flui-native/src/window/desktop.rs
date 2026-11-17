@@ -13,7 +13,7 @@
 #![forbid(unsafe_code)]
 
 use flui_foundation::geometry::{Bounds, DevicePixelRatio, Point, Size, snap};
-use flui_platform::{DisplayId, DisplayInfo, DisplaySnapshot, WindowPosition};
+use flui_platform::{DisplayDescription, DisplayId, DisplaySnapshot, WindowPosition};
 
 /// One display of a device-pixel desktop: which display it is, where its
 /// top-left corner sits in the desktop's device pixels, and how many device
@@ -30,7 +30,7 @@ pub(crate) struct DisplayFrame {
 impl DisplayFrame {
     /// The frame of `display`, whose origin its host published in the
     /// desktop's device pixels.
-    pub(crate) fn of(display: &DisplayInfo) -> Self {
+    pub(crate) fn of(display: &DisplayDescription) -> Self {
         Self {
             display: display.id,
             origin: display.origin.get(),
@@ -196,7 +196,7 @@ mod tests {
             let id = registry.mint(&DisplayKey::Injected(key)).expect("an id");
             let bounds = Bounds::new(Point::new(x, y), Size::new(width, height));
             DisplayFrame::of(
-                &DisplayInfo::from_device(id, "display", bounds, bounds, ratio(scale))
+                &DisplayDescription::from_device(id, "display", bounds, bounds, ratio(scale))
                     .expect("a display"),
             )
         };
@@ -271,7 +271,7 @@ mod tests {
         let display = |key, x, width, scale| {
             let id = registry.mint(&DisplayKey::Injected(key)).expect("an id");
             let bounds = Bounds::new(Point::new(x, 0), Size::new(width, 1080));
-            DisplayInfo::from_device(id, "display", bounds, bounds, ratio(scale))
+            DisplayDescription::from_device(id, "display", bounds, bounds, ratio(scale))
                 .expect("a display")
         };
         let (primary, hidpi) = (display(1, 0, 1920, 1.0), display(2, 1920, 3840, 2.0));

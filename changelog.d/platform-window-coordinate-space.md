@@ -6,7 +6,7 @@
 - `DisplayBounds` (a display's extent and usable area in its own logical pixels, the usable area
   inside the extent, checked by `try_new` with `InvalidDisplayBounds`) and `DesktopOrigin` (where
   a display sits in its window system's desktop, which orders the displays and is never a logical
-  position). `DisplayInfo::from_device` builds a display a window system lays out in device
+  position). `DisplayDescription::from_device` builds a display a window system lays out in device
   pixels.
 - `ApplyError::DisplayGone`: a `SetPosition` that names a display the window's host no longer has
   is refused with it, and the window stays where it is.
@@ -21,7 +21,7 @@
   its corner. The snapshot's position is measured on the display the window is on
   (`WindowState::display`, which follows it); a window spanning displays has coordinates outside
   that display's extent. Wayland, Android, iOS and the web still publish no position.
-- `DisplayInfo` carries `origin: DesktopOrigin` and `bounds: DisplayBounds` in place of the
+- `DisplayDescription` carries `origin: DesktopOrigin` and `bounds: DisplayBounds` in place of the
   `bounds` and `usable_bounds` device-pixel rectangles, whose unit changed with the platform
   (logical on Wayland, points times the screen's scale on macOS).
 - `WindowCommand::SetSize`, `WindowHandle::set_size` and `WindowOptions::size` take a
@@ -45,6 +45,6 @@
 
 - `WindowOptions::display` and its builder: a position names its display.
 - `WindowOption::Position`: a position is a place by its type.
-- `DisplayInfo::with_usable_bounds`.
+- `DisplayDescription::with_usable_bounds`.
 - `From<&AppConfig> for WindowOptions`: `AppConfig::window_options(displays)` builds a window's
   options, with the configured position placed on the primary display of `displays`.

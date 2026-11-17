@@ -81,7 +81,7 @@ pub(crate) struct HeldPresses(Mutex<Vec<HeldPress>>);
 /// One press sequence a headless window holds, and the contact holding it.
 #[derive(Debug, Clone, Copy)]
 struct HeldPress {
-    pointer: flui_platform::PointerId,
+    pointer: flui_platform::pointer::PointerId,
     press: flui_platform::pointer::PressId,
 }
 
@@ -370,7 +370,7 @@ impl HeadlessState {
     /// Display `id` as the system describes it now: its bounds in its own
     /// logical pixels, its place on the simulated desktop (device pixels,
     /// displays laid left to right) and its scale.
-    pub(crate) fn display(&self, id: DisplayId) -> Option<flui_platform::DisplayInfo> {
+    pub(crate) fn display(&self, id: DisplayId) -> Option<flui_platform::DisplayDescription> {
         self.displays.lock().snapshot.get(id).cloned()
     }
 

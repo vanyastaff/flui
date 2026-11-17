@@ -102,7 +102,7 @@ canvas.with_transform(transform, |canvas| …)            // a closure run insid
   - a constructor without `self` in the standard library's shape (`with_capacity`,
     `BoxDecoration::with_color`);
   - a closure run inside a scope (`Canvas::with_transform(&mut self, transform, f)`);
-  - an operating system's snapshot a test builds (`SystemPreferences`, `DisplayInfo`).
+  - an operating system's snapshot a test builds (`SystemPreferences`, `DisplayDescription`).
 - `cargo xtask builder-names` holds the rule. In the same targets it reports a method of an
   inherent `impl` named `with_*` that takes `self` by value and returns `Self`, on a type of its
   crate that an `impl` of a trait ending in `View`, an `impl_*_view!` call or a

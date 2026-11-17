@@ -1539,7 +1539,7 @@ impl PlatformWindow for MacOSWindow {
         flui_platform::WindowAt::Unknown
     }
 
-    fn haptics(&self) -> Option<Arc<dyn flui_platform::PlatformHaptics>> {
+    fn haptics(&self) -> Option<Arc<dyn flui_platform::haptics::PlatformHaptics>> {
         Some(Arc::clone(&self.facets.haptics))
     }
 

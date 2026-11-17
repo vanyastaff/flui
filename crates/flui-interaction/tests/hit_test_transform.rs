@@ -192,8 +192,8 @@ fn sample_delivery(
     use flui_platform::{
         EventTime,
         pointer::{
-            PointerButtons, PointerEvent, PointerId, PointerInfo, PointerKind, PointerMove,
-            PointerPosition, PointerSample, Pressure,
+            PointerButtons, PointerEvent, PointerId, PointerKind, PointerMove, PointerPosition,
+            PointerSample, PointerSource, Pressure,
         },
     };
     use std::rc::Rc;
@@ -210,7 +210,7 @@ fn sample_delivery(
         )
         .with_pressure(Pressure::try_new(0.4).expect("valid pressure"))
     };
-    let pointer = PointerInfo::new(
+    let pointer = PointerSource::new(
         PointerId::try_from(1_u64).expect("nonzero"),
         PointerKind::Touch,
     );

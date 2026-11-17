@@ -6,7 +6,7 @@ use std::{
     rc::{Rc, Weak},
 };
 
-use flui_platform::{PlatformWindow, pointer::PointerInfo};
+use flui_platform::{PlatformWindow, pointer::PointerSource};
 
 use super::PointerTarget;
 
@@ -43,7 +43,7 @@ enum CaptureStatus {
 /// One binding-admitted generation. All fields are framework-owned values;
 /// releasing a token never retires a handler or invokes an event callback.
 pub(crate) struct ContactCapture {
-    pointer: PointerInfo,
+    pointer: PointerSource,
     sequence: u64,
     status: Cell<CaptureStatus>,
     deliveries: Cell<usize>,
@@ -74,7 +74,7 @@ impl ContactFeeder {
 
 impl ContactCapture {
     pub(crate) fn new(
-        pointer: PointerInfo,
+        pointer: PointerSource,
         sequence: u64,
         wake: Option<Weak<dyn PlatformWindow>>,
     ) -> Rc<Self> {
@@ -154,7 +154,7 @@ impl ContactCapture {
 
     fn claim(
         self: &Rc<Self>,
-        pointer: PointerInfo,
+        pointer: PointerSource,
         target: PointerTarget,
     ) -> Result<PointerCapture, PointerCaptureError> {
         if pointer != self.pointer {
@@ -178,7 +178,7 @@ impl ContactCapture {
         }
     }
 
-    fn release(&self, pointer: PointerInfo, sequence: u64, target: PointerTarget) {
+    fn release(&self, pointer: PointerSource, sequence: u64, target: PointerTarget) {
         if pointer != self.pointer
             || sequence != self.sequence
             || !matches!(self.status.get(), CaptureStatus::Claimed(current) if current == target)
@@ -213,7 +213,10 @@ pub(crate) struct CaptureRequest<'a> {
 }
 
 impl CaptureRequest<'_> {
-    pub(crate) fn claim(self, pointer: PointerInfo) -> Result<PointerCapture, PointerCaptureError> {
+    pub(crate) fn claim(
+        self,
+        pointer: PointerSource,
+    ) -> Result<PointerCapture, PointerCaptureError> {
         self.contact.claim(pointer, self.target)
     }
 
@@ -246,7 +249,7 @@ impl fmt::Debug for CaptureRequest<'_> {
 #[must_use = "retain the capture token until the contact should be released"]
 pub struct PointerCapture {
     contact: Weak<ContactCapture>,
-    pointer: PointerInfo,
+    pointer: PointerSource,
     sequence: u64,
     target: PointerTarget,
 }

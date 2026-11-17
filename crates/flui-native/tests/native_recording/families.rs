@@ -241,7 +241,7 @@ impl ReplayTarget for PlatformTarget<'_> {
                 let mut infos = Vec::with_capacity(displays.len());
                 for display in displays {
                     let id = self.labels.id(display.label);
-                    infos.push(display.parts.clone().into_info(id));
+                    infos.push(display.parts.clone().into_description(id));
                 }
                 self.sources
                     .displays

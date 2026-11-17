@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use flui_foundation::geometry::{Bounds, DevicePixelRatio, Point, Size};
 use flui_platform::{
-    DisplayId, DisplayInfo, DisplayKey, DisplayRegistry, DisplaySnapshot, WindowCommand,
+    DisplayDescription, DisplayId, DisplayKey, DisplayRegistry, DisplaySnapshot, WindowCommand,
     WindowExtent, WindowGeometry, WindowMode, WindowOptions, WindowPosition,
 };
 use flui_testing::window_commands::AdmitAndApply as _;
@@ -47,13 +47,14 @@ fn on(display: DisplayId, x: f64, y: f64) -> WindowPosition {
 /// the ids of its displays in that order.
 fn desktop(monitors: &[(f64, (i32, i32))]) -> (DisplaySnapshot, Vec<DisplayId>) {
     let registry = DisplayRegistry::new();
-    let displays: Vec<DisplayInfo> = monitors
+    let displays: Vec<DisplayDescription> = monitors
         .iter()
         .zip(1..)
         .map(|(&(scale, (x, y)), key)| {
             let id = registry.mint(&DisplayKey::Injected(key)).expect("id");
             let bounds = Bounds::new(Point::new(x, y), Size::new(3840, 2160));
-            DisplayInfo::from_device(id, "d", bounds, bounds, ratio(scale)).expect("a display")
+            DisplayDescription::from_device(id, "d", bounds, bounds, ratio(scale))
+                .expect("a display")
         })
         .collect();
     let ids = displays.iter().map(|display| display.id).collect();

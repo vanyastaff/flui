@@ -44,13 +44,13 @@ use std::time::Duration;
 use flui_foundation::geometry::{Bounds, DevicePixelRatio, Size};
 use flui_foundation::panic::FirstPanic;
 use flui_foundation::{ManualClock, PresentationId};
-use flui_platform::TextStoreHost;
 use flui_platform::capability::scripted::{AlreadyDriven, Scenario, ScenarioDriver};
 use flui_platform::data_transfer::{RepresentationDescriptor, TransferActions};
 use flui_platform::drag::{
     DragError, OsDragEnd, OsDragParts, OsDragRequest, OsDragStart, PlatformDragSource,
 };
 use flui_platform::input_regions::{DeviceInputRegion, InputRegion};
+use flui_platform::text_store::TextStoreHost;
 use flui_platform::text_store::TextStoreStatus;
 use flui_platform::{
     Cursor, CursorError, CursorIcon, DisplayId, PlatformInput, PlatformTextInput, PlatformWindow,
@@ -466,8 +466,8 @@ impl PlatformWindow for HeadlessWindow {
         Ok(())
     }
 
-    fn haptics(&self) -> Option<Arc<dyn flui_platform::PlatformHaptics>> {
-        Some(Arc::clone(&self.haptics) as Arc<dyn flui_platform::PlatformHaptics>)
+    fn haptics(&self) -> Option<Arc<dyn flui_platform::haptics::PlatformHaptics>> {
+        Some(Arc::clone(&self.haptics) as Arc<dyn flui_platform::haptics::PlatformHaptics>)
     }
 
     fn system_chrome(&self) -> Option<Arc<dyn flui_platform::PlatformSystemChrome>> {

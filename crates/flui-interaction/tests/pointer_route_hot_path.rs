@@ -13,7 +13,7 @@ use flui_interaction::{HitTestEntry, InteractionLane, Offset, PointerTarget, Ren
 use flui_platform::pointer::{
     DeviceId, PointerEvent, PointerMove, PointerPosition, PointerRole, PointerSample, Pressure,
 };
-use flui_platform::{EventTime, Modifiers};
+use flui_platform::{EventTime, keyboard::Modifiers};
 
 thread_local! {
     /// The allocations made on this thread. The count is per thread because
@@ -187,9 +187,9 @@ fn resolved_route_move_invocation_allocates_no_heap_after_setup() {
 /// copying it, and keep a bounded tail however many arrive before the frame.
 fn binding_frame_coalescing_moves_bounded_history() {
     use flui_interaction::{GestureBinding, HitTestResult, InputSurface};
-    use flui_platform::pointer::{PointerButton, PointerButtons, PointerInfo, PointerPress};
+    use flui_platform::pointer::{PointerButton, PointerButtons, PointerPress, PointerSource};
     let binding = GestureBinding::new();
-    let pointer = PointerInfo::new(
+    let pointer = PointerSource::new(
         flui_platform::pointer::PointerId::new(core::num::NonZeroU64::MIN),
         PointerKind::Touch,
     );
@@ -305,9 +305,9 @@ fn empty_hit_test_result_allocates_nothing() {
 
 fn resampler_packets(down_time: u64) -> [PointerEvent; 3] {
     use flui_platform::pointer::{
-        PointerButton, PointerButtons, PointerInfo, PointerPress, PointerRelease,
+        PointerButton, PointerButtons, PointerPress, PointerRelease, PointerSource,
     };
-    let pointer = PointerInfo::new(
+    let pointer = PointerSource::new(
         flui_platform::pointer::PointerId::new(core::num::NonZeroU64::MIN),
         PointerKind::Mouse,
     )

@@ -25,7 +25,7 @@ A window's place had no fixed meaning on a desktop of mixed scales.
 |---|---|---|
 | `WindowState::outer`, `WindowCommand::SetPosition` | "global logical pixels" | Win32 divided the physical corner by the *window's* scale and multiplied a command by it, so a window on a 2x monitor right of a 1x one read x 960 at physical 1920, and one `SetPosition` landed on different monitors depending on which monitor the window was on |
 | `WindowOptions::position`, `normal_geometry` | logical pixels of `WindowOptions::display`, from its usable area | one type, `WindowGeometry`, carried two spaces depending on where it was stored |
-| `DisplayInfo::bounds` | device pixels, logical on Wayland | macOS published points times each screen's own scale, so two screens could overlap in that "device" space; placement read it as logical by dividing by each display's scale |
+| `DisplayDescription::bounds` | device pixels, logical on Wayland | macOS published points times each screen's own scale, so two screens could overlap in that "device" space; placement read it as logical by dividing by each display's scale |
 | `WindowCommand::SetSize`, `WindowOptions::size`, `SetPosition` | raw `Size<f64>`, `Point<f64>` | a second pass checked what the snapshot's types already hold, and a host received unchecked numbers from an admitted command |
 
 winit answers the first problem by publishing physical positions only; SDL3 keeps screen
@@ -108,7 +108,7 @@ corner.
 
 ### §2 A display's bounds are its own logical pixels
 
-`DisplayInfo` replaces `bounds: Bounds<i32>` and `usable_bounds` with:
+`DisplayDescription` replaces `bounds: Bounds<i32>` and `usable_bounds` with:
 
 - `bounds: DisplayBounds`: the display's extent (finite, positive) and its usable area (finite,
   inside the extent), in its logical pixels from its corner, built by `DisplayBounds::try_new`,
@@ -118,7 +118,7 @@ corner.
   compositor's logical units on Wayland; the browser's screen coordinates, CSS pixels, on the
   web). It orders
   the displays and is never a logical position; no arithmetic mixes it with one.
-- `DisplayInfo::from_device` builds a display of a device-pixel desktop.
+- `DisplayDescription::from_device` builds a display of a device-pixel desktop.
 
 ### §3 Commands and options carry checked geometry
 
@@ -154,7 +154,7 @@ to the replay's id. Protocol 0.25 is a break (`BREAKING`).
 
 - The compiler: `SetPosition`, `SetSize`, `WindowOptions::{size, position}` and
   `WindowGeometry::position` take the checked types; `WindowOptions::display` and the raw
-  `DisplayInfo` bounds no longer exist.
+  `DisplayDescription` bounds no longer exist.
 - `flui-platform`'s `a_position_names_the_display_the_window_is_on`,
   `position_must_be_finite`, `size_must_be_finite_and_positive`,
   `an_opening_is_refused_for_what_a_command_is_refused_for`,

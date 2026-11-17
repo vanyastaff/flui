@@ -380,7 +380,7 @@ fn resampling_sibling_case(fail: bool, compete: bool) {
         }));
     assert!(realm.pump(&mut clock, &mut sink).presented(), "B commits");
     clock.advance(Duration::from_millis(1_000));
-    let pointer = PointerInfo::new(
+    let pointer = PointerSource::new(
         PointerId::try_from(1_u64).expect("contact"),
         PointerKind::Touch,
     );

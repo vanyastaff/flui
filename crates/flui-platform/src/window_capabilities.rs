@@ -658,7 +658,7 @@ pub struct CapabilityParts {
     pub confines_cursor: WindowCapability,
     /// [`CursorGrab::Locked`] through [`WindowCommand::SetCursorGrab`]: the
     /// pointer stays in place, hidden, and its motion arrives as
-    /// [`PointerEvent::RawMotion`](crate::PointerEvent::RawMotion).
+    /// [`PointerEvent::RawMotion`](crate::pointer::PointerEvent::RawMotion).
     pub locks_cursor: WindowCapability,
     /// [`WindowLevel::AlwaysOnTop`] through [`WindowCommand::SetLevel`].
     pub keeps_on_top: WindowCapability,

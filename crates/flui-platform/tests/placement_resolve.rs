@@ -5,7 +5,7 @@ use std::sync::LazyLock;
 
 use flui_foundation::geometry::{Bounds, DevicePixelRatio, Point, Size};
 use flui_platform::{
-    Availability, DisplayId, DisplayInfo, DisplayKey, DisplayRegistry, DisplaySnapshot,
+    Availability, DisplayDescription, DisplayId, DisplayKey, DisplayRegistry, DisplaySnapshot,
     InvalidGeometry, PlacementError, PlacementOffset, ResolvedPlacement, WindowCapabilities,
     WindowCapability, WindowExtent, WindowGeometry, WindowMode, WindowPlacement, WindowPosition,
     WindowState,
@@ -31,8 +31,8 @@ fn device_display(
     display: Bounds<i32>,
     usable: Bounds<i32>,
     ratio: DevicePixelRatio,
-) -> DisplayInfo {
-    DisplayInfo::from_device(id, "display", display, usable, ratio).expect("a display")
+) -> DisplayDescription {
+    DisplayDescription::from_device(id, "display", display, usable, ratio).expect("a display")
 }
 
 fn bounds(x: i32, y: i32, width: i32, height: i32) -> Bounds<i32> {

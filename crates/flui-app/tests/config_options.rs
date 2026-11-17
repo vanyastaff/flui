@@ -6,7 +6,7 @@ use flui_app::AppConfig;
 use flui_foundation::geometry::{DevicePixelRatio, Point, Size};
 use flui_platform::os_options::{OsWindowOptions, Win32WindowOptions, WindowsCornerPreference};
 use flui_platform::{
-    AppTitleBar, ControlsOffset, DesktopOrigin, DisplayBounds, DisplayInfo, DisplayKey,
+    AppTitleBar, ControlsOffset, DesktopOrigin, DisplayBounds, DisplayDescription, DisplayKey,
     DisplayRegistry, DisplaySnapshot, InputLatency, SystemControls, WindowExtent, WindowFrame,
     WindowMode, WindowOptions, WindowPosition, WindowReveal,
 };
@@ -66,7 +66,7 @@ fn the_position_is_kept() {
             .mint(&DisplayKey::Injected(key))
             .expect("a display id");
         let bounds = DisplayBounds::whole(Size::new(1920.0, 1080.0)).expect("a display's bounds");
-        DisplayInfo::new(
+        DisplayDescription::new(
             id,
             "Display",
             DesktopOrigin::new(0, 0),

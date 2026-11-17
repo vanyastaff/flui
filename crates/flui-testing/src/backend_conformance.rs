@@ -100,7 +100,7 @@ pub trait BackendUnderTest {
     /// The haptic actuator of a window the backend opens, for the haptics
     /// rows; `None`, the default, when the backend has none, and those rows
     /// are reported as not applicable.
-    fn haptics(&mut self) -> Option<std::sync::Arc<dyn flui_platform::PlatformHaptics>> {
+    fn haptics(&mut self) -> Option<std::sync::Arc<dyn flui_platform::haptics::PlatformHaptics>> {
         None
     }
 

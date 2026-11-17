@@ -85,7 +85,7 @@ Web ignored page freeze and GPU context loss.
 6. **Placement is FLUI's own value.** `WindowPlacement` stores a persistent display key, the normal
    geometry relative to that display's usable area in its logical pixels, and the mode, in a
    versioned encoding. Resolution against the current display snapshot is a pure function that
-   always yields a window wholly on a live display. `DisplayInfo` gains `persistent_key`, a string
+   always yields a window wholly on a live display. `DisplayDescription` gains `persistent_key`, a string
    that survives reboots (the monitor device path on Windows, not the LUID), compared only for
    equality. OS autosave facilities are not used, so behaviour is the same everywhere.
 7. **System notices are a separate stream.** The platform reports `SystemNotice` (the same events without a session end, which has its own hook); `HostNotice` (session ending, cancelled, ended; sleep;

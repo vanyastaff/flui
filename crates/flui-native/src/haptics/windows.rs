@@ -41,7 +41,9 @@ use super::degradation::{
 };
 use crate::owner::windows::WindowRef;
 use flui_platform::haptics::{HapticCapabilities, HapticOutcome, HapticPattern, HapticRequest};
-use flui_platform::{DeviceId, HapticFeedback, PlatformHaptics, Unsupported, UnsupportedReason};
+use flui_platform::{
+    HapticFeedback, Unsupported, UnsupportedReason, haptics::PlatformHaptics, pointer::DeviceId,
+};
 
 /// Nothing plays now: no pen is in range, or the worker cannot take the
 /// request; a later request may play.
@@ -569,7 +571,7 @@ mod tests {
     /// Every request of both tiers reports `refused`, and the actuator claims
     /// nothing.
     fn assert_unavailable(
-        haptics: &dyn flui_platform::PlatformHaptics,
+        haptics: &dyn flui_platform::haptics::PlatformHaptics,
         refused: HapticOutcome,
         when: &str,
     ) {

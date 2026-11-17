@@ -3,8 +3,8 @@ use std::time::Duration;
 
 use flui_foundation::geometry::{Bounds, DevicePixelRatio, Point, Rect, Size};
 use flui_platform::{
-    CapabilityAbsence, ColorGamut, DesktopOrigin, DisplayBounds, DisplayColor, DisplayId,
-    DisplayInfo, DisplayKey, DisplayRegistry, DisplaySnapshot, DynamicRange, Headroom,
+    CapabilityAbsence, ColorGamut, DesktopOrigin, DisplayBounds, DisplayColor, DisplayDescription,
+    DisplayId, DisplayKey, DisplayRegistry, DisplaySnapshot, DynamicRange, Headroom,
     InvalidHeadroom, RefreshPeriod, SurfaceColorSpace, UnsupportedReason, WindowDisplay,
 };
 
@@ -75,10 +75,11 @@ fn snapshot_derives_the_window_display_from_its_id() {
     let id = registry.mint(&DisplayKey::Injected(1)).expect("id");
     let unheld = registry.mint(&DisplayKey::Injected(2)).expect("id");
     let bounds = Bounds::new(Point::new(0, 0), Size::new(1920, 1080));
-    let display = DisplayInfo::from_device(id, "Panel", bounds, bounds, DevicePixelRatio::ONE)
-        .expect("a display with an area")
-        .with_primary(true)
-        .with_refresh_period(Duration::from_nanos(16_683_333));
+    let display =
+        DisplayDescription::from_device(id, "Panel", bounds, bounds, DevicePixelRatio::ONE)
+            .expect("a display with an area")
+            .with_primary(true)
+            .with_refresh_period(Duration::from_nanos(16_683_333));
     let snapshot = DisplaySnapshot::empty()
         .successor(vec![display.clone()])
         .expect("revision");
@@ -319,16 +320,17 @@ fn mhz(millihertz: i64) -> Option<Duration> {
         .map(RefreshPeriod::get)
 }
 
-fn period_of(info: DisplayInfo) -> Option<Duration> {
+fn period_of(info: DisplayDescription) -> Option<Duration> {
     info.refresh_period.map(RefreshPeriod::get)
 }
 
-fn blank_display() -> DisplayInfo {
+fn blank_display() -> DisplayDescription {
     let id = DisplayRegistry::new()
         .mint(&DisplayKey::Injected(1))
         .expect("id");
     let bounds = Bounds::new(Point::new(0, 0), Size::new(1, 1));
-    DisplayInfo::from_device(id, "d", bounds, bounds, DevicePixelRatio::ONE).expect("a display")
+    DisplayDescription::from_device(id, "d", bounds, bounds, DevicePixelRatio::ONE)
+        .expect("a display")
 }
 
 fn zero_rate_is_unknown() {
@@ -469,9 +471,9 @@ fn refresh_value_classification_table() {
     );
 }
 
-fn panel(id: DisplayId) -> DisplayInfo {
+fn panel(id: DisplayId) -> DisplayDescription {
     let bounds = Bounds::new(Point::new(0, 0), Size::new(1920, 1080));
-    DisplayInfo::from_device(id, "Panel", bounds, bounds, DevicePixelRatio::ONE)
+    DisplayDescription::from_device(id, "Panel", bounds, bounds, DevicePixelRatio::ONE)
         .expect("a display with an area")
 }
 
@@ -573,7 +575,10 @@ fn a_profile_change_is_a_new_revision() {
         second.revision() > first.revision(),
         "HDR switching on is a display change"
     );
-    assert_eq!(second.get(id).map(DisplayInfo::headroom), Some(Ok(three)));
+    assert_eq!(
+        second.get(id).map(DisplayDescription::headroom),
+        Some(Ok(three))
+    );
     let again = second.successor(vec![hdr]).expect("revision");
     assert_eq!(
         again.revision(),

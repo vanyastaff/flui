@@ -12,8 +12,8 @@ use std::fmt::Write as _;
 use flui_platform::PlatformInput;
 use flui_platform::keyboard::Modifiers;
 use flui_platform::pointer::{
-    ButtonChange, PanZoomPhase, PenTool, PointerEvent, PointerInfo, PointerKind, PointerRole,
-    PointerSample, TouchpadSwipePhase,
+    ButtonChange, PanZoomPhase, PenTool, PointerEvent, PointerKind, PointerRole, PointerSample,
+    PointerSource, TouchpadSwipePhase,
 };
 
 use codec::{CodecError, NativeRecording};
@@ -249,7 +249,7 @@ fn kind(kind: PointerKind) -> &'static str {
 }
 
 /// `verb p<id><*primary> <kind> [d<device>]`.
-fn write_head(out: &mut String, verb: &str, pointer: &PointerInfo) {
+fn write_head(out: &mut String, verb: &str, pointer: &PointerSource) {
     let primary = if pointer.role == PointerRole::Primary {
         "*"
     } else {

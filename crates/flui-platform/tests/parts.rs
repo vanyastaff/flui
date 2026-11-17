@@ -9,8 +9,8 @@ use flui_foundation::geometry::{
 };
 use flui_platform::{
     AppTitleBar, Availability, Brightness, CapabilityAbsence, ColorGamut, DisplayColor,
-    DisplayInfo, DisplayKey, DisplayRegistry, GesturePreferences, HourCycle, KeyboardInset, Locale,
-    MeasurementSystem, MotionPreference, NumberingSystem, RegionOverride, RegionalFormats,
+    DisplayDescription, DisplayKey, DisplayRegistry, GesturePreferences, HourCycle, KeyboardInset,
+    Locale, MeasurementSystem, MotionPreference, NumberingSystem, RegionOverride, RegionalFormats,
     ScrollBarPreferences, ScrollBarVisibility, ScrollTrackClick, SizeConstraints, SrgbColor,
     SystemPreferences, TextWeightPreference, Weekday, WheelPreferences, WheelStep,
     WindowCapabilities, WindowCapability, WindowCommand, WindowExecutionState, WindowExtent,
@@ -76,7 +76,7 @@ fn preference_parts_validate_as_the_builder_does() {
 fn a_display_round_trips_through_its_parts() {
     let registry = DisplayRegistry::new();
     let id = registry.mint(&DisplayKey::Injected(9)).expect("id");
-    let display = DisplayInfo::from_device(
+    let display = DisplayDescription::from_device(
         id,
         "Studio Display",
         Bounds::new(Point::new(-1920, 0), Size::new(5120, 2880)),
@@ -93,7 +93,7 @@ fn a_display_round_trips_through_its_parts() {
     )));
     let (taken, parts) = display.clone().into_parts();
     assert_eq!(taken, id);
-    assert_eq!(parts.into_info(id), display);
+    assert_eq!(parts.into_description(id), display);
 }
 
 fn a_window_state_round_trips_through_its_parts() {

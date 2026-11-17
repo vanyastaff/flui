@@ -5867,7 +5867,7 @@ the library does not know settles it as `AnswerUnreadable`, and one whose `Inten
 not keep as `DataLost` with its code, each logged: every record taken off the queue ends a request
 or is reported. The result `Intent` never leaves the owner thread or the host: the router holds it
 by a global reference under its request's token and capability, and that capability's provider
-reads it once by handing the answer's `ResultData` to `Activity::take_data`. A `ResultData`
+reads it once by handing the answer's `ResultIntent` to `Activity::take_data`. A `ResultIntent`
 dropped unread (a completion nobody receives, a retired runtime, a provider that went) releases
 it, which the router sweeps. A request lives while its provider holds its `ResultTicket`; the drop
 records the release and wakes the owner through its signal, and that turn's sweep ends it as

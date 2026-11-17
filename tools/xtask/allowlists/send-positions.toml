@@ -59,8 +59,6 @@ positions = [
     { item = "flui_platform::storage::Storage", at = "supertrait", marker = "Send", crosses = "handle" },
     { item = "flui_platform::storage::Storage", at = "supertrait", marker = "Sync", crosses = "handle" },
     { item = "flui_platform::storage::StorageFuture", at = "dyn", marker = "Send", crosses = "job" },
-    { item = "flui_platform::surface_target::DisplayConnection", at = "supertrait", marker = "Send", crosses = "handle" },
-    { item = "flui_platform::surface_target::DisplayConnection", at = "supertrait", marker = "Sync", crosses = "handle" },
     { item = "flui_platform::surface_target::RedrawRequester", at = "supertrait", marker = "Send", crosses = "waker" },
     { item = "flui_platform::surface_target::RedrawRequester", at = "supertrait", marker = "Sync", crosses = "waker" },
     { item = "flui_platform::surface_target::SurfaceTarget", at = "supertrait", marker = "Send", crosses = "handle" },

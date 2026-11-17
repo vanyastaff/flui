@@ -213,7 +213,7 @@ mod tests {
 
     use flui_foundation::geometry::Bounds;
     use flui_platform::{
-        AppTitleBar, CapabilityAbsence, DisplayId, DisplayInfo, DisplayKey, DisplayRegistry,
+        AppTitleBar, CapabilityAbsence, DisplayDescription, DisplayId, DisplayKey, DisplayRegistry,
         WindowCommand, WindowExtent, WindowFrame,
     };
 
@@ -239,7 +239,7 @@ mod tests {
             let id = registry.mint(&DisplayKey::Injected(key)).expect("an id");
             let bounds = Bounds::new(Point::new(x, 0), Size::new(1920, 1080));
             let usable = Bounds::new(Point::new(x, panel), Size::new(1920, 1080 - panel));
-            DisplayInfo::from_device(id, "display", bounds, usable, ratio(scale))
+            DisplayDescription::from_device(id, "display", bounds, usable, ratio(scale))
                 .expect("a display")
         };
         let primary = display(1, 0, 2.0, 56).with_primary(true);

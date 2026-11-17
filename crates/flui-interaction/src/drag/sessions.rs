@@ -60,7 +60,7 @@ pub(crate) struct Entry {
     pub(crate) allowed: AllowedActions,
     pub(crate) reach: DragReach,
     pub(crate) source: PresentationId,
-    pub(crate) pointer: Option<flui_platform::pointer::PointerInfo>,
+    pub(crate) pointer: Option<flui_platform::pointer::PointerSource>,
     /// The press sequence the drag began in, which its OS session starts from.
     pub(crate) press: Option<flui_platform::pointer::PressId>,
     pub(crate) window: Option<std::rc::Weak<dyn PlatformWindow>>,
@@ -273,6 +273,6 @@ pub(crate) type Shared = Rc<RefCell<DragSessions>>;
 pub(crate) type WeakShared = Weak<RefCell<DragSessions>>;
 
 /// The pointer kind hit tests ask with when a session knows none.
-pub(crate) fn pointer_kind(pointer: Option<flui_platform::pointer::PointerInfo>) -> PointerKind {
+pub(crate) fn pointer_kind(pointer: Option<flui_platform::pointer::PointerSource>) -> PointerKind {
     pointer.map_or(PointerKind::Unknown, |info| info.kind)
 }

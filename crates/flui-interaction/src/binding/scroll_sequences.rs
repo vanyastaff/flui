@@ -15,7 +15,7 @@ use super::{
     SignalSource, pointer_sequences::MAX_SIMULTANEOUS_POINTERS, scroll_contact::Arbitration,
 };
 use crate::{
-    events::PointerInfo, gesture::settings::LatchIdle, ids::InputSurface, pointer::ScrollRoute,
+    events::PointerSource, gesture::settings::LatchIdle, ids::InputSurface, pointer::ScrollRoute,
 };
 
 /// Rc identity is the admission authority: a reentrant Begin cannot be
@@ -48,7 +48,7 @@ impl ScrollSequence {
 #[derive(Clone)]
 pub(super) struct ScrollContact {
     pub(super) surface: InputSurface,
-    pub(super) pointer: PointerInfo,
+    pub(super) pointer: PointerSource,
     pub(super) position: Point<f64>,
     /// The scroll targets competing with the feeds, when there are any.
     pub(super) arbitration: Option<Rc<Arbitration>>,
@@ -147,7 +147,7 @@ impl ScrollSequences {
     pub(super) fn is_current(
         &self,
         surface: InputSurface,
-        pointer: PointerInfo,
+        pointer: PointerSource,
         sequence: &Rc<ScrollSequence>,
     ) -> bool {
         self.latches
@@ -174,7 +174,7 @@ impl ScrollSequences {
     }
 
     /// Record that `source`'s momentum now belongs to nobody.
-    pub(super) fn drop_momentum_of(&self, surface: InputSurface, pointer: PointerInfo) {
+    pub(super) fn drop_momentum_of(&self, surface: InputSurface, pointer: PointerSource) {
         let key = (surface, SignalSource::from(pointer));
         let mut dropped = self.momentum_dropped.borrow_mut();
         dropped.retain(|held| *held != key);
@@ -214,8 +214,8 @@ mod tests {
 
     use super::*;
 
-    fn source(id: u64) -> PointerInfo {
-        PointerInfo::new(
+    fn source(id: u64) -> PointerSource {
+        PointerSource::new(
             PointerId::try_from(id).expect("pointer"),
             PointerKind::Mouse,
         )

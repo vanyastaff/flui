@@ -19,14 +19,14 @@ use wasm_bindgen_test::wasm_bindgen_test;
 
 /// What a display spans in device pixels: its logical extent at its scale,
 /// rounded, which a change of page zoom moves the scale of and not this.
-fn device_size(display: &flui_platform::DisplayInfo) -> (i64, i64) {
+fn device_size(display: &flui_platform::DisplayDescription) -> (i64, i64) {
     let device = |logical: f64| (logical * display.scale_factor.get()).round() as i64;
     let extent = display.bounds.extent();
     (device(extent.width), device(extent.height))
 }
 
 /// What a display's usable area spans in device pixels.
-fn device_usable(display: &flui_platform::DisplayInfo) -> (i64, i64) {
+fn device_usable(display: &flui_platform::DisplayDescription) -> (i64, i64) {
     let device = |logical: f64| (logical * display.scale_factor.get()).round() as i64;
     let usable = display.bounds.usable();
     (device(usable.width()), device(usable.height()))

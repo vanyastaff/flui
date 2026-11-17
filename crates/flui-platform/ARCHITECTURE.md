@@ -41,7 +41,7 @@ this one path (ADR-0151 §9).
   `docs/gaps.md`, "A window larger than a renderer draws"), since `flui-native` and
   `flui-engine` both read this crate and neither the other.
 - **A headroom is finite and at least white; an absent colour says why.** A display's
-  colour profile is `DisplayInfo::color`: a `DisplayColor` or the `CapabilityAbsence` the
+  colour profile is `DisplayDescription::color`: a `DisplayColor` or the `CapabilityAbsence` the
   platform gives, which `color_space()` and `headroom()` answer as `Unsupported`.
   `DisplayColor` is `Standard(gamut)` or `High(gamut, headroom)`: only the high range
   carries a headroom (or the absence of one), so a standard-range display that
@@ -115,7 +115,7 @@ this one path (ADR-0151 §9).
   window's place: the snapshot's outer and normal positions, `SetPosition`
   and the options' positions. There is no global logical space. The snapshot's
   outer position is measured on the window's `display`, which `successor`
-  sets from it. A `DisplayInfo` carries its extent and usable area in its own
+  sets from it. A `DisplayDescription` carries its extent and usable area in its own
   logical pixels (`DisplayBounds`, the usable area inside the extent) and its
   place in the window system's desktop as a `DesktopOrigin`, whose unit is
   the window system's and which no arithmetic mixes with a logical position.
@@ -402,7 +402,7 @@ What only the host owns reaches a provider through its `ProviderContext`
 elsewhere. The Activity is scoped by the `CapabilityId` the registrar minted
 for the provider's registration, which only its `RegisteredProvider` puts in
 the context, so no caller names another capability by its string; the
-values the host hands providers (`ResultTicket`, `ResultData`,
+values the host hands providers (`ResultTicket`, `ResultIntent`,
 `ActivityResult`, `ResultRequest`) are made only with the `ResultMint`
 `HostBridge::install_activity` hands the bridge. `capability::activity_result` holds that vocabulary and no JNI
 type: a request is identified by a `ResultToken` the host mints per call and
@@ -412,7 +412,7 @@ replaces; it ends exactly once, with an `ActivityResult` or a typed
 `ResultRefused`, and lasts while the provider holds its `ResultTicket`, whose
 `Drop` the host reads as a cancel (the `Resolver` answers no liveness query);
 an answer's `Intent` stays with the host until the provider
-hands its `ResultData` back, and a `ResultData` dropped unread releases it;
+hands its `ResultIntent` back, and a `ResultIntent` dropped unread releases it;
 and the provider's own `jni` crate works on raw pointers the
 host lends for one call (`JniFrame`, `IntentFrame`), filling objects the host
 made instead of handing the host a reference it would have to trust.

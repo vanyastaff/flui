@@ -11,14 +11,14 @@ use flui_interaction::{
 use flui_platform::{
     EventTime,
     pointer::{
-        DeviceId, PointerButtons, PointerId, PointerInfo, PointerKind, PointerMove,
-        PointerPosition, PointerSample,
+        DeviceId, PointerButtons, PointerId, PointerKind, PointerMove, PointerPosition,
+        PointerSample, PointerSource,
     },
 };
 use std::{cell::RefCell, rc::Rc};
 
-fn info(id: u64) -> PointerInfo {
-    PointerInfo::new(
+fn info(id: u64) -> PointerSource {
+    PointerSource::new(
         PointerId::try_from(id).expect("nonzero fixture ID"),
         PointerKind::Mouse,
     )

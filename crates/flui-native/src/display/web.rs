@@ -1221,8 +1221,8 @@ pub(crate) mod source {
 
     use flui_foundation::geometry::{Bounds, DevicePixelRatio, Point, Size};
     use flui_platform::{
-        CapabilityAbsence, DisplayColor, DisplayId, DisplayInfo, DisplayKey, DisplaySnapshot,
-        RefreshPeriod,
+        CapabilityAbsence, DisplayColor, DisplayDescription, DisplayId, DisplayKey,
+        DisplaySnapshot, RefreshPeriod,
     };
     use parking_lot::Mutex;
     use wasm_bindgen::{JsCast, JsValue};
@@ -1417,7 +1417,7 @@ pub(crate) mod source {
             std::mem::replace(&mut state.details, details)
         }
 
-        fn sample(&self, state: &mut State) -> Result<Vec<DisplayInfo>, PlatformError> {
+        fn sample(&self, state: &mut State) -> Result<Vec<DisplayDescription>, PlatformError> {
             let window = web_sys::window().ok_or_else(|| PlatformError::Displays {
                 message: "no global window".into(),
             })?;
@@ -1465,7 +1465,7 @@ pub(crate) mod source {
             state: &mut State,
             window: &web_sys::Window,
             period: Option<RefreshPeriod>,
-        ) -> Result<(Vec<DisplayInfo>, Option<DisplayId>), PlatformError> {
+        ) -> Result<(Vec<DisplayDescription>, Option<DisplayId>), PlatformError> {
             let screen = window.screen().map_err(|_| PlatformError::Displays {
                 message: "the window has no screen".into(),
             })?;
@@ -1510,7 +1510,7 @@ pub(crate) mod source {
             window: &web_sys::Window,
             details: &JsValue,
             period: Option<RefreshPeriod>,
-        ) -> Option<(Vec<DisplayInfo>, Option<DisplayId>)> {
+        ) -> Option<(Vec<DisplayDescription>, Option<DisplayId>)> {
             let screens: Vec<JsValue> = js_sys::Array::from(&get(details, "screens")?).to_vec();
             if screens.is_empty() {
                 return None;
@@ -1608,7 +1608,7 @@ pub(crate) mod source {
         id: DisplayId,
         own_ratio: DevicePixelRatio,
         scale_override: Option<DevicePixelRatio>,
-    ) -> Option<DisplayInfo> {
+    ) -> Option<DisplayDescription> {
         let scale_factor = scale_override.unwrap_or(own_ratio);
         let number = |name: &str, fallback: f64| get_number(screen, name).unwrap_or(fallback);
         let device = |css: f64| device_pixels(css, own_ratio.get());
@@ -1647,7 +1647,7 @@ pub(crate) mod source {
         Some(info)
     }
 
-    fn with_period(info: DisplayInfo, period: Option<RefreshPeriod>) -> DisplayInfo {
+    fn with_period(info: DisplayDescription, period: Option<RefreshPeriod>) -> DisplayDescription {
         match period {
             Some(period) => info.with_refresh_period(period.get()),
             None => info,

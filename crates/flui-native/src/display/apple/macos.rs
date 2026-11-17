@@ -1,7 +1,7 @@
 //! The macOS display source (`NSScreen`).
 //!
 //! On `objc2` / `objc2-app-kit`, like the rest of the backend. Each screen
-//! becomes a [`DisplayInfo`] whose refresh period is the rate of the display's
+//! becomes a [`DisplayDescription`] whose refresh period is the rate of the display's
 //! current mode (`CGDisplayCopyDisplayMode`), so a 120 Hz ProMotion panel
 //! reports 120 Hz and a mode the display cannot describe reports nothing.
 //!
@@ -42,7 +42,7 @@ use objc2_foundation::{
     NSString,
 };
 
-use flui_platform::{DisplayId, DisplayInfo, DisplayKey, DisplaySnapshot, RefreshPeriod};
+use flui_platform::{DisplayDescription, DisplayId, DisplayKey, DisplaySnapshot, RefreshPeriod};
 
 #[cfg(not(target_arch = "aarch64"))]
 use super::screen::MacosPotentialHeadroom;
@@ -159,7 +159,7 @@ impl MacosDisplays {
     }
 
     /// Read every screen (`+[NSScreen screens]`).
-    fn read(&self, mtm: MainThreadMarker) -> Vec<DisplayInfo> {
+    fn read(&self, mtm: MainThreadMarker) -> Vec<DisplayDescription> {
         let screens: Retained<NSArray<NSScreen>> = NSScreen::screens(mtm);
         let mut displays = Vec::with_capacity(screens.count());
         // The first screen is always the primary (main) display, and its
@@ -195,7 +195,7 @@ impl MacosDisplays {
             };
             // The name System Settings shows ("Built-in Retina Display", a
             // monitor's model), macOS 10.15 and later.
-            let mut display = DisplayInfo::new(
+            let mut display = DisplayDescription::new(
                 id,
                 screen.localizedName().to_string(),
                 origin,

@@ -10,8 +10,8 @@ use std::time::Duration;
 
 use flui_foundation::geometry::Point;
 use flui_interaction::events::{
-    PointerButton, PointerButtons, PointerEvent, PointerInfo, PointerKind, PointerMove,
-    PointerPosition, PointerPress, PointerRelease, PointerRole, PointerSample,
+    PointerButton, PointerButtons, PointerEvent, PointerKind, PointerMove, PointerPosition,
+    PointerPress, PointerRelease, PointerRole, PointerSample, PointerSource,
 };
 use flui_interaction::gesture::GestureSettings;
 use flui_interaction::pointer::PointerDispatch;
@@ -44,8 +44,8 @@ fn sample(time: Duration, x: f64, y: f64) -> PointerSample {
     )
 }
 
-fn info(id: u64) -> PointerInfo {
-    PointerInfo::new(
+fn info(id: u64) -> PointerSource {
+    PointerSource::new(
         PointerId::try_from(id).expect("nonzero pointer"),
         PointerKind::Touch,
     )
