@@ -1333,7 +1333,7 @@ fn a_drag_into_a_window_of_this_process_drops_through_the_loop() {
     if ended.get() != Some(OsDragEnd::Dropped(TransferActions::COPY))
         || std::env::var_os("FLUI_PROBE").is_some()
     {
-        let probes: Vec<String> = (0..8).map(probe::attempt).collect();
+        let probes: Vec<String> = (0..10).map(probe::attempt).collect();
         eprintln!("PROBE first {:?}", ended.get());
         for probe in probes {
             eprintln!("{probe}");
@@ -1372,8 +1372,8 @@ mod probe {
     use super::*;
     use windows::Win32::UI::Input::KeyboardAndMouse::GetCapture;
     use windows::Win32::UI::WindowsAndMessaging::{
-        GetClassNameW, GetCursorPos, GetMessagePos, GetSystemMetrics, SM_CXSCREEN, SM_CYSCREEN,
-        SetCursorPos,
+        GetClassNameW, GetCursorPos, GetMessagePos, GetPhysicalCursorPos, GetSystemMetrics,
+        SM_CXSCREEN, SM_CYSCREEN, SWP_NOACTIVATE, SetCursorPos,
     };
 
     fn window(hwnd: HWND) -> String {
@@ -1458,6 +1458,25 @@ mod probe {
                 )
             };
         }
+        if variant == 8 || variant == 9 {
+            // SAFETY: the case's own live window, on its thread; metrics by value.
+            let _ = unsafe {
+                let (w, h) = (GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN));
+                if variant == 8 {
+                    SetWindowPos(
+                        target.hwnd,
+                        Some(HWND_TOPMOST),
+                        -100,
+                        -100,
+                        w + 200,
+                        h + 200,
+                        SWP_NOACTIVATE,
+                    )
+                } else {
+                    SetWindowPos(target.hwnd, Some(HWND_TOPMOST), -20, -20, 0, 0, SWP_NOSIZE)
+                }
+            };
+        }
         if variant == 7 {
             // SAFETY: an argument-free query of the calling thread.
             let pos = unsafe { GetMessagePos() };
@@ -1489,8 +1508,22 @@ mod probe {
         let counted = Rc::clone(&calls);
         let report = Rc::new(RefCell::new(String::new()));
         let reported = Rc::clone(&report);
+        let positions = Rc::new(RefCell::new(Vec::new()));
+        let read_positions = Rc::clone(&positions);
         let decide = move || {
             counted.set(counted.get() + 1);
+            {
+                let mut physical = POINT::default();
+                // SAFETY: queries by value and into a live local.
+                let now = unsafe {
+                    let read = GetPhysicalCursorPos(&raw mut physical).is_ok();
+                    (GetMessagePos(), read, physical.x, physical.y)
+                };
+                let mut positions = read_positions.borrow_mut();
+                if positions.len() < 8 && positions.last() != Some(&now) {
+                    positions.push(now);
+                }
+            }
             let entered = seen.borrow().iter().any(|line| line.starts_with("entered"));
             if !entered && started.elapsed() < Duration::from_secs(2) {
                 return S_OK;
@@ -1586,9 +1619,10 @@ mod probe {
         stop.store(true, Ordering::Release);
         let _ = poke.join();
         format!(
-            "PROBE variant {variant}: ended={:?} seen={:?} decide_calls={} feedback={:?} cursor_before={before:?} set_cursor={set_cursor:?} poke(sent,no_capture,post_failed,no_info)={:?}\n   {}",
+            "PROBE variant {variant}: ended={:?} seen={:?} positions(msgpos,physical)={:x?} decide_calls={} feedback={:?} cursor_before={before:?} set_cursor={set_cursor:?} poke(sent,no_capture,post_failed,no_info)={:?}\n   {}",
             ended.get(),
-            target.seen.borrow(),
+            target.seen.borrow().iter().take(4).collect::<Vec<_>>(),
+            positions.borrow(),
             calls.get(),
             feedback.borrow(),
             stats
