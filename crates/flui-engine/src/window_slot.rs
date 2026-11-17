@@ -470,18 +470,17 @@ impl WindowSlot {
 
     /// The format the slot's frames will draw in once it is configured, read
     /// from the surface's capabilities before any size is known; `None` while
-    /// it holds no surface or the surface offers no configuration.
+    /// it holds no surface or its colour cannot be resolved. It resolves the
+    /// colour as `Renderer::derive_surface_config` does, without that
+    /// function's warnings, which the first configure logs once (ADR-0256 §1).
     pub(crate) fn expected_format(&self, gpu: &Gpu<'_>) -> Option<wgpu::TextureFormat> {
         let surface = self.lease.surface()?;
-        // The format does not depend on the size; one pixel stands for any.
-        let (_config, _copy_src, color) = crate::Renderer::derive_surface_config(
-            surface,
-            gpu.adapter,
-            self.lease.pacing(),
-            1,
-            1,
-            self.latency,
-            self.color,
+        let color = ResolvedSurfaceColor::resolve(
+            self.color.requested,
+            &surface.get_capabilities(gpu.adapter),
+            self.color.display,
+            &surface.display_hdr_info(gpu.adapter),
+            crate::surface_color::working_format_renderable(gpu.adapter),
         )
         .ok()?;
         Some(color.working_format())

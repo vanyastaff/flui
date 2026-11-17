@@ -151,7 +151,9 @@ pub struct GpuContext {
   the driver's compilation overlaps the application's first build instead of following it. A
   panic of the worker resumes on that frame, which settles `Retry` as any panicking frame does
   (§7), and the next frame builds the library itself; a device rebuild drops a warm-up under way,
-  whose library is the lost device's. A second format, and the variants the shape and gradient
+  whose library is the lost device's. A first frame in another format than the warm-up's (a colour
+  change before the first size, an offscreen slot of another format attached first) waits for the
+  warm-up and builds its own format too. A second format, and the variants the shape and gradient
   caches build on demand, are built on the frame that first draws them. wasm32 has no thread to
   build on, and there the frame builds the library. Flutter's counterpart is Impeller, which
   creates its pipelines when its context starts, on its worker pool, where Skia's backend needed
@@ -160,15 +162,8 @@ pub struct GpuContext {
 - `wgpu::PipelineCache` reaches pipeline creation only where the adapter has
   `Features::PIPELINE_CACHE`, which wgpu implements on Vulkan alone
   (`wgpu-types/src/features.rs:1163-1172`); every other site passes `None`, as all fourteen
-  pipeline sites do today. Its data outlives the process in the application's machine-local
-  store, one file per `wgpu::util::pipeline_cache_key` (adapter vendor and device), wrapped in an
-  envelope of length and content hash and refused above 64 MiB: wgpu checks only the data's
-  header, so a truncated or altered file is the envelope's to catch. A file the envelope or wgpu
-  refuses is deleted and the context starts cold, without failing; a write stages a file and
-  renames it over the old one, so a crash mid-write leaves the previous data or none. The data is
-  written back after the warm-up and when the context retires. This is what a driver without a
-  disk cache of its own (Android's Vulkan drivers) needs between runs; lavapipe stores nothing in
-  it. Not built yet ([gap](../gaps.md#accepted-adr-sections-not-built-yet)).
+  pipeline sites do today. Its data lives for the context's life and is not persisted: where it
+  would be stored and how a driver update invalidates it is a separate decision.
 - **An atlas entry ages by queue submission.** The glyph atlas and the image cache stamp an entry
   with the submission that last used it; the counter advances once per `queue.submit`, and an
   entry used at or after the start of the oldest shown slot's latest frame is immune from
@@ -687,8 +682,9 @@ the facade. Every production use of `with_backend` becomes:
   - `a_device_rebuild_keeps_the_surfaces_and_redraws_every_slot_in_full`;
   - `the_first_slots_attach_builds_its_pipelines_on_a_worker_once`,
     `a_warm_up_that_panics_fails_the_frame_that_joins_it_and_the_next_builds_inline` and
-    `a_device_rebuild_drops_a_warm_up_under_way` (the warm-up of §1), with the cold first frame
-    timed by `crates/flui-engine/benches/first_frame.rs`;
+    `a_device_rebuild_drops_a_warm_up_under_way` and, in `headless.rs`,
+    `a_new_renderer_warms_its_capture_pipelines_and_the_first_capture_takes_them` (the warm-up of
+    §1), with the cold first frame timed by `crates/flui-engine/benches/first_frame.rs`;
   - `a_hidden_slot_is_not_acquired_and_settles_not_shown`.
 - Tests to be added through the public API, without a GPU, in `flui-engine`'s `tests/` against
   the testing backend: `a_full_lifecycle_queue_returns_the_command`,

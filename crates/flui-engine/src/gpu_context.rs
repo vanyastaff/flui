@@ -765,14 +765,7 @@ impl GpuContext {
                 entry.size = size;
                 Ok(())
             }
-            Some(SurfaceSlot::Window(window)) => {
-                window.resize(&gpu_of(adapter, domain), size)?;
-                // A configured window names the format its frames draw in.
-                if let Some((format, _size)) = window.target_format() {
-                    self.warm_pipelines(format);
-                }
-                Ok(())
-            }
+            Some(SurfaceSlot::Window(window)) => window.resize(&gpu_of(adapter, domain), size),
             None => Err(not_attached()),
         }
     }
@@ -1108,6 +1101,16 @@ impl GpuContext {
     #[cfg(test)]
     pub(crate) fn builds(&self) -> ContextBuilds {
         self.builds
+    }
+
+    /// Whether a pipeline warm-up is under way; never on wasm32.
+    #[cfg(test)]
+    pub(crate) fn warming_up(&self) -> bool {
+        #[cfg(not(target_arch = "wasm32"))]
+        let warming = self.warmup.is_some();
+        #[cfg(target_arch = "wasm32")]
+        let warming = false;
+        warming
     }
 
     /// Make the next offscreen frame panic after its recording, before its
