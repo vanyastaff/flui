@@ -567,7 +567,7 @@ impl<'v> SubtreeCull<'v> {
         let Some(record) = inner.record(at.node.key()) else {
             return false;
         };
-        let Some(Entry::Chunk { chunk, .. }) = record.content().entries().get(at.entry.get())
+        let Some(Entry::Chunk { chunk, parent }) = record.content().entries().get(at.entry.get())
         else {
             return false;
         };
@@ -580,7 +580,10 @@ impl<'v> SubtreeCull<'v> {
             .path
             .last()
             .expect("BUG: standing in a node leaves it on the path");
-        let reach = top.entry_reach(geometry, at.entry, bounds, &mut self.scratch);
+        let reach = match parent {
+            None => top.content_reach(bounds),
+            Some(_) => top.entry_reach(geometry, at.entry, bounds, &mut self.scratch),
+        };
         self.meets_reach(reach)
     }
 
