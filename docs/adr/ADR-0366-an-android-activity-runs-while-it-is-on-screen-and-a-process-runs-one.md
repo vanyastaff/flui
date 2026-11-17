@@ -1,4 +1,4 @@
-# ADR-0364: An Android Activity runs while it is on screen, and a process runs one
+# ADR-0366: An Android Activity runs while it is on screen, and a process runs one
 
 - **Status:** Implemented (2026-11-17)
 - **Date:** 2026-11-17

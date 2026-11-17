@@ -15,7 +15,7 @@
 //! | `onStop` / `onSaveInstanceState` | the process may be killed without notice | session end |
 //!
 //! What the window reports follows from the three facts together
-//! (`ActivityStanding`, beside the looper's callbacks, ADR-0364): it runs
+//! (`ActivityStanding`, beside the looper's callbacks, ADR-0366): it runs
 //! while it is on screen, so a
 //! paused Activity that stays visible (split screen, picture-in-picture, a
 //! translucent or dialog Activity over it) keeps drawing, taking input and

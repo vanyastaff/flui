@@ -8,7 +8,7 @@
   sleep). The rest of both decisions is unchanged; iOS keeps its sleep.
 - **Superseded-by:** [ADR-0268](ADR-0268-the-ios-display-link-paces-the-backgrounded-pump.md), the clause
   "iOS keeps its sleep" only: the iOS display link paces its backgrounded pump.
-  [ADR-0364](ADR-0364-an-android-activity-runs-while-it-is-on-screen-and-a-process-runs-one.md)
+  [ADR-0366](ADR-0366-an-android-activity-runs-while-it-is-on-screen-and-a-process-runs-one.md)
   for decisions 2 and 3, the gate only: what they say of a resumed and a paused Activity holds of
   one on screen (`onStart` to `onStop`) and one stopped, and the preferences are read again on
   `Start`.

@@ -555,7 +555,7 @@ fn sample_state(
             brightness: kept.appearance,
             insets: kept.insets,
             // Running while on screen, paused or not, and focused while in
-            // the foreground with the input focus (ADR-0364).
+            // the foreground with the input focus (ADR-0366).
             execution: standing.execution(),
             occluded: !standing.visible,
             hovered: kept.hovered,

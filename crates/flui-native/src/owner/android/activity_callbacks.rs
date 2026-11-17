@@ -68,7 +68,7 @@ pub(crate) enum ActivitySignal {
 }
 
 /// The Activity's three lifecycle facts as its callbacks last reported them,
-/// and what the window reports from them (ADR-0364).
+/// and what the window reports from them (ADR-0366).
 ///
 /// Android keeps a paused Activity on screen wherever another one holds the
 /// foreground without covering it: the other half of a split screen below API

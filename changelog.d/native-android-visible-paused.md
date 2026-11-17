@@ -3,7 +3,7 @@
 - **`flui-native`**: an Android Activity that is paused but still on screen (split screen, picture
   in picture, a translucent or dialog Activity on top) keeps drawing, taking input and running its
   owner jobs, and reports its lifecycle as `Inactive`; only `onStop` suspends the window and
-  releases its surface (ADR-0364). While stopped, the loop answers every input event, so a touch
+  releases its surface (ADR-0366). While stopped, the loop answers every input event, so a touch
   held through Home no longer makes the system report the application not responding.
 - **`flui-native`**: an Android process runs one FLUI platform. A second `FluiActivity`, which a
   share or a link from another application starts in that application's task, hands its intent to

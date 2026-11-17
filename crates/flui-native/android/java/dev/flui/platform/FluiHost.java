@@ -50,7 +50,7 @@ import java.util.Set;
  * wakes and never waits for the owner; the lock guards the deques alone, and
  * neither side calls out while it holds it.
  *
- * <p>A process runs one FLUI platform (ADR-0364), over the Activity that owns
+ * <p>A process runs one FLUI platform (ADR-0366), over the Activity that owns
  * the queues ({@link #created}): the newest {@link FluiActivity} unless an
  * older one is still live and not finishing, in which case the newer one
  * hands what it was opened with to the owner and finishes. Only the owner

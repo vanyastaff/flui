@@ -43,7 +43,7 @@
 //! surface's lifetime has a defined end at all. Emitting on `Stop` as well
 //! moves the drop off it in the ordinary cycle, where the release is then an
 //! idempotent no-op at `TerminateWindow`. `Pause` keeps the surface: a paused
-//! Activity that stays on screen keeps drawing (ADR-0364).
+//! Activity that stays on screen keeps drawing (ADR-0366).
 //!
 //! The initial `on_ready` waits for the first `InitWindow`, not the first
 //! `Start`: `native_window()` is `None` until then, so a bootstrap that
@@ -927,7 +927,7 @@ impl host::Loop for AndroidLoop {
                         // The foreground, focus gained and the end of the
                         // session have nothing to do besides delivering their
                         // signal: a paused Activity stays on screen, drawing,
-                        // until `Stop` (ADR-0364).
+                        // until `Stop` (ADR-0366).
                         MainEvent::Resume { .. }
                         | MainEvent::GainedFocus
                         | MainEvent::SaveState { .. } => {

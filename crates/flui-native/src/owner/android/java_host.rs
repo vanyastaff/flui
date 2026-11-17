@@ -16,7 +16,7 @@
 //!
 //! `FluiActivity` forwards its callbacks into a queue in `FluiHost`, which
 //! buffers until a platform binds its wake handle (an entry can arrive before
-//! `android_main` runs). A process runs one platform (ADR-0364): only the
+//! `android_main` runs). A process runs one platform (ADR-0366): only the
 //! Activity that owns the queues binds and drains them, and one created while
 //! another runs FLUI is refused here ([`PlatformError::SecondActivity`]) after
 //! handing its intent over. Once bound, each entry wakes the owner (ADR-0249),
@@ -64,7 +64,7 @@ pub(crate) struct Found {
 /// [`PlatformError::HostProtocol`] when the classes state another protocol,
 /// [`PlatformError::Init`] when the APK has none of FLUI's classes or its
 /// Activity is not a `FluiActivity`, and [`PlatformError::SecondActivity`]
-/// when another Activity of the process runs FLUI (ADR-0364): this one hands
+/// when another Activity of the process runs FLUI (ADR-0366): this one hands
 /// its intent to that one and finishes.
 pub(crate) fn check(found: &Found) -> Result<(), PlatformError> {
     let Some(packaged) = found.protocol else {
@@ -421,7 +421,7 @@ mod queue {
                 Ok(None) => {
                     // The platform started over the owner (`java_host::check`), and
                     // only an Activity created since, while this one was
-                    // finishing, owns the queues now (ADR-0364).
+                    // finishing, owns the queues now (ADR-0366).
                     tracing::info!(
                         target: "flui_native::android",
                         "a newer Activity owns FluiHost's queue; this finishing one hears none"
@@ -963,7 +963,7 @@ mod tests {
         );
     }
 
-    /// A process runs one FLUI platform (ADR-0364): `FluiActivity` asks
+    /// A process runs one FLUI platform (ADR-0366): `FluiActivity` asks
     /// `FluiHost` whether it owns the queues before `NativeActivity` starts
     /// the library, and a second instance hands its intent to the running one
     /// and finishes; only the owner binds a wake handle and reads the queues,

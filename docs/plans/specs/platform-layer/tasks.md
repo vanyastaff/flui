@@ -8500,7 +8500,7 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
   во всех именах XML (`is_xml_name_text`); `setsockopt` записи — только когда остаток сократился
   на `WRITE_TIMEOUT_SLACK`.
 
-- [x] **LY137** — ветка `native/android-visible-paused`, решение — ADR-0364 (заменяет
+- [x] **LY137** — ветка `native/android-visible-paused`, решение — ADR-0366 (заменяет
   Android-предложение ADR-0345 §1, затвор решений 2 и 3 ADR-0249 и довод строки `launchMode`
   решения 6 ADR-0255). Проверено на `main` @ `620f5e43c` чтением. Подтвердились все три: `Pause`
   отпускал поверхность и снимал `resumed`, на котором стояли кадры, ввод, опрос настроек и
@@ -8522,7 +8522,7 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
   так что касание, удержанное через Home, больше не ведёт к ANR (запись gaps снята, прогон должен
   на устройстве). Задания приложения при остановленной Activity ждут `Start`, как фоновая
   прокачка iOS (ADR-0268); запись gaps «A paused Android Activity runs no owner jobs» снята: видимая
-  приостановленная Activity их обслуживает, правило для остановленной записано в ADR-0364 §1.
+  приостановленная Activity их обслуживает, правило для остановленной записано в ADR-0366 §1.
   Процесс держит одну платформу: `FluiHost.created` в `onCreate` до старта библиотеки делает
   Activity владельцем очередей, если живой владелец не завершается; только владелец привязывает
   handle (`bind(Activity, long)` отвечает `false`) и читает очереди (`peekEntries`, `peekOpened`,

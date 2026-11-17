@@ -16,7 +16,7 @@ import android.view.Window;
  * the APK, where the Activity's class loader finds them, and gives FLUI the
  * callbacks only an Activity subclass receives, which it forwards to the
  * queue in {@link FluiHost}. A process runs one: an instance created while
- * another runs FLUI hands its intent to that one and finishes (ADR-0364).
+ * another runs FLUI hands its intent to that one and finishes (ADR-0366).
  *
  * <p>The request codes {@link FluiHost#FIRST_HOST_CODE} to
  * {@link FluiHost#LAST_HOST_CODE} are the host's: capability providers start
@@ -55,7 +55,7 @@ public class FluiActivity extends NativeActivity {
         }
         // Before `NativeActivity.onCreate` starts `android_main`, whose
         // platform starts only over the Activity that owns the host's queues:
-        // a process runs one FLUI platform (ADR-0364).
+        // a process runs one FLUI platform (ADR-0366).
         boolean owner = FluiHost.created(this);
         super.onCreate(savedInstanceState);
         if (!owner) {

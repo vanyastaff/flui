@@ -17,7 +17,7 @@ pub(crate) struct LoopTurn {
     /// The turn has a frame to deliver at the choreographer's next frame,
     /// whose callback is posted and wakes the looper (ADR-0269).
     pub(crate) awaiting_vsync: bool,
-    /// The Activity is on screen, paused or not (ADR-0364), so a frame can be
+    /// The Activity is on screen, paused or not (ADR-0366), so a frame can be
     /// delivered at all.
     pub(crate) running: bool,
     /// The earliest wall-clock deadline the wake hook reported.

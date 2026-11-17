@@ -3350,7 +3350,7 @@ own method, per ADR-0035's split of this family by signal rather than by arity.
 Android and the Web emit it. Android's `Stop` and `TerminateWindow` send `Release`,
 `Start` and `InitWindow` send `Rebuild` — `owner/android/looper.rs`'s module doc
 carries why that pair, and not `Stop` alone, is the correct mapping; `Pause` keeps the
-surface, since a paused Activity that stays on screen keeps drawing (ADR-0364). The Web sends
+surface, since a paused Activity that stays on screen keeps drawing (ADR-0366). The Web sends
 `Release` on `webglcontextlost` and `Rebuild` on `webglcontextrestored`: the canvas stays, the context behind it is gone, and
 whatever was built on it must be rebuilt once the browser gives one back. The loss is
 cancelled with `preventDefault` — without that the browser never restores the context —
@@ -4034,7 +4034,7 @@ focus. Headless simulation exercises the same observation contract.
 
 Android records `Start`/`Stop` in the standing it shares with its window before
 invoking embedder callbacks. Its window reports `Running` while the Activity is on
-screen, paused or not, and otherwise `Suspended` (ADR-0364); the foreground refines
+screen, paused or not, and otherwise `Suspended` (ADR-0366); the foreground refines
 the focus, and native-window availability remains a separate fact.
 This makes redraw-backed owner continuations honest: the loop consumes redraw
 flags only after polling confirms execution is still running. A queued `Stop`
@@ -5732,7 +5732,7 @@ Before the platform starts, `owner::android::java_host` reads through the Activi
 whether the APK has `FluiHost`, whether its `PROTOCOL` is the library's, whether the Activity is
 a `FluiActivity` and whether it owns `FluiHost`'s queues; anything else refuses the start with
 `PlatformError::HostProtocol`, `Init` or `SecondActivity`, naming what it found, before any
-native method is bound (decision 5, ADR-0364). `owner::android::java_view`
+native method is bound (decision 5, ADR-0366). `owner::android::java_view`
 then loads `FluiView` through the same loader on the Java main thread, binds its native methods
 with `RegisterNatives` on the class it returned (`FindClass` would search the system loader), and
 lays one full-window view over the Activity's content (ADR-0348). Every owner-to-view call is posted
@@ -5746,7 +5746,7 @@ then frees it, both on the Java main thread, the only thread that calls the view
 2): `onTrimMemory`, at most one entry per trim level; each intent `onCreate` and `onNewIntent`
 receive, at most `MAX_OPENED_ITEMS`; and each answer `onActivityResult` brings to a request for a
 result (below). The queues are Java statics: they buffer what arrives before `android_main` runs
-or between two platforms of one process. A process runs one platform (ADR-0364): the queues belong
+or between two platforms of one process. A process runs one platform (ADR-0366): the queues belong
 to the Activity `FluiHost.created` made their owner in `onCreate`, before the library starts, and
 a second instance created while a live owner is not finishing hands its intent to the owner as an
 intent to the running Activity, brings the owner's task to the front and finishes, its platform
@@ -6066,7 +6066,7 @@ The loop has no timer of its own (ADR-0249): every producer wakes the looper
 (`request_redraw` on the request that sets its flag, `OwnerSignal`, the Java
 view's queue, the inset reply, this callback), and `poll_timeout` blocks until
 the next wake deadline or 500 ms preference sample while the Activity is on
-screen, and while stopped until a deadline still ahead or a wake (ADR-0364). A
+screen, and while stopped until a deadline still ahead or a wake (ADR-0366). A
 deadline already behind while stopped waits for a frame, so it does not cut the
 wait to zero.
 
@@ -6250,7 +6250,7 @@ means. The window's published state is refreshed before its observer is told.
 
 **Choice:** `onStart`/`onStop` give visibility, `onResume`/`onPause` the foreground,
 `onWindowFocusChanged` focus; none implies another. The window reports from the three together
-(`activity_callbacks::ActivityStanding`, ADR-0364): running while visible, so a paused Activity that stays on
+(`activity_callbacks::ActivityStanding`, ADR-0366): running while visible, so a paused Activity that stays on
 screen keeps drawing, taking input and serving its owner; focused while focused and in the
 foreground. `onLowMemory` is `Critical`, and
 each `onTrimMemory`, which `FluiActivity` forwards through `FluiHost`'s queue, is the level its
