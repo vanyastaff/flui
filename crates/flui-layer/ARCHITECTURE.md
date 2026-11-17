@@ -252,7 +252,10 @@ both versions. A follower under `LeaderClip::Hide` is damaged when the patch cha
 leader's branch, and so is every follower whose chains pass through it, since hidden it hides
 them. A scope's footprint folds only its effects and slots, from the last back and without
 recursion, each effect starting from its direct chunks' union; a clip over
-filters with a kernel bounds their scope by the clip. A node's foreground filter inputs are read
+filters with a kernel bounds their scope by the clip, and a clip that cuts its scope away whole
+keeps the strip of itself within one device pixel of it (`edge_of`), judged by the least scale of
+the maps between the clip and the surface that the fold knows, since an anti-aliased edge shows
+content in a pixel the two share ([ADR-0304](../../docs/adr/ADR-0304-the-scene-is-retained-and-damage-is-the-footprint-of-its-patch.md) §4). A node's foreground filter inputs are read
 only once the damage meets its subtree footprint, in one fold; until then only the content's
 closure entries are visited, never its other chunks. A surface
 change between applies is

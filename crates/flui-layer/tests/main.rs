@@ -416,6 +416,26 @@ fn scene_patch_damage() {
                 d::damage_under_a_fractional_clip_edge_takes_the_shared_pixel,
             ),
             (
+                "a_clip_in_a_nodes_own_content_keeps_the_pixel_it_shares",
+                d::a_clip_in_a_nodes_own_content_keeps_the_pixel_it_shares,
+            ),
+            (
+                "a_clip_in_a_nodes_own_content_under_a_scale_below_1_keeps_the_pixel_it_shares",
+                d::a_clip_in_a_nodes_own_content_under_a_scale_below_1_keeps_the_pixel_it_shares,
+            ),
+            (
+                "a_moved_clip_in_a_nodes_own_content_damages_the_pixel_it_shared",
+                d::a_moved_clip_in_a_nodes_own_content_damages_the_pixel_it_shared,
+            ),
+            (
+                "a_repaint_in_a_scrolled_viewport_damages_only_what_it_shows",
+                d::a_repaint_in_a_scrolled_viewport_damages_only_what_it_shows,
+            ),
+            (
+                "an_ancestor_scale_below_1_still_loses_the_pixel_a_content_clip_shares",
+                d::an_ancestor_scale_below_1_still_loses_the_pixel_a_content_clip_shares,
+            ),
+            (
                 "a_filter_under_a_shrinking_ancestor_damages_its_device_kernel",
                 d::a_filter_under_a_shrinking_ancestor_damages_its_device_kernel,
             ),

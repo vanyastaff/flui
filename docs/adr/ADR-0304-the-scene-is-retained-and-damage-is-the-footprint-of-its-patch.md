@@ -289,7 +289,14 @@ under-report. A clip on the chain from the surface to a node cuts the node's foo
 pixels it touches once mapped to the surface, since
 an anti-aliased clip's edge can show content in a pixel it covers in part (for a hard clip,
 which snaps, that is an over-report). A clip inside a node's own content cuts the node's stored
-bound exactly, in the node's space. The engine culls with the
+bound in the node's space, where the device scale is not known: a cut that leaves something is
+exact, and rounding it once mapped matches the pixels; a clip that cuts the content away whole
+keeps the strip of itself within one device pixel of the content, a pixel the two can share. The
+strip's width is one pixel over the least scale of the maps between the clip and the surface that
+the footprint knows: the node's own content for its stored bound, and the whole chain for a
+footprint mapped to the surface. A stored bound takes the chain above its node at a scale of 1 or
+more ([gap](../gaps.md#a-clip-in-a-nodes-own-content-under-an-ancestors-scale-below-1)). The
+engine culls with the
 same bounds. A chain, placement or
 bound that is not finite makes the frame `Full(NonFinite)`; a singular chain draws nothing and
 contributes only its old footprint.

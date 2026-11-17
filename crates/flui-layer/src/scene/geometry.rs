@@ -162,13 +162,28 @@ impl Scope {
     /// takes and adds its spread to the kernel (`device_spread`); a clip
     /// over a scope with a kernel bounds it by the clip, its kernel spent,
     /// since a local bound cannot hold device pixels but the clip still
-    /// bounds all they draw.
-    pub(crate) fn through(self, links: &Links<'_>) -> Self {
+    /// bounds all they draw. A clip that cuts away all of a scope keeps the
+    /// strip of itself that lies within one device pixel of the scope
+    /// (`edge_of`): an anti-aliased clip shows content in a pixel its edge
+    /// shares with that content.
+    pub(crate) fn through(self, links: &Links<'_>, outer: f64) -> Self {
+        // How much the maps outward of each step shrink a length at least,
+        // up to the space `links` lead out to; a space beyond it is taken
+        // at a scale of 1 or more.
+        let mut shrink: SmallVec<[f64; 16]> = SmallVec::with_capacity(links.steps.len());
+        let mut scale = outer;
+        for link in &links.steps {
+            shrink.push(scale);
+            if let Some(Map::Matrix(matrix)) = links.map(link) {
+                scale *= least_scale(matrix);
+            }
+        }
         links
             .steps
             .iter()
+            .zip(shrink)
             .rev()
-            .fold(self, |scope, link| match *link {
+            .fold(self, |scope, (link, scale)| match *link {
                 Link::Translate(_) | Link::Matrix(_) | Link::Resolved(_) => Self {
                     local: match (scope.local, links.map(link)) {
                         (Reach::Rect(rect), Some(map)) => map.rect(rect),
@@ -182,7 +197,10 @@ impl Scope {
                     kernel: 0.0,
                 },
                 Link::Clip(clip) => Self {
-                    local: clipped(scope.local, Reach::rect(clip)),
+                    local: match clipped(scope.local, Reach::rect(clip)) {
+                        Reach::Nothing => edge_of(scope.local, clip, scale),
+                        cut => cut,
+                    },
                     ..scope
                 },
                 Link::Filter(filter) => Self {
@@ -199,6 +217,50 @@ impl Scope {
                 },
             })
     }
+}
+
+/// The strip of `clip` within one device pixel of `content`, which `clip`
+/// cuts away whole, with `scale` the least a length in their space grows on
+/// its way to the surface: mapped and rounded out to whole pixels, it holds
+/// any pixel the two share. Nothing when they lie apart by a pixel or more.
+fn edge_of(content: Reach, clip: Rect<f64>, scale: f64) -> Reach {
+    let Reach::Rect(content) = content else {
+        return Reach::Nothing;
+    };
+    let reach = scale.recip();
+    if !reach.is_finite() {
+        // A map that collapses the space puts every distance in it under a
+        // pixel.
+        return Reach::rect(clip);
+    }
+    content
+        .expand(reach)
+        .intersect(&clip)
+        .map_or(Reach::Nothing, Reach::rect)
+}
+
+/// The least factor by which the maps of `links` grow a length, taken
+/// together: no less than the product of each one's.
+pub(crate) fn least_scale_of(links: &Links<'_>) -> f64 {
+    links
+        .steps
+        .iter()
+        .filter_map(|link| match links.map(link) {
+            Some(Map::Matrix(matrix)) => Some(least_scale(matrix)),
+            Some(Map::Translate(_)) | None => None,
+        })
+        .product()
+}
+
+/// The least factor by which `matrix`'s plane part grows a length: the
+/// smaller singular value of its 2×2 linear part. A projective map is taken
+/// at that part alone.
+fn least_scale(matrix: &Matrix4) -> f64 {
+    let [a, b, c, d] = [matrix.m[0], matrix.m[1], matrix.m[4], matrix.m[5]];
+    let sum = a * a + b * b + c * c + d * d;
+    let det = a * d - b * c;
+    let root = (sum * sum - 4.0 * det * det).max(0.0).sqrt();
+    ((sum - root) / 2.0).max(0.0).sqrt()
 }
 
 /// Where something lands, in one space.
@@ -652,12 +714,15 @@ impl<'v> Geometry<'v> {
     /// starts from the union of its direct chunks, and the whole content's
     /// from that of its top-level chunks, which the content holds. One pass
     /// from the last of them back folds each into its parent's, so a chain of
-    /// effects of any depth costs no stack.
+    /// effects of any depth costs no stack. `outer` is the least a length in
+    /// the space that holds the scope grows on its way to the surface, as far
+    /// as the caller knows it (`least_scale_of`), 1 where it does not.
     fn scope(
         self,
         key: NodeKey,
         start: Option<EntryIndex>,
         filters: Option<&mut Vec<(EntryIndex, Scope)>>,
+        outer: f64,
     ) -> Scope {
         let content = self.record(key).content();
         let entries = content.entries();
@@ -691,7 +756,7 @@ impl<'v> Geometry<'v> {
                 }
             },
         };
-        self.fold(key, structural, first_effect, whole, floor, filters)
+        self.fold(key, structural, first_effect, whole, floor, filters, outer)
     }
 
     /// What the effect `entry` of `key` holds, in the space under its own
@@ -717,13 +782,20 @@ impl<'v> Geometry<'v> {
             },
             entry.get() + 1,
             None,
+            1.0,
         )
     }
 
     /// Folds `structural`, the effects and slots of one scope, into `whole`:
     /// an entry whose parent is at or after `floor` joins its parent's
     /// inside, any other joins `whole`. `first_effect` is the position of the
-    /// first effect among them.
+    /// first effect among them. `outer` is the least the space holding
+    /// `whole` grows a length on its way to the surface (see [`Self::scope`]).
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the fold's slice, its floor and its outer scale come from two callers that \
+                  each fix them differently"
+    )]
     fn fold(
         self,
         key: NodeKey,
@@ -732,26 +804,49 @@ impl<'v> Geometry<'v> {
         mut whole: Scope,
         floor: usize,
         mut filters: Option<&mut Vec<(EntryIndex, Scope)>>,
+        outer: f64,
     ) -> Scope {
         let content = self.record(key).content();
         let entries = content.entries();
-        // Each structural entry's inside, and an effect's position among the
-        // content's effects: those of the scope are consecutive.
+        // Each structural entry's inside, an effect's position among the
+        // content's effects (those of the scope are consecutive), and the
+        // least the space holding the entry grows a length on its way to the
+        // surface, and the space under the entry's own map: a parent precedes
+        // its entries.
         let mut inside: SmallVec<[Scope; 16]> = SmallVec::with_capacity(structural.len());
         let mut positions: SmallVec<[usize; 16]> = SmallVec::with_capacity(structural.len());
+        let mut held_at: SmallVec<[f64; 16]> = SmallVec::with_capacity(structural.len());
+        let mut under: SmallVec<[f64; 16]> = SmallVec::with_capacity(structural.len());
         let mut next_effect = first_effect;
-        for index in structural {
-            match entries[index.get()] {
+        for (offset, &index) in structural.iter().enumerate() {
+            let entry = &entries[index.get()];
+            let held = match entry.parent() {
+                Some(parent) if parent.get() >= floor => {
+                    let at = structural[..offset]
+                        .binary_search(&parent)
+                        .expect("BUG: an entry's parent effect precedes it in its scope");
+                    under[at]
+                }
+                _ => outer,
+            };
+            held_at.push(held);
+            match entry {
                 Entry::Effect { .. } => {
                     inside.push(Scope {
                         local: content.effect_scope(next_effect).chunks,
                         kernel: 0.0,
                     });
+                    let at = Address {
+                        node: key,
+                        entry: index,
+                    };
+                    under.push(held * self.map_scale(&content.layers()[next_effect], at));
                     positions.push(next_effect);
                     next_effect += 1;
                 }
                 Entry::Slot { .. } | Entry::Chunk { .. } => {
                     inside.push(Scope::EMPTY);
+                    under.push(held);
                     positions.push(usize::MAX);
                 }
             }
@@ -774,7 +869,7 @@ impl<'v> Geometry<'v> {
                     {
                         filters.push((at.entry, held));
                     }
-                    held.through(&links)
+                    held.through(&links, held_at[offset])
                 }
                 // The structural entries hold no chunk.
                 Entry::Chunk { .. } => continue,
@@ -790,6 +885,18 @@ impl<'v> Geometry<'v> {
             }
         }
         whole
+    }
+
+    /// The least the map of the effect `layer` at `at` grows a length: a
+    /// transform's and a resolved follower's, 1 for a translation.
+    fn map_scale(self, layer: &Layer, at: Address) -> f64 {
+        match layer {
+            Layer::Transform(transform) => least_scale(transform.transform()),
+            Layer::Follower(_) => self
+                .resolve(at, 0)
+                .map_or(1.0, |transform| least_scale(&transform)),
+            _ => 1.0,
+        }
     }
 
     /// What the child boundary `child` slotted here draws, in its parent's
@@ -822,7 +929,7 @@ impl<'v> Geometry<'v> {
     /// What `key`'s content and subtree change, in its own space, from its
     /// children's stored bounds, and its filters' device kernel.
     pub(crate) fn subtree_scope(self, key: NodeKey) -> Scope {
-        self.scope(key, None, None)
+        self.scope(key, None, None, 1.0)
     }
 
     /// Where `entry` of `key` and its scope land on the surface; nothing when
@@ -833,7 +940,7 @@ impl<'v> Geometry<'v> {
             return Reach::Nothing;
         }
         self.content_links(key, entry, &mut links, 0);
-        let scope = self.scope(key, Some(entry), None);
+        let scope = self.scope(key, Some(entry), None, least_scale_of(&links));
         map_out_spread(&links, scope.local, scope.kernel)
     }
 
@@ -861,7 +968,7 @@ impl<'v> Geometry<'v> {
         if let Some(layer) = self.record(key).content().effect_layer(entry) {
             self.effect_links(layer, Address { node: key, entry }, &mut own, 0);
         }
-        let scope = inside.through(&own);
+        let scope = inside.through(&own, least_scale_of(chain));
         map_out_spread(chain, scope.local, scope.kernel)
     }
 
@@ -916,7 +1023,7 @@ impl<'v> Geometry<'v> {
     ) -> SmallVec<[(Address, Matrix4, Reach); 4]> {
         let entries = self.record(key).content().entries().len();
         let mut filters = Vec::new();
-        self.scope(key, None, Some(&mut filters));
+        self.scope(key, None, Some(&mut filters), 1.0);
         *reads = reads.saturating_add(u64::try_from(entries).unwrap_or(u64::MAX));
         filters
             .into_iter()
