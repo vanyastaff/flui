@@ -43,7 +43,7 @@ use std::fmt::Write as _;
 const FACADE_CATALOGS: [&str; 2] = ["flui/material", "flui/cupertino"];
 
 /// The facade's test support, which the doctests of `flui` name beside its
-/// catalogs so the book's chapters that run through Tester compiles.
+/// catalogs so the book's chapters that run through Tester compile.
 const FACADE_TESTING: &str = "flui/testing";
 
 use super::classify::{Mode, Package, Repo, Scope, Workspace};

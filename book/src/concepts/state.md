@@ -40,11 +40,12 @@ impl ViewState<Counter> for CounterState {
 ```
 
 `build` reads signals but never writes them: its `BuildContext` is not a context a write accepts,
-so a write there does not compile, and a `Writer` used while a build runs is refused at run time
-(`SignalError::WrittenDuringBuild`). A write rebuilds exactly the elements that read the signal. A
-widget that has to write from a callback with no `ctx` (one shaped `Fn()` or `Fn(&str)`) takes a
-`WriterSource` from `ctx.writer_source()` in `create_state`, keeps it in its state, and moves a
-clone into the callback, which writes through it: `source.write(|ctx| count.set(ctx, 0))`.
+so a write there does not compile, and a write opened through a `WriterSource` while a build runs
+is refused at run time (`SignalError::WrittenDuringBuild`). A write rebuilds exactly the elements
+that read the signal. A widget that has to write from a callback with no `ctx` (one shaped `Fn()`
+or `Fn(&str)`) takes a `WriterSource` from `ctx.writer_source()` in `create_state`, keeps it in its
+state, and moves a clone into the callback, which writes through it:
+`source.write(|ctx| count.set(ctx, 0))`.
 
 ## `InheritedView`
 

@@ -55,8 +55,8 @@ impl ViewState<NotesScreen> for NotesState {
 - `build` reads the signal with `get(ctx)`. The read subscribes this view, so a write rebuilds
   it and nothing else.
 - The button's callback receives a `ctx` and writes through it with `update`, returning the
-  write's `Result` so the button reports a refused write. `build` cannot write: its `ctx` is not
-  one a write accepts, so a write there does not compile.
+  write's `Result`, so the button logs a refused write. `build` gets no context a write
+  accepts, so a write there does not compile.
 - A `Signal` is a `Copy` handle, so the callback captures its own copy with `move`.
 
 [State](../concepts/state.md) covers the other forms of state: data shared down the tree with an
