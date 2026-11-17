@@ -616,6 +616,99 @@ fn a_subscriber_that_panics_on_the_trace_of_a_withheld_frame_keeps_the_retry() {
     );
 }
 
+/// A subscriber, scoped to the current thread, that keeps the `host_reports_occlusion` of each
+/// `surface_withholds_frames` event.
+#[derive(Clone, Default)]
+struct WithheldReports(std::sync::Arc<std::sync::Mutex<Vec<String>>>);
+
+impl tracing::Subscriber for WithheldReports {
+    fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+        true
+    }
+    fn max_level_hint(&self) -> Option<tracing::level_filters::LevelFilter> {
+        Some(tracing::level_filters::LevelFilter::TRACE)
+    }
+    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+    fn event(&self, event: &tracing::Event<'_>) {
+        #[derive(Default)]
+        struct Report {
+            withholds: bool,
+            reports_occlusion: String,
+        }
+        impl tracing::field::Visit for Report {
+            fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+                if field.name() == "event" {
+                    self.withholds = value == "surface_withholds_frames";
+                }
+            }
+            fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+                if field.name() == "host_reports_occlusion" {
+                    self.reports_occlusion = format!("{value:?}");
+                }
+            }
+        }
+        let mut report = Report::default();
+        event.record(&mut report);
+        if report.withholds {
+            self.0
+                .lock()
+                .expect("the report log")
+                .push(report.reports_occlusion);
+        }
+    }
+    fn enter(&self, _: &tracing::span::Id) {}
+    fn exit(&self, _: &tracing::span::Id) {}
+}
+
+/// A surface that keeps withholding frames is reported once per presentation, when the streak
+/// leaves the budget, saying whether the window's host tells a covering (an unseen covering is
+/// the usual cause where it cannot); the attempts after it are not reported again.
+///
+/// Fails when the report is left out, when it repeats on every attempt past the budget, or when
+/// it leaves out whether the host reports occlusion.
+pub(crate) fn a_surface_that_keeps_withholding_frames_is_reported_once() {
+    let budget = super::MAX_NOT_SHOWN_RETRIES;
+    // A window that reports no covering (`WindowCapabilities::NONE`), kept alive here: the
+    // presentation holds it weakly.
+    let window: std::rc::Rc<dyn flui_platform::PlatformWindow> =
+        std::rc::Rc::new(crate::testing::TestWindow::new());
+    let ui_runtime = UiRuntime::for_test_with_window(std::rc::Rc::clone(&window));
+    ui_runtime
+        .attach_root_widget(&SizedBox::new(20.0, 20.0))
+        .expect("root attaches");
+    let reports = WithheldReports::default();
+    let log = std::sync::Arc::clone(&reports.0);
+    let mut withheld = ScriptedSink::new(|_, _| SubmitVerdict::NotShown);
+    let _second = tracing::Dispatch::new(tracing::subscriber::NoSubscriber::default());
+    tracing::subscriber::with_default(reports, || {
+        tracing::callsite::rebuild_interest_cache();
+        for _ in 0..budget {
+            let _ = ui_runtime.render_frame(&mut withheld);
+        }
+        assert!(
+            log.lock().expect("the report log").is_empty(),
+            "a withdrawal inside the budget is a transient, not reported"
+        );
+        let _ = ui_runtime.render_frame(&mut withheld);
+        for _ in 0..3 {
+            assert!(ui_runtime.wait_out_failure_retry_for_test());
+            let _ = ui_runtime.render_frame(&mut withheld);
+        }
+    });
+    tracing::callsite::rebuild_interest_cache();
+    assert_eq!(withheld.submit_calls, budget + 4);
+    assert_eq!(
+        *log.lock().expect("the report log"),
+        ["Some(false)"],
+        "one report, past the budget, saying the host tells no covering"
+    );
+    drop(window);
+}
+
 /// A subscriber, scoped to the current thread, that panics on the event whose message holds
 /// `needle`.
 struct PanicsOnEvent {

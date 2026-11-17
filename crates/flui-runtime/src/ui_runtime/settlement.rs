@@ -526,14 +526,44 @@ impl UiRuntime {
                             // armed first, and the panic is held until the trace below ran.
                             held.contain(|| self.mark_needs_full_repaint_for(producer));
                         }
+                        let first_report = producer.first_withdrawal_past_budget();
                         held.contain(|| {
-                            tracing::debug!(
-                                frame = frame_number,
-                                streak,
-                                "Frame withheld by the surface past {} consecutive attempts; \
-                             retrying after the dropped-frame backoff",
-                                MAX_NOT_SHOWN_RETRIES
-                            );
+                            // Whether the window's host tells a covering: one that cannot leaves
+                            // a covered window reading seen, so its frames run into a surface
+                            // that refuses them, and the report says which case it is. Read
+                            // inside the containment: the window is not ours. `None` once the
+                            // window is gone.
+                            if first_report {
+                                let host_reports_occlusion: Option<bool> =
+                                    producer.with_window(|window| {
+                                        window
+                                            .state()
+                                            .capabilities
+                                            .reports_occlusion()
+                                            .is_available()
+                                    });
+                                tracing::warn!(
+                                    target: "flui.pace",
+                                    event = "surface_withholds_frames",
+                                    frame = frame_number,
+                                    streak,
+                                    host_reports_occlusion = ?host_reports_occlusion,
+                                    "the window's surface withheld {} frames in a row; each \
+                                     further attempt waits out the dropped-frame backoff. With \
+                                     `host_reports_occlusion` false the window is likely covered \
+                                     by another window its host cannot tell of; with it true the \
+                                     host reads the window seen while its surface shows nothing",
+                                    MAX_NOT_SHOWN_RETRIES
+                                );
+                            } else {
+                                tracing::debug!(
+                                    frame = frame_number,
+                                    streak,
+                                    "Frame withheld by the surface past {} consecutive attempts; \
+                                     retrying after the dropped-frame backoff",
+                                    MAX_NOT_SHOWN_RETRIES
+                                );
+                            }
                         });
                         if let Some(payload) = held.into_payload() {
                             resume_unwind(payload);
