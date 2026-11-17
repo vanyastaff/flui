@@ -270,17 +270,17 @@ fn a_dead_renderer_is_reported_once_and_its_frames_go_on() {
 }
 
 /// A dropped frame's paced retry is due work at its backoff deadline, never
-/// tree work a runner may pace behind a frame that showed nothing
-/// (ADR-0353 decision 4), and a repaint asked for is tree work.
+/// frame work a runner may pace behind a frame that showed nothing
+/// (ADR-0353 decision 4), and a repaint asked for is frame work.
 ///
-/// Red-check: drop the backoff from `has_pending_tree_work` and the
-/// retry shows as tree work before its deadline.
+/// Red-check: drop the backoff from `has_pending_frame_work` and the
+/// retry shows as frame work before its deadline.
 #[test]
 fn a_dropped_frames_retry_is_due_work_and_a_repaint_is_tree_work() {
     let lost = Lost::new();
     assert!(
-        !lost.runtime.has_pending_tree_work(),
-        "a backoff that runs leaves no tree work"
+        !lost.runtime.has_pending_frame_work(),
+        "a backoff that runs leaves no frame work"
     );
     assert!(
         !lost.runtime.has_pending_due_work(),
@@ -292,8 +292,8 @@ fn a_dropped_frames_retry_is_due_work_and_a_repaint_is_tree_work() {
         "the retry is due work once the backoff is over"
     );
     assert!(
-        !lost.runtime.has_pending_tree_work(),
-        "and not tree work a runner would hold behind its fallback"
+        !lost.runtime.has_pending_frame_work(),
+        "and not frame work a runner would hold behind its fallback"
     );
 
     let runtime = crate::owner_publication::runtime_with_wake(Arc::new(|| {}));
@@ -302,8 +302,8 @@ fn a_dropped_frames_retry_is_due_work_and_a_repaint_is_tree_work() {
         .expect("mount text");
     runtime.mark_primary_needs_full_repaint();
     assert!(
-        runtime.has_pending_tree_work(),
-        "a repaint asked for is tree work"
+        runtime.has_pending_frame_work(),
+        "a repaint asked for is frame work"
     );
     assert!(!runtime.has_pending_due_work(), "and nothing is due");
 }

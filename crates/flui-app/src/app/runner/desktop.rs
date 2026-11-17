@@ -469,7 +469,7 @@ impl DesktopWakeDeadlines {
         self.fallback.arm_after_no_present(
             now,
             ui_runtime.refresh_interval(presentation),
-            ui_runtime.has_pending_tree_work(),
+            ui_runtime.has_pending_frame_work(),
         )
     }
 
