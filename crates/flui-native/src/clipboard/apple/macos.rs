@@ -23,12 +23,17 @@
 //! `owner::apple::macos::owner_lane` module — this file only decides what
 //! runs on the lane.
 
-use flui_platform::{ClipboardError, ClipboardRead, ClipboardWrite, ClipboardWritten, Concealment};
+use flui_platform::{
+    ClipboardError, ClipboardRead, ClipboardWrite, ClipboardWritten, Concealment, ExpiryClearing,
+};
 use objc2::rc::Retained;
 use objc2_app_kit::{NSPasteboard, NSPasteboardContentsOptions, NSPasteboardType};
 use objc2_foundation::NSString;
 
-use crate::host::{NativeClipboard, SyncClipboard, admit_text, host_text};
+use crate::host::{
+    ClearDecision, ExpiredClear, ExpiredEntry, ExpiringRecord, NativeClipboard, SyncClipboard,
+    admit_text, host_text,
+};
 
 use crate::owner::apple::MacOSLoop;
 
@@ -46,6 +51,10 @@ use crate::owner::apple::MacOSLoop;
 pub struct MacOSClipboard {
     /// `None` = general pasteboard; `Some(name)` = named pasteboard (tests).
     pasteboard: Option<String>,
+    /// The last expiring entry this clipboard landed, with the pasteboard's
+    /// `changeCount` after it (ADR-0361). Read and written only on the owner
+    /// lane, which serializes every operation; the lock never waits.
+    expiring: parking_lot::Mutex<ExpiringRecord<isize>>,
     /// Owner lane every operation is routed through.
     owner: &'static dispatch::Queue,
     /// True when `owner` is the main queue, so "on the main thread" is
@@ -95,6 +104,7 @@ impl MacOSClipboard {
         tracing::debug!("Created macOS clipboard (NSPasteboard)");
         Self {
             pasteboard: None,
+            expiring: parking_lot::Mutex::default(),
             owner: crate::owner::apple::macos::owner_queue(),
             owner_is_main: true,
         }
@@ -109,6 +119,7 @@ impl MacOSClipboard {
     fn for_test(owner: &'static dispatch::Queue, name: impl Into<String>) -> Self {
         Self {
             pasteboard: Some(name.into()),
+            expiring: parking_lot::Mutex::default(),
             owner,
             owner_is_main: false,
         }
@@ -174,7 +185,9 @@ impl SyncClipboard for MacOSClipboard {
 
     fn write_now(&self, write: ClipboardWrite) -> ClipboardWritten {
         let concealed = write.is_concealed();
+        let entry = write.entry();
         let text = write.into_text();
+        let expiring = &self.expiring;
         self.with_pasteboard_on_owner(|pasteboard| {
             // Clear existing contents; the return value is the new change
             // count, which this backend does not consume. A concealed write
@@ -208,6 +221,10 @@ impl SyncClipboard for MacOSClipboard {
             let string_type = string_type();
             // The pasteboard copies the string's contents during the set.
             if pasteboard.setString_forType(&ns_string, &string_type) {
+                // The change count moves when the pasteboard changes hands
+                // (the clear above), not per type set: read after the write,
+                // it is the entry's until any process clears it again.
+                expiring.lock().landed(entry, pasteboard.changeCount());
                 Ok(())
             } else {
                 tracing::error!(len = text.len(), "Failed to write text to clipboard");
@@ -218,6 +235,31 @@ impl SyncClipboard for MacOSClipboard {
 
     fn concealment(&self) -> Concealment {
         Concealment::Honored
+    }
+
+    /// The pasteboard is cleared by change count, and AppKit's distributed
+    /// notifications say when the screen locks.
+    fn expiry_clearing(&self) -> ExpiryClearing {
+        ExpiryClearing::AtTimeAndLock
+    }
+
+    /// AppKit has no conditional clear: the change count is read and the
+    /// pasteboard cleared in two calls on the owner lane, so a copy another
+    /// process makes between them (microseconds apart) is cleared with the
+    /// entry. Every other later copy moves the change count first.
+    fn clear_expired_now(&self, entry: ExpiredEntry) -> ExpiredClear {
+        let expiring = &self.expiring;
+        self.with_pasteboard_on_owner(|pasteboard| {
+            let mut expiring = expiring.lock();
+            match expiring.decide(entry, &pasteboard.changeCount()) {
+                ClearDecision::NotHeld => ExpiredClear::NotHeld,
+                ClearDecision::Clear => {
+                    let count = pasteboard.clearContents();
+                    expiring.landed(None, count);
+                    ExpiredClear::Cleared
+                }
+            }
+        })
     }
 }
 

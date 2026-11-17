@@ -91,18 +91,36 @@ pub enum ClipboardError {
 }
 
 /// One write to the clipboard: its text, and whether the clipboard keeps it
-/// out of the user's clipboard history and cloud sync (ADR-0152 §6).
+/// out of the user's clipboard history and cloud sync (ADR-0152 §6), and
+/// clears it after a time (ADR-0361).
 ///
 /// A password manager writes a secret [`concealed`](Self::concealed): the
 /// paste still works, but the entry is not kept or shown by the system's
 /// clipboard history, synced to the user's other devices, or recorded by a
 /// clipboard manager that honours the host's marker. What a host does with
-/// it is its [`Concealment`].
+/// it is its [`Concealment`]. A secret written
+/// [`expires_after`](Self::expires_after) is concealed too, and is cleared
+/// at its time and when the session locks if the clipboard still holds it;
+/// what a host does with that is its [`ExpiryClearing`].
 #[derive(Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct ClipboardWrite {
     text: String,
-    concealed: bool,
+    kept: Kept,
+}
+
+/// How the clipboard keeps a write's entry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Kept {
+    /// Like any other entry.
+    Ordinary,
+    /// Out of history and sync.
+    Concealed,
+    /// Out of history and sync, and cleared after `after` if still there.
+    Expiring {
+        after: ClipboardExpiry,
+        entry: ClipboardEntryId,
+    },
 }
 
 impl ClipboardWrite {
@@ -111,15 +129,41 @@ impl ClipboardWrite {
     pub fn text(text: impl Into<String>) -> Self {
         Self {
             text: Into::<String>::into(text),
-            concealed: false,
+            kept: Kept::Ordinary,
         }
     }
 
     /// The same write, kept out of the clipboard's history and cloud sync
-    /// as far as the host can ([`Concealment`]).
+    /// as far as the host can ([`Concealment`]). An expiring write stays
+    /// expiring.
     #[must_use]
     pub fn concealed(mut self) -> Self {
-        self.concealed = true;
+        if self.kept == Kept::Ordinary {
+            self.kept = Kept::Concealed;
+        }
+        self
+    }
+
+    /// The same write, concealed, and cleared `after` it is asked for, and
+    /// when the user's session locks, if the clipboard still holds this
+    /// entry then: a later copy, by this application or another one, is
+    /// never cleared (ADR-0361). What the host can do is its
+    /// [`ExpiryClearing`].
+    ///
+    /// The write is named by a new [`ClipboardEntryId`]; a clone of it names
+    /// the same entry, so writing a clone twice makes one entry, cleared at
+    /// the earlier time.
+    ///
+    /// # Panics
+    ///
+    /// When the process has made 2^64 expiring writes: the entry names are
+    /// never reissued.
+    #[must_use]
+    pub fn expires_after(mut self, after: ClipboardExpiry) -> Self {
+        self.kept = Kept::Expiring {
+            after,
+            entry: ClipboardEntryId::mint(),
+        };
         self
     }
 
@@ -129,10 +173,30 @@ impl ClipboardWrite {
         &self.text
     }
 
-    /// Whether the write asks to be kept out of history and sync.
+    /// Whether the write asks to be kept out of history and sync: a
+    /// concealed write, or an expiring one.
     #[must_use]
     pub fn is_concealed(&self) -> bool {
-        self.concealed
+        self.kept != Kept::Ordinary
+    }
+
+    /// How long the entry lives, for an expiring write.
+    #[must_use]
+    pub fn expiry(&self) -> Option<ClipboardExpiry> {
+        match self.kept {
+            Kept::Expiring { after, .. } => Some(after),
+            Kept::Ordinary | Kept::Concealed => None,
+        }
+    }
+
+    /// The entry an expiring write makes, which the host's conditional clear
+    /// names; `None` for a write that does not expire.
+    #[must_use]
+    pub fn entry(&self) -> Option<ClipboardEntryId> {
+        match self.kept {
+            Kept::Expiring { entry, .. } => Some(entry),
+            Kept::Ordinary | Kept::Concealed => None,
+        }
     }
 
     /// The text written, given up by the write.
@@ -144,13 +208,113 @@ impl ClipboardWrite {
 
 impl std::fmt::Debug for ClipboardWrite {
     // Hand-written: a concealed write is a secret, and any write may be
-    // private to the user. Its length and marker are safe to show.
+    // private to the user. Its length, marker and expiry are safe to show.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ClipboardWrite")
             .field("len", &self.text.len())
-            .field("concealed", &self.concealed)
+            .field("concealed", &self.is_concealed())
+            .field("expiry", &self.expiry())
             .finish()
     }
+}
+
+/// How long a concealed clipboard entry lives before it clears itself, if
+/// the clipboard still holds it ([`ClipboardWrite::expires_after`]): from
+/// [`MIN`](Self::MIN) to [`MAX`](Self::MAX).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ClipboardExpiry(std::time::Duration);
+
+impl ClipboardExpiry {
+    /// The shortest expiry: below a second nobody can paste the entry before
+    /// it goes.
+    pub const MIN: std::time::Duration = std::time::Duration::from_secs(1);
+
+    /// The longest expiry: past a day the entry is a long-lived one, not a
+    /// secret on the clipboard for a moment, and every clock the hosts arm
+    /// it on adds a day without overflow.
+    pub const MAX: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
+
+    /// An expiry of `after`.
+    ///
+    /// # Errors
+    ///
+    /// [`ClipboardExpiryError::TooShort`] below [`MIN`](Self::MIN), zero
+    /// included; [`ClipboardExpiryError::TooLong`] past [`MAX`](Self::MAX).
+    pub const fn try_new(after: std::time::Duration) -> Result<Self, ClipboardExpiryError> {
+        if after.as_nanos() < Self::MIN.as_nanos() {
+            return Err(ClipboardExpiryError::TooShort);
+        }
+        if after.as_nanos() > Self::MAX.as_nanos() {
+            return Err(ClipboardExpiryError::TooLong);
+        }
+        Ok(Self(after))
+    }
+
+    /// The time the entry lives.
+    #[must_use]
+    pub const fn get(self) -> std::time::Duration {
+        self.0
+    }
+}
+
+/// Why a duration is no [`ClipboardExpiry`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, thiserror::Error)]
+#[non_exhaustive]
+pub enum ClipboardExpiryError {
+    /// Shorter than [`ClipboardExpiry::MIN`].
+    #[error("a clipboard expiry is at least a second")]
+    TooShort,
+    /// Longer than [`ClipboardExpiry::MAX`].
+    #[error("a clipboard expiry is at most a day")]
+    TooLong,
+}
+
+/// The entry one expiring clipboard write makes, unique in the process and
+/// never reissued: the host records it with the operating system's token
+/// for the entry when the write lands, and clears the clipboard for it only
+/// while both still match (ADR-0361).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ClipboardEntryId(std::num::NonZeroU64);
+
+/// The process's expiring clipboard entries.
+static CLIPBOARD_ENTRIES: flui_foundation::AtomicIdMint<std::num::NonZeroU64> =
+    flui_foundation::AtomicIdMint::new();
+
+impl ClipboardEntryId {
+    /// A name no entry had before.
+    fn mint() -> Self {
+        Self(
+            CLIPBOARD_ENTRIES
+                .next()
+                .expect("BUG: a process makes fewer than 2^64 expiring clipboard writes"),
+        )
+    }
+
+    /// The raw value, for a host that carries it in the entry itself (an
+    /// Android clip's extras) and for diagnostics; there is no conversion
+    /// back.
+    #[must_use]
+    pub const fn get(self) -> u64 {
+        self.0.get()
+    }
+}
+
+/// What a host does with an expiring write ([`ClipboardWrite::expires_after`]):
+/// whether it clears the entry at its time and when the session locks, if the
+/// clipboard still holds it then.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum ExpiryClearing {
+    /// Cleared at its time and when the user's session locks (or the machine
+    /// sleeps), if the clipboard still holds it.
+    AtTimeAndLock,
+    /// Cleared at its time if the clipboard still holds it; the host hears no
+    /// session lock (iOS, Android).
+    AtTime,
+    /// The host cannot clear an entry only while it is still there (the
+    /// web's clipboard has no such form): the write is a concealed one that
+    /// stays until something replaces it.
+    Unavailable,
 }
 
 /// What a host does with a [`concealed`](ClipboardWrite::concealed) write.

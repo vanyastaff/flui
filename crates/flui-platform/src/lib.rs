@@ -162,7 +162,10 @@ mod window_state;
 
 pub use backoff::Backoff;
 pub use brightness::Brightness;
-pub use clipboard::{ClipboardError, ClipboardRead, ClipboardWrite, ClipboardWritten, Concealment};
+pub use clipboard::{
+    ClipboardEntryId, ClipboardError, ClipboardExpiry, ClipboardExpiryError, ClipboardRead,
+    ClipboardWrite, ClipboardWritten, Concealment, ExpiryClearing,
+};
 pub use cursor::{Cursor, CursorError, CursorGrab, CursorImage, CursorImageError};
 /// The system cursor shapes a [`Cursor::Icon`] names: the
 /// `cursor-icon` crate's, which ADR-0089 allows in stable signatures.

@@ -395,6 +395,7 @@ where
             with_owner_platform(|owner| {
                 owner.on_wake(Box::new(|| {
                     super::host::drive_native_text_sizing();
+                    super::host::serve_clipboard_expiries();
                     // What an opened URL's loan returned is routed here,
                     // outside the destructor that returned it.
                     super::host::route_owed_opened_urls();

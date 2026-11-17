@@ -1109,6 +1109,7 @@ pub(crate) fn install_owner_platform(
                     // What an opened URL's loan returned is routed here,
                     // outside the destructor that returned it.
                     if current() {
+                        first.contain(serve_clipboard_expiries);
                         route_owed_opened_urls();
                         // A phone's background hold is released once its
                         // writes ended; the headless host stands in for one.
@@ -1187,6 +1188,7 @@ pub(crate) fn install_owner_platform(
         not(target_arch = "wasm32")
     ))]
     first.contain(install_wake_deadline_hook);
+    first.contain(install_turn_deadline_route);
     first.contain(|| {
         if let Err(error) = refresh_preferences_with(flui_native::OwnerPlatform::preferences) {
             tracing::warn!(%error, "initial system preference observation failed");
@@ -1659,6 +1661,9 @@ impl flui_native::AppHandler for RunnerHandler {
         // System notices (ADR-0237): every UI runtime's subscribers receive
         // them from the owner thread.
         contained((), "host notice", || {
+            // The clipboard clears before the application hears the lock,
+            // whatever its subscribers do.
+            clear_clipboard_expiries_on_lock(notice);
             super::owner_dispatch::deliver_host_notice(&notice.into());
         });
     }
@@ -1845,7 +1850,6 @@ pub(super) fn install_platform_quit_hook() {
 ))]
 pub(super) fn install_wake_deadline_hook() {
     let identity = APP_RUNTIME.with(|slot| Arc::clone(&slot.borrow().loop_identity));
-    let turn_identity = Arc::clone(&identity);
     route_wake_deadline(move || {
         APP_RUNTIME.with(|slot| {
             let state = slot.borrow();
@@ -1856,21 +1860,50 @@ pub(super) fn install_wake_deadline_hook() {
             }
         })
     });
-    // The owner turns window placements need: no frame serves them, and the
-    // main window waiting for its placement read has none yet.
+}
+
+/// Route the loop's turn deadline to this owner installation's
+/// `AppRuntime::turn_deadline`, on every host: an expiring clipboard entry's
+/// clear (ADR-0361), and on the desktop the owner turns window placements
+/// need, which no frame serves and the main window waiting for its placement
+/// read has none for. A later installation's route answers for itself.
+fn install_turn_deadline_route() {
+    let installed = APP_RUNTIME.with(|slot| slot.borrow().owner_install_generation);
     set_route(
         |routes| &mut routes.turn_deadline,
         Rc::new(move || {
             APP_RUNTIME.with(|slot| {
-                let state = slot.borrow();
-                if Arc::ptr_eq(&state.loop_identity, &turn_identity) {
-                    state.turn_deadline()
-                } else {
-                    None
-                }
+                let state = slot.try_borrow().ok()?;
+                (state.owner_install_generation == installed)
+                    .then(|| state.turn_deadline())
+                    .flatten()
             })
         }) as Rc<dyn Fn() -> Option<web_time::Instant>>,
     );
+}
+
+/// The owner's turn serves the expiring clipboard entries' clears due by now
+/// (ADR-0361); the host's answers settle at a later turn.
+pub(super) fn serve_clipboard_expiries() {
+    let expiries = APP_RUNTIME.with(|slot| slot.borrow().clipboard_expiries());
+    if let Some(expiries) = expiries {
+        expiries.serve();
+    }
+}
+
+/// The user's session locked, or the machine is going to sleep: every
+/// expiring clipboard entry still owed a clear is cleared now (ADR-0361).
+fn clear_clipboard_expiries_on_lock(notice: flui_platform::SystemNotice) {
+    if !matches!(
+        notice,
+        flui_platform::SystemNotice::SessionLocked | flui_platform::SystemNotice::Sleep
+    ) {
+        return;
+    }
+    let expiries = APP_RUNTIME.with(|slot| slot.borrow().clipboard_expiries());
+    if let Some(expiries) = expiries {
+        expiries.session_locked();
+    }
 }
 
 /// The instant the running loop is asked to give the owner a turn at: the

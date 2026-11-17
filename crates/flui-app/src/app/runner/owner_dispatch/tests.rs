@@ -2233,6 +2233,19 @@ fn platform_replacement_contains_reentrant_retirement() {
         fn concealment(&self) -> flui_platform::Concealment {
             flui_platform::Concealment::Honored
         }
+        fn expiry_clearing(&self) -> flui_platform::ExpiryClearing {
+            flui_platform::ExpiryClearing::AtTimeAndLock
+        }
+        fn clear_expired(
+            &self,
+            _: flui_native::ExpiredEntry,
+            answer: flui_platform::capability::Resolver<flui_native::ExpiredClear>,
+        ) {
+            drop(answer);
+        }
+        fn clear_expired_before_exit(&self, _: std::time::Duration) -> flui_native::ExpiredClear {
+            flui_native::ExpiredClear::NotHeld
+        }
     }
     impl Drop for RetiredProducer {
         fn drop(&mut self) {

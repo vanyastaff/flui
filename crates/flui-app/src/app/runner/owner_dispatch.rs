@@ -1059,6 +1059,12 @@ pub(crate) const EXIT_BUDGET: std::time::Duration = std::time::Duration::from_se
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) const SERVICE_SHUTDOWN_DEADLINE: std::time::Duration = std::time::Duration::from_secs(5);
 
+/// The longest the loop's end waits for the host to clear an expiring
+/// clipboard entry still owed its clear (ADR-0361): the Win32 clipboard
+/// thread may be waiting out another process that holds the clipboard.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) const EXIT_CLIPBOARD_BOUND: std::time::Duration = std::time::Duration::from_millis(500);
+
 /// The one deadline the exit order's framework steps share, taken when the
 /// flush starts: the flush and the services end by [`Self::services`], the
 /// pools by [`Self::end`], with every second the services did not use.
@@ -1336,6 +1342,21 @@ pub(super) fn teardown_platform_ui_runtime_logged(log: &mut dyn FnMut(TeardownSt
         }
     }
     log(TeardownStep::Flush);
+
+    // An expiring clipboard entry still owed its clear is cleared now if the
+    // clipboard still holds it (ADR-0361): on the hosts whose clipboard
+    // outlives the process, within the services' part of the deadline and at
+    // most `EXIT_CLIPBOARD_BOUND`.
+    first_panic.contain(|| {
+        let expiries = APP_RUNTIME.with(|slot| slot.borrow().clipboard_expiries());
+        if let Some(expiries) = expiries {
+            let within = exit
+                .services()
+                .saturating_duration_since(std::time::Instant::now())
+                .min(EXIT_CLIPBOARD_BOUND);
+            expiries.before_exit(within);
+        }
+    });
 
     // Service-lifecycle shutdown BEFORE the pools close: the
     // registry cancels every application service cooperatively and joins

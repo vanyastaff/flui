@@ -26,6 +26,11 @@
 //!   refused without asking the closure. One that waits past
 //!   [`TRANSFER_TIMEOUT`], or whose offer stopped being the selection, is
 //!   refused.
+//! - **Clearing an expiring entry.** A clear waits for the write asked
+//!   before it, then gives the clipboard up at the time the window took it,
+//!   if the clipboard still holds the entry it names (ADR-0361): the server
+//!   ignores the release once another client took the selection later, so
+//!   no copy made since is lost.
 //! - **Reading.** While the application owns the clipboard a read answers
 //!   its text at once; a read sent after a write waits for the write to own
 //!   it. Otherwise the thread takes a server timestamp, as a write does, and
@@ -48,7 +53,8 @@ use std::time::Duration;
 
 use flui_foundation::panic::FirstPanic;
 use flui_platform::{
-    ClipboardError, ClipboardRead, ClipboardWrite, ClipboardWritten, capability::Resolver,
+    ClipboardEntryId, ClipboardError, ClipboardRead, ClipboardWrite, ClipboardWritten,
+    capability::Resolver,
 };
 use rustix::event::{PollFd, PollFlags, Timespec, poll};
 use rustix::io::Errno;
@@ -67,7 +73,7 @@ use x11rb::{COPY_DEPTH_FROM_PARENT, COPY_FROM_PARENT, CURRENT_TIME, NONE};
 
 use crate::clipboard::linux::MAX_READERS;
 use crate::clipboard::text::{CONCEALED_HINT, CONCEALED_HINT_VALUE, TextForm};
-use crate::host::{MAX_TEXT, admit_text, owned_text};
+use crate::host::{ExpiredClear, ExpiredEntry, MAX_TEXT, admit_text, owned_text};
 use crate::owner::linux::x11::{WindowSelection, select_checked};
 
 /// How long a transfer may wait for its peer: a whole read, the next chunk
@@ -139,8 +145,39 @@ pub(super) enum Command {
     Answer(Generation, Option<String>),
     /// Answer with the selection's text.
     Read(Name, Owed<Option<Arc<str>>>),
+    /// Let go of the clipboard if it still holds this expiring entry, once
+    /// the write asked before it owned or failed (ADR-0361).
+    ClearExpired(ExpiredEntry, OwedClear),
     /// Let go of everything and end.
     Stop,
+}
+
+/// The answer a conditional clear owes its handle: taken to settle, or
+/// [`ExpiredClear::Failed`] with [`ClipboardError::Gone`] when the command
+/// drops untaken, as [`Owed`] does for a read or write.
+pub(super) struct OwedClear(Option<Resolver<ExpiredClear>>);
+
+impl OwedClear {
+    /// The answer `resolver` owes.
+    pub(super) fn new(resolver: Resolver<ExpiredClear>) -> Self {
+        Self(Some(resolver))
+    }
+
+    /// Settle with `cleared`. A retired owner has nobody left to answer.
+    fn settle(mut self, cleared: ExpiredClear) {
+        if let Some(resolver) = self.0.take() {
+            let _ = resolver.resolve(cleared);
+        }
+    }
+}
+
+impl Drop for OwedClear {
+    fn drop(&mut self) {
+        if let Some(resolver) = self.0.take() {
+            // A retired owner has nobody left to answer.
+            let _ = resolver.resolve(ExpiredClear::Failed(ClipboardError::Gone));
+        }
+    }
 }
 
 /// The answer a read or write command owes its handle. The thread takes the
@@ -325,6 +362,8 @@ struct Encodings {
     text: Arc<str>,
     /// Whether the write was concealed: [`CONCEALED_HINT`] is offered too.
     concealed: bool,
+    /// The entry an expiring write makes, which a conditional clear names.
+    entry: Option<ClipboardEntryId>,
     /// The text's length in ISO 8859-1, counted once: each request for the
     /// form would otherwise scan the whole text again.
     latin1_len: OnceCell<usize>,
@@ -334,6 +373,7 @@ impl Encodings {
     fn new(write: ClipboardWrite) -> Self {
         Self {
             concealed: write.is_concealed(),
+            entry: write.entry(),
             text: Arc::<str>::from(write.into_text()),
             latin1_len: OnceCell::new(),
         }
@@ -818,6 +858,9 @@ pub(super) struct Selections {
     /// The requests waiting on the owner thread for the primary
     /// selection's text.
     asks: Vec<Ask>,
+    /// The conditional clears asked while a clipboard write waits for its
+    /// timestamp: served once it owned or failed, in order.
+    clears: Vec<(ExpiredEntry, OwedClear)>,
     transfers: Vec<Transfer>,
     chunk: usize,
 }
@@ -870,6 +913,7 @@ impl Selections {
             primary,
             notice,
             asks: Vec::new(),
+            clears: Vec::new(),
             transfers: Vec::new(),
             chunk,
         })
@@ -940,9 +984,55 @@ impl Selections {
                     selection.serve(connection, window)?;
                 }
             }
+            Command::ClearExpired(entry, answer) => {
+                if self.clipboard.pending.is_some() {
+                    self.clears.push((entry, answer));
+                } else {
+                    let cleared = self.clear_expired(entry)?;
+                    answer.settle(cleared);
+                }
+            }
             Command::Stop => return Ok(false),
         }
         Ok(true)
+    }
+
+    /// Let go of the clipboard if it still holds the expiring entry `entry`
+    /// names. The window gives up the selection at the time it took it:
+    /// the server ignores a `SetSelectionOwner` at a time earlier than the
+    /// selection's last change, so a client that took the clipboard since,
+    /// even one whose `SelectionClear` has not reached the thread, keeps it.
+    /// The check and the release are one step of the server.
+    fn clear_expired(&mut self, entry: ExpiredEntry) -> Result<ExpiredClear, ReplyOrIdError> {
+        let held = match &self.clipboard.owned {
+            Some(Owned {
+                content: Content::Text(encodings),
+                time,
+            }) => encodings.entry.map(|held| (held, *time)),
+            _ => None,
+        };
+        let Some((_, time)) = held.filter(|(held, _)| entry.names(*held)) else {
+            return Ok(ExpiredClear::NotHeld);
+        };
+        if !self.still_owned(Name::Clipboard)? {
+            self.lost(Name::Clipboard)?;
+            return Ok(ExpiredClear::NotHeld);
+        }
+        let (connection, _, _, clipboard) = self.split(Name::Clipboard);
+        clipboard.owned = None;
+        connection.set_selection_owner(NONE, clipboard.atom, time)?;
+        connection.flush()?;
+        Ok(ExpiredClear::Cleared)
+    }
+
+    /// The clipboard write a clear waited for owned or failed: serve the
+    /// clears asked meanwhile, in order.
+    fn serve_clears(&mut self) -> Result<(), ReplyOrIdError> {
+        for (entry, answer) in std::mem::take(&mut self.clears) {
+            let cleared = self.clear_expired(entry)?;
+            answer.settle(cleared);
+        }
+        Ok(())
     }
 
     /// Own selection `name` with `content` once the server's time arrives.
@@ -1066,7 +1156,12 @@ impl Selections {
         // The writes' answers go last: a delivery that panics leaves the
         // reads above served and the connection's state settled.
         self.split(name).3.answer_writes(written);
-        settled
+        settled?;
+        // The clears asked after the write are checked against what it left.
+        if name == Name::Clipboard {
+            self.serve_clears()?;
+        }
+        Ok(())
     }
 
     /// Another client took a selection the window owned, unless the window
@@ -1460,6 +1555,8 @@ impl Selections {
         let mut failure = FirstPanic::new();
         failure.contain(|| self.clipboard.abandon());
         failure.contain(|| self.primary.abandon());
+        // A clear still waiting answers `Gone` as it drops.
+        failure.contain(|| drop(std::mem::take(&mut self.clears)));
         failure.resume();
     }
 
