@@ -7104,7 +7104,7 @@ GPU-память простаивающего или невидимого окн
   `CGAssociateMouseAndMouseCursorPosition`, `NSWindow.level`, `contentResizeIncrements`,
   `contentAspectRatio`, live resize из делегата; веб — CSS `url(data:…)`, `cursor: none`, pointer
   lock с `movementX/Y`; iOS и Android — lock `NOT_YET_ON_THIS_HOST`, остальное
-  `NOT_ON_THIS_PLATFORM`; headless моделирует всё. Запись: протокол 0.20 (разрыв ADR-0342: новый
+  `NOT_ON_THIS_PLATFORM`; headless моделирует всё. Запись: протокол 0.21 (разрыв ADR-0342: новый
   вариант `raw_motion`), формат записи ввода 5, нативная запись несёт новые способности,
   `cursor_grab`, `level`, `user_resizing`. Тесты (каждый падает при откате): таблица
   `window_command_validate` — `admit_refuses_exactly_when_the_capability_is_unavailable` (восемь

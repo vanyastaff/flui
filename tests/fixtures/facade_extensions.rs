@@ -270,10 +270,11 @@ fn custom_render_view_mounts_lays_out_and_paints() {
     let mut t = Tester::mount(Center::new().child(
         flui::widgets::Semantics::new()
             .container(true)
-            .label("leaf")
+            .role(SemanticsRole::Group)
+            .identifier("leaf")
             .child(LeafView { paints: paints.clone() }),
     ));
-    let bounds = t.rect(&find::text("leaf"));
+    let bounds = t.rect(&find::id("leaf"));
     assert_eq!((bounds.width, bounds.height), (24.0, 16.0));
     assert_eq!(paints.load(Ordering::SeqCst), 1);
 }
@@ -319,7 +320,8 @@ fn gesture_recognizer_uses_headless_virtual_time() {
     let mut t = Tester::mount(Center::new().child(
         flui::widgets::Semantics::new()
             .container(true)
-            .label("press")
+            .role(SemanticsRole::Group)
+            .identifier("press")
             .child(
                 GestureDetector::new()
                     .on_long_press(move |_ctx| {
@@ -331,9 +333,9 @@ fn gesture_recognizer_uses_headless_virtual_time() {
     ));
     // The long-press deadline runs on the test's clock: a press released
     // before 500 ms of it is no long press, one held past it is.
-    t.long_press(&find::text("press"), Duration::from_millis(300));
+    t.long_press(&find::id("press"), Duration::from_millis(300));
     assert_eq!(fired.load(Ordering::SeqCst), 0);
-    t.long_press(&find::text("press"), Duration::from_millis(550));
+    t.long_press(&find::id("press"), Duration::from_millis(550));
     assert_eq!(fired.load(Ordering::SeqCst), 1);
 }
 
@@ -362,14 +364,14 @@ fn pointer_input_schedules_a_widget_rebuild() {
             ))
     });
     let mut t = Tester::mount(Center::new().child(
-        flui::widgets::Semantics::new().container(true).label("target").child(view),
+        flui::widgets::Semantics::new().container(true).role(SemanticsRole::Group).identifier("target").child(view),
     ));
     let initial_builds = builds.load(Ordering::SeqCst);
-    assert_eq!(t.rect(&find::text("target")).width, 40.0);
-    t.tap(&find::text("target"));
+    assert_eq!(t.rect(&find::id("target")).width, 40.0);
+    t.tap(&find::id("target"));
     assert_eq!(value.load(Ordering::SeqCst), 1);
     assert!(builds.load(Ordering::SeqCst) > initial_builds);
-    assert_eq!(t.rect(&find::text("target")).width, 41.0);
+    assert_eq!(t.rect(&find::id("target")).width, 41.0);
 }
 
 #[test]
@@ -377,7 +379,7 @@ fn typed_drag_down_callback_is_available_from_the_widget_surface() {
     let downs = Arc::new(AtomicUsize::new(0));
     let observed = downs.clone();
     let mut t = Tester::mount(Center::new().child(
-        flui::widgets::Semantics::new().container(true).label("drag").child(
+        flui::widgets::Semantics::new().container(true).role(SemanticsRole::Group).identifier("drag").child(
             GestureDetector::new()
                 .drag(flui::widgets::DragSlot::horizontal().on_down(
                     move |_ctx, _details: flui::widgets::DragDownDetails| {
@@ -390,7 +392,7 @@ fn typed_drag_down_callback_is_available_from_the_widget_surface() {
     ));
     // A press that never moves: the callback runs on the pointer's down,
     // with no drag accepted.
-    t.tap(&find::text("drag"));
+    t.tap(&find::id("drag"));
     assert_eq!(downs.load(Ordering::SeqCst), 1);
 }
 
@@ -471,7 +473,7 @@ impl StatefulView for ArenaProbe {
 impl ViewState<ArenaProbe> for ArenaProbeState {
     fn build(&self, view: &ArenaProbe, _: &dyn BuildContext) -> impl IntoView {
         let recognizers = view.recognizers.borrow();
-        flui::widgets::Semantics::new().container(true).label("arena").child(
+        flui::widgets::Semantics::new().container(true).role(SemanticsRole::Group).identifier("arena").child(
             flui::widgets::Listener::new()
                 .behavior(HitTestBehavior::Opaque)
                 .recognizer(&recognizers[0])
@@ -490,7 +492,7 @@ fn downstream_custom_recognizer_competes_in_the_arena() {
     // Past the near recognizer's threshold and short of the far one's: the
     // near one claims the contact and the arena rejects the far one, though
     // the far one is the member a sweep would award.
-    t.drag(&find::text("arena"), 15.0, 0.0, Duration::from_millis(100));
+    t.drag(&find::id("arena"), 15.0, 0.0, Duration::from_millis(100));
     let recognizers = probe.recognizers.borrow();
     let [far, near] = &recognizers[..] else {
         panic!("the state built two recognizers");

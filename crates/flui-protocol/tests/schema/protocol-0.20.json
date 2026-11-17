@@ -5525,12 +5525,6 @@
         "closes": {
           "$ref": "#/$defs/Capability"
         },
-        "confines_cursor": {
-          "$ref": "#/$defs/Capability"
-        },
-        "cursor_image": {
-          "$ref": "#/$defs/NativeAvailability"
-        },
         "enters_fullscreen": {
           "$ref": "#/$defs/Capability"
         },
@@ -5538,15 +5532,6 @@
           "$ref": "#/$defs/NativeAvailability"
         },
         "hides": {
-          "$ref": "#/$defs/Capability"
-        },
-        "keeps_on_bottom": {
-          "$ref": "#/$defs/Capability"
-        },
-        "keeps_on_top": {
-          "$ref": "#/$defs/Capability"
-        },
-        "locks_cursor": {
           "$ref": "#/$defs/Capability"
         },
         "material": {
@@ -5579,9 +5564,6 @@
         "reports_system_gestures": {
           "$ref": "#/$defs/Capability"
         },
-        "sets_aspect_ratio": {
-          "$ref": "#/$defs/Capability"
-        },
         "sets_constraints": {
           "$ref": "#/$defs/Capability"
         },
@@ -5592,9 +5574,6 @@
           "$ref": "#/$defs/Capability"
         },
         "sets_resizable": {
-          "$ref": "#/$defs/Capability"
-        },
-        "sets_resize_increments": {
           "$ref": "#/$defs/Capability"
         },
         "sets_size": {
@@ -5630,18 +5609,6 @@
         "frame_rate_hint"
       ],
       "type": "object"
-    },
-    "NativeCursorGrab": {
-      "oneOf": [
-        {
-          "const": "confined",
-          "type": "string"
-        },
-        {
-          "const": "locked",
-          "type": "string"
-        }
-      ]
     },
     "NativeDevice": {
       "properties": {
@@ -6602,18 +6569,6 @@
         },
         {
           "const": "detents",
-          "type": "string"
-        }
-      ]
-    },
-    "NativeWindowLevel": {
-      "oneOf": [
-        {
-          "const": "always_on_top",
-          "type": "string"
-        },
-        {
-          "const": "always_on_bottom",
           "type": "string"
         }
       ]
@@ -7674,18 +7629,6 @@
         {
           "additionalProperties": false,
           "properties": {
-            "raw_motion": {
-              "$ref": "#/$defs/RawMotion"
-            }
-          },
-          "required": [
-            "raw_motion"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
             "device_added": {
               "$ref": "#/$defs/DeviceChange"
             }
@@ -7966,49 +7909,6 @@
     "ProtocolVersion": {
       "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$",
       "type": "string"
-    },
-    "RawMotion": {
-      "properties": {
-        "at": {
-          "items": {
-            "format": "double",
-            "type": "number"
-          },
-          "maxItems": 2,
-          "minItems": 2,
-          "type": [
-            "array",
-            "null"
-          ]
-        },
-        "dx": {
-          "format": "double",
-          "type": "number"
-        },
-        "dy": {
-          "format": "double",
-          "type": "number"
-        },
-        "pointer": {
-          "$ref": "#/$defs/PointerInfo"
-        },
-        "t": {
-          "format": "uint64",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "unaccelerated": {
-          "type": "boolean"
-        }
-      },
-      "required": [
-        "pointer",
-        "t",
-        "dx",
-        "dy",
-        "unaccelerated"
-      ],
-      "type": "object"
     },
     "ReadParams": {
       "properties": {
@@ -10667,6 +10567,26 @@
         },
         {
           "properties": {
+            "identifier": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "unpublished_identifier",
+              "type": "string"
+            },
+            "parent": {
+              "$ref": "#/$defs/ElementId"
+            }
+          },
+          "required": [
+            "kind",
+            "identifier",
+            "parent"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
             "kind": {
               "const": "unknown",
               "type": "string"
@@ -11446,16 +11366,6 @@
           "minItems": 2,
           "type": "array"
         },
-        "cursor_grab": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/NativeCursorGrab"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
         "display": {
           "format": "uint64",
           "minimum": 0,
@@ -11480,16 +11390,6 @@
           "anyOf": [
             {
               "$ref": "#/$defs/KeyboardInset"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "level": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/NativeWindowLevel"
             },
             {
               "type": "null"
@@ -11562,9 +11462,6 @@
             "boolean",
             "null"
           ]
-        },
-        "user_resizing": {
-          "type": "boolean"
         },
         "visible": {
           "type": "boolean"
@@ -12665,6 +12562,26 @@
               "identifier",
               "parent",
               "elements"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "identifier": {
+                "type": "string"
+              },
+              "kind": {
+                "const": "unpublished_identifier",
+                "type": "string"
+              },
+              "parent": {
+                "$ref": "#/$defs/ElementId"
+              }
+            },
+            "required": [
+              "kind",
+              "identifier",
+              "parent"
             ],
             "type": "object"
           },
