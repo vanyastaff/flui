@@ -178,7 +178,7 @@ fn an_inspect_that_reaches_for_the_tree_is_recorded_on_its_node() {
             .expect("the snapshot is taken");
         let node = reentrant(&root);
         let failure = node
-            .get_fact::<&str>(INSPECT_FAILED)
+            .fact_as::<&str>(INSPECT_FAILED)
             .expect("the refusal is recorded");
         assert!(failure.contains("busy inspecting"), "{reach:?}: {failure}");
         assert_eq!(node.get::<bool>("before"), Ok(true), "{reach:?}");

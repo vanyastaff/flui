@@ -2450,41 +2450,9 @@ pub mod flui::foundation
 pub const flui::foundation::APP_ID_MAX_LEN: usize
 reexport flui::foundation::AppId => flui::app::AppId
 reexport flui::foundation::AppIdError => flui::app::AppIdError
-pub type flui::foundation::ArgCallback<Arg> = alloc::rcs::rc::Rc<dyn Fn(&Arg) + 'static>
 pub trait flui::foundation::Arity: flui_foundation::arity::sealed::Sealed + core::fmt::Debug + Copy + Default + 'static
 const flui::foundation::Arity::DESCRIPTION: &'static str
 fn flui::foundation::Arity::validate_count(count: usize) -> bool
-pub struct flui::foundation::AsyncSnapshot<T, E> { .. }
-impl<T, E> Default for flui::foundation::AsyncSnapshot<T, E>
-impl<T: Clone, E: Clone> Clone for flui::foundation::AsyncSnapshot<T, E>
-impl<T: Copy, E: Copy> Copy for flui::foundation::AsyncSnapshot<T, E>
-impl<T: Eq, E: Eq> Eq for flui::foundation::AsyncSnapshot<T, E>
-impl<T: PartialEq, E: PartialEq> PartialEq for flui::foundation::AsyncSnapshot<T, E>
-impl<T: PartialEq, E: PartialEq> core::marker::StructuralPartialEq for flui::foundation::AsyncSnapshot<T, E>
-impl<T: core::fmt::Debug, E: core::fmt::Debug> core::fmt::Debug for flui::foundation::AsyncSnapshot<T, E>
-impl<T: core::fmt::Display, E: core::fmt::Display> core::fmt::Display for flui::foundation::AsyncSnapshot<T, E>
-impl<T: core::hash::Hash, E: core::hash::Hash> core::hash::Hash for flui::foundation::AsyncSnapshot<T, E>
-pub const fn flui::foundation::AsyncSnapshot::connection_state(&self) -> flui::foundation::ConnectionState // impl<T, E> flui::foundation::AsyncSnapshot<T, E>
-pub const fn flui::foundation::AsyncSnapshot::data(&self) -> Option<&T> // impl<T, E> flui::foundation::AsyncSnapshot<T, E>
-pub const fn flui::foundation::AsyncSnapshot::error(&self) -> Option<&E> // impl<T, E> flui::foundation::AsyncSnapshot<T, E>
-pub const fn flui::foundation::AsyncSnapshot::has_data(&self) -> bool // impl<T, E> flui::foundation::AsyncSnapshot<T, E>
-pub const fn flui::foundation::AsyncSnapshot::has_error(&self) -> bool // impl<T, E> flui::foundation::AsyncSnapshot<T, E>
-pub const fn flui::foundation::AsyncSnapshot::nothing() -> Self // impl<T, E> flui::foundation::AsyncSnapshot<T, E>
-pub const fn flui::foundation::AsyncSnapshot::waiting() -> Self // impl<T, E> flui::foundation::AsyncSnapshot<T, E>
-pub const fn flui::foundation::AsyncSnapshot::with_data(state: flui::foundation::ConnectionState, data: T) -> Self // impl<T, E> flui::foundation::AsyncSnapshot<T, E>
-pub const fn flui::foundation::AsyncSnapshot::with_error(state: flui::foundation::ConnectionState, error: E) -> Self // impl<T, E> flui::foundation::AsyncSnapshot<T, E>
-pub fn flui::foundation::AsyncSnapshot::after_connected(self) -> Self // impl<T, E> flui::foundation::AsyncSnapshot<T, E>
-pub fn flui::foundation::AsyncSnapshot::after_data(self, data: T) -> Self // impl<T, E> flui::foundation::AsyncSnapshot<T, E>
-pub fn flui::foundation::AsyncSnapshot::after_disconnected(self) -> Self // impl<T, E> flui::foundation::AsyncSnapshot<T, E>
-pub fn flui::foundation::AsyncSnapshot::after_done(self) -> Self // impl<T, E> flui::foundation::AsyncSnapshot<T, E>
-pub fn flui::foundation::AsyncSnapshot::after_error(self, error: E) -> Self // impl<T, E> flui::foundation::AsyncSnapshot<T, E>
-pub fn flui::foundation::AsyncSnapshot::after_failure(self, error: E) -> Self // impl<T, E> flui::foundation::AsyncSnapshot<T, E>
-pub fn flui::foundation::AsyncSnapshot::after_subscribe(self) -> Self // impl<T, E> flui::foundation::AsyncSnapshot<T, E>
-pub fn flui::foundation::AsyncSnapshot::after_success(self, data: T) -> Self // impl<T, E> flui::foundation::AsyncSnapshot<T, E>
-pub fn flui::foundation::AsyncSnapshot::in_state(self, state: flui::foundation::ConnectionState) -> Self // impl<T, E> flui::foundation::AsyncSnapshot<T, E>
-pub fn flui::foundation::AsyncSnapshot::initial(initial_data: Option<T>) -> Self // impl<T, E> flui::foundation::AsyncSnapshot<T, E>
-pub fn flui::foundation::AsyncSnapshot::into_data(self) -> Option<T> // impl<T, E> flui::foundation::AsyncSnapshot<T, E>
-pub fn flui::foundation::AsyncSnapshot::into_error(self) -> Option<E> // impl<T, E> flui::foundation::AsyncSnapshot<T, E>
 pub struct flui::foundation::AtLeast<const N: usize>;
 impl<const N: usize> Clone for flui::foundation::AtLeast<N>
 impl<const N: usize> Copy for flui::foundation::AtLeast<N>
@@ -2533,8 +2501,8 @@ pub fn flui::foundation::ChangeNotifier::notify_listeners_with_recovery(&self, r
 pub fn flui::foundation::ChangeNotifier::remove_all_listeners(&self)
 pub fn flui::foundation::ChangeNotifier::remove_listener(&self, id: flui::foundation::ListenerId)
 pub fn flui::foundation::ChangeNotifier::retire_after_delivery<T: 'static>(&self, capture: T) -> Option<T>
-pub fn flui::foundation::ChangeNotifier::take_listener(&self, id: flui::foundation::ListenerId) -> Option<alloc::rcs::rc::Rc<flui::foundation::notifier_generic::NotificationCallback<()>>>
-pub fn flui::foundation::ChangeNotifier::take_listeners(&self) -> Vec<alloc::rcs::rc::Rc<flui::foundation::notifier_generic::NotificationCallback<()>>>
+pub fn flui::foundation::ChangeNotifier::take_listener(&self, id: flui::foundation::ListenerId) -> Option<alloc::rcs::rc::Rc<flui::foundation::notifier::NotificationCallback<()>>>
+pub fn flui::foundation::ChangeNotifier::take_listeners(&self) -> Vec<alloc::rcs::rc::Rc<flui::foundation::notifier::NotificationCallback<()>>>
 pub struct flui::foundation::ClaimHandle<T> { .. }
 impl<T> Drop for flui::foundation::ClaimHandle<T>
 impl<T> core::fmt::Debug for flui::foundation::ClaimHandle<T>
@@ -2557,19 +2525,6 @@ pub fn flui::foundation::ClaimSlot::deliver(&self, value: T) -> Result<(), T> //
 pub fn flui::foundation::ClaimSlot::is_abandoned(&self) -> bool // impl<T> flui::foundation::ClaimSlot<T>
 pub fn flui::foundation::ClaimSlot::is_settled(&self) -> bool // impl<T> flui::foundation::ClaimSlot<T>
 pub fn flui::foundation::ClaimSlot::take_abandoned(&self) -> Option<T> // impl<T> flui::foundation::ClaimSlot<T>
-pub enum flui::foundation::ConnectionState
-impl Clone for flui::foundation::ConnectionState
-impl Copy for flui::foundation::ConnectionState
-impl Default for flui::foundation::ConnectionState
-impl Eq for flui::foundation::ConnectionState
-impl PartialEq for flui::foundation::ConnectionState
-impl core::fmt::Debug for flui::foundation::ConnectionState
-impl core::hash::Hash for flui::foundation::ConnectionState
-impl core::marker::StructuralPartialEq for flui::foundation::ConnectionState
-variant flui::foundation::ConnectionState::Active // at 2
-variant flui::foundation::ConnectionState::Done // at 3
-variant flui::foundation::ConnectionState::None // at 0
-variant flui::foundation::ConnectionState::Waiting // at 1
 pub struct flui::foundation::CreationSite(_)
 impl Clone for flui::foundation::CreationSite
 impl Copy for flui::foundation::CreationSite
@@ -2601,7 +2556,6 @@ impl flui::foundation::MintedId for flui::foundation::DragSessionId
 impl flui_foundation::sequence::sealed::Sealed for flui::foundation::DragSessionId
 pub const fn flui::foundation::DragSessionId::from_wire(raw: core::num::nonzero::NonZeroU64) -> Self
 pub const fn flui::foundation::DragSessionId::get(self) -> u64
-pub const flui::foundation::EPSILON: f64 = 1e-10
 #[repr(transparent)] pub struct flui::foundation::ElementId(_)
 impl Clone for flui::foundation::ElementId
 impl Copy for flui::foundation::ElementId
@@ -2825,15 +2779,15 @@ pub struct flui::foundation::Notifier<Arg> { .. }
 impl<Arg> Clone for flui::foundation::Notifier<Arg>
 impl<Arg> Default for flui::foundation::Notifier<Arg>
 impl<Arg> core::fmt::Debug for flui::foundation::Notifier<Arg>
-pub fn flui::foundation::Notifier::add(&self, listener: flui::foundation::ArgCallback<Arg>) -> flui::foundation::ListenerId // impl<Arg> flui::foundation::Notifier<Arg>
-pub fn flui::foundation::Notifier::add_with_recovery(&self, listener: flui::foundation::notifier_generic::RecoveryCallback<Arg>) -> flui::foundation::ListenerId // impl<Arg> flui::foundation::Notifier<Arg>
+pub fn flui::foundation::Notifier::add(&self, listener: flui::foundation::NotifierCallback<Arg>) -> flui::foundation::ListenerId // impl<Arg> flui::foundation::Notifier<Arg>
+pub fn flui::foundation::Notifier::add_with_recovery(&self, listener: flui::foundation::notifier::RecoveryCallback<Arg>) -> flui::foundation::ListenerId // impl<Arg> flui::foundation::Notifier<Arg>
 pub fn flui::foundation::Notifier::dispose(&self) // impl<Arg> flui::foundation::Notifier<Arg>
 pub fn flui::foundation::Notifier::inherit_failure(&self, recovery: &mut flui::foundation::panic::RecoveryScope<'_>) // impl<Arg> flui::foundation::Notifier<Arg>
 pub fn flui::foundation::Notifier::is_disposed(&self) -> bool // impl<Arg> flui::foundation::Notifier<Arg>
 pub fn flui::foundation::Notifier::is_empty(&self) -> bool // impl<Arg> flui::foundation::Notifier<Arg>
 pub fn flui::foundation::Notifier::len(&self) -> usize // impl<Arg> flui::foundation::Notifier<Arg>
 pub fn flui::foundation::Notifier::listen(&self, listener: flui::foundation::ListenerCallback) -> flui::foundation::Subscription where Arg: 'static // impl<Arg> flui::foundation::Notifier<Arg>
-pub fn flui::foundation::Notifier::listen_with_recovery(&self, relay: flui::foundation::notifier_generic::RecoveryCallback<Arg>) -> flui::foundation::Subscription where Arg: 'static // impl<Arg> flui::foundation::Notifier<Arg>
+pub fn flui::foundation::Notifier::listen_with_recovery(&self, relay: flui::foundation::notifier::RecoveryCallback<Arg>) -> flui::foundation::Subscription where Arg: 'static // impl<Arg> flui::foundation::Notifier<Arg>
 pub fn flui::foundation::Notifier::new() -> Self // impl<Arg> flui::foundation::Notifier<Arg>
 pub fn flui::foundation::Notifier::notify(&self, arg: &Arg) // impl<Arg> flui::foundation::Notifier<Arg>
 pub fn flui::foundation::Notifier::notify_with_recovery(&self, arg: &Arg, recovery: &mut flui::foundation::panic::RecoveryScope<'_>) // impl<Arg> flui::foundation::Notifier<Arg>
@@ -2841,7 +2795,8 @@ pub fn flui::foundation::Notifier::remove(&self, id: flui::foundation::ListenerI
 pub fn flui::foundation::Notifier::remove_all(&self) // impl<Arg> flui::foundation::Notifier<Arg>
 pub fn flui::foundation::Notifier::remove_even_if_disposed(&self, id: flui::foundation::ListenerId) // impl<Arg> flui::foundation::Notifier<Arg>
 pub fn flui::foundation::Notifier::retire_after_delivery<T: 'static>(&self, capture: T) -> Option<T> // impl<Arg> flui::foundation::Notifier<Arg>
-pub fn flui::foundation::Notifier::take_callback(&self, id: flui::foundation::ListenerId) -> Option<alloc::rcs::rc::Rc<flui::foundation::notifier_generic::NotificationCallback<Arg>>> // impl<Arg> flui::foundation::Notifier<Arg>
+pub fn flui::foundation::Notifier::take_callback(&self, id: flui::foundation::ListenerId) -> Option<alloc::rcs::rc::Rc<flui::foundation::notifier::NotificationCallback<Arg>>> // impl<Arg> flui::foundation::Notifier<Arg>
+pub type flui::foundation::NotifierCallback<Arg> = alloc::rcs::rc::Rc<dyn Fn(&Arg) + 'static>
 pub struct flui::foundation::Optional;
 impl Clone for flui::foundation::Optional
 impl Copy for flui::foundation::Optional
@@ -3225,7 +3180,6 @@ pub fn flui::foundation::ValueNotifier::new(value: T) -> Self // impl<T> flui::f
 pub fn flui::foundation::ValueNotifier::notify(&self) // impl<T> flui::foundation::ValueNotifier<T>
 pub fn flui::foundation::ValueNotifier::replace(&mut self, new_value: T) -> T where T: PartialEq // impl<T> flui::foundation::ValueNotifier<T>
 pub fn flui::foundation::ValueNotifier::set_value(&mut self, new_value: T) where T: PartialEq // impl<T> flui::foundation::ValueNotifier<T>
-pub fn flui::foundation::ValueNotifier::set_value_force(&mut self, new_value: T) // impl<T> flui::foundation::ValueNotifier<T>
 pub fn flui::foundation::ValueNotifier::take(&mut self) -> T where T: Default // impl<T> flui::foundation::ValueNotifier<T>
 pub fn flui::foundation::ValueNotifier::update<F>(&mut self, f: F) where F: FnOnce(&mut T) // impl<T> flui::foundation::ValueNotifier<T>
 pub struct flui::foundation::Variable;
@@ -3271,26 +3225,23 @@ reexport flui::foundation::arity::Optional => flui::foundation::Optional
 reexport flui::foundation::arity::Range => flui::foundation::Range
 reexport flui::foundation::arity::Single => flui::foundation::Single
 reexport flui::foundation::arity::Variable => flui::foundation::Variable
-pub mod flui::foundation::async_snapshot
-reexport flui::foundation::async_snapshot::AsyncSnapshot => flui::foundation::AsyncSnapshot
-reexport flui::foundation::async_snapshot::ConnectionState => flui::foundation::ConnectionState
 pub mod flui::foundation::build_phase
 reexport flui::foundation::build_phase::BuildPhase => flui::foundation::BuildPhase
 reexport flui::foundation::build_phase::BuildPhaseGuard => flui::foundation::BuildPhaseGuard
 reexport flui::foundation::build_phase::MutatedDuringBuild => flui::foundation::MutatedDuringBuild
-pub mod flui::foundation::claim_slot
+pub mod flui::foundation::child_slot
+reexport flui::foundation::child_slot::IndexedSlot => flui::foundation::IndexedSlot
+pub mod flui::foundation::claim
+reexport flui::foundation::claim::ClaimHandle => flui::foundation::ClaimHandle
+reexport flui::foundation::claim::ClaimOutcome => flui::foundation::ClaimOutcome
+reexport flui::foundation::claim::ClaimSlot => flui::foundation::ClaimSlot
+reexport flui::foundation::claim::claim_slot => flui::foundation::claim_slot
 pub fn flui::foundation::claim_slot<T>(wake: alloc::rcs::arc::Arc<dyn Fn() + Send + Sync>) -> (flui::foundation::ClaimSlot<T>, flui::foundation::ClaimHandle<T>)
-reexport flui::foundation::claim_slot::ClaimHandle => flui::foundation::ClaimHandle
-reexport flui::foundation::claim_slot::ClaimOutcome => flui::foundation::ClaimOutcome
-reexport flui::foundation::claim_slot::ClaimSlot => flui::foundation::ClaimSlot
-reexport flui::foundation::claim_slot::claim_slot => flui::foundation::claim_slot
 pub mod flui::foundation::clock
 reexport flui::foundation::clock::ManualClock => flui::foundation::ManualClock
 reexport flui::foundation::clock::MonotonicClock => flui::foundation::MonotonicClock
 reexport flui::foundation::clock::SystemClock => flui::foundation::SystemClock
 reexport flui::foundation::clock::event_epoch => flui::foundation::event_epoch
-pub mod flui::foundation::consts
-reexport flui::foundation::consts::EPSILON => flui::foundation::EPSILON
 pub mod flui::foundation::creation_site
 reexport flui::foundation::creation_site::CreationSite => flui::foundation::CreationSite
 pub mod flui::foundation::diagnostics
@@ -3741,11 +3692,11 @@ impl PartialEq for flui::foundation::inspect::SnapshotNode
 impl core::fmt::Debug for flui::foundation::inspect::SnapshotNode
 impl core::fmt::Display for flui::foundation::inspect::SnapshotNode
 pub fn flui::foundation::inspect::SnapshotNode::fact(&self, name: &str) -> Option<&flui::foundation::inspect::OwnedField>
+pub fn flui::foundation::inspect::SnapshotNode::fact_as<'a, T: flui::foundation::inspect::FromField<'a>>(&'a self, name: &str) -> Result<T, flui::foundation::inspect::FieldError>
 pub fn flui::foundation::inspect::SnapshotNode::field(&self, name: &str) -> Option<&flui::foundation::inspect::OwnedField>
 pub fn flui::foundation::inspect::SnapshotNode::find_by_kind(&self, kind: &str) -> flui::foundation::inspect::Matches<'_>
 pub fn flui::foundation::inspect::SnapshotNode::find_by_link(&self, link: flui::foundation::inspect::Link) -> Option<&flui::foundation::inspect::SnapshotNode>
 pub fn flui::foundation::inspect::SnapshotNode::get<'a, T: flui::foundation::inspect::FromField<'a>>(&'a self, name: &str) -> Result<T, flui::foundation::inspect::FieldError>
-pub fn flui::foundation::inspect::SnapshotNode::get_fact<'a, T: flui::foundation::inspect::FromField<'a>>(&'a self, name: &str) -> Result<T, flui::foundation::inspect::FieldError>
 pub fn flui::foundation::inspect::SnapshotNode::iter(&self) -> impl Iterator<Item = &flui::foundation::inspect::SnapshotNode>
 pub fn flui::foundation::inspect::SnapshotNode::total_debug_fields(&self) -> u64
 pub struct flui::foundation::inspect::SnapshotQuery
@@ -3889,15 +3840,14 @@ reexport flui::foundation::notifier::ChangeNotifier => flui::foundation::ChangeN
 reexport flui::foundation::notifier::Listenable => flui::foundation::Listenable
 reexport flui::foundation::notifier::ListenerCallback => flui::foundation::ListenerCallback
 reexport flui::foundation::notifier::ListenerObserver => flui::foundation::ListenerObserver
+pub struct flui::foundation::notifier::NotificationCallback<Arg>(_)
+impl<Arg> core::fmt::Debug for flui::foundation::notifier::NotificationCallback<Arg>
+reexport flui::foundation::notifier::Notifier => flui::foundation::Notifier
+reexport flui::foundation::notifier::NotifierCallback => flui::foundation::NotifierCallback
+pub type flui::foundation::notifier::RecoveryCallback<Arg> = alloc::rcs::rc::Rc<dyn Fn(&Arg, &mut flui::foundation::panic::RecoveryScope<'_>)>
 reexport flui::foundation::notifier::Subscription => flui::foundation::Subscription
 reexport flui::foundation::notifier::ValueListenable => flui::foundation::ValueListenable
 reexport flui::foundation::notifier::ValueNotifier => flui::foundation::ValueNotifier
-pub mod flui::foundation::notifier_generic
-reexport flui::foundation::notifier_generic::ArgCallback => flui::foundation::ArgCallback
-pub struct flui::foundation::notifier_generic::NotificationCallback<Arg>(_)
-impl<Arg> core::fmt::Debug for flui::foundation::notifier_generic::NotificationCallback<Arg>
-reexport flui::foundation::notifier_generic::Notifier => flui::foundation::Notifier
-pub type flui::foundation::notifier_generic::RecoveryCallback<Arg> = alloc::rcs::rc::Rc<dyn Fn(&Arg, &mut flui::foundation::panic::RecoveryScope<'_>)>
 pub mod flui::foundation::observe
 #[non_exhaustive] pub struct flui::foundation::observe::ElementMounted
 field flui::foundation::observe::ElementMounted::element: flui::foundation::ElementId // at 0
@@ -3987,7 +3937,6 @@ pub fn flui::foundation::panic::is_internal_invariant(text: &str) -> bool
 pub fn flui::foundation::panic::payload_text(payload: &dyn core::any::Any + Send) -> Option<&str>
 pub mod flui::foundation::prelude
 reexport flui::foundation::prelude::ChangeNotifier => flui::foundation::ChangeNotifier
-reexport flui::foundation::prelude::EPSILON => flui::foundation::EPSILON
 reexport flui::foundation::prelude::ElementId => flui::foundation::ElementId
 reexport flui::foundation::prelude::Id => flui::foundation::Id
 reexport flui::foundation::prelude::Identifier => flui::foundation::Identifier
@@ -4030,12 +3979,10 @@ reexport flui::foundation::sequence::ListenerId => flui::foundation::ListenerId
 reexport flui::foundation::sequence::MintedId => flui::foundation::MintedId
 reexport flui::foundation::sequence::PressId => flui::foundation::PressId
 reexport flui::foundation::sequence::TaskId => flui::foundation::TaskId
-pub mod flui::foundation::slot
-reexport flui::foundation::slot::IndexedSlot => flui::foundation::IndexedSlot
-pub mod flui::foundation::slot_index
-reexport flui::foundation::slot_index::SlotIndex => flui::foundation::SlotIndex
-reexport flui::foundation::slot_index::SlotKey => flui::foundation::SlotKey
-reexport flui::foundation::slot_index::SlotSet => flui::foundation::SlotSet
+pub mod flui::foundation::slot_table
+reexport flui::foundation::slot_table::SlotIndex => flui::foundation::SlotIndex
+reexport flui::foundation::slot_table::SlotKey => flui::foundation::SlotKey
+reexport flui::foundation::slot_table::SlotSet => flui::foundation::SlotSet
 pub mod flui::foundation::testing
 pub struct flui::foundation::testing::CountingWaker { .. }
 impl Default for flui::foundation::testing::CountingWaker
@@ -4049,12 +3996,13 @@ pub fn flui::foundation::testing::CountingWaker::shared(self) -> alloc::rcs::arc
 pub fn flui::foundation::testing::CountingWaker::waker(self: &alloc::rcs::arc::Arc<Self>) -> core::task::wake::Waker
 pub fn flui::foundation::testing::CountingWaker::was_woken(&self) -> bool
 pub fn flui::foundation::testing::panicking_waker(message: &'static str) -> core::task::wake::Waker
-pub mod flui::foundation::text_sizing
-reexport flui::foundation::text_sizing::TextScaleProfile => flui::foundation::TextScaleProfile
-reexport flui::foundation::text_sizing::TextSize => flui::foundation::TextSize
-reexport flui::foundation::text_sizing::TextSizeError => flui::foundation::TextSizeError
-reexport flui::foundation::text_sizing::TextSizeRequest => flui::foundation::TextSizeRequest
-reexport flui::foundation::text_sizing::TextSizingIntent => flui::foundation::TextSizingIntent
+pub mod flui::foundation::text
+reexport flui::foundation::text::TextDirection => flui::foundation::TextDirection
+reexport flui::foundation::text::TextScaleProfile => flui::foundation::TextScaleProfile
+reexport flui::foundation::text::TextSize => flui::foundation::TextSize
+reexport flui::foundation::text::TextSizeError => flui::foundation::TextSizeError
+reexport flui::foundation::text::TextSizeRequest => flui::foundation::TextSizeRequest
+reexport flui::foundation::text::TextSizingIntent => flui::foundation::TextSizingIntent
 pub mod flui::foundation::ticket
 reexport flui::foundation::ticket::Ticket => flui::foundation::Ticket
 reexport flui::foundation::ticket::TicketSource => flui::foundation::TicketSource
@@ -4454,7 +4402,9 @@ impl core::fmt::Debug for flui::geometry::Matrix4
 impl core::fmt::Display for flui::geometry::Matrix4
 impl core::ops::arith::Mul for flui::geometry::Matrix4 { type Output = flui::geometry::Matrix4; }
 impl core::ops::arith::MulAssign for flui::geometry::Matrix4
+impl core::ops::index::Index<(usize, usize)> for flui::geometry::Matrix4 { type Output = f64; }
 impl core::ops::index::Index<usize> for flui::geometry::Matrix4 { type Output = f64; }
+impl core::ops::index::IndexMut<(usize, usize)> for flui::geometry::Matrix4
 impl core::ops::index::IndexMut<usize> for flui::geometry::Matrix4
 impl flui::animation::Lerp for flui::geometry::Matrix4
 impl flui::foundation::inspect::ToValue for flui::geometry::Matrix4
@@ -4469,8 +4419,6 @@ pub fn flui::geometry::Matrix4::approx_eq(&self, other: &Self) -> bool
 pub fn flui::geometry::Matrix4::approx_eq_eps(&self, other: &Self, epsilon: f64) -> bool
 pub fn flui::geometry::Matrix4::as_translation(&self) -> Option<(f64, f64)>
 pub fn flui::geometry::Matrix4::determinant(&self) -> f64
-pub fn flui::geometry::Matrix4::get(&self, row: usize, col: usize) -> f64
-pub fn flui::geometry::Matrix4::get_mut(&mut self, row: usize, col: usize) -> &mut f64
 pub fn flui::geometry::Matrix4::invert(&mut self) -> bool
 pub fn flui::geometry::Matrix4::is_identity(&self) -> bool
 pub fn flui::geometry::Matrix4::is_identity_with_epsilon(&self, epsilon: f64) -> bool
@@ -4589,6 +4537,7 @@ pub fn flui::geometry::Offset::swap(self) -> Self // impl<T: flui::geometry::Uni
 pub fn flui::geometry::Offset::to_size(self) -> flui::geometry::Size<f64> // impl flui::geometry::Offset<f64>
 pub fn flui::geometry::Offset::to_vec2(self) -> flui::geometry::Vec2<T> // impl<T: flui::geometry::Unit> flui::geometry::Offset<T>
 pub fn flui::geometry::Offset::translate(self, other: impl Into<flui::geometry::Offset<f64>>) -> Self // impl flui::geometry::Offset<f64>
+pub const flui::geometry::PRECISION_ERROR_TOLERANCE: f64 = 1e-10
 pub struct flui::geometry::Point<T: flui::geometry::Unit = f64>
 field flui::geometry::Point::x: T // at 0
 field flui::geometry::Point::y: T // at 1
@@ -24894,6 +24843,7 @@ pub fn flui::view::element::AnimatedBehavior::new() -> Self // impl<V> flui::vie
 pub fn flui::view::element::AnimatedBehavior::state(&self) -> Option<&<V as flui::prelude::StatefulView>::State> // impl<V> flui::view::element::AnimatedBehavior<V> where V: flui::prelude::AnimatedView
 pub fn flui::view::element::AnimatedBehavior::state_mut(&mut self) -> Option<&mut <V as flui::prelude::StatefulView>::State> // impl<V> flui::view::element::AnimatedBehavior<V> where V: flui::prelude::AnimatedView
 reexport flui::view::element::AnimatedElement => flui::view::AnimatedElement
+reexport flui::view::element::AsyncSnapshot => flui::widgets::AsyncSnapshot
 reexport flui::view::element::BoxedResultFuture => flui::widgets::BoxedResultFuture
 reexport flui::view::element::BoxedResultStream => flui::widgets::BoxedResultStream
 #[non_exhaustive] pub struct flui::view::element::CarouselSliverConfig
@@ -24902,6 +24852,7 @@ field flui::view::element::CarouselSliverConfig::frames: flui::rendering::object
 impl Clone for flui::view::element::CarouselSliverConfig
 impl core::fmt::Debug for flui::view::element::CarouselSliverConfig
 pub fn flui::view::element::CarouselSliverConfig::new(config: flui::rendering::objects::CarouselConfig, frames: flui::rendering::objects::CarouselItemFrames) -> Self
+reexport flui::view::element::ConnectionState => flui::widgets::ConnectionState
 #[non_exhaustive] pub struct flui::view::element::DependentEntry { .. }
 field flui::view::element::DependentEntry::depth: usize // at 0
 impl Clone for flui::view::element::DependentEntry
@@ -26126,6 +26077,37 @@ impl core::fmt::Debug for flui::widgets::AssetImage
 impl flui::prelude::ImageProvider for flui::widgets::AssetImage
 pub fn flui::widgets::AssetImage::new(registry: alloc::rcs::arc::Arc<flui_assets::registry::AssetRegistry>, path: impl Into<String>) -> Self
 pub fn flui::widgets::AssetImage::path(&self) -> &str
+pub struct flui::widgets::AsyncSnapshot<T, E> { .. }
+impl<T, E> Default for flui::widgets::AsyncSnapshot<T, E>
+impl<T: Clone, E: Clone> Clone for flui::widgets::AsyncSnapshot<T, E>
+impl<T: Copy, E: Copy> Copy for flui::widgets::AsyncSnapshot<T, E>
+impl<T: Eq, E: Eq> Eq for flui::widgets::AsyncSnapshot<T, E>
+impl<T: PartialEq, E: PartialEq> PartialEq for flui::widgets::AsyncSnapshot<T, E>
+impl<T: PartialEq, E: PartialEq> core::marker::StructuralPartialEq for flui::widgets::AsyncSnapshot<T, E>
+impl<T: core::fmt::Debug, E: core::fmt::Debug> core::fmt::Debug for flui::widgets::AsyncSnapshot<T, E>
+impl<T: core::fmt::Display, E: core::fmt::Display> core::fmt::Display for flui::widgets::AsyncSnapshot<T, E>
+impl<T: core::hash::Hash, E: core::hash::Hash> core::hash::Hash for flui::widgets::AsyncSnapshot<T, E>
+pub const fn flui::widgets::AsyncSnapshot::connection_state(&self) -> flui::widgets::ConnectionState // impl<T, E> flui::widgets::AsyncSnapshot<T, E>
+pub const fn flui::widgets::AsyncSnapshot::data(&self) -> Option<&T> // impl<T, E> flui::widgets::AsyncSnapshot<T, E>
+pub const fn flui::widgets::AsyncSnapshot::error(&self) -> Option<&E> // impl<T, E> flui::widgets::AsyncSnapshot<T, E>
+pub const fn flui::widgets::AsyncSnapshot::has_data(&self) -> bool // impl<T, E> flui::widgets::AsyncSnapshot<T, E>
+pub const fn flui::widgets::AsyncSnapshot::has_error(&self) -> bool // impl<T, E> flui::widgets::AsyncSnapshot<T, E>
+pub const fn flui::widgets::AsyncSnapshot::nothing() -> Self // impl<T, E> flui::widgets::AsyncSnapshot<T, E>
+pub const fn flui::widgets::AsyncSnapshot::waiting() -> Self // impl<T, E> flui::widgets::AsyncSnapshot<T, E>
+pub const fn flui::widgets::AsyncSnapshot::with_data(state: flui::widgets::ConnectionState, data: T) -> Self // impl<T, E> flui::widgets::AsyncSnapshot<T, E>
+pub const fn flui::widgets::AsyncSnapshot::with_error(state: flui::widgets::ConnectionState, error: E) -> Self // impl<T, E> flui::widgets::AsyncSnapshot<T, E>
+pub fn flui::widgets::AsyncSnapshot::after_connected(self) -> Self // impl<T, E> flui::widgets::AsyncSnapshot<T, E>
+pub fn flui::widgets::AsyncSnapshot::after_data(self, data: T) -> Self // impl<T, E> flui::widgets::AsyncSnapshot<T, E>
+pub fn flui::widgets::AsyncSnapshot::after_disconnected(self) -> Self // impl<T, E> flui::widgets::AsyncSnapshot<T, E>
+pub fn flui::widgets::AsyncSnapshot::after_done(self) -> Self // impl<T, E> flui::widgets::AsyncSnapshot<T, E>
+pub fn flui::widgets::AsyncSnapshot::after_error(self, error: E) -> Self // impl<T, E> flui::widgets::AsyncSnapshot<T, E>
+pub fn flui::widgets::AsyncSnapshot::after_failure(self, error: E) -> Self // impl<T, E> flui::widgets::AsyncSnapshot<T, E>
+pub fn flui::widgets::AsyncSnapshot::after_subscribe(self) -> Self // impl<T, E> flui::widgets::AsyncSnapshot<T, E>
+pub fn flui::widgets::AsyncSnapshot::after_success(self, data: T) -> Self // impl<T, E> flui::widgets::AsyncSnapshot<T, E>
+pub fn flui::widgets::AsyncSnapshot::in_state(self, state: flui::widgets::ConnectionState) -> Self // impl<T, E> flui::widgets::AsyncSnapshot<T, E>
+pub fn flui::widgets::AsyncSnapshot::initial(initial_data: Option<T>) -> Self // impl<T, E> flui::widgets::AsyncSnapshot<T, E>
+pub fn flui::widgets::AsyncSnapshot::into_data(self) -> Option<T> // impl<T, E> flui::widgets::AsyncSnapshot<T, E>
+pub fn flui::widgets::AsyncSnapshot::into_error(self) -> Option<E> // impl<T, E> flui::widgets::AsyncSnapshot<T, E>
 reexport flui::widgets::AutoComplete => flui::semantics::AutoComplete
 reexport flui::widgets::AutovalidateMode => flui::prelude::AutovalidateMode
 pub struct flui::widgets::BackIntent;
@@ -26345,6 +26327,19 @@ impl core::fmt::Debug for flui::widgets::CompanionSpec
 pub fn flui::widgets::CompanionSpec::command(self, command: flui::widgets::GestureCommand) -> Self
 pub fn flui::widgets::CompanionSpec::new<I: flui::prelude::Intent>(first: flui::widgets::GestureCommand, link: &flui::widgets::CompanionLink<I>) -> Self
 pub fn flui::widgets::CompanionSpec::node_for(&self, command: &flui::widgets::GestureCommand) -> Result<flui::prelude::SemanticsAnchor, flui::widgets::CompanionGap>
+pub enum flui::widgets::ConnectionState
+impl Clone for flui::widgets::ConnectionState
+impl Copy for flui::widgets::ConnectionState
+impl Default for flui::widgets::ConnectionState
+impl Eq for flui::widgets::ConnectionState
+impl PartialEq for flui::widgets::ConnectionState
+impl core::fmt::Debug for flui::widgets::ConnectionState
+impl core::hash::Hash for flui::widgets::ConnectionState
+impl core::marker::StructuralPartialEq for flui::widgets::ConnectionState
+variant flui::widgets::ConnectionState::Active // at 2
+variant flui::widgets::ConnectionState::Done // at 3
+variant flui::widgets::ConnectionState::None // at 0
+variant flui::widgets::ConnectionState::Waiting // at 1
 reexport flui::widgets::ConstrainedBox => flui::prelude::ConstrainedBox
 pub struct flui::widgets::ContactAdmission(_)
 impl Clone for flui::widgets::ContactAdmission
@@ -28316,7 +28311,7 @@ reexport flui::widgets::SliverToBoxAdapter => flui::prelude::SliverToBoxAdapter
 pub trait flui::widgets::SnapPolicy: core::fmt::Debug
 fn flui::widgets::SnapPolicy::target(&self, metrics: &flui::widgets::ScrollMetrics, velocity: f64) -> f64
 fn flui::widgets::SnapPolicy::target_from(&self, metrics: &flui::widgets::ScrollMetrics, velocity: f64, origin: f64) -> f64 { .. }
-pub type flui::widgets::SnapshotBuilder<T, E> = alloc::rcs::rc::Rc<dyn Fn(&dyn flui::prelude::BuildContext, &flui::foundation::AsyncSnapshot<T, E>) -> flui::prelude::BoxedView>
+pub type flui::widgets::SnapshotBuilder<T, E> = alloc::rcs::rc::Rc<dyn Fn(&dyn flui::prelude::BuildContext, &flui::widgets::AsyncSnapshot<T, E>) -> flui::prelude::BoxedView>
 reexport flui::widgets::SortDirection => flui::semantics::SortDirection
 reexport flui::widgets::Spacer => flui::prelude::Spacer
 pub struct flui::widgets::Speed(_)

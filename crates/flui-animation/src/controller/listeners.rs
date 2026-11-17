@@ -74,9 +74,9 @@ impl Listenable for AnimationController {
             let callback = callback.take();
             let mut retired = RetiredSources::new();
             retired.value_callbacks.push(Opaque::new(
-                flui_foundation::notifier_generic::NotificationCallback::user(Rc::new(
-                    move |(): &()| callback(),
-                )),
+                flui_foundation::notifier::NotificationCallback::user(Rc::new(move |(): &()| {
+                    callback();
+                })),
             ));
             Self::retire_after(inner, retired);
             return flui_foundation::Subscription::inert();
@@ -94,7 +94,7 @@ impl Listenable for AnimationController {
             let relay = relay.take();
             let mut retired = RetiredSources::new();
             retired.value_callbacks.push(Opaque::new(
-                flui_foundation::notifier_generic::NotificationCallback::relay(Rc::new(
+                flui_foundation::notifier::NotificationCallback::relay(Rc::new(
                     move |(): &(), recovery| relay(recovery),
                 )),
             ));

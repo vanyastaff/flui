@@ -18,7 +18,7 @@ use std::task::{Context, Poll, Waker};
 use std::{rc::Rc, sync::Arc};
 
 use crate::common::{lay_out, loose};
-use flui_foundation::ConnectionState;
+use flui_widgets::ConnectionState;
 use parking_lot::Mutex;
 
 // Exercise the public prelude import path: if `FutureBuilder` were not exported

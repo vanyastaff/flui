@@ -1,6 +1,5 @@
 //! The directionality in which text flows, shared by the paint, semantics and
-//! reading-order paths (previously defined twice, in `flui-painting` and
-//! `flui-semantics`, with hand-written mappings between them).
+//! reading-order paths.
 
 /// The directionality in which text flows.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Default)]

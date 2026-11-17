@@ -1,15 +1,13 @@
-//! `Notifier<Arg>` — a generic, typed, hardened notification channel.
+//! [`Notifier<Arg>`]: an owner-local channel that lends `&Arg` to each listener.
 //!
-//! Generalizes [`crate::notifier::ChangeNotifier`] (which is effectively
-//! `Notifier<()>`) to lend an argument to each listener. Reuses the
-//! same firing discipline proven in [`crate::notifier::ChangeNotifier::notify_listeners`]:
-//! snapshot under a borrow, registration-order firing, release before callbacks,
-//! per-callback `catch_unwind`, remove-during-notify skip, and a dispose guard.
-//!
-//! It is also the core `ChangeNotifier` itself is seated on: `ChangeNotifier`
-//! wraps a `Notifier<()>` and adds only its own seams (the branded
-//! use-after-dispose message, and `remove_listener` tolerating a disposed
-//! receiver via [`Notifier::remove_even_if_disposed`]).
+//! A delivery snapshots the registrations under a borrow, releases it, and calls
+//! them in registration order. A listener removed by an earlier one in the same
+//! delivery is skipped, a dispose stops the tail, and a listener's panic is
+//! contained so the rest still run; the first failure is resumed after the
+//! round (ADR-0287). [`ChangeNotifier`](super::ChangeNotifier) is a
+//! `Notifier<()>` with its own use-after-dispose message and a
+//! `remove_listener` that tolerates a disposed receiver
+//! ([`Notifier::remove_even_if_disposed`]).
 
 use crate::panic::RecoveryScope;
 use std::{
@@ -27,7 +25,7 @@ use crate::sequence::ListenerId;
 use smallvec::SmallVec;
 
 /// A listener callback that borrows its argument for the duration of the call.
-pub type ArgCallback<Arg> = Rc<dyn Fn(&Arg) + 'static>;
+pub type NotifierCallback<Arg> = Rc<dyn Fn(&Arg) + 'static>;
 
 /// A callback that runs inside the notifying delivery's [`RecoveryScope`]: the
 /// form a relay registers so the first failure of the whole delivery stays
@@ -39,7 +37,7 @@ pub type RecoveryCallback<Arg> = Rc<dyn Fn(&Arg, &mut RecoveryScope<'_>)>;
 pub struct NotificationCallback<Arg>(CallbackKind<Arg>);
 
 enum CallbackKind<Arg> {
-    User(ArgCallback<Arg>),
+    User(NotifierCallback<Arg>),
     Relay(RecoveryCallback<Arg>),
     /// A listener that takes no argument, held as it was given: no adapter
     /// is allocated to drop the argument.
@@ -51,7 +49,7 @@ type OwnedCallback<Arg> = Rc<NotificationCallback<Arg>>;
 impl<Arg> NotificationCallback<Arg> {
     /// Package a withdrawn user callback for enclosing-owner retirement.
     #[doc(hidden)]
-    pub fn user(callback: ArgCallback<Arg>) -> Rc<Self> {
+    pub fn user(callback: NotifierCallback<Arg>) -> Rc<Self> {
         Rc::new(Self(CallbackKind::User(callback)))
     }
     /// Package a refused framework relay for enclosing-owner retirement.
@@ -364,7 +362,7 @@ impl<Arg> Notifier<Arg> {
     }
 
     /// Register a listener; returns its id.
-    pub fn add(&self, listener: ArgCallback<Arg>) -> ListenerId {
+    pub fn add(&self, listener: NotifierCallback<Arg>) -> ListenerId {
         if self.check_disposed() {
             return self.mint_id();
         }
@@ -417,7 +415,7 @@ impl<Arg> Notifier<Arg> {
     /// wrapper's check and this call into a generically-worded debug panic,
     /// where the historical single-check semantics let the already-started
     /// call proceed.
-    pub(crate) fn add_unchecked(&self, listener: ArgCallback<Arg>) -> ListenerId {
+    pub(crate) fn add_unchecked(&self, listener: NotifierCallback<Arg>) -> ListenerId {
         self.admit_callback(NotificationCallback::user(listener))
     }
 
@@ -449,7 +447,7 @@ impl<Arg> Notifier<Arg> {
     /// extracts (a removed listener, or the whole displaced list on a clear),
     /// only after this notifier's own lock has released.
     ///
-    /// A removed/displaced [`ArgCallback`]'s `Drop` may run arbitrary user
+    /// A removed/displaced [`NotifierCallback`]'s `Drop` may run arbitrary user
     /// code: the last `Arc` clone of a listener closure reaching zero can
     /// destroy captured state whose own destructor calls back into this same
     /// notifier (e.g. another `remove`/`dispose`). `mutate` itself only
@@ -842,7 +840,7 @@ mod tests {
     }
 
     #[test]
-    fn notifier_generic_contract() {
+    fn notifier_contract() {
         crate::test_cases::run_cases(&[
             (
                 "panicking listener does not abort rest",

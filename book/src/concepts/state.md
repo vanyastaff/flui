@@ -38,7 +38,7 @@ deciding whether a dependent rebuilds when the data changes.
 pub struct ValueNotifier<T: Clone> { /* value, plus a ChangeNotifier */ }
 ```
 
-*(`crates/flui-foundation/src/notifier.rs`)* — a `ChangeNotifier` (the base "something changed, notify listeners" primitive)
+*(`crates/flui-foundation/src/notifier/mod.rs`)* — a `ChangeNotifier` (the base "something changed, notify listeners" primitive)
 that holds a single value and notifies on change. Useful for state that needs to be observed from
 outside the `View`/`Element` tree, or shared across more than one subtree without going through
 `InheritedView`.

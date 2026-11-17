@@ -40,7 +40,7 @@ pub use super::wrap_alignment::{WrapAlignment, WrapCrossAlignment};
 
 /// Precision tolerance for run-overflow detection, at the `f64` scale
 /// (ADR-0098).
-const PRECISION_TOLERANCE: f64 = flui_foundation::EPSILON;
+const PRECISION_TOLERANCE: f64 = flui_foundation::geometry::PRECISION_ERROR_TOLERANCE;
 
 // ── Layout helpers ────────────────────────────────────────────────────────────
 

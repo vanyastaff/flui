@@ -164,15 +164,13 @@ pub mod app_id;
 pub mod arena;
 // Compile-time child-count markers the render protocol attaches to nodes.
 pub mod arity;
-pub mod async_snapshot;
 // Whether a build is running, for controllers below the signal graph (ADR-0086 §7).
 pub mod build_phase;
 // Generic at-most-once request/reply primitive (ADR-0039 §3): the
 // owner lanes' claim-slot reply protocol composes this; its state-machine
 // tests live here so CI actually runs them (same rationale as `affinity`).
-pub mod claim_slot;
+pub mod claim;
 pub mod clock;
-pub mod consts;
 // Monotonic generation/version counters for the window-runtime protocol:
 // FrameEpoch, SurfaceGeneration.
 pub mod epoch;
@@ -187,16 +185,13 @@ pub mod frame_stamp;
 pub mod generation;
 // Geometry values: points, offsets, sizes, rectangles, insets, radii, matrices (ADR-0098).
 pub mod geometry;
-pub mod text_sizing;
-pub use text_sizing::{
-    TextScaleProfile, TextSize, TextSizeError, TextSizeRequest, TextSizingIntent,
+pub mod text;
+pub use text::{
+    TextDirection, TextScaleProfile, TextSize, TextSizeError, TextSizeRequest, TextSizingIntent,
 };
-// Text flow direction, the one value the paint, semantics and reading-order
-// paths share.
 pub mod id;
 pub mod key;
 pub mod memory;
-mod text_direction;
 // Input sequence identity and its owner-local mint (ADR-0207 §4)
 pub mod sequence;
 // Tickets that match an asynchronous answer to its request (ADR-0287 §5).
@@ -210,9 +205,9 @@ pub mod panic;
 #[cfg_attr(docsrs, doc(cfg(feature = "testing")))]
 pub mod testing;
 // A child's position during reconciliation (index plus previous sibling).
-pub mod slot;
+pub mod child_slot;
 // Slot-addressed side tables: membership and position without hashing.
-pub mod slot_index;
+pub mod slot_table;
 
 // Shared field-name vocabulary for structured tracing events. Foundation owns
 // the names because every framework crate emits them; *installing* a subscriber
@@ -230,9 +225,6 @@ pub mod notifier;
 // the `ReadScope` contract. The graph itself lives in `flui-view`. Not
 // re-exported from the root: reached as `flui_foundation::read_scope::…`.
 pub mod read_scope;
-
-// Generic typed notification channel
-pub mod notifier_generic;
 
 // Typed self-description of the trees (ADR-0242); replaces `debug`'s string properties.
 pub mod inspect;
@@ -253,20 +245,17 @@ pub use app_id::{APP_ID_MAX_LEN, AppId, AppIdError, executable_class};
 // Arity markers. Kept out of the prelude: a glob import of `Range` would
 // shadow `std::ops::Range`.
 pub use arity::{Arity, AtLeast, Exact, Leaf, Never, Optional, Range, Single, Variable};
-pub use async_snapshot::{AsyncSnapshot, ConnectionState};
 pub use build_phase::{BuildPhase, BuildPhaseGuard, MutatedDuringBuild};
 // Claim-slot request/reply primitive (ADR-0039 §3)
-pub use claim_slot::{ClaimHandle, ClaimOutcome, ClaimSlot, claim_slot};
+pub use claim::{ClaimHandle, ClaimOutcome, ClaimSlot, claim_slot};
 // Monotonic time source (OS / virtual clock) — foundational primitive injected
 // by deadline- and frame-driven subsystems (gesture arena, headless binding).
 pub use clock::{ManualClock, MonotonicClock, SystemClock, event_epoch};
-pub use consts::EPSILON;
 pub use creation_site::CreationSite;
 pub use sequence::{
     AtomicIdMint, DragSessionId, FrameCallbackId, IdExhausted, IdMint, InputSequenceId, ListenerId,
     MintedId, PressId, TaskId,
 };
-pub use text_direction::TextDirection;
 pub use ticket::{Ticket, TicketSource};
 pub use tree_error::{PathEntry, TREE_CONTEXT_DEPTH, TreeContext, TreeError};
 // Window-runtime generation/version counters + commit-time freshness gate.
@@ -300,15 +289,15 @@ pub use id::{
 };
 pub use key::{SaltedKey, UniqueKey, ValueKey, ViewKey};
 // Change notification (Listenable pattern)
+pub use child_slot::IndexedSlot;
 pub use notifier::{
     ChangeNotifier, Listenable, ListenerCallback, ListenerObserver, Subscription, ValueListenable,
     ValueNotifier,
 };
 pub use rebuild_reason::{RebuildReason, RebuildReasons};
-pub use slot::IndexedSlot;
-pub use slot_index::{SlotIndex, SlotKey, SlotSet};
+pub use slot_table::{SlotIndex, SlotKey, SlotSet};
 // Generic typed channel
-pub use notifier_generic::{ArgCallback, Notifier};
+pub use notifier::{Notifier, NotifierCallback};
 // WASM compatibility
 
 // ============================================================================
@@ -327,7 +316,6 @@ pub mod prelude {
     pub use crate::{
         // Change notification
         ChangeNotifier,
-        EPSILON,
         // IDs
         ElementId,
         // Generic ID system

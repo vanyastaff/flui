@@ -21,7 +21,7 @@ not prevent an aggregate's second field from aborting the process.
 
 ## Decision
 
-1. `ArgCallback<T>` borrows `&T`. `Notifier::notify` and
+1. `NotifierCallback<T>` borrows `&T`. `Notifier::notify` and
    `ListenerRegistry::notify_status` accept borrowed arguments, require no
    `Clone`, and never own an argument's destruction. `Notifier` clones share
    the channel even when its argument type does not implement `Clone`.

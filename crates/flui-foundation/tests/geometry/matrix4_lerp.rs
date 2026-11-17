@@ -57,7 +57,7 @@ fn skew_is_kept_and_interpolated() {
     let mid = Matrix4::skew_2d(angle, 0.0).lerp(Matrix4::IDENTITY, 0.5);
     // x' = x + k·y: the shear coefficient sits in row 0, column 1.
     let mut expected = Matrix4::IDENTITY;
-    *expected.get_mut(0, 1) = angle.tan() / 2.0;
+    expected[(0, 1)] = angle.tan() / 2.0;
     assert_close(mid, expected, 1e-12, "skew tan(a) -> 0");
 }
 
@@ -65,10 +65,10 @@ fn perspective_is_kept_and_interpolated() {
     let distance = 200.0;
     // CSS `perspective(d)`: w' = w − z/d, row 3, column 2.
     let mut perspective = Matrix4::IDENTITY;
-    *perspective.get_mut(3, 2) = -1.0 / distance;
+    perspective[(3, 2)] = -1.0 / distance;
     let mid = perspective.lerp(Matrix4::IDENTITY, 0.5);
     let mut expected = Matrix4::IDENTITY;
-    *expected.get_mut(3, 2) = -1.0 / (2.0 * distance);
+    expected[(3, 2)] = -1.0 / (2.0 * distance);
     assert_close(mid, expected, 1e-15, "perspective -1/d -> 0");
 }
 
@@ -81,8 +81,8 @@ fn translation_and_scale_interpolate_linearly() {
 
 fn singular_projection_switches_at_the_midpoint() {
     let mut singular = Matrix4::IDENTITY;
-    *singular.get_mut(3, 3) = 0.0;
-    *singular.get_mut(3, 2) = 1.0;
+    singular[(3, 3)] = 0.0;
+    singular[(3, 2)] = 1.0;
     for (t, expected) in [
         (-0.5, singular),
         (0.25, singular),
@@ -99,7 +99,7 @@ fn singular_projection_switches_at_the_midpoint() {
 fn perspective_over_a_collapsed_axis_switches_at_the_midpoint() {
     // A perspective row cannot be solved for when the linear part is singular.
     let mut collapsed = Matrix4::scaling(0.0, 1.0, 1.0);
-    *collapsed.get_mut(3, 0) = 0.01;
+    collapsed[(3, 0)] = 0.01;
     assert_eq!(collapsed.lerp(Matrix4::IDENTITY, 0.25).m, collapsed.m);
     assert_eq!(
         collapsed.lerp(Matrix4::IDENTITY, 0.5).m,
@@ -110,7 +110,7 @@ fn perspective_over_a_collapsed_axis_switches_at_the_midpoint() {
 fn normalisation_overflow_switches_at_the_midpoint() {
     // Dividing by a subnormal m33 turns the finite translation into infinity.
     let mut tiny = Matrix4::translation(1.0, 0.0, 0.0);
-    *tiny.get_mut(3, 3) = f64::from_bits(1);
+    tiny[(3, 3)] = f64::from_bits(1);
     let quarter = tiny.lerp(Matrix4::IDENTITY, 0.25);
     assert_eq!(quarter.m, tiny.m, "before the midpoint: {quarter:?}");
     let half = tiny.lerp(Matrix4::IDENTITY, 0.5);
