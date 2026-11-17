@@ -1531,6 +1531,10 @@ fn a_frame_drawn_after_a_panicked_upload_does_not_move_the_base() {
 #[test]
 fn the_host_places_the_desktop_executor() {
     use flui_native::CurrentHost;
+    #[cfg_attr(
+        not(any(target_os = "linux", windows, target_os = "macos")),
+        expect(unused_mut, reason = "only a desktop target adds its own hosts")
+    )]
     let mut hosts = vec![(CurrentHost::Headless, RasterPlacement::Inline)];
     #[cfg(target_os = "linux")]
     hosts.extend([

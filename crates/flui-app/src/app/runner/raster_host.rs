@@ -2476,7 +2476,10 @@ fn damage_mode() -> DamageMode {
 /// the sent messages a swap chain's thread sends it (ADR-0305 §9); the
 /// headless host stays inline, as ADR-0305 §10 places it.
 #[cfg_attr(
-    any(target_os = "android", target_os = "ios", target_arch = "wasm32"),
+    all(
+        any(target_os = "android", target_os = "ios", target_arch = "wasm32"),
+        not(all(test, feature = "testing"))
+    ),
     expect(dead_code, reason = "only the desktop loop turns a raster thread")
 )]
 pub(crate) fn desktop_placement(host: flui_native::CurrentHost) -> RasterPlacement {
