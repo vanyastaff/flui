@@ -481,13 +481,12 @@ impl FallbackWake {
         anchored
     }
 
-    /// A pump ran and presented nothing, and nothing keeps the gate open, so
-    /// no deadline is armed for it. A pending deadline stays, but the tree work
-    /// it held is gone once this frame left none: tree work that arrives later
-    /// is new and runs at once.
-    pub(super) fn release_held_work(&self, left_work: bool) {
-        let mut state = self.state.lock();
-        state.holds_work &= left_work;
+    /// A pump ran, presented nothing and left nothing pending (the gate is
+    /// closed, so no deadline is armed for it): the tree work a pending
+    /// deadline held is done. The deadline stays, and tree work that arrives
+    /// after this frame is new and runs at once.
+    pub(super) fn release_held_work(&self) {
+        self.state.lock().holds_work = false;
     }
 
     /// The instant the platform's wake-deadline hook should wake the loop
@@ -807,12 +806,7 @@ mod desktop_pacing_tests {
             frame_is_dirty(false, false, none, Some(now), holding),
             "nor does an armed raster attempt"
         );
-        fallback.release_held_work(true);
-        assert!(
-            fallback.gate(now).holds_work,
-            "a frame that left tree work keeps it held"
-        );
-        fallback.release_held_work(false);
+        fallback.release_held_work();
         let released = fallback.gate(now);
         assert!(
             released.pending && !released.holds_work,

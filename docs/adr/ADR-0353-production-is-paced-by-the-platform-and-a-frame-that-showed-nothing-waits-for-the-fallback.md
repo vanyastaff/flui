@@ -130,12 +130,14 @@ deadline that comes due between the two reads is counted at least once. An inbox
 raster attempt (`next_attempt_at`, a device rebuild or a surface restore) and the due fallback
 count at once. A frame's immediate retry (a panicking resize asking again) is tree work that frame
 left, so it waits for the fallback and cannot spin; a dropped frame's paced retry is due work at
-its backoff deadline. A frame that presents nothing and arms no deferral (nothing keeps the gate
-open) leaves a pending fallback in place but releases its `holds_work` once it left no tree work
-(`FallbackWake::release_held_work`), so tree work after it runs at once. With no fallback armed,
-every pending work is dirty at once. A press, a release or a key is dispatched when it arrives
-(the platform input callback calls `handle_input_addressed` directly), and only the frame that
-would show its effect waits. Pointer motion is coalesced or resampled and delivered by the frame,
+its backoff deadline. A frame the loop thread ran that presents nothing and leaves nothing
+pending (the gate closes, so it arms no deferral) releases a pending fallback's `holds_work`
+(`FallbackWake::release_held_work`); the deadline stays, and tree work after that frame runs at
+once. A frame a raster thread held does not release it, so the hold lasts until the deadline, one
+fallback at most. With no fallback armed, every pending work is dirty at once. A press, a release
+or a key is dispatched when it arrives (the platform input callback calls `handle_input_addressed`
+directly); the frame that shows its effect waits only while the fallback holds tree work.
+Pointer motion is coalesced or resampled and delivered by the frame,
 so on a window whose last frame showed nothing, its handlers run with that frame, at most one
 fallback (0.95 display period) late. A deadline source must be in the dirty predicate and
 self-clearing, or its wake arrives and is skipped: each
@@ -216,7 +218,7 @@ Tests in `crates/flui-app/src/app/runner/frame_pacing.rs`, rows of `desktop_paci
   records the tree work its frame left; the echo and that tree work wait, a held press waits even
   when the frame left no tree work, due work runs on its own wake, the due fallback runs the frame,
   tree work after a frame that left none runs at once, as do an inbox redraw and an armed raster
-  attempt, and a frame that ran out the held work releases it; red when tree work counts past a
+  attempt, and a release keeps the deadline but frees later tree work; red when tree work counts past a
   pending fallback that holds work, and red when input
   work counts past any pending fallback), in `flui-runtime`'s contracts,
   `a_dropped_frames_retry_is_due_work_and_a_repaint_is_tree_work` and

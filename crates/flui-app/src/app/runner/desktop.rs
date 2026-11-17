@@ -473,11 +473,11 @@ impl DesktopWakeDeadlines {
         )
     }
 
-    /// After a pump that presented nothing and armed no deferral: a pending
-    /// fallback stops holding tree work once the pump left none.
-    pub(super) fn settle_after_no_present(&self, ui_runtime: &crate::app::ui_runtime::UiRuntime) {
-        self.fallback
-            .release_held_work(ui_runtime.has_pending_tree_work());
+    /// After a pump that presented nothing and left nothing pending: a
+    /// pending fallback no longer holds tree work
+    /// ([`FallbackWake::release_held_work`]).
+    pub(super) fn settle_after_no_present(&self) {
+        self.fallback.release_held_work();
     }
 
     /// The earliest armed deadline: the pacing fallback and the first
@@ -710,7 +710,7 @@ impl DesktopFrameDriver {
                          ticker wake"
                     );
                 } else {
-                    self.deadlines.settle_after_no_present(ui_runtime);
+                    self.deadlines.settle_after_no_present();
                 }
                 // The reveal runs platform code: after the deferral is
                 // armed, so a panic there leaves the wake paced.
