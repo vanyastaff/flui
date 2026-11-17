@@ -704,9 +704,18 @@ mod desktop_pacing_tests {
         use std::cell::{Cell, RefCell};
         use std::rc::Rc;
 
+        /// What the subscriber read inside the event.
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        enum ReadInside {
+            /// The subscriber heard no pacing event.
+            NotRun,
+            /// The next wake the fallback answered inside the event.
+            Read(Option<Instant>),
+        }
+
         thread_local! {
             static FALLBACK: RefCell<Option<Rc<FallbackWake>>> = const { RefCell::new(None) };
-            static READ_INSIDE: Cell<Option<Option<Instant>>> = const { Cell::new(None) };
+            static READ_INSIDE: Cell<ReadInside> = const { Cell::new(ReadInside::NotRun) };
         }
 
         /// Reads the fallback's next wake from inside every pacing event.
@@ -726,7 +735,7 @@ mod desktop_pacing_tests {
                 }
                 if let Some(fallback) = FALLBACK.with_borrow(Clone::clone) {
                     let read = fallback.next_wake(Instant::now(), Duration::from_millis(16));
-                    READ_INSIDE.set(Some(read));
+                    READ_INSIDE.set(ReadInside::Read(read));
                 }
             }
             fn enter(&self, _: &tracing::span::Id) {}
@@ -757,7 +766,7 @@ mod desktop_pacing_tests {
         );
         assert_eq!(
             read_inside,
-            Some(None),
+            ReadInside::Read(None),
             "the subscriber ran and read the deadline already abandoned"
         );
     }

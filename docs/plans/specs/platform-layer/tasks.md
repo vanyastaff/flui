@@ -7905,6 +7905,42 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
   `an_unseen_window_asks_for_no_wake_until_it_is_seen` (headless). Осталось: трекер Win32,
   отключённая удалённая сессия, выход композитного менеджера X11, старый кадр при раскрытии
   (`docs/gaps.md`); прогон Wayland с композитором, не отвечающим на callback, — в строке паритета.
+- [x] **LY142** — ветка `app/owner-thread-state`. Находки подтверждены на `main` @ `817b30989`
+  чтением: роутер закрытия лежит в `Rc` (`NativeBindings`) и держит `Weak<dyn PlatformWindow>`,
+  `GpuLossLedger` — только поток страницы, `FirstReveal`, `HostMemory` — поток цикла, а все за
+  `parking_lot::Mutex`. Класс шире названного (ADR-0323 §5): `FallbackWake` и `BackgroundPace`
+  (пейсинг окна), `DesktopWakeDeadlines` (`Arc` → `Rc`), флаг закрытия установки и снимок окна в
+  `window_install.rs`/`installed_host.rs` (`Arc<AtomicBool>`, `Arc<Mutex<_>>`), слот
+  data-transfer в `AppRuntime` (`Arc<Mutex<_>>`, наружу не клонировался) и рендерер прямого режима
+  (`Arc<Mutex<Renderer>>`, `Arc<Mutex<render_fn>>`) — теперь `Rc` с `Cell`/`RefCell`. Вместе с
+  ними сделаны удаления flui-app из ADR-0323 §4: `CloseRequestHandler::new` без `Send + Sync`
+  (держится в `Rc`), `run_direct` без `Send`, `AppConfig::memory_reclaim` без `Sync`; восемь
+  записей ушли из `send-positions.toml`. Проверки `ThreadId` роутера и
+  `CloseRequestError::WrongThread` удалены: `AppRuntime` поточно-локален, так что
+  `owner_thread` либо пуст, либо равен текущему потоку, и вариант был недостижим; вместо проверок —
+  `assert_not_impl_any!(CloseRequestRouter, CloseRequestHandler: Send, Sync)`. Обновление `Cell`
+  — копия состояния в замыкании без доступа к ячейке (`update` у `FallbackWake` и
+  `GpuLossLedger`), запись не теряется. Повторный вход: под блокировкой роутера, `HostMemory`,
+  `FirstReveal`, `GpuLossLedger` и `BackgroundPace` чужой код не выполнялся (клон наружу до
+  вызова), так что там повторный вход не висел и теперь не паникует — таблица заимствуется только
+  внутри методов владельца. Реальный случай нашёлся в `FallbackWake::next_wake`: событие `tracing`
+  об отказе от дедлайна шло под замком, и подписчик, читающий дедлайн, ждал замка своего же потока;
+  теперь состояние записано до события. В прямом режиме замыкание приложения шло под замком
+  рендерера; теперь сцена строится со свободным рендерером, кадр, вызванный изнутри другого,
+  отвечает `Declined`, размер, пришедший во время кадра, применяется следующим кадром. Маркеры
+  «slice», «#558», «#559» и пункты плана в доках `lifecycle.rs`, `close_request.rs`, `config.rs`,
+  `lib.rs`, `desktop.rs` заменены действующим контрактом. Тесты:
+  `a_subscriber_reading_the_deadline_inside_its_abandonment_event_finds_it_gone`
+  (`desktop_pacing_matrix`; на `FallbackWake` из `main` падает по таймауту 10 с — чтение внутри
+  события ждёт замка), `a_handler_that_closes_its_own_window_closes_it_once` (обработчик с
+  `Rc<Cell<_>>` закрывает своё окно изнутри ответа: одно закрытие, одно освобождение дерева) и
+  `a_memory_receiver_without_sync_is_reclaimed_per_notice` (приёмник с `Cell`) в `runner_close`, а
+  `a_refused_quit_waits_for_the_record_then_exits` считает в `Rc<Cell<_>>`: на `main` эти три не
+  компилируются (граница `Send + Sync`). Правило записано в `crates/flui-app/ARCHITECTURE.md`.
+  Остаются за замками то, что достаёт другой поток: `AppHandle` и `DeviceRetry`, вейкеры ожидающих
+  окон, флаг и запросчик перерисовки, список перерисовок растра, эндпоинт агента, воркеры и
+  сервисы, полосы хранилища и хуки разработки (`DevReload`, `DevAgent`; ADR-0311). Не собрано
+  здесь: Android, iOS, wasm (правки `android.rs`, `web.rs`, `gpu_loss.rs` — только CI).
 
 ## Чего нет в этой серии
 
