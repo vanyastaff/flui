@@ -237,7 +237,7 @@ impl LayerCompositor {
             layer_blend,
             bounds,
             filters,
-            image_filter: None, // set by save_layer_with_image_filter after push
+            image_filter: None, // set by save_layer_impl after the push
             composite_clip,
         };
         self.layer_stack.push(saved);
@@ -312,8 +312,8 @@ impl LayerCompositor {
 
     /// Mark the top-of-stack `SavedLayer` with an image filter spec.
     ///
-    /// Called by `WgpuPainter::save_layer_with_image_filter` immediately after
-    /// `save_layer_impl` pushes the new entry.  Panics in debug mode if the stack
+    /// Called by `WgpuPainter::save_layer_impl` immediately after it
+    /// pushes the new entry.  Panics in debug mode if the stack
     /// is empty (which would indicate a caller ordering bug — `push_layer` must
     /// precede this call).
     pub(super) fn set_top_image_filter(&mut self, spec: ImageFilterSpec) {
@@ -387,44 +387,18 @@ impl LayerCompositor {
             };
         }
 
-        // A non-white tint carries ColorFilter chroma that the fast reintegrate
-        // path cannot apply (it splices children into the parent draw order
-        // unchanged).  A hue-only filter at effective_alpha == 1.0 MUST still go
-        // through the offscreen composite path so the premultiplied tint shifts
-        // chroma — otherwise the hue shift is silently dropped.  White tint
-        // (plain opacity) at ~1.0 AND SrcOver blend keeps the cheap reintegrate path.
-        //
-        // Any mode but SrcOver ALWAYS forces the composite path even at
-        // opacity=1.0 and white tint, because the reintegrate path splices
-        // children unchanged into the parent draw order — silently compositing
-        // them SrcOver. That holds for the advanced modes (Multiply, Screen, …)
-        // and the Porter-Duff ones alike (`Src` replaces its region, `DstOver`
-        // puts the layer under the backdrop).
-        //
-        // A LayerFilter ALWAYS forces the composite path: the filter must run on
-        // the rendered offscreen before pixels reach the parent, which the
-        // reintegrate path cannot do (it inserts content directly into the parent
-        // draw order without an offscreen round-trip).
-        let has_chroma = (saved.layer_tint_rgb[0] - 1.0).abs() > f32::EPSILON
-            || (saved.layer_tint_rgb[1] - 1.0).abs() > f32::EPSILON
-            || (saved.layer_tint_rgb[2] - 1.0).abs() > f32::EPSILON;
-        // G3 guardrail: an image_filter ALWAYS forces the composite path so the
-        // Morph (or future Blur) pass can run on the rendered offscreen before
-        // pixels reach the parent.  The Reintegrate fast-path splices children
-        // directly into the parent draw order and CANNOT apply an image filter.
-        //
-        // A `composite_clip` ALWAYS forces the composite path for the same
-        // reason: `Clip::AntiAliasWithSaveLayer` asks for the offscreen by
-        // name, and its clip's coverage is applied to the composite. Splicing
-        // the children back into the parent would drop both — the layer's
-        // isolation and, for a rounded clip, the clip itself.
+        // `force_isolation` is set after the push (a shader mask, which also
+        // carries a clip), so the painter's own reading of `composites` at
+        // save time already sees that layer composite.
         let needs_composite = saved.force_isolation
-            || (1.0 - saved.layer_opacity).abs() > f32::EPSILON
-            || has_chroma
-            || saved.layer_blend != BlendMode::SrcOver
-            || !saved.filters.is_empty()
-            || saved.image_filter.is_some()
-            || saved.composite_clip.is_some();
+            || composites(
+                saved.layer_opacity,
+                saved.layer_tint_rgb,
+                saved.layer_blend,
+                &saved.filters,
+                saved.image_filter.is_some(),
+                saved.composite_clip.is_some(),
+            );
 
         if needs_composite {
             RestoreOutcome::Composite {
@@ -449,4 +423,40 @@ impl LayerCompositor {
             }
         }
     }
+}
+
+/// Whether a layer with these composite parameters renders its children to an
+/// offscreen and composites it, rather than splicing them into the parent.
+///
+/// A non-white tint carries color-filter chroma, which the splice cannot apply:
+/// a hue-only filter at opacity 1 still composites so the premultiplied tint
+/// shifts chroma. Any mode but `SrcOver` composites even at opacity 1 and white
+/// tint, since the splice would draw the children `SrcOver`; that holds for the
+/// advanced modes and the Porter-Duff ones alike (`Src` replaces its region,
+/// `DstOver` puts the layer under the backdrop). A color-filter chain or an
+/// image filter runs on the rendered offscreen before its pixels reach the
+/// parent. A composite clip is applied to the composite, and
+/// `Clip::AntiAliasWithSaveLayer` asks for the offscreen by name: splicing
+/// would drop the isolation and, for a rounded clip, the clip itself.
+///
+/// The painter reads it when it saves the layer, with the clip its caller
+/// gave, and only a layer it finds unchanging under no inherited coverage
+/// keeps the inherited scissor; every other layer folds that coverage and
+/// scissor into its clip, so [`LayerCompositor::pop_layer`] composites it.
+pub(crate) fn composites(
+    layer_opacity: f32,
+    layer_tint_rgb: [f32; 3],
+    layer_blend: BlendMode,
+    filters: &LayerFilterChain,
+    image_filtered: bool,
+    clipped: bool,
+) -> bool {
+    (1.0 - layer_opacity).abs() > f32::EPSILON
+        || layer_tint_rgb
+            .iter()
+            .any(|channel| (channel - 1.0).abs() > f32::EPSILON)
+        || layer_blend != BlendMode::SrcOver
+        || !filters.is_empty()
+        || image_filtered
+        || clipped
 }

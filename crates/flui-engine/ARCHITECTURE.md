@@ -1280,6 +1280,17 @@ nested rounded geometry, repeated AA, independent rx/ry and fractional rects.
 The native Windows GPU suite passes with `FLUI_REQUIRE_GPU=1` (59 tests, no
 skips). This is execution evidence for this host, not every target/backend.
 
+A layer that changes nothing where it composites (opacity 1, no tint,
+`SrcOver`, no filter and no clip of its own, as `layer_compositor::composites`
+reads it, under no inherited clip coverage) splices its
+children into its parent in every frame. They keep the hardware scissor in
+force, which with no clip coverage behind it is a partial frame's damage and
+cuts them as it would cut the layer. A partial frame therefore makes no
+offscreen that a full frame does not, and a backdrop under such a layer reads
+the parent in both (`a_backdrop_filter_in_a_clipped_layer_reads_only_inside_the_clip`).
+Every other layer leaves its children unscissored, since a filter under it
+may read past the scissor, and cuts its composite instead.
+
 Future optimizations include bounded mask atlases, reuse keyed by immutable
 expression plus target mapping, and workload benchmarks. These require measured
 benefit and completion-safe resource ownership. The clip quotas do not constitute
