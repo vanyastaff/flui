@@ -188,12 +188,8 @@ mod toplevel {
     use super::client_frame::surfaces::{ClientFrame, FrameGlobals, FrameRecord, TitleFonts};
     use super::client_frame::{self, Action, Frame, Look, Offers};
     use super::configure::{
-        Activation, Sizing, ToplevelStates, WmCapabilities, capabilities, clamp, pointer_reported,
-        protocol_extent,
-    };
-    use super::configure::{
         Activation, GeometryConfigure, Sizing, ToplevelStates, WmCapabilities, capabilities, clamp,
-        protocol_extent,
+        pointer_reported, protocol_extent,
     };
     use super::decoration::{Decoration, Drawn, FrameDrawer};
     #[cfg(any(test, feature = "testing"))]

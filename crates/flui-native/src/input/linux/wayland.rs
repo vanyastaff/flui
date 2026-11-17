@@ -671,23 +671,6 @@ pub mod cursor {
         }
     }
 
-    /// The integer buffer scale an application's cursor image of `width` by
-    /// `height` device pixels is shown at on a window of `scale`: the theme's
-    /// scale ([`theme_scale`]), or the largest below it that divides both
-    /// sides, as a buffer's size must be a multiple of its scale. A side no
-    /// scale above one divides shows the image at one.
-    #[must_use]
-    pub fn image_scale(scale: f64, width: u16, height: u16) -> i32 {
-        let divides = |scale: i32| {
-            u16::try_from(scale)
-                .is_ok_and(|scale| width.is_multiple_of(scale) && height.is_multiple_of(scale))
-        };
-        (1..=theme_scale(scale))
-            .rev()
-            .find(|candidate| divides(*candidate))
-            .unwrap_or(1)
-    }
-
     /// The names a cursor theme may give `icon`, best first: its CSS name,
     /// then the X cursor names themes used before.
     #[must_use]
@@ -792,24 +775,6 @@ pub mod cursor {
             assert_eq!(names.first(), Some(&"pointer"));
             assert!(names.contains(&"hand2"), "{names:?}");
             assert_eq!(theme_names(CursorIcon::Default).first(), Some(&"default"));
-        }
-
-        /// An application's image is shown at the window's scale rounded up,
-        /// or the largest smaller scale both its sides are a multiple of.
-        #[test]
-        fn a_cursor_image_is_shown_at_a_scale_its_sides_divide() {
-            // (case, window scale, width, height, buffer scale)
-            for (case, scale, width, height, expected) in [
-                ("one", 1.0, 32, 32, 1),
-                ("two", 2.0, 64, 64, 2),
-                ("rounded up", 1.5, 48, 48, 2),
-                ("an odd side", 2.0, 33, 32, 1),
-                ("three divides, two does not", 3.0, 27, 27, 3),
-                ("the next scale down", 4.0, 6, 6, 3),
-                ("one pixel", 2.0, 1, 1, 1),
-            ] {
-                assert_eq!(image_scale(scale, width, height), expected, "{case}");
-            }
         }
 
         /// A scale as a test writes it.

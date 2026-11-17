@@ -75,10 +75,9 @@ use wayland_protocols::wp::tablet::zv2::client::zwp_tablet_tool_v2::{
     self, ButtonState, Type as ToolType, ZwpTabletToolV2,
 };
 use wayland_protocols::wp::tablet::zv2::client::zwp_tablet_v2::{self, ZwpTabletV2};
-use wayland_protocols::wp::viewporter::client::wp_viewport::WpViewport;
 use web_time::Instant;
 
-use super::cursor::{self, SurfaceRequest};
+use super::cursor;
 use super::keyboards::Keyboards;
 use super::repeat::RepeatSettings;
 use super::wire::{
@@ -104,7 +103,7 @@ use crate::owner::window_delivery::WindowDelivery;
 mod cursors;
 mod grab;
 
-use cursors::{ImageBuffer, show_cursor, show_frame_cursor};
+use cursors::{ImageBuffer, ThemeSurface, show_cursor, show_frame_cursor};
 use grab::{Hold, end_hold, hold, let_go_of_pointer, let_go_on_leave};
 
 /// The newest `wl_seat` the input understands: version 9 says which way a
@@ -1467,7 +1466,7 @@ impl WaylandInput for SeatInput {
                 windows
                     .iter()
                     .find(|held| held.id == id)
-                    .map(|held| (held.cursor, (held.scale)()))
+                    .map(|held| (held.cursor.clone(), (held.scale)()))
             })
             .flatten()
         else {
@@ -1475,9 +1474,10 @@ impl WaylandInput for SeatInput {
         };
         let surface = surface_key(id);
         self.shared.objects.with(|objects| {
-            // A `cursor-shape` cursor is the compositor's to scale.
-            if objects.shapes.is_none() {
-                show_cursor(&self.shared, objects, surface, cursor, scale);
+            // A `cursor-shape` cursor is the compositor's to scale; a theme
+            // cursor and an application's image are drawn for the scale.
+            if objects.shapes.is_none() || !matches!(cursor, Cursor::Icon(_)) {
+                show_cursor(&self.shared, objects, surface, &cursor, scale);
             }
         });
     }
@@ -1646,62 +1646,6 @@ fn frame_event(
         _ => {}
     }
     true
-}
-
-/// The surface a pointer's theme cursor is drawn on, and its viewport, made
-/// the first time an image needs one ([`cursor::CursorBuffer::Viewported`]).
-struct ThemeSurface {
-    surface: WlSurface,
-    viewport: Option<WpViewport>,
-}
-
-impl ThemeSurface {
-    /// Put `buffer`, an image of `width` by `height` pixels, on the surface
-    /// as `fit` says: send it what [`cursor::CursorBuffer::requests`] lists.
-    fn show(
-        &mut self,
-        source: &CursorGlobals,
-        buffer: &WlBuffer,
-        (width, height): (u32, u32),
-        fit: cursor::CursorBuffer,
-    ) {
-        let requests = fit.requests(
-            width,
-            height,
-            self.viewport.is_some(),
-            self.surface.version(),
-        );
-        for request in requests {
-            match request {
-                SurfaceRequest::MakeViewport => {
-                    self.viewport = source.viewporter.as_ref().map(|viewporter| {
-                        viewporter.get_viewport(&self.surface, &source.queue, ())
-                    });
-                }
-                SurfaceRequest::Destination(size) => {
-                    if let Some(viewport) = &self.viewport {
-                        let (width, height) = size.unwrap_or((-1, -1));
-                        viewport.set_destination(width, height);
-                    }
-                }
-                SurfaceRequest::BufferScale(scale) => self.surface.set_buffer_scale(scale),
-                SurfaceRequest::Attach => self.surface.attach(Some(buffer), 0, 0),
-                SurfaceRequest::DamageBuffer(width, height) => {
-                    self.surface.damage_buffer(0, 0, width, height);
-                }
-                SurfaceRequest::Damage(width, height) => self.surface.damage(0, 0, width, height),
-                SurfaceRequest::Commit => self.surface.commit(),
-            }
-        }
-    }
-
-    /// Destroy the viewport, then the surface.
-    fn destroy(self) {
-        if let Some(viewport) = self.viewport {
-            viewport.destroy();
-        }
-        self.surface.destroy();
-    }
 }
 
 /// The tablet seat of `seat`, whose key is `key`.

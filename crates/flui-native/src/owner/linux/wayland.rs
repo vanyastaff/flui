@@ -886,11 +886,8 @@ mod event_loop {
     use flui_platform::data_transfer::DragTransport;
     use flui_platform::drag::PlatformDragSource;
     use flui_platform::{
-        Cursor, CursorError, CursorGrab, DisplayId, DisplaySnapshot, PlatformFailure,
-        SessionEndAnswer, SessionEndPhase, SystemNotice, WindowId,
-    };
-    use flui_platform::{
-        CursorError, DisplaySnapshot, SessionEndAnswer, SessionEndPhase, SystemNotice, WindowId,
+        Cursor, CursorError, CursorGrab, DisplaySnapshot, PlatformFailure, SessionEndAnswer,
+        SessionEndPhase, SystemNotice, WindowId,
     };
     use rustc_hash::FxHashMap;
     use rustix::event::{EventfdFlags, PollFd, PollFlags, Timespec, eventfd, poll};

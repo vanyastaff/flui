@@ -89,14 +89,14 @@ columns and is listed after them.
 
 | Environment | Host | ✅ | 🟡 | ❌ | — | ❔ | Score | Ready | Nightly runner | Nightly ✅ |
 |:--|:--|--:|--:|--:|--:|--:|--:|:-:|:--|--:|
-| Windows | Win32 (native) | 12 | 54 | 31 | 20 | 10 | 40% | no | windows-latest | 3 |
-| macOS | AppKit (native) | 9 | 44 | 43 | 21 | 10 | 32% | no | macos-latest | 2 |
-| Wayland | Wayland (native) | 11 | 54 | 28 | 29 | 5 | 41% | no | — | 0 |
-| X11 | X11 (native) | 12 | 50 | 30 | 30 | 5 | 40% | no | — | 0 |
-| iOS | UIKit (native) | 6 | 39 | 40 | 34 | 8 | 30% | no | macos-latest, iOS Simulator | 0 |
-| Android | android-activity (native) | 18 | 42 | 32 | 29 | 6 | 42% | no | ubuntu-24.04, Android emulator | 2 |
-| Web | wasm canvas (native) | 7 | 43 | 28 | 42 | 7 | 37% | no | — | 0 |
-| Headless | test double | 53 | 3 | 48 | 21 | 2 | 52% | — | — | 0 |
+| Windows | Win32 (native) | 12 | 56 | 31 | 20 | 10 | 40% | no | windows-latest | 3 |
+| macOS | AppKit (native) | 9 | 46 | 43 | 21 | 10 | 33% | no | macos-latest | 2 |
+| Wayland | Wayland (native) | 11 | 55 | 28 | 30 | 5 | 41% | no | — | 0 |
+| X11 | X11 (native) | 12 | 52 | 30 | 30 | 5 | 40% | no | — | 0 |
+| iOS | UIKit (native) | 6 | 39 | 41 | 35 | 8 | 30% | no | macos-latest, iOS Simulator | 0 |
+| Android | android-activity (native) | 18 | 42 | 33 | 30 | 6 | 42% | no | ubuntu-24.04, Android emulator | 2 |
+| Web | wasm canvas (native) | 7 | 44 | 28 | 43 | 7 | 37% | no | — | 0 |
+| Headless | test double | 55 | 3 | 48 | 21 | 2 | 53% | — | — | 0 |
 
 Quality bar: 2 of 16 met (no process-global state, one monotonic clock); 9 partly; 3 not met (power and thermal behaviour, assistive technology conformance, the first frame matching the OS splash); 2 not audited (timestamps across a counter wrap or a clock-base change, platform-edge diagnostics free of secrets).
 
@@ -229,7 +229,9 @@ Quality bar: 2 of 16 met (no process-global state, one monotonic clock); 9 partl
 | Keyboard: keys, modifiers, repeat, dead keys | ✅ | 🟡 | 🟡 | 🟡 | ❌ | 🟡 | 🟡 | ✅ | iOS handles no hardware keyboard; Android ran hardware key events through a manual Android run, with no repeat, dead key or physical keyboard. Wayland repeats at 25 a second after 600 ms on a seat older than `repeat_info` (version 4), checked by its keyboard model alone: no compositor the tests start offers so old a seat. |
 | Keyboard layout and its changes | 🟡 | ❌ | 🟡 | 🟡 | ❌ | ❌ | ❌ | ❌ | Web hard-codes `en-US`; Wayland and X11 read the layout through XKB and report its changes, not run with a layout switched |
 | Gamepad and D-pad: a controller's buttons and sticks, a remote's keys, moving focus by direction | ❌ | ❌ | ❌ | ❌ | ❌ | 🟡 | ❌ | 🟡 | No gamepad source on any host (XInput or GameInput, `GCController`, Android `SOURCE_GAMEPAD` axes, the Web Gamepad API, evdev); Android's D-pad arrives as the arrow keys and Enter through the key table, and the arrows drive directional focus, never run on a TV. |
-| Cursor shapes | 🟡 | 🟡 | 🟡 | 🟡 | ❌ | ❌ | 🟡 | ✅ | No iPad pointer styles or Android `PointerIcon`; no custom image or hide-until-move. Wayland without `cursor-shape` draws the cursor theme's image, through a viewport where the window's scale does not divide the image's size; that ran on Weston 13 at scale 3 (2026-11-16), which does not enforce the buffer-scale rule on cursor surfaces, so a run under a compositor that does (KWin before `cursor-shape`) is owed |
+| Cursor shapes | 🟡 | 🟡 | 🟡 | 🟡 | ❌ | ❌ | 🟡 | ✅ | No iPad pointer styles or Android `PointerIcon`. A cursor image of the application (`Cursor::Image`) and no cursor (`Cursor::Hidden`) are built on Windows, macOS, Wayland, X11 and the Web and reach no widget yet ([gaps](gaps.md#a-widget-cannot-ask-for-a-cursor-image-or-none-and-the-pointer-grabs-have-run-on-no-device)); none has run on a device but the headless host. Wayland without `cursor-shape` draws the cursor theme's image, through a viewport where the window's scale does not divide the image's size; that ran on Weston 13 at scale 3 (2026-11-16), which does not enforce the buffer-scale rule on cursor surfaces, so a run under a compositor that does (KWin before `cursor-shape`) is owed |
+| Pointer grab: confined and locked, with raw motion | 🟡 | 🟡 | 🟡 | 🟡 | ❌ | ❌ | 🟡 | ✅ | A grab holds only while the window has the keyboard focus and ends with it (ADR-0354 §2). Windows confines and locks with its cursor clip and raw input (`a_grab_is_held_while_focused_and_let_go_with_the_focus`, which takes the foreground itself, a lock following the client area through a move and a resize, and the conformance check `a_grab_ends_with_the_focus` reading the cursor clip), never with a physical mouse or a remote session; macOS and the Web lock only (no confine API), type-checked, never run (Quartz does not say whether the mouse is detached, so the AppKit fixture reads no grab of its own: owed on a Mac); X11 confines and locks with a pointer grab and XInput 2 raw motion, run on Xvfb under openbox, where XTest motion is not held to the grab and the conformance check reads the grab of the server from a second connection; Wayland confines and locks through `zwp_pointer_constraints_v1` and `zwp_relative_pointer_manager_v1` where the compositor offers them, run on Weston only, where the conformance fixture reads no grab of its own (no compositor tells another client of a constraint); iOS (`prefersPointerLocked`) and Android (`requestPointerCapture`) are not built |
+| Window level, resize steps and proportion | 🟡 | 🟡 | — | 🟡 | — | — | — | ✅ | Windows keeps a window on top with `WS_EX_TOPMOST` (granted to a window of the foreground) and below by the host, and holds the steps and the proportion in `WM_SIZING` (`a_frame_drag_keeps_the_steps_and_the_proportion`, `a_level_is_what_win32_holds`), never with a user drag; macOS uses `NSWindow.level`, `contentResizeIncrements` and `contentAspectRatio` (AppKit holds one of the two at a time), type-checked only; X11 writes `_NET_WM_STATE_ABOVE`/`BELOW` and `WM_NORMAL_HINTS`, run on Xvfb; xdg-shell, UIKit, Android and the browser have no levels, steps or proportion |
 | System back and history | — | — | — | — | ❌ | ❌ | ❌ | ❌ | Android predictive back (from targetSdk 36, `KEYCODE_BACK` isn't delivered), the iOS edge swipe, the Web History and Navigation APIs |
 | Browser gesture suppression | — | — | — | — | — | — | 🟡 | — | The canvas sets `touch-action: none` inline; the page `flui build` writes sets `overscroll-behavior: none` on `html` and `body` (a page that brings its own canvas sets its own); it never ran in Safari or on a phone. |
 | Input device availability | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | ✅ | Headless, Wayland and X11 report presence changes, the other hosts only their initial table so far; none ran on its environment. |

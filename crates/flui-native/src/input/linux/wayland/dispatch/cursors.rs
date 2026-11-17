@@ -4,6 +4,7 @@
 //! hidden cursor, or a pointer the compositor holds in place).
 
 use std::fs::File;
+use std::num::NonZeroU32;
 use std::os::fd::AsFd;
 use std::os::unix::fs::FileExt;
 
@@ -16,9 +17,11 @@ use wayland_client::protocol::wl_surface::{self, WlSurface};
 use wayland_client::{Connection, Dispatch, Proxy, QueueHandle};
 use wayland_cursor::CursorTheme;
 use wayland_protocols::wp::cursor_shape::v1::client::wp_cursor_shape_device_v1;
+use wayland_protocols::wp::viewporter::client::wp_viewport::WpViewport;
 
 #[cfg(any(test, feature = "testing"))]
 use super::ShownCursor;
+use super::cursor::SurfaceRequest;
 use super::{Objects, PointerObjects, Shared, cursor};
 use crate::input::assembly::NativeSurface;
 use crate::input::linux::cursor_image::premultiplied_argb;
@@ -28,8 +31,6 @@ use crate::owner::linux::wayland::{CursorGlobals, WaylandState};
 /// a repeated image is that buffer again.
 pub(super) struct ImageBuffer {
     image: CursorImage,
-    /// The buffer scale it was made for.
-    scale: i32,
     buffer: WlBuffer,
 }
 
@@ -122,7 +123,7 @@ fn show_pointer_cursor(
                 shared.shown.with(|shown| {
                     *shown = Some(ShownCursor {
                         name: "image".to_owned(),
-                        scale: drawn,
+                        scale: i32::try_from(drawn.get()).unwrap_or(i32::MAX),
                     });
                 });
                 #[cfg(not(any(test, feature = "testing")))]
@@ -152,7 +153,7 @@ fn show_pointer_cursor(
                 shared.shown.with(|shown| {
                     *shown = Some(ShownCursor {
                         name: drawn.0.to_owned(),
-                        scale: drawn.1,
+                        scale: i32::try_from(drawn.1.get()).unwrap_or(i32::MAX),
                     });
                 });
                 #[cfg(not(any(test, feature = "testing")))]
@@ -211,9 +212,24 @@ fn theme_setting() -> (String, u32) {
     (name, size)
 }
 
-/// Draw `cursor` from the theme on `pointer`'s cursor surface at the buffer
-/// scale `scale` rounds up to, and set it since the enter `serial`. What was
-/// drawn, or `None` where the theme has no image of it.
+/// `pointer`'s cursor surface, made the first time a cursor is drawn on it.
+fn theme_surface<'pointer>(
+    source: &CursorGlobals,
+    pointer: &'pointer mut PointerObjects,
+) -> &'pointer mut ThemeSurface {
+    pointer.cursor_surface.get_or_insert_with(|| ThemeSurface {
+        surface: source
+            .compositor
+            .create_surface(&source.queue, CursorSurface),
+        viewport: None,
+    })
+}
+
+/// Draw `cursor` from the theme on `pointer`'s cursor surface for the scale
+/// `scale` rounds up to, put on the surface so the compositor takes its
+/// buffer ([`cursor::CursorBuffer::fit`]), and set it since the enter
+/// `serial`. What was drawn and its pixels per logical pixel, or `None`
+/// where the theme has no image of it.
 fn draw_theme_cursor(
     shared: &Shared,
     source: &CursorGlobals,
@@ -221,16 +237,8 @@ fn draw_theme_cursor(
     serial: u32,
     cursor: CursorIcon,
     scale: f64,
-) -> Option<(&'static str, i32)> {
+) -> Option<(&'static str, NonZeroU32)> {
     let scale = cursor::theme_scale(scale);
-    let surface = pointer
-        .cursor_surface
-        .get_or_insert_with(|| {
-            source
-                .compositor
-                .create_surface(&source.queue, CursorSurface)
-        })
-        .clone();
     let drawn = shared
         .themes
         .with(|themes| {
@@ -242,7 +250,7 @@ fn draw_theme_cursor(
                     &source.connection,
                     source.shm.clone(),
                     &name,
-                    size.saturating_mul(scale.unsigned_abs()),
+                    size.saturating_mul(scale.get()),
                 )
                 .ok()?;
                 themes.push((scale, theme));
@@ -252,38 +260,29 @@ fn draw_theme_cursor(
             cursor::theme_names(cursor).into_iter().find_map(|name| {
                 let image = &theme.get_cursor(name)?[0];
                 let (width, height) = image.dimensions();
+                let fit =
+                    cursor::CursorBuffer::fit(width, height, scale, source.viewporter.is_some());
+                let shown =
+                    theme_surface(source, pointer).show(source, image, (width, height), fit);
                 let (x, y) = image.hotspot();
-                let buffer: &WlBuffer = image;
-                if surface.version() >= 3 {
-                    surface.set_buffer_scale(scale);
-                }
-                surface.attach(Some(buffer), 0, 0);
-                surface.damage(
-                    0,
-                    0,
-                    i32::try_from(width).unwrap_or(i32::MAX),
-                    i32::try_from(height).unwrap_or(i32::MAX),
-                );
-                surface.commit();
-                let hotspot = |at: u32| i32::try_from(at).unwrap_or(0) / scale;
-                pointer
-                    .pointer
-                    .set_cursor(serial, Some(&surface), hotspot(x), hotspot(y));
-                Some(name)
+                let (x, y) = fit.surface_point(x, y);
+                pointer.pointer.set_cursor(serial, Some(&shown), x, y);
+                Some((name, fit.scale()))
             })
         })
         .flatten();
     if drawn.is_none() {
         tracing::debug!(?cursor, "the cursor theme has no image of the cursor");
     }
-    drawn.map(|name| (name, scale))
+    drawn
 }
 
 /// Show `image` on `pointer`'s cursor surface since the enter `serial`, as
-/// a buffer of `source`'s shared memory at the buffer scale its sides allow
-/// on a window of `scale` ([`cursor::image_scale`]), with its hotspot. The
-/// buffer is the last one made when the image and the scale are the same.
-/// The buffer scale drawn at, or `None` where no buffer could be made.
+/// a buffer of `source`'s shared memory put on the surface as a theme image
+/// drawn for the window's `scale` is ([`cursor::CursorBuffer::fit`]: the
+/// image's pixels are device pixels), with its hotspot. The buffer is the
+/// last one made when the image is the same. Its pixels per logical pixel,
+/// or `None` where no buffer could be made.
 fn draw_image_cursor(
     shared: &Shared,
     source: &CursorGlobals,
@@ -291,28 +290,11 @@ fn draw_image_cursor(
     serial: u32,
     image: &CursorImage,
     scale: f64,
-) -> Option<i32> {
-    let surface = pointer
-        .cursor_surface
-        .get_or_insert_with(|| {
-            source
-                .compositor
-                .create_surface(&source.queue, CursorSurface)
-        })
-        .clone();
-    // A surface before version 3 takes no buffer scale.
-    let scale = if surface.version() >= 3 {
-        cursor::image_scale(scale, image.width(), image.height())
-    } else {
-        1
-    };
+) -> Option<NonZeroU32> {
     let buffer = shared
         .image
         .with(|held| {
-            if let Some(held) = held
-                .as_ref()
-                .filter(|held| held.scale == scale && held.image == *image)
-            {
+            if let Some(held) = held.as_ref().filter(|held| held.image == *image) {
                 return Some(held.buffer.clone());
             }
             let buffer = image_buffer(source, image)?;
@@ -320,7 +302,6 @@ fn draw_image_cursor(
             // is never written again, so it keeps showing what it showed.
             if let Some(replaced) = held.replace(ImageBuffer {
                 image: image.clone(),
-                scale,
                 buffer: buffer.clone(),
             }) {
                 replaced.buffer.destroy();
@@ -328,20 +309,18 @@ fn draw_image_cursor(
             Some(buffer)
         })
         .flatten()?;
-    if surface.version() >= 3 {
-        surface.set_buffer_scale(scale);
-    }
-    surface.attach(Some(&buffer), 0, 0);
-    surface.damage(0, 0, i32::from(image.width()), i32::from(image.height()));
-    surface.commit();
-    let (x, y) = image.hotspot();
-    pointer.pointer.set_cursor(
-        serial,
-        Some(&surface),
-        i32::from(x) / scale,
-        i32::from(y) / scale,
+    let (width, height) = (u32::from(image.width()), u32::from(image.height()));
+    let fit = cursor::CursorBuffer::fit(
+        width,
+        height,
+        cursor::theme_scale(scale),
+        source.viewporter.is_some(),
     );
-    Some(scale)
+    let shown = theme_surface(source, pointer).show(source, &buffer, (width, height), fit);
+    let (x, y) = image.hotspot();
+    let (x, y) = fit.surface_point(u32::from(x), u32::from(y));
+    pointer.pointer.set_cursor(serial, Some(&shown), x, y);
+    Some(fit.scale())
 }
 
 /// A `wl_shm` buffer of `image`: its premultiplied pixels as `ARGB8888`,
@@ -390,5 +369,63 @@ impl Dispatch<WlBuffer, CursorImageBuffer> for WaylandState {
     ) {
         // A released buffer is attached again for the next cursor of the
         // same image; it is destroyed when another image replaces it.
+    }
+}
+
+/// The surface a pointer's theme cursor is drawn on, and its viewport, made
+/// the first time an image needs one ([`cursor::CursorBuffer::Viewported`]).
+pub(super) struct ThemeSurface {
+    surface: WlSurface,
+    viewport: Option<WpViewport>,
+}
+
+impl ThemeSurface {
+    /// Put `buffer`, an image of `width` by `height` pixels, on the surface
+    /// as `fit` says: send it what [`cursor::CursorBuffer::requests`] lists.
+    /// The surface, which the pointer's cursor is set to.
+    fn show(
+        &mut self,
+        source: &CursorGlobals,
+        buffer: &WlBuffer,
+        (width, height): (u32, u32),
+        fit: cursor::CursorBuffer,
+    ) -> WlSurface {
+        let requests = fit.requests(
+            width,
+            height,
+            self.viewport.is_some(),
+            self.surface.version(),
+        );
+        for request in requests {
+            match request {
+                SurfaceRequest::MakeViewport => {
+                    self.viewport = source.viewporter.as_ref().map(|viewporter| {
+                        viewporter.get_viewport(&self.surface, &source.queue, ())
+                    });
+                }
+                SurfaceRequest::Destination(size) => {
+                    if let Some(viewport) = &self.viewport {
+                        let (width, height) = size.unwrap_or((-1, -1));
+                        viewport.set_destination(width, height);
+                    }
+                }
+                SurfaceRequest::BufferScale(scale) => self.surface.set_buffer_scale(scale),
+                SurfaceRequest::Attach => self.surface.attach(Some(buffer), 0, 0),
+                SurfaceRequest::DamageBuffer(width, height) => {
+                    self.surface.damage_buffer(0, 0, width, height);
+                }
+                SurfaceRequest::Damage(width, height) => self.surface.damage(0, 0, width, height),
+                SurfaceRequest::Commit => self.surface.commit(),
+            }
+        }
+        self.surface.clone()
+    }
+
+    /// Destroy the viewport, then the surface.
+    pub(super) fn destroy(self) {
+        if let Some(viewport) = self.viewport {
+            viewport.destroy();
+        }
+        self.surface.destroy();
     }
 }
