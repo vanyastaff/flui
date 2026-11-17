@@ -1406,8 +1406,12 @@ impl SceneWindow for IOSWindow {
     }
 
     fn disconnect(&self, marker: MainThreadMarker) {
-        self.observe_lifecycle(LifecycleObservation::Detached);
-        self.detach_native(marker);
+        // A panic out of the `Detached` publication waits until the native
+        // link is detached.
+        let mut failure = flui_foundation::panic::FirstPanic::new();
+        failure.contain(|| self.observe_lifecycle(LifecycleObservation::Detached));
+        failure.contain(|| self.detach_native(marker));
+        failure.resume();
     }
 
     fn close_for_good(&self) {

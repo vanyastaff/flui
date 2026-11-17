@@ -1735,12 +1735,18 @@ impl IOSLoop {
                     if !window.attachment_matches(origin.attachment, marker) {
                         return;
                     }
-                    window.disconnect(marker);
-                    if let Err(error) = self.tell_scene_consumer(|consumer| {
-                        consumer.disconnected(origin.session, origin.attachment)
-                    }) {
-                        tracing::error!(%error, "scene disconnect observer failed");
-                    }
+                    // A panic out of the disconnect (a handler hearing
+                    // `Detached`) waits until the consumer has heard it.
+                    let mut failure = flui_foundation::panic::FirstPanic::new();
+                    failure.contain(|| window.disconnect(marker));
+                    failure.contain(|| {
+                        if let Err(error) = self.tell_scene_consumer(|consumer| {
+                            consumer.disconnected(origin.session, origin.attachment)
+                        }) {
+                            tracing::error!(%error, "scene disconnect observer failed");
+                        }
+                    });
+                    failure.resume();
                 }
             }
             SceneAction::Open(origin, urls, launch) => {
