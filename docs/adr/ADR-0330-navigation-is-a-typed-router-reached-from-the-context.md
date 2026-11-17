@@ -411,8 +411,9 @@ ADR-0027 §9's vocabulary closed: no second channel without a producer.
   bare key, the prefixes without the query, defaults and `Param`);
   `crates/flui-widgets/tests/routable_ui.rs` compiles the accepted shapes
   (`routable_ui/pass/`) and every rejection against its diagnostic (`routable_ui/fail/`); the
-  pattern parser, specificity order and conflict detection in
-  `crates/flui-macros/src/derive/routable/pattern.rs`.
+  pattern parser, specificity order and shape comparison in
+  `crates/flui-macros/src/derive/routable/pattern.rs`, and the search for two patterns of one
+  shape in `routes` of `crates/flui-macros/src/derive/routable.rs`.
 - §2: in `crates/flui-widgets/tests/router.rs`, rows of the `router_and_widgets_app` table of
   `tests/contracts.rs`: `router_opens_at_a_location_with_its_back_stack`,
   `a_deep_link_adds_its_lower_page_in_the_frame_its_top_settles`,

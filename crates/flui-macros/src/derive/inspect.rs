@@ -116,47 +116,93 @@ struct FieldAttrs {
     debug: bool,
 }
 
+/// An entry of a field's `#[inspect(...)]` list.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Entry {
+    Skip,
+    Name,
+    Default,
+    Level,
+    Unit,
+    With,
+    Debug,
+}
+
+impl Entry {
+    const NAMES: [(&'static str, Self); 7] = [
+        ("skip", Self::Skip),
+        ("name", Self::Name),
+        ("default", Self::Default),
+        ("level", Self::Level),
+        ("unit", Self::Unit),
+        ("with", Self::With),
+        ("debug", Self::Debug),
+    ];
+
+    /// The entry `meta` names, or the refusal of a name the list does not take.
+    fn parse(meta: &ParseNestedMeta<'_>) -> syn::Result<Self> {
+        Self::NAMES
+            .iter()
+            .find(|(name, _)| is_named(&meta.path, name))
+            .map(|(_, entry)| *entry)
+            .ok_or_else(|| {
+                meta.error(format!(
+                    "unsupported inspect attribute; expected {FIELD_ENTRIES}"
+                ))
+            })
+    }
+}
+
 impl FieldAttrs {
-    /// Read the field's `#[inspect(...)]` lists. An entry the field cannot take ends its own
-    /// list, since what follows it may be its value; the other lists, and the combinations of
-    /// what was read, are still checked.
+    /// Take what `entry` says from its place in a list, value included.
+    fn read(&mut self, entry: Entry, meta: &ParseNestedMeta<'_>) -> syn::Result<()> {
+        match entry {
+            Entry::Skip => self.skip = true,
+            Entry::Debug => self.debug = true,
+            Entry::Name => self.name = Some(meta.value()?.parse::<LitStr>()?),
+            Entry::Default => {
+                self.default = Some(if meta.input.peek(syn::Token![=]) {
+                    DefaultAttr::Expr(meta.value()?.parse::<Expr>()?)
+                } else {
+                    DefaultAttr::Type
+                });
+            }
+            Entry::Level => {
+                let level: Ident = meta.value()?.call(Ident::parse_any)?;
+                self.level = Some(Level::parse(&level)?);
+            }
+            Entry::Unit => {
+                let unit: Ident = meta.value()?.call(Ident::parse_any)?;
+                self.unit = Some(Unit::parse(&unit)?);
+            }
+            Entry::With => self.with = Some(meta.value()?.parse::<Path>()?),
+        }
+        Ok(())
+    }
+
+    /// Read the field's `#[inspect(...)]` lists, then check the combinations of what was
+    /// read. An entry given twice is refused, since only one could take effect, and is still
+    /// read, so what it holds is checked as well.
     fn parse(field: &syn::Field) -> syn::Result<Self> {
         Refusals::collect(|refusals| {
             let mut attrs = Self::default();
+            let mut given: Vec<Entry> = Vec::new();
             for attr in inspect_attributes(&field.attrs) {
-                let read = parse_entries(attr, FIELD_ENTRIES, |meta| {
-                    if is_named(&meta.path, "skip") {
-                        set_flag(&mut attrs.skip, &meta)
-                    } else if is_named(&meta.path, "debug") {
-                        set_flag(&mut attrs.debug, &meta)
-                    } else if is_named(&meta.path, "name") {
-                        let name: LitStr = meta.value()?.parse()?;
-                        set_once(&mut attrs.name, name, &meta)
-                    } else if is_named(&meta.path, "default") {
-                        let default = if meta.input.peek(syn::Token![=]) {
-                            DefaultAttr::Expr(meta.value()?.parse()?)
-                        } else {
-                            DefaultAttr::Type
-                        };
-                        set_once(&mut attrs.default, default, &meta)
-                    } else if is_named(&meta.path, "level") {
-                        let level: Ident = meta.value()?.call(Ident::parse_any)?;
-                        let level = Level::parse(&level)?;
-                        set_once(&mut attrs.level, level, &meta)
-                    } else if is_named(&meta.path, "unit") {
-                        let unit: Ident = meta.value()?.call(Ident::parse_any)?;
-                        let unit = Unit::parse(&unit)?;
-                        set_once(&mut attrs.unit, unit, &meta)
-                    } else if is_named(&meta.path, "with") {
-                        let with: Path = meta.value()?.parse()?;
-                        set_once(&mut attrs.with, with, &meta)
-                    } else {
-                        Err(meta.error(format!(
-                            "unsupported inspect attribute; expected {FIELD_ENTRIES}"
-                        )))
+                parse_entries(attr, FIELD_ENTRIES, refusals, |meta, refusals| {
+                    let entry = Entry::parse(&meta)?;
+                    let twice = given.contains(&entry);
+                    if !twice {
+                        given.push(entry);
                     }
+                    let read = attrs.read(entry, &meta);
+                    // After the value, so that the refusal underlines the whole entry.
+                    if twice {
+                        refusals.push(
+                            meta.error("this inspect attribute is given twice for the field"),
+                        );
+                    }
+                    read
                 });
-                refusals.value(read);
             }
             if attrs.skip
                 && (attrs.name.is_some()
@@ -190,26 +236,6 @@ impl FieldAttrs {
 
 fn inspect_attributes(attrs: &[Attribute]) -> impl Iterator<Item = &Attribute> {
     named(attrs, "inspect")
-}
-
-/// Store an attribute's value; a second one for the same field is an error, since only one
-/// could take effect.
-fn set_once<T>(slot: &mut Option<T>, value: T, meta: &ParseNestedMeta<'_>) -> syn::Result<()> {
-    if slot.replace(value).is_some() {
-        return Err(given_twice(meta));
-    }
-    Ok(())
-}
-
-fn set_flag(flag: &mut bool, meta: &ParseNestedMeta<'_>) -> syn::Result<()> {
-    if std::mem::replace(flag, true) {
-        return Err(given_twice(meta));
-    }
-    Ok(())
-}
-
-fn given_twice(meta: &ParseNestedMeta<'_>) -> syn::Error {
-    meta.error("this inspect attribute is given twice for the field")
 }
 
 /// `#[inspect(...)]` describes a field: on the type or on a variant it would do nothing, so it
@@ -370,9 +396,10 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
         .iter()
         .any(|param| matches!(param, GenericParam::Type(_) | GenericParam::Const(_)));
     let kind_args = generic_args.then(|| {
+        let args = local("args");
         quote! {
-            fn kind_args(&self, args: &mut dyn ::core::ops::FnMut(&'static str)) {
-                #runtime::kind_args_of(::core::any::type_name::<Self>(), args);
+            fn kind_args(&self, #args: &mut dyn ::core::ops::FnMut(&'static str)) {
+                #runtime::kind_args_of(::core::any::type_name::<Self>(), #args);
             }
         }
     });
@@ -639,7 +666,7 @@ mod tests {
             enum E<#[inspect(skip)] T> {
                 #[inspect(skip)]
                 A {
-                    #[inspect(nonsense)]
+                    #[inspect(debug = 1, nonsense)]
                     a: f64,
                     #[inspect(name = "x", name = "y")]
                     #[inspect()]
@@ -647,6 +674,8 @@ mod tests {
                     variant: f64,
                     #[inspect(skip, debug, with = describe, default)]
                     c: T,
+                    #[inspect(level = bogus, unit = bogus, level = detail, nonsense = out, name = "d")]
+                    d: f64,
                 },
             }
         };
@@ -656,6 +685,7 @@ mod tests {
                 "describes a field",
                 "`#[inspect]` does nothing here",
                 "describes a field",
+                "expected `,`",
                 "unsupported inspect attribute",
                 "given twice",
                 "the list is empty",
@@ -663,6 +693,10 @@ mod tests {
                 "a skipped field takes no other inspect attribute",
                 "`debug` and `with` both map the field",
                 "a `debug` field has no typed value",
+                "expected `summary`, `detail` or `debug`",
+                "expected `logical_px`",
+                "given twice",
+                "unsupported inspect attribute",
             ],
         );
     }

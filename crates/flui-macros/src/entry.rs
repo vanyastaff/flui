@@ -7,6 +7,7 @@ use quote::{ToTokens, quote};
 use syn::ItemFn;
 
 use crate::generics;
+use crate::hygiene;
 use crate::refusals::Refusals;
 use crate::runtime_path::Runtime;
 
@@ -52,6 +53,10 @@ pub(crate) fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenS
     if let Some(declared) = declared {
         function.block.stmts.insert(0, declared);
     }
+    // The parameter of the generated `android_main`. The author's function is
+    // named in that body, and a parameter spelled at the call site would
+    // shadow a function of the same name.
+    let android_app = hygiene::local("app");
     Ok(quote! {
         #function
 
@@ -67,8 +72,8 @@ pub(crate) fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenS
         /// crate as a `cdylib`: it hands the run the system's `AndroidApp`.
         #[cfg(target_os = "android")]
         #[unsafe(no_mangle)]
-        fn android_main(app: #app::__entry::AndroidApp) {
-            #app::__entry::android(app, #name);
+        fn android_main(#android_app: #app::__entry::AndroidApp) {
+            #app::__entry::android(#android_app, #name);
         }
     })
 }

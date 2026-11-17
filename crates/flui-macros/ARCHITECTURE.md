@@ -126,9 +126,13 @@ unreported (`a_collection_is_its_value_or_every_refusal_in_the_order_found`).
 Two things end a reading early. A shape the macro does not take (a union, a
 struct where `Routable` takes an enum, a tuple struct where `InheritedData`
 takes named fields) leaves no variants or fields to read; what was recorded
-before it is reported with it. Inside one attribute's list, an entry the derive
-does not know ends that list, since the tokens after it may be its value; the
-item's other lists are still read. `Routable` reads on past a variant it
+before it is reported with it. An attribute that is not a list of entries
+(`#[inspect = "x"]`, a literal where an entry's name goes) has no next entry
+to read on from; the item's other lists are still read. A refused entry does
+not end its list: `derive::attribute::parse_entries` records it and reads on
+after the next comma, whether the derive does not know the entry, refuses its
+value, was given it twice or finds tokens after it that it does not take
+(`skip = 1`). `Routable` reads on past a variant it
 refuses: a variant whose pattern reads is compared with the patterns after it
 whatever its fields got wrong, and a field whose `#[query]` is refused still
 counts as a query field, so it is not also reported as missing from the

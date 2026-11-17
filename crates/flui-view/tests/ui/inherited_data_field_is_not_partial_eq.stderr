@@ -1,0 +1,19 @@
+error[E0369]: binary operation `!=` cannot be applied to type `Handle`
+  --> tests/ui/inherited_data_field_is_not_partial_eq.rs:11:5
+   |
+ 8 | #[derive(Clone, InheritedData)]
+   |                 ------------- Handle
+...
+11 |     handle: Handle,
+   |     ^^^^^^ Handle
+   |
+note: an implementation of `PartialEq` might be missing for `Handle`
+  --> tests/ui/inherited_data_field_is_not_partial_eq.rs:6:1
+   |
+ 6 | struct Handle;
+   | ^^^^^^^^^^^^^ must implement `PartialEq`
+help: consider annotating `Handle` with `#[derive(PartialEq)]`
+   |
+ 6 + #[derive(PartialEq)]
+ 7 | struct Handle;
+   |

@@ -25,21 +25,26 @@
 //! | `ValueKey<T>` | Match by value (list items with unique field) |
 //! | `UniqueKey` | Force new element on every rebuild |
 //!
-//! # Examples
+//! # A view's key
+//!
+//! A view holds its key in a field and marks it `#[view(key)]`; the view
+//! derives of `flui-view` read the field through [`AsViewKey`], so the field is
+//! a key, an `Option` of one, or a shared `Rc<dyn ViewKey>`.
 //!
 //! ```rust,ignore
-//! use flui_foundation::{Key, ValueKey, UniqueKey, WithKey};
+//! use flui_foundation::{Key, ValueKey};
+//! use flui_view::StatelessView;
 //!
-//! // Simple compile-time key
+//! // A compile-time key.
 //! const HEADER: Key = Key::from_str("header");
 //!
-//! // Value-based key for list items
-//! items.iter().map(|item| {
-//!     TodoItem::new(item).with_view_key(ValueKey::new(item.id))
-//! })
-//!
-//! // Unique key to force rebuild
-//! AnimatedWidget::new().with_view_key(UniqueKey::new())
+//! // A list item matched by its record's id across rebuilds.
+//! #[derive(Clone, StatelessView)]
+//! struct TodoItem {
+//!     #[view(key)]
+//!     key: ValueKey<u64>,
+//!     title: String,
+//! }
 //! ```
 
 use std::{
@@ -842,81 +847,6 @@ impl ViewKey for Key {
         fmt::Debug::fmt(self, f)
     }
 }
-
-// ============================================================================
-// KEYED WRAPPER
-// ============================================================================
-
-/// A view with an associated key.
-///
-/// Created by calling `.with_view_key()` on a view.
-#[derive(Debug)]
-pub struct Keyed<V> {
-    /// The wrapped view.
-    pub view: V,
-    /// The key.
-    pub key: Box<dyn ViewKey>,
-}
-
-impl<V> Keyed<V> {
-    /// Create a new keyed view.
-    pub fn new(view: V, key: impl ViewKey) -> Self {
-        Self {
-            view,
-            key: Box::new(key),
-        }
-    }
-
-    /// Get the key.
-    pub fn key(&self) -> &dyn ViewKey {
-        &*self.key
-    }
-
-    /// Unwrap into the inner view.
-    pub fn into_inner(self) -> V {
-        self.view
-    }
-}
-
-// ============================================================================
-// WITH KEY TRAIT
-// ============================================================================
-
-/// Extension trait to add a key to any view.
-pub trait WithKey: Sized {
-    /// Attach a key to this view.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// let view = MyView::new().with_view_key(ValueKey::new(item.id));
-    /// ```
-    fn with_view_key(self, key: impl ViewKey) -> Keyed<Self> {
-        Keyed::new(self, key)
-    }
-
-    /// Attach a value key to this view (convenience).
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// let view = MyView::new().with_value_key(item.id);
-    /// ```
-    fn with_value_key<T>(self, value: T) -> Keyed<Self>
-    where
-        T: Clone + Hash + Eq + fmt::Debug + 'static,
-    {
-        Keyed::new(self, ValueKey::new(value))
-    }
-
-    /// Attach a unique key to this view.
-    fn with_unique_key(self) -> Keyed<Self> {
-        Keyed::new(self, UniqueKey::new())
-    }
-}
-
-// Blanket implementation for all types
-impl<T> WithKey for T {}
 
 // ============================================================================
 // SERDE SUPPORT

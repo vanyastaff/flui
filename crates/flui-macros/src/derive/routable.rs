@@ -418,24 +418,31 @@ fn query_attribute<'a>(
     }
     let mut key: Option<String> = None;
     if !matches!(attribute.meta, syn::Meta::Path(_)) {
-        let read = parse_entries(
+        let mut renamed = false;
+        parse_entries(
             attribute,
             "`rename = \"key\"`, or `#[query]` without the parentheses",
-            |meta| {
+            refusals,
+            |meta, refusals| {
                 if !is_named(&meta.path, "rename") {
                     return Err(meta.error("`#[query]` takes only `rename = \"key\"`"));
                 }
-                let renamed: LitStr = meta.value()?.parse()?;
-                if renamed.value().is_empty() {
-                    return Err(syn::Error::new(renamed.span(), "a query key is not empty"));
+                let twice = std::mem::replace(&mut renamed, true);
+                let name = meta
+                    .value()
+                    .and_then(syn::parse::ParseBuffer::parse::<LitStr>);
+                // After the value, so that the refusal underlines the whole entry.
+                if twice {
+                    refusals.push(meta.error("`rename` is given twice"));
                 }
-                if key.replace(renamed.value()).is_some() {
-                    return Err(meta.error("`rename` is given twice"));
+                let name = name?;
+                if name.value().is_empty() {
+                    return Err(syn::Error::new(name.span(), "a query key is not empty"));
                 }
+                key = Some(name.value());
                 Ok(())
             },
         );
-        refusals.value(read);
     }
     let (kind, value) = match single_argument(&field.ty, "Option") {
         Some(inner) => (QueryKind::Optional, inner),
@@ -753,7 +760,7 @@ mod tests {
                 #[route("/s")]
                 #[route("/again")]
                 Search {
-                    #[query(nope)]
+                    #[query(nope, rename = "", rename = "z")]
                     a: String,
                     #[query(rename = "x", rename = "y")]
                     b: String,
@@ -785,6 +792,8 @@ mod tests {
                 "`#[query]` marks a field; the variant takes",
                 "a route pattern starts with `/`",
                 "`#[query]` takes only `rename = \"key\"`",
+                "a query key is not empty",
+                "`rename` is given twice",
                 "`rename` is given twice",
                 "a field takes one `#[query]` attribute",
                 "a variant takes one `#[route]` attribute",

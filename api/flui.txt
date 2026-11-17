@@ -2797,13 +2797,6 @@ impl<'de> serde_core::de::Deserialize<'de> for flui::foundation::KeyRef
 pub const fn flui::foundation::KeyRef::as_u64(&self) -> u64
 pub const fn flui::foundation::KeyRef::key(&self) -> flui::foundation::Key
 pub const fn flui::foundation::KeyRef::new(key: flui::foundation::Key) -> Self
-pub struct flui::foundation::Keyed<V>
-field flui::foundation::Keyed::key: Box<dyn flui::foundation::ViewKey> // at 1
-field flui::foundation::Keyed::view: V // at 0
-impl<V: core::fmt::Debug> core::fmt::Debug for flui::foundation::Keyed<V>
-pub fn flui::foundation::Keyed::into_inner(self) -> V // impl<V> flui::foundation::Keyed<V>
-pub fn flui::foundation::Keyed::key(&self) -> &dyn flui::foundation::ViewKey // impl<V> flui::foundation::Keyed<V>
-pub fn flui::foundation::Keyed::new(view: V, key: impl flui::foundation::ViewKey) -> Self // impl<V> flui::foundation::Keyed<V>
 pub type flui::foundation::LayerId = flui::foundation::Id<flui::foundation::markers::Layer>
 pub struct flui::foundation::Leaf;
 impl Clone for flui::foundation::Leaf
@@ -3308,11 +3301,6 @@ fn flui::foundation::ViewKey::debug_fmt(&self, f: &mut core::fmt::Formatter<'_>)
 fn flui::foundation::ViewKey::is_global_key(&self) -> bool { .. }
 fn flui::foundation::ViewKey::key_eq(&self, other: &dyn flui::foundation::ViewKey) -> bool
 fn flui::foundation::ViewKey::key_hash(&self) -> u64
-pub trait flui::foundation::WithKey: Sized
-fn flui::foundation::WithKey::with_unique_key(self) -> flui::foundation::Keyed<Self> { .. }
-fn flui::foundation::WithKey::with_value_key<T>(self, value: T) -> flui::foundation::Keyed<Self> where T: Clone + core::hash::Hash + Eq + core::fmt::Debug + 'static { .. }
-fn flui::foundation::WithKey::with_view_key(self, key: impl flui::foundation::ViewKey) -> flui::foundation::Keyed<Self> { .. }
-impl<T> flui::foundation::WithKey for T
 pub mod flui::foundation::affinity
 reexport flui::foundation::affinity::OwnerAffinity => flui::foundation::OwnerAffinity
 pub mod flui::foundation::app_id
@@ -3926,12 +3914,10 @@ impl<K: flui::foundation::key::AsViewKey + ?Sized> flui::foundation::key::AsView
 impl<K: flui::foundation::key::AsViewKey> flui::foundation::key::AsViewKey for Option<K>
 reexport flui::foundation::key::Key => flui::foundation::Key
 reexport flui::foundation::key::KeyRef => flui::foundation::KeyRef
-reexport flui::foundation::key::Keyed => flui::foundation::Keyed
 reexport flui::foundation::key::SaltedKey => flui::foundation::SaltedKey
 reexport flui::foundation::key::UniqueKey => flui::foundation::UniqueKey
 reexport flui::foundation::key::ValueKey => flui::foundation::ValueKey
 reexport flui::foundation::key::ViewKey => flui::foundation::ViewKey
-reexport flui::foundation::key::WithKey => flui::foundation::WithKey
 pub mod flui::foundation::markers
 pub enum flui::foundation::markers::DataTransfer
 impl core::fmt::Debug for flui::foundation::markers::DataTransfer
@@ -4066,7 +4052,6 @@ reexport flui::foundation::prelude::Id => flui::foundation::Id
 reexport flui::foundation::prelude::Identifier => flui::foundation::Identifier
 reexport flui::foundation::prelude::Key => flui::foundation::Key
 reexport flui::foundation::prelude::KeyRef => flui::foundation::KeyRef
-reexport flui::foundation::prelude::Keyed => flui::foundation::Keyed
 reexport flui::foundation::prelude::LayerId => flui::foundation::LayerId
 reexport flui::foundation::prelude::Listenable => flui::foundation::Listenable
 reexport flui::foundation::prelude::ListenerCallback => flui::foundation::ListenerCallback
@@ -4083,7 +4068,6 @@ reexport flui::foundation::prelude::ValueListenable => flui::foundation::ValueLi
 reexport flui::foundation::prelude::ValueNotifier => flui::foundation::ValueNotifier
 reexport flui::foundation::prelude::ViewId => flui::foundation::ViewId
 reexport flui::foundation::prelude::ViewKey => flui::foundation::ViewKey
-reexport flui::foundation::prelude::WithKey => flui::foundation::WithKey
 pub mod flui::foundation::read_scope
 reexport flui::foundation::read_scope::ReadGraph => flui::view::ReadGraph
 reexport flui::foundation::read_scope::ReadScope => flui::view::ReadScope
@@ -25331,12 +25315,10 @@ reexport flui::view::key::GlobalKey => flui::prelude::GlobalKey
 reexport flui::view::key::Key => flui::foundation::Key
 reexport flui::view::key::KeyLookup => flui::view::KeyLookup
 reexport flui::view::key::KeyRef => flui::foundation::KeyRef
-reexport flui::view::key::Keyed => flui::foundation::Keyed
 reexport flui::view::key::ObjectKey => flui::prelude::ObjectKey
 reexport flui::view::key::UniqueKey => flui::foundation::UniqueKey
 reexport flui::view::key::ValueKey => flui::foundation::ValueKey
 reexport flui::view::key::ViewKey => flui::foundation::ViewKey
-reexport flui::view::key::WithKey => flui::foundation::WithKey
 pub mod flui::view::navigation
 pub struct flui::view::navigation::FileTypeDeclaration { .. }
 impl Clone for flui::view::navigation::FileTypeDeclaration

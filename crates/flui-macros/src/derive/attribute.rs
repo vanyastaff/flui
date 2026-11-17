@@ -6,10 +6,11 @@
 //! counting its entries, or looked only where it reads would pass each of
 //! those by every check and act on none.
 
+use proc_macro2::TokenTree;
 use syn::ext::IdentExt;
 use syn::meta::ParseNestedMeta;
 use syn::visit::Visit;
-use syn::{Attribute, DeriveInput, Field, Path, Variant};
+use syn::{Attribute, DeriveInput, Field, Path, Token, Variant};
 
 use crate::refusals::Refusals;
 
@@ -26,27 +27,49 @@ pub(crate) fn named<'a>(
     attrs.iter().filter(move |attr| is_named(attr.path(), name))
 }
 
-/// Read each entry of the list `attr` carries with `entry`.
+/// Read each entry of the list `attr` carries with `entry`, recording every
+/// one it refuses.
 ///
-/// A list without an entry names nothing the derive could act on: it is
-/// refused with `expected`, what the author writes instead.
+/// A refused entry does not end its list: the reading goes on after the next
+/// comma, so one build names each of them. That covers an entry `entry`
+/// refuses and one followed by tokens it did not read (`skip = 1`). A list
+/// without an entry names nothing the derive could act on and is refused
+/// with `expected`, what the author writes instead. Only a list that is not
+/// one ends early: `#[inspect = "x"]`, or a literal where an entry's name goes.
 pub(crate) fn parse_entries(
     attr: &Attribute,
     expected: &str,
-    mut entry: impl FnMut(ParseNestedMeta<'_>) -> syn::Result<()>,
-) -> syn::Result<()> {
+    refusals: &mut Refusals,
+    mut entry: impl FnMut(ParseNestedMeta<'_>, &mut Refusals) -> syn::Result<()>,
+) {
     let mut any = false;
-    attr.parse_nested_meta(|meta| {
+    let read = attr.parse_nested_meta(|meta| {
         any = true;
-        entry(meta)
-    })?;
-    if any {
-        return Ok(());
+        let rest = meta.input;
+        let ends = || rest.is_empty() || rest.peek(Token![,]);
+        let read = entry(meta, refusals).and_then(|()| {
+            if ends() {
+                Ok(())
+            } else {
+                Err(rest.error("expected `,`"))
+            }
+        });
+        if let Err(refused) = read {
+            refusals.push(refused);
+            while !ends() {
+                rest.parse::<TokenTree>()?;
+            }
+        }
+        Ok(())
+    });
+    match read {
+        Err(syntax) => refusals.push(syntax),
+        Ok(()) if any => {}
+        Ok(()) => refusals.push(syn::Error::new_spanned(
+            attr,
+            format!("the list is empty; expected {expected}"),
+        )),
     }
-    Err(syn::Error::new_spanned(
-        attr,
-        format!("the list is empty; expected {expected}"),
-    ))
 }
 
 /// Refuse each helper of `names` written where no derive reads one.

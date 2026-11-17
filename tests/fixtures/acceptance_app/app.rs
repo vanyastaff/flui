@@ -1328,8 +1328,9 @@ fn home(ctx: &dyn BuildContext, shared: &Shared, router: &RouterHandle<Route>) -
 
 /// One note's row, keyed by the note's id: the row of the same note keeps
 /// its element, and so its focus, across a rebuild that moves or resizes it.
-#[derive(Clone)]
+#[derive(Clone, StatelessView)]
 struct NoteRow {
+    #[view(key)]
     key: ValueKey<NoteId>,
     title: String,
     extent: f64,
@@ -1352,16 +1353,6 @@ impl StatelessView for NoteRow {
             )
             .style(flat_row()),
         )
-    }
-}
-
-impl View for NoteRow {
-    fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
-        ElementKind::stateless(self)
-    }
-
-    fn key(&self) -> Option<&dyn ViewKey> {
-        Some(&self.key)
     }
 }
 

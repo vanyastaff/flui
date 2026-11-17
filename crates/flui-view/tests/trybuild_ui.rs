@@ -42,4 +42,6 @@ fn ui_tests() {
     // A `#[view(...)]` the derive could not act on is refused, not ignored.
     t.compile_fail("tests/ui/view_attribute_placement.rs");
     t.compile_fail("tests/ui/view_key_field_is_not_a_key.rs");
+    // A provider's field that cannot be compared is reported at the field.
+    t.compile_fail("tests/ui/inherited_data_field_is_not_partial_eq.rs");
 }

@@ -16,10 +16,12 @@
 //! ## Paths in generated code
 //!
 //! An expansion names its runtime crate through the consumer's Cargo
-//! manifest, under whatever name the manifest gives it: `flui-sdk` first (a
-//! package), then the crate that owns the trait (a framework crate), then the
-//! `flui` facade (an application). A crate with none of the three gets a
-//! compile error that says which dependency to add.
+//! manifest, under whatever name the manifest gives it. A derive looks for
+//! `flui-sdk` first (a package), then the crate that owns the trait (a
+//! framework crate), then the `flui` facade (an application). `#[flui::main]`
+//! looks for `flui-app`, then the facade: the SDK has no application runtime.
+//! A crate with none of them gets a compile error that says which dependency
+//! to add.
 
 // Every public item is documented; keep it that way.
 #![deny(missing_docs)]

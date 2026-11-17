@@ -15,6 +15,11 @@ enum AppRoute {
         #[route("/ignored")]
         id: u32,
     },
+    #[route("/call")]
+    Call {
+        #[query]
+        then: fn(#[query] u32),
+    },
     #[route("/tag")]
     Tag {
         #[query()]

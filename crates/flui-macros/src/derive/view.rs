@@ -75,9 +75,7 @@ struct ViewAttrs<'a> {
 
 impl<'a> ViewAttrs<'a> {
     /// Read `#[view(...)]` from the type and its fields. Every refusal is
-    /// recorded before any is reported, so one build shows them all; an entry
-    /// that names nothing its place takes ends its own list, since what
-    /// follows it may be its value.
+    /// recorded before any is reported, so one build shows them all.
     fn parse(input: &'a DeriveInput) -> syn::Result<Self> {
         Refusals::collect(|refusals| {
             let mut attrs = Self {
@@ -87,22 +85,21 @@ impl<'a> ViewAttrs<'a> {
             };
             refuse_unread(input, &["view"], refusals);
             for attr in view_attributes(&input.attrs) {
-                let read = parse_entries(attr, "`inspect`", |meta| {
+                parse_entries(attr, "`inspect`", refusals, |meta, _| {
                     if !is_named(&meta.path, "inspect") {
                         return Err(meta.error("expected `inspect`; `key` and `site` mark a field"));
                     }
                     if std::mem::replace(&mut attrs.inspect, true) {
-                        refusals.push(meta.error("`inspect` is given twice"));
+                        return Err(meta.error("`inspect` is given twice"));
                     }
                     Ok(())
                 });
-                refusals.value(read);
             }
             match &input.data {
                 Data::Struct(data) => {
                     for (field, member) in data.fields.iter().zip(data.fields.members()) {
                         for attr in view_attributes(&field.attrs) {
-                            let read = parse_entries(attr, "`key` or `site`", |meta| {
+                            parse_entries(attr, "`key` or `site`", refusals, |meta, _| {
                                 let (slot, name) = if is_named(&meta.path, "key") {
                                     (&mut attrs.key, "key")
                                 } else if is_named(&meta.path, "site") {
@@ -116,10 +113,8 @@ impl<'a> ViewAttrs<'a> {
                                     member: member.clone(),
                                     field,
                                 };
-                                refusals.value(mark(slot, name, &meta, marked));
-                                Ok(())
+                                mark(slot, name, &meta, marked)
                             });
-                            refusals.value(read);
                         }
                     }
                 }
@@ -406,6 +401,8 @@ mod tests {
                 c: CreationSite,
                 #[view()]
                 d: u8,
+                #[view(nonsense = 1, key)]
+                e: UniqueKey,
             }
         };
         assert_refused(
@@ -417,6 +414,8 @@ mod tests {
                 "`key` is given twice for the field",
                 "only one field can be marked `#[view(site)]`",
                 "the list is empty; expected `key` or `site`",
+                "expected `key` or `site`; `inspect` goes on the type",
+                "only one field can be marked `#[view(key)]`",
             ],
         );
     }
