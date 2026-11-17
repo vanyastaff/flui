@@ -136,9 +136,11 @@ impl crate::host::WindowAccessibility for IosAccessibility {
 
 impl PlatformAccessibility for IosAccessibility {
     fn publish(&self, update: TreeUpdate) {
-        // Only self-contained updates may answer a late activation; see
-        // `BridgeShared`.
-        self.shared.retain_if_self_contained(&update);
+        // Retained when self-contained; one published from inside the
+        // activation is its answer and goes no further (`BridgeShared::publish`).
+        let Some(update) = self.shared.publish(update) else {
+            return;
+        };
         // The composition root publishes on the owner thread, which is the
         // main thread on iOS; anywhere else the update is only retained.
         let marker = MainThreadMarker::new();

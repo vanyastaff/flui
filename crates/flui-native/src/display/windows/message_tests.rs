@@ -156,7 +156,7 @@ fn the_displays_and_the_preferences_hear_every_change_in_either_order() {
         } else {
             [preference_subscriber, display_subscriber]
         };
-        let receiver = Receiver::try_new(subscribers).expect("a receiver");
+        let receiver = Receiver::try_new(subscribers, Rc::default()).expect("a receiver");
         preferences.sample().expect("the first preference read");
         displays.snapshot().expect("the first sample");
 
