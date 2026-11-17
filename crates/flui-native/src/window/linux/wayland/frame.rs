@@ -27,6 +27,8 @@ use std::time::Duration;
 
 use web_time::Instant;
 
+use crate::owner::linux::wayland::wait::FrameHold;
+
 /// How long a window waits for a frame callback before it gives it up,
 /// while the compositor answered the last one.
 pub(crate) const CALLBACK_GRACE: Duration = Duration::from_secs(1);
@@ -147,6 +149,18 @@ impl Pacing {
         self.callback_until
             .filter(|_| self.asked && !self.suspended)
     }
+
+    /// What holds back a frame asked of the window now, whether or not one
+    /// is: the compositor while it has not configured the window or keeps
+    /// it suspended, else the callback that is out until its grace.
+    pub(crate) fn hold(self) -> FrameHold {
+        if !self.configured || self.suspended {
+            FrameHold::Compositor
+        } else {
+            self.callback_until
+                .map_or(FrameHold::Free, FrameHold::Until)
+        }
+    }
 }
 
 /// The first output in `entered` (the order a surface entered them) the
@@ -261,6 +275,14 @@ mod tests {
             ..pacing(true, None)
         };
         assert!(!unconfigured.due(now));
+        // A frame asked of the window waits, whether or not one is, for the
+        // callback out, and for the compositor while it is unconfigured.
+        assert_eq!(pacing(false, None).hold(), FrameHold::Free);
+        assert_eq!(
+            pacing(false, until).hold(),
+            FrameHold::Until(now + CALLBACK_GRACE)
+        );
+        assert_eq!(unconfigured.hold(), FrameHold::Compositor);
     }
 
     /// An occluded window (the compositor suspended it) is given no frame
@@ -278,6 +300,11 @@ mod tests {
         };
         assert!(!occluded.due(now), "past the grace, still occluded");
         assert_eq!(occluded.gives_up_at(), None, "no wake for a grace");
+        assert_eq!(
+            occluded.hold(),
+            FrameHold::Compositor,
+            "the compositor shows it"
+        );
         let unarmed = Pacing {
             callback_until: None,
             ..occluded

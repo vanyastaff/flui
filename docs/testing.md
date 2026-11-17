@@ -14,7 +14,7 @@ Write the test with `flui::testing::{Tester, find}`: `Tester::mount` mounts the 
 window's own input path, and `Tester::expect` waits while the application has a frame or work
 due ([cookbook](../book/src/cookbook/testing.md)). `flui::testing::rendering::{RenderTester,
 BoxQueryRun}` tests a render object of one's own. The framework's own harnesses
-(`flui_testing::widgets::lay_out`, `HeadlessHost`, `HeadlessBinding`, gesture replay and the
+(`flui_testing::widgets::lay_out`, `HeadlessHost`, gesture replay and the
 accessibility reader) stay in `flui-testing` and out of the facade.
 
 The `testing` feature is off by default. Independent consumer tests check that
@@ -35,7 +35,7 @@ the same bug found by a whole-demo snapshot names a demo.
 | Painting | A `DisplayList`, no canvas boilerplate | `flui_painting::testing::{record, command_count, bounds}` | `flui-painting/testing` |
 | Layer | Structural walkers over a `LayerTree` (built with `SceneBuilder` or `push_child`) | `flui_layer::testing::inspect` | `flui-layer/testing` |
 | Render object | A real `PipelineOwner` — layout, paint, hit-test, intrinsics | `flui_rendering::testing::{RenderTester, Probe}` | `flui-rendering/testing` |
-| **Frame** | A **whole headless frame** on a virtual clock: build → layout → paint → composite, gestures, animation, async tasks | `flui_testing::HeadlessBinding` | dev-dependency |
+| **Frame** | A **whole headless frame** on a virtual clock: build → layout → paint → composite, gestures, animation, async tasks | `flui_testing::HeadlessHost` | dev-dependency |
 | Runtime | A `UiRuntime`'s own frame transaction, multi-presentation routing and failure containment, submitting to a scripted sink | `flui_runtime::ui_runtime::UiRuntime::for_test` with `flui_runtime::testing::{ScriptedSink, TestWindow}` (the UI runtime tests live in `crates/flui-runtime/src/ui_runtime/`) | `flui-runtime/testing` |
 | **Widget** | A mounted widget tree with geometry probes and synthetic input, every frame the UI runtime's own `UiRuntime::pump` on a manual clock | `flui_testing::widgets::{lay_out, LaidOut}`, `flui_testing::HeadlessHost` | dev-dependency |
 | Accessibility | The assembled semantics tree, queried by role | `flui_testing::a11y::{A11yTree, A11yQuery}` | dev-dependency |
@@ -51,14 +51,13 @@ Two structural rules hold across the stack:
   transaction: `lay_out` mounts its tree in a `HeadlessHost`, whose frames are
   `UiRuntime::pump` (ADR-0083 §4). A crate below it exposes its own kit behind a
   feature named `testing`, never `test-support` or `test-utils`.
-- **On the substrate driver, mount through `HeadlessBinding::mount_root`.** It owns the eight-step
-  bootstrap whose ordering is load-bearing, and its contract is that the
-  bootstrap frame is the same frame `pump_frame` runs (same layout↔build
-  fixpoint, same lazy-sliver service pass). Hand-rolled copies of that sequence
-  have already drifted once, silently: of the eight that existed, one
-  bootstrapped with a bare `PipelineOwner::run_frame` and captured every
-  `SliverAppBar` delegate child unbuilt, and none ran the lazy-sliver service
-  pass. All eight now go through `mount_root`.
+- **A test's frames are the UI runtime's.** A tree mounts through `HeadlessHost::attach` (or
+  `lay_out`, which wraps it), and its first frame, the mount included, is `UiRuntime::pump`:
+  the same layout↔build fixpoint and lazy-sliver service pass every later frame runs. Frame
+  loops hand-rolled over raw owners drifted once, silently: one
+  bootstrapped with a bare `PipelineOwner::run_frame` and captured every `SliverAppBar`
+  delegate child unbuilt. Presentations at independent cadences are separate hosts, each on
+  its own manual clock.
 
 ### wasm32: compiled everywhere, executed in one place
 
@@ -215,8 +214,7 @@ compositor `WAYLAND_DISPLAY` names. No one compositor runs them all:
 | `wayland_scripted::` | the compositor of the case's own, in the Xvfb suite of `cargo xtask test` | What no installed compositor does on demand: `configure_bounds`, a seat older than `repeat_info`, a scale change while the host runs, a strict buffer-scale rule on cursors, frame callbacks never answered, an output removed with no `leave`, a configure storm, a connection closed mid-request, a touchpad swipe and hold on a gestures global of a chosen version. |
 
 The `wayland_scripted` harness and `flui-app`'s
-`native_linux::an_app_whose_window_is_never_drawn_still_quits` and
-`native_linux::a_raster_thread_presents_one_frame_per_frame_callback` need no
+`native_linux::an_app_whose_window_is_never_drawn_still_quits` need no
 compositor installed: each case starts `flui-native`'s
 `testing::wayland_compositor::ScriptedCompositor`, a compositor on
 `wayland-server`'s pure-Rust backend at a socket of its own, which offers the
@@ -880,7 +878,7 @@ tests/benches/examples via a self dev-dependency; downstream crates opt in with
 | `flui-layer` | [crates/flui-layer/README.md](../crates/flui-layer/README.md) | `SceneBuilder`, `inspect::structure` / `clip_rects` / `first_picture_bounds` |
 | `flui-painting` | [crates/flui-painting/src/testing/mod.rs](../crates/flui-painting/src/testing/mod.rs) | `record`, `command_count`, `bounds` |
 | `flui-foundation` | [crates/flui-foundation/docs/TESTING.md](../crates/flui-foundation/docs/TESTING.md) | `inspect::{Inspect, SnapshotNode}` for structured assertions (no `testing` module) |
-| `flui-testing` | [crates/flui-testing/README.md](../crates/flui-testing/README.md) | `HeadlessBinding` (`pump_frame`, `mount_root`, `replay`), `a11y::A11yQuery` — a **dev-dependency**, not a `testing` feature |
+| `flui-testing` | [crates/flui-testing/README.md](../crates/flui-testing/README.md) | `HeadlessHost` (`pump`, `run_script`), `replay::PointerScript`, `a11y::A11yQuery` — a **dev-dependency**, not a `testing` feature |
 | `flui-testing` (widgets) | [crates/flui-testing/ARCHITECTURE.md](../crates/flui-testing/ARCHITECTURE.md) | `widgets::{lay_out, LaidOut, settle_lazy}`, `widgets::harness::{mount, mount_with_ime}` — the canonical widget harness on the UI runtime, shared verbatim by `flui-widgets` / `flui-material` / `flui-cupertino` |
 
 | Crate | What it gives you |
@@ -955,18 +953,16 @@ production-faithful animation tests. Assert per frame via `Probe` (`offset`,
 
 ## Headless frames and widget trees
 
-`flui_testing::HeadlessBinding` is the frame tier: a non-singleton, sleep-free
-runtime whose `pump_frame(dt)` advances a virtual `ManualClock` and runs the
-same frame the live `draw_frame` runs. Mount through `mount_root`; never
-hand-roll the bootstrap (see the map above). `mount_root` wraps the caller in
-`RootRenderView` — the same production root-bootstrap path as
-`WidgetsBinding::attach_root_widget` — so `PipelineOwner.root_id` is installed
-by `RootRenderElement`, not by a post-hoc parentless-node scan.
+`flui_testing::HeadlessHost` is the frame tier: a non-singleton, sleep-free
+host whose `pump(dt)` advances a virtual `ManualClock` and runs
+`UiRuntime::pump`, the same frame transaction a platform runner drives.
+`attach` mounts the root under the UI runtime's own root scopes, as `run_app`
+does, and the first pump builds, lays out and paints it.
 
 ```rust,ignore
-let mut binding = HeadlessBinding::new();
-let mounted = binding.mount_root(&root, MountOwners::fresh(), MountOptions::tight(800.0, 600.0));
-binding.pump_frame(Duration::from_millis(16));
+let mut host = HeadlessHost::new(HeadlessWindow::new(800, 600));
+host.attach(&root)?;
+let _ = host.pump(Duration::from_millis(16));
 ```
 
 `flui_testing::widgets::lay_out` is the widget tier: it mounts the tree in a
@@ -1015,8 +1011,8 @@ deadline-driven recognizer's verdict is part of the script, not of how the test
 process happened to be scheduled.
 
 ```rust,ignore
-binding.replay(&PointerScript::long_press(at, Duration::from_millis(600)));
-binding.replay(&PointerScript::fling(from, to));
+laid.replay(&PointerScript::long_press(at, Duration::from_millis(600)));
+host.run_script(&PointerScript::fling(from, to));
 ```
 
 Presets: `tap`, `double_tap`, `long_press`, `drag`, `fling`, `swipe`, `pinch`.
@@ -1053,7 +1049,8 @@ wire form mirrors it.
 
 ### Accessibility
 
-`binding.enable_semantics()` then `binding.a11y_tree()` gives an `A11yTree` of
+`laid.enable_semantics()` then `laid.a11y_tree()` (`HeadlessHost::enable_semantics` then
+`published_a11y_tree` on a bare host) gives an `A11yTree` of
 AccessKit nodes, translated by the same `flui_semantics::tree_to_update` a
 platform adapter uses — so a test and a screen reader cannot disagree. Query by
 role rather than by node index.
