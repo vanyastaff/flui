@@ -754,16 +754,15 @@ impl Renderer {
         let device = Arc::new(device);
         let queue = Arc::new(queue);
 
-        let (config, supports_copy_src, surface_color) =
-            Self::derive_surface_config(
-                &surface,
-                &adapter,
-                SurfacePacing::of(&**target),
-                width,
-                height,
-                latency,
-                color,
-            )?;
+        let (config, supports_copy_src, surface_color) = Self::derive_surface_config(
+            &surface,
+            &adapter,
+            SurfacePacing::of(&**target),
+            width,
+            height,
+            latency,
+            color,
+        )?;
         surface.configure(&device, &config);
 
         let (painter, offscreen) = Self::build_format_consumers(

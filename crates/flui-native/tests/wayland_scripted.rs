@@ -29,7 +29,7 @@ mod cases {
         Configure, HangUp, KEY_A, Offer, OutputOffer, ScriptedCompositor, Step, ToplevelState,
     };
     use flui_native::testing::wayland::{
-        compositor_report, cursor_report, present, run_for,
+        MAX_BUFFER_SCALE, compositor_report, cursor_report, present, run_for,
     };
     use flui_native::{HostWindow, Platform as _, WaylandPlatform};
     use flui_platform::keyboard::{KeyPress, KeyState};
@@ -67,6 +67,14 @@ mod cases {
             (
                 "a_window_the_compositor_never_draws_keeps_the_loop_turning",
                 a_window_the_compositor_never_draws_keeps_the_loop_turning,
+            ),
+            (
+                "a_window_the_compositor_never_configures_holds_nothing",
+                a_window_the_compositor_never_configures_holds_nothing,
+            ),
+            (
+                "a_fractional_scale_no_screen_has_leaves_the_window_at_its_scale",
+                a_fractional_scale_no_screen_has_leaves_the_window_at_its_scale,
             ),
             (
                 "an_output_removed_under_a_window_leaves_it_on_the_others",
@@ -152,7 +160,17 @@ mod cases {
             position += IMAGE_HEADER + side * side * 4;
         }
         for &(nominal, side) in images {
-            for value in [IMAGE_HEADER, IMAGE, nominal, 1, side, side, side / 2, side / 2, 0] {
+            for value in [
+                IMAGE_HEADER,
+                IMAGE,
+                nominal,
+                1,
+                side,
+                side,
+                side / 2,
+                side / 2,
+                0,
+            ] {
                 word(&mut file, value);
             }
             for _ in 0..side * side {
@@ -443,16 +461,94 @@ mod cases {
         }
     }
 
+    /// A window the compositor never configures opens and holds nothing: the
+    /// open returns, each turn returns in its time, and the window is asked
+    /// for no frame, which it could not draw; the configure that comes late
+    /// gets it its first frame.
+    fn a_window_the_compositor_never_configures_holds_nothing() {
+        let started = Instant::now();
+        let session = Session::open(
+            Offer::default().first_configure(None),
+            WindowOptions::default().title("never configured"),
+        );
+        let frames = |session: &Session| {
+            session
+                .handler
+                .calls()
+                .iter()
+                .filter(|call| matches!(call, HandlerCall::FrameRequested(_)))
+                .count()
+        };
+        for _ in 0..50 {
+            session.window.request_redraw();
+            let turn = Instant::now();
+            run_for(&session.platform, Duration::from_millis(10)).expect("the loop turns");
+            assert!(
+                turn.elapsed() < Duration::from_millis(500),
+                "a turn took {:?}",
+                turn.elapsed()
+            );
+        }
+        assert!(
+            started.elapsed() < PATIENCE,
+            "the open waited for a configure"
+        );
+        assert_eq!(
+            frames(&session),
+            0,
+            "a frame was asked of an unconfigured window"
+        );
+        assert_eq!(
+            session.compositor.heard().frames,
+            0,
+            "nothing was committed"
+        );
+        session.compositor.play(Step::Configure(
+            Configure::default().state(ToplevelState::Activated),
+        ));
+        session.turn_until("the first frame after the late configure", |session| {
+            frames(session) > 0 && session.compositor.heard().frames > 0
+        });
+    }
+
+    /// A fractional scale no screen has (zero, or past `DevicePixelRatio`'s
+    /// range) is refused and leaves the window at the scale it had; one a
+    /// screen can have but past the largest a buffer is drawn at draws at
+    /// that largest.
+    fn a_fractional_scale_no_screen_has_leaves_the_window_at_its_scale() {
+        let session = Session::open(
+            Offer::default().fractional_scale(),
+            WindowOptions::default().title("fractional"),
+        );
+        let told = |numerator: u32, expected: f64, what: &str| {
+            session
+                .compositor
+                .play(Step::PreferFractionalScale(numerator));
+            session.turn_until(what, |session| session.scale() == Some(expected));
+            // A refusal changes nothing: give it turns to show if it did.
+            for _ in 0..20 {
+                run_for(&session.platform, Duration::from_millis(5)).expect("the loop turns");
+            }
+            assert_eq!(session.scale(), Some(expected), "{what}");
+        };
+        told(180, 1.5, "the window at 1.5");
+        told(0, 1.5, "a zero scale refused");
+        told(
+            120 * 20,
+            MAX_BUFFER_SCALE,
+            "twenty drawn at the largest buffer scale",
+        );
+        told(120 * 1_000, MAX_BUFFER_SCALE, "a thousand refused");
+    }
+
     /// An output the compositor removes while the window's surface is on it,
     /// with no `leave`, no longer sets the window's scale or holds it: the
     /// window takes the scale of the output it is still on.
     fn an_output_removed_under_a_window_leaves_it_on_the_others() {
-        let offer = Offer::default()
-            .compositor(5)
-            .outputs([
-                OutputOffer::new(1920, 1080, 1),
-                OutputOffer::new(2560, 1440, 2),
-            ]);
+        let offer = Offer::default().compositor(5).outputs([
+            OutputOffer::new(1920, 1080, 1),
+            OutputOffer::new(2560, 1440, 2),
+        ]);
         let session = Session::open(offer, WindowOptions::default().title("two outputs"));
         session.turn_until("the window's first frame", |session| {
             session.compositor.heard().frames > 0
@@ -529,7 +625,10 @@ mod cases {
             run_for(&platform, Duration::from_millis(10)).is_err(),
             "the loop reports the lost connection"
         );
-        assert!(started.elapsed() < PATIENCE, "nothing waited on the dead peer");
+        assert!(
+            started.elapsed() < PATIENCE,
+            "nothing waited on the dead peer"
+        );
     }
 
     /// A compositor that closes the connection on the window's first frame
@@ -547,6 +646,10 @@ mod cases {
             }
             assert!(Instant::now() < deadline, "the loop never saw the hang-up");
         }
-        assert_eq!(session.compositor.heard().clients, 0, "every connection closed");
+        assert_eq!(
+            session.compositor.heard().clients,
+            0,
+            "every connection closed"
+        );
     }
 }

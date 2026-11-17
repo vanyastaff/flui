@@ -69,12 +69,37 @@ mod tests {
     #[test]
     fn the_pacer_chooses_the_present_mode() {
         for (case, pacing, offered, expected) in [
-            ("display, all offered", Display, &[Fifo, Mailbox, Immediate][..], Fifo),
+            (
+                "display, all offered",
+                Display,
+                &[Fifo, Mailbox, Immediate][..],
+                Fifo,
+            ),
             ("display, Fifo alone", Display, &[Fifo][..], Fifo),
-            ("compositor, Mesa", Compositor, &[Fifo, Mailbox, Immediate][..], Mailbox),
-            ("compositor, no Mailbox", Compositor, &[Fifo, Immediate][..], Immediate),
-            ("compositor, GL", Compositor, &[Fifo, AutoVsync, AutoNoVsync][..], Fifo),
-            ("compositor, relaxed", Compositor, &[FifoRelaxed, Fifo][..], Fifo),
+            (
+                "compositor, Mesa",
+                Compositor,
+                &[Fifo, Mailbox, Immediate][..],
+                Mailbox,
+            ),
+            (
+                "compositor, no Mailbox",
+                Compositor,
+                &[Fifo, Immediate][..],
+                Immediate,
+            ),
+            (
+                "compositor, GL",
+                Compositor,
+                &[Fifo, AutoVsync, AutoNoVsync][..],
+                Fifo,
+            ),
+            (
+                "compositor, relaxed",
+                Compositor,
+                &[FifoRelaxed, Fifo][..],
+                Fifo,
+            ),
         ] {
             assert_eq!(pacing.present_mode(offered), expected, "{case}");
         }

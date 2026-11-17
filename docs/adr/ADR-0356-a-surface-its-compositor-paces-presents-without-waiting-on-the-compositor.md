@@ -15,10 +15,13 @@
   arms the frame callback), [ADR-0305](ADR-0305-one-gpu-context-serves-every-surface-through-a-raster-executor.md)
   §5 (the window's slot configures its surface), [ADR-0243](ADR-0243-one-testing-kit-per-layer.md)
   (the scripted compositor that confirms it is `flui-native`'s testing kit)
-- **Sources:** `mesa/mesa@mesa-25.2.8 src/vulkan/wsi/wsi_common_wayland.c:3002` (the
-  `wl_display_dispatch_queue` loop a `Fifo` present waits in) and `:3097` (the frame callback it
-  waits for, below `wp_fifo_v1`); `oscar-soirey/Raven src/platform/platform.h:359-373` (a
-  compositor-paced present without driver vsync)
+- **Sources:** Mesa 25.2.8's Wayland WSI,
+  [`wsi_common_wayland.c:3002`](https://gitlab.freedesktop.org/mesa/mesa/-/blob/mesa-25.2.8/src/vulkan/wsi/wsi_common_wayland.c#L3002)
+  (the `wl_display_dispatch_queue` loop a `Fifo` present waits in) and
+  [`:3097`](https://gitlab.freedesktop.org/mesa/mesa/-/blob/mesa-25.2.8/src/vulkan/wsi/wsi_common_wayland.c#L3097)
+  (the frame callback it waits for, below `wp_fifo_v1`); Raven at `7ab270df`,
+  [`platform.h:359-373`](https://github.com/oscar-soirey/Raven/blob/7ab270df3b618de3d11af6033912374b6cd621b7/src/platform/platform.h#L359-L373)
+  (a compositor-paced present without driver vsync)
 
 ## Context and problem statement
 
@@ -96,6 +99,9 @@ impl SurfacePacing {
 - Good, because a shown window's cadence does not change: the callback still holds it to the
   compositor's refresh, and under `Mailbox` the compositor shows each committed buffer whole.
 - Bad, because a Wayland swapchain holds one image more under `Mailbox` than under `Fifo`.
+- Bad, because the GL fallback (ADR-0244 §1) is not covered: wgpu's GL backend offers only
+  `Fifo` on Linux and sets no swap interval, so a hidden window drawn there may still wait in
+  `eglSwapBuffers` ([gaps](../gaps.md#no-present-mode-queue-depth-vrr-or-tearing-control)).
 - Neutral, because `Immediate` is used only on a driver without `Mailbox`; a compositor still takes
   the committed buffer whole, so it does not tear on a composited desktop.
 

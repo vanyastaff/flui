@@ -1,9 +1,10 @@
 //! A Wayland compositor a test scripts: it speaks the wire protocol over a
 //! socket of its own to an unmodified Wayland host, and does on demand what
 //! no installed compositor does: a seat older than `repeat_info`, a
-//! `configure_bounds`, a scale change while the host runs, a frame callback
-//! it never answers, an output that goes with no `leave`, a burst of
-//! configures, a connection it closes in the middle of a request.
+//! `configure_bounds`, a scale change while the host runs, a fractional scale
+//! no screen has, a toplevel it never configures, a frame callback it never
+//! answers, an output that goes with no `leave`, a burst of configures, a
+//! connection it closes in the middle of a request.
 //!
 //! It runs on a thread of its own. A test connects the host to
 //! [`ScriptedCompositor::socket`] (`WaylandPlatform::try_new_at`), plays it
@@ -29,6 +30,12 @@ use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
 use rustix::event::{EventfdFlags, PollFd, PollFlags, eventfd, poll};
+use wayland_protocols::wp::fractional_scale::v1::server::wp_fractional_scale_manager_v1::{
+    self, WpFractionalScaleManagerV1,
+};
+use wayland_protocols::wp::fractional_scale::v1::server::wp_fractional_scale_v1::{
+    self, WpFractionalScaleV1,
+};
 use wayland_protocols::wp::viewporter::server::wp_viewport::{self, WpViewport};
 use wayland_protocols::wp::viewporter::server::wp_viewporter::{self, WpViewporter};
 use wayland_protocols::xdg::shell::server::xdg_positioner::{self, XdgPositioner};
@@ -103,6 +110,7 @@ pub struct Offer {
     shell: u32,
     seat: Option<u32>,
     viewporter: bool,
+    fractional_scale: bool,
     outputs: Vec<OutputOffer>,
     first: Option<Configure>,
     withhold_frame_callbacks: bool,
@@ -116,6 +124,7 @@ impl Default for Offer {
             shell: 6,
             seat: None,
             viewporter: true,
+            fractional_scale: false,
             outputs: vec![OutputOffer::new(1920, 1080, 1)],
             first: Some(Configure::default().state(ToplevelState::Activated)),
             withhold_frame_callbacks: false,
@@ -153,6 +162,14 @@ impl Offer {
     #[must_use]
     pub fn viewporter(mut self, offered: bool) -> Self {
         self.viewporter = offered;
+        self
+    }
+
+    /// Offer `wp_fractional_scale_manager_v1`, whose scales
+    /// [`Step::PreferFractionalScale`] sends.
+    #[must_use]
+    pub fn fractional_scale(mut self) -> Self {
+        self.fractional_scale = true;
         self
     }
 
@@ -265,6 +282,10 @@ pub enum Step {
         /// Down or up.
         down: bool,
     },
+    /// Prefer this fractional scale, a numerator over 120, for the
+    /// toplevel's surface (`wp_fractional_scale_v1.preferred_scale`): any
+    /// number, zero and ones past any screen's included.
+    PreferFractionalScale(u32),
     /// Hold back every frame callback from now (`true`), or answer those
     /// held and every later one (`false`).
     WithholdFrameCallbacks(bool),
@@ -502,6 +523,24 @@ impl ClientData for ClientState {
     }
 }
 
+/// A state a surface's next commit applies: set by a request since the last
+/// commit, or left as it is. What it is set to may itself be nothing (a
+/// detached buffer, an unset destination).
+enum Pending<T> {
+    Unchanged,
+    Set(T),
+}
+
+impl<T> Pending<T> {
+    /// What the commit applies, leaving nothing pending.
+    fn take(&mut self) -> Option<T> {
+        match std::mem::replace(self, Self::Unchanged) {
+            Self::Set(value) => Some(value),
+            Self::Unchanged => None,
+        }
+    }
+}
+
 /// The role a surface was given.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Role {
@@ -515,12 +554,12 @@ enum Role {
 struct SurfaceState {
     surface: WlSurface,
     role: Role,
-    pending_buffer: Option<Option<WlBuffer>>,
+    pending_buffer: Pending<Option<WlBuffer>>,
     buffer: Option<WlBuffer>,
     pending_scale: Option<i32>,
     scale: i32,
     viewport: Option<WpViewport>,
-    pending_destination: Option<Option<(i32, i32)>>,
+    pending_destination: Pending<Option<(i32, i32)>>,
     destination: Option<(i32, i32)>,
     frames: Vec<WlCallback>,
 }
@@ -538,10 +577,10 @@ impl SurfaceState {
 }
 
 /// The client's last toplevel.
-struct Toplevel {
+struct ShellWindow {
     surface: WlSurface,
     xdg: XdgSurface,
-    toplevel: XdgToplevel,
+    xdg_toplevel: XdgToplevel,
     configured: bool,
 }
 
@@ -570,11 +609,13 @@ struct Compositor {
     /// The compositor's end of each connection, to close it by.
     connections: Vec<UnixStream>,
     surfaces: Vec<SurfaceState>,
-    toplevel: Option<Toplevel>,
+    toplevel: Option<ShellWindow>,
     outputs: Vec<OutputSlot>,
     pointers: Vec<WlPointer>,
     keyboards: Vec<WlKeyboard>,
     withheld: Vec<WlCallback>,
+    /// Each surface's fractional-scale object.
+    fractional: Vec<(WlSurface, WpFractionalScaleV1)>,
 }
 
 impl Compositor {
@@ -584,6 +625,9 @@ impl Compositor {
         display.create_global::<Self, WlShm, ()>(1, ());
         if offer.viewporter {
             display.create_global::<Self, WpViewporter, ()>(1, ());
+        }
+        if offer.fractional_scale {
+            display.create_global::<Self, WpFractionalScaleManagerV1, ()>(1, ());
         }
         if let Some(version) = offer.seat {
             display.create_global::<Self, WlSeat, ()>(version, ());
@@ -612,6 +656,7 @@ impl Compositor {
             pointers: Vec::new(),
             keyboards: Vec::new(),
             withheld: Vec::new(),
+            fractional: Vec::new(),
         }
     }
 
@@ -638,9 +683,9 @@ impl Compositor {
             return;
         };
         if let Some((width, height)) = configure.bounds
-            && toplevel.toplevel.version() >= 4
+            && toplevel.xdg_toplevel.version() >= 4
         {
-            toplevel.toplevel.configure_bounds(width, height);
+            toplevel.xdg_toplevel.configure_bounds(width, height);
         }
         let states = configure
             .states
@@ -648,7 +693,7 @@ impl Compositor {
             .flat_map(|state| (*state as u32).to_ne_bytes())
             .collect();
         toplevel
-            .toplevel
+            .xdg_toplevel
             .configure(configure.size.0, configure.size.1, states);
         toplevel.xdg.configure(serial);
         toplevel.configured = true;
@@ -735,6 +780,18 @@ impl Compositor {
                         callback.done(time);
                     }
                     self.shared.note(|heard| heard.withheld = 0);
+                }
+            }
+            Step::PreferFractionalScale(numerator) => {
+                let Some(toplevel) = &self.toplevel else {
+                    return;
+                };
+                for (_, scale) in self
+                    .fractional
+                    .iter()
+                    .filter(|(surface, _)| surface.id() == toplevel.surface.id())
+                {
+                    scale.preferred_scale(numerator);
                 }
             }
             Step::HangUp => self.hang_up_now = true,
@@ -894,12 +951,12 @@ impl Dispatch<WlCompositor, ()> for Compositor {
                 state.surfaces.push(SurfaceState {
                     surface,
                     role: Role::None,
-                    pending_buffer: None,
+                    pending_buffer: Pending::Unchanged,
                     buffer: None,
                     pending_scale: None,
                     scale: 1,
                     viewport: None,
-                    pending_destination: None,
+                    pending_destination: Pending::Unchanged,
                     destination: None,
                     frames: Vec::new(),
                 });
@@ -938,7 +995,7 @@ impl Dispatch<WlSurface, ()> for Compositor {
         match request {
             wl_surface::Request::Attach { buffer, .. } => {
                 if let Some(held) = state.surface_mut(surface) {
-                    held.pending_buffer = Some(buffer);
+                    held.pending_buffer = Pending::Set(buffer);
                 }
             }
             wl_surface::Request::Frame { callback } => {
@@ -1092,15 +1149,63 @@ impl Dispatch<WpViewport, WlSurface> for Compositor {
         {
             // `-1` by `-1` unsets the destination.
             held.pending_destination =
-                Some((width > 0 && height > 0).then_some((width, height)));
+                Pending::Set((width > 0 && height > 0).then_some((width, height)));
         }
     }
 
     fn destroyed(state: &mut Self, _: ClientId, _: &WpViewport, surface: &WlSurface) {
         if let Some(held) = state.surface_mut(surface) {
             held.viewport = None;
-            held.pending_destination = Some(None);
+            held.pending_destination = Pending::Set(None);
         }
+    }
+}
+
+impl GlobalDispatch<WpFractionalScaleManagerV1, ()> for Compositor {
+    fn bind(
+        _: &mut Self,
+        _: &DisplayHandle,
+        _: &Client,
+        resource: New<WpFractionalScaleManagerV1>,
+        (): &(),
+        data_init: &mut DataInit<'_, Self>,
+    ) {
+        data_init.init(resource, ());
+    }
+}
+
+impl Dispatch<WpFractionalScaleManagerV1, ()> for Compositor {
+    fn request(
+        state: &mut Self,
+        _: &Client,
+        _: &WpFractionalScaleManagerV1,
+        request: wp_fractional_scale_manager_v1::Request,
+        (): &(),
+        _: &DisplayHandle,
+        data_init: &mut DataInit<'_, Self>,
+    ) {
+        if let wp_fractional_scale_manager_v1::Request::GetFractionalScale { id, surface } = request
+        {
+            let scale = data_init.init(id, ());
+            state.fractional.push((surface, scale));
+        }
+    }
+}
+
+impl Dispatch<WpFractionalScaleV1, ()> for Compositor {
+    fn request(
+        _: &mut Self,
+        _: &Client,
+        _: &WpFractionalScaleV1,
+        _: wp_fractional_scale_v1::Request,
+        (): &(),
+        _: &DisplayHandle,
+        _: &mut DataInit<'_, Self>,
+    ) {
+    }
+
+    fn destroyed(state: &mut Self, _: ClientId, scale: &WpFractionalScaleV1, (): &()) {
+        state.fractional.retain(|(_, held)| held.id() != scale.id());
     }
 }
 
@@ -1168,10 +1273,10 @@ impl Dispatch<XdgSurface, WlSurface> for Compositor {
                 if let Some(held) = state.surface_mut(surface) {
                     held.role = Role::Toplevel;
                 }
-                state.toplevel = Some(Toplevel {
+                state.toplevel = Some(ShellWindow {
                     surface: surface.clone(),
                     xdg: xdg.clone(),
-                    toplevel,
+                    xdg_toplevel: toplevel,
                     configured: false,
                 });
                 if state.offer.hang_up == Some(HangUp::OnToplevel) {
@@ -1203,7 +1308,7 @@ impl Dispatch<XdgToplevel, ()> for Compositor {
         if state
             .toplevel
             .as_ref()
-            .is_some_and(|held| held.toplevel.id() == toplevel.id())
+            .is_some_and(|held| held.xdg_toplevel.id() == toplevel.id())
         {
             state.toplevel = None;
         }
