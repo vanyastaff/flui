@@ -18,6 +18,9 @@
   `SurfaceFactory::create` and the raster executor's `Attach`, `Release` and `Restore` commands.
   The `WindowTarget` bound, the lease, probing before creating, always rebuilding on a returned
   window and releasing before creating stand.
+- **Superseded-by:** [ADR-0356](ADR-0356-a-surface-its-compositor-paces-presents-without-waiting-on-the-compositor.md)
+  for decision 1's public bound only: `Renderer::new` takes the window's `Arc<dyn SurfaceTarget>`,
+  which also says who paces the surface, and `WindowTarget` is the lease's crate-private bound.
 
 *A `wgpu::Surface<'static>` is sound only while the window behind it exists. The engine used to
 prove that with another crate's convention; now it proves it with ownership, and recovery asks
@@ -82,8 +85,8 @@ borrowed-safe `create_surface(&W)` that #1043 names, sound only by GPUI's owners
    - winit: inherits winit's contract — the `Arc<winit::Window>` the surface holds *is* the native
      lifetime.
    - Win32: the surface target's `window_handle()` answers `Unavailable` once the window's
-     delivery is retired, and otherwise consults the `hwnd_affinity::teardown_route` identity
-     probe (`AlreadyGone`/`StaleHandle` → `Unavailable`). `WM_DESTROY` retires the window's
+     delivery is retired, and otherwise consults the `hwnd_affinity::handle_names` identity
+     probe (`Nothing`/`AnotherWindow` → `Unavailable`). `WM_DESTROY` retires the window's
      delivery after `on_close`, while the HWND is still valid.
    - AppKit: `setReleasedWhenClosed:NO` (the +1 is released once, in `Drop`); the surface target
      keeps its own retained reference to the view, released on the main thread, and its

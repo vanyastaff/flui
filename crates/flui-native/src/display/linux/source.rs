@@ -53,6 +53,10 @@ use crate::owner::signal::OwnerSignal;
 /// The displays of one platform instance.
 pub(crate) struct LinuxDisplays {
     source: DisplaySource,
+    /// The session the source reads: the display server its platform
+    /// connected to, named once, so the windows and the outputs are one
+    /// server's whatever the process environment says later.
+    environment: Environment,
     state: Mutex<State>,
 }
 
@@ -84,9 +88,11 @@ impl crate::owner::notices::StaleOnWake for LinuxDisplays {
 }
 
 impl LinuxDisplays {
-    pub(crate) fn new() -> Arc<Self> {
+    /// The source of the session `environment` names.
+    pub(crate) fn new(environment: Environment) -> Arc<Self> {
         Arc::new(Self {
             source: DisplaySource::new(),
+            environment,
             state: Mutex::new(State {
                 views: None,
                 protocol: None,
@@ -154,9 +160,9 @@ impl LinuxDisplays {
 
     /// Read the outputs once, on a connection that closes again.
     fn read_once(&self) -> Result<(), DisplayError> {
-        let environment = Environment::current();
-        let protocol = Protocol::from_environment(&environment).ok_or(DisplayError::NoServer)?;
-        let session = connect(protocol, &environment)?;
+        let protocol =
+            Protocol::from_environment(&self.environment).ok_or(DisplayError::NoServer)?;
+        let session = connect(protocol, &self.environment)?;
         self.install(protocol, session.views());
         Ok(())
     }
@@ -223,7 +229,7 @@ impl LinuxDisplays {
         protocol: Protocol,
         signal: &Arc<OwnerSignal>,
     ) -> Result<DisplayWatcher, PlatformError> {
-        match connect(protocol, &Environment::current()) {
+        match connect(protocol, &self.environment) {
             Ok(session) => self.watch_session(protocol, signal, session),
             Err(error) => Err(self.fail(error.to_string())),
         }

@@ -5,9 +5,16 @@
 //! The raster thread arms the callback just before it presents, and the
 //! present's commit carries it to the compositor. A present that is
 //! skipped (an outdated surface, a zero size) commits nothing, so its
-//! callback never comes: after [`CALLBACK_GRACE`] the window stops waiting
-//! for it. A window the compositor does not draw sends no `done` either;
-//! it is then asked for a frame at most once per grace.
+//! callback never comes: after its grace the window stops waiting for it.
+//! A window the compositor does not draw, without saying so, sends no `done`
+//! either, so its callbacks go unanswered one after another: each one the
+//! window gives up doubles the grace of the next, from [`CALLBACK_GRACE`]
+//! up to [`MAX_CALLBACK_GRACE`], so an unpaced window is asked for a frame
+//! less and less often, down to once per ceiling, and never polled. The
+//! first `done` the compositor sends ends the backoff: the window is paced
+//! again. Each callback carries a ticket, so a `done` of an older one ends
+//! the backoff but never releases the callback that is out now: the
+//! compositor showed an earlier commit, not the one the window waits on.
 //!
 //! A window the compositor says it does not show (`suspended`: covered by
 //! other windows, on a hidden workspace, its outputs off) is occluded: it
@@ -20,12 +27,94 @@ use std::time::Duration;
 
 use web_time::Instant;
 
-/// How long a window waits for a frame callback before it gives it up.
+/// How long a window waits for a frame callback before it gives it up,
+/// while the compositor answered the last one.
 pub(crate) const CALLBACK_GRACE: Duration = Duration::from_secs(1);
 
-/// Whether a callback armed at `armed` still holds the next frame back.
-pub(crate) fn waiting_on_callback(armed: Option<Instant>, now: Instant) -> bool {
-    armed.is_some_and(|armed| now < armed + CALLBACK_GRACE)
+/// The longest a window waits for a frame callback: the grace after enough
+/// callbacks in a row went unanswered.
+pub(crate) const MAX_CALLBACK_GRACE: Duration = Duration::from_secs(8);
+
+/// The schedule a window's callback graces follow: the one every surface that
+/// shows nothing backs off on, from [`CALLBACK_GRACE`] to
+/// [`MAX_CALLBACK_GRACE`].
+const GRACES: flui_platform::Backoff =
+    flui_platform::Backoff::new(CALLBACK_GRACE, MAX_CALLBACK_GRACE);
+
+/// The grace of a callback armed after `unanswered` callbacks in a row were
+/// given up: [`CALLBACK_GRACE`] doubled once per callback given up, at most
+/// [`MAX_CALLBACK_GRACE`].
+pub(crate) fn grace(unanswered: u32) -> Duration {
+    GRACES.delay(unanswered)
+}
+
+/// A frame callback that is out: when it was armed, its ticket, and the
+/// grace it gets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Out {
+    armed: Instant,
+    ticket: u64,
+    grace: Duration,
+}
+
+/// A window's frame callbacks: the one out, if any, the last ticket issued
+/// and how many callbacks in a row the window gave up unanswered.
+#[derive(Debug, Default)]
+pub(crate) struct Callbacks {
+    out: Option<Out>,
+    issued: u64,
+    unanswered: u32,
+}
+
+impl Callbacks {
+    /// The instant the window gives up the callback that is out.
+    pub(crate) fn gives_up_at(&self) -> Option<Instant> {
+        self.out.map(|out| out.armed + out.grace)
+    }
+
+    /// Arm a callback at `now` unless one still holds the window back: the
+    /// ticket the callback carries to its `done`, or `None` when the window
+    /// still waits on the one out.
+    pub(crate) fn arm(&mut self, now: Instant) -> Option<u64> {
+        if self.gives_up_at().is_some_and(|until| now < until) {
+            return None;
+        }
+        // A ticket per present: a window would present for longer than the
+        // universe lasts before the count saturated, and two equal tickets
+        // then only release a callback a little early.
+        self.issued = self.issued.saturating_add(1);
+        self.out = Some(Out {
+            armed: now,
+            ticket: self.issued,
+            grace: grace(self.unanswered),
+        });
+        Some(self.issued)
+    }
+
+    /// The compositor answered the callback `ticket` (`done`): it draws the
+    /// window, so the backoff ends. The callback out is released when it is
+    /// that one or an older one: a commit's callback comes after every
+    /// earlier commit's. An answer to an older callback does not release the
+    /// one out, whose commit the compositor has not shown, but ends its
+    /// backoff too: it keeps the first grace, so a present that committed
+    /// nothing holds a window the compositor paces for no longer than that.
+    pub(crate) fn answered(&mut self, ticket: u64) {
+        self.unanswered = 0;
+        match self.out {
+            Some(out) if out.ticket <= ticket => self.out = None,
+            Some(ref mut out) => out.grace = out.grace.min(grace(0)),
+            None => {}
+        }
+    }
+
+    /// The window delivers a frame at `now`: a callback out past its grace is
+    /// given up, and the next one waits twice as long, up to the ceiling.
+    pub(crate) fn deliver(&mut self, now: Instant) {
+        if self.gives_up_at().is_some_and(|until| now >= until) {
+            self.out = None;
+            self.unanswered = self.unanswered.saturating_add(1);
+        }
+    }
 }
 
 /// What decides whether a window delivers a frame.
@@ -37,23 +126,26 @@ pub(crate) struct Pacing {
     pub(crate) configured: bool,
     /// The compositor does not show the window.
     pub(crate) suspended: bool,
-    /// When the frame callback that is out was armed.
-    pub(crate) armed: Option<Instant>,
+    /// When the frame callback that is out is given up
+    /// ([`Callbacks::gives_up_at`]).
+    pub(crate) callback_until: Option<Instant>,
 }
 
 impl Pacing {
     /// Whether the window delivers its frame now.
     pub(crate) fn due(self, now: Instant) -> bool {
-        self.asked && self.configured && !self.suspended && !waiting_on_callback(self.armed, now)
+        self.asked
+            && self.configured
+            && !self.suspended
+            && self.callback_until.is_none_or(|until| now >= until)
     }
 
     /// When the window gives up the callback that holds its frame back;
     /// `None` with nothing armed, nothing asked for, or while the window
     /// is not shown, whose frame waits for the compositor instead.
     pub(crate) fn gives_up_at(self) -> Option<Instant> {
-        self.armed
+        self.callback_until
             .filter(|_| self.asked && !self.suspended)
-            .map(|armed| armed + CALLBACK_GRACE)
     }
 }
 
@@ -138,32 +230,31 @@ mod tests {
     fn a_lost_frame_callback_holds_the_window_for_its_grace_only() {
         let now = Instant::now();
         let ms = Duration::from_millis;
-        assert!(!waiting_on_callback(None, now), "nothing armed");
-        assert!(waiting_on_callback(Some(now), now), "just armed");
-        assert!(waiting_on_callback(now.checked_sub(ms(900)), now));
-        assert!(
-            !waiting_on_callback(now.checked_sub(CALLBACK_GRACE), now),
-            "given up at the grace"
-        );
-        let pacing = |asked, armed| Pacing {
+        let mut callbacks = Callbacks::default();
+        assert_eq!(callbacks.gives_up_at(), None, "nothing armed");
+        assert_eq!(callbacks.arm(now), Some(1), "armed with the first ticket");
+        assert_eq!(callbacks.arm(now + ms(900)), None, "still waiting on it");
+        assert_eq!(callbacks.gives_up_at(), Some(now + CALLBACK_GRACE));
+        let pacing = |asked, callback_until| Pacing {
             asked,
             configured: true,
             suspended: false,
-            armed,
+            callback_until,
         };
+        let until = callbacks.gives_up_at();
+        assert_eq!(pacing(true, until).gives_up_at(), until);
         assert_eq!(
-            pacing(true, Some(now)).gives_up_at(),
-            Some(now + CALLBACK_GRACE)
-        );
-        assert_eq!(
-            pacing(false, Some(now)).gives_up_at(),
+            pacing(false, until).gives_up_at(),
             None,
             "no frame asked for"
         );
         assert_eq!(pacing(true, None).gives_up_at(), None);
         assert!(pacing(true, None).due(now));
-        assert!(!pacing(true, Some(now)).due(now), "the callback holds it");
-        assert!(pacing(true, now.checked_sub(CALLBACK_GRACE)).due(now));
+        assert!(!pacing(true, until).due(now), "the callback holds it");
+        assert!(
+            pacing(true, until).due(now + CALLBACK_GRACE),
+            "given up at the grace"
+        );
         assert!(!pacing(false, None).due(now), "nothing asked for");
         let unconfigured = Pacing {
             configured: false,
@@ -183,12 +274,12 @@ mod tests {
             asked: true,
             configured: true,
             suspended: true,
-            armed: long_ago,
+            callback_until: long_ago.map(|armed| armed + CALLBACK_GRACE),
         };
         assert!(!occluded.due(now), "past the grace, still occluded");
         assert_eq!(occluded.gives_up_at(), None, "no wake for a grace");
         let unarmed = Pacing {
-            armed: None,
+            callback_until: None,
             ..occluded
         };
         assert!(!unarmed.due(now), "nothing armed, still occluded");
@@ -197,6 +288,70 @@ mod tests {
             ..occluded
         };
         assert!(shown.due(now), "shown again: the kept frame goes out");
+    }
+
+    /// A window whose callbacks go unanswered is asked for frames less and
+    /// less often: each callback it gives up doubles the next one's grace up
+    /// to the ceiling, and the compositor's first `done` ends the backoff. A
+    /// `done` of an older callback ends it too, but never releases the one
+    /// out now. Red-check: keep `grace(0)` for every callback and the
+    /// window is asked for a frame once a second forever; release the
+    /// callback out on any `done` and the stale one lets the next frame go
+    /// before the compositor showed the last.
+    #[test]
+    fn unanswered_callbacks_back_off_to_the_ceiling_until_one_is_answered() {
+        let start = Instant::now();
+        let mut callbacks = Callbacks::default();
+        let mut now = start;
+        // (callback, the grace it gets)
+        let schedule = [
+            (1, CALLBACK_GRACE),
+            (2, CALLBACK_GRACE * 2),
+            (3, CALLBACK_GRACE * 4),
+            (4, MAX_CALLBACK_GRACE),
+            (5, MAX_CALLBACK_GRACE),
+        ];
+        for (ticket, wait) in schedule {
+            assert_eq!(callbacks.arm(now), Some(ticket), "callback {ticket}");
+            assert_eq!(
+                callbacks.gives_up_at(),
+                Some(now + wait),
+                "callback {ticket}"
+            );
+            callbacks.deliver(now + wait.saturating_sub(Duration::from_millis(1)));
+            assert!(callbacks.gives_up_at().is_some(), "not given up early");
+            now += wait;
+            callbacks.deliver(now);
+            assert_eq!(callbacks.gives_up_at(), None, "given up at its grace");
+        }
+        let elapsed = now.saturating_duration_since(start);
+        assert_eq!(
+            elapsed,
+            CALLBACK_GRACE * 7 + MAX_CALLBACK_GRACE * 2,
+            "five frames in twenty-three seconds, not one a second"
+        );
+
+        // Two callbacks out in turn: the older one's `done` comes late.
+        let older = callbacks.arm(now).expect("nothing out");
+        now += MAX_CALLBACK_GRACE;
+        callbacks.deliver(now);
+        let current = callbacks.arm(now).expect("the older one was given up");
+        callbacks.answered(older);
+        assert_eq!(
+            callbacks.gives_up_at(),
+            Some(now + CALLBACK_GRACE),
+            "an older `done` leaves the callback out, at the first grace: the compositor paces \
+             the window again"
+        );
+        callbacks.answered(current);
+        assert_eq!(callbacks.gives_up_at(), None, "its own `done` releases it");
+        callbacks.arm(now);
+        assert_eq!(
+            callbacks.gives_up_at(),
+            Some(now + CALLBACK_GRACE),
+            "an answered window is paced again"
+        );
+        assert_eq!(grace(u32::MAX), MAX_CALLBACK_GRACE, "no overflow");
     }
 
     /// A surface is on the first output it entered that still exists.

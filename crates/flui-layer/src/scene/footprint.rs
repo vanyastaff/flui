@@ -474,7 +474,7 @@ fn growth(next: &VersionInner, child: NodeKey) -> Option<(NodeKey, Bounds, f64)>
         local: Reach::of(record.subtree()),
         kernel: record.kernel(),
     }
-    .through(&links);
+    .through(&links, 1.0);
     let reach = scope.local;
     let current = Reach::of(parent_record.subtree());
     let kernel = scope.kernel.max(parent_record.kernel());

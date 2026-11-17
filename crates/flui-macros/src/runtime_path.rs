@@ -4,7 +4,8 @@ use proc_macro_crate::{FoundCrate, crate_name};
 use proc_macro2::Span;
 use syn::Path;
 
-/// Runtime module that owns the trait implemented by a derive.
+/// The runtime module that owns what a macro's expansion names.
+#[derive(Clone, Copy)]
 pub(crate) enum Runtime {
     View,
     Foundation,
@@ -24,7 +25,7 @@ impl Runtime {
     /// to a crate the library build does not have. The converse case, an
     /// owner as a normal dependency beside `flui-sdk` as a dev-dependency
     /// only, is the one this order cannot serve; no crate has that shape.
-    pub(crate) fn resolve(&self, span: Span) -> syn::Result<Path> {
+    pub(crate) fn resolve(self, span: Span) -> syn::Result<Path> {
         let (package, module) = match self {
             Self::View => ("flui-view", "view"),
             Self::Foundation => ("flui-foundation", "foundation"),
@@ -45,10 +46,17 @@ impl Runtime {
         if let Ok(found) = crate_name("flui") {
             return module_path(found, "flui", module, span);
         }
+        // The application runtime is not in the SDK, so a crate that already
+        // has `flui-sdk` is not told to add it.
+        let facade = if matches!(self, Self::App) {
+            "add `flui` to Cargo.toml (`flui-sdk` has no application entry)"
+        } else {
+            "add `flui` to Cargo.toml (a package adds `flui-sdk`)"
+        };
         Err(syn::Error::new(
             span,
             format!(
-                "FLUI derive requires a runtime dependency; add `flui` to Cargo.toml (a package adds `flui-sdk`), or use a direct `{package}` dependency (renamed dependencies are supported)"
+                "FLUI macros expand to paths in a runtime crate; {facade}, or use a direct `{package}` dependency (renamed dependencies are supported)"
             ),
         ))
     }
@@ -78,4 +86,27 @@ fn absolute_path(found: FoundCrate, package: &str, span: Span) -> syn::Result<Pa
                 format!("FLUI dependency alias `{name}` is not a Rust crate identifier"),
             )
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// This crate's own manifest names no runtime crate, so every lookup
+    /// from its unit tests ends in the error a consumer without one sees.
+    #[test]
+    fn a_crate_without_the_runtime_is_told_which_dependency_to_add() {
+        let advice = |runtime: Runtime| match runtime.resolve(Span::call_site()) {
+            Ok(_) => panic!("BUG: flui-macros resolves a runtime crate"),
+            Err(error) => error.to_string(),
+        };
+        let view = advice(Runtime::View);
+        assert!(view.contains("a package adds `flui-sdk`"), "{view}");
+        assert!(view.contains("a direct `flui-view` dependency"), "{view}");
+
+        let app = advice(Runtime::App);
+        assert!(app.contains("`flui-sdk` has no application entry"), "{app}");
+        assert!(!app.contains("a package adds `flui-sdk`"), "{app}");
+        assert!(app.contains("a direct `flui-app` dependency"), "{app}");
+    }
 }

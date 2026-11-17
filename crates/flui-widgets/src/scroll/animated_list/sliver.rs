@@ -13,9 +13,8 @@ use flui_animation::{
 use flui_foundation::{ValueKey, ViewKey};
 use flui_objects::{Placement, PlacementSlot};
 use flui_rendering::delegates::SliverGridDelegate;
-use flui_view::element::ElementKind;
-use flui_view::prelude::{BuildContext, LifecycleContext, StatefulView};
-use flui_view::{BoxedView, IntoView, RebuildHandle, StatelessView, View, ViewExt, ViewState};
+use flui_view::prelude::{BuildContext, LifecycleContext, StatefulView, StatelessView};
+use flui_view::{BoxedView, IntoView, RebuildHandle, ViewExt, ViewState};
 
 use super::roster::{Entry, ItemBuilder, Items, Shown, Source, merge};
 use crate::motion::{Animate, Effects, Transition, Trigger};
@@ -563,23 +562,11 @@ impl ItemView {
 
 /// Carries an item's key into the sliver, so the item keeps its element
 /// wherever it moves, leaving included.
-#[derive(Clone)]
+#[derive(Clone, StatelessView)]
 struct KeyedItem<K: Clone + Eq + Hash + 'static> {
+    #[view(key)]
     key: ValueKey<K>,
     child: BoxedView,
-}
-
-impl<K> View for KeyedItem<K>
-where
-    K: Clone + Eq + Hash + fmt::Debug + 'static,
-{
-    fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
-        ElementKind::stateless(self)
-    }
-
-    fn key(&self) -> Option<&dyn ViewKey> {
-        Some(&self.key)
-    }
 }
 
 impl<K> StatelessView for KeyedItem<K>

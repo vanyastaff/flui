@@ -1,20 +1,22 @@
 error: `#[derive(Inspect)]` does not support unions: which field is live is unknown; implement `Inspect` by hand
- --> tests/ui/inspect_unsupported_shape.rs:4:1
+ --> tests/ui/inspect_unsupported_shape.rs:4:7
   |
 4 | union Bits {
-  | ^^^^^
+  |       ^^^^
 
 error: a skipped field takes no other inspect attribute
   --> tests/ui/inspect_unsupported_shape.rs:11:5
    |
-11 |     #[inspect(skip, unit = logical_px)]
-   |     ^
+11 | /     #[inspect(skip, unit = logical_px)]
+12 | |     width: f64,
+   | |______________^
 
 error: a `debug` field has no typed value to compare a default with; map it with `with` instead
   --> tests/ui/inspect_unsupported_shape.rs:17:5
    |
-17 |     #[inspect(debug, default)]
-   |     ^
+17 | /     #[inspect(debug, default)]
+18 | |     height: f64,
+   | |_______________^
 
 error: expected `logical_px`, `device_px`, `seconds`, `degrees`, `radians` or `fraction`
   --> tests/ui/inspect_unsupported_shape.rs:23:22
@@ -26,10 +28,65 @@ error: `variant` names the enum's variant in the snapshot; report this field und
   --> tests/ui/inspect_unsupported_shape.rs:29:14
    |
 29 |     Circle { variant: f64 },
-   |              ^^^^^^^
+   |              ^^^^^^^^^^^^
 
 error: another field already reports as `width`; give one of them another name with `#[inspect(name = "...")]`
   --> tests/ui/inspect_unsupported_shape.rs:35:5
    |
-35 |     #[inspect(name = "width")]
-   |     ^
+35 | /     #[inspect(name = "width")]
+36 | |     height: f64,
+   | |_______________^
+
+error: `#[inspect(...)]` describes a field; write it on the field it describes
+  --> tests/ui/inspect_unsupported_shape.rs:40:1
+   |
+40 | #[inspect(skip)]
+   | ^^^^^^^^^^^^^^^^
+
+error: `#[inspect(...)]` describes a field; write it on the field it describes
+  --> tests/ui/inspect_unsupported_shape.rs:47:5
+   |
+47 |     #[inspect(name = "round")]
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: this inspect attribute is given twice for the field
+  --> tests/ui/inspect_unsupported_shape.rs:53:27
+   |
+53 |     #[inspect(name = "w", name = "width")]
+   |                           ^^^^^^^^^^^^^^
+
+error: `#[inspect(...)]` describes a field; write it on the field it describes
+  --> tests/ui/inspect_unsupported_shape.rs:58:1
+   |
+58 | #[r#inspect(skip)]
+   | ^^^^^^^^^^^^^^^^^^
+
+error: the list is empty; expected `skip`, `name`, `default`, `level`, `unit`, `with` or `debug`
+  --> tests/ui/inspect_unsupported_shape.rs:65:5
+   |
+65 |     #[inspect()]
+   |     ^^^^^^^^^^^^
+
+error: `#[inspect]` does nothing here: the derive reads the attributes of the type, of its variants and of their fields
+  --> tests/ui/inspect_unsupported_shape.rs:72:14
+   |
+72 |     call: fn(#[inspect(name = "x")] u32),
+   |              ^^^^^^^^^^^^^^^^^^^^^^
+
+error: expected `summary`, `detail` or `debug`
+  --> tests/ui/inspect_unsupported_shape.rs:78:23
+   |
+78 |     #[inspect(level = bogus, unit = bogus, title = "w")]
+   |                       ^^^^^
+
+error: expected `logical_px`, `device_px`, `seconds`, `degrees`, `radians` or `fraction`
+  --> tests/ui/inspect_unsupported_shape.rs:78:37
+   |
+78 |     #[inspect(level = bogus, unit = bogus, title = "w")]
+   |                                     ^^^^^
+
+error: unsupported inspect attribute; expected `skip`, `name`, `default`, `level`, `unit`, `with` or `debug`
+  --> tests/ui/inspect_unsupported_shape.rs:78:44
+   |
+78 |     #[inspect(level = bogus, unit = bogus, title = "w")]
+   |                                            ^^^^^

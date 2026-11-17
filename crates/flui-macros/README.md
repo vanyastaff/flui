@@ -1,22 +1,27 @@
 # flui-macros
 
-Procedural macros for FLUI.
+The procedural macros of FLUI. An author never names this crate: each macro is
+re-exported beside the trait or function it serves, at the path the table
+gives. An application reaches the same items through the facade:
+`flui::prelude` carries the view derives, `InheritedData` and `Routable`,
+`Inspect` is `flui::Inspect`, `TwoWayConverter` is in `flui::animation`, and
+the entry attribute is `flui::main`.
 
-This crate emits code into the consuming crate. Derives resolve a direct runtime
-dependency first (`flui-view`, `flui-foundation`, or `flui-animation`), then fall
-back to the corresponding module in the `flui` facade. Cargo dependency aliases
-are respected in either case. Applications can use a single `flui` dependency:
+| Macro | Writes | Import it from |
+|-------|--------|----------------|
+| `#[derive(StatelessView)]`, `#[derive(StatefulView)]` | `impl View` for a type that implements the authoring trait, with its key and creation site from the fields marked `#[view(key)]` and `#[view(site)]` | `flui_view` |
+| `#[derive(InheritedData)]` | one `FIELD_<NAME>` mask per field and `impl InheritedData` | `flui_view` |
+| `#[derive(Inspect)]` | `impl Inspect` for a struct or an enum | `flui_foundation::inspect` |
+| `#[derive(TwoWayConverter)]` | `impl TwoWayConverter` and a fieldwise `impl Lerp` | `flui_animation` |
+| `#[derive(Routable)]` | `impl Routable` from `#[route("…")]` patterns | `flui_widgets::router` |
+| `#[flui::main]` | the entry every platform starts an application from | `flui` |
 
-```rust,ignore
-use flui::prelude::*;
-```
+The attributes each macro takes, what it refuses and why are in its rustdoc
+(`cargo doc -p flui-macros --open`). [`ARCHITECTURE.md`](ARCHITECTURE.md) records the
+decisions behind them: how an expansion finds its runtime crate, how `Inspect`
+maps a field, how `Routable` orders its patterns.
 
-## Derives
-
-### `#[derive(StatelessView)]`
-
-Generates the object-safe `impl View for T` boilerplate for a type that already
-implements the typed authoring trait `StatelessView`:
+A view, as an application writes one:
 
 ```rust,ignore
 use flui::prelude::*;
@@ -33,129 +38,16 @@ impl StatelessView for Greeting {
 }
 ```
 
-With only the facade dependency, the generated implementation calls:
-
-```rust,ignore
-::flui::view::element::ElementKind::stateless(self)
-```
-
-and preserves the user's generic parameters and where clauses.
-
-### `#[derive(StatefulView)]`
-
-Generates the matching `impl View for T` boilerplate for a type that implements
-`StatefulView`:
-
-```rust,ignore
-use flui::prelude::*;
-
-#[derive(Clone, StatefulView)]
-struct Counter {
-    initial: u32,
-}
-
-struct CounterState {
-    count: u32,
-}
-
-impl StatefulView for Counter {
-    type State = CounterState;
-
-    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
-        CounterState { count: self.initial }
-    }
-}
-
-impl ViewState<Counter> for CounterState {
-    fn build(&self, _view: &Counter, _ctx: &dyn BuildContext) -> impl IntoView {
-        Text::new(format!("count: {}", self.count))
-    }
-}
-```
-
-With only the facade dependency, the generated implementation calls:
-
-```rust,ignore
-::flui::view::element::ElementKind::stateful(self)
-```
-
-### `#[derive(InheritedData)]`
-
-Field-granular inherited dependencies (issue #1090). For a non-generic struct with
-named fields, generates one `pub const FIELD_<NAME>: FieldMask<Self>` per field (declaration
-order, bit 0 first; `r#type` becomes `FIELD_TYPE`) and `impl InheritedData for T` whose
-`field_mask_diff` unions the mask of every field that differs (`!=`, so each field must be
-`PartialEq`). An `InheritedView` whose `Data` derives it overrides `changed_fields` with
-`self.data().field_mask_diff(old.data())`, and a dependent that read one field through
-`BuildContextExt::depend_on_field` rebuilds only when that field changes. Lookup is keyed by
-the **provider view** type (`MediaQuery`), and the mask names a field of its data type:
-
-```rust,ignore
-use flui::prelude::*;
-
-#[derive(Clone, PartialEq, InheritedData)]
-struct MediaQueryData {
-    size: Size,
-    text_scale_factor: f32,
-}
-
-// In a reader's build (`data()` is `InheritedView::data`):
-let size = ctx.depend_on_field::<MediaQuery, _>(MediaQueryData::FIELD_SIZE, |mq| mq.data().size);
-```
-
-Refused at compile time, with the reason named: more than 64 fields (the mask is 64 bits;
-split the provider data), tuple or unit structs, enums, unions, and generic structs.
-
-## Keys
-
-The derives intentionally do not generate a custom `View::key()` method; the
-default key is `None`. A widget that participates in keyed reconciliation must
-write the `impl View` block manually so `create_element()` and `key()` live in a
-single coherent implementation:
-
-```rust,ignore
-impl View for KeyedRow {
-    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
-        flui_view::element::ElementKind::stateless(self)
-    }
-
-    fn key(&self) -> Option<&dyn flui_foundation::ViewKey> {
-        Some(&self.key)
-    }
-}
-```
-
-A future derive attribute for field-backed keys is an authoring improvement, not
-part of the current Phase 3 surface.
-
-## Recursive And Conditional Returns
-
-The derives operate on the struct declaration only; they do not inspect the body
-of `build()`. When a `build()` body has branches with different concrete return
-types, or a recursive widget needs an erased boundary, use `.boxed()` at that
-branch:
-
-```rust,ignore
-if has_children {
-    TreeNode::new(children).boxed()
-} else {
-    LeafNode.boxed()
-}
-```
-
-This keeps the public authoring trait on `impl IntoView` while making the
-dynamic boundary explicit and local.
-
-## Other Macros
-
-`Animatable` and `Inspect` are also implemented in this crate. They are
-independent of the view derives and are documented in the generated rustdoc for
-their proc-macro entry points.
-
-## Verification
-
-Focused checks:
+## Checking a change
 
 ```bash
-cargo clippy -p flui-macros --all-targets -- -D warnings
+cargo heli clippy -p flui-macros --all-targets -- -D warnings
+cargo heli nextest run -p flui-macros
 ```
+
+A refusal a derive makes before it needs a runtime path (an attribute out of place, repeated
+or empty, a shape it does not support) is a unit test of its `expand` here. What an accepted
+derive expands to is tested where the runtime is: `flui-view`, `flui-foundation`,
+`flui-animation` and `flui-widgets` for behaviour, and the trybuild suites of `flui-sdk`,
+`flui-view`, `flui-widgets` and the facade (`tests/ui/entry` for `#[flui::main]`) for what an
+author sees, a refusal included.

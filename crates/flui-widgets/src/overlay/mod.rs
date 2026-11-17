@@ -763,9 +763,9 @@ impl View for OverlayEntryView {
         ElementKind::stateful(self)
     }
 
-    /// Written by hand rather than derived: `#[derive(StatefulView)]` emits its
-    /// own `impl View`, and Rust forbids a second one, so a keyed view must own
-    /// the whole impl (`flui-macros` documents this).
+    /// This `impl View` is written by hand because it overrides
+    /// `should_skip_rebuild`, which `#[derive(StatefulView)]` leaves at its
+    /// default; the key would otherwise be a `#[view(key)]` field.
     fn key(&self) -> Option<&dyn ViewKey> {
         Some(&self.key)
     }

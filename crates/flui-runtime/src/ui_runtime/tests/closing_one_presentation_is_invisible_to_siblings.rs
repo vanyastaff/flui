@@ -60,8 +60,9 @@ struct CloseObservation {
 
 /// Observe inside the real disposal hook: owner destruction after close must
 /// not make a skipped text-input close look successful.
-#[derive(Clone)]
+#[derive(Clone, StatefulView)]
 struct CloseObserver {
+    #[view(key)]
     key: flui_view::GlobalKey<CloseObserver>,
     focus: Rc<FocusManager>,
     input: TextInputHandle,
@@ -105,15 +106,6 @@ impl ViewState<CloseObserver> for CloseObserver {
             text_input: self.input.ensure_open(),
             ime_allowed: self.platform.recorder.last_ime_allowed(),
         });
-    }
-}
-
-impl View for CloseObserver {
-    fn key(&self) -> Option<&dyn flui_foundation::ViewKey> {
-        Some(&self.key)
-    }
-    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
-        flui_view::element::ElementKind::stateful(self)
     }
 }
 
@@ -264,19 +256,11 @@ impl Drop for RetirementKey {
     }
 }
 
-#[derive(Clone)]
-struct KeyedCloseView(RetirementKey);
+#[derive(Clone, StatelessView)]
+struct KeyedCloseView(#[view(key)] RetirementKey);
 impl StatelessView for KeyedCloseView {
     fn build(&self, _: &dyn BuildContext) -> impl IntoView {
         SizedBox::square(10.0)
-    }
-}
-impl View for KeyedCloseView {
-    fn key(&self) -> Option<&dyn flui_foundation::ViewKey> {
-        Some(&self.0)
-    }
-    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
-        flui_view::element::ElementKind::stateless(self)
     }
 }
 

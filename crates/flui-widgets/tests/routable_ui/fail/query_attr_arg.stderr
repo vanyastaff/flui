@@ -1,5 +1,35 @@
 error: `#[query]` takes only `rename = "key"`
- --> tests/routable_ui/fail/query_attr_arg.rs:7:17
+ --> tests/routable_ui/fail/query_attr_arg.rs:9:17
   |
-7 |         #[query(key = "q")]
+9 |         #[query(key = "q")]
   |                 ^^^
+
+error: a field takes one `#[query]` attribute
+  --> tests/routable_ui/fail/query_attr_arg.rs:15:9
+   |
+15 |         #[query]
+   |         ^^^^^^^^
+
+error: `rename` is given twice
+  --> tests/routable_ui/fail/query_attr_arg.rs:17:31
+   |
+17 |         #[query(rename = "s", rename = "sort")]
+   |                               ^^^^^^^^^^^^^^^
+
+error: `#[query]` takes only `rename = "key"`
+  --> tests/routable_ui/fail/query_attr_arg.rs:20:17
+   |
+20 |         #[query(order = 1, rename = "")]
+   |                 ^^^^^
+
+error: a query key is not empty
+  --> tests/routable_ui/fail/query_attr_arg.rs:20:37
+   |
+20 |         #[query(order = 1, rename = "")]
+   |                                     ^^
+
+error: field `second` reads the query key `k`, which field `first` already reads; give one of them another key with `#[query(rename = "...")]`
+  --> tests/routable_ui/fail/query_attr_arg.rs:28:9
+   |
+28 |         second: u32,
+   |         ^^^^^^

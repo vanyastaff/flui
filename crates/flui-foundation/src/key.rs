@@ -1,45 +1,32 @@
-//! View keys for element identity and reconciliation
+//! The keys a view is matched by when its parent rebuilds.
 //!
-//! This module provides key types for view identity tracking:
+//! A key is a [`ViewKey`]: two keys match when they are of one type and equal
+//! as that type, so a `ValueKey<u32>` never matches a `ValueKey<i32>` of the
+//! same number.
 //!
-//! # Simple Keys (Copy, lightweight)
+//! - [`ValueKey<T>`] matches by value: a list item keyed by its record's id,
+//!   or a constant such as `ValueKey::new("header")`.
+//! - [`UniqueKey`] matches only itself: a new element on every rebuild that
+//!   holds a new one.
+//! - `ObjectKey` and `GlobalKey<T>` are `flui-view`'s.
 //!
-//! - [`Key`] - Simple `u64` identifier with niche optimization
-//!   - Compile-time constants via FNV-1a hash: `Key::from_str("name")`
-//!   - Runtime unique generation: `Key::new()`
-//!   - From external ID: `Key::from_u64(id)`
+//! # A view's key
 //!
-//! # Keys (for reconciliation)
-//!
-//! - [`ViewKey`] - Trait for all reconciliation keys
-//! - [`ValueKey<T>`] - Key by value (string, number, struct)
-//! - [`UniqueKey`] - Guaranteed unique, never matches another
-//!
-//! Note: `ObjectKey` and `GlobalKey<T>` are in `flui-view` (widgets layer).
-//!
-//! # When to Use Which
-//!
-//! | Key Type | Use Case |
-//! |----------|----------|
-//! | `Key` | Simple ID, compile-time constants, database IDs |
-//! | `ValueKey<T>` | Match by value (list items with unique field) |
-//! | `UniqueKey` | Force new element on every rebuild |
-//!
-//! # Examples
+//! A view holds its key in a field and marks it `#[view(key)]`; the view
+//! derives of `flui-view` read the field through [`AsViewKey`], so the field is
+//! a key, an `Option` of one, or an `Rc<dyn ViewKey>` or `Box<dyn ViewKey>`.
 //!
 //! ```rust,ignore
-//! use flui_foundation::{Key, ValueKey, UniqueKey, WithKey};
+//! use flui_foundation::ValueKey;
+//! use flui_view::StatelessView;
 //!
-//! // Simple compile-time key
-//! const HEADER: Key = Key::from_str("header");
-//!
-//! // Value-based key for list items
-//! items.iter().map(|item| {
-//!     TodoItem::new(item).with_view_key(ValueKey::new(item.id))
-//! })
-//!
-//! // Unique key to force rebuild
-//! AnimatedWidget::new().with_view_key(UniqueKey::new())
+//! // A list item matched by its record's id across rebuilds.
+//! #[derive(Clone, StatelessView)]
+//! struct TodoItem {
+//!     #[view(key)]
+//!     key: ValueKey<u64>,
+//!     title: String,
+//! }
 //! ```
 
 use std::{
@@ -47,293 +34,13 @@ use std::{
     fmt,
     hash::{Hash, Hasher},
     num::NonZeroU64,
-    sync::atomic::{AtomicU64, Ordering},
 };
 
-/// Runtime counter backing [`Key::new`]. Starts at 1; the value 0 is the
-/// permanent-exhaustion sentinel (see `Key::new`). Exhaustion tests drive a
-/// *local* `AtomicU64` through [`Key::new_with_counter`] rather than mutating
-/// this shared static, so no test ever resets it to the sentinel — keeping
-/// the counter monotonic and `Key::new` race-free across parallel tests.
-static KEY_COUNTER: AtomicU64 = AtomicU64::new(1);
+use crate::sequence::AtomicIdMint;
 
-/// Runtime counter backing [`UniqueKey::new`]. Same 1-based start and
-/// 0-is-exhausted-sentinel contract as [`KEY_COUNTER`]. Kept distinct so
-/// `Key` and `UniqueKey` issue independent id spaces.
-static UNIQUE_KEY_COUNTER: AtomicU64 = AtomicU64::new(1);
-
-/// View key with niche optimization
-///
-/// Thanks to `NonZeroU64`, `Option<Key>` is only 8 bytes instead of 16.
-/// This saves memory and improves cache locality when storing many views.
-///
-/// # Memory Layout
-///
-/// ```text
-/// Option<u64>:      [8 bytes data] + [8 bytes discriminant] = 16 bytes
-/// Option<Key>:      [8 bytes NonZeroU64] = 8 bytes (0 means None)
-/// ```
-///
-/// # Creation Methods
-///
-/// 1. **Compile-time constant** - `Key::from_str("name")`
-/// 2. **Runtime unique** - `Key::new()`
-/// 3. **Explicit ID** - `Key::from_u64(id)`
-///
-/// # Performance
-///
-/// - Key comparison: ~1ns (u64 compare)
-/// - Hash computation: O(1) (already hashed)
-/// - Creation: 0ns (compile-time) or ~5ns (runtime counter)
-#[repr(transparent)]
-#[derive(Clone, Copy, PartialEq, Eq)]
-#[must_use = "keys should be used for widget identification"]
-pub struct Key(NonZeroU64);
-
-impl Key {
-    /// Create compile-time constant key from string
-    ///
-    /// Uses FNV-1a hash algorithm which is const-evaluatable.
-    /// The hash is computed at compile time with zero runtime cost.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_foundation::Key;
-    ///
-    /// const HEADER: Key = Key::from_str("app_header");
-    /// const FOOTER: Key = Key::from_str("app_footer");
-    ///
-    /// // These are compile-time constants:
-    /// assert_eq!(HEADER, Key::from_str("app_header"));
-    /// ```
-    ///
-    /// # Panics
-    ///
-    /// Never panics - if hash is 0, uses 1 instead.
-    #[inline]
-    pub const fn from_str(s: &str) -> Self {
-        let hash = const_fnv1a_hash(s.as_bytes());
-        // Ensure non-zero (use 1 if hash is 0, which is extremely rare).
-        let non_zero = if hash == 0 { 1 } else { hash };
-        // Safe const construction: the branch above guarantees
-        // `non_zero != 0`, so `expect` is statically unreachable and the
-        // documented "never panics" contract holds. `Option::expect` is
-        // const-stable, so this stays a `const fn` with no `unsafe`.
-        Self(NonZeroU64::new(non_zero).expect("from_str guarantees non-zero"))
-    }
-
-    /// Generate unique runtime key
-    ///
-    /// Uses thread-safe atomic counter for guaranteed uniqueness.
-    /// Each call returns a new unique key.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_foundation::Key;
-    ///
-    /// let key1 = Key::new();
-    /// let key2 = Key::new();
-    /// assert_ne!(key1, key2);
-    /// ```
-    ///
-    /// # Thread Safety
-    ///
-    /// This method is thread-safe and lock-free.
-    /// Uses `Ordering::Relaxed` for maximum performance.
-    ///
-    /// # Panics
-    ///
-    /// Panics if all `u64::MAX - 1` keys have been issued (practically
-    /// impossible). The counter then latches a permanent-exhaustion
-    /// sentinel so every subsequent call also panics, rather than
-    /// wrapping around and re-issuing a duplicate key.
-    // Audit I-5: `Key` deliberately does NOT implement `Default`.
-    // Defaults must be deterministic; `Key::new()` bumps an atomic
-    // counter so every call returns a different value. Construction
-    // routes through `Key::new()` (unique) or `Key::from_u64`
-    // (deterministic).
-    #[expect(clippy::new_without_default)]
-    #[inline]
-    pub fn new() -> Self {
-        Self::new_with_counter(&KEY_COUNTER)
-    }
-
-    /// Shared implementation of [`Key::new`], parameterized over the
-    /// backing counter. Production routes through the shared `KEY_COUNTER`
-    /// static; exhaustion tests pass a *local* `AtomicU64` pre-set to the
-    /// sentinel so they exercise the overflow path without mutating the
-    /// shared counter (which would race sibling tests calling `Key::new`).
-    ///
-    /// The `try_update` sentinel state machine.
-    ///
-    /// Invariants for `counter`:
-    ///
-    /// * `1..=u64::MAX` — live: the loaded value is the key just handed
-    ///   out; the next stored value is `value + 1`.
-    /// * `0` — PERMANENT EXHAUSTION SENTINEL: every key in `1..=u64::MAX`
-    ///   has been issued. The closure refuses to advance (returns `None`),
-    ///   so `try_update` yields `Err(0)` on this and ALL subsequent
-    ///   calls — there is no silent recovery, even across `catch_unwind`
-    ///   + retry.
-    ///
-    /// The plain `fetch_add` + unchecked-construction shape this replaces
-    /// wrapped `u64::MAX -> 0` and then fabricated a duplicate (re-issuing
-    /// 1, 2, ... after the panic was caught), breaking identity.
-    /// `try_update` writes the sentinel atomically with the read, so the
-    /// exhausted state is observable and sticky.
-    #[inline]
-    fn new_with_counter(counter: &AtomicU64) -> Self {
-        let id = counter
-            .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
-                // current == 0 -> exhausted: refuse, keep sentinel.
-                // current == u64::MAX -> hand it out, then wrap to the
-                // 0 sentinel so the *next* call is permanently exhausted.
-                if current == 0 {
-                    None
-                } else {
-                    Some(current.wrapping_add(1))
-                }
-            })
-            // On `Err`, the counter is at the 0 sentinel: the keyspace
-            // is exhausted. This panics on every call thereafter.
-            .expect("Key counter exhausted: all 2^64-1 keys issued");
-
-        // `id` is the pre-increment value, guaranteed in `1..=u64::MAX`
-        // on the success path. The `expect` here is a defensive net for
-        // that invariant — it can only fire if the sentinel logic above
-        // ever let a 0 through, which it cannot.
-        Self(NonZeroU64::new(id).expect("Key::new invariant: counter returned 0"))
-    }
-
-    /// Create key from existing u64 ID
-    ///
-    /// Returns `None` if `n` is 0 (invalid for `NonZeroU64`).
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_foundation::Key;
-    ///
-    /// // From database ID
-    /// let user_id = 42u64;
-    /// let key = Key::from_u64(user_id).expect("Invalid ID");
-    ///
-    /// // Check for 0
-    /// assert_eq!(Key::from_u64(0), None);
-    /// ```
-    #[inline]
-    #[must_use]
-    pub const fn from_u64(n: u64) -> Option<Self> {
-        match NonZeroU64::new(n) {
-            Some(nz) => Some(Self(nz)),
-            None => None,
-        }
-    }
-
-    /// Convert key to raw u64
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_foundation::Key;
-    ///
-    /// let key = Key::from_u64(42).unwrap();
-    /// assert_eq!(key.as_u64(), 42);
-    /// ```
-    #[inline]
-    #[must_use]
-    pub const fn as_u64(&self) -> u64 {
-        self.0.get()
-    }
-
-    /// Get the inner `NonZeroU64`
-    #[inline]
-    #[expect(dead_code)]
-    pub(crate) const fn inner(self) -> NonZeroU64 {
-        self.0
-    }
-}
-
-// NOTE: `impl Default for Key` was removed.
-// `Key::default()` returning a fresh unique key violated the
-// least-surprise principle for `Default`: every call produced a
-// different value, which made `#[derive(Default)]` on parent types
-// silently break round-trip equality.
-//
-// Construction now goes through `Key::new()` (explicit unique
-// generation) or `Key::from_u64` (deterministic). There were
-// zero in-workspace consumers of `Key::default()`.
-
-impl fmt::Debug for Key {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Key({})", self.0)
-    }
-}
-
-impl fmt::Display for Key {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl Hash for Key {
-    #[inline]
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.0.hash(state);
-    }
-}
-
-/// Key reference for `DynView` trait
-///
-/// This is a lightweight wrapper around `Key` that can be used
-/// in the object-safe `DynView` trait. It's essentially the same
-/// as `Key` but semantically represents a reference.
-#[repr(transparent)]
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
-pub struct KeyRef(Key);
-
-impl KeyRef {
-    /// Create from Key
-    #[inline]
-    #[must_use]
-    pub const fn new(key: Key) -> Self {
-        Self(key)
-    }
-
-    /// Convert to raw u64
-    #[inline]
-    #[must_use]
-    pub const fn as_u64(&self) -> u64 {
-        self.0.as_u64()
-    }
-
-    /// Get the underlying Key
-    #[inline]
-    pub const fn key(&self) -> Key {
-        self.0
-    }
-}
-
-impl From<Key> for KeyRef {
-    #[inline]
-    fn from(k: Key) -> Self {
-        Self(k)
-    }
-}
-
-impl fmt::Debug for KeyRef {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "KeyRef({})", self.0.as_u64())
-    }
-}
-
-impl fmt::Display for KeyRef {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.0.as_u64())
-    }
-}
+/// The mint of [`UniqueKey`]: one id domain for the process, since a key is
+/// built on whichever thread builds the view that holds it.
+static UNIQUE_KEYS: AtomicIdMint<NonZeroU64> = AtomicIdMint::new();
 
 // ============================================================================
 // VIEW KEY TRAIT
@@ -424,6 +131,66 @@ impl Eq for dyn ViewKey {}
 impl Hash for dyn ViewKey {
     fn hash<H: Hasher>(&self, state: &mut H) {
         state.write_u64(self.key_hash());
+    }
+}
+
+/// A field a view reads its key from: a [`ViewKey`], one that may be absent, or one that is
+/// shared or boxed as a trait object.
+///
+/// `#[view(key)]` on a field of a `#[derive(StatelessView)]` or `#[derive(StatefulView)]`
+/// type writes `View::key` through this trait, so the field keeps the type the view needs:
+///
+/// | Field type | The view's key |
+/// |------------|----------------|
+/// | `K: ViewKey` (`ValueKey<T>`, `UniqueKey`, `GlobalKey<T>`, …) | always that key |
+/// | `Option<K>` of any row here | the key when there is one, keyless otherwise |
+/// | `Rc<dyn ViewKey>`, `Box<dyn ViewKey>` | the key inside |
+///
+/// The trait lives beside [`ViewKey`] because only the crate that owns `ViewKey` can state
+/// that `Option<K>` and `Rc<K>` are not keys themselves, which is what lets these
+/// implementations stand beside the one for every `K: ViewKey`.
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` is not a field a view can read its key from",
+    label = "not a view key",
+    note = "a `#[view(key)]` field is a `ViewKey` (`ValueKey<T>`, `UniqueKey`, `GlobalKey<T>`, …), an `Option` of one, or an `Rc<dyn ViewKey>` or `Box<dyn ViewKey>`"
+)]
+pub trait AsViewKey {
+    /// The key this field gives its view, or `None` when it holds none.
+    fn as_view_key(&self) -> Option<&dyn ViewKey>;
+}
+
+impl<K: ViewKey> AsViewKey for K {
+    #[inline]
+    fn as_view_key(&self) -> Option<&dyn ViewKey> {
+        Some(self)
+    }
+}
+
+impl AsViewKey for dyn ViewKey {
+    #[inline]
+    fn as_view_key(&self) -> Option<&dyn ViewKey> {
+        Some(self)
+    }
+}
+
+impl<K: AsViewKey> AsViewKey for Option<K> {
+    #[inline]
+    fn as_view_key(&self) -> Option<&dyn ViewKey> {
+        self.as_ref().and_then(AsViewKey::as_view_key)
+    }
+}
+
+impl<K: AsViewKey + ?Sized> AsViewKey for std::rc::Rc<K> {
+    #[inline]
+    fn as_view_key(&self) -> Option<&dyn ViewKey> {
+        (**self).as_view_key()
+    }
+}
+
+impl AsViewKey for Box<dyn ViewKey> {
+    #[inline]
+    fn as_view_key(&self) -> Option<&dyn ViewKey> {
+        Some(&**self)
     }
 }
 
@@ -625,80 +392,42 @@ impl ViewKey for SaltedKey {
 /// ```
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct UniqueKey {
-    id: u64,
+    id: NonZeroU64,
 }
 
 impl UniqueKey {
-    /// Create a new unique key.
+    /// A key no other key matches.
     ///
-    /// Audit I-5: `Default` is deliberately not implemented — each
-    /// call returns a different value (atomic-counter bump).
+    /// There is no `Default`: each call returns a different key.
     ///
     /// # Panics
     ///
-    /// Panics if all `u64::MAX - 1` unique keys have been issued
-    /// (practically impossible). The counter then latches a permanent-
-    /// exhaustion sentinel so every subsequent call also panics, rather
-    /// than wrapping around to 0 and re-issuing a duplicate key.
-    // `Key::new` gets `#[must_use]` from the `Key` type's attribute;
-    // `UniqueKey` has no type-level attribute, so mark the constructor
-    // directly — a discarded freshly-minted key only burns counter space.
-    #[expect(clippy::new_without_default)]
-    #[must_use = "keys should be used for widget identification"]
+    /// Once the process has issued 2^64 − 1 unique keys, which a process
+    /// that issued one every nanosecond would reach after five centuries.
+    #[expect(
+        clippy::new_without_default,
+        reason = "a default would be a different key on every call"
+    )]
+    #[must_use = "a discarded key only spends an id"]
     pub fn new() -> Self {
-        Self::new_with_counter(&UNIQUE_KEY_COUNTER)
-    }
-
-    /// Shared implementation of [`UniqueKey::new`], parameterized over the
-    /// backing counter. Production routes through `UNIQUE_KEY_COUNTER`;
-    /// exhaustion tests pass a *local* `AtomicU64` pre-set to the sentinel
-    /// so they exercise the overflow path without mutating the shared
-    /// counter (which would race sibling tests calling `UniqueKey::new`).
-    ///
-    /// The same `try_update` sentinel state machine as `Key::new`.
-    ///
-    /// Invariants for `counter`:
-    ///
-    /// * `1..=u64::MAX` — live; the loaded value is the id just issued.
-    /// * `0` — PERMANENT EXHAUSTION SENTINEL; the closure refuses to
-    ///   advance, so every call thereafter panics. No wrap-around to a
-    ///   duplicate / zero id.
-    ///
-    /// `UniqueKey` holds a plain `u64` (no `NonZero` niche), so 0 is
-    /// representable — which is exactly why the guard matters: without it
-    /// the old `fetch_add` shape would hand out `id == 0` on wrap and then
-    /// re-issue 1, 2, ... breaking the uniqueness contract.
-    fn new_with_counter(counter: &AtomicU64) -> Self {
-        let id = counter
-            .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
-                if current == 0 {
-                    None
-                } else {
-                    Some(current.wrapping_add(1))
-                }
-            })
-            .expect("UniqueKey counter exhausted: all 2^64-1 ids issued");
-
-        // `id` is the pre-increment value, guaranteed in `1..=u64::MAX`
-        // on the success path.
+        let id = UNIQUE_KEYS
+            .next()
+            .expect("BUG: a process issues fewer than 2^64 - 1 unique keys");
         Self { id }
     }
 
-    /// Get the unique ID.
+    /// The key's id, for diagnostics.
     #[must_use]
     pub const fn id(&self) -> u64 {
-        self.id
+        self.id.get()
     }
 }
 
-// NOTE: `impl Default for UniqueKey` was removed —
-// same rationale as `Key`: defaults must be deterministic, but
-// `UniqueKey::new()` bumps an atomic counter per call.
-// `UniqueKey::new()` is the only constructor.
-
 impl fmt::Debug for UniqueKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("UniqueKey").field("id", &self.id).finish()
+        f.debug_struct("UniqueKey")
+            .field("id", &self.id.get())
+            .finish()
     }
 }
 
@@ -715,7 +444,7 @@ impl ViewKey for UniqueKey {
     }
 
     fn key_hash(&self) -> u64 {
-        self.id
+        self.id.get()
     }
 
     fn clone_key(&self) -> Box<dyn ViewKey> {
@@ -727,285 +456,18 @@ impl ViewKey for UniqueKey {
     }
 }
 
-// ============================================================================
-// VIEW KEY IMPLEMENTATION FOR `Key`
-// ============================================================================
-//
-// The spec's "five concrete `ViewKey` impls"
-// assumption expected `Key` (NonZeroU64 newtype) to be storable as a
-// reconciliation key alongside `ValueKey<T>`, `UniqueKey`, `ObjectKey`,
-// `GlobalKey<T>`. Without this impl the assumption was off by one — only
-// four impls existed. Adding it lets any caller treat a `Key` (compile-
-// time FNV-1a hash via `Key::from_str` or runtime atomic counter via
-// `Key::new`) as a `Box<dyn ViewKey>` for storage on `ElementNode` and
-// for participation in `View::can_update`'s key-match branch.
-//
-// `Key` is `Copy + Clone + PartialEq + Eq + Hash`, so the impl is
-// trivial: `clone_key` boxes a copy, `key_eq` downcasts and compares
-// inner `NonZeroU64`, `key_hash` returns the inner `u64` directly
-// (already-hashed: `Key::from_str` is a const FNV-1a, `Key::new` is an
-// atomic counter — both are well-distributed identifiers). `Key` is
-// not a global-handoff key; `is_global_key` keeps the default `false`.
-
-impl ViewKey for Key {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn key_eq(&self, other: &dyn ViewKey) -> bool {
-        other
-            .as_any()
-            .downcast_ref::<Self>()
-            .is_some_and(|other| self.0 == other.0)
-    }
-
-    fn key_hash(&self) -> u64 {
-        // `Key` already holds an identifier-shaped `NonZeroU64`; expose
-        // it directly. No need to re-hash through `DefaultHasher` like
-        // `ValueKey<T>` does (which hashes both the inner `T` AND its
-        // `TypeId` to keep `ValueKey<u32>(42)` distinct from
-        // `ValueKey<i32>(42)`). `Key` has no inner type parameter, so
-        // collision with other `Key` instances would require the same
-        // raw `u64` — which is what `key_eq` then compares anyway.
-        self.0.get()
-    }
-
-    fn clone_key(&self) -> Box<dyn ViewKey> {
-        // `Key` is `Copy`, so `Box::new(*self)` is the canonical
-        // clone-into-trait-object pattern.
-        Box::new(*self)
-    }
-
-    fn debug_fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // Delegate to `Key`'s own `Debug` impl, which renders as
-        // `Key(<inner-u64>)`. Avoids drift between the two formatters.
-        fmt::Debug::fmt(self, f)
-    }
-}
-
-// ============================================================================
-// KEYED WRAPPER
-// ============================================================================
-
-/// A view with an associated key.
-///
-/// Created by calling `.with_view_key()` on a view.
-#[derive(Debug)]
-pub struct Keyed<V> {
-    /// The wrapped view.
-    pub view: V,
-    /// The key.
-    pub key: Box<dyn ViewKey>,
-}
-
-impl<V> Keyed<V> {
-    /// Create a new keyed view.
-    pub fn new(view: V, key: impl ViewKey) -> Self {
-        Self {
-            view,
-            key: Box::new(key),
-        }
-    }
-
-    /// Get the key.
-    pub fn key(&self) -> &dyn ViewKey {
-        &*self.key
-    }
-
-    /// Unwrap into the inner view.
-    pub fn into_inner(self) -> V {
-        self.view
-    }
-}
-
-// ============================================================================
-// WITH KEY TRAIT
-// ============================================================================
-
-/// Extension trait to add a key to any view.
-pub trait WithKey: Sized {
-    /// Attach a key to this view.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// let view = MyView::new().with_view_key(ValueKey::new(item.id));
-    /// ```
-    fn with_view_key(self, key: impl ViewKey) -> Keyed<Self> {
-        Keyed::new(self, key)
-    }
-
-    /// Attach a value key to this view (convenience).
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// let view = MyView::new().with_value_key(item.id);
-    /// ```
-    fn with_value_key<T>(self, value: T) -> Keyed<Self>
-    where
-        T: Clone + Hash + Eq + fmt::Debug + 'static,
-    {
-        Keyed::new(self, ValueKey::new(value))
-    }
-
-    /// Attach a unique key to this view.
-    fn with_unique_key(self) -> Keyed<Self> {
-        Keyed::new(self, UniqueKey::new())
-    }
-}
-
-// Blanket implementation for all types
-impl<T> WithKey for T {}
-
-// ============================================================================
-// SERDE SUPPORT
-// ============================================================================
-
-#[cfg(feature = "serde")]
-impl serde::Serialize for Key {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        serializer.serialize_u64(self.as_u64())
-    }
-}
-
-#[cfg(feature = "serde")]
-impl<'de> serde::Deserialize<'de> for Key {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let id = u64::deserialize(deserializer)?;
-        Self::from_u64(id).ok_or_else(|| {
-            serde::de::Error::custom("Key cannot be zero (uses NonZeroU64 internally)")
-        })
-    }
-}
-
-#[cfg(feature = "serde")]
-impl serde::Serialize for KeyRef {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        self.key().serialize(serializer)
-    }
-}
-
-#[cfg(feature = "serde")]
-impl<'de> serde::Deserialize<'de> for KeyRef {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let key = Key::deserialize(deserializer)?;
-        Ok(Self::new(key))
-    }
-}
-
-// ============================================================================
-// FNV-1A HASH
-// ============================================================================
-
-/// FNV-1a hash for compile-time evaluation
-///
-/// This is a simple, fast hash function that can be evaluated at compile time.
-/// Used for creating constant keys from string literals.
-///
-/// # Algorithm
-///
-/// FNV-1a (Fowler-Noll-Vo) is a non-cryptographic hash function:
-/// - Fast and simple
-/// - Good distribution
-/// - Const-evaluatable in Rust
-///
-/// # References
-///
-/// - <http://www.isthe.com/chongo/tech/comp/fnv/>
-const fn const_fnv1a_hash(bytes: &[u8]) -> u64 {
-    const FNV_OFFSET: u64 = 14_695_981_039_346_656_037;
-    const FNV_PRIME: u64 = 1_099_511_628_211;
-
-    let mut hash = FNV_OFFSET;
-    let mut i = 0;
-    while i < bytes.len() {
-        hash ^= bytes[i] as u64;
-        hash = hash.wrapping_mul(FNV_PRIME);
-        i += 1;
-    }
-    hash
-}
-
 #[cfg(test)]
 mod tests {
-
     use super::*;
 
-    /// F2 — once the runtime counter reaches the permanent-exhaustion
-    /// sentinel (0), `Key::new` must panic on EVERY subsequent call and
-    /// never fabricate a duplicate or zero-valued key. This is the
-    /// regression guard against the old `fetch_add` + unchecked-
-    /// construction shape, which wrapped `u64::MAX -> 0` and then
-    /// silently re-issued keys after a caught panic.
-    fn key_counter_exhaustion() {
-        use std::panic::{AssertUnwindSafe, catch_unwind};
-        // Drive a LOCAL counter pre-set to the sentinel, not the shared
-        // `KEY_COUNTER`. This keeps the global static monotonic, so this
-        // test cannot race sibling tests that call `Key::new` in parallel
-        // (the prior `swap(0)`-on-the-global approach was flaky).
-        let counter = AtomicU64::new(0);
-        // First call against the sentinel MUST panic.
-        let r1 = catch_unwind(AssertUnwindSafe(|| Key::new_with_counter(&counter)));
-        // Second call must also panic — no silent recovery.
-        let r2 = catch_unwind(AssertUnwindSafe(|| Key::new_with_counter(&counter)));
-
-        assert!(
-            r1.is_err(),
-            "Key::new must panic when counter is at sentinel 0"
-        );
-        assert!(
-            r2.is_err(),
-            "Key::new must keep panicking after exhaustion (permanent sentinel)"
-        );
-        // The counter must remain latched at the sentinel — no wrap-around
-        // re-issued a live id behind the panics.
-        assert_eq!(
-            counter.load(Ordering::Relaxed),
-            0,
-            "exhausted counter must stay latched at the 0 sentinel"
-        );
-    }
-
-    // `Key` has no `Default` impl: a default that returned a fresh unique
-    // key would be surprising. `Key::new()` is the explicit construction
-    // path for a unique key.
-
-    // ========================================================================
-    // ViewKey impl for Key
-    // ========================================================================
-
-    /// `key_eq` rejects cross-type compares: `Key` vs `ValueKey<u32>`
-    /// is never a match, even if the underlying numeric values
-    /// coincide. The downcast inside the impl is what enforces this.
-    fn test_key_view_key_eq_rejects_cross_type() {
-        let key: &dyn ViewKey = &Key::from_u64(42).unwrap();
-        let value_key = ValueKey::<u64>::new(42);
-        let value: &dyn ViewKey = &value_key;
-        assert!(!key.key_eq(value));
-        assert!(!value.key_eq(key));
-    }
-
     #[test]
-    fn key_contract() {
-        crate::test_cases::run_cases(&[
-            ("key counter exhaustion", key_counter_exhaustion),
-            (
-                "test key view key eq rejects cross type",
-                test_key_view_key_eq_rejects_cross_type,
-            ),
-        ]);
+    fn a_unique_key_matches_only_itself_and_no_other_key_type() {
+        let first = UniqueKey::new();
+        let second = UniqueKey::new();
+        assert!(first.key_eq(&first));
+        assert!(!first.key_eq(&second));
+        let number = ValueKey::<u64>::new(first.id());
+        assert!(!first.key_eq(&number));
+        assert!(!number.key_eq(&first));
     }
 }

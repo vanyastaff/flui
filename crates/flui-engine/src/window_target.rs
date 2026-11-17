@@ -1,4 +1,4 @@
-//! The abstraction a windowed [`Renderer`](crate::Renderer) draws into.
+//! The handle source a surface lease holds.
 //!
 //! Issue #1043: the renderer used to extract raw handles from a *borrowed*
 //! window at construction time and keep the bytes for later reuse in
@@ -6,9 +6,10 @@
 //! consumer could write `Renderer::new(&window).await?; drop(window);` and it
 //! type-checked — the saved bytes then outlived the thing they pointed at, and
 //! the SAFETY argument that made the surface-creation `unsafe` block sound
-//! lived in a comment, not in the type system. `WindowTarget` closes that hole
-//! by requiring an *owned*, `'static` handle source instead of a borrowed one:
-//! a caller can no longer hand the renderer a window and then outlive it.
+//! lived in a comment, not in the type system. The public constructors take
+//! the window's `Arc<dyn SurfaceTarget>`, owned and `'static`, so a caller
+//! cannot hand the renderer a window and then outlive it; inside the crate the
+//! lease holds it as a `WindowTarget`, the bound wgpu's surface creation reads.
 
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
@@ -40,7 +41,10 @@ use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 /// (`wgpu::WindowHandle` internal to `create_surface`) is `HasWindowHandle +
 /// Send + Sync` for exactly the same "the surface owns this for its whole
 /// life" reason.
-pub trait WindowTarget: HasWindowHandle + HasDisplayHandle + Send + Sync + 'static {}
+pub(crate) trait WindowTarget:
+    HasWindowHandle + HasDisplayHandle + Send + Sync + 'static
+{
+}
 
 impl<T> WindowTarget for T where
     T: ?Sized + HasWindowHandle + HasDisplayHandle + Send + Sync + 'static

@@ -115,8 +115,9 @@ impl Drop for DropPanics {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, StatefulView)]
 struct InitStatePanicChild {
+    #[view(key)]
     key: GlobalKey<InitStatePanicChildState>,
     failed_id: Rc<Cell<Option<ElementId>>>,
     init_calls: Rc<Cell<u32>>,
@@ -161,16 +162,6 @@ impl ViewState<InitStatePanicChild> for InitStatePanicChildState {
 
     fn dispose(&mut self) {
         self.dispose_calls.set(self.dispose_calls.get() + 1);
-    }
-}
-
-impl View for InitStatePanicChild {
-    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
-        flui_view::element::ElementKind::stateful(self)
-    }
-
-    fn key(&self) -> Option<&dyn ViewKey> {
-        Some(&self.key)
     }
 }
 
@@ -225,8 +216,9 @@ impl View for Row {
 /// second dispose call — there should never be one; that is exactly what
 /// these tests pin — records a count instead of aborting the test process
 /// on a double panic.
-#[derive(Clone)]
+#[derive(Clone, StatefulView)]
 struct DisposeCounter {
+    #[view(key)]
     key: Option<GlobalKey<DisposeCounterState>>,
     armed: Rc<Cell<bool>>,
     disposed: Rc<Cell<u32>>,
@@ -266,16 +258,6 @@ impl ViewState<DisposeCounter> for DisposeCounterState {
             self.armed.set(false);
             panic!("induced dispose panic (lifecycle containment test)");
         }
-    }
-}
-
-impl View for DisposeCounter {
-    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
-        flui_view::element::ElementKind::stateful(self)
-    }
-
-    fn key(&self) -> Option<&dyn ViewKey> {
-        self.key.as_ref().map(|key| key as &dyn ViewKey)
     }
 }
 
@@ -684,8 +666,9 @@ impl View for CountProvider {
 /// (mirrors `DisposeCounter`'s one-shot `armed` shape), and whose `build`
 /// depends on `CountProvider` so the provider's dependent map is exercised
 /// end to end by the panic.
-#[derive(Clone)]
+#[derive(Clone, StatefulView)]
 struct DeactivateCounter {
+    #[view(key)]
     key: GlobalKey<DeactivateCounterState>,
     armed: Rc<Cell<bool>>,
     deactivated: Rc<Cell<u32>>,
@@ -729,16 +712,6 @@ impl ViewState<DeactivateCounter> for DeactivateCounterState {
 
     fn dispose(&mut self) {
         self.disposed.set(self.disposed.get() + 1);
-    }
-}
-
-impl View for DeactivateCounter {
-    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
-        flui_view::element::ElementKind::stateful(self)
-    }
-
-    fn key(&self) -> Option<&dyn ViewKey> {
-        Some(&self.key)
     }
 }
 

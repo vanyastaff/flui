@@ -88,6 +88,7 @@ fn a_window_state_round_trips_through_its_parts() {
     capabilities.reports_presentation =
         WindowCapability::Absent(CapabilityAbsence::NOT_ON_THIS_DEVICE);
     capabilities.reports_keyboard_inset = WindowCapability::NOT_ON_THIS_PLATFORM;
+    capabilities.reports_occlusion = WindowCapability::Emulated;
     capabilities.reports_system_gestures =
         WindowCapability::Absent(CapabilityAbsence::NOT_YET_ON_THIS_HOST);
     let capabilities = capabilities.into_capabilities();
@@ -136,6 +137,10 @@ fn a_window_state_round_trips_through_its_parts() {
     assert_eq!(
         state.capabilities.reports_keyboard_inset(),
         WindowCapability::NOT_ON_THIS_PLATFORM
+    );
+    assert_eq!(
+        state.capabilities.reports_occlusion(),
+        WindowCapability::Emulated
     );
     assert_eq!(parts.capabilities.sets_title, WindowCapability::Native);
     assert_eq!(parts.capabilities.frame_rate_hint, Availability::Native);

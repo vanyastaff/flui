@@ -2674,14 +2674,6 @@ impl PartialEq for flui::foundation::FrameStamp
 impl core::fmt::Debug for flui::foundation::FrameStamp
 impl core::marker::StructuralPartialEq for flui::foundation::FrameStamp
 pub fn flui::foundation::FrameStamp::new(address: flui::foundation::PresentationAddress, epoch: flui::foundation::FrameEpoch, surface_generation: flui::foundation::SurfaceGeneration) -> Self
-pub struct flui::foundation::GenerationGate(_)
-impl Clone for flui::foundation::GenerationGate
-impl Default for flui::foundation::GenerationGate
-impl core::fmt::Debug for flui::foundation::GenerationGate
-pub fn flui::foundation::GenerationGate::bump(&self) -> flui::foundation::ResourceGeneration
-pub fn flui::foundation::GenerationGate::current(&self) -> flui::foundation::ResourceGeneration
-pub fn flui::foundation::GenerationGate::is_current(&self, generation: flui::foundation::ResourceGeneration) -> bool
-pub fn flui::foundation::GenerationGate::new() -> Self
 #[repr(transparent)] pub struct flui::foundation::Id<T: flui::foundation::Marker>(_, _)
 impl From<flui::foundation::Id<flui::foundation::markers::Semantics>> for flui::foundation::inspect::InspectId
 impl<'de, T: flui::foundation::Marker> serde_core::de::Deserialize<'de> for flui::foundation::Id<T>
@@ -2765,45 +2757,6 @@ impl core::marker::StructuralPartialEq for flui::foundation::InputSequenceId
 impl flui::foundation::MintedId for flui::foundation::InputSequenceId
 impl flui_foundation::sequence::sealed::Sealed for flui::foundation::InputSequenceId
 pub const fn flui::foundation::InputSequenceId::get(self) -> u64
-#[repr(transparent)] pub struct flui::foundation::Key(_)
-impl Clone for flui::foundation::Key
-impl Copy for flui::foundation::Key
-impl Eq for flui::foundation::Key
-impl From<flui::foundation::Key> for flui::foundation::KeyRef
-impl PartialEq for flui::foundation::Key
-impl core::fmt::Debug for flui::foundation::Key
-impl core::fmt::Display for flui::foundation::Key
-impl core::hash::Hash for flui::foundation::Key
-impl core::marker::StructuralPartialEq for flui::foundation::Key
-impl flui::foundation::ViewKey for flui::foundation::Key
-impl serde_core::ser::Serialize for flui::foundation::Key
-impl<'de> serde_core::de::Deserialize<'de> for flui::foundation::Key
-pub const fn flui::foundation::Key::as_u64(&self) -> u64
-pub const fn flui::foundation::Key::from_str(s: &str) -> Self
-pub const fn flui::foundation::Key::from_u64(n: u64) -> Option<Self>
-pub fn flui::foundation::Key::new() -> Self
-#[repr(transparent)] pub struct flui::foundation::KeyRef(_)
-impl Clone for flui::foundation::KeyRef
-impl Copy for flui::foundation::KeyRef
-impl Eq for flui::foundation::KeyRef
-impl From<flui::foundation::Key> for flui::foundation::KeyRef
-impl PartialEq for flui::foundation::KeyRef
-impl core::fmt::Debug for flui::foundation::KeyRef
-impl core::fmt::Display for flui::foundation::KeyRef
-impl core::hash::Hash for flui::foundation::KeyRef
-impl core::marker::StructuralPartialEq for flui::foundation::KeyRef
-impl serde_core::ser::Serialize for flui::foundation::KeyRef
-impl<'de> serde_core::de::Deserialize<'de> for flui::foundation::KeyRef
-pub const fn flui::foundation::KeyRef::as_u64(&self) -> u64
-pub const fn flui::foundation::KeyRef::key(&self) -> flui::foundation::Key
-pub const fn flui::foundation::KeyRef::new(key: flui::foundation::Key) -> Self
-pub struct flui::foundation::Keyed<V>
-field flui::foundation::Keyed::key: Box<dyn flui::foundation::ViewKey> // at 1
-field flui::foundation::Keyed::view: V // at 0
-impl<V: core::fmt::Debug> core::fmt::Debug for flui::foundation::Keyed<V>
-pub fn flui::foundation::Keyed::into_inner(self) -> V // impl<V> flui::foundation::Keyed<V>
-pub fn flui::foundation::Keyed::key(&self) -> &dyn flui::foundation::ViewKey // impl<V> flui::foundation::Keyed<V>
-pub fn flui::foundation::Keyed::new(view: V, key: impl flui::foundation::ViewKey) -> Self // impl<V> flui::foundation::Keyed<V>
 pub type flui::foundation::LayerId = flui::foundation::Id<flui::foundation::markers::Layer>
 pub struct flui::foundation::Leaf;
 impl Clone for flui::foundation::Leaf
@@ -3029,21 +2982,6 @@ pub fn flui::foundation::RebuildReasons::insert(&mut self, reason: flui::foundat
 pub fn flui::foundation::RebuildReasons::iter(self) -> impl Iterator<Item = flui::foundation::RebuildReason>
 pub fn flui::foundation::RebuildReasons::merge(&mut self, other: Self)
 pub type flui::foundation::RenderId = flui::foundation::id::GenId<flui::foundation::markers::Render>
-pub struct flui::foundation::ResourceGeneration(_)
-impl Clone for flui::foundation::ResourceGeneration
-impl Copy for flui::foundation::ResourceGeneration
-impl Default for flui::foundation::ResourceGeneration
-impl Eq for flui::foundation::ResourceGeneration
-impl Ord for flui::foundation::ResourceGeneration
-impl PartialEq for flui::foundation::ResourceGeneration
-impl PartialOrd for flui::foundation::ResourceGeneration
-impl core::fmt::Debug for flui::foundation::ResourceGeneration
-impl core::fmt::Display for flui::foundation::ResourceGeneration
-impl core::hash::Hash for flui::foundation::ResourceGeneration
-impl core::marker::StructuralPartialEq for flui::foundation::ResourceGeneration
-pub const flui::foundation::ResourceGeneration::ZERO: Self = _
-pub const fn flui::foundation::ResourceGeneration::get(self) -> u64
-pub const fn flui::foundation::ResourceGeneration::next(self) -> Self
 pub struct flui::foundation::SaltedKey { .. }
 impl Clone for flui::foundation::SaltedKey
 impl core::fmt::Debug for flui::foundation::SaltedKey
@@ -3308,11 +3246,6 @@ fn flui::foundation::ViewKey::debug_fmt(&self, f: &mut core::fmt::Formatter<'_>)
 fn flui::foundation::ViewKey::is_global_key(&self) -> bool { .. }
 fn flui::foundation::ViewKey::key_eq(&self, other: &dyn flui::foundation::ViewKey) -> bool
 fn flui::foundation::ViewKey::key_hash(&self) -> u64
-pub trait flui::foundation::WithKey: Sized
-fn flui::foundation::WithKey::with_unique_key(self) -> flui::foundation::Keyed<Self> { .. }
-fn flui::foundation::WithKey::with_value_key<T>(self, value: T) -> flui::foundation::Keyed<Self> where T: Clone + core::hash::Hash + Eq + core::fmt::Debug + 'static { .. }
-fn flui::foundation::WithKey::with_view_key(self, key: impl flui::foundation::ViewKey) -> flui::foundation::Keyed<Self> { .. }
-impl<T> flui::foundation::WithKey for T
 pub mod flui::foundation::affinity
 reexport flui::foundation::affinity::OwnerAffinity => flui::foundation::OwnerAffinity
 pub mod flui::foundation::app_id
@@ -3365,8 +3298,6 @@ pub const flui::foundation::diagnostics::PRESENTATION_ID: &str = "presentation_i
 pub const flui::foundation::diagnostics::REDACTED_VALUE: &str = "<private>"
 pub mod flui::foundation::epoch
 reexport flui::foundation::epoch::FrameEpoch => flui::foundation::FrameEpoch
-reexport flui::foundation::epoch::GenerationGate => flui::foundation::GenerationGate
-reexport flui::foundation::epoch::ResourceGeneration => flui::foundation::ResourceGeneration
 reexport flui::foundation::epoch::SurfaceGeneration => flui::foundation::SurfaceGeneration
 pub fn flui::foundation::event_epoch() -> std::time::Instant
 pub fn flui::foundation::executable_class(stem: &str) -> String
@@ -3917,14 +3848,17 @@ pub fn flui::foundation::inspect::render(root: &flui::foundation::inspect::Snaps
 pub fn flui::foundation::inspect::snapshot<T: flui::foundation::inspect::InspectTree + ?Sized>(tree: &T, query: flui::foundation::inspect::SnapshotQuery) -> Result<flui::foundation::inspect::SnapshotNode, flui::foundation::inspect::SnapshotError>
 pub fn flui::foundation::inspect::style_for(is_terminal: bool) -> &'static dyn flui::foundation::inspect::Style
 pub mod flui::foundation::key
-reexport flui::foundation::key::Key => flui::foundation::Key
-reexport flui::foundation::key::KeyRef => flui::foundation::KeyRef
-reexport flui::foundation::key::Keyed => flui::foundation::Keyed
+pub trait flui::foundation::key::AsViewKey
+fn flui::foundation::key::AsViewKey::as_view_key(&self) -> Option<&dyn flui::foundation::ViewKey>
+impl flui::foundation::key::AsViewKey for Box<dyn flui::foundation::ViewKey>
+impl flui::foundation::key::AsViewKey for dyn flui::foundation::ViewKey
+impl<K: flui::foundation::ViewKey> flui::foundation::key::AsViewKey for K
+impl<K: flui::foundation::key::AsViewKey + ?Sized> flui::foundation::key::AsViewKey for alloc::rcs::rc::Rc<K>
+impl<K: flui::foundation::key::AsViewKey> flui::foundation::key::AsViewKey for Option<K>
 reexport flui::foundation::key::SaltedKey => flui::foundation::SaltedKey
 reexport flui::foundation::key::UniqueKey => flui::foundation::UniqueKey
 reexport flui::foundation::key::ValueKey => flui::foundation::ValueKey
 reexport flui::foundation::key::ViewKey => flui::foundation::ViewKey
-reexport flui::foundation::key::WithKey => flui::foundation::WithKey
 pub mod flui::foundation::markers
 pub enum flui::foundation::markers::DataTransfer
 impl core::fmt::Debug for flui::foundation::markers::DataTransfer
@@ -4057,9 +3991,6 @@ reexport flui::foundation::prelude::EPSILON => flui::foundation::EPSILON
 reexport flui::foundation::prelude::ElementId => flui::foundation::ElementId
 reexport flui::foundation::prelude::Id => flui::foundation::Id
 reexport flui::foundation::prelude::Identifier => flui::foundation::Identifier
-reexport flui::foundation::prelude::Key => flui::foundation::Key
-reexport flui::foundation::prelude::KeyRef => flui::foundation::KeyRef
-reexport flui::foundation::prelude::Keyed => flui::foundation::Keyed
 reexport flui::foundation::prelude::LayerId => flui::foundation::LayerId
 reexport flui::foundation::prelude::Listenable => flui::foundation::Listenable
 reexport flui::foundation::prelude::ListenerCallback => flui::foundation::ListenerCallback
@@ -4076,7 +4007,6 @@ reexport flui::foundation::prelude::ValueListenable => flui::foundation::ValueLi
 reexport flui::foundation::prelude::ValueNotifier => flui::foundation::ValueNotifier
 reexport flui::foundation::prelude::ViewId => flui::foundation::ViewId
 reexport flui::foundation::prelude::ViewKey => flui::foundation::ViewKey
-reexport flui::foundation::prelude::WithKey => flui::foundation::WithKey
 pub mod flui::foundation::read_scope
 reexport flui::foundation::read_scope::ReadGraph => flui::view::ReadGraph
 reexport flui::foundation::read_scope::ReadScope => flui::view::ReadScope
@@ -8496,7 +8426,7 @@ pub struct flui::material::DrawerController { .. }
 impl Clone for flui::material::DrawerController
 impl core::fmt::Debug for flui::material::DrawerController
 impl flui::prelude::StatefulView for flui::material::DrawerController { type State = flui::material::DrawerControllerState; }
-impl flui::prelude::View for flui::material::DrawerController
+impl flui::prelude::View for flui::material::DrawerController where Self: flui::prelude::StatefulView
 impl flui::prelude::ViewState<flui::material::DrawerController> for flui::material::DrawerControllerState
 pub fn flui::material::DrawerController::barrier_dismissible(self, dismissible: bool) -> Self
 pub fn flui::material::DrawerController::edge_drag_width(self, width: f64) -> Self
@@ -11993,6 +11923,16 @@ pub const fn flui::platform::Availability::is_available(self) -> bool
 variant flui::platform::Availability::Emulated // at 1
 variant flui::platform::Availability::Native // at 0
 variant flui::platform::Availability::Unavailable // at 2
+pub struct flui::platform::Backoff { .. }
+impl Clone for flui::platform::Backoff
+impl Copy for flui::platform::Backoff
+impl Eq for flui::platform::Backoff
+impl PartialEq for flui::platform::Backoff
+impl core::fmt::Debug for flui::platform::Backoff
+impl core::hash::Hash for flui::platform::Backoff
+impl core::marker::StructuralPartialEq for flui::platform::Backoff
+pub const fn flui::platform::Backoff::new(first: core::time::Duration, ceiling: core::time::Duration) -> Self
+pub fn flui::platform::Backoff::delay(self, misses: u32) -> core::time::Duration
 pub enum flui::platform::Brightness
 impl Clone for flui::platform::Brightness
 impl Copy for flui::platform::Brightness
@@ -12034,15 +11974,16 @@ field flui::platform::CapabilityParts::activates: flui::platform::WindowCapabili
 field flui::platform::CapabilityParts::app_title_bar: flui::platform::WindowCapability // at 6
 field flui::platform::CapabilityParts::closes: flui::platform::WindowCapability // at 13
 field flui::platform::CapabilityParts::enters_fullscreen: flui::platform::WindowCapability // at 9
-field flui::platform::CapabilityParts::frame_rate_hint: flui::platform::Availability // at 21
+field flui::platform::CapabilityParts::frame_rate_hint: flui::platform::Availability // at 22
 field flui::platform::CapabilityParts::hides: flui::platform::WindowCapability // at 10
 field flui::platform::CapabilityParts::material: flui::platform::WindowCapability // at 14
 field flui::platform::CapabilityParts::maximizes: flui::platform::WindowCapability // at 8
 field flui::platform::CapabilityParts::minimizes: flui::platform::WindowCapability // at 7
-field flui::platform::CapabilityParts::observes_minimized: flui::platform::Availability // at 19
-field flui::platform::CapabilityParts::observes_position: flui::platform::Availability // at 18
-field flui::platform::CapabilityParts::places_at_open: flui::platform::Availability // at 20
+field flui::platform::CapabilityParts::observes_minimized: flui::platform::Availability // at 20
+field flui::platform::CapabilityParts::observes_position: flui::platform::Availability // at 19
+field flui::platform::CapabilityParts::places_at_open: flui::platform::Availability // at 21
 field flui::platform::CapabilityParts::reports_keyboard_inset: flui::platform::WindowCapability // at 16
+field flui::platform::CapabilityParts::reports_occlusion: flui::platform::WindowCapability // at 18
 field flui::platform::CapabilityParts::reports_presentation: flui::platform::WindowCapability // at 15
 field flui::platform::CapabilityParts::reports_system_gestures: flui::platform::WindowCapability // at 17
 field flui::platform::CapabilityParts::sets_constraints: flui::platform::WindowCapability // at 3
@@ -12425,6 +12366,16 @@ impl core::marker::StructuralPartialEq for flui::platform::FrameOutcome
 variant flui::platform::FrameOutcome::Declined // at 1
 variant flui::platform::FrameOutcome::Failed // at 2
 variant flui::platform::FrameOutcome::Produced // at 0
+#[non_exhaustive] pub enum flui::platform::FramePacing
+impl Clone for flui::platform::FramePacing
+impl Copy for flui::platform::FramePacing
+impl Default for flui::platform::FramePacing
+impl Eq for flui::platform::FramePacing
+impl PartialEq for flui::platform::FramePacing
+impl core::fmt::Debug for flui::platform::FramePacing
+impl core::marker::StructuralPartialEq for flui::platform::FramePacing
+variant flui::platform::FramePacing::Compositor // at 1
+variant flui::platform::FramePacing::Display // at 0
 #[non_exhaustive] pub struct flui::platform::FramePresented
 field flui::platform::FramePresented::at: flui::interaction::EventTime // at 1
 field flui::platform::FramePresented::frame: flui::foundation::FrameStamp // at 0
@@ -13332,6 +13283,7 @@ impl core::hash::Hash for flui::platform::SurfaceColorSpace
 impl core::marker::StructuralPartialEq for flui::platform::SurfaceColorSpace
 pub const fn flui::platform::SurfaceColorSpace::new(gamut: flui::platform::ColorGamut, dynamic_range: flui::platform::DynamicRange) -> Self
 pub trait flui::platform::SurfaceTarget: raw_window_handle::borrowed::HasWindowHandle + raw_window_handle::borrowed::HasDisplayHandle + Send + Sync + 'static
+fn flui::platform::SurfaceTarget::frame_pacing(&self) -> flui::platform::FramePacing { .. }
 fn flui::platform::SurfaceTarget::keep_past_close(&self)
 fn flui::platform::SurfaceTarget::pre_present_notify(&self, frame: Option<flui::foundation::FrameStamp>, statistics: flui::platform::SwapChainStatistics)
 #[non_exhaustive] pub enum flui::platform::SwapChainStatistics
@@ -13611,6 +13563,7 @@ pub const fn flui::platform::WindowCapabilities::observes_position(&self) -> flu
 pub const fn flui::platform::WindowCapabilities::permits(&self, command: &flui::platform::WindowCommand) -> bool
 pub const fn flui::platform::WindowCapabilities::places_at_open(&self) -> flui::platform::Availability
 pub const fn flui::platform::WindowCapabilities::reports_keyboard_inset(&self) -> flui::platform::WindowCapability
+pub const fn flui::platform::WindowCapabilities::reports_occlusion(&self) -> flui::platform::WindowCapability
 pub const fn flui::platform::WindowCapabilities::reports_presentation(&self) -> flui::platform::WindowCapability
 pub const fn flui::platform::WindowCapabilities::reports_system_gestures(&self) -> flui::platform::WindowCapability
 pub const fn flui::platform::WindowCapabilities::revision(&self) -> flui::platform::WindowRevision
@@ -15531,6 +15484,31 @@ pub fn flui::platform::testing::ScriptedResponse::ok(body: impl Into<Vec<u8>>) -
 variant flui::platform::testing::ScriptedResponse::Fail(flui::platform::http::HttpError) // at 1
 variant flui::platform::testing::ScriptedResponse::Respond { status: flui::platform::http::StatusCode, body: Vec<u8> } // at 0
 pub mod flui::platform::text_store
+#[non_exhaustive] pub enum flui::platform::text_store::Autofill
+impl Clone for flui::platform::text_store::Autofill
+impl Copy for flui::platform::text_store::Autofill
+impl Eq for flui::platform::text_store::Autofill
+impl PartialEq for flui::platform::text_store::Autofill
+impl core::fmt::Debug for flui::platform::text_store::Autofill
+impl core::hash::Hash for flui::platform::text_store::Autofill
+impl core::marker::StructuralPartialEq for flui::platform::text_store::Autofill
+variant flui::platform::text_store::Autofill::CurrentPassword // at 1
+variant flui::platform::text_store::Autofill::NewPassword // at 2
+variant flui::platform::text_store::Autofill::OneTimeCode // at 3
+variant flui::platform::text_store::Autofill::Username // at 0
+#[non_exhaustive] pub enum flui::platform::text_store::Capitalization
+impl Clone for flui::platform::text_store::Capitalization
+impl Copy for flui::platform::text_store::Capitalization
+impl Default for flui::platform::text_store::Capitalization
+impl Eq for flui::platform::text_store::Capitalization
+impl PartialEq for flui::platform::text_store::Capitalization
+impl core::fmt::Debug for flui::platform::text_store::Capitalization
+impl core::hash::Hash for flui::platform::text_store::Capitalization
+impl core::marker::StructuralPartialEq for flui::platform::text_store::Capitalization
+variant flui::platform::text_store::Capitalization::Characters // at 3
+variant flui::platform::text_store::Capitalization::None // at 0
+variant flui::platform::text_store::Capitalization::Sentences // at 1
+variant flui::platform::text_store::Capitalization::Words // at 2
 pub struct flui::platform::text_store::CommitGate { .. }
 impl Clone for flui::platform::text_store::CommitGate
 impl Default for flui::platform::text_store::CommitGate
@@ -15563,7 +15541,34 @@ impl core::marker::StructuralPartialEq for flui::platform::text_store::Compositi
 variant flui::platform::text_store::CompositionEnd::Abandoned // at 1
 variant flui::platform::text_store::CompositionEnd::Committed // at 0
 variant flui::platform::text_store::CompositionEnd::Deferred // at 2
+#[non_exhaustive] pub enum flui::platform::text_store::Correction
+impl Clone for flui::platform::text_store::Correction
+impl Copy for flui::platform::text_store::Correction
+impl Eq for flui::platform::text_store::Correction
+impl PartialEq for flui::platform::text_store::Correction
+impl core::fmt::Debug for flui::platform::text_store::Correction
+impl core::hash::Hash for flui::platform::text_store::Correction
+impl core::marker::StructuralPartialEq for flui::platform::text_store::Correction
+variant flui::platform::text_store::Correction::Autocorrect // at 2
+variant flui::platform::text_store::Correction::Off // at 0
+variant flui::platform::text_store::Correction::Suggestions // at 1
 pub const flui::platform::text_store::DEFERRED_LOCK_CAPACITY: usize = 16
+#[non_exhaustive] pub enum flui::platform::text_store::EnterAction
+impl Clone for flui::platform::text_store::EnterAction
+impl Copy for flui::platform::text_store::EnterAction
+impl Default for flui::platform::text_store::EnterAction
+impl Eq for flui::platform::text_store::EnterAction
+impl PartialEq for flui::platform::text_store::EnterAction
+impl core::fmt::Debug for flui::platform::text_store::EnterAction
+impl core::hash::Hash for flui::platform::text_store::EnterAction
+impl core::marker::StructuralPartialEq for flui::platform::text_store::EnterAction
+variant flui::platform::text_store::EnterAction::Default // at 0
+variant flui::platform::text_store::EnterAction::Done // at 1
+variant flui::platform::text_store::EnterAction::Go // at 2
+variant flui::platform::text_store::EnterAction::Next // at 3
+variant flui::platform::text_store::EnterAction::Previous // at 4
+variant flui::platform::text_store::EnterAction::Search // at 5
+variant flui::platform::text_store::EnterAction::SendMessage // at 6
 pub enum flui::platform::text_store::LockGrant
 impl core::fmt::Debug for flui::platform::text_store::LockGrant
 pub fn flui::platform::text_store::LockGrant::kind(&self) -> flui::platform::text_store::LockKind
@@ -15575,31 +15580,6 @@ pub enum flui::platform::text_store::LockKind
 impl Clone for flui::platform::text_store::LockKind
 impl Copy for flui::platform::text_store::LockKind
 impl Eq for flui::platform::text_store::LockKind
-#[non_exhaustive] pub enum flui::platform::text_store::Autofill
-impl Clone for flui::platform::text_store::Autofill
-impl Copy for flui::platform::text_store::Autofill
-impl Eq for flui::platform::text_store::Autofill
-impl PartialEq for flui::platform::text_store::Autofill
-impl core::fmt::Debug for flui::platform::text_store::Autofill
-impl core::hash::Hash for flui::platform::text_store::Autofill
-impl core::marker::StructuralPartialEq for flui::platform::text_store::Autofill
-variant flui::platform::text_store::Autofill::CurrentPassword // at 1
-variant flui::platform::text_store::Autofill::NewPassword // at 2
-variant flui::platform::text_store::Autofill::OneTimeCode // at 3
-variant flui::platform::text_store::Autofill::Username // at 0
-#[non_exhaustive] pub enum flui::platform::text_store::Capitalization
-impl Clone for flui::platform::text_store::Capitalization
-impl Copy for flui::platform::text_store::Capitalization
-impl Default for flui::platform::text_store::Capitalization
-impl Eq for flui::platform::text_store::Capitalization
-impl PartialEq for flui::platform::text_store::Capitalization
-impl core::fmt::Debug for flui::platform::text_store::Capitalization
-impl core::hash::Hash for flui::platform::text_store::Capitalization
-impl core::marker::StructuralPartialEq for flui::platform::text_store::Capitalization
-variant flui::platform::text_store::Capitalization::Characters // at 3
-variant flui::platform::text_store::Capitalization::None // at 0
-variant flui::platform::text_store::Capitalization::Sentences // at 1
-variant flui::platform::text_store::Capitalization::Words // at 2
 impl PartialEq for flui::platform::text_store::LockKind
 impl core::fmt::Debug for flui::platform::text_store::LockKind
 impl core::marker::StructuralPartialEq for flui::platform::text_store::LockKind
@@ -15623,6 +15603,18 @@ impl core::fmt::Debug for flui::platform::text_store::LockTiming
 impl core::marker::StructuralPartialEq for flui::platform::text_store::LockTiming
 variant flui::platform::text_store::LockTiming::Async // at 1
 variant flui::platform::text_store::LockTiming::Sync // at 0
+pub struct flui::platform::text_store::NumberFormat
+field flui::platform::text_store::NumberFormat::decimal: bool // at 1
+field flui::platform::text_store::NumberFormat::signed: bool // at 0
+impl Clone for flui::platform::text_store::NumberFormat
+impl Copy for flui::platform::text_store::NumberFormat
+impl Default for flui::platform::text_store::NumberFormat
+impl Eq for flui::platform::text_store::NumberFormat
+impl PartialEq for flui::platform::text_store::NumberFormat
+impl core::fmt::Debug for flui::platform::text_store::NumberFormat
+impl core::hash::Hash for flui::platform::text_store::NumberFormat
+impl core::marker::StructuralPartialEq for flui::platform::text_store::NumberFormat
+pub const flui::platform::text_store::NumberFormat::WHOLE: Self = _
 #[non_exhaustive] pub enum flui::platform::text_store::OffsetError
 impl Clone for flui::platform::text_store::OffsetError
 impl Copy for flui::platform::text_store::OffsetError
@@ -15632,34 +15624,7 @@ impl PartialEq for flui::platform::text_store::OffsetError
 impl core::error::Error for flui::platform::text_store::OffsetError
 impl core::fmt::Debug for flui::platform::text_store::OffsetError
 impl core::fmt::Display for flui::platform::text_store::OffsetError
-#[non_exhaustive] pub enum flui::platform::text_store::Correction
-impl Clone for flui::platform::text_store::Correction
-impl Copy for flui::platform::text_store::Correction
-impl Eq for flui::platform::text_store::Correction
-impl PartialEq for flui::platform::text_store::Correction
-impl core::fmt::Debug for flui::platform::text_store::Correction
-impl core::hash::Hash for flui::platform::text_store::Correction
-impl core::marker::StructuralPartialEq for flui::platform::text_store::Correction
-variant flui::platform::text_store::Correction::Autocorrect // at 2
-variant flui::platform::text_store::Correction::Off // at 0
-variant flui::platform::text_store::Correction::Suggestions // at 1
 impl core::marker::StructuralPartialEq for flui::platform::text_store::OffsetError
-#[non_exhaustive] pub enum flui::platform::text_store::EnterAction
-impl Clone for flui::platform::text_store::EnterAction
-impl Copy for flui::platform::text_store::EnterAction
-impl Default for flui::platform::text_store::EnterAction
-impl Eq for flui::platform::text_store::EnterAction
-impl PartialEq for flui::platform::text_store::EnterAction
-impl core::fmt::Debug for flui::platform::text_store::EnterAction
-impl core::hash::Hash for flui::platform::text_store::EnterAction
-impl core::marker::StructuralPartialEq for flui::platform::text_store::EnterAction
-variant flui::platform::text_store::EnterAction::Default // at 0
-variant flui::platform::text_store::EnterAction::Done // at 1
-variant flui::platform::text_store::EnterAction::Go // at 2
-variant flui::platform::text_store::EnterAction::Next // at 3
-variant flui::platform::text_store::EnterAction::Previous // at 4
-variant flui::platform::text_store::EnterAction::Search // at 5
-variant flui::platform::text_store::EnterAction::SendMessage // at 6
 variant flui::platform::text_store::OffsetError::Inverted { start: usize, end: usize } // at 3
 variant flui::platform::text_store::OffsetError::NotCharBoundary(usize) // at 2
 variant flui::platform::text_store::OffsetError::PastEnd { offset: usize, len: usize } // at 0
@@ -15694,18 +15659,6 @@ impl core::hash::Hash for flui::platform::text_store::PointMode
 impl core::marker::StructuralPartialEq for flui::platform::text_store::PointMode
 pub const flui::platform::text_store::PointMode::EXACT: Self = _
 pub const flui::platform::text_store::PointMode::NEAREST: Self = _
-pub struct flui::platform::text_store::NumberFormat
-field flui::platform::text_store::NumberFormat::decimal: bool // at 1
-field flui::platform::text_store::NumberFormat::signed: bool // at 0
-impl Clone for flui::platform::text_store::NumberFormat
-impl Copy for flui::platform::text_store::NumberFormat
-impl Default for flui::platform::text_store::NumberFormat
-impl Eq for flui::platform::text_store::NumberFormat
-impl PartialEq for flui::platform::text_store::NumberFormat
-impl core::fmt::Debug for flui::platform::text_store::NumberFormat
-impl core::hash::Hash for flui::platform::text_store::NumberFormat
-impl core::marker::StructuralPartialEq for flui::platform::text_store::NumberFormat
-pub const flui::platform::text_store::NumberFormat::WHOLE: Self = _
 pub struct flui::platform::text_store::RangeRect
 field flui::platform::text_store::RangeRect::bounds: flui::geometry::Bounds<f64> // at 0
 field flui::platform::text_store::RangeRect::clipped: bool // at 1
@@ -15737,6 +15690,26 @@ impl Eq for flui::platform::text_store::TextChange
 impl PartialEq for flui::platform::text_store::TextChange
 impl core::fmt::Debug for flui::platform::text_store::TextChange
 impl core::marker::StructuralPartialEq for flui::platform::text_store::TextChange
+#[non_exhaustive] pub struct flui::platform::text_store::TextInputOptions
+field flui::platform::text_store::TextInputOptions::autofill: Option<flui::platform::text_store::Autofill> // at 4
+field flui::platform::text_store::TextInputOptions::capitalization: flui::platform::text_store::Capitalization // at 2
+field flui::platform::text_store::TextInputOptions::correction: flui::platform::text_store::Correction // at 3
+field flui::platform::text_store::TextInputOptions::enter_action: flui::platform::text_store::EnterAction // at 1
+field flui::platform::text_store::TextInputOptions::purpose: flui::platform::text_store::TextInputPurpose // at 0
+impl Clone for flui::platform::text_store::TextInputOptions
+impl Copy for flui::platform::text_store::TextInputOptions
+impl Default for flui::platform::text_store::TextInputOptions
+impl Eq for flui::platform::text_store::TextInputOptions
+impl PartialEq for flui::platform::text_store::TextInputOptions
+impl core::fmt::Debug for flui::platform::text_store::TextInputOptions
+impl core::hash::Hash for flui::platform::text_store::TextInputOptions
+impl core::marker::StructuralPartialEq for flui::platform::text_store::TextInputOptions
+pub const flui::platform::text_store::TextInputOptions::TEXT: Self = _
+pub const fn flui::platform::text_store::TextInputOptions::autofill(self, autofill: flui::platform::text_store::Autofill) -> Self
+pub const fn flui::platform::text_store::TextInputOptions::capitalization(self, capitalization: flui::platform::text_store::Capitalization) -> Self
+pub const fn flui::platform::text_store::TextInputOptions::correction(self, correction: flui::platform::text_store::Correction) -> Self
+pub const fn flui::platform::text_store::TextInputOptions::enter_action(self, enter_action: flui::platform::text_store::EnterAction) -> Self
+pub const fn flui::platform::text_store::TextInputOptions::new(purpose: flui::platform::text_store::TextInputPurpose) -> Self
 #[non_exhaustive] pub enum flui::platform::text_store::TextInputPurpose
 impl Clone for flui::platform::text_store::TextInputPurpose
 impl Copy for flui::platform::text_store::TextInputPurpose
@@ -15781,26 +15754,6 @@ variant flui::platform::text_store::TextStoreError::Offset(flui::platform::text_
 variant flui::platform::text_store::TextStoreError::PointOutside // at 5
 variant flui::platform::text_store::TextStoreError::Protected // at 3
 variant flui::platform::text_store::TextStoreError::SyncLockUnavailable // at 0
-#[non_exhaustive] pub struct flui::platform::text_store::TextInputOptions
-field flui::platform::text_store::TextInputOptions::autofill: Option<flui::platform::text_store::Autofill> // at 4
-field flui::platform::text_store::TextInputOptions::capitalization: flui::platform::text_store::Capitalization // at 2
-field flui::platform::text_store::TextInputOptions::correction: flui::platform::text_store::Correction // at 3
-field flui::platform::text_store::TextInputOptions::enter_action: flui::platform::text_store::EnterAction // at 1
-field flui::platform::text_store::TextInputOptions::purpose: flui::platform::text_store::TextInputPurpose // at 0
-impl Clone for flui::platform::text_store::TextInputOptions
-impl Copy for flui::platform::text_store::TextInputOptions
-impl Default for flui::platform::text_store::TextInputOptions
-impl Eq for flui::platform::text_store::TextInputOptions
-impl PartialEq for flui::platform::text_store::TextInputOptions
-impl core::fmt::Debug for flui::platform::text_store::TextInputOptions
-impl core::hash::Hash for flui::platform::text_store::TextInputOptions
-impl core::marker::StructuralPartialEq for flui::platform::text_store::TextInputOptions
-pub const flui::platform::text_store::TextInputOptions::TEXT: Self = _
-pub const fn flui::platform::text_store::TextInputOptions::autofill(self, autofill: flui::platform::text_store::Autofill) -> Self
-pub const fn flui::platform::text_store::TextInputOptions::capitalization(self, capitalization: flui::platform::text_store::Capitalization) -> Self
-pub const fn flui::platform::text_store::TextInputOptions::correction(self, correction: flui::platform::text_store::Correction) -> Self
-pub const fn flui::platform::text_store::TextInputOptions::enter_action(self, enter_action: flui::platform::text_store::EnterAction) -> Self
-pub const fn flui::platform::text_store::TextInputOptions::new(purpose: flui::platform::text_store::TextInputPurpose) -> Self
 reexport flui::platform::text_store::TextStoreHost => flui::platform::TextStoreHost
 #[non_exhaustive] pub enum flui::platform::text_store::TextStoreHostError
 impl Clone for flui::platform::text_store::TextStoreHostError
@@ -15820,6 +15773,7 @@ reexport flui::platform::text_store::TextStoreRead => flui::platform::TextStoreR
 #[non_exhaustive] pub struct flui::platform::text_store::TextStoreStatus
 field flui::platform::text_store::TextStoreStatus::protected: bool // at 0
 field flui::platform::text_store::TextStoreStatus::single_line: bool // at 1
+field flui::platform::text_store::TextStoreStatus::text_input: flui::platform::text_store::TextInputOptions // at 2
 impl Clone for flui::platform::text_store::TextStoreStatus
 impl Copy for flui::platform::text_store::TextStoreStatus
 impl Eq for flui::platform::text_store::TextStoreStatus
@@ -15827,6 +15781,7 @@ impl PartialEq for flui::platform::text_store::TextStoreStatus
 impl core::fmt::Debug for flui::platform::text_store::TextStoreStatus
 impl core::marker::StructuralPartialEq for flui::platform::text_store::TextStoreStatus
 pub const flui::platform::text_store::TextStoreStatus::EDITABLE_SINGLE_LINE: Self = _
+pub const fn flui::platform::text_store::TextStoreStatus::holds_secret(&self) -> bool
 pub const fn flui::platform::text_store::TextStoreStatus::with_protected(self, protected: bool) -> Self
 pub const fn flui::platform::text_store::TextStoreStatus::with_single_line(self, single_line: bool) -> Self
 pub const fn flui::platform::text_store::TextStoreStatus::with_text_input(self, text_input: flui::platform::text_store::TextInputOptions) -> Self
@@ -15865,7 +15820,6 @@ reexport flui::platform::text_store::utf16::OffsetError => flui::platform::text_
 reexport flui::platform::text_store::utf16::Utf16Offset => flui::platform::text_store::Utf16Offset
 reexport flui::platform::text_store::utf16::Utf16Range => flui::platform::text_store::Utf16Range
 pub fn flui::platform::text_store::utf16::byte_offset(text: &str, offset: flui::platform::text_store::Utf16Offset) -> Result<usize, flui::platform::text_store::OffsetError>
-field flui::platform::text_store::TextStoreStatus::text_input: flui::platform::text_store::TextInputOptions // at 2
 pub fn flui::platform::text_store::utf16::byte_range(text: &str, range: flui::platform::text_store::Utf16Range) -> Result<core::ops::range::Range<usize>, flui::platform::text_store::OffsetError>
 pub fn flui::platform::text_store::utf16::utf16_len(text: &str) -> flui::platform::text_store::Utf16Offset
 pub fn flui::platform::text_store::utf16::utf16_offset(text: &str, byte: usize) -> Result<flui::platform::text_store::Utf16Offset, flui::platform::text_store::OffsetError>
@@ -15873,7 +15827,6 @@ pub fn flui::platform::text_store::utf16::utf16_range(text: &str, bytes: core::o
 macro flui::platform::window_takes_no_frame_verbs!
 pub mod flui::prelude
 pub struct flui::prelude::AbsorbPointer { .. }
-pub const fn flui::platform::text_store::TextStoreStatus::holds_secret(&self) -> bool
 impl Clone for flui::prelude::AbsorbPointer
 impl Default for flui::prelude::AbsorbPointer
 impl core::fmt::Debug for flui::prelude::AbsorbPointer
@@ -16724,6 +16677,7 @@ pub fn flui::prelude::EditableText::required(self, required: bool) -> Self
 pub fn flui::prelude::EditableText::selection_style(self, style: flui::prelude::SelectionStyle) -> Self
 pub fn flui::prelude::EditableText::semantic_hint(self, hint: impl Into<String>) -> Self
 pub fn flui::prelude::EditableText::semantic_label(self, label: impl Into<String>) -> Self
+pub fn flui::prelude::EditableText::text_input(self, text_input: flui::platform::text_store::TextInputOptions) -> Self
 pub fn flui::prelude::EditableText::text_style(self, style: flui::painting::typography::TextStyle) -> Self
 pub struct flui::prelude::EditableTextState { .. }
 impl core::fmt::Debug for flui::prelude::EditableTextState
@@ -16768,7 +16722,6 @@ pub fn flui::prelude::ElementNode::registered_global_key_hash(&self) -> Option<u
 pub fn flui::prelude::ElementNode::slot(&self) -> usize
 #[non_exhaustive] pub struct flui::prelude::ElementOwner<'a> { .. }
 impl core::fmt::Debug for flui::prelude::ElementOwner<'_>
-pub fn flui::prelude::EditableText::text_input(self, text_input: flui::platform::text_store::TextInputOptions) -> Self
 pub fn flui::prelude::ElementOwner::clear_pending_dependency_change(&mut self, id: flui::foundation::ElementId) // impl flui::prelude::ElementOwner<'_>
 pub fn flui::prelude::ElementOwner::dirty_count(&self) -> usize // impl flui::prelude::ElementOwner<'_>
 pub fn flui::prelude::ElementOwner::displace_global_key(&mut self, losing_parent: flui::foundation::ElementId, child: flui::foundation::ElementId, key: &dyn flui::foundation::ViewKey, taken_by: flui::foundation::ElementId) // impl flui::prelude::ElementOwner<'_>
@@ -18086,6 +18039,7 @@ pub fn flui::prelude::RawTextField::new(controller: flui::prelude::TextEditingCo
 pub fn flui::prelude::RawTextField::obscure_text(self, obscure: bool) -> Self
 pub fn flui::prelude::RawTextField::on_changed<F, R>(self, callback: F) -> Self where F: Fn(&mut flui::prelude::EventContext<'_>, &str) -> R + 'static, R: flui::prelude::EventOutcome
 pub fn flui::prelude::RawTextField::on_submitted<F, R>(self, callback: F) -> Self where F: Fn(&mut flui::prelude::EventContext<'_>, &str) -> R + 'static, R: flui::prelude::EventOutcome
+pub fn flui::prelude::RawTextField::text_input(self, text_input: flui::platform::text_store::TextInputOptions) -> Self
 pub struct flui::prelude::RawTextFieldState { .. }
 impl core::fmt::Debug for flui::prelude::RawTextFieldState
 impl flui::prelude::ViewState<flui::prelude::RawTextField> for flui::prelude::RawTextFieldState
@@ -18106,6 +18060,7 @@ pub fn flui::prelude::RawTextFormField::obscure_text(self, obscure: bool) -> Sel
 pub fn flui::prelude::RawTextFormField::on_reset<F, R>(self, on_reset: F) -> Self where F: Fn(&mut flui::prelude::EventContext<'_>) -> R + 'static, R: flui::prelude::EventOutcome
 pub fn flui::prelude::RawTextFormField::on_saved<F, R>(self, on_saved: F) -> Self where F: Fn(&mut flui::prelude::EventContext<'_>, &String) -> R + 'static, R: flui::prelude::EventOutcome
 pub fn flui::prelude::RawTextFormField::on_submitted<F, R>(self, callback: F) -> Self where F: Fn(&mut flui::prelude::EventContext<'_>, &str) -> R + 'static, R: flui::prelude::EventOutcome
+pub fn flui::prelude::RawTextFormField::text_input(self, text_input: flui::platform::text_store::TextInputOptions) -> Self
 pub fn flui::prelude::RawTextFormField::validator(self, validator: impl Fn(&String) -> Option<String> + 'static) -> Self
 pub fn flui::prelude::RawTextFormField::with_initial_value(value: impl Into<String>) -> Self
 pub struct flui::prelude::RebuildHandle { .. }
@@ -18129,7 +18084,6 @@ pub fn flui::prelude::RenderObjectContext::depend_on<I: flui::prelude::Inherited
 pub fn flui::prelude::RenderObjectContext::detach_mouse_region(&self, target: flui_interaction::pointer::interaction_lane::MouseRegionTarget) -> Result<(), flui::prelude::RenderObjectContextError> // impl<'a> flui::prelude::RenderObjectContext<'a>
 pub fn flui::prelude::RenderObjectContext::register_local_payload(&self, payload: alloc::rcs::rc::Rc<dyn core::any::Any>) -> Result<flui_interaction::pointer::interaction_lane::LocalPayloadTarget, flui::prelude::RenderObjectContextError> // impl<'a> flui::prelude::RenderObjectContext<'a>
 pub fn flui::prelude::RenderObjectContext::register_mouse_region(&self, callbacks: flui_interaction::pointer::interaction_lane::MouseRegionCallbacks) -> Result<flui_interaction::pointer::interaction_lane::MouseRegionTarget, flui::prelude::RenderObjectContextError> // impl<'a> flui::prelude::RenderObjectContext<'a>
-pub fn flui::prelude::RawTextField::text_input(self, text_input: flui::platform::text_store::TextInputOptions) -> Self
 pub fn flui::prelude::RenderObjectContext::register_pan_zoom(&self, handler: impl Fn(flui_interaction::pointer::interaction_lane::PanZoomDispatch<'_>) -> flui::prelude::EventPropagation + 'static) -> Result<flui::rendering::PanZoomTarget, flui::prelude::RenderObjectContextError> // impl<'a> flui::prelude::RenderObjectContext<'a>
 pub fn flui::prelude::RenderObjectContext::register_path_clipper(&self, clipper: impl Fn(flui::geometry::Size) -> flui::painting::paint::Path + 'static) -> Result<flui_interaction::pointer::interaction_lane::PathClipTarget, flui::prelude::RenderObjectContextError> // impl<'a> flui::prelude::RenderObjectContext<'a>
 pub fn flui::prelude::RenderObjectContext::register_pointer(&self, handler: impl Fn(flui::interaction::PointerDispatch<'_>) + 'static) -> Result<flui::rendering::PointerTarget, flui::prelude::RenderObjectContextError> // impl<'a> flui::prelude::RenderObjectContext<'a>
@@ -18151,7 +18105,6 @@ pub fn flui::prelude::RenderObjectContext::unregister_path_clipper(&self, target
 pub fn flui::prelude::RenderObjectContext::unregister_pointer(&self, target: flui::rendering::PointerTarget) -> Result<(), flui::prelude::RenderObjectContextError> // impl<'a> flui::prelude::RenderObjectContext<'a>
 pub fn flui::prelude::RenderObjectContext::unregister_scroll(&self, target: flui::rendering::ScrollTarget) -> Result<(), flui::prelude::RenderObjectContextError> // impl<'a> flui::prelude::RenderObjectContext<'a>
 pub fn flui::prelude::RenderObjectContext::unregister_shader_mask(&self, target: flui_interaction::pointer::interaction_lane::ShaderMaskTarget) -> Result<(), flui::prelude::RenderObjectContextError> // impl<'a> flui::prelude::RenderObjectContext<'a>
-pub fn flui::prelude::RawTextFormField::text_input(self, text_input: flui::platform::text_store::TextInputOptions) -> Self
 pub fn flui::prelude::RenderObjectContext::unregister_smart_zoom(&self, target: flui::rendering::SmartZoomTarget) -> Result<(), flui::prelude::RenderObjectContextError> // impl<'a> flui::prelude::RenderObjectContext<'a>
 pub fn flui::prelude::RenderObjectContext::withdraw_scroll_contact_feed(&self, target: flui::rendering::PointerTarget) -> Result<(), flui::prelude::RenderObjectContextError> // impl<'a> flui::prelude::RenderObjectContext<'a>
 pub fn flui::prelude::RenderObjectContext::withdraw_scroll_target_axis(&self, target: flui::rendering::ScrollTarget) -> Result<(), flui::prelude::RenderObjectContextError> // impl<'a> flui::prelude::RenderObjectContext<'a>
@@ -24331,6 +24284,7 @@ pub fn flui::view::HapticsMode::new(child: impl flui::prelude::IntoView) -> Self
 pub struct flui::view::HostNoticeSubscription { .. }
 impl core::fmt::Debug for flui::view::HostNoticeSubscription
 reexport flui::view::IndexedSlot => flui::foundation::IndexedSlot
+reexport flui::view::InheritedData => flui_macros::InheritedData
 reexport flui::view::InheritedData => flui::prelude::InheritedData
 pub type flui::view::InheritedElement<V> = flui::view::element::Element<V, flui::foundation::Single, flui::view::element::InheritedBehavior<V>>
 reexport flui::view::InheritedView => flui::prelude::InheritedView
@@ -24706,6 +24660,7 @@ fn flui::view::StatefulRenderView::did_unmount_render_object(&self, _ctx: &flui:
 type flui::view::StatefulRenderView::Protocol: flui::rendering::Protocol
 type flui::view::StatefulRenderView::RenderObject: flui::rendering::RenderObject<<Self as flui::view::StatefulRenderView>::Protocol> + 'static
 type flui::view::StatefulRenderView::State: flui::view::RenderViewState<Self>
+reexport flui::view::StatefulView => flui_macros::StatefulView
 reexport flui::view::StatefulView => flui::prelude::StatefulView
 pub struct flui::view::StatelessBehavior { .. }
 impl Default for flui::view::StatelessBehavior
@@ -24713,6 +24668,7 @@ impl core::fmt::Debug for flui::view::StatelessBehavior
 impl<V, A> flui::view::element::ElementBehavior<V, A> for flui::view::StatelessBehavior where V: flui::prelude::StatelessView, A: flui::view::element::ElementArity
 pub fn flui::view::StatelessBehavior::new() -> Self
 pub type flui::view::StatelessElement<V> = flui::view::element::Element<V, flui::foundation::Single, flui::view::StatelessBehavior>
+reexport flui::view::StatelessView => flui_macros::StatelessView
 reexport flui::view::StatelessView => flui::prelude::StatelessView
 pub struct flui::view::TaskToken { .. }
 impl Drop for flui::view::TaskToken
@@ -25319,15 +25275,11 @@ macro flui::view::impl_render_view!
 macro flui::view::impl_stateful_render_view!
 pub mod flui::view::key
 reexport flui::view::key::GlobalKey => flui::prelude::GlobalKey
-reexport flui::view::key::Key => flui::foundation::Key
 reexport flui::view::key::KeyLookup => flui::view::KeyLookup
-reexport flui::view::key::KeyRef => flui::foundation::KeyRef
-reexport flui::view::key::Keyed => flui::foundation::Keyed
 reexport flui::view::key::ObjectKey => flui::prelude::ObjectKey
 reexport flui::view::key::UniqueKey => flui::foundation::UniqueKey
 reexport flui::view::key::ValueKey => flui::foundation::ValueKey
 reexport flui::view::key::ViewKey => flui::foundation::ViewKey
-reexport flui::view::key::WithKey => flui::foundation::WithKey
 pub mod flui::view::navigation
 pub struct flui::view::navigation::FileTypeDeclaration { .. }
 impl Clone for flui::view::navigation::FileTypeDeclaration
@@ -25738,6 +25690,7 @@ reexport flui::view::view::ErrorViewBuilder => flui::view::ErrorViewBuilder
 reexport flui::view::view::FieldMask => flui::view::FieldMask
 reexport flui::view::view::FieldSet => flui::view::FieldSet
 reexport flui::view::view::FrameworkError => flui::view::FrameworkError
+reexport flui::view::view::InheritedData => flui_macros::InheritedData
 reexport flui::view::view::InheritedData => flui::prelude::InheritedData
 reexport flui::view::view::InheritedElement => flui::view::InheritedElement
 reexport flui::view::view::InheritedView => flui::prelude::InheritedView
@@ -25758,8 +25711,10 @@ reexport flui::view::view::RootRenderElement => flui::view::RootRenderElement
 reexport flui::view::view::RootRenderView => flui::view::RootRenderView
 reexport flui::view::view::StatefulElement => flui::view::StatefulElement
 reexport flui::view::view::StatefulRenderView => flui::view::StatefulRenderView
+reexport flui::view::view::StatefulView => flui_macros::StatefulView
 reexport flui::view::view::StatefulView => flui::prelude::StatefulView
 reexport flui::view::view::StatelessElement => flui::view::StatelessElement
+reexport flui::view::view::StatelessView => flui_macros::StatelessView
 reexport flui::view::view::StatelessView => flui::prelude::StatelessView
 reexport flui::view::view::View => flui::prelude::View
 reexport flui::view::view::ViewExt => flui::prelude::ViewExt
@@ -33095,6 +33050,23 @@ variant flui_protocol::native_recording::Appearance::Dark // at 1
 variant flui_protocol::native_recording::Appearance::Light // at 0
 variant flui_protocol::native_recording::Appearance::VibrantDark // at 3
 variant flui_protocol::native_recording::Appearance::VibrantLight // at 2
+#[non_exhaustive] pub enum flui_protocol::native_recording::Autofill
+impl Clone for flui_protocol::native_recording::Autofill
+impl Copy for flui_protocol::native_recording::Autofill
+impl Eq for flui_protocol::native_recording::Autofill
+impl PartialEq for flui_protocol::native_recording::Autofill
+impl core::fmt::Debug for flui_protocol::native_recording::Autofill
+impl core::hash::Hash for flui_protocol::native_recording::Autofill
+impl core::marker::StructuralPartialEq for flui_protocol::native_recording::Autofill
+impl schemars::JsonSchema for flui_protocol::native_recording::Autofill
+impl serde_core::ser::Serialize for flui_protocol::native_recording::Autofill
+impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::native_recording::Autofill
+pub const flui_protocol::native_recording::Autofill::ALL: &'static [Self] = _
+pub const fn flui_protocol::native_recording::Autofill::name(self) -> &'static str
+variant flui_protocol::native_recording::Autofill::CurrentPassword // at 1
+variant flui_protocol::native_recording::Autofill::NewPassword // at 2
+variant flui_protocol::native_recording::Autofill::OneTimeCode // at 3
+variant flui_protocol::native_recording::Autofill::Username // at 0
 #[non_exhaustive] pub enum flui_protocol::native_recording::Availability
 impl Clone for flui_protocol::native_recording::Availability
 impl Copy for flui_protocol::native_recording::Availability
@@ -33134,23 +33106,6 @@ variant flui_protocol::native_recording::Backend::Win32 // at 0
 variant flui_protocol::native_recording::Backend::X11 // at 4
 #[non_exhaustive] pub enum flui_protocol::native_recording::CancelReason
 impl Clone for flui_protocol::native_recording::CancelReason
-#[non_exhaustive] pub enum flui_protocol::native_recording::Autofill
-impl Clone for flui_protocol::native_recording::Autofill
-impl Copy for flui_protocol::native_recording::Autofill
-impl Eq for flui_protocol::native_recording::Autofill
-impl PartialEq for flui_protocol::native_recording::Autofill
-impl core::fmt::Debug for flui_protocol::native_recording::Autofill
-impl core::hash::Hash for flui_protocol::native_recording::Autofill
-impl core::marker::StructuralPartialEq for flui_protocol::native_recording::Autofill
-impl schemars::JsonSchema for flui_protocol::native_recording::Autofill
-impl serde_core::ser::Serialize for flui_protocol::native_recording::Autofill
-impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::native_recording::Autofill
-pub const flui_protocol::native_recording::Autofill::ALL: &'static [Self] = _
-pub const fn flui_protocol::native_recording::Autofill::name(self) -> &'static str
-variant flui_protocol::native_recording::Autofill::CurrentPassword // at 1
-variant flui_protocol::native_recording::Autofill::NewPassword // at 2
-variant flui_protocol::native_recording::Autofill::OneTimeCode // at 3
-variant flui_protocol::native_recording::Autofill::Username // at 0
 impl Copy for flui_protocol::native_recording::CancelReason
 impl Eq for flui_protocol::native_recording::CancelReason
 impl PartialEq for flui_protocol::native_recording::CancelReason
@@ -33172,15 +33127,16 @@ field flui_protocol::native_recording::Capabilities::activates: flui_protocol::n
 field flui_protocol::native_recording::Capabilities::app_title_bar: flui_protocol::native_recording::Capability // at 6
 field flui_protocol::native_recording::Capabilities::closes: flui_protocol::native_recording::Capability // at 13
 field flui_protocol::native_recording::Capabilities::enters_fullscreen: flui_protocol::native_recording::Capability // at 9
-field flui_protocol::native_recording::Capabilities::frame_rate_hint: flui_protocol::native_recording::Availability // at 21
+field flui_protocol::native_recording::Capabilities::frame_rate_hint: flui_protocol::native_recording::Availability // at 22
 field flui_protocol::native_recording::Capabilities::hides: flui_protocol::native_recording::Capability // at 10
 field flui_protocol::native_recording::Capabilities::material: flui_protocol::native_recording::Capability // at 14
 field flui_protocol::native_recording::Capabilities::maximizes: flui_protocol::native_recording::Capability // at 8
 field flui_protocol::native_recording::Capabilities::minimizes: flui_protocol::native_recording::Capability // at 7
-field flui_protocol::native_recording::Capabilities::observes_minimized: flui_protocol::native_recording::Availability // at 19
-field flui_protocol::native_recording::Capabilities::observes_position: flui_protocol::native_recording::Availability // at 18
-field flui_protocol::native_recording::Capabilities::places_at_open: flui_protocol::native_recording::Availability // at 20
+field flui_protocol::native_recording::Capabilities::observes_minimized: flui_protocol::native_recording::Availability // at 20
+field flui_protocol::native_recording::Capabilities::observes_position: flui_protocol::native_recording::Availability // at 19
+field flui_protocol::native_recording::Capabilities::places_at_open: flui_protocol::native_recording::Availability // at 21
 field flui_protocol::native_recording::Capabilities::reports_keyboard_inset: flui_protocol::native_recording::Capability // at 16
+field flui_protocol::native_recording::Capabilities::reports_occlusion: flui_protocol::native_recording::Capability // at 18
 field flui_protocol::native_recording::Capabilities::reports_presentation: flui_protocol::native_recording::Capability // at 15
 field flui_protocol::native_recording::Capabilities::reports_system_gestures: flui_protocol::native_recording::Capability // at 17
 field flui_protocol::native_recording::Capabilities::sets_constraints: flui_protocol::native_recording::Capability // at 3
@@ -33214,6 +33170,24 @@ pub const fn flui_protocol::native_recording::Capability::platform_absence() -> 
 variant flui_protocol::native_recording::Capability::Emulated // at 1
 variant flui_protocol::native_recording::Capability::Native // at 0
 variant flui_protocol::native_recording::Capability::Unavailable(flui_protocol::native_recording::Absence) // at 2
+#[non_exhaustive] pub enum flui_protocol::native_recording::Capitalization
+impl Clone for flui_protocol::native_recording::Capitalization
+impl Copy for flui_protocol::native_recording::Capitalization
+impl Default for flui_protocol::native_recording::Capitalization
+impl Eq for flui_protocol::native_recording::Capitalization
+impl PartialEq for flui_protocol::native_recording::Capitalization
+impl core::fmt::Debug for flui_protocol::native_recording::Capitalization
+impl core::hash::Hash for flui_protocol::native_recording::Capitalization
+impl core::marker::StructuralPartialEq for flui_protocol::native_recording::Capitalization
+impl schemars::JsonSchema for flui_protocol::native_recording::Capitalization
+impl serde_core::ser::Serialize for flui_protocol::native_recording::Capitalization
+impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::native_recording::Capitalization
+pub const flui_protocol::native_recording::Capitalization::ALL: &'static [Self] = _
+pub const fn flui_protocol::native_recording::Capitalization::name(self) -> &'static str
+variant flui_protocol::native_recording::Capitalization::Characters // at 3
+variant flui_protocol::native_recording::Capitalization::None // at 0
+variant flui_protocol::native_recording::Capitalization::Sentences // at 1
+variant flui_protocol::native_recording::Capitalization::Words // at 2
 pub struct flui_protocol::native_recording::ClickSettings
 field flui_protocol::native_recording::ClickSettings::height: f64 // at 2
 field flui_protocol::native_recording::ClickSettings::interval_ns: u64 // at 0
@@ -33253,24 +33227,6 @@ impl core::fmt::Debug for flui_protocol::native_recording::CloseCause
 impl core::hash::Hash for flui_protocol::native_recording::CloseCause
 impl core::marker::StructuralPartialEq for flui_protocol::native_recording::CloseCause
 impl schemars::JsonSchema for flui_protocol::native_recording::CloseCause
-#[non_exhaustive] pub enum flui_protocol::native_recording::Capitalization
-impl Clone for flui_protocol::native_recording::Capitalization
-impl Copy for flui_protocol::native_recording::Capitalization
-impl Default for flui_protocol::native_recording::Capitalization
-impl Eq for flui_protocol::native_recording::Capitalization
-impl PartialEq for flui_protocol::native_recording::Capitalization
-impl core::fmt::Debug for flui_protocol::native_recording::Capitalization
-impl core::hash::Hash for flui_protocol::native_recording::Capitalization
-impl core::marker::StructuralPartialEq for flui_protocol::native_recording::Capitalization
-impl schemars::JsonSchema for flui_protocol::native_recording::Capitalization
-impl serde_core::ser::Serialize for flui_protocol::native_recording::Capitalization
-impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::native_recording::Capitalization
-pub const flui_protocol::native_recording::Capitalization::ALL: &'static [Self] = _
-pub const fn flui_protocol::native_recording::Capitalization::name(self) -> &'static str
-variant flui_protocol::native_recording::Capitalization::Characters // at 3
-variant flui_protocol::native_recording::Capitalization::None // at 0
-variant flui_protocol::native_recording::Capitalization::Sentences // at 1
-variant flui_protocol::native_recording::Capitalization::Words // at 2
 impl serde_core::ser::Serialize for flui_protocol::native_recording::CloseCause
 impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::native_recording::CloseCause
 pub const flui_protocol::native_recording::CloseCause::ALL: &'static [Self] = _
@@ -33289,6 +33245,22 @@ impl core::marker::StructuralPartialEq for flui_protocol::native_recording::Colo
 impl schemars::JsonSchema for flui_protocol::native_recording::Color
 impl serde_core::ser::Serialize for flui_protocol::native_recording::Color
 impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::native_recording::Color
+#[non_exhaustive] pub enum flui_protocol::native_recording::Correction
+impl Clone for flui_protocol::native_recording::Correction
+impl Copy for flui_protocol::native_recording::Correction
+impl Eq for flui_protocol::native_recording::Correction
+impl PartialEq for flui_protocol::native_recording::Correction
+impl core::fmt::Debug for flui_protocol::native_recording::Correction
+impl core::hash::Hash for flui_protocol::native_recording::Correction
+impl core::marker::StructuralPartialEq for flui_protocol::native_recording::Correction
+impl schemars::JsonSchema for flui_protocol::native_recording::Correction
+impl serde_core::ser::Serialize for flui_protocol::native_recording::Correction
+impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::native_recording::Correction
+pub const flui_protocol::native_recording::Correction::ALL: &'static [Self] = _
+pub const fn flui_protocol::native_recording::Correction::name(self) -> &'static str
+variant flui_protocol::native_recording::Correction::Autocorrect // at 2
+variant flui_protocol::native_recording::Correction::Off // at 0
+variant flui_protocol::native_recording::Correction::Suggestions // at 1
 pub struct flui_protocol::native_recording::Counter
 field flui_protocol::native_recording::Counter::count: u64 // at 0
 field flui_protocol::native_recording::Counter::frequency: u64 // at 1
@@ -33328,22 +33300,6 @@ impl core::marker::StructuralPartialEq for flui_protocol::native_recording::Devi
 impl schemars::JsonSchema for flui_protocol::native_recording::Device
 impl serde_core::ser::Serialize for flui_protocol::native_recording::Device
 impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::native_recording::Device
-#[non_exhaustive] pub enum flui_protocol::native_recording::Correction
-impl Clone for flui_protocol::native_recording::Correction
-impl Copy for flui_protocol::native_recording::Correction
-impl Eq for flui_protocol::native_recording::Correction
-impl PartialEq for flui_protocol::native_recording::Correction
-impl core::fmt::Debug for flui_protocol::native_recording::Correction
-impl core::hash::Hash for flui_protocol::native_recording::Correction
-impl core::marker::StructuralPartialEq for flui_protocol::native_recording::Correction
-impl schemars::JsonSchema for flui_protocol::native_recording::Correction
-impl serde_core::ser::Serialize for flui_protocol::native_recording::Correction
-impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::native_recording::Correction
-pub const flui_protocol::native_recording::Correction::ALL: &'static [Self] = _
-pub const fn flui_protocol::native_recording::Correction::name(self) -> &'static str
-variant flui_protocol::native_recording::Correction::Autocorrect // at 2
-variant flui_protocol::native_recording::Correction::Off // at 0
-variant flui_protocol::native_recording::Correction::Suggestions // at 1
 pub struct flui_protocol::native_recording::Display
 field flui_protocol::native_recording::Display::bounds: [i32; 4] // at 2
 field flui_protocol::native_recording::Display::color: flui_protocol::native_recording::DisplayColor // at 8
@@ -33397,6 +33353,26 @@ pub const flui_protocol::native_recording::DynamicRange::ALL: &'static [Self] = 
 pub const fn flui_protocol::native_recording::DynamicRange::name(self) -> &'static str
 variant flui_protocol::native_recording::DynamicRange::High // at 1
 variant flui_protocol::native_recording::DynamicRange::Standard // at 0
+#[non_exhaustive] pub enum flui_protocol::native_recording::EnterAction
+impl Clone for flui_protocol::native_recording::EnterAction
+impl Copy for flui_protocol::native_recording::EnterAction
+impl Eq for flui_protocol::native_recording::EnterAction
+impl PartialEq for flui_protocol::native_recording::EnterAction
+impl core::fmt::Debug for flui_protocol::native_recording::EnterAction
+impl core::hash::Hash for flui_protocol::native_recording::EnterAction
+impl core::marker::StructuralPartialEq for flui_protocol::native_recording::EnterAction
+impl schemars::JsonSchema for flui_protocol::native_recording::EnterAction
+impl serde_core::ser::Serialize for flui_protocol::native_recording::EnterAction
+impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::native_recording::EnterAction
+pub const flui_protocol::native_recording::EnterAction::ALL: &'static [Self] = _
+pub const fn flui_protocol::native_recording::EnterAction::name(self) -> &'static str
+variant flui_protocol::native_recording::EnterAction::Default // at 0
+variant flui_protocol::native_recording::EnterAction::Done // at 1
+variant flui_protocol::native_recording::EnterAction::Go // at 2
+variant flui_protocol::native_recording::EnterAction::Next // at 3
+variant flui_protocol::native_recording::EnterAction::Previous // at 4
+variant flui_protocol::native_recording::EnterAction::Search // at 5
+variant flui_protocol::native_recording::EnterAction::SendMessage // at 6
 #[non_exhaustive] pub enum flui_protocol::native_recording::Execution
 impl Clone for flui_protocol::native_recording::Execution
 impl Copy for flui_protocol::native_recording::Execution
@@ -33436,26 +33412,6 @@ impl schemars::JsonSchema for flui_protocol::native_recording::FailureKind
 impl serde_core::ser::Serialize for flui_protocol::native_recording::FailureKind
 impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::native_recording::FailureKind
 pub const flui_protocol::native_recording::FailureKind::ALL: &'static [Self] = _
-#[non_exhaustive] pub enum flui_protocol::native_recording::EnterAction
-impl Clone for flui_protocol::native_recording::EnterAction
-impl Copy for flui_protocol::native_recording::EnterAction
-impl Eq for flui_protocol::native_recording::EnterAction
-impl PartialEq for flui_protocol::native_recording::EnterAction
-impl core::fmt::Debug for flui_protocol::native_recording::EnterAction
-impl core::hash::Hash for flui_protocol::native_recording::EnterAction
-impl core::marker::StructuralPartialEq for flui_protocol::native_recording::EnterAction
-impl schemars::JsonSchema for flui_protocol::native_recording::EnterAction
-impl serde_core::ser::Serialize for flui_protocol::native_recording::EnterAction
-impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::native_recording::EnterAction
-pub const flui_protocol::native_recording::EnterAction::ALL: &'static [Self] = _
-pub const fn flui_protocol::native_recording::EnterAction::name(self) -> &'static str
-variant flui_protocol::native_recording::EnterAction::Default // at 0
-variant flui_protocol::native_recording::EnterAction::Done // at 1
-variant flui_protocol::native_recording::EnterAction::Go // at 2
-variant flui_protocol::native_recording::EnterAction::Next // at 3
-variant flui_protocol::native_recording::EnterAction::Previous // at 4
-variant flui_protocol::native_recording::EnterAction::Search // at 5
-variant flui_protocol::native_recording::EnterAction::SendMessage // at 6
 pub const fn flui_protocol::native_recording::FailureKind::name(self) -> &'static str
 variant flui_protocol::native_recording::FailureKind::Deferred // at 0
 variant flui_protocol::native_recording::FailureKind::Displays // at 2
@@ -34071,8 +34027,14 @@ pub const fn flui_protocol::native_recording::StoreLockKind::name(self) -> &'sta
 variant flui_protocol::native_recording::StoreLockKind::Read // at 0
 variant flui_protocol::native_recording::StoreLockKind::ReadWrite // at 1
 pub struct flui_protocol::native_recording::StoreStatus
+field flui_protocol::native_recording::StoreStatus::autofill: Option<flui_protocol::native_recording::Autofill> // at 8
+field flui_protocol::native_recording::StoreStatus::capitalization: flui_protocol::native_recording::Capitalization // at 6
+field flui_protocol::native_recording::StoreStatus::correction: Option<flui_protocol::native_recording::Correction> // at 7
+field flui_protocol::native_recording::StoreStatus::decimal: bool // at 4
+field flui_protocol::native_recording::StoreStatus::enter_action: Option<flui_protocol::native_recording::EnterAction> // at 5
 field flui_protocol::native_recording::StoreStatus::protected: bool // at 0
 field flui_protocol::native_recording::StoreStatus::purpose: flui_protocol::native_recording::InputPurpose // at 2
+field flui_protocol::native_recording::StoreStatus::signed: bool // at 3
 field flui_protocol::native_recording::StoreStatus::single_line: bool // at 1
 impl Clone for flui_protocol::native_recording::StoreStatus
 impl Copy for flui_protocol::native_recording::StoreStatus
@@ -34110,14 +34072,8 @@ impl core::fmt::Debug for flui_protocol::native_recording::Stream
 impl core::hash::Hash for flui_protocol::native_recording::Stream
 impl core::marker::StructuralPartialEq for flui_protocol::native_recording::Stream
 impl schemars::JsonSchema for flui_protocol::native_recording::Stream
-field flui_protocol::native_recording::StoreStatus::autofill: Option<flui_protocol::native_recording::Autofill> // at 8
-field flui_protocol::native_recording::StoreStatus::capitalization: flui_protocol::native_recording::Capitalization // at 6
-field flui_protocol::native_recording::StoreStatus::correction: Option<flui_protocol::native_recording::Correction> // at 7
-field flui_protocol::native_recording::StoreStatus::decimal: bool // at 4
-field flui_protocol::native_recording::StoreStatus::enter_action: Option<flui_protocol::native_recording::EnterAction> // at 5
 impl serde_core::ser::Serialize for flui_protocol::native_recording::Stream
 impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::native_recording::Stream
-field flui_protocol::native_recording::StoreStatus::signed: bool // at 3
 pub const flui_protocol::native_recording::Stream::ALL: &'static [Self] = _
 pub const fn flui_protocol::native_recording::Stream::name(self) -> &'static str
 variant flui_protocol::native_recording::Stream::App // at 1

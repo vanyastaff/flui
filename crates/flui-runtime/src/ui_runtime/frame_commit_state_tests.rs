@@ -616,6 +616,161 @@ fn a_subscriber_that_panics_on_the_trace_of_a_withheld_frame_keeps_the_retry() {
     );
 }
 
+/// A surface that never shows a frame backs off on the whole schedule: past the budget each wait
+/// doubles until it reaches `FAILURE_RETRY_CAP` and stays there, every attempt a deadline, and
+/// once a frame presents the next withdrawal starts over from the display rate.
+///
+/// Fails when a wait shrinks while the surface keeps withholding, when the waits stop short of
+/// the ceiling or pass it, or when a present leaves the next withdrawal at the ceiling.
+pub(crate) fn a_withholding_surface_backs_off_to_the_ceiling_and_starts_over_once_it_shows() {
+    let budget = super::MAX_NOT_SHOWN_RETRIES;
+    let ui_runtime = mount_box();
+    let mut withheld = ScriptedSink::new(|_, _| SubmitVerdict::NotShown);
+    let presentation = || ui_runtime.presentations.primary();
+    let wait = || {
+        presentation()
+            .failure_retry_at()
+            .map(|at| at.saturating_duration_since(presentation().clock().now()))
+    };
+    for _ in 0..=budget {
+        let _ = ui_runtime.render_frame(&mut withheld);
+    }
+    let mut waits = vec![wait().expect("past the budget an attempt waits")];
+    while waits.len() < 16 {
+        assert!(ui_runtime.wait_out_failure_retry_for_test());
+        assert!(!ui_runtime.render_frame(&mut withheld));
+        waits.push(wait().expect("every attempt past the budget waits"));
+    }
+    let cap = crate::frame_failure::FAILURE_RETRY_CAP;
+    // Each wait is read against the clock a moment after it was armed.
+    let slack = std::time::Duration::from_millis(1);
+    assert!(
+        waits.windows(2).all(|pair| pair[0] <= pair[1] + slack),
+        "the wait never shrinks while the surface withholds: {waits:?}"
+    );
+    assert!(
+        waits.iter().all(|wait| *wait <= cap),
+        "never past the ceiling: {waits:?}"
+    );
+    assert!(
+        waits.last().is_some_and(|last| *last + slack >= cap),
+        "the schedule reaches its ceiling: {waits:?}"
+    );
+
+    press_primary(&ui_runtime);
+    assert!(ui_runtime.render_frame(&mut ScriptedSink::always_presents()));
+    assert_eq!(wait(), None, "the present ends the wait");
+    // The shown tree is clean: the next withdrawal starts with a repaint.
+    ui_runtime.mark_needs_full_repaint_for(presentation());
+    for _ in 0..budget {
+        let _ = ui_runtime.render_frame(&mut withheld);
+    }
+    assert_eq!(
+        wait(),
+        None,
+        "a new withdrawal is ridden out at the display rate again"
+    );
+    let _ = ui_runtime.render_frame(&mut withheld);
+    let restarted = wait().expect("past the new budget an attempt waits");
+    assert!(
+        restarted < cap,
+        "and its first wait starts the schedule over, not at the ceiling: {restarted:?}"
+    );
+}
+
+/// A subscriber, scoped to the current thread, that keeps the `host_reports_occlusion` of each
+/// `surface_withholds_frames` event.
+#[derive(Clone, Default)]
+struct WithheldReports(std::sync::Arc<std::sync::Mutex<Vec<String>>>);
+
+impl tracing::Subscriber for WithheldReports {
+    fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+        true
+    }
+    fn max_level_hint(&self) -> Option<tracing::level_filters::LevelFilter> {
+        Some(tracing::level_filters::LevelFilter::TRACE)
+    }
+    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+    fn event(&self, event: &tracing::Event<'_>) {
+        #[derive(Default)]
+        struct Report {
+            withholds: bool,
+            reports_occlusion: String,
+        }
+        impl tracing::field::Visit for Report {
+            fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+                if field.name() == "event" {
+                    self.withholds = value == "surface_withholds_frames";
+                }
+            }
+            fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+                if field.name() == "host_reports_occlusion" {
+                    self.reports_occlusion = format!("{value:?}");
+                }
+            }
+        }
+        let mut report = Report::default();
+        event.record(&mut report);
+        if report.withholds {
+            self.0
+                .lock()
+                .expect("the report log")
+                .push(report.reports_occlusion);
+        }
+    }
+    fn enter(&self, _: &tracing::span::Id) {}
+    fn exit(&self, _: &tracing::span::Id) {}
+}
+
+/// A surface that keeps withholding frames is reported once per presentation, when the streak
+/// leaves the budget, saying whether the window's host tells a covering (an unseen covering is
+/// the usual cause where it cannot); the attempts after it are not reported again.
+///
+/// Fails when the report is left out, when it repeats on every attempt past the budget, or when
+/// it leaves out whether the host reports occlusion.
+pub(crate) fn a_surface_that_keeps_withholding_frames_is_reported_once() {
+    let budget = super::MAX_NOT_SHOWN_RETRIES;
+    // A window that reports no covering (`WindowCapabilities::NONE`), kept alive here: the
+    // presentation holds it weakly.
+    let window: std::rc::Rc<dyn flui_platform::PlatformWindow> =
+        std::rc::Rc::new(crate::testing::TestWindow::new());
+    let ui_runtime = UiRuntime::for_test_with_window(std::rc::Rc::clone(&window));
+    ui_runtime
+        .attach_root_widget(&SizedBox::new(20.0, 20.0))
+        .expect("root attaches");
+    let reports = WithheldReports::default();
+    let log = std::sync::Arc::clone(&reports.0);
+    let mut withheld = ScriptedSink::new(|_, _| SubmitVerdict::NotShown);
+    let _second = tracing::Dispatch::new(tracing::subscriber::NoSubscriber::default());
+    tracing::subscriber::with_default(reports, || {
+        tracing::callsite::rebuild_interest_cache();
+        for _ in 0..budget {
+            let _ = ui_runtime.render_frame(&mut withheld);
+        }
+        assert!(
+            log.lock().expect("the report log").is_empty(),
+            "a withdrawal inside the budget is a transient, not reported"
+        );
+        let _ = ui_runtime.render_frame(&mut withheld);
+        for _ in 0..3 {
+            assert!(ui_runtime.wait_out_failure_retry_for_test());
+            let _ = ui_runtime.render_frame(&mut withheld);
+        }
+    });
+    tracing::callsite::rebuild_interest_cache();
+    assert_eq!(withheld.submit_calls, budget + 4);
+    assert_eq!(
+        *log.lock().expect("the report log"),
+        ["Some(false)"],
+        "one report, past the budget, saying the host tells no covering"
+    );
+    drop(window);
+}
+
 /// A subscriber, scoped to the current thread, that panics on the event whose message holds
 /// `needle`.
 struct PanicsOnEvent {

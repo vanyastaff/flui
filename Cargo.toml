@@ -385,6 +385,9 @@ wayland-protocols = { version = "0.32", features = ["client", "unstable", "stagi
 # pointers, which only the system library has, and the GPU driver reads events
 # on the same display from its own thread.
 wayland-backend = { version = "0.3", features = ["client_system", "dlopen"] }
+# The server half of the same family, in pure Rust: the compositor flui-native's
+# `testing` kit plays to its Wayland host over a socket (`testing::wayland_compositor`).
+wayland-server = "0.31"
 # Safe `poll` and `eventfd` for the display thread's connection and stop descriptors.
 rustix = { version = "1", default-features = false, features = ["std", "event"] }
 raw-window-handle = "0.6"
@@ -452,6 +455,10 @@ clap = { version = "4.5", features = ["derive"] }
 # names the features it needs (`full`, `visit`, `span-locations`).
 proc-macro2 = "1"
 syn = "3"
+# TOML that keeps a document's layout: `#[flui::main]` reads the crate's manifest with it, and
+# `flui-cli` edits a project's `Cargo.toml` and `.cargo/config.toml`. Each member names the
+# features it needs (`parse`, `display`).
+toml_edit = { version = "0.25", default-features = false }
 # Markdown events for `cargo xtask markers`: prose apart from code spans and blocks.
 pulldown-cmark = { version = "0.13", default-features = false }
 

@@ -1648,8 +1648,9 @@ mod tests {
         }
     }
 
-    #[derive(Clone)]
+    #[derive(Clone, crate::StatefulView)]
     struct RegistryStateView {
+        #[view(key)]
         key: crate::GlobalKey<RegistryState>,
         value: i32,
     }
@@ -1671,16 +1672,6 @@ mod tests {
             _ctx: &dyn crate::BuildContext,
         ) -> impl IntoView {
             LeafView
-        }
-    }
-
-    impl View for RegistryStateView {
-        fn create_element(self: std::rc::Rc<Self>) -> crate::element::ElementKind {
-            crate::element::ElementKind::stateful(self)
-        }
-
-        fn key(&self) -> Option<&dyn flui_foundation::ViewKey> {
-            Some(&self.key)
         }
     }
 
@@ -1735,8 +1726,9 @@ mod tests {
     }
 
     /// A keyed stateful parent whose child is a [`LookupInBuild`].
-    #[derive(Clone)]
+    #[derive(Clone, crate::StatefulView)]
     struct KeyedLookupParent {
+        #[view(key)]
         key: crate::GlobalKey<RegistryState>,
         value: i32,
         child: LookupInBuild,
@@ -1753,16 +1745,6 @@ mod tests {
     impl crate::ViewState<KeyedLookupParent> for RegistryState {
         fn build(&self, view: &KeyedLookupParent, _ctx: &dyn crate::BuildContext) -> impl IntoView {
             view.child.clone()
-        }
-    }
-
-    impl View for KeyedLookupParent {
-        fn create_element(self: std::rc::Rc<Self>) -> crate::element::ElementKind {
-            crate::element::ElementKind::stateful(self)
-        }
-
-        fn key(&self) -> Option<&dyn flui_foundation::ViewKey> {
-            Some(&self.key)
         }
     }
 

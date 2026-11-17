@@ -1019,27 +1019,20 @@ pub(crate) fn outgoing_switcher_retirement_preserves_independent_captures() {
         return;
     }
 
-    use flui_view::{BoxedView, StatelessView, ValueKey, View};
+    use flui_view::{BoxedView, StatelessView, ValueKey};
     use flui_widgets::AnimatedSwitcher;
     use std::cell::{Cell, RefCell};
     use std::rc::Rc;
 
-    #[derive(Clone)]
+    #[derive(Clone, StatelessView)]
     struct ObservedView {
+        #[view(key)]
         key: ValueKey<u64>,
         role: &'static str,
         child: BoxedView,
         armed: Rc<Cell<bool>>,
         fail_once: Rc<Cell<bool>>,
         drops: Rc<RefCell<Vec<(&'static str, bool)>>>,
-    }
-    impl View for ObservedView {
-        fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
-            flui_view::element::ElementKind::stateless(self)
-        }
-        fn key(&self) -> Option<&dyn flui_foundation::ViewKey> {
-            Some(&self.key)
-        }
     }
     impl StatelessView for ObservedView {
         fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
@@ -1276,8 +1269,9 @@ pub(crate) fn a_detached_ticker_mode_lands_an_implicit_run() {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, StatefulView)]
 struct KeyedOpacity {
+    #[view(key)]
     key: flui_view::GlobalKey<KeyedOpacityState>,
     target: f64,
     registry: std::rc::Rc<std::cell::RefCell<Option<Vsync>>>,
@@ -1287,15 +1281,6 @@ struct KeyedOpacity {
 struct KeyedOpacityState {
     registry: std::rc::Rc<std::cell::RefCell<Option<Vsync>>>,
     inits: std::rc::Rc<std::cell::Cell<usize>>,
-}
-
-impl flui_view::View for KeyedOpacity {
-    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
-        flui_view::element::ElementKind::stateful(self)
-    }
-    fn key(&self) -> Option<&dyn flui_foundation::ViewKey> {
-        Some(&self.key)
-    }
 }
 
 impl StatefulView for KeyedOpacity {

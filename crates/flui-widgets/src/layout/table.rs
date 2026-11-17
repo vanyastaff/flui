@@ -12,9 +12,10 @@ use flui_painting::typography::TextBaseline;
 use flui_rendering::parent_data::TableCellParentData;
 use flui_rendering::parent_data::TableCellVerticalAlignment;
 use flui_rendering::protocol::BoxProtocol;
+use flui_view::prelude::StatelessView;
 use flui_view::{
-    BoxedView, BuildContext, CreationSite, IntoView, ParentDataView, RenderView, StatelessView,
-    View, ViewExt, impl_parent_data_view, impl_render_view,
+    BoxedView, BuildContext, CreationSite, IntoView, ParentDataView, RenderView, View, ViewExt,
+    impl_parent_data_view, impl_render_view,
 };
 
 /// One row of a [`Table`]: an optional background decoration plus its cells.
@@ -90,8 +91,9 @@ impl TableRow {
 /// The wrapper owns no render object, so the cell's own render node still
 /// attaches directly to `RenderTable`, and a `TableCell` inside it is still
 /// the nearest parent-data ancestor of that node.
-#[derive(Clone)]
+#[derive(Clone, StatelessView)]
 struct KeyedCell {
+    #[view(key)]
     key: CellKey,
     child: BoxedView,
 }
@@ -194,16 +196,6 @@ impl std::fmt::Debug for KeyedCell {
             .field("key", &self.key.row)
             .field("cell", &self.key.cell)
             .finish_non_exhaustive()
-    }
-}
-
-impl View for KeyedCell {
-    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
-        flui_view::element::ElementKind::stateless(self)
-    }
-
-    fn key(&self) -> Option<&dyn ViewKey> {
-        Some(&self.key)
     }
 }
 

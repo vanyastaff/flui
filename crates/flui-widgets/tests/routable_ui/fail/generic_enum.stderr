@@ -2,4 +2,10 @@ error: derive(Routable) takes no generics: a route type is concrete
  --> tests/routable_ui/fail/generic_enum.rs:4:14
   |
 4 | enum AppRoute<T> {
-  |              ^
+  |              ^^^
+
+error: derive(Routable) takes no generics: a route type is concrete
+  --> tests/routable_ui/fail/generic_enum.rs:11:14
+   |
+11 | enum Bounded where {
+   |              ^^^^^

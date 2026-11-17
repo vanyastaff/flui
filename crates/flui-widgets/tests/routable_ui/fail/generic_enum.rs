@@ -6,4 +6,11 @@ enum AppRoute<T> {
     Item { id: T },
 }
 
+// A clause without a predicate has only its keyword to point at.
+#[derive(Routable, Clone, PartialEq)]
+enum Bounded where {
+    #[route("/")]
+    Home,
+}
+
 fn main() {}

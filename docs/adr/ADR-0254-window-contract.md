@@ -86,6 +86,9 @@
   - [ADR-0236](ADR-0236-display-snapshot-and-refresh-period.md) decision 5, the delivery shape
     only: the window's display is a field of the snapshot and its change arrives the same way;
     the snapshot and the refresh period stay.
+- **Superseded-by:** [ADR-0356](ADR-0356-a-surface-its-compositor-paces-presents-without-waiting-on-the-compositor.md)
+  for §5's clause that `Renderer::new` keeps ADR-0063's `WindowTarget` bound: it takes the
+  surface target itself, which also says who paces the surface (`SurfaceTarget::frame_pacing`).
 - **Related:** [ADR-0035](ADR-0035-lifecycle-consolidation-and-frames-enabled.md) (execution
   state), [ADR-0039](ADR-0039-event-loop-affinity-capability.md) (the owner proof and the owner
   lane), [ADR-0045](ADR-0045-raster-lane.md) (the raster thread),

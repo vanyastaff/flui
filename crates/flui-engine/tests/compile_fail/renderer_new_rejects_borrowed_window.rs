@@ -1,18 +1,15 @@
 //! Issue #1043's proof program: before this fix, `Renderer::new(&window)`
 //! type-checked for a `window: W` local, then `drop(window)` left the
 //! surface built from raw handles pointing at a dead window. `Renderer::new`
-//! now takes `impl WindowTarget` (`HasWindowHandle + HasDisplayHandle + Send
-//! + Sync + 'static`) — an OWNED value, not a borrow — so the escape must no
-//! longer compile.
-//!
-//! `borrow_then_drop`'s body is generic over `W` with no `'static` bound, so
-//! `&window` (a reference to a function-local) can never satisfy
-//! `WindowTarget`'s `'static` requirement regardless of what a caller
-//! instantiates `W` with; the body fails to type-check on its own, without
-//! a caller.
+//! now takes the window's `Arc<dyn SurfaceTarget>`, whose trait object is
+//! `'static`, so a target that borrows a local window cannot be handed over
+//! and the escape no longer compiles.
 
 #![forbid(unsafe_code)]
 
+use std::sync::Arc;
+
+use flui_platform::{SurfaceTarget, SwapChainStatistics};
 use raw_window_handle::{
     DisplayHandle, HandleError, HasDisplayHandle, HasWindowHandle, WindowHandle,
 };
@@ -31,19 +28,17 @@ impl HasDisplayHandle for LocalWindow {
     }
 }
 
-async fn borrow_then_drop<W>(window: W)
-where
-    // `Send + Sync` are given explicitly so the ONLY bound `&window` fails
-    // to satisfy is `'static` — the one this fixture exists to pin. Without
-    // them the compiler reports a missing `Sync` bound on `W` first, which
-    // is a real diagnostic but not this issue's diagnostic.
-    W: HasWindowHandle + HasDisplayHandle + Send + Sync,
-{
-    let renderer = flui_engine::Renderer::new(&window).await;
+impl SurfaceTarget for &'_ LocalWindow {
+    fn pre_present_notify(&self, _frame: Option<flui_foundation::FrameStamp>, _statistics: SwapChainStatistics) {} fn keep_past_close(&self) {}
+}
+
+async fn borrow_then_drop() {
+    let window = LocalWindow;
+    let renderer = flui_engine::Renderer::new(Arc::new(&window)).await;
     drop(window);
     let _ = renderer;
 }
 
 fn main() {
-    let _ = borrow_then_drop(LocalWindow);
+    let _ = borrow_then_drop();
 }

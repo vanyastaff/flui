@@ -276,7 +276,9 @@ pub struct WindowState {
     /// reaches the screen: covered by other windows, on another workspace or
     /// space, cloaked, behind a locked session, a background page or app, a
     /// toplevel the compositor suspended. `false` where the window system does
-    /// not tell, and always `false` for a hidden or minimized window, which
+    /// not tell: whether a covering by other windows is told is the
+    /// capabilities' [`reports_occlusion`](WindowCapabilities::reports_occlusion).
+    /// Always `false` for a hidden or minimized window, which
     /// [`successor`](Self::successor) holds: those are their own facts.
     pub occluded: bool,
     /// Whether the window is the active window of its desktop and whether it

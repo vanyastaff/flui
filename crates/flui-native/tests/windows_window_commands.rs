@@ -967,6 +967,50 @@ fn a_burst_of_frame_requests_on_a_hidden_window_is_one_frame() {
         > 1));
 }
 
+/// A window that is not seen, for each fact the host knows for certain
+/// (hidden, minimized, cloaked, its session locked), with nothing asked of
+/// it, runs no frame over half a second: nothing of the host wakes it on a
+/// clock of its own. Red-check: arm a periodic timer on the window that
+/// requests a frame, and the count grows.
+fn an_unseen_window_with_nothing_asked_runs_no_frame() {
+    let platform = platform();
+    let hidden_window = open(&platform, hidden());
+    let minimized = open(&platform, options());
+    apply(&minimized, WindowCommand::SetMode(WindowMode::Minimized));
+    let cloaked = open(&platform, options());
+    let value = BOOL::from(true);
+    // SAFETY: `value` is a live `BOOL`, the size `DWMWA_CLOAK` reads.
+    unsafe {
+        DwmSetWindowAttribute(
+            hwnd_of(&cloaked),
+            DWMWA_CLOAK,
+            (&raw const value).cast(),
+            std::mem::size_of::<BOOL>() as u32,
+        )
+    }
+    .expect("the window cloaks");
+    let locked = open(&platform, options());
+    send(&locked, WM_WTSSESSION_CHANGE, WTS_SESSION_LOCK as usize, 1);
+    settle();
+    let windows = [&hidden_window, &minimized, &cloaked, &locked];
+    for window in windows {
+        assert!(!window.state().is_seen(), "not seen: {:?}", window.state());
+    }
+    let counts: Vec<_> = windows.iter().map(|window| count_frames(window)).collect();
+    let _ = pump_until(Duration::from_millis(500), || false);
+    let frames: Vec<usize> = counts
+        .iter()
+        .map(|count| count.load(Ordering::SeqCst))
+        .collect();
+    assert_eq!(frames, [0, 0, 0, 0], "hidden, minimized, cloaked, locked");
+    send(
+        &locked,
+        WM_WTSSESSION_CHANGE,
+        WTS_SESSION_UNLOCK as usize,
+        1,
+    );
+}
+
 /// The window stays on its thread; another thread asks for a frame through
 /// its redraw requester, and the window's frame callback runs (ADR-0254 §5).
 fn a_redraw_asked_from_another_thread_reaches_the_window() {
@@ -3114,6 +3158,10 @@ fn native_window_commands() {
         (
             "a_burst_of_frame_requests_on_a_hidden_window_is_one_frame",
             a_burst_of_frame_requests_on_a_hidden_window_is_one_frame,
+        ),
+        (
+            "an_unseen_window_with_nothing_asked_runs_no_frame",
+            an_unseen_window_with_nothing_asked_runs_no_frame,
         ),
         (
             "a_redraw_asked_from_another_thread_reaches_the_window",

@@ -9,6 +9,8 @@
 //!   chrome regions (ADR-0286);
 //! - `rescale`: the pure half too: the outer size that keeps a window's
 //!   content at its logical size when its DPI changes;
+//! - `record`: the pure half too: what the window procedure records of a
+//!   window, which its wrappers and its context share without a lock;
 //! - `app_bars`: the auto-hide app bars the shell answers for a monitor, which
 //!   a maximized window without the system's title bar leaves their edge;
 //! - [`material`]: the pure half too: from which build the window draws a
@@ -49,6 +51,8 @@ pub(crate) mod frame_timing;
 pub(crate) mod limits;
 #[cfg(windows)]
 pub(crate) mod proc;
+#[cfg(any(windows, test))]
+mod record;
 #[cfg(any(windows, test))]
 mod rescale;
 #[cfg(windows)]

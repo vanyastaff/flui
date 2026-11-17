@@ -27,7 +27,7 @@ all-features = true
 # Warn on yanked crates (scope: all published versions)
 yanked = "warn"
 # Flag unmaintained crates anywhere in the graph. "workspace" would silence
-# both ignores below (their crates are transitive), and with them every
+# the ignores below (their crates are transitive), and with them every
 # future abandoned crate deep in the text or GPU stack; each of those is ours
 # to route around, so each gets an ignore with its reason instead.
 unmaintained = "all"
@@ -42,16 +42,6 @@ ignore = [
     # hash non-determinism, which does not affect the compiled artefact.
     { id = "RUSTSEC-2025-0057" },
 
-    # RUSTSEC-2026-0192: ttf-parser is unmaintained (author archived the
-    # repo). Source: ttf-parser ← owned_ttf_parser ← ab_glyph ←
-    # sctk-adwaita ← winit (the Wayland window decorations).  Parsing happens
-    # on locally installed fonts, not remote input. Host discovery uses
-    # fontdb 0.24, which vendors a minimal metadata subset of ttf-parser 0.25.1
-    # instead of depending on the crate; this is not a skrifa migration.
-    # Revisit this remaining exemption when the window-decoration stack
-    # replaces its parser dependency.
-    { id = "RUSTSEC-2026-0192" },
-
     # RUSTSEC-2026-0370 / -0371 / -0372: zvariant, zbus_names and
     # zvariant_derive are unmaintained, merged into zbus 6 as its `wire` and
     # `names` modules and derives. flui-native's own D-Bus code is on zbus 6;
@@ -62,6 +52,16 @@ ignore = [
     { id = "RUSTSEC-2026-0370" },
     { id = "RUSTSEC-2026-0371" },
     { id = "RUSTSEC-2026-0372" },
+
+    # RUSTSEC-2026-0543: chrono is unmaintained. No FLUI crate names it; the
+    # only sources are tools/desktop-mcp, an MCP server that is not part of
+    # the framework or its public API: rmcp ← desktop-mcp (rmcp's protocol
+    # model and task manager carry `chrono::DateTime` as required, not
+    # optional, up to rmcp 3.10.0) and uiautomation ← desktop-mcp
+    # (Windows-only, required up to 0.25.1). rmcp also turns on schemars'
+    # `chrono04` feature. Remove this ignore when both crates move to jiff or
+    # time, or when desktop-mcp stops using them.
+    { id = "RUSTSEC-2026-0543" },
 ]
 
 # ═══════════════════════════════════════════════════════════════════════════════
