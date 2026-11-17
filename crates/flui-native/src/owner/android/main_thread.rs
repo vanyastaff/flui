@@ -2,13 +2,17 @@
 //! boundary and with the report it owes when it does not finish.
 //!
 //! `AndroidApp::run_on_java_main_thread` runs a closure under
-//! android-activity's own guard, which aborts the process on a panic.
+//! android-activity's own `catch_unwind`, which only logs a panic through the
+//! `log` crate and drops its payload: whatever the closure owed (an answer, a
+//! settled state, an event for the owner) is lost with no report.
 //! [`MainThreadWork`] runs its body inside [`os_entry`] and owes its `failed`
 //! report on every exit but success: the body's error, a panic in it, and
 //! being dropped unrun. The report runs inside the boundary too, so a panic
 //! there is logged and the thread goes on. [`post`] hands one to the Java
 //! main thread; every closure the Android host posts there goes through it,
-//! which `cargo xtask panic-boundary` holds.
+//! which `cargo xtask panic-boundary` holds. Java receives nothing from a
+//! posted closure, and an exception its JNI calls leave pending is caught by
+//! android-activity's attachment of the thread, so the Activity goes on.
 //!
 //! android-activity keeps a closure it cannot deliver (its callback state is
 //! leaked, not dropped), so on Android the report for work dropped unrun may
@@ -55,7 +59,10 @@ where
         }
     }
 
-    /// Run the body, then the report it owes, each inside the boundary.
+    /// Run the body, then the report it owes or, on success, let the report
+    /// go: each inside the boundary, so every capture of the work is
+    /// destroyed there too (the last reference to a host object may be
+    /// one of them).
     pub(crate) fn run(mut self) {
         let Some(body) = self.body.take() else {
             return;
@@ -64,20 +71,14 @@ where
             self.entry,
             (),
             AfterPanic::Answer(|()| Err(PostFailure::Panicked)),
-            || body().map_err(PostFailure::Failed),
+            move || body().map_err(PostFailure::Failed),
         );
-        match outcome {
-            Ok(()) => drop(self.failed.take()),
-            Err(failure) => self.report(failure),
-        }
-    }
-
-    fn report(&mut self, failure: PostFailure) {
-        if let Some(failed) = self.failed.take() {
-            os_entry(self.entry, (), AfterPanic::Answer(|()| ()), || {
+        let failed = self.failed.take();
+        os_entry(self.entry, (), AfterPanic::Answer(|()| ()), move || {
+            if let (Err(failure), Some(failed)) = (outcome, failed) {
                 failed(failure);
-            });
-        }
+            }
+        });
     }
 }
 
@@ -86,12 +87,18 @@ where
     F: FnOnce(PostFailure),
 {
     fn drop(&mut self) {
-        // Still owed: the work never ran.
-        if let Some(failed) = self.failed.take() {
-            os_entry(self.entry, (), AfterPanic::Answer(|()| ()), || {
-                failed(PostFailure::Dropped);
-            });
+        // Still owed: the work never ran. Its body's captures are destroyed
+        // inside the boundary with the report, whichever of them panics.
+        let (body, failed) = (self.body.take(), self.failed.take());
+        if body.is_none() && failed.is_none() {
+            return;
         }
+        os_entry(self.entry, (), AfterPanic::Answer(|()| ()), move || {
+            let _body = body;
+            if let Some(failed) = failed {
+                failed(PostFailure::Dropped);
+            }
+        });
     }
 }
 
@@ -173,6 +180,64 @@ mod tests {
         let (seen, failed) = reported();
         drop(MainThreadWork::new("test", || Ok(()), failed));
         assert_eq!(*seen.borrow(), [PostFailure::Dropped]);
+    }
+
+    /// A capture whose destructor panics: destroyed outside the boundary, the
+    /// panic would leave `run` or the drop.
+    struct PanicsWhenDestroyed;
+
+    impl Drop for PanicsWhenDestroyed {
+        fn drop(&mut self) {
+            panic!("a capture's destructor panicked");
+        }
+    }
+
+    /// Every capture of posted work is destroyed inside the boundary on every
+    /// exit: the report's after success, the body's and the report's after a
+    /// failure, and both when the work is dropped unrun.
+    #[test]
+    fn every_capture_of_posted_work_is_destroyed_inside_the_boundary() {
+        let held = PanicsWhenDestroyed;
+        MainThreadWork::new(
+            "test",
+            || Ok(()),
+            move |_: PostFailure| {
+                let _held = &held;
+            },
+        )
+        .run();
+
+        let held = PanicsWhenDestroyed;
+        MainThreadWork::new(
+            "test",
+            move || -> Result<(), String> {
+                let _held = &held;
+                Err("refused".to_owned())
+            },
+            |_: PostFailure| {},
+        )
+        .run();
+
+        // One panicking capture per work: a second destructor panicking while
+        // the first unwinds aborts, as in std.
+        let held = PanicsWhenDestroyed;
+        drop(MainThreadWork::new(
+            "test",
+            move || {
+                let _held = &held;
+                Ok(())
+            },
+            |_: PostFailure| {},
+        ));
+
+        let held = PanicsWhenDestroyed;
+        drop(MainThreadWork::new(
+            "test",
+            || Ok(()),
+            move |_: PostFailure| {
+                let _held = &held;
+            },
+        ));
     }
 
     /// A report that panics stays inside the boundary too.

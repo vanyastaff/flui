@@ -8273,6 +8273,57 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
   окон, флаг и запросчик перерисовки, список перерисовок растра, эндпоинт агента, воркеры и
   сервисы, полосы хранилища и хуки разработки (`DevReload`, `DevAgent`; ADR-0311). Не собрано
   здесь: Android, iOS, macOS (правка `android.rs` — только CI); wasm проверен типами в WSL.
+- [x] **LY135** — ветка `native/android-main-thread-boundary`. Проверено на `main` @ `7b065dc08`:
+  главная часть находки уже исправлена в #2654 — каждое замыкание на Java main thread идёт через
+  `owner::android::main_thread::post`/`run` внутри `os_entry` с отчётом о каждом выходе, кроме
+  успеха, а гейт `panic-boundary` отказывает идентификатору `run_on_java_main_thread` вне `fn post`
+  этого модуля (запрос insets на панике отвечает `Ready(None)`). Ложной оставалась заметка о
+  android-activity в доке `main_thread.rs` и константе гейта («прерывает процесс»): 0.6.1
+  (`main_callbacks.rs`) ловит панику замыкания, только логирует через `log` и теряет долг
+  замыкания; доки исправлены. Остаток класса подтверждён чтением. Установка `FluiView` шла через
+  `run`: паника после установки вида (событие `tracing` — чужой код) оставляла окно без
+  `Installed`, паника до неё — `Pending` навсегда, а паника между возвратом `FluiView.install` и
+  записью `Ready` оставляла вид в окне, который `detach` уже не находил; `detach` с ошибкой
+  освобождал handle, который вид ещё называл. Теперь установка — `ViewInstall`
+  (`owner/android/view_install.rs`), машина состояний над её вызовами JNI (`ViewHost`): handle
+  освобождается, только когда ни один вид окна его не называет — отказ или установка,
+  остановившаяся после передачи handle, спрашивает окно о виде с этим handle (`FluiView.handle()`),
+  снимает его и освобождает handle; окно, которое не прочесть, и `detach` с ошибкой оставляют
+  handle. Владелец слышит `Installed` один раз, после записи состояния и до лога; `Pending` и
+  `Failed` читались одинаково — стадия одна, `Absent`. Захваты отправленной работы
+  (`MainThreadWork`) теперь уничтожаются внутри границы на каждом выходе: отчёт после успеха, тело
+  работы, сброшенной без запуска. Обратное направление: `nativeDrag` и `nativeImeState` читали
+  строки через `EnvUnowned::with_env`, который сам ловит панику — её полезная нагрузка молча
+  ронялась вне `discard_payload` и без лога, а ошибка JNI оставляла исключение Java висеть, и
+  фреймворковый колбэк над нативным методом (слушатель drag, input connection) бросал его на
+  главном потоке — процесс падал. Решение (новое правило не нужно, ADR-0151 §16 — «ответ, понятный
+  ОС»; записано в `crates/flui-native/ARCHITECTURE.md`): каждый нативный метод классов FLUI
+  (14 у `FluiView`, `FluiHost.nativeWake`) — один вызов `owner::android::native_call::jni_native`,
+  обобщённого над `JniCall` (на Android — `EnvUnowned`, в тестах — заместитель): граница, страж
+  `ClearsPending`, тело, выбор ответа — «ничто» метода (`false`, `0`, `null`, без значения) на
+  ошибку JNI или панику, и никогда — висящее исключение; среда берётся через `AttachGuard`, без
+  типа исхода с недостижимой паникой. Activity продолжает работу. Тот же страж заменил
+  `ClearPending` моста доступности. Гейт `panic-boundary`: нативный метод JNI (внешняя функция,
+  чей первый параметр — среда) — только один вызов `jni_native`, сам `jni_native` — один вызов
+  `os_entry`, другие функции и импорты под этим именем — находка; замыкание, отданное лупер-у
+  Android методом ndk `add_fd_with_callback`, — вход ОС (в крейте таких нет, правило — для
+  первого). Тесты, в скобках результат с откатом:
+  `a_native_method_answers_and_leaves_no_exception_pending_on_any_exit` (без стража —
+  `ThrowsThenAnswers` отвечает `(Some(7), true)`);
+  `every_exit_of_the_installation_frees_only_handles_no_view_names` (без снятия остановившейся
+  установки — `[None]` вместо `[Some(Freed)]`) и
+  `a_failed_detach_keeps_the_handle_and_a_late_installation_installs_nothing`;
+  `every_capture_of_posted_work_is_destroyed_inside_the_boundary` (с отчётом, сброшенным вне
+  границы после успеха, и с телом, сброшенным вне границы без запуска, — паника деструктора
+  выходит наружу); самотест гейта: прямой `os_entry` и чужой адаптер у нативного метода, второй
+  `jni_native` и его импорт, голый и макросный `add_fd_with_callback` (без правила JNI —
+  `Direct`/`Adapted` `MISSED`; без списка лупера — оба `MISSED`), строка
+  `the_jni_adapter_calls_the_boundary` в `panic_boundary_contract`, счёт фикстуры 16/8 →
+  20/10. Код Android проверен типами в WSL (`cargo +nightly check --target
+  aarch64-linux-android`), clippy под Android — только CI. Прогон на устройстве с намеренной
+  паникой в нативном методе и в отправленном замыкании не сделан: у закреплённого 1.100.0 на
+  Windows нет цели Android, её добавление требует `rustup`, а 1.99.0 с целью не собирает
+  workspace; долг записан в строке паники `platform-parity.toml` и в `docs/gaps.md`.
 
 - [x] **LY144** — ветка `system/filters-and-launch-policy`, решение — ADR-0360. Находки
   подтверждены на `main` @ `d139b8188` чтением кода: `literal_glob` выдавал `*.png` без сложения
