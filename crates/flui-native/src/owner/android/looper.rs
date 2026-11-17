@@ -977,7 +977,7 @@ impl host::Loop for AndroidLoop {
                             self.running.set(false);
                         }
                         MainEvent::WindowResized { .. } => {
-                            tracing::info!("Android: Window resized");
+                            tracing::debug!("Android: window resized");
                             // Cloned out of its cell: the resize observer runs
                             // embedder code that may call back into the platform.
                             let window = self.window.borrow().clone();

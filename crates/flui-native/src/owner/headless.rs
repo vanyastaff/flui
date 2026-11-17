@@ -693,8 +693,12 @@ impl host::Services for HeadlessLoop {
         host::environment_launch_value(key)
     }
 
+    /// The executable the process runs, as on the desktop hosts: a headless
+    /// platform still runs in a real process.
     fn app_path(&self) -> Result<PathBuf, PlatformError> {
-        Ok(PathBuf::from("/mock/app/path"))
+        std::env::current_exe().map_err(|error| PlatformError::AppPath {
+            message: error.to_string(),
+        })
     }
 
     fn open_url(&self, url: &str) {
@@ -1010,7 +1014,7 @@ impl HeadlessDeferredWindowOpens {
     /// real headless window and delivering it through that request's
     /// [`ClaimSlot`] — the same registration/activation/`Created`-event
     /// bookkeeping the synchronous `Platform::open_window` path performs
-    /// (`create_mock_window`), so a test cannot tell the two paths apart
+    /// (`HeadlessWindows::open`), so a test cannot tell the two paths apart
     /// except by timing. Returns the same window handle that was delivered
     /// (a real, live [`PlatformWindow`](flui_platform::PlatformWindow) a test can drive further — including
     /// a genuine `.close()` — since the whole point of this test seam is

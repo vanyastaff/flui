@@ -919,12 +919,12 @@ impl WindowProc {
                     {
                         tracing::warn!(%error, "pointer device notifications unavailable");
                     }
-                    tracing::debug!("WM_CREATE for HWND {:?}", hwnd);
+                    tracing::debug!(?hwnd, "WM_CREATE");
                     LRESULT(0)
                 }
 
                 WM_CLOSE => {
-                    tracing::debug!("WM_CLOSE for HWND {:?}", hwnd);
+                    tracing::debug!(?hwnd, "WM_CLOSE");
 
                     if let Some(ctx) = ctx {
                         // Ask the handler whether the close proceeds;
@@ -961,7 +961,7 @@ impl WindowProc {
                 }
 
                 WM_DESTROY => {
-                    tracing::debug!("WM_DESTROY for HWND {:?}", hwnd);
+                    tracing::debug!(?hwnd, "WM_DESTROY");
 
                     // A close the window granted retired it before destroying
                     // it, and cleared its slot: this finds no context. One
@@ -1248,7 +1248,7 @@ impl WindowProc {
                     } else {
                         (get_x_lparam(lparam), get_y_lparam(lparam))
                     };
-                    tracing::debug!("Window Moved: ({}, {})", x, y);
+                    tracing::debug!(x, y, "the window moved");
 
                     if let Some(ctx) = ctx {
                         ctx.update_window_state(|record| WindowRecord {

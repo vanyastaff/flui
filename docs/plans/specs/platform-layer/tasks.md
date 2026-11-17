@@ -7425,6 +7425,39 @@ GPU-память простаивающего или невидимого окн
   сценарий отзыва после `OleUninitialize` здесь не воспроизведён, удержание — по типам. Ожидание
   trybuild `owner_platform_is_not_send` не устарело: локально у тулчейна нет `rust-src`, и
   фрагменты из `$RUST/core` выпадают из вывода; на CI (с `rust-src`) оно верно.
+- [x] **LY154** — ветка `docs/platform-citations`. Каждая цитата Flutter сверена с исходником тега
+  `3.50.0` (`ab2912035e`, чтение блобов через `gh` и неглубокий клон в `.flutter/`), а не по памяти.
+  Ссылки на коммиты master (`6597889f57` в ADR-0151, 0152, 0154, 0254, 0255; `97cd226ec5` в
+  ADR-0261, 0262, 0265; `d8bd864cdb` в ADR-0345) переведены на `3.50.0`: процитированные файлы на
+  теге совпадают по SHA блоба или в процитированных строках; в `semantics_helper.dart` строка 238
+  стала 234 (поведение master с `retirePlaceholders` ADR-0255 не использует). `f60eef8885` в
+  ADR-0340 — коммита нет во `flutter/flutter` (`gh` отвечает 422): источники переписаны на
+  `3.50.0` с номерами строк, утверждения (шаблон с `adjustResize`, `ImeSyncDeferringInsetsCallback`
+  с API 30) проверены. ADR-0332: правило `isCompatibleWith` пересказано по 3.50.0 (тристабильные
+  флаги, `isAccessibilityFocusBlocked`, `_traversalChildIdentifier`); ADR-0288: 3.50 отказывает в
+  `route` и точке входа только в release и только непроверенному отправителю
+  (`IntentUtils.java:29-96`), правило FLUI строже; ADR-0028: заморозка 3.44, `material_ui` и
+  `cupertino_ui` в 3.47, устаревание в 3.50; ADR-0037, 0076, 0048: ссылки на строки 3.50.0, каждое
+  утверждение о `focus_manager.dart`, `text_input.dart`, `overlay.dart` и `framework.dart` верно на
+  теге; ADR-0333: ссылка 3.27.0 вела в `flutter/flutter`, где движка в 3.27.0 не было, а «память
+  переиспользуется при сбросе билдера» на 3.50.0 неверно (`Build` отдаёт буфер списку) — фраза
+  заменена тем, что видно в `dl_storage.h`, `dl_builder.cc`, `dl_op_records.h`; ADR-0348: ссылки на
+  строки. Неверное о FLUI: «как веб-движок Flutter держит один элемент редактирования» в
+  `text/web.rs` и `ARCHITECTURE.md` — Flutter 3.50 создаёт элемент на каждое соединение
+  (`text_editing.dart:1584-1771`), FLUI держит один, исправлено; ADR-0049 описывал backend winit
+  и «headless mock» — переписано по `Platform::request_exit_policy_reevaluation`. `docs/gaps.md`:
+  100 мс Windows-эмбеддера — `kWindowResizeTimeout` по тегу; записи о GPU-памяти простаивающего
+  окна и о живом resize на Windows уже на `main` и сверены с кодом (`RasterHost::reclaim` только
+  от давления памяти; `modal_loop`, `WM_GETDPISCALEDSIZE`, `UserPlacing`). Строка паритета
+  «Orientation lock»: Android 16 игнорирует фиксацию на экранах от 600 dp у приложения с API 36 без
+  `PROPERTY_COMPAT_ALLOW_RESTRICTED_RESIZABILITY` (FLUI его не объявляет). Журнал: эмодзи в
+  сообщениях хостов не осталось; Android пишет resize окна `debug!`, сообщения окон Win32 и AppKit
+  — со структурированными полями; headless больше не зовёт себя mock (док крейта переписан по
+  тому, что хост делает; `app_path` возвращает исполняемый файл процесса вместо
+  `/mock/app/path`). Тест: `a_headless_platform_names_the_executable_it_runs_in` (с откатом:
+  `left: "/mock/app/path"`). Не тронуто: штампы «oracle tag `3.44.0`» в `flui-material`,
+  `flui-cupertino`, `flui-widgets`, ADR-0062, 0069, 0079 и `crates/flui-engine/CONTRIBUTING.md` —
+  слой виджетов, не платформы; перевод на 3.50 требует сверки каждого значения с `material_ui`.
 
 ## Отступление от порядка, решённое владельцем
 

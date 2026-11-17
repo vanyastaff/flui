@@ -11,10 +11,15 @@
   [ADR-0115](ADR-0115-image-source-affine-paint-boundary.md) (the image-region placement);
   [ADR-0322](ADR-0322-a-control-mounts-one-element-for-its-behaviours.md) (the control-cost rows
   that measure a cold mount)
-- **Sources:** Flutter 3.27.0 `DisplayListBuilder` and `DlOpRecord`
-  (<https://github.com/flutter/flutter/blob/3.27.0/engine/src/flutter/display_list/display_list.h>):
-  ops are records in the list's own storage, reused when the builder is reset, and a path op
-  holds a shared path handle.
+- **Sources:** Flutter 3.50.0 `DisplayListBuilder` and its `DLOp` records: ops are
+  variable-length records in one byte buffer the list owns
+  ([`dl_storage.h:16-58`](https://github.com/flutter/flutter/blob/3.50.0/engine/src/flutter/display_list/dl_storage.h#L16-L58),
+  [`dl_op_records.h:57`](https://github.com/flutter/flutter/blob/3.50.0/engine/src/flutter/display_list/dl_op_records.h#L57)),
+  `Build` trims the builder's buffer and moves it into the list without a copy
+  ([`dl_builder.cc:204-208`](https://github.com/flutter/flutter/blob/3.50.0/engine/src/flutter/display_list/dl_builder.cc#L204-L208)),
+  and a path op holds a `DlPath`, a handle on shared path data
+  ([`dl_op_records.h:603-608`](https://github.com/flutter/flutter/blob/3.50.0/engine/src/flutter/display_list/dl_op_records.h#L603-L608),
+  [`geometry/dl_path.h:111`](https://github.com/flutter/flutter/blob/3.50.0/engine/src/flutter/display_list/geometry/dl_path.h#L111)).
 
 ## Context and problem statement
 

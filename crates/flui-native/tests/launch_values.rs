@@ -1,5 +1,6 @@
 //! A platform reads the values its process was launched with under one key on every host
-//! (ADR-0288 §7): where it reads the environment, the variable the key spells.
+//! (ADR-0288 §7): where it reads the environment, the variable the key spells. It names the
+//! executable it was launched from.
 
 use flui_native::headless_platform;
 use flui_platform::LaunchKey;
@@ -20,4 +21,18 @@ fn a_headless_platform_reads_launch_values_from_the_environment() {
         "the variable is not set"
     );
     assert_eq!(platform.launch_value(unset), None);
+}
+
+/// A headless platform runs in a real process, so the path it names is that process's
+/// executable, never a stand-in.
+#[test]
+fn a_headless_platform_names_the_executable_it_runs_in() {
+    let platform = headless_platform();
+    let expected = std::env::current_exe().expect("the test binary has a path");
+    assert_eq!(
+        platform
+            .app_path()
+            .expect("the headless platform names its executable"),
+        expected
+    );
 }

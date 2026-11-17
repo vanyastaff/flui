@@ -156,10 +156,13 @@ an unmounted recovery-view value, and discard it without recording. A later
 mounted-item call may mount and record the same index, or the probed index may
 never become production content.
 
-### Flutter 3.44.0 mapping
+### Flutter 3.50.0 mapping
 
-The reference is Flutter 3.44.0, checked at the pinned tag. FLUI preserves its
-observable recovery floor and narrows several blast radii:
+The reference is Flutter 3.50.0, read at the tag in
+[`packages/flutter/lib/src/widgets/framework.dart`](https://github.com/flutter/flutter/blob/3.50.0/packages/flutter/lib/src/widgets/framework.dart)
+(`performRebuild` at 5828, `_tryRebuild` at 2753, `_deactivateRecursively` at
+2140, `finalizeTree` at 3357, `RenderObjectElement.unmount` at 6882). FLUI
+preserves its observable recovery floor and narrows several blast radii:
 
 - `ComponentElement.performRebuild` first catches `build` and substitutes
   `ErrorWidget`; its second catch surrounds `updateChild`, attempts to

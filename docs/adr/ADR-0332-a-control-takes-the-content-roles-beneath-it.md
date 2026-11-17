@@ -9,10 +9,16 @@
   [ADR-0203](ADR-0203-semantics-vocabulary.md) (the roles);
   [ADR-0322](ADR-0322-a-control-mounts-one-element-for-its-behaviours.md) (a control is one node, which makes
   its semantics one configuration over its child)
-- **Sources:** Flutter 3.27.0 `SemanticsConfiguration.isCompatibleWith`
-  (<https://github.com/flutter/flutter/blob/3.27.0/packages/flutter/lib/src/semantics/semantics.dart>):
-  two configurations conflict when they set the same flag or handle the same action, so
-  `isButton` over `isImage` is one node; WAI-ARIA 1.2 §5.2.8 "Presentational children"
+- **Sources:** Flutter 3.50.0 `SemanticsConfiguration.isCompatibleWith`
+  (<https://github.com/flutter/flutter/blob/3.50.0/packages/flutter/lib/src/semantics/semantics.dart#L6848-L6897>)
+  and `SemanticsFlags.hasConflictingFlags`
+  (<https://github.com/flutter/flutter/blob/3.50.0/engine/src/flutter/lib/ui/semantics.dart#L1636-L1661>):
+  two configurations conflict when both handle one action, both set one of the tri-state flags
+  (checked, selected, enabled, toggled, expanded, required, focused) or the same boolean flag,
+  only one blocks accessibility focus, or both carry a value, a range bound, an explicit role or
+  a platform view (the method lists a few more); an annotated configuration with another traversal child identifier is refused
+  even by an unannotated one. A button and an image are different flags, so `isButton` over
+  `isImage` is one node; WAI-ARIA 1.2 §5.2.8 "Presentational children"
   (<https://www.w3.org/TR/wai-aria-1.2/#childrenArePresentational>) and the accessible name
   computation's "name from content" (<https://www.w3.org/TR/accname-1.2/#step2F>).
 

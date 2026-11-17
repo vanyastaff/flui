@@ -560,7 +560,7 @@ impl MacOSWindow {
             }
             self.publish_state();
 
-            tracing::debug!("Window resized to {}x{}", new_size.width, new_size.height);
+            tracing::debug!(size = ?new_size, "the window was resized");
         }
     }
 
@@ -580,7 +580,7 @@ impl MacOSWindow {
 
             self.publish_state();
 
-            tracing::debug!("Window moved to ({}, {})", new_origin.x, new_origin.y);
+            tracing::debug!(origin = ?new_origin, "the window moved");
         }
     }
 
@@ -750,7 +750,7 @@ impl MacOSWindow {
                 refused.report();
             }
             if changed {
-                tracing::info!("Window scale factor changed to {}", new_scale.get());
+                tracing::info!(scale = new_scale.get(), "the window's scale changed");
             }
 
             // Re-read the display in the same pass: this handler is reached on
@@ -782,7 +782,7 @@ impl MacOSWindow {
             let screen: ObjcId = msg_send![self.ns_window, screen];
             if screen != NIL {
                 let scale: f64 = msg_send![screen, backingScaleFactor];
-                tracing::debug!("Window moved to screen with scale factor {}", scale);
+                tracing::debug!(scale, "the window moved to another screen");
 
                 // Update scale factor (will trigger backing properties changed)
                 self.handle_backing_properties_changed();

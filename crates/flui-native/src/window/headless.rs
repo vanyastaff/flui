@@ -371,8 +371,6 @@ impl host::Window<HeadlessLoop> for HeadlessHostWindow {
     }
 }
 
-// ==================== Mock Implementations ====================
-
 /// A simulated move of a window named a display its platform does not hold
 /// ([`HeadlessHostWindow::simulate_move_to`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]

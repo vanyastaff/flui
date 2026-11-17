@@ -22,7 +22,7 @@
   then `FileRenameInfoEx` with POSIX semantics);
   `Stebalien/tempfile@303aaa99f2e2a03ac48643c0486c709d5081d746`, module `file::imp::windows`
   (`persist` passes a path without the `\\?\` prefix);
-  `flutter/flutter@97cd226ec5ee4c4075b8516ea294152dba1fbfcc`
+  `flutter/flutter@3.50.0`
   `packages/flutter/lib/src/services/restoration.dart` (restoration keyed by widget identity)
 
 ## Context and problem statement

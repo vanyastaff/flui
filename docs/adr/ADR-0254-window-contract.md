@@ -102,7 +102,7 @@
 - **Sources:** other projects are read at pinned commits and cited as `owner/repo@sha path:line`:
   winit 0.31.0-beta.3 (`rust-windowing/winit@1893565716`), GPUI (`zed-industries/zed@fae8a35482`),
   Slint (`slint-ui/slint@277e7676ce`), Masonry (`linebender/xilem@271a27a6d4`), SDL3
-  (`libsdl-org/SDL@d0183f0ee3`), Flutter's embedder (`flutter/flutter@6597889f57`),
+  (`libsdl-org/SDL@d0183f0ee3`), Flutter's embedder (`flutter/flutter@3.50.0`),
   raw-window-handle 0.6.2 (`rust-windowing/raw-window-handle@1b859486d7`) and wgpu
   (`gfx-rs/wgpu@3050396df2`). Counts and lines of FLUI's own tree are at `main` `083b0f75d`.
 
@@ -126,7 +126,7 @@ masonry_core/src/app/render_root.rs:228-306](https://github.com/linebender/xilem
 string ([libsdl-org/SDL@d0183f0ee3 include/SDL3/SDL_video.h](https://github.com/libsdl-org/SDL/blob/d0183f0ee3/include/SDL3/SDL_video.h), `SDL_GetError` throughout) and
 makes size and mode changes requests that `SDL_SyncWindow` waits for (`:1041-1046`); Flutter's
 embedder has no window commands and takes a metrics snapshot instead
-([flutter/flutter@6597889f57 engine/src/flutter/shell/platform/embedder/embedder.h:1098-1148](https://github.com/flutter/flutter/blob/6597889f57/engine/src/flutter/shell/platform/embedder/embedder.h#L1098-L1148)).
+([flutter/flutter@3.50.0 engine/src/flutter/shell/platform/embedder/embedder.h:1098-1148](https://github.com/flutter/flutter/blob/3.50.0/engine/src/flutter/shell/platform/embedder/embedder.h#L1098-L1148)).
 The triad is the best shape of the group. `PlatformWindow` around it is not finished:
 
 - **Three sources per fact.** `is_focused`, `is_visible`, `physical_size`, `logical_size`,

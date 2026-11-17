@@ -26,7 +26,7 @@
   [ADR-0244](ADR-0244-os-version-floors-and-gates.md)
 - **Sources:** other projects are read at pinned commits and cited as `owner/repo@sha path:line`:
   Tauri v2 (`tauri-apps/tauri@9318ab84b8`) with its plugins
-  (`tauri-apps/plugins-workspace@11211c30e7`), Flutter (`flutter/flutter@6597889f57`) with its
+  (`tauri-apps/plugins-workspace@11211c30e7`), Flutter (`flutter/flutter@3.50.0`) with its
   packages (`flutter/packages@1383427519`, `Baseflow/flutter-permission-handler@0684469188`),
   Expo (`expo/expo@0937842df7`), Project Robius (`project-robius/robius-location@1974355613`),
   `rust-mobile/ndk-context@0eb252bf23`, `bilelmoussaoui/ashpd@c9b9ddcf4a`, the XDG portals
@@ -185,8 +185,8 @@ lacks, and everything else the rule leaves out.
   which the application delegate hands out. A macOS application without a menu bar has no Quit or
   Edit menu (the App menu bar row of `docs/platform-parity.md`), and the references keep it in
   core: Tauri through `muda` ([tauri-apps/tauri@9318ab84b8 crates/tauri/Cargo.toml](https://github.com/tauri-apps/tauri/blob/9318ab84b8/crates/tauri/Cargo.toml)), Flutter's
-  `PlatformMenuBar` ([flutter/flutter@6597889f57
-  packages/flutter/lib/src/widgets/platform_menu_bar.dart](https://github.com/flutter/flutter/blob/6597889f57/packages/flutter/lib/src/widgets/platform_menu_bar.dart)), GPUI's `Platform::set_menus`
+  `PlatformMenuBar` ([flutter/flutter@3.50.0
+  packages/flutter/lib/src/widgets/platform_menu_bar.dart](https://github.com/flutter/flutter/blob/3.50.0/packages/flutter/lib/src/widgets/platform_menu_bar.dart)), GPUI's `Platform::set_menus`
   ([zed-industries/zed@fae8a35482 crates/gpui/src/platform.rs:488](https://github.com/zed-industries/zed/blob/fae8a35482/crates/gpui/src/platform.rs#L488)) and Electron's `Menu`
   ([electron/electron@30db518815 docs/api/menu.md](https://github.com/electron/electron/blob/30db518815/docs/api/menu.md)).
 - **The Windows jump list is not core**: `ICustomDestinationList` needs no object the host owns.

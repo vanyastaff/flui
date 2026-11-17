@@ -458,13 +458,7 @@ impl WindowsWindow {
             // its own chrome; the window opens either way.
             let _ = super::backdrop::apply_chrome(hwnd, chrome);
 
-            tracing::info!(
-                "Created window HWND {:?} - {}x{} - scale: {}",
-                hwnd,
-                width,
-                height,
-                scale_factor
-            );
+            tracing::info!(?hwnd, width, height, scale_factor, "a window opened");
 
             // Seed observations from the native client, not requested outer
             // bounds. The window, and every hook of its class, reads its

@@ -451,8 +451,11 @@ mod input {
     //! (iOS Safari moves the focus without a keyboard otherwise, and
     //! `navigator.userActivation.isActive`, true for seconds after a tap, does
     //! not mean "inside it"), while the application may focus its field after
-    //! the handler returned. So, as Flutter's web engine keeps one editing
-    //! element, the window has one hidden editor for its whole life: a field
+    //! the handler returned. So the window has one hidden editor for its
+    //! whole life, where Flutter 3.50's web engine makes an editing element
+    //! for each connection and removes it when the connection ends
+    //! (`DefaultTextEditingStrategy::initializeTextEditing` and `disable` in
+    //! its `text_editing.dart`): a field
     //! change rewrites its content and hints and leaves its focus, so the
     //! keyboard stays up from one field to the next, and only a store
     //! released with no field after it gives the focus back to the canvas.
