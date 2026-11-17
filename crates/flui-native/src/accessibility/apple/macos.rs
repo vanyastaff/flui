@@ -173,6 +173,9 @@ impl crate::host::WindowAccessibility for MacosAccessibility {
             events.raise();
         }
     }
+
+    /// AppKit places the nodes from the subclassed view's own position.
+    fn bounds_changed(&self, _: crate::host::ScreenBounds) {}
 }
 
 /// Each AppKit window's content view is subclassed for VoiceOver as the

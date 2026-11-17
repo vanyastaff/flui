@@ -21,7 +21,7 @@ use std::rc::{Rc, Weak};
 
 use flui_foundation::geometry::{DevicePixelRatio, DevicePoint};
 use flui_platform::text_store::{
-    OwnerCalls, TextChange, TextInputPurpose, TextStore, TextStoreObserver, TextStoreStatus,
+    OwnerCalls, TextChange, TextInputOptions, TextStore, TextStoreObserver, TextStoreStatus,
     Utf16Range,
 };
 use windows::Win32::{
@@ -92,9 +92,10 @@ pub(super) struct DocumentState {
     /// Whether the store was protected when the document opened: the
     /// static status TSF read then, which no notification can change.
     protected: bool,
-    /// The store's purpose when the document opened; static like
-    /// `protected`, because TSF reads the input scope with the document.
-    purpose: TextInputPurpose,
+    /// What the store asked of the input method when the document opened;
+    /// its purpose is static like `protected`, because TSF reads the input
+    /// scope with the document.
+    text_input: TextInputOptions,
     /// Set when TSF asked for the input scope since the last retrieval.
     scope_requested: Cell<Option<input_scope::ScopeRequest>>,
     /// The window, reached only while its handle still names it.
@@ -125,7 +126,7 @@ impl DocumentState {
     ) -> Rc<Self> {
         Rc::new(Self {
             protected: store.status().protected,
-            purpose: store.status().purpose,
+            text_input: store.status().text_input,
             scope_requested: Cell::new(None),
             store,
             window,
@@ -138,13 +139,13 @@ impl DocumentState {
         })
     }
 
-    /// The store's status as TSF last read it: the protection and purpose it
+    /// The store's status as TSF last read it: the protection and options it
     /// opened with, the rest current.
     fn opened_status(&self) -> TextStoreStatus {
         self.store
             .status()
             .with_protected(self.protected)
-            .with_purpose(self.purpose)
+            .with_text_input(self.text_input)
     }
 
     /// Forget the sink and stop listening to the store; the document is
@@ -1006,7 +1007,9 @@ impl TextStoreObserver for SinkObserver {
             return;
         };
         let now = state.store.status();
-        if state.closed.get() || (now.protected == state.protected && now.purpose == state.purpose)
+        if state.closed.get()
+            || (now.protected == state.protected
+                && now.text_input.purpose == state.text_input.purpose)
         {
             return;
         }

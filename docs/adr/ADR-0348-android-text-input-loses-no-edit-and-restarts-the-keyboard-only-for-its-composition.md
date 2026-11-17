@@ -7,6 +7,8 @@
   items 1 and 2, and item 9, were replaced by [ADR-0255](ADR-0255-mobile-and-web-hosts.md)); the
   Android row of
   [ADR-0090](ADR-0090-ime-pull-text-store-contract.md)'s platform mapping, which §3 states
+- **Superseded-by:** [ADR-0352](ADR-0352-a-text-field-asks-the-input-method-in-one-value-and-acts-on-its-enter-key-itself.md)
+  §2 for the keys an editor action arrives as in §3 (every action is Enter)
 - **Related:** [ADR-0255](ADR-0255-mobile-and-web-hosts.md) (how the dex reaches the APK and the
   Activity), [ADR-0313](ADR-0313-a-generational-slot-never-mints-an-id-twice.md) (identities come
   from `IdMint`), [ADR-0135](ADR-0135-win32-text-services-hold-the-text-store-on-the-owner-thread.md)

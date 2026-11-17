@@ -28,7 +28,7 @@ use flui_painting::{
 };
 use flui_platform::TargetPlatform;
 use flui_platform::keyboard::{ImeComposition, Key, KeyPress, KeyState, Modifiers, NamedKey};
-use flui_platform::text_store::{OwnerCalls, TextInputPurpose};
+use flui_platform::text_store::{EnterAction, OwnerCalls, TextInputOptions};
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_rendering::layer::LayerLink;
 use flui_rendering::pipeline::PipelineCell;
@@ -443,10 +443,10 @@ pub struct EditableText {
     /// stronger than redacting at each of those points, because it cannot be
     /// forgotten at a new one.
     pub(super) obscure_text: bool,
-    /// What the field is for, which input methods shape their layout and
-    /// suggestions by (default [`TextInputPurpose::Text`]). It never filters
-    /// what the field accepts.
-    pub(super) input_purpose: TextInputPurpose,
+    /// What the field asks of the input method and the on-screen keyboard
+    /// (default [`TextInputOptions::TEXT`]). It never filters what the field
+    /// accepts.
+    pub(super) text_input: TextInputOptions,
     /// The character painted in place of each source character.
     pub(super) obscuring_character: char,
     /// Called with the current text when Enter is pressed while this field
@@ -500,7 +500,7 @@ impl EditableText {
             autofocus: false,
             text_style: None,
             obscure_text: false,
-            input_purpose: TextInputPurpose::Text,
+            text_input: TextInputOptions::TEXT,
             obscuring_character: DEFAULT_OBSCURING_CHARACTER,
             on_submitted: None,
             on_changed: None,
@@ -611,13 +611,19 @@ impl EditableText {
         self
     }
 
-    /// What the field is for: an email, URL, phone or number field asks the
-    /// input method for the layout that suits it (default
-    /// [`TextInputPurpose::Text`]). An obscured field is a password field
-    /// whatever its purpose.
+    /// What the field asks of the input method and the on-screen keyboard
+    /// (default [`TextInputOptions::TEXT`]): the layout its purpose names, the
+    /// label of the Enter key, capitalization, correction and what the system
+    /// may fill it with. An obscured field is a password field whatever it
+    /// asks, never suggested or corrected.
+    ///
+    /// Enter acts by the label: after [`Self::on_submitted`]'s callback, a
+    /// field whose Enter says [`EnterAction::Next`] moves the focus to the
+    /// next field and one that says [`EnterAction::Previous`] to the one
+    /// before, on every host and from a hardware keyboard too.
     #[must_use]
-    pub fn input_purpose(mut self, purpose: TextInputPurpose) -> Self {
-        self.input_purpose = purpose;
+    pub fn text_input(mut self, text_input: TextInputOptions) -> Self {
+        self.text_input = text_input;
         self
     }
 
@@ -676,17 +682,16 @@ impl EditableText {
     /// Call `callback` with the field's current text when Enter is pressed
     /// while it has focus.
     ///
-    /// Fires on a raw Enter keypress rather than an IME action-button
-    /// commit, since this substrate has no platform IME-action-button
-    /// integration yet (see the type doc's `# DEFERRED (v1)` list). The key
-    /// is consumed ([`KeyEventResult::Handled`](flui_interaction::focus::KeyEventResult))
-    /// only when a callback is set — with none, Enter is left unconsumed
-    /// (`Ignored`) so an ancestor can still act on it, unchanged from this
-    /// field's behavior before this method existed.
+    /// Fires on an Enter press, which is what every host delivers the
+    /// on-screen keyboard's action key as, whatever its label
+    /// ([`Self::text_input`]). The key is consumed
+    /// ([`KeyEventResult::Handled`](flui_interaction::focus::KeyEventResult))
+    /// when a callback is set or the label moved the focus; otherwise Enter
+    /// is left unconsumed (`Ignored`) so an ancestor can still act on it.
     ///
     /// No multiline support exists in this substrate (there is no
     /// newline-insertion behavior to conflict with), so Enter has exactly
-    /// one meaning here: submit.
+    /// one meaning here: submit, then the label's focus move.
     ///
     /// The callback receives the dispatch's `&mut EventContext<'_>` first, so it
     /// writes a signal directly (ADR-0086); the field opens that write from
@@ -744,7 +749,7 @@ impl std::fmt::Debug for EditableText {
             .field("autofocus", &self.autofocus)
             .field("text_style", &self.text_style)
             .field("obscure_text", &self.obscure_text)
-            .field("input_purpose", &self.input_purpose)
+            .field("text_input", &self.text_input)
             .field("obscuring_character", &self.obscuring_character)
             .field("on_submitted", &self.on_submitted.is_some())
             .field("on_changed", &self.on_changed.is_some())
@@ -896,9 +901,10 @@ pub struct EditableTextState {
     /// Whether the field is obscured, read by the copy action at key time
     /// and kept current by `did_update_view`.
     obscure: Rc<Cell<bool>>,
-    /// The field's purpose, read by the text store's status and kept current
-    /// by `did_update_view`.
-    input_purpose: Rc<Cell<TextInputPurpose>>,
+    /// What the field asks of the input method, read by the text store's
+    /// status and the Enter key's handler, and kept current by
+    /// `did_update_view`.
+    text_input: Rc<Cell<TextInputOptions>>,
     /// The mask character, read by the text store's geometry and kept
     /// current by `did_update_view`.
     obscuring_character: Rc<Cell<char>>,
@@ -981,7 +987,7 @@ impl StatefulView for EditableText {
             primary: Rc::default(),
             selection_drag: Rc::new(Cell::new(None)),
             obscure: Rc::new(Cell::new(self.obscure_text)),
-            input_purpose: Rc::new(Cell::new(self.input_purpose)),
+            text_input: Rc::new(Cell::new(self.text_input)),
             obscuring_character: Rc::new(Cell::new(self.obscuring_character)),
             text_store: None,
             enclosing_action_chain: None,
@@ -1381,6 +1387,7 @@ impl EditableTextState {
             Rc::clone(&self.controller),
             Rc::clone(node),
             Rc::clone(&self.on_submitted),
+            Rc::clone(&self.text_input),
             self.writer(),
             Rc::clone(&self.platform),
         );
@@ -1766,7 +1773,7 @@ impl ViewState<EditableText> for EditableTextState {
             pipeline: self.pipeline_owner.clone(),
             inner_anchor: self.inner_anchor.clone(),
             obscure: Rc::clone(&self.obscure),
-            input_purpose: Rc::clone(&self.input_purpose),
+            text_input: Rc::clone(&self.text_input),
             obscuring_character: Rc::clone(&self.obscuring_character),
             edits: self.edit_observer(),
         }));
@@ -2010,8 +2017,8 @@ impl ViewState<EditableText> for EditableTextState {
         // reconciled below, once the controller is the replacement's too, so
         // no backend sees the new flag with the old controller's text.
         let mut reclaim = was_obscured != new_view.obscure_text;
-        let was_purpose = self.input_purpose.replace(new_view.input_purpose);
-        if (was_obscured != new_view.obscure_text || was_purpose != new_view.input_purpose)
+        let was_text_input = self.text_input.replace(new_view.text_input);
+        if (was_obscured != new_view.obscure_text || was_text_input != new_view.text_input)
             && let Some(store) = &self.text_store
         {
             calls.run(|| store.status_changed());
@@ -2546,6 +2553,7 @@ fn build_key_handler(
     controller: Rc<RefCell<TextEditingController>>,
     focus_node: Rc<FocusNode>,
     on_submitted: Rc<RefCell<Option<SubmitCallback>>>,
+    text_input: Rc<Cell<TextInputOptions>>,
     writer: WriterSource,
     platform: Rc<Cell<TargetPlatform>>,
 ) -> KeyEventHandler {
@@ -2670,11 +2678,10 @@ fn build_key_handler(
                 KeyEventResult::Handled
             }
             // Only claimed when something actually consumes it — with no
-            // `on_submitted` set, Enter is left `Ignored` so an ancestor
-            // can still act on it, unchanged from this field's behavior
-            // before `on_submitted` existed. See `on_submitted`'s doc for
-            // why a raw Enter keypress rather than an IME action-button
-            // commit.
+            // `on_submitted` set and no focus-moving label, Enter is left
+            // `Ignored` so an ancestor can still act on it. Every host
+            // delivers the on-screen keyboard's action key as Enter (see
+            // `on_submitted`'s doc).
             Key::Named(NamedKey::Enter) => {
                 // IME owns Enter while composing — same suppression
                 // contract the `Key::Character` arm above follows: an
@@ -2707,17 +2714,35 @@ fn build_key_handler(
                 // `TextEditingController::clear()`). Calling it while either guard
                 // is still held is the same drop-under-guard hazard as for a
                 // `Mutex`/`RwLock`, applied here to a `RefCell`.
-                let Some(callback) = on_submitted.borrow().clone() else {
+                let callback = on_submitted.borrow().clone();
+                // The label the key showed, read before the callback, which
+                // may rebuild the field with another.
+                let action = text_input.get().enter_action;
+                let moves_focus = matches!(action, EnterAction::Next | EnterAction::Previous);
+                if callback.is_none() && !moves_focus {
                     return KeyEventResult::Ignored;
-                };
+                }
                 // Auto-repeat (macOS/Win32 report a held Enter as repeated
                 // `Down` events, not one Down followed by held state) must
-                // not resubmit on every tick — the key is still consumed
-                // (`Handled`), just without calling the callback again.
-                if event.state != KeyState::Down(KeyPress::AutoRepeat) {
+                // not resubmit or move on every tick — the key is still
+                // consumed (`Handled`), just without acting again.
+                if event.state == KeyState::Down(KeyPress::AutoRepeat) {
+                    return KeyEventResult::Handled;
+                }
+                if let Some(callback) = callback {
                     let text = controller.text();
                     drop(controller);
                     writer.write(|ctx| callback(ctx, &text));
+                }
+                // A callback that moved the focus itself, or let the field
+                // go, decided where it is: the label moves it only from here.
+                if moves_focus && focus_node.has_primary_focus() {
+                    // Nowhere to go leaves the focus here.
+                    if action == EnterAction::Next {
+                        focus_node.next_focus();
+                    } else {
+                        focus_node.previous_focus();
+                    }
                 }
                 KeyEventResult::Handled
             }

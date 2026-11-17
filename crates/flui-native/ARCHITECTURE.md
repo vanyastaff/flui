@@ -980,7 +980,7 @@ trait depends on `flui-platform` instead.
   `a_past_turn_deadline_does_not_spin_the_win32_loop` and
   `a_due_turn_deadline_wakes_the_owner_from_a_modal_loop` hold it.
 - **A window states when the user places or resizes it (ADR-0343 §2,
-  ADR-0352 §4).** Each host fills `ReportedFacts::interaction` on the report
+  ADR-0354 §4).** Each host fills `ReportedFacts::interaction` on the report
   that carries a change: Win32 `UserPlacing` inside its size-move loop and
   while the default procedure carries out an `SC_MAXIMIZE`, `SC_MINIMIZE` or
   `SC_RESTORE` the user worked, `UserResizing` from the loop's first
@@ -991,7 +991,7 @@ trait depends on `flui-platform` instead.
   `windowDidEndLiveResize:`, Wayland while a configure carries `resizing`. The
   headless host states what `HeadlessHostWindow::simulate_interaction` said;
   every other host `Unknown` ([gaps](../../docs/gaps.md#only-win32-says-when-the-user-places-a-window-and-not-for-every-placement)).
-- **A grab is the desktop's, so it ends with the focus (ADR-0352 §2).** Each
+- **A grab is the desktop's, so it ends with the focus (ADR-0354 §2).** Each
   host takes `CursorGrab::Confined`/`Locked` only for a window with the
   keyboard focus and lets it go on focus loss, hide and close, before it
   publishes: Win32's `ClipCursor` is the desktop's and outlives a window that
@@ -1421,9 +1421,22 @@ trait depends on `flui-platform` instead.
   OS extension; until that reader exists the handle is kept and read under
   `testing` only. The window tells its AT-SPI bridge each change of the
   compositor's activation, which `UnixAccessibility::focus_changed` passes to
-  the adapter (the X11 window already called it); the bridge reaches the
-  adapter through `AtSpiAdapter`, the two calls it makes of
-  `accesskit_unix::Adapter`. `Activate` is a request with an
+  the adapter (the X11 window already called it), and where its content is
+  (`WindowAccessibility::bounds_changed`): the compositor tells a client
+  nothing of its window's position, so the window is at the origin and its
+  content below the title bar it draws itself (`scale::unplaced_bounds`),
+  while the X11 window passes its frame's and its content's rectangles on the
+  root each time a read of the server finds them changed. That read follows
+  the events the server sends the window (`ConfigureNotify`, including the
+  synthetic one ICCCM 4.1.5 has a window manager send when it moves a frame,
+  `ReparentNotify`, `_NET_FRAME_EXTENTS`, the focus), so a manager that moves
+  a frame without telling the client leaves the old position until the next
+  such event ([gaps](../../docs/gaps.md)). The headless window passes its
+  simulated rectangle, which `HeadlessWindowSystem::accessibility_bounds`
+  reports. AT-SPI's screen
+  coordinates of a node are the content's origin plus the node's place; the
+  bridge reaches the adapter through `AtSpiAdapter`, the three calls it makes
+  of `accesskit_unix::Adapter`. `Activate` is a request with an
   `xdg-activation` token (`activation`): the window asks for one naming the
   last user input (its seat, serial and surface, `UserInput`, kept by the
   loop in `LastInput`, which the windows read; no input records into it until
@@ -2268,8 +2281,10 @@ of that tap without one give the focus back. A field attached outside a tap
 focuses the editor only while the canvas has the page's focus.
 `navigator.userActivation.isActive` is not used: it stays true for seconds
 after a tap, outside its handler. The `EditContext` path writes the canvas's
-`inputmode` through `owner::web::CanvasWrites` and puts the page's value and
-the canvas's own `editContext` back when it lets the field go. The
+`inputmode` and `enterkeyhint` through `owner::web::CanvasWrites` and puts the
+page's values and the canvas's own `editContext` back when it lets the field
+go; an `EditContext` has no capitalization, correction or autofill for the
+browser to read, so those reach only the editors. The
 headless-Chrome tests (constructed events; the test driver has no trusted
 input) `a_tap_focuses_an_editor_the_field_attached_after_it_takes_over`,
 `a_tap_no_field_follows_gives_the_focus_back_to_the_canvas`,
@@ -2390,8 +2405,9 @@ and writes only what changed between two specs.
   host writes no published value over a served field, and a field no store is
   served through shows its published value again after an edit and once the
   text input releases it (`FocusedField::on_release`). The field's
-  hints are the store's status (`inputmode`, an `autocomplete` of its
-  purpose, `enterkeyhint`). The focus leaving the field, the field's removal
+  hints are the store's status (`inputmode`, an `autocomplete` of its autofill
+  or purpose, `enterkeyhint`, `autocapitalize`, `autocorrect`, `spellcheck`).
+  The focus leaving the field, the field's removal
   or the host's retirement moves the store back to the canvas, and the
   element keeps no listener of the text input's. A hidden editor that takes
   the store over takes the canvas's focus only, never another element's of the
@@ -2615,12 +2631,25 @@ waits at most 500ms before the bootstrap (`AppHandler::ready`); unavailable or s
 unknown and can recover later. No D-Bus call runs in the frame path. Successful
 unsigned `org.freedesktop.appearance/reduced-motion` values map 1 to Reduce and
 other values to NoPreference. A missing key permits the GNOME
-`org.gnome.desktop.interface/enable-animations` fallback; transient errors
+`org.gnome.desktop.interface/enable-animations` fallback, and with neither key
+motion is unobserved, as every other key without a value is; failed reads
 preserve the last accepted snapshot. Settings v1 uses its double-variant `Read`
-reply. Healthy observations use notifications; failed reads retain a bounded
-retry that unrelated notifications cannot postpone. Service-owner changes
-refresh the same observation set. Shutdown fences owner admission before
-cancelling the task, whose state holds no strong owner/source cycle.
+reply. The watch never polls. A refresh is retried on `READ_RETRIES`' doubling
+schedule, which runs out and which unrelated notifications cannot postpone,
+after a read that fails in a way that passes by itself (the call timed out, no
+reply, the portal's `Failed`), and after a refresh in which the portal answered
+no setting at all: `xdg-desktop-portal` folds a backend that has not started
+or has gone into `NotFound` for every key, and the backend's return changes no
+owner on the bus and sends no signal. A key missing beside others that answer,
+a portal without the Settings interface and a portal not on the bus
+(`ServiceUnknown`) wait for the next `SettingChanged` or `NameOwnerChanged`,
+each of which refreshes the same observation set and starts the schedule over.
+A session bus that does not answer, or a connection that ends before the portal
+answered on it, is tried again on `CONNECT_RETRIES`' schedule, which only a
+connection the portal answered on starts over, and once it runs out the watch
+ends with the observation it has.
+Shutdown fences owner admission before cancelling the task, whose state holds
+no strong owner/source cycle.
 
 The same connection reads `org.freedesktop.appearance/color-scheme`: 1 is dark,
 everything else (no preference, prefers light, a missing key) light. It is kept

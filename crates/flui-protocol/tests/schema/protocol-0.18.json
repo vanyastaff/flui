@@ -778,6 +778,26 @@
         }
       ]
     },
+    "Autofill": {
+      "oneOf": [
+        {
+          "const": "username",
+          "type": "string"
+        },
+        {
+          "const": "current_password",
+          "type": "string"
+        },
+        {
+          "const": "new_password",
+          "type": "string"
+        },
+        {
+          "const": "one_time_code",
+          "type": "string"
+        }
+      ]
+    },
     "Availability": {
       "oneOf": [
         {
@@ -1028,6 +1048,26 @@
             "unavailable"
           ],
           "type": "object"
+        }
+      ]
+    },
+    "Capitalization": {
+      "oneOf": [
+        {
+          "const": "none",
+          "type": "string"
+        },
+        {
+          "const": "sentences",
+          "type": "string"
+        },
+        {
+          "const": "words",
+          "type": "string"
+        },
+        {
+          "const": "characters",
+          "type": "string"
         }
       ]
     },
@@ -1387,6 +1427,22 @@
             "any"
           ],
           "type": "object"
+        }
+      ]
+    },
+    "Correction": {
+      "oneOf": [
+        {
+          "const": "off",
+          "type": "string"
+        },
+        {
+          "const": "suggestions",
+          "type": "string"
+        },
+        {
+          "const": "autocorrect",
+          "type": "string"
         }
       ]
     },
@@ -2083,6 +2139,38 @@
     },
     "Empty": {
       "type": "object"
+    },
+    "EnterAction": {
+      "oneOf": [
+        {
+          "const": "default",
+          "type": "string"
+        },
+        {
+          "const": "done",
+          "type": "string"
+        },
+        {
+          "const": "go",
+          "type": "string"
+        },
+        {
+          "const": "next",
+          "type": "string"
+        },
+        {
+          "const": "previous",
+          "type": "string"
+        },
+        {
+          "const": "search",
+          "type": "string"
+        },
+        {
+          "const": "send_message",
+          "type": "string"
+        }
+      ]
     },
     "ErrorCode": {
       "oneOf": [
@@ -5437,12 +5525,6 @@
         "closes": {
           "$ref": "#/$defs/Capability"
         },
-        "confines_cursor": {
-          "$ref": "#/$defs/Capability"
-        },
-        "cursor_image": {
-          "$ref": "#/$defs/NativeAvailability"
-        },
         "enters_fullscreen": {
           "$ref": "#/$defs/Capability"
         },
@@ -5450,15 +5532,6 @@
           "$ref": "#/$defs/NativeAvailability"
         },
         "hides": {
-          "$ref": "#/$defs/Capability"
-        },
-        "keeps_on_bottom": {
-          "$ref": "#/$defs/Capability"
-        },
-        "keeps_on_top": {
-          "$ref": "#/$defs/Capability"
-        },
-        "locks_cursor": {
           "$ref": "#/$defs/Capability"
         },
         "material": {
@@ -5488,9 +5561,6 @@
         "reports_system_gestures": {
           "$ref": "#/$defs/Capability"
         },
-        "sets_aspect_ratio": {
-          "$ref": "#/$defs/Capability"
-        },
         "sets_constraints": {
           "$ref": "#/$defs/Capability"
         },
@@ -5501,9 +5571,6 @@
           "$ref": "#/$defs/Capability"
         },
         "sets_resizable": {
-          "$ref": "#/$defs/Capability"
-        },
-        "sets_resize_increments": {
           "$ref": "#/$defs/Capability"
         },
         "sets_size": {
@@ -5539,18 +5606,6 @@
         "frame_rate_hint"
       ],
       "type": "object"
-    },
-    "NativeCursorGrab": {
-      "oneOf": [
-        {
-          "const": "confined",
-          "type": "string"
-        },
-        {
-          "const": "locked",
-          "type": "string"
-        }
-      ]
     },
     "NativeDevice": {
       "properties": {
@@ -6511,18 +6566,6 @@
         },
         {
           "const": "detents",
-          "type": "string"
-        }
-      ]
-    },
-    "NativeWindowLevel": {
-      "oneOf": [
-        {
-          "const": "always_on_top",
-          "type": "string"
-        },
-        {
-          "const": "always_on_bottom",
           "type": "string"
         }
       ]
@@ -7583,18 +7626,6 @@
         {
           "additionalProperties": false,
           "properties": {
-            "raw_motion": {
-              "$ref": "#/$defs/RawMotion"
-            }
-          },
-          "required": [
-            "raw_motion"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
             "device_added": {
               "$ref": "#/$defs/DeviceChange"
             }
@@ -7875,49 +7906,6 @@
     "ProtocolVersion": {
       "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$",
       "type": "string"
-    },
-    "RawMotion": {
-      "properties": {
-        "at": {
-          "items": {
-            "format": "double",
-            "type": "number"
-          },
-          "maxItems": 2,
-          "minItems": 2,
-          "type": [
-            "array",
-            "null"
-          ]
-        },
-        "dx": {
-          "format": "double",
-          "type": "number"
-        },
-        "dy": {
-          "format": "double",
-          "type": "number"
-        },
-        "pointer": {
-          "$ref": "#/$defs/PointerInfo"
-        },
-        "t": {
-          "format": "uint64",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "unaccelerated": {
-          "type": "boolean"
-        }
-      },
-      "required": [
-        "pointer",
-        "t",
-        "dx",
-        "dy",
-        "unaccelerated"
-      ],
-      "type": "object"
     },
     "ReadParams": {
       "properties": {
@@ -9493,11 +9481,50 @@
     },
     "StoreStatus": {
       "properties": {
+        "autofill": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Autofill"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "capitalization": {
+          "$ref": "#/$defs/Capitalization"
+        },
+        "correction": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Correction"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "decimal": {
+          "type": "boolean"
+        },
+        "enter_action": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EnterAction"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "protected": {
           "type": "boolean"
         },
         "purpose": {
           "$ref": "#/$defs/InputPurpose"
+        },
+        "signed": {
+          "type": "boolean"
         },
         "single_line": {
           "type": "boolean"
@@ -11316,16 +11343,6 @@
           "minItems": 2,
           "type": "array"
         },
-        "cursor_grab": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/NativeCursorGrab"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
         "display": {
           "format": "uint64",
           "minimum": 0,
@@ -11350,16 +11367,6 @@
           "anyOf": [
             {
               "$ref": "#/$defs/KeyboardInset"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "level": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/NativeWindowLevel"
             },
             {
               "type": "null"
@@ -11432,9 +11439,6 @@
             "boolean",
             "null"
           ]
-        },
-        "user_resizing": {
-          "type": "boolean"
         },
         "visible": {
           "type": "boolean"

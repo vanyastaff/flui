@@ -19,19 +19,21 @@ use std::sync::Weak;
 
 use flui_foundation::geometry::{Bounds, Point};
 use flui_platform::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, NamedKey};
-use flui_platform::text_store::TextStoreStatus;
 use flui_platform::text_store::utf16::{Utf16Offset, Utf16Range};
+use flui_platform::text_store::{Autofill, TextStoreStatus};
 use flui_platform::{EventTime, PlatformInput};
 use objc2::rc::{Retained, Weak as ObjcWeak};
 use objc2::runtime::ProtocolObject;
-use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send};
+use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send};
 
 use objc2_foundation::{
     NSArray, NSAttributedStringKey, NSComparisonResult, NSDictionary, NSInteger, NSObject,
     NSObjectProtocol, NSPoint as CGPoint, NSRange, NSRect as CGRect, NSSize as CGSize, NSString,
 };
 use objc2_ui_kit::{
-    NSWritingDirection, UIKeyInput, UIKeyboardType, UIResponder, UITextAutocorrectionType,
+    NSWritingDirection, UIKeyInput, UIKeyboardType, UIResponder, UIReturnKeyType,
+    UITextAutocapitalizationType, UITextAutocorrectionType, UITextContentTypeNewPassword,
+    UITextContentTypeOneTimeCode, UITextContentTypePassword, UITextContentTypeUsername,
     UITextInput, UITextInputDelegate, UITextInputStringTokenizer, UITextInputTokenizer,
     UITextInputTraits, UITextLayoutDirection, UITextPosition, UITextRange, UITextSelectionRect,
     UITextSpellCheckingType, UITextStorageDirection, UIView,
@@ -128,6 +130,9 @@ pub(super) struct ResponderIvars {
     delivery: Weak<WindowDelivery>,
     /// What the keyboard is told of the focused field.
     traits: Cell<KeyboardTraits>,
+    /// The traits changed while the keyboard composed: reloaded once its
+    /// marked text ends, never under it.
+    reload_owed: Cell<bool>,
     tokenizer: OnceCell<Retained<UITextInputStringTokenizer>>,
     input_delegate: RefCell<Option<ObjcWeak<ProtocolObject<dyn UITextInputDelegate>>>>,
 }
@@ -195,6 +200,52 @@ define_class!(
                 || UITextSpellCheckingType(self.ivars().traits.get().spell_checking),
             )
         }
+
+        #[unsafe(method(returnKeyType))]
+        fn return_key_type(&self) -> UIReturnKeyType {
+            os_entry(
+                "FluiTextInputView returnKeyType",
+                (),
+                AfterPanic::Answer(|()| UIReturnKeyType::Default),
+                || UIReturnKeyType(self.ivars().traits.get().return_key),
+            )
+        }
+
+        #[unsafe(method(autocapitalizationType))]
+        fn autocapitalization_type(&self) -> UITextAutocapitalizationType {
+            os_entry(
+                "FluiTextInputView autocapitalizationType",
+                (),
+                AfterPanic::Answer(|()| UITextAutocapitalizationType::None),
+                || UITextAutocapitalizationType(self.ivars().traits.get().autocapitalization),
+            )
+        }
+
+        /// UIKit's constant for what the field may be filled with, or `nil`.
+        #[unsafe(method_id(textContentType))]
+        fn text_content_type(&self) -> Option<Retained<NSString>> {
+            os_entry(
+                "FluiTextInputView textContentType",
+                (),
+                AfterPanic::Answer(|()| None),
+                || {
+                    let constant: &'static NSString =
+                        match self.ivars().traits.get().content? {
+                            // SAFETY: a UIKit constant, immutable for the process's life.
+                            Autofill::Username => unsafe { UITextContentTypeUsername },
+                            // SAFETY: a UIKit constant, immutable for the process's life.
+                            Autofill::CurrentPassword => unsafe { UITextContentTypePassword },
+                            // SAFETY: a UIKit constant, immutable for the process's life.
+                            Autofill::NewPassword => unsafe { UITextContentTypeNewPassword },
+                            // SAFETY: a UIKit constant, immutable for the process's life.
+                            Autofill::OneTimeCode => unsafe { UITextContentTypeOneTimeCode },
+                            // A kind added later that UIKit has no word for here.
+                            _ => return None,
+                        };
+                    Some(constant.retain())
+                },
+            )
+        }
     }
 
     // SAFETY: the methods below carry UIKit's selectors and signatures for
@@ -211,7 +262,9 @@ define_class!(
         #[unsafe(method(insertText:))]
         fn insert_text(&self, text: &NSString) {
             os_entry("FluiTextInputView insertText:", (), AfterPanic::Answer(|()| ()), || {
-                if self.client().type_text(text.to_string()) == Typed::Return {
+                let typed = self.client().type_text(text.to_string());
+                self.reload_if_owed();
+                if typed == Typed::Return {
                     self.press(NamedKey::Enter, Code::Enter);
                 }
             });
@@ -290,6 +343,7 @@ define_class!(
                 let selected = Utf16Range::try_new(Utf16Offset::new(selected.location), Utf16Offset::new(end))
                     .expect("BUG: a saturating end is never before its start");
                 self.client().set_marked_text(text, selected, None);
+                self.reload_if_owed();
             });
         }
 
@@ -297,6 +351,7 @@ define_class!(
         fn unmark_text(&self) {
             os_entry("FluiTextInputView unmarkText", (), AfterPanic::Answer(|()| ()), || {
                 self.client().unmark_text();
+                self.reload_if_owed();
             });
         }
 
@@ -486,6 +541,7 @@ impl TextInputView {
             client: Rc::clone(&client),
             delivery,
             traits: Cell::new(KeyboardTraits::DEFAULT),
+            reload_owed: Cell::new(false),
             tokenizer: OnceCell::new(),
             input_delegate: RefCell::new(None),
         }));
@@ -582,6 +638,21 @@ impl TextInputView {
         if !self.isFirstResponder() {
             self.becomeFirstResponder();
         } else if changed {
+            // A reload under marked text would end the composition: it waits
+            // for the composition to end ([`Self::reload_if_owed`]).
+            if self.client().composes() {
+                self.ivars().reload_owed.set(true);
+            } else {
+                self.ivars().reload_owed.set(false);
+                self.reloadInputViews();
+            }
+        }
+    }
+
+    /// Reload the keyboard for traits that changed while it composed, once
+    /// its marked text has ended.
+    fn reload_if_owed(&self) {
+        if !self.client().composes() && self.ivars().reload_owed.replace(false) {
             self.reloadInputViews();
         }
     }

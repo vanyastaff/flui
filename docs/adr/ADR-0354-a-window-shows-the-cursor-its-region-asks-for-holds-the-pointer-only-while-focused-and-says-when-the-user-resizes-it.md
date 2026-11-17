@@ -1,4 +1,4 @@
-# ADR-0352: A window shows the cursor its region asks for, holds the pointer only while focused, and says when the user resizes it
+# ADR-0354: A window shows the cursor its region asks for, holds the pointer only while focused, and says when the user resizes it
 
 - **Status:** Accepted (2026-11-16)
 - **Date:** 2026-11-16
@@ -119,7 +119,7 @@ for it and state what they stated before.
 
 The native recording mirrors the new capabilities, `cursor_grab`, `level` and `user_resizing` as
 optional fields; the input recording gains `raw_motion`, a new variant of a union its reader
-refuses whole, so its format version moves and protocol 0.18 is a break (ADR-0342).
+refuses whole, so its format version moves and protocol 0.19 is a break (ADR-0342).
 
 ## Consequences
 

@@ -13,7 +13,7 @@ use std::{
 };
 
 use cursor_icon::CursorIcon;
-use flui_foundation::geometry::{Bounds, Point, Size};
+use flui_foundation::geometry::{Bounds, Point, Size, device_size, snap};
 use flui_platform::input_regions::{DeviceInputRegion, InputRegion};
 use flui_platform::text_store::TextStoreHost;
 use flui_platform::{
@@ -25,7 +25,7 @@ use flui_platform::{
 };
 use parking_lot::Mutex;
 
-use crate::host::{self, Host, WindowFacets, WindowPositions};
+use crate::host::{self, Host, ScreenBounds, WindowFacets, WindowPositions};
 use crate::host_window::HostWindow;
 use crate::input::regions::ProjectedInputRegions;
 use crate::owner::OpenWindowError;
@@ -416,6 +416,9 @@ pub struct HeadlessWindowSystem {
     /// The proportion the simulated system holds the user's resize to: the
     /// last [`WindowCommand::SetAspectRatio`] it applied.
     pub aspect_ratio: Option<flui_platform::AspectRatio>,
+    /// Where the window last told its accessibility bridge it lies, as every
+    /// native window tells its own ([`WindowAccessibility::bounds_changed`](crate::host::WindowAccessibility::bounds_changed)).
+    pub accessibility_bounds: Option<ScreenBounds>,
 }
 
 /// The native window of the headless host.
@@ -698,6 +701,8 @@ struct HeadlessHostWindowState {
     reported: Option<WindowState>,
     /// What [`HeadlessHostWindow::simulate_interaction`] last said.
     interaction: WindowInteraction,
+    /// Where the accessibility bridge was last told the window lies.
+    bridge_bounds: Option<ScreenBounds>,
 }
 
 /// A rectangle as the simulated window system holds it: the numbers a test
@@ -720,6 +725,20 @@ impl From<WindowGeometry> for ModelBounds {
 }
 
 impl HeadlessHostWindowState {
+    /// Where the window lies on the simulated screen, in device pixels: its
+    /// position and size at its scale. This host draws no frame, so the
+    /// content is the whole window. `None` for a size that is no rectangle.
+    fn screen_bounds(&self) -> Option<ScreenBounds> {
+        let ratio = self.scale_factor;
+        // `as` saturates and reads NaN as zero, as a coordinate must.
+        let origin = Point::new(
+            snap(ratio.to_device(self.position.x)) as i32,
+            snap(ratio.to_device(self.position.y)) as i32,
+        );
+        let window = Bounds::new(origin, device_size(self.size, ratio));
+        ScreenBounds::try_new(window, window).ok()
+    }
+
     fn geometry(&self) -> ModelBounds {
         ModelBounds {
             position: Some(self.position),
@@ -949,6 +968,7 @@ impl HeadlessHostWindow {
             capabilities,
             reported: None,
             interaction: WindowInteraction::None,
+            bridge_bounds: None,
         };
         model.size = model.clamp_size(opening.content.get(), &limits);
         if capabilities.permits(&WindowCommand::SetMode(options.mode)) {
@@ -973,7 +993,7 @@ impl HeadlessHostWindow {
         let redraw_delivery = Arc::downgrade(&delivery);
         let redraw_retirement = delivery.retirement();
         let reports = delivery.presentation_reports();
-        Self {
+        let window = Self {
             id,
             state,
             window_state,
@@ -997,7 +1017,9 @@ impl HeadlessHostWindow {
                 in_flight: Mutex::default(),
                 reports,
             }),
-        }
+        };
+        window.tell_bridge_bounds();
+        window
     }
 
     /// The window's display bounds in logical pixels, from the platform's
@@ -1010,12 +1032,30 @@ impl HeadlessHostWindow {
             .display_bounds(display)
     }
 
+    /// Tell the accessibility bridge where the window lies, when that changed
+    /// since it was last told, as a native window does, and keep what it was
+    /// told once it returns: the model's borrow is released while the bridge
+    /// runs.
+    fn tell_bridge_bounds(&self) {
+        let due = {
+            let state = self.state.borrow_mut();
+            state
+                .screen_bounds()
+                .filter(|bounds| state.bridge_bounds != Some(*bounds))
+        };
+        if let Some(bounds) = due {
+            self.facets.accessibility.bounds_changed(bounds);
+            self.state.borrow_mut().bridge_bounds = Some(bounds);
+        }
+    }
+
     /// The model changed: publish what it says now, and raise the handler's
     /// `state_changed` after the cell's lock is released when the revision
     /// grew. Only a change of the model ends a snapshot reported in its
     /// place ([`Self::simulate_state`]); a read never does.
     fn publish_state(&self) {
         self.state.borrow_mut().reported = None;
+        self.tell_bridge_bounds();
         self.source.cell.publish_report(
             &self.delivery,
             sample_of(&self.source.model, &self.delivery),
@@ -1164,6 +1204,7 @@ impl HeadlessHostWindow {
             level: state.level,
             resize_increments: state.resize_increments,
             aspect_ratio: state.aspect_ratio,
+            accessibility_bounds: state.bridge_bounds,
         }
     }
 

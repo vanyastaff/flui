@@ -292,9 +292,10 @@ pub(crate) const X_KEYCODE_OFFSET: u32 = 8;
 
 /// IBus's `ContentType`, purpose and hints, of `content`.
 pub(crate) fn ibus_content(content: ContentType) -> (u32, u32) {
-    // IBusInputPurpose: FREE_FORM 0, NUMBER 3, PHONE 4, URL 5, EMAIL 6,
-    // PASSWORD 8.
+    // IBusInputPurpose: FREE_FORM 0, DIGITS 2, NUMBER 3, PHONE 4, URL 5,
+    // EMAIL 6, PASSWORD 8.
     let purpose = match content.purpose {
+        ContentType::DIGITS => 2,
         ContentType::NUMBER => 3,
         ContentType::PHONE => 4,
         ContentType::URL => 5,
@@ -302,8 +303,21 @@ pub(crate) fn ibus_content(content: ContentType) -> (u32, u32) {
         ContentType::PASSWORD => 8,
         _ => 0,
     };
-    // IBusInputHints: PRIVATE 1 << 11, HIDDEN_TEXT 1 << 12, MULTILINE 1 << 14.
+    // IBusInputHints: SPELLCHECK 1 << 0, WORD_COMPLETION 1 << 2,
+    // UPPERCASE_CHARS 1 << 4, UPPERCASE_WORDS 1 << 5, UPPERCASE_SENTENCES
+    // 1 << 6, PRIVATE 1 << 11, HIDDEN_TEXT 1 << 12, MULTILINE 1 << 14.
     let mut hints = 0;
+    for (hint, ibus) in [
+        (ContentType::HINT_SPELLCHECK, 1 << 0),
+        (ContentType::HINT_COMPLETION, 1 << 2),
+        (ContentType::HINT_UPPERCASE, 1 << 4),
+        (ContentType::HINT_TITLECASE, 1 << 5),
+        (ContentType::HINT_AUTO_CAPITALIZATION, 1 << 6),
+    ] {
+        if content.hint & hint != 0 {
+            hints |= ibus;
+        }
+    }
     if content.hint & ContentType::HINT_SENSITIVE_DATA != 0 {
         hints |= 1 << 11;
     }
@@ -319,17 +333,31 @@ pub(crate) fn ibus_content(content: ContentType) -> (u32, u32) {
 /// Fcitx5's capability flags of a context serving a field of `content`:
 /// the client's own capabilities with the field's purpose and hints.
 pub(crate) fn fcitx_capability(content: ContentType) -> u64 {
-    // fcitx::CapabilityFlag: Password 1 << 3, Email 1 << 7, Url 1 << 12,
-    // Dialable 1 << 13, Number 1 << 14, Multiline 1 << 35, Sensitive 1 << 36.
+    // fcitx::CapabilityFlag: Password 1 << 3, Email 1 << 7, Digit 1 << 8,
+    // Uppercase 1 << 9, Url 1 << 12, Dialable 1 << 13, Number 1 << 14,
+    // SpellCheck 1 << 16, WordCompletion 1 << 18, UppercaseWords 1 << 19,
+    // UppercaseSentences 1 << 20, Multiline 1 << 35, Sensitive 1 << 36.
     let mut flags = FCITX_BASE
         | match content.purpose {
             ContentType::PASSWORD => 1 << 3,
             ContentType::EMAIL => 1 << 7,
+            ContentType::DIGITS => 1 << 8,
             ContentType::URL => 1 << 12,
             ContentType::PHONE => 1 << 13,
             ContentType::NUMBER => 1 << 14,
             _ => 0,
         };
+    for (hint, fcitx) in [
+        (ContentType::HINT_UPPERCASE, 1 << 9),
+        (ContentType::HINT_SPELLCHECK, 1 << 16),
+        (ContentType::HINT_COMPLETION, 1 << 18),
+        (ContentType::HINT_TITLECASE, 1 << 19),
+        (ContentType::HINT_AUTO_CAPITALIZATION, 1 << 20),
+    ] {
+        if content.hint & hint != 0 {
+            flags |= fcitx;
+        }
+    }
     if content.hint & ContentType::HINT_HIDDEN_TEXT != 0 {
         flags |= 1 << 3;
     }

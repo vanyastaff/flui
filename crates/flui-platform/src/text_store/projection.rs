@@ -24,10 +24,13 @@ type Edit = Box<dyn FnOnce(&mut dyn TextStoreEdit) -> Result<(), TextStoreError>
 ///
 /// - **`Preedit` with text** replaces the composition (or, when none is in
 ///   progress, the selection), marks the new text as the composition with
-///   `hides_caret` set when `cursor` is `None`, and puts the caret at the
-///   cursor's end — translated from a byte offset into the preedit to a
-///   UTF-16 offset into the document, clamped forward to a `char` boundary
-///   when malformed — or at the composition's end when there is no cursor.
+///   `hides_caret` set when `cursor` is `None`, and selects the cursor's span
+///   inside it: the input method's target clause, so a field can mark the
+///   part being converted, with the caret at its end. Each end is translated
+///   from a byte offset into the preedit to a UTF-16 offset into the
+///   document, clamped forward to a `char` boundary (and to the preedit's
+///   end) when malformed. With no cursor the caret goes to the composition's
+///   end.
 /// - **`Preedit` with empty text** ends an active composition: its text is
 ///   deleted and the caret goes to the earlier of where it was and where the
 ///   composition started. With no composition it changes nothing (winit's
@@ -115,14 +118,23 @@ fn preedit(
         range,
         hides_caret: cursor.is_none(),
     }))?;
-    let caret = match cursor {
-        Some((_, end)) => {
-            let end = text.ceil_char_boundary(end);
-            Utf16Offset::new(start.get() + utf16::utf16_len(&text[..end]).get())
+    // The cursor's span is the input method's target clause, kept as the
+    // selection inside the composition, as `setMarkedText:selectedRange:` and
+    // `text-input-v3`'s cursor are.
+    let selection = match cursor {
+        Some((anchor, active)) => {
+            let at = |byte: usize| {
+                let byte = text.ceil_char_boundary(byte);
+                Utf16Offset::new(start.get() + utf16::utf16_len(&text[..byte]).get())
+            };
+            Selection {
+                anchor: at(anchor),
+                active: at(active),
+            }
         }
-        None => change.new_end,
+        None => Selection::collapsed(change.new_end),
     };
-    session.set_selection(Selection::collapsed(caret))
+    session.set_selection(selection)
 }
 
 fn end_composition(session: &mut dyn TextStoreEdit) -> Result<(), TextStoreError> {

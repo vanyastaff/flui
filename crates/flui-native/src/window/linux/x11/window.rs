@@ -83,6 +83,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
 
+use flui_foundation::geometry::{Bounds, DevicePixelRatio, Point, Size, WindowMetrics};
 use flui_foundation::geometry::{DevicePixelRatio, Point, Size, WindowMetrics};
 use flui_foundation::panic::FirstPanic;
 use flui_platform::input_regions::ResizeEdge;
@@ -119,7 +120,7 @@ use super::placement::{
     window_scale,
 };
 use super::support::{SupportAtoms, WindowManager, WindowManagerSupport, capabilities};
-use crate::host::{self, WindowFacets, WindowPositions};
+use crate::host::{self, ScreenBounds, WindowFacets, WindowPositions};
 use crate::host_window::HostWindow;
 use crate::input::regions::ProjectedInputRegions;
 use crate::input::regions::presses::{
@@ -398,6 +399,10 @@ struct Record {
     content: Option<Size<i32>>,
     /// The focus the accessibility bridge was last told of.
     focus_told: bool,
+    /// Where the window was on the screen at the last read of the server.
+    bounds: Option<ScreenBounds>,
+    /// Where the accessibility bridge was last told the window is.
+    bounds_told: Option<ScreenBounds>,
     /// The window manager's support last read, kept for a window whose
     /// platform is gone.
     support: WindowManagerSupport,
@@ -586,9 +591,9 @@ impl X11Window {
 
     /// Follow the window's state: raise `state_changed` for a new revision,
     /// or for one a command published with nobody told, from the host's own
-    /// turn; tell the bridge of a change of focus, and ask for a frame when
-    /// the content changed size. The server is asked only if the snapshot is
-    /// stale.
+    /// turn; tell the bridge of a change of focus or of where the window is
+    /// on the screen, and ask for a frame when the content changed size. The
+    /// server is asked only if the snapshot is stale.
     fn follow_state(&self) {
         self.unread.set(false);
         let published = self.cell.read_unannounced(&self.delivery, || self.sample());
@@ -599,10 +604,13 @@ impl X11Window {
         // handler applies follows the window again inside it, and must find
         // this read already committed, not have its newer focus put back by
         // this one afterwards.
-        let (focus_changed, resized, rescaled) = {
+        let (focus_changed, new_bounds, resized, rescaled) = {
             let mut record = self.record.borrow_mut();
             let focus_changed = std::mem::replace(&mut record.focus_told, state.focus.is_focused())
                 != state.focus.is_focused();
+            let bounds = record.bounds;
+            let new_bounds =
+                bounds.filter(|_| std::mem::replace(&mut record.bounds_told, bounds) != bounds);
             // A change of a size known before: the first one an `Expose`
             // paints.
             let content = state.metrics.map(WindowMetrics::physical);
@@ -613,6 +621,7 @@ impl X11Window {
             }
             (
                 focus_changed,
+                new_bounds,
                 resized,
                 std::mem::take(&mut record.hints_rescaled),
             )
@@ -628,6 +637,9 @@ impl X11Window {
             self.facets
                 .accessibility
                 .focus_changed(state.focus.is_focused());
+        }
+        if let Some(bounds) = new_bounds {
+            self.facets.accessibility.bounds_changed(bounds);
         }
         if resized {
             self.request_redraw();
@@ -660,6 +672,11 @@ impl X11Window {
         let level = support.kept(read.level);
         let cursor_grab = self.input.pointer_grab(self.window_ref());
         let outer = outer_bounds(read.origin, read.content, frame);
+        // The frame extents are not negative, so the content lies within
+        // the outer rectangle unless that saturated; such a read is not told.
+        if let Ok(bounds) = ScreenBounds::try_new(outer, Bounds::new(read.origin, read.content)) {
+            record.bounds = Some(bounds);
+        }
         let display = snapshot
             .as_ref()
             .and_then(|snapshot| display_of(snapshot, outer).or_else(|| snapshot.primary()));
@@ -2397,6 +2414,8 @@ impl X11Windows {
                 normal_geometry: plan.normal_geometry,
                 content: None,
                 focus_told: false,
+                bounds: None,
+                bounds_told: None,
                 support,
                 scale,
                 hints_rescaled: false,

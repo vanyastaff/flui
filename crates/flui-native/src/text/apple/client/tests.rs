@@ -188,6 +188,23 @@ fn kana_composed_then_converted_is_committed_in_the_field() {
     assert!(client.reports_key_release());
 }
 
+/// The client says whether the keyboard holds marked text, from the call that
+/// set it to the one that ended it, so a change of the field's traits can
+/// wait for the composition instead of reloading the keyboard under it.
+#[test]
+fn the_client_knows_while_the_keyboard_composes() {
+    let store = InMemoryTextStore::new("ab");
+    let (client, _) = serving(&store);
+    assert!(!client.composes());
+    client.set_marked_text("か".into(), span(1, 1), None);
+    assert!(client.composes());
+    client.unmark_text();
+    assert!(!client.composes());
+    client.set_marked_text("か".into(), span(1, 1), None);
+    client.insert_text("火".into(), None);
+    assert!(!client.composes());
+}
+
 #[test]
 fn an_edit_replaces_the_range_appkit_names() {
     struct Case {

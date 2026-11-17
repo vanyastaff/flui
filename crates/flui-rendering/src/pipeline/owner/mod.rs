@@ -314,7 +314,8 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
     paint_scratch: Option<Box<paint::PaintScratch>>,
 
     /// Nodes of a scene the owner dropped its records of while keeping the
-    /// lineage (a new pixel ratio, a staged patch never applied): the next
+    /// lineage (a new pixel ratio, a staged patch never applied, a pass with
+    /// no root to walk): the next
     /// patch retires each one still in the version it patches.
     abandoned_nodes: Vec<flui_layer::SceneNodeId>,
     /// Nodes of removed boundaries, retired by the paint that republishes
