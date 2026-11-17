@@ -159,30 +159,6 @@
             "gesture"
           ],
           "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "hold": {
-              "$ref": "#/$defs/HoldPhase"
-            }
-          },
-          "required": [
-            "hold"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "swipe": {
-              "$ref": "#/$defs/Swipe"
-            }
-          },
-          "required": [
-            "swipe"
-          ],
-          "type": "object"
         }
       ]
     },
@@ -3279,22 +3255,6 @@
       ],
       "type": "object"
     },
-    "HoldPhase": {
-      "oneOf": [
-        {
-          "const": "begin",
-          "type": "string"
-        },
-        {
-          "const": "end",
-          "type": "string"
-        },
-        {
-          "const": "cancelled",
-          "type": "string"
-        }
-      ]
-    },
     "HostInput": {
       "oneOf": [
         {
@@ -3695,14 +3655,6 @@
         },
         "system_gesture_exclusion": {
           "$ref": "#/$defs/Availability"
-        },
-        "touchpad_hold": {
-          "$ref": "#/$defs/Availability",
-          "default": "unavailable"
-        },
-        "touchpad_swipe": {
-          "$ref": "#/$defs/Availability",
-          "default": "unavailable"
         },
         "trackpad_gestures": {
           "$ref": "#/$defs/Availability"
@@ -5601,6 +5553,9 @@
           "$ref": "#/$defs/NativeAvailability"
         },
         "reports_keyboard_inset": {
+          "$ref": "#/$defs/Capability"
+        },
+        "reports_occlusion": {
           "$ref": "#/$defs/Capability"
         },
         "reports_presentation": {
@@ -7638,12 +7593,12 @@
         {
           "additionalProperties": false,
           "properties": {
-            "touchpad_hold": {
-              "$ref": "#/$defs/TouchpadHold"
+            "scroll_inertia_cancel": {
+              "$ref": "#/$defs/Signal"
             }
           },
           "required": [
-            "touchpad_hold"
+            "scroll_inertia_cancel"
           ],
           "type": "object"
         },
@@ -7656,18 +7611,6 @@
           },
           "required": [
             "pan_zoom"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "touchpad_swipe": {
-              "$ref": "#/$defs/TouchpadSwipe"
-            }
-          },
-          "required": [
-            "touchpad_swipe"
           ],
           "type": "object"
         },
@@ -9949,34 +9892,6 @@
       ],
       "type": "object"
     },
-    "Swipe": {
-      "properties": {
-        "dx": {
-          "format": "double",
-          "type": "number"
-        },
-        "dy": {
-          "format": "double",
-          "type": "number"
-        },
-        "fingers": {
-          "format": "uint8",
-          "maximum": 255,
-          "minimum": 0,
-          "type": "integer"
-        },
-        "phase": {
-          "$ref": "#/$defs/GesturePhase"
-        }
-      },
-      "required": [
-        "fingers",
-        "phase",
-        "dx",
-        "dy"
-      ],
-      "type": "object"
-    },
     "SwipeParams": {
       "properties": {
         "direction": {
@@ -10390,145 +10305,6 @@
         "pixel_ratio"
       ],
       "type": "object"
-    },
-    "TouchpadHold": {
-      "properties": {
-        "modifiers": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "phase": {
-          "$ref": "#/$defs/TouchpadHoldPhase"
-        },
-        "pointer": {
-          "$ref": "#/$defs/PointerInfo"
-        },
-        "t": {
-          "format": "uint64",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "x": {
-          "format": "double",
-          "type": "number"
-        },
-        "y": {
-          "format": "double",
-          "type": "number"
-        }
-      },
-      "required": [
-        "pointer",
-        "t",
-        "x",
-        "y",
-        "phase"
-      ],
-      "type": "object"
-    },
-    "TouchpadHoldPhase": {
-      "oneOf": [
-        {
-          "const": "begin",
-          "type": "string"
-        },
-        {
-          "const": "end",
-          "type": "string"
-        },
-        {
-          "const": "cancelled",
-          "type": "string"
-        }
-      ]
-    },
-    "TouchpadSwipe": {
-      "properties": {
-        "fingers": {
-          "format": "uint8",
-          "maximum": 255,
-          "minimum": 0,
-          "type": "integer"
-        },
-        "modifiers": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "phase": {
-          "$ref": "#/$defs/TouchpadSwipePhase"
-        },
-        "pointer": {
-          "$ref": "#/$defs/PointerInfo"
-        },
-        "t": {
-          "format": "uint64",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "x": {
-          "format": "double",
-          "type": "number"
-        },
-        "y": {
-          "format": "double",
-          "type": "number"
-        }
-      },
-      "required": [
-        "pointer",
-        "t",
-        "x",
-        "y",
-        "fingers",
-        "phase"
-      ],
-      "type": "object"
-    },
-    "TouchpadSwipePhase": {
-      "oneOf": [
-        {
-          "const": "start",
-          "type": "string"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "update": {
-              "properties": {
-                "dx": {
-                  "format": "double",
-                  "type": "number"
-                },
-                "dy": {
-                  "format": "double",
-                  "type": "number"
-                }
-              },
-              "required": [
-                "dx",
-                "dy"
-              ],
-              "type": "object"
-            }
-          },
-          "required": [
-            "update"
-          ],
-          "type": "object"
-        },
-        {
-          "const": "end",
-          "type": "string"
-        },
-        {
-          "const": "cancelled",
-          "type": "string"
-        }
-      ]
     },
     "TrackpadAction": {
       "oneOf": [

@@ -6,7 +6,7 @@
   state and repeat (they were private fields that had to agree), §2's keys bullet for `KeyRepeat`
   and a dead key as a `Named` key, and §3 for `KeyRepeat` among the flag enums
 - **Superseded-by:** [ADR-0358](ADR-0358-a-touchpad-hold-stops-what-coasts-and-a-touchpad-swipe-is-a-gesture.md)
-  for the recording format's version and the protocol version (§5): version 5 and 0.19
+  for the recording format's version and the protocol version (§5): version 5 and 0.20
 - **Related:** [ADR-0342](ADR-0342-a-value-added-to-a-closed-union-breaks-the-agent-protocol.md) (a variant added to a closed union is a break), [ADR-0089](ADR-0089-upstream-types-in-stable-signatures.md) §4 (the generated W3C
   tables), [ADR-0215](ADR-0215-input-recording-and-backend-conformance.md) (the recording mirrors
   the vocabulary variant by variant), [ADR-0080](ADR-0080-agent-protocol-desktop-contract.md) (the

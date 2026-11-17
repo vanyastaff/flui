@@ -114,7 +114,7 @@ fraction of the touchpad; UIKit and the Web report neither.
 
 The input recording carries `touchpad_hold` and `touchpad_swipe` rows and the two capabilities
 (absent in a recording that predates them, read as `unavailable`); the format is version 5 and
-refuses version 4. The native recording's reading action gains `hold` and `swipe`. Protocol 0.19
+refuses version 4. The native recording's reading action gains `hold` and `swipe`. Protocol 0.20
 is a break (ADR-0342 §1 for the added variants) and lists `scroll_inertia_cancel` in `BREAKING`'s
 `removed`.
 
@@ -124,7 +124,7 @@ is a break (ADR-0342 §1 for the added variants) and lists `scroll_inertia_cance
   hold is said.
 - Good, because a swipe competes for its consumer in the arena, so a horizontal and a vertical
   swipe recognizer nested in one another split swipes by axis, and a scrollable never moves.
-- Bad, because a 0.18 agent client is refused by a 0.19 application, and version 4 recordings no
+- Bad, because a 0.19 agent client is refused by a 0.20 application, and version 4 recordings no
   longer read.
 - Neutral, because no host's swipe or hold has run on a touchpad; each is held at its seam
   (`crates/flui-native/platform-parity.toml`).

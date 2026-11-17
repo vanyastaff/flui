@@ -823,11 +823,21 @@ trait depends on `flui-platform` instead.
   `isVisible` or `isMiniaturized`, and on Wayland, Android, iOS and the Web,
   where the application cannot hide its window, open. Occluded is what
   each window system tells of a shown window kept off the screen: a DWM
-  cloak or a locked session, an X11 `VisibilityNotify` of `FullyObscured` or
+  cloak or a locked session, an X11
+  `VisibilityNotify` of `FullyObscured` or
   an unviewable map state, AppKit's `occlusionState` without its visible
   bit, a Wayland toplevel unconfigured, on no output or
   `suspended`, an Activity stopped, a scene in the background, a hidden
-  document. The pure `held_to` holds a size to the window's constraints
+  document. Whether a covering by other windows is among them is the
+  capabilities' `reports_occlusion` (ADR-0357): native on AppKit; on X11
+  while no compositing manager owns `_NET_WM_CM_S<n>` (the server reads a
+  redirected window unobscured); on Wayland where the window's
+  `xdg_toplevel` is version 6 or newer (`SUSPENSION_VERSION`), whose
+  `suspended` covers a toplevel the compositor does not show; absent on
+  Win32, which tells no covering and tracks none, and on Android, iOS and the
+  Web, whose window systems tell a stop or a hidden page and never a covering.
+  A host states "not seen" only from what it knows for certain, so nothing that
+  stops frames and cancels pointer sequences rests on a guess. The pure `held_to` holds a size to the window's constraints
   for the hosts whose window system applies a size as given (AppKit's
   `setContentSize:`, the headless model). Each platform's
   window is one file beside it (`android`, `web`, `headless`, and
@@ -1406,7 +1416,14 @@ trait depends on `flui-platform` instead.
   (`decoration`). A suspended window is
   occluded: it is given no frame and gives up no frame callback until the
   compositor shows it again, when the frame asked for meanwhile is delivered
-  (`frame::Pacing`). Where the compositor offers `xdg-foreign` v2 the window is
+  (`frame::Pacing`). A window the compositor does not draw without saying so
+  answers no frame callback: each callback it gives up doubles the next one's
+  grace from `CALLBACK_GRACE` to `MAX_CALLBACK_GRACE` on the one schedule
+  of a surface that shows nothing (`flui_platform::Backoff`, ADR-0357), a
+  deadline of the loop's wait, never a poll, and the first `done` ends the
+  backoff; a `done` releases the callback out only when it answers that
+  callback or a later one, and an older one gives it the first grace
+  (`frame::Callbacks`, by ticket). Where the compositor offers `xdg-foreign` v2 the window is
   exported as it opens, and the export lives until the window closes. Its
   portal parent `wayland:<handle>` (`foreign::PortalParent`) is a
   cross-platform fact (X11 names a window `x11:<XID>`), so it reaches the
