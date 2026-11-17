@@ -112,6 +112,9 @@ impl crate::host::WindowAccessibility for FakeAccessibility {
     fn detach(&self) {}
 
     fn focus_changed(&self, _: bool) {}
+
+    /// A headless window is on no screen.
+    fn bounds_changed(&self, _: crate::host::ScreenBounds) {}
 }
 
 /// Each headless window gets a recorder of its own.

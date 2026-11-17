@@ -1346,9 +1346,15 @@ trait depends on `flui-platform` instead.
   OS extension; until that reader exists the handle is kept and read under
   `testing` only. The window tells its AT-SPI bridge each change of the
   compositor's activation, which `UnixAccessibility::focus_changed` passes to
-  the adapter (the X11 window already called it); the bridge reaches the
-  adapter through `AtSpiAdapter`, the two calls it makes of
-  `accesskit_unix::Adapter`. `Activate` is a request with an
+  the adapter (the X11 window already called it), and where its content is
+  (`WindowAccessibility::bounds_changed`): the compositor tells a client
+  nothing of its window's position, so the window is at the origin and its
+  content below the title bar it draws itself (`scale::unplaced_bounds`),
+  while the X11 window passes its frame's and its content's rectangles on the
+  root each time a read of the server finds them changed. AT-SPI's screen
+  coordinates of a node are the content's origin plus the node's place; the
+  bridge reaches the adapter through `AtSpiAdapter`, the three calls it makes
+  of `accesskit_unix::Adapter`. `Activate` is a request with an
   `xdg-activation` token (`activation`): the window asks for one naming the
   last user input (its seat, serial and surface, `UserInput`, kept by the
   loop in `LastInput`, which the windows read; no input records into it until
@@ -2540,12 +2546,20 @@ waits at most 500ms before the bootstrap (`AppHandler::ready`); unavailable or s
 unknown and can recover later. No D-Bus call runs in the frame path. Successful
 unsigned `org.freedesktop.appearance/reduced-motion` values map 1 to Reduce and
 other values to NoPreference. A missing key permits the GNOME
-`org.gnome.desktop.interface/enable-animations` fallback; transient errors
+`org.gnome.desktop.interface/enable-animations` fallback, and with neither key
+motion is unobserved, as every other key without a value is; failed reads
 preserve the last accepted snapshot. Settings v1 uses its double-variant `Read`
-reply. Healthy observations use notifications; failed reads retain a bounded
-retry that unrelated notifications cannot postpone. Service-owner changes
-refresh the same observation set. Shutdown fences owner admission before
-cancelling the task, whose state holds no strong owner/source cycle.
+reply. The watch never polls. A refresh is retried only after a read that
+fails in a way that passes by itself (the call timed out, no reply, the
+portal's `Failed`), on `READ_RETRIES`' doubling schedule, which runs out and
+which unrelated notifications cannot postpone; a missing key, a portal without
+the Settings interface and a portal not on the bus (`ServiceUnknown`) wait for
+the next `SettingChanged` or `NameOwnerChanged`, each of which refreshes the
+same observation set and starts the schedule over. A session bus that does
+not answer, or a connection that ends, is tried again on `CONNECT_RETRIES`'
+schedule, and once that runs out the watch ends with the observation it has.
+Shutdown fences owner admission before cancelling the task, whose state holds
+no strong owner/source cycle.
 
 The same connection reads `org.freedesktop.appearance/color-scheme`: 1 is dark,
 everything else (no preference, prefers light, a missing key) light. It is kept

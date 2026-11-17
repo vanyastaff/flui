@@ -376,6 +376,9 @@ impl crate::host::WindowAccessibility for AndroidAccessibility {
 
     /// Android follows the window's focus itself.
     fn focus_changed(&self, _focused: bool) {}
+
+    /// Android places the nodes from the view's own position.
+    fn bounds_changed(&self, _: crate::host::ScreenBounds) {}
 }
 
 impl PlatformAccessibility for AndroidAccessibility {

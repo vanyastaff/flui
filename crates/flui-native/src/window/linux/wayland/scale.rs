@@ -22,10 +22,13 @@
 
 #![forbid(unsafe_code)]
 
-use flui_foundation::geometry::{DevicePixelRatio, Size, WindowMetrics};
+use flui_foundation::geometry::{
+    Bounds, DevicePixelRatio, Point, Size, WindowMetrics, device_size,
+};
 use flui_platform::MAX_SURFACE_EXTENT;
 
 use crate::display::scale::{RefusedScale, ScaleStreak};
+use crate::host::ScreenBounds;
 
 /// The scale a surface's buffer is drawn at: the scale the compositor
 /// named, up to [`Self::MAX`].
@@ -183,6 +186,23 @@ pub(crate) fn buffer_scale(viewported: bool, told: ScaleTold, drawn: Size<f64>) 
         .or(told.output)
         .map_or(BufferScale::ONE, BufferScale::of)
         .fitted(drawn)
+}
+
+/// Where a window lies as its accessibility bridge places it, when the
+/// compositor keeps the window's position to itself: the window at the
+/// origin, and the content of `metrics` below the title bar of `header`
+/// logical pixels the window draws itself (zero where it draws none), both
+/// at the content's scale.
+pub(crate) fn unplaced_bounds(metrics: WindowMetrics, header: f64) -> ScreenBounds {
+    let content = metrics.physical();
+    let header = device_size(Size::new(0.0, header), metrics.scale()).height;
+    ScreenBounds {
+        outer: Bounds::new(
+            Point::new(0, 0),
+            Size::new(content.width, content.height.saturating_add(header)),
+        ),
+        content: Bounds::new(Point::new(0, header), content),
+    }
 }
 
 #[cfg(test)]
@@ -433,6 +453,37 @@ mod tests {
             assert_eq!(
                 published(viewported, numerator, content),
                 expected,
+                "{case}"
+            );
+        }
+    }
+
+    /// The bridge of a window the compositor does not place puts it at the
+    /// origin and its content below the title bar the window draws itself,
+    /// in the device pixels the tree's nodes are laid out in.
+    #[test]
+    fn an_unplaced_window_has_its_content_below_its_own_title_bar() {
+        let bounds = |x, y, width, height| Bounds::new(Point::new(x, y), Size::new(width, height));
+        for (case, metrics, header, outer, content) in [
+            (
+                "no title bar of its own",
+                WindowMetrics::from_logical(Size::new(400.0, 300.0), 1.0),
+                0.0,
+                bounds(0, 0, 400, 300),
+                bounds(0, 0, 400, 300),
+            ),
+            (
+                "its own title bar at a fractional scale",
+                WindowMetrics::from_logical(Size::new(400.0, 300.0), 1.5),
+                37.0,
+                bounds(0, 0, 600, 506),
+                bounds(0, 56, 600, 450),
+            ),
+        ] {
+            let metrics = metrics.expect("a window's metrics");
+            assert_eq!(
+                unplaced_bounds(metrics, header),
+                ScreenBounds { outer, content },
                 "{case}"
             );
         }

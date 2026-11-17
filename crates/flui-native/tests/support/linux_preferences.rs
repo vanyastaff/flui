@@ -122,6 +122,8 @@ pub mod linux {
         "gnome-contrast",
         "text-scale",
         "text-scale-out-of-range",
+        "quiet-without-keys",
+        "quiet-without-portal",
     ];
 
     /// The X11 platform on the harness's X server, shared as `run_shared` takes it.
@@ -464,12 +466,135 @@ pub mod linux {
         }
     }
 
+    /// A portal that knows none of the settings: every read is `NotFound`.
+    struct NoSettings;
+
+    #[zbus::interface(name = "org.freedesktop.portal.Settings")]
+    impl NoSettings {
+        #[expect(
+            clippy::unused_self,
+            reason = "a method the interface serves takes the served object"
+        )]
+        fn read_one(
+            &self,
+            namespace: &str,
+            key: &str,
+        ) -> Result<zbus::OwnedVariant, SettingsError> {
+            Err(SettingsError::NotFound(format!("{namespace} {key}")))
+        }
+    }
+
+    /// How long a quiet case listens to the bus once the first read is done.
+    const QUIET_FOR: std::time::Duration = std::time::Duration::from_secs(3);
+
+    /// A portal that knows none of the keys, and a bus with no portal at all,
+    /// are read as the owner starts and not again while nothing changes: a
+    /// monitor on the bus, which sees the calls a missing service answers
+    /// too, counts no call to the Settings interface for [`QUIET_FOR`] after
+    /// the first read.
+    fn run_quiet_case(case: &str) {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .expect("fixture runtime");
+        let calls = Arc::new(AtomicU32::new(0));
+        let monitor = runtime.block_on(async {
+            let connection = zbus::connection::Builder::session()
+                .build()
+                .await
+                .expect("the monitor's connection");
+            let rule = zbus::MatchRule::builder()
+                .msg_type(zbus::message::Type::MethodCall)
+                .interface("org.freedesktop.portal.Settings")
+                .build()
+                .expect("a match rule");
+            zbus::fdo::MonitoringProxy::new(&connection)
+                .await
+                .expect("org.freedesktop.DBus.Monitoring")
+                .become_monitor(&[rule], 0)
+                .await
+                .expect("the session bus lets its user monitor it");
+            connection
+        });
+        let counted = Arc::clone(&calls);
+        let stream = zbus::MessageStream::from(&monitor);
+        let counter = runtime.spawn(async move {
+            let mut stream = std::pin::pin!(stream);
+            while let Some(message) = futures_util::StreamExt::next(&mut stream).await {
+                let Ok(message) = message else { continue };
+                let header = message.header();
+                if message.message_type() == zbus::message::Type::MethodCall
+                    && header
+                        .interface()
+                        .is_some_and(|name| name.as_str() == "org.freedesktop.portal.Settings")
+                {
+                    counted.fetch_add(1, Ordering::SeqCst);
+                }
+            }
+        });
+        let service = (case == "quiet-without-keys").then(|| {
+            runtime
+                .block_on(async {
+                    zbus::connection::Builder::session()
+                        .name("org.freedesktop.portal.Desktop")
+                        .serve_at("/org/freedesktop/portal/desktop", NoSettings)
+                        .build()
+                        .await
+                })
+                .expect("isolated portal service")
+        });
+        let (start, begin) = tokio::sync::oneshot::channel::<PlatformProxy>();
+        let counts = Arc::new(parking_lot::Mutex::new(None::<(u32, u32)>));
+        let measured = Arc::clone(&counts);
+        let listener = runtime.spawn(async move {
+            let Ok(owner) = begin.await else {
+                return;
+            };
+            // The first read is done before the host is ready, or abandoned
+            // after the bootstrap's bound; its calls are counted by now.
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+            let first = calls.load(Ordering::SeqCst);
+            tokio::time::sleep(QUIET_FOR).await;
+            *measured.lock() = Some((first, calls.load(Ordering::SeqCst)));
+            owner.request_quit().expect("quiet owner quit");
+        });
+        let watchdog = runtime.spawn(async {
+            tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+            eprintln!("Linux preference owner did not complete within 30 seconds");
+            std::process::exit(2);
+        });
+        let platform = x11_platform();
+        platform
+            .run_shared(crate::app::on_ready(move |owner| {
+                start.send(owner.proxy()).expect("start listening");
+                Ok(())
+            }))
+            .expect("owner loop");
+        drop(service);
+        listener.abort();
+        counter.abort();
+        watchdog.abort();
+        let measured = *counts.lock();
+        let (first, last) = measured.expect("the listener measured before the owner quit");
+        assert!(first > 0, "the owner's start read the portal");
+        assert_eq!(
+            last - first,
+            0,
+            "no read of the portal for {QUIET_FOR:?} after the first ({first} calls)"
+        );
+        println!("Linux preference case {case} passed");
+    }
+
     pub fn run_case(case: &str) {
         if matches!(
             case,
             "contrast" | "gnome-contrast" | "text-scale" | "text-scale-out-of-range"
         ) {
             return run_value_case(case);
+        }
+        if matches!(case, "quiet-without-keys" | "quiet-without-portal") {
+            return run_quiet_case(case);
         }
         let live = matches!(case, "live" | "recovery" | "restart");
         let recovery = case == "recovery";

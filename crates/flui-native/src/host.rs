@@ -59,7 +59,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 
-use flui_foundation::geometry::Size;
+use flui_foundation::geometry::{Bounds, Size};
 use flui_platform::data_transfer::{DragTransport, NullDragTransport};
 use flui_platform::haptics::{HapticCapabilities, HapticOutcome, HapticPattern, HapticRequest};
 use flui_platform::{
@@ -272,6 +272,25 @@ pub trait WindowAccessibility: PlatformAccessibility {
     /// thread. A bridge whose adapter follows focus itself (through the
     /// window procedure it subclasses) has nothing to do.
     fn focus_changed(&self, focused: bool);
+
+    /// The window's rectangles on the screen changed, on its owner thread:
+    /// an assistive technology places the window's nodes from them. A bridge
+    /// whose adapter asks the OS where the window is (through the window or
+    /// view it holds) has nothing to do.
+    fn bounds_changed(&self, bounds: ScreenBounds);
+}
+
+/// Where a window lies on the screen, in device pixels: its outer rectangle,
+/// with the frame the window manager or the window draws around it, and its
+/// content's, which the tree's root covers. A platform that does not tell a
+/// window where it is (Wayland) gives the outer rectangle at the origin, so
+/// the content's is relative to the window.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ScreenBounds {
+    /// The window with its frame.
+    pub outer: Bounds<i32>,
+    /// The window's content.
+    pub content: Bounds<i32>,
 }
 
 /// The haptics position: the actuator one window, `W`, hands out.
@@ -598,6 +617,8 @@ impl WindowAccessibility for Absent<position::Accessibility> {
     fn detach(&self) {}
 
     fn focus_changed(&self, _: bool) {}
+
+    fn bounds_changed(&self, _: ScreenBounds) {}
 }
 
 /// Every window hands out a bridge that is never active.
