@@ -505,7 +505,7 @@ pub(crate) struct AppRuntime {
     /// The platform instance's data-transfer source and the nonce that names
     /// this platform instance's drags (ADR-0211 §3), installed and cleared
     /// with the clipboard. Every UI runtime this host builds takes both.
-    platform_data_transfer: Arc<Mutex<Option<PlatformDataTransfer>>>,
+    platform_data_transfer: RefCell<Option<PlatformDataTransfer>>,
     /// The byte storage every UI runtime this host builds hands its widgets,
     /// resolved once from the run's configuration when the host starts
     /// ([`Self::install_host_storage`]) and released with the owner platform
@@ -524,7 +524,7 @@ pub(crate) struct AppRuntime {
     pub(super) terminal: Option<Box<dyn std::any::Any + Send>>,
     /// What this host gives back on a memory-pressure notice: one receiver every
     /// UI runtime it builds shares (`runner::host::build_lending_ui_runtime`).
-    pub(super) host_memory: Arc<super::host_memory::HostMemory>,
+    pub(super) host_memory: Rc<super::host_memory::HostMemory>,
     /// The run's window placements: where the host acquires the storage they
     /// are kept in, the windows that remember one and the writes still out
     /// (`runner::placement`).
@@ -620,7 +620,7 @@ impl AppRuntime {
             platform_primary_selection: Rc::default(),
             host_bridge: flui_platform::capability::HostBridge::new(),
             capabilities: None,
-            platform_data_transfer: Arc::new(Mutex::new(None)),
+            platform_data_transfer: RefCell::new(None),
             execution_slot: Rc::default(),
             host_storage: crate::app::capability::StorageSlot::default(),
             flush_host: None,
@@ -638,7 +638,7 @@ impl AppRuntime {
             session_end_refusals: Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
             background_writes: None,
-            host_memory: Arc::default(),
+            host_memory: Rc::default(),
             #[cfg(all(
                 not(target_os = "android"),
                 not(target_os = "ios"),
@@ -1401,7 +1401,7 @@ impl AppRuntime {
     pub(super) fn clear_platform_clipboard(&self) {
         let _prev = self.platform_clipboard.borrow_mut().take();
         let _prev = self.platform_primary_selection.borrow_mut().take();
-        let _prev = self.platform_data_transfer.lock().take();
+        let _prev = self.platform_data_transfer.borrow_mut().take();
         let _prev = self.host_bridge.install_activity(None);
     }
 
@@ -1426,7 +1426,7 @@ impl AppRuntime {
         source: Arc<dyn flui_platform::DragTransport>,
     ) -> Option<PlatformDataTransfer> {
         self.platform_data_transfer
-            .lock()
+            .borrow_mut()
             .replace(PlatformDataTransfer {
                 source,
                 nonce: flui_platform::drag::ProcessNonce::mint(),
@@ -1436,7 +1436,7 @@ impl AppRuntime {
     /// The installed data-transfer source and nonce, for the UI runtimes the
     /// runners build.
     pub(super) fn data_transfer(&self) -> Option<PlatformDataTransfer> {
-        self.platform_data_transfer.lock().clone()
+        self.platform_data_transfer.borrow().clone()
     }
 
     /// Install the host's byte storage over `store`, or none, once, when the
@@ -1660,7 +1660,7 @@ impl Drop for AppRuntime {
     fn drop(&mut self) {
         let _prev = self.platform_clipboard.borrow_mut().take();
         let _prev = self.platform_primary_selection.borrow_mut().take();
-        let _prev = self.platform_data_transfer.lock().take();
+        let _prev = self.platform_data_transfer.borrow_mut().take();
         let _prev = self.host_bridge.install_activity(None);
     }
 }

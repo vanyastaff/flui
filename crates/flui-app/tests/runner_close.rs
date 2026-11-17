@@ -255,11 +255,12 @@ impl ViewState<ObservedRoot> for ObservedRootState {
 }
 
 /// An application whose main window holds the observed tree and which exits
-/// when its last window closes. It hands its control to `ready`.
+/// when its last window closes, with what `configure` adds to its
+/// configuration. It hands its control to `ready`.
 fn observed_app(
     observed: Observed,
     ready: Rc<RefCell<Option<AppHandle>>>,
-    handler: Option<CloseRequestHandler>,
+    configure: impl FnOnce(AppConfig) -> AppConfig,
 ) -> (Application, ObservedRoot) {
     let device_reports = Arc::clone(&observed.device_reports);
     let frame_panics = Arc::clone(&observed.frame_panics);
@@ -279,9 +280,7 @@ fn observed_app(
                 _ => {}
             })
         }));
-    if let Some(handler) = handler {
-        config = config.close_request_handler(handler);
-    }
+    config = configure(config);
     let root = ObservedRoot { observed };
     let application = Application::new().config(config).on_ready(move |handle| {
         ready.replace(Some(handle.clone()));
@@ -305,8 +304,19 @@ fn start(observed: &Observed) -> Started {
 
 /// [`start`], with `handler` answering the windows' close requests.
 fn start_with(observed: &Observed, handler: Option<CloseRequestHandler>) -> Started {
+    start_configured(observed, move |config| match handler {
+        Some(handler) => config.close_request_handler(handler),
+        None => config,
+    })
+}
+
+/// [`start`], with what `configure` adds to the configuration.
+fn start_configured(
+    observed: &Observed,
+    configure: impl FnOnce(AppConfig) -> AppConfig,
+) -> Started {
     let ready = Rc::new(RefCell::new(None));
-    let (application, root) = observed_app(observed.clone(), Rc::clone(&ready), handler);
+    let (application, root) = observed_app(observed.clone(), Rc::clone(&ready), configure);
     let platform = flui_native::HeadlessPlatform::new();
     let events = platform.host_events();
     let run = HeadlessRun::start_on(application, root, platform);
@@ -627,6 +637,94 @@ pub(crate) fn a_vetoed_close_disposes_nothing() {
     }
 }
 
+/// A handler that closes its own window from inside its answer re-enters
+/// the close-request router while the router is asking it: the window closes
+/// once, the tree is disposed once and the loop ends. The handler finds its
+/// window's address in an `Rc<Cell<_>>` the test fills after the start.
+pub(crate) fn a_handler_that_closes_its_own_window_closes_it_once() {
+    let observed = Observed::default();
+    let own_window: Rc<Cell<Option<PresentationAddress>>> = Rc::default();
+    let closed_inside: Rc<RefCell<Vec<bool>>> = Rc::default();
+    let handler = {
+        let (own_window, closed_inside) = (Rc::clone(&own_window), Rc::clone(&closed_inside));
+        CloseRequestHandler::new(move |_| {
+            if let Some(address) = own_window.get() {
+                closed_inside
+                    .borrow_mut()
+                    .push(request_presentation_close(address).is_ok());
+            }
+            CloseResponse::Close
+        })
+    };
+    let started = start_with(&observed, Some(handler));
+    own_window.set(Some(main_window_address(&started)));
+
+    let _ = started.window.simulate_close();
+    turn_until_stopped(&started.run, 4);
+
+    assert_eq!(
+        *closed_inside.borrow(),
+        [true],
+        "the handler was asked once and its close was accepted"
+    );
+    assert!(
+        !started.run.is_running(),
+        "the window's close ended the loop"
+    );
+    assert_eq!(observed.disposed.get(), 1, "disposed once");
+    join_ok(started.run);
+}
+
+/// A memory receiver that keeps its own count in a `Cell`: it is `Send`, so
+/// a configuration takes it, and not `Sync`, which a receiver reclaimed on the
+/// owner thread alone does not need. It reports each reclaim, with its count
+/// so far, to `log`.
+struct CountingReceiver {
+    reclaimed: Cell<u32>,
+    log: Arc<Mutex<Vec<(u32, flui_foundation::memory::MemoryPressureLevel)>>>,
+}
+
+impl flui_foundation::memory::ReclaimMemory for CountingReceiver {
+    fn reclaim(&self, level: flui_foundation::memory::MemoryPressureLevel) {
+        self.reclaimed.set(self.reclaimed.get() + 1);
+        self.log
+            .lock()
+            .expect("BUG: the receiver does not panic")
+            .push((self.reclaimed.get(), level));
+    }
+}
+
+/// The application's memory receiver is reclaimed once per memory-pressure
+/// notice, at the notice's level, and its state is its own.
+pub(crate) fn a_memory_receiver_without_sync_is_reclaimed_per_notice() {
+    use flui_foundation::memory::MemoryPressureLevel;
+
+    let observed = Observed::default();
+    let log = Arc::new(Mutex::new(Vec::new()));
+    let receiver = CountingReceiver {
+        reclaimed: Cell::new(0),
+        log: Arc::clone(&log),
+    };
+    let started = start_configured(&observed, move |config| config.memory_reclaim(receiver));
+
+    for level in [MemoryPressureLevel::Moderate, MemoryPressureLevel::Critical] {
+        started
+            .events
+            .notice(flui_platform::SystemNotice::MemoryPressure(level));
+        started.run.run_owner_turn();
+    }
+
+    assert_eq!(
+        *log.lock().expect("BUG: the receiver does not panic"),
+        [
+            (1, MemoryPressureLevel::Moderate),
+            (2, MemoryPressureLevel::Critical)
+        ]
+    );
+    close(&started, CloseRoute::User);
+    join_ok(started.run);
+}
+
 /// Who asks the application to quit.
 #[derive(Clone, Copy, Debug)]
 enum QuitFrom {
@@ -668,19 +766,21 @@ pub(crate) fn a_quit_nothing_refuses_ends_the_loop() {
 /// ahead without asking again.
 ///
 /// Red-check: let the platform's quit close the windows at once, past their
-/// handlers, as AppKit's loop did — the platform row disposes the tree.
+/// handlers, as AppKit's loop did — the platform row disposes the tree. The
+/// handler counts in a `Cell` it shares by `Rc`: a handler stays on the
+/// owner thread, so it takes owner-thread state.
 pub(crate) fn a_refused_quit_waits_for_the_record_then_exits() {
     let cases = [Veto::Handler, Veto::Hold]
         .into_iter()
         .flat_map(|veto| [QuitFrom::Application, QuitFrom::Platform].map(|from| (veto, from)));
     for (veto, from) in cases {
         let observed = Observed::default();
-        let asked = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let counted = Arc::clone(&asked);
+        let asked = Rc::new(Cell::new(0_usize));
+        let counted = Rc::clone(&asked);
         let handler = matches!(veto, Veto::Handler).then(|| {
             CloseRequestHandler::new(move |request| {
                 if request.reason() == CloseReason::Program {
-                    counted.fetch_add(1, Ordering::SeqCst);
+                    counted.set(counted.get() + 1);
                     CloseResponse::KeepOpen
                 } else {
                     CloseResponse::Close
@@ -709,11 +809,7 @@ pub(crate) fn a_refused_quit_waits_for_the_record_then_exits() {
             "{veto:?}: the deferred quit went ahead"
         );
         if matches!(veto, Veto::Handler) {
-            assert_eq!(
-                asked.load(Ordering::SeqCst),
-                1,
-                "the handler was not asked again"
-            );
+            assert_eq!(asked.get(), 1, "the handler was not asked again");
         }
         join_ok(started.run);
     }
@@ -903,7 +999,7 @@ pub(crate) fn two_windows_draw_on_one_device() {
     let ready = Rc::new(RefCell::new(None));
     let ready_slot = Rc::clone(&ready);
     let opened = secondary.clone();
-    let (application, root) = observed_app(main.clone(), Rc::clone(&ready), None);
+    let (application, root) = observed_app(main.clone(), Rc::clone(&ready), |config| config);
     let application = application.on_ready(move |handle| {
         ready_slot.replace(Some(handle.clone()));
         drop(
@@ -1502,6 +1598,14 @@ fn runner_close() {
             (
                 "a_vetoed_close_disposes_nothing",
                 a_vetoed_close_disposes_nothing,
+            ),
+            (
+                "a_handler_that_closes_its_own_window_closes_it_once",
+                a_handler_that_closes_its_own_window_closes_it_once,
+            ),
+            (
+                "a_memory_receiver_without_sync_is_reclaimed_per_notice",
+                a_memory_receiver_without_sync_is_reclaimed_per_notice,
             ),
             (
                 "a_quit_nothing_refuses_ends_the_loop",

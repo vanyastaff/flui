@@ -839,7 +839,7 @@ fn reclaim_host_memory(level: flui_foundation::memory::MemoryPressureLevel) {
     let memory = APP_RUNTIME.with(|slot| {
         slot.try_borrow()
             .ok()
-            .map(|state| std::sync::Arc::clone(&state.host_memory))
+            .map(|state| Rc::clone(&state.host_memory))
     });
     if let Some(memory) = memory {
         memory.reclaim(level);

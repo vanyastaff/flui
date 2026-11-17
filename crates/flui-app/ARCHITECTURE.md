@@ -403,6 +403,30 @@ the dispatch layer moves there too.
   `the_host_feed_runs_off_the_owner_thread_and_wakes_once`,
   `a_landed_host_feed_wakes_every_ui_runtime_window`).
 
+- **State only the loop's thread reaches holds no lock (ADR-0323 §1, §5).**
+  The close-request router and the handlers it calls, the host's memory
+  receivers, a window's pacing fallback, background pace and first reveal,
+  the browser's GPU-loss ledger, an installation's closed flag and window
+  snapshot, the data-transfer slot and direct mode's renderer are `Rc` with
+  `Cell` or `RefCell`: each is reached only from the loop's routes, its frame
+  drivers and its wake-deadline query, none of which another thread calls.
+  No call checks its thread at run time; the router and a handler are
+  neither `Send` nor `Sync`, which the compiler holds. A table is borrowed
+  only inside its owner's methods, code the owner does not own (a handler, a
+  guard's signal, a receiver, a `tracing` event, a window command, the drop
+  of a removed entry) runs after the borrow ends, and a route that can be
+  entered while another holds the state answers instead of borrowing it
+  twice (direct mode's frame declines and its resize waits for the next
+  frame). What another thread reaches keeps its lock or atomic: the
+  application's handle and its device retry, a
+  pending window's waker, the frame wake and redraw flag, the raster
+  thread's redraw list, the agent endpoint, workers and services, storage
+  lanes and the development hooks. `close_request_matrix`,
+  `a_handler_that_closes_its_own_window_closes_it_once`,
+  `a_memory_receiver_without_sync_is_reclaimed_per_notice` and
+  `a_subscriber_reading_the_deadline_inside_its_abandonment_event_finds_it_gone`
+  hold it.
+
 ## Mapping decisions
 
 ### Lifecycle observations are typed and lossless

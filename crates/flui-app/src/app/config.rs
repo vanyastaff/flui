@@ -44,22 +44,12 @@ impl Default for DiagnosticsProfile {
 ///
 /// Use this to customize the app window and behavior.
 ///
-/// # Frame pacing has no field here
+/// # Frame pacing
 ///
-/// `vsync`/`target_fps` fields previously lived here, advisory-only and
-/// never wired to the real present path — this crate removed the unwired
-/// `vsync`/`target_fps` fields rather than leave a persistently misleading
-/// shape a caller could reasonably expect to govern pacing. Both are
-/// removed, not deprecated: a frame-configuration field is wired end to end
-/// or it does not exist. A frame-pacing surface
-/// returns with the threaded raster lane that can act on one: the unwired
-/// `flui_engine::RasterOptions` DTO was deleted rather than kept as a shape
-/// nothing read, because its every consumer was its own test (and
-/// ADR-0045 decision 6 had already decided to replace its
-/// `max_frames_in_flight` field with `PipelineDepth`). There is no field
-/// here to remove-or-wire because there is no consumer downstream to wire
-/// it to yet — that consumer is #559's job, not a claim this removal gets
-/// to make in the meantime.
+/// A frame-configuration field here is wired end to end or does not exist:
+/// there is no `vsync` or `target_fps`. Frames follow the refresh of the
+/// display the window is on (ADR-0353), and the one pacing choice an
+/// application makes is the swapchain's [`frame_latency`](Self::frame_latency).
 ///
 /// # Example
 ///
@@ -293,7 +283,7 @@ pub struct AppConfig {
     /// On iOS services start once during process bootstrap and survive scene
     /// disconnection; framework quit cancels and joins them. Their lifetime
     /// does not grant background execution time from the operating system.
-    /// Native-only today — the lifecycle layer has no wasm32 slice yet.
+    /// Native-only: `wasm32` does not build the lifecycle module.
     #[cfg(not(target_arch = "wasm32"))]
     pub services: Vec<ServiceDefinition>,
 
@@ -742,13 +732,15 @@ impl AppConfig {
     /// order registered, before any subscriber of
     /// [`HostNotice::MemoryPressure`](flui_platform::HostNotice::MemoryPressure)
     /// hears the notice. The host has one set of receivers, read from the
-    /// configuration the run starts with.
+    /// configuration the run starts with. A receiver is reclaimed on the
+    /// thread that runs the application and is never shared with another,
+    /// so it needs no `Sync`.
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
     pub fn memory_reclaim(
         mut self,
-        receiver: impl flui_foundation::memory::ReclaimMemory + Send + Sync + 'static,
+        receiver: impl flui_foundation::memory::ReclaimMemory + Send + 'static,
     ) -> Self {
-        self.memory_reclaimers.0.push(std::sync::Arc::new(receiver));
+        self.memory_reclaimers.0.push(std::rc::Rc::new(receiver));
         self
     }
 }

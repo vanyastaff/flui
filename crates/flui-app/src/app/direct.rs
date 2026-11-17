@@ -44,12 +44,12 @@
 //! ).unwrap();
 //! ```
 
-use std::sync::Arc;
+use std::cell::RefCell;
+use std::rc::Rc;
 
 use flui_engine::{EngineError, Recoverability, Renderer};
 use flui_layer::{Scene, SceneBuilder};
 use flui_platform::{DispatchEventResult, FrameOutcome, PlatformInput, WindowOptions};
-use parking_lot::Mutex;
 
 use super::AppConfig;
 
@@ -70,7 +70,10 @@ use super::AppConfig;
 /// * `config` - Application configuration (title, size, etc.)
 /// * `render_fn` - Called each frame with a `SceneBuilder` and the current
 ///   viewport size (width, height) in pixels. Build your scene using
-///   `SceneBuilder::push_*`, `add_picture`, `add_canvas`, etc.
+///   `SceneBuilder::push_*`, `add_picture`, `add_canvas`, etc. It runs on
+///   the thread that called `run_direct` and never leaves it, so it may
+///   capture `Rc`, `Cell` and `RefCell` state; it runs with the renderer
+///   free, so a resize that arrives meanwhile is applied.
 ///
 /// # Returns
 ///
@@ -88,7 +91,7 @@ use super::AppConfig;
 /// application entry point — see the module docs.
 pub fn run_direct(
     config: AppConfig,
-    render_fn: impl FnMut(&mut SceneBuilder, f64, f64) + Send + 'static,
+    render_fn: impl FnMut(&mut SceneBuilder, f64, f64) + 'static,
 ) -> anyhow::Result<()> {
     // Managed startup, same contract as `run_app`: install FLUI's default
     // backend only into an empty slot. The historical code called
@@ -119,7 +122,7 @@ pub fn run_direct(
     /// function's own `Result` return is `run_direct`'s answer).
     fn bootstrap_direct<F>(config: AppConfig, render_fn: F) -> anyhow::Result<()>
     where
-        F: FnMut(&mut SceneBuilder, f64, f64) + Send + 'static,
+        F: FnMut(&mut SceneBuilder, f64, f64) + 'static,
     {
         fn owner_platform_installed<R>(f: impl FnOnce(&flui_native::OwnerPlatform) -> R) -> R {
             crate::app::runner::with_owner_platform(f)
@@ -176,32 +179,46 @@ pub fn run_direct(
             "GPU renderer initialized"
         );
 
-        // 3. Wrap renderer and render_fn for callback sharing
-        let renderer = Arc::new(Mutex::new(renderer));
-        let render_fn = Arc::new(Mutex::new(render_fn));
+        // 3. The renderer is shared by the frame and resize routes, both
+        // called on this thread (ADR-0323 §1). Neither holds it while code
+        // this mode does not own runs (the application's closure); a route
+        // that finds it held, because a frame or a resize was delivered from
+        // inside the other, gets an answer instead of a second borrow: a
+        // frame declines, a resize is kept for the next frame.
+        let renderer = Rc::new(RefCell::new(renderer));
+        let pending_size: Rc<std::cell::Cell<Option<(u32, u32)>>> = Rc::default();
 
         // 4. Register frame callback
-        let renderer_frame = Arc::clone(&renderer);
-        let render_fn_frame = Arc::clone(&render_fn);
+        let renderer_frame = Rc::clone(&renderer);
+        let pending_frame = Rc::clone(&pending_size);
+        let mut render_fn = render_fn;
         routes.route_frame_requested(move |_| {
-            let mut r = renderer_frame.lock();
-            let (w, h) = r.size();
+            let (w, h) = {
+                let Ok(mut r) = renderer_frame.try_borrow_mut() else {
+                    return FrameOutcome::Declined;
+                };
+                if let Some((w, h)) = pending_frame.take() {
+                    r.resize(w, h);
+                }
+                r.size()
+            };
 
             // A surface with no area has nothing to draw into: no frame ran.
             if w == 0 || h == 0 {
                 return FrameOutcome::Declined;
             }
 
+            // The application's closure builds the scene with the renderer
+            // free.
+            let mut builder = SceneBuilder::new();
+            render_fn(&mut builder, w as f64, h as f64);
+            let scene = Scene::new(builder.build());
+
+            let Ok(mut r) = renderer_frame.try_borrow_mut() else {
+                return FrameOutcome::Declined;
+            };
             // Mark full repaint every frame in direct mode (no damage tracking)
             r.mark_full_repaint();
-
-            // Build scene via user closure
-            let mut builder = SceneBuilder::new();
-            {
-                let mut rfn = render_fn_frame.lock();
-                rfn(&mut builder, w as f64, h as f64);
-            }
-            let scene = Scene::new(builder.build());
 
             if let Err(e) = r.render_scene(&scene) {
                 if e.recoverability() == Recoverability::Recoverable {
@@ -246,7 +263,7 @@ pub fn run_direct(
         // 5. Follow the window's snapshot: a change of its drawable metrics
         // resizes the surface. Weak: the route lives in the window's
         // own handler.
-        let renderer_resize = Arc::clone(&renderer);
+        let renderer_resize = Rc::clone(&renderer);
         let observed = std::rc::Rc::downgrade(&window);
         let sized = std::cell::Cell::new(window.state().metrics);
         routes.route_state_changed(move || {
@@ -266,7 +283,13 @@ pub fn run_direct(
                 physical.width.unsigned_abs(),
                 physical.height.unsigned_abs(),
             );
-            renderer_resize.lock().resize(w, h);
+            match renderer_resize.try_borrow_mut() {
+                Ok(mut renderer) => {
+                    pending_size.set(None);
+                    renderer.resize(w, h);
+                }
+                Err(_) => pending_size.set(Some((w, h))),
+            }
             tracing::debug!(
                 "Window resized to {}x{} (scale: {})",
                 w,

@@ -108,7 +108,7 @@ where
         //
         // 0b. The bound on backgrounded pumps: a deadline the wake hook
         // reports, not a sleep on the loop thread.
-        let background_pace = Arc::new(BackgroundPace::default());
+        let background_pace = std::rc::Rc::new(BackgroundPace::default());
 
         // The existing owner wake carries runtime deadlines, which count the
         // raster work of the window while its frames run (a lost device's next
@@ -116,7 +116,7 @@ where
         // Geometry refresh is owner work even while a hidden presentation
         // cannot produce frames.
         {
-            let background_pace = Arc::clone(&background_pace);
+            let background_pace = std::rc::Rc::clone(&background_pace);
             super::host::route_wake_deadline(move || {
                 super::host::merge_wake_deadlines(
                     APP_RUNTIME.with(|slot| slot.borrow().next_wake()),
@@ -453,7 +453,7 @@ where
 pub(super) struct AndroidFrameDriver {
     raster: RasterSlot,
     hot_reload: crate::app::hot_reload::ScenePlugin,
-    background_pace: std::sync::Arc<BackgroundPace>,
+    background_pace: std::rc::Rc<BackgroundPace>,
 }
 
 impl AndroidFrameDriver {

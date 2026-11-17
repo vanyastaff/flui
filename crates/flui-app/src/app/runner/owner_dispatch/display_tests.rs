@@ -110,16 +110,16 @@ fn open_window(rig: &Rig, display: Option<usize>) -> Win {
 fn open_paced_window(
     rig: &Rig,
     display: Option<usize>,
-    deadlines: &Arc<super::super::desktop::DesktopWakeDeadlines>,
+    deadlines: &std::rc::Rc<super::super::desktop::DesktopWakeDeadlines>,
 ) -> (Win, super::super::frame_driver::FrameBinding) {
-    let (win, frame) = install_window(rig, display, Some(Arc::clone(deadlines)));
+    let (win, frame) = install_window(rig, display, Some(Rc::clone(deadlines)));
     (win, frame.expect("a paced window has a frame binding"))
 }
 
 fn install_window(
     rig: &Rig,
     display: Option<usize>,
-    deadlines: Option<Arc<super::super::desktop::DesktopWakeDeadlines>>,
+    deadlines: Option<Rc<super::super::desktop::DesktopWakeDeadlines>>,
 ) -> (Win, Option<super::super::frame_driver::FrameBinding>) {
     let host_window =
         with_owner_platform(|owner| owner.open_routed(flui_platform::WindowOptions::default()))
@@ -631,10 +631,10 @@ fn window_display_observation_contract() {
     );
 }
 
-fn wake_deadlines() -> Arc<super::super::desktop::DesktopWakeDeadlines> {
-    Arc::new(super::super::desktop::DesktopWakeDeadlines {
-        fallback: Arc::new(super::super::frame_pacing::FallbackWake::new()),
-        first_reveal: Arc::new(super::super::first_reveal::FirstReveal::new()),
+fn wake_deadlines() -> std::rc::Rc<super::super::desktop::DesktopWakeDeadlines> {
+    std::rc::Rc::new(super::super::desktop::DesktopWakeDeadlines {
+        fallback: std::rc::Rc::new(super::super::frame_pacing::FallbackWake::new()),
+        first_reveal: std::rc::Rc::new(super::super::first_reveal::FirstReveal::new()),
     })
 }
 

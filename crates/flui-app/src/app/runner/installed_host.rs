@@ -3,7 +3,6 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use flui_foundation::{PresentationAddress, panic::FirstPanic};
 use flui_runtime::owner::{
@@ -63,7 +62,7 @@ pub(super) struct Installation {
     ))]
     pub(super) address: PresentationAddress,
     result: Rc<Cell<Option<Result<(), InstallError>>>>,
-    closed: Arc<AtomicBool>,
+    closed: Rc<Cell<bool>>,
 }
 
 impl Installation {
@@ -72,7 +71,7 @@ impl Installation {
     }
 
     pub(super) fn cancel(&self) {
-        self.closed.store(true, Ordering::Release);
+        self.closed.set(true);
     }
 }
 
