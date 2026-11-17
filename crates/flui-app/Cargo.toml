@@ -168,9 +168,6 @@ flui-foundation = { workspace = true, features = ["testing"] }
 # entry points.
 flui-app = { path = ".", features = ["testing", "http", "unstable-windows", "single-instance"] }
 static_assertions.workspace = true
-# `testing::x11::run_for`, which the `raster_share` bench turns the X11 loop
-# with until its window holds the size the bench measures at.
-flui-native = { workspace = true, features = ["testing"] }
 # A throwaway data root for the host storage tests.
 tempfile.workspace = true
 # The driver agent's tests speak the protocol's JSON lines by hand.
@@ -201,7 +198,9 @@ flui-view = { workspace = true, features = ["testing"] }
 # collection with. Same dev-only feature-unification pattern.
 flui-painting = { workspace = true, features = ["testing"] }
 # The compositor `native_linux` runs an application's Wayland host against
-# (`testing::wayland_compositor`), which misbehaves on demand.
+# (`testing::wayland_compositor`), which misbehaves on demand, and
+# `testing::x11::run_for`, which the `raster_share` bench turns the X11 loop
+# with until its window holds the size the bench measures at.
 flui-native = { workspace = true, features = ["testing"] }
 # The concrete render object and the animation controller the runner's
 # device-recovery, frame-pacing and dispatch tests mount; the UI runtime that
