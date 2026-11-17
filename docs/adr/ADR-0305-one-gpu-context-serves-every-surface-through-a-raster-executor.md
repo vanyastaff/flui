@@ -143,6 +143,23 @@ pub struct GpuContext {
   (`crates/flui-engine/src/frame_protocol.rs:1-9`), its committed images (ADR-0100), its viewport,
   its `SurfaceGeneration` counter (§6) and its external textures, whose `TextureId`s each
   presentation's registry mints on its own (`crates/flui-layer/src/texture_registry.rs:103-113`).
+- **The first format's pipelines are built while the first frame is.** The first slot to name a
+  target format starts that format's `PipelineLibrary` on a worker thread
+  (`crates/flui-engine/src/pipeline_warmup.rs`): a window slot at its attach, from the format its
+  surface's capabilities give before any size is known; an offscreen slot at its attach; the
+  headless renderer when it is made. The frame that first needs the library joins the worker, so
+  the driver's compilation overlaps the application's first build instead of following it. A
+  panic of the worker resumes on that frame, which settles `Retry` as any panicking frame does
+  (§7), and the next frame builds the library itself; a device rebuild drops a warm-up under way
+  (its library is the lost device's) and the first frame after it builds the new device's library
+  itself. A first frame in another format than the warm-up's (a colour
+  change before the first size, an offscreen slot of another format attached first) waits for the
+  warm-up and builds its own format too. A second format, and the variants the shape and gradient
+  caches build on demand, are built on the frame that first draws them. wasm32 has no thread to
+  build on, and there the frame builds the library. Flutter's counterpart is Impeller, which
+  creates its pipelines when its context starts, on its worker pool, where Skia's backend needed
+  an SkSL warm-up captured by hand for each application; FLUI takes Impeller's shape, so an
+  application captures nothing.
 - `wgpu::PipelineCache` reaches pipeline creation only where the adapter has
   `Features::PIPELINE_CACHE`, which wgpu implements on Vulkan alone
   (`wgpu-types/src/features.rs:1163-1172`); every other site passes `None`, as all fourteen
@@ -664,6 +681,11 @@ the facade. Every production use of `with_backend` becomes:
   - `a_panic_in_one_slot_rebuilds_the_shared_caches_and_keeps_the_pipelines`: the panicking frame
     settles `Retry`, another slot's committed image is unchanged, no pipeline is built again;
   - `a_device_rebuild_keeps_the_surfaces_and_redraws_every_slot_in_full`;
+  - `the_first_slots_attach_builds_its_pipelines_on_a_worker_once`,
+    `a_warm_up_that_panics_fails_the_frame_that_joins_it_and_the_next_builds_inline` and
+    `a_device_rebuild_drops_a_warm_up_under_way` and, in `headless.rs`,
+    `a_new_renderer_warms_its_capture_pipelines_and_the_first_capture_takes_them` (the warm-up of
+    §1), with the cold first frame timed by `crates/flui-engine/benches/first_frame.rs`;
   - `a_hidden_slot_is_not_acquired_and_settles_not_shown`.
 - Tests to be added through the public API, without a GPU, in `flui-engine`'s `tests/` against
   the testing backend: `a_full_lifecycle_queue_returns_the_command`,
