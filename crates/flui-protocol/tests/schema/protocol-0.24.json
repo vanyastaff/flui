@@ -5914,6 +5914,18 @@
     },
     "NativePreferences": {
       "properties": {
+        "accent_color": {
+          "items": {
+            "format": "float",
+            "type": "number"
+          },
+          "maxItems": 4,
+          "minItems": 4,
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "gestures": {
           "$ref": "#/$defs/Gestures",
           "default": {}
@@ -5953,6 +5965,26 @@
           "anyOf": [
             {
               "$ref": "#/$defs/Regional"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "scroll_bar_visibility": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ScrollBarVisibility"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "scroll_track_click": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ScrollTrackClick"
             },
             {
               "type": "null"
@@ -7859,6 +7891,18 @@
     },
     "Preferences": {
       "properties": {
+        "accent_color": {
+          "items": {
+            "format": "float",
+            "type": "number"
+          },
+          "maxItems": 4,
+          "minItems": 4,
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "gestures": {
           "$ref": "#/$defs/Gestures",
           "default": {}
@@ -7908,6 +7952,26 @@
           "format": "uint64",
           "minimum": 0,
           "type": "integer"
+        },
+        "scroll_bar_visibility": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ScrollBarVisibility"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "scroll_track_click": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ScrollTrackClick"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "text_scale": {
           "format": "double",
@@ -8975,6 +9039,18 @@
       ],
       "type": "object"
     },
+    "ScrollBarVisibility": {
+      "oneOf": [
+        {
+          "const": "when_scrolling",
+          "type": "string"
+        },
+        {
+          "const": "always",
+          "type": "string"
+        }
+      ]
+    },
     "ScrollHint": {
       "oneOf": [
         {
@@ -9094,6 +9170,18 @@
         },
         {
           "const": "precise",
+          "type": "string"
+        }
+      ]
+    },
+    "ScrollTrackClick": {
+      "oneOf": [
+        {
+          "const": "page",
+          "type": "string"
+        },
+        {
+          "const": "jump_to_spot",
           "type": "string"
         }
       ]

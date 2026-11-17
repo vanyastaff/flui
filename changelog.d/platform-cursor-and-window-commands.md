@@ -21,7 +21,7 @@
 
 - `PlatformWindow::set_cursor` takes `&Cursor` instead of a `CursorIcon`; a window built outside
   the hosts passes `&Cursor::Icon(icon)` on. `CursorError` moved beside `Cursor` at the same path.
-- The agent protocol is 0.22 and the input recording format 6: a recording may carry a locked
+- The agent protocol is 0.24 and the input recording format 6: a recording may carry a locked
   pointer's `raw_motion`, which older clients and readers refuse.
 
 ### Fixed

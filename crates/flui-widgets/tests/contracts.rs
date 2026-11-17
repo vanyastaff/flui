@@ -2046,6 +2046,14 @@ fn scrollbar() {
                 crate::scrollbar::the_track_pages_and_the_wheel_scrolls_over_the_bar,
             ),
             (
+                "scrollbar::a_track_tap_jumps_to_the_spot_where_the_system_asks",
+                crate::scrollbar::a_track_tap_jumps_to_the_spot_where_the_system_asks,
+            ),
+            (
+                "scrollbar::an_unset_thumb_follows_the_systems_scroll_bar_visibility",
+                crate::scrollbar::an_unset_thumb_follows_the_systems_scroll_bar_visibility,
+            ),
+            (
                 "scrollbar::the_bar_fades_in_while_scrolling_and_out_after_it_stops",
                 crate::scrollbar::the_bar_fades_in_while_scrolling_and_out_after_it_stops,
             ),

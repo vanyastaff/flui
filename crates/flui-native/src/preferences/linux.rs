@@ -5,8 +5,8 @@
 //!
 //! D-Bus runs on the existing background executor. The owner only reads an
 //! immutable accepted snapshot; no portal request runs in build/layout/paint.
-//! The portal reports motion, contrast, text scale, the color scheme and
-//! GNOME's clock format; the preferred languages and the regional formats set
+//! The portal reports motion, contrast, text scale, the color scheme, the
+//! accent colour and GNOME's clock format and overlay scrolling; the preferred languages and the regional formats set
 //! apart from them (`LC_TIME`, `LC_MEASUREMENT`) come from the process
 //! environment, read once, as gettext and glibc read them.
 
@@ -15,7 +15,10 @@ use std::{
     time::Duration,
 };
 
-use flui_platform::{Brightness, HourCycle, MotionPreference, SystemPreferences};
+use flui_platform::{
+    Brightness, HourCycle, MotionPreference, PreferenceParts, ScrollBarVisibility, SrgbColor,
+    SystemPreferences,
+};
 use futures_util::StreamExt;
 use parking_lot::Mutex;
 use zbus::{OwnedVariant, Proxy};
@@ -23,7 +26,7 @@ use zbus::{OwnedVariant, Proxy};
 use crate::{
     PlatformError, executor::NativeExecutor, owner::signal::OwnerSignal,
     owner::sources::SystemPreferenceSource, preferences::locales as preferred_locales,
-    preferences::regional,
+    preferences::regional, preferences::retries::Retries,
 };
 
 const APPEARANCE: &str = "org.freedesktop.appearance";
@@ -36,39 +39,13 @@ const BOOTSTRAP_TIMEOUT: Duration = Duration::from_millis(500);
 /// (`heals_by_itself`), or that the portal answered with no value at all:
 /// 1, 2, 4, 8 and 16 s after each, then none until the portal next signals a
 /// change or changes hands.
-const READ_RETRIES: Backoff = Backoff::new(Duration::from_secs(1), 5);
+const READ_RETRIES: Retries = Retries::new(Duration::from_secs(1), 5);
 
 /// The retries of a session bus that does not answer, or of a connection that
 /// ended before the portal answered on it: 1 to 32 s apart, the last a minute
 /// after the first attempt, then the watch ends. A connection on which the
 /// portal answered starts the schedule over when it ends.
-const CONNECT_RETRIES: Backoff = Backoff::new(Duration::from_secs(1), 6);
-
-/// The pauses before the retries of something that failed: doubling from
-/// the first, a fixed number of them, then none, so a failure that never
-/// heals costs a bounded number of attempts and never a poll.
-#[derive(Debug, Clone, Copy)]
-struct Backoff {
-    next: Duration,
-    left: u32,
-}
-
-impl Backoff {
-    const fn new(first: Duration, retries: u32) -> Self {
-        Self {
-            next: first,
-            left: retries,
-        }
-    }
-
-    /// The pause before the next retry; `None` once every retry is spent.
-    fn next_pause(&mut self) -> Option<Duration> {
-        self.left = self.left.checked_sub(1)?;
-        let pause = self.next;
-        self.next = self.next.saturating_mul(2);
-        Some(pause)
-    }
-}
+const CONNECT_RETRIES: Retries = Retries::new(Duration::from_secs(1), 6);
 
 /// When the watch connects again: on its schedule after a connection that
 /// failed or ended with the portal never answering on it, and on a fresh
@@ -77,25 +54,24 @@ impl Backoff {
 /// second for good.
 #[derive(Debug, Clone, Copy)]
 struct ConnectRetry {
-    schedule: Backoff,
-    left: Backoff,
+    schedule: Retries,
+    spent: u32,
 }
 
 impl ConnectRetry {
-    const fn new(schedule: Backoff) -> Self {
-        Self {
-            schedule,
-            left: schedule,
-        }
+    const fn new(schedule: Retries) -> Self {
+        Self { schedule, spent: 0 }
     }
 
     /// The pause before the next connection, after one on which the portal
     /// answered a read (`answered`) or not; `None` once the schedule is spent.
     fn pause_after(&mut self, answered: bool) -> Option<Duration> {
         if answered {
-            self.left = self.schedule;
+            self.spent = 0;
         }
-        self.left.next_pause()
+        let pause = self.schedule.pause(self.spent)?;
+        self.spent += 1;
+        Some(pause)
     }
 }
 
@@ -106,6 +82,9 @@ struct Observation {
     /// brightness is presentation-specific (ADR-0172): each window reports it
     /// through the window state's `brightness`.
     appearance: Brightness,
+    /// The hour cycle `LC_TIME` gives, which a portal without GNOME's
+    /// `clock-format` leaves in force.
+    environment_hour_cycle: Option<HourCycle>,
 }
 
 /// The portal's observation and the task that keeps it, which a Linux host's loop
@@ -146,6 +125,7 @@ impl PreferenceSource {
         let locales = preferred_locales::from_posix_environment(var);
         let regional =
             regional::from_posix_environment(var, locales.as_deref().and_then(<[_]>::first));
+        let environment_hour_cycle = regional.hour_cycle();
         let accepted = match locales {
             Some(locales) => SystemPreferences::default().with_locales(locales),
             None => SystemPreferences::default(),
@@ -155,6 +135,7 @@ impl PreferenceSource {
             active: true,
             accepted,
             appearance: Brightness::Light,
+            environment_hour_cycle,
         }));
         let (ready, receiver) = mpsc::sync_channel(1);
         let task = executor.handle().spawn(observe(
@@ -243,7 +224,7 @@ async fn observe_through<F>(
     signal: &Weak<OwnerSignal>,
     mut ready: Option<mpsc::SyncSender<()>>,
     mut connect: impl FnMut() -> F,
-    schedule: Backoff,
+    schedule: Retries,
 ) where
     F: Future<Output = zbus::Result<zbus::Connection>>,
 {
@@ -305,7 +286,9 @@ async fn observe_connection(
         *answered |= refresh.answered;
         refresh
     };
-    retry.settle(refreshed(refresh(&proxy, observation, signal).await));
+    retry.settle(refreshed(
+        refresh(&proxy, observation, signal, MissingKey::Withdraws).await,
+    ));
     if let Some(ready) = ready.take() {
         let _ = ready.send(());
     }
@@ -322,21 +305,27 @@ async fn observe_connection(
                 };
                 if matches!(
                     (namespace, key),
-                    (APPEARANCE, "reduced-motion" | "color-scheme" | "contrast")
-                        | (GNOME, "enable-animations" | "text-scaling-factor" | "clock-format")
+                    (APPEARANCE, "reduced-motion" | "color-scheme" | "contrast" | "accent-color")
+                        | (
+                            GNOME,
+                            "enable-animations"
+                                | "text-scaling-factor"
+                                | "clock-format"
+                                | "overlay-scrolling"
+                        )
                         | (GNOME_A11Y, "high-contrast")
                 ) {
                     retry = ReadRetry::new();
-                    retry.settle(refreshed(refresh(&proxy, observation, signal).await));
+                    retry.settle(refreshed(refresh(&proxy, observation, signal, MissingKey::Keeps).await));
                 }
             }
             owner = owners.next() => {
                 if owner.is_none() { return Ok(()); }
                 retry = ReadRetry::new();
-                retry.settle(refreshed(refresh(&proxy, observation, signal).await));
+                retry.settle(refreshed(refresh(&proxy, observation, signal, MissingKey::Withdraws).await));
             }
             () = sleep_until(due) => {
-                retry.settle(refreshed(refresh(&proxy, observation, signal).await));
+                retry.settle(refreshed(refresh(&proxy, observation, signal, MissingKey::Keeps).await));
             }
         }
     }
@@ -355,14 +344,14 @@ async fn sleep_until(due: Option<tokio::time::Instant>) {
 /// schedule, which a signal or a change of owner starts over.
 #[derive(Debug)]
 struct ReadRetry {
-    backoff: Backoff,
+    spent: u32,
     due: Option<tokio::time::Instant>,
 }
 
 impl ReadRetry {
     const fn new() -> Self {
         Self {
-            backoff: READ_RETRIES,
+            spent: 0,
             due: None,
         }
     }
@@ -371,10 +360,10 @@ impl ReadRetry {
     fn settle(&mut self, refreshed: Refreshed) {
         self.due = match refreshed.next {
             NextRead::Settled => None,
-            NextRead::Retry => self
-                .backoff
-                .next_pause()
-                .map(|pause| tokio::time::Instant::now() + pause),
+            NextRead::Retry => READ_RETRIES.pause(self.spent).map(|pause| {
+                self.spent += 1;
+                tokio::time::Instant::now() + pause
+            }),
         };
     }
 }
@@ -446,23 +435,69 @@ fn heals_by_itself(error: &zbus::Error) -> bool {
     }
 }
 
+/// Whether a key the portal answers it does not have keeps or clears what was
+/// accepted from it before.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MissingKey {
+    /// The portal that answered before answers now: a key it lacks for a
+    /// moment (`NotFound` while its backend restarts) keeps its value.
+    Keeps,
+    /// The portal changed hands or the watch connected anew: the backend now
+    /// answering is the one to believe, so a key it lacks has no observation.
+    Withdraws,
+}
+
+/// Publish the snapshot `edit` makes of the accepted one, if it differs.
+/// Parts taken from an accepted snapshot pass its checks again; a text scale
+/// the snapshot refuses goes through `accept_text_scale`, which reports it.
+fn publish_parts(
+    observation: &Mutex<Observation>,
+    signal: &Weak<OwnerSignal>,
+    edit: impl FnOnce(&mut PreferenceParts),
+) {
+    publish(observation, signal, |observation| {
+        let mut parts = observation.accepted.clone().into_parts();
+        edit(&mut parts);
+        match parts.try_into_preferences() {
+            Ok(next) if next != observation.accepted => {
+                observation.accepted = next;
+                true
+            }
+            _ => false,
+        }
+    });
+}
+
+/// Take one key's read: a value replaces the field it feeds; a key the portal
+/// lacks clears that field under [`MissingKey::Withdraws`] and keeps it
+/// otherwise; a failed read keeps it, for a retry to settle.
+fn take_key<T: Copy>(
+    observation: &Mutex<Observation>,
+    signal: &Weak<OwnerSignal>,
+    read: &zbus::Result<Option<T>>,
+    missing: MissingKey,
+    set: impl FnOnce(&mut PreferenceParts, Option<T>),
+) {
+    let value = match read {
+        Ok(Some(value)) => Some(*value),
+        Ok(None) if missing == MissingKey::Withdraws => None,
+        Ok(None) | Err(_) => return,
+    };
+    publish_parts(observation, signal, |parts| set(parts, value));
+}
+
 /// Read every observed setting. Each accepted value is published on its own,
 /// so one failing read neither discards nor delays the other.
 async fn refresh(
     proxy: &Proxy<'_>,
     observation: &Mutex<Observation>,
     signal: &Weak<OwnerSignal>,
+    missing: MissingKey,
 ) -> Refreshed {
     let motion = read_motion(proxy).await;
-    if let Ok(Some(motion)) = motion {
-        publish(observation, signal, |observation| {
-            let changed = observation.accepted.motion() != Some(motion);
-            if changed {
-                observation.accepted = observation.accepted.clone().with_motion(motion);
-            }
-            changed
-        });
-    }
+    take_key(observation, signal, &motion, missing, |parts, motion| {
+        parts.motion = motion;
+    });
     let appearance = read_appearance(proxy).await;
     if let Ok(scheme) = appearance {
         // A portal without the key prefers neither: light.
@@ -472,42 +507,44 @@ async fn refresh(
         });
     }
     let contrast = read_contrast(proxy).await;
-    if let Ok(Some(high_contrast)) = contrast {
-        publish(observation, signal, |observation| {
-            let changed = observation.accepted.high_contrast() != Some(high_contrast);
-            if changed {
-                observation.accepted = observation
-                    .accepted
-                    .clone()
-                    .with_high_contrast(high_contrast);
-            }
-            changed
-        });
-    }
+    take_key(observation, signal, &contrast, missing, |parts, high| {
+        parts.high_contrast = high;
+    });
     let text_scale = read_text_scale(proxy).await;
-    if let Ok(Some(scale)) = text_scale {
-        accept_text_scale(observation, signal, scale);
+    match text_scale {
+        Ok(Some(scale)) => accept_text_scale(observation, signal, scale),
+        Ok(None) if missing == MissingKey::Withdraws => {
+            publish_parts(observation, signal, |parts| parts.text_scale = None);
+        }
+        Ok(None) | Err(_) => {}
     }
     let clock = read_clock_format(proxy).await;
-    if let Ok(Some(hour_cycle)) = clock {
-        publish(observation, signal, |observation| {
-            let changed = observation.accepted.regional().hour_cycle() != Some(hour_cycle);
-            if changed {
-                let regional = observation
-                    .accepted
-                    .regional()
-                    .clone()
-                    .with_hour_cycle(hour_cycle);
-                observation.accepted = observation.accepted.clone().with_regional(regional);
-            }
-            changed
-        });
-    }
+    // Without GNOME's clock format the hour cycle is the environment's again.
+    let environment_hour_cycle = observation.lock().environment_hour_cycle;
+    take_key(observation, signal, &clock, missing, |parts, hour_cycle| {
+        parts.regional.hour_cycle = hour_cycle.or(environment_hour_cycle);
+    });
+    let accent = read_accent(proxy).await;
+    take_key(observation, signal, &accent, missing, |parts, accent| {
+        parts.accent_color = accent.and_then(PortalAccent::color);
+    });
+    let scroll_bars = read_scroll_bar_visibility(proxy).await;
+    take_key(
+        observation,
+        signal,
+        &scroll_bars,
+        missing,
+        |parts, visibility| {
+            parts.scroll_bars.visibility = visibility;
+        },
+    );
     let answered = matches!(motion, Ok(Some(_)))
         || matches!(appearance, Ok(Some(_)))
         || matches!(contrast, Ok(Some(_)))
         || matches!(text_scale, Ok(Some(_)))
-        || matches!(clock, Ok(Some(_)));
+        || matches!(clock, Ok(Some(_)))
+        || matches!(accent, Ok(Some(_)))
+        || matches!(scroll_bars, Ok(Some(_)));
     Refreshed::of(
         [
             motion.as_ref().err(),
@@ -515,9 +552,72 @@ async fn refresh(
             contrast.as_ref().err(),
             text_scale.as_ref().err(),
             clock.as_ref().err(),
+            accent.as_ref().err(),
+            scroll_bars.as_ref().err(),
         ],
         answered,
     )
+}
+
+/// What the portal's `accent-color` says.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum PortalAccent {
+    /// The user chose this colour.
+    Color(SrgbColor),
+    /// The user chose none: the portal spells it as components outside
+    /// `0..=1`.
+    Unset,
+}
+
+impl PortalAccent {
+    /// The accent of an `accent-color` value: red, green and blue in sRGB,
+    /// opaque. The Settings portal's specification makes any component
+    /// outside `0..=1` mean "unset", so that, a NaN included, is no accent
+    /// rather than a failed read.
+    fn of((red, green, blue): (f64, f64, f64)) -> Self {
+        SrgbColor::try_new(red, green, blue, 1.0).map_or(Self::Unset, Self::Color)
+    }
+
+    /// The colour the snapshot records: none for "unset".
+    const fn color(self) -> Option<SrgbColor> {
+        match self {
+            Self::Color(color) => Some(color),
+            Self::Unset => None,
+        }
+    }
+}
+
+/// `accent-color` (GNOME 47, KDE Plasma 6); a desktop without the key has no
+/// observation.
+async fn read_accent(proxy: &Proxy<'_>) -> zbus::Result<Option<PortalAccent>> {
+    match read(proxy, APPEARANCE, "accent-color").await {
+        Ok(value) => Ok(Some(PortalAccent::of(<(f64, f64, f64)>::try_from(value)?))),
+        Err(error) if missing_key(&error) => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+/// GNOME's `overlay-scrolling`: scroll bars that show while the content
+/// scrolls, or always; a desktop without the key has no observation. GNOME
+/// has no track-click setting the portal carries (GTK's
+/// `gtk-primary-button-warps-slider` is an XSETTING), so that stays
+/// unobserved.
+async fn read_scroll_bar_visibility(
+    proxy: &Proxy<'_>,
+) -> zbus::Result<Option<ScrollBarVisibility>> {
+    match read(proxy, GNOME, "overlay-scrolling").await {
+        Ok(value) => Ok(Some(overlay_scrolling(bool::try_from(value)?))),
+        Err(error) if missing_key(&error) => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+fn overlay_scrolling(overlay: bool) -> ScrollBarVisibility {
+    if overlay {
+        ScrollBarVisibility::WhenScrolling
+    } else {
+        ScrollBarVisibility::Always
+    }
 }
 
 /// GNOME's `clock-format`; a desktop without the key, or with a value it
@@ -651,18 +751,18 @@ mod tests {
         fn exit(&self, _: &tracing::span::Id) {}
     }
 
-    /// Each schedule doubles its pause and runs out: a failure that never
-    /// heals costs a bounded number of attempts.
+    /// A read is retried 1 to 16 s apart, a connection 1 to 32 s apart, and
+    /// both run out.
     #[test]
-    fn a_backoff_doubles_and_runs_out() {
-        let pauses = |mut backoff: Backoff| {
-            std::iter::from_fn(move || backoff.next_pause())
+    fn the_watchs_retries_are_bounded() {
+        let pauses = |retries: Retries| {
+            (0..10)
+                .map_while(|spent| retries.pause(spent))
                 .map(|pause| pause.as_secs())
                 .collect::<Vec<u64>>()
         };
         assert_eq!(pauses(READ_RETRIES), [1, 2, 4, 8, 16]);
         assert_eq!(pauses(CONNECT_RETRIES), [1, 2, 4, 8, 16, 32]);
-        assert_eq!(pauses(Backoff::new(Duration::MAX, 2)), [u64::MAX, u64::MAX]);
     }
 
     /// A session bus that never answers is asked once and then once per
@@ -678,6 +778,7 @@ mod tests {
             active: true,
             accepted: SystemPreferences::default(),
             appearance: Brightness::Light,
+            environment_hour_cycle: None,
         });
         let attempts = AtomicUsize::new(0);
         let (ready, started) = mpsc::sync_channel(1);
@@ -690,7 +791,7 @@ mod tests {
                 attempts.fetch_add(1, Ordering::SeqCst);
                 std::future::ready(Err(zbus::Error::Failure("no session bus".into())))
             },
-            Backoff::new(Duration::from_millis(1), 6),
+            Retries::new(Duration::from_millis(1), 6),
         );
         let ended =
             runtime.block_on(async { tokio::time::timeout(Duration::from_secs(5), watch).await });
@@ -775,7 +876,7 @@ mod tests {
     /// connection.
     #[test]
     fn only_a_connection_the_portal_answered_on_starts_the_schedule_over() {
-        let mut retries = ConnectRetry::new(Backoff::new(Duration::from_secs(1), 3));
+        let mut retries = ConnectRetry::new(Retries::new(Duration::from_secs(1), 3));
         let pauses = |retries: &mut ConnectRetry, answered: &[bool]| {
             answered
                 .iter()
@@ -793,6 +894,107 @@ mod tests {
         );
     }
 
+    /// The portal's accent is an opaque sRGB colour while every component
+    /// is in `0..=1`; any component outside that range, NaN included, is the
+    /// portal's "unset" and clears an accent accepted before. Red-check: keep
+    /// the previous accent on "unset", or clamp an out-of-range component.
+    #[test]
+    fn the_portal_accent_is_a_colour_in_range_and_unset_outside_it() {
+        let blue = SrgbColor::try_new(0.21, 0.52, 0.89, 1.0).expect("in range");
+        assert_eq!(
+            PortalAccent::of((0.21, 0.52, 0.89)),
+            PortalAccent::Color(blue)
+        );
+        assert_eq!(
+            PortalAccent::of((0.0, 1.0, 0.0)),
+            PortalAccent::Color(SrgbColor::try_new(0.0, 1.0, 0.0, 1.0).expect("in range"))
+        );
+        for unset in [
+            (-1.0, -1.0, -1.0),
+            (0.5, 1.5, 0.5),
+            (f64::NAN, 0.5, 0.5),
+            (0.5, 0.5, f64::INFINITY),
+        ] {
+            assert_eq!(PortalAccent::of(unset), PortalAccent::Unset, "{unset:?}");
+        }
+        assert_eq!(PortalAccent::Color(blue).color(), Some(blue));
+        assert_eq!(PortalAccent::Unset.color(), None, "unset clears the accent");
+    }
+
+    /// A key's value replaces its field; a key the portal lacks keeps the
+    /// field while the same portal answers and clears it once the portal
+    /// changed hands; a failed read keeps it. Red-check: publish nothing for a
+    /// missing key whatever the portal, or clear on a failed read.
+    #[test]
+    fn a_missing_key_withdraws_its_field_only_after_the_portal_changed_hands() {
+        let blue = SrgbColor::try_new(0.21, 0.52, 0.89, 1.0).expect("in range");
+        let observation = Mutex::new(Observation {
+            active: true,
+            accepted: SystemPreferences::default(),
+            appearance: Brightness::Light,
+            environment_hour_cycle: Some(HourCycle::H23),
+        });
+        let accent = |observation: &Mutex<Observation>| observation.lock().accepted.accent_color();
+        let set_accent = |parts: &mut PreferenceParts, accent: Option<PortalAccent>| {
+            parts.accent_color = accent.and_then(PortalAccent::color);
+        };
+        let signal = Weak::new();
+        let answered: zbus::Result<Option<PortalAccent>> = Ok(Some(PortalAccent::Color(blue)));
+        take_key(
+            &observation,
+            &signal,
+            &answered,
+            MissingKey::Keeps,
+            set_accent,
+        );
+        assert_eq!(accent(&observation), Some(blue));
+        let failed: zbus::Result<Option<PortalAccent>> =
+            Err(zbus::Error::Failure("backend failed".into()));
+        let missing: zbus::Result<Option<PortalAccent>> = Ok(None);
+        for (read, rule) in [
+            (&failed, MissingKey::Withdraws),
+            (&failed, MissingKey::Keeps),
+            (&missing, MissingKey::Keeps),
+        ] {
+            take_key(&observation, &signal, read, rule, set_accent);
+            assert_eq!(accent(&observation), Some(blue), "{rule:?}");
+        }
+        take_key(
+            &observation,
+            &signal,
+            &missing,
+            MissingKey::Withdraws,
+            set_accent,
+        );
+        assert_eq!(accent(&observation), None, "the new portal has no accent");
+        // The clock format withdrawn, the environment's hour cycle stands.
+        let clock: zbus::Result<Option<HourCycle>> = Ok(Some(HourCycle::H12));
+        let set_clock = |parts: &mut PreferenceParts, cycle: Option<HourCycle>| {
+            parts.regional.hour_cycle = cycle.or(Some(HourCycle::H23));
+        };
+        take_key(&observation, &signal, &clock, MissingKey::Keeps, set_clock);
+        let missing: zbus::Result<Option<HourCycle>> = Ok(None);
+        take_key(
+            &observation,
+            &signal,
+            &missing,
+            MissingKey::Withdraws,
+            set_clock,
+        );
+        assert_eq!(
+            observation.lock().accepted.regional().hour_cycle(),
+            Some(HourCycle::H23)
+        );
+    }
+
+    /// GNOME's overlay scrolling shows scroll bars while scrolling; without
+    /// it they always show.
+    #[test]
+    fn overlay_scrolling_is_scroll_bars_that_show_while_scrolling() {
+        assert_eq!(overlay_scrolling(true), ScrollBarVisibility::WhenScrolling);
+        assert_eq!(overlay_scrolling(false), ScrollBarVisibility::Always);
+    }
+
     /// A text scale the snapshot refuses is reported with the observation
     /// unlocked, and leaves what was accepted before as it was.
     #[test]
@@ -801,6 +1003,7 @@ mod tests {
             active: true,
             accepted: SystemPreferences::default(),
             appearance: Brightness::Light,
+            environment_hour_cycle: None,
         }));
         let events = Arc::new(AtomicUsize::new(0));
         let locked = Arc::new(AtomicUsize::new(0));

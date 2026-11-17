@@ -126,7 +126,7 @@ for it and state what they stated before.
 
 The native recording mirrors the new capabilities, `cursor_grab`, `level` and `user_resizing` as
 optional fields; the input recording gains `raw_motion`, a new variant of a union its reader
-refuses whole, so its format version moves and protocol 0.22 is a break relative to 0.21 (ADR-0342).
+refuses whole, so its format version moves and protocol 0.24 is a break relative to 0.23 (ADR-0342).
 
 ## Consequences
 

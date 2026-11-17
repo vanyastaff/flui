@@ -12238,6 +12238,7 @@ impl core::marker::StructuralPartialEq for flui::platform::InvalidPreference
 variant flui::platform::InvalidPreference::Distance // at 4
 variant flui::platform::InvalidPreference::DurationScale // at 1
 variant flui::platform::InvalidPreference::FlingRange // at 6
+variant flui::platform::InvalidPreference::Color // at 7
 variant flui::platform::InvalidPreference::GestureArea // at 3
 variant flui::platform::InvalidPreference::PixelRatio // at 2
 variant flui::platform::InvalidPreference::Speed // at 5
@@ -12596,6 +12597,8 @@ field flui::platform::PreferenceParts::regional: flui::platform::RegionalParts /
 field flui::platform::PreferenceParts::text_scale: Option<f64> // at 0
 field flui::platform::PreferenceParts::text_weight: Option<flui::platform::TextWeightPreference> // at 4
 field flui::platform::PreferenceParts::wheel: flui::platform::WheelParts // at 8
+field flui::platform::PreferenceParts::accent_color: Option<flui::platform::SrgbColor> // at 9
+field flui::platform::PreferenceParts::scroll_bars: flui::platform::ScrollBarParts // at 10
 impl Clone for flui::platform::PreferenceParts
 impl Default for flui::platform::PreferenceParts
 impl PartialEq for flui::platform::PreferenceParts
@@ -12706,6 +12709,50 @@ reexport flui::platform::ScrollInversion => flui::interaction::ScrollInversion
 reexport flui::platform::ScrollPhase => flui::interaction::ScrollPhase
 reexport flui::platform::ScrollPrecision => flui::interaction::ScrollPrecision
 reexport flui::platform::ScrollUnit => flui::interaction::ScrollUnit
+pub struct flui::platform::ScrollBarParts
+field flui::platform::ScrollBarParts::track_click: Option<flui::platform::ScrollTrackClick> // at 1
+field flui::platform::ScrollBarParts::visibility: Option<flui::platform::ScrollBarVisibility> // at 0
+impl Clone for flui::platform::ScrollBarParts
+impl Copy for flui::platform::ScrollBarParts
+impl Default for flui::platform::ScrollBarParts
+impl Eq for flui::platform::ScrollBarParts
+impl PartialEq for flui::platform::ScrollBarParts
+impl core::fmt::Debug for flui::platform::ScrollBarParts
+impl core::marker::StructuralPartialEq for flui::platform::ScrollBarParts
+pub const fn flui::platform::ScrollBarParts::into_preferences(self) -> flui::platform::ScrollBarPreferences
+pub struct flui::platform::ScrollBarPreferences { .. }
+impl Clone for flui::platform::ScrollBarPreferences
+impl Copy for flui::platform::ScrollBarPreferences
+impl Default for flui::platform::ScrollBarPreferences
+impl Eq for flui::platform::ScrollBarPreferences
+impl PartialEq for flui::platform::ScrollBarPreferences
+impl core::fmt::Debug for flui::platform::ScrollBarPreferences
+impl core::marker::StructuralPartialEq for flui::platform::ScrollBarPreferences
+pub const fn flui::platform::ScrollBarPreferences::into_parts(self) -> flui::platform::ScrollBarParts
+pub const fn flui::platform::ScrollBarPreferences::track_click(&self) -> Option<flui::platform::ScrollTrackClick>
+pub const fn flui::platform::ScrollBarPreferences::visibility(&self) -> Option<flui::platform::ScrollBarVisibility>
+pub const fn flui::platform::ScrollBarPreferences::with_track_click(self, value: flui::platform::ScrollTrackClick) -> Self
+pub const fn flui::platform::ScrollBarPreferences::with_visibility(self, value: flui::platform::ScrollBarVisibility) -> Self
+#[non_exhaustive] pub enum flui::platform::ScrollBarVisibility
+impl Clone for flui::platform::ScrollBarVisibility
+impl Copy for flui::platform::ScrollBarVisibility
+impl Eq for flui::platform::ScrollBarVisibility
+impl PartialEq for flui::platform::ScrollBarVisibility
+impl core::fmt::Debug for flui::platform::ScrollBarVisibility
+impl core::hash::Hash for flui::platform::ScrollBarVisibility
+impl core::marker::StructuralPartialEq for flui::platform::ScrollBarVisibility
+variant flui::platform::ScrollBarVisibility::Always // at 1
+variant flui::platform::ScrollBarVisibility::WhenScrolling // at 0
+#[non_exhaustive] pub enum flui::platform::ScrollTrackClick
+impl Clone for flui::platform::ScrollTrackClick
+impl Copy for flui::platform::ScrollTrackClick
+impl Eq for flui::platform::ScrollTrackClick
+impl PartialEq for flui::platform::ScrollTrackClick
+impl core::fmt::Debug for flui::platform::ScrollTrackClick
+impl core::hash::Hash for flui::platform::ScrollTrackClick
+impl core::marker::StructuralPartialEq for flui::platform::ScrollTrackClick
+variant flui::platform::ScrollTrackClick::JumpToSpot // at 1
+variant flui::platform::ScrollTrackClick::Page // at 0
 #[non_exhaustive] pub enum flui::platform::SessionEndAnswer
 impl Clone for flui::platform::SessionEndAnswer
 impl Copy for flui::platform::SessionEndAnswer
@@ -12792,6 +12839,19 @@ pub trait flui::platform::Storage: Send + Sync + 'static
 fn flui::platform::Storage::copy_aside(&self, name: &flui::platform::StorageName) -> flui::platform::StorageFuture<flui::platform::CopiedAside>
 fn flui::platform::Storage::publish(&self, name: &flui::platform::StorageName, bytes: Vec<u8>, mode: flui::platform::WriteMode) -> flui::platform::StorageFuture<flui::platform::StoredVersion>
 fn flui::platform::Storage::read(&self, name: &flui::platform::StorageName, limit: u64) -> flui::platform::StorageFuture<flui::platform::Stored>
+pub struct flui::platform::SrgbColor { .. }
+impl Clone for flui::platform::SrgbColor
+impl Copy for flui::platform::SrgbColor
+impl PartialEq for flui::platform::SrgbColor
+impl core::fmt::Debug for flui::platform::SrgbColor
+impl core::marker::StructuralPartialEq for flui::platform::SrgbColor
+pub const fn flui::platform::SrgbColor::alpha(self) -> f32
+pub const fn flui::platform::SrgbColor::blue(self) -> f32
+pub const fn flui::platform::SrgbColor::green(self) -> f32
+pub const fn flui::platform::SrgbColor::red(self) -> f32
+pub const fn flui::platform::SrgbColor::to_array(self) -> [f32; 4]
+pub fn flui::platform::SrgbColor::from_rgba8(red: u8, green: u8, blue: u8, alpha: u8) -> Self
+pub fn flui::platform::SrgbColor::try_new(red: f64, green: f64, blue: f64, alpha: f64) -> Result<Self, flui::platform::InvalidPreference>
 #[non_exhaustive] pub enum flui::platform::StorageError
 impl Clone for flui::platform::StorageError
 impl Eq for flui::platform::StorageError
@@ -12965,6 +13025,10 @@ pub fn flui::platform::SystemPreferences::with_locales(self, value: impl Into<al
 pub fn flui::platform::SystemPreferences::with_regional(self, value: flui::platform::RegionalFormats) -> Self
 pub fn flui::platform::SystemPreferences::with_text_scale(self, value: f64) -> Result<Self, flui::platform::InvalidPreference>
 pub fn flui::platform::SystemPreferences::with_wheel(self, value: flui::platform::WheelPreferences) -> Self
+pub const fn flui::platform::SystemPreferences::accent_color(&self) -> Option<flui::platform::SrgbColor>
+pub const fn flui::platform::SystemPreferences::scroll_bars(&self) -> &flui::platform::ScrollBarPreferences
+pub const fn flui::platform::SystemPreferences::with_accent_color(self, value: Option<flui::platform::SrgbColor>) -> Self
+pub const fn flui::platform::SystemPreferences::with_scroll_bars(self, value: flui::platform::ScrollBarPreferences) -> Self
 #[non_exhaustive] pub enum flui::platform::SystemUiOverlayStyle
 impl Clone for flui::platform::SystemUiOverlayStyle
 impl Copy for flui::platform::SystemUiOverlayStyle
@@ -17345,6 +17409,8 @@ pub fn flui::prelude::MediaQuery::of(ctx: &dyn flui::prelude::BuildContext) -> f
 pub fn flui::prelude::MediaQuery::padding_of(ctx: &dyn flui::prelude::BuildContext) -> Option<flui::geometry::EdgeInsets>
 pub fn flui::prelude::MediaQuery::platform_brightness_of(ctx: &dyn flui::prelude::BuildContext) -> Option<flui::platform::Brightness>
 pub fn flui::prelude::MediaQuery::regional_formats_of(ctx: &dyn flui::prelude::BuildContext) -> Option<flui::platform::RegionalFormats>
+pub fn flui::prelude::MediaQuery::accent_color_of(ctx: &dyn flui::prelude::BuildContext) -> Option<flui::prelude::Color>
+pub fn flui::prelude::MediaQuery::scroll_bars_of(ctx: &dyn flui::prelude::BuildContext) -> Option<flui::platform::ScrollBarPreferences>
 pub fn flui::prelude::MediaQuery::size_of(ctx: &dyn flui::prelude::BuildContext) -> Option<flui::geometry::Size>
 pub fn flui::prelude::MediaQuery::system_gesture_insets_of(ctx: &dyn flui::prelude::BuildContext) -> Option<flui::geometry::EdgeInsets>
 pub fn flui::prelude::MediaQuery::text_sizing_of(ctx: &dyn flui::prelude::BuildContext) -> Option<flui::painting::TextSizing>
@@ -17357,6 +17423,8 @@ field flui::prelude::MediaQueryData::motion: flui::animation::MotionPolicy // at
 field flui::prelude::MediaQueryData::platform_brightness: flui::platform::Brightness // at 7
 field flui::prelude::MediaQueryData::preferred_locales: Option<alloc::rcs::arc::Arc<[flui::platform::Locale]>> // at 10
 field flui::prelude::MediaQueryData::regional_formats: flui::platform::RegionalFormats // at 11
+field flui::prelude::MediaQueryData::accent_color: Option<flui::prelude::Color> // at 12
+field flui::prelude::MediaQueryData::scroll_bars: flui::platform::ScrollBarPreferences // at 13
 field flui::prelude::MediaQueryData::size: flui::geometry::Size // at 0
 field flui::prelude::MediaQueryData::system_gesture_insets: flui::geometry::EdgeInsets // at 6
 field flui::prelude::MediaQueryData::text_sizing: flui::painting::TextSizing // at 2
@@ -17375,6 +17443,8 @@ pub const flui::prelude::MediaQueryData::FIELD_MOTION: flui::view::FieldMask<Sel
 pub const flui::prelude::MediaQueryData::FIELD_PLATFORM_BRIGHTNESS: flui::view::FieldMask<Self> = _
 pub const flui::prelude::MediaQueryData::FIELD_PREFERRED_LOCALES: flui::view::FieldMask<Self> = _
 pub const flui::prelude::MediaQueryData::FIELD_REGIONAL_FORMATS: flui::view::FieldMask<Self> = _
+pub const flui::prelude::MediaQueryData::FIELD_ACCENT_COLOR: flui::view::FieldMask<Self> = _
+pub const flui::prelude::MediaQueryData::FIELD_SCROLL_BARS: flui::view::FieldMask<Self> = _
 pub const flui::prelude::MediaQueryData::FIELD_SIZE: flui::view::FieldMask<Self> = _
 pub const flui::prelude::MediaQueryData::FIELD_SYSTEM_GESTURE_INSETS: flui::view::FieldMask<Self> = _
 pub const flui::prelude::MediaQueryData::FIELD_TEXT_SIZING: flui::view::FieldMask<Self> = _
@@ -30865,6 +30935,7 @@ pub fn flui_layer::scene::version::SceneVersion::texture_users(&self, texture: f
 pub struct flui_layer::scene::version::SubtreeCull<'v> { .. }
 impl core::fmt::Debug for flui_layer::scene::version::SubtreeCull<'_>
 pub fn flui_layer::scene::version::SubtreeCull::meets(&mut self, node: flui_layer::scene::id::SceneNodeId) -> bool // impl<'v> flui_layer::scene::version::SubtreeCull<'v>
+pub fn flui_layer::scene::version::SubtreeCull::meets_chunk(&mut self, at: flui_layer::scene::version::EntryAddress) -> bool // impl<'v> flui_layer::scene::version::SubtreeCull<'v>
 pub struct flui_layer::scene_snapshot::DamageRect { .. }
 impl Clone for flui_layer::scene_snapshot::DamageRect
 impl Copy for flui_layer::scene_snapshot::DamageRect
@@ -33740,6 +33811,9 @@ field flui_protocol::native_recording::Preferences::regional: Option<Box<flui_pr
 field flui_protocol::native_recording::Preferences::text_scale: Option<f64> // at 0
 field flui_protocol::native_recording::Preferences::text_weight: Option<flui_protocol::native_recording::TextWeight> // at 4
 field flui_protocol::native_recording::Preferences::wheel_horizontal_characters: Option<u32> // at 9
+field flui_protocol::native_recording::Preferences::accent_color: Option<[f32; 4]> // at 10
+field flui_protocol::native_recording::Preferences::scroll_bar_visibility: Option<flui_protocol::native_recording::ScrollBarVisibility> // at 11
+field flui_protocol::native_recording::Preferences::scroll_track_click: Option<flui_protocol::native_recording::ScrollTrackClick> // at 12
 field flui_protocol::native_recording::Preferences::wheel_vertical: Option<flui_protocol::native_recording::WheelStep> // at 8
 impl Clone for flui_protocol::native_recording::Preferences
 impl Default for flui_protocol::native_recording::Preferences
@@ -33840,6 +33914,21 @@ impl core::marker::StructuralPartialEq for flui_protocol::native_recording::Scro
 impl schemars::JsonSchema for flui_protocol::native_recording::Scroll
 impl serde_core::ser::Serialize for flui_protocol::native_recording::Scroll
 impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::native_recording::Scroll
+#[non_exhaustive] pub enum flui_protocol::native_recording::ScrollBarVisibility
+impl Clone for flui_protocol::native_recording::ScrollBarVisibility
+impl Copy for flui_protocol::native_recording::ScrollBarVisibility
+impl Eq for flui_protocol::native_recording::ScrollBarVisibility
+impl PartialEq for flui_protocol::native_recording::ScrollBarVisibility
+impl core::fmt::Debug for flui_protocol::native_recording::ScrollBarVisibility
+impl core::hash::Hash for flui_protocol::native_recording::ScrollBarVisibility
+impl core::marker::StructuralPartialEq for flui_protocol::native_recording::ScrollBarVisibility
+impl schemars::JsonSchema for flui_protocol::native_recording::ScrollBarVisibility
+impl serde_core::ser::Serialize for flui_protocol::native_recording::ScrollBarVisibility
+impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::native_recording::ScrollBarVisibility
+pub const flui_protocol::native_recording::ScrollBarVisibility::ALL: &'static [Self] = _
+pub const fn flui_protocol::native_recording::ScrollBarVisibility::name(self) -> &'static str
+variant flui_protocol::native_recording::ScrollBarVisibility::Always // at 1
+variant flui_protocol::native_recording::ScrollBarVisibility::WhenScrolling // at 0
 #[non_exhaustive] pub enum flui_protocol::native_recording::ScrollInversion
 impl Clone for flui_protocol::native_recording::ScrollInversion
 impl Copy for flui_protocol::native_recording::ScrollInversion
@@ -33875,6 +33964,21 @@ variant flui_protocol::native_recording::ScrollPhase::Ended // at 2
 variant flui_protocol::native_recording::ScrollPhase::MomentumBegan // at 4
 variant flui_protocol::native_recording::ScrollPhase::MomentumChanged // at 5
 variant flui_protocol::native_recording::ScrollPhase::MomentumEnded // at 6
+#[non_exhaustive] pub enum flui_protocol::native_recording::ScrollTrackClick
+impl Clone for flui_protocol::native_recording::ScrollTrackClick
+impl Copy for flui_protocol::native_recording::ScrollTrackClick
+impl Eq for flui_protocol::native_recording::ScrollTrackClick
+impl PartialEq for flui_protocol::native_recording::ScrollTrackClick
+impl core::fmt::Debug for flui_protocol::native_recording::ScrollTrackClick
+impl core::hash::Hash for flui_protocol::native_recording::ScrollTrackClick
+impl core::marker::StructuralPartialEq for flui_protocol::native_recording::ScrollTrackClick
+impl schemars::JsonSchema for flui_protocol::native_recording::ScrollTrackClick
+impl serde_core::ser::Serialize for flui_protocol::native_recording::ScrollTrackClick
+impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::native_recording::ScrollTrackClick
+pub const flui_protocol::native_recording::ScrollTrackClick::ALL: &'static [Self] = _
+pub const fn flui_protocol::native_recording::ScrollTrackClick::name(self) -> &'static str
+variant flui_protocol::native_recording::ScrollTrackClick::JumpToSpot // at 1
+variant flui_protocol::native_recording::ScrollTrackClick::Page // at 0
 #[non_exhaustive] pub enum flui_protocol::native_recording::ScrollUnit
 impl Clone for flui_protocol::native_recording::ScrollUnit
 impl Copy for flui_protocol::native_recording::ScrollUnit

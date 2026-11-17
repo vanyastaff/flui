@@ -22,6 +22,12 @@ mod browser {
     //! browser formats with. Each query's `change` and the window's
     //! `languagechange` only wake the owner, which then samples every
     //! observation again.
+    //!
+    //! The CSS system colour `AccentColor` is not read as the accent: a
+    //! browser that resists fingerprinting resolves it to a fixed colour,
+    //! which a page cannot tell from the user's, so the host reports no
+    //! accent until a run in each browser shows which resolve it truthfully
+    //! (ADR-0359 §3).
 
     use std::sync::{
         Arc, Weak,
