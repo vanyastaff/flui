@@ -7127,6 +7127,55 @@ GPU-память простаивающего или невидимого окн
   `overlapping_activations_on_two_threads_keep_each_others_marks` (один общий слот — публикация
   второй активации доходит до адаптера).
 
+- [x] **LY119** — ветка `platform/text-field-status`, решение — ADR-0352 (заменяет в ADR-0348 §3
+  клавиши действия редактора). Обе находки подтверждены на `main` @ `9e309039d`: статус — только
+  `protected`, `single_line`, `purpose`, хосты угадывали метку Enter по назначению, многострочный
+  статус строился правкой `pub`-поля; проекция `project_ime_event` оставляла конец курсора
+  предредактирования (новый тест на `main` падает: выделение `6..6` вместо `4..6`). Построено:
+  `TextStoreStatus::text_input: TextInputOptions` — назначение (`Number(NumberFormat { signed,
+  decimal })`), `EnterAction`, `Capitalization`, `Correction::{Off, Suggestions, Autocorrect}`
+  (три состояния вместо двух флагов), `Autofill`; `TextInputOptions::new(purpose)` выбирает
+  умолчания по назначению, у назначения нет строителя; `with_single_line` и `with_text_input` у
+  статуса. Каждый хост передаёт то, для чего у платформы есть слово: iOS (`returnKeyType`,
+  `autocapitalizationType`, `textContentType`, клавиатуры decimal и numbers-and-punctuation),
+  Android (`IME_ACTION_*`, `TYPE_TEXT_FLAG_CAP_*`, `AUTO_CORRECT`, `NO_SUGGESTIONS`, флаги знака и
+  дроби), Web (`enterkeyhint` и на холсте `EditContext`, `autocapitalize`, `autocorrect`,
+  `spellcheck`, `autocomplete` автозаполнения), Wayland, IBus и Fcitx5 (подсказки капитализации,
+  дополнения и проверки, `digits` для целого), TSF (`IS_NUMBER` для числа со знаком или дробью).
+  Метка Enter только метка: каждый хост, Android тоже (было Tab и Shift+Tab), доставляет Enter, а
+  `EditableText` после `on_submitted` переводит фокус на Next и Previous. Проекция выделяет
+  целевой отрезок внутри композиции. Журнал записывает все поля статуса (протокол 0.18, поля
+  необязательны, старая запись читается как была). Виджеты: `text_input(TextInputOptions)` вместо
+  `input_purpose` во всех слоях полей. Тесты, в скобках результат с откатом:
+  `ime_events_project_onto_the_store_as_the_text_input_contract_says` (выделение схлопнуто в
+  конец отрезка); `enter_moves_the_focus_as_the_fields_enter_key_says` (фокус остаётся на первом
+  поле); `the_store_reports_the_text_input_the_field_was_built_with` (без записи нового значения
+  в ячейку в `did_update_view` хранилище сообщает первое);
+  `a_push_platform_is_told_the_focused_fields_status` (при сравнении одного назначения платформе
+  не сообщают новую метку Enter); `a_store_focus_keeps_every_field_of_its_status` (без метки и
+  исправления в записи строка читается назад не той, что записана); таблицы хостов `a_fields_options_pick_its_return_key_capitalization_correction_and_content`,
+  `the_text_input_options_reach_the_editor_info`,
+  `the_capitalization_and_correction_a_field_asks_for_are_its_hints`,
+  `a_fields_capitalization_and_correction_reach_each_protocol`,
+  `the_status_picks_capitalization_and_correction`, `the_status_labels_the_enter_key`,
+  `a_field_gets_the_scope_its_status_asks_for`. Прогоны на устройствах (метки Enter, капитализация
+  и автоисправление на Android и iOS, `textContentType`, Enter вместо Tab у Next на Android) —
+  в строках «Input purpose and hints» и «Autofill» `platform-parity.toml`; автозаполнение Android
+  (структура виртуальных view) не строится в этой серии и записано там же и в `docs/gaps.md`.
+  После независимого чтения: хост реагирует на смену статуса только при разнице в том, что он
+  передаёт, и перезапускает метод ввода только вне композиции — зеркало Android сравнивает
+  `EditorInfo`, с которым запущен метод ввода, и откладывает смену до конца композиции, не
+  показывая клавиатуру (`a_status_change_restarts_only_for_what_android_reads_and_never_mid_composition`),
+  iOS перечитывает признаки после конца marked text (`the_client_knows_while_the_keyboard_composes`);
+  `TextStoreStatus::holds_secret` (защищённое поле, пароль или одноразовый код) — единая проверка
+  перед подсказками, исправлением, обучением и записью журнала (строка одноразового кода в
+  `a_protected_store_journals_nothing_of_its_content`); Web всегда пишет `enterkeyhint`; вариант
+  `Send` переименован в `SendMessage` (имя `Send` заставляло rustc печатать `std::marker::Send`
+  во всех диагностиках — падали trybuild core и facade); журнал пишет статус целиком, старые
+  записи читаются по закреплённым тогдашним умолчаниям; у каждой ветви Enter своя строка теста,
+  каждая падает при откате своей ветви. Не построено и записано в `docs/gaps.md`: ожидание конца
+  композиции для смены статуса на Windows (TSF переоткрывает документ) и Wayland.
+
 - [x] **LY130** — ветка `native/xdnd-source-watch`. Находка подтверждена на `main` @ `cd0c88cd0`
   прогоном в WSL под Xvfb: источник, чьё соединение закрыто посреди наведения, оставлял окно в
   `Entered` с живым предложением до следующего drag, а запрос принятого drop от ушедшего

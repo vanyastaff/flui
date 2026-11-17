@@ -4,14 +4,14 @@
 //! reading in the candidate window, and an email, URL, phone or number field
 //! the keyboard its purpose asks for.
 
-use flui_platform::text_store::{TextInputPurpose, TextStoreStatus};
+use flui_platform::text_store::{NumberFormat, TextInputPurpose, TextStoreStatus};
 use windows::Win32::{
     Foundation::{E_NOTIMPL, E_UNEXPECTED},
     System::{Com::CoTaskMemAlloc, Variant::VARIANT},
     UI::TextServices::{
-        GUID_PROP_INPUTSCOPE, IS_DIGITS, IS_EMAIL_SMTPEMAILADDRESS, IS_PASSWORD, IS_SEARCH,
-        IS_TELEPHONE_FULLTELEPHONENUMBER, IS_URL, ITfInputScope, ITfInputScope_Impl, InputScope,
-        TS_ATTR_FIND_WANT_VALUE,
+        GUID_PROP_INPUTSCOPE, IS_DIGITS, IS_EMAIL_SMTPEMAILADDRESS, IS_NUMBER, IS_PASSWORD,
+        IS_SEARCH, IS_TELEPHONE_FULLTELEPHONENUMBER, IS_URL, ITfInputScope, ITfInputScope_Impl,
+        InputScope, TS_ATTR_FIND_WANT_VALUE,
     },
 };
 use windows_core::{BSTR, GUID};
@@ -24,11 +24,13 @@ pub(super) fn scope_for(status: TextStoreStatus) -> Option<InputScope> {
     if status.protected {
         return Some(IS_PASSWORD);
     }
-    match status.purpose {
+    match status.text_input.purpose {
         TextInputPurpose::Email => Some(IS_EMAIL_SMTPEMAILADDRESS),
         TextInputPurpose::Url => Some(IS_URL),
         TextInputPurpose::Phone => Some(IS_TELEPHONE_FULLTELEPHONENUMBER),
-        TextInputPurpose::Number => Some(IS_DIGITS),
+        TextInputPurpose::Number(NumberFormat::WHOLE) => Some(IS_DIGITS),
+        // A sign or a fraction: the scope that offers both.
+        TextInputPurpose::Number(_) => Some(IS_NUMBER),
         TextInputPurpose::Search => Some(IS_SEARCH),
         // `Text`, and a purpose added later that has no scope yet.
         _ => None,
@@ -198,35 +200,31 @@ mod tests {
 
     #[test]
     fn a_field_gets_the_scope_its_status_asks_for() {
+        use flui_platform::text_store::TextInputOptions;
+
         let plain = TextStoreStatus::EDITABLE_SINGLE_LINE;
+        let of = |purpose| plain.with_text_input(TextInputOptions::new(purpose));
+        let number = |signed, decimal| TextInputPurpose::Number(NumberFormat { signed, decimal });
         let cases = [
             (plain, None),
             (plain.with_protected(true), Some(IS_PASSWORD)),
             // Protection wins over what the field is for: the reading of a
             // hidden email must not show in the candidate window.
             (
-                plain
-                    .with_protected(true)
-                    .with_purpose(TextInputPurpose::Email),
+                of(TextInputPurpose::Email).with_protected(true),
                 Some(IS_PASSWORD),
             ),
+            (of(TextInputPurpose::Email), Some(IS_EMAIL_SMTPEMAILADDRESS)),
+            (of(TextInputPurpose::Url), Some(IS_URL)),
             (
-                plain.with_purpose(TextInputPurpose::Email),
-                Some(IS_EMAIL_SMTPEMAILADDRESS),
-            ),
-            (plain.with_purpose(TextInputPurpose::Url), Some(IS_URL)),
-            (
-                plain.with_purpose(TextInputPurpose::Phone),
+                of(TextInputPurpose::Phone),
                 Some(IS_TELEPHONE_FULLTELEPHONENUMBER),
             ),
-            (
-                plain.with_purpose(TextInputPurpose::Number),
-                Some(IS_DIGITS),
-            ),
-            (
-                plain.with_purpose(TextInputPurpose::Search),
-                Some(IS_SEARCH),
-            ),
+            (of(number(false, false)), Some(IS_DIGITS)),
+            (of(number(true, false)), Some(IS_NUMBER)),
+            (of(number(false, true)), Some(IS_NUMBER)),
+            (of(number(true, true)), Some(IS_NUMBER)),
+            (of(TextInputPurpose::Search), Some(IS_SEARCH)),
         ];
         for (status, expected) in cases {
             assert_eq!(scope_for(status), expected, "{status:?}");

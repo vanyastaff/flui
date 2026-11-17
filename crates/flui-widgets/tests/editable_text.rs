@@ -3237,103 +3237,275 @@ pub(crate) fn replacing_the_controller_retires_the_old_selection_contact() {
     selection_retarget(true);
 }
 
-/// The purpose a field is built with is the purpose its text store reports,
-/// follows a rebuild that changes it, and is independent of obscuring.
+/// What a field asks of the input method is what its text store reports,
+/// follows a rebuild that changes any part of it (the Enter key's label as
+/// much as the purpose), and is independent of obscuring.
 ///
-/// Red-check: leave `did_update_view` without the purpose cell — the store
-/// keeps reporting the first purpose after the swap.
-pub(crate) fn the_store_reports_the_purpose_the_field_was_built_with() {
-    use flui_platform::text_store::TextInputPurpose;
+/// Red-check: leave `did_update_view` reading the cell without replacing it
+/// — the store keeps reporting the first options after the swap. Comparing
+/// only the purpose there is caught by
+/// `a_push_platform_is_told_the_focused_fields_status` instead: the platform
+/// is not told of a new Enter key label.
+pub(crate) fn the_store_reports_the_text_input_the_field_was_built_with() {
+    use flui_platform::text_store::{
+        Autofill, Capitalization, Correction, EnterAction, TextInputOptions, TextInputPurpose,
+    };
     use flui_widgets::SizedBox;
 
     let controller = TextEditingController::new();
     let focus = FocusNode::new();
-    let field = |purpose, obscured| {
+    let field = |text_input, obscured| {
         SizedBox::new(60.0, 30.0).child(
             EditableText::new(controller.clone(), Rc::clone(&focus))
-                .input_purpose(purpose)
+                .text_input(text_input)
                 .obscure_text(obscured),
         )
     };
-    let mut harness = crate::common::harness::mount_with_ime(field(TextInputPurpose::Email, false));
+    let email = TextInputOptions::new(TextInputPurpose::Email);
+    let mut harness = crate::common::harness::mount_with_ime(field(email, false));
     let _ = focus.request_focus();
     harness.tick();
-    let status = || {
+    let status = |harness: &crate::common::harness::Harness| {
         harness
             .active_text_store()
             .expect("the focused field is the active IME client")
             .status()
     };
-    assert_eq!(status().purpose, TextInputPurpose::Email);
-    assert!(!status().protected);
+    assert_eq!(status(&harness).text_input, email);
+    assert!(!status(&harness).protected);
 
-    harness.swap_root(field(TextInputPurpose::Url, false));
+    let asked = TextInputOptions::new(TextInputPurpose::Url)
+        .enter_action(EnterAction::Go)
+        .capitalization(Capitalization::Sentences)
+        .correction(Correction::Suggestions)
+        .autofill(Autofill::Username);
+    harness.swap_root(field(asked, false));
     harness.tick();
-    let after = harness
-        .active_text_store()
-        .expect("still the active IME client")
-        .status();
-    assert_eq!(after.purpose, TextInputPurpose::Url, "a rebuild changes it");
+    assert_eq!(status(&harness).text_input, asked, "a rebuild changes it");
 
-    harness.swap_root(field(TextInputPurpose::Url, true));
+    let next = asked.enter_action(EnterAction::Next);
+    harness.swap_root(field(next, false));
     harness.tick();
-    let obscured = harness
-        .active_text_store()
-        .expect("still the active IME client")
-        .status();
-    assert!(obscured.protected, "obscuring protects the field");
     assert_eq!(
-        obscured.purpose,
-        TextInputPurpose::Url,
-        "and leaves its purpose alone"
+        status(&harness).text_input,
+        next,
+        "a rebuild that changes only the Enter key's label reaches the store"
     );
+
+    harness.swap_root(field(next, true));
+    harness.tick();
+    let obscured = status(&harness);
+    assert!(obscured.protected, "obscuring protects the field");
+    assert_eq!(obscured.text_input, next, "and leaves what it asks alone");
 }
 
 /// A push platform reads no store, so it is told the focused field's status
-/// as the field attaches and again each time obscuring or the purpose
-/// changes: what an iOS keyboard turns into secure entry and its layout.
+/// as the field attaches and again each time obscuring or what the field
+/// asks of the input method changes: what an iOS keyboard turns into secure
+/// entry, its layout and its Return key.
 ///
 /// Red-check: drop the observer `attach_entered` installs — only the
 /// attach-time status arrives.
 pub(crate) fn a_push_platform_is_told_the_focused_fields_status() {
-    use flui_platform::text_store::{TextInputPurpose, TextStoreStatus};
+    use flui_platform::text_store::{
+        EnterAction, TextInputOptions, TextInputPurpose, TextStoreStatus,
+    };
     use flui_widgets::SizedBox;
 
     let controller = TextEditingController::new();
     let focus = FocusNode::new();
-    let field = |purpose, obscured| {
+    let field = |text_input, obscured| {
         SizedBox::new(60.0, 30.0).child(
             EditableText::new(controller.clone(), Rc::clone(&focus))
-                .input_purpose(purpose)
+                .text_input(text_input)
                 .obscure_text(obscured),
         )
     };
-    let mut harness =
-        crate::common::harness::mount_with_push_ime(field(TextInputPurpose::Email, false));
+    let email = TextInputOptions::new(TextInputPurpose::Email);
+    let mut harness = crate::common::harness::mount_with_push_ime(field(email, false));
     harness.tick();
     assert_eq!(harness.field_status_calls(), [], "no field has focus yet");
 
     let _ = focus.request_focus();
     harness.tick();
-    let email = TextStoreStatus::EDITABLE_SINGLE_LINE.with_purpose(TextInputPurpose::Email);
-    assert_eq!(harness.field_status_calls(), [email], "told as it attaches");
+    let attached = TextStoreStatus::EDITABLE_SINGLE_LINE.with_text_input(email);
+    assert_eq!(
+        harness.field_status_calls(),
+        [attached],
+        "told as it attaches"
+    );
 
-    harness.swap_root(field(TextInputPurpose::Email, true));
+    harness.swap_root(field(email, true));
     harness.tick();
-    let protected = email.with_protected(true);
+    let protected = attached.with_protected(true);
     assert_eq!(
         harness.field_status_calls().last(),
         Some(&protected),
         "obscuring reaches the platform"
     );
 
-    harness.swap_root(field(TextInputPurpose::Url, true));
+    let url = TextInputOptions::new(TextInputPurpose::Url);
+    harness.swap_root(field(url, true));
     harness.tick();
     assert_eq!(
         harness.field_status_calls().last(),
-        Some(&protected.with_purpose(TextInputPurpose::Url)),
+        Some(&protected.with_text_input(url)),
         "and so does the purpose"
     );
+
+    let send = url.enter_action(EnterAction::SendMessage);
+    harness.swap_root(field(send, true));
+    harness.tick();
+    assert_eq!(
+        harness.field_status_calls().last(),
+        Some(&protected.with_text_input(send)),
+        "and the Enter key's label"
+    );
+}
+
+/// Enter on a field whose Enter key says Next moves the focus to the next
+/// field, after the submit callback; Previous moves it back; a field whose
+/// key names neither keeps the focus. A Next field moves on without a
+/// callback, a callback that moved the focus itself keeps it where it put
+/// it, and a held Enter's repeats move nothing. Every host delivers the
+/// on-screen keyboard's action key as Enter, so the label acts the same
+/// everywhere.
+///
+/// Red-checks, each failing its row: drop the focus move from the Enter arm
+/// (`Next then Previous`); claim Enter only when a callback is set (`Next
+/// without a callback`); move without asking whether the field still has the
+/// focus (`a callback that moves the focus`); act on a repeat (`a held
+/// Enter`).
+pub(crate) fn enter_moves_the_focus_as_the_fields_enter_key_says() {
+    use std::cell::RefCell;
+    use std::time::Duration;
+
+    use flui_platform::PlatformInput;
+    use flui_platform::keyboard::NamedKey;
+    use flui_platform::text_store::{EnterAction, TextInputOptions};
+    use flui_testing::{HeadlessHost, HeadlessWindow};
+    use flui_view::ViewExt;
+    use flui_widgets::{Column, SizedBox};
+
+    /// What the fields do on submit.
+    #[derive(Clone, Copy, Debug)]
+    enum Submit {
+        /// No callback.
+        Nothing,
+        /// Record the text.
+        Record,
+        /// Record the text and move the focus to the field at this index.
+        RecordAndFocus(usize),
+    }
+
+    let enter = |host: &mut HeadlessHost, press: KeyPress| {
+        host.dispatch(PlatformInput::Keyboard(KeyEvent::new(
+            KeyState::Down(press),
+            Key::Named(NamedKey::Enter),
+            Code::Enter,
+            EventTime::from_nanos(1),
+        )));
+        let _ = host.pump(Duration::ZERO);
+    };
+    let (next, previous, done) = (EnterAction::Next, EnterAction::Previous, EnterAction::Done);
+    // (case, each field's Enter label, what submit does, the presses, the
+    // field focused after each, the texts submitted)
+    type Row = (
+        &'static str,
+        [EnterAction; 3],
+        Submit,
+        &'static [KeyPress],
+        &'static [usize],
+        &'static [&'static str],
+    );
+    let rows: [Row; 5] = [
+        (
+            "Next then Previous",
+            [next, previous, done],
+            Submit::Record,
+            &[KeyPress::First, KeyPress::First],
+            &[1, 0],
+            &["one", "two"],
+        ),
+        (
+            "Done",
+            [done, done, done],
+            Submit::Record,
+            &[KeyPress::First, KeyPress::First],
+            &[0, 0],
+            &["one", "one"],
+        ),
+        (
+            "Next without a callback",
+            [next, done, done],
+            Submit::Nothing,
+            &[KeyPress::First],
+            &[1],
+            &[],
+        ),
+        (
+            "a callback that moves the focus",
+            [next, done, done],
+            Submit::RecordAndFocus(2),
+            &[KeyPress::First],
+            &[2],
+            &["one"],
+        ),
+        (
+            "a held Enter",
+            [next, next, done],
+            Submit::Nothing,
+            &[KeyPress::First, KeyPress::AutoRepeat],
+            &[1, 1],
+            &[],
+        ),
+    ];
+    for (case, actions, submit, presses, focus_after, submitted_texts) in rows {
+        let nodes = [FocusNode::new(), FocusNode::new(), FocusNode::new()];
+        let submitted = Rc::new(RefCell::new(Vec::<String>::new()));
+        let field = |index: usize, text: &str| {
+            let mut editable = EditableText::new(
+                TextEditingController::with_text(text),
+                Rc::clone(&nodes[index]),
+            )
+            .text_input(TextInputOptions::TEXT.enter_action(actions[index]));
+            let submitted = Rc::clone(&submitted);
+            match submit {
+                Submit::Nothing => {}
+                Submit::Record => {
+                    editable = editable.on_submitted(move |_ctx, text| {
+                        submitted.borrow_mut().push(text.to_owned());
+                    });
+                }
+                Submit::RecordAndFocus(target) => {
+                    let target = Rc::clone(&nodes[target]);
+                    editable = editable.on_submitted(move |_ctx, text| {
+                        submitted.borrow_mut().push(text.to_owned());
+                        let _ = target.request_focus();
+                    });
+                }
+            }
+            SizedBox::new(60.0, 30.0).child(editable).boxed()
+        };
+        let form = Column::new(vec![field(0, "one"), field(1, "two"), field(2, "three")]);
+        let mut host = HeadlessHost::new(HeadlessWindow::new(400, 200));
+        host.attach(&form).expect("fresh host");
+        let _ = host.pump(Duration::ZERO);
+        let _ = nodes[0].request_focus();
+        let _ = host.pump(Duration::ZERO);
+        for (index, (&press, &focused)) in presses.iter().zip(focus_after).enumerate() {
+            enter(&mut host, press);
+            assert!(
+                nodes[focused].has_primary_focus(),
+                "{case}: after press {index} the focus is on field {focused}"
+            );
+        }
+        assert_eq!(
+            *submitted.borrow(),
+            submitted_texts,
+            "{case}: each press submitted the field it was on"
+        );
+    }
 }
 
 /// The colours of the rectangles the frame paints, in layer order.

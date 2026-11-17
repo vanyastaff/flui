@@ -199,6 +199,32 @@ fn a_field_states_its_purpose_in_each_protocol() {
         "a protected field is a password and sensitive"
     );
     assert_eq!(fcitx_capability(notes), base | (1 << 35));
+    let digits = ContentType {
+        hint: 0,
+        purpose: ContentType::DIGITS,
+    };
+    assert_eq!(ibus_content(digits), (2, 0));
+    assert_eq!(fcitx_capability(digits), base | (1 << 8));
+}
+
+#[test]
+fn a_fields_capitalization_and_correction_reach_each_protocol() {
+    let content = |hint| ContentType {
+        hint,
+        purpose: ContentType::NORMAL,
+    };
+    let base = (1 << 1) | (1 << 4) | (1 << 6);
+    // (the text-input-v3 hint, IBus's hint, Fcitx5's capability)
+    for (hint, ibus, fcitx) in [
+        (ContentType::HINT_SPELLCHECK, 1 << 0, 1 << 16),
+        (ContentType::HINT_COMPLETION, 1 << 2, 1 << 18),
+        (ContentType::HINT_UPPERCASE, 1 << 4, 1 << 9),
+        (ContentType::HINT_TITLECASE, 1 << 5, 1 << 19),
+        (ContentType::HINT_AUTO_CAPITALIZATION, 1 << 6, 1 << 20),
+    ] {
+        assert_eq!(ibus_content(content(hint)), (0, ibus), "{hint:#x}");
+        assert_eq!(fcitx_capability(content(hint)), base | fcitx, "{hint:#x}");
+    }
 }
 
 #[test]

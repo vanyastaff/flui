@@ -72,13 +72,48 @@ fn preedit_replaces_the_selection_and_marks_the_composition() {
     assert_eq!(composed(&store), Some(range(6, 7)));
 }
 
+/// The cursor's byte range is the input method's target clause: the store
+/// selects it inside the composition, so the field can mark the clause being
+/// converted, as AppKit's `selectedRange` and `text-input-v3`'s cursor do.
+fn preedit_selects_the_input_methods_clause() {
+    let store = InMemoryTextStore::new("x");
+    // "とうきょう" converting its last two kana: bytes 9..15, units 3..5.
+    apply(&store, &preedit_event("とうきょう", Some((9, 15))));
+    assert_eq!(composed(&store), Some(range(1, 6)));
+    assert_eq!(
+        store.selection(),
+        Selection {
+            anchor: at(4),
+            active: at(6),
+        }
+    );
+    // A clause that ends inside a character ends after it; a start past the
+    // text clamps to its end.
+    apply(&store, &preedit_event("😀a", Some((1, 3))));
+    assert_eq!(
+        store.selection(),
+        Selection {
+            anchor: at(3),
+            active: at(3),
+        }
+    );
+    apply(&store, &preedit_event("😀a", Some((99, 5))));
+    assert_eq!(
+        store.selection(),
+        Selection {
+            anchor: at(4),
+            active: at(4),
+        }
+    );
+}
+
 fn malformed_preedit_cursor_clamps_instead_of_panicking() {
     let store = InMemoryTextStore::new("");
     // Byte 1 is inside "é" (two bytes): it moves forward to byte 2, one
     // unit into the preedit. Past the end clamps to the end.
     apply(&store, &preedit_event("éa", Some((1, 1))));
     assert_eq!(store.selection(), Selection::collapsed(at(1)));
-    apply(&store, &preedit_event("éa", Some((0, 99))));
+    apply(&store, &preedit_event("éa", Some((99, 99))));
     assert_eq!(store.selection(), Selection::collapsed(at(2)));
     for (text, cursor, units) in [
         ("中a", 1, 1),
@@ -89,7 +124,7 @@ fn malformed_preedit_cursor_clamps_instead_of_panicking() {
         ("😀a", usize::MAX, 3),
         ("", usize::MAX, 0),
     ] {
-        apply(&store, &preedit_event(text, Some((0, cursor))));
+        apply(&store, &preedit_event(text, Some((cursor, cursor))));
         assert_eq!(store.selection(), Selection::collapsed(at(units)));
     }
 }
@@ -124,11 +159,12 @@ fn a_push_event_while_commits_are_closed_applies_in_order_at_the_next_anchor() {
     assert_eq!(store.selection(), Selection::collapsed(at(1)));
 }
 
-/// IME projection into a store: preedit, malformed cursors, commit, and
-/// events pushed while commits are closed.
+/// IME projection into a store: preedit, its clause, malformed cursors,
+/// commit, and events pushed while commits are closed.
 #[test]
 fn ime_events_project_onto_the_store_as_the_text_input_contract_says() {
     preedit_replaces_the_selection_and_marks_the_composition();
+    preedit_selects_the_input_methods_clause();
     malformed_preedit_cursor_clamps_instead_of_panicking();
     commit_replaces_the_composition();
     a_push_event_while_commits_are_closed_applies_in_order_at_the_next_anchor();
