@@ -1391,3 +1391,242 @@ impl DrawSegment {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use flui_foundation::geometry::{Matrix4, Rect};
+    use flui_layer::{Bounds, ContentVersion, SceneOwner};
+
+    use super::{
+        AmbientKey, AmbientScissor, ChunkRecording, RasterKey, RecordingCache, RecordingKey,
+    };
+    use crate::state_stack::ResolvedClip;
+
+    fn translated(x: f64, y: f64) -> Matrix4 {
+        Matrix4::translation(x, y, 0.0)
+    }
+
+    fn versions(count: usize) -> Vec<ContentVersion> {
+        let mut owner = SceneOwner::new();
+        let mut writer = owner.writer();
+        (0..count)
+            .map(|_| writer.next_content_version().expect("a content version"))
+            .collect()
+    }
+
+    /// A recording that draws nothing and charges `bytes`.
+    fn recording(bytes: usize) -> ChunkRecording {
+        ChunkRecording {
+            rects: Vec::new(),
+            circles: Vec::new(),
+            arcs: Vec::new(),
+            shadows: Vec::new(),
+            linear_gradients: Vec::new(),
+            radial_gradients: Vec::new(),
+            sweep_gradients: Vec::new(),
+            glyphs: Vec::new(),
+            stops: Vec::new(),
+            mesh_vertices: Vec::new(),
+            mesh_indices: Vec::new(),
+            vertices: Vec::new(),
+            indices: Vec::new(),
+            tess_batches: Vec::new(),
+            first_batch_grew: false,
+            glyph_scissors: Vec::new(),
+            rect_scissors: Vec::new(),
+            circle_scissors: Vec::new(),
+            arc_scissors: Vec::new(),
+            shadow_scissors: Vec::new(),
+            linear_gradient_runs: Vec::new(),
+            radial_gradient_runs: Vec::new(),
+            sweep_gradient_runs: Vec::new(),
+            cached_images: Vec::new(),
+            runs: Vec::new(),
+            clip: ResolvedClip::NONE,
+            glyph_keys: Vec::new(),
+            bytes,
+        }
+    }
+
+    /// The key of `content` drawn at `x` under `cache`'s epoch.
+    fn key(cache: &RecordingCache, content: ContentVersion, x: f64) -> RecordingKey {
+        let ctm = translated(x, 0.0);
+        RecordingKey {
+            content,
+            raster: RasterKey::of(&ctm).expect("a translation is kept"),
+            ambient: AmbientKey::of(None, &ctm, Bounds::Unbounded, 1.0, (64, 64))
+                .expect("no scissor is kept"),
+            epoch: cache.epoch().expect("a fresh cache has an epoch"),
+        }
+    }
+
+    /// A transform is kept when it is a finite planar affine one whose
+    /// translation stays below 2^23 pixels; its whole translation is in the
+    /// key.
+    #[test]
+    fn a_raster_key_holds_planar_affine_transforms_in_range() {
+        let mut projective = Matrix4::IDENTITY;
+        projective.m[3] = 0.001;
+        let mut depth = Matrix4::IDENTITY;
+        depth.m[14] = 1.0;
+        let mut infinite = Matrix4::IDENTITY;
+        infinite.m[0] = f64::INFINITY;
+        let mut sheared = Matrix4::IDENTITY;
+        sheared.m[4] = 0.5;
+        for (row, ctm, kept) in [
+            ("identity", Matrix4::IDENTITY, true),
+            ("a fractional translation", translated(3.25, -7.5), true),
+            ("a shear", sheared, true),
+            ("a projective row", projective, false),
+            ("a depth translation", depth, false),
+            ("a non-finite scale", infinite, false),
+            (
+                "a translation at the limit",
+                translated(8_388_608.0, 0.0),
+                false,
+            ),
+            (
+                "a translation below the limit",
+                translated(8_388_607.0, 0.0),
+                true,
+            ),
+        ] {
+            assert_eq!(RasterKey::of(&ctm).is_some(), kept, "{row}");
+        }
+        assert_ne!(
+            RasterKey::of(&translated(1.0, 0.0)),
+            RasterKey::of(&translated(2.0, 0.0)),
+            "a whole-pixel move is another key"
+        );
+    }
+
+    /// The scissor is keyed as `Covers` when it holds every pixel the chunk
+    /// touches, and otherwise exactly, relative to the whole pixels of the
+    /// translation; opacity and the target's size are keyed as they are.
+    #[test]
+    fn an_ambient_key_holds_the_scissor_that_cuts_the_chunk() {
+        let bounds = Bounds::Finite(Rect::from_xywh(0.0, 0.0, 10.0, 10.0));
+        let at = |x: f64, scissor, viewport| {
+            AmbientKey::of(scissor, &translated(x, 0.0), bounds, 1.0, viewport)
+                .expect("an affine transform in range")
+        };
+        assert_eq!(at(5.0, None, (64, 64)).scissor, AmbientScissor::Covers);
+        assert_eq!(
+            at(5.0, Some((0, 0, 64, 64)), (64, 64)).scissor,
+            AmbientScissor::Covers,
+            "a scissor around the chunk"
+        );
+        assert_eq!(
+            at(5.5, Some((0, 0, 15, 64)), (64, 64)).scissor,
+            AmbientScissor::Exact {
+                x: -5,
+                y: 0,
+                w: 15,
+                h: 64
+            },
+            "the chunk's last pixel column, 15, is outside"
+        );
+        assert_eq!(
+            at(5.5, Some((0, 0, 16, 64)), (64, 64)).scissor,
+            AmbientScissor::Covers,
+            "the scissor holds the pixel the chunk's edge shares"
+        );
+        assert_eq!(
+            at(5.0, Some((2, 0, 4, 64)), (64, 64)),
+            at(7.0, Some((4, 0, 4, 64)), (64, 64)),
+            "a scissor moved with the chunk by whole pixels"
+        );
+        assert_ne!(
+            AmbientKey::of(
+                Some((0, 0, 64, 64)),
+                &Matrix4::IDENTITY,
+                Bounds::Unbounded,
+                1.0,
+                (64, 64)
+            ),
+            AmbientKey::of(None, &Matrix4::IDENTITY, Bounds::Unbounded, 1.0, (64, 64)),
+            "an unbounded chunk under a scissor is cut by it"
+        );
+        assert_ne!(at(5.0, None, (64, 64)), at(5.0, None, (32, 64)), "size");
+        assert_ne!(
+            AmbientKey::of(None, &Matrix4::IDENTITY, bounds, 0.5, (64, 64)),
+            AmbientKey::of(None, &Matrix4::IDENTITY, bounds, 1.0, (64, 64)),
+            "opacity"
+        );
+    }
+
+    /// Over its budget the cache evicts the least recently rastered
+    /// recordings first, and its counts report each eviction once with the
+    /// bytes it holds.
+    #[test]
+    fn the_cache_evicts_the_least_recently_rastered_over_its_budget() {
+        let mut cache = RecordingCache::with_budget(250);
+        let [a, b, c] = versions(3)[..] else {
+            unreachable!("BUG: three versions were minted")
+        };
+        let (a, b, c) = (
+            key(&cache, a, 0.0),
+            key(&cache, b, 0.0),
+            key(&cache, c, 0.0),
+        );
+        cache.insert(a, recording(100));
+        cache.insert(b, recording(100));
+        cache.end_frame();
+        assert!(cache.get(&a).is_some(), "a is rastered in the next frame");
+        cache.insert(c, recording(100));
+        assert_eq!(
+            cache.take_counts(),
+            (0, 300),
+            "over budget until it settles"
+        );
+        cache.settle();
+        assert!(cache.get(&b).is_none(), "b was rastered least recently");
+        assert!(cache.get(&a).is_some() && cache.get(&c).is_some());
+        assert_eq!(cache.take_counts(), (1, 200));
+        assert_eq!(
+            cache.take_counts(),
+            (0, 200),
+            "an eviction is reported once"
+        );
+    }
+
+    /// A chunk keeps two recordings: a third gives up its least recently
+    /// rastered one.
+    #[test]
+    fn a_chunk_keeps_two_recordings() {
+        let mut cache = RecordingCache::new();
+        let content = versions(1)[0];
+        let [first, second, third] = [0.0, 1.0, 2.0].map(|x| key(&cache, content, x));
+        cache.insert(first, recording(10));
+        cache.insert(second, recording(10));
+        cache.end_frame();
+        assert!(cache.get(&first).is_some(), "first is rastered again");
+        cache.insert(third, recording(10));
+        assert!(
+            cache.get(&second).is_none(),
+            "second was rastered least recently"
+        );
+        assert!(cache.get(&first).is_some() && cache.get(&third).is_some());
+        assert_eq!(cache.take_counts(), (1, 20));
+    }
+
+    /// A new epoch drops every recording and counts each, and a recording
+    /// keyed by the old epoch is not kept.
+    #[test]
+    fn a_new_epoch_drops_every_recording() {
+        let mut cache = RecordingCache::new();
+        let [a, b] = versions(2)[..] else {
+            unreachable!("BUG: two versions were minted")
+        };
+        let (a, b) = (key(&cache, a, 0.0), key(&cache, b, 0.0));
+        cache.insert(a, recording(10));
+        cache.insert(b, recording(10));
+        cache.advance_epoch();
+        assert_eq!(cache.take_counts(), (2, 0));
+        cache.insert(a, recording(10));
+        assert!(cache.get(&a).is_none(), "a stale epoch's recording");
+        let fresh = key(&cache, a.content, 0.0);
+        cache.insert(fresh, recording(10));
+        assert!(cache.get(&fresh).is_some());
+    }
+}
