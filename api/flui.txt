@@ -15226,7 +15226,6 @@ variant flui::platform::text_store::OffsetError::PastEnd { offset: usize, len: u
 variant flui::platform::text_store::OffsetError::SplitsSurrogatePair(usize) // at 1
 pub struct flui::platform::text_store::OwnerCalls { .. }
 impl Default for flui::platform::text_store::OwnerCalls
-impl Drop for flui::platform::text_store::OwnerCalls
 impl core::fmt::Debug for flui::platform::text_store::OwnerCalls
 pub const fn flui::platform::text_store::OwnerCalls::new() -> Self
 pub fn flui::platform::text_store::OwnerCalls::failed(&self) -> bool

@@ -51,8 +51,8 @@ use std::num::NonZeroU64;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use flui_foundation::UniqueKey;
 use flui_foundation::geometry::{Bounds, DevicePixelRatio};
+use flui_foundation::{IdExhausted, IdMint, UniqueKey};
 
 use crate::unsupported::{CapabilityAbsence, Unsupported};
 
@@ -151,23 +151,22 @@ pub struct DisplayRegistry {
 #[derive(Debug)]
 struct RegistryState {
     known: HashMap<DisplayKey, DisplayId>,
-    /// The next id to issue; `None` once exhausted, for good.
-    next: Option<NonZeroU64>,
+    ids: IdMint<NonZeroU64>,
 }
 
 impl DisplayRegistry {
     /// An empty registry; its first id is 1.
     #[must_use]
     pub fn new() -> Self {
-        Self::starting_at(NonZeroU64::MIN)
+        Self::starting_after(0)
     }
 
-    fn starting_at(first: NonZeroU64) -> Self {
+    fn starting_after(last: u64) -> Self {
         Self {
             tag: UniqueKey::new(),
             inner: Mutex::new(RegistryState {
                 known: HashMap::new(),
-                next: Some(first),
+                ids: IdMint::starting_after(last),
             }),
         }
     }
@@ -192,8 +191,10 @@ impl DisplayRegistry {
         {
             return Ok(*id);
         }
-        let issued = state.next.ok_or(DisplayIdsExhausted)?;
-        state.next = issued.checked_add(1);
+        let issued = state
+            .ids
+            .next()
+            .map_err(|IdExhausted| DisplayIdsExhausted)?;
         let id = DisplayId {
             number: issued,
             registry: self.tag,
@@ -749,7 +750,7 @@ mod tests {
     /// repeats; this needs the private counter.
     #[test]
     fn exhausted_counter_refuses_without_wrapping() {
-        let registry = DisplayRegistry::starting_at(NonZeroU64::MAX);
+        let registry = DisplayRegistry::starting_after(u64::MAX - 1);
         let last = registry
             .mint(&DisplayKey::Injected(1))
             .expect("the last id is still issued");
