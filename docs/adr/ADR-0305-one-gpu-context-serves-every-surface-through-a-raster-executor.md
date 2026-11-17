@@ -474,9 +474,11 @@ executor and slot.
   `NoPresent` without reaching the executor, and the host reports no rebuild or restore deadline
   a dead executor left. Each window tells its UI runtime once
   (`DeviceRecovery::Dead`, reported through the frame-failure handler as a lost device): the
-  presentation attempts no frames and keeps taking input, lifecycle changes and the agent's
-  requests against the tree it last painted. The failure itself (`ExecutorFailure::Wedged`, or a
-  turn's panic) is taken from the sender once (`take_executor_failure`) and logged, with no panic
+  presentation attempts no frames but the one the death asks for, which commits a tree that a
+  frame dropped before the death left uncommitted, and keeps taking input, lifecycle changes and
+  the agent's requests against the tree it last painted. The failure itself
+  (`ExecutorFailure::Wedged`, or a turn's panic) is taken from the sender once
+  (`take_executor_failure`) and logged, with no panic
   on its thread. A window closed while the thread does not answer its detach keeps its native
   window and its surface target until the process exits, since the wedged thread may still
   present over them.

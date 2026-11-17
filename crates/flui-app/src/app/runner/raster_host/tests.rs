@@ -1321,7 +1321,7 @@ fn a_window_the_raster_thread_refuses_is_refused_at_attach() {
 /// the thread's hands.
 #[test]
 fn a_window_whose_attach_the_raster_thread_does_not_answer_is_kept() {
-    let (shared, slots, _wakes) = threaded_host();
+    let (shared, slots, wakes) = threaded_host();
     let render = slots.hold_next_render();
     let mut scene = TestScene::new(AT);
     let (_epoch, verdict) = submit_threaded(&shared, &mut scene);
@@ -1331,6 +1331,7 @@ fn a_window_whose_attach_the_raster_thread_does_not_answer_is_kept() {
         ui_runtime_id: UiRuntimeId::new(1),
         presentation_id: PresentationId::new(2),
     };
+    let woken = wakes.load(std::sync::atomic::Ordering::SeqCst);
     let attached = shared
         .try_with(|host| {
             host.attach_target(
@@ -1344,6 +1345,10 @@ fn a_window_whose_attach_the_raster_thread_does_not_answer_is_kept() {
         })
         .expect("the host is idle");
     assert!(attached.is_ok(), "the window is kept: {:?}", attached.err());
+    assert!(
+        wakes.load(std::sync::atomic::Ordering::SeqCst) > woken,
+        "the death the attach found asks the open window for a frame"
+    );
     let mut other_scene = TestScene::new(AT);
     let publication = other_scene.publication();
     let epoch = other_scene.next_epoch();

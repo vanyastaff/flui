@@ -314,6 +314,13 @@ impl UiRuntime {
                     recovery: recovery.unwrap_or_default(),
                 },
             );
+            if newly_dead {
+                // A frame that failed before the death left its tree
+                // uncommitted and its input held: one more frame, which the
+                // dead renderer answers without drawing, commits it.
+                self.mark_needs_full_repaint_for(presentation);
+                self.wake_frame();
+            }
         } else if was_held && !holds {
             self.mark_needs_full_repaint_for(presentation);
             self.wake_frame();
