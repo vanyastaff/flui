@@ -106,7 +106,8 @@ impl Opening {
         for uri in intent.uris {
             match scheme(&uri) {
                 Some(scheme) if scheme.eq_ignore_ascii_case("file") => {
-                    match file_uri_path(&uri, PathConvention::HOST) {
+                    // Android's paths, whatever host the crate is built on.
+                    match file_uri_path(&uri, PathConvention::Unix) {
                         Some(path) => opening.documents.push(Document::Path(path)),
                         None => unopened += 1,
                     }
