@@ -144,15 +144,23 @@ async fn watch(
     let mut parent = Some(parent);
     let mut misses = 0;
     loop {
-        let end = session(&bus, &shortcuts, parent.take(), &feed, &dismissal, &mut tokens).await;
+        let end = session(
+            &bus,
+            &shortcuts,
+            parent.take(),
+            &feed,
+            &dismissal,
+            &mut tokens,
+        )
+        .await;
         match end {
-            Ok(()) => misses = 0,
+            // A session that was bound and then lost starts the count over.
+            Ok(()) | Err(SessionEnd::PortalLeft) => misses = 0,
             Err(SessionEnd::Dismissed) => return,
             Err(SessionEnd::Final(error)) => {
                 feed.send(ShortcutEvent::Ended(error));
                 return;
             }
-            Err(SessionEnd::PortalLeft) => misses = 0,
             Err(SessionEnd::Transient(error)) => {
                 if misses >= RETRIES {
                     feed.send(ShortcutEvent::Ended(error));
@@ -224,7 +232,9 @@ async fn session(
         }
         Response::Cancelled => return Err(SessionEnd::Final(ShortcutError::Denied)),
         Response::Ended(code) => {
-            return Err(SessionEnd::Final(SystemFailure::PortalResponse(code).into()));
+            return Err(SessionEnd::Final(
+                SystemFailure::PortalResponse(code).into(),
+            ));
         }
         Response::Dismissed => return Err(SessionEnd::Dismissed),
     }
@@ -232,8 +242,7 @@ async fn session(
     let bind = tokens.next();
     let parent_window = parent.as_ref().map_or("", PortalParent::as_str).to_owned();
     let session_object =
-        zbus::ObjectPath::try_from(session_path.as_str())
-            .map_err(|error| PortalError::from(zbus::Error::from(error)))?;
+        zbus::ObjectPath::try_from(session_path.as_str()).map_err(PortalError::from)?;
     let body = (
         session_object,
         requested(shortcuts),
@@ -283,15 +292,20 @@ async fn session(
                     feed.send(event);
                 }
             }
-            // A stream ends only with its connection.
-            Either::Left((Either::Left((_, _)), _)) => return Ok(()),
+            // A stream ends only with its connection, and the session with it.
+            Either::Left((Either::Left((None, _)), _)) => return Ok(()),
             Either::Left((Either::Right((Some(Ok(message)), _)), _))
-                if message.header().sender().map(|sender| sender.as_str())
+                if message
+                    .header()
+                    .sender()
+                    .map(zbus::names::UniqueName::as_str)
                     == Some(desktop.owner.as_str()) =>
             {
                 return Err(SessionEnd::Final(ShortcutError::Revoked));
             }
-            Either::Left((Either::Right(_), _)) => {}
+            // A message the connection could not read is no signal, and a
+            // `Closed` another client sends is not the portal's.
+            Either::Left((Either::Left((Some(Err(_)), _)) | Either::Right(_), _)) => {}
             Either::Right((Either::Left(_), _)) => return Err(SessionEnd::PortalLeft),
             Either::Right((Either::Right(_), _)) => {
                 close(&desktop, &session_path).await;
@@ -326,7 +340,13 @@ async fn subscribe(
 async fn close(desktop: &Desktop, path: &str) {
     let _ = desktop
         .connection
-        .call_method(Some(desktop.owner.as_str()), path, Some(SESSION), "Close", &())
+        .call_method(
+            Some(desktop.owner.as_str()),
+            path,
+            Some(SESSION),
+            "Close",
+            &(),
+        )
         .await;
 }
 

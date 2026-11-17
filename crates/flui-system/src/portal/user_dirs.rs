@@ -134,24 +134,22 @@ fn read_bounded(path: &Path) -> Result<Option<String>, SystemFailure> {
 /// character, as `xdg-user-dirs` writes and GLib reads it. A value of any
 /// other form names nothing.
 fn named(text: &str, key: &str, home: &Path) -> Option<PathBuf> {
-    text.lines()
-        .filter_map(|line| {
-            let line = line.trim_start();
-            let rest = line.strip_prefix(key)?.trim_start();
-            let rest = rest.strip_prefix('=')?.trim_start();
-            let quoted = rest.strip_prefix('"')?;
-            let mut value = String::new();
-            let mut characters = quoted.chars();
-            loop {
-                match characters.next()? {
-                    '"' => break,
-                    '\\' => value.push(characters.next()?),
-                    character => value.push(character),
-                }
+    text.lines().rev().find_map(|line| {
+        let line = line.trim_start();
+        let rest = line.strip_prefix(key)?.trim_start();
+        let rest = rest.strip_prefix('=')?.trim_start();
+        let quoted = rest.strip_prefix('"')?;
+        let mut value = String::new();
+        let mut characters = quoted.chars();
+        loop {
+            match characters.next()? {
+                '"' => break,
+                '\\' => value.push(characters.next()?),
+                character => value.push(character),
             }
-            folder(&value, home)
-        })
-        .last()
+        }
+        folder(&value, home)
+    })
 }
 
 /// The folder a value names: relative to `home` after `$HOME`, or absolute.

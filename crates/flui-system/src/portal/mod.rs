@@ -84,8 +84,7 @@ impl From<zbus::Error> for PortalError {
             zbus::Error::FDO(error)
                 if matches!(
                     *error,
-                    zbus::fdo::Error::ServiceUnknown(_)
-                        | zbus::fdo::Error::NameHasNoOwner(_)
+                    zbus::fdo::Error::ServiceUnknown(_) | zbus::fdo::Error::NameHasNoOwner(_)
                 ) =>
             {
                 Self::Unsupported(Unsupported::new(UnsupportedReason::Unavailable))
@@ -275,7 +274,11 @@ pub(crate) struct Bus {
 const METHOD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(25);
 
 impl Bus {
-    fn new(address: Option<Arc<str>>, app_id: Option<AppName>, timer: zruntime::SharedRuntime) -> Self {
+    fn new(
+        address: Option<Arc<str>>,
+        app_id: Option<AppName>,
+        timer: zruntime::SharedRuntime,
+    ) -> Self {
         let (retire, retired) = Dismissal::pair();
         Self {
             address,
@@ -302,7 +305,7 @@ impl Bus {
 
     /// Completes after `wait`, on the portal's executor.
     pub(crate) async fn sleep(&self, wait: std::time::Duration) {
-        let _ = self.timer.sleep(wait).await;
+        self.timer.sleep(wait).await;
     }
 
     pub(crate) async fn connection(&self) -> Result<zbus::Connection, PortalError> {
@@ -386,7 +389,9 @@ fn is_sandboxed() -> bool {
 /// `mutex`'s guard: a panic while one is held leaves only a value that is
 /// whole (a connection, a registration), never one half written.
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    mutex
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// The executor thread of one portal and the requests still running on it.
@@ -473,7 +478,8 @@ impl Portal {
     pub(crate) fn start(&self) -> Result<(), PortalError> {
         let mut worker = self.worker.borrow_mut();
         if worker.is_none() {
-            let started = Worker::start(self.address.borrow().clone(), self.app_id.borrow().clone());
+            let started =
+                Worker::start(self.address.borrow().clone(), self.app_id.borrow().clone());
             *worker = Some(started.map_err(|_| {
                 PortalError::Unsupported(Unsupported::new(UnsupportedReason::Unavailable))
             })?);
@@ -558,11 +564,17 @@ pub(crate) fn register(
     });
     let dialogs = configure.clone();
     registrar.provide::<FileDialogCapability>(move |ctx: &ProviderContext<'_>| {
-        FileDialogs::try_new(PortalDialogs::new(dialogs(ctx), ctx.completions().clone()), ctx)
+        FileDialogs::try_new(
+            PortalDialogs::new(dialogs(ctx), ctx.completions().clone()),
+            ctx,
+        )
     });
     let autostart = configure.clone();
     registrar.provide::<AutostartCapability>(move |ctx: &ProviderContext<'_>| {
-        Ok::<_, Unsupported>(Autostart::new(PortalAutostart::new(autostart(ctx), ctx), ctx))
+        Ok::<_, Unsupported>(Autostart::new(
+            PortalAutostart::new(autostart(ctx), ctx),
+            ctx,
+        ))
     });
     let shortcuts = configure.clone();
     registrar.provide::<GlobalShortcutCapability>(move |ctx: &ProviderContext<'_>| {

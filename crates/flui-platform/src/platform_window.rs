@@ -620,7 +620,7 @@ pub trait PlatformWindow {
 
     /// Name this window to a desktop portal for one request: answer `answer`
     /// with the [`PortalParent`](crate::capability::PortalParent) the request
-    /// passes as `parent_window` and holds until it ends (ADR-0363).
+    /// passes as `parent_window` and holds until it ends (ADR-0364).
     ///
     /// An X11 window answers `x11:<XID>` at once. A Wayland window exports
     /// itself for the request (`xdg-foreign`) and answers `wayland:<handle>`

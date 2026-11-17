@@ -89,7 +89,13 @@ where
         return Ok(Response::Dismissed);
     }
     let reply = connection
-        .call_method(Some(owner.as_str()), PATH, Some(interface.name), method, body)
+        .call_method(
+            Some(owner.as_str()),
+            PATH,
+            Some(interface.name),
+            method,
+            body,
+        )
         .await?;
     let handle = reply.body().deserialize::<OwnedObjectPath>()?;
     if handle.as_str() != expected {
@@ -183,7 +189,9 @@ pub(super) async fn subscribe(
 
 /// The bus's notices that the portal's name changed owner: any change
 /// means the owner a request was sent to is gone.
-pub(super) async fn subscribe_departures(connection: &zbus::Connection) -> Result<MessageStream, PortalError> {
+pub(super) async fn subscribe_departures(
+    connection: &zbus::Connection,
+) -> Result<MessageStream, PortalError> {
     let rule = MatchRule::builder()
         .msg_type(zbus::message::Type::Signal)
         .sender(BUS)

@@ -8,7 +8,9 @@
 
 use std::{fmt, rc::Rc};
 
-use flui_platform::capability::{Capability, Completion, CompletionSource, ProviderContext, Resolver};
+use flui_platform::capability::{
+    Capability, Completion, CompletionSource, ProviderContext, Resolver,
+};
 use flui_platform::{SystemFailure, Unsupported};
 
 /// The autostart capability: `ctx.capability::<AutostartCapability>()` hands

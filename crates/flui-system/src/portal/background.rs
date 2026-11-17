@@ -70,8 +70,15 @@ impl AutostartBackend for PortalAutostart {
                 let body = (parent.as_str().to_owned(), options);
                 let result = async {
                     let desktop = bus.desktop().await?;
-                    request::call(&desktop, BACKGROUND, "RequestBackground", &token, &body, None)
-                        .await
+                    request::call(
+                        &desktop,
+                        BACKGROUND,
+                        "RequestBackground",
+                        &token,
+                        &body,
+                        None,
+                    )
+                    .await
                 }
                 .await;
                 // The window's export lasts until the request ended.

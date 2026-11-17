@@ -13,7 +13,9 @@ use flui_platform::capability::Abandoned;
 use flui_platform::keyboard::{Key, Modifiers};
 use flui_platform::launch::{ExternalUri, LaunchError, LauncherCapability, Scheme};
 use flui_platform::{SystemFailure, UnsupportedReason};
-use flui_system::autostart::{AutostartCapability, AutostartError, AutostartRequest, AutostartState};
+use flui_system::autostart::{
+    AutostartCapability, AutostartError, AutostartRequest, AutostartState,
+};
 use flui_system::dialog::{DialogError, FileDialogCapability, OpenRequest, OpenResult};
 use flui_system::shortcuts::{
     BoundShortcut, GlobalShortcutCapability, Shortcut, ShortcutError, ShortcutEvent, ShortcutId,
@@ -80,9 +82,11 @@ fn a_request_names_the_window_by_its_export_and_releases_it_when_it_ends() {
     });
     assert_eq!(exports.live(), 1);
     drop(dialog);
-    pump_until(&mut host, "the dropped dialog's export was released", || {
-        exports.live() == 0
-    });
+    pump_until(
+        &mut host,
+        "the dropped dialog's export was released",
+        || exports.live() == 0,
+    );
 }
 
 /// A launch is attached to the window the same way, and its export lasts
@@ -126,7 +130,10 @@ fn the_application_is_named_to_each_portal_once_before_its_first_call() {
 
     assert_eq!(settle(&mut host, launcher.open_uri(&uri)), Ok(Ok(())));
     assert_eq!(settle(&mut host, launcher.open_uri(&uri)), Ok(Ok(())));
-    assert_eq!(portal.calls(), [register.clone(), open.clone(), open.clone()]);
+    assert_eq!(
+        portal.calls(),
+        [register.clone(), open.clone(), open.clone()]
+    );
 
     portal.depart();
     portal.return_to_bus();
@@ -245,7 +252,10 @@ fn autostart_asks_the_background_portal_and_answers_what_it_granted() {
         Ok(Err(SystemFailure::PortalResponse(2).into()))
     );
     assert_eq!(
-        settle(&mut host, autostart.request(AutostartRequest::enable().reason(" "))),
+        settle(
+            &mut host,
+            autostart.request(AutostartRequest::enable().reason(" "))
+        ),
         Ok(Err(AutostartError::InvalidRequest(
             flui_system::autostart::MalformedAutostart::Reason
         ))),
@@ -321,7 +331,11 @@ fn global_shortcuts_bind_hear_their_presses_and_unbind_when_dropped() {
     let session = portal.sessions().remove(0);
 
     // Another session's press is not this binding's.
-    portal.shortcut("Activated", "/org/freedesktop/portal/desktop/session/other/x", "record");
+    portal.shortcut(
+        "Activated",
+        "/org/freedesktop/portal/desktop/session/other/x",
+        "record",
+    );
     portal.shortcut("Activated", &session, "record");
     assert_eq!(
         settle(&mut host, binding.next()),
@@ -356,7 +370,10 @@ fn a_restarted_portal_renews_the_binding_and_a_closed_session_ends_it() {
     portal.depart();
     portal.return_to_bus();
     assert!(
-        matches!(settle(&mut host, binding.next()), Ok(ShortcutEvent::Bound(_))),
+        matches!(
+            settle(&mut host, binding.next()),
+            Ok(ShortcutEvent::Bound(_))
+        ),
         "the binding is renewed"
     );
     let sessions = portal.sessions();
@@ -453,7 +470,11 @@ fn the_launcher_entry_broadcasts_its_whole_state_under_the_applications_entry() 
     let (_, second) = heard
         .recv_timeout(Duration::from_secs(10))
         .expect("the second update");
-    assert_eq!(second["progress"], variant(0.5), "the whole state each time");
+    assert_eq!(
+        second["progress"],
+        variant(0.5),
+        "the whole state each time"
+    );
     assert_eq!(second["count"], variant(3_i64));
     assert_eq!(second["count-visible"], variant(true));
     listener.join().expect("the listener ends");
@@ -496,7 +517,10 @@ fn a_runtime_that_ends_closes_the_sessions_its_portal_still_holds() {
     drop(host);
     let deadline = Instant::now() + Duration::from_secs(10);
     while portal.sessions_closed().is_empty() {
-        assert!(Instant::now() < deadline, "the session was closed within 10 s");
+        assert!(
+            Instant::now() < deadline,
+            "the session was closed within 10 s"
+        );
         std::thread::sleep(Duration::from_millis(5));
     }
     assert_eq!(portal.sessions_closed(), [session]);

@@ -77,15 +77,8 @@ impl PortalDialogs {
             portal.spawn(move |bus| async move {
                 let result = async {
                     let desktop = bus.desktop().await?;
-                    request::call(
-                        &desktop,
-                        interface,
-                        method,
-                        &token,
-                        &body,
-                        Some(&dismissal),
-                    )
-                    .await
+                    request::call(&desktop, interface, method, &token, &body, Some(&dismissal))
+                        .await
                 }
                 .await;
                 // The window's export lasts until the request ended.

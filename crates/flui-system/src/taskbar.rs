@@ -76,6 +76,10 @@ impl Honoured {
     /// What a backend shows: `progress`, `indeterminate`, `count` and
     /// `confirmed`, in that order.
     #[must_use]
+    #[expect(
+        clippy::fn_params_excessive_bools,
+        reason = "four independent facts a backend states, in the order of the fields"
+    )]
     pub const fn new(progress: bool, indeterminate: bool, count: bool, confirmed: bool) -> Self {
         Self {
             progress,

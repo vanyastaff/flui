@@ -38,7 +38,10 @@ impl LauncherEntry {
     ///
     /// [`UnsupportedReason::NotDeclared`] for an application with no id: the
     /// signal names the desktop entry by it.
-    pub(crate) fn try_new(portal: Rc<Portal>, app_id: Option<AppName>) -> Result<Self, Unsupported> {
+    pub(crate) fn try_new(
+        portal: Rc<Portal>,
+        app_id: Option<AppName>,
+    ) -> Result<Self, Unsupported> {
         let app_id = app_id.ok_or(Unsupported::of::<TaskbarCapability>(
             UnsupportedReason::NotDeclared {
                 what: "the application id ([app] id in flui.toml)",

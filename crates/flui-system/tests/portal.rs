@@ -450,10 +450,12 @@ struct Registry(Arc<Script>);
 impl Registry {
     #[zbus(property, name = "version")]
     fn version(&self) -> u32 {
-        1
+        self.0.version("Registry", 1)
     }
 
-    fn register(&self, app_id: String, _options: Results) {
+    fn register(&self, app_id: String, options: Results) {
+        // The stand-in reads no option.
+        drop(options);
         self.0.record(Call::Register { app_id });
     }
 }
@@ -539,11 +541,20 @@ impl GlobalShortcuts {
         &self,
         #[zbus(header)] header: Header<'_>,
         #[zbus(connection)] connection: &zbus::Connection,
-        _session: OwnedObjectPath,
+        session: OwnedObjectPath,
         shortcuts: Vec<(String, Results)>,
         parent: String,
         options: Results,
     ) -> OwnedObjectPath {
+        assert!(
+            self.0
+                .sessions
+                .lock()
+                .expect("sessions")
+                .iter()
+                .any(|made| made == session.as_str()),
+            "the shortcuts are bound to a session the portal made"
+        );
         self.0.record(Call::BindShortcuts {
             parent,
             shortcuts: shortcuts
@@ -763,7 +774,10 @@ impl<T: 'static> Settles<T> for Dialog<T> {
 }
 
 /// Land `pending`'s outcome, pumping `host` until it settles.
-pub(crate) fn settle<T: 'static>(host: &mut HeadlessHost, pending: impl Settles<T>) -> Result<T, Abandoned> {
+pub(crate) fn settle<T: 'static>(
+    host: &mut HeadlessHost,
+    pending: impl Settles<T>,
+) -> Result<T, Abandoned> {
     let slot = outcome_slot::<Result<T, Abandoned>>();
     let into = Rc::clone(&slot);
     pending.land(move |outcome| *into.borrow_mut() = Some(outcome));

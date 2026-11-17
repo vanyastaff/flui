@@ -8,7 +8,9 @@
 
 use std::{fmt, path::PathBuf, rc::Rc};
 
-use flui_platform::capability::{Capability, Completion, CompletionSource, ProviderContext, Resolver};
+use flui_platform::capability::{
+    Capability, Completion, CompletionSource, ProviderContext, Resolver,
+};
 use flui_platform::{SystemFailure, Unsupported};
 
 /// The user-folder capability: `ctx.capability::<UserDirCapability>()`

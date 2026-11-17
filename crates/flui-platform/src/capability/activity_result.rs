@@ -924,6 +924,7 @@ impl fmt::Debug for HostBridge {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("HostBridge")
             .field("activity", &self.activity.borrow().is_some())
+            .field("app_id", &*self.app_id.borrow())
             .finish()
     }
 }

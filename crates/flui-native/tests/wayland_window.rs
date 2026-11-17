@@ -17,8 +17,8 @@ use std::time::{Duration, Instant};
 use flui_foundation::geometry::{Size, WindowMetrics};
 use flui_native::testing::app::{self, AppCall};
 use flui_native::testing::wayland::{
-    ClientFrameReport, MAX_BUFFER_SCALE, bridge_focus, client_frame_report, compositor_report,
-    PortalParentRequest, fullscreen_on, offers_activation, outputs, present, run_for, suspend,
+    ClientFrameReport, MAX_BUFFER_SCALE, PortalParentRequest, bridge_focus, client_frame_report,
+    compositor_report, fullscreen_on, offers_activation, outputs, present, run_for, suspend,
 };
 use flui_native::{ExitAnswer, HostWindow, Platform as _, WaylandPlatform};
 use flui_platform::WindowFrame;
@@ -1665,7 +1665,11 @@ mod optional {
         );
 
         let second = portal_parent(&fixture);
-        assert_ne!(second.as_str(), name, "each request exports the window anew");
+        assert_ne!(
+            second.as_str(),
+            name,
+            "each request exports the window anew"
+        );
         drop(second);
 
         fixture.close();

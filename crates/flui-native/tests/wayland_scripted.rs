@@ -29,12 +29,12 @@ mod cases {
     use flui_native::testing::wayland::{
         MAX_BUFFER_SCALE, PortalParentRequest, compositor_report, cursor_report, present, run_for,
     };
-    use flui_platform::capability::PortalParent;
     use flui_native::testing::wayland_compositor::{
         Configure, HangUp, Heard, KEY_A, Offer, OutputOffer, ScriptedCompositor, Step,
         ToplevelState,
     };
     use flui_native::{HostWindow, Platform as _, WaylandPlatform};
+    use flui_platform::capability::PortalParent;
     use flui_platform::keyboard::{KeyPress, KeyState};
     use flui_platform::pointer::{PointerEvent, TouchpadSwipePhase};
     use flui_platform::{Availability, PlatformInput, WindowOptions};

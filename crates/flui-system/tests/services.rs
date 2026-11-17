@@ -72,7 +72,9 @@ fn an_autostart_request_reaches_its_system_and_a_malformed_one_does_not() {
                 &mut host,
                 autostart.request(AutostartRequest::enable().reason(reason))
             ),
-            Ok(Err(AutostartError::InvalidRequest(MalformedAutostart::Reason))),
+            Ok(Err(AutostartError::InvalidRequest(
+                MalformedAutostart::Reason
+            ))),
             "{reason:?}"
         );
     }
@@ -114,18 +116,9 @@ fn the_launcher_entry_sends_each_change_once_and_its_handles_share_one_state() {
     assert_eq!(
         plugin.taskbar().shown(),
         [
-            EntryState::new(
-                half,
-                None,
-            ),
-            EntryState::new(
-                half,
-                Some(2),
-            ),
-            EntryState::new(
-                Progress::Hidden,
-                Some(2),
-            ),
+            EntryState::new(half, None,),
+            EntryState::new(half, Some(2),),
+            EntryState::new(Progress::Hidden, Some(2),),
         ],
         "each handle keeps what the other set; the repeat is not sent"
     );
@@ -147,7 +140,7 @@ fn malformed_shortcuts_end_the_binding_before_the_system_is_asked() {
     let cases = [
         (Vec::new(), MalformedShortcut::Count),
         (too_many, MalformedShortcut::Count),
-        (vec![record.clone(), record.clone()], MalformedShortcut::DuplicateId),
+        (vec![record.clone(), record], MalformedShortcut::DuplicateId),
         (
             vec![Shortcut::new(id("blank"), "  ")],
             MalformedShortcut::Description,
@@ -157,11 +150,16 @@ fn malformed_shortcuts_end_the_binding_before_the_system_is_asked() {
         let binding = shortcuts.bind(asked);
         assert_eq!(
             settled(&mut host, binding.next()),
-            Ok(ShortcutEvent::Ended(ShortcutError::InvalidRequest(malformed))),
+            Ok(ShortcutEvent::Ended(ShortcutError::InvalidRequest(
+                malformed
+            ))),
             "{malformed:?}"
         );
     }
-    assert!(plugin.shortcuts().bindings().is_empty(), "no system was asked");
+    assert!(
+        plugin.shortcuts().bindings().is_empty(),
+        "no system was asked"
+    );
 }
 
 /// A binding hands out what the system said in order, answers its end again

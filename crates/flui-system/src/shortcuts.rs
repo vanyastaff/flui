@@ -12,7 +12,9 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use std::{any::Any, fmt, rc::Rc};
 
-use flui_platform::capability::{Capability, Completion, CompletionSource, ProviderContext, Resolver};
+use flui_platform::capability::{
+    Capability, Completion, CompletionSource, ProviderContext, Resolver,
+};
 use flui_platform::keyboard::{Key, Modifiers, NamedKey};
 use flui_platform::{SystemFailure, Unsupported};
 
@@ -139,7 +141,9 @@ impl Trigger {
         match self.key {
             TriggerKey::Character(character) => written.push(character),
             TriggerKey::Named(named) => {
-                written.push_str(&keysym(named).expect("BUG: a trigger holds a named key with a keysym"));
+                written.push_str(
+                    &keysym(named).expect("BUG: a trigger holds a named key with a keysym"),
+                );
             }
         }
         written
@@ -366,34 +370,36 @@ impl ShortcutFeed {
             if let ShortcutEvent::Ended(error) = &event {
                 state.ended = Some(*error);
             }
-            match state.waiting.pop_front() {
-                Some(waiting) => Some((waiting, event)),
-                None => {
-                    if state.queued.len() >= Self::MAX_QUEUED {
-                        let input = state.queued.iter().position(|queued| {
-                            matches!(queued, ShortcutEvent::Pressed(_) | ShortcutEvent::Released(_))
-                        });
-                        match input {
-                            Some(oldest) => {
-                                drop(state.queued.remove(oldest));
-                                state.dropped += 1;
-                            }
-                            // Only bindings and changes queued: this press
-                            // or release is the one that goes.
-                            None if matches!(
-                                event,
-                                ShortcutEvent::Pressed(_) | ShortcutEvent::Released(_)
-                            ) =>
-                            {
-                                state.dropped += 1;
-                                return;
-                            }
-                            None => {}
+            if let Some(waiting) = state.waiting.pop_front() {
+                Some((waiting, event))
+            } else {
+                if state.queued.len() >= Self::MAX_QUEUED {
+                    let input = state.queued.iter().position(|queued| {
+                        matches!(
+                            queued,
+                            ShortcutEvent::Pressed(_) | ShortcutEvent::Released(_)
+                        )
+                    });
+                    match input {
+                        Some(oldest) => {
+                            drop(state.queued.remove(oldest));
+                            state.dropped += 1;
                         }
+                        // Only bindings and changes queued: this press
+                        // or release is the one that goes.
+                        None if matches!(
+                            event,
+                            ShortcutEvent::Pressed(_) | ShortcutEvent::Released(_)
+                        ) =>
+                        {
+                            state.dropped += 1;
+                            return;
+                        }
+                        None => {}
                     }
-                    state.queued.push_back(event);
-                    None
                 }
+                state.queued.push_back(event);
+                None
             }
         };
         // Resolved outside the lock: settling posts to the owner.
@@ -407,15 +413,15 @@ impl ShortcutFeed {
         let (completion, answer) = completions.pending();
         let ready = {
             let mut state = self.lock();
-            match state.queued.pop_front() {
-                Some(event) => Some((answer, event)),
-                None => match state.ended {
-                    Some(error) => Some((answer, ShortcutEvent::Ended(error))),
-                    None => {
-                        state.waiting.push_back(answer);
-                        None
-                    }
-                },
+            let event = state
+                .queued
+                .pop_front()
+                .or_else(|| state.ended.map(ShortcutEvent::Ended));
+            if let Some(event) = event {
+                Some((answer, event))
+            } else {
+                state.waiting.push_back(answer);
+                None
             }
         };
         if let Some((answer, event)) = ready {
@@ -598,7 +604,11 @@ mod tests {
             (ctrl_shift, Key::character("A"), Some("CTRL+SHIFT+a")),
             (Modifiers::META, Key::character("7"), Some("LOGO+7")),
             (Modifiers::ALT, Key::Named(NamedKey::F12), Some("ALT+F12")),
-            (Modifiers::NONE, Key::Named(NamedKey::PageUp), Some("Page_Up")),
+            (
+                Modifiers::NONE,
+                Key::Named(NamedKey::PageUp),
+                Some("Page_Up"),
+            ),
             // A character no system names alike, a modifier no trigger
             // takes, a key with no keysym.
             (Modifiers::CONTROL, Key::character("é"), None),
