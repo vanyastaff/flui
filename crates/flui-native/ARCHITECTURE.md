@@ -4412,6 +4412,26 @@ manager reads as it maps it, so a window opened in a mode is mapped only once
 the property holds it. Logical numbers become 16-bit X11 coordinates and
 extents only when they are finite and fit (`window::linux::x11::placement`).
 
+A window answers what its window manager asks beyond its close, a policy the
+Wayland host holds too (`xdg_wm_base.ping`): it lists `_NET_WM_PING` and sends
+each ping back to the root as the loop hears it, on the owner thread, so an
+owner that hangs answers nothing and its window manager can offer to end it
+(`a_window_answers_the_window_managers_ping`); it names `WM_CLIENT_MACHINE`
+from `uname` beside `_NET_WM_PID`, and writes neither without a name a window
+manager could match (`protocols::ClientMachine`). Where the server has SYNC it
+lists `_NET_WM_SYNC_REQUEST` and names two XSync counters, the basic one and
+the extended one. `protocols::ResizeSync` decides when they are set: a request
+waits for the configure after it; at the window's read a configure that asked
+no frame is answered at once, and otherwise the answer follows the next frame
+the loop delivers (`X11Window::deliver_frame`), on every exit of its handler,
+a panic included; under a window manager that lists `_NET_WM_FRAME_DRAWN` the
+extended counter is odd while each frame draws. Each write is flushed at once,
+since the GPU driver may present on a connection of its own. With the inline
+raster the frame has been presented when the answer goes; a raster thread may
+still be drawing it (`a_synchronised_resize_is_answered_after_its_frame`,
+`a_window_manager_that_paces_frames_sees_each_one_drawn`,
+`openbox_paces_an_interactive_resize_by_the_windows_counter`).
+
 A window's identity is the `WindowId` the platform issues from its `WindowIdMint`;
 the X id only routes an event to the window that holds it now and is
 forgotten as the window closes, before the X window is destroyed. A close (the

@@ -2217,7 +2217,7 @@ mod cases {
     /// The counters `xid` names in `_NET_WM_SYNC_REQUEST_COUNTER`: the one a
     /// window manager without frame synchronisation waits on, then the
     /// extended one.
-    fn resize_counters(server: &RustConnection, xid: u32) -> [u32; 2] {
+    pub(crate) fn resize_counters(server: &RustConnection, xid: u32) -> [u32; 2] {
         let counters: Vec<u32> = server
             .get_property(
                 false,
@@ -2239,7 +2239,7 @@ mod cases {
 
     /// A connection that reads counters as a window manager does, with the
     /// SYNC extension initialised on it.
-    fn counter_reader() -> RustConnection {
+    pub(crate) fn counter_reader() -> RustConnection {
         let reader = RustConnection::connect(None)
             .expect("the X server answers")
             .0;
@@ -2252,7 +2252,7 @@ mod cases {
     }
 
     /// The value of `counter` on the server now.
-    fn counter_value(reader: &RustConnection, counter: u32) -> i64 {
+    pub(crate) fn counter_value(reader: &RustConnection, counter: u32) -> i64 {
         let value = reader
             .sync_query_counter(counter)
             .expect("request")

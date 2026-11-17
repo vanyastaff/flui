@@ -7513,6 +7513,39 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
   CI под `xvfb-run` (976 тестов), `wayland_window` под Weston (падает лишь
   `optional::a_window_moved_to_another_output_names_its_display`, как и на `main`). Не запущено:
   обзор мышью Orca и лупа в настоящей сессии (строка паритета `tree-and-actions`).
+- [x] **LY131** — ветка `native/x11-manager-liveness`. Обе находки подтверждены на `main` @
+  `223b4d78d`: `WM_PROTOCOLS` — один `WM_DELETE_WINDOW`, `_NET_WM_PID` пишется без
+  `WM_CLIENT_MACHINE`, счётчиков XSync нет. Окно X11 теперь перечисляет `_NET_WM_PING` и
+  отражает ping к корню, как его слышит цикл владельца (зависший владелец не отвечает — та же
+  политика, что `xdg_wm_base.ping` на Wayland); пишет `WM_CLIENT_MACHINE` из `uname` (`STRING`
+  для ASCII, `UTF8_STRING` для прочего UTF-8) и без пригодного имени не пишет и `_NET_WM_PID`
+  (`protocols::ClientMachine`). Где у сервера есть SYNC (`X11Windows` инициализирует его один раз),
+  окно перечисляет `_NET_WM_SYNC_REQUEST` и называет два счётчика — базовый и расширенный.
+  Когда их ставить, решает чистая модель `window::linux::x11::protocols::ResizeSync`: запрос ждёт
+  `ConfigureNotify` после себя; на чтении окна конфигурация без запрошенного кадра отвечается сразу,
+  иначе ответ идёт после следующего кадра цикла (`X11Window::deliver_frame`) при любом исходе
+  обработчика, паника включительно; при `_NET_WM_FRAME_DRAWN` у менеджера расширенный счётчик
+  нечётен, пока кадр рисуется (как `gdk_x11_surface_begin_frame`), расширенный запрос отвечается
+  на нём чётным значением не ниже запрошенного. Каждая запись сразу отправляется (драйвер GPU может
+  показывать кадр через своё соединение). `deliver_frames` теперь держит панику одного окна, отдавая
+  кадры остальным. При встроенном растре кадр к ответу уже показан; растровый поток
+  (`FLUI_RASTER_PLACEMENT=threaded`, только отладочная сборка Linux) может ещё рисовать его —
+  записано в `ARCHITECTURE.md` и `docs/gaps.md`. Тесты, каждый падает при откате (прогон
+  2026-11-16, WSL Ubuntu 24.04, Xvfb с openbox): `a_window_answers_the_window_managers_ping` (без
+  ветки ping — нет ответа за 5 с; ответ не приходит, пока цикл не повернулся),
+  `a_window_carries_the_application_id_it_was_started_with` (без записи — `WM_CLIENT_MACHINE`
+  пуст), `a_synchronised_resize_is_answered_after_its_frame` (без ответа после кадра или без
+  `configured()` — таймаут; ответ на чтении до кадра — кадр видит значение запроса; без ответа на
+  чтении — конфигурация без изменения размера не отвечена), `a_window_manager_that_paces_frames_sees_each_one_drawn`
+  (без `paces_frames` — кадр не нечётен; без удержания паники — счётчик остаётся нечётным),
+  `openbox_paces_an_interactive_resize_by_the_windows_counter` (настоящий openbox на перетаскивании
+  края; без `_NET_WM_SYNC_REQUEST` в протоколах счётчик остаётся 0); таблицы модели
+  `a_request_is_answered_once_its_configure_is_repainted`, `the_extended_counter_brackets_each_frame`,
+  `a_request_carries_the_value_of_its_two_words`, `a_machine_name_is_written_in_the_type_that_carries_it`
+  и строка `paces_frames` в `what_the_window_manager_supports_is_what_a_window_honours`. Прогоны: весь
+  `x11_window` (41 случай). Долг на устройствах — строка паритета `live-resize-without-jitter`:
+  перетаскивание под mutter, KWin и xfwm4 с композитором. Не строится в этой строке: темп кадров по
+  `_NET_WM_FRAME_DRAWN` и отчёты `_NET_WM_FRAME_TIMINGS` (записано в `docs/gaps.md`).
 
 ### Доведение до приёмки
 
