@@ -215,7 +215,8 @@ compositor `WAYLAND_DISPLAY` names. No one compositor runs them all:
 | `wayland_scripted::` | the compositor of the case's own, in the Xvfb suite of `cargo xtask test` | What no installed compositor does on demand: `configure_bounds`, a seat older than `repeat_info`, a scale change while the host runs, a strict buffer-scale rule on cursors, frame callbacks never answered, an output removed with no `leave`, a configure storm, a connection closed mid-request, a touchpad swipe and hold on a gestures global of a chosen version. |
 
 The `wayland_scripted` harness and `flui-app`'s
-`native_linux::an_app_whose_window_is_never_drawn_still_quits` need no
+`native_linux::an_app_whose_window_is_never_drawn_still_quits` and
+`native_linux::a_raster_thread_presents_one_frame_per_frame_callback` need no
 compositor installed: each case starts `flui-native`'s
 `testing::wayland_compositor::ScriptedCompositor`, a compositor on
 `wayland-server`'s pure-Rust backend at a socket of its own, which offers the

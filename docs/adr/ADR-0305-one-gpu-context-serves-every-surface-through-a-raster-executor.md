@@ -311,7 +311,11 @@ impl UiRuntime { pub fn settle_frame(&mut self, settlement: FrameSettlement) -> 
   frame's sink names,
   `FrameSink::in_flight_limit`. A presentation at its limit skips with `Backpressure`, keeps its
   demand and reports no pending work, and the settlement that frees a place wakes the loop. The
-  limit is the placement's depth (§10): 1 inline, which never queues, 2 threaded. wgpu's
+  limit is the placement's depth (§10): 1 inline, which never queues, 2 threaded. A slot whose
+  surface its compositor paces (`FramePacing::Compositor`, ADR-0356) holds 1 in either placement:
+  the frame callback that withholds the window's next frame is armed by the present, which a
+  raster thread makes after the wake that queued the frame returned, so a second frame taken
+  meanwhile would be presented in the same refresh as the first. wgpu's
   `desired_maximum_frame_latency` stays the slot's `FrameLatency` (ADR-0347 decision 4), set at
   `Attach` and changed by `Configure`, and stays decoupled from the depth; the GL backend ignores
   it as before.
@@ -535,7 +539,8 @@ impl<B: RasterBackend + Send + 'static> RasterExecutor<B> {
   is not refused, since the thread or its queue may still hold its surface;
   it is quarantined as §9 says. It answers a frame `Queued`, or `QueuedReplacing` with the epoch the
   slot's `SendReceipt::Replaced` names, keeps what each held frame's verdict needs (its version,
-  surface and retry), and its sink's in-flight limit is the placement's depth. A settlement
+  surface and retry), and its sink's in-flight limit is the slot's (§5): the placement's depth,
+  or one where the compositor paces the surface. A settlement
   carries whether a call on its slot panicked since the previous settlement and the owner has
   not taken it (`SlotSettlement::panicked`), which is how an owner that drains later
   than the turn tells the frame a slot's panic came with; a slot holds a panic in place of a
@@ -693,7 +698,10 @@ the facade. Every production use of `with_backend` becomes:
   `a_threaded_windows_detach_returns_once_its_slot_is_down`,
   `a_window_the_raster_thread_refuses_is_refused_at_attach`,
   `a_window_whose_attach_the_raster_thread_does_not_answer_is_kept`,
-  `a_window_wake_settles_what_the_raster_thread_finished` and
+  `a_window_wake_settles_what_the_raster_thread_finished`,
+  `a_compositor_paced_window_holds_one_frame_on_a_raster_thread` (§5, with
+  `crates/flui-app/tests/native_linux.rs`'s
+  `a_raster_thread_presents_one_frame_per_frame_callback` on the Wayland host),
   `a_threaded_frame_that_did_not_present_counts_toward_the_first_reveal` and
   `a_wedged_raster_thread_quarantines_its_open_window` (§9), with the pacing it leaves in
   `crates/flui-app/src/app/runner/frame_pacing.rs`'s `a_held_frame_arms_no_fallback` (§10);
