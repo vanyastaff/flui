@@ -833,8 +833,8 @@ agent or OS automation locator selects it (the web mirror still writes `data-flu
 lifted into, at most 4 nodes per identifier (a row template names its first rows) and 256 in all,
 and the testing kit's `TestError::UnpublishedIdentifier` gives the form that is found (a role on
 the node, or the identifier on the control). The kit raises it when a locator matches nothing and
-names a lifted identifier: its own, or a scope's that no published node carries. An expectation
-that holds by matching nothing (`to_be_gone`) waits and then fails with it too. Past the cap a
+names a lifted identifier: its own, or a scope's that no published node carries. It only explains
+a failure, so `to_be_gone` still passes on a lifted identifier. Past the cap a
 lookup falls back to `NotFound`.
 
 **Why.** An identifier that annotated or split nodes would change the tree, and so what a screen
@@ -843,7 +843,7 @@ a merged parent would collect its children's.
 
 **Test.** `the_identifier_is_exported_unannounced_unmerged_and_no_boundary` in
 `tests/identifier.rs`, `an_identifier_on_a_node_that_publishes_nothing_else_is_reported` and
-`unpublished_identifiers_are_reported_once_each_and_bounded`,
+`unpublished_identifiers_are_reported_once_per_parent_and_bounded`,
 `an_identifier_lifted_under_many_parents_leaves_room_for_the_rest` there; the `identifier` row of
 `every_published_attribute_reads_through_the_consumer`.
 

@@ -1478,6 +1478,9 @@ fn an_identifier_on_a_node_that_publishes_nothing_else_fails_saying_so() {
                 .identifier("legend")
                 .child(SizedBox::new(24.0, 16.0)),
             unpublished("legend").child(SizedBox::new(24.0, 16.0)),
+            // "save" lifted outside the button too, which the read reports
+            // first: the fix still names the button, the control it is in.
+            unpublished("save").child(SizedBox::new(24.0, 16.0)),
         ))),
     );
     let _ = t.rect(&find::button("Save"));
@@ -1514,9 +1517,13 @@ fn an_identifier_on_a_node_that_publishes_nothing_else_fails_saying_so() {
         expected.contains("publishes nothing of its own"),
         "{expected}"
     );
-    // Matching nothing for that reason is no verdict either.
-    let gone = panic_text(|| t.expect(find::id("swatch")).to_be_gone());
-    assert!(gone.contains("publishes nothing of its own"), "{gone}");
+    // The reason only explains a failure: an expectation that holds by
+    // matching nothing passes.
+    t.expect(find::id("swatch")).to_be_gone();
+    // The target's own identifier is the likely reason even where a
+    // published node carries it too.
+    let own = failure(&mut t, find::id("legend").within(find::button("Save")));
+    assert!(own.contains("\"legend\""), "{own}");
     // An identifier a published node carries selects it, and a failure
     // there is the expectation's own, not the lifted node's.
     let _ = t.rect(&find::id("legend"));

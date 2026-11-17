@@ -502,7 +502,7 @@ struct Walk<'q> {
     diagnostics: Vec<TreeDiagnostic>,
     /// How many nodes each lifted identifier `diagnostics` reports it under,
     /// up to [`MAX_PARENTS_PER_IDENTIFIER`].
-    lifted: FxHashMap<String, usize>,
+    lifted: Vec<(String, usize)>,
     /// How many lifted identifiers `diagnostics` reports, up to
     /// [`MAX_LIFTED_IDENTIFIERS`].
     lifted_reported: usize,
@@ -563,11 +563,16 @@ impl Walk<'_> {
             {
                 return;
             }
-            let parents = self.lifted.entry(identifier.to_owned()).or_default();
-            if *parents >= MAX_PARENTS_PER_IDENTIFIER {
-                return;
+            // At most `MAX_LIFTED_IDENTIFIERS` entries, so a scan.
+            match self
+                .lifted
+                .iter_mut()
+                .find(|(known, _)| known == identifier)
+            {
+                Some((_, parents)) if *parents >= MAX_PARENTS_PER_IDENTIFIER => return,
+                Some((_, parents)) => *parents += 1,
+                None => self.lifted.push((identifier.to_owned(), 1)),
             }
-            *parents += 1;
             self.lifted_reported += 1;
             here.push(identifier.to_owned());
             self.diagnostics
@@ -820,7 +825,7 @@ impl SemanticsOwner {
                 truncated: false,
                 root_claims_focus,
                 diagnostics: Vec::new(),
-                lifted: FxHashMap::default(),
+                lifted: Vec::new(),
                 lifted_reported: 0,
                 filter: AgentFilter::of(self),
             };

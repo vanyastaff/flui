@@ -1204,7 +1204,8 @@ impl Tester {
     /// published node carries. A scope a published node satisfies leaves the
     /// miss to the rest of the locator (ADR-0240 §4 lets one identifier stand
     /// in several places); the target's own identifier is blamed even then,
-    /// since the lifted instance may be the one its scope holds.
+    /// since the lifted instance may be the one its scope holds. It only
+    /// explains a failure, so a misplaced guess costs a hint, never a verdict.
     fn unpublished_identifier(&mut self, locator: &Locator) -> Option<TestError> {
         let mut scopes: Vec<&str> = Vec::new();
         let mut pending: Vec<&Locator> = Vec::new();
@@ -1487,13 +1488,6 @@ fn wait(
         // made on the tree that work committed.
         let matches = tester.try_find_all(locator)?;
         let found = match holds(tester, &matches) {
-            // No match because an identifier is on a lifted node is no
-            // verdict: `to_be_gone` would pass while the node is on screen.
-            // It waits as a failing check does, so a node still leaving
-            // over the next frames is waited out.
-            Ok(()) if matches.is_empty() && tester.unpublished_identifier(locator).is_some() => {
-                "no match, because an identifier it names is on a lifted node".to_owned()
-            }
             Ok(()) => return Ok(()),
             Err(found) => found,
         };
@@ -1502,7 +1496,9 @@ fn wait(
         let next = tester.host.time_to_next_frame();
         let gives_up = next != Some(Duration::ZERO) || waited >= timeout;
         // An expectation that gives up matching nothing, on an identifier
-        // nothing selects, says why, as a lookup does.
+        // nothing selects, says why, as a lookup does. The reason only
+        // explains a failure: an expectation that holds by matching nothing
+        // (`to_be_gone`) passes, whatever lifted node carries the identifier.
         if gives_up
             && matches.is_empty()
             && let Some(error) = tester.unpublished_identifier(locator)

@@ -417,7 +417,7 @@ fn an_identifier_on_a_node_that_publishes_nothing_else_is_reported() {
 }
 
 #[test]
-fn unpublished_identifiers_are_reported_once_each_and_bounded() {
+fn unpublished_identifiers_are_reported_once_per_parent_and_bounded() {
     let mut owner = SemanticsOwner::new(Arc::new(|_: &TreeUpdate| {}));
     let node = |index: u32, identifier: Option<String>| {
         let mut node = SemanticsNode::new().with_source_render_id(render_id(index));
