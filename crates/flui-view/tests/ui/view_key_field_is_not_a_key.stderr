@@ -8,7 +8,6 @@ error[E0277]: `String` is not a field a view can read its key from
   = note: a `#[view(key)]` field is a `ViewKey` (`ValueKey<T>`, `UniqueKey`, `GlobalKey<T>`, …), an `Option` of one, or an `Rc<dyn ViewKey>` or `Box<dyn ViewKey>`
   = help: the following other types implement trait `ViewKey`:
             GlobalKey<T>
-            Key
             ObjectKey
             SaltedKey
             UniqueKey

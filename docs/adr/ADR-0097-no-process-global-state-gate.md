@@ -51,7 +51,7 @@ re-checked:
 | `REGISTRY_STACK`, `TEST_REGISTRY` | `crates/flui-view/src/key/registry.rs:198-212` | `thread_local!`, `ManuallyDrop` for a hot-reload cdylib |
 | `LOCAL_LANES`, `ACTIVE_LANES` | `crates/flui-interaction/src/pointer/interaction_lane.rs:739-741` | `thread_local!` lane registries |
 
-Beside them sit monotonic ID counters (`KEY_COUNTER`, `crates/flui-foundation/src/key.rs:59`;
+Beside them sit monotonic ID counters (`UNIQUE_KEYS`, `crates/flui-foundation/src/key.rs`;
 `NEXT_GRAPH_ID`, `crates/flui-view/src/reactive/mod.rs:72`; `NEXT_INCARNATION`,
 `crates/flui-app/src/app/runtime.rs:190`, and others), warn-once flags
 (`crates/flui-engine/src/batches/gradients.rs:64,77`), and platform cells that OS callbacks read

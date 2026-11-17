@@ -33,11 +33,11 @@
 //! ```rust
 //! use std::rc::Rc;
 //!
-//! use flui_foundation::{ChangeNotifier, ElementId, Key, Listenable};
+//! use flui_foundation::{ChangeNotifier, ElementId, Listenable, UniqueKey};
 //!
 //! // Create unique identifiers
 //! let element_id = ElementId::new(1);
-//! let key = Key::new();
+//! let key = UniqueKey::new();
 //!
 //! // Observable values for reactive UI
 //! let mut notifier = ChangeNotifier::new();
@@ -52,7 +52,8 @@
 //! ## Feature Flags
 //!
 //! - `serde`: Enables serialization support for foundation types
-//! - `full`: Enables all optional features
+//! - `creation-site`: Keeps creation sites (`CreationSite`) in release builds
+//! - `testing`: Test support (`testing::CountingWaker`, `testing::panicking_waker`)
 //!
 //! ## Architecture
 //!
@@ -67,7 +68,7 @@
 //! ### Element Identification
 //!
 //! ```rust
-//! use flui_foundation::{ElementId, Key};
+//! use flui_foundation::{ElementId, UniqueKey, ValueKey, ViewKey};
 //!
 //! // Generational element identifier: packs slab index + generation into 8 bytes.
 //! let element_id = ElementId::new(42); // 1-based: index() == 41
@@ -79,9 +80,9 @@
 //! );
 //!
 //! // Keys for element matching during rebuilds
-//! let key1 = Key::new();
-//! let key2 = Key::from_str("header");
-//! assert_ne!(key1, key2);
+//! let unique = UniqueKey::new();
+//! let header = ValueKey::new("header");
+//! assert!(!unique.key_eq(&header));
 //! ```
 //!
 //! ### Change Notification
@@ -173,7 +174,7 @@ pub mod claim_slot;
 pub mod clock;
 pub mod consts;
 // Monotonic generation/version counters for the window-runtime protocol:
-// FrameEpoch, SurfaceGeneration, ResourceGeneration.
+// FrameEpoch, SurfaceGeneration.
 pub mod epoch;
 // The frame-identity group (address/epoch/surface_generation) bundled for
 // the raster boundary — see the module doc for why it exists as its own
@@ -269,7 +270,7 @@ pub use text_direction::TextDirection;
 pub use ticket::{Ticket, TicketSource};
 pub use tree_error::{PathEntry, TREE_CONTEXT_DEPTH, TreeContext, TreeError};
 // Window-runtime generation/version counters + commit-time freshness gate.
-pub use epoch::{FrameEpoch, GenerationGate, ResourceGeneration, SurfaceGeneration};
+pub use epoch::{FrameEpoch, SurfaceGeneration};
 // The frame-identity group bundled for the raster boundary.
 pub use frame_stamp::FrameStamp;
 pub use id::{
@@ -297,7 +298,7 @@ pub use id::{
     // Marker types module
     markers,
 };
-pub use key::{Key, KeyRef, SaltedKey, UniqueKey, ValueKey, ViewKey};
+pub use key::{SaltedKey, UniqueKey, ValueKey, ViewKey};
 // Change notification (Listenable pattern)
 pub use notifier::{
     ChangeNotifier, Listenable, ListenerCallback, ListenerObserver, Subscription, ValueListenable,
@@ -332,8 +333,6 @@ pub mod prelude {
         // Generic ID system
         Id,
         Identifier,
-        Key,
-        KeyRef,
         LayerId,
         Listenable,
         ListenerCallback,

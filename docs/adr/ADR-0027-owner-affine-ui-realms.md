@@ -209,7 +209,7 @@ pub struct SceneSnapshot {           // Send + Sync; moves by value; never Arc<S
 
 | Work class | Validity check at commit |
 |---|---|
-| Asset / decode | `ResourceGeneration` current on its `GenerationGate` |
+| Asset / decode | its `LoadTicket` is still the pending entry's (`flui-assets`, `registry/images.rs`) |
 | Snapshot computation (future) | input revision |
 | Raster frame | `FrameEpoch` + `SurfaceGeneration` |
 | Lifetime isolation | channel identity (+ generational `UiRuntimeId`) |
