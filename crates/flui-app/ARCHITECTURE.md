@@ -596,7 +596,7 @@ run with nothing borrowed.
   displays, which moves a window back onto a live display) each open the
   window from its configuration. A panic is reported and its payload
   discarded.
-- **A position is placed on a display when the window opens (ADR-0361).** A
+- **A position is placed on a display when the window opens (ADR-0362).** A
   restored placement opens at the `WindowPosition` `resolve` gives, on the
   display it chose; a configured `AppConfig::position` is whole logical
   pixels of the primary display (the first where none is marked), which

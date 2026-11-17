@@ -8384,7 +8384,7 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
   `flui-system` без провайдера; отображение фильтров и суд над открытым файлом (`AssocIsDangerous`
   на Windows, Launch Services на macOS) для них записаны в ADR-0360 §2, §4 и `docs/gaps.md`.
 
-- [x] **LY115** — ветка `platform/window-coordinate-space`, решение — ADR-0361 (заменяет
+- [x] **LY115** — ветка `platform/window-coordinate-space`, решение — ADR-0362 (заменяет
   глобальную позицию ADR-0237 решения 2, опцию дисплея решения 6 и границы ADR-0236 решения 1).
   Находки подтверждены на `main` @ `2d32298db` чтением кода: Win32 делил угол окна на масштаб
   окна и умножал на него `SetPosition`; macOS публиковал границы экрана как точки, умноженные на

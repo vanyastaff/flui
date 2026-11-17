@@ -1,6 +1,6 @@
 //! Where a window is on a desktop its window system lays out in device pixels
 //! (Win32, X11): the one conversion between a [`WindowPosition`] and the
-//! desktop's device pixels (ADR-0361).
+//! desktop's device pixels (ADR-0362).
 //!
 //! A position is a point of one display, in that display's logical pixels
 //! from its top-left corner, so it converts through that display's own
