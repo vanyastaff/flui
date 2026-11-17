@@ -1,6 +1,10 @@
 //! The Wayland host under test: its loop's turns, run by hand on the thread
 //! that made the platform where a test stands in for `Platform::run`, and what
-//! the compositor said of a window, read apart from the window's snapshot.
+//! the compositor said of a window, read apart from the window's snapshot;
+//! and a compositor of the test's own ([`compositor`]).
+
+#[cfg(feature = "testing")]
+pub mod compositor;
 
 use std::time::Duration;
 

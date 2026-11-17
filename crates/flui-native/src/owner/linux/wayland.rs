@@ -958,9 +958,9 @@ mod event_loop {
         /// ([`launch_arguments`](crate::owner::launch_arguments)).
         fn launch_arguments() -> Vec<std::ffi::OsString>;
 
-        /// The displays: the compositor's outputs, read on a connection of
-        /// their own.
-        fn displays() -> Arc<dyn WaylandDisplays>;
+        /// The displays: the outputs of the compositor at `socket`, the one
+        /// the loop connects to, read on a connection of their own.
+        fn displays(socket: &Path) -> Arc<dyn WaylandDisplays>;
 
         /// The seats' input, made on the owner thread, which alone reaches
         /// it, recording each user input it reports in `last_input`, which
@@ -2436,7 +2436,7 @@ mod event_loop {
                     LAUNCH_TOKEN_VARIABLE,
                 )))),
                 owner_thread: std::thread::current().id(),
-                displays: H::displays(),
+                displays: H::displays(socket),
                 input,
                 clipboard,
                 drag,

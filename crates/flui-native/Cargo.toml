@@ -435,6 +435,11 @@ rustix = { workspace = true, optional = true, features = ["time", "fs", "pipe"] 
 # The cursor theme the Wayland host draws a cursor from where the compositor
 # has no `cursor-shape`.
 wayland-cursor = { version = "0.31", optional = true }
+# The compositor the `testing` kit plays to the Wayland host over a socket of
+# its own (`testing::wayland::compositor`): the server half of the crates the
+# host speaks the client half of, on their pure-Rust backend, so a test needs
+# no compositor installed.
+wayland-server = { workspace = true, optional = true }
 accesskit_unix = { version = "0.24", optional = true }
 zbus = { workspace = true, optional = true }
 futures-util = { workspace = true, optional = true }
@@ -650,8 +655,15 @@ native-capture = ["dep:flui-protocol", "dep:serde", "dep:serde_json"]
 # needs from the host itself, such as turns of the AppKit event loop, and the
 # native recording codec the tests replay recordings through. Off by
 # default and not part of the release API; this crate's tests turn it on
-# through the dev-dependency on itself.
-testing = ["dep:flui-protocol", "dep:serde", "dep:serde_json"]
+# through the dev-dependency on itself. On Linux it brings the server half of
+# the Wayland crates, which the kit's compositor speaks (with `wayland`).
+testing = [
+    "dep:flui-protocol",
+    "dep:serde",
+    "dep:serde_json",
+    "dep:wayland-server",
+    "wayland-protocols?/server",
+]
 
 # The `unexpected_cfgs` check-cfg declaration for objc 0.2's
 # `cfg(feature = "cargo-clippy")` probes lives in build.rs — Cargo forbids
@@ -814,6 +826,16 @@ required-features = ["wayland"]
 [[test]]
 name = "wayland_frame"
 path = "tests/wayland_frame.rs"
+harness = false
+required-features = ["wayland"]
+
+# The native Wayland host against a compositor the case scripts
+# (`testing::wayland::compositor`), over a socket of its own: its own harness,
+# because it names a cursor theme of its own in the process's environment
+# before any thread starts.
+[[test]]
+name = "wayland_scripted"
+path = "tests/wayland_scripted.rs"
 harness = false
 required-features = ["wayland"]
 
