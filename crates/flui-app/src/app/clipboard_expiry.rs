@@ -123,7 +123,13 @@ impl ClipboardExpiries {
     }
 
     /// Time the entries on `clock` from now on.
-    #[cfg(all(test, feature = "testing"))]
+    #[cfg(all(
+        test,
+        feature = "testing",
+        not(target_os = "android"),
+        not(target_os = "ios"),
+        not(target_arch = "wasm32")
+    ))]
     pub(crate) fn set_clock(&self, clock: Rc<dyn MonotonicClock>) {
         self.clock.replace(clock);
     }

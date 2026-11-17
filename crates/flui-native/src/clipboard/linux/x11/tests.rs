@@ -1280,9 +1280,12 @@ fn an_expiring_entry_is_given_up_only_while_the_clipboard_still_holds_it() {
     let first = clipboard();
     let second = clipboard();
 
+    // A read through the writer waits for its write to own the selection, so
+    // the other client reads only once the server has it.
     let write = expiring("secret");
     let entry = write.entry().expect("an expiring write");
     write_unobserved(&first, write);
+    assert_eq!(answers.read(&first).as_deref(), Some("secret"));
     assert_eq!(answers.read(&second).as_deref(), Some("secret"));
     assert_eq!(
         clear(&answers, &first, ExpiredEntry::Entry(entry)),
@@ -1293,6 +1296,7 @@ fn an_expiring_entry_is_given_up_only_while_the_clipboard_still_holds_it() {
     let write = expiring("secret");
     let entry = write.entry().expect("an expiring write");
     write_unobserved(&first, write);
+    assert_eq!(answers.read(&first).as_deref(), Some("secret"));
     assert_eq!(answers.read(&second).as_deref(), Some("secret"));
     write_unobserved(&second, ClipboardWrite::text("theirs".to_owned()));
     assert_eq!(answers.read(&second).as_deref(), Some("theirs"));

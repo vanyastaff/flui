@@ -11594,8 +11594,8 @@ impl PartialOrd for flui::platform::ClipboardExpiry
 impl core::fmt::Debug for flui::platform::ClipboardExpiry
 impl core::hash::Hash for flui::platform::ClipboardExpiry
 impl core::marker::StructuralPartialEq for flui::platform::ClipboardExpiry
-pub const flui::platform::ClipboardExpiry::MAX: core::time::Duration
-pub const flui::platform::ClipboardExpiry::MIN: core::time::Duration
+pub const flui::platform::ClipboardExpiry::MAX: core::time::Duration = _
+pub const flui::platform::ClipboardExpiry::MIN: core::time::Duration = _
 pub const fn flui::platform::ClipboardExpiry::get(self) -> core::time::Duration
 pub const fn flui::platform::ClipboardExpiry::try_new(after: core::time::Duration) -> Result<Self, flui::platform::ClipboardExpiryError>
 #[non_exhaustive] pub enum flui::platform::ClipboardExpiryError
