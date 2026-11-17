@@ -761,6 +761,18 @@ whose poll panicked (ADR-0281 §2, §3); healthy completion and cancellation dro
 normally. A compute panic is reported as complete before its diagnostics run.
 Pinned by `service_lifecycle_matrix`.
 
+### A service watches the application's lifecycle, not a window's
+
+`ServiceContext::lifecycle` is a latest-wins watch of one owner-side fold
+(`ServiceLifecycle`): the state each live UI runtime's scheduler last
+committed, folded into the most active one, `Detached` while none is live.
+The runner feeds it where it builds every UI runtime: it notes the scheduler's
+state, adds a lifecycle listener, and the listener's capture forgets the
+runtime when the scheduler drops it with the runtime. The fold publishes only
+a change, and its table's borrow ends before a reader's waker runs. Memory
+pressure reaches a service through `AppConfig::memory_reclaim`, the route that
+already exists. Pinned by `a_service_watches_the_application_pause_and_resume`.
+
 ### The owner's teardown raises its failure from functions, never from `Drop`
 
 `owner_dispatch` implements no `Drop`: the exit's failure is held in the terminal slot and resumed
