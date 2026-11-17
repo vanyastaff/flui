@@ -5,4 +5,4 @@
   `DisplayParts::into_info` is `into_description`; `PointerInfo` is `PointerSource` (the contact,
   device and kind an event comes from) and `MismatchedPointerInfo` is `MismatchedPointerSource`;
   an activity result's `ResultData` is `ResultIntent` and its host side `ResultDataHold` is
-  `ResultIntentHold`. The agent protocol's recorded `PointerInfo` keeps its wire name.
+  `ResultIntentHold`.

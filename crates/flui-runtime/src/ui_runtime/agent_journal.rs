@@ -18,7 +18,8 @@ use flui_platform::keyboard::{KeyEvent, KeyState};
 use flui_platform::pointer::{ButtonChange, PointerEvent, PointerKind};
 use flui_platform::{EventTime, ImeEvent, PlatformInput};
 use flui_protocol::{
-    DeviceClass, Event, InputEvent, InputKind, Journal, JournalEntry, JournalParams, LogicalPoint,
+    events::Event, events::InputEvent, geometry::LogicalPoint, input::DeviceClass,
+    input::InputKind, input::Journal, input::JournalEntry, input::JournalParams,
 };
 
 use super::UiRuntime;

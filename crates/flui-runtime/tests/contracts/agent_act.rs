@@ -8,8 +8,10 @@ use std::time::Duration;
 
 use flui_protocol::method::{SemanticsAct, SemanticsLocate};
 use flui_protocol::{
-    ActOutcome, ActParams, ActionName, ElementRef, ErrorCode, ErrorObject, HandleKind,
-    LocateParams, Locator, LogicalPoint, Matches, Pick, Retry, Target, WindowId,
+    act::ActOutcome, act::ActParams, error::ErrorCode, error::ErrorObject, error::HandleKind,
+    error::Retry, geometry::LogicalPoint, locator::LocateParams, locator::Locator,
+    locator::Matches, locator::Pick, locator::Target, tree::ElementRef, tree::WindowId,
+    wire::ActionName,
 };
 
 use flui_testing::{HeadlessDevAgent, HeadlessHost, HeadlessWindow};

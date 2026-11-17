@@ -12,7 +12,7 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use flui_protocol::AppInfo;
+use flui_protocol::session::AppDescription;
 use flui_runtime::agent::{Refused, Service, ServiceConfig};
 use flui_view::dev_agent::AgentWindow;
 use interprocess::local_socket::traits::Listener as _;
@@ -174,7 +174,7 @@ impl Drop for Running {
 /// layer when `records_native`.
 pub(super) fn listen(
     launch: &Launch,
-    app: AppInfo,
+    app: AppDescription,
     disconnect: Option<Arc<Disconnect>>,
     records_native: bool,
 ) -> io::Result<Running> {

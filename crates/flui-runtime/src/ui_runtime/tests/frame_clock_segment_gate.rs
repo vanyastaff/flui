@@ -100,7 +100,7 @@ pub(crate) fn starting_an_idle_presentation_animation_requests_its_first_frame()
 
 pub(crate) fn agent_playback_drives_independent_windows_and_one_paused_step_frame() {
     use flui_animation::{Animation as _, AnimationController};
-    use flui_protocol::{MotionParams, MotionRequest, method};
+    use flui_protocol::{method, motion::MotionParams, motion::MotionRequest};
     use std::time::Duration;
 
     let mut runtime = mount_root_here();
@@ -240,7 +240,7 @@ pub(crate) fn agent_playback_drives_independent_windows_and_one_paused_step_fram
 /// where the step left it, at the raw time that passed since the resume.
 pub(crate) fn agent_playback_resumes_a_paused_stepped_run_at_normal_speed() {
     use flui_animation::{Animation as _, AnimationController};
-    use flui_protocol::{MotionParams, MotionRequest, method};
+    use flui_protocol::{method, motion::MotionParams, motion::MotionRequest};
     use std::time::Duration;
 
     let mut runtime = mount_root_here();

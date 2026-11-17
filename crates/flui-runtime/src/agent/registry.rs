@@ -7,7 +7,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use flui_protocol::WindowId;
+use flui_protocol::tree::WindowId;
 use flui_view::__runtime::WakeSlot;
 use flui_view::dev_agent::AgentWindow;
 use parking_lot::Mutex;

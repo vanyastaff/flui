@@ -12,7 +12,10 @@ use std::time::{Duration, Instant};
 
 use flui_protocol::framing::MAX_LINE;
 use flui_protocol::version::{BREAKING, PROTOCOL_VERSION, ProtocolVersion};
-use flui_protocol::{ActParams, ActionName, AppInfo, Condition, Locator, Node, Target, Tree};
+use flui_protocol::{
+    act::ActParams, locator::Locator, locator::Target, session::AppDescription, tree::Node,
+    tree::Tree, wait::Condition, wire::ActionName,
+};
 use flui_testing::{HeadlessDevAgent, HeadlessHost, HeadlessWindow};
 use flui_view::prelude::*;
 use flui_view::{Signal, StatefulView, ViewState};
@@ -133,7 +136,7 @@ fn driver_agent_journaling(
     });
     let agent = DriverAgent::new(
         launch,
-        AppInfo::new("counter", "headless").with_pid(7),
+        AppDescription::new("counter", "headless").with_pid(7),
         Arc::clone(&disconnect),
         records_native,
     );
@@ -834,9 +837,9 @@ fn malformed_unknown_and_unserved_requests() {
         let listed: Vec<String> =
             serde_json::from_value(welcome["hello"]["capabilities"]["methods"].clone())
                 .expect("the hello lists methods");
-        for method in flui_protocol::METHODS
+        for method in flui_protocol::method::METHODS
             .iter()
-            .filter(|method| method.served_by == flui_protocol::ServedBy::Agent)
+            .filter(|method| method.served_by == flui_protocol::method::ServedBy::Agent)
         {
             let reply = client.call(method.name, json!({}));
             let refused = reply["error"]["code"] == "not_supported";

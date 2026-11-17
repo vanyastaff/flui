@@ -12,7 +12,7 @@ use std::task::{Context, Waker};
 use std::time::Duration;
 
 use flui_foundation::testing::CountingWaker;
-use flui_protocol::AppInfo;
+use flui_protocol::session::AppDescription;
 use flui_protocol::version::PROTOCOL_VERSION;
 use flui_runtime::agent::{Limits, Service, ServiceConfig};
 use flui_testing::{HeadlessDevAgent, HeadlessHost, HeadlessWindow};
@@ -161,7 +161,7 @@ fn service(limits: Limits) -> (Service, Arc<AtomicUsize>) {
     let service = Service::new(ServiceConfig {
         records_native: false,
         token: TOKEN.to_owned(),
-        app: AppInfo::new("page", "web"),
+        app: AppDescription::new("page", "web"),
         limits,
         on_driver_gone: Some(Box::new(move || {
             counted.fetch_add(1, Ordering::SeqCst);

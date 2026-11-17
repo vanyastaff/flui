@@ -11,8 +11,8 @@
 use std::collections::HashMap;
 
 use flui_protocol::{
-    ChangedField, ElementId, ElementRef, Node, NodeChange, ReadQuery, SnapshotDelta, Tree,
-    TreeRevision, WindowId,
+    snapshot::ChangedField, snapshot::NodeChange, snapshot::SnapshotDelta, tree::ElementId,
+    tree::ElementRef, tree::Node, tree::ReadQuery, tree::Tree, tree::TreeRevision, tree::WindowId,
 };
 
 use super::{Placement, WireReadError};

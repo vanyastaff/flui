@@ -1516,8 +1516,9 @@ impl PresentationState {
 
     pub(crate) fn apply_motion(
         &self,
-        request: flui_protocol::MotionRequest,
-    ) -> Result<(flui_protocol::MotionState, bool), flui_animation::InvalidPlaybackRate> {
+        request: flui_protocol::motion::MotionRequest,
+    ) -> Result<(flui_protocol::motion::MotionState, bool), flui_animation::InvalidPlaybackRate>
+    {
         let rate = request
             .rate
             .map(flui_animation::PlaybackRate::try_new)
@@ -1533,7 +1534,7 @@ impl PresentationState {
         }
         let demand = clock.now() != old_time || (clock.rate() != old_rate && !clock.is_paused());
         Ok((
-            flui_protocol::MotionState::new(
+            flui_protocol::motion::MotionState::new(
                 clock.rate().get(),
                 clock.now().as_duration().as_secs_f64() * 1000.0,
             ),

@@ -25,8 +25,9 @@ use std::cmp::Reverse;
 
 use accesskit_consumer::{NodeRef, TreeState};
 use flui_protocol::{
-    ElementRef, LocateParams, Locator, Match, Matches, Node, Pick, StateFilter, TextMatch,
-    WindowId, outline,
+    locator::LocateParams, locator::Locator, locator::Match, locator::Matches, locator::Pick,
+    locator::StateFilter, locator::TextMatch, tree::ElementRef, tree::Node, tree::WindowId,
+    tree::outline,
 };
 
 use super::{Placement, Published, WireReadError, element_id, surface_rect, wire_node};
@@ -306,7 +307,7 @@ impl Flat {
         &self,
         index: usize,
         placement: Placement,
-        revision: flui_protocol::TreeRevision,
+        revision: flui_protocol::tree::TreeRevision,
     ) -> Match {
         let wire = self.entries[index].wire.clone();
         Match::new(ElementRef::new(placement.window, wire.id), revision, wire)
