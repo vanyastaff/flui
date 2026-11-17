@@ -2411,13 +2411,15 @@ mod cases {
         turn_until(&fixture, "the resize's answer", || {
             counter_value(&reader, basic) == resized
         });
+        // The first frame at the new size is the one the answer waits for;
+        // a later one (the resize's `Expose`) may already read it.
         let seen = frames.borrow().clone();
-        assert!(
-            seen.iter().any(|(_, width)| *width == Some(460.0)),
-            "a frame at the new size: {seen:?}"
-        );
-        assert!(
-            seen.iter().all(|(counter, _)| *counter != resized),
+        let first_resized = seen
+            .iter()
+            .find(|(_, width)| *width == Some(460.0))
+            .unwrap_or_else(|| panic!("a frame at the new size: {seen:?}"));
+        assert_ne!(
+            first_resized.0, resized,
             "the counter waits for the frame: {seen:?}"
         );
         assert_eq!(
