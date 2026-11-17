@@ -54,13 +54,16 @@ pub enum KeyLookup {
 /// // Create a global key
 /// let form_key = GlobalKey::<FormState>::new();
 ///
-/// // Use in widget tree
-/// Form::new().with_view_key(form_key.clone())
+/// // The view holds the key in a field marked `#[view(key)]`
+/// #[derive(Clone, StatefulView)]
+/// struct Form {
+///     #[view(key)]
+///     key: GlobalKey<FormState>,
+/// }
+/// let form = Form { key: form_key.clone() };
 ///
 /// // Access from anywhere
-/// if let Some(state) = form_key.current_state() {
-///     state.validate();
-/// }
+/// form_key.with_current_state(|state| state.validate());
 /// ```
 ///
 /// # Performance Note

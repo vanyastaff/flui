@@ -3322,8 +3322,9 @@ mod tests {
     /// A keyed stateless view used to drive the REAL GlobalKey retake path
     /// (`try_retake_global_key`) so the reparent updates the moved subtree's
     /// node depths through production code.
-    #[derive(Clone)]
+    #[derive(Clone, crate::StatelessView)]
     struct KeyedView {
+        #[view(key)]
         key: crate::GlobalKey<()>,
     }
 
@@ -3333,18 +3334,9 @@ mod tests {
         }
     }
 
-    impl View for KeyedView {
-        fn create_element(self: std::rc::Rc<Self>) -> crate::element::ElementKind {
-            crate::element::ElementKind::stateless(self)
-        }
-
-        fn key(&self) -> Option<&dyn flui_foundation::ViewKey> {
-            Some(&self.key)
-        }
-    }
-
-    #[derive(Clone)]
+    #[derive(Clone, crate::StatefulView)]
     struct KeyedDependencyView {
+        #[view(key)]
         key: crate::GlobalKey<()>,
         build_calls: Arc<AtomicUsize>,
         dependency_calls: Arc<AtomicUsize>,
@@ -3376,16 +3368,6 @@ mod tests {
 
         fn did_change_dependencies(&mut self, _ctx: &dyn crate::LifecycleContext) {
             self.dependency_calls.fetch_add(1, Ordering::Relaxed);
-        }
-    }
-
-    impl View for KeyedDependencyView {
-        fn create_element(self: std::rc::Rc<Self>) -> crate::element::ElementKind {
-            crate::element::ElementKind::stateful(self)
-        }
-
-        fn key(&self) -> Option<&dyn flui_foundation::ViewKey> {
-            Some(&self.key)
         }
     }
 

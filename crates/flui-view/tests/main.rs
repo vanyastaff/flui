@@ -35,6 +35,10 @@ mod creation_site;
 mod dense_reconcile_containment;
 #[path = "dense_update_containment.rs"]
 mod dense_update_containment;
+#[path = "derive_hygiene.rs"]
+mod derive_hygiene;
+#[path = "derived_key.rs"]
+mod derived_key;
 #[path = "flush_registry.rs"]
 mod flush_registry;
 #[path = "global_key.rs"]

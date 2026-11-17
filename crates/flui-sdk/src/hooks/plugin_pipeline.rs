@@ -215,30 +215,19 @@ mod tests {
     use std::cell::Cell;
     use std::rc::Rc;
 
-    use flui_foundation::ViewKey;
-    use flui_view::element::ElementKind;
     use flui_view::{BuildContext, GlobalKey, IntoView, KeyLookup};
 
     use super::*;
 
-    #[derive(Clone)]
+    #[derive(Clone, StatelessView)]
     struct KeyedRoot {
+        #[view(key)]
         key: GlobalKey<()>,
     }
 
     impl StatelessView for KeyedRoot {
         fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
             flui_view::ErrorView::new("plugin probe")
-        }
-    }
-
-    impl View for KeyedRoot {
-        fn create_element(self: Rc<Self>) -> ElementKind {
-            ElementKind::stateless(self)
-        }
-
-        fn key(&self) -> Option<&dyn ViewKey> {
-            Some(&self.key)
         }
     }
 

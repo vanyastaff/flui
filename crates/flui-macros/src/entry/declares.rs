@@ -8,9 +8,11 @@
 
 use std::path::{Path, PathBuf};
 
-use proc_macro2::{Span, TokenStream};
+use proc_macro2::TokenStream;
 use quote::quote;
 use toml_edit::{Document, TableLike};
+
+use crate::hygiene::local;
 
 /// One list the manifest declares: the crate's own entries, then each
 /// feature's, which count when the crate is compiled with that feature.
@@ -47,7 +49,7 @@ impl<T> Declared<T> {
                 quote! {
                     {
                         const PART: &[#ty] = &[#(#list),*];
-                        if cfg!(feature = #feature) { PART } else { &[] }
+                        if ::core::cfg!(feature = #feature) { PART } else { &[] }
                     }
                 }
             });
@@ -147,7 +149,7 @@ impl Opens {
             } = declared;
             quote! { #app::__entry::FileTypeDeclaration::new(#extension, #mime, #name) }
         });
-        let declared = syn::Ident::new("__flui_declared", Span::mixed_site());
+        let declared = local("declared");
         syn::parse2(quote! {
             let #declared = {
                 const URL_SCHEME_PARTS: &[&[&str]] = #schemes;
@@ -389,5 +391,25 @@ mod tests {
                 Err(message) => assert_eq!(parsed, Err(message.to_owned()), "{case}"),
             }
         }
+    }
+
+    // A manifest reaches the attribute only from the crate being compiled, and a trybuild
+    // case's manifest declares nothing, so what a feature's part expands to is read here.
+    #[test]
+    fn a_features_part_tests_its_feature_through_core() {
+        let declared = Declared {
+            always: Vec::new(),
+            by_feature: vec![("links".to_owned(), vec!["notes".to_owned()])],
+        };
+        let part = declared
+            .parts(
+                &quote::quote!(&'static str),
+                |scheme| quote::quote!(#scheme),
+            )
+            .to_string();
+        assert!(
+            part.contains(":: core :: cfg ! (feature = \"links\")"),
+            "{part}"
+        );
     }
 }

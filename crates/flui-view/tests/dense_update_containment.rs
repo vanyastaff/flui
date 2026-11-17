@@ -90,8 +90,9 @@ impl View for DenseRenderUpdateLeaf {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, StatefulView)]
 pub(super) struct DenseDidUpdateView {
+    #[view(key)]
     key: ValueKey<u32>,
     armed: Rc<Cell<bool>>,
     panic_classification: PanicClassification,
@@ -139,16 +140,6 @@ impl ViewState<DenseDidUpdateView> for DenseDidUpdateState {
                 }
             }
         }
-    }
-}
-
-impl View for DenseDidUpdateView {
-    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
-        flui_view::element::ElementKind::stateful(self)
-    }
-
-    fn key(&self) -> Option<&dyn ViewKey> {
-        Some(&self.key)
     }
 }
 

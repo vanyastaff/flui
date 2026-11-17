@@ -195,8 +195,9 @@ fn a_global_key_moving_between_lazy_hosts_relocates_instead_of_panicking() {
 /// `update`, so this exercises the containment window's earlier half
 /// (the `Retaken` report is written before `activate_subtree` runs, so
 /// the undo always has a relocated element to act on).
-#[derive(Clone)]
+#[derive(Clone, crate::StatefulView)]
 struct GlobalKeyedPanicsOnActivate {
+    #[view(key)]
     key: GlobalKey<Self>,
     armed: Arc<std::sync::atomic::AtomicBool>,
 }
@@ -229,15 +230,6 @@ impl crate::ViewState<GlobalKeyedPanicsOnActivate> for GlobalKeyedPanicsOnActiva
             !self.armed.load(std::sync::atomic::Ordering::SeqCst),
             "retake activate boom"
         );
-    }
-}
-
-impl View for GlobalKeyedPanicsOnActivate {
-    fn create_element(self: std::rc::Rc<Self>) -> crate::element::ElementKind {
-        crate::element::ElementKind::stateful(self)
-    }
-    fn key(&self) -> Option<&dyn ViewKey> {
-        Some(&self.key)
     }
 }
 

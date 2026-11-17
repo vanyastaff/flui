@@ -297,7 +297,7 @@ pub use id::{
     // Marker types module
     markers,
 };
-pub use key::{Key, KeyRef, Keyed, SaltedKey, UniqueKey, ValueKey, ViewKey, WithKey};
+pub use key::{Key, KeyRef, SaltedKey, UniqueKey, ValueKey, ViewKey};
 // Change notification (Listenable pattern)
 pub use notifier::{
     ChangeNotifier, Listenable, ListenerCallback, ListenerObserver, Subscription, ValueListenable,
@@ -334,7 +334,6 @@ pub mod prelude {
         Identifier,
         Key,
         KeyRef,
-        Keyed,
         LayerId,
         Listenable,
         ListenerCallback,
@@ -351,6 +350,5 @@ pub mod prelude {
         ValueNotifier,
         ViewId,
         ViewKey,
-        WithKey,
     };
 }

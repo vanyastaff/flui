@@ -27,17 +27,14 @@ use std::rc::{Rc, Weak};
 use std::str::FromStr;
 use std::task::Poll;
 
-use flui::foundation::{
-    ChangeNotifier, ConnectionState, Listenable, Subscription, ValueKey, ViewKey,
-};
+use flui::foundation::{ChangeNotifier, ConnectionState, Listenable, Subscription, ValueKey};
 use flui::geometry::{EdgeInsets, Size};
 use flui::interaction::FocusNode;
 use flui::material::{ButtonStyle, InputDecoration, TextButton, TextFormField, Theme, ThemeData};
 use flui::platform::StorageName;
 use flui::prelude::*;
-use flui::view::element::ElementKind;
 use flui::view::persist::{DecodeError, Document, PersistError, Persisted, Revision, SaveStatus};
-use flui::view::{AsyncDriver, CloseGuard, StaleClose, TaskToken, View};
+use flui::view::{AsyncDriver, CloseGuard, StaleClose, TaskToken};
 use flui::widgets::{
     AnimatedBuilder, BoxedResultFuture, Form, FormHandle, FutureBuilder, SafeArea,
     WidgetStateProperty,
@@ -1328,8 +1325,9 @@ fn home(ctx: &dyn BuildContext, shared: &Shared, router: &RouterHandle<Route>) -
 
 /// One note's row, keyed by the note's id: the row of the same note keeps
 /// its element, and so its focus, across a rebuild that moves or resizes it.
-#[derive(Clone)]
+#[derive(Clone, StatelessView)]
 struct NoteRow {
+    #[view(key)]
     key: ValueKey<NoteId>,
     title: String,
     extent: f64,
@@ -1352,16 +1350,6 @@ impl StatelessView for NoteRow {
             )
             .style(flat_row()),
         )
-    }
-}
-
-impl View for NoteRow {
-    fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
-        ElementKind::stateless(self)
-    }
-
-    fn key(&self) -> Option<&dyn ViewKey> {
-        Some(&self.key)
     }
 }
 

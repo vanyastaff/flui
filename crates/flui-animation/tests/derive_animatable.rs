@@ -30,6 +30,26 @@ struct Appearance {
 #[derive(Clone, TwoWayConverter)]
 struct NestedAppearance(Appearance, f64);
 
+// The derive is written in a `macro_rules!` body and the fields and their types
+// come from its caller: two hygiene contexts, which the generated `self` bridges.
+macro_rules! converter {
+    ($name:ident { $($field:ident : $ty:ident),* }) => {
+        #[derive(Clone, TwoWayConverter)]
+        struct $name {
+            $($field: $ty),*
+        }
+    };
+}
+
+converter!(FromAMacro { u: f64, v: f64 });
+
+fn a_type_from_a_macro_round_trips_and_lerps() {
+    let a = FromAMacro { u: 1.0, v: 2.0 };
+    assert_eq!(a.to_vector(), [1.0, 2.0]);
+    let mid = a.lerp_to(&FromAMacro { u: 3.0, v: 4.0 }, 0.5);
+    assert_eq!((mid.u, mid.v), (2.0, 3.0));
+}
+
 fn nested_fields_keep_their_interpolation_contracts() {
     let begin = NestedAppearance(
         Appearance {
@@ -234,6 +254,10 @@ fn two_way_converter_derive_contract() {
         ("vector round trip", named_struct_round_trips_through_vector),
         ("componentwise lerp", derived_lerp_is_componentwise),
         ("keyframe value", derived_type_is_a_keyframe_value),
+        (
+            "a type from a macro",
+            a_type_from_a_macro_round_trips_and_lerps,
+        ),
         (
             "nested interpolation",
             nested_fields_keep_their_interpolation_contracts,

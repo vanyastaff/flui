@@ -5,4 +5,10 @@ pub fn run<T: Default>() -> Result<(), flui::LaunchError> {
     Ok(())
 }
 
+// A clause without a predicate has only its keyword to point at.
+#[flui::main]
+pub fn start() -> Result<(), flui::LaunchError> where {
+    Ok(())
+}
+
 fn main() {}

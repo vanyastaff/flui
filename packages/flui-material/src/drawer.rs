@@ -423,8 +423,9 @@ type BoundDrawerCallback = Rc<dyn Fn(bool)>;
 /// Provides interactive behavior for [`Drawer`] content: open/close
 /// animation, edge-swipe-to-open, drag-to-close, and the scrim. Built by
 /// [`crate::Scaffold`] — rarely constructed directly.
-#[derive(Clone)]
+#[derive(Clone, StatefulView)]
 pub struct DrawerController {
+    #[view(key)]
     key: GlobalKey<DrawerControllerState>,
     alignment: DrawerAlignment,
     child: BoxedView,
@@ -797,16 +798,6 @@ impl ViewState<DrawerController> for DrawerControllerState {
         self.core.replace_callback(None);
         self.writer = None;
         self.controller.dispose();
-    }
-}
-
-impl View for DrawerController {
-    fn create_element(self: std::rc::Rc<Self>) -> flui_sdk::view::element::ElementKind {
-        flui_sdk::view::element::ElementKind::stateful(self)
-    }
-
-    fn key(&self) -> Option<&dyn flui_sdk::foundation::ViewKey> {
-        Some(&self.key)
     }
 }
 

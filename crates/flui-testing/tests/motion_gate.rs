@@ -7,8 +7,8 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use flui_animation::{SpringDescription, Vsync};
+use flui_foundation::ValueKey;
 use flui_foundation::geometry::{EdgeInsets, Matrix4, Rect, Size};
-use flui_foundation::{ValueKey, ViewKey};
 use flui_interaction::events::PointerEvent;
 use flui_painting::Alignment;
 use flui_painting::styling::Color;
@@ -20,7 +20,6 @@ use flui_testing::motion::{
     check_all, gate,
 };
 use flui_testing::widgets::{LaidOut, lay_out_animated, loose};
-use flui_view::element::ElementKind;
 use flui_view::environment::VsyncScope;
 use flui_view::prelude::*;
 use flui_view::{IntoView, View, ViewExt};
@@ -843,20 +842,11 @@ impl FlowDelegate for FadingFlow {
 }
 
 /// A square at `opacity` that keeps its element across reorders.
-#[derive(Clone)]
+#[derive(Clone, StatelessView)]
 struct Tagged {
+    #[view(key)]
     key: ValueKey<i32>,
     opacity: f64,
-}
-
-impl View for Tagged {
-    fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
-        ElementKind::stateless(self)
-    }
-
-    fn key(&self) -> Option<&dyn ViewKey> {
-        Some(&self.key)
-    }
 }
 
 impl StatelessView for Tagged {
