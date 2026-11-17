@@ -309,7 +309,7 @@ the dispatch layer moves there too.
   `RuntimeTask::Frame` with its installed surface binding. The concrete driver
   owns its backend resources across wakes; one `UiRuntime::enter` holds the owner-inbox drain
   (`UiRuntime::drain_owner_inbox`), the pre-frame runner work and the wake gate
-  (`wake_action`, `frame_is_dirty`, `FallbackGate`, ADR-0058), which stays per
+  (`wake_action`, `frame_is_dirty`, `FallbackGate`, ADR-0353), which stays per
   backend here; the render arm calls `UiRuntime::pump` (ADR-0083 §1), the
   background arm `UiRuntime::pump_background`; the pacing after it only reads
   flags. No runner drives scheduler phases itself (pinned by

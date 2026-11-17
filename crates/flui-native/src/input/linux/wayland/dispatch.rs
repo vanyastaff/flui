@@ -20,7 +20,7 @@
 //! the objects' user data hold it weakly, so a proxy outliving the input
 //! records nothing.
 
-use std::num::NonZeroU64;
+use std::num::{NonZeroU32, NonZeroU64};
 use std::os::fd::OwnedFd;
 use std::os::unix::fs::FileExt;
 use std::rc::Rc;
@@ -75,10 +75,12 @@ use wayland_protocols::wp::tablet::zv2::client::zwp_tablet_tool_v2::{
     self, ButtonState, Type as ToolType, ZwpTabletToolV2,
 };
 use wayland_protocols::wp::tablet::zv2::client::zwp_tablet_v2::{self, ZwpTabletV2};
+use wayland_protocols::wp::viewporter::client::wp_viewport::WpViewport;
 use web_time::Instant;
 
-use super::cursor;
+use super::cursor::{self, SurfaceRequest};
 use super::keyboards::Keyboards;
+use super::repeat::RepeatSettings;
 use super::wire::{
     Axis, AxisSource, PinchWire, PointerWire, Routed, SeatAssembly, SeatEvent, SeatKey, SeatWire,
     ToolWire, TouchWire, WireTime,
@@ -154,11 +156,14 @@ enum Wire {
     /// or went.
     Seat(SeatWire),
     /// A keyboard's keymap: the compositor's file and its size, read when it
-    /// is delivered.
+    /// is delivered, and the keyboard object's version, which says whether
+    /// its compositor tells it its repeat. A compositor sends the keymap
+    /// first, as the keyboard is made.
     Keymap {
         seat: SeatKey,
         fd: OwnedFd,
         size: u32,
+        version: u32,
     },
     /// A keyboard entered the window of a surface, or left (`None`).
     KeyFocus {
@@ -187,8 +192,7 @@ enum Wire {
     /// A keyboard's repeat settings.
     RepeatInfo {
         seat: SeatKey,
-        rate: i32,
-        delay: i32,
+        settings: RepeatSettings,
     },
     /// What the window `id` holds of the pointer changed: the compositor
     /// carried out or ended its constraint, or the input let it go; the
@@ -237,7 +241,7 @@ struct PointerObjects {
     pinch: Option<ZwpPointerGesturePinchV1>,
     shape: Option<WpCursorShapeDeviceV1>,
     /// The surface a theme cursor is drawn on, made at its first.
-    cursor_surface: Option<WlSurface>,
+    cursor_surface: Option<ThemeSurface>,
     /// The window surface it is over and the serial of its enter.
     focus: Option<(NativeSurface, u32)>,
     /// That surface, as the protocol names it: what a button names on an
@@ -365,7 +369,7 @@ struct Shared {
     /// The seat keys minted.
     seat_keys: OwnerCell<IdMint<NonZeroU64>>,
     /// The cursor theme loaded at each buffer scale a cursor was drawn at.
-    themes: OwnerCell<Vec<(i32, CursorTheme)>>,
+    themes: OwnerCell<Vec<(NonZeroU32, CursorTheme)>>,
     /// The last application image shown as a cursor.
     image: OwnerCell<Option<ImageBuffer>>,
     /// The cursor last shown, for a test.
@@ -923,7 +927,15 @@ impl Delivering {
 
     fn keyboard_wire(&mut self, wire: Wire) -> Vec<(Target, PlatformInput)> {
         match wire {
-            Wire::Keymap { seat, fd, size } => {
+            Wire::Keymap {
+                seat,
+                fd,
+                size,
+                version,
+            } => {
+                // Even a keymap that cannot be read names the keyboard's
+                // version, which its repeat follows.
+                self.keyboards.keyboard_version(seat, version);
                 let source = match read_keymap(fd, size) {
                     Ok(source) => source,
                     Err(error) => {
@@ -1048,8 +1060,8 @@ impl Delivering {
                 }
                 Vec::new()
             }
-            Wire::RepeatInfo { seat, rate, delay } => {
-                self.keyboards.configure(seat, rate, delay);
+            Wire::RepeatInfo { seat, settings } => {
+                self.keyboards.configure(seat, settings);
                 Vec::new()
             }
             // Assembled elsewhere, delivered to the text inputs, or a window's
@@ -1447,6 +1459,29 @@ impl WaylandInput for SeatInput {
             .unwrap_or_default()
     }
 
+    fn rescaled(&self, id: WindowId) {
+        let Some((cursor, scale)) = self
+            .shared
+            .windows
+            .with(|windows| {
+                windows
+                    .iter()
+                    .find(|held| held.id == id)
+                    .map(|held| (held.cursor, (held.scale)()))
+            })
+            .flatten()
+        else {
+            return;
+        };
+        let surface = surface_key(id);
+        self.shared.objects.with(|objects| {
+            // A `cursor-shape` cursor is the compositor's to scale.
+            if objects.shapes.is_none() {
+                show_cursor(&self.shared, objects, surface, cursor, scale);
+            }
+        });
+    }
+
     fn keyboard_layout(&self) -> String {
         self.shared
             .delivering
@@ -1611,6 +1646,62 @@ fn frame_event(
         _ => {}
     }
     true
+}
+
+/// The surface a pointer's theme cursor is drawn on, and its viewport, made
+/// the first time an image needs one ([`cursor::CursorBuffer::Viewported`]).
+struct ThemeSurface {
+    surface: WlSurface,
+    viewport: Option<WpViewport>,
+}
+
+impl ThemeSurface {
+    /// Put `buffer`, an image of `width` by `height` pixels, on the surface
+    /// as `fit` says: send it what [`cursor::CursorBuffer::requests`] lists.
+    fn show(
+        &mut self,
+        source: &CursorGlobals,
+        buffer: &WlBuffer,
+        (width, height): (u32, u32),
+        fit: cursor::CursorBuffer,
+    ) {
+        let requests = fit.requests(
+            width,
+            height,
+            self.viewport.is_some(),
+            self.surface.version(),
+        );
+        for request in requests {
+            match request {
+                SurfaceRequest::MakeViewport => {
+                    self.viewport = source.viewporter.as_ref().map(|viewporter| {
+                        viewporter.get_viewport(&self.surface, &source.queue, ())
+                    });
+                }
+                SurfaceRequest::Destination(size) => {
+                    if let Some(viewport) = &self.viewport {
+                        let (width, height) = size.unwrap_or((-1, -1));
+                        viewport.set_destination(width, height);
+                    }
+                }
+                SurfaceRequest::BufferScale(scale) => self.surface.set_buffer_scale(scale),
+                SurfaceRequest::Attach => self.surface.attach(Some(buffer), 0, 0),
+                SurfaceRequest::DamageBuffer(width, height) => {
+                    self.surface.damage_buffer(0, 0, width, height);
+                }
+                SurfaceRequest::Damage(width, height) => self.surface.damage(0, 0, width, height),
+                SurfaceRequest::Commit => self.surface.commit(),
+            }
+        }
+    }
+
+    /// Destroy the viewport, then the surface.
+    fn destroy(self) {
+        if let Some(viewport) = self.viewport {
+            viewport.destroy();
+        }
+        self.surface.destroy();
+    }
 }
 
 /// The tablet seat of `seat`, whose key is `key`.
@@ -2185,7 +2276,7 @@ impl Dispatch<WlPointer, PointerData> for WaylandState {
 impl Dispatch<WlKeyboard, KeyboardData> for WaylandState {
     fn event(
         _: &mut Self,
-        _: &WlKeyboard,
+        keyboard: &WlKeyboard,
         event: wl_keyboard::Event,
         data: &KeyboardData,
         _: &Connection,
@@ -2201,7 +2292,12 @@ impl Dispatch<WlKeyboard, KeyboardData> for WaylandState {
                     tracing::warn!("the compositor's keymap is not XKB's: keys are unread");
                     return;
                 }
-                Wire::Keymap { seat, fd, size }
+                Wire::Keymap {
+                    seat,
+                    fd,
+                    size,
+                    version: keyboard.version(),
+                }
             }
             wl_keyboard::Event::Enter {
                 serial, surface, ..
@@ -2255,9 +2351,10 @@ impl Dispatch<WlKeyboard, KeyboardData> for WaylandState {
                 group,
                 time: arrival(None),
             },
-            wl_keyboard::Event::RepeatInfo { rate, delay } => {
-                Wire::RepeatInfo { seat, rate, delay }
-            }
+            wl_keyboard::Event::RepeatInfo { rate, delay } => Wire::RepeatInfo {
+                seat,
+                settings: RepeatSettings::told(rate, delay),
+            },
             _ => return,
         };
         shared.record(wire);
@@ -2687,13 +2784,15 @@ impl Dispatch<WpCursorShapeDeviceV1, ()> for WaylandState {
 #[cfg(test)]
 mod tests {
     use std::os::fd::OwnedFd;
+    use std::time::Duration;
 
     use flui_platform::PlatformInput;
     use flui_platform::keyboard::{KeyPress, KeyState};
+    use web_time::Instant;
 
     use super::{
-        Delivering, NativeClock, NativeSurface, SeatEvent, SeatKey, SeatWire, Target, Wire,
-        arrival, queue, read_keymap,
+        Delivering, NativeClock, NativeSurface, RepeatSettings, SeatEvent, SeatKey, SeatWire,
+        Target, Wire, arrival, queue, read_keymap,
     };
     use crate::input::linux::xkb::GROUP_NAME_READS;
 
@@ -2735,6 +2834,7 @@ mod tests {
                     seat: SeatKey(1),
                     fd,
                     size,
+                    version: 9,
                 },
             );
         };
@@ -2755,8 +2855,7 @@ mod tests {
             &mut wires,
             Wire::RepeatInfo {
                 seat: SeatKey(1),
-                rate: 25,
-                delay: 600,
+                settings: RepeatSettings::told(25, 600),
             },
         );
         assert_eq!(wires.len(), 2, "wires queued");
@@ -2827,7 +2926,12 @@ mod tests {
         let mut delivering = Delivering::new(NativeClock::epoch_only());
         let seat = SeatKey(1);
         let window = NativeSurface(7);
-        let _ = delivering.keyboard_wire(Wire::Keymap { seat, fd, size });
+        let _ = delivering.keyboard_wire(Wire::Keymap {
+            seat,
+            fd,
+            size,
+            version: 9,
+        });
         let _ = delivering.keyboard_wire(Wire::KeyFocus {
             seat,
             focus: Some(window),
@@ -2864,6 +2968,48 @@ mod tests {
         assert!(delivering.keymap(seat).is_none(), "the seat is forgotten");
     }
 
+    /// The keymap names its keyboard's version: a key held on a keyboard too
+    /// old to be told its repeat repeats after 600 ms, and one held on a
+    /// newer keyboard waits for its compositor's `repeat_info`.
+    #[test]
+    fn a_keymap_of_an_old_keyboard_brings_its_repeat() {
+        if xkbcommon_dl::xkbcommon_option().is_none() {
+            eprintln!("skipped: libxkbcommon is not installed");
+            return;
+        }
+        for (version, repeats) in [(3, true), (4, false)] {
+            let (fd, size) = shared(format!("{TWO_LAYOUTS}\n\0").as_bytes(), "repeat-keymap");
+            let mut delivering = Delivering::new(NativeClock::epoch_only());
+            let seat = SeatKey(1);
+            let _ = delivering.keyboard_wire(Wire::Keymap {
+                seat,
+                fd,
+                size,
+                version,
+            });
+            let _ = delivering.keyboard_wire(Wire::KeyFocus {
+                seat,
+                focus: Some(NativeSurface(7)),
+            });
+            let before = Instant::now();
+            let _ = delivering.keyboard_wire(Wire::Key {
+                seat,
+                time: arrival(None),
+                code: 2,
+                pressed: true,
+            });
+            let due = delivering.keyboards.due();
+            assert_eq!(due.is_some(), repeats, "version {version}: {due:?}");
+            if let Some(due) = due {
+                assert!(
+                    due >= before + Duration::from_millis(600),
+                    "after the untold delay: {:?}",
+                    due - before
+                );
+            }
+        }
+    }
+
     /// A compositor switching layouts without end has each switch named by a
     /// lookup: an 8 MiB keymap's layouts are read once, however many group
     /// changes follow.
@@ -2877,7 +3023,12 @@ mod tests {
         GROUP_NAME_READS.with(|reads| reads.set(0));
         let mut delivering = Delivering::new(NativeClock::epoch_only());
         let seat = SeatKey(1);
-        let _ = delivering.keyboard_wire(Wire::Keymap { seat, fd, size });
+        let _ = delivering.keyboard_wire(Wire::Keymap {
+            seat,
+            fd,
+            size,
+            version: 9,
+        });
         assert_eq!(delivering.layout, "First");
         for change in 0..10_000_u32 {
             let _ = delivering.keyboard_wire(Wire::Modifiers {

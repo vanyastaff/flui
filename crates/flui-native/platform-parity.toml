@@ -336,7 +336,7 @@ evidence = 'Linux: `SetMode(Fullscreen)` asks the compositor (`xdg_toplevel.set_
 id = "position-size-move-and-resize-events"
 feature = 'Position, size, move and resize events'
 status = { windows = "partial", macos = "partial", wayland = "partial", x11 = "partial", ios = "na", android = "na", web = "partial", headless = "yes" }
-note = "Wayland can't read or set a global position by design; X11 ran on an Xvfb server. macOS: the AppKit window conformance kit passes on an M1, macOS 27.0, 2026-10-27 (nextest flui-native 233/233); a drag, the y-axis by hand and a second display have not run ([#1736](https://github.com/vanyastaff/flui/issues/1736))."
+note = "Wayland can't read or set a global position by design; it holds the size a window opens at within the compositor's `configure_bounds`, checked by its sizing model alone and owed a run under a compositor that sends them (mutter, KWin), while Win32 and X11 open past the work area ([gaps](gaps.md#window-control-has-run-only-on-windows-an-x11-test-server-and-the-appkit-conformance-kit)). X11 ran on an Xvfb server. macOS: the AppKit window conformance kit passes on an M1, macOS 27.0, 2026-10-27 (nextest flui-native 233/233); a drag, the y-axis by hand and a second display have not run ([#1736](https://github.com/vanyastaff/flui/issues/1736))."
 evidence = "Linux: X11 sets and reads the outer position and size through the window manager, measured by `_NET_FRAME_EXTENTS`; Wayland sets the content size. Wayland can't read or set a global position by design. X11 ran on an Xvfb server. macOS reads and sets the outer top-left position, content size and limits through `NSWindow`; the AppKit window conformance kit passes on an M1, macOS 27.0, 2026-10-27 (nextest flui-native 233/233), and [#1736](https://github.com/vanyastaff/flui/issues/1736) still lists a drag, the y-axis by hand and a second display"
 
 [[group.section.row]]
@@ -544,7 +544,7 @@ note = 'Not in the contract'
 id = "keyboard-keys-modifiers-repeat-dead-keys"
 feature = 'Keyboard: keys, modifiers, repeat, dead keys'
 status = { windows = "yes", macos = "partial", wayland = "partial", x11 = "partial", ios = "missing", android = "partial", web = "partial", headless = "yes" }
-note = 'iOS handles no hardware keyboard; Android ran hardware key events through a manual Android run, with no repeat, dead key or physical keyboard.'
+note = 'iOS handles no hardware keyboard; Android ran hardware key events through a manual Android run, with no repeat, dead key or physical keyboard. Wayland repeats at 25 a second after 600 ms on a seat older than `repeat_info` (version 4), checked by its keyboard model alone: no compositor the tests start offers so old a seat.'
 evidence = "iOS handles no hardware keyboard. Windows run: Tab and Enter. Android run: a manual Android run sends hardware key events (`input keyevent`, `keycombination`): Tab and Shift+Tab, Enter, Space, Escape, F5, the arrows, Home, + and -, Ctrl+X and Ctrl+V (a character key looked up without Control, so the shortcut sees `x`), and the Menu key (named `ContextMenu`, which opens a row's menu); no repeat, dead key or physical keyboard"
 
 [[group.section.row]]
@@ -564,7 +564,7 @@ evidence = 'No gamepad vocabulary in the contract and no source on any host. And
 id = "cursor-shapes"
 feature = 'Cursor shapes'
 status = { windows = "partial", macos = "partial", wayland = "partial", x11 = "partial", ios = "missing", android = "missing", web = "partial", headless = "yes" }
-note = 'No iPad pointer styles or Android `PointerIcon`. A cursor image of the application (`Cursor::Image`) and no cursor (`Cursor::Hidden`) are built on Windows, macOS, Wayland, X11 and the Web and reach no widget yet ([gaps](gaps.md#a-widget-cannot-ask-for-a-cursor-image-or-none-and-the-pointer-grabs-have-run-on-no-device)); none has run on a device but the headless host'
+note = "No iPad pointer styles or Android `PointerIcon`. A cursor image of the application (`Cursor::Image`) and no cursor (`Cursor::Hidden`) are built on Windows, macOS, Wayland, X11 and the Web and reach no widget yet ([gaps](gaps.md#a-widget-cannot-ask-for-a-cursor-image-or-none-and-the-pointer-grabs-have-run-on-no-device)); none has run on a device but the headless host. Wayland without `cursor-shape` draws the cursor theme's image, through a viewport where the window's scale does not divide the image's size; that ran on Weston 13 at scale 3 (2026-11-16), which does not enforce the buffer-scale rule on cursor surfaces, so a run under a compositor that does (KWin before `cursor-shape`) is owed"
 
 [[group.section.row]]
 id = "pointer-grab-confined-and-locked"

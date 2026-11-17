@@ -1,4 +1,4 @@
-//! Wake-deadline actuation for the AppKit backend (ADR-0058 decision 2).
+//! Wake-deadline actuation for the AppKit backend (ADR-0353 decision 2).
 //!
 //! # Why this module exists
 //!

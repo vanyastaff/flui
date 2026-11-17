@@ -36,9 +36,15 @@
 //! the surface's destination is the logical size and the buffer is drawn at
 //! the scale the compositor prefers for the surface: a fractional one
 //! (`wp_fractional_scale_v1`), else a whole one (`wl_surface` version 6),
-//! else that of the output the surface entered ([`scale`]). Any buffer size
-//! is then valid while a resize is under way. Without the viewporter the
+//! else the largest of the outputs the surface is on ([`scale`]). Any buffer
+//! size is then valid while a resize is under way. Without the viewporter the
 //! buffer is drawn at scale 1 and the compositor scales it.
+//!
+//! A configure that leaves the size to the window, before it took any other
+//! size, holds the size it opened at within the bounds the compositor
+//! recommends (`configure_bounds`, version 4: the output's work area), so a
+//! window asked for larger than the screen opens within it. The bounds are
+//! a hint: a size the window asks for later is not held to them.
 //!
 //! # Outputs and occlusion
 //!
@@ -185,6 +191,10 @@ mod toplevel {
         Activation, Sizing, ToplevelStates, WmCapabilities, capabilities, clamp, pointer_reported,
         protocol_extent,
     };
+    use super::configure::{
+        Activation, GeometryConfigure, Sizing, ToplevelStates, WmCapabilities, capabilities, clamp,
+        protocol_extent,
+    };
     use super::decoration::{Decoration, Drawn, FrameDrawer};
     #[cfg(any(test, feature = "testing"))]
     use super::foreign::PortalParent;
@@ -253,6 +263,9 @@ mod toplevel {
         size: (i32, i32),
         /// The states of the last toplevel configure.
         states: ToplevelStates,
+        /// The last `configure_bounds`, `0` on an axis the compositor knows
+        /// no bound for, as before it sends any.
+        bounds: (i32, i32),
         /// The last toplevel configure's states as the protocol sent them,
         /// before they were decoded.
         #[cfg(any(test, feature = "testing"))]
@@ -298,9 +311,9 @@ mod toplevel {
     #[derive(Debug, Clone, Copy)]
     struct Configure {
         serial: u32,
-        width: i32,
-        height: i32,
-        states: ToplevelStates,
+        /// What it gives the window geometry, with the bounds the compositor
+        /// recommended before it as `Told` holds them.
+        geometry: GeometryConfigure,
     }
 
     impl ToplevelRecord {
@@ -519,6 +532,9 @@ mod toplevel {
         /// Whether the accessibility bridge was last told the window is the
         /// active one.
         bridge_focus: Cell<bool>,
+        /// The scale the seats' input last drew a theme cursor over the
+        /// window for, as the window last told it.
+        cursor_scale: Cell<f64>,
         /// Where the accessibility bridge was last told the window is.
         bridge_bounds: Cell<Option<ScreenBounds>>,
         /// What a test draws the window's frames with.
@@ -560,21 +576,22 @@ mod toplevel {
         /// The output the window is on, and the scale its buffer is drawn at.
         fn output_and_scale(&self) -> (Option<OutputFacts>, BufferScale) {
             let applied = self.applied;
-            let entered = first_live(&applied.told.outputs, |output| self.live.contains(output));
-            let output = entered.and_then(|output| self.displays.output(output));
+            let outputs = self
+                .displays
+                .on_outputs(&applied.told.outputs, &|output| self.live.contains(output));
             let scale = buffer_scale(
                 self.viewported,
                 ScaleTold {
                     fractional: applied.told.fractional_scale.ratio(),
                     preferred: applied.told.preferred_scale.ratio(),
-                    output: output.map(|output| output.scale),
+                    outputs,
                 },
                 // The content is the one surface drawn at the scale: the
                 // frame's title bar spans its width, and its margins are a
                 // pixel the viewport stretches (`client_frame::margin_size`).
                 applied.sizing.content(),
             );
-            (output, scale)
+            (outputs.first, scale)
         }
 
         /// The read these facts make; a size that is no extent costs it its
@@ -847,6 +864,7 @@ mod toplevel {
                 applied: RefCell::new(applied),
                 closed: Cell::new(false),
                 bridge_focus: Cell::new(false),
+                cursor_scale: Cell::new(1.0),
                 bridge_bounds: Cell::new(None),
                 #[cfg(any(test, feature = "testing"))]
                 shm: protocol.shm,
@@ -865,10 +883,7 @@ mod toplevel {
                 surface: window.surface.0.clone(),
                 delivery: Arc::clone(&window.delivery),
                 scale: Arc::new(move || {
-                    state
-                        .upgrade()
-                        .and_then(|state| state.published().metrics)
-                        .map_or(1.0, |metrics| metrics.scale().get())
+                    state.upgrade().map_or(1.0, |state| state.published_scale())
                 }),
                 frame: Rc::clone(&window.frame_record) as _,
                 text: Arc::clone(&window.facets.text).seat_text(),
@@ -1130,15 +1145,17 @@ mod toplevel {
                     let constraints = applied.constraints;
                     // The configure sizes the window geometry: a title bar
                     // the window draws itself comes off the content's height.
-                    let (width, height) = applied
-                        .own_frame(decoration, configure.states, self.viewported)
-                        .map_or((configure.width, configure.height), |frame| {
-                            frame.content_of(configure.width, configure.height)
-                        });
-                    let resized =
-                        applied
-                            .sizing
-                            .configure(width, height, configure.states, constraints);
+                    let geometry = configure.geometry;
+                    let frame = applied.own_frame(decoration, geometry.states, self.viewported);
+                    let resized = applied.sizing.configure_geometry(
+                        geometry,
+                        constraints,
+                        |width, height| {
+                            frame
+                                .as_ref()
+                                .map_or((width, height), |frame| frame.content_of(width, height))
+                        },
+                    );
                     resized || first
                 });
                 (resized, applied.sizing.states().activated)
@@ -1162,7 +1179,7 @@ mod toplevel {
                 self.record.redraw.store(true, Ordering::Release);
             }
             if let Some(configure) = configure {
-                self.leave_restored_maximized(configure.states);
+                self.leave_restored_maximized(configure.geometry.states);
             }
             if let Some(table) = self.table.upgrade() {
                 table.activation(self.id, activated);
@@ -1216,6 +1233,17 @@ mod toplevel {
                 for token in due {
                     activation.activate(token.into_string(), &self.surface.0);
                 }
+            }
+        }
+
+        /// Tell the seats' input when the window publishes another scale than
+        /// it last said (the one the input reads a theme cursor's scale
+        /// from), so a cursor theme image over it is drawn again for it.
+        /// Nothing of the window is borrowed meanwhile.
+        fn tell_input_scale(&self) {
+            let scale = self.state.published_scale();
+            if self.cursor_scale.replace(scale).to_bits() != scale.to_bits() {
+                self.input.rescaled(self.id);
             }
         }
 
@@ -1940,6 +1968,7 @@ mod toplevel {
             }
             let close_requested = self.carry_out_protocol();
             self.refresh_state();
+            self.tell_input_scale();
             if close_requested {
                 self.ask_close();
             }
@@ -2170,9 +2199,12 @@ mod toplevel {
                 }
                 told.configure = Some(Configure {
                     serial,
-                    width,
-                    height,
-                    states,
+                    geometry: GeometryConfigure {
+                        width,
+                        height,
+                        states,
+                        bounds: told.bounds,
+                    },
                 });
             }
         }
@@ -2211,6 +2243,9 @@ mod toplevel {
                     told.toplevel = Some((width, height, states));
                 }
                 xdg_toplevel::Event::Close => told.close_requested = true,
+                xdg_toplevel::Event::ConfigureBounds { width, height } => {
+                    told.bounds = (width, height);
+                }
                 xdg_toplevel::Event::WmCapabilities { capabilities } => {
                     told.wm = Some(WmCapabilities::decode(&capabilities));
                 }
@@ -2512,7 +2547,13 @@ mod toplevel {
                 };
                 let constraints = applied.constraints;
                 // Zero on both axes: the window keeps its extents.
-                applied.sizing.configure(0, 0, states, constraints);
+                let told = GeometryConfigure {
+                    states,
+                    ..GeometryConfigure::default()
+                };
+                applied
+                    .sizing
+                    .configure_geometry(told, constraints, |width, height| (width, height));
             }
             self.refresh_state();
             true

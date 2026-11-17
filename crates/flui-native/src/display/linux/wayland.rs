@@ -56,7 +56,7 @@ use super::view::OutputView;
 use super::wayland_model::{ColorEvent, OutputEvent, TransferRange, WaylandOutputs};
 use crate::error::PlatformError;
 use crate::owner::linux::wayland::{
-    MAX_OUTPUTS, OutputFacts, OutputName, WaylandDisplays, bindable,
+    MAX_OUTPUTS, OnOutputs, OutputFacts, OutputName, WaylandDisplays, bindable,
 };
 use crate::owner::notices::StaleOnWake;
 use crate::owner::signal::OwnerSignal;
@@ -97,15 +97,19 @@ impl WaylandDisplays for WaylandDisplaySource {
         self.native.snapshot()
     }
 
-    fn output(&self, output: OutputName) -> Option<OutputFacts> {
-        let snapshot = self.native.snapshot().ok()?;
-        let display = self
-            .native
-            .display_of_native(Protocol::Wayland, output.get())?;
-        let info = snapshot.displays().iter().find(|info| info.id == display)?;
-        Some(OutputFacts {
-            display,
-            scale: info.scale_factor,
+    fn on_outputs(&self, entered: &[OutputName], live: &dyn Fn(OutputName) -> bool) -> OnOutputs {
+        let Ok(snapshot) = self.native.snapshot() else {
+            return OnOutputs::default();
+        };
+        OnOutputs::read(entered, live, |output| {
+            let display = self
+                .native
+                .display_of_native(Protocol::Wayland, output.get())?;
+            let info = snapshot.displays().iter().find(|info| info.id == display)?;
+            Some(OutputFacts {
+                display,
+                scale: info.scale_factor,
+            })
         })
     }
 

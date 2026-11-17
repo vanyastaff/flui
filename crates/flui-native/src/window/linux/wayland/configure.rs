@@ -302,6 +302,46 @@ pub(crate) fn protocol_extent(extent: f64) -> i32 {
     }
 }
 
+/// The size the compositor recommends a window's content stays within
+/// (`xdg_toplevel.configure_bounds`, version 4: the work area of the
+/// output, say), each axis in logical pixels; an axis the compositor
+/// gives as zero has no bound. The default bounds nothing, as before the
+/// compositor sends any.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub(crate) struct Bounds {
+    width: Option<f64>,
+    height: Option<f64>,
+}
+
+impl Bounds {
+    /// The bounds of a `configure_bounds` of `width` by `height`: an
+    /// axis that is zero or less is unknown.
+    pub(crate) fn told(width: i32, height: i32) -> Self {
+        let axis = |extent: i32| (extent > 0).then(|| f64::from(extent));
+        Self {
+            width: axis(width),
+            height: axis(height),
+        }
+    }
+
+    /// `size` held within the bounds, each axis on its own.
+    fn hold(self, size: Size<f64>) -> Size<f64> {
+        let axis = |extent: f64, bound: Option<f64>| bound.map_or(extent, |b| extent.min(b));
+        Size::new(axis(size.width, self.width), axis(size.height, self.height))
+    }
+}
+
+/// What a configure gives the window geometry: `xdg_toplevel.configure`'s
+/// size (an axis of zero left to the window) and states, and the
+/// `configure_bounds` before it (an axis of zero bounds nothing).
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub(crate) struct GeometryConfigure {
+    pub(crate) width: i32,
+    pub(crate) height: i32,
+    pub(crate) states: ToplevelStates,
+    pub(crate) bounds: (i32, i32),
+}
+
 /// The content size of a window as its client and compositor decide it.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct Sizing {
@@ -314,6 +354,10 @@ pub(crate) struct Sizing {
     pending: Option<Size<f64>>,
     /// The states of the configure last acknowledged.
     states: ToplevelStates,
+    /// Whether the normal size is still the one the window opened at:
+    /// no configure in normal mode and no request has set it since, so
+    /// the compositor's bounds hold it.
+    at_open_size: bool,
 }
 
 impl Sizing {
@@ -331,6 +375,7 @@ impl Sizing {
                 tiled: TiledEdges::NONE,
                 suspended: false,
             },
+            at_open_size: true,
         }
     }
 
@@ -344,46 +389,76 @@ impl Sizing {
         self.states
     }
 
-    /// Take a configure of `width` by `height` with `states`. Each axis
-    /// is zero on its own where the compositor leaves it to the client
-    /// (xdg-shell), and keeps the window's own extent. A window the
+    /// Take `told`, a configure of the window geometry, whose content is the
+    /// geometry less what `content_of` takes off (the title bar of a frame
+    /// the window draws itself): off its size and off its bounds alike.
+    /// Returns whether the content size changed.
+    pub(crate) fn configure_geometry(
+        &mut self,
+        told: GeometryConfigure,
+        constraints: SizeConstraints,
+        content_of: impl Fn(i32, i32) -> (i32, i32),
+    ) -> bool {
+        let (width, height) = content_of(told.width, told.height);
+        let (bound_width, bound_height) = content_of(told.bounds.0, told.bounds.1);
+        self.configure(
+            width,
+            height,
+            told.states,
+            constraints,
+            Bounds::told(bound_width, bound_height),
+        )
+    }
+
+    /// Take a configure of `width` by `height` content with `states`. Each
+    /// axis is zero on its own where the compositor leaves it to the client
+    /// (xdg-shell), and keeps the window's own extent, held within `bounds`
+    /// while that is still the size the window opened at. A window the
     /// compositor sizes takes the size it is given; one in normal mode
-    /// takes a size asked for meanwhile, else the compositor's suggestion
-    /// within `constraints`, else returns to the size it had in normal
-    /// mode. Returns whether the content size changed.
+    /// takes a size asked for meanwhile, else the compositor's suggestion,
+    /// else returns to the size it had in normal mode, each held within
+    /// `constraints` (limits changed while the compositor sized the window
+    /// hold the size it returns to). Returns whether the content size
+    /// changed.
     pub(crate) fn configure(
         &mut self,
         width: i32,
         height: i32,
         states: ToplevelStates,
         constraints: SizeConstraints,
+        bounds: Bounds,
     ) -> bool {
         let before = self.content;
         let given = |extent: i32, own: f64| {
             if extent > 0 { f64::from(extent) } else { own }
         };
-        let suggested = width > 0 || height > 0;
         // The extents the window falls back on: the normal size once the
-        // compositor lets go of it, its current size otherwise.
+        // compositor lets go of it, its current size otherwise. The
+        // size the window opened at is a request the compositor's bounds
+        // hold, unlike one the window took since.
         let own = if self.states.sized_by_compositor() && !states.sized_by_compositor() {
             self.normal
         } else {
             self.content
         };
+        let own = if self.at_open_size && !states.sized_by_compositor() {
+            bounds.hold(own)
+        } else {
+            own
+        };
         if states.sized_by_compositor() {
             self.content = Size::new(given(width, own.width), given(height, own.height));
         } else if let Some(size) = self.pending.take() {
             self.content = clamp(size, constraints);
-        } else if suggested {
+        } else {
             self.content = clamp(
                 Size::new(given(width, own.width), given(height, own.height)),
                 constraints,
             );
-        } else {
-            self.content = own;
         }
         if !states.sized_by_compositor() {
             self.normal = self.content;
+            self.at_open_size = false;
         }
         self.states = states;
         self.content != before
@@ -392,8 +467,10 @@ impl Sizing {
     /// The client asks for `size`. In normal mode it is the size at once;
     /// while the compositor sizes the window it is taken when the
     /// compositor stops, and this returns `true`: the window asks to
-    /// leave the mode.
+    /// leave the mode. Either way the window's size is its own from
+    /// here: the compositor's bounds no longer hold it.
     pub(crate) fn request(&mut self, size: Size<f64>, constraints: SizeConstraints) -> bool {
+        self.at_open_size = false;
         if self.states.sized_by_compositor() {
             self.pending = Some(size);
             true
@@ -479,12 +556,12 @@ mod tests {
         let mut sizing = Sizing::new(Size::new(800.0, 600.0));
 
         assert!(
-            !sizing.configure(0, 0, normal, none),
+            !sizing.configure(0, 0, normal, none, Bounds::default()),
             "0x0: the client decides"
         );
         assert_eq!(sizing.content(), Size::new(800.0, 600.0));
 
-        assert!(sizing.configure(1920, 1080, maximized, none));
+        assert!(sizing.configure(1920, 1080, maximized, none, Bounds::default()));
         assert_eq!(sizing.content(), Size::new(1920.0, 1080.0));
 
         assert!(
@@ -492,15 +569,15 @@ mod tests {
             "leave the mode first"
         );
         assert_eq!(sizing.content(), Size::new(1920.0, 1080.0), "not yet");
-        assert!(sizing.configure(1900, 1000, normal, none));
+        assert!(sizing.configure(1900, 1000, normal, none, Bounds::default()));
         assert_eq!(
             sizing.content(),
             Size::new(640.0, 480.0),
             "the size asked for wins over the compositor's suggestion"
         );
 
-        assert!(sizing.configure(1920, 1080, maximized, none));
-        assert!(sizing.configure(0, 0, normal, none));
+        assert!(sizing.configure(1920, 1080, maximized, none, Bounds::default()));
+        assert!(sizing.configure(0, 0, normal, none, Bounds::default()));
         assert_eq!(
             sizing.content(),
             Size::new(640.0, 480.0),
@@ -511,7 +588,7 @@ mod tests {
             Some(Size::new(200.0, 150.0)),
             Some(Size::new(1000.0, 700.0)),
         );
-        assert!(sizing.configure(1200, 100, normal, limits));
+        assert!(sizing.configure(1200, 100, normal, limits, Bounds::default()));
         assert_eq!(
             sizing.content(),
             Size::new(1000.0, 150.0),
@@ -520,14 +597,14 @@ mod tests {
         assert!(!sizing.request(Size::new(50.0, 50.0), limits));
         assert_eq!(sizing.content(), Size::new(200.0, 150.0));
         // Negative sizes are no size.
-        assert!(!sizing.configure(-5, 40, normal, limits));
+        assert!(!sizing.configure(-5, 40, normal, limits, Bounds::default()));
         assert_eq!(sizing.states(), normal);
 
         // New limits hold a window in normal mode, never one the
         // compositor sizes.
         sizing.constrain(bounded(Some(Size::new(300.0, 300.0)), None));
         assert_eq!(sizing.content(), Size::new(300.0, 300.0));
-        assert!(sizing.configure(1920, 1080, maximized, none));
+        assert!(sizing.configure(1920, 1080, maximized, none, Bounds::default()));
         sizing.constrain(bounded(None, Some(Size::new(100.0, 100.0))));
         assert_eq!(sizing.content(), Size::new(1920.0, 1080.0));
     }
@@ -543,18 +620,122 @@ mod tests {
             ..ToplevelStates::default()
         };
         let mut sizing = Sizing::new(Size::new(640.0, 480.0));
-        assert!(sizing.configure(800, 0, normal, none));
+        assert!(sizing.configure(800, 0, normal, none, Bounds::default()));
         assert_eq!(sizing.content(), Size::new(800.0, 480.0));
-        assert!(sizing.configure(0, 300, normal, none));
+        assert!(sizing.configure(0, 300, normal, none, Bounds::default()));
         assert_eq!(sizing.content(), Size::new(800.0, 300.0));
-        assert!(sizing.configure(1920, 0, maximized, none));
+        assert!(sizing.configure(1920, 0, maximized, none, Bounds::default()));
         assert_eq!(sizing.content(), Size::new(1920.0, 300.0));
-        assert!(sizing.configure(0, 0, normal, none));
+        assert!(sizing.configure(0, 0, normal, none, Bounds::default()));
         assert_eq!(
             sizing.content(),
             Size::new(800.0, 300.0),
             "the normal size back"
         );
+    }
+
+    /// A window asked for larger than the compositor's bounds (the work
+    /// area of a 1366 by 768 laptop) opens within them when the first
+    /// configure leaves the size to it, each axis on its own and within
+    /// its limits. The bounds are a hint: a size asked for later, the
+    /// size the window has since taken, and a size the compositor gives
+    /// are not held to them.
+    #[test]
+    fn a_window_opens_within_the_compositors_bounds() {
+        let none = SizeConstraints::NONE;
+        let normal = ToplevelStates::default();
+        let maximized = ToplevelStates {
+            maximized: true,
+            ..ToplevelStates::default()
+        };
+        let laptop = Bounds::told(1366, 740);
+        let opened = || Sizing::new(Size::new(1600.0, 1000.0));
+
+        let mut sizing = opened();
+        assert!(sizing.configure(0, 0, normal, none, laptop));
+        assert_eq!(sizing.content(), Size::new(1366.0, 740.0));
+        assert!(!sizing.request(Size::new(1600.0, 1000.0), none));
+        assert!(!sizing.configure(0, 0, normal, none, laptop));
+        assert_eq!(
+            sizing.content(),
+            Size::new(1600.0, 1000.0),
+            "a size asked for after the open is not held"
+        );
+
+        let mut sizing = opened();
+        assert!(!sizing.configure(0, 0, normal, none, Bounds::told(0, 0)));
+        assert_eq!(sizing.content(), Size::new(1600.0, 1000.0), "no bounds");
+        assert!(!sizing.configure(0, 0, normal, none, laptop));
+        assert_eq!(
+            sizing.content(),
+            Size::new(1600.0, 1000.0),
+            "bounds told after the window took its size"
+        );
+
+        let mut sizing = opened();
+        assert!(sizing.configure(0, 0, normal, none, Bounds::told(2560, 900)));
+        assert_eq!(sizing.content(), Size::new(1600.0, 900.0), "one axis");
+
+        let mut sizing = opened();
+        assert!(sizing.configure(1200, 0, normal, none, laptop));
+        assert_eq!(
+            sizing.content(),
+            Size::new(1200.0, 740.0),
+            "the axis left to the window"
+        );
+
+        let mut sizing = opened();
+        let limits =
+            SizeConstraints::try_new(Some(Size::new(800.0, 800.0)), None).expect("finite limits");
+        assert!(sizing.configure(0, 0, normal, limits, laptop));
+        assert_eq!(
+            sizing.content(),
+            Size::new(1366.0, 800.0),
+            "the window's limits over the bounds"
+        );
+
+        let mut sizing = opened();
+        assert!(sizing.configure(1920, 1080, maximized, none, laptop));
+        assert_eq!(
+            sizing.content(),
+            Size::new(1920.0, 1080.0),
+            "the compositor's size"
+        );
+        assert!(sizing.configure(0, 0, normal, none, laptop));
+        assert_eq!(
+            sizing.content(),
+            Size::new(1366.0, 740.0),
+            "the size it opened at, held, once it is the window's again"
+        );
+
+        // The bounds and the size are the window geometry's: a title bar the
+        // window draws itself comes off both.
+        let title_bar = |width: i32, height: i32| {
+            if height > 0 {
+                (width, (height - 37).max(1))
+            } else {
+                (width, height)
+            }
+        };
+        let mut sizing = opened();
+        let first = GeometryConfigure {
+            bounds: (1366, 740),
+            ..GeometryConfigure::default()
+        };
+        assert!(sizing.configure_geometry(first, none, title_bar));
+        assert_eq!(
+            sizing.content(),
+            Size::new(1366.0, 703.0),
+            "the bounds less the title bar"
+        );
+        let maximized_geometry = GeometryConfigure {
+            width: 1920,
+            height: 1080,
+            states: maximized,
+            bounds: (1366, 740),
+        };
+        assert!(sizing.configure_geometry(maximized_geometry, none, title_bar));
+        assert_eq!(sizing.content(), Size::new(1920.0, 1043.0));
     }
 
     /// Every capability of a Wayland window whose compositor offers
