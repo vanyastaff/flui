@@ -87,6 +87,28 @@ fn recording() -> usize {
 /// A window that remembers its placement reads the stored one once, before
 /// it opens: installing the window, which starts the recorder from that
 /// placement, asks storage for nothing more.
+/// A configured position is whole logical pixels of the primary display: the
+/// configuration alone names no display, so the runner places it on the
+/// owner's primary display when it opens the window, and the window's first
+/// snapshot is there.
+#[test]
+fn a_configured_position_opens_on_the_primary_display() {
+    let application = Application::new().config(AppConfig::new().position(40, 30));
+    let (run, _clock) = start_on_manual_clock(application);
+    let windows = run.open_windows();
+    let [window] = windows.as_slice() else {
+        panic!("one window is open, not {}", windows.len());
+    };
+    let state = window.state();
+    let at = state
+        .outer
+        .position()
+        .expect("the headless host reports where its window is");
+    assert_eq!(at.at(), Point::new(40.0, 30.0));
+    assert_eq!(Some(at.display()), state.display, "on the window's display");
+    run.join().expect("the run ends");
+}
+
 #[test]
 fn a_remembered_placement_is_read_once_before_the_window_opens() {
     let storage = MemoryStorage::new();
