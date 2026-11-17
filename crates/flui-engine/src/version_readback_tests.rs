@@ -2209,3 +2209,41 @@ fn a_target_fill_drawn_at_a_new_size_fills_the_new_size() {
     assert_eq!(&large[corner..corner + 4], &RED, "the far corner is filled");
     assert_eq!(pixels_differing(&large, &fresh), 0);
 }
+
+/// A chunk drawn while the glyph atlas was too full to place a glyph it
+/// asked for is not kept: the next frame records it again, with its glyphs,
+/// replays the other chunks, and draws what a fresh renderer draws.
+#[test]
+fn a_chunk_drawn_without_a_glyph_is_recorded_again() {
+    use flui_layer::FullReason;
+    let Some(renderer) = crate::test_support::renderer_or_skip() else {
+        return;
+    };
+    // The two chunks of the mixed scene that draw text.
+    const TEXT_CHUNKS: u64 = 2;
+    let version = mixed_scene();
+    let mut capture = renderer.retained_capture((SIDE, SIDE)).expect("capture");
+    capture.keep_recorded_ir();
+    capture.hold_glyph_atlas_full(true);
+    let first = full_frame(&mut capture, &version, FullReason::FirstFrame);
+    assert_eq!(first.counters.chunks_recorded, MIXED_CHUNKS);
+    capture.hold_glyph_atlas_full(false);
+    let second = full_frame(&mut capture, &version, FullReason::FirstFrame);
+    assert_eq!(
+        (
+            second.counters.chunks_recorded,
+            second.counters.recording_cache_hits
+        ),
+        (TEXT_CHUNKS, MIXED_CHUNKS - TEXT_CHUNKS),
+        "the text chunks record again, the others replay"
+    );
+    let mut fresh = renderer.retained_capture((SIDE, SIDE)).expect("capture");
+    fresh.keep_recorded_ir();
+    let oracle = full_frame(&mut fresh, &version, FullReason::FirstFrame);
+    assert_ne!(
+        pixels_differing(&first.pixels, &oracle.pixels),
+        0,
+        "precondition: the first frame drew without its glyphs"
+    );
+    assert_eq!(pixels_differing(&second.pixels, &oracle.pixels), 0);
+}

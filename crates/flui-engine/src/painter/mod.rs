@@ -383,6 +383,13 @@ impl WgpuPainter {
 
     // ===== Accessors =====
 
+    /// Makes every later glyph placement that needs room miss as a full
+    /// page at the device limit does, until `full` is `false`.
+    #[cfg(test)]
+    pub(crate) fn hold_glyph_atlas_full(&mut self, full: bool) {
+        self.glyph_atlas.hold_full(full);
+    }
+
     /// Marks the shared image atlas full, as a failed packing does, so the
     /// frame boundary resets it once an entry of it goes a frame unused.
     #[cfg(test)]

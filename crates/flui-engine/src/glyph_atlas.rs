@@ -305,6 +305,9 @@ pub(crate) struct GlyphAtlas<R: GlyphRasterizer> {
     /// The keys [`Self::slot`] placed since [`Self::log_slots`] began a log,
     /// and whether one could not be placed.
     slot_log: SlotLog<R::Key>,
+    /// Whether placements answer as a full page does ([`Self::hold_full`]).
+    #[cfg(test)]
+    held_full: bool,
 }
 
 /// The glyphs a recording placed, kept while a log is open.
@@ -312,7 +315,9 @@ struct SlotLog<K> {
     /// Whether [`GlyphAtlas::slot`] logs.
     active: bool,
     keys: FxHashSet<K>,
-    /// Whether a glyph could not be placed while the log was open.
+    /// Whether a glyph missed while the log was open because its page was
+    /// full: one the rasterizer cannot draw, or larger than the device
+    /// allows, misses the same way every frame and does not count.
     dropped: bool,
 }
 
@@ -357,6 +362,8 @@ impl<R: GlyphRasterizer> GlyphAtlas<R> {
             reported_full: false,
             slots_lost: false,
             slot_log: SlotLog::default(),
+            #[cfg(test)]
+            held_full: false,
         }
     }
 
@@ -383,13 +390,8 @@ impl<R: GlyphRasterizer> GlyphAtlas<R> {
     /// cached, so its next use asks again.
     pub(crate) fn slot(&mut self, key: R::Key) -> Option<GlyphSlot> {
         let slot = self.place(key);
-        if self.slot_log.active {
-            match slot {
-                Some(_) => {
-                    self.slot_log.keys.insert(key);
-                }
-                None => self.slot_log.dropped = true,
-            }
+        if slot.is_some() && self.slot_log.active {
+            self.slot_log.keys.insert(key);
         }
         slot
     }
@@ -473,6 +475,10 @@ impl<R: GlyphRasterizer> GlyphAtlas<R> {
         );
         let frame = self.frame;
         loop {
+            #[cfg(test)]
+            if self.held_full {
+                break;
+            }
             let page = page_mut(&mut self.mask, &mut self.color, color_page);
             if let Some(allocation) = page.packer.allocate(wanted) {
                 return Some(allocation);
@@ -501,17 +507,28 @@ impl<R: GlyphRasterizer> GlyphAtlas<R> {
                 );
                 continue;
             }
-            if !self.reported_full {
-                self.reported_full = true;
-                let page = page_mut(&mut self.mask, &mut self.color, color_page);
-                tracing::warn!(
-                    page = page.label(),
-                    size = page.size,
-                    "glyph atlas page is full at the device's texture limit; glyphs are being dropped this frame"
-                );
-            }
-            return None;
+            break;
         }
+        if !self.reported_full {
+            self.reported_full = true;
+            let page = page_mut(&mut self.mask, &mut self.color, color_page);
+            tracing::warn!(
+                page = page.label(),
+                size = page.size,
+                "glyph atlas page is full at the device's texture limit; glyphs are being dropped this frame"
+            );
+        }
+        // Room could free up once slots go unused: what was drawn without
+        // this glyph is not to be kept.
+        self.slot_log.dropped |= self.slot_log.active;
+        None
+    }
+
+    /// Answers every later placement that needs room as a full page at the
+    /// device limit does, until `full` is `false` again.
+    #[cfg(test)]
+    pub(crate) fn hold_full(&mut self, full: bool) {
+        self.held_full = full;
     }
 
     /// Once per presented frame, after its submit: slots the next frame does
@@ -559,7 +576,8 @@ impl<R: GlyphRasterizer> GlyphAtlas<R> {
     }
 
     /// The distinct keys placed since [`Self::log_slots`], ending the log;
-    /// `None` when a glyph asked for in that time could not be placed, so
+    /// `None` when a glyph asked for in that time missed because its page was
+    /// full, so
     /// what was drawn without it is not to be kept.
     pub(crate) fn take_slot_log(&mut self) -> Option<Vec<R::Key>> {
         let log = &mut self.slot_log;
@@ -704,48 +722,90 @@ mod rasterizer_tests {
         assert_eq!(atlas.len(), 1);
     }
 
-    /// A log names each placed glyph once, and a glyph the atlas cannot
-    /// place (here wider than the device allows) leaves no log, so what was
-    /// recorded without it is not kept to replay.
+    /// A log names each placed glyph once. A glyph that misses because its
+    /// page is full, which room freed later could place, leaves no log, so
+    /// what was drawn without it is not kept to replay; one that misses the
+    /// same way every frame (the rasterizer has no bitmap for it, or it is
+    /// wider than the device allows) leaves the log as it is.
     #[test]
     fn a_glyph_the_atlas_cannot_place_leaves_no_slot_log() {
-        struct Wide {
-            width: u32,
+        /// Key 0 is wider than the device, key 1 has no bitmap, keys from
+        /// 10 on are `big` texels square, the others one texel.
+        struct Sized {
+            wide: u32,
+            big: u32,
         }
-        impl GlyphRasterizer for Wide {
+        impl GlyphRasterizer for Sized {
             type Key = u32;
 
             fn rasterize(&mut self, key: u32) -> Option<GlyphImage> {
-                let width = if key == 0 { self.width } else { 1 };
+                let [width, height] = match key {
+                    0 => [self.wide, 1],
+                    1 => return None,
+                    10.. => [self.big, self.big],
+                    _ => [1, 1],
+                };
                 Some(
                     GlyphImage::try_new(
                         0,
                         1,
                         width,
-                        1,
+                        height,
                         GlyphContent::Mask,
-                        vec![255; width as usize],
+                        vec![255; (width * height) as usize],
                     )
-                    .expect("a one-row bitmap has valid bytes"),
+                    .expect("a mask bitmap has valid bytes"),
                 )
             }
         }
-        let (device, queue) = crate::test_support::test_device_and_queue("Glyph Atlas Test");
-        let width = device.limits().max_texture_dimension_2d + 1;
-        let mut atlas = atlas_on(device, queue, Wide { width });
+        // A small device limit, so a page fills at a few glyphs.
+        let instance =
+            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle().with_env());
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            apply_limit_buckets: false,
+            ..Default::default()
+        }))
+        .expect("GPU adapter for the glyph atlas");
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            required_limits: wgpu::Limits {
+                max_texture_dimension_2d: 512,
+                ..Default::default()
+            },
+            ..Default::default()
+        }))
+        .expect("a device of a 512-texel limit");
+        let mut atlas = atlas_on(
+            Arc::new(device),
+            Arc::new(queue),
+            Sized {
+                wide: 513,
+                big: 200,
+            },
+        );
 
         atlas.log_slots();
-        atlas.slot(1).expect("a one-texel glyph is placed");
-        atlas.slot(1).expect("a one-texel glyph is placed");
         atlas.slot(2).expect("a one-texel glyph is placed");
+        atlas.slot(2).expect("a one-texel glyph is placed");
+        atlas.slot(3).expect("a one-texel glyph is placed");
         let mut keys = atlas.take_slot_log().expect("every glyph was placed");
         keys.sort_unstable();
-        assert_eq!(keys, [1, 2], "each placed glyph once");
+        assert_eq!(keys, [2, 3], "each placed glyph once");
+
+        for (row, key) in [("wider than the device", 0), ("no bitmap", 1)] {
+            atlas.log_slots();
+            atlas.slot(2).expect("a one-texel glyph is placed");
+            assert!(atlas.slot(key).is_none(), "{row}: precondition: not placed");
+            assert_eq!(
+                atlas.take_slot_log(),
+                Some(vec![2]),
+                "{row}: a miss that repeats every frame keeps the log"
+            );
+        }
 
         atlas.log_slots();
-        atlas.slot(1).expect("a one-texel glyph is placed");
-        assert!(atlas.slot(0).is_none(), "precondition: too wide to place");
-        assert_eq!(atlas.take_slot_log(), None, "a dropped glyph leaves no log");
+        let full = (10..30).find(|&key| atlas.slot(key).is_none());
+        assert!(full.is_some(), "precondition: big glyphs fill the page");
+        assert_eq!(atlas.take_slot_log(), None, "a full page leaves no log");
         assert_eq!(atlas.take_slot_log(), None, "the log ended");
     }
 

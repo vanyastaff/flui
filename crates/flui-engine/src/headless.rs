@@ -608,6 +608,12 @@ impl RetainedCapture {
         self.painter.reclaim(level);
     }
 
+    /// Makes every later glyph placement that needs room miss as a full
+    /// glyph atlas does, until `full` is `false`.
+    pub(crate) fn hold_glyph_atlas_full(&mut self, full: bool) {
+        self.painter.hold_glyph_atlas_full(full);
+    }
+
     /// Marks the painter's image atlas full, so the frame boundary resets it
     /// once an entry goes a frame unused.
     pub(crate) fn mark_image_atlas_full(&mut self) {
