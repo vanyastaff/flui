@@ -1752,10 +1752,9 @@ fn drawn(capture: &RetainedCapture) -> Drawn {
 
 /// How many of the pixels of `a` and `b` differ.
 fn pixels_differing(a: &[u8], b: &[u8]) -> usize {
-    a.chunks_exact(4)
-        .zip(b.chunks_exact(4))
-        .filter(|(a, b)| a != b)
-        .count()
+    let (a, _) = a.as_chunks::<4>();
+    let (b, _) = b.as_chunks::<4>();
+    a.iter().zip(b).filter(|(a, b)| a != b).count()
 }
 
 /// A chunk whose content, transform and surroundings are unchanged replays
@@ -1782,7 +1781,12 @@ fn a_cached_chunk_replays_the_command_stream_it_recorded() {
         "the first frame records every chunk"
     );
     assert!(
-        first.pixels.chunks_exact(4).any(|pixel| pixel != WHITE),
+        first
+            .pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .any(|&pixel| pixel != WHITE),
         "precondition: the version draws"
     );
 
@@ -1825,7 +1829,8 @@ fn an_atlas_reset_misses_every_cached_recording() {
     };
     // (row, what happens between the frames, whether the second frame and
     // the fresh one draw through the plugin font source, whether it hits)
-    let rows: [(&str, fn(&mut RetainedCapture), bool, bool); 4] = [
+    type Between = fn(&mut RetainedCapture);
+    let rows: [(&str, Between, bool, bool); 4] = [
         ("a frame between", empty_frame, false, true),
         (
             "a critical reclaim",
@@ -1993,12 +1998,13 @@ fn a_recording_spliced_after_another_prefix_equals_one_recorded_there() {
             canvas,
             Rect::from_xywh(10.0, 60.0, 40.0, 8.0),
             [Color::RED, Color::BLUE],
-        )
+        );
     };
     let text: Painting = |canvas| paint_text(canvas, "ab", Offset::new(10.0, 80.0));
     // (row, first chunk in frame one, in frame two, the kept chunk, its
     // rounded clip's radius in each frame)
-    let rows: [(&str, Painting, Painting, Painting, Option<(f64, f64)>); 8] = [
+    type Radii = Option<(f64, f64)>;
+    let rows: [(&str, Painting, Painting, Painting, Radii); 8] = [
         (
             "a rect after a path, then after a rect",
             path,
