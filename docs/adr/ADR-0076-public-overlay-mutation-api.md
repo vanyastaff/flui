@@ -96,12 +96,14 @@ API never exposes the list.
 
 `OverlayEntryViewState::build` wraps each entry's built child in `OverlayScope`, a private
 `InheritedView<Data = OverlayHandle>` carrying the enclosing overlay's handle — the analogue of
-Flutter 3.44's `_RenderTheaterMarker`, not the older `findAncestorStateOfType<OverlayState>()`
+Flutter's `_RenderTheaterMarker` ([`overlay.dart:2301`](https://github.com/flutter/flutter/blob/ab2912035e/packages/flutter/lib/src/widgets/overlay.dart#L2301)
+at 3.50.0), not the older `findAncestorStateOfType<OverlayState>()`
 walk. Because the marker is per entry, a descendant of a nested overlay resolves the nearest
 one with no extra code.
 
 `Overlay::maybe_of` resolves through `depend_on`, which registers a dependency. **This diverges
-from Flutter**, whose `Overlay.maybeOf` passes `createDependency: false`. The reason is
+from Flutter**, whose `Overlay.maybeOf` passes `createDependency: false`
+([`overlay.dart:635-641`](https://github.com/flutter/flutter/blob/ab2912035e/packages/flutter/lib/src/widgets/overlay.dart#L635-L641)). The reason is
 FLUI-specific: `Draggable`'s drag session is a `Send + Sync` gesture object with no
 `BuildContext`, so it cannot re-run the lookup mid-drag as Flutter's `_DragAvatar` does. The
 handle is resolved ahead of time in `init_state`/`did_change_dependencies` and cached; the

@@ -1293,7 +1293,7 @@ impl host::Window<WebLoop> for WebWindow {
         options: WindowOptions,
         handler: Rc<dyn flui_platform::WindowHandler>,
     ) -> Result<Rc<dyn HostWindow>, OpenWindowError> {
-        tracing::info!(title = %options.title, "Creating web window (canvas)");
+        tracing::debug!("a window is opening");
         // Refused for what a command is refused for; a canvas takes no limits.
         let content = options.geometry()?.content;
 

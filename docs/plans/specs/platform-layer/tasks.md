@@ -7425,6 +7425,116 @@ GPU-память простаивающего или невидимого окн
   сценарий отзыва после `OleUninitialize` здесь не воспроизведён, удержание — по типам. Ожидание
   trybuild `owner_platform_is_not_send` не устарело: локально у тулчейна нет `rust-src`, и
   фрагменты из `$RUST/core` выпадают из вывода; на CI (с `rust-src`) оно верно.
+- [x] **LY154** — ветка `docs/platform-citations`. Цитаты Flutter читаются по коммиту тега 3.50.0,
+  `flutter/flutter@ab2912035e` (правило `owner/repo@sha` в ADR-0151, 0152, 0154, 0254, 0255 стоит;
+  рядом для читателя «3.50.0»); исходники читались через `gh` и неглубокий клон в `.flutter/`.
+  Ссылки на коммиты master (`6597889f57` в ADR-0151, 0152, 0154, 0254, 0255; `97cd226ec5` в
+  ADR-0261, 0262, 0265; `d8bd864cdb` в ADR-0345) переведены на этот коммит, и каждая перенесённая
+  ссылка прочитана построчно на теге, а не только сверена по SHA блоба: совпадение блоба с master
+  показало, что две ссылки были неверны и до переноса — `FlutterTextInputPlugin.mm:140-141`
+  (раскладка клавиатуры для URL; отдельный ответчик — `FlutterTextInputView`, `:793-815`, его
+  `becomeFirstResponder` `:1360`) и `history.dart:17-25,124` (строка 124 —
+  `MultiEntriesBrowserHistory`; `SingleEntryBrowserHistory` — `:234-250`, его запись-приманка
+  `:368-373`); строки `semantics/text_field.dart` сдвинулись (`:17-48`), `semantics_helper.dart`
+  238 → 234 (поведение master с `retirePlaceholders` ADR-0255 не использует); пояснение источника
+  ADR-0262 («по идентичности виджета») исправлено на «по restoration id». Остальные (`embedder.h`
+  12-48 и 1098-1148, `FlutterActivity.java:728-737`, `FlutterSceneDelegate.mm:32-101`,
+  `dom_manager.dart:16-46`, шаблон манифеста `:12`, `flutter_plugins.dart:1950-1993`,
+  `binding.dart:296-342`, `_keepAliveBucket`) говорят то, что им приписано. `f60eef8885` в
+  ADR-0340 — коммита нет во `flutter/flutter` (`gh` отвечает 422): источники переписаны на
+  `3.50.0` с номерами строк, утверждения (шаблон с `adjustResize`, `ImeSyncDeferringInsetsCallback`
+  с API 30) проверены. ADR-0332: правило `isCompatibleWith` пересказано по 3.50.0 (тристабильные
+  флаги, `isAccessibilityFocusBlocked`, `_traversalChildIdentifier`); ADR-0288: 3.50 отказывает в
+  `route` и точке входа только в release и только непроверенному отправителю
+  (`IntentUtils.java:29-96`), правило FLUI строже; ADR-0028: заморозка 3.44, `material_ui` и
+  `cupertino_ui` в 3.47, устаревание в 3.50; ADR-0037, 0076, 0048: ссылки на строки 3.50.0, каждое
+  утверждение о `focus_manager.dart`, `text_input.dart`, `overlay.dart` и `framework.dart` верно на
+  теге; ADR-0333: ссылка 3.27.0 вела в `flutter/flutter`, где движка в 3.27.0 не было, а «память
+  переиспользуется при сбросе билдера» на 3.50.0 неверно (`Build` отдаёт буфер списку) — фраза
+  заменена тем, что видно в `dl_storage.h`, `dl_builder.cc`, `dl_op_records.h`; ADR-0348: ссылки на
+  строки. Неверное о FLUI: «как веб-движок Flutter держит один элемент редактирования» в
+  `text/web.rs` и `ARCHITECTURE.md` — стратегия Flutter 3.50 по умолчанию создаёт элемент на
+  каждое соединение и убирает его (`text_editing.dart:1594`, `:1768`; элемент формы автозаполнения
+  остаётся, `:1763`), с семантикой правка идёт в собственном элементе узла
+  (`semantics/text_field.dart:128`, `:149`); FLUI держит один редактор, исправлено; ADR-0049 описывал backend winit
+  и «headless mock» — переписано по `Platform::request_exit_policy_reevaluation`. `docs/gaps.md`:
+  100 мс Windows-эмбеддера — `kWindowResizeTimeout` по тегу; записи о GPU-памяти простаивающего
+  окна и о живом resize на Windows уже на `main` и сверены с кодом (`RasterHost::reclaim` только
+  от давления памяти; `modal_loop`, `WM_GETDPISCALEDSIZE`, `UserPlacing`). Строка паритета
+  «Orientation lock»: Android 16 игнорирует фиксацию на дисплеях с наименьшей шириной от 600 dp у
+  приложения с API 36 без `PROPERTY_COMPAT_ALLOW_RESTRICTED_RESIZABILITY` (FLUI его не объявляет).
+  Журнал: эмодзи в сообщениях хостов не осталось; у событий окна Win32 и AppKit одно сообщение и
+  один набор полей, хэндл — поле `handle` (`a window opened`, `window moved`, `window resized`,
+  `window scale changed`); уровни: resize Android `info` → `debug`, «a window is opening» Win32,
+  Web и headless `info` → `debug`, resize AppKit `debug` → `trace`; заголовок окна не пишется ни в
+  строках открытия окна, ни в стартовых строках `flui-app`, путь из списка URI drag не пишется,
+  относительный путь single-instance Linux — только расширением; форматные сообщения цикла Android,
+  потока clipboard X11 и direct-режима — полями. headless больше не зовёт себя mock (док крейта
+  переписан по тому, что хост делает; `app_path` возвращает исполняемый файл процесса вместо
+  `/mock/app/path`). Тест: `a_headless_platform_names_the_executable_it_runs_in` — путь абсолютный
+  и указывает на файл (с откатом: `/mock/app/path` не абсолютен на Windows и не файл). Не тронуто: штампы «oracle tag `3.44.0`» в `flui-material`,
+  `flui-cupertino`, `flui-widgets`, ADR-0062, 0069, 0079 и `crates/flui-engine/CONTRIBUTING.md` —
+  слой виджетов, не платформы; перевод на 3.50 требует сверки каждого значения с `material_ui`.
+
+- [x] **LY151** — ветка `platform/system-preferences-accent`, решение — ADR-0359. Находки
+  подтверждены на `main` @ `a04deac12` чтением: у `SystemPreferences` не было ни акцента, ни
+  полос прокрутки (`rg -i 'accent|scroller' crates/flui-platform crates/flui-native/src/preferences`
+  пусто), `docs/gaps.md` числил акцент в «Missing». Построено: `SrgbColor` (`try_new` отказывает
+  NaN, бесконечности и компоненты вне `0..=1` как `InvalidPreference::Color`, без зажатия;
+  `-0.0` читается как `0.0`), `SystemPreferences::accent_color`, `ScrollBarPreferences`
+  (`ScrollBarVisibility::{WhenScrolling, Always}`, `ScrollTrackClick::{Page, JumpToSpot}`),
+  поля в `PreferenceParts`, в обоих зеркалах записи и в схеме (`accent_color`,
+  `scroll_bar_visibility`, `scroll_track_click`; протокол 0.23, добавление). Источники: Windows —
+  `UISettings.GetColorValue(Accent)` и `AutoHideScrollBars`, события `ColorValuesChanged` и
+  `AutoHideScrollBarsChanged` (общий список `UiSettingsEvent` вместо двух полей токенов;
+  интерфейс, которого нет у старой Windows, — не наблюдение), приёмник широковещаний слышит ещё
+  `WM_DWMCOLORIZATIONCOLORCHANGED`; Linux — `accent-color` портала (компонент вне `0..=1` —
+  «не задан», снимает принятый акцент) и `overlay-scrolling` GNOME по тому же правилу ключей и
+  расписанию повторов, а само расписание теперь строится на `flui_platform::Backoff`
+  (`Retries`: тот же шаг, счёт попыток), второй тип графика снят; macOS —
+  `controlAccentColor` в `sRGBColorSpace`, `preferredScrollerStyle`, `AppleScrollerPagingBehavior`,
+  уведомления `NSSystemColorsDidChangeNotification` и
+  `NSPreferredScrollerStyleDidChangeNotification`, распределённое
+  `AppleInterfaceThemeChangedNotification`, акцент разрешён во внешнем виде приложения; iOS, Android и Web акцента не дают (решение §4 ADR-0359: у Android палитра, роли которой
+  зависят от светлой и тёмной темы; Web — `AccentColor` у браузера против отпечатков фиксирован, прогон в браузерах в долгах). Кольцо фокуса из строки не построено: ни один виджет не
+  читает его цвет, а новое публичное поле без потребителя запрещено. Потребители:
+  `MediaQueryData::{accent_color, scroll_bars}`; `Scrollbar` без `thumb_visibility` следует
+  видимости системы, тап по дорожке переносит бегунок в точку при `JumpToSpot`; основной цвет
+  Cupertino без автора берёт акцент. Тесты, в скобках результат с откатом:
+  `an_accent_colour_enters_only_as_finite_srgb_in_range`,
+  `scroll_bar_observations_stay_apart_and_unknown_until_read`,
+  `preferences_round_trip_through_their_parts` (`flui-platform`);
+  `windows_reads_preferences_before_a_user_window_exists` (сверяет с ответом `UISettings`),
+  `a_colorization_change_wakes_the_owner_without_a_user_window` (без
+  `WM_DWMCOLORIZATIONCOLORCHANGED` в приёмнике — владелец не просыпается), Windows 11 через
+  nextest; `the_portal_accent_is_a_colour_in_range_and_unset_outside_it`,
+  `overlay_scrolling_is_scroll_bars_that_show_while_scrolling`, случаи `accent-color` и
+  `overlay-scrolling` в `linux_preferences` (с «не задан», который оставляет прежний акцент, —
+  владелец не видит снятия за 30 с), WSL со стоящим порталом;
+  `preference_rows_keep_their_json_spelling`
+  (новая строка, прежние байты не тронуты),
+  `every_vocabulary_variant_round_trips_through_the_recording_dto`;
+  `a_track_tap_jumps_to_the_spot_where_the_system_asks` и
+  `an_unset_thumb_follows_the_systems_scroll_bar_visibility` (без чтения предпочтения — падают),
+  `an_unset_primary_follows_the_system_accent` (без акцента — системный синий). Не прогнаны:
+  живая смена акцента и полос на Windows (настройки машины не меняли), GNOME или KDE, macOS
+  (только проверка типов), браузер — заметки строк «Accent colour» и «Scroll-bar behaviour»
+  в `platform-parity.toml` и `docs/gaps.md`. После независимого чтения: каждое значение
+  снимка Windows читается отдельно (упавший геттер оставляет прежнее значение и требует
+  повтора), повторы — `Retries` над `flui_platform::Backoff` (0,1–3,2 с, шесть; Linux 1–16 с,
+  пять) вместо 100 мс без конца; macOS читает каждое значение отдельно; ключ, которого нет у
+  портала, снимает значение после смены владельца портала (`MissingKey::Withdraws`); бегунок
+  переносится по нажатию и тащится дальше; Cupertino берёт акцент только при яркости платформы,
+  цвет на акценте — белый или чёрный по контрасту. Тесты (в скобках — с откатом):
+  `failed_reads_retry_on_a_doubling_schedule_and_stop` (фиксированные 100 мс — паузы не
+  удваиваются), `an_unreadable_value_keeps_the_others_and_owes_a_retry` (неполное чтение без
+  повтора), `every_settings_event_is_observed`,
+  `a_missing_key_withdraws_its_field_only_after_the_portal_changed_hands`, случай
+  `accent-withdrawn` (с `Keeps` после смены владельца — снятия нет за 30 с),
+  `platform_recordings_replay_on_the_headless_host` и `native_recordings_write_back_byte_for_byte`
+  (перепутанные `Always`/`WhenScrolling` в разборе — падают),
+  `a_forced_brightness_or_a_light_accent_keeps_the_theme_legible` (акцент при любой яркости —
+  падает). Android всё ещё роняет всё чтение целиком — `docs/gaps.md`.
 
 ## Отступление от порядка, решённое владельцем
 

@@ -783,7 +783,7 @@ pub(super) fn create_host(
         Ok(host) => Some(host),
         Err(error) => {
             tracing::warn!(
-                ?hwnd,
+                handle = ?hwnd,
                 ?error,
                 "DirectManipulation did not initialise; the precision touchpad scrolls as wheel ticks"
             );

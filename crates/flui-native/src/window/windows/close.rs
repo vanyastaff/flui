@@ -151,7 +151,7 @@ impl WindowContext {
             if let Err(error) = marked {
                 // A subscriber is user code.
                 failure.contain(|| {
-                    tracing::warn!(?hwnd, %error, "a retired window could not be marked retired");
+                    tracing::warn!(handle = ?hwnd, %error, "a retired window could not be marked retired");
                 });
             }
         }
@@ -255,7 +255,7 @@ fn end_granted(hwnd: HWND, fate: NativeFate) {
                 DestroyWindow(hwnd)
             };
             if let Err(error) = destroyed {
-                tracing::warn!(?hwnd, ?error, "DestroyWindow failed on a granted close");
+                tracing::warn!(handle = ?hwnd, ?error, "DestroyWindow failed on a granted close");
             }
         }
         NativeFate::Keep => {

@@ -481,7 +481,8 @@ as the captures are dropped today (`paint.rs:116-120`), and changes the root pla
 `Full(SurfaceChanged)`.
 
 §9. **The raster side retains recordings and redraws a region rect by rect.** The engine walks the
-held version and culls nodes by their subtree footprint. For a `Region` it plans:
+held version and culls nodes by their subtree footprint and chunks by their bounds, each through
+the chain above it. For a `Region` it plans:
 
 ```rust
 enum RegionPlan { Bounds(DamageRect), Rects(Region) }

@@ -390,6 +390,12 @@ fn the_re_exports_are_the_facades_types() {
         |x| x;
     let _: fn(flui::platform::WheelPreferences) -> flui_sdk::platform::WheelPreferences = |x| x;
     let _: fn(flui::platform::WheelStep) -> flui_sdk::platform::WheelStep = |x| x;
+    let _: fn(flui::platform::SrgbColor) -> flui_sdk::platform::SrgbColor = |x| x;
+    let _: fn(flui::platform::ScrollBarPreferences) -> flui_sdk::platform::ScrollBarPreferences =
+        |x| x;
+    let _: fn(flui::platform::ScrollBarVisibility) -> flui_sdk::platform::ScrollBarVisibility =
+        |x| x;
+    let _: fn(flui::platform::ScrollTrackClick) -> flui_sdk::platform::ScrollTrackClick = |x| x;
     let _: fn(flui::platform::InvalidPreference) -> flui_sdk::platform::InvalidPreference = |x| x;
     let _: fn(flui::platform::TargetPlatform) -> flui_sdk::platform::TargetPlatform = |x| x;
     let _: fn(flui::platform::HapticFeedback) -> flui_sdk::platform::HapticFeedback = |x| x;
@@ -653,8 +659,12 @@ fn the_public_surface_is_the_measured_list() {
         "pub use flui_platform::NumberingSystem;",
         "pub use flui_platform::RegionOverride;",
         "pub use flui_platform::RegionalFormats;",
+        "pub use flui_platform::ScrollBarPreferences;",
+        "pub use flui_platform::ScrollBarVisibility;",
+        "pub use flui_platform::ScrollTrackClick;",
         "pub use flui_platform::SessionEndBlock;",
         "pub use flui_platform::SessionEndRequest;",
+        "pub use flui_platform::SrgbColor;",
         "pub use flui_platform::SubmitError;",
         "pub use flui_platform::SystemPreferences;",
         "pub use flui_platform::TargetPlatform;",

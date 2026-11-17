@@ -1302,7 +1302,7 @@ impl WindowsLoop {
                 }
             }
 
-            tracing::info!("Message loop exited with code: {}", msg.wParam.0);
+            tracing::info!(code = msg.wParam.0, "the message loop exited");
         }
         Ok(())
     }

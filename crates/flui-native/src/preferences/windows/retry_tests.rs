@@ -203,9 +203,11 @@ fn recovery(panics: bool, repeat_failure: bool) {
                     if repeat_failure && call == 0 {
                         assert!(
                             source
-                                .sample_with(|| Err(PlatformError::Preferences {
-                                    message: "repeated getter failure".into(),
-                                }))
+                                .sample_with(|| Err::<SystemPreferences, _>(
+                                    PlatformError::Preferences {
+                                        message: "repeated getter failure".into(),
+                                    }
+                                ))
                                 .is_err()
                         );
                         return;
@@ -222,16 +224,20 @@ fn recovery(panics: bool, repeat_failure: bool) {
                 if panics {
                     assert!(
                         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                            source.sample_with(|| panic!("injected native getter panic"))
+                            source.sample_with(|| -> Result<SystemPreferences, PlatformError> {
+                                panic!("injected native getter panic")
+                            })
                         }))
                         .is_err()
                     );
                 } else {
                     assert!(
                         source
-                            .sample_with(|| Err(PlatformError::Preferences {
-                                message: "injected getter failure".into(),
-                            }))
+                            .sample_with(|| Err::<SystemPreferences, _>(
+                                PlatformError::Preferences {
+                                    message: "injected getter failure".into(),
+                                }
+                            ))
                             .is_err()
                     );
                 }

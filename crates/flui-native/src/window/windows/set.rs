@@ -326,7 +326,7 @@ impl crate::host::Window<WindowsLoop> for WindowsWindow {
             .map_err(|reason| OpenWindowError::Backend {
                 message: format!("the platform has shut down ({reason:?})"),
             })?;
-        tracing::info!("Opening window: {:?}", options.title);
+        tracing::debug!("a window is opening");
 
         // Refused before an id is taken, for what a command is refused for.
         options.geometry()?;

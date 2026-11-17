@@ -7,7 +7,7 @@ use smallvec::SmallVec;
 
 use flui_foundation::geometry::{Matrix4, Point, Rect, Size};
 
-use super::content::{BoundaryContent, Bounds, EntryIndex, LinkRole};
+use super::content::{BoundaryContent, Bounds, Entry, EntryIndex, LinkRole};
 use super::geometry::{Folded, Geometry, Links, Reach};
 use super::id::{Lineage, NodeKey, SceneNodeId, SceneVersionId};
 use super::owner::Placement;
@@ -451,9 +451,9 @@ impl SceneVersion {
             .map(move |(_, key)| SceneNodeId::new(lineage, *key))
     }
 
-    /// A reader of which subtrees can reach `rect`, in surface pixels: what
-    /// the raster side asks to skip a boundary outside a partial frame's
-    /// damage (ADR-0304 §9). See [`SubtreeCull`].
+    /// A reader of which subtrees and chunks can reach `rect`, in surface
+    /// pixels: what the raster side asks to skip a boundary or a chunk outside
+    /// a partial frame's damage (ADR-0304 §9). See [`SubtreeCull`].
     #[must_use]
     pub fn subtree_cull(&self, rect: Rect<f64>) -> SubtreeCull<'_> {
         SubtreeCull {
@@ -483,8 +483,8 @@ impl SceneVersion {
     }
 }
 
-/// Answers, for each slot a walk of one version meets, whether the subtree
-/// it holds can reach a rect of the surface (ADR-0304 §9).
+/// Answers, for each slot and chunk a walk of one version meets, whether
+/// what it draws can reach a rect of the surface (ADR-0304 §9).
 ///
 /// It reads each node's stored subtree bounds and filter spread through its
 /// chain, as the damage of a patch does, so a subtree a change there can
@@ -493,9 +493,10 @@ impl SceneVersion {
 /// and edges count as meeting.
 ///
 /// It keeps the chains of the nodes on the walk's current path folded, so a
-/// slot asked in depth-first paint order costs the effects above it in its
-/// parent and the clips, filters and extents above that, not the depth of
-/// the tree. A slot asked out of that order rebuilds the path from the root.
+/// slot or a chunk asked in depth-first paint order costs the effects above
+/// it in its node and the clips, filters and extents above that, not the
+/// depth of the tree. One asked out of that order rebuilds the path from the
+/// root.
 pub struct SubtreeCull<'v> {
     version: &'v SceneVersion,
     rect: Rect<f64>,
@@ -543,7 +544,49 @@ impl<'v> SubtreeCull<'v> {
                 folded
             }
         };
-        let meets = match folded.subtree_reach(geometry) {
+        let meets = self.meets_reach(folded.subtree_reach(geometry));
+        if meets {
+            // The walk enters it next, and asks for its slots and chunks from
+            // there.
+            self.path.push(folded);
+        }
+        meets
+    }
+
+    /// Whether the chunk at `at` can land in the rect, through the effects
+    /// above it in its node and the node's chain: a walk that has entered the
+    /// node skips a chunk that cannot, as it skips a slot whose subtree
+    /// cannot. An address that names no chunk of this version (another
+    /// lineage, an unattached node, an entry past the content's end, an
+    /// effect or a slot) meets nothing.
+    pub fn meets_chunk(&mut self, at: EntryAddress) -> bool {
+        if at.node.lineage() != self.version.lineage() {
+            return false;
+        }
+        let inner = self.version.inner();
+        let Some(record) = inner.record(at.node.key()) else {
+            return false;
+        };
+        let Some(Entry::Chunk { chunk, .. }) = record.content().entries().get(at.entry.get())
+        else {
+            return false;
+        };
+        let bounds = chunk.bounds();
+        let geometry = Geometry::shown(inner);
+        if !self.stand_in(geometry, at.node.key()) {
+            return false;
+        }
+        let top = self
+            .path
+            .last()
+            .expect("BUG: standing in a node leaves it on the path");
+        let reach = top.entry_reach(geometry, at.entry, bounds, &mut self.scratch);
+        self.meets_reach(reach)
+    }
+
+    /// Whether `reach` meets the rect, edges included.
+    fn meets_reach(&self, reach: Reach) -> bool {
+        match reach {
             Reach::Nothing => false,
             Reach::Rect(reach) => {
                 reach.left() <= self.rect.right()
@@ -552,12 +595,7 @@ impl<'v> SubtreeCull<'v> {
                     && self.rect.top() <= reach.bottom()
             }
             Reach::Unbounded | Reach::NonFinite => true,
-        };
-        if meets {
-            // The walk enters it next, and asks for its slots from there.
-            self.path.push(folded);
         }
-        meets
     }
 
     /// Leaves `key` the last node on the path, rebuilding the path from the

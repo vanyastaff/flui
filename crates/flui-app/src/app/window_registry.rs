@@ -10,7 +10,8 @@
 //! consumes that opaque value and invokes no window method or diagnostic hook.
 //! No caller outside this file names or passes a bare `WindowId`: no routing API elsewhere in
 //! `flui-app` accepts or returns one. The exceptions are structural — the
-//! test-only `PlatformWindow` mock restating `fn id(&self) -> WindowId`, and
+//! test windows implementing `PlatformWindow` (`RecordingWindow`, `ReentrantIdentityWindow`)
+//! restating `fn id(&self) -> WindowId`, and
 //! `AppRuntime::release_redraw_window_for`, which compares a window's own id.
 //!
 //! # Joint publication

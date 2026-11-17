@@ -11,7 +11,8 @@ use flui_platform::{
     AppTitleBar, Availability, Brightness, CapabilityAbsence, ColorGamut, DisplayColor,
     DisplayDescription, DisplayKey, DisplayRegistry, GesturePreferences, HourCycle, KeyboardInset,
     Locale, MeasurementSystem, MotionPreference, NumberingSystem, RegionOverride, RegionalFormats,
-    SizeConstraints, SystemPreferences, TextWeightPreference, Weekday, WheelPreferences, WheelStep,
+    ScrollBarPreferences, ScrollBarVisibility, ScrollTrackClick, SizeConstraints, SrgbColor,
+    SystemPreferences, TextWeightPreference, Weekday, WheelPreferences, WheelStep,
     WindowCapabilities, WindowCapability, WindowCommand, WindowExecutionState, WindowExtent,
     WindowFocus, WindowFrame, WindowGeometry, WindowInsets, WindowMaterial, WindowMode,
     WindowState,
@@ -43,9 +44,23 @@ fn preferences_round_trip_through_their_parts() {
             WheelPreferences::default()
                 .with_vertical(WheelStep::Page)
                 .with_horizontal_characters(4),
+        )
+        .with_accent_color(Some(SrgbColor::from_rgba8(0, 120, 215, 255)))
+        .with_scroll_bars(
+            ScrollBarPreferences::default()
+                .with_visibility(ScrollBarVisibility::Always)
+                .with_track_click(ScrollTrackClick::JumpToSpot),
         );
     let parts = preferences.clone().into_parts();
     assert_eq!(parts.text_scale, Some(1.5));
+    assert_eq!(
+        parts.accent_color,
+        Some(SrgbColor::from_rgba8(0, 120, 215, 255))
+    );
+    assert_eq!(
+        parts.scroll_bars.track_click,
+        Some(ScrollTrackClick::JumpToSpot)
+    );
     assert_eq!(parts.try_into_preferences(), Ok(preferences));
 }
 

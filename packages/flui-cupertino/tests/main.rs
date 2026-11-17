@@ -169,6 +169,14 @@ fn theme_and_color_resolution() {
             theme::explicit_theme_brightness_overrides_media_query,
         ),
         (
+            "theme::an unset primary follows the system accent",
+            theme::an_unset_primary_follows_the_system_accent,
+        ),
+        (
+            "theme::a forced brightness or a light accent keeps the theme legible",
+            theme::a_forced_brightness_or_a_light_accent_keeps_the_theme_legible,
+        ),
+        (
             "cupertino_app::publishes the resolved theme to descendants",
             cupertino_app::publishes_the_resolved_theme_to_descendants,
         ),

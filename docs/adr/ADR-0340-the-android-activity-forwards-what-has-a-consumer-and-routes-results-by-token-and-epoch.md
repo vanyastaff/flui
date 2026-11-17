@@ -13,10 +13,10 @@
   the provider context, the permission vocabulary), [ADR-0277](ADR-0277-a-window-publishes-its-insets-and-the-keyboards-motion.md)
   (the keyboard inset and its motion), [ADR-0348](ADR-0348-android-text-input-loses-no-edit-and-restarts-the-keyboard-only-for-its-composition.md) §2 (the Java
   side never waits for the owner)
-- **Sources:** flutter/flutter@f60eef8885
-  `engine/src/flutter/shell/platform/android/io/flutter/plugin/editing/TextInputPlugin.java`,
-  `ImeSyncDeferringInsetsCallback.java`, and
-  `packages/flutter_tools/templates/app/android.tmpl/app/src/main/AndroidManifest.xml.tmpl:14`
+- **Sources:** Flutter 3.50.0, `flutter/flutter@ab2912035e`
+  [`engine/src/flutter/shell/platform/android/io/flutter/plugin/editing/TextInputPlugin.java:92-93`](https://github.com/flutter/flutter/blob/ab2912035e/engine/src/flutter/shell/platform/android/io/flutter/plugin/editing/TextInputPlugin.java#L92-L93),
+  [`ImeSyncDeferringInsetsCallback.java:49-52`](https://github.com/flutter/flutter/blob/ab2912035e/engine/src/flutter/shell/platform/android/io/flutter/plugin/editing/ImeSyncDeferringInsetsCallback.java#L49-L52), and
+  [`packages/flutter_tools/templates/app/android.tmpl/app/src/main/AndroidManifest.xml.tmpl:14`](https://github.com/flutter/flutter/blob/ab2912035e/packages/flutter_tools/templates/app/android.tmpl/app/src/main/AndroidManifest.xml.tmpl#L14)
 
 ## Context and problem statement
 
