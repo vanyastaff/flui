@@ -1557,7 +1557,9 @@ mod tests {
     /// out with its subtree while the drawing after it is still read.
     ///
     /// Fails if the walk places a follower by its own translation (zero),
-    /// reads an unplaced follower's subtree, or stops at it.
+    /// takes its resolved transform as the window's or applies the
+    /// follower's ancestors twice, reads an unplaced follower's subtree, or
+    /// stops at it.
     #[test]
     fn followers_are_placed_by_their_leader_or_left_out() {
         let led = LayerLink::new();
@@ -1572,7 +1574,13 @@ mod tests {
                 Offset::new(30.0, 40.0),
             )),
         );
-        let follower = tree.push_child(root, Layer::Follower(FollowerLayer::new(led)));
+        // Under a slot of its own, as an overlay boundary is: the resolved
+        // transform is relative to that slot, which the walk applies above it.
+        let slot = tree.push_child(
+            root,
+            Layer::Offset(OffsetLayer::new(Offset::new(100.0, 0.0))),
+        );
+        let follower = tree.push_child(slot, Layer::Follower(FollowerLayer::new(led)));
         tree.push_child(follower, swatch(1));
         let hidden = tree.push_child(
             root,
