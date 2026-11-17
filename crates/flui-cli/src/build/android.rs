@@ -76,8 +76,9 @@ impl AndroidBuilder {
     ///
     /// # Errors
     ///
-    /// When `flui.toml` cannot be read, its version has no `versionCode`, or
-    /// the key cannot sign ([`SigningKey::for_build`]).
+    /// When `flui.toml` cannot be read, a release build of a pre-release
+    /// declares no `[app] build`, or the key cannot sign
+    /// ([`SigningKey::for_build`]).
     fn package_facts(&self, profile: Profile) -> BuildResult<PackageFacts> {
         // flui.toml names the package either way, so a changed `[app] id`
         // reaches the APK whichever packages it.
@@ -85,8 +86,12 @@ impl AndroidBuilder {
             .map_err(|error| {
             BuildError::Other(format!("flui.toml names the package: {error}"))
         })?;
-        let version_code = config.app.version.android_version_code()?;
-        let version_name = config.app.version.android_version_name();
+        let numbers = config
+            .app
+            .version
+            .package_numbers(config.app.build, profile)?;
+        let version_code = numbers.android_version_code;
+        let version_name = numbers.as_written;
         let signing = SigningKey::for_build(
             profile,
             config.signing.android.as_ref(),
@@ -635,7 +640,7 @@ impl AndroidBuilder {
         super::android_manifest::write(
             &super::android_manifest::path_in(&self.workspace_root),
             &super::android_manifest::ManifestFacts {
-                label: &config.app.name,
+                label: config.app.shown_name(),
                 lib_name: &lib_name,
             },
             declarations,
