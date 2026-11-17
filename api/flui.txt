@@ -48,7 +48,7 @@ pub fn flui::AppConfig::frame_latency(self, latency: flui::app::FrameLatency) ->
 pub fn flui::AppConfig::input_latency(self, latency: flui::platform::InputLatency) -> Self
 pub fn flui::AppConfig::input_tap(self, factory: flui::app::InputTapFactory) -> Self
 pub fn flui::AppConfig::max_size(self, width: u32, height: u32) -> Self
-pub fn flui::AppConfig::memory_reclaim(self, receiver: impl flui::foundation::memory::ReclaimMemory + Send + Sync + 'static) -> Self
+pub fn flui::AppConfig::memory_reclaim(self, receiver: impl flui::foundation::memory::ReclaimMemory + Send + 'static) -> Self
 pub fn flui::AppConfig::min_size(self, width: u32, height: u32) -> Self
 pub fn flui::AppConfig::mode(self, mode: flui::platform::WindowMode) -> Self
 pub fn flui::AppConfig::motion_override(self, preference: flui::animation::MotionOverride) -> Self
@@ -1309,16 +1309,15 @@ impl core::error::Error for flui::app::CloseRequestError
 impl core::fmt::Debug for flui::app::CloseRequestError
 impl core::fmt::Display for flui::app::CloseRequestError
 impl core::marker::StructuralPartialEq for flui::app::CloseRequestError
-variant flui::app::CloseRequestError::Failed { address: flui::foundation::PresentationAddress, error: flui::platform::ApplyError } // at 5
-variant flui::app::CloseRequestError::NoHostedRuntime // at 3
-variant flui::app::CloseRequestError::Refused { address: flui::foundation::PresentationAddress, error: flui::platform::AdmissionError } // at 4
+variant flui::app::CloseRequestError::Failed { address: flui::foundation::PresentationAddress, error: flui::platform::ApplyError } // at 4
+variant flui::app::CloseRequestError::NoHostedRuntime // at 2
+variant flui::app::CloseRequestError::Refused { address: flui::foundation::PresentationAddress, error: flui::platform::AdmissionError } // at 3
 variant flui::app::CloseRequestError::UnknownPresentation { address: flui::foundation::PresentationAddress } // at 0
 variant flui::app::CloseRequestError::WindowGone { address: flui::foundation::PresentationAddress } // at 1
-variant flui::app::CloseRequestError::WrongThread // at 2
 pub struct flui::app::CloseRequestHandler(_)
 impl Clone for flui::app::CloseRequestHandler
 impl core::fmt::Debug for flui::app::CloseRequestHandler
-pub fn flui::app::CloseRequestHandler::new(handler: impl Fn(&flui::app::CloseRequest) -> flui::app::CloseResponse + Send + Sync + 'static) -> Self
+pub fn flui::app::CloseRequestHandler::new(handler: impl Fn(&flui::app::CloseRequest) -> flui::app::CloseResponse + 'static) -> Self
 #[non_exhaustive] pub enum flui::app::CloseResponse
 impl Clone for flui::app::CloseResponse
 impl Copy for flui::app::CloseResponse
@@ -1782,7 +1781,7 @@ reexport flui::app::open_window => flui::open_window
 reexport flui::app::register_font => flui::register_font
 pub fn flui::app::request_presentation_close(address: flui::foundation::PresentationAddress) -> Result<(), flui::app::CloseRequestError>
 reexport flui::app::run_app => flui::run_app
-pub fn flui::app::run_direct(config: flui::AppConfig, render_fn: impl FnMut(&mut flui_layer::compositor::builder::SceneBuilder, f64, f64) + Send + 'static) -> anyhow::Result<()>
+pub fn flui::app::run_direct(config: flui::AppConfig, render_fn: impl FnMut(&mut flui_layer::compositor::builder::SceneBuilder, f64, f64) + 'static) -> anyhow::Result<()>
 pub fn flui::app::service_events<E: Send>(name: &'static str, capacity: usize) -> (flui::app::ServicePublisher<E>, flui::app::ServiceEvents<E>)
 pub fn flui::app::window_handle(address: flui::foundation::PresentationAddress) -> Option<flui::view::WindowHandle>
 pub mod flui::cupertino

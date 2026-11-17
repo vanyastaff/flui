@@ -222,7 +222,7 @@ fn presented_host_window(
 ) -> Option<Rc<dyn flui_native::HostWindow>> {
     host::APP_RUNTIME.with(|slot| {
         let state = slot.try_borrow().ok()?;
-        if state.owner_thread.is_none() {
+        if state.owner_thread != Some(std::thread::current().id()) {
             return None;
         }
         let presented = find(&state.window_commands)?;
@@ -254,9 +254,7 @@ pub fn window_handle(
 ) -> Option<flui_view::WindowHandle> {
     host::APP_RUNTIME.with(|slot| {
         let state = slot.try_borrow().ok()?;
-        state
-            .owner_thread
-            .is_some()
+        (state.owner_thread == Some(std::thread::current().id()))
             .then(|| state.window_commands.handle_for(address))
             .flatten()
     })
