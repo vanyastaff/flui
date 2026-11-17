@@ -1968,18 +1968,9 @@ impl PresentationState {
         self.device_recovery.replace(recovery)
     }
 
-    /// Whether this presentation attempts no frames: its device rebuild was
-    /// given up, which holds its frames until a new rebuild is asked for, or
-    /// its renderer is dead.
-    pub(crate) fn device_holds_frames(&self) -> bool {
-        self.device_recovery
-            .get()
-            .is_some_and(crate::frame_failure::DeviceRecovery::holds_frames)
-    }
-
-    /// Whether this presentation's device rebuild was given up and waits for
-    /// the application to ask for another.
-    pub(crate) fn device_rebuild_given_up(&self) -> bool {
+    /// Whether this presentation's device rebuild was given up, which holds
+    /// its frames until a new rebuild is asked for.
+    pub(crate) fn device_abandoned(&self) -> bool {
         self.device_recovery
             .get()
             .is_some_and(crate::frame_failure::DeviceRecovery::is_abandoned)

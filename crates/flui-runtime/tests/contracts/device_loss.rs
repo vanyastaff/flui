@@ -208,15 +208,15 @@ fn a_given_up_rebuild_holds_frames_until_the_application_asks_again() {
 }
 
 /// A dead renderer is reported once, even over a rebuild already given up,
-/// holds the frames for good, and a rebuild the application asks for leaves
+/// its frames go on without drawing, and a rebuild the application asks for leaves
 /// it as it is (ADR-0305 §9). The death asks for one frame, which commits
 /// the tree a frame dropped before it left uncommitted.
 ///
-/// Red-check: report only a change into a held state (drop `newly_dead` in
+/// Red-check: report only a change into a given-up state (drop `dies` in
 /// `note_primary_device_recovery`) and the death over the given-up rebuild
 /// is never reported.
 #[test]
-fn a_dead_renderer_is_reported_once_and_takes_no_rebuild() {
+fn a_dead_renderer_is_reported_once_and_its_frames_go_on() {
     // The first frame was dropped on the lost device, so its tree is not
     // committed when the renderer is found dead.
     let mut lost = Lost::new();
@@ -246,7 +246,7 @@ fn a_dead_renderer_is_reported_once_and_takes_no_rebuild() {
     let wakes = lost.wakes.load(Ordering::SeqCst);
     assert!(
         !lost.wants_a_frame(wakes),
-        "a dead renderer asks for no frame"
+        "a dead renderer asks for no frame while nothing changes"
     );
     assert!(
         !lost.runtime.retry_render_device(),
@@ -256,5 +256,15 @@ fn a_dead_renderer_is_reported_once_and_takes_no_rebuild() {
         lost.runtime.primary_device_recovery(),
         Some(DeviceRecovery::Dead)
     );
-    assert!(!lost.wants_a_frame(wakes));
+    // The frames go on, answered without drawing, so input and the semantics
+    // tree still follow the application.
+    lost.runtime.mark_primary_needs_full_repaint();
+    assert!(
+        lost.runtime.has_pending_work(),
+        "work asked for after the death runs a frame"
+    );
+    let submits = lost.device.submits;
+    let _shown = lost.run_frame();
+    assert_eq!(lost.device.submits, submits + 1, "that frame is run");
+    assert_eq!(lost.reports().len(), reported, "and reports nothing");
 }

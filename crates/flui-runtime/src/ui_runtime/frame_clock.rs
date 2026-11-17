@@ -288,25 +288,29 @@ impl UiRuntime {
     /// [`FrameFailureKind::DeviceLost`](crate::frame_failure::FrameFailureKind::DeviceLost)
     /// with [`DeviceRecovery::Abandoned`](crate::frame_failure::DeviceRecovery::Abandoned)
     /// and holds the presentation's frames: it asks for none and waits out no
-    /// retry. A renderer found dead reports one with
-    /// [`DeviceRecovery::Dead`](crate::frame_failure::DeviceRecovery::Dead), even over a
-    /// given-up rebuild, and holds the frames the same way for good. Leaving a given-up state marks the whole tree for repaint and
+    /// retry. Leaving a given-up state marks the whole tree for repaint and
     /// asks for a frame, since nothing was shown meanwhile; a rebuild that
     /// succeeds is repainted by the renderer's owner, which knows whether the
     /// frame it runs next still needs one.
+    ///
+    /// A renderer found dead reports one with
+    /// [`DeviceRecovery::Dead`](crate::frame_failure::DeviceRecovery::Dead), even
+    /// over a given-up rebuild, and releases any hold: the frames go on, the
+    /// host answers them without drawing, and the first of them, asked for
+    /// here with a full repaint, commits the tree a frame dropped before the
+    /// death left uncommitted, with the input it held.
     pub fn note_primary_device_recovery(
         &self,
         recovery: Option<crate::frame_failure::DeviceRecovery>,
     ) {
         let presentation = self.presentations.primary();
         let previous = presentation.replace_device_recovery(recovery);
-        let was_held = previous.is_some_and(crate::frame_failure::DeviceRecovery::holds_frames);
-        let holds = recovery.is_some_and(crate::frame_failure::DeviceRecovery::holds_frames);
-        // A death is reported even over a given-up rebuild: it is the news
-        // that no later rebuild will help.
-        let newly_dead =
+        let was_abandoned =
+            previous.is_some_and(crate::frame_failure::DeviceRecovery::is_abandoned);
+        let abandons = recovery.is_some_and(crate::frame_failure::DeviceRecovery::is_abandoned);
+        let dies =
             recovery == Some(crate::frame_failure::DeviceRecovery::Dead) && previous != recovery;
-        if (holds && !was_held) || newly_dead {
+        if (abandons && !was_abandoned) || dies {
             presentation.disarm_failure_retry();
             self.report_frame_failure(
                 presentation,
@@ -314,14 +318,8 @@ impl UiRuntime {
                     recovery: recovery.unwrap_or_default(),
                 },
             );
-            if newly_dead {
-                // A frame that failed before the death left its tree
-                // uncommitted and its input held: one more frame, which the
-                // dead renderer answers without drawing, commits it.
-                self.mark_needs_full_repaint_for(presentation);
-                self.wake_frame();
-            }
-        } else if was_held && !holds {
+        }
+        if (was_abandoned && !abandons) || dies {
             self.mark_needs_full_repaint_for(presentation);
             self.wake_frame();
         }
@@ -336,7 +334,7 @@ impl UiRuntime {
     pub fn retry_render_device(&self) -> bool {
         let mut asked = false;
         for presentation in self.presentations.iter() {
-            if presentation.device_rebuild_given_up() {
+            if presentation.device_abandoned() {
                 presentation
                     .replace_device_recovery(Some(crate::frame_failure::DeviceRecovery::Pending));
                 self.mark_needs_full_repaint_for(presentation);
@@ -539,7 +537,7 @@ impl UiRuntime {
                     // backoff still runs or the device was abandoned; the backoff's deadline
                     // (counted below once the sink frees a place) or a new rebuild wakes it then.
                     _ if presentation.frames_in_flight().is_saturated() => false,
-                    _ if presentation.device_holds_frames() => false,
+                    _ if presentation.device_abandoned() => false,
                     Some(at) => presentation.clock().now() >= at,
                     None => {
                         presentation.has_pending_work_snapshot()

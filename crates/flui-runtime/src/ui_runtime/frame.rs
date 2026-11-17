@@ -1361,7 +1361,7 @@ impl UiRuntime {
                 // A presentation at its in-flight limit is woken by the settlement that frees a
                 // place (ADR-0305 §5).
                 && !presentation.frames_in_flight().is_saturated()
-                && !presentation.device_holds_frames()
+                && !presentation.device_abandoned()
                 && (presentation.redraw_requested_since_watch()
                     || (late_visual_update && presentation.has_pending_work_snapshot()))
         });

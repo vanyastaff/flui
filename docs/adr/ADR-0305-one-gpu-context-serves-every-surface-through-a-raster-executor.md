@@ -474,9 +474,10 @@ executor and slot.
   `NoPresent` without reaching the executor, and the host reports no rebuild or restore deadline
   a dead executor left. Each window tells its UI runtime once
   (`DeviceRecovery::Dead`, reported through the frame-failure handler as a lost device): the
-  presentation attempts no frames but the one the death asks for, which commits a tree that a
-  frame dropped before the death left uncommitted, and keeps taking input, lifecycle changes and
-  the agent's requests against the tree it last painted. The failure itself
+  presentation keeps building and laying out its frames, which the host answers without drawing,
+  so it keeps taking input, lifecycle changes and the agent's requests and its semantics tree
+  follows the application; the death releases a given-up rebuild's hold and asks for a frame,
+  which commits a tree that a frame dropped before the death left uncommitted. The failure itself
   (`ExecutorFailure::Wedged`, or a turn's panic) is taken from the sender once
   (`take_executor_failure`) and logged, with no panic
   on its thread. A window closed while the thread does not answer its detach keeps its native
@@ -698,7 +699,7 @@ the facade. Every production use of `with_backend` becomes:
   `a_failed_rebuild_is_reported_with_the_dropped_frame`,
   `a_given_up_rebuild_holds_frames_until_the_application_asks_again`,
   `a_lost_device_waits_out_its_rebuild_backoff`,
-  `a_dead_renderer_is_reported_once_and_takes_no_rebuild` (§9) and
+  `a_dead_renderer_is_reported_once_and_its_frames_go_on` (§9) and
   `a_given_up_device_renders_again_when_the_application_asks`.
 - Runs: a platform's placement becomes threaded only with its row in `docs/platform-parity.md`
   (§10).

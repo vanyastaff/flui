@@ -30,7 +30,8 @@
 - **`flui-runtime`**: `DeviceRecovery::Dead`, reported once with a `DeviceLost` frame failure when
   the raster thread died or stopped answering
   ([ADR-0305](/docs/adr/ADR-0305-one-gpu-context-serves-every-surface-through-a-raster-executor.md) §9).
-  The presentation attempts no frames, and `AppHandle::retry_render_device` leaves it as it is.
+  The presentation's frames go on without drawing, and `AppHandle::retry_render_device` leaves it
+  as it is.
 
 ### Changed
 
