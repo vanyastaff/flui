@@ -11,7 +11,7 @@
 //! [`Closures::push_effect`], which joins a backdrop group's members, and
 //! close over it.
 
-use flui_foundation::geometry::{Matrix4, Rect};
+use flui_foundation::geometry::{Matrix4, Rect, cover};
 use flui_painting::DamageExtent;
 use flui_painting::paint::ImageFilter;
 
@@ -330,7 +330,8 @@ fn transform_reach(filter: &ImageFilter, bounds: Rect<f64>, transform: &Matrix4)
 /// mapped to the surface, when that input already reaches `inner` past its
 /// own mapped bounds. A kernel adds the renderer's growth, which is physical
 /// pixels whatever the transform above it. A magnifier (a uniform scale)
-/// scales what it takes, half a source pixel of bilinear read included, and
+/// scales what it takes, the source pixel its input covers in part and half
+/// a source pixel of bilinear read included, and
 /// draws a pixel past it. Any other transform filter stretches device
 /// distances by a factor its ancestors set, so what it reaches has no bound
 /// known inside its boundary. Bounds in a boundary's space carry this
@@ -344,10 +345,11 @@ pub(crate) fn device_spread(filter: &ImageFilter, inner: f64) -> f64 {
             transform: map,
             sampling,
         } => match map.inverse_coefficients() {
+            // The source is whole device pixels: one the input covers in part
+            // is read whole, at most a pixel past it.
             [xx, 0.0, 0.0, yy, _, _] if xx == yy && xx > 0.0 => {
-                (inner + sampling.reach()) / xx + 1.0
+                (inner + 1.0 + sampling.reach()) / xx + 1.0
             }
-            _ if inner == 0.0 && sampling.reach() == 0.0 => 1.0,
             _ => f64::INFINITY,
         },
         ImageFilter::Compose(filters) => filters
@@ -423,8 +425,9 @@ pub(crate) fn moved(
 
 /// Where `filter` draws what it takes from `input` (surface pixels) under
 /// `transform`: spread by a kernel's reach, or moved where a transform
-/// sends it, the sampling's reach before the map and a pixel after it. `None` when that has no
-/// bound, under a projective ancestor.
+/// sends it, from the whole source pixels the input touches grown by the
+/// sampling's reach, and a pixel past that once mapped. `None` when that
+/// has no bound, under a projective ancestor.
 pub(crate) fn footprint(
     filter: &ImageFilter,
     input: Rect<f64>,
@@ -439,10 +442,12 @@ pub(crate) fn footprint(
                 return None;
             }
             let moved = shown_map(map.inverse_coefficients(), transform)?;
-            // A read reaches past its sample point before the map spreads it,
-            // as the renderer inflates its input support (a 10× linear
-            // magnifier draws five device pixels past the mapped source).
-            let read = input.expand(sampling.reach());
+            // The source is whole device pixels, so a pixel the input covers
+            // in part is read whole, and a read reaches past its sample point
+            // before the map spreads it, as the renderer inflates its input
+            // support (a 10× linear magnifier draws five device pixels past
+            // the mapped source).
+            let read = cover(input).expand(sampling.reach());
             Some(moved.transform_rect(&read).expand(1.0)).filter(Rect::is_finite)
         }
         ImageFilter::Compose(filters) => filters
