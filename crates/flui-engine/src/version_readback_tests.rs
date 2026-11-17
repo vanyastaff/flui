@@ -973,8 +973,8 @@ enum LayerClip {
     SaveLayerOverImageFilter,
 }
 
-/// A retained root over stripes, then, under `clip` (x 90..128), a red box
-/// (x 70..86) left of the clip (`nodes[0]`), a box at (100, 4) in `color`
+/// A retained root over stripes, then, under `clip` (x `left`..128), a red
+/// box (x 70..`right`) left of the clip (`nodes[0]`), a box at (100, 4) in `color`
 /// (`nodes[1]`) and a blur reading the clip's left edge. Without
 /// `root_too` only the second box's content is published.
 fn clipped_reader(
@@ -982,6 +982,7 @@ fn clipped_reader(
     nodes: [SceneNodeId; 2],
     color: Color,
     clip: LayerClip,
+    [left, right]: [f64; 2],
     root_too: bool,
 ) {
     use flui_layer::{BackdropFilterLayer, ClipRectLayer, ImageFilterLayer, Layer, OpacityLayer};
@@ -1008,16 +1009,16 @@ fn clipped_reader(
     if !root_too {
         return;
     }
-    let mut hidden = BoundaryContent::builder();
-    hidden.chunk(picture(writer, 3, &|canvas| {
+    let mut boxed_left = BoundaryContent::builder();
+    boxed_left.chunk(picture(writer, 3, &|canvas| {
         canvas.draw_rect(
-            Rect::from_ltrb(70.0, 4.0, 86.0, 28.0),
+            Rect::from_ltrb(70.0, 4.0, right, 28.0),
             &Paint::fill(Color::RED),
         );
     }));
     writer.push(SceneOp::Publish {
         node: nodes[0],
-        content: Arc::new(hidden.finish()),
+        content: Arc::new(boxed_left.finish()),
     });
     for (node, at) in [
         (nodes[0], Offset::ZERO),
@@ -1041,7 +1042,7 @@ fn clipped_reader(
             );
         }
     }));
-    let window = Rect::from_ltrb(90.0, 0.0, 128.0, 40.0);
+    let window = Rect::from_ltrb(left, 0.0, 128.0, 40.0);
     let layers = match clip {
         LayerClip::SaveLayer => vec![Layer::from(ClipRectLayer::new(
             window,
@@ -1085,23 +1086,27 @@ fn clipped_reader(
 /// what the clip shows. The layer's children draw into it unclipped, but a
 /// partial frame skips a node the clip hides, so a filter that read past
 /// the clip would blur the hidden box in a full frame and not in a partial
-/// one.
+/// one. At a fractional edge the box ends where the clip starts, inside the
+/// pixel the clip's edge covers in part, which shows it.
 #[test]
 fn a_backdrop_filter_in_a_clipped_layer_reads_only_inside_the_clip() {
     let Some(renderer) = crate::test_support::renderer_or_skip() else {
         return;
     };
-    for clip in [
-        LayerClip::SaveLayer,
-        LayerClip::HardOverOpacity,
-        LayerClip::SaveLayerOverImageFilter,
+    // (clip, [clip's left edge, the hidden box's right edge])
+    for (clip, edges) in [
+        (LayerClip::SaveLayer, [90.0, 86.0]),
+        (LayerClip::HardOverOpacity, [90.0, 86.0]),
+        (LayerClip::SaveLayerOverImageFilter, [90.0, 86.0]),
+        (LayerClip::SaveLayer, [89.6, 89.6]),
+        (LayerClip::HardOverOpacity, [89.4, 89.4]),
     ] {
         let mut partial = renderer.retained_capture((SIDE, SIDE)).expect("capture");
         let mut owner = SceneOwner::new();
         let nodes: [SceneNodeId; 2] = {
             let mut writer = owner.writer();
             let nodes = std::array::from_fn(|_| writer.mint_node());
-            clipped_reader(&mut writer, nodes, Color::WHITE, clip, true);
+            clipped_reader(&mut writer, nodes, Color::WHITE, clip, edges, true);
             nodes
         };
         owner.apply(SURFACE).expect("the scene applies");
@@ -1117,7 +1122,7 @@ fn a_backdrop_filter_in_a_clipped_layer_reads_only_inside_the_clip() {
             .render_scene(&Scene::of_version(owner.current().clone()))
             .expect("the warm-up renders");
 
-        clipped_reader(&mut owner.writer(), nodes, Color::BLUE, clip, false);
+        clipped_reader(&mut owner.writer(), nodes, Color::BLUE, clip, edges, false);
         owner.apply(SURFACE).expect("a recolour applies");
         apply(&mut partial, owner.patch_damage());
         partial
@@ -1125,7 +1130,7 @@ fn a_backdrop_filter_in_a_clipped_layer_reads_only_inside_the_clip() {
             .expect("the partial frame renders");
         assert!(
             matches!(partial.last_plan(), Some(FramePlan::RetainedPartial(_))),
-            "{clip:?}: the frame is partial: {:?}",
+            "{clip:?} at {edges:?}: the frame is partial: {:?}",
             partial.last_plan()
         );
         let mut full = renderer.retained_capture((SIDE, SIDE)).expect("capture");
@@ -1150,9 +1155,101 @@ fn a_backdrop_filter_in_a_clipped_layer_reads_only_inside_the_clip() {
             .count();
         assert_eq!(
             stale, 0,
-            "{clip:?}: pixels the partial frame drew unlike the full frame"
+            "{clip:?} at {edges:?}: pixels the partial frame drew unlike the full frame"
         );
     }
+}
+
+/// One full frame of stripes in a save layer whose clip starts at `left`,
+/// under an image filter's blur of `spread` when there is one, with a blur
+/// backdrop over `backdrop` after them.
+fn clipped_stripes(
+    renderer: &crate::headless::HeadlessRenderer,
+    left: f64,
+    spread: Option<f64>,
+    backdrop: Option<Rect<f64>>,
+) -> Vec<u8> {
+    use flui_layer::{BackdropFilterLayer, ClipRectLayer, ImageFilterLayer, Layer};
+    use flui_painting::paint::{BlendMode, Clip, ImageFilter};
+
+    let mut owner = SceneOwner::new();
+    {
+        let mut writer = owner.writer();
+        let mut canvas = Canvas::new();
+        for x in (60..SIDE).step_by(4) {
+            let color = if x % 8 == 0 {
+                Color::BLUE
+            } else {
+                Color::GREEN
+            };
+            canvas.draw_rect(
+                Rect::from_xywh(f64::from(x), 0.0, 4.0, 40.0),
+                &Paint::fill(color),
+            );
+        }
+        let stripes = Arc::new(Chunk::new(
+            RenderId::new(2),
+            0,
+            writer.next_content_version().expect("a content version"),
+            canvas.finish(),
+        ));
+        let mut content = BoundaryContent::builder();
+        content.push_effect(
+            Layer::from(ClipRectLayer::new(
+                Rect::from_ltrb(left, 0.0, 128.0, 40.0),
+                Clip::AntiAliasWithSaveLayer,
+            )),
+            RenderId::new(3),
+            0,
+        );
+        if let Some(sigma) = spread {
+            content.push_effect(
+                Layer::from(ImageFilterLayer::new(ImageFilter::blur(sigma))),
+                RenderId::new(4),
+                0,
+            );
+        }
+        content.chunk(stripes);
+        if let Some(bounds) = backdrop {
+            content.push_effect(
+                Layer::from(BackdropFilterLayer::new(
+                    ImageFilter::blur(3.0),
+                    BlendMode::SrcOver,
+                    bounds,
+                )),
+                RenderId::new(5),
+                0,
+            );
+            content.pop_effect();
+        }
+        if spread.is_some() {
+            content.pop_effect();
+        }
+        content.pop_effect();
+        writer.push(SceneOp::Publish {
+            node: writer.current().root(),
+            content: Arc::new(content.finish()),
+        });
+    }
+    owner.apply(SURFACE).expect("the scene applies");
+    let mut full = renderer.retained_capture((SIDE, SIDE)).expect("capture");
+    apply(
+        &mut full,
+        DamageRegion::Full(flui_layer::FullReason::FirstFrame),
+    );
+    full.render_scene(&Scene::of_version(owner.current().clone()))
+        .expect("the frame renders");
+    full.read_rgba().expect("readback")
+}
+
+/// Whether any pixel of row 16 between `columns` differs in the two frames.
+fn row_differs(a: &[u8], b: &[u8], columns: std::ops::Range<u32>) -> bool {
+    columns.into_iter().any(|x| {
+        px(a, x, 16)
+            .iter()
+            .zip(px(b, x, 16))
+            .any(|(&a, b)| a.abs_diff(b) > 2)
+    })
 }
 
 /// A backdrop filter under an image filter's layer draws what the image
@@ -1161,88 +1258,35 @@ fn a_backdrop_filter_in_a_clipped_layer_reads_only_inside_the_clip() {
 /// image filter requires to draw what the clip shows, not by the clip.
 #[test]
 fn a_backdrop_filter_under_an_image_filter_draws_what_the_filter_spreads_into_the_clip() {
-    use flui_layer::{BackdropFilterLayer, ClipRectLayer, ImageFilterLayer, Layer};
-    use flui_painting::paint::{BlendMode, Clip, ImageFilter};
-
     let Some(renderer) = crate::test_support::renderer_or_skip() else {
         return;
     };
-    let draw = |with_backdrop: bool| {
-        let mut owner = SceneOwner::new();
-        {
-            let mut writer = owner.writer();
-            let mut canvas = Canvas::new();
-            for x in (60..SIDE).step_by(4) {
-                let color = if x % 8 == 0 {
-                    Color::BLUE
-                } else {
-                    Color::GREEN
-                };
-                canvas.draw_rect(
-                    Rect::from_xywh(f64::from(x), 0.0, 4.0, 40.0),
-                    &Paint::fill(color),
-                );
-            }
-            let stripes = Arc::new(Chunk::new(
-                RenderId::new(2),
-                0,
-                writer.next_content_version().expect("a content version"),
-                canvas.finish(),
-            ));
-            let mut content = BoundaryContent::builder();
-            content.push_effect(
-                Layer::from(ClipRectLayer::new(
-                    Rect::from_ltrb(90.0, 0.0, 128.0, 40.0),
-                    Clip::AntiAliasWithSaveLayer,
-                )),
-                RenderId::new(3),
-                0,
-            );
-            content.push_effect(
-                Layer::from(ImageFilterLayer::new(ImageFilter::blur(2.0))),
-                RenderId::new(4),
-                0,
-            );
-            content.chunk(stripes);
-            if with_backdrop {
-                // Wholly left of the clip, inside what the blur draws it from.
-                content.push_effect(
-                    Layer::from(BackdropFilterLayer::new(
-                        ImageFilter::blur(2.0),
-                        BlendMode::SrcOver,
-                        Rect::from_ltrb(84.0, 8.0, 90.0, 24.0),
-                    )),
-                    RenderId::new(5),
-                    0,
-                );
-                content.pop_effect();
-            }
-            content.pop_effect();
-            content.pop_effect();
-            writer.push(SceneOp::Publish {
-                node: writer.current().root(),
-                content: Arc::new(content.finish()),
-            });
-        }
-        owner.apply(SURFACE).expect("the scene applies");
-        let mut full = renderer.retained_capture((SIDE, SIDE)).expect("capture");
-        apply(
-            &mut full,
-            DamageRegion::Full(flui_layer::FullReason::FirstFrame),
-        );
-        full.render_scene(&Scene::of_version(owner.current().clone()))
-            .expect("the frame renders");
-        full.read_rgba().expect("readback")
-    };
-    let (with, without) = (draw(true), draw(false));
-    let spread = (90..96).any(|x| {
-        px(&with, x, 16)
-            .iter()
-            .zip(px(&without, x, 16))
-            .any(|(&a, b)| a.abs_diff(b) > 2)
-    });
+    // Wholly left of the clip, inside what the blur draws it from.
+    let backdrop = Rect::from_ltrb(84.0, 8.0, 90.0, 24.0);
+    let with = clipped_stripes(&renderer, 90.0, Some(2.0), Some(backdrop));
+    let without = clipped_stripes(&renderer, 90.0, Some(2.0), None);
     assert!(
-        spread,
+        row_differs(&with, &without, 90..96),
         "the image filter spreads the backdrop filter's output into the clip"
+    );
+}
+
+/// A backdrop filter in a clipped layer filters the pixel the clip's
+/// fractional edge shows in part, as it does the pixels the clip covers.
+#[test]
+fn a_backdrop_filter_filters_the_pixel_a_clip_edge_shows_in_part() {
+    let Some(renderer) = crate::test_support::renderer_or_skip() else {
+        return;
+    };
+    let backdrop = Some(Rect::from_ltrb(80.0, 8.0, 110.0, 24.0));
+    let with = clipped_stripes(&renderer, 90.6, None, backdrop);
+    let without = clipped_stripes(&renderer, 90.6, None, None);
+    assert!(
+        row_differs(&with, &without, 91..92),
+        "precondition: the filter blurs the stripes the clip covers"
+    );
+    assert!(
+        row_differs(&with, &without, 90..91),
+        "the filter blurs the pixel the clip's edge covers in part"
     );
 }

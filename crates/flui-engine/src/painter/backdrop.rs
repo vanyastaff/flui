@@ -90,7 +90,16 @@ impl WgpuPainter {
                 });
             }
         };
-        let layer_clip_bounds = self.compositor.composite_clip_bounds()?;
+        // Whole pixels: the composite clip shows a pixel its edge covers in
+        // part, so the filter reads and writes all of it.
+        let layer_clip_bounds = self.compositor.composite_clip_bounds()?.map(|bound| {
+            Rect::from_ltrb(
+                bound.left().floor(),
+                bound.top().floor(),
+                bound.right().ceil(),
+                bound.bottom().ceil(),
+            )
+        });
         let mut clip = self.captured_group_clip();
         clip.chain = match clip.chain.append(
             shape,
@@ -277,15 +286,9 @@ impl GpuReplay {
         );
         // A layer's children draw into it unclipped, and the scene's cull
         // skips a node its composite clip hides: past that clip the filter
-        // reads as at the attachment's edge, in every frame alike. A pixel
-        // the clip's edge covers in part is read whole.
+        // reads transparency, as past the attachment.
         let Some(readable) = (match op.layer_clip_bounds {
-            Some(bound) => attachment.intersect(&Rect::from_ltrb(
-                bound.left().floor(),
-                bound.top().floor(),
-                bound.right().ceil(),
-                bound.bottom().ceil(),
-            )),
+            Some(bound) => attachment.intersect(&bound),
             None => Some(attachment),
         })
         .filter(|rect| !rect.is_empty()) else {
