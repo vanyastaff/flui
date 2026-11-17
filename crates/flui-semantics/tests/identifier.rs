@@ -464,3 +464,48 @@ fn unpublished_identifiers_are_reported_once_each_and_bounded() {
         "a shared identifier is reported once"
     );
 }
+
+#[test]
+fn an_identifier_lifted_under_many_parents_is_reported_once() {
+    let mut owner = SemanticsOwner::new(Arc::new(|_: &TreeUpdate| {}));
+    let node = |index: u32, configure: &dyn Fn(&mut SemanticsConfiguration)| {
+        let mut node = SemanticsNode::new().with_source_render_id(render_id(index));
+        node.set_rect(Rect::from_ltwh(0.0, 0.0, 80.0, 10.0));
+        configure(node.config_mut());
+        node
+    };
+    let root = owner.insert(node(1, &|c| c.set_label("Window")));
+    // A row template: each of 80 rows lifts a "swatch", more than one read
+    // reports, and a "footer" follows them in tree order.
+    for row in 0..80 {
+        let published = owner.insert(node(2 + 2 * row, &|c| c.set_label("Row")));
+        let swatch = owner.insert(node(3 + 2 * row, &|c| c.set_identifier("swatch")));
+        owner.add_child(published, swatch);
+        owner.add_child(root, published);
+    }
+    let footer_parent = owner.insert(node(500, &|c| c.set_label("Footer")));
+    let footer = owner.insert(node(501, &|c| c.set_identifier("footer")));
+    owner.add_child(footer_parent, footer);
+    owner.add_child(root, footer_parent);
+    owner.set_root(Some(root));
+    owner.flush();
+
+    let placement = Placement::new(
+        DevicePixelRatio::try_new(1.0).expect("1 is a ratio"),
+        WindowId::from_u64(1).expect("non-zero"),
+    );
+    let tree = owner
+        .read_wire(&ReadQuery::new(), placement)
+        .expect("the published tree reads");
+    let reported: Vec<&str> = tree
+        .diagnostics
+        .iter()
+        .filter_map(|diagnostic| match diagnostic {
+            flui_protocol::TreeDiagnostic::UnpublishedIdentifier { identifier, .. } => {
+                Some(identifier.as_str())
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(reported, ["swatch", "footer"]);
+}

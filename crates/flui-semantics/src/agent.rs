@@ -500,9 +500,9 @@ struct Walk<'q> {
     /// AccessKit falls back to the root when nothing does.
     root_claims_focus: bool,
     diagnostics: Vec<TreeDiagnostic>,
-    /// How many lifted identifiers `diagnostics` reports, up to
+    /// The lifted identifiers `diagnostics` reports, each once, at most
     /// [`MAX_LIFTED_IDENTIFIERS`].
-    lifted_reported: usize,
+    lifted: Vec<String>,
     filter: AgentFilter,
 }
 
@@ -548,18 +548,16 @@ impl Walk<'_> {
             .filtered_children(|child| filter.apply(child))
             .collect();
         // An identifier on a node the read lifts into this one selects
-        // nothing: reported once per identifier and parent, so an author
-        // learns why (ADR-0240 §3). A lifted node has exactly one published
-        // parent, so the identifiers seen here repeat nowhere else.
-        let mut seen: Vec<String> = Vec::new();
+        // nothing: reported once per read, with the first node it is lifted
+        // into, so an author learns why (ADR-0240 §3) and a row template
+        // repeating one identifier does not crowd out the rest.
         lifted_identifiers(filter, node, &mut |identifier| {
-            if self.lifted_reported >= MAX_LIFTED_IDENTIFIERS
-                || seen.iter().any(|known| known == identifier)
+            if self.lifted.len() >= MAX_LIFTED_IDENTIFIERS
+                || self.lifted.iter().any(|known| known == identifier)
             {
                 return;
             }
-            self.lifted_reported += 1;
-            seen.push(identifier.to_owned());
+            self.lifted.push(identifier.to_owned());
             self.diagnostics
                 .push(TreeDiagnostic::UnpublishedIdentifier {
                     identifier: identifier.to_owned(),
@@ -805,7 +803,7 @@ impl SemanticsOwner {
                 truncated: false,
                 root_claims_focus,
                 diagnostics: Vec::new(),
-                lifted_reported: 0,
+                lifted: Vec::new(),
                 filter: AgentFilter::of(self),
             };
             if walk.remaining == 0 {

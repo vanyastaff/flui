@@ -163,8 +163,9 @@ pub enum TestError {
     /// nothing selects it by that identifier (ADR-0240 §3).
     #[error(
         "nothing matches {locator:?}: the identifier {identifier:?} is on a node that publishes \
-         nothing of its own (no role, label or text), which the agent and accessibility clients \
-         lift into its parent, so nothing selects it. {fix}\nThe window shows:\n{shown}",
+         nothing of its own (no role, label or text, or a generic or presentation role), which the \
+         agent and accessibility clients lift into its parent, so nothing \
+         selects it. {fix}\nThe window shows:\n{shown}",
         fix = unpublished_identifier_fix(control.as_deref())
     )]
     UnpublishedIdentifier {
@@ -1212,6 +1213,10 @@ impl Tester {
             return None;
         }
         let tree = self.try_semantics().ok()?;
+        // An identifier a published node carries selects that node, so a
+        // miss is the rest of the locator's (ADR-0240 §4 lets one identifier
+        // stand in several places).
+        wanted.retain(|identifier| !carries_identifier(&tree.roots, identifier));
         let (identifier, parent) =
             tree.diagnostics
                 .iter()
@@ -1469,6 +1474,12 @@ fn wait(
         // made on the tree that work committed.
         let matches = tester.try_find_all(locator)?;
         let found = match holds(tester, &matches) {
+            // No match because an identifier is on a lifted node is no
+            // verdict: `to_be_gone` would pass while the node is on screen.
+            Ok(()) if matches.is_empty() => match tester.unpublished_identifier(locator) {
+                Some(error) => return Err(error),
+                None => return Ok(()),
+            },
             Ok(()) => return Ok(()),
             Err(found) => found,
         };
@@ -1476,9 +1487,12 @@ fn wait(
         // later is the test's to reach with `pump_for`.
         let next = tester.host.time_to_next_frame();
         let gives_up = next != Some(Duration::ZERO) || waited >= timeout;
-        // An expectation that gives up on an identifier nothing selects says
-        // why, as a lookup does.
-        if gives_up && let Some(error) = tester.unpublished_identifier(locator) {
+        // An expectation that gives up matching nothing, on an identifier
+        // nothing selects, says why, as a lookup does.
+        if gives_up
+            && matches.is_empty()
+            && let Some(error) = tester.unpublished_identifier(locator)
+        {
             return Err(error);
         }
         if next != Some(Duration::ZERO) {
@@ -1511,10 +1525,10 @@ fn wait(
 fn unpublished_identifier_fix(control: Option<&str>) -> String {
     match control {
         Some(control) => format!(
-            "Give the identifier to the control it is inside, `{control}`: a group there would \
+            "Give the identifier to the control it is inside, `{control}`: a group there can \
              cut the name its label gives it."
         ),
-        None => "Give that node a role, as \
+        None => "Give that node a role other than generic or presentation, as \
                  `Semantics::new().container(true).role(SemanticsRole::Group).identifier(..)`."
             .to_owned(),
     }
@@ -1530,6 +1544,18 @@ fn names_from_contents(role: Role) -> bool {
 }
 
 /// The node `id` names among `roots` and their descendants.
+/// Whether a node under `roots` is published with `identifier`.
+fn carries_identifier(roots: &[Node], identifier: &str) -> bool {
+    let mut pending: Vec<&Node> = roots.iter().collect();
+    while let Some(node) = pending.pop() {
+        if node.identifier.as_deref() == Some(identifier) {
+            return true;
+        }
+        pending.extend(&node.children);
+    }
+    false
+}
+
 fn find_node(roots: &[Node], id: ElementId) -> Option<&Node> {
     let mut pending: Vec<&Node> = roots.iter().collect();
     while let Some(node) = pending.pop() {

@@ -1471,6 +1471,13 @@ fn an_identifier_on_a_node_that_publishes_nothing_else_fails_saying_so() {
                 ),
             )
             .on_pressed(|_| {}),
+            // A published group and a lifted node share "legend".
+            flui_widgets::Semantics::new()
+                .container(true)
+                .role(flui_widgets::SemanticsRole::Group)
+                .identifier("legend")
+                .child(SizedBox::new(24.0, 16.0)),
+            unpublished("legend").child(SizedBox::new(24.0, 16.0)),
         ))),
     );
     let _ = t.rect(&find::button("Save"));
@@ -1507,7 +1514,17 @@ fn an_identifier_on_a_node_that_publishes_nothing_else_fails_saying_so() {
         expected.contains("publishes nothing of its own"),
         "{expected}"
     );
-    t.expect(find::id("swatch")).to_be_gone();
+    // Matching nothing for that reason is no verdict either.
+    let gone = panic_text(|| t.expect(find::id("swatch")).to_be_gone());
+    assert!(gone.contains("publishes nothing of its own"), "{gone}");
+    // An identifier a published node carries selects it, and a failure
+    // there is the expectation's own, not the lifted node's.
+    let _ = t.rect(&find::id("legend"));
+    let present = panic_text(|| t.expect(find::id("legend")).to_be_gone());
+    assert!(
+        present.contains("0 matches") && !present.contains("publishes nothing of its own"),
+        "{present}"
+    );
     assert!(
         matches!(
             t.try_rect(&find::id("absent")),
