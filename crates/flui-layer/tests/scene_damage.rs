@@ -15,7 +15,7 @@ use flui_layer::{
     SceneOwner, SceneVersion, SubtreeCull, SurfaceKey, TransformLayer, close_over,
     resolve_follower_transform,
 };
-use flui_painting::paint::{BlendMode, Clip, ImageFilter};
+use flui_painting::paint::{BlendMode, Clip, ImageFilter, ImageSampling, ImageTransform};
 use flui_painting::styling::Color;
 use flui_painting::{Canvas, Paint};
 
@@ -400,6 +400,73 @@ pub(crate) fn a_magnifier_damages_its_sampling_fringe() {
         covered(&damage, covering(395.0, 95.0, 505.0, 205.0)),
         "{damage:?}"
     );
+}
+
+/// A transform filter reads its source in whole device pixels: a box that
+/// ends inside one shows there. The 8× bilinear magnifier about x = 98 draws
+/// that pixel (96) up to x = 98 − 8 × 0.5 = 94; a nearest scale of 8 across
+/// and 2 down draws it up to 98 − 8 = 90. A repaint of the box damages that
+/// far, and the cull keeps the node there. A box that ends on a pixel edge
+/// shows only as far as its last whole pixel draws (86).
+pub(crate) fn a_magnifier_reads_a_partly_covered_source_pixel_whole() {
+    let magnifier = || ImageFilter::try_magnify(Point::new(98.0, 20.0), 8.0).expect("a magnifier");
+    let stretch = || ImageFilter::Transform {
+        transform: ImageTransform::try_scale_about(Point::new(98.0, 20.0), 8.0, 2.0)
+            .expect("a stretch"),
+        sampling: ImageSampling::Nearest,
+    };
+    let cases = [
+        (magnifier(), 96.7, 94.0),
+        (magnifier(), 96.1, 94.0),
+        (magnifier(), 96.0, 86.0),
+        (stretch(), 96.1, 90.0),
+    ];
+    for (filter, right, shown_to) in cases {
+        let mut owner = SceneOwner::new();
+        let mut writer = owner.writer();
+        let root = writer.current().root();
+        let lens = writer.mint_node();
+        let content = |writer: &mut flui_layer::SceneWriter<'_>| {
+            let version = writer.next_content_version().expect("a version");
+            let mut content = BoundaryContent::builder();
+            content.push_effect(
+                Layer::from(ImageFilterLayer::new(filter.clone())),
+                RenderId::new(1),
+                0,
+            );
+            content.chunk(chunk(2, version, Rect::from_ltrb(70.0, 4.0, right, 28.0)));
+            content.pop_effect();
+            content.finish()
+        };
+        let first = content(&mut writer);
+        writer.push(publish(lens, first));
+        let mut top = BoundaryContent::builder();
+        top.slot(lens);
+        writer.push(publish(root, top.finish()));
+        owner.apply(SURFACE).expect("a magnified box");
+
+        let mut writer = owner.writer();
+        let next = content(&mut writer);
+        writer.push(publish(lens, next));
+        owner.apply(SURFACE).expect("the box repaints");
+        let damage = rects(owner.patch_damage());
+        // A damage rect is whole pixels: the last shown pixel, [shown_to - 1,
+        // shown_to), is damaged when a rect on its row reaches `shown_to`.
+        assert!(
+            damage.iter().any(|rect| rect.top() <= 20
+                && rect.bottom() >= 21
+                && f64::from(rect.left()) <= shown_to - 1.0
+                && f64::from(rect.right()) >= shown_to),
+            "a box to {right}: the repaint damages its last shown pixel: {damage:?}"
+        );
+        assert!(
+            owner
+                .current()
+                .subtree_cull(Rect::from_ltrb(shown_to - 1.0, 20.0, shown_to, 21.0))
+                .meets(lens),
+            "a box to {right}: the cull keeps the node where its last pixel shows"
+        );
+    }
 }
 
 /// Footprints count follower nesting as the renderer does: the follower
