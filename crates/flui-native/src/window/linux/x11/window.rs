@@ -122,8 +122,8 @@ use crate::input::regions::presses::{
 use crate::owner::OpenWindowError;
 use crate::owner::OpenWindows;
 use crate::owner::linux::x11::{
-    Doorbell, HostDisplays, InputTarget, LoopDrag, LoopInput, LoopText, LoopWindows, PeerInterest,
-    PeerSelect, WindowRef, WindowScale, X11Connection, X11Loop,
+    Doorbell, HostDisplays, InputTarget, LoopDrag, LoopInput, LoopText, LoopWindows, PeerHeard,
+    PeerInterest, PeerSelect, WindowRef, WindowScale, X11Connection, X11Loop,
 };
 use crate::owner::slot::OwnerWeak;
 use crate::owner::wake_deadline::FrameCount;
@@ -2081,14 +2081,14 @@ impl X11Windows {
         }
         // A window whose end goes unheard (a peer's no longer there, a call
         // off the owner thread) names no window manager the platform follows.
-        let heard = match self.connection.hear_peer(
-            window,
-            PeerInterest::WindowManager,
-            EventMask::STRUCTURE_NOTIFY,
-        ) {
-            PeerSelect::Sent(selected) => selected.is_ok_and(|cookie| cookie.check().is_ok()),
-            PeerSelect::Unchanged | PeerSelect::OffOwnerThread => false,
-        };
+        let heard = matches!(
+            self.connection.hear_peer(
+                window,
+                PeerInterest::WindowManager,
+                EventMask::STRUCTURE_NOTIFY,
+            ),
+            PeerHeard::Heard
+        );
         if heard && still(window) {
             return true;
         }
