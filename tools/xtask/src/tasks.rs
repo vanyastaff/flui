@@ -783,14 +783,16 @@ fn ci_stage(runner: Runner) -> anyhow::Result<()> {
     runner.steps(&test_plan(Host::current(), Stages::All))?;
     // nextest executes no doctests; flui-native's need neither
     // `--all-features` nor a display server, so it is not carved
-    // out; `flui/testing` compiles the book's chapters that run through Tester (src/book.rs)
+    // out; `flui/testing` compiles the book's chapters that run through
+    // Tester, and the catalogs the theme chapter and the facade's
+    // Material-gated half (src/book.rs)
     runner.run(&Cmd::cargo([
         "test",
         "--workspace",
         "--locked",
         "--doc",
         "--features",
-        "flui/testing",
+        "flui/testing,flui/material,flui/cupertino",
     ]))
 }
 

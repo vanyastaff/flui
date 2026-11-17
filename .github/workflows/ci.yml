@@ -1041,8 +1041,9 @@ jobs:
 
 
       - name: cargo test --doc
-        # `flui/testing` compiles the book's chapters that run through Tester (src/book.rs).
-        run: cargo test --workspace --locked --doc --features flui/testing
+        # `flui/testing` compiles the book's chapters that run through Tester and the
+        # catalogs the facade's Material-gated half and the theme chapter need (src/book.rs).
+        run: cargo test --workspace --locked --doc --features flui/testing,flui/material,flui/cupertino
 
   # ─────────────────────────────────────────────────────────────────────────
   # miri checks selected ownership and containment contracts without a GPU:
