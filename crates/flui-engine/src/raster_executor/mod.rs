@@ -63,6 +63,39 @@ pub use surface::{SlotSize, SlotSurface, SurfaceHold};
 #[cfg(not(target_arch = "wasm32"))]
 pub use thread::ExecutorHandle;
 
+/// Where an executor turns (ADR-0305 §10): on the owner thread, within the
+/// owner's calls, or on its own raster thread, with one frame presenting
+/// while the owner builds the next.
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "ADR-0305 §10 decides the two placements; a third is a new decision"
+)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RasterPlacement {
+    /// The owner turns the executor itself, within the call that sent it work.
+    #[default]
+    Inline,
+    /// One raster thread turns it ([`RasterExecutor::spawn`]).
+    Threaded,
+}
+
+impl RasterPlacement {
+    /// How many frames of one slot are in flight at most: the depth of its
+    /// settlement ring (ADR-0305 §5).
+    #[must_use]
+    pub fn depth(self) -> std::num::NonZeroUsize {
+        let depth = match self {
+            Self::Inline => inbox::INLINE_DEPTH,
+            #[cfg(not(target_arch = "wasm32"))]
+            Self::Threaded => inbox::THREADED_DEPTH,
+            #[cfg(target_arch = "wasm32")]
+            Self::Threaded => inbox::INLINE_DEPTH,
+        };
+        std::num::NonZeroUsize::new(depth)
+            .expect("BUG: a slot's ring holds at least one settlement")
+    }
+}
+
 use self::{
     device_health::{DeviceRebuilds, FailedRebuild},
     inbox::{InboxState, SlotInbox},
@@ -863,7 +896,8 @@ impl<B: RasterBackend> RasterExecutor<B> {
         // A frame's texture updates apply whether or not it is shown: a
         // retirement releases memory, and a hidden slot's next frame draws
         // the newest image. A panic joins this turn's failure: the first of
-        // the resize's, the textures' and the render's is the one held.
+        // the resize's, the textures' and the render's is the one held, or
+        // the first panic in place of a refusal before it (`join`).
         let mut frame = frame;
         let mut discarded = None;
         let textures_report = frame.as_mut().and_then(|frame| {
@@ -880,11 +914,7 @@ impl<B: RasterBackend> RasterExecutor<B> {
                 }),
                 None => {
                     let panicked = caught.into_payload().map(SlotFailure::Panicked);
-                    if failure.is_none() {
-                        failure = panicked;
-                    } else {
-                        discarded = panicked;
-                    }
+                    discarded = join(&mut failure, panicked);
                     None
                 }
             }
@@ -914,12 +944,7 @@ impl<B: RasterBackend> RasterExecutor<B> {
         } else {
             render(backend, slot, &frame)
         };
-        let discarded_render = if failure.is_none() {
-            failure = render_failure;
-            None
-        } else {
-            render_failure
-        };
+        let discarded_render = join(&mut failure, render_failure);
         let extra = {
             let mut state = slot.inbox.lock();
             // The answer counts only while no newer size was sent since the
@@ -930,8 +955,11 @@ impl<B: RasterBackend> RasterExecutor<B> {
                 state.surface = state.surface.on(answer);
             }
             surface_lost(&mut state, &mut slot.applied, surface_loss);
+            // Held before the settlement, which carries the mark of every
+            // panic held since the slot's last one.
+            let extra = failure.and_then(|failure| state.hold_failure(failure));
             state.settle(&frame, verdict);
-            failure.and_then(|failure| state.hold_failure(failure))
+            extra
         };
         retire(Some(frame), extra, first);
         retire(None, discarded, first);
@@ -1248,4 +1276,21 @@ fn hold_panic(inbox: &SlotInbox, caught: FirstPanic, first: &mut FirstPanic) {
     };
     let extra = inbox.lock().hold_failure(SlotFailure::Panicked(payload));
     retire(None, extra, first);
+}
+
+/// Join `next` into a turn's `failure` and answer the one discarded: a panic
+/// takes the place of a refusal, since its payload is what the owner reports,
+/// and otherwise the first stands.
+fn join(failure: &mut Option<SlotFailure>, next: Option<SlotFailure>) -> Option<SlotFailure> {
+    match (failure.as_ref(), next) {
+        (_, None) => None,
+        (None, next) => {
+            *failure = next;
+            None
+        }
+        (Some(SlotFailure::Refused(_)), Some(next @ SlotFailure::Panicked(_))) => {
+            failure.replace(next)
+        }
+        (Some(_), next) => next,
+    }
 }

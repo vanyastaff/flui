@@ -236,10 +236,17 @@ the dispatch layer moves there too.
 - **Every native window is a slot on one GPU context.** The loop's
   `RasterHost` (`runner/raster_host.rs`) sits in the composition root as
   `Rc<RefCell<_>>`. The first window to attach bootstraps the context on the
-  owner platform's display connection and places an inline `RasterExecutor`;
-  each later window mints a slot on it. A frame is sent and the executor turns
-  at once, so its settlement is in hand before the pump returns; a frame that
-  finds the host already turning is answered `Retry`. The host stamps each
+  owner platform's display connection and places a `RasterExecutor`; each
+  later window mints a slot on it. Inline, a frame is sent and the executor
+  turns at once, so its settlement is in hand before the pump returns; a frame
+  that finds the host already turning is answered `Retry`. Threaded (a debug
+  build on Linux started with `FLUI_RASTER_PLACEMENT=threaded`,
+  ADR-0305 §10), a frame is answered `Queued` or `QueuedReplacing`, two may be
+  in flight, the raster thread's wake asks every window for a frame, and each
+  window's wake hands its slot's settlements to `UiRuntime::settle_frame`
+  before its frame gate (`RasterSlot::settle`): what they became paces the
+  window and counts toward its first reveal, and a panic of the code they ran
+  is resumed at the end of that window's own wake. The host stamps each
   frame with the generation the executor's record requires at that moment, and
   makes a window's surface again over its kept `SurfaceTarget` when the record
   asks for one. The context retires with the loop's owner platform

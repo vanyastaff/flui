@@ -725,7 +725,8 @@ impl HeadlessSink {
             last: None,
             submits: 0,
             deferred: 0,
-            presented: std::collections::VecDeque::new(),
+            // Its room is taken here, so a frame that presents allocates nothing.
+            presented: std::collections::VecDeque::with_capacity(PRESENTED_KEPT),
         }
     }
 

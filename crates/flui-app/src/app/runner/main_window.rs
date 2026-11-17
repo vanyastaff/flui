@@ -1094,12 +1094,15 @@ where
                 let ingress = Ingress::new(proxy, startup == StartupWindow::Open);
                 let handle = ingress.handle();
                 install_owner_platform(owner)?;
+                // Read with the loop's state free: an unknown value is logged.
+                let placement = super::raster_host::desktop_placement();
                 APP_RUNTIME.with(|slot| {
                     let mut runtime = slot.borrow_mut();
                     runtime.main_ingress = Some(Arc::clone(&ingress));
                     runtime.capabilities = Some(registry);
                     runtime.main_host_lifecycle = flui_scheduler::AppLifecycleState::Resumed;
-                    runtime.raster_host = super::raster_host::SharedRasterHost::new(renderers);
+                    runtime.raster_host =
+                        super::raster_host::SharedRasterHost::new(renderers, placement);
                     runtime.reopen_lifecycles();
                     runtime.ensure_execution();
                 });
