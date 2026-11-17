@@ -710,16 +710,28 @@ fn a_backdrop_effect_in_the_gap_of_a_bounding_box_is_redrawn_whole() {
     );
 }
 
+/// Where `grouped_readers` puts the group's first member.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FirstMember {
+    /// An effect of the root.
+    InRoot,
+    /// The effect of its own child node.
+    Alone,
+    /// Its own child, under a clip that leaves it nothing to write.
+    Clipped,
+}
+
 /// A retained root holding a box (`nodes[0]`), then a backdrop group's two
 /// members with a white square painted between them. The first member is an
-/// effect of the root or, with `first_alone`, of its own child `nodes[1]`.
+/// effect of the root or, as `placed` says, of its own child `nodes[1]`,
+/// there under a clip that hides it.
 /// Without `root_too` only the box's content is published, in `color`.
 fn grouped_readers(
     writer: &mut SceneWriter<'_>,
     nodes: [SceneNodeId; 2],
     color: Color,
     group: &flui_layer::BackdropGroupKey,
-    first_alone: bool,
+    placed: FirstMember,
     root_too: bool,
 ) {
     use flui_layer::{BackdropFilterLayer, Layer};
@@ -748,7 +760,7 @@ fn grouped_readers(
     }
     writer.push(SceneOp::Place {
         node: nodes[0],
-        placement: Placement::try_new(Offset::new(100.0, 100.0)).expect("a finite offset"),
+        placement: Placement::try_new(Offset::new(100.0, 4.0)).expect("a finite offset"),
     });
     let member = |bounds: Rect<f64>| {
         Layer::from(
@@ -771,7 +783,10 @@ fn grouped_readers(
         }
     }));
     content.slot(nodes[0]);
-    if first_alone {
+    if placed == FirstMember::InRoot {
+        content.push_effect(first, RenderId::new(21), 0);
+        content.pop_effect();
+    } else {
         let mut alone = BoundaryContent::builder();
         alone.push_effect(first, RenderId::new(3), 0);
         alone.pop_effect();
@@ -783,20 +798,31 @@ fn grouped_readers(
             node: nodes[1],
             placement: Placement::try_new(Offset::ZERO).expect("a finite offset"),
         });
-        content.slot(nodes[1]);
-    } else {
-        content.push_effect(first, RenderId::new(21), 0);
-        content.pop_effect();
+        if placed == FirstMember::Clipped {
+            // Over none of the member's pixels.
+            content.push_effect(
+                Layer::from(flui_layer::ClipRectLayer::new(
+                    Rect::from_ltrb(60.0, 8.0, 70.0, 24.0),
+                    flui_painting::paint::Clip::HardEdge,
+                )),
+                RenderId::new(4),
+                0,
+            );
+            content.slot(nodes[1]);
+            content.pop_effect();
+        } else {
+            content.slot(nodes[1]);
+        }
     }
     // Painted after the group's capture: the second member must not see it.
     content.chunk(picture(writer, 22, &|canvas| {
         canvas.draw_rect(
-            Rect::from_xywh(106.0, 106.0, 12.0, 12.0),
+            Rect::from_xywh(106.0, 10.0, 12.0, 12.0),
             &Paint::fill(Color::WHITE),
         );
     }));
     content.push_effect(
-        member(Rect::from_ltrb(104.0, 104.0, 120.0, 120.0)),
+        member(Rect::from_ltrb(104.0, 8.0, 120.0, 24.0)),
         RenderId::new(23),
         0,
     );
@@ -811,15 +837,20 @@ fn grouped_readers(
 /// member, in a partial frame as in a full one: damage that meets only the
 /// second member still replays the first, which captures, so the second
 /// does not blur the square painted between them. Each row puts the first
-/// member somewhere the damage does not reach.
+/// member somewhere the damage does not reach; the last plans one pass per
+/// rect, with a second rect far from the group.
 #[test]
 fn a_backdrop_group_outside_the_damage_still_captures_at_its_first_member() {
     let Some(renderer) = crate::test_support::renderer_or_skip() else {
         return;
     };
-    for (case, first_alone) in [
-        ("first member in the root", false),
-        ("first member in its own node", true),
+    // (case, where the first member is, one pass per rect)
+    for (case, placed, by_rect) in [
+        ("first member in the root", FirstMember::InRoot, false),
+        ("first member in its own node", FirstMember::Alone, false),
+        ("one pass per rect", FirstMember::Alone, true),
+        // It writes nothing, in a full frame as in a partial one.
+        ("first member hidden by a clip", FirstMember::Clipped, false),
     ] {
         let group = flui_layer::BackdropGroupKey::new();
         let mut partial = renderer.retained_capture((SIDE, SIDE)).expect("capture");
@@ -827,7 +858,7 @@ fn a_backdrop_group_outside_the_damage_still_captures_at_its_first_member() {
         let nodes: [SceneNodeId; 2] = {
             let mut writer = owner.writer();
             let nodes = std::array::from_fn(|_| writer.mint_node());
-            grouped_readers(&mut writer, nodes, Color::RED, &group, first_alone, true);
+            grouped_readers(&mut writer, nodes, Color::RED, &group, placed, true);
             nodes
         };
         owner.apply(SURFACE).expect("the scene applies");
@@ -848,11 +879,16 @@ fn a_backdrop_group_outside_the_damage_still_captures_at_its_first_member() {
             nodes,
             Color::BLUE,
             &group,
-            first_alone,
+            placed,
             false,
         );
         owner.apply(SURFACE).expect("a recolour applies");
         apply(&mut partial, owner.patch_damage());
+        if by_rect {
+            // A second rect far from the group.
+            partial.plan_rect_by_rect();
+            partial.mark_dirty(Rect::from_xywh(50.0, 100.0, 10.0, 10.0));
+        }
         partial
             .render_scene(&Scene::of_version(owner.current().clone()))
             .expect("the partial frame renders");
@@ -861,6 +897,10 @@ fn a_backdrop_group_outside_the_damage_still_captures_at_its_first_member() {
             "{case}: the frame is partial: {:?}",
             partial.last_plan()
         );
+        if by_rect {
+            // The group's members share one rect, the far one has its own.
+            assert_eq!(partial.region_passes(), 2, "{case}: two passes");
+        }
         let mut full = renderer.retained_capture((SIDE, SIDE)).expect("capture");
         apply(
             &mut full,
@@ -872,9 +912,11 @@ fn a_backdrop_group_outside_the_damage_still_captures_at_its_first_member() {
             partial.read_rgba().expect("readback"),
             full.read_rgba().expect("readback"),
         );
-        assert!(
-            px(&oracle, 112, 112)[0] < 200,
-            "{case}: precondition: the second member blurs the backdrop without the white square"
+        // Hidden, the first member does not capture: the second reads the square.
+        assert_eq!(
+            px(&oracle, 112, 16)[0] < 200,
+            placed != FirstMember::Clipped,
+            "{case}: precondition: the second member blurs the backdrop as it stood at the capture"
         );
         let stale = (0..SIDE)
             .flat_map(|y| (0..SIDE).map(move |x| (x, y)))

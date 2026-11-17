@@ -339,7 +339,8 @@ pub enum Closure { None, Bounded { reads: Rect<f64>, writes: Rect<f64> }, Unboun
 under the norm of the CTM) and `writes` what it changes; a chunk with `reads_destination` reads and
 writes its own bounds. Damage that meets an entry's `reads ∪ writes`, unless one rect of the
 region already contains it, joins `reads ∪ writes`; damage that meets one member of a backdrop
-group joins every member's, since the group captures where its first member paints (ADR-0230).
+group joins the rect over every member's, so the group lies in one rect and captures where a full
+frame captures (ADR-0230).
 The entries of a frame are a `Closures` set, which `close_over` takes. The joins and the region's merges repeat to a
 fixed point, at most 64 rounds (the cap of `frame_protocol.rs:285-299`), past which the frame is
 `Full(Unbounded)`; damage that meets a `Closure::Unbounded` is `Full(Unbounded)`. A

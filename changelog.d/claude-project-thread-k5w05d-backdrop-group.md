@@ -4,4 +4,4 @@
 
 ### Changed
 
-- `flui_layer::close_over` takes a `Closures` set in place of an iterator of `Closure`s. `Closures::push_effect` adds an effect's `read_closure` and joins it to its backdrop group, and damage that meets one member of a group takes every member's footprint.
+- `flui_layer::close_over` takes a `Closures` set in place of an iterator of `Closure`s. `Closures::push_effect` adds an effect's `read_closure` and joins it to its backdrop group, and damage that meets one member of a group takes the rect over every member's footprint.

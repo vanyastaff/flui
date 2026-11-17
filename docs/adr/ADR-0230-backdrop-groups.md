@@ -33,12 +33,13 @@ Content painted after the group's first filter is therefore not part of what
 later grouped filters sample, including an earlier pane's own child: that is
 the contract, not an artifact.
 
-A partial frame keeps the capture where a full one makes it. The first
-operation of a group captures whether or not it writes a pixel: outside the
-viewport, its clip or the damage scissor of its region pass, it still fixes
-the group's backdrop at its place in the list. Damage that meets one member
-joins every member's read footprint (ADR-0304 §6), so a frame that redraws
-any member replays the first one where it captures instead of culling it.
+A partial frame keeps the capture where a full one makes it. The capture
+belongs to the group's first member that writes a pixel; one that its clip
+leaves nothing to write captures in no frame. Damage that meets one member
+takes the rect over every member's read footprint (ADR-0304 §6), so the
+whole group lies in one rect of the region: the frame, and the one region
+pass that redraws the group, replay every member that writes in a full frame,
+and the first of them captures.
 
 `flui-widgets` adds `BackdropFilter` (filter, blend mode, enabled, and
 `grouped()`), and `BackdropGroup`, a stateful widget whose key lives in its
@@ -54,8 +55,10 @@ groups, untinted in one group, and tinted again when the two members sit on
 different surfaces. Both engine readbacks named
 `a_backdrop_group_outside_the_damage_still_captures_at_its_first_member` (the
 tree path and the version path) draw a partial frame whose damage meets only
-the second member, with the first under the root, in its own node, and left
-out of a region pass, and compare it with a full frame;
+the second member, with the first under the root, in its own node, and with
+one pass per rect, and compare it with a full frame;
+`a_backdrop_group_takes_one_rect_of_a_region_frame` plans two damaged
+members as one rect;
 `damage_under_one_backdrop_group_member_takes_every_member` pins the closure.
 `harness_backdrop_filter_carries_its_group_to_the_layer`
 pins the render object, and

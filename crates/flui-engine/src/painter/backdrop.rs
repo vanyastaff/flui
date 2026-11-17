@@ -222,25 +222,25 @@ impl GpuReplay {
             f64::from(viewport_size.0),
             f64::from(viewport_size.1),
         );
-        // What the filter writes: its output under the viewport, its clip
-        // and the frame's damage scissor. `None` writes nothing.
-        let mut shown = op
+        let Some(mut output) = op
             .output_bounds
             .intersect(&viewport)
-            .filter(|rect| !rect.is_empty());
+            .filter(|rect| !rect.is_empty())
+        else {
+            return Ok(());
+        };
         if let Some(bound) = op.clip.chain.root_bounds()? {
-            shown =
-                shown.and_then(|output| output.intersect(&bound).filter(|rect| !rect.is_empty()));
+            let Some(cropped) = output.intersect(&bound).filter(|rect| !rect.is_empty()) else {
+                return Ok(());
+            };
+            output = cropped;
         }
         if let Some((x, y, width, height)) = op.scissor {
             let writes = Rect::from_xywh(x as f64, y as f64, f64::from(width), f64::from(height));
-            shown =
-                shown.and_then(|output| output.intersect(&writes).filter(|rect| !rect.is_empty()));
-        }
-        // A grouped filter that writes nothing still fixes its group's
-        // backdrop below; any other one is done.
-        if shown.is_none() && op.group.is_none() {
-            return Ok(());
+            let Some(cropped) = output.intersect(&writes).filter(|rect| !rect.is_empty()) else {
+                return Ok(());
+            };
+            output = cropped;
         }
         let backing = target
             .texture
@@ -266,11 +266,11 @@ impl GpuReplay {
             f64::from(viewport_size.1.min(attachment_size.1)),
         );
         // A grouped filter reads the backdrop its group captured on this
-        // surface; the first member captures the whole readable attachment.
-        // It captures whether or not it writes anything: a member outside
-        // the viewport, its clip or the damage scissor still fixes the
-        // group's backdrop at its place in paint order, so a later member
-        // never reads what was painted after it.
+        // surface; the first member that writes captures the whole readable
+        // attachment. A member whose clip or scissor leaves it nothing to
+        // write has returned above, so a partial frame captures where a full
+        // one does only because the damage closure keeps every member of a
+        // group it meets inside one rect (ADR-0230).
         let snapshot = match &op.group {
             Some(group) => Some(snapshots.capture(
                 group,
@@ -286,12 +286,10 @@ impl GpuReplay {
             )?),
             None => None,
         };
-        let Some(mut output) = shown
-            .and_then(|output| output.intersect(&readable))
-            .filter(|rect| !rect.is_empty())
-        else {
+        let Some(cropped) = output.intersect(&readable).filter(|rect| !rect.is_empty()) else {
             return Ok(());
         };
+        output = cropped;
         // The backdrop rect each effect reads, its taps per pixel, and the
         // transparent texels its copy keeps past the attachment edge (left,
         // top, right, bottom). A blur reads its kernel halo even outside the

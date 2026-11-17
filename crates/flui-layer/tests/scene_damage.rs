@@ -297,13 +297,20 @@ pub(crate) fn an_unattached_leader_never_shadows_the_attached_one() {
     );
 }
 
-/// Damage that meets one member of a backdrop group takes every member: the
-/// first member, far from the damage, is redrawn where the group captures.
-/// The same two filters without a group leave the far one alone.
+/// Damage that meets one member of a backdrop group takes the rect over
+/// every member: the first member, far from the damage, is redrawn where the
+/// group captures. The same filters without a group leave the far one alone,
+/// and damage that reaches the near member only through an ungrouped filter
+/// it grew over still takes the group.
 pub(crate) fn damage_under_one_backdrop_group_member_takes_every_member() {
-    for grouped in [true, false] {
+    // (case, grouped, an ungrouped filter between the card and the member)
+    for (case, grouped, through) in [
+        ("grouped", true, false),
+        ("ungrouped", false, false),
+        ("grouped, reached through another filter", true, true),
+    ] {
         let group = BackdropGroupKey::new();
-        let member = |x: f64| {
+        let filter = |x: f64, grouped: bool| {
             Layer::from(
                 BackdropFilterLayer::new(
                     ImageFilter::blur(2.0),
@@ -313,12 +320,13 @@ pub(crate) fn damage_under_one_backdrop_group_member_takes_every_member() {
                 .with_group(grouped.then(|| group.clone())),
             )
         };
+        let near = if through { 540.0 } else { 490.0 };
         let mut owner = SceneOwner::new();
         let mut writer = owner.writer();
         let root = writer.current().root();
         let (first, card) = (writer.mint_node(), writer.mint_node());
         let mut alone = BoundaryContent::builder();
-        alone.push_effect(member(10.0), RenderId::new(1), 0);
+        alone.push_effect(filter(10.0, grouped), RenderId::new(1), 0);
         alone.pop_effect();
         writer.push(publish(first, alone.finish()));
         let version = writer.next_content_version().expect("a version");
@@ -328,7 +336,11 @@ pub(crate) fn damage_under_one_backdrop_group_member_takes_every_member() {
         let mut top = BoundaryContent::builder();
         top.slot(card);
         top.slot(first);
-        top.push_effect(member(490.0), RenderId::new(3), 0);
+        if through {
+            top.push_effect(filter(490.0, false), RenderId::new(4), 0);
+            top.pop_effect();
+        }
+        top.push_effect(filter(near, grouped), RenderId::new(3), 0);
         top.pop_effect();
         writer.push(publish(root, top.finish()));
         owner.apply(SURFACE).expect("two members and a card");
@@ -341,13 +353,13 @@ pub(crate) fn damage_under_one_backdrop_group_member_takes_every_member() {
         owner.apply(SURFACE).expect("the card repaints");
         let damage = rects(owner.patch_damage());
         assert!(
-            covered(&damage, covering(490.0, 10.0, 530.0, 50.0)),
-            "grouped {grouped}: the member over the card: {damage:?}"
+            covered(&damage, covering(near, 10.0, near + 40.0, 50.0)),
+            "{case}: the near member: {damage:?}"
         );
         assert_eq!(
             covered(&damage, covering(10.0, 10.0, 50.0, 50.0)),
             grouped,
-            "grouped {grouped}: the far member: {damage:?}"
+            "{case}: the far member: {damage:?}"
         );
     }
 }

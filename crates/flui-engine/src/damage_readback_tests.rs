@@ -3128,12 +3128,11 @@ fn a_backdrop_reader_in_the_gap_of_a_bounding_box_is_redrawn_whole() {
     );
 }
 
-/// Grouped backdrop filters in two rects of a rect-by-rect frame read the
-/// pixels their own pass drew: each pass captures the group's backdrop
-/// again, because a capture an earlier pass took holds the previous frame
-/// where a later pass clears and redraws its rect.
+/// Grouped backdrop filters damaged in two corners of a rect-by-rect frame
+/// share one rect: the closure takes the rect over every member, so the one
+/// pass that redraws them captures at the first, as a full frame does.
 #[test]
-fn a_backdrop_group_captures_once_per_region_pass() {
+fn a_backdrop_group_takes_one_rect_of_a_region_frame() {
     use flui_layer::BackdropGroupKey;
     let Some(renderer) = crate::test_support::renderer_or_skip() else {
         return;
@@ -3181,10 +3180,10 @@ fn a_backdrop_group_captures_once_per_region_pass() {
     );
     assert_eq!(
         planned_rects(&partial).map(|rects| rects.len()),
-        Some(2),
-        "one pass per corner"
+        Some(1),
+        "both corners join the rect over the group"
     );
-    assert_eq!(partial.region_passes(), 2);
+    assert_eq!(partial.region_passes(), 1);
     let pixels = partial.read_rgba().expect("readback");
     let full = full_frame_pixels(&renderer, &after);
     let stale = mismatches(&pixels, &full, 2);
@@ -3201,19 +3200,21 @@ fn a_backdrop_group_captures_once_per_region_pass() {
 /// its first member, in a partial frame as in a full one. Damage that meets
 /// only the second member still makes the group capture at the first, so
 /// the second does not blur a box painted between the two. Each row puts
-/// the first member somewhere the damage, or a region pass, does not reach.
+/// the first member somewhere the damage does not reach; the last plans one
+/// pass per rect, with a second rect far from the group.
 #[test]
 fn a_backdrop_group_outside_the_damage_still_captures_at_its_first_member() {
     use flui_layer::BackdropGroupKey;
     let Some(renderer) = crate::test_support::renderer_or_skip() else {
         return;
     };
+    let near = Rect::from_xywh(100.0, 4.0, 24.0, 24.0);
+    let far = Rect::from_xywh(50.0, 100.0, 10.0, 10.0);
     // (case, the first member in its own boundary, one pass per rect)
     for (case, first_alone, by_rect) in [
         ("first member under the root", false, false),
         ("first member in its own boundary", true, false),
-        // The second pass's scissor leaves the first member out.
-        ("one pass per rect", false, true),
+        ("one pass per rect", true, true),
     ] {
         let (root, background, holder) = (
             ContentToken::mint(),
@@ -3229,10 +3230,8 @@ fn a_backdrop_group_outside_the_damage_still_captures_at_its_first_member() {
         };
         let build = |color: Color| {
             backdrop_scene(&root, &background, &striped_backdrop, &|tree, root_id| {
-                tree.push_child(
-                    root_id,
-                    rect_picture(Rect::from_xywh(100.0, 100.0, 24.0, 24.0), color),
-                );
+                tree.push_child(root_id, rect_picture(near, color));
+                tree.push_child(root_id, rect_picture(far, color));
                 let first = grouped(Rect::from_ltrb(8.0, 8.0, 24.0, 24.0));
                 if first_alone {
                     let alone = tree.push_child(
@@ -3248,35 +3247,26 @@ fn a_backdrop_group_outside_the_damage_still_captures_at_its_first_member() {
                 // not see it.
                 tree.push_child(
                     root_id,
-                    rect_picture(Rect::from_xywh(106.0, 106.0, 12.0, 12.0), Color::WHITE),
+                    rect_picture(Rect::from_xywh(106.0, 10.0, 12.0, 12.0), Color::WHITE),
                 );
-                tree.push_child(
-                    root_id,
-                    grouped(Rect::from_ltrb(104.0, 104.0, 120.0, 120.0)),
-                );
+                tree.push_child(root_id, grouped(Rect::from_ltrb(104.0, 8.0, 120.0, 24.0)));
             })
         };
         let (before, after) = (build(Color::RED), build(Color::BLUE));
         let full = full_frame_pixels(&renderer, &after);
         assert!(
-            px(&full, 112, 112)[0] < 200,
+            px(&full, 112, 16)[0] < 200,
             "{case}: precondition: the second member blurs the backdrop without the white box"
         );
-        let partial = region_frame(
-            &renderer,
-            &before,
-            &after,
-            &[Rect::from_xywh(100.0, 100.0, 24.0, 24.0)],
-            by_rect,
-        );
+        let partial = region_frame(&renderer, &before, &after, &[near, far], by_rect);
         assert!(
             matches!(partial.last_plan(), Some(FramePlan::RetainedPartial(_))),
             "{case}: the frame is partial: {:?}",
             partial.last_plan()
         );
         if by_rect {
-            // The damage took the first member's footprint as a rect of its own.
-            assert_eq!(partial.region_passes(), 2, "{case}: one pass per member");
+            // The group's members share one rect, the far box has its own.
+            assert_eq!(partial.region_passes(), 2, "{case}: two passes");
         }
         let pixels = partial.read_rgba().expect("readback");
         let stale = mismatches(&pixels, &full, 2);

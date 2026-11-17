@@ -827,6 +827,40 @@ fn damage_disjoint_from_a_backdrop_does_not_expand() {
     assert_eq!(partial(region), covering(10.0, 10.0, 30.0, 30.0));
 }
 
+/// Damage that meets one grouped backdrop filter takes the rect over every
+/// member of its group: the far member is where the group captures.
+#[test]
+fn damage_meeting_one_grouped_backdrop_takes_the_whole_group() {
+    let group = crate::BackdropGroupKey::new();
+    let build = |tokens: &[ContentToken; 2]| {
+        let mut frame = Frame::new(1.0, &tokens[0]);
+        let parent = frame.root();
+        for bounds in [
+            Rect::from_xywh(330.0, 200.0, 50.0, 50.0),
+            Rect::from_xywh(200.0, 200.0, 100.0, 100.0),
+        ] {
+            frame.push(
+                parent,
+                BackdropFilterLayer::new(ImageFilter::blur(2.0), BlendMode::SrcOver, bounds)
+                    .with_group(Some(group.clone())),
+            );
+        }
+        frame.boundary(
+            parent,
+            2,
+            &tokens[1],
+            Offset::new(190.0, 190.0),
+            Size::new(20.0, 20.0),
+        );
+        frame.scene()
+    };
+    let root = ContentToken::mint();
+    let mut differ = LayerDiffer::default();
+    differ.diff(&build(&[root.clone(), ContentToken::mint()]), SURFACE);
+    let region = differ.diff(&build(&[root, ContentToken::mint()]), SURFACE);
+    assert_eq!(partial(region), covering(190.0, 190.0, 387.0, 307.0));
+}
+
 #[test]
 fn damage_over_threshold_is_full() {
     let root = ContentToken::mint();

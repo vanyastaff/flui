@@ -104,9 +104,10 @@ pub(crate) fn filter_closure(filter: &ImageFilter, ctm: &Matrix4, content: Rect<
 /// The closures of a frame's effects, and the backdrop groups they join.
 ///
 /// The members of one [`BackdropGroupKey`] read one backdrop, captured where
-/// the first of them paints: damage that meets any member takes every
-/// member's footprint, so the first is redrawn where it captures and a later
-/// one never reads what was painted after that point.
+/// the first of them that writes paints. Damage that meets any member takes
+/// the rect over every member's footprint, so every member lies in one rect
+/// of the region: a pass that redraws one member redraws them all, and the
+/// member that captures is the one that captures in a full frame.
 #[derive(Debug, Default, Clone)]
 pub struct Closures {
     /// Each closure, with the index in `groups` of the group it joins.
@@ -154,7 +155,7 @@ impl Closures {
 ///
 /// Damage that meets a closure's `reads ∪ writes`, unless one rect of the
 /// region already contains it, takes all of it; damage that meets one
-/// member of a backdrop group takes every member's ([`Closures`]). The joins
+/// member of a backdrop group takes the rect over every member's ([`Closures`]). The joins
 /// and the region's merges repeat to a fixed point, at most
 /// [`MAX_CLOSURE_ROUNDS`] rounds, past which the answer is
 /// `Full(Unbounded)`. Damage that meets a [`Closure::Unbounded`] is
@@ -165,37 +166,41 @@ pub fn close_over(damage: DamageRegion, closures: &Closures, surface: (u32, u32)
     let DamageRegion::Region(mut region) = damage else {
         return damage;
     };
+    // Each footprint, and what damage that meets it takes: itself, or the
+    // rect over every member of its group.
     let mut footprints: Vec<(DamageRect, Option<u32>)> = Vec::new();
+    let mut spans: Vec<Option<DamageRect>> = vec![None; closures.groups.len()];
     for &(closure, group) in &closures.entries {
         match closure {
             Closure::None => {}
             Closure::Unbounded => return DamageRegion::Full(FullReason::Unbounded),
             Closure::Bounded { reads, writes } => {
                 match DamageRect::try_covering(reads.union(&writes), surface) {
-                    Ok(Some(footprint)) => footprints.push((footprint, group)),
+                    Ok(Some(footprint)) => {
+                        if let Some(group) = group {
+                            let span = &mut spans[group as usize];
+                            *span = Some(span.map_or(footprint, |span| span.union(footprint)));
+                        }
+                        footprints.push((footprint, group));
+                    }
                     Ok(None) => {}
                     Err(_) => return DamageRegion::Full(FullReason::NonFinite),
                 }
             }
         }
     }
-    // Which groups the damage meets, refreshed each round.
-    let mut met = vec![false; closures.groups.len()];
     for _ in 0..MAX_CLOSURE_ROUNDS {
-        for &(footprint, group) in &footprints {
-            if let Some(group) = group
-                && region.rects().iter().any(|rect| rect.overlaps(footprint))
-            {
-                met[group as usize] = true;
-            }
-        }
         let mut grew = false;
         for &(footprint, group) in &footprints {
             let rects = region.rects();
-            let meets = group.is_some_and(|group| met[group as usize])
-                || rects.iter().any(|rect| rect.overlaps(footprint));
-            if meets && !rects.iter().any(|rect| contains(*rect, footprint)) {
-                region.insert(footprint);
+            if !rects.iter().any(|rect| rect.overlaps(footprint)) {
+                continue;
+            }
+            let takes = group
+                .and_then(|group| spans[group as usize])
+                .unwrap_or(footprint);
+            if !rects.iter().any(|rect| contains(*rect, takes)) {
+                region.insert(takes);
                 grew = true;
             }
         }

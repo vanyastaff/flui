@@ -29,7 +29,7 @@ use crate::{
 /// Content that cannot be vouched for by a token — textures (a texture layer
 /// or a picture's texture draw), platform views, live canvases, performance
 /// overlays and anything under a follower — is damaged on every frame at its
-/// old and new positions. The damage then closes over the [`read_closure`]
+/// old and new positions. The damage then closes over the [`read_closure`](super::closure::read_closure)
 /// of every effect in both frames with [`close_over`]: a filter whose reads
 /// or writes meet it takes both, to a fixed point, and one without a bound
 /// makes the frame `Full(Unbounded)`.
@@ -127,7 +127,7 @@ struct Frame {
     boundaries: HashMap<RenderId, Record>,
     /// Content no token vouches for, in surface pixels.
     volatile: Option<Rect<f64>>,
-    /// What each filter of the frame reads and writes ([`read_closure`]).
+    /// What each filter of the frame reads and writes ([`read_closure`](super::closure::read_closure)).
     closures: Closures,
 }
 

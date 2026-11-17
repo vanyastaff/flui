@@ -166,7 +166,7 @@ by the transform and the renderer's physical-pixel growth, `ceil(sqrt(3) x sigma
 writes its bounds; a foreground image filter reads and writes its children's extents moved or
 grown the same way, since the engine composites its whole output; a colour or image filter that
 paints transparent black has no bound and makes the frame `Full(Unbounded)`. Damage that meets a
-closure takes all of it, and damage that meets one member of a backdrop group takes every
+closure takes all of it, and damage that meets one member of a backdrop group takes the rect over every
 member's (a `Closures` set keys them by `BackdropGroupKey`), to a fixed point of at most 64 rounds. The engine's backdrop planning
 calls the same two functions. The result is `Full` for an unpairable frame (first frame,
 surface size change, unstamped root, root boundary or placement change, a boundary stamped
