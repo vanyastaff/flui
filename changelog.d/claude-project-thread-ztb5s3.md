@@ -8,11 +8,12 @@
   the application has a frame or work due and fails at once, with the window's outline, when it is
   idle. Each action has a `try_` twin returning `TestError`.
 - `Tester::draw_commands(&locator)` reads the draw commands the located element painted in the
-  window's last submitted scene: its render object and every one below it, after
-  the frames due now, in paint order and each placed in the window, so a test checks what one
-  `CustomPainter` or render object drew beside others. `try_draw_commands` refuses an authored
-  region (`TestError::NoRenderObject`) and a subtree past one inspection
-  (`TestError::SubtreeTooLarge`) rather than return part of a drawing.
+  window's last submitted scene: its render object and every one below it, after the frames due
+  now, in paint order and each placed in the window, so a test checks what one `CustomPainter` or
+  render object drew beside others. A subtree larger than one inspection is read in several, and
+  a frame between those reads starts the read again. `try_draw_commands` refuses an authored
+  region (`TestError::NoRenderObject`) and a render object with more children than one inspection
+  lists (`TestError::TooManyChildren`) rather than return part of a drawing.
 
 ### Changed
 

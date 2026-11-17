@@ -1656,22 +1656,117 @@ fn draw_commands_read_one_element_and_none_of_its_sibling() {
     assert_eq!(colours(&mut t, "right"), [right, right]);
 }
 
-/// `draw_commands` refuses an element whose render objects are more than
-/// one inspection lists, rather than returning part of its drawing.
+/// `draw_commands` reads a subtree larger than one inspection lists whole,
+/// in several inspections: a swatch after five thousand render objects is
+/// still the element's drawing.
 ///
-/// Fails if the read returns the commands of the listed part.
+/// Fails if the read stops at the first inspection's 4096 nodes.
 #[test]
-fn draw_commands_refuse_a_subtree_past_one_inspection() {
+fn draw_commands_read_a_subtree_past_one_inspection_whole() {
+    use flui_painting::styling::Color;
+
+    let column = |last: Option<u8>| {
+        let mut children: Vec<_> = (0..1000)
+            .map(|_| SizedBox::new(1.0, 0.0).into_view().boxed())
+            .collect();
+        if let Some(shade) = last {
+            children.push(
+                flui_widgets::CustomPaint::new()
+                    .size(flui_foundation::geometry::Size::new(1.0, 1.0))
+                    .painter(SwatchPainter(Color::rgb(shade, 0, 0)))
+                    .into_view()
+                    .boxed(),
+            );
+        }
+        flui_widgets::Column::new(children).into_view().boxed()
+    };
+    let columns: Vec<_> = (0..5)
+        .map(|index| column((index == 4).then_some(7)))
+        .collect();
+    let mut t = Tester::mount(Center::new().child(named("many", flui_widgets::Row::new(columns))));
+    let colours: Vec<Color> = t
+        .draw_commands(&find::id("many"))
+        .into_iter()
+        .filter_map(|command| match command.op {
+            flui_painting::DrawOp::Rect { paint, .. } => Some(paint.color),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(colours, [Color::rgb(7, 0, 0)]);
+}
+
+/// `draw_commands` refuses an element under which one render object has
+/// more children than one inspection lists, rather than returning part of
+/// its drawing.
+///
+/// Fails if the read returns the commands of the listed children.
+#[test]
+fn draw_commands_refuse_a_render_object_with_more_children_than_one_inspection() {
     let boxes: Vec<_> = (0..4200)
         .map(|_| SizedBox::new(1.0, 0.0).into_view().boxed())
         .collect();
     let mut t = Tester::mount(Center::new().child(named("many", flui_widgets::Column::new(boxes))));
     let refused = t.try_draw_commands(&find::id("many"));
     assert!(
-        matches!(
-            refused,
-            Err(TestError::SubtreeTooLarge { listed: 4096, .. })
+        matches!(refused, Err(TestError::TooManyChildren { .. })),
+        "{refused:?}"
+    );
+}
+
+/// A painter's region of its own semantics, with a stable identifier.
+#[derive(Debug)]
+struct RegionPainter;
+
+impl flui_widgets::CustomPainter for RegionPainter {
+    fn paint(&self, canvas: &mut flui_painting::Canvas, size: flui_foundation::geometry::Size) {
+        canvas.draw_rect(
+            flui_foundation::geometry::Rect::from_origin_size(
+                flui_foundation::geometry::Point::ZERO,
+                size,
+            ),
+            &flui_painting::Paint::fill(flui_painting::styling::Color::rgb(1, 0, 0)),
+        );
+    }
+    fn should_repaint(&self, _old: &dyn flui_widgets::CustomPainter) -> bool {
+        false
+    }
+    fn semantics_regions(
+        &self,
+        size: flui_foundation::geometry::Size,
+    ) -> Vec<flui_semantics::SemanticsRegion> {
+        let mut config = flui_semantics::SemanticsConfiguration::new();
+        config.set_label("dot");
+        config.set_identifier("dot");
+        vec![flui_semantics::SemanticsRegion::new(
+            flui_semantics::SemanticsRegionKey(1),
+            flui_foundation::geometry::Rect::from_origin_size(
+                flui_foundation::geometry::Point::ZERO,
+                size,
+            ),
+            config,
+        )]
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+/// `draw_commands` refuses a painter's authored region, which no render
+/// object forms: its drawing is the painter's, located by the painter.
+///
+/// Fails if the read decodes the region's identity as a render object's.
+#[test]
+fn draw_commands_refuse_an_authored_region() {
+    let mut t = Tester::mount(
+        Center::new().child(
+            flui_widgets::CustomPaint::new()
+                .size(flui_foundation::geometry::Size::new(10.0, 10.0))
+                .painter(RegionPainter),
         ),
+    );
+    let refused = t.try_draw_commands(&find::id("dot"));
+    assert!(
+        matches!(refused, Err(TestError::NoRenderObject { .. })),
         "{refused:?}"
     );
 }

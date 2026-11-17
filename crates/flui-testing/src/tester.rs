@@ -247,6 +247,23 @@ pub enum TestError {
         /// The frames pumped.
         frames: usize,
     },
+    /// The window's agent did not answer within the frames allowed.
+    #[error("the window's agent did not answer within {frames} frames")]
+    Unanswered {
+        /// The frames pumped.
+        frames: u32,
+    },
+    /// The window's agent refused or failed a call.
+    #[error("the window's agent answered {}: {}", .0.code, .0.message)]
+    Agent(Box<ErrorObject>),
+    /// Frames kept changing the window between a locate and the readings of
+    /// what it found (its semantics tree, or the scene a drawing is read
+    /// from), every time it was read.
+    #[error("the window changed between a locate and its readings {reads} times")]
+    KeptChanging {
+        /// The locates made.
+        reads: usize,
+    },
     /// The element is an authored semantics region, which no render object
     /// forms, so no drawing is its own.
     #[error(
@@ -257,33 +274,17 @@ pub enum TestError {
         /// The element, as its outline line.
         element: String,
     },
-    /// The render objects below the element are more than one inspection
-    /// lists, so its drawing cannot be read whole.
+    /// A render object below the element has more children than one
+    /// inspection lists, so its drawing cannot be read whole.
     #[error(
-        "{element} has more render objects below it than one inspection lists ({listed}); \
-         locate a smaller part of it"
+        "a render object under {element} has more children than one inspection lists \
+         ({children} left out); locate a smaller part of it"
     )]
-    SubtreeTooLarge {
+    TooManyChildren {
         /// The element, as its outline line.
         element: String,
-        /// How many render objects the inspection listed before it stopped.
-        listed: u32,
-    },
-    /// The window's agent did not answer within the frames allowed.
-    #[error("the window's agent did not answer within {frames} frames")]
-    Unanswered {
-        /// The frames pumped.
-        frames: u32,
-    },
-    /// The window's agent refused or failed a call.
-    #[error("the window's agent answered {}: {}", .0.code, .0.message)]
-    Agent(Box<ErrorObject>),
-    /// Frames kept changing the semantics tree between a locate and the
-    /// readings of what it found, every time it was read.
-    #[error("the semantics tree changed between a locate and its readings {reads} times")]
-    KeptChanging {
-        /// The locates made.
-        reads: usize,
+        /// How many children the inspection left out.
+        children: u32,
     },
 }
 
@@ -680,50 +681,88 @@ impl Tester {
     ///
     /// The agent's protocol carries no drawing, so the tester reads the scene
     /// the headless host received and selects its picture layers by the
-    /// render objects the window's agent lists under the element.
+    /// render objects the window's agent lists under the element. A subtree
+    /// larger than one inspection lists is read in several, each from a
+    /// node the last one cut, so the drawing is read whole. A frame that
+    /// submits a scene between those reads starts the read again.
     ///
     /// # Errors
     ///
     /// As [`Self::try_read`]; [`TestError::NoRenderObject`] when the element
-    /// is an authored region no render object forms, and
-    /// [`TestError::SubtreeTooLarge`] when the render objects below it are
-    /// more than one inspection lists, rather than a partial drawing.
+    /// is an authored region no render object forms;
+    /// [`TestError::TooManyChildren`] when one render object below it has
+    /// more children than one inspection lists, rather than a partial
+    /// drawing; [`TestError::KeptChanging`] when every read saw a new scene.
     pub fn try_draw_commands(
         &mut self,
         locator: &Locator,
     ) -> Result<Vec<flui_painting::DrawCommandBuf>, TestError> {
+        for _ in 0..VISIBLE_READS {
+            self.run_due_now();
+            let submits = self.host.sink().submits();
+            let found = self.resolve(locator)?;
+            // A render-formed node's id is its render object's packed id;
+            // an authored region's carries a domain bit no render id has.
+            let Some(render) = flui_foundation::RenderId::from_u64(found.element.element.get())
+            else {
+                return Err(TestError::NoRenderObject {
+                    element: line_of(&found.node),
+                });
+            };
+            let painters = self.render_subtree(render, &found.node)?;
+            if self.host.sink().submits() != submits {
+                continue;
+            }
+            return Ok(self.host.sink().layer_tree().map_or_else(Vec::new, |tree| {
+                scene_commands(tree, |painter| painters.contains(&painter))
+            }));
+        }
+        Err(TestError::KeptChanging {
+            reads: VISIBLE_READS,
+        })
+    }
+
+    /// `render` and every render object below it, read with as many
+    /// inspections as the subtree takes: each node an inspection cut is the
+    /// root of the next.
+    fn render_subtree(
+        &mut self,
+        render: flui_foundation::RenderId,
+        element: &Node,
+    ) -> Result<rustc_hash::FxHashSet<flui_foundation::RenderId>, TestError> {
         use flui_foundation::inspect::Link;
 
-        let found = self.resolve(locator)?;
-        // A render-formed node's id is its render object's packed id; an
-        // authored region's carries a domain bit no render id has.
-        let Some(render) = flui_foundation::RenderId::from_u64(found.element.element.get()) else {
-            return Err(TestError::NoRenderObject {
-                element: line_of(&found.node),
-            });
-        };
-        self.run_due_now();
-        let mut params = InspectParams::new(self.window.id());
-        params.root = Some(Link::Render(render).to_string());
-        let call = self.window.call::<InspectRender>(params)?;
-        let reading = self.answered(call)?;
-        if reading.truncated {
-            return Err(TestError::SubtreeTooLarge {
-                element: line_of(&found.node),
-                listed: reading.count,
-            });
-        }
         let mut painters = rustc_hash::FxHashSet::default();
-        let mut pending: Vec<&flui_protocol::InspectNode> = reading.roots.iter().collect();
-        while let Some(node) = pending.pop() {
-            if let Ok(Link::Render(id)) = node.id.parse::<Link>() {
+        let mut roots = vec![render];
+        while let Some(root) = roots.pop() {
+            let mut params = InspectParams::new(self.window.id());
+            params.root = Some(Link::Render(root).to_string());
+            let call = self.window.call::<InspectRender>(params)?;
+            let reading = self.answered(call)?;
+            let mut pending: Vec<&flui_protocol::InspectNode> = reading.roots.iter().collect();
+            while let Some(node) = pending.pop() {
+                let Ok(Link::Render(id)) = node.id.parse::<Link>() else {
+                    panic!(
+                        "BUG: inspect.render names its nodes by render handle, not {:?}",
+                        node.id
+                    );
+                };
                 painters.insert(id);
+                if node.omitted_children > 0 {
+                    // The root itself cut: its children alone are more than
+                    // one inspection lists, so reading it again lists the same.
+                    if id == root {
+                        return Err(TestError::TooManyChildren {
+                            element: line_of(element),
+                            children: node.omitted_children,
+                        });
+                    }
+                    roots.push(id);
+                }
+                pending.extend(&node.children);
             }
-            pending.extend(&node.children);
         }
-        Ok(self.host.sink().layer_tree().map_or_else(Vec::new, |tree| {
-            scene_commands(tree, |painter| painters.contains(&painter))
-        }))
+        Ok(painters)
     }
 
     /// The draw commands the one element `locator` names painted, as

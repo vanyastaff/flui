@@ -128,10 +128,13 @@ substrate driver over raw owners, which the raw-owner suites still use.
   one exception is `Tester::draw_commands`, which reads the scene the
   headless host received, because the agent's protocol carries no drawing;
   it locates through the agent and selects the picture layers whose render
-  object `inspect.render` lists under the element, and refuses a subtree
-  past one inspection rather than return part of its drawing
+  object `inspect.render` lists under the element, paging the inspection
+  from each node it cut and starting again when a frame submits a scene
+  between those reads. It refuses a render object with more children than
+  one inspection lists rather than return part of its drawing
   (`draw_commands_read_one_element_and_none_of_its_sibling`,
-  `draw_commands_refuse_a_subtree_past_one_inspection`).
+  `draw_commands_read_a_subtree_past_one_inspection_whole`,
+  `draw_commands_refuse_a_render_object_with_more_children_than_one_inspection`).
   Each read first runs the frames due now at zero duration, so its answer comes
   from the tree that work committed. An expectation pumps a frame only while
   `time_to_next_frame` is zero (a scheduled frame or pending work); with
