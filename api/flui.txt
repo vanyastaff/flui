@@ -14846,12 +14846,15 @@ impl core::error::Error for flui::platform::launch::InvalidUri
 impl core::fmt::Debug for flui::platform::launch::InvalidUri
 impl core::fmt::Display for flui::platform::launch::InvalidUri
 impl core::marker::StructuralPartialEq for flui::platform::launch::InvalidUri
-variant flui::platform::launch::InvalidUri::ControlCharacter // at 5
-variant flui::platform::launch::InvalidUri::Credentials // at 3
+variant flui::platform::launch::InvalidUri::Credentials // at 4
+variant flui::platform::launch::InvalidUri::HiddenCharacter // at 8
+variant flui::platform::launch::InvalidUri::MailtoField // at 5
+variant flui::platform::launch::InvalidUri::MissingAuthority // at 3
 variant flui::platform::launch::InvalidUri::NotAbsolute // at 0
 variant flui::platform::launch::InvalidUri::RefusedScheme // at 1
 variant flui::platform::launch::InvalidUri::SchemeNotAllowed // at 2
-variant flui::platform::launch::InvalidUri::TooLong { limit: usize } // at 4
+variant flui::platform::launch::InvalidUri::TooLong { limit: usize } // at 6
+variant flui::platform::launch::InvalidUri::UnencodedCharacter // at 7
 #[non_exhaustive] pub enum flui::platform::launch::LaunchError
 impl Clone for flui::platform::launch::LaunchError
 impl Copy for flui::platform::launch::LaunchError
@@ -14891,11 +14894,12 @@ impl core::fmt::Debug for flui::platform::launch::LauncherCapability
 impl flui::platform::capability::Capability for flui::platform::launch::LauncherCapability { type Handle = flui::platform::launch::Launcher; }
 pub const flui::platform::launch::MAX_EXTERNAL_URI_LEN: usize
 pub const flui::platform::launch::REFUSED_SCHEMES: [&str; 6]
-pub const flui::platform::launch::RUNNABLE_EXTENSIONS: [&str; 41]
+pub const flui::platform::launch::RUNNABLE_EXTENSIONS: [&str; 56]
 pub struct flui::platform::launch::Scheme(_)
 impl Clone for flui::platform::launch::Scheme
 impl Eq for flui::platform::launch::Scheme
 impl PartialEq for flui::platform::launch::Scheme
+impl core::hash::Hash for flui::platform::launch::Scheme
 impl core::fmt::Debug for flui::platform::launch::Scheme
 impl core::marker::StructuralPartialEq for flui::platform::launch::Scheme
 pub const flui::platform::launch::Scheme::HTTP: Self = _
@@ -14904,6 +14908,7 @@ pub const flui::platform::launch::Scheme::MAILTO: Self = _
 pub const flui::platform::launch::Scheme::TEL: Self = _
 pub fn flui::platform::launch::Scheme::as_str(&self) -> &str
 pub fn flui::platform::launch::Scheme::try_new(name: impl Into<alloc::borrow::Cow<'static, str>>) -> Option<Self>
+pub fn flui::platform::launch::runs_when_opened(path: &std::path::Path) -> bool
 pub mod flui::platform::os_options
 #[non_exhaustive] pub enum flui::platform::os_options::AndroidColorMode
 impl Clone for flui::platform::os_options::AndroidColorMode
@@ -23147,7 +23152,10 @@ impl Eq for flui::services::system::dialog::FileFilter
 impl PartialEq for flui::services::system::dialog::FileFilter
 impl core::fmt::Debug for flui::services::system::dialog::FileFilter
 impl core::marker::StructuralPartialEq for flui::services::system::dialog::FileFilter
+pub const flui::services::system::dialog::FileFilter::MAX_NAME_LEN: usize = 255
+pub const flui::services::system::dialog::FileFilter::MAX_PATTERNS: usize = 64
 pub const flui::services::system::dialog::FileFilter::MAX_PATTERN_LEN: usize = 255
+pub const flui::services::system::dialog::FileFilter::MAX_PER_REQUEST: usize = 64
 pub fn flui::services::system::dialog::FileFilter::extensions(&self) -> &[String]
 pub fn flui::services::system::dialog::FileFilter::mime_types(&self) -> &[String]
 pub fn flui::services::system::dialog::FileFilter::name(&self) -> &str
@@ -23164,14 +23172,16 @@ impl core::error::Error for flui::services::system::dialog::MalformedRequest
 impl core::fmt::Debug for flui::services::system::dialog::MalformedRequest
 impl core::fmt::Display for flui::services::system::dialog::MalformedRequest
 impl core::marker::StructuralPartialEq for flui::services::system::dialog::MalformedRequest
-variant flui::services::system::dialog::MalformedRequest::DuplicateFilterName // at 4
+variant flui::services::system::dialog::MalformedRequest::DuplicateFilterName // at 6
 variant flui::services::system::dialog::MalformedRequest::EmptyFilter // at 1
-variant flui::services::system::dialog::MalformedRequest::Extension // at 2
+variant flui::services::system::dialog::MalformedRequest::Extension // at 4
 variant flui::services::system::dialog::MalformedRequest::FilterName // at 0
-variant flui::services::system::dialog::MalformedRequest::FiltersOnFolders // at 5
-variant flui::services::system::dialog::MalformedRequest::MimeType // at 3
-variant flui::services::system::dialog::MalformedRequest::RelativeDirectory // at 7
-variant flui::services::system::dialog::MalformedRequest::SuggestedName // at 6
+variant flui::services::system::dialog::MalformedRequest::FiltersOnFolders // at 7
+variant flui::services::system::dialog::MalformedRequest::MimeType // at 5
+variant flui::services::system::dialog::MalformedRequest::RelativeDirectory // at 9
+variant flui::services::system::dialog::MalformedRequest::SuggestedName // at 8
+variant flui::services::system::dialog::MalformedRequest::TooManyFilters // at 3
+variant flui::services::system::dialog::MalformedRequest::TooManyPatterns // at 2
 #[non_exhaustive] pub struct flui::services::system::dialog::OpenRequest { .. }
 field flui::services::system::dialog::OpenRequest::accept_label: Option<String> // at 5
 field flui::services::system::dialog::OpenRequest::directory: Option<std::path::PathBuf> // at 3

@@ -66,48 +66,81 @@ complete. Option 2 decides for every call site at once, so a widget that opens o
 inherits the application's widening for its deep links. Option 3 makes the allowed set a value at
 the call: a link widget that takes text from content names `&[Scheme::HTTPS, Scheme::HTTP]`, and
 nothing else reaches the handler. Option A would leave a filter's meaning to the platform an
-application happens to run on; B gives a widget one behaviour to test.
+application happens to run on; B gives a widget one behaviour to test. A file to open has no
+caller-named set to allow (any document type is legitimate), so a list of runnable names is the
+deny-list option 1 rejects for schemes: it is kept as the floor every host has, and the policy is
+each backend asking its own system about the file it opened (§2).
 
 §1. **A launch names the schemes it allows.** `ExternalUri::try_new(uri: &str, allowed: &[Scheme])`.
 A `Scheme` is checked (`Scheme::try_new` takes RFC 3986 §3.1 syntax, in ASCII lower case) and
 cannot be one of `REFUSED_SCHEMES` (`javascript`, `vbscript`, `data`, `about`, `blob`, `file`);
-`Scheme::HTTPS`, `HTTP`, `MAILTO` and `TEL` are named constants. A URI passes when, in this order:
-it is at most `MAX_EXTERNAL_URI_LEN` bytes, checked before it is read further or copied; it holds no
-control character and no bidirectional formatting character; it has a valid scheme; the scheme is
-not refused; the scheme is one of `allowed`, compared ignoring ASCII case; and it names no user
-before its host (`//user@host`, with `\` read as `/` as a browser reads it). Each failure is its
-`InvalidUri` variant (`TooLong`, `ControlCharacter`, `NotAbsolute`, `RefusedScheme`,
-`SchemeNotAllowed`, `Credentials`). The URI is handed on as written: nothing decodes its
-percent-escapes. An application's own declared schemes (ADR-0307) are what it receives, not what it
-launches; a caller that launches one names it.
+`Scheme::HTTPS`, `HTTP`, `MAILTO` and `TEL` are named constants; a `Scheme` is `Eq` and `Hash`, so
+an allowed set can be a set. A URI passes when, in this order: it is at most
+`MAX_EXTERNAL_URI_LEN` bytes, checked before it is read further or copied; it holds no character
+RFC 3986 makes it percent-encode (a space, `"`, `<`, `>`, `` ` ``, `{`, `|`, `}`, `^`, `\`:
+`UnencodedCharacter`), since Windows splices a URI into its handler's `"<app>" "%1"` command line
+as written, which lets a `"` or a space start an argument of the URI's own (the class of
+CVE-2018-1000006, worst for an application's own scheme); it holds no character that changes how it
+reads without being seen (control, bidirectional formatting, zero-width and invisible formatting
+characters, the soft hyphen, the byte-order mark, and any space or separator outside ASCII:
+`HiddenCharacter`); it has a valid scheme; the scheme is not refused; the scheme is one of
+`allowed`, compared ignoring ASCII case; a scheme with an authority (`http`, `https`, `ftp`, `ws`,
+`wss`, `file`) writes the `//` before it (`MissingAuthority`), because a browser reads
+`https:bank.example@evil.example` as that authority all the same; the authority names no user
+before its host (`Credentials`); and a `mailto` query names only `to`, `cc`, `bcc`, `subject` and
+`body`, ignoring ASCII case (`MailtoField`), since some mail clients attach the local file an
+`attach` names. A field name is not decoded for the comparison: one holding a `%` is refused. The
+URI is handed on as written: nothing decodes its percent-escapes. An application's own declared
+schemes (ADR-0307) are what it receives, not what it launches; a caller that launches one names it.
 
 §2. **A path is local, and an open opens documents only.** Every path verb refuses a relative path
-(`RelativePath`) and a Windows network share or device path as given (`\\server\…`,
-`\\?\UNC\…`, `\\.\…`: `NotLocal`; a drive the user mapped stays theirs). `open_path` also refuses a
-path whose name, or the name of what it resolves to, ends in one of `RUNNABLE_EXTENSIONS`
-(`NotADocument`): programs, installers, scripts, shortcuts and searches on Windows, a Linux
-desktop entry, a macOS application, Terminal script or Automator workflow. The name is read as
-Windows reads it (trailing dots and spaces dropped, a `:stream` suffix ignored), and one list holds
-for every host, since a file made on one system is opened on another. Revealing or trashing such a
-file runs nothing and is allowed. A host whose handler would run a file the name does not reveal
-(a macOS Unix executable without an extension) refuses it in its backend.
+(`RelativePath`) and a path off the local drives (`NotLocal`). Locality is an allow-list: on Windows
+the only prefixes admitted are a drive letter, plain or verbatim (`Prefix::Disk`,
+`Prefix::VerbatimDisk`); every other prefix (`UNC`, `VerbatimUNC`, `DeviceNS`, and `Verbatim`, which
+reaches a share through `\\?\GLOBALROOT\Device\Mup\…`) is refused. On every other system an
+absolute path has no prefix and is local. Locality is judged on the path as given, so a drive the
+user mapped stays theirs.
+
+`open_path` refuses a name that runs when opened (`NotADocument`). The seam decides from the path
+alone and touches no file system on the owner thread: the last component ends in one of
+`RUNNABLE_EXTENSIONS` or in a Windows class id (`.{…}`), read as Windows reads it (trailing dots and
+spaces dropped, a `:stream` suffix ignored). The list (programs, installers, scripts, shortcuts and
+searches on Windows, Python and Java scripts, help, theme and sandbox files, archived web pages, a
+Linux desktop entry, macOS applications, Terminal scripts, Automator workflows and Finder location
+files) is the floor every host has, one list since a file made on one system is opened on another;
+it is not the policy. The policy is the backend's own judgement of the file it opened:
+`LauncherBackend::open_path` opens the file first, off the owner thread, judges what the descriptor
+or handle holds (so a link swapped between a check and the open changes nothing), and answers
+`NotADocument` without handing it on when its resolved name `runs_when_opened` or its system calls
+it dangerous: on Linux an executable regular file or a desktop entry; on Windows `AssocIsDangerous`
+on the final path of the opened handle (`GetFinalPathNameByHandle`); on macOS Launch Services'
+application and executable checks. Revealing or trashing such a file runs nothing and is allowed.
+Every file system call of a launch (opening, resolving, judging) runs off the owner thread, and its
+answer goes to the resolver of the request that asked.
 
 §3. **A filter means one thing.** A file matches a `FileFilter` when its name ends in `.` and one of
 its extensions, compared ignoring ASCII case, or when its type is one of its MIME types. An
 extension is one or more parts of ASCII letters, digits, `-`, `_` and `+` joined by single dots
 (`tar.gz`), so no host reads a character of it as a wildcard, a list separator or a path; a MIME
 type is two RFC 6838 names, or a type and `*`, without parameters. Each is at most
-`FileFilter::MAX_PATTERN_LEN` bytes. The filter keeps them as the dialog compares them (no leading
-dot, ASCII lower case) and keeps each once. A request whose filter is blank-named, empty or
-malformed, or which shows two filters with one name, is refused with
+`FileFilter::MAX_PATTERN_LEN` bytes, a filter's name at most `FileFilter::MAX_NAME_LEN`, a filter
+holds at most `FileFilter::MAX_PATTERNS` patterns and a request at most
+`FileFilter::MAX_PER_REQUEST` filters; the counts are checked before anything is copied for the
+system. The filter keeps patterns as the dialog compares them (no leading dot, ASCII lower case)
+and keeps each once. A request whose filter is blank-named, empty, malformed or over a bound, or
+which shows two filters with one name, is refused with
 `DialogError::InvalidRequest(MalformedRequest)` naming the reason, before the system is asked.
 
-§4. **A host maps the filter or refuses.** The portal folds case into its globs
-(`*.[pP][nN][gG]`) and passes MIME types as they are. A host whose dialog matches an extension
-otherwise maps it (Windows' `*.ext` patterns already ignore case; a dialog that matches only an
-extension's last part, as macOS's content types do for `tar.gz`, filters on that part and checks
-the pick), and one that cannot express a pattern answers `DialogError::Unsupported` for the
-request. None drops a pattern.
+§4. **A host maps the filter or refuses.** A host whose dialog matches an extension otherwise maps
+it (Windows' `*.ext` patterns already ignore case; a dialog that matches only an extension's last
+part, as macOS's content types do for `tar.gz`, filters on that part and checks the pick), and one
+that cannot express a pattern answers `DialogError::Unsupported` for the request. None drops a
+pattern. The portal is the one host that falls short, by a decision: its backends match globs
+case-sensitively, and a bracket per letter (`*.[pP][nN][gG]`) would match every case but reach a
+save dialog that derives the extension it appends from the selected glob. It sends each extension
+in lower and in upper case (`*.png`, `*.PNG`), as GTK applications do, and passes MIME types as they
+are; a name in mixed case (`Photo.Png`) on a case-sensitive file system is not shown, which
+`docs/gaps.md` records.
 
 §5. **The first filter starts selected, and a save reports the one left selected.** The portal
 sends the first filter as `current_filter` as well as first in `filters`. A save answers
@@ -145,12 +178,12 @@ is empty, since a closed window's id may name another window by then.
 - Tests in `flui-system`'s `system_it`: `external_uri_admits_only_the_schemes_its_caller_names`,
   `a_scheme_is_named_once_whatever_its_case_and_never_a_refused_one`,
   `opening_a_program_a_script_or_a_shortcut_is_refused_without_asking_the_system`,
-  `a_link_is_judged_by_what_it_links_to` (Unix),
-  `a_network_share_or_a_device_is_refused_without_asking_the_system` (Windows),
+  `only_a_drive_letter_is_a_local_path` (Windows, a row per `Prefix` kind),
   `a_filter_keeps_each_pattern_once_as_the_dialog_compares_it`,
   `a_malformed_request_is_refused_without_showing_a_dialog`,
   `a_save_reports_the_filter_selected_when_the_user_accepted`; against the stand-in portal on
-  Linux, `the_dialogs_reach_the_file_chooser_and_answer_its_picks` and
-  `a_save_dialog_reports_the_filter_the_portal_says_was_selected`; the portal's own
+  Linux, `the_dialogs_reach_the_file_chooser_and_answer_its_picks`,
+  `a_save_dialog_reports_the_filter_the_portal_says_was_selected` and
+  `a_file_that_would_run_is_judged_by_what_was_opened_and_never_handed_on`; the portal's own
   `a_filter_becomes_globs_then_mime_types` and
   `a_launch_is_attached_to_its_widgets_window_while_it_is_open`.
