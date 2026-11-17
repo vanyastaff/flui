@@ -659,42 +659,94 @@ fn nodes_after_removal(remove_g: bool) -> usize {
     scene.version().len()
 }
 
-/// A frame whose semantics fail after paint leaves its patch staged; a host
-/// that drops that patch unapplied and then runs a frame with no root gets
-/// no frame back, and nothing stays staged for a later report to commit.
-pub(crate) fn a_frame_without_a_root_drops_a_patch_never_applied() {
-    let (mut owner, [_, p, ..]) = mount_nested_under_opacity();
-    let mut host = flui_layer::SceneOwner::new();
-    {
-        let mut writer = host.writer();
-        let painted = owner
-            .run_frame_in_place(&mut writer)
+/// What a frame with no root finds owed.
+#[derive(Clone, Copy, Debug)]
+enum OwedWithoutRoot {
+    /// A patch a failed frame staged and its host dropped unapplied.
+    UnappliedPatch,
+    /// A paint mark made after the root was removed, nothing staged.
+    QueuedPaint,
+}
+
+/// A frame with no root paints nothing, keeps nothing staged for a later
+/// report to commit, and leaves the records it could not bring up to date
+/// forgotten: when the root returns, its first frame repaints the tree with
+/// the change made while it was gone, and the scene holds the nodes a fresh
+/// owner's would.
+pub(crate) fn a_frame_without_a_root_forgets_the_scene_it_cannot_paint() {
+    use OwedWithoutRoot::{QueuedPaint, UnappliedPatch};
+    for owed in [UnappliedPatch, QueuedPaint] {
+        let (mut owner, [_, _, opacity, ..]) = mount_nested_under_opacity();
+        let root = owner.root_id().expect("the tree has a root");
+        let mut scene = SceneHost::new();
+        scene
+            .run_frame_in_place(&mut owner)
             .expect("the first frame");
-        assert!(painted, "the first frame paints the tree");
+        match owed {
+            UnappliedPatch => {
+                set_opacity(&mut owner, opacity, 0.25);
+                owner.fail_next_semantics_after_paint_for_test(
+                    flui_rendering::error::RenderError::contract_violation(
+                        "semantics",
+                        "fails after paint",
+                    ),
+                );
+                {
+                    // The host drops the failed frame's patch without
+                    // applying it.
+                    let mut writer = scene.owner_mut().writer();
+                    owner
+                        .run_frame_in_place(&mut writer)
+                        .expect_err("semantics fails after paint");
+                }
+                assert!(
+                    owner.scene_staged(),
+                    "the failed frame's patch stays staged"
+                );
+                owner.set_root_id(None);
+            }
+            QueuedPaint => {
+                owner.set_root_id(None);
+                set_opacity(&mut owner, opacity, 0.25);
+            }
+        }
+        let rootless = scene
+            .run_frame_in_place(&mut owner)
+            .expect("a frame with no root");
+        assert!(
+            rootless.is_none(),
+            "{owed:?}: a frame with no root paints nothing"
+        );
+        assert!(
+            !owner.scene_staged(),
+            "{owed:?}: nothing stays staged for a later report to commit"
+        );
+
+        owner.set_root_id(Some(root));
+        let tree = scene
+            .run_frame_in_place(&mut owner)
+            .expect("the root returns")
+            .unwrap_or_else(|| panic!("{owed:?}: the returned root's first frame paints"));
+        assert_eq!(
+            first_opacity_alpha(&tree).map(|a| (a * 100.0).round()),
+            Some(25.0),
+            "{owed:?}: the change made while the root was gone is painted"
+        );
+        for _ in 0..3 {
+            scene.run_frame_in_place(&mut owner).expect("a later frame");
+        }
+        assert_eq!(
+            scene.version().len(),
+            nodes_after_first_frame(),
+            "{owed:?}: the scene still holds nodes of the forgotten records"
+        );
     }
-    owner.mark_needs_paint(p);
-    owner.fail_next_semantics_after_paint_for_test(
-        flui_rendering::error::RenderError::contract_violation("semantics", "fails after paint"),
-    );
-    {
-        let mut writer = host.writer();
-        owner
-            .run_frame_in_place(&mut writer)
-            .expect_err("semantics fails after paint");
-        // The host drops the failed frame's patch without applying it.
-    }
-    assert!(
-        owner.scene_staged(),
-        "the failed frame's patch stays staged"
-    );
-    owner.set_root_id(None);
-    let mut writer = host.writer();
-    let painted = owner
-        .run_frame_in_place(&mut writer)
-        .expect("a frame with no root");
-    assert!(!painted, "a frame with no root paints nothing");
-    assert!(
-        !owner.scene_staged(),
-        "the patch never applied is dropped, not left for a report to commit"
-    );
+}
+
+/// How many nodes the scene holds after a fresh owner's first frame.
+fn nodes_after_first_frame() -> usize {
+    let (mut owner, _) = mount_nested_under_opacity();
+    let mut scene = SceneHost::new();
+    scene.run_frame_in_place(&mut owner).expect("first frame");
+    scene.version().len()
 }

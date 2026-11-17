@@ -172,7 +172,14 @@ impl PipelineOwner<PaintPhase> {
             .scene_frame
             .as_ref()
             .is_some_and(|frame| frame.node.lineage() != lineage);
-        if ratio_changed || unapplied || renewed {
+        // A pass with no root to walk drops what is queued (the residue scan
+        // below), so the records stop describing the tree: forgotten, they
+        // make the next root's first pass repaint from scratch, with every
+        // change made while the root was gone.
+        let rootless = self
+            .root_id
+            .is_none_or(|root| self.render_tree.get(root).is_none());
+        if ratio_changed || unapplied || renewed || rootless {
             self.forget_scene();
             self.retained_pixel_ratio = self.device_pixel_ratio;
         }
