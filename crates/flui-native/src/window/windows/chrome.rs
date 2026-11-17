@@ -106,6 +106,37 @@ pub(crate) struct Edges {
     pub(crate) bottom: i32,
 }
 
+/// The edges of a monitor that hold an app bar set to hide itself (the taskbar
+/// with "automatically hide" on), as the shell answers
+/// `ABM_GETAUTOHIDEBAREX` for each edge of the monitor.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct AutoHideEdges {
+    pub(crate) left: bool,
+    pub(crate) top: bool,
+    pub(crate) right: bool,
+    pub(crate) bottom: bool,
+}
+
+/// How far a maximized window whose application draws its title bar stands
+/// back from a monitor edge that holds an auto-hide app bar, in device pixels.
+///
+/// With an auto-hide bar the work area is the whole monitor, so a client that
+/// fills it covers the monitor, the shell takes the window for a fullscreen
+/// one and the bar no longer slides in when the pointer reaches its edge. The
+/// strip left uncovered is where the pointer reveals the bar: Windows Terminal
+/// and Chromium leave the same two pixels.
+pub(crate) const AUTO_HIDE_BAR_REVEAL: i32 = 2;
+
+/// A maximized window, as `WM_NCCALCSIZE` measures its client.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Maximized {
+    /// How far the window hangs its frame off the monitor on each side: the
+    /// sizing frame's thickness at the window's DPI.
+    pub(crate) frame_overhang: i32,
+    /// The edges of the window's monitor that hold an auto-hide app bar.
+    pub(crate) auto_hide: AutoHideEdges,
+}
+
 /// The client rectangle `WM_NCCALCSIZE` gives a window whose application draws
 /// its title bar.
 ///
@@ -113,20 +144,37 @@ pub(crate) struct Edges {
 /// client rectangle the default procedure made of it. The side and bottom
 /// borders stay the system's (they resize the window and carry its shadow);
 /// the caption and the top border go, so the client reaches the window's top.
-/// A maximized window hangs its frame off the monitor by `maximized_inset`, so
-/// its client starts that far down and stays on the monitor.
+///
+/// A maximized window's client is the work area: it hangs its frame off the
+/// monitor by [`Maximized::frame_overhang`], so its client starts that far
+/// down, and it stands [`AUTO_HIDE_BAR_REVEAL`] back from each edge that
+/// holds an auto-hide app bar, so the bar can still be revealed there.
 pub(crate) const fn app_title_bar_client(
     proposed: Edges,
     defaulted: Edges,
-    maximized_inset: Option<i32>,
+    maximized: Option<Maximized>,
 ) -> Edges {
-    let inset = match maximized_inset {
-        Some(inset) => inset,
-        None => 0,
+    let Some(Maximized {
+        frame_overhang,
+        auto_hide,
+    }) = maximized
+    else {
+        return Edges {
+            top: proposed.top,
+            ..defaulted
+        };
     };
+    const fn reveal(bar: bool) -> i32 {
+        if bar { AUTO_HIDE_BAR_REVEAL } else { 0 }
+    }
     Edges {
-        top: proposed.top.saturating_add(inset),
-        ..defaulted
+        left: defaulted.left.saturating_add(reveal(auto_hide.left)),
+        top: proposed
+            .top
+            .saturating_add(frame_overhang)
+            .saturating_add(reveal(auto_hide.top)),
+        right: defaulted.right.saturating_sub(reveal(auto_hide.right)),
+        bottom: defaulted.bottom.saturating_sub(reveal(auto_hide.bottom)),
     }
 }
 
@@ -241,34 +289,81 @@ mod tests {
         }
     }
 
+    /// A 1920×1080 monitor whose work area is the whole monitor (an auto-hide
+    /// taskbar takes none of it), and a window maximized on it: the window
+    /// rectangle hangs the 8-pixel frame off every side, and the default
+    /// procedure's client is the work area below a 23-pixel caption.
     #[test]
-    fn the_client_reaches_the_top_and_a_maximized_one_stays_on_the_monitor() {
+    fn the_client_reaches_the_top_and_a_maximized_one_leaves_an_auto_hide_bar_its_edge() {
         let proposed = Edges {
             left: -8,
             top: -8,
             right: 1928,
-            bottom: 1048,
+            bottom: 1088,
         };
         let defaulted = Edges {
             left: 0,
             top: 23,
             right: 1920,
-            bottom: 1040,
+            bottom: 1080,
         };
-        assert_eq!(
-            app_title_bar_client(proposed, defaulted, None),
-            Edges {
-                top: -8,
-                ..defaulted
-            }
-        );
-        assert_eq!(
-            app_title_bar_client(proposed, defaulted, Some(8)),
-            Edges {
-                top: 0,
-                ..defaulted
-            }
-        );
+        let maximized = |auto_hide| {
+            Some(Maximized {
+                frame_overhang: 8,
+                auto_hide,
+            })
+        };
+        let bars = |left, top, right, bottom| AutoHideEdges {
+            left,
+            top,
+            right,
+            bottom,
+        };
+        let client = |left, top, right, bottom| Edges {
+            left,
+            top,
+            right,
+            bottom,
+        };
+        for (name, state, wanted) in [
+            ("normal", None, client(0, -8, 1920, 1080)),
+            (
+                "maximized, no auto-hide bar: the work area",
+                maximized(AutoHideEdges::default()),
+                client(0, 0, 1920, 1080),
+            ),
+            (
+                "an auto-hide taskbar at the bottom",
+                maximized(bars(false, false, false, true)),
+                client(0, 0, 1920, 1078),
+            ),
+            (
+                "at the top",
+                maximized(bars(false, true, false, false)),
+                client(0, 2, 1920, 1080),
+            ),
+            (
+                "on the left",
+                maximized(bars(true, false, false, false)),
+                client(2, 0, 1920, 1080),
+            ),
+            (
+                "on the right",
+                maximized(bars(false, false, true, false)),
+                client(0, 0, 1918, 1080),
+            ),
+            (
+                "an app bar on every edge",
+                maximized(bars(true, true, true, true)),
+                client(2, 2, 1918, 1078),
+            ),
+        ] {
+            assert_eq!(
+                app_title_bar_client(proposed, defaulted, state),
+                wanted,
+                "{name}"
+            );
+        }
     }
 
     #[test]

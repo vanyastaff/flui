@@ -145,6 +145,9 @@ pub(crate) struct WindowClass {
     pub(crate) input: Rc<dyn WindowInputs>,
     /// The text input those hooks keep, as the window hands it out.
     pub(crate) text: Rc<dyn WindowTexts>,
+    /// The window's own hook, as the input reads whose caption buttons a
+    /// window's are.
+    pub(crate) chrome: Rc<dyn WindowChrome>,
     /// The modal loops running on the thread, which the class's procedure
     /// tells after each message ([`ModalLoops::ran`]); the host's table starts
     /// it empty.
@@ -220,6 +223,26 @@ pub(crate) fn window_inputs() -> Option<Rc<dyn WindowInputs>> {
 /// thread no owner of that host opened on.
 pub(crate) fn window_texts() -> Option<Rc<dyn WindowTexts>> {
     registered_class().map(|class| class.text)
+}
+
+/// What the window's own hook of FLUI's window class on this thread tells the
+/// class's other hooks of a window's frame, for the host the process
+/// registered the class for; `None` on a thread no owner of that host opened
+/// on.
+pub(crate) fn window_chrome() -> Option<Rc<dyn WindowChrome>> {
+    registered_class().map(|class| class.chrome)
+}
+
+/// What the window tells the class's other hooks of its frame, read-only.
+/// Answers `None` for a window it does not hold: one already closed, or a
+/// reference whose handle now names another window.
+pub(crate) trait WindowChrome {
+    /// Whether the chrome regions the application hands `window` answer the
+    /// system's hit test (ADR-0286 §7): the system draws no title bar and the
+    /// window is not fullscreen. Its caption buttons are then the
+    /// application's; otherwise a caption button is the system's own, and so
+    /// are the messages over it.
+    fn regions_answer_the_hit_test(&self, window: WindowRef) -> Option<bool>;
 }
 
 /// What the text input of FLUI's window class holds of a window, as the

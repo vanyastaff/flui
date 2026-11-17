@@ -5861,6 +5861,34 @@ the frame. `WM_GETMINMAXINFO` turns the app's logical inner-size limits into out
 window's current DPI with the frame measured for the style the window has
 (`window::windows::limits`); a fullscreen window keeps the system's rectangle.
 
+**A scale change keeps the content's logical size.** Left alone, the system scales the outer
+rectangle linearly across a DPI change, while the caption and border metrics are rounded at each
+DPI, so the content drifts by pixels at each change (an 800×600 content measured at 96, 120, 144
+and 168 DPI in `window::windows::rescale`'s test). A normal window answers `WM_GETDPISCALEDSIZE`
+with the outer size whose content is its logical size at the new DPI under the frame measured
+there (`rescale::rescaled_outer`), which the system then suggests in `WM_DPICHANGED` and positions
+against the pointer during a drag. A maximized, minimized or fullscreen window answers none; the
+rectangle a fullscreen window returns to is rescaled by the same rule under the style it returns
+to. Tests: `a_rescaled_window_keeps_its_content_where_linear_scaling_drifts`,
+`a_scale_change_keeps_the_contents_logical_size`,
+`a_fullscreen_window_covers_its_monitor_through_a_dpi_change`. The rectangle a maximized window is
+restored to is the system's across a scale change.
+
+**An application's title bar** (ADR-0286 §7): a maximized window's client is the work area, and it
+stands `chrome::AUTO_HIDE_BAR_REVEAL` back from each monitor edge the shell answers
+`ABM_GETAUTOHIDEBAREX` for, since a client covering the whole monitor reads to the shell as a
+fullscreen window and the auto-hide taskbar would no longer slide in
+(`the_client_reaches_the_top_and_a_maximized_one_leaves_an_auto_hide_bar_its_edge`). Its caption
+buttons take the non-client pointer messages and, where `EnableMouseInPointer` was refused, the
+legacy non-client mouse messages over them as the client messages they stand for
+(`input::windows::caption`): a press captures the mouse as a press in the content does, a move tracks
+the non-client leave, and `WM_NCMOUSELEAVE` ends the hover unless the cursor is still over the
+window. The input takes those messages only after asking the window whose caption buttons they
+are (`owner::windows::WindowChrome`, the window's own hook as the class's chrome, so the hooks
+still answer disjoint messages): where the system draws the title bar, or the window is
+fullscreen, they stay the default procedure's, so a press on the system's own button is never the
+application's (`caption_buttons_take_the_legacy_mouse_messages_over_them`).
+
 **Fullscreen from another mode:** a visible maximized or minimized window is restored (`SC_RESTORE`)
 before the style is replaced, and the style saved to return to has no `WS_MAXIMIZE` or
 `WS_MINIMIZE`. A resize does not end fullscreen, and a minimized fullscreen window comes back

@@ -34,14 +34,17 @@ use windows::Win32::{
     Foundation::{HWND, LPARAM, LRESULT, WPARAM},
     UI::{
         Controls::WM_MOUSELEAVE,
-        Input::KeyboardAndMouse::{TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent},
+        Input::KeyboardAndMouse::{
+            TME_LEAVE, TRACKMOUSEEVENT, TRACKMOUSEEVENT_FLAGS, TrackMouseEvent,
+        },
         WindowsAndMessaging::{
             DM_POINTERHITTEST, DefWindowProcW, ISMEX_NOSEND, InSendMessageEx, WM_CAPTURECHANGED,
             WM_CHAR, WM_INPUTLANGCHANGE, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP,
             WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL,
-            WM_NCDESTROY, WM_POINTERCAPTURECHANGED, WM_POINTERDEVICECHANGE, WM_POINTERDOWN,
-            WM_POINTERENTER, WM_POINTERLEAVE, WM_POINTERUP, WM_POINTERUPDATE, WM_RBUTTONDOWN,
-            WM_RBUTTONUP, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_TIMER, WM_XBUTTONDOWN, WM_XBUTTONUP,
+            WM_NCDESTROY, WM_NCMOUSELEAVE, WM_POINTERCAPTURECHANGED, WM_POINTERDEVICECHANGE,
+            WM_POINTERDOWN, WM_POINTERENTER, WM_POINTERLEAVE, WM_POINTERUP, WM_POINTERUPDATE,
+            WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_TIMER, WM_XBUTTONDOWN,
+            WM_XBUTTONUP,
         },
     },
 };
@@ -332,6 +335,8 @@ impl WindowMessages for InputWindows {
                 | DM_POINTERHITTEST
         ) || (msg == WM_TIMER && InputWindow::is_touchpad_timer(wparam.0))
             || caption_pointer(msg, wparam).is_some()
+            || caption::client_mouse_message(msg, wparam.0).is_some()
+            || msg == WM_NCMOUSELEAVE
     }
 
     unsafe fn message(
@@ -356,7 +361,18 @@ impl WindowMessages for InputWindows {
         // Held for the whole message: a callback that closes the window
         // drops the entry, not the input this message reaches.
         let input = self.by_handle(hwnd);
-        if let Some(client) = caption_pointer(msg, wparam) {
+        let caption = caption_pointer(msg, wparam);
+        let caption_mouse = caption::client_mouse_message(msg, wparam.0);
+        if (caption.is_some() || caption_mouse.is_some())
+            && !input
+                .as_deref()
+                .is_some_and(InputWindow::caption_buttons_are_the_applications)
+        {
+            // A caption button the system draws (or of a window the input
+            // does not hold): the button and its messages are the system's.
+            return None;
+        }
+        if let Some(client) = caption {
             // Over a caption button of the application's: its pointer messages
             // are the application's button's, and the default procedure, which
             // would track the system's own button and promote them to mouse
@@ -365,6 +381,22 @@ impl WindowMessages for InputWindows {
                 input.pointer_message(hwnd, client, wparam);
             }
             return Some(LRESULT(0));
+        }
+        if let Some(stand_in) = caption_mouse {
+            // The same button on the legacy mouse route: the client mouse
+            // message it stands for, at its point in client coordinates.
+            // SAFETY: the arguments as Win32 delivered them to the class's
+            // procedure, which is `caption_mouse`'s contract too.
+            return Some(unsafe { Self::caption_mouse(hwnd, stand_in, lparam, input.as_deref()) });
+        }
+        if msg == WM_NCMOUSELEAVE {
+            // The mouse left the non-client area, which a move over a caption
+            // button tracks. Heard, not answered: the default procedure ends
+            // the hover of the system's own frame with it.
+            if let Some(input) = input {
+                input.left_non_client(hwnd);
+            }
+            return None;
         }
         match msg {
             DM_POINTERHITTEST => {
@@ -420,6 +452,44 @@ impl WindowInputs for InputWindows {
 
 #[cfg(windows)]
 impl InputWindows {
+    /// A non-client mouse message over a caption button of the application's,
+    /// as the client mouse message `stand_in` it stands for, at the message's
+    /// screen point `lparam` in client coordinates.
+    ///
+    /// A move tracks the non-client area's leave (`WM_NCMOUSELEAVE`): the
+    /// content's would come at once, the mouse being over no content. A press
+    /// captures the mouse as the content's does, so the release reaches the
+    /// application's button wherever it happens, and the moves between come
+    /// as client messages.
+    ///
+    /// # Safety
+    ///
+    /// As [`handle`](Self::handle): the arguments Win32 delivered to this
+    /// class's `WNDPROC` for the non-client message, on the thread that owns
+    /// `hwnd`.
+    unsafe fn caption_mouse(
+        hwnd: HWND,
+        stand_in: caption::MouseStandIn,
+        lparam: LPARAM,
+        ctx: Option<&InputWindow>,
+    ) -> LRESULT {
+        use windows::Win32::UI::Input::KeyboardAndMouse::TME_NONCLIENT;
+
+        let Some(client) = raw::client_point_lparam(hwnd, lparam) else {
+            return LRESULT(0);
+        };
+        let wparam = WPARAM(stand_in.wparam(raw::held_mouse_buttons()));
+        if stand_in.message == WM_MOUSEMOVE {
+            if let Some(ctx) = ctx {
+                ctx.mouse_moved(hwnd, wparam, client, TME_LEAVE | TME_NONCLIENT);
+            }
+            return LRESULT(0);
+        }
+        // SAFETY: a client button message for the window the non-client one
+        // was delivered to, on its thread: `handle`'s contract.
+        unsafe { Self::handle(hwnd, stand_in.message, wparam, client, ctx) }.unwrap_or(LRESULT(0))
+    }
+
     /// The input messages ([`WindowMessages::message`]), with `ctx`, the
     /// window's input, `None` for a window the input does not hold (one it
     /// was never told of, or already destroyed).
@@ -438,37 +508,13 @@ impl InputWindows {
     ) -> Option<LRESULT> {
         // SAFETY: see the `# Safety` section above. This single `unsafe`
         // block covers every Win32 call in the `match` below:
-        // `TrackMouseEvent` (`WM_MOUSEMOVE`) takes a `&raw` pointer to a
-        // stack-local, correctly-sized struct; `InSendMessageEx` and
-        // `DefWindowProcW` take plain values.
+        // `InSendMessageEx` and `DefWindowProcW` take plain values.
         unsafe {
             let answer = match msg {
                 WM_MOUSEMOVE => {
                     if let Some(ctx) = ctx {
-                        let time = ctx.message_clock.message_time();
-                        // Request WM_MOUSELEAVE notification for hover tracking
-                        let mut tme = TRACKMOUSEEVENT {
-                            cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32,
-                            dwFlags: TME_LEAVE,
-                            hwndTrack: hwnd,
-                            dwHoverTime: 0,
-                        };
-                        let _ = TrackMouseEvent(&raw mut tme);
-                        // Cleared by WM_MOUSELEAVE.
-                        ctx.set_hovered(true);
-
-                        let events = raw::mouse_move_input(
-                            &ctx.registry,
-                            wparam,
-                            lparam,
-                            ctx.scale_factor(),
-                            time,
-                        );
-                        for event in events {
-                            if ctx.registry.borrow().delivers(&event) {
-                                ctx.delivery.dispatch_input(event);
-                            }
-                        }
+                        // Its hover ends with `WM_MOUSELEAVE`.
+                        ctx.mouse_moved(hwnd, wparam, lparam, TME_LEAVE);
                     }
                     LRESULT(0)
                 }
@@ -924,6 +970,65 @@ impl InputWindow {
     fn set_hovered(&self, hovered: bool) {
         if self.hovered.replace(hovered) != hovered {
             self.delivery.report_hover(hovered);
+        }
+    }
+
+    /// A legacy mouse move to the client point `lparam` with the buttons of
+    /// `wparam` held: the window asks for the leave of the area the move is
+    /// over (`tracking`: `TME_LEAVE`, with `TME_NONCLIENT` over a caption
+    /// button), the hover begins, and the move is delivered.
+    fn mouse_moved(
+        &self,
+        hwnd: HWND,
+        wparam: WPARAM,
+        lparam: LPARAM,
+        tracking: TRACKMOUSEEVENT_FLAGS,
+    ) {
+        let time = self.message_clock.message_time();
+        let mut leave = TRACKMOUSEEVENT {
+            cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32,
+            dwFlags: tracking,
+            hwndTrack: hwnd,
+            dwHoverTime: 0,
+        };
+        // SAFETY: `leave` is a stack local with `cbSize` set, read by the call
+        // and not kept; `hwnd` is the window the message was sent to. A window
+        // whose leave cannot be tracked keeps its hover until the next leave.
+        let _ = unsafe { TrackMouseEvent(&raw mut leave) };
+        self.set_hovered(true);
+        let events =
+            raw::mouse_move_input(&self.registry, wparam, lparam, self.scale_factor(), time);
+        for event in events {
+            if self.registry.borrow().delivers(&event) {
+                self.delivery.dispatch_input(event);
+            }
+        }
+    }
+
+    /// Whether the window's caption buttons are the application's, as the
+    /// window answers it (`WindowChrome`): its chrome regions answer the
+    /// system's hit test. A window the window's hook no longer holds has none.
+    fn caption_buttons_are_the_applications(&self) -> bool {
+        crate::owner::windows::window_chrome()
+            .and_then(|chrome| chrome.regions_answer_the_hit_test(self.window))
+            .unwrap_or(false)
+    }
+
+    /// `WM_NCMOUSELEAVE`: the mouse left the non-client area a move over a
+    /// caption button tracked. The hover ends unless the mouse is still over
+    /// the window: it went from the button into the content, whose own move
+    /// keeps the hover and tracks the content's leave, whichever of the two
+    /// messages the window takes first.
+    fn left_non_client(&self, hwnd: HWND) {
+        use windows::Win32::UI::WindowsAndMessaging::{GetCursorPos, WindowFromPoint};
+
+        let mut cursor = windows::Win32::Foundation::POINT::default();
+        // SAFETY: `cursor` is a stack local out-parameter; `WindowFromPoint`
+        // takes the point by value and the handle it answers is only compared.
+        let still_over =
+            unsafe { GetCursorPos(&raw mut cursor).is_ok() && WindowFromPoint(cursor) == hwnd };
+        if !still_over {
+            self.set_hovered(false);
         }
     }
 
@@ -2174,6 +2279,36 @@ mod raw {
     ) -> Assembled {
         let reading = legacy_mouse_reading(ReadingAction::Move, wparam, lparam, scale_factor, time);
         decode(&mut registry.borrow_mut(), &reading).unwrap_or_else(DecodeError::into_inputs)
+    }
+
+    /// The `MK_*` bits of the mouse buttons down in the thread's
+    /// queue-synchronized key state: what a client mouse message's `WPARAM`
+    /// carries, for a non-client one that carries none.
+    pub(super) fn held_mouse_buttons() -> usize {
+        MOUSE_BUTTONS
+            .iter()
+            .filter(|codes| key_down_in_queue(VIRTUAL_KEY(codes.virtual_key)))
+            .fold(0, |held, codes| held | codes.key_state_bit as usize)
+    }
+
+    /// A non-client mouse message's point, which it carries in screen
+    /// coordinates, as the client mouse message it stands for carries it: in
+    /// `hwnd`'s client coordinates, packed as `MAKELPARAM` packs them (a point
+    /// above or left of the client is negative, and `get_x_lparam` reads it
+    /// back so). `None` when the point cannot be converted.
+    pub(super) fn client_point_lparam(hwnd: HWND, lparam: LPARAM) -> Option<LPARAM> {
+        let mut point = POINT {
+            x: get_x_lparam(lparam),
+            y: get_y_lparam(lparam),
+        };
+        // SAFETY: `point` is a live, writable local; `ScreenToClient` writes
+        // nothing else. On failure (invalid `hwnd`) it returns FALSE.
+        if !unsafe { ScreenToClient(hwnd, &raw mut point) }.as_bool() {
+            return None;
+        }
+        // Each coordinate's low 16 bits, as the message packs a signed word.
+        let word = |value: i32| (value as u32 & 0xffff) as isize;
+        Some(LPARAM((word(point.y) << 16) | word(point.x)))
     }
 
     /// The signed scroll distance both wheel messages carry in the high word of

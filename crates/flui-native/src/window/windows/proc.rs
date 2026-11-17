@@ -31,7 +31,7 @@ use flui_platform::{
 };
 use parking_lot::Mutex;
 use windows::Win32::{
-    Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
+    Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, SIZE, WPARAM},
     Graphics::{
         Dwm::{DWMWA_CLOAKED, DwmGetWindowAttribute},
         Gdi::{BeginPaint, ClientToScreen, EndPaint, InvalidateRect, PAINTSTRUCT, ScreenToClient},
@@ -43,11 +43,11 @@ use windows::Win32::{
         IsWindowVisible, IsZoomed, MINMAXINFO, NCCALCSIZE_PARAMS, SC_KEYMENU, SC_RESTORE, SW_SHOW,
         SW_SHOWMAXIMIZED, SW_SHOWMINIMIZED, SWP_NOSIZE, SendMessageW, SetWindowLongPtrW,
         WA_INACTIVE, WINDOWPOS, WM_ACTIVATE, WM_APP, WM_CLOSE, WM_CREATE, WM_DESTROY,
-        WM_DPICHANGED, WM_ERASEBKGND, WM_GETMINMAXINFO, WM_KILLFOCUS, WM_MOVE, WM_NCCALCSIZE,
-        WM_NCHITTEST, WM_PAINT, WM_SETCURSOR, WM_SETFOCUS, WM_SETTEXT, WM_SETTINGCHANGE,
-        WM_SHOWWINDOW, WM_SIZE, WM_STYLECHANGED, WM_SYSCOMMAND, WM_WINDOWPOSCHANGED,
-        WM_WINDOWPOSCHANGING, WS_CAPTION, WS_MAXIMIZE, WS_MAXIMIZEBOX, WS_MINIMIZE,
-        WS_OVERLAPPEDWINDOW, WS_POPUP, WS_THICKFRAME,
+        WM_DPICHANGED, WM_ERASEBKGND, WM_GETDPISCALEDSIZE, WM_GETMINMAXINFO, WM_KILLFOCUS, WM_MOVE,
+        WM_NCCALCSIZE, WM_NCHITTEST, WM_PAINT, WM_SETCURSOR, WM_SETFOCUS, WM_SETTEXT,
+        WM_SETTINGCHANGE, WM_SHOWWINDOW, WM_SIZE, WM_STYLECHANGED, WM_SYSCOMMAND,
+        WM_WINDOWPOSCHANGED, WM_WINDOWPOSCHANGING, WS_CAPTION, WS_MAXIMIZE, WS_MAXIMIZEBOX,
+        WS_MINIMIZE, WS_OVERLAPPEDWINDOW, WS_POPUP, WS_THICKFRAME,
     },
 };
 
@@ -64,7 +64,8 @@ use crate::owner::windows::modal_loop::{
     MODAL_DEADLINE_TIMER, ModalPacing, PaceClock, kill_window_timer,
 };
 use crate::owner::windows::{
-    WindowHooks, WindowIdentity, WindowMessages, WindowStep, window_destroyed, window_step,
+    WindowChrome, WindowHooks, WindowIdentity, WindowMessages, WindowStep, window_destroyed,
+    window_step,
 };
 use crate::owner::windows::{get_x_lparam, get_y_lparam};
 use crate::window::state::{
@@ -501,6 +502,14 @@ impl WindowContext {
         matches!(self.frame.get(), flui_platform::WindowFrame::AppTitleBar(_))
     }
 
+    /// Whether the chrome regions the application hands the window answer the
+    /// system's hit test (ADR-0286 §7): the system draws no title bar, and the
+    /// window is not fullscreen, where nothing moves or resizes it from a bar.
+    /// Its caption buttons are then the application's.
+    fn chrome_answers_the_hit_test(&self) -> bool {
+        !self.frame.get().has_system_title_bar() && !self.mode.get().holds_fullscreen()
+    }
+
     /// What this context knows of the window beyond what Win32 reports.
     pub(crate) fn tracking(&self, hwnd: HWND) -> OwnerTracking {
         OwnerTracking {
@@ -767,6 +776,17 @@ pub(crate) unsafe fn with_message_context<R>(
 /// window itself and passes every other message on.
 pub(crate) struct WindowProc;
 
+/// Whose caption buttons a window's are, as the input asks before it takes
+/// the messages over one for the application's button.
+impl WindowChrome for WindowProc {
+    fn regions_answer_the_hit_test(&self, window: WindowRef) -> Option<bool> {
+        window.with_context(
+            "caption buttons",
+            WindowContext::chrome_answers_the_hit_test,
+        )
+    }
+}
+
 impl WindowMessages for WindowProc {
     /// A locked session hides the window; every other step is the window's
     /// own.
@@ -803,7 +823,8 @@ impl WindowMessages for WindowProc {
             | WM_SHOWWINDOW | WM_MOVE | WM_DPICHANGED | WM_WINDOWPOSCHANGING
             | WM_WINDOWPOSCHANGED | CLOSE_WINDOW | DELIVER_QUEUED | WM_SETTEXT
             | WM_STYLECHANGED | WM_GETMINMAXINFO | REQUEST_FRAME | WM_SETCURSOR | WM_SETFOCUS
-            | WM_KILLFOCUS | WM_ACTIVATE | WM_SETTINGCHANGE | WM_NCCALCSIZE | WM_NCHITTEST => true,
+            | WM_KILLFOCUS | WM_ACTIVATE | WM_SETTINGCHANGE | WM_NCCALCSIZE | WM_NCHITTEST
+            | WM_GETDPISCALEDSIZE => true,
             WM_TIMER => wparam.0 == MODAL_DEADLINE_TIMER,
             WM_SYSCOMMAND => {
                 (wparam.0 & 0xFFF0) == SC_KEYMENU as usize || is_user_placement_command(wparam)
@@ -1393,9 +1414,12 @@ impl WindowProc {
                     let proposed = edges((*params).rgrc[0]);
                     let answer = DefWindowProcW(hwnd, msg, wparam, lparam);
                     let defaulted = edges((*params).rgrc[0]);
-                    let maximized_inset = IsZoomed(hwnd).as_bool().then(|| frame_thickness(hwnd));
+                    let maximized = IsZoomed(hwnd).as_bool().then(|| super::chrome::Maximized {
+                        frame_overhang: frame_thickness(hwnd),
+                        auto_hide: auto_hide_edges(hwnd),
+                    });
                     let client =
-                        super::chrome::app_title_bar_client(proposed, defaulted, maximized_inset);
+                        super::chrome::app_title_bar_client(proposed, defaulted, maximized);
                     (*params).rgrc[0] = RECT {
                         left: client.left,
                         top: client.top,
@@ -1411,10 +1435,7 @@ impl WindowProc {
                 WM_NCHITTEST => {
                     let defaulted = DefWindowProcW(hwnd, msg, wparam, lparam);
                     let Some(ctx) = ctx.filter(|ctx| {
-                        // A fullscreen window is not moved or resized from its bar.
-                        !ctx.frame.get().has_system_title_bar()
-                            && !ctx.mode.get().holds_fullscreen()
-                            && defaulted.0 == HTCLIENT as isize
+                        ctx.chrome_answers_the_hit_test() && defaulted.0 == HTCLIENT as isize
                     }) else {
                         return Some(defaulted);
                     };
@@ -1446,6 +1467,23 @@ impl WindowProc {
                         top_band,
                     );
                     LRESULT(code as isize)
+                }
+
+                // The system asks, before a `WM_DPICHANGED`, what size the
+                // window takes at the DPI it is moving to: the one that keeps
+                // its content's logical size, where the system would scale
+                // the whole window linearly.
+                WM_GETDPISCALEDSIZE => {
+                    // SAFETY: for this message `lParam` is the address of the
+                    // `SIZE` the system owns for the call, read and written
+                    // until the message returns; the null check guards a
+                    // sender that breaks that contract.
+                    let pending = (lparam.0 as *mut SIZE).as_mut();
+                    let answered = match (ctx, pending) {
+                        (Some(ctx), Some(pending)) => ctx.dpi_scaled_size(hwnd, wparam.0, pending),
+                        _ => false,
+                    };
+                    LRESULT(isize::from(answered))
                 }
 
                 WM_SETCURSOR => {
@@ -1627,8 +1665,8 @@ pub(crate) struct OwnerTracking {
     pub(crate) interaction: flui_platform::WindowInteraction,
 }
 
-/// Whether the window's style has a caption: a fullscreen window has been
-/// stripped of it, and keeps no frame of the application's either.
+/// Whether a `WM_SYSCOMMAND` is one that places the window: maximize, minimize
+/// or restore.
 fn is_user_placement_command(wparam: WPARAM) -> bool {
     use windows::Win32::UI::WindowsAndMessaging::{SC_MAXIMIZE, SC_MINIMIZE};
     let command = wparam.0 & 0xFFF0;
@@ -1637,6 +1675,8 @@ fn is_user_placement_command(wparam: WPARAM) -> bool {
         || command == SC_RESTORE as usize
 }
 
+/// Whether the window's style has a caption: a fullscreen window has been
+/// stripped of it, and keeps no frame of the application's either.
 fn has_caption(hwnd: HWND) -> bool {
     // SAFETY: a plain style query; a stale handle reads as no style.
     let style = unsafe { GetWindowLongPtrW(hwnd, GWL_STYLE) as u32 };
@@ -1655,6 +1695,59 @@ fn frame_thickness(hwnd: HWND) -> i32 {
         let dpi = GetDpiForWindow(hwnd);
         GetSystemMetricsForDpi(SM_CYFRAME, dpi)
             .saturating_add(GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi))
+    }
+}
+
+/// The edges of the monitor `hwnd` is on that hold an app bar set to hide
+/// itself, as the shell answers `ABM_GETAUTOHIDEBAREX` for each. An edge the
+/// shell cannot answer for (no shell, a monitor that cannot be read) reads as
+/// holding none.
+///
+/// Each answer is a message the shell's taskbar answers from another process,
+/// so the thread may run a message sent to one of its windows meanwhile; the
+/// caller holds no borrow across it.
+fn auto_hide_edges(hwnd: HWND) -> super::chrome::AutoHideEdges {
+    use windows::Win32::{
+        Graphics::Gdi::{
+            GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow,
+        },
+        UI::Shell::{
+            ABE_BOTTOM, ABE_LEFT, ABE_RIGHT, ABE_TOP, ABM_GETAUTOHIDEBAREX, APPBARDATA,
+            SHAppBarMessage,
+        },
+    };
+
+    let mut monitor = MONITORINFO {
+        cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+        ..Default::default()
+    };
+    // SAFETY: `monitor` is a stack local with `cbSize` set; the monitor handle
+    // comes from the live window.
+    let read = unsafe {
+        GetMonitorInfoW(
+            MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST),
+            &raw mut monitor,
+        )
+    };
+    if !read.as_bool() {
+        return super::chrome::AutoHideEdges::default();
+    }
+    let holds_bar = |edge: u32| {
+        let mut query = APPBARDATA {
+            cbSize: std::mem::size_of::<APPBARDATA>() as u32,
+            uEdge: edge,
+            rc: monitor.rcMonitor,
+            ..Default::default()
+        };
+        // SAFETY: `query` is a stack local with `cbSize` set, read by the call
+        // and not kept; the answer is the bar's handle, or zero for none.
+        unsafe { SHAppBarMessage(ABM_GETAUTOHIDEBAREX, &raw mut query) != 0 }
+    };
+    super::chrome::AutoHideEdges {
+        left: holds_bar(ABE_LEFT),
+        top: holds_bar(ABE_TOP),
+        right: holds_bar(ABE_RIGHT),
+        bottom: holds_bar(ABE_BOTTOM),
     }
 }
 
@@ -2197,7 +2290,8 @@ impl WindowContext {
                 return;
             }
         };
-        let old_scale = self.scale.rescale(dpi);
+        let old_dpi = self.scale.dpi();
+        self.scale.rescale(dpi);
         let new_scale = self.scale.scale();
         tracing::info!(dpi = dpi.get(), new_scale, "DPI changed");
         // The display's scale changed, so its snapshot entry did.
@@ -2208,7 +2302,7 @@ impl WindowContext {
         let hold = self.hold_publishing();
         let ratio = self.scale.ratio();
         self.update_window_state(|state| state.scale_factor = ratio);
-        self.apply_dpi_rectangle(hwnd, suggested, new_scale / old_scale);
+        self.apply_dpi_rectangle(hwnd, suggested, old_dpi, dpi.get());
         // The state callback the rectangle's `WM_SIZE` ran may have closed the
         // window: its resize and frame are then not for whatever window has
         // the handle now.
@@ -2243,14 +2337,83 @@ impl WindowContext {
         self.step(hwnd, WindowStep::ScaleApplied);
     }
 
-    /// Give the window the rectangle its new DPI asks for; `ratio` is the new
-    /// scale over the old.
+    /// `WM_GETDPISCALEDSIZE`: the outer size the window takes at `dpi`, its
+    /// pending size `pending` now, written back into `pending`. The size keeps
+    /// the content's logical size ([`rescale`](super::rescale)), where the
+    /// system's linear scaling would not.
+    ///
+    /// Answers whether it wrote one. A window that is not in its normal mode
+    /// answers none: a maximized or fullscreen window covers its monitor at
+    /// any DPI (the fullscreen one's way back is rescaled with
+    /// [`apply_dpi_rectangle`](Self::apply_dpi_rectangle)), and a minimized
+    /// one has no size on screen. Neither does a DPI no screen has, which the
+    /// `WM_DPICHANGED` that follows refuses and reports.
+    fn dpi_scaled_size(&self, hwnd: HWND, dpi: usize, pending: &mut SIZE) -> bool {
+        use crate::owner::windows::WindowDpi;
+
+        if !self.mode.get().is_normal() {
+            return false;
+        }
+        let Some(to) = u32::try_from(dpi).ok().and_then(WindowDpi::try_new) else {
+            return false;
+        };
+        // SAFETY: a plain style query of the live window the message was sent to.
+        let style = unsafe { GetWindowLongPtrW(hwnd, GWL_STYLE) } as u32;
+        let outer = super::limits::PixelSize::new(pending.cx, pending.cy);
+        let Some(rescaled) = self.rescaled_outer(hwnd, style, outer, self.scale.dpi(), to.get())
+        else {
+            return false;
+        };
+        pending.cx = rescaled.width;
+        pending.cy = rescaled.height;
+        true
+    }
+
+    /// The outer size of a window of `style` that is `outer` at `from` DPI,
+    /// once it is at `to` DPI with its content at the same logical size; the
+    /// frame is measured for `style` at each DPI. `None` where either DPI is
+    /// no screen's, the frame cannot be measured, or the content is no size.
+    fn rescaled_outer(
+        &self,
+        hwnd: HWND,
+        style: u32,
+        outer: super::limits::PixelSize,
+        from: u32,
+        to: u32,
+    ) -> Option<super::limits::PixelSize> {
+        use super::rescale::{FramedScale, rescaled_outer};
+
+        // SAFETY: a plain style query of the live window.
+        let ex_style = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) } as u32;
+        let app_title_bar = self.draws_app_title_bar();
+        let framed = |dpi: u32| {
+            let ratio = crate::owner::windows::WindowDpi::try_new(dpi)?.ratio();
+            let (width, height) =
+                super::set::outer_size(style, ex_style, dpi, (0, 0), app_title_bar).ok()?;
+            Some(FramedScale {
+                ratio,
+                frame: super::limits::PixelSize::new(width, height),
+            })
+        };
+        rescaled_outer(outer, framed(from)?, framed(to)?)
+    }
+
+    /// Give the window the rectangle its new DPI asks for; it was at `from`
+    /// DPI and is at `to` now.
     ///
     /// A window that is not fullscreen takes the rectangle the system
-    /// suggests. A fullscreen window covers its monitor again instead, which
-    /// the suggestion, scaled from its old size, need not do; the rectangle
-    /// it returns to is rescaled with it, as the system would have scaled it.
-    pub(crate) fn apply_dpi_rectangle(&self, hwnd: HWND, suggested: Option<RECT>, ratio: f64) {
+    /// suggests, which for a normal window is the size it answered
+    /// `WM_GETDPISCALEDSIZE` with. A fullscreen window covers its monitor
+    /// again instead, which the suggestion, scaled from its old size, need not
+    /// do; the rectangle it returns to is rescaled with it, its content kept
+    /// at the same logical size under the style it returns to.
+    pub(crate) fn apply_dpi_rectangle(
+        &self,
+        hwnd: HWND,
+        suggested: Option<RECT>,
+        from: u32,
+        to: u32,
+    ) {
         use windows::Win32::{
             Graphics::Gdi::{
                 GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow,
@@ -2259,16 +2422,23 @@ impl WindowContext {
         };
 
         let mode = self.mode.get();
-        if let Some(bounds) = mode.fullscreen_bounds()
-            && let (Some(width), Some(height)) = (
-                rescaled(bounds.size.width, ratio),
-                rescaled(bounds.size.height, ratio),
-            )
-        {
-            self.mode.set(mode.with_fullscreen_bounds(Bounds {
-                origin: bounds.origin,
-                size: Size::new(width, height),
-            }));
+        if let Some(bounds) = mode.fullscreen_bounds() {
+            let outer = super::limits::PixelSize::new(bounds.size.width, bounds.size.height);
+            // The frame is the one the window returns to; a way back whose
+            // content is no size is scaled as the system would scale it.
+            let ratio = f64::from(to) / f64::from(from);
+            let size = self
+                .rescaled_outer(hwnd, self.restore_style.get(), outer, from, to)
+                .map(|size| (size.width, size.height))
+                .or_else(|| {
+                    rescaled(bounds.size.width, ratio).zip(rescaled(bounds.size.height, ratio))
+                });
+            if let Some((width, height)) = size {
+                self.mode.set(mode.with_fullscreen_bounds(Bounds {
+                    origin: bounds.origin,
+                    size: Size::new(width, height),
+                }));
+            }
         }
         let target = if mode.is_fullscreen() {
             let mut monitor = MONITORINFO {
