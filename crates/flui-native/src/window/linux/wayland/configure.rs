@@ -185,13 +185,18 @@ pub(crate) enum Activation {
 /// nor made fullscreen (`states`) takes the size the compositor gives
 /// it: the client's size is no request it honours. A compositor that
 /// announces no `wm_capabilities` (before version 5; sway 1.9) is taken
-/// to offer every mode, as the window cannot know which it ignores.
+/// to offer every mode, as the window cannot know which it ignores. The
+/// window reports a covering where its `xdg_toplevel` is version 6 or newer
+/// (`tells_suspension`): the compositor then suspends a toplevel it does not
+/// show, covered by other windows among the reasons xdg-shell names, and the
+/// window reads occluded; before it, a covering is never told.
 pub(crate) fn capabilities(
     announced: Option<WmCapabilities>,
     decoration: Option<CapabilityAbsence>,
     app_title_bar: Option<CapabilityAbsence>,
     states: ToplevelStates,
     activation: Activation,
+    tells_suspension: bool,
 ) -> WindowCapabilities {
     use WindowCapability::{Absent, Emulated, Native};
 
@@ -231,6 +236,11 @@ pub(crate) fn capabilities(
     capabilities.minimizes = offered(|announced| announced.minimize);
     capabilities.maximizes = offered(|announced| announced.maximize);
     capabilities.enters_fullscreen = offered(|announced| announced.fullscreen);
+    capabilities.reports_occlusion = if tells_suspension {
+        Native
+    } else {
+        on_this_device
+    };
     // xdg-shell has no levels, resize steps or proportion, so those stay
     // the platform's absence. The cursor image and the grabs are the
     // compositor's to offer (`pointer_reported`).
@@ -761,6 +771,7 @@ mod tests {
             None,
             ToplevelStates::default(),
             Activation::Offered,
+            true,
         );
         assert_eq!(
             honoured.into_parts(),
@@ -789,6 +800,7 @@ mod tests {
                 reports_presentation: WindowCapability::NOT_ON_THIS_PLATFORM,
                 reports_keyboard_inset: WindowCapability::NOT_ON_THIS_PLATFORM,
                 reports_system_gestures: WindowCapability::NOT_ON_THIS_PLATFORM,
+                reports_occlusion: Native,
                 observes_position: Availability::Unavailable,
                 observes_minimized: Availability::Unavailable,
                 places_at_open: Availability::Unavailable,
@@ -850,6 +862,7 @@ mod tests {
             None,
             ToplevelStates::default(),
             Activation::Offered,
+            true,
         );
         for (case, offer, image, confines, locks) in table {
             let reported = pointer_reported(base, offer).into_parts();
@@ -871,23 +884,29 @@ mod tests {
             Some(CapabilityAbsence::NOT_ON_THIS_DEVICE),
             free,
             Activation::Missing,
+            false,
         );
         assert!(unannounced.maximizes().is_available());
         assert!(unannounced.minimizes().is_available());
+        assert_eq!(
+            unannounced.reports_occlusion(),
+            WindowCapability::Absent(CapabilityAbsence::NOT_ON_THIS_DEVICE),
+            "a toplevel before version 6 is never told it is suspended, so never that it is covered"
+        );
         assert!(unannounced.sets_size().is_available());
         assert_eq!(unannounced.sets_resizable(), WindowCapability::Emulated);
         assert_eq!(
-            capabilities(None, None, None, free, Activation::Missing).sets_frame(),
+            capabilities(None, None, None, free, Activation::Missing, false).sets_frame(),
             WindowCapability::Native,
             "a compositor that draws frames takes the command"
         );
         assert_eq!(
-            capabilities(None, None, None, free, Activation::Offered).activates(),
+            capabilities(None, None, None, free, Activation::Offered, false).activates(),
             WindowCapability::Emulated,
             "the compositor decides what an activation request does"
         );
         assert!(
-            capabilities(None, None, None, free, Activation::Missing)
+            capabilities(None, None, None, free, Activation::Missing, false)
                 .app_title_bar()
                 .is_available(),
             "a window that draws its own margins takes the application's title bar"
@@ -936,6 +955,7 @@ mod tests {
             None,
             free,
             Activation::Offered,
+            false,
         );
         assert!(!announced.maximizes().is_available());
         assert!(!announced.minimizes().is_available());
@@ -962,7 +982,7 @@ mod tests {
         let tiled = ToplevelStates::decode(&array(&[TILED_LEFT, ACTIVATED]));
         let refused = WindowCommand::SetSize(Size::new(640.0, 480.0))
             .admit(
-                &capabilities(None, None, None, tiled, Activation::Missing)
+                &capabilities(None, None, None, tiled, Activation::Missing, false)
                     .publish()
                     .expect("the process has publications left"),
             )
@@ -973,13 +993,13 @@ mod tests {
         );
         let maximized = ToplevelStates::decode(&array(&[TILED_LEFT, MAXIMIZED]));
         assert!(
-            capabilities(None, None, None, maximized, Activation::Missing)
+            capabilities(None, None, None, maximized, Activation::Missing, false)
                 .sets_size()
                 .is_available()
         );
         let floating = ToplevelStates::decode(&array(&[ACTIVATED]));
         assert!(
-            capabilities(None, None, None, floating, Activation::Missing)
+            capabilities(None, None, None, floating, Activation::Missing, false)
                 .sets_size()
                 .is_available()
         );

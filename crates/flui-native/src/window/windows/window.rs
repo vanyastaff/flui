@@ -213,6 +213,10 @@ pub(crate) const fn window_capabilities(
     capabilities.observes_position = Availability::Native;
     capabilities.observes_minimized = Availability::Native;
     capabilities.places_at_open = Availability::Native;
+    // Win32 tells a window nothing when other windows cover it, and the host
+    // tracks no covering (`docs/gaps.md`): a cloak, a lock, a hidden or a
+    // minimized window is what it reports.
+    capabilities.reports_occlusion = Absent(CapabilityAbsence::NOT_YET_ON_THIS_HOST);
     capabilities.material = Native;
     // `ClipCursor` to the client area, or to one pixel of it with the mouse's
     // raw input (`cursor`).

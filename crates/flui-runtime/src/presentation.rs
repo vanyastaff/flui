@@ -540,6 +540,10 @@ pub struct PresentationState {
     /// spin at the fallback pace indefinitely: past the budget each attempt
     /// waits out the dropped-frame backoff (ADR-0335 §2).
     not_shown_streak: Cell<u32>,
+    /// Whether a withheld streak past its budget was reported
+    /// ([`Self::first_withdrawal_past_budget`]): once per presentation, so a
+    /// window covered again and again does not repeat it.
+    withheld_reported: Cell<bool>,
     /// Whether the performance overlay is drawn. Its numbers come from the
     /// clock's frame history, which is kept either way.
     performance_overlay: Cell<bool>,
@@ -1142,6 +1146,7 @@ impl PresentationState {
             frames_rendered: Cell::new(0),
             frames_dropped: Cell::new(0),
             not_shown_streak: Cell::new(0),
+            withheld_reported: Cell::new(false),
             performance_overlay: Cell::new(false),
             redraw_pending: Cell::new(false),
             redraw_requests: Cell::new(0),
@@ -1291,6 +1296,7 @@ impl PresentationState {
             frames_rendered: Cell::new(0),
             frames_dropped: Cell::new(0),
             not_shown_streak: Cell::new(0),
+            withheld_reported: Cell::new(false),
             performance_overlay: Cell::new(false),
             redraw_pending: Cell::new(false),
             redraw_requests: Cell::new(0),
@@ -1750,6 +1756,13 @@ impl PresentationState {
     /// burst (ADR-0335 §2).
     pub(crate) fn clear_not_shown_streak(&self) {
         self.not_shown_streak.set(0);
+    }
+
+    /// Whether this is the first time the presentation's surface withheld
+    /// frames past the budget: `true` once per presentation, for the
+    /// report that says so.
+    pub(crate) fn first_withdrawal_past_budget(&self) -> bool {
+        !self.withheld_reported.replace(true)
     }
 
     // ========================================================================

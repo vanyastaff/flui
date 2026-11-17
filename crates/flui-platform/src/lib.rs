@@ -110,6 +110,7 @@
 // `wildcard_enum_match_arm` entry in the workspace `Cargo.toml`.
 #![warn(clippy::wildcard_enum_match_arm)]
 
+mod backoff;
 mod brightness;
 pub mod capability;
 mod clipboard;
@@ -159,6 +160,7 @@ mod window_handler;
 mod window_insets;
 mod window_state;
 
+pub use backoff::Backoff;
 pub use brightness::Brightness;
 pub use clipboard::{ClipboardError, ClipboardRead, ClipboardWrite, ClipboardWritten, Concealment};
 pub use cursor::{Cursor, CursorError, CursorGrab, CursorImage, CursorImageError};

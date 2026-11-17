@@ -79,12 +79,13 @@ impl WindowCapability {
 ///
 /// The reports a window makes,
 /// [`reports_presentation`](Self::reports_presentation),
-/// [`reports_keyboard_inset`](Self::reports_keyboard_inset) and
-/// [`reports_system_gestures`](Self::reports_system_gestures), carry
+/// [`reports_keyboard_inset`](Self::reports_keyboard_inset),
+/// [`reports_system_gestures`](Self::reports_system_gestures) and
+/// [`reports_occlusion`](Self::reports_occlusion), carry
 /// their reason the same way: no verb answers for them, so the field is where
 /// a caller learns why frames come without
-/// [`FrameRequest::presented`](crate::FrameRequest::presented) or why those
-/// insets stay zero.
+/// [`FrameRequest::presented`](crate::FrameRequest::presented), why those
+/// insets stay zero or why a covered window reads unoccluded.
 ///
 /// Five fields are a plain [`Availability`]: what the window observes or can
 /// be placed at ([`observes_position`](Self::observes_position),
@@ -327,6 +328,7 @@ impl WindowCapabilities {
         reports_presentation: WindowCapability::NOT_ON_THIS_PLATFORM,
         reports_keyboard_inset: WindowCapability::NOT_ON_THIS_PLATFORM,
         reports_system_gestures: WindowCapability::NOT_ON_THIS_PLATFORM,
+        reports_occlusion: WindowCapability::NOT_ON_THIS_PLATFORM,
         observes_position: Availability::Unavailable,
         observes_minimized: Availability::Unavailable,
         places_at_open: Availability::Unavailable,
@@ -364,6 +366,7 @@ impl WindowCapabilities {
         reports_presentation: WindowCapability::Native,
         reports_keyboard_inset: WindowCapability::Native,
         reports_system_gestures: WindowCapability::Native,
+        reports_occlusion: WindowCapability::Native,
         observes_position: Availability::Native,
         observes_minimized: Availability::Native,
         places_at_open: Availability::Native,
@@ -678,6 +681,14 @@ pub struct CapabilityParts {
     /// [`WindowInsets::system_gestures`](crate::WindowInsets::system_gestures):
     /// the window reports the edges system gestures take.
     pub reports_system_gestures: WindowCapability,
+    /// [`WindowState::occluded`](crate::WindowState::occluded) for a covering
+    /// by other windows: the window reads occluded once the windows above it
+    /// leave none of it on screen, and unoccluded once they uncover some of
+    /// it. Where it is absent, a covered window reads unoccluded, so an
+    /// unoccluded snapshot says only that the window system reported nothing
+    /// else that hides it (a lock, another workspace, a suspension, a
+    /// background page or app), not that the window is seen.
+    pub reports_occlusion: WindowCapability,
     /// The snapshot's [`WindowGeometry::position`](crate::WindowGeometry::position)
     /// is reported.
     pub observes_position: Availability,

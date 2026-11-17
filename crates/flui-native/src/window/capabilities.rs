@@ -138,6 +138,8 @@ pub(crate) const fn appkit_window_capabilities(
     capabilities.observes_position = Availability::Native;
     capabilities.observes_minimized = Availability::Native;
     capabilities.places_at_open = Availability::Native;
+    // `occlusionState` loses `Visible` once other windows cover the window.
+    capabilities.reports_occlusion = Native;
     // A title bar of the application's is drawn under the system's, made
     // transparent (`fullSizeContentView`), with the traffic lights over it.
     capabilities.app_title_bar = Native;
