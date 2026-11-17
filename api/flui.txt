@@ -11895,6 +11895,16 @@ impl core::marker::StructuralPartialEq for flui::platform::FrameOutcome
 variant flui::platform::FrameOutcome::Declined // at 1
 variant flui::platform::FrameOutcome::Failed // at 2
 variant flui::platform::FrameOutcome::Produced // at 0
+#[non_exhaustive] pub enum flui::platform::FramePacing
+impl Clone for flui::platform::FramePacing
+impl Copy for flui::platform::FramePacing
+impl Default for flui::platform::FramePacing
+impl Eq for flui::platform::FramePacing
+impl PartialEq for flui::platform::FramePacing
+impl core::fmt::Debug for flui::platform::FramePacing
+impl core::marker::StructuralPartialEq for flui::platform::FramePacing
+variant flui::platform::FramePacing::Compositor // at 1
+variant flui::platform::FramePacing::Display // at 0
 #[non_exhaustive] pub struct flui::platform::FramePresented
 field flui::platform::FramePresented::at: flui::interaction::EventTime // at 1
 field flui::platform::FramePresented::frame: flui::foundation::FrameStamp // at 0
@@ -12802,6 +12812,7 @@ impl core::hash::Hash for flui::platform::SurfaceColorSpace
 impl core::marker::StructuralPartialEq for flui::platform::SurfaceColorSpace
 pub const fn flui::platform::SurfaceColorSpace::new(gamut: flui::platform::ColorGamut, dynamic_range: flui::platform::DynamicRange) -> Self
 pub trait flui::platform::SurfaceTarget: raw_window_handle::borrowed::HasWindowHandle + raw_window_handle::borrowed::HasDisplayHandle + Send + Sync + 'static
+fn flui::platform::SurfaceTarget::frame_pacing(&self) -> flui::platform::FramePacing { .. }
 fn flui::platform::SurfaceTarget::keep_past_close(&self)
 fn flui::platform::SurfaceTarget::pre_present_notify(&self, frame: Option<flui::foundation::FrameStamp>, statistics: flui::platform::SwapChainStatistics)
 #[non_exhaustive] pub enum flui::platform::SwapChainStatistics

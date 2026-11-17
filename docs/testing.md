@@ -212,6 +212,18 @@ compositor `WAYLAND_DISPLAY` names. No one compositor runs them all:
 | `wayland_window::` outside `optional` | headless Weston 13, in `cargo xtask test` | The conformance kit and `a_window_maximized_before_fullscreen_returns_to_normal` maximize a window. Sway tiles and, at 1.9, offers `xdg_wm_base` 2 with no `wm_capabilities`, so it carries out no maximize and the window cannot know. |
 | `wayland_window::optional::` | headless Weston 13, where each says what it skipped, then a headless sway, in `cargo xtask wayland-optional` | Their subjects are what a compositor may not offer: `xdg-decoration`, `wp_fractional_scale_v1`, `xdg-foreign`, `xdg-activation`, `zwlr_foreign_toplevel_manager_v1` (a window's app id read back), a seat. Weston 13 lacks all six. |
 | `a_window_moved_to_another_output_names_its_display` | none: a case of `optional`, it says under both runs that it skipped | It needs two outputs and a compositor that returns a window to the output it left: Weston on its X11 backend with `--output-count=2`. Sway leaves a window on the output it went fullscreen on. |
+| `wayland_scripted::` | the compositor of the case's own, in the Xvfb suite of `cargo xtask test` | What no installed compositor does on demand: `configure_bounds`, a seat older than `repeat_info`, a scale change while the host runs, a strict buffer-scale rule on cursors, frame callbacks never answered, an output removed with no `leave`, a configure storm, a connection closed mid-request. |
+
+The `wayland_scripted` harness and `flui-app`'s
+`native_linux::an_app_whose_window_is_never_drawn_still_quits` need no
+compositor installed: each case starts `flui-native`'s
+`testing::wayland_compositor::ScriptedCompositor`, a compositor on
+`wayland-server`'s pure-Rust backend at a socket of its own, which offers the
+globals and versions an `Offer` names and plays typed `Step`s, and connects
+the host to that socket (`WaylandPlatform::try_new_at`, or `WAYLAND_DISPLAY`
+naming its path for a child process). What the compositor heard from the
+host (`Heard`) is the readback. They load libwayland-client and libxkbcommon
+as the host does; the application case draws through Vulkan (lavapipe in CI).
 
 A case of `optional` that meets a compositor without its subject says in its
 output what it skipped and what it checked instead, and both Wayland runs
@@ -250,7 +262,11 @@ messages, hooks, DPI, the monitors, DWM, DXGI presentation, OLE drag and drop an
 services work as on the user's desktop. No window there is in the foreground: the system moves
 the activation among a process's shown windows when one of them enters a modal loop, so a case
 that counts what ran during an idle modal loop runs in a process with no other shown window
-(`windows_window_commands::native_idle_modal_loops`). This holds for `cargo heli nextest run`,
+(`windows_window_commands::native_idle_modal_loops`). A window the activation moves to goes
+above the others of its band, a topmost one above a window raised topmost after it, so a case
+that asks which window is under a point (`WindowFromPoint`, OLE's `DoDragDrop` loop) hides the
+windows the cases before it opened: a dropped platform leaves its windows open
+(`no_case_leaves_a_window_shown` in `drag::windows::tests`). This holds for `cargo heli nextest run`,
 `cargo nextest run` and every `cargo xtask` task that runs nextest (`test`, `platform-test`,
 `gpu-test`); plain `cargo test` starts its tests on the caller's desktop.
 `windows_test_desktop::nextest_starts_a_test_on_the_runs_own_desktop` fails when a test nextest

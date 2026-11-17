@@ -169,7 +169,7 @@ impl UnconfiguredSurface {
         surface: wgpu::Surface<'static>,
     ) -> Self {
         Self {
-            lease: SurfaceLease::from_parts(leased, surface),
+            lease: SurfaceLease::from_parts(leased, surface, target.frame_pacing()),
             target,
         }
     }
