@@ -84,18 +84,21 @@ pub trait SurfaceTarget: HasWindowHandle + HasDisplayHandle + Send + Sync + 'sta
     /// made from this target, so the native window it names must outlive the
     /// close (ADR-0305 §9).
     ///
-    /// Called on the owner thread when the window's renderer lets go of its
-    /// slot, which is during the window's close on every host (the close
-    /// releases the window's handler, and the handler owns the renderer), and
-    /// before the target is leaked for the life of the process; a later call
-    /// does nothing. The close under way then hides the native window instead
-    /// of destroying it, and keeps what its handles name. The window stays
-    /// closed to the application: its handler is released, it is in no window
-    /// list, it takes no input, and the handle queries keep answering
+    /// Called on the owner thread once the raster thread is known dead or
+    /// wedged, for every window it served: usually while the window is open,
+    /// or during its close for a window whose detach found the thread wedged.
+    /// A later call does nothing. A keep on an open window only records it:
+    /// the window keeps showing and taking input. Its close (by the
+    /// user, a command or the application's exit) then hides the
+    /// native window instead of destroying it and keeps what its handles
+    /// name. The window is closed to the application as any closed window
+    /// is: its handler is released, it is in no window list, it takes no
+    /// input, and the handle queries answer
     /// [`HandleError::Unavailable`](raw_window_handle::HandleError::Unavailable).
-    /// A host called after its native window is already gone (destroyed by
-    /// the OS or another client), or whose surface names no native window
-    /// (the web), does nothing, and says so where it implements this.
+    /// A host whose native window is already destroyed (by its own close
+    /// before the keep, the OS or another client), or whose surface names no
+    /// native window (the web), does nothing, and says so where it implements
+    /// this.
     fn keep_past_close(&self);
 }
 

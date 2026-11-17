@@ -894,6 +894,15 @@ impl WindowProc {
                             // this message on its owner thread.
                             ctx.close_granted(hwnd);
                         }
+                    } else if super::close::is_retired(hwnd) {
+                        // Retired by a granted close: kept past it, or
+                        // waiting for its handler's release, whose end
+                        // destroys or keeps it. A raster thread may still
+                        // present over a kept one.
+                        tracing::debug!(
+                            ?hwnd,
+                            "WM_CLOSE for a retired window: left to its retirement"
+                        );
                     } else if let Err(error) = DestroyWindow(hwnd) {
                         tracing::warn!(
                             ?hwnd,

@@ -633,6 +633,33 @@ fn a_keep_before_the_settle_keeps_the_native_window_once() {
     assert_eq!(retirement.settle(), NativeFate::Destroy, "the fate stays");
 }
 
+/// A window cleared settles its native window's fate once the handler let
+/// go: a keep recorded while it was open stands, and a keep after the clear
+/// does nothing.
+fn a_clear_settles_the_native_window_after_the_release() {
+    let (delivery, _handler) = window();
+    let retirement = delivery.retirement();
+    assert!(
+        retirement.keep_past_close(),
+        "a keep while open is recorded"
+    );
+    delivery.clear();
+    assert_eq!(
+        retirement.settle(),
+        NativeFate::Keep,
+        "the open keep stands"
+    );
+
+    let (delivery, _handler) = window();
+    let retirement = delivery.retirement();
+    delivery.clear();
+    assert!(
+        !retirement.keep_past_close(),
+        "a keep after the clear let go of the handler does nothing"
+    );
+    assert_eq!(retirement.settle(), NativeFate::Destroy);
+}
+
 /// One row per obligation of a window's handler, as its window delivers
 /// them.
 #[test]
@@ -693,6 +720,10 @@ fn window_handler_obligation_table() {
         (
             "a keep before the settle keeps the native window once",
             a_keep_before_the_settle_keeps_the_native_window_once,
+        ),
+        (
+            "a clear settles the native window after the release",
+            a_clear_settles_the_native_window_after_the_release,
         ),
     ];
     let mut failures = Vec::new();

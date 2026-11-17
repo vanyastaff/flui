@@ -1614,9 +1614,11 @@ mod toplevel {
             );
         }
 
-        /// Nothing more for the close to do: it destroys only the window's
-        /// role objects (the toplevel and its `xdg_surface`), so the
-        /// compositor unmaps the window either way, and the `wl_surface` a
+        /// Records the keep and changes nothing else: a keep may come while
+        /// the window is still open, and it keeps showing and taking input.
+        /// Its close has nothing more to do for it: the close destroys only
+        /// the window's role objects (the toplevel and its `xdg_surface`), so
+        /// the compositor unmaps the window either way, and the `wl_surface` a
         /// surface is made over goes only with its last holder, which this
         /// target is. The target, leaked, keeps it and the connection its
         /// `wl_display` lives on; a present over the role-less surface shows

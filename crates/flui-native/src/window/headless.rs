@@ -591,10 +591,11 @@ impl flui_platform::SurfaceTarget for HeadlessSurface {
         self.presents.presenting(frame);
     }
 
-    /// Records the keep, which the window reports
-    /// ([`HeadlessHostWindow::kept_past_close`]); there is no native window
-    /// to hide, so the close goes on as any other. A keep after the close
-    /// let go of the handler does nothing.
+    /// Records the keep, which may come while the window is still open, and
+    /// changes nothing else; the window's close settles it and reports it
+    /// ([`HeadlessHostWindow::kept_past_close`]). There is no native window to
+    /// hide, so the close goes on as any other. A keep after the close let go
+    /// of the handler does nothing.
     fn keep_past_close(&self) {
         let _first = self.retirement.keep_past_close();
     }
@@ -1079,10 +1080,7 @@ impl HeadlessHostWindow {
         // the window it was just told about must not find its handler
         // already gone. Its fate is settled once the handler, which owns the
         // renderer, let go: a keep its release made is the one reported.
-        let retirement = self.delivery.retirement();
-        self.delivery.clear_then(move || {
-            let _fate = retirement.settle();
-        });
+        self.delivery.clear();
     }
 
     /// Whether the window's surface target was asked, before the close let

@@ -699,6 +699,9 @@ impl MacOSWindow {
         // The clear also retires the delivery, so the surface target answers
         // `Unavailable` from here on.
         self.delivery.clear();
+        // A keep recorded for the window, while it was open or as it closes,
+        // keeps its view past the close.
+        self.keep_native_if_kept();
 
         // Match winit's own `windowWillClose:` handling: NIL the delegate
         // so no further delegate method can fire against a window this

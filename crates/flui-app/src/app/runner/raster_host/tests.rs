@@ -1770,6 +1770,9 @@ fn quarantine_one_window(wedged_here: bool, busy: bool) {
     };
     let (shared, slots, wakes) = threaded_host_at(at, None);
     let closed = Arc::new(FakeWindow::new(2));
+    // A window still open when the thread wedges, attached only when the
+    // thread wedges in another window's render.
+    let third = Arc::new(FakeWindow::new(3));
     let other = PresentationAddress {
         ui_runtime_id: UiRuntimeId::new(7),
         presentation_id: PresentationId::new(7),
@@ -1810,7 +1813,7 @@ fn quarantine_one_window(wedged_here: bool, busy: bool) {
         shared
             .try_with(|host| {
                 host.attach_target(
-                    Arc::new(FakeWindow::new(3)),
+                    Arc::clone(&third) as Arc<dyn flui_platform::SurfaceTarget>,
                     None,
                     address(),
                     &crate::app::AppConfig::default(),
@@ -1882,6 +1885,12 @@ fn quarantine_one_window(wedged_here: bool, busy: bool) {
         wakes.load(std::sync::atomic::Ordering::SeqCst) > woken,
         "the death asks the open window for a frame"
     );
+    if !wedged_here {
+        assert!(
+            third.kept_past_close() > 0,
+            "a window still open is kept too, before any close of it"
+        );
+    }
     // The window's wake settles what the dead executor never will, and
     // tells its runtime the renderer is dead.
     let (_, caught) = slot.settle(&mut ui_runtime);

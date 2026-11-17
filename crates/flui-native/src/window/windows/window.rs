@@ -2018,11 +2018,12 @@ impl flui_platform::SurfaceTarget for Win32Surface {
         self.presented.report(presented);
     }
 
-    /// The close under way then hides the `HWND` and keeps it for the life of
-    /// the process instead of destroying it (`WindowContext::close_granted`):
-    /// a swap chain made for it stays one over a live window. A keep after a
-    /// `WM_DESTROY` the OS sent on its own, or after the window was
-    /// destroyed, does nothing.
+    /// Records the keep and changes nothing else: a window still open keeps
+    /// showing and taking input. Its granted close, whichever way it comes,
+    /// then hides the `HWND` and keeps it for the life of the process instead
+    /// of destroying it (`WindowContext::close_granted`), so a swap chain made
+    /// for it stays one over a live window. A keep after a `WM_DESTROY` the
+    /// OS sent on its own, or after the window was destroyed, does nothing.
     fn keep_past_close(&self) {
         let _first = self.retirement.keep_past_close();
     }

@@ -385,6 +385,7 @@ impl MainRetainedView {
 
     /// The kept view to message, on the main thread: `None` when no view was
     /// kept.
+    #[cfg(target_os = "macos")]
     pub(crate) fn object(
         &self,
         _main: objc2::MainThreadMarker,

@@ -617,15 +617,17 @@ impl WindowDelivery {
     /// that `closed`. So the clear is queued too, behind it, and the running
     /// drain reaches it in order. A clone of the handler out for a method
     /// still running is dropped when that method returns.
-    #[cfg_attr(
-        all(windows, not(test)),
-        expect(
-            dead_code,
-            reason = "the Win32 and headless windows settle their native window after the release (`clear_then`)"
-        )
-    )]
+    ///
+    /// Once the handler let go, the native window's fate is settled
+    /// ([`Retirement::settle`]): a keep recorded before then, the handler's
+    /// own release included, is the one that stands, and a later keep does
+    /// nothing. A host whose native window outlives the release uses
+    /// [`Self::clear_then`] to act on that fate.
     pub(crate) fn clear(&self) {
-        self.clear_with(None);
+        let retirement = self.retirement();
+        self.clear_then(move || {
+            let _fate = retirement.settle();
+        });
     }
 
     /// What tells the window's surface target and redraw requester, on any
@@ -639,8 +641,8 @@ impl WindowDelivery {
     /// returns and the queued clear runs, not when this call returns. A backend
     /// uses it to order a notice after the release of what the handler owns
     /// (a renderer and its surface), and to destroy its native window after
-    /// that release, or keep it when the release asked for a keep
-    /// ([`Retirement::settle`]).
+    /// that release, or keep it when a keep was recorded before it; the
+    /// completion settles the fate itself ([`Retirement::settle`]).
     pub(crate) fn clear_then(&self, on_retired: impl FnOnce() + Send + 'static) {
         self.clear_with(Some(Box::new(on_retired)));
     }

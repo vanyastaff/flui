@@ -103,7 +103,7 @@ use crate::owner::apple::metal_layer::{LayerRefresh, NewRefresh};
 use crate::{
     owner::OpenWindowError,
     owner::slot::{OwnerCell, OwnerWeak},
-    owner::window_delivery::{Retirement, WindowDelivery},
+    owner::window_delivery::{NativeFate, Retirement, WindowDelivery},
     window::state::{
         ReportedFacts, Sample, SampledGeometry, WindowStateCell, mode_of, reported_frame,
     },
@@ -1142,31 +1142,14 @@ impl SurfaceTarget for MacOSSurface {
         }
     }
 
-    /// Orders the view's window out at once, inside the close
-    /// (`windowWillClose:`), and this target, leaked, keeps its +1 on the
-    /// window's view (`MainRetainedView`), and so the view's Metal layer, for
-    /// the life of the process: the window's own release lets go only of the
-    /// window's reference. Off the main thread, for a view that left its
-    /// window, and on a second call it does nothing.
+    /// Records the keep and changes nothing else: a window still open keeps
+    /// showing and taking input. Its close, whichever way it comes
+    /// (`windowWillClose:`, or the window's drop without one), then orders it
+    /// out and keeps its view, and so the view's Metal layer, for the life of
+    /// the process (`MacOSWindow::keep_native`). A keep after the close
+    /// settled the window does nothing.
     fn keep_past_close(&self) {
-        if !self.retirement.keep_past_close() {
-            return;
-        }
-        let Some(main) = MainThreadMarker::new() else {
-            return;
-        };
-        let Some(view) = self.view.object(main) else {
-            return;
-        };
-        // SAFETY: `view` is the live view this target retains, messaged on
-        // the main thread; `window` answers nil once the view left its
-        // window, and the window it answers is alive while it holds the view.
-        unsafe {
-            let window: ObjcId = msg_send![objc_address(view), window];
-            if window != NIL {
-                let _: () = msg_send![window, orderOut: NIL];
-            }
-        }
+        let _first = self.retirement.keep_past_close();
     }
 }
 
@@ -1798,8 +1781,11 @@ impl Drop for MacOSWindow {
 
         // The window's surface targets and the features beside it outlive
         // it; from here on they hand out nothing of a view the release below
-        // may free. A window that closed set this already.
-        self.closed.store(true, Ordering::SeqCst);
+        // may free. A window that closed set this already, and settled its
+        // fate there.
+        if !self.closed.swap(true, Ordering::SeqCst) {
+            self.keep_native_if_kept();
+        }
 
         // The close delegate pins its native receiver in the outer autorelease
         // pool, so a final callback-local wrapper drop cannot deallocate the
@@ -1832,6 +1818,29 @@ impl Drop for MacOSWindow {
 }
 
 impl MacOSWindow {
+    /// Settle the window's fate where it closes (`windowWillClose:`, or its
+    /// drop without one), once: when a keep was recorded for it
+    /// (`SurfaceTarget::keep_past_close`, ADR-0305 §9), order it out and take
+    /// a +1 on its view that nothing releases, so the view and its Metal
+    /// layer, which a raster thread that did not answer may still present
+    /// to, outlive the window's own release.
+    fn keep_native_if_kept(&self) {
+        if self.delivery.retirement().settle() != NativeFate::Keep {
+            return;
+        }
+        let kept = Retained::clone(&*self.view);
+        #[expect(
+            clippy::mem_forget,
+            reason = "ADR-0305 §9: a raster thread that did not answer may still present to this view"
+        )]
+        std::mem::forget(kept);
+        // SAFETY: `ns_window` is alive for the lifetime of `self`, messaged on
+        // the owner thread it was made on.
+        unsafe {
+            let _: () = msg_send![self.ns_window, orderOut: NIL];
+        }
+    }
+
     /// The window's published state for a caller that reads it
     /// (`PlatformWindow::state`), read from AppKit again first when something
     /// invalidated it. A revision the read publishes is announced at the

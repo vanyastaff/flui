@@ -64,7 +64,7 @@ use crate::owner::apple::ios::{
 };
 use crate::owner::panic_boundary::{AfterPanic, ContainedIvars, os_entry};
 use crate::owner::signal::OwnerSignal;
-use crate::owner::window_delivery::{Retirement, WindowDelivery};
+use crate::owner::window_delivery::{NativeFate, Retirement, WindowDelivery};
 use crate::platform::HostPlatform;
 use crate::text::TextInput;
 use crate::window::capabilities::{pointer_absence, scene_capabilities};
@@ -1422,6 +1422,9 @@ impl SceneWindow for IOSWindow {
             .dispatch_surface_immediate(SurfaceChange::Release);
         crate::owner::panic_boundary::contain_owner_callback(|| self.delivery.dispatch_close());
         crate::owner::panic_boundary::contain_owner_callback(|| self.delivery.clear());
+        if let Some(marker) = MainThreadMarker::new() {
+            self.keep_native_if_kept(marker);
+        }
         self.facets.text.detach();
         self.facets.accessibility.detach();
         if let Some(marker) = MainThreadMarker::new() {
@@ -1519,6 +1522,25 @@ impl IOSWindow {
     fn read_state(&self) -> crate::owner::window_delivery::Publication {
         self.snapshot
             .refresh(&self.delivery, || self.sample_state())
+    }
+
+    /// Settle the window's fate where it closes, once: when a keep was
+    /// recorded for it (`SurfaceTarget::keep_past_close`, ADR-0305 §9), hide
+    /// its view and take a +1 on it that nothing releases, so the view and
+    /// its Metal layer, which a raster thread that did not answer may still
+    /// present to, outlive the window's teardown. The teardown takes the view
+    /// out of its window and hides the window as for any close.
+    fn keep_native_if_kept(&self, marker: MainThreadMarker) {
+        if self.delivery.retirement().settle() != NativeFate::Keep {
+            return;
+        }
+        let view = &self.native.get(marker).view;
+        view.setHidden(true);
+        #[expect(
+            clippy::mem_forget,
+            reason = "ADR-0305 §9: a raster thread that did not answer may still present to this view"
+        )]
+        std::mem::forget(view.clone());
     }
 
     fn detach_native(&self, marker: MainThreadMarker) {
@@ -1949,9 +1971,14 @@ impl PlatformWindow for IOSWindow {
 
 impl Drop for IOSWindow {
     /// The surface targets outlive the window: they hand out nothing from
-    /// here on, before the view the window holds is released.
+    /// here on, before the view the window holds is released. A window
+    /// dropped without its close settles its fate here.
     fn drop(&mut self) {
-        self.closed.store(true, Ordering::SeqCst);
+        if !self.closed.swap(true, Ordering::SeqCst)
+            && let Some(marker) = MainThreadMarker::new()
+        {
+            self.keep_native_if_kept(marker);
+        }
     }
 }
 
@@ -2077,23 +2104,13 @@ impl SurfaceTarget for IOSSurface {
     ) {
     }
 
-    /// Hides the view at once, inside the close; the close takes it out of
-    /// its window and hides the window as for any close, and this target,
-    /// leaked, keeps its +1 on the view (`MainRetainedView`), and so the
-    /// view's Metal layer, for the life of the process. Off the main thread
-    /// and on a second call it does nothing.
+    /// Records the keep and changes nothing else: a window still open keeps
+    /// showing and taking input. Its close (`IOSWindow::close_for_good`) then
+    /// hides its view and keeps it, and so the view's Metal layer, for the
+    /// life of the process. A keep after the close settled the window does
+    /// nothing.
     fn keep_past_close(&self) {
-        if !self.retirement.keep_past_close() {
-            return;
-        }
-        let Some(main) = MainThreadMarker::new() else {
-            return;
-        };
-        if let Some(view) = self.view.object(main) {
-            // SAFETY: `view` is the live `UIView` this target retains,
-            // messaged on the main thread.
-            let _: () = unsafe { msg_send![view, setHidden: true] };
-        }
+        let _first = self.retirement.keep_past_close();
     }
 }
 

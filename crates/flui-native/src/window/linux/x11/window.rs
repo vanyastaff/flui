@@ -1458,11 +1458,12 @@ impl X11Window {
     /// surface target and the redraw requester answer for a window that is
     /// gone.
     ///
-    /// A release that asked to keep the window past the close
-    /// ([`X11Surface`]'s `keep_past_close`) leaves it unmapped instead, never
-    /// destroyed: a raster thread that did not answer may still present over
-    /// it. The platform's table no longer names it, so the events the server
-    /// still sends for it reach no window.
+    /// A window whose surface target was asked, while it was open or before
+    /// this release, to keep it past the close ([`X11Surface`]'s
+    /// `keep_past_close`) is left unmapped instead, never destroyed: a raster
+    /// thread that did not answer may still present over it. The platform's
+    /// table no longer names it, so the events the server still sends for it
+    /// reach no window.
     fn retire(&self) {
         let retirement = self.delivery.retirement();
         match self.native.replace(NativeWindow::Released) {
@@ -1662,11 +1663,13 @@ impl flui_platform::SurfaceTarget for X11Surface {
     ) {
     }
 
-    /// The window's retirement then unmaps the X window instead of
-    /// destroying it (`X11Window::retire`), and this target, leaked, keeps
-    /// the connection the window and the surface's display live on. A keep
-    /// after the retirement destroyed the window, or after another client
-    /// did, does nothing.
+    /// Records the keep and changes nothing else: a window still open keeps
+    /// showing and taking input. Its retirement, whichever way it comes (a
+    /// user's close, a command, the platform's release at quit), then unmaps
+    /// the X window instead of destroying it (`X11Window::retire`), and this
+    /// target, leaked, keeps the connection the window and the surface's
+    /// display live on. A keep after the retirement destroyed the window, or
+    /// after another client did, does nothing.
     fn keep_past_close(&self) {
         let _first = self.retirement.keep_past_close();
     }

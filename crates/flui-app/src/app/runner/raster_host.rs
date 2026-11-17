@@ -233,8 +233,12 @@ impl SharedRasterHost {
             let death_wake = host.death_wake.take();
             drop(host);
             let mut caught = FirstPanic::new();
+            let mut wedged = death_wake.is_some();
             for wait in detaching {
-                let _down = wait.wait(&mut caught);
+                wedged |= !wait.wait(&mut caught);
+            }
+            if wedged {
+                self.keep_every_window(&mut caught);
             }
             if let Some(redraws) = death_wake {
                 let _woken = caught.contain(|| redraws.wake());
@@ -242,6 +246,29 @@ impl SharedRasterHost {
             self.hold_deferred(caught);
         }
         Some(answer)
+    }
+
+    /// Ask every attached window's host to keep its native window past its
+    /// close: the raster thread is dead or wedged, and a wedged thread may
+    /// still present over any surface it holds. Asked while the windows are
+    /// open, so a close that comes later, by any path, already finds it
+    /// (ADR-0305 §9). A host's panic is held in `caught`, and every other
+    /// window is still asked.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn keep_every_window(&self, caught: &mut FirstPanic) {
+        // Read, then let go of the link before any host code runs.
+        let Ok(link) = self.link.try_borrow() else {
+            return;
+        };
+        let targets: Vec<Arc<dyn SurfaceTarget>> = link
+            .slots
+            .values()
+            .map(|(_, target)| Arc::clone(target))
+            .collect();
+        drop(link);
+        for target in targets {
+            let _kept = caught.contain(|| target.keep_past_close());
+        }
     }
 
     /// Read the host; `None` while it is turning.
@@ -272,10 +299,12 @@ impl SharedRasterHost {
                     // host's deferred detach then expects the thread to answer
                     // it stale, and still says so of any other slot.
                     let mut caught = FirstPanic::new();
-                    if wait.wait(&mut caught)
-                        && let Ok(mut link) = self.link.try_borrow_mut()
-                    {
-                        let _forgotten = link.slots.remove(&address);
+                    if wait.wait(&mut caught) {
+                        if let Ok(mut link) = self.link.try_borrow_mut() {
+                            let _forgotten = link.slots.remove(&address);
+                        }
+                    } else {
+                        self.keep_every_window(&mut caught);
                     }
                     self.hold_deferred(caught);
                 }
@@ -2784,6 +2813,15 @@ impl RasterSlot {
             .unwrap_or(false);
         if died {
             self.renderer_dead = true;
+            // Before the window tells its runtime: a death the executor met
+            // on its own (a turn's panic, a wedged attach) keeps every
+            // window's native window past its close too.
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let mut caught = FirstPanic::new();
+                self.host.keep_every_window(&mut caught);
+                self.host.hold_deferred(caught);
+            }
             ui_runtime.note_primary_device_recovery(Some(
                 flui_runtime::frame_failure::DeviceRecovery::Dead,
             ));

@@ -1034,7 +1034,16 @@ impl raw_window_handle::HasWindowHandle for AndroidSurface {
             // The kept reference holds its window alive, so an equal address
             // is that same window, never a new one at a reused address.
             if kept.as_ref().is_none_or(|kept| kept.ptr() != current.ptr()) {
-                *kept = Some(current);
+                let replaced = kept.replace(current);
+                if self.retirement.is_kept() {
+                    // A raster thread that did not answer may still present
+                    // over the window it replaces (ADR-0305 §9).
+                    #[expect(
+                        clippy::mem_forget,
+                        reason = "ADR-0305 §9: a kept window's earlier native window stays acquired"
+                    )]
+                    std::mem::forget(replaced);
+                }
             }
             kept.as_ref()
                 .expect("BUG: a native window was just kept")
@@ -1086,13 +1095,14 @@ impl flui_platform::SurfaceTarget for AndroidSurface {
     ) {
     }
 
-    /// Nothing more to do: the Activity's window is the system's to destroy,
-    /// and the surface a raster thread may still present over was made from
-    /// the handle this target last handed out, whose `ANativeWindow` it holds
-    /// a counted reference to (`kept`). The target, leaked, never releases
-    /// it, and hands out no other once retired, so that `ANativeWindow`
-    /// stays valid for the life of the process, whatever the glue does with
-    /// its own reference. The keep is recorded all the same.
+    /// Records the keep, which may come while the window is open; nothing
+    /// visible changes. The Activity's window is the system's to destroy, and
+    /// the surface a raster thread may still present over was made from a
+    /// handle this target handed out, whose `ANativeWindow` it holds a
+    /// counted reference to (`kept`). The target, leaked, never releases it;
+    /// once kept, a native window it replaces stays acquired too, and once
+    /// retired it hands out no other, so each stays valid for the life of the
+    /// process, whatever the glue does with its own reference.
     fn keep_past_close(&self) {
         let _first = self.retirement.keep_past_close();
     }
