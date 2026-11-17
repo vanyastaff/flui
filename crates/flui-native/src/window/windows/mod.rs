@@ -56,6 +56,8 @@ mod window;
 mod app_bar_tests;
 #[cfg(all(test, target_os = "windows"))]
 mod delivery_tests;
+#[cfg(all(test, target_os = "windows"))]
+mod record_tests;
 
 #[cfg(windows)]
 pub(crate) use cloak::CloakWatch;

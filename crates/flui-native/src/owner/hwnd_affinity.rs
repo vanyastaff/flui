@@ -5,13 +5,20 @@
 //! `GWLP_USERDATA` slot — on the thread that created the window, and
 //! `DestroyWindow` refuses to destroy a window created by a different thread
 //! (both are documented contracts: see MSDN's `DestroyWindow` remarks and the
-//! "About Messages and Message Queues" thread-affinity section). The Windows
-//! backend shares `Arc<WindowsWindow>` freely across threads, so every
+//! "About Messages and Message Queues" thread-affinity section). The platform
+//! and its windows are neither `Send` nor `Sync` (ADR-0327 §5), so their own
+//! calls are on that thread by construction; but the slot is read through a
+//! raw handle, and what another thread does hold of a window (its surface
+//! target, the requests its delivery takes) reaches the same handle. So every
 //! dereference of the raw context pointer read back from `GWLP_USERDATA`
-//! must first decide whether the calling thread may touch it at all: a
-//! foreign thread's read races the owner thread's `WM_DESTROY` clear+free
-//! with no synchronization, and no ordering of the read alone can close that
-//! window (it is a time-of-check/time-of-use race).
+//! first decides whether the calling thread may touch it at all: a foreign
+//! thread's read races the owner thread's `WM_DESTROY` clear+free with no
+//! synchronization, and no ordering of the read alone can close that window
+//! (it is a time-of-check/time-of-use race).
+//!
+//! Whether a handle still names a wrapper's window ([`handle_names`]) asks no
+//! thread: the answer is the same from any thread, and a teardown runs only
+//! on the owner, where the wrapper lives.
 //!
 //! The decisions are pure rules over thread identities and slot state. They
 //! are compiled under `test` on every host, because the Win32 shells that
@@ -76,8 +83,8 @@ pub(crate) enum UserDataRefusal {
     WindowGone,
     /// The calling thread is not the window's creating thread. A foreign
     /// thread's dereference races the owner thread's `WM_DESTROY` clear+free
-    /// of the same allocation, so it is refused outright — this is the
-    /// refusal that discharges the `Send`/`Sync` affinity obligation.
+    /// of the same allocation, so it is refused outright: what makes the
+    /// dereference sound is this check, not who usually calls.
     ForeignThread,
     /// The live window behind the handle is not of this backend's window
     /// class, so its `GWLP_USERDATA` slot belongs to someone else's protocol
@@ -143,49 +150,47 @@ pub(crate) fn classify_user_data_access(
     }
 }
 
-/// How a teardown request (`close()`, or the wrapper's last `Drop`) must
-/// reach the native window.
+/// What a wrapper's handle names now: the wrapper's own window, or nothing it
+/// may touch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum TeardownRoute {
-    /// The HWND no longer names a live window; there is nothing to destroy
-    /// and nothing to post to.
-    AlreadyGone,
-    /// The HWND names a live window that is not the one this wrapper
-    /// created — the OS recycled the handle value (foreign class, or a
-    /// user-data identity different from the context this wrapper
-    /// installed). Destroying or posting `WM_CLOSE` would target an
-    /// innocent window, so teardown must not touch the HWND at all;
-    /// wrapper-side cleanup still proceeds.
-    StaleHandle,
-    /// The caller is on the owning thread: `DestroyWindow` may run directly
-    /// (Win32 dispatches the resulting `WM_DESTROY` synchronously on this
-    /// same thread before it returns).
-    DestroyDirect,
-    /// The caller is on a foreign thread: `DestroyWindow` would fail there
-    /// ("a thread cannot use `DestroyWindow` to destroy a window created by
-    /// a different thread" — MSDN), so the close must be posted to the owner
-    /// thread's message queue with `PostMessageW(WM_CLOSE)`, the documented
-    /// cross-thread mechanism.
-    PostClose,
+pub(crate) enum HandleNames {
+    /// The handle names no live window: there is nothing to destroy, show or
+    /// hand a renderer.
+    Nothing,
+    /// The handle names a live window that is not the one this wrapper
+    /// created: the OS recycled the handle value (a foreign class, or a
+    /// user-data value different from the context this wrapper installed).
+    /// Destroying, showing or drawing to it would reach an innocent window,
+    /// so nothing touches the handle; wrapper-side cleanup still proceeds.
+    AnotherWindow,
+    /// The handle names the window this wrapper created, still alive. On the
+    /// owner thread, where the wrapper lives, `DestroyWindow` may run
+    /// directly (Win32 dispatches the resulting `WM_DESTROY` synchronously on
+    /// this same thread before it returns).
+    ItsWindow,
 }
 
-/// Routes a teardown request by thread identity **and window identity**.
+/// Decides what a wrapper's handle names, by window identity.
 ///
-/// Thread inputs follow [`classify_user_data_access`]'s convention. The
-/// identity inputs guard against OS handle recycling — without them a
-/// wrapper that outlived its native window would destroy (owner thread) or
-/// politely close (foreign thread) whatever unrelated window the recycled
-/// handle now names:
+/// The inputs guard against OS handle recycling; without them a wrapper that
+/// outlived its native window would destroy or show whatever unrelated
+/// window the recycled handle now names:
 ///
+/// - `owner_thread` — `GetWindowThreadProcessId(hwnd)`; `0` ([`OWNER_GONE`])
+///   when the handle is dead. Only its liveness matters here.
 /// - `is_own_class` — whether the live window's class is this backend's
 ///   registered class.
 /// - `slot` — the raw `GWLP_USERDATA` value currently stored in the window
 ///   (read without dereferencing, so it is safe to query from any thread).
 /// - `expected_slot` — the context pointer this wrapper's constructor
 ///   installed (never `0`, since it came from `Box::into_raw`). A live
-///   window is "ours" only while `slot == expected_slot`; a cleared slot
-///   (`0`, mid-`WM_DESTROY`) or a recycled window's foreign value both
-///   route [`TeardownRoute::StaleHandle`].
+///   window is this wrapper's only while `slot == expected_slot`; a cleared
+///   slot (`0`, mid-`WM_DESTROY`) or a recycled window's foreign value both
+///   answer [`HandleNames::AnotherWindow`].
+///
+/// No thread decides the answer: a wrapper is neither `Send` nor `Sync`, so
+/// its teardown is on the owner thread, and a surface target asking from the
+/// renderer's thread needs only the identity.
 ///
 /// Residual, stated rather than claimed closed: pointer-value ABA — the
 /// freed context allocation's address being reused for a *new* FLUI
@@ -193,21 +198,18 @@ pub(crate) enum TeardownRoute {
 /// would pass this check. Both reuses must collide at once; the
 /// consequence is bounded to closing a window this same process owns.
 #[must_use]
-pub(crate) fn route_teardown(
+pub(crate) fn handle_names(
     owner_thread: u32,
-    current_thread: u32,
     is_own_class: bool,
     slot: isize,
     expected_slot: isize,
-) -> TeardownRoute {
+) -> HandleNames {
     if owner_thread == OWNER_GONE {
-        TeardownRoute::AlreadyGone
+        HandleNames::Nothing
     } else if !is_own_class || slot != expected_slot {
-        TeardownRoute::StaleHandle
-    } else if owner_thread == current_thread {
-        TeardownRoute::DestroyDirect
+        HandleNames::AnotherWindow
     } else {
-        TeardownRoute::PostClose
+        HandleNames::ItsWindow
     }
 }
 
@@ -282,18 +284,13 @@ impl Default for ContextLedger {
 /// Native reveal/focus calls may synchronously close or recycle the handle.
 #[cfg(target_os = "windows")]
 pub(crate) fn show_owned_window(
-    route: impl Fn() -> TeardownRoute,
+    names: impl Fn() -> HandleNames,
     show: impl FnOnce() -> Result<(), flui_platform::ApplyError>,
     focus: impl FnOnce(),
 ) -> Result<(), flui_platform::ApplyError> {
-    let check = || match route() {
-        TeardownRoute::DestroyDirect => Ok(()),
-        TeardownRoute::AlreadyGone | TeardownRoute::StaleHandle => {
-            Err(flui_platform::ApplyError::Closed)
-        }
-        TeardownRoute::PostClose => Err(flui_platform::ApplyError::failed(
-            "show must run on the native window owner".into(),
-        )),
+    let check = || match names() {
+        HandleNames::ItsWindow => Ok(()),
+        HandleNames::Nothing | HandleNames::AnotherWindow => Err(flui_platform::ApplyError::Closed),
     };
     check()?;
     show()?;
@@ -304,10 +301,56 @@ pub(crate) fn show_owned_window(
 
 #[cfg(test)]
 mod tests {
-    use super::{OWNER_GONE, UserDataRefusal, UserDataVerdict, classify_user_data_access};
+    use super::{
+        HandleNames, OWNER_GONE, UserDataRefusal, UserDataVerdict, classify_user_data_access,
+        handle_names,
+    };
 
     const HW_OWNER: u32 = 7;
     const HW_FOREIGN: u32 = 8;
+
+    /// A handle names its wrapper's window only while the window lives, is of
+    /// the backend's class and holds the context the wrapper installed; no
+    /// thread enters the answer.
+    #[test]
+    fn a_handle_names_its_wrappers_window_only_while_its_slot_is_the_wrappers() {
+        const INSTALLED: isize = 0x1000;
+        crate::table_test::run_table(
+            "a_handle_names_its_wrappers_window_only_while_its_slot_is_the_wrappers",
+            &[
+                ("dead_handle", || {
+                    assert_eq!(
+                        handle_names(OWNER_GONE, false, 0, INSTALLED),
+                        HandleNames::Nothing
+                    );
+                }),
+                ("recycled_for_a_foreign_class", || {
+                    assert_eq!(
+                        handle_names(HW_OWNER, false, INSTALLED, INSTALLED),
+                        HandleNames::AnotherWindow
+                    );
+                }),
+                ("slot_cleared_by_wm_destroy", || {
+                    assert_eq!(
+                        handle_names(HW_OWNER, true, 0, INSTALLED),
+                        HandleNames::AnotherWindow
+                    );
+                }),
+                ("recycled_for_another_flui_window", || {
+                    assert_eq!(
+                        handle_names(HW_OWNER, true, 0x2000, INSTALLED),
+                        HandleNames::AnotherWindow
+                    );
+                }),
+                ("its_own_window", || {
+                    assert_eq!(
+                        handle_names(HW_OWNER, true, INSTALLED, INSTALLED),
+                        HandleNames::ItsWindow
+                    );
+                }),
+            ],
+        );
+    }
 
     #[test]
     fn refusal_precedence_is_gone_then_foreign_thread_then_class_then_slot() {

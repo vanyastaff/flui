@@ -1,7 +1,11 @@
 //! [`WindowsWindow`], the handle the Win32 host hands out: how a window
 //! opens, what its commands ask of the OS, and its handles for the renderer.
 
-use std::{cell::RefCell, rc::Rc, sync::Arc};
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+    sync::Arc,
+};
 
 use cursor_icon::CursorIcon;
 use flui_foundation::geometry::{Bounds, DevicePixelRatio, Point, Size};
@@ -52,8 +56,8 @@ use super::set::{
     placement_of, restore_rectangle, workspace_origin,
 };
 use crate::host::WindowFacets;
+use crate::owner::hwnd_affinity::HandleNames;
 use crate::owner::windows::WINDOW_CLASS_NAME;
-use crate::owner::windows::control::PostRefusal;
 use crate::text::WindowTextInput;
 use crate::version::gate::Since;
 use crate::window::state::{WindowStateCell, device_extent};
@@ -66,8 +70,12 @@ pub struct WindowsWindow {
     /// Native window handle
     hwnd: HWND,
 
-    /// Window state
-    state: Arc<Mutex<WindowRecord>>,
+    /// What the window procedure last recorded of the window, shared with its
+    /// owner-thread context. A `Cell` of a `Copy` record: a read or an update
+    /// holds nothing, so a window callback that reads it while another
+    /// updates it sees the last record set, never a held lock. Its strong
+    /// count is the number of wrappers: the last one destroys the window.
+    state: Rc<Cell<WindowRecord>>,
 
     /// Which native window this wrapper was built for.
     pub(crate) identity: crate::owner::windows::WindowIdentity,
@@ -93,7 +101,7 @@ pub struct WindowsWindow {
     /// field) against the window's current slot so a wrapper that outlived
     /// its native window cannot destroy or close whatever unrelated window
     /// the OS recycled the handle value for — see
-    /// [`teardown_route`](super::proc::teardown_route). Dangling as a
+    /// [`handle_names`](super::proc::handle_names). Dangling as a
     /// VALUE once `WM_DESTROY` has run; that is fine for comparison and
     /// exactly why it must never be dereferenced here.
     context: *const super::proc::WindowContext,
@@ -117,11 +125,12 @@ pub struct WindowsWindow {
     /// The window's frame requests, shared with its context and its
     /// surfaces.
     frame_post: super::proc::FramePost,
-
-    /// The owner thread's queue the window posts its close to from
-    /// another thread.
-    queue: crate::owner::windows::control::OwnerQueue,
 }
+
+// Owner-local (ADR-0327 §5): a wrapper, and every clone of it, stays on the
+// thread that opened its window, so its teardown calls `DestroyWindow` there
+// and posts nothing.
+static_assertions::assert_not_impl_any!(WindowsWindow: Send, Sync);
 
 impl std::fmt::Debug for WindowsWindow {
     // Hand-written: the window's handler has no meaningful
@@ -221,7 +230,7 @@ impl WindowsWindow {
         handler: Rc<dyn flui_platform::WindowHandler>,
         windows: Arc<WindowSet>,
         shares: crate::owner::windows::control::OwnerShares,
-        apartment: Option<Rc<crate::owner::windows::com_apartment::ComApartment>>,
+        apartment: Rc<crate::owner::windows::com_apartment::ComApartment>,
         drag: Arc<dyn crate::owner::windows::HostDrag>,
     ) -> Result<Rc<Self>, OpenWindowError> {
         // The numbers the window is built from: the open checked them before
@@ -399,7 +408,7 @@ impl WindowsWindow {
         requested: Size<i32>,
         scale_factor: f64,
         normal: Option<RECT>,
-        apartment: Option<Rc<crate::owner::windows::com_apartment::ComApartment>>,
+        apartment: Rc<crate::owner::windows::com_apartment::ComApartment>,
         drag: Arc<dyn crate::owner::windows::HostDrag>,
         window_hooks: crate::owner::windows::WindowHooks,
         preferences: Rc<dyn crate::owner::windows::control::OwnerPreferences>,
@@ -457,7 +466,7 @@ impl WindowsWindow {
             let _ = ClientToScreen(hwnd, &raw mut origin);
 
             let deferred = options.visible && options.reveal == WindowReveal::AfterFirstFrame;
-            let state = Arc::new(Mutex::new(WindowRecord {
+            let state = Rc::new(Cell::new(WindowRecord {
                 bounds: Bounds {
                     origin: Point::new(
                         origin.x as f64 / scale_factor,
@@ -477,7 +486,7 @@ impl WindowsWindow {
             let capabilities = windows.capabilities();
             let snapshot = Arc::new(WindowStateCell::open(sample_state(
                 hwnd,
-                &state,
+                state.get(),
                 OwnerTracking {
                     mode: NativeMode::Normal,
                     restore_style: 0,
@@ -561,10 +570,10 @@ impl WindowsWindow {
                 window_id,
                 capabilities: windows.capabilities(),
                 windows: Arc::downgrade(&windows),
-                window_state: Arc::downgrade(&state),
+                window_state: Rc::downgrade(&state),
                 snapshot: Arc::clone(&snapshot),
                 exit_policy,
-                queue: queue.clone(),
+                queue,
                 deliveries,
                 frame_post: frame_post.clone(),
                 delivery: Arc::clone(&delivery),
@@ -633,7 +642,6 @@ impl WindowsWindow {
                 drag_source: Arc::clone(&drag).drag_source(this),
                 delivery: Arc::clone(&delivery),
                 frame_post,
-                queue,
             });
             // The wrapper owns the window from here: a panic out of a hook
             // (or anything after it) drops it, which destroys the window and
@@ -663,7 +671,7 @@ impl WindowsWindow {
                     app_hooks: Rc::clone(&app_hooks),
                     preferences,
                     hooks: Rc::clone(&window_hooks),
-                    apartment,
+                    apartment: Some(apartment),
                     drag,
                 },
                 || this.with_context("window_created", |_| ()).is_some(),
@@ -758,11 +766,18 @@ impl WindowsWindow {
         });
     }
 
+    /// Whether the handle names the window this wrapper created, alive: not
+    /// destroyed, and not recycled by the OS for another window
+    /// ([`handle_names`](super::proc::handle_names)).
+    fn handle_is_its_window(&self) -> bool {
+        super::proc::handle_names(self.hwnd, self.context) == HandleNames::ItsWindow
+    }
+
     /// Whether the handle still names this wrapper's window: after a call that
     /// can run user callbacks, the window may have closed and another taken its
     /// handle.
     pub(crate) fn owns_handle(&self) -> bool {
-        handle_available(super::proc::teardown_route(self.hwnd, self.context))
+        self.handle_is_its_window()
             && super::proc::with_window_context(self.hwnd, "owns_handle", |context| {
                 context.identity == self.identity
             }) == Some(true)
@@ -862,7 +877,7 @@ impl WindowsWindow {
 
     /// Get current window bounds
     pub fn bounds(&self) -> Bounds<f64> {
-        let state = self.state.lock();
+        let state = self.state.get();
         Bounds {
             origin: state.bounds.origin,
             size: state.bounds.size,
@@ -910,7 +925,7 @@ impl WindowsWindow {
     /// largest surface is clamped), before any call; [`ApplyError::Platform`] when
     /// Win32 refuses or fails the resize.
     fn set_inner_size(&self, size: Size<f64>) -> Result<(), ApplyError> {
-        let scale = self.state.lock().scale_factor;
+        let scale = self.state.get().scale_factor;
         let content = device_size(size, scale)?;
         let fullscreen = super::proc::with_window_context(self.hwnd, "set_inner_size", |ctx| {
             ctx.mode
@@ -986,7 +1001,7 @@ impl WindowsWindow {
     /// Win32 can represent, before any call; [`ApplyError::Platform`]
     /// when Win32 refuses or fails the move.
     fn set_outer_position(&self, at: Point<f64>) -> Result<(), ApplyError> {
-        let scale = self.state.lock().scale_factor.get();
+        let scale = self.state.get().scale_factor.get();
         let (x, y) = device_pair(at.x, at.y, scale)?;
         let fullscreen = super::proc::with_window_context(self.hwnd, "set_outer_position", |ctx| {
             let mode = ctx.mode.get();
@@ -1245,7 +1260,10 @@ impl WindowsWindow {
     /// hidden until it is shown explicitly.
     fn hide_native(&self) {
         self.show_native(SW_HIDE);
-        self.state.lock().visible = false;
+        self.state.set(WindowRecord {
+            visible: false,
+            ..self.state.get()
+        });
         super::proc::with_window_context(self.hwnd, "hide", |ctx| {
             // The first frame no longer shows it; an explicit show still does.
             ctx.first_show
@@ -1257,7 +1275,7 @@ impl WindowsWindow {
 
     /// Get current scale factor
     pub fn scale_factor(&self) -> f64 {
-        self.state.lock().scale_factor.get()
+        self.state.get().scale_factor.get()
     }
 
     /// Make the window borderless over its monitor; a fullscreen window stays
@@ -1426,7 +1444,7 @@ impl PlatformWindow for WindowsWindow {
         use flui_platform::WindowAt;
         use windows::Win32::UI::WindowsAndMessaging::{GA_ROOT, GetAncestor, WindowFromPoint};
 
-        let scale = self.state.lock().scale_factor.get();
+        let scale = self.state.get().scale_factor.get();
         let device = |logical: f64| {
             let device = (logical * scale).round();
             (device.is_finite() && device >= f64::from(i32::MIN) && device <= f64::from(i32::MAX))
@@ -1542,7 +1560,7 @@ impl PlatformWindow for WindowsWindow {
     }
 
     fn apply(&self, command: AdmittedCommand) -> Result<(), ApplyError> {
-        if !handle_available(super::proc::teardown_route(self.hwnd, self.context)) {
+        if !self.handle_is_its_window() {
             return Err(ApplyError::Closed);
         }
         let command = command.against(&self.snapshot.published_capabilities())?;
@@ -1624,10 +1642,10 @@ impl PlatformWindow for WindowsWindow {
         regions: &[flui_platform::input_regions::InputRegion],
     ) -> Result<(), Unsupported> {
         let gone = Unsupported::new(UnsupportedReason::NoWindow);
-        if !handle_available(super::proc::teardown_route(self.hwnd, self.context)) {
+        if !self.handle_is_its_window() {
             return Err(gone);
         }
-        let scale = self.state.lock().scale_factor;
+        let scale = self.state.get().scale_factor;
         super::proc::with_window_context(self.hwnd, "set_input_regions", |ctx| {
             // `WM_NCHITTEST` borrows them only while it reads a slice and runs
             // no code of the application's. They are projected with nothing
@@ -1651,22 +1669,13 @@ impl WindowsWindow {
         };
         crate::owner::hwnd_affinity::show_owned_window(
             || {
-                use crate::owner::hwnd_affinity::TeardownRoute;
-                let route = super::proc::teardown_route(self.hwnd, self.context);
-                if route != TeardownRoute::DestroyDirect {
-                    return route;
-                }
                 // The wrapper and its live context carry the same identity,
                 // minted once and never reused, so unlike the raw context
-                // address it cannot be recycled. Only inspect it under the
-                // owner guard.
-                if super::proc::with_window_context(self.hwnd, "show identity", |context| {
-                    context.identity == self.identity
-                }) == Some(true)
-                {
-                    route
+                // address it cannot be recycled.
+                if self.owns_handle() {
+                    HandleNames::ItsWindow
                 } else {
-                    TeardownRoute::StaleHandle
+                    HandleNames::AnotherWindow
                 }
             },
             || {
@@ -1749,37 +1758,27 @@ impl WindowsWindow {
         }
     }
 
+    /// Close the window without asking the veto: a close command is not a
+    /// close request.
     fn close_window(&self) {
-        use crate::owner::hwnd_affinity::TeardownRoute;
-        match super::proc::teardown_route(self.hwnd, self.context) {
-            TeardownRoute::DestroyDirect => {
+        match super::proc::handle_names(self.hwnd, self.context) {
+            HandleNames::ItsWindow => {
                 // SAFETY: `DestroyWindow` takes `self.hwnd` by value; the
-                // route just established this is the owning thread, the only
-                // one Win32 permits the call from, and where `WM_DESTROY`
-                // (handled in `platform.rs`, reclaiming the `GWLP_USERDATA`
-                // allocation) is dispatched synchronously before the call
-                // returns.
+                // handle names this wrapper's live window, and the wrapper is
+                // on the thread that created it (it is neither `Send` nor
+                // `Sync`), the only one Win32 permits the call from, where
+                // `WM_DESTROY` (reclaiming the `GWLP_USERDATA` allocation) is
+                // dispatched synchronously before the call returns.
                 unsafe {
                     if let Err(error) = DestroyWindow(self.hwnd) {
                         tracing::warn!(hwnd = ?self.hwnd, ?error, "DestroyWindow (WindowCommand::Close) failed");
                     }
                 }
             }
-            TeardownRoute::PostClose => {
-                // Cross-thread close cannot call `DestroyWindow` (Win32
-                // forbids it off the creating thread), so the owner thread
-                // destroys the window when it takes the posted message. Not
-                // `WM_CLOSE`: that asks the should-close veto, and a close
-                // command is not a request. The message names this window,
-                // so a handle reused before it arrives is left alone.
-                // A window no longer the owner thread's is closed already.
-                let _: Result<(), PostRefusal> =
-                    super::proc::post_close(&self.queue, self.hwnd, self.identity);
-            }
-            TeardownRoute::AlreadyGone => {
+            HandleNames::Nothing => {
                 tracing::debug!(hwnd = ?self.hwnd, "close: the native window is already gone");
             }
-            TeardownRoute::StaleHandle => {
+            HandleNames::AnotherWindow => {
                 tracing::debug!(
                     hwnd = ?self.hwnd,
                     "close: the handle no longer names this wrapper's window \
@@ -1788,25 +1787,6 @@ impl WindowsWindow {
             }
         }
     }
-}
-
-/// Whether [`WindowsWindow`]'s [`HasWindowHandle::window_handle`] may hand
-/// out a handle for a window whose teardown routes to `route`.
-///
-/// Pure so it is testable without a live `HWND` (see
-/// [`crate::owner::hwnd_affinity::TeardownRoute`]): `DestroyDirect` and
-/// `PostClose` both describe a live window this wrapper still owns (they
-/// differ only in which thread may call `DestroyWindow` directly);
-/// `AlreadyGone` and `StaleHandle` both describe a window with nothing left
-/// to hand a caller — destroyed, or the OS recycled the `HWND` value for an
-/// unrelated window.
-#[must_use]
-fn handle_available(route: crate::owner::hwnd_affinity::TeardownRoute) -> bool {
-    use crate::owner::hwnd_affinity::TeardownRoute;
-    matches!(
-        route,
-        TeardownRoute::DestroyDirect | TeardownRoute::PostClose
-    )
 }
 
 /// What Windows answered a request for the foreground.
@@ -1898,10 +1878,10 @@ impl Win32Surface {
     /// Whether the window this surface was made for is still there.
     fn is_live(&self) -> bool {
         !self.retirement.is_retired()
-            && handle_available(super::proc::teardown_route(
+            && super::proc::handle_names(
                 self.hwnd(),
                 self.context as *const super::proc::WindowContext,
-            ))
+            ) == HandleNames::ItsWindow
     }
 }
 
@@ -2028,7 +2008,7 @@ impl Clone for WindowsWindow {
     fn clone(&self) -> Self {
         Self {
             hwnd: self.hwnd,
-            state: Arc::clone(&self.state),
+            state: Rc::clone(&self.state),
             identity: self.identity,
             window_id: self.window_id,
             windows: Arc::clone(&self.windows),
@@ -2044,58 +2024,44 @@ impl Clone for WindowsWindow {
             drag_source: Arc::clone(&self.drag_source),
             delivery: Arc::clone(&self.delivery),
             frame_post: self.frame_post.clone(),
-            queue: self.queue.clone(),
         }
     }
 }
 
 impl Drop for WindowsWindow {
     fn drop(&mut self) {
-        // Only destroy if this is the last reference
-        if Arc::strong_count(&self.state) == 1 {
-            tracing::debug!("Destroying window HWND {:?}", self.hwnd);
+        // Only the last wrapper destroys the window.
+        if Rc::strong_count(&self.state) == 1 {
+            tracing::debug!(hwnd = ?self.hwnd, "destroying the window");
 
-            use crate::owner::hwnd_affinity::TeardownRoute;
-            match super::proc::teardown_route(self.hwnd, self.context) {
-                TeardownRoute::DestroyDirect => {
+            match super::proc::handle_names(self.hwnd, self.context) {
+                HandleNames::ItsWindow => {
                     // Detach the bridge (UIA's subclass) BEFORE destroying
                     // the window — Win32 wants subclasses removed while the
-                    // window still exists, and this is the owner-thread
-                    // teardown path subclassing requires. Any capability
-                    // `Arc` still held elsewhere degrades to a no-op.
+                    // window still exists, on the thread that created it,
+                    // where the wrapper is. Any capability `Arc` still held
+                    // elsewhere degrades to a no-op.
                     self.facets.accessibility.detach();
 
                     // SAFETY: `DestroyWindow` takes `self.hwnd` by value;
-                    // the route just established this is the owning thread
-                    // and that the handle still names THIS wrapper's window
-                    // (a never-created or already-destroyed handle routes
-                    // `AlreadyGone`, a recycled one `StaleHandle`), where
-                    // `WM_DESTROY` (handled in `platform.rs`) retires the
-                    // `GWLP_USERDATA` allocation synchronously within this
-                    // call, the ledger freeing it at the outermost borrow
-                    // release.
+                    // the handle still names THIS wrapper's window (a
+                    // never-created or already-destroyed handle answers
+                    // `Nothing`, a recycled one `AnotherWindow`), and the
+                    // wrapper is on the thread that created it (it is
+                    // neither `Send` nor `Sync`), where `WM_DESTROY` retires
+                    // the `GWLP_USERDATA` allocation synchronously within
+                    // this call, the ledger freeing it at the outermost
+                    // borrow release.
                     unsafe {
                         if let Err(error) = DestroyWindow(self.hwnd) {
                             tracing::warn!(hwnd = ?self.hwnd, ?error, "DestroyWindow failed in Drop");
                         }
                     }
                 }
-                TeardownRoute::PostClose => {
-                    // Off the owning thread `DestroyWindow` is forbidden and
-                    // unhooking the UIA subclass would race the owner's
-                    // message dispatch, so neither runs here: the close is
-                    // posted to the owner's queue, and the subclass adapter
-                    // is left for the bridge's own drop guard
-                    // (which leaks it, with a warning, rather than unhook
-                    // cross-thread). The close asks no veto, as the owner
-                    // thread's `DestroyWindow` above asks none.
-                    let _: Result<(), PostRefusal> =
-                        super::proc::post_close(&self.queue, self.hwnd, self.identity);
-                }
-                TeardownRoute::AlreadyGone => {
+                HandleNames::Nothing => {
                     tracing::debug!(hwnd = ?self.hwnd, "Drop: the native window is already gone");
                 }
-                TeardownRoute::StaleHandle => {
+                HandleNames::AnotherWindow => {
                     tracing::debug!(
                         hwnd = ?self.hwnd,
                         "Drop: the handle no longer names this wrapper's window \

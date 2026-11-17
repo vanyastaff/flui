@@ -340,7 +340,7 @@ impl crate::host::Window<WindowsLoop> for WindowsWindow {
             handler,
             Arc::clone(windows),
             shares,
-            owner.apartment.share(),
+            Rc::clone(&owner.apartment),
             Arc::clone(&owner.drag),
         )?;
         let hwnd_value = window.hwnd().0 as isize;

@@ -4,12 +4,13 @@
 //! owner-thread state. Only the owner thread can reach it (through
 //! [`OwnerControl::shares`], or the window procedure), and it is freed by
 //! `WM_NCDESTROY` on that thread, so what it owns is never run or dropped
-//! anywhere else. A platform dropped off its owner thread keeps the native
-//! window, and so leaks the context instead.
+//! anywhere else. The control that creates and destroys the window belongs to
+//! the loop, which is neither `Send` nor `Sync` (ADR-0327 §5), so the window
+//! is destroyed on the thread that created it.
 //!
 //! The owner window is also where the exit policy is decided: a request for
 //! it (the last tracked window's `WM_DESTROY`, or
-//! `Platform::request_exit_policy_reevaluation` from any thread) is posted
+//! `Platform::request_exit_policy_reevaluation` on the owner thread) is posted
 //! here as one coalesced message (sent from the owner's next turn when the
 //! queue refuses it, [`OwnerQueue`]), so the hook always runs on a fresh owner
 //! turn rather than nested inside whatever code destroyed the window.
@@ -38,12 +39,9 @@ use crate::{
 use flui_platform::WindowOptions;
 use parking_lot::Mutex;
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     rc::Rc,
-    sync::{
-        Arc, OnceLock, Weak,
-        atomic::{AtomicBool, Ordering},
-    },
+    sync::{Arc, OnceLock, Weak},
 };
 use windows::{
     Win32::{
@@ -107,7 +105,7 @@ pub(crate) struct OwnerControlContext {
     windows: Weak<dyn ClassWindows>,
     /// Set while an [`EXIT_POLICY`] message is queued; see
     /// [`ExitPolicyRequest`].
-    exit_policy_pending: Arc<AtomicBool>,
+    exit_policy_pending: Rc<Cell<bool>>,
     /// The features' hooks on this window (OLE drag and drop, whose sessions
     /// run from it), in the order a message reaches them.
     owner_hooks: Rc<[Arc<dyn OwnerMessages>]>,
@@ -145,9 +143,11 @@ pub(crate) trait OwnerMessages {
     fn destroyed(&self);
 }
 
-/// Posts a message to the owner window while it exists. `Send + Sync`: it
-/// carries only the window's address, read under the lock the owner control
-/// clears before it destroys the window.
+/// Posts a message to the owner window while it exists. `Send + Sync`: the
+/// OLE transport that holds one is a `DragTransport`, which `flui-platform`
+/// still bounds `Send + Sync` (ADR-0323 §4). It carries only the window's
+/// address, read under the lock the owner control clears before it destroys
+/// the window.
 #[derive(Clone)]
 pub(crate) struct OwnerPost {
     address: Arc<Mutex<Option<isize>>>,
@@ -255,17 +255,24 @@ pub(crate) struct OwnerShares {
     pub(crate) modal_pacing: Rc<ModalPacing>,
 }
 
-/// A coalesced request, postable from any thread, that the owner consult the
+/// A coalesced request, made on the owner thread, that the owner consult the
 /// exit policy: if the platform tracks no top-level window, the
 /// application's handler (or, with none bound, the default "exit when the last
 /// window closes") decides whether the message loop quits. Requests made while
 /// one is already queued cost nothing, and one the owner's queue refuses is
 /// decided in the owner's next turn ([`OwnerQueue`]); once the owner window is
 /// closed they are refused, like a wake.
+///
+/// Its two askers, the last window's `WM_DESTROY` and
+/// `Platform::request_exit_policy_reevaluation`, are on the owner thread, so
+/// the flag is a `Cell`: a request made while the procedure answers the
+/// queued one (a handler that asks again from its exit policy) finds the flag
+/// already cleared and queues the next.
 #[derive(Clone)]
 pub(crate) struct ExitPolicyRequest {
     address: Arc<Mutex<Option<isize>>>,
-    pending: Arc<AtomicBool>,
+    /// Set while an [`EXIT_POLICY`] message is queued.
+    pending: Rc<Cell<bool>>,
     queue: OwnerQueue,
     /// The owner window's identity, which the message names.
     identity: WindowIdentity,
@@ -273,7 +280,7 @@ pub(crate) struct ExitPolicyRequest {
 
 impl ExitPolicyRequest {
     pub(crate) fn post(&self) {
-        if self.pending.swap(true, Ordering::AcqRel) {
+        if self.pending.replace(true) {
             return;
         }
         let address = self.address.lock();
@@ -290,19 +297,20 @@ impl ExitPolicyRequest {
         {
             // No owner window takes it: nothing is queued, and the next
             // request posts again.
-            self.pending.store(false, Ordering::Release);
+            self.pending.set(false);
         }
     }
 }
 
 /// The owner window's address, and the owner-thread gate onto its context.
-/// `Send + Sync`: it carries only the address, so the owner hooks can hold
-/// one; reaching the context through it still requires the owner thread.
+/// Owner-local, like the loop that holds it: the address is shared, under its
+/// lock, with the owner signal's cross-thread wake, and reaching the context
+/// through the gate still checks the thread, since the slot is a raw pointer.
 #[derive(Clone)]
 pub(crate) struct OwnerGate {
     address: Arc<Mutex<Option<isize>>>,
     identity: WindowIdentity,
-    exit_policy_pending: Arc<AtomicBool>,
+    exit_policy_pending: Rc<Cell<bool>>,
     queue: OwnerQueue,
 }
 
@@ -457,7 +465,7 @@ impl OwnerControl {
             knock.wake();
             posted
         }));
-        let exit_policy_pending = Arc::new(AtomicBool::new(false));
+        let exit_policy_pending = Rc::new(Cell::new(false));
         let app_hooks = Rc::new(RefCell::new(super::AppHooks::new(
             Arc::clone(&app),
             Arc::downgrade(&signal),
@@ -498,7 +506,7 @@ impl OwnerControl {
             notices,
             displays,
             windows: windows.clone(),
-            exit_policy_pending: Arc::clone(&exit_policy_pending),
+            exit_policy_pending: Rc::clone(&exit_policy_pending),
             owner_hooks: Rc::clone(&owner_hooks),
             modal_pacing: ModalPacing::new(
                 ModalFrames::new(app, windows, frames, Arc::downgrade(&signal)),
@@ -579,12 +587,8 @@ impl OwnerControl {
         self.gate.exit_policy_request()
     }
 
-    /// Stops owner turns. On the owner thread the registered turn callback
-    /// is dropped at once; elsewhere it stays in the owner context, which the
-    /// owner frees when it destroys the owner window. If the platform is
-    /// dropped off the owner instead, [`Self::close`] keeps the native window
-    /// and the context, callback included, is leaked rather than freed on
-    /// the wrong thread.
+    /// Stops owner turns and drops the registered turn callback; a closed
+    /// owner window has none left to drop.
     pub(crate) fn close_signal(&self) {
         self.signal.close();
         if let Ok(shares) = self.shares("close owner turns") {
@@ -592,19 +596,21 @@ impl OwnerControl {
         }
     }
 
+    /// Stops owner turns and destroys the owner window, whose `WM_NCDESTROY`
+    /// frees the owner context. The address is taken out first, under the
+    /// lock a cross-thread wake reads it under, so no post reaches the window
+    /// once it is being destroyed. A second call finds no address and does
+    /// nothing.
     pub(crate) fn close(&self) {
         self.close_signal();
         let address = self.gate.address.lock().take();
         if let Some(address) = address {
-            if self.signal.owner() == std::thread::current().id() {
-                // SAFETY: native destruction occurs on the recorded owner,
-                // outside the address/state locks. WM_NCDESTROY owns userdata
-                // reclamation.
-                if let Err(error) = unsafe { DestroyWindow(HWND(address as *mut _)) } {
-                    tracing::error!(%error, "owner message window destruction failed");
-                }
-            } else {
-                tracing::error!("owner message window dropped off owner; native resource retained");
+            // SAFETY: `DestroyWindow` takes the handle by value. The control
+            // belongs to the loop, which is neither `Send` nor `Sync`, so this
+            // runs on the thread that created the window, the only one Win32
+            // lets destroy it; no lock is held across the call.
+            if let Err(error) = unsafe { DestroyWindow(HWND(address as *mut _)) } {
+                tracing::error!(%error, "owner message window destruction failed");
             }
         }
     }
@@ -614,7 +620,7 @@ impl OwnerGate {
     fn exit_policy_request(&self) -> ExitPolicyRequest {
         ExitPolicyRequest {
             address: Arc::clone(&self.address),
-            pending: Arc::clone(&self.exit_policy_pending),
+            pending: Rc::clone(&self.exit_policy_pending),
             queue: self.queue.clone(),
             identity: self.identity,
         }
@@ -905,7 +911,7 @@ unsafe fn receive(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> L
         }
         if message == EXIT_POLICY && (*pointer).identity.halves() == (wparam.0, lparam.0) {
             let context = &*pointer;
-            context.exit_policy_pending.store(false, Ordering::Release);
+            context.exit_policy_pending.set(false);
             let signal = Arc::clone(&context.signal);
             let turn = Rc::clone(&context.turn);
             let app = Arc::clone(&context.app_hooks.borrow().app);

@@ -258,7 +258,7 @@ cross-thread UI closures.
 
 ## Implementation status
 
-Built: `OwnerAffinity` debug assertions on macOS and Windows; `OwnerPlatform`,
+Built: `OwnerAffinity` debug assertions on macOS (the Windows loop is neither `Send` nor `Sync`, ADR-0327 §5, so the compiler keeps it on its thread); `OwnerPlatform`,
 `PlatformProxy`, `PendingWindow` and the claim slot; the
 fallible ready callback on every backend; owner signals; loop-owned pending
 windows; the resident main window; the owner lane behind
