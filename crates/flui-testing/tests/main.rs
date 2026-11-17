@@ -7,7 +7,7 @@
 //!
 //! Convention (mirrors `flui-view/tests/main.rs`): tests that WRITE
 //! process-global state get their own [[test]] target instead. The modules
-//! here each drive a per-test `HeadlessBinding` (no singletons, no env vars,
+//! here each drive their own host or binding (no singletons, no env vars,
 //! no statics) — with one bounded exception worth naming, since it is exactly
 //! the kind of thing this convention exists to catch.
 //!
@@ -346,8 +346,8 @@ fn headless_frame_driver_matrix() {
             ("a11y_query::a_button_in_the_render_tree_is_findable_by_role", a11y_query::a_button_in_the_render_tree_is_findable_by_role as fn()),
             ("a11y_query::a_headless_frame_fails_on_an_attribute_its_role_does_not_support", a11y_query::a_headless_frame_fails_on_an_attribute_its_role_does_not_support as fn()),
             ("a11y_query::unique_queries_preserve_subjects_and_complete_failure_diagnostics", a11y_query::unique_queries_preserve_subjects_and_complete_failure_diagnostics as fn()),
-            ("mount_bootstrap::mount_root_installs_the_render_root_and_lays_it_out", mount_bootstrap::mount_root_installs_the_render_root_and_lays_it_out as fn()),
-            ("mount_bootstrap::the_bound_binding_keeps_pumping_from_where_the_bootstrap_left_off", mount_bootstrap::the_bound_binding_keeps_pumping_from_where_the_bootstrap_left_off as fn()),
+            ("mount_bootstrap::the_mount_frame_installs_the_render_root_at_the_window_size_and_paints", mount_bootstrap::the_mount_frame_installs_the_render_root_at_the_window_size_and_paints as fn()),
+            ("mount_bootstrap::a_frame_with_no_work_submits_nothing_and_keeps_the_committed_geometry", mount_bootstrap::a_frame_with_no_work_submits_nothing_and_keeps_the_committed_geometry as fn()),
             ("self_rescheduling_local_post_frame::self_rescheduling_local_post_frame_callback_fires_exactly_once_per_pumped_frame", self_rescheduling_local_post_frame::self_rescheduling_local_post_frame_callback_fires_exactly_once_per_pumped_frame as fn()),
             ("controller_restart::starting_an_idle_bound_controller_requests_its_first_frame", controller_restart::starting_an_idle_bound_controller_requests_its_first_frame as fn()),
             ("controller_restart::adopting_a_registry_revokes_the_previous_driver_binding", controller_restart::adopting_a_registry_revokes_the_previous_driver_binding as fn()),
@@ -396,8 +396,6 @@ fn containment_and_isolation_matrix() {
             ("runtime_input_lifecycle::a_panicking_pause_diagnostic_cannot_skip_motion_drain", runtime_input_lifecycle::a_panicking_pause_diagnostic_cannot_skip_motion_drain as fn()),
             ("runtime_input_lifecycle::a_cancel_failure_precedes_a_pause_diagnostic_failure_and_recovers", runtime_input_lifecycle::a_cancel_failure_precedes_a_pause_diagnostic_failure_and_recovers as fn()),
             ("lifecycle_panic_containment::lifecycle_panic_containment_init_state_paints_exact_error_slot", lifecycle_panic_containment::lifecycle_panic_containment_init_state_paints_exact_error_slot as fn()),
-            ("owner_scope::interaction_targets_are_isolated_between_headless_bindings", owner_scope::interaction_targets_are_isolated_between_headless_bindings as fn()),
-            ("owner_scope::pointer_route_panic_still_runs_the_down_arena_lifecycle", owner_scope::pointer_route_panic_still_runs_the_down_arena_lifecycle as fn()),
             ("multi_presentation_clock::two_presentations_at_independent_scripted_cadences_tick_and_advance_independently", multi_presentation_clock::two_presentations_at_independent_scripted_cadences_tick_and_advance_independently as fn()),
             ("window_scale_factor::a_scale_no_window_can_have_is_answered_and_changes_nothing", window_scale_factor::a_scale_no_window_can_have_is_answered_and_changes_nothing as fn()),
             ("window_scale_factor::rescaling_a_secondary_window_updates_only_its_semantics_bounds",window_scale_factor::rescaling_a_secondary_window_updates_only_its_semantics_bounds as fn()),
@@ -405,9 +403,6 @@ fn containment_and_isolation_matrix() {
             ("window_scale_factor::a_secondary_window_publishes_its_own_media_query", window_scale_factor::a_secondary_window_publishes_its_own_media_query as fn()),
             ("window_insets::a_keyboard_motion_lays_out_each_frame_at_its_time", window_insets::a_keyboard_motion_lays_out_each_frame_at_its_time as fn()),
             ("window_insets::reported_insets_reach_their_media_query_fields", window_insets::reported_insets_reach_their_media_query_fields as fn()),
-            ("multi_presentation_clock::the_motion_clock_rate_and_step_drive_the_binding_vsync", multi_presentation_clock::the_motion_clock_rate_and_step_drive_the_binding_vsync as fn()),
-            ("multi_presentation_clock::presentation_rates_pause_and_step_are_independent", multi_presentation_clock::presentation_rates_pause_and_step_are_independent as fn()),
-            ("multi_presentation_clock::extra_registry_drivers_request_frames_and_retire_on_replacement", multi_presentation_clock::extra_registry_drivers_request_frames_and_retire_on_replacement as fn()),
         ],
     );
 }

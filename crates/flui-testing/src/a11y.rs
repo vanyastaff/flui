@@ -8,9 +8,10 @@
 //! nodes before exposing them to assistive technology. For the filtered agent
 //! projection, use the development agent's read protocol.
 //!
-//! Reach it through [`HeadlessBinding::a11y_tree`](crate::HeadlessBinding::a11y_tree),
-//! after [`enable_semantics`](crate::HeadlessBinding::enable_semantics) — the
-//! semantics phase is a no-op until something asks for it, exactly as in
+//! Reach it through [`LaidOut::a11y_tree`](crate::widgets::LaidOut::a11y_tree)
+//! after [`LaidOut::enable_semantics`](crate::widgets::LaidOut::enable_semantics),
+//! or [`HeadlessHost::published_a11y_tree`](crate::HeadlessHost::published_a11y_tree)
+//! — the semantics phase is a no-op until something asks for it, exactly as in
 //! production.
 
 use std::collections::{HashMap, HashSet};
@@ -35,17 +36,6 @@ pub use accesskit::{
     Action, ActionData, ActionRequest, Live, NodeId, Point as A11yPoint, Rect as A11yRect, Role,
     ScrollUnit, SortDirection as A11ySortDirection, Toggled, TreeId,
 };
-
-/// The binding drives no tree, so there is no pipeline to assemble semantics
-/// from.
-///
-/// Returned rather than panicked because this is a caller error, not a broken
-/// internal invariant — the two are different claims, and `expect("BUG: …")`
-/// would assert the wrong one. A test that knows its binding is tree-bound
-/// unwraps at the call site.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-#[error("semantics requires a tree-bound binding; construct one with HeadlessBinding::with_tree")]
-pub struct NotTreeBound;
 
 // ============================================================================
 // A11yTree

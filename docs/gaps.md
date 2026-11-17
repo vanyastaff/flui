@@ -624,7 +624,6 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 
 - An accepted ADR is the rule; whether the code follows it yet is not its status ([`adr/README.md`](adr/README.md)). Where a section is not built, a bullet here names it as `ADR-NNNN §k` and the record's Status stays `Accepted (date)`; the pull request that builds the section removes its bullet, and the record becomes `Implemented (date)` when none is left.
 - **ADR-0083 §3.** Beside `APP_RUNTIME`, `flui-app` keeps three secondary-window thread-locals (`crates/flui-app/src/app/runner/secondary_window.rs`), each a `globals` entry whose exit is ADR-0083.
-- **ADR-0083 §4.** `HeadlessBinding::pump_frame`, `run_pipeline`, `pump_presentation` and `pump_all` still exist in `crates/flui-testing/src/lib.rs`.
 - **ADR-0085 §5.** A graph no element reads still pays the map lookups, since `begin_element_build` (`crates/flui-view/src/reactive/mod.rs`) looks the element up on every build.
 - **ADR-0089 §5.** `flui-sdk` has no `gpu` module, so `pub use ::wgpu` stays in the internal `flui-engine`, which no Stable crate re-exports.
 - **ADR-0089 §6.** `cargo xtask api-closure` builds each Stable package once, on the host with its default features (`tools/xtask/src/api_closure.rs`), so an item behind a non-default feature or another target is outside what CI checks.

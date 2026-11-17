@@ -479,6 +479,7 @@ fn frame_pacing_and_pump_matrix() {
             ("frame_clock_segment_gate::closed_presentation_animation_cannot_wake_a_surviving_window", frame_clock_segment_gate::closed_presentation_animation_cannot_wake_a_surviving_window as fn()),
             ("frame_clock_segment_gate::an_animation_at_the_in_flight_limit_waits_for_the_settlement", frame_clock_segment_gate::an_animation_at_the_in_flight_limit_waits_for_the_settlement as fn()),
             ("frame_clock_segment_gate::agent_playback_drives_independent_windows_and_one_paused_step_frame", frame_clock_segment_gate::agent_playback_drives_independent_windows_and_one_paused_step_frame as fn()),
+            ("frame_clock_segment_gate::agent_playback_resumes_a_paused_stepped_run_at_normal_speed", frame_clock_segment_gate::agent_playback_resumes_a_paused_stepped_run_at_normal_speed as fn()),
             ("frame_clock_segment_gate::gated_presentations_hold_samples_then_catch_up_when_visible", frame_clock_segment_gate::gated_presentations_hold_samples_then_catch_up_when_visible as fn()),
             ("checked_geometry_refusal_acknowledges_the_query_and_keeps_safe_admission", super::preferences::checked_geometry_refusal_acknowledges_the_query_and_keeps_safe_admission as fn()),
             ("newer_geometry_publication_survives_query_and_diagnostic_reentry", super::preferences::tests::newer_geometry_publication_survives_query_and_diagnostic_reentry as fn()),

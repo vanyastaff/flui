@@ -35,7 +35,7 @@ members = [
     "crates/flui-widgets", # Widget catalog
     "crates/flui-runtime", # Frame runtime a UI runtime drives (ADR-0083)
     "crates/flui-sdk",     # Package-author surface (ADR-0088)
-    "crates/flui-testing", # Headless UI runtime host, widget harness, substrate driver
+    "crates/flui-testing", # Headless UI runtime host, widget harness, Tester
 
     # H: hosts
     "crates/flui-native", # The core host: native and headless hosts

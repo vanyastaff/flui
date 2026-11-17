@@ -1671,8 +1671,7 @@ impl GestureArena {
     /// on Cancel it abandons that generation without granting a winner. Composed
     /// standalone drivers use [`crate::GestureBinding`] too, rather than finishing
     /// an event by its reusable pointer ID after callbacks. This is the arena a
-    /// [`HeadlessBinding`](https://docs.rs/flui-testing)
-    /// or production `GestureBinding` hands down to a subtree.
+    /// `GestureBinding` hands down to a subtree.
     #[inline]
     pub fn binding_driven(clock: Arc<dyn MonotonicClock>) -> Self {
         Self::assemble(clock, SweepModel::BindingDriven, VecDeque::new())
