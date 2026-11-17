@@ -40,13 +40,16 @@
 //!
 //! # Commands
 //!
-//! The server carries out the title, the place, the size, the limits
-//! (`WM_NORMAL_HINTS`), the decorations (`_MOTIF_WM_HINTS`), showing and
-//! hiding (mapping and withdrawing); the window manager the modes, asked with
-//! the EWMH client messages, or, for a window it does not manage yet (one not
-//! mapped), in the window's own `_NET_WM_STATE`, which it reads when it maps
-//! the window. A window opened in a mode is mapped only once that property
-//! holds it, so it never appears in normal mode first.
+//! The server carries out the title, the place, the size, the limits, the
+//! resize steps and the proportion (`WM_NORMAL_HINTS`), the decorations
+//! (`_MOTIF_WM_HINTS`), showing and hiding (mapping and withdrawing); the
+//! window manager the modes and the level, asked with the EWMH client
+//! messages, or, for a window it does not manage yet (one not mapped), in the
+//! window's own `_NET_WM_STATE`, which it reads when it maps the window. A
+//! window opened in a mode is mapped only once that property holds it, so it
+//! never appears in normal mode first. The cursor and a hold of the pointer
+//! are the input's (`LoopInput`), which lets a hold go when the window loses
+//! the focus, is unmapped or closes.
 //!
 //! # Frames
 //!
@@ -80,15 +83,15 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
 
-use cursor_icon::CursorIcon;
 use flui_foundation::geometry::{DevicePixelRatio, Point, Size, WindowMetrics};
 use flui_foundation::panic::FirstPanic;
 use flui_platform::input_regions::ResizeEdge;
 use flui_platform::{
-    AdmittedCommand, ApplyError, Brightness, CloseDecision, CursorError, DisplaySnapshot,
-    PlatformTextInput, PlatformWindow, SizeConstraints, Unsupported, UnsupportedReason,
-    WindowCapabilities, WindowCommand, WindowFrame, WindowGeometry, WindowHandler, WindowId,
-    WindowIdMint, WindowMode, WindowOptions, WindowState,
+    AdmittedCommand, ApplyError, AspectRatio, Brightness, CloseDecision, Cursor, CursorError,
+    CursorGrab, DisplaySnapshot, PlatformTextInput, PlatformWindow, SizeConstraints, Unsupported,
+    UnsupportedReason, WindowCapabilities, WindowCommand, WindowExtent, WindowFrame,
+    WindowGeometry, WindowHandler, WindowId, WindowIdMint, WindowLevel, WindowMode, WindowOptions,
+    WindowState,
 };
 use flui_semantics::platform::PlatformAccessibility;
 use raw_window_handle::{
@@ -106,8 +109,10 @@ use x11rb::protocol::xproto::{
 };
 use x11rb::wrapper::ConnectionExt as _;
 
-use super::hints::{motif_hints, size_limits};
-use super::mode::{NetWmState, NetWmStateAtoms, WmState, mode_flags, with_mode};
+use super::hints::{motif_hints, resize_steps, size_limits};
+use super::mode::{
+    LevelAtoms, NetWmState, NetWmStateAtoms, WmState, level_of, mode_flags, with_level, with_mode,
+};
 use super::placement::{
     FrameExtents, device_coordinate, device_extent, display_of, logical_geometry, outer_bounds,
     window_scale,
@@ -168,6 +173,8 @@ pub(crate) struct WindowAtoms {
     net_wm_pid: xproto::Atom,
     net_wm_state: xproto::Atom,
     states: NetWmStateAtoms,
+    /// The `_NET_WM_STATE` atoms a window's level is kept by.
+    levels: LevelAtoms,
     net_active_window: xproto::Atom,
     net_frame_extents: xproto::Atom,
     net_request_frame_extents: xproto::Atom,
@@ -194,7 +201,7 @@ impl WindowAtoms {
     /// [`PlatformError::Init`](crate::PlatformError::Init) when the server
     /// does not answer.
     pub(crate) fn intern(connection: &X11Connection) -> Result<Self, crate::PlatformError> {
-        const NAMES: [&[u8]; 22] = [
+        const NAMES: [&[u8]; 24] = [
             b"WM_PROTOCOLS",
             b"WM_DELETE_WINDOW",
             b"WM_STATE",
@@ -207,6 +214,8 @@ impl WindowAtoms {
             b"_NET_WM_STATE_MAXIMIZED_HORZ",
             b"_NET_WM_STATE_MAXIMIZED_VERT",
             b"_NET_WM_STATE_FULLSCREEN",
+            b"_NET_WM_STATE_ABOVE",
+            b"_NET_WM_STATE_BELOW",
             b"_NET_ACTIVE_WINDOW",
             b"_NET_FRAME_EXTENTS",
             b"_NET_REQUEST_FRAME_EXTENTS",
@@ -249,6 +258,8 @@ impl WindowAtoms {
             maximized_horz,
             maximized_vert,
             fullscreen,
+            above,
+            below,
             net_active_window,
             net_frame_extents,
             net_request_frame_extents,
@@ -275,6 +286,7 @@ impl WindowAtoms {
                 maximized_vert,
                 fullscreen,
             },
+            levels: LevelAtoms { above, below },
             net_active_window,
             net_frame_extents,
             net_request_frame_extents,
@@ -296,6 +308,8 @@ impl WindowAtoms {
             maximized_vert: self.states.maximized_vert,
             fullscreen: self.states.fullscreen,
             moveresize: self.net_wm_moveresize,
+            above: self.levels.above,
+            below: self.levels.below,
         }
     }
 
@@ -381,6 +395,14 @@ struct Record {
     support: WindowManagerSupport,
     /// The scale of the display the window was last read on, or opened on.
     scale: DevicePixelRatio,
+    /// The window's size hints are device pixels at a scale it has left:
+    /// the next read writes them again at the new one.
+    hints_rescaled: bool,
+    /// The steps the user's resize takes, in logical pixels
+    /// (`WM_NORMAL_HINTS`).
+    resize_increments: Option<WindowExtent>,
+    /// The proportion the user's resize keeps (`WM_NORMAL_HINTS`).
+    aspect_ratio: Option<AspectRatio>,
 }
 
 /// One X11 window of the platform's connection.
@@ -569,7 +591,7 @@ impl X11Window {
         // handler applies follows the window again inside it, and must find
         // this read already committed, not have its newer focus put back by
         // this one afterwards.
-        let (focus_changed, resized) = {
+        let (focus_changed, resized, rescaled) = {
             let mut record = self.record.borrow_mut();
             let focus_changed = std::mem::replace(&mut record.focus_told, state.focus.is_focused())
                 != state.focus.is_focused();
@@ -581,8 +603,19 @@ impl X11Window {
             if content.is_some() {
                 record.content = content;
             }
-            (focus_changed, resized)
+            (
+                focus_changed,
+                resized,
+                std::mem::take(&mut record.hints_rescaled),
+            )
         };
+        // The limits, the steps and the proportion are device pixels.
+        if rescaled && !self.closed.get() {
+            self.write_size_hints(None);
+            if let Err(error) = self.xcb().flush() {
+                tracing::debug!(%error, "cannot set an X11 window's size hints");
+            }
+        }
         if focus_changed {
             self.facets
                 .accessibility
@@ -616,11 +649,14 @@ impl X11Window {
         // What a window manager wrote on the window stands while one runs.
         let frame = support.kept(read.frame);
         let mode = mode_of(support.kept(mode_flags(read.wm_state, read.net_state)));
+        let level = support.kept(read.level);
+        let cursor_grab = self.input.pointer_grab(self.window_ref());
         let outer = outer_bounds(read.origin, read.content, frame);
         let display = snapshot
             .as_ref()
             .and_then(|snapshot| display_of(snapshot, outer).or_else(|| snapshot.primary()));
         let scale = window_scale(display, record.scale);
+        record.hints_rescaled |= record.scale != scale;
         record.scale = scale;
         self.input_scale.set(scale.get());
         // Remembered for a window whose platform is gone.
@@ -691,6 +727,8 @@ impl X11Window {
                 // A move or resize the window manager runs for the user is
                 // not read yet (docs/gaps.md).
                 interaction: flui_platform::WindowInteraction::Unknown,
+                cursor_grab,
+                level,
             }
             .onto(state)
         })
@@ -751,6 +789,7 @@ impl X11Window {
             map_state: attributes.map_state,
             wm_state: WmState::from_property(&wm_state),
             net_state: NetWmState::from_atoms(&net_state, &atoms.states),
+            level: level_of(&net_state, &atoms.levels),
             focused: focus == self.xid,
             active: active.first() == Some(&self.xid),
         })
@@ -773,14 +812,22 @@ impl X11Window {
             })
     }
 
-    /// Write `WM_NORMAL_HINTS` from the limits the window keeps, and the
-    /// place it opens at, `position`, in device pixels.
+    /// Write `WM_NORMAL_HINTS` from the limits, the resize steps and the
+    /// proportion the window keeps, and the place it opens at, `position`,
+    /// in device pixels at the window's scale.
     fn write_size_hints(&self, position: Option<(i16, i16)>) {
-        let (constraints, resizable) = {
+        let (constraints, resizable, increments, aspect) = {
             let record = self.record.borrow();
-            (record.constraints, record.resizable)
+            (
+                record.constraints,
+                record.resizable,
+                record.resize_increments,
+                record.aspect_ratio,
+            )
         };
-        let limits = size_limits(constraints, resizable, self.content_device(), self.scale());
+        let scale = self.scale();
+        let limits = size_limits(constraints, resizable, self.content_device(), scale);
+        let steps = resize_steps(increments, aspect, limits.min, scale);
         let hints = WmSizeHints {
             position: position.map(|(x, y)| {
                 (
@@ -791,6 +838,12 @@ impl X11Window {
             }),
             min_size: limits.min,
             max_size: limits.max,
+            size_increment: steps.increment,
+            base_size: steps.base,
+            aspect: steps.aspect.map(|(width, height)| {
+                let ratio = x11rb::properties::AspectRatio::new(width, height);
+                (ratio, ratio)
+            }),
             win_gravity: Some(xproto::Gravity::NORTH_WEST),
             ..WmSizeHints::default()
         };
@@ -960,6 +1013,8 @@ impl X11Window {
             reason = "a root coordinate of the X server fits the i16 range it came from"
         )]
         let root = |value: i32| fp1616(value).round() as i32;
+        // A hold of the pointer the window asked for ends with the grab.
+        self.input.let_pointer_go(self.window_ref());
         if let Err(error) = self.xcb().ungrab_pointer(x11rb::CURRENT_TIME) {
             tracing::debug!(%error, "cannot let go of the pointer for the window manager");
         }
@@ -1008,8 +1063,23 @@ impl X11Window {
         if !supported {
             return;
         }
-        let current: Vec<u32> = self
-            .xcb()
+        if let Some(atoms) = with_mode(&self.own_net_wm_state(), mode, &self.atoms.states)
+            && let Err(error) = self.xcb().change_property32(
+                PropMode::REPLACE,
+                self.xid,
+                self.atoms.net_wm_state,
+                AtomEnum::ATOM,
+                &atoms,
+            )
+        {
+            tracing::debug!(%error, ?mode, "cannot set an X11 window's mode before it is mapped");
+        }
+    }
+
+    /// The atoms of the window's `_NET_WM_STATE` now; none where it cannot
+    /// be read.
+    fn own_net_wm_state(&self) -> Vec<u32> {
+        self.xcb()
             .get_property(
                 false,
                 self.xid,
@@ -1021,17 +1091,42 @@ impl X11Window {
             .ok()
             .and_then(|cookie| cookie.reply().ok())
             .and_then(|reply| Some(reply.value32()?.collect()))
-            .unwrap_or_default();
-        if let Some(atoms) = with_mode(&current, mode, &self.atoms.states)
-            && let Err(error) = self.xcb().change_property32(
-                PropMode::REPLACE,
-                self.xid,
-                self.atoms.net_wm_state,
-                AtomEnum::ATOM,
-                &atoms,
-            )
-        {
-            tracing::debug!(%error, ?mode, "cannot set an X11 window's mode before it is mapped");
+            .unwrap_or_default()
+    }
+
+    /// Keep the window above the others, below them, or neither
+    /// (`_NET_WM_STATE_ABOVE`, `_NET_WM_STATE_BELOW`): asked of the window
+    /// manager for a window it manages, written in the window's own
+    /// `_NET_WM_STATE` for one not mapped yet, which the window manager reads
+    /// as it maps it. The snapshot reads the level the window manager keeps.
+    fn set_level(&self, level: WindowLevel) {
+        let levels = self.atoms.levels;
+        if self.unmapped() {
+            if let Some(atoms) = with_level(&self.own_net_wm_state(), level, &levels)
+                && let Err(error) = self.xcb().change_property32(
+                    PropMode::REPLACE,
+                    self.xid,
+                    self.atoms.net_wm_state,
+                    AtomEnum::ATOM,
+                    &atoms,
+                )
+            {
+                tracing::debug!(%error, ?level, "cannot set an X11 window's level before it is mapped");
+            }
+            return;
+        }
+        match level {
+            WindowLevel::Normal => {
+                self.send_state(StateAction::Remove, levels.above, levels.below);
+            }
+            WindowLevel::AlwaysOnTop => {
+                self.send_state(StateAction::Remove, levels.below, 0);
+                self.send_state(StateAction::Add, levels.above, 0);
+            }
+            WindowLevel::AlwaysOnBottom => {
+                self.send_state(StateAction::Remove, levels.above, 0);
+                self.send_state(StateAction::Add, levels.below, 0);
+            }
         }
     }
 
@@ -1227,6 +1322,8 @@ impl X11Window {
             record.reveal_pending = false;
             record.shown = false;
         }
+        // A hidden window holds no pointer.
+        self.input.let_pointer_go(self.window_ref());
         if let Err(error) = self.xcb().unmap_window(self.xid) {
             tracing::debug!(%error, "cannot unmap an X11 window");
         }
@@ -1534,6 +1631,8 @@ struct ServerRead {
     map_state: MapState,
     wm_state: Option<WmState>,
     net_state: NetWmState,
+    /// The level `_NET_WM_STATE` keeps the window at.
+    level: WindowLevel,
     focused: bool,
     active: bool,
 }
@@ -1709,7 +1808,8 @@ impl PlatformWindow for X11Window {
         // Opened under what the window honours now: an event that marked it
         // (the window manager's end) may have published other capabilities
         // since the publication the command was admitted against (ADR-0341).
-        let command = command.against(&self.state_now().capabilities)?;
+        let state = self.state_now();
+        let command = command.against(&state.capabilities)?;
         match command {
             WindowCommand::SetTitle(title) => {
                 self.write_title(&title);
@@ -1738,6 +1838,27 @@ impl PlatformWindow for X11Window {
                 self.close();
                 return Ok(());
             }
+            WindowCommand::SetCursorGrab(CursorGrab::None) => {
+                self.input.let_pointer_go(self.window_ref());
+            }
+            // Only a window with the keyboard focus holds the pointer: one
+            // without it holds none, which its snapshot shows.
+            WindowCommand::SetCursorGrab(grab) => {
+                if state.focus.is_focused() {
+                    self.input
+                        .hold_pointer(self.window_ref(), grab)
+                        .map_err(ApplyError::Platform)?;
+                }
+            }
+            WindowCommand::SetLevel(level) => self.set_level(level),
+            WindowCommand::SetResizeIncrements(step) => {
+                self.record.borrow_mut().resize_increments = step;
+                self.write_size_hints(None);
+            }
+            WindowCommand::SetAspectRatio(ratio) => {
+                self.record.borrow_mut().aspect_ratio = ratio;
+                self.write_size_hints(None);
+            }
             // `admit` refused the material: its capability is unavailable.
             other => return Err(not_carried_out(&other)),
         }
@@ -1763,9 +1884,10 @@ impl PlatformWindow for X11Window {
         self.refresh_state();
     }
 
-    /// The pointer and its cursor are the input feature's: it loads the
-    /// cursor from the theme and sets it on the window.
-    fn set_cursor(&self, cursor: CursorIcon) -> Result<(), CursorError> {
+    /// The pointer and its cursor are the input feature's: it loads a system
+    /// cursor from the theme, makes an image a Render cursor, and sets the
+    /// cursor on the window.
+    fn set_cursor(&self, cursor: &Cursor) -> Result<(), CursorError> {
         if self.closed.get() {
             return Err(Unsupported::new(UnsupportedReason::NoWindow).into());
         }
@@ -2264,6 +2386,9 @@ impl X11Windows {
                 focus_told: false,
                 support,
                 scale,
+                hints_rescaled: false,
+                resize_increments: None,
+                aspect_ratio: None,
             }),
             unread: Cell::new(false),
             unannounced: Cell::new(false),

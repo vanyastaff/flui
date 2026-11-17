@@ -1119,7 +1119,7 @@ pub(crate) mod macos {
     //! area of a title bar the application draws moves the window instead
     //! (`title_bar`).
 
-    use std::cell::RefCell;
+    use std::cell::{Cell, RefCell};
 
     use flui_platform::input_regions::InputRegion;
     use objc2_app_kit::{NSEvent, NSEventType};
@@ -1130,12 +1130,16 @@ pub(crate) mod macos {
     use events::MacInputState;
 
     /// The input of one content view: its pointer contacts, its trackpad
-    /// gesture session and its scrolling, and the window's chrome regions a
-    /// left press is answered from, made with the view and dropped with it.
+    /// gesture session and its scrolling, the window's chrome regions a
+    /// left press is answered from, and whether the window holds the pointer
+    /// locked, made with the view and dropped with it.
     #[derive(Default)]
     pub(crate) struct ViewInputs {
         state: RefCell<MacInputState>,
         chrome: RefCell<ChromeRegions>,
+        /// Set by the window while it holds the pointer locked: the mouse's
+        /// motion is then raw motion, and no move is delivered.
+        locked: Cell<bool>,
     }
 
     /// The window's input regions in device pixels, and the scale they were
@@ -1185,7 +1189,10 @@ pub(crate) mod macos {
             let height = view.height();
             // Converted before anything is dispatched, with the borrow
             // released: a callback may re-enter the view.
-            let inputs = self.state.borrow_mut().convert(event, height);
+            let inputs = self
+                .state
+                .borrow_mut()
+                .convert(event, height, self.locked.get());
             for input in inputs {
                 view.dispatch_input(input);
             }
@@ -1203,6 +1210,10 @@ pub(crate) mod macos {
             let mut chrome = self.chrome.borrow_mut();
             chrome.projected = projected;
             chrome.scale = scale;
+        }
+
+        fn set_pointer_locked(&self, locked: bool) {
+            self.locked.set(locked);
         }
     }
 
@@ -1234,9 +1245,9 @@ pub(crate) mod macos {
         use flui_platform::EventTime;
         use flui_platform::keyboard::{Key, KeyEvent, KeyPress, KeyState, Modifiers, NamedKey};
         use flui_platform::pointer::{
-            PanZoomEvent, PointerButton, PointerButtons, PointerEvent, PointerId, PointerInfo,
-            PointerKind, PointerPosition, PointerRole, PointerSignal, ScrollEvent, ScrollInversion,
-            ScrollPhase, SmartZoomEvent,
+            MotionAcceleration, MotionDelta, PanZoomEvent, PointerButton, PointerButtons,
+            PointerEvent, PointerId, PointerInfo, PointerKind, PointerPosition, PointerRole,
+            PointerSignal, ScrollEvent, ScrollInversion, ScrollPhase, SmartZoomEvent,
         };
         use objc2_app_kit::{NSEvent, NSEventModifierFlags, NSEventPhase, NSEventType};
         use objc2_foundation::NSProcessInfo;
@@ -1285,11 +1296,13 @@ pub(crate) mod macos {
 
         impl MacInputState {
             /// What `event`, delivered to a view `view_height` points tall,
-            /// carries.
+            /// carries; while its window holds the pointer `locked`, a mouse
+            /// move or drag carries the mouse's motion instead.
             pub(super) fn convert(
                 &mut self,
                 event: &NSEvent,
                 view_height: f64,
+                locked: bool,
             ) -> Vec<PlatformInput> {
                 let reading_time =
                     ReadingTime::coarse(NativeTime::UptimeSeconds(event.timestamp()));
@@ -1346,6 +1359,23 @@ pub(crate) mod macos {
                         .with_location(crate::input::keys::location_for_code(code))
                         .with_modifiers(extract_modifiers(event)),
                     )];
+                }
+                if locked {
+                    if matches!(
+                        event_type,
+                        NSEventType::MouseMoved
+                            | NSEventType::LeftMouseDragged
+                            | NSEventType::RightMouseDragged
+                            | NSEventType::OtherMouseDragged
+                    ) {
+                        return self.locked_motion(event, reading_time);
+                    }
+                    if event_type == NSEventType::Pressure {
+                        // The click's pressure stage still moves on; the move
+                        // a pressure event carries is no move while locked.
+                        let _pressure = self.force.pressure_event(event.stage(), event.pressure());
+                        return Vec::new();
+                    }
                 }
                 let modifiers = extract_modifiers(event);
                 let location = event.locationInWindow();
@@ -1458,6 +1488,32 @@ pub(crate) mod macos {
                 decode(&mut self.contacts, &reading)
                     .unwrap_or_else(DecodeError::into_inputs)
                     .into_vec()
+            }
+
+            /// A mouse move or drag while the window holds the pointer
+            /// locked: the event's deltas, which AppKit reports after the
+            /// user's pointer speed and acceleration, in points, right and
+            /// down positive, as the locked pointer's motion at the place it
+            /// rests. A motion of nothing delivers nothing.
+            fn locked_motion(&self, event: &NSEvent, time: ReadingTime) -> Vec<PlatformInput> {
+                let (dx, dy) = (event.deltaX(), event.deltaY());
+                if dx == 0.0 && dy == 0.0 {
+                    return Vec::new();
+                }
+                let Ok(delta) = MotionDelta::try_new(dx, dy) else {
+                    return Vec::new();
+                };
+                self.contacts
+                    .raw_motion(
+                        NativeSurface::default(),
+                        None,
+                        MOUSE,
+                        time,
+                        delta,
+                        MotionAcceleration::System,
+                    )
+                    .into_iter()
+                    .collect()
             }
 
             fn scroll(

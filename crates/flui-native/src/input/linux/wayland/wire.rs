@@ -13,8 +13,8 @@
 use flui_platform::input_capabilities::PointerKindSet;
 use flui_platform::keyboard::Modifiers;
 use flui_platform::pointer::{
-    PointerButton, PointerButtons, PointerEvent, PointerKind, ScrollDelta, ScrollInversion,
-    ScrollPrecision, ScrollUnit,
+    MotionAcceleration, MotionDelta, PointerButton, PointerButtons, PointerEvent, PointerKind,
+    ScrollDelta, ScrollInversion, ScrollPrecision, ScrollUnit,
 };
 use flui_platform::{EventTime, PlatformInput};
 use smallvec::SmallVec;
@@ -197,6 +197,17 @@ pub enum PointerWire {
     },
     /// The events since the last frame belong together.
     Frame,
+    /// The pointer, which the window of `surface` holds in place
+    /// (`zwp_locked_pointer_v1`), moved by `dx` and `dy` unaccelerated
+    /// (`zwp_relative_pointer_v1.relative_motion`): no move, its raw motion.
+    RawMotion {
+        /// The window surface that holds the pointer.
+        surface: NativeSurface,
+        /// The motion along x, unaccelerated.
+        dx: f64,
+        /// The motion along y, unaccelerated.
+        dy: f64,
+    },
 }
 
 /// A `wl_touch` event.
@@ -865,6 +876,24 @@ impl SeatAssembly {
                 self.pointer_state(device).axes.inverted[axis.index()] = Some(inverted);
             }
             PointerWire::Frame => self.axis_frame(device, time, &mut out),
+            // The contact keeps its resting place: no move goes with it.
+            PointerWire::RawMotion { surface, dx, dy } => {
+                let Ok(delta) = MotionDelta::try_new(dx, dy) else {
+                    return out;
+                };
+                out.extend(
+                    self.contacts
+                        .raw_motion(
+                            surface,
+                            Some(device),
+                            MOUSE,
+                            time.reading_time(),
+                            delta,
+                            MotionAcceleration::None,
+                        )
+                        .map(|input| Routed::To(surface, input)),
+                );
+            }
         }
         out
     }

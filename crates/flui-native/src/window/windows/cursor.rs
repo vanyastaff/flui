@@ -17,7 +17,7 @@ use windows::Win32::{
     Foundation::{HWND, POINT, RECT},
     Graphics::Gdi::{ClientToScreen, CreateBitmap, DeleteObject, HBITMAP},
     UI::{
-        Input::{RAWINPUTDEVICE, RIDEV_REMOVE, RegisterRawInputDevices},
+        Input::{RAWINPUTDEVICE, RAWINPUTDEVICE_FLAGS, RIDEV_REMOVE, RegisterRawInputDevices},
         WindowsAndMessaging::{
             ClipCursor, CreateIconIndirect, DestroyIcon, GetClientRect, GetCursorPos, HCURSOR,
             HICON, ICONINFO, IDC_APPSTARTING, IDC_ARROW, IDC_CROSS, IDC_HAND, IDC_IBEAM, IDC_NO,
@@ -146,8 +146,10 @@ impl OwnedCursor {
         let height = i32::from(image.height());
         let bgra: Vec<u8> = image
             .rgba()
-            .chunks_exact(4)
-            .flat_map(|pixel| [pixel[2], pixel[1], pixel[0], pixel[3]])
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .flat_map(|&[red, green, blue, alpha]| [blue, green, red, alpha])
             .collect();
         // A monochrome row is padded to a 16-bit boundary; every bit set.
         let mask_row = usize::from(image.width()).div_ceil(16) * 2;
@@ -271,7 +273,7 @@ fn register_raw_mouse(target: Option<HWND>) -> Result<(), PlatformFailure> {
         usUsagePage: GENERIC_DESKTOP,
         usUsage: MOUSE,
         dwFlags: if target.is_some() {
-            Default::default()
+            RAWINPUTDEVICE_FLAGS(0)
         } else {
             RIDEV_REMOVE
         },

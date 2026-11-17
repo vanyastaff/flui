@@ -317,13 +317,52 @@ pub(crate) mod configure {
         capabilities.minimizes = offered(|announced| announced.minimize);
         capabilities.maximizes = offered(|announced| announced.maximize);
         capabilities.enters_fullscreen = offered(|announced| announced.fullscreen);
-        // A cursor image is a buffer on the pointer's cursor surface. The
-        // grabs are the compositor's pointer constraints, which this host does
-        // not speak yet; xdg-shell has no levels, resize steps or proportion,
-        // so those stay the platform's absence.
-        capabilities.cursor_image = Availability::Native;
-        capabilities.confines_cursor = Absent(CapabilityAbsence::NOT_YET_ON_THIS_HOST);
-        capabilities.locks_cursor = Absent(CapabilityAbsence::NOT_YET_ON_THIS_HOST);
+        // xdg-shell has no levels, resize steps or proportion, so those stay
+        // the platform's absence. The cursor image and the grabs are the
+        // compositor's to offer (`pointer_reported`).
+        capabilities.into_capabilities()
+    }
+
+    /// What the compositor offers a window's pointer, as the seats' input
+    /// bound it: shared memory for a cursor image's buffer, and the pointer
+    /// constraints and relative motion a grab is made of.
+    #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+    pub(crate) struct PointerOffer {
+        /// `wl_shm`, which a cursor image is a buffer of.
+        pub(crate) shared_memory: bool,
+        /// `zwp_pointer_constraints_v1`, which confines and locks a pointer.
+        pub(crate) constraints: bool,
+        /// `zwp_relative_pointer_manager_v1`, which reports a locked
+        /// pointer's motion.
+        pub(crate) relative_motion: bool,
+    }
+
+    /// `capabilities` with what the compositor offers the pointer (`offer`):
+    /// a cursor image where it has shared memory, a confined pointer where
+    /// it has pointer constraints, and a locked one where it also reports
+    /// relative motion. A compositor without them lacks what the platform
+    /// has.
+    pub(crate) const fn pointer_reported(
+        capabilities: WindowCapabilities,
+        offer: PointerOffer,
+    ) -> WindowCapabilities {
+        let on_this_device = WindowCapability::Absent(CapabilityAbsence::NOT_ON_THIS_DEVICE);
+        let mut capabilities = capabilities.into_parts();
+        capabilities.cursor_image = if offer.shared_memory {
+            Availability::Native
+        } else {
+            Availability::Unavailable
+        };
+        capabilities.confines_cursor = if offer.constraints {
+            WindowCapability::Native
+        } else {
+            on_this_device
+        };
+        capabilities.locks_cursor = if offer.constraints && offer.relative_motion {
+            WindowCapability::Native
+        } else {
+            on_this_device
+        };
         capabilities.into_capabilities()
     }
 
@@ -622,7 +661,8 @@ pub(crate) mod configure {
         /// everything, named: a capability the contract gains does not
         /// compile here until this host says whether its window has it, and
         /// none is had for not being taken away. The presentation report is
-        /// the compositor's (`presented::reported`).
+        /// the compositor's (`presented::reported`), and so are the cursor
+        /// image and the grabs (`pointer_reported`).
         #[test]
         fn a_wayland_window_has_the_capabilities_it_names() {
             use WindowCapability::{Emulated, Native};
@@ -659,10 +699,8 @@ pub(crate) mod configure {
                     activates: Emulated,
                     closes: Native,
                     material: WindowCapability::NOT_ON_THIS_PLATFORM,
-                    confines_cursor: WindowCapability::Absent(
-                        CapabilityAbsence::NOT_YET_ON_THIS_HOST
-                    ),
-                    locks_cursor: WindowCapability::Absent(CapabilityAbsence::NOT_YET_ON_THIS_HOST),
+                    confines_cursor: WindowCapability::NOT_ON_THIS_PLATFORM,
+                    locks_cursor: WindowCapability::NOT_ON_THIS_PLATFORM,
                     keeps_on_top: WindowCapability::NOT_ON_THIS_PLATFORM,
                     keeps_on_bottom: WindowCapability::NOT_ON_THIS_PLATFORM,
                     sets_resize_increments: WindowCapability::NOT_ON_THIS_PLATFORM,
@@ -674,9 +712,70 @@ pub(crate) mod configure {
                     observes_minimized: Availability::Unavailable,
                     places_at_open: Availability::Unavailable,
                     frame_rate_hint: Availability::Unavailable,
-                    cursor_image: Availability::Native,
+                    cursor_image: Availability::Unavailable,
                 }
             );
+        }
+
+        /// A window's cursor image and grabs are what its compositor offers
+        /// the pointer: an image where it has shared memory, a confined
+        /// pointer where it has pointer constraints, a locked one where it
+        /// also reports relative motion.
+        #[test]
+        fn the_pointer_has_what_the_compositor_offers() {
+            use WindowCapability::Native;
+            use flui_platform::Availability;
+
+            let absent = WindowCapability::Absent(CapabilityAbsence::NOT_ON_THIS_DEVICE);
+            let offer = |shared_memory, constraints, relative_motion| PointerOffer {
+                shared_memory,
+                constraints,
+                relative_motion,
+            };
+            // (case, offer, cursor image, confines, locks)
+            let table = [
+                (
+                    "everything",
+                    offer(true, true, true),
+                    Availability::Native,
+                    Native,
+                    Native,
+                ),
+                (
+                    "constraints without relative motion",
+                    offer(true, true, false),
+                    Availability::Native,
+                    Native,
+                    absent,
+                ),
+                (
+                    "relative motion without constraints",
+                    offer(true, false, true),
+                    Availability::Native,
+                    absent,
+                    absent,
+                ),
+                (
+                    "nothing",
+                    offer(false, false, false),
+                    Availability::Unavailable,
+                    absent,
+                    absent,
+                ),
+            ];
+            let base = capabilities(
+                None,
+                None,
+                None,
+                ToplevelStates::default(),
+                Activation::Offered,
+            );
+            for (case, offer, image, confines, locks) in table {
+                let reported = pointer_reported(base, offer).into_parts();
+                assert_eq!(reported.cursor_image, image, "{case}: cursor image");
+                assert_eq!(reported.confines_cursor, confines, "{case}: confines");
+                assert_eq!(reported.locks_cursor, locks, "{case}: locks");
+            }
         }
 
         /// The capabilities follow what the compositor announces, and a
@@ -1104,14 +1203,14 @@ mod toplevel {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Weak};
 
-    use cursor_icon::CursorIcon;
     use flui_foundation::geometry::{DevicePixelRatio, Size};
     use flui_platform::input_capabilities::InputCapabilities;
     use flui_platform::{
-        AdmittedCommand, ApplyError, CloseDecision, CursorError, PlatformTextInput, PlatformWindow,
-        SizeConstraints, Unsupported, UnsupportedReason, WindowCapabilities, WindowCommand,
-        WindowExecutionState, WindowFrame, WindowGeometry, WindowHandler, WindowId, WindowMode,
-        WindowOptions, WindowState,
+        AdmittedCommand, ApplyError, CloseDecision, Cursor, CursorError, CursorGrab,
+        PlatformTextInput, PlatformWindow, SizeConstraints, Unsupported, UnsupportedReason,
+        WindowCapabilities, WindowCommand, WindowExecutionState, WindowFrame, WindowGeometry,
+        WindowHandler, WindowId, WindowInteraction, WindowLevel, WindowMode, WindowOptions,
+        WindowState,
     };
     use flui_semantics::platform::PlatformAccessibility;
     use parking_lot::Mutex;
@@ -1147,7 +1246,8 @@ mod toplevel {
     use super::client_frame::surfaces::{ClientFrame, FrameGlobals, FrameRecord, TitleFonts};
     use super::client_frame::{self, Action, Frame, Look, Offers};
     use super::configure::{
-        Activation, Sizing, ToplevelStates, WmCapabilities, capabilities, clamp, protocol_extent,
+        Activation, PointerOffer, Sizing, ToplevelStates, WmCapabilities, capabilities, clamp,
+        pointer_reported, protocol_extent,
     };
     use super::decoration::{Decoration, Drawn, FrameDrawer};
     #[cfg(any(test, feature = "testing"))]
@@ -1500,6 +1600,10 @@ mod toplevel {
         draws_own: bool,
         reports_presentation: bool,
         activation: Activation,
+        /// What the compositor offers for the window's pointer.
+        pointer: PointerOffer,
+        /// What the window holds of the pointer, as the seats' input holds it.
+        cursor_grab: CursorGrab,
         closed: bool,
         /// The compositor answered a frame callback of the window's: it
         /// mapped the window at least once.
@@ -1582,19 +1686,30 @@ mod toplevel {
                     hovered: self.hovered,
                     // xdg-shell has one `activated` state for both.
                     focus: flui_platform::WindowFocus::reported(states.activated, states.activated),
-                    // A move or resize the compositor runs for the user is not
-                    // read yet (docs/gaps.md).
-                    interaction: flui_platform::WindowInteraction::Unknown,
-                    capabilities: presented::reported(
-                        capabilities(
-                            applied.told.wm,
-                            decoration.absence(),
-                            decoration.app_title_bar_absence(),
-                            states,
-                            self.activation,
+                    // The configure says when the user resizes the window by
+                    // its frame; a move the compositor runs for the user is
+                    // not read yet (docs/gaps.md).
+                    interaction: if states.resizing {
+                        WindowInteraction::UserResizing
+                    } else {
+                        WindowInteraction::Unknown
+                    },
+                    capabilities: pointer_reported(
+                        presented::reported(
+                            capabilities(
+                                applied.told.wm,
+                                decoration.absence(),
+                                decoration.app_title_bar_absence(),
+                                states,
+                                self.activation,
+                            ),
+                            self.reports_presentation,
                         ),
-                        self.reports_presentation,
+                        self.pointer,
                     ),
+                    cursor_grab: self.cursor_grab,
+                    // xdg-shell keeps no window above or below the others.
+                    level: WindowLevel::Normal,
                 }
                 .onto(state)
             })
@@ -1858,6 +1973,8 @@ mod toplevel {
                 } else {
                     Activation::Missing
                 },
+                pointer: self.input.pointer_offer(),
+                cursor_grab: self.input.pointer_grab(self.id),
                 closed: self.closed.get(),
                 shown: self.record.frame_shown.load(Ordering::Acquire),
             }
@@ -1882,6 +1999,8 @@ mod toplevel {
                 draws_own: self.frame_globals.is_some(),
                 reports_presentation: false,
                 activation: Activation::Missing,
+                pointer: PointerOffer::default(),
+                cursor_grab: CursorGrab::None,
                 closed: false,
                 shown: false,
             }
@@ -2712,6 +2831,15 @@ mod toplevel {
                 }
                 // Admitted only where the compositor takes activation requests.
                 WindowCommand::Activate => self.ask_activation()?,
+                // The seats' input constrains the pointer of the seat whose
+                // keyboard is in the window; one in no seat's keyboard holds
+                // nothing.
+                WindowCommand::SetCursorGrab(grab) => self
+                    .input
+                    .hold_pointer(self.id, grab)
+                    .map_err(ApplyError::Platform)?,
+                // xdg-shell has no levels: every window is at the normal one.
+                WindowCommand::SetLevel(WindowLevel::Normal) => {}
                 // `admit` refuses what a Wayland window cannot do.
                 other => return Err(not_carried_out(&other)),
             }
@@ -2721,9 +2849,11 @@ mod toplevel {
             Ok(())
         }
 
-        /// The cursor is the seats' input's, which shows it through
-        /// `cursor-shape` while the pointer is over the window.
-        fn set_cursor(&self, cursor: CursorIcon) -> Result<(), CursorError> {
+        /// The cursor is the seats' input's, which shows it while the pointer
+        /// is over the window: a system cursor through `cursor-shape` or the
+        /// theme, an image as a buffer on the pointer's cursor surface, a
+        /// hidden one as no surface.
+        fn set_cursor(&self, cursor: &Cursor) -> Result<(), CursorError> {
             self.input.set_cursor(self.id, cursor)
         }
 
@@ -2949,19 +3079,22 @@ mod toplevel {
                 told: None,
                 answered: false,
             };
-            presented::reported(
-                capabilities(
-                    None,
-                    decoration.absence(),
-                    decoration.app_title_bar_absence(),
-                    ToplevelStates::default(),
-                    if owner.offers_activation() {
-                        Activation::Offered
-                    } else {
-                        Activation::Missing
-                    },
+            pointer_reported(
+                presented::reported(
+                    capabilities(
+                        None,
+                        decoration.absence(),
+                        decoration.app_title_bar_absence(),
+                        ToplevelStates::default(),
+                        if owner.offers_activation() {
+                            Activation::Offered
+                        } else {
+                            Activation::Missing
+                        },
+                    ),
+                    owner.offers_presentation(),
                 ),
-                owner.offers_presentation(),
+                owner.pointer_offer(),
             )
         }
 

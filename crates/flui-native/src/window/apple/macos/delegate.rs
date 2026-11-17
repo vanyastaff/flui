@@ -159,7 +159,47 @@ fn get_or_create_delegate_class() -> &'static Class {
                     // SAFETY: see the shared invariant above.
                     if let Some(window) = unsafe { get_window_from_delegate(this) } {
                         window.record_normal();
+                        // A window in the Dock holds no pointer.
+                        window.let_pointer_go();
                         window.handle_transition_started();
+                    }
+                },
+            );
+        }
+
+        // windowWillStartLiveResize: and windowDidEndLiveResize: bracket the
+        // user's resize by the frame.
+        extern "C-unwind" fn window_will_start_live_resize(
+            this: &Object,
+            _sel: Sel,
+            _notification: ObjcId,
+        ) {
+            os_entry(
+                "windowWillStartLiveResize:",
+                (),
+                AfterPanic::Answer(|()| ()),
+                || {
+                    // SAFETY: see the shared invariant above.
+                    if let Some(window) = unsafe { get_window_from_delegate(this) } {
+                        window.handle_live_resize(true);
+                    }
+                },
+            );
+        }
+
+        extern "C-unwind" fn window_did_end_live_resize(
+            this: &Object,
+            _sel: Sel,
+            _notification: ObjcId,
+        ) {
+            os_entry(
+                "windowDidEndLiveResize:",
+                (),
+                AfterPanic::Answer(|()| ()),
+                || {
+                    // SAFETY: see the shared invariant above.
+                    if let Some(window) = unsafe { get_window_from_delegate(this) } {
+                        window.handle_live_resize(false);
                     }
                 },
             );
@@ -403,6 +443,14 @@ fn get_or_create_delegate_class() -> &'static Class {
                 window_will_miniaturize as extern "C-unwind" fn(_, _, _),
             );
             decl.add_method(
+                sel!(windowWillStartLiveResize:),
+                window_will_start_live_resize as extern "C-unwind" fn(_, _, _),
+            );
+            decl.add_method(
+                sel!(windowDidEndLiveResize:),
+                window_did_end_live_resize as extern "C-unwind" fn(_, _, _),
+            );
+            decl.add_method(
                 sel!(windowWillEnterFullScreen:),
                 window_will_enter_fullscreen as extern "C-unwind" fn(_, _, _),
             );
@@ -597,6 +645,8 @@ impl MacOSWindow {
     /// Handle focus lost event
     fn handle_focus_lost(&self) {
         self.text_key_window_changed();
+        // A grab ends with the focus, before the snapshot says so.
+        self.let_pointer_go();
         self.publish_state();
         self.facets.accessibility.focus_changed(false);
         tracing::debug!("Window lost focus");
@@ -671,6 +721,9 @@ impl MacOSWindow {
         if self.closed.swap(true, Ordering::SeqCst) {
             return;
         }
+        // A closed window holds no pointer: the mouse is attached again
+        // before anyone hears of the close.
+        self.let_pointer_go();
 
         // Untrack from the platform's window map here, on the owner thread the
         // delegate notification runs on: the map holds the window strongly, so
@@ -740,6 +793,8 @@ impl MacOSWindow {
             }
             if changed {
                 tracing::info!("Window scale factor changed to {}", new_scale.get());
+                // An image cursor is measured in points at the scale.
+                self.rescale_cursor();
             }
 
             // Re-read the display in the same pass: this handler is reached on

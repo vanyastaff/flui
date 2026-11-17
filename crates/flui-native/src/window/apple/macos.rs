@@ -3,11 +3,12 @@
 //! inside a view's display pass, the owner's `display_pass`, decides how a
 //! redraw is asked for), and [`MacOSWindows`], what the windows open with.
 //!
-//! Three parts live beside it: [`delegate`], the window's `NSWindowDelegate`,
+//! Four parts live beside it: [`delegate`], the window's `NSWindowDelegate`,
 //! one AppKit object with the handlers of what it reports; [`ext`],
 //! [`MacOSWindowExt`] and the [`AppKitWindow`] it gives, the public AppKit
-//! features beyond the cross-platform window; and [`backdrop`], the view
-//! behind the content ([`MacOSBackdrop`]: a material or Liquid Glass).
+//! features beyond the cross-platform window; [`backdrop`], the view
+//! behind the content ([`MacOSBackdrop`]: a material or Liquid Glass); and
+//! [`cursor`], the `NSCursor` the window shows and the pointer it locks.
 //!
 //! The loop holds the windows it tracks as `HostWindow`s
 //! (`owner::apple::macos`). A window lives on the AppKit main thread, its
@@ -23,6 +24,7 @@
 #![expect(deprecated)]
 
 pub(crate) mod backdrop;
+pub(crate) mod cursor;
 pub(crate) mod delegate;
 pub(crate) mod ext;
 
@@ -44,7 +46,6 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
-use cursor_icon::CursorIcon;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject, Bool, ClassBuilder, Sel};
 use objc2::{MainThreadMarker, msg_send};
@@ -109,8 +110,9 @@ use crate::{
     },
 };
 use flui_platform::{
-    CursorError, DisplayId, PlatformWindow, RedrawRequester, SurfaceTarget, WindowHandler,
-    WindowId, WindowIdMint, WindowOptions, WindowReveal,
+    AspectRatio, Cursor, CursorError, CursorGrab, DisplayId, PlatformWindow, RedrawRequester,
+    SurfaceTarget, WindowExtent, WindowHandler, WindowId, WindowIdMint, WindowLevel, WindowOptions,
+    WindowReveal,
 };
 
 /// macOS window wrapper around NSWindow.
@@ -218,8 +220,23 @@ struct MacOSWindowState {
     /// display snapshot it was read from (`sync_layer_refresh`).
     layer_refresh: LayerRefresh,
 
-    /// Cursor selected by this exact window's presentation.
-    cursor: CursorIcon,
+    /// Cursor selected by this exact window's presentation, made into an
+    /// `NSCursor` where it is not one of AppKit's own.
+    cursor: cursor::NativeCursor,
+
+    /// The grab the window holds: `Locked` while it detached the mouse
+    /// (`hold_pointer`), let go when it stops being key, is hidden,
+    /// miniaturized or closed.
+    cursor_grab: CursorGrab,
+
+    /// Whether the user is resizing the window by its frame: from
+    /// `windowWillStartLiveResize:` to `windowDidEndLiveResize:`.
+    live_resize: bool,
+
+    /// The steps and the proportion the last commands asked the user's
+    /// resize to keep (`apply_resize_rules`).
+    resize_increments: Option<WindowExtent>,
+    aspect_ratio: Option<AspectRatio>,
 
     /// The outer rectangle the window returns to from a maximized, minimized
     /// or full-screen mode. AppKit does not keep one a caller can read, so it
@@ -691,7 +708,11 @@ impl MacOSWindow {
                     scale_streak,
                     display: None,
                     layer_refresh: LayerRefresh::default(),
-                    cursor: CursorIcon::default(),
+                    cursor: cursor::NativeCursor::ARROW,
+                    cursor_grab: CursorGrab::None,
+                    live_resize: false,
+                    resize_increments: None,
+                    aspect_ratio: None,
                     normal: None,
                     sequence: ModeSequence::default(),
                     occlusion_visible: true,
@@ -1457,6 +1478,18 @@ unsafe fn primary_screen_height() -> Option<f64> {
     }
 }
 
+/// Where a window at AppKit's `level` stands among the others: above the
+/// normal level is kept on top (the floating level, and the higher ones an
+/// application sets through `AppKitWindow::set_window_level`), below it is
+/// kept under them.
+fn level_of(level: objc2_app_kit::NSWindowLevel) -> WindowLevel {
+    match level.cmp(&objc2_app_kit::NSNormalWindowLevel) {
+        std::cmp::Ordering::Greater => WindowLevel::AlwaysOnTop,
+        std::cmp::Ordering::Less => WindowLevel::AlwaysOnBottom,
+        std::cmp::Ordering::Equal => WindowLevel::Normal,
+    }
+}
+
 impl PlatformWindow for MacOSWindow {
     fn id(&self) -> WindowId {
         self.id
@@ -1542,7 +1575,11 @@ impl PlatformWindow for MacOSWindow {
             WindowCommand::SetFrame(frame) => self.set_frame(frame)?,
             WindowCommand::SetMode(mode) => self.change_mode(mode)?,
             WindowCommand::Show => self.show_window()?,
-            WindowCommand::Hide => self.hide()?,
+            // A hidden window holds no pointer.
+            WindowCommand::Hide => {
+                self.hide()?;
+                self.let_pointer_go();
+            }
             WindowCommand::Activate => self.activate_window(),
             // AppKit tears the window down through `windowWillClose:`.
             WindowCommand::Close => {
@@ -1551,6 +1588,21 @@ impl PlatformWindow for MacOSWindow {
             }
             // The material is no fact of the snapshot: nothing to publish.
             WindowCommand::SetMaterial(material) => return self.apply_material(material),
+            WindowCommand::SetCursorGrab(CursorGrab::Locked) => self.lock_pointer()?,
+            WindowCommand::SetCursorGrab(CursorGrab::None) => self.let_pointer_go(),
+            WindowCommand::SetLevel(level) => self.set_level(level),
+            // What the user's resize keeps is held by AppKit, and is no fact
+            // of the snapshot: nothing to publish.
+            WindowCommand::SetResizeIncrements(step) => {
+                self.state.lock().resize_increments = step;
+                self.apply_resize_rules();
+                return Ok(());
+            }
+            WindowCommand::SetAspectRatio(ratio) => {
+                self.state.lock().aspect_ratio = ratio;
+                self.apply_resize_rules();
+                return Ok(());
+            }
             // A command added to the contract that this backend has not met
             // is refused, not ignored.
             other => return Err(crate::window::state::not_carried_out(&other)),
@@ -1613,75 +1665,35 @@ impl PlatformWindow for MacOSWindow {
         Ok(())
     }
 
-    // The explicit `arrowCursor` list below is intentional documentation of
-    // which icons resolve to the default arrow; it is textually identical to
-    // the `_` arm's body, which objc2's `msg_send!` expansion makes clippy
-    // visible (objc 0.2's differing expansion hid it).
-    #[allow(clippy::match_same_arms)]
-    fn set_cursor(&self, cursor: CursorIcon) -> Result<(), CursorError> {
-        self.state.lock().cursor = cursor;
-
-        // SAFETY: every selector below is an NSCursor class constructor
-        // available on the supported macOS baseline. The returned singleton
-        // remains owned by AppKit and `set` only selects it for the current
-        // pointer location. A window is used on its owner thread only, the
-        // AppKit main thread.
-        unsafe {
-            let ns_cursor: ObjcId = match cursor {
-                CursorIcon::ContextMenu => msg_send![class!(NSCursor), contextualMenuCursor],
-                CursorIcon::Pointer => msg_send![class!(NSCursor), pointingHandCursor],
-                CursorIcon::Cell | CursorIcon::Crosshair => {
-                    msg_send![class!(NSCursor), crosshairCursor]
-                }
-                CursorIcon::Text => msg_send![class!(NSCursor), IBeamCursor],
-                CursorIcon::VerticalText => {
-                    msg_send![class!(NSCursor), IBeamCursorForVerticalLayout]
-                }
-                CursorIcon::Copy => msg_send![class!(NSCursor), dragCopyCursor],
-                CursorIcon::Move | CursorIcon::Grabbing => {
-                    msg_send![class!(NSCursor), closedHandCursor]
-                }
-                CursorIcon::Grab => msg_send![class!(NSCursor), openHandCursor],
-                CursorIcon::NoDrop | CursorIcon::NotAllowed => {
-                    msg_send![class!(NSCursor), operationNotAllowedCursor]
-                }
-                CursorIcon::EResize
-                | CursorIcon::WResize
-                | CursorIcon::EwResize
-                | CursorIcon::ColResize => {
-                    msg_send![class!(NSCursor), resizeLeftRightCursor]
-                }
-                CursorIcon::NResize
-                | CursorIcon::SResize
-                | CursorIcon::NsResize
-                | CursorIcon::RowResize => {
-                    msg_send![class!(NSCursor), resizeUpDownCursor]
-                }
-                CursorIcon::Default
-                | CursorIcon::Help
-                | CursorIcon::Progress
-                | CursorIcon::Wait
-                | CursorIcon::Alias
-                | CursorIcon::NeResize
-                | CursorIcon::NwResize
-                | CursorIcon::SeResize
-                | CursorIcon::SwResize
-                | CursorIcon::NeswResize
-                | CursorIcon::NwseResize
-                | CursorIcon::AllScroll
-                | CursorIcon::ZoomIn
-                | CursorIcon::ZoomOut
-                | CursorIcon::DndAsk => msg_send![class!(NSCursor), arrowCursor],
-                _ => msg_send![class!(NSCursor), arrowCursor],
-            };
-            if ns_cursor == NIL {
-                return Err(CursorError::failed(
-                    "AppKit returned a null NSCursor".to_string(),
-                ));
-            }
-            let _: () = msg_send![ns_cursor, set];
-            Ok(())
+    /// Every cursor, an image included, set at once as AppKit's current
+    /// cursor. A repeated one is the cursor the window already made, set
+    /// again; the one it replaces is released only once the new one shows.
+    /// While the window holds the pointer locked its transparent cursor stays,
+    /// and the cursor asked for shows when the lock is let go.
+    fn set_cursor(&self, cursor: &Cursor) -> Result<(), CursorError> {
+        let (kept, scale) = {
+            let state = self.state.lock();
+            let scale = state.scale_factor.get();
+            (state.cursor.shows(cursor, scale), scale)
+        };
+        // Made with the state let go: AppKit is messaged.
+        let made = if kept {
+            None
+        } else {
+            Some(cursor::NativeCursor::of(cursor, scale)?)
+        };
+        let (shown, replaced) = {
+            let mut state = self.state.lock();
+            let replaced = made.map(|made| std::mem::replace(&mut state.cursor, made));
+            let shown = (state.cursor_grab != CursorGrab::Locked).then(|| state.cursor.clone());
+            (shown, replaced)
+        };
+        if let Some(shown) = shown {
+            let shown = shown.ns_cursor()?;
+            cursor::set(&shown);
         }
+        drop(replaced);
+        Ok(())
     }
 }
 
@@ -1742,6 +1754,144 @@ impl MacOSWindow {
         self.enter_mode_when_shown();
     }
 
+    /// Hold the pointer in place for the key window: detach the mouse from
+    /// the cursor, hide the cursor under the window's transparent one, and
+    /// have the content view's input read the mouse's motion as raw motion.
+    /// A window that is not key, not shown or miniaturized takes no grab, and
+    /// its snapshot says so; a window that already holds one keeps it.
+    ///
+    /// # Errors
+    /// [`ApplyError::Platform`] when AppKit makes no transparent cursor or
+    /// Quartz refuses to detach the mouse; nothing is held then.
+    fn lock_pointer(&self) -> Result<(), ApplyError> {
+        // SAFETY: see the note above these bodies.
+        let (key, flags) = unsafe {
+            let key: bool = msg_send![self.ns_window, isKeyWindow];
+            (key, self.read_flags())
+        };
+        if !key
+            || !flags.on_screen
+            || flags.miniaturized
+            || self.state.lock().cursor_grab == CursorGrab::Locked
+        {
+            return Ok(());
+        }
+        let blank = cursor::blank_cursor().map_err(ApplyError::Platform)?;
+        cursor::detach_mouse(true).map_err(ApplyError::Platform)?;
+        // Committed before anything else is told: the view's input reads
+        // motion from the next mouse event on.
+        self.state.lock().cursor_grab = CursorGrab::Locked;
+        content_view::set_pointer_locked(&self.view, true);
+        cursor::set(&blank);
+        Ok(())
+    }
+
+    /// Let the pointer go if the window holds it: attach the mouse to the
+    /// cursor again and show the cursor the presentation asked for. A window
+    /// that holds nothing is left as it is. Run when the application lets go,
+    /// and when the window stops being key, is hidden, miniaturized or
+    /// closed: the association is the process's, and no other window may be
+    /// left with the mouse detached.
+    fn let_pointer_go(&self) {
+        let shown = {
+            let mut state = self.state.lock();
+            if std::mem::replace(&mut state.cursor_grab, CursorGrab::None) != CursorGrab::Locked {
+                return;
+            }
+            state.cursor.clone()
+        };
+        if let Err(error) = cursor::detach_mouse(false) {
+            tracing::warn!(%error, "the mouse could not be attached to the cursor again");
+        }
+        content_view::set_pointer_locked(&self.view, false);
+        match shown.ns_cursor() {
+            Ok(shown) => cursor::set(&shown),
+            Err(error) => tracing::debug!(%error, "the window's cursor could not be shown again"),
+        }
+    }
+
+    /// Keep the window above the other windows (the floating level), below
+    /// them (one under the normal level, as AppKit has no level of its own
+    /// for it), or at the normal level.
+    fn set_level(&self, level: WindowLevel) {
+        use objc2_app_kit::{NSFloatingWindowLevel, NSNormalWindowLevel};
+        let value = match level {
+            WindowLevel::Normal => NSNormalWindowLevel,
+            WindowLevel::AlwaysOnTop => NSFloatingWindowLevel,
+            WindowLevel::AlwaysOnBottom => NSNormalWindowLevel - 1,
+        };
+        // SAFETY: see the note above these bodies; `setLevel:` takes an
+        // `NSInteger`.
+        unsafe {
+            let _: () = msg_send![self.ns_window, setLevel: value];
+        }
+    }
+
+    /// Hand AppKit what the user's resize keeps. AppKit holds the content's
+    /// resize increments or its aspect ratio, setting one cancelling the
+    /// other, so a proportion the application asked for is held while it
+    /// lasts, and the steps once it is lifted; with neither, both are
+    /// cleared (an aspect ratio of zero, steps of one point).
+    fn apply_resize_rules(&self) {
+        let (step, ratio) = {
+            let state = self.state.lock();
+            (state.resize_increments, state.aspect_ratio)
+        };
+        // SAFETY: see the note above these bodies; both setters take an
+        // `NSSize`.
+        unsafe {
+            if let Some(ratio) = ratio {
+                let proportion = NSSize::new(
+                    f64::from(ratio.width().get()),
+                    f64::from(ratio.height().get()),
+                );
+                let _: () = msg_send![self.ns_window, setContentAspectRatio: proportion];
+                return;
+            }
+            let _: () = msg_send![self.ns_window, setContentAspectRatio: NSSize::new(0.0, 0.0)];
+            let increments = step.map_or(NSSize::new(1.0, 1.0), |step| {
+                NSSize::new(step.width(), step.height())
+            });
+            let _: () = msg_send![self.ns_window, setContentResizeIncrements: increments];
+        }
+    }
+
+    /// The user started or ended resizing the window by its frame
+    /// (`windowWillStartLiveResize:`, `windowDidEndLiveResize:`): the
+    /// snapshot's interaction says so.
+    fn handle_live_resize(&self, resizing: bool) {
+        self.state.lock().live_resize = resizing;
+        self.publish_state();
+    }
+
+    /// The window's backing scale changed: an image cursor, measured in
+    /// points at the old scale, is made again at the new one, and shown again
+    /// unless the pointer is locked under the transparent cursor.
+    fn rescale_cursor(&self) {
+        let (made, scale) = {
+            let state = self.state.lock();
+            (state.cursor.clone(), state.scale_factor.get())
+        };
+        let next = match made.rescaled(scale) {
+            Some(Ok(next)) => next,
+            Some(Err(error)) => {
+                tracing::debug!(%error, "the cursor image could not be measured at the new scale");
+                return;
+            }
+            None => return,
+        };
+        let (shown, replaced) = {
+            let mut state = self.state.lock();
+            let replaced = std::mem::replace(&mut state.cursor, next);
+            let shown = (state.cursor_grab != CursorGrab::Locked).then(|| state.cursor.clone());
+            (shown, replaced)
+        };
+        if let Some(Ok(shown)) = shown.map(|shown| shown.ns_cursor()) {
+            cursor::set(&shown);
+        }
+        drop((made, replaced));
+    }
+
     fn close_window(&self) {
         // No separate flag-set needed here: AppKit's `-[NSWindow close]`
         // posts `NSWindowWillCloseNotification` (routing to the delegate's
@@ -1773,6 +1923,14 @@ impl Drop for MacOSWindow {
         // it; from here on they hand out nothing of a view the release below
         // may free. A window that closed set this already.
         self.closed.store(true, Ordering::SeqCst);
+
+        // A window dropped without closing may still hold the pointer: the
+        // mouse's association is the process's, so it is attached again.
+        if self.state.get_mut().cursor_grab == CursorGrab::Locked
+            && let Err(error) = cursor::detach_mouse(false)
+        {
+            tracing::warn!(%error, "the mouse could not be attached to the cursor again");
+        }
 
         // The close delegate pins its native receiver in the outer autorelease
         // pool, so a final callback-local wrapper drop cannot deallocate the
@@ -1830,7 +1988,7 @@ impl MacOSWindow {
     /// The window as AppKit reports it now; rectangles that describe no
     /// window cost the sample its geometry and nothing else.
     fn sample_state(&self) -> Sample {
-        let (display, normal, scale, occlusion_visible, heading, asked_frame) = {
+        let (display, normal, scale, occlusion_visible, heading, asked_frame, grab, live_resize) = {
             let state = self.state.lock();
             (
                 state.display,
@@ -1839,6 +1997,8 @@ impl MacOSWindow {
                 state.occlusion_visible,
                 state.sequence.heading(std::time::Instant::now()),
                 state.frame,
+                state.cursor_grab,
+                state.live_resize,
             )
         };
         let hovered = self.delivery.hovered();
@@ -1867,6 +2027,7 @@ impl MacOSWindow {
                 }
             };
             let mask: NSWindowStyleMask = msg_send![self.ns_window, styleMask];
+            let level: objc2_app_kit::NSWindowLevel = msg_send![self.ns_window, level];
             let mode = mode_of(flags.mode_flags());
             let position = primary_screen_height().and_then(|height| {
                 top_left_of_frame(crate::owner::apple::macos::bounds_of(frame), height)
@@ -1931,9 +2092,16 @@ impl MacOSWindow {
                     // the main window has no report of its own here.
                     focus: flui_platform::WindowFocus::reported(focused, focused),
                     capabilities,
-                    // AppKit's live resize and title-bar drag are not read
-                    // yet (docs/gaps.md).
-                    interaction: flui_platform::WindowInteraction::Unknown,
+                    // A live resize is AppKit's to report; its title-bar drag
+                    // is not read yet (docs/gaps.md), so outside a resize the
+                    // host cannot tell.
+                    interaction: if live_resize {
+                        flui_platform::WindowInteraction::UserResizing
+                    } else {
+                        flui_platform::WindowInteraction::Unknown
+                    },
+                    cursor_grab: grab,
+                    level: level_of(level),
                 }
                 .onto(state)
             })
@@ -2332,6 +2500,21 @@ impl MacOSWindow {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The level each command sets reads back as the level it asked for, and
+    /// a level only the AppKit extension sets reads as the side it is on.
+    #[test]
+    fn the_level_appkit_holds_reads_back_as_the_snapshots() {
+        use objc2_app_kit::{NSFloatingWindowLevel, NSNormalWindowLevel, NSStatusWindowLevel};
+        for (level, expected) in [
+            (NSNormalWindowLevel, WindowLevel::Normal),
+            (NSFloatingWindowLevel, WindowLevel::AlwaysOnTop),
+            (NSNormalWindowLevel - 1, WindowLevel::AlwaysOnBottom),
+            (NSStatusWindowLevel, WindowLevel::AlwaysOnTop),
+        ] {
+            assert_eq!(level_of(level), expected, "{level}");
+        }
+    }
 
     /// Always-run, AppKit-free pin on the display-pass decision: a redraw
     /// request issued while this thread is inside a display pass must take the

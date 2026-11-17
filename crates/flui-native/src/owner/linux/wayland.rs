@@ -730,8 +730,8 @@ mod event_loop {
     use flui_platform::data_transfer::DragTransport;
     use flui_platform::drag::PlatformDragSource;
     use flui_platform::{
-        CursorError, DisplayId, DisplaySnapshot, SessionEndAnswer, SessionEndPhase, SystemNotice,
-        WindowId,
+        Cursor, CursorError, CursorGrab, DisplayId, DisplaySnapshot, PlatformFailure,
+        SessionEndAnswer, SessionEndPhase, SystemNotice, WindowId,
     };
     use rustc_hash::FxHashMap;
     use rustix::event::{EventfdFlags, PollFd, PollFlags, Timespec, eventfd, poll};
@@ -780,6 +780,7 @@ mod event_loop {
     use crate::owner::{DirectOwnerHooks, OpenWindowError, OwnerHooks, OwnerPlatform};
     use crate::platform::{AppHandler, ExitAnswer, Platform};
     use crate::transfer::linux::wayland::DataDevices;
+    use crate::window::linux::wayland::configure::PointerOffer;
 
     /// The newest `wl_compositor` the loop understands: version 6 gives a
     /// surface its preferred buffer scale.
@@ -1105,8 +1106,29 @@ mod event_loop {
         ///
         /// # Errors
         /// [`CursorError::Unsupported`] when the compositor takes no cursor
-        /// shape from the host.
-        fn set_cursor(&self, id: WindowId, cursor: CursorIcon) -> Result<(), CursorError>;
+        /// shape from the host, or no image ([`PointerOffer`]).
+        fn set_cursor(&self, id: WindowId, cursor: &Cursor) -> Result<(), CursorError>;
+
+        /// Constrain the pointer of the seat whose keyboard is in the window
+        /// `id` as `grab` asks, after letting go of what the window held;
+        /// [`CursorGrab::None`] only lets go. A window in no seat's keyboard
+        /// holds nothing. The input lets a grab go itself when the keyboard
+        /// leaves the window, and the compositor ends it when it ends the
+        /// constraint.
+        ///
+        /// # Errors
+        /// [`PlatformFailure::Failed`] when the compositor offers no
+        /// constraint of that kind.
+        fn hold_pointer(&self, id: WindowId, grab: CursorGrab) -> Result<(), PlatformFailure>;
+
+        /// What the window `id` holds of the pointer now: a grab the
+        /// compositor said it carries out (`confined`, `locked`), none
+        /// before it did or after it ended it.
+        fn pointer_grab(&self, id: WindowId) -> CursorGrab;
+
+        /// What the compositor offers the windows' pointer, as the input
+        /// bound it.
+        fn pointer_offer(&self) -> PointerOffer;
 
         /// The active keyboard layout's name; empty before a keymap came.
         fn keyboard_layout(&self) -> String;
@@ -2431,6 +2453,12 @@ mod event_loop {
         /// (`xdg-activation`).
         pub(crate) fn offers_activation(&self) -> bool {
             self.protocol.activation.is_some()
+        }
+
+        /// What the compositor offers a window's pointer: shared memory for
+        /// a cursor image, the constraints and relative motion of a grab.
+        pub(crate) fn pointer_offer(&self) -> PointerOffer {
+            self.input.pointer_offer()
         }
 
         /// Run turns for `span` on the owner thread, for a test that drives

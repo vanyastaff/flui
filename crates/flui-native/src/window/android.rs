@@ -15,7 +15,6 @@ use std::sync::{
 
 use android_activity::AndroidApp;
 use android_activity::ndk::configuration::UiModeNight;
-use cursor_icon::CursorIcon;
 use flui_foundation::geometry::{DevicePixelRatio, Size};
 use flui_platform::input_regions::{InputRegion, InputRegionKind};
 use flui_platform::{
@@ -47,7 +46,9 @@ use crate::{
     version::gate::android::WindowColorMode,
     window::state::{ReportedFacts, Sample, SampledGeometry, WindowStateCell},
 };
-use flui_platform::{CursorError, PlatformWindow, WindowExecutionState, WindowId, WindowInsets};
+use flui_platform::{
+    Cursor, CursorError, PlatformWindow, WindowExecutionState, WindowId, WindowInsets,
+};
 
 /// Android window wrapping the native ANativeWindow via `AndroidApp`
 ///
@@ -567,6 +568,9 @@ fn sample_state(
             // The user can resize a freeform or split-screen window, which
             // this host does not read: it cannot tell.
             interaction: flui_platform::WindowInteraction::Unknown,
+            // The window takes no grab and the system stacks it.
+            cursor_grab: flui_platform::CursorGrab::None,
+            level: flui_platform::WindowLevel::Normal,
         }
         .onto(state)
     })
@@ -883,11 +887,16 @@ impl PlatformWindow for AndroidWindow {
 
     fn apply(&self, command: AdmittedCommand) -> Result<(), ApplyError> {
         // The system owns the surface and the Activity's lifetime: admission
-        // refuses every command but the normal mode, which the window is
-        // always in. An Activity cannot bring its task to the front itself:
-        // the user and the system decide which task is shown.
+        // refuses every command but what the window always is: the normal
+        // mode and level, and no grab, which it never takes. An Activity
+        // cannot bring its task to the front itself: the user and the system
+        // decide which task is shown.
         match command.against(&self.snapshot.published_capabilities())? {
-            flui_platform::WindowCommand::SetMode(flui_platform::WindowMode::Normal) => Ok(()),
+            flui_platform::WindowCommand::SetMode(flui_platform::WindowMode::Normal)
+            | flui_platform::WindowCommand::SetLevel(flui_platform::WindowLevel::Normal)
+            | flui_platform::WindowCommand::SetCursorGrab(flui_platform::CursorGrab::None) => {
+                Ok(())
+            }
             other => Err(crate::window::state::not_carried_out(&other)),
         }
     }
@@ -896,8 +905,9 @@ impl PlatformWindow for AndroidWindow {
         self.current_state()
     }
 
-    /// Not set: the reason [`pointer_icon_absence`] gives at this API level.
-    fn set_cursor(&self, _cursor: CursorIcon) -> Result<(), CursorError> {
+    /// Not set, whichever cursor: the reason [`pointer_icon_absence`] gives at
+    /// this API level.
+    fn set_cursor(&self, _cursor: &Cursor) -> Result<(), CursorError> {
         Err(Unsupported::from(pointer_icon_absence(self.api)).into())
     }
 

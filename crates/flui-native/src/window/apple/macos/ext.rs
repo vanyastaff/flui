@@ -432,6 +432,9 @@ impl<'a> AppKitWindow<'a> {
     }
 
     /// Order the window at `level` among the windows of every application.
+    /// The window's state says where that stands it
+    /// ([`WindowState::level`](flui_platform::WindowState::level)): above the
+    /// normal level is kept on top.
     ///
     /// # Errors
     /// [`AppKitWindowError`]: the window is closed.
@@ -442,6 +445,7 @@ impl<'a> AppKitWindow<'a> {
         unsafe {
             let _: () = msg_send![window.ns_window, setLevel: value];
         }
+        window.publish_state();
         Ok(())
     }
 

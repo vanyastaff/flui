@@ -566,7 +566,9 @@ impl WindowCapabilities {
             WindowCommand::SetMode(WindowMode::Minimized) => Slot::Minimize,
             WindowCommand::SetMode(WindowMode::Maximized) => Slot::Maximize,
             WindowCommand::SetMode(WindowMode::Fullscreen) => Slot::EnterFullscreen,
-            WindowCommand::SetMode(WindowMode::Normal) => return None,
+            WindowCommand::SetMode(WindowMode::Normal)
+            | WindowCommand::SetCursorGrab(CursorGrab::None)
+            | WindowCommand::SetLevel(WindowLevel::Normal) => return None,
             WindowCommand::Hide => Slot::Hide,
             WindowCommand::Show => Slot::Show,
             WindowCommand::Activate => Slot::Activate,
@@ -574,10 +576,8 @@ impl WindowCapabilities {
             WindowCommand::SetMaterial(_) => Slot::SetMaterial,
             WindowCommand::SetCursorGrab(CursorGrab::Confined) => Slot::ConfineCursor,
             WindowCommand::SetCursorGrab(CursorGrab::Locked) => Slot::LockCursor,
-            WindowCommand::SetCursorGrab(CursorGrab::None) => return None,
             WindowCommand::SetLevel(WindowLevel::AlwaysOnTop) => Slot::KeepOnTop,
             WindowCommand::SetLevel(WindowLevel::AlwaysOnBottom) => Slot::KeepOnBottom,
-            WindowCommand::SetLevel(WindowLevel::Normal) => return None,
             WindowCommand::SetResizeIncrements(_) => Slot::SetResizeIncrements,
             WindowCommand::SetAspectRatio(_) => Slot::SetAspectRatio,
         })

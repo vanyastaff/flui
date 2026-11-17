@@ -53,8 +53,8 @@ pub mod decode {
     use flui_platform::input_capabilities::PointerKindSet;
     use flui_platform::keyboard::Modifiers;
     use flui_platform::pointer::{
-        PenTool, PointerButton, PointerEvent, PointerKind, PointerMove, ScrollDelta,
-        ScrollInversion, ScrollPrecision, ScrollUnit,
+        MotionAcceleration, MotionDelta, PenTool, PointerButton, PointerEvent, PointerKind,
+        PointerMove, ScrollDelta, ScrollInversion, ScrollPrecision, ScrollUnit,
     };
 
     use crate::input::assembly::{
@@ -709,6 +709,52 @@ pub mod decode {
         /// start over.
         pub fn reset_scrolling(&mut self, source: XiSlave) {
             self.scrolled.retain(|(device, _), _| *device != source);
+        }
+
+        /// Whether `event` is a motion of its master's cursor (a mouse's or a
+        /// touchpad's), not a pen's or a touch's.
+        #[must_use]
+        pub fn moves_cursor(&self, event: &XiEvent) -> bool {
+            matches!(event.action, XiAction::Motion)
+                && self
+                    .target_of(event)
+                    .is_some_and(|target| target.contact == CURSOR)
+        }
+
+        /// The cursor of master `master` held in place on the window
+        /// `surface` moved by `delta`, the device's own counts (`XI_RawMotion`'s
+        /// unaccelerated valuators) from slave `source`, at `time`: its raw
+        /// motion, with the identity and resting place of the cursor's
+        /// contact there, or of the reserved pointer for a master not known.
+        /// `None` from a pen or a touch screen, whose valuators are
+        /// positions, and for a time off the event timeline.
+        #[must_use]
+        pub fn raw_motion(
+            &self,
+            surface: NativeSurface,
+            master: Option<XiMaster>,
+            source: XiSlave,
+            time: XiTime,
+            delta: MotionDelta,
+        ) -> Option<PlatformInput> {
+            if self
+                .devices
+                .get(&source)
+                .is_some_and(|known| known.role != DeviceRole::Cursor)
+            {
+                return None;
+            }
+            let device = master
+                .and_then(|master| self.masters.get(&master))
+                .map(|master| master.label);
+            self.contacts.raw_motion(
+                surface,
+                device,
+                CURSOR,
+                time.reading_time(),
+                delta,
+                MotionAcceleration::None,
+            )
         }
 
         /// End every contact on `surface` with `reason`; what moves on
@@ -1388,16 +1434,23 @@ mod live {
     use cursor_icon::CursorIcon;
     use flui_platform::input_capabilities::InputCapabilities;
     use flui_platform::keyboard::{KeyPress, KeyState};
-    use flui_platform::{CursorError, EventTime, PlatformInput, Unsupported, UnsupportedReason};
+    use flui_platform::pointer::MotionDelta;
+    use flui_platform::{
+        Cursor, CursorError, CursorGrab, CursorImage, EventTime, PlatformFailure, PlatformInput,
+        Unsupported, UnsupportedReason,
+    };
 
     use x11rb::connection::Connection as _;
+    use x11rb::errors::ReplyOrIdError;
     use x11rb::protocol::Event;
+    use x11rb::protocol::render::{self, ConnectionExt as _};
     use x11rb::protocol::xinput::{
         self, ConnectionExt as _, DeviceClassData, DeviceType, Fp1616, Fp3232, XIEventMask,
     };
     use x11rb::protocol::xkb::{self, ConnectionExt as _};
     use x11rb::protocol::xproto::{
-        self, ChangeWindowAttributesAux, ConnectionExt as _, NotifyMode,
+        self, ChangeWindowAttributesAux, ConnectionExt as _, EventMask, GrabMode, GrabStatus,
+        ImageFormat, ImageOrder, NotifyMode,
     };
 
     use super::decode::{
@@ -1407,6 +1460,7 @@ mod live {
     use crate::input::assembly::{NativeCancel, NativeClock, NativeSurface};
     use crate::input::availability;
     use crate::input::event_timestamp_ns;
+    use crate::input::linux::cursor_image::premultiplied_argb;
     use crate::input::linux::xkb::{Keyboard, KeymapSource};
     use crate::owner::layout_callback::LayoutCallback;
     use crate::owner::linux::x11::{
@@ -1468,8 +1522,28 @@ mod live {
         windows: HashMap<xproto::Window, InputTarget>,
         keyboard: Option<CoreKeyboard>,
         cursors: Option<x11rb::cursor::Handle>,
-        /// The cursors loaded so far.
+        /// The theme's cursors loaded so far.
         loaded: HashMap<CursorIcon, xproto::Cursor>,
+        /// The cursor of no pixels, made at its first use: a hidden cursor's
+        /// and a locked pointer's.
+        blank: Option<xproto::Cursor>,
+        /// The last application image made a cursor, and that cursor: a
+        /// repeated image is the cursor already made.
+        image: Option<(CursorImage, xproto::Cursor)>,
+        /// The Render format an image is made a cursor in (`ARGB32`), asked
+        /// for at the first image.
+        argb32: Option<render::Pictformat>,
+    }
+
+    /// The pointer a window holds (`CursorGrab`), and for a lock, the point
+    /// of the window, in device pixels, it is held at and the master pointer
+    /// the grab took (the client's pointer), whose cursor the raw motion is.
+    #[derive(Debug, Clone, Copy)]
+    struct Held {
+        window: WindowRef,
+        grab: CursorGrab,
+        at: (i16, i16),
+        master: Option<XiMaster>,
     }
 
     /// The X11 loop's input: the windows' pointers, keys and cursors on the
@@ -1496,6 +1570,9 @@ mod live {
         /// The windows' text input, which every key goes through: the
         /// input method of the focused field takes it or lets it through.
         text: Rc<dyn LoopText>,
+        /// The pointer a window holds: one at most, as the server grabs it
+        /// for one window of the client.
+        held: Cell<Option<Held>>,
     }
 
     impl std::fmt::Debug for X11Input {
@@ -1725,6 +1802,9 @@ mod live {
                 keyboard,
                 cursors,
                 loaded: HashMap::new(),
+                blank: None,
+                image: None,
+                argb32: None,
             };
             let input = Rc::new(Self {
                 connection: Arc::clone(connection),
@@ -1737,18 +1817,10 @@ mod live {
                 layout_moved: Cell::new(false),
                 keymap_stale: Cell::new(false),
                 text,
+                held: Cell::new(None),
             });
             if xinput {
-                let watched = xcb.xinput_xi_select_events(
-                    connection.root(),
-                    &[xinput::EventMask {
-                        deviceid: xinput::Device::ALL.into(),
-                        mask: vec![XIEventMask::HIERARCHY | XIEventMask::DEVICE_CHANGED],
-                    }],
-                );
-                if let Err(error) = watched {
-                    tracing::debug!(%error, "the X11 device hierarchy goes unheard");
-                }
+                input.select_root_events(false);
                 input.read_devices();
             }
             input
@@ -2144,6 +2216,166 @@ mod live {
             })
         }
 
+        /// Let go of the pointer a window holds, if one does: the grab ends,
+        /// and a lock's raw motion is no longer heard.
+        fn let_go(&self) {
+            let Some(held) = self.held.take() else {
+                return;
+            };
+            if let Err(error) = self.connection.xcb().ungrab_pointer(x11rb::CURRENT_TIME) {
+                tracing::debug!(%error, "cannot let go of the X11 pointer");
+            }
+            if held.grab == CursorGrab::Locked {
+                self.select_root_events(false);
+            }
+        }
+
+        /// Let go of the pointer if the window of X id `xid` holds it: the
+        /// window lost the focus or was unmapped, and the server ended the
+        /// grab or will.
+        fn let_go_of(&self, xid: xproto::Window) {
+            if self.held.get().is_some_and(|held| held.window.xid == xid) {
+                self.let_go();
+            }
+        }
+
+        /// Select what the input hears of every device on the root window:
+        /// the device hierarchy and the devices' changes, and while a window
+        /// holds the pointer in place, the raw motion (`XI_RawMotion`) XInput
+        /// 2 sends there whoever grabs the pointer.
+        fn select_root_events(&self, raw_motion: bool) {
+            let mut mask = XIEventMask::HIERARCHY | XIEventMask::DEVICE_CHANGED;
+            if raw_motion {
+                mask |= XIEventMask::RAW_MOTION;
+            }
+            let selected = self.connection.xcb().xinput_xi_select_events(
+                self.connection.root(),
+                &[xinput::EventMask {
+                    deviceid: xinput::Device::ALL.into(),
+                    mask: vec![mask],
+                }],
+            );
+            if let Err(error) = selected {
+                tracing::debug!(%error, "the X11 device hierarchy goes unheard");
+            }
+        }
+
+        /// The point of `window` a lock holds the pointer at, in device
+        /// pixels: where the pointer is when it is over the content, the
+        /// content's centre otherwise.
+        fn lock_point(&self, window: WindowRef) -> (i16, i16) {
+            let xcb = self.connection.xcb();
+            let pointer = xcb.query_pointer(window.xid).ok();
+            let geometry = xcb.get_geometry(window.xid).ok();
+            let pointer = pointer.and_then(|cookie| cookie.reply().ok());
+            let Some(geometry) = geometry.and_then(|cookie| cookie.reply().ok()) else {
+                return (0, 0);
+            };
+            let inside = |at: i16, extent: u16| (0..i32::from(extent)).contains(&i32::from(at));
+            match pointer {
+                Some(pointer)
+                    if pointer.same_screen
+                        && inside(pointer.win_x, geometry.width)
+                        && inside(pointer.win_y, geometry.height) =>
+                {
+                    (pointer.win_x, pointer.win_y)
+                }
+                _ => {
+                    let half = |extent: u16| i16::try_from(extent / 2).unwrap_or(i16::MAX);
+                    (half(geometry.width), half(geometry.height))
+                }
+            }
+        }
+
+        /// Put the pointer at `at` of the window of X id `xid`.
+        fn warp_to(&self, xid: xproto::Window, at: (i16, i16)) {
+            let warped =
+                self.connection
+                    .xcb()
+                    .warp_pointer(x11rb::NONE, xid, 0, 0, 0, 0, at.0, at.1);
+            if let Err(error) = warped {
+                tracing::debug!(%error, "cannot hold the X11 pointer in place");
+            }
+        }
+
+        /// Whether `event`, over the window of X id `xid`, is a motion of the
+        /// cursor that window holds in place: it is no move, and the pointer
+        /// it took away from where the lock holds it is put back there.
+        fn held_in_place(&self, xid: xproto::Window, event: &XiEvent) -> bool {
+            let Some(held) = self
+                .held
+                .get()
+                .filter(|held| held.grab == CursorGrab::Locked && held.window.xid == xid)
+            else {
+                return false;
+            };
+            if !self.with_state(|state| state.pointers.moves_cursor(event)) {
+                return false;
+            }
+            let at = (f64::from(held.at.0), f64::from(held.at.1));
+            if (event.position.0.round(), event.position.1.round()) != at {
+                self.warp_to(xid, held.at);
+            }
+            true
+        }
+
+        /// `XI_RawMotion` while a window holds the pointer in place: a
+        /// physical device's unaccelerated motion along valuators 0 and 1 as
+        /// that window's raw motion, of the master pointer the grab took. A
+        /// motion along neither delivers nothing.
+        ///
+        /// Only a slave device's own event is read: the server sends a
+        /// grabbed master's raw event to the grabbing client twice, through
+        /// its grab and through its root selection, and its slave's once.
+        fn raw_motion(&self, raw: &xinput::RawMotionEvent) -> Vec<(Arc<WindowDelivery>, Delivery)> {
+            let Some(held) = self
+                .held
+                .get()
+                .filter(|held| held.grab == CursorGrab::Locked)
+            else {
+                return Vec::new();
+            };
+            if raw.deviceid != raw.sourceid {
+                return Vec::new();
+            }
+            let values: Vec<f64> = raw.axisvalues_raw.iter().copied().map(fp3232).collect();
+            let moved = valuators(&raw.valuator_mask, &values);
+            let along = |axis: u16| {
+                moved
+                    .iter()
+                    .find(|(number, _)| *number == axis)
+                    .map_or(0.0, |(_, value)| *value)
+            };
+            let (dx, dy) = (along(0), along(1));
+            if dx == 0.0 && dy == 0.0 {
+                return Vec::new();
+            }
+            let Ok(delta) = MotionDelta::try_new(dx, dy) else {
+                return Vec::new();
+            };
+            self.with_state(|state| {
+                let Some(target) = state
+                    .windows
+                    .get(&held.window.xid)
+                    .filter(|target| target.window == held.window)
+                else {
+                    return Vec::new();
+                };
+                state
+                    .pointers
+                    .raw_motion(
+                        surface_of(target.window),
+                        held.master,
+                        XiSlave(raw.sourceid),
+                        xi_time(raw.time),
+                        delta,
+                    )
+                    .map(|input| (Arc::clone(&target.delivery), Delivery::Input(input)))
+                    .into_iter()
+                    .collect()
+            })
+        }
+
         /// Select a window's XInput 2 events: every master device's pointer,
         /// touch, key and, on XInput 2.4, pinch events.
         fn select(&self, window: xproto::Window) {
@@ -2191,6 +2423,203 @@ mod live {
                 .cloned()
                 .unwrap_or_default()
         }
+    }
+
+    impl State {
+        /// The theme's cursor for `icon`, loaded at its first use: by its
+        /// CSS name, the names themes used before, then the core cursor
+        /// font's glyph.
+        fn theme_cursor(
+            &mut self,
+            connection: &X11Connection,
+            icon: CursorIcon,
+        ) -> Result<xproto::Cursor, CursorError> {
+            if let Some(loaded) = self.loaded.get(&icon) {
+                return Ok(*loaded);
+            }
+            let Some(handle) = self.cursors.as_ref() else {
+                return Err(CursorError::failed(
+                    "the X server's cursors cannot be loaded".into(),
+                ));
+            };
+            let names = std::iter::once(icon.name())
+                .chain(icon.alt_names().iter().copied())
+                .chain(std::iter::once(core_name(icon)));
+            let mut loaded = x11rb::NONE;
+            for name in names {
+                match handle.load_cursor(connection.xcb(), name) {
+                    Ok(found) if found != x11rb::NONE => {
+                        loaded = found;
+                        break;
+                    }
+                    Ok(_) => {}
+                    Err(error) => return Err(CursorError::failed(error.to_string())),
+                }
+            }
+            if loaded == x11rb::NONE {
+                return Err(CursorError::failed(format!(
+                    "the cursor theme has no {icon:?} cursor"
+                )));
+            }
+            self.loaded.insert(icon, loaded);
+            Ok(loaded)
+        }
+
+        /// The cursor of no pixels, made at its first use.
+        fn blank_cursor(
+            &mut self,
+            connection: &X11Connection,
+        ) -> Result<xproto::Cursor, CursorError> {
+            if let Some(blank) = self.blank {
+                return Ok(blank);
+            }
+            let clear = CursorImage::try_new(1, 1, (0, 0), vec![0; 4])
+                .map_err(|error| CursorError::failed(error.to_string()))?;
+            let blank = self.made_cursor(connection, &clear)?;
+            self.blank = Some(blank);
+            Ok(blank)
+        }
+
+        /// `image` as a cursor: the one made last when it is that image,
+        /// else one made now, which replaces it.
+        fn image_cursor(
+            &mut self,
+            connection: &X11Connection,
+            image: &CursorImage,
+        ) -> Result<xproto::Cursor, CursorError> {
+            if let Some((made_of, cursor)) = &self.image
+                && made_of == image
+            {
+                return Ok(*cursor);
+            }
+            let cursor = self.made_cursor(connection, image)?;
+            if let Some((_, replaced)) = self.image.replace((image.clone(), cursor)) {
+                // The server keeps a freed cursor while a window still shows
+                // it. A failed connection says so at its next request.
+                drop(connection.xcb().free_cursor(replaced));
+            }
+            Ok(cursor)
+        }
+
+        /// A new cursor of `image`, in the Render format asked for once.
+        fn made_cursor(
+            &mut self,
+            connection: &X11Connection,
+            image: &CursorImage,
+        ) -> Result<xproto::Cursor, CursorError> {
+            if self.argb32.is_none() {
+                self.argb32 = argb32_format(connection);
+            }
+            let format = self.argb32.ok_or_else(|| {
+                CursorError::failed(
+                    "the X server has no RENDER ARGB32 format for a cursor image".into(),
+                )
+            })?;
+            render_cursor(connection, format, image)
+                .map_err(|error| CursorError::failed(error.to_string()))
+        }
+    }
+
+    /// The server's standard `ARGB32` Render format: 32 bits, alpha in the
+    /// top byte, then red, green and blue. `None` where the server has no
+    /// RENDER, or lists no such format.
+    fn argb32_format(connection: &X11Connection) -> Option<render::Pictformat> {
+        let reply = connection
+            .xcb()
+            .render_query_pict_formats()
+            .ok()?
+            .reply()
+            .ok()?;
+        reply
+            .formats
+            .iter()
+            .find(|format| {
+                let direct = format.direct;
+                format.type_ == render::PictType::DIRECT
+                    && format.depth == 32
+                    && (direct.alpha_shift, direct.alpha_mask) == (24, 0xff)
+                    && (direct.red_shift, direct.red_mask) == (16, 0xff)
+                    && (direct.green_shift, direct.green_mask) == (8, 0xff)
+                    && (direct.blue_shift, direct.blue_mask) == (0, 0xff)
+            })
+            .map(|format| format.id)
+    }
+
+    /// A Render cursor of `image` in `format`, the server's `ARGB32`: its
+    /// premultiplied pixels put in a 32-bit pixmap in the server's byte
+    /// order, the pixmap made a picture and the picture a cursor; the
+    /// pixmap, its graphics context and the picture are freed after, as the
+    /// cursor keeps its own copy. An image is at most 128 by 128 pixels, 64
+    /// KiB, within any server's request length. Each request that can be
+    /// refused is checked, so a refusal is this call's error and not an
+    /// event no one reads, and what was made is freed on every exit; a new
+    /// image costs those round trips once.
+    fn render_cursor(
+        connection: &X11Connection,
+        format: render::Pictformat,
+        image: &CursorImage,
+    ) -> Result<xproto::Cursor, ReplyOrIdError> {
+        let xcb = connection.xcb();
+        let (width, height) = (image.width(), image.height());
+        let least_first = xcb.setup().image_byte_order == ImageOrder::LSB_FIRST;
+        let pixels: Vec<u8> = premultiplied_argb(image)
+            .flat_map(|pixel| {
+                if least_first {
+                    pixel.to_le_bytes()
+                } else {
+                    pixel.to_be_bytes()
+                }
+            })
+            .collect();
+        let pixmap = xcb.generate_id()?;
+        xcb.create_pixmap(32, pixmap, connection.root(), width, height)?
+            .check()?;
+        let made = pixmap_cursor(xcb, pixmap, format, image, &pixels);
+        xcb.free_pixmap(pixmap)?;
+        made
+    }
+
+    /// The cursor of `image` whose server-ordered `pixels` are put in
+    /// `pixmap` (32 bits deep, the image's size) and made a picture of
+    /// `format`; the graphics context and the picture made on the way are
+    /// freed on every exit, the pixmap is the caller's.
+    fn pixmap_cursor(
+        xcb: &x11rb::xcb_ffi::XCBConnection,
+        pixmap: xproto::Pixmap,
+        format: render::Pictformat,
+        image: &CursorImage,
+        pixels: &[u8],
+    ) -> Result<xproto::Cursor, ReplyOrIdError> {
+        let context = xcb.generate_id()?;
+        xcb.create_gc(context, pixmap, &xproto::CreateGCAux::new())?
+            .check()?;
+        let put: Result<(), ReplyOrIdError> = xcb
+            .put_image(
+                ImageFormat::Z_PIXMAP,
+                pixmap,
+                context,
+                image.width(),
+                image.height(),
+                0,
+                0,
+                0,
+                32,
+                pixels,
+            )
+            .map_err(ReplyOrIdError::from)
+            .and_then(|cookie| cookie.check().map_err(ReplyOrIdError::from));
+        xcb.free_gc(context)?;
+        put?;
+        let picture = xcb.generate_id()?;
+        xcb.render_create_picture(picture, pixmap, format, &render::CreatePictureAux::new())?
+            .check()?;
+        let (x, y) = image.hotspot();
+        let cursor: Result<xproto::Cursor, ReplyOrIdError> = xcb.generate_id().and_then(|cursor| {
+            xcb.render_create_cursor(cursor, picture, x, y)?.check()?;
+            Ok(cursor)
+        });
+        xcb.render_free_picture(picture)?;
+        cursor
     }
 
     /// The names XKB gives the core keyboard's layouts (its groups), in
@@ -2257,6 +2686,7 @@ mod live {
         }
 
         fn window_closed(&self, window: WindowRef) {
+            self.let_pointer_go(window);
             let removed = self.with_state(|state| {
                 // The X id may already name a later window: only this one's
                 // entry goes.
@@ -2355,6 +2785,12 @@ mod live {
                     Vec::new()
                 }
                 Event::FocusOut(focus) => {
+                    // A grab of the keyboard (a window manager's switcher)
+                    // moves no focus; a focus that moved takes the window's
+                    // hold of the pointer with it.
+                    if focus.mode != NotifyMode::GRAB {
+                        self.let_go_of(focus.event);
+                    }
                     if focus.mode == NotifyMode::NORMAL {
                         deliver(self.focus_out(focus.event));
                     }
@@ -2362,7 +2798,15 @@ mod live {
                     // the event even when a handler panicked here.
                     return false;
                 }
+                Event::UnmapNotify(unmapped) => {
+                    // The server ends the grab of a window that is no longer
+                    // viewable; the window reads itself again too.
+                    self.let_go_of(unmapped.window);
+                    return false;
+                }
+                Event::XinputRawMotion(raw) => self.raw_motion(raw),
                 _ => match copied_event(event) {
+                    Some((window, xi)) if self.held_in_place(window, &xi) => Vec::new(),
                     Some((window, xi)) => {
                         if matches!(
                             event,
@@ -2385,6 +2829,11 @@ mod live {
             let Some((window, last)) = copied_event(run.last()) else {
                 return false;
             };
+            // A run is one pointer's over one window: held in place, it is
+            // put back once, after its last motion.
+            if self.held_in_place(window, &last) {
+                return true;
+            }
             let deliveries = if run.passed().is_empty() {
                 self.pointer_event(window, &last)
             } else {
@@ -2403,9 +2852,12 @@ mod live {
             }
         }
 
-        fn set_cursor(&self, window: WindowRef, cursor: CursorIcon) -> Result<(), CursorError> {
-            let xcb = self.connection.xcb();
-            let loaded = self.with_state(|state| {
+        /// A system cursor from the theme, a hidden one as the cursor of no
+        /// pixels, an image as a Render cursor made of it. The cursor is the
+        /// window's attribute: a lock's grab shows its blank cursor over it
+        /// until the grab ends.
+        fn set_cursor(&self, window: WindowRef, cursor: &Cursor) -> Result<(), CursorError> {
+            let native = self.with_state(|state| {
                 if !state
                     .windows
                     .get(&window.xid)
@@ -2415,43 +2867,100 @@ mod live {
                         UnsupportedReason::NoWindow,
                     )));
                 }
-                if let Some(loaded) = state.loaded.get(&cursor) {
-                    return Ok(*loaded);
+                match cursor {
+                    Cursor::Icon(icon) => state.theme_cursor(&self.connection, *icon),
+                    Cursor::Hidden => state.blank_cursor(&self.connection),
+                    Cursor::Image(image) => state.image_cursor(&self.connection, image),
                 }
-                let Some(handle) = state.cursors.as_ref() else {
-                    return Err(CursorError::failed(
-                        "the X server's cursors cannot be loaded".into(),
-                    ));
-                };
-                let names = std::iter::once(cursor.name())
-                    .chain(cursor.alt_names().iter().copied())
-                    .chain(std::iter::once(core_name(cursor)));
-                let mut loaded = x11rb::NONE;
-                for name in names {
-                    match handle.load_cursor(xcb, name) {
-                        Ok(found) if found != x11rb::NONE => {
-                            loaded = found;
-                            break;
-                        }
-                        Ok(_) => {}
-                        Err(error) => return Err(CursorError::failed(error.to_string())),
-                    }
-                }
-                if loaded == x11rb::NONE {
-                    return Err(CursorError::failed(format!(
-                        "the cursor theme has no {cursor:?} cursor"
-                    )));
-                }
-                state.loaded.insert(cursor, loaded);
-                Ok(loaded)
             })?;
+            let xcb = self.connection.xcb();
             xcb.change_window_attributes(
                 window.xid,
-                &ChangeWindowAttributesAux::new().cursor(loaded),
+                &ChangeWindowAttributesAux::new().cursor(native),
             )
             .map_err(|error| CursorError::failed(error.to_string()))?;
             xcb.flush()
                 .map_err(|error| CursorError::failed(error.to_string()))
+        }
+
+        /// The server's pointer grab of `window`, confined to it. Confined,
+        /// the pointer moves inside the window's content. Locked, the grab
+        /// shows the blank cursor, the master pointers' raw motion is heard
+        /// on the root window, and each motion of the cursor is put back
+        /// where the lock holds it (`held_in_place`): a warp,
+        /// rather than a confinement to a window of one pixel, whose
+        /// crossing would read as the pointer leaving the window.
+        fn hold_pointer(&self, window: WindowRef, grab: CursorGrab) -> Result<(), PlatformFailure> {
+            self.let_go();
+            let locked = match grab {
+                CursorGrab::None => return Ok(()),
+                CursorGrab::Confined => false,
+                CursorGrab::Locked => true,
+            };
+            let failed = |message: String| PlatformFailure::Failed { message };
+            let cursor = if locked {
+                self.with_state(|state| state.blank_cursor(&self.connection))
+                    .map_err(|error| failed(error.to_string()))?
+            } else {
+                x11rb::NONE
+            };
+            let at = if locked {
+                self.lock_point(window)
+            } else {
+                (0, 0)
+            };
+            let xcb = self.connection.xcb();
+            let answer = xcb
+                .grab_pointer(
+                    true,
+                    window.xid,
+                    EventMask::NO_EVENT,
+                    GrabMode::ASYNC,
+                    GrabMode::ASYNC,
+                    window.xid,
+                    cursor,
+                    x11rb::CURRENT_TIME,
+                )
+                .map_err(|error| failed(error.to_string()))?
+                .reply()
+                .map_err(|error| failed(error.to_string()))?;
+            if answer.status != GrabStatus::SUCCESS {
+                return Err(failed(format!(
+                    "the X server refused the pointer grab: {:?}",
+                    answer.status
+                )));
+            }
+            // The core grab takes the client's pointer, a master.
+            let master = locked
+                .then(|| xcb.xinput_xi_get_client_pointer(window.xid).ok())
+                .flatten()
+                .and_then(|cookie| cookie.reply().ok())
+                .map(|reply| XiMaster(reply.deviceid))
+                .filter(|master| master.0 != 0);
+            self.held.set(Some(Held {
+                window,
+                grab,
+                at,
+                master,
+            }));
+            if locked {
+                self.select_root_events(true);
+                self.warp_to(window.xid, at);
+            }
+            Ok(())
+        }
+
+        fn let_pointer_go(&self, window: WindowRef) {
+            if self.held.get().is_some_and(|held| held.window == window) {
+                self.let_go();
+            }
+        }
+
+        fn pointer_grab(&self, window: WindowRef) -> CursorGrab {
+            self.held
+                .get()
+                .filter(|held| held.window == window)
+                .map_or(CursorGrab::None, |held| held.grab)
         }
 
         fn keyboard_layout(&self) -> String {

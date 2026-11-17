@@ -58,6 +58,22 @@ pub(crate) const fn scene_capabilities() -> WindowCapabilities {
     capabilities.reports_keyboard_inset = WindowCapability::Native;
     capabilities.closes = WindowCapability::Native;
     capabilities.frame_rate_hint = Availability::Native;
+    // An iPad's pointer is locked by a view controller that prefers it
+    // (`prefersPointerLocked`, iPadOS 14), which this host does not answer
+    // yet; UIKit keeps no pointer inside a window short of that.
+    capabilities.locks_cursor = WindowCapability::Absent(CapabilityAbsence::NOT_YET_ON_THIS_HOST);
+    capabilities.confines_cursor =
+        WindowCapability::Absent(CapabilityAbsence::NOT_ON_THIS_PLATFORM);
+    // A scene's window is not stacked among others, and the system sizes it.
+    capabilities.keeps_on_top = WindowCapability::Absent(CapabilityAbsence::NOT_ON_THIS_PLATFORM);
+    capabilities.keeps_on_bottom =
+        WindowCapability::Absent(CapabilityAbsence::NOT_ON_THIS_PLATFORM);
+    capabilities.sets_resize_increments =
+        WindowCapability::Absent(CapabilityAbsence::NOT_ON_THIS_PLATFORM);
+    capabilities.sets_aspect_ratio =
+        WindowCapability::Absent(CapabilityAbsence::NOT_ON_THIS_PLATFORM);
+    // The window sets no pointer shape at all (`pointer_absence`).
+    capabilities.cursor_image = Availability::Unavailable;
     capabilities.into_capabilities()
 }
 
@@ -126,6 +142,22 @@ pub(crate) const fn appkit_window_capabilities(
     // transparent (`fullSizeContentView`), with the traffic lights over it.
     capabilities.app_title_bar = Native;
     capabilities.material = Native;
+    // `NSCursor` takes an image of the application's (`macos::cursor`).
+    capabilities.cursor_image = Availability::Native;
+    // The pointer is held in place by detaching it from the mouse
+    // (`CGAssociateMouseAndMouseCursorPosition`), its motion read from the
+    // mouse events' deltas; AppKit and Quartz keep no pointer inside a
+    // window's area.
+    capabilities.locks_cursor = Native;
+    capabilities.confines_cursor = Absent(CapabilityAbsence::NOT_ON_THIS_PLATFORM);
+    // `NSWindow.level`: the floating level above, one under the normal
+    // level below.
+    capabilities.keeps_on_top = Native;
+    capabilities.keeps_on_bottom = Native;
+    // `contentResizeIncrements` and `contentAspectRatio`, which AppKit holds
+    // the user's resize to.
+    capabilities.sets_resize_increments = Native;
+    capabilities.sets_aspect_ratio = Native;
     capabilities.into_capabilities()
 }
 
@@ -217,6 +249,22 @@ pub(crate) fn activity_capabilities(facts: ActivityFacts) -> WindowCapabilities 
         None => WindowCapability::Absent(CapabilityAbsence::NOT_ON_THIS_DEVICE),
     };
     capabilities.frame_rate_hint = facts.frame_rate_hint;
+    // A view takes the mouse's relative motion through pointer capture
+    // (`View.requestPointerCapture`, API 26), which this host does not ask
+    // for yet; nothing keeps the pointer inside a window short of that.
+    capabilities.locks_cursor = WindowCapability::Absent(CapabilityAbsence::NOT_YET_ON_THIS_HOST);
+    capabilities.confines_cursor =
+        WindowCapability::Absent(CapabilityAbsence::NOT_ON_THIS_PLATFORM);
+    // The system stacks and sizes an Activity's window.
+    capabilities.keeps_on_top = WindowCapability::Absent(CapabilityAbsence::NOT_ON_THIS_PLATFORM);
+    capabilities.keeps_on_bottom =
+        WindowCapability::Absent(CapabilityAbsence::NOT_ON_THIS_PLATFORM);
+    capabilities.sets_resize_increments =
+        WindowCapability::Absent(CapabilityAbsence::NOT_ON_THIS_PLATFORM);
+    capabilities.sets_aspect_ratio =
+        WindowCapability::Absent(CapabilityAbsence::NOT_ON_THIS_PLATFORM);
+    // The window sets no pointer icon at all (`pointer_icon_absence`).
+    capabilities.cursor_image = Availability::Unavailable;
     capabilities.into_capabilities()
 }
 
@@ -303,7 +351,30 @@ mod tests {
         let ios = AppleVersion::new;
         let macos = MacOSVersion::new;
         let api = AndroidApi::from_level;
-        let rows: [(&str, Option<CapabilityAbsence>, Option<CapabilityAbsence>); 24] = [
+        const PLATFORM: CapabilityAbsence = CapabilityAbsence::NOT_ON_THIS_PLATFORM;
+        let rows: [(&str, Option<CapabilityAbsence>, Option<CapabilityAbsence>); 28] = [
+            (
+                "UIKit pointer lock",
+                scene_capabilities().locks_cursor().absence(),
+                Some(HOST),
+            ),
+            (
+                "AppKit pointer lock",
+                appkit_window_capabilities(None).locks_cursor().absence(),
+                None,
+            ),
+            (
+                "AppKit pointer confinement",
+                appkit_window_capabilities(None).confines_cursor().absence(),
+                Some(PLATFORM),
+            ),
+            (
+                "Activity pointer lock",
+                activity_capabilities(activity(26, false))
+                    .locks_cursor()
+                    .absence(),
+                Some(HOST),
+            ),
             (
                 "UIKit material",
                 scene_capabilities().material().absence(),
