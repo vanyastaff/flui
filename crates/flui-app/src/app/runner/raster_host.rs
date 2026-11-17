@@ -1748,6 +1748,11 @@ impl RasterHost {
         let Some(placed) = self.placed.as_mut() else {
             return false;
         };
+        // A dead executor restores nothing: its record may still owe a
+        // surface, which no attempt can make.
+        if placed.sender.health() == flui_engine::ExecutorHealth::Died {
+            return false;
+        }
         let Some(slot) = placed.slots.get(&address) else {
             return false;
         };
@@ -2216,10 +2221,10 @@ impl RasterHost {
         // if a wedged render returns: the window settles them now, as
         // finished with nothing to present, so its UI runtime commits the
         // tree they were painted from and the input held for that commit
-        // replays. The window is quarantined, not closed (ADR-0305 §9): it
-        // takes input against the tree it last painted while it draws
-        // nothing. A settlement the thread still sends for one of them is a
-        // frame the window no longer holds.
+        // replays. The window is quarantined, not closed (ADR-0305 §9): its
+        // frames go on against the current tree while it draws nothing. A
+        // settlement the thread still sends for one of them is a frame the
+        // window no longer holds.
         if died
             && let Some(slot) = placed.slots.get_mut(&address)
             && !slot.pending.is_empty()
@@ -2567,7 +2572,7 @@ impl RasterSlot {
         }
         self.give_back(drained);
         // After the settlements, which commit what a dead executor never
-        // will: the runtime holds its frames from then on.
+        // will: the runtime learns of the death once.
         let _dead = caught.contain(|| self.settle_death(ui_runtime));
         (settled, caught)
     }
