@@ -349,14 +349,14 @@ impl WindowInstall {
         *seen.lock() = Some(seed.clone());
         self.observe(WindowObservation::Snapshot {
             execution: seed.execution,
-            focused: seed.focused,
+            focused: seed.focus.is_focused(),
             visible: seed.is_seen(),
         });
         if let Some(metrics) = seed.metrics {
             self.observe(WindowObservation::Metrics(metrics));
         }
         self.observe(WindowObservation::Insets(seed.insets));
-        self.observe(WindowObservation::Brightness(seed.appearance.into()));
+        self.observe(WindowObservation::Brightness(seed.brightness));
         self.host.displays().follow(dispatcher, &window);
         let display = self.host.displays().derive(window.as_ref());
         self.observe(WindowObservation::Display(display));

@@ -169,7 +169,7 @@ mod cases {
             &window,
             &handler,
             "the window on the output",
-            |_| window.state().visible && window.state().focused,
+            |_| window.state().visible && window.state().focus.is_focused(),
         );
 
         let Some(PlatformInput::Capabilities(capabilities)) = handler.inputs().into_iter().next()
@@ -379,7 +379,7 @@ mod cases {
             &window,
             &handler,
             "the window on the output",
-            |_| window.state().visible && window.state().focused,
+            |_| window.state().visible && window.state().focus.is_focused(),
         );
         handler.react_to_input(|input| {
             if let PlatformInput::Keyboard(key) = &input {
@@ -494,7 +494,7 @@ mod cases {
             &window,
             &handler,
             "the window on the output",
-            |_| window.state().visible && window.state().focused,
+            |_| window.state().visible && window.state().focus.is_focused(),
         );
         let screen = session.screen();
         let (x, root, origin) = (&screen.connection, screen.root, screen.origin);

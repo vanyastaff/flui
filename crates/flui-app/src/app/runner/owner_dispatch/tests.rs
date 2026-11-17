@@ -61,6 +61,18 @@ struct ReentrantIdentityWindow {
 }
 
 impl PlatformWindow for ReentrantIdentityWindow {
+    fn gesture_geometry(
+        &self,
+    ) -> Result<Option<flui_platform::GestureGeometry>, flui_platform::PreferenceQueryError> {
+        Ok(None)
+    }
+
+    fn window_at(&self, _: flui_foundation::geometry::Point<f64>) -> flui_platform::WindowAt {
+        flui_platform::WindowAt::Unknown
+    }
+
+    fn reveal_after_first_frame(&self) {}
+
     fn id(&self) -> flui_platform::WindowId {
         self.queried
             .store(true, std::sync::atomic::Ordering::SeqCst);
@@ -1947,7 +1959,6 @@ fn platform_brightness_follows_the_window_appearance() {
     use super::super::frame_driver::{FrameDriver, TestFrameDriver};
     use flui_native::{HeadlessPlatform, Platform};
     use flui_platform::Brightness;
-    use flui_platform::WindowAppearance;
     use flui_view::prelude::*;
 
     #[derive(Clone, StatelessView)]
@@ -1970,7 +1981,7 @@ fn platform_brightness_follows_the_window_appearance() {
         .expect("headless window")
         .clone();
     // The desktop is already dark when the window opens.
-    native.simulate_appearance(WindowAppearance::Dark);
+    native.simulate_brightness(Brightness::Dark);
     // The window registry owns a live window; this test stands in for it.
     let live = Rc::clone(&window);
     let observed = Rc::new(RefCell::new(Vec::new()));
@@ -2013,7 +2024,7 @@ fn platform_brightness_follows_the_window_appearance() {
         &[Some(Brightness::Dark)],
         "the first build saw a light theme on a dark desktop"
     );
-    native.simulate_appearance(WindowAppearance::Light);
+    native.simulate_brightness(Brightness::Light);
     dispatch_platform_ui_runtime(
         dispatcher,
         RuntimeTask::Frame(frame, flui_native::frame_request_now()),

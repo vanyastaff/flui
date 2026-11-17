@@ -60,7 +60,8 @@ impl SlotPhase {
     }
 }
 
-/// Why a slot failed: the first failure since the owner last took one.
+/// Why a slot failed since the owner last took a failure: the first one, or
+/// the first panic in place of a refusal held before it.
 #[non_exhaustive]
 pub enum SlotFailure {
     /// The backend refused a command on the slot: its attach, a restore, a
@@ -127,6 +128,9 @@ pub(crate) struct InboxState {
     pub(crate) settlements: VecDeque<SlotSettlement>,
     pub(crate) phase: SlotPhase,
     pub(crate) failure: Option<SlotFailure>,
+    /// Whether a panic of the slot was held since its last settlement and
+    /// the owner has not taken it.
+    pub(crate) panicked: bool,
 }
 
 /// A slot's inbox, shared by its owner and the executor.
@@ -159,6 +163,7 @@ impl SlotInbox {
                 settlements: VecDeque::with_capacity(depth),
                 phase: SlotPhase::Attaching,
                 failure: None,
+                panicked: false,
             }),
         }
     }
@@ -207,7 +212,10 @@ impl Drop for InboxState {
 }
 
 impl InboxState {
-    /// Settle `frame` (the one the executor took): one fewer in flight.
+    /// Settle `frame` (the one the executor took): one fewer in flight. The
+    /// settlement is marked when a panic of the slot was held since its last
+    /// one: the owner tells the frame a slot's panic came with however late
+    /// it drains.
     pub(crate) fn settle(&mut self, frame: &SceneSnapshot, verdict: RasterVerdict) {
         debug_assert!(self.in_flight > 0, "BUG: a settled frame was in flight");
         self.in_flight = self.in_flight.saturating_sub(1);
@@ -215,18 +223,25 @@ impl InboxState {
             address: frame.stamp.address,
             epoch: frame.stamp.epoch,
             verdict,
+            panicked: std::mem::take(&mut self.panicked),
         });
     }
 
-    /// Keep `failure` if none is held; hand it back otherwise, for the caller
-    /// to discard once the lock is released.
+    /// Keep `failure` if none is held, or in place of a held refusal when it
+    /// is a panic, whose payload the owner reports; hand back the one not
+    /// kept, for the caller to discard once the lock is released. A panic
+    /// marks the slot's next settlement, kept or not.
     #[must_use]
     pub(crate) fn hold_failure(&mut self, failure: SlotFailure) -> Option<SlotFailure> {
-        if self.failure.is_none() {
-            self.failure = Some(failure);
-            None
-        } else {
-            Some(failure)
+        let panic = matches!(failure, SlotFailure::Panicked(_));
+        self.panicked |= panic;
+        match &self.failure {
+            None => {
+                self.failure = Some(failure);
+                None
+            }
+            Some(SlotFailure::Refused(_)) if panic => self.failure.replace(failure),
+            Some(_) => Some(failure),
         }
     }
 }

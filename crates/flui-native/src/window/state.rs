@@ -9,8 +9,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use flui_foundation::geometry::WindowMetrics;
 use flui_platform::{
-    InvalidGeometry, PublicationMint, WindowAppearance, WindowCapabilities, WindowExecutionState,
-    WindowExtent, WindowGeometry, WindowInsets, WindowInteraction, WindowMode, WindowRevision,
+    InvalidGeometry, PublicationMint, WindowCapabilities, WindowExecutionState, WindowExtent,
+    WindowFocus, WindowGeometry, WindowInsets, WindowInteraction, WindowMode, WindowRevision,
     WindowState,
 };
 use parking_lot::Mutex;
@@ -26,7 +26,7 @@ pub(crate) struct ReportedFacts {
     /// The drawable area and scale; `None` for a report that is not one.
     pub(crate) metrics: Option<WindowMetrics>,
     /// The user's theme as applied to the window (ADR-0222).
-    pub(crate) appearance: WindowAppearance,
+    pub(crate) brightness: flui_platform::Brightness,
     /// The safe area, the soft keyboard and the system-gesture edges, in
     /// logical pixels (ADR-0277).
     pub(crate) insets: WindowInsets,
@@ -38,9 +38,10 @@ pub(crate) struct ReportedFacts {
     pub(crate) occluded: bool,
     /// What the last hover report said.
     pub(crate) hovered: bool,
-    /// Whether the window is the active window of its desktop; its focus where
-    /// the window system has no notion apart from it.
-    pub(crate) active: bool,
+    /// Whether the window is the active window of its desktop and holds the
+    /// keyboard, read through `WindowFocus::reported` where the window system
+    /// reports the two apart.
+    pub(crate) focus: WindowFocus,
     /// What the window honours now.
     pub(crate) capabilities: WindowCapabilities,
     /// Whether the user is placing the window through the window system, as
@@ -54,12 +55,12 @@ impl ReportedFacts {
     pub(crate) fn onto(self, state: WindowState) -> WindowState {
         state
             .with_metrics(self.metrics)
-            .with_appearance(self.appearance)
+            .with_brightness(self.brightness)
             .with_insets(self.insets)
             .with_execution(self.execution)
             .with_occluded(self.occluded)
             .with_hovered(self.hovered)
-            .with_active(self.active)
+            .with_focus(self.focus)
             .with_capabilities(self.capabilities)
             .with_interaction(self.interaction)
     }
@@ -895,7 +896,9 @@ mod tests {
                 content: extent,
                 normal: None,
             });
-        Sample::read(geometry, |state| state.with_focused(focused))
+        Sample::read(geometry, |state| {
+            state.with_focus(flui_platform::WindowFocus::reported(focused, focused))
+        })
     }
 
     fn state(width: f64) -> Sample {
@@ -945,7 +948,7 @@ mod tests {
         cell.invalidate();
         let focused = cell.state_with(|| read(f64::NAN, true));
         assert!(focused.changed, "the focus is published");
-        assert!(focused.state.focused);
+        assert!(focused.state.focus.is_focused());
         assert_eq!(focused.state.outer, first.state.outer);
         assert_eq!(focused.state.content_size, first.state.content_size);
         assert_eq!(focused.state.metrics, first.state.metrics);
@@ -984,7 +987,9 @@ mod tests {
         cell.invalidate();
         let refused = cell.state_with(|| {
             read_as(f64::NAN, |state| {
-                state.with_metrics(Some(metrics(2.0))).with_focused(true)
+                state
+                    .with_metrics(Some(metrics(2.0)))
+                    .with_focus(flui_platform::WindowFocus::Focused)
             })
         });
         assert!(refused.changed, "the focus is published");
@@ -1133,7 +1138,7 @@ mod tests {
         let cell = WindowStateCell::open(read(f64::NAN, true));
         let opened = cell.last.lock().state.clone();
         assert_eq!(opened.outer, WindowGeometry::EMPTY);
-        assert!(opened.focused);
+        assert!(opened.focus.is_focused());
         assert!(cell.last.lock().unreported_refusal.is_some());
     }
 
@@ -1296,7 +1301,10 @@ mod tests {
         );
         cell.invalidate();
         let focused = cell.read(&delivery, || read(1.0, true));
-        assert!(focused.focused, "not frozen: the focus publishes");
+        assert!(
+            focused.focus.is_focused(),
+            "not frozen: the focus publishes"
+        );
         assert!(focused.capabilities.is_withdrawn(), "withdrawn for good");
         assert!(
             !cell.last.lock().unreported_withdrawal,
@@ -1317,12 +1325,12 @@ mod tests {
             .successor_from(
                 window(1.0)
                     .with_capabilities(WindowCapabilities::NONE)
-                    .with_focused(true),
+                    .with_focus(flui_platform::WindowFocus::Focused),
                 EXHAUSTED,
             )
             .expect("a revision is left");
         assert!(next.capabilities.is_withdrawn());
-        assert!(next.focused, "the other facts publish");
+        assert!(next.focus.is_focused(), "the other facts publish");
         assert_eq!(
             WindowCommand::Hide.admit(&next.capabilities),
             Err(AdmissionError::Unpublished)

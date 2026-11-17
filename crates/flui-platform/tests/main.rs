@@ -40,6 +40,8 @@ mod window_geometry;
 #[path = "unsupported.rs"]
 mod unsupported;
 
+// `NoNativeSurface` is a testing item, compiled only with the feature.
+#[cfg(feature = "testing")]
 #[path = "surface_target.rs"]
 mod surface_target;
 

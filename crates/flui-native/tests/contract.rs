@@ -137,7 +137,7 @@ fn test_window_lifecycle_contract() {
             );
 
             // Contract 7: Window focus API
-            let is_focused = window.state().focused;
+            let is_focused = window.state().focus.is_focused();
             tracing::info!("Window focus: {}", is_focused);
 
             // Contract 8: request_redraw() must not panic
@@ -2888,15 +2888,14 @@ mod native_windows {
     )]
     fn appearance_is_the_theme_the_chrome_follows_not_the_chrome_flag() {
         use flui_platform::Brightness;
-        use flui_platform::WindowAppearance;
         use windows::Win32::Graphics::Dwm::{DWMWINDOWATTRIBUTE, DwmSetWindowAttribute};
         use windows::Win32::UI::WindowsAndMessaging::WM_SETTINGCHANGE;
 
         let platform = WindowsPlatform::try_new().expect("native Windows platform");
         let window = open(&platform, true);
         let hwnd = hwnd_of(&window);
-        let reported: WindowAppearance = window.state().appearance;
-        let dark = Brightness::from(reported).is_dark();
+        let reported: Brightness = window.state().brightness;
+        let dark = reported.is_dark();
         assert_eq!(
             chrome_is_dark(hwnd),
             dark,
@@ -2918,7 +2917,7 @@ mod native_windows {
         }
         .expect("invert the dark title-bar flag");
         assert_eq!(
-            window.state().appearance,
+            window.state().brightness,
             reported,
             "read back the chrome flag"
         );

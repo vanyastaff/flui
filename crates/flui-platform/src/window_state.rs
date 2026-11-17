@@ -35,9 +35,8 @@ use flui_foundation::geometry::{Point, Size, WindowMetrics};
 
 use crate::window_capabilities::Publication;
 use crate::{
-    CapabilityParts, DisplayId, InvalidGeometry, Unsupported, WindowAppearance, WindowCapabilities,
-    WindowCapability, WindowExecutionState, WindowExtent, WindowFrame, WindowGeometry,
-    WindowInsets,
+    CapabilityParts, DisplayId, InvalidGeometry, Unsupported, WindowCapabilities, WindowCapability,
+    WindowExecutionState, WindowExtent, WindowFrame, WindowGeometry, WindowInsets,
 };
 
 /// The monotone version of a [`WindowState`]. Never wraps.
@@ -191,6 +190,60 @@ pub enum WindowInteraction {
     UserPlacing,
 }
 
+/// Where a window stands in its desktop's input: whether it is the active
+/// window and whether it holds the keyboard itself, as one fact.
+///
+/// Focus implies activation, so a window that holds the keyboard and is not
+/// active is not a value of this type. A window system that reports the two
+/// apart may report them out of step for a moment (Win32 deactivates a window
+/// before it takes the focus away; an X11 window manager updates
+/// `_NET_ACTIVE_WINDOW` after the focus moved): [`Self::reported`] is the one
+/// rule every host reads such a pair through.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a window is inactive, active, or active with the keyboard; there is no fourth standing"
+)]
+pub enum WindowFocus {
+    /// Another window is the active one, or none is.
+    #[default]
+    Inactive,
+    /// The active window of its desktop, the one the user works in, with the
+    /// keyboard held by a window it owns (a Win32 window whose owned popup has
+    /// the focus).
+    Active,
+    /// The active window, holding the keyboard itself.
+    Focused,
+}
+
+impl WindowFocus {
+    /// The standing a window system's two reports describe: the keyboard
+    /// focus wins, since the window that receives the keys is the one the
+    /// user works in, and a window system with no notion of activation apart
+    /// from focus passes its focus as both.
+    #[must_use]
+    pub const fn reported(focused: bool, active: bool) -> Self {
+        match (focused, active) {
+            (true, _) => Self::Focused,
+            (false, true) => Self::Active,
+            (false, false) => Self::Inactive,
+        }
+    }
+
+    /// Whether the window holds the keyboard itself.
+    #[must_use]
+    pub const fn is_focused(self) -> bool {
+        matches!(self, Self::Focused)
+    }
+
+    /// Whether the window is the active window of its desktop, holding the
+    /// keyboard itself or through a window it owns.
+    #[must_use]
+    pub const fn is_active(self) -> bool {
+        !matches!(self, Self::Inactive)
+    }
+}
+
 /// What the operating system reports about one window, at one revision.
 ///
 /// Built with [`new`](Self::new) and the `with_*` methods so a field can be
@@ -226,8 +279,10 @@ pub struct WindowState {
     /// not tell, and always `false` for a hidden or minimized window, which
     /// [`successor`](Self::successor) holds: those are their own facts.
     pub occluded: bool,
-    /// Whether the window has input focus.
-    pub focused: bool,
+    /// Whether the window is the active window of its desktop and whether it
+    /// holds the keyboard itself. Always [`WindowFocus::Inactive`] for a
+    /// hidden window, which [`successor`](Self::successor) holds.
+    pub focus: WindowFocus,
     /// The title; `None` where the OS has no window title.
     pub title: Option<String>,
     /// The inner-size limits the OS enforces.
@@ -246,11 +301,13 @@ pub struct WindowState {
     /// that is not finite and positive) is never published:
     /// [`successor`](Self::successor) keeps the metrics before it.
     pub metrics: Option<WindowMetrics>,
-    /// The light/dark appearance the system applies to the window: the user's
-    /// theme as applied to it, never one the backend chose for its own chrome
-    /// (ADR-0222). A backend that cannot observe the theme reports
-    /// [`WindowAppearance::Light`].
-    pub appearance: WindowAppearance,
+    /// Whether the theme the system applies to the window is light or dark:
+    /// the user's theme as applied to it, never one the backend chose for its
+    /// own chrome (ADR-0222). A backend that cannot observe the theme reports
+    /// [`Brightness::Light`](crate::Brightness::Light). What the window system
+    /// draws behind the content is its material, not its theme
+    /// ([`WindowCommand::SetMaterial`]).
+    pub brightness: crate::Brightness,
     /// Where the content is covered or contested: the safe area, the soft
     /// keyboard and its motion, and the system-gesture edges (ADR-0277).
     /// Zero where the platform reports none; whether a window reports the
@@ -262,12 +319,6 @@ pub struct WindowState {
     pub execution: WindowExecutionState,
     /// Whether the pointer is over the window's content.
     pub hovered: bool,
-    /// Whether the window is the active window of its desktop: the one the
-    /// user works in, holding the keyboard itself or through a window it owns
-    /// (a Win32 window whose owned popup has the focus is active and not
-    /// focused). Where the window system has no notion apart from focus, it
-    /// is the focus.
-    pub active: bool,
     /// Whether the user is placing the window through the window system
     /// right now ([`WindowInteraction`]); [`WindowInteraction::Unknown`] where
     /// the host cannot tell.
@@ -278,9 +329,9 @@ pub struct WindowState {
 }
 
 impl WindowState {
-    /// A visible, unoccluded, unfocused, inactive, unhovered, running, resizable,
+    /// A visible, unoccluded, inactive, unhovered, running, resizable,
     /// system-framed window in normal mode at revision zero, with no title, limits, display,
-    /// metrics or insets, the light appearance, an interaction the host cannot
+    /// metrics or insets, a light theme, an interaction the host cannot
     /// tell, and capabilities that honour nothing.
     #[must_use]
     pub fn new(outer: WindowGeometry, content_size: WindowExtent) -> Self {
@@ -292,18 +343,17 @@ impl WindowState {
             normal_geometry: None,
             visible: true,
             occluded: false,
-            focused: false,
+            focus: WindowFocus::Inactive,
             title: None,
             constraints: SizeConstraints::NONE,
             resizable: true,
             frame: WindowFrame::System,
             display: None,
             metrics: None,
-            appearance: WindowAppearance::Light,
+            brightness: crate::Brightness::Light,
             insets: WindowInsets::ZERO,
             execution: WindowExecutionState::Running,
             hovered: false,
-            active: false,
             interaction: WindowInteraction::Unknown,
             capabilities: WindowCapabilities::NONE,
         }
@@ -338,10 +388,10 @@ impl WindowState {
         self
     }
 
-    /// Set whether the window has input focus.
+    /// Set whether the window is active and whether it holds the keyboard.
     #[must_use]
-    pub fn with_focused(mut self, focused: bool) -> Self {
-        self.focused = focused;
+    pub fn with_focus(mut self, focus: WindowFocus) -> Self {
+        self.focus = focus;
         self
     }
 
@@ -388,10 +438,10 @@ impl WindowState {
         self
     }
 
-    /// Set the appearance the system applies to the window.
+    /// Set whether the theme the system applies to the window is light or dark.
     #[must_use]
-    pub fn with_appearance(mut self, appearance: WindowAppearance) -> Self {
-        self.appearance = appearance;
+    pub fn with_brightness(mut self, brightness: crate::Brightness) -> Self {
+        self.brightness = brightness;
         self
     }
 
@@ -423,13 +473,6 @@ impl WindowState {
         self
     }
 
-    /// Set whether the window is the active window of its desktop.
-    #[must_use]
-    pub fn with_active(mut self, active: bool) -> Self {
-        self.active = active;
-        self
-    }
-
     /// Set which commands the window honours.
     #[must_use]
     pub fn with_capabilities(mut self, capabilities: WindowCapabilities) -> Self {
@@ -455,7 +498,9 @@ impl WindowState {
     /// a drawable area is never published. A sample of a hidden or minimized
     /// window is not [`occluded`](Self::occluded), whatever the window system
     /// said: AppKit calls a miniaturized window occluded, which is no
-    /// covering, and a hidden window has nothing to cover.
+    /// covering, and a hidden window has nothing to cover. Nor is a sample of
+    /// a hidden window active or focused ([`WindowFocus::Inactive`]): the user
+    /// cannot work in a window that is not shown.
     ///
     /// The capabilities' publication and their own
     /// [`revision`](WindowCapabilities::revision) are this function's to
@@ -496,6 +541,9 @@ impl WindowState {
             sample.metrics = self.metrics;
         }
         sample.occluded &= sample.visible && sample.mode != WindowMode::Minimized;
+        if !sample.visible {
+            sample.focus = WindowFocus::Inactive;
+        }
         if sample == *self {
             return Ok(sample);
         }
@@ -772,11 +820,15 @@ pub enum ApplyError {
     Platform(PlatformFailure),
 }
 
-/// What the window system said of a command it did not carry out.
+/// What the window system said of a request of a window it did not carry
+/// out: a command ([`ApplyError::Platform`]), a cursor
+/// ([`CursorError::Platform`](crate::CursorError::Platform)) or a preference
+/// query ([`PreferenceQueryError::Platform`](crate::PreferenceQueryError::Platform)).
+/// It is the one shape of that refusal, so a caller matches one type.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum PlatformFailure {
-    /// A number the command carries, finite and positive as admission holds
+    /// A number the request carries, finite and positive as admission holds
     /// it, is beyond what the window system can represent (Win32's device
     /// pixels at the window's scale).
     #[error("a value is beyond what the window system can represent")]
@@ -894,8 +946,8 @@ pub struct WindowStateParts {
     pub visible: bool,
     /// [`WindowState::occluded`].
     pub occluded: bool,
-    /// [`WindowState::focused`].
-    pub focused: bool,
+    /// [`WindowState::focus`].
+    pub focus: WindowFocus,
     /// [`WindowState::title`].
     pub title: Option<String>,
     /// [`WindowState::constraints`].
@@ -908,16 +960,14 @@ pub struct WindowStateParts {
     pub display: Option<DisplayId>,
     /// [`WindowState::metrics`].
     pub metrics: Option<WindowMetrics>,
-    /// [`WindowState::appearance`].
-    pub appearance: WindowAppearance,
+    /// [`WindowState::brightness`].
+    pub brightness: crate::Brightness,
     /// [`WindowState::insets`].
     pub insets: WindowInsets,
     /// [`WindowState::execution`].
     pub execution: WindowExecutionState,
     /// [`WindowState::hovered`].
     pub hovered: bool,
-    /// [`WindowState::active`].
-    pub active: bool,
     /// [`WindowState::interaction`].
     pub interaction: WindowInteraction,
     /// [`WindowState::capabilities`], taken apart.
@@ -936,18 +986,17 @@ impl WindowState {
             normal_geometry,
             visible,
             occluded,
-            focused,
+            focus,
             title,
             constraints,
             resizable,
             frame,
             display,
             metrics,
-            appearance,
+            brightness,
             insets,
             execution,
             hovered,
-            active,
             interaction,
             capabilities,
         } = self;
@@ -958,18 +1007,17 @@ impl WindowState {
             normal_geometry,
             visible,
             occluded,
-            focused,
+            focus,
             title,
             constraints,
             resizable,
             frame,
             display,
             metrics,
-            appearance,
+            brightness,
             insets,
             execution,
             hovered,
-            active,
             interaction,
             capabilities: capabilities.into_parts(),
         }
@@ -989,18 +1037,17 @@ impl WindowStateParts {
             normal_geometry,
             visible,
             occluded,
-            focused,
+            focus,
             title,
             constraints,
             resizable,
             frame,
             display,
             metrics,
-            appearance,
+            brightness,
             insets,
             execution,
             hovered,
-            active,
             interaction,
             capabilities,
         } = self;
@@ -1012,18 +1059,17 @@ impl WindowStateParts {
             normal_geometry,
             visible,
             occluded,
-            focused,
+            focus,
             title,
             constraints,
             resizable,
             frame,
             display,
             metrics,
-            appearance,
+            brightness,
             insets,
             execution,
             hovered,
-            active,
             interaction,
             capabilities: capabilities.into_capabilities(),
         }

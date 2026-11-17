@@ -74,8 +74,8 @@ use crate::window::state::{ReportedFacts, Sample, SampledGeometry, WindowStateCe
 use crate::{BootstrapError, PlatformError, PlatformProxy};
 use flui_foundation::geometry::{EdgeInsets, Size};
 use flui_platform::{
-    AdmittedCommand, ApplyError, WindowAppearance, WindowCapabilities, WindowCommand,
-    WindowGeometry, WindowState,
+    AdmittedCommand, ApplyError, Brightness, WindowCapabilities, WindowCommand, WindowGeometry,
+    WindowState,
 };
 use flui_platform::{
     CursorError, PlatformWindow, RedrawRequester, SurfaceChange, SurfaceTarget,
@@ -1480,7 +1480,6 @@ impl IOSWindow {
                 // A scene cannot hide its window; in the background the system
                 // keeps it from the screen, which is its occlusion.
                 .with_visible(!closed)
-                .with_focused(focused)
                 .with_resizable(false)
                 .with_frame(flui_platform::WindowFrame::None)
                 .with_display(self.screen.lock().id);
@@ -1490,17 +1489,17 @@ impl IOSWindow {
                     metrics.scale.get(),
                 )
                 .ok(),
-                appearance: if self.dark.load(Ordering::Relaxed) {
-                    WindowAppearance::Dark
+                brightness: if self.dark.load(Ordering::Relaxed) {
+                    Brightness::Dark
                 } else {
-                    WindowAppearance::Light
+                    Brightness::Light
                 },
                 insets: safe_area.with_keyboard(metrics.keyboard),
                 execution: self.execution_now(),
                 occluded: !foreground,
                 hovered: self.delivery.hovered(),
                 // A scene has no activation apart from its focus.
-                active: focused,
+                focus: flui_platform::WindowFocus::reported(focused, focused),
                 capabilities: scene_capabilities(),
                 // The user can resize a scene in Stage Manager or split view,
                 // which this host does not read: it cannot tell.
@@ -1753,6 +1752,22 @@ impl PlatformWindow for IOSWindow {
     fn id(&self) -> WindowId {
         self.id
     }
+
+    /// UIKit's gesture distances are not read yet; the consumer keeps its
+    /// own.
+    fn gesture_geometry(
+        &self,
+    ) -> Result<Option<flui_platform::GestureGeometry>, flui_platform::PreferenceQueryError> {
+        Ok(None)
+    }
+
+    /// A scene's window shares no desktop with other windows of the process.
+    fn window_at(&self, _: flui_foundation::geometry::Point<f64>) -> flui_platform::WindowAt {
+        flui_platform::WindowAt::Unknown
+    }
+
+    /// The scene shows its window when it opens; there is no reveal to defer.
+    fn reveal_after_first_frame(&self) {}
 
     /// Ask for a frame.
     ///

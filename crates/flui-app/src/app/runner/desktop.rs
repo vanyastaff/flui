@@ -9,7 +9,8 @@ use std::sync::Arc;
 
 use super::first_reveal::FirstReveal;
 use super::frame_pacing::{
-    FallbackWake, WakeAction, frame_is_dirty, keeps_frame_gate_open, wake_action,
+    AfterPump, FallbackWake, WakeAction, after_pump, frame_is_dirty, keeps_frame_gate_open,
+    wake_action,
 };
 use super::host::{APP_RUNTIME, desktop_secondary_wake_deadline, merge_wake_deadlines};
 use super::owner_dispatch::{
@@ -17,7 +18,7 @@ use super::owner_dispatch::{
     prepare_ui_runtime_alongside,
 };
 use super::placement::RememberedPlacement;
-use super::raster_host::RasterSlot;
+use super::raster_host::{RasterSlot, ThreadSettled};
 use super::window_routes::WindowRoutes;
 use crate::app::AppConfig;
 
@@ -505,7 +506,67 @@ impl DesktopFrameDriver {
         );
     }
 
+    /// Show the window its first frame was deferred for.
+    fn reveal(&self) {
+        if let Some(window) = self.reveal_window.upgrade() {
+            window.reveal_after_first_frame();
+            // What the run registers with Windows waits for its first frame
+            // shown, so it never competes with the start.
+            #[cfg(windows)]
+            super::associations::start_pending();
+        }
+    }
+
+    /// A frame of the window presented at `at`, settled after the wake that
+    /// submitted it: the first reveals the window, and the pacing fallback
+    /// stands down, as for a frame that presented within its wake.
+    fn after_presented(&self, at: web_time::Instant) {
+        // The present is recorded before the reveal runs platform code, so
+        // a panic there leaves the pacing it paced.
+        self.deadlines.fallback.record_present(at);
+        if self.deadlines.first_reveal.after_frame(true, at) {
+            self.reveal();
+        }
+    }
+
     pub(super) fn wake(
+        &mut self,
+        ui_runtime: &mut crate::app::ui_runtime::UiRuntime,
+        presentation: flui_foundation::PresentationId,
+    ) {
+        // What a raster thread finished since the last wake settles first,
+        // whatever this wake goes on to do: a settled frame frees its place,
+        // which the gate below reads, and its failure arms the runtime's
+        // retry (ADR-0305 §4). What the frames became paces the window and
+        // counts toward its first reveal as a frame of this wake does. A
+        // panic of the code the settlements ran is this window's: the rest
+        // of the wake runs, then it resumes here.
+        let (settled, mut caught) = self.raster.settle(ui_runtime);
+        // The reveal runs platform code: contained on its own, so a panic
+        // there neither drops the settlements' first one nor skips the
+        // wake's frame.
+        let _paced = caught.contain(|| self.after_settled(settled, web_time::Instant::now()));
+        let _ran = caught.contain(|| self.turn(ui_runtime, presentation));
+        caught.resume();
+    }
+
+    /// Pace the window on what its frames a raster thread finished became,
+    /// as on a frame of the wake itself.
+    fn after_settled(&self, settled: ThreadSettled, at: web_time::Instant) {
+        match settled {
+            ThreadSettled::Nothing => {}
+            ThreadSettled::Presented => self.after_presented(at),
+            ThreadSettled::NotPresented => {
+                if self.deadlines.first_reveal.after_frame(false, at) {
+                    self.reveal();
+                }
+            }
+        }
+    }
+
+    /// The wake past its settlements: the gate, then the frame and its
+    /// pacing.
+    fn turn(
         &mut self,
         ui_runtime: &mut crate::app::ui_runtime::UiRuntime,
         presentation: flui_foundation::PresentationId,
@@ -520,7 +581,6 @@ impl DesktopFrameDriver {
         let worker_reload_frame = &self.worker_reload;
         let fallback = &self.deadlines.fallback;
         let first_reveal = &self.deadlines.first_reveal;
-        let reveal_window = &self.reveal_window;
         // The gate half of the wake runs inside one ui_runtime entry and
         // decides; the pump below enters the ui_runtime itself.
         let raster_deadline = self.raster.frame_deadline();
@@ -582,7 +642,12 @@ impl DesktopFrameDriver {
             self.raster.show(action == WakeAction::Render);
         }
         match action {
-            WakeAction::Skip => return,
+            WakeAction::Skip => {
+                // What the wake's settlements left of a GPU panic of a frame
+                // the raster thread finished is reported though no frame runs.
+                self.raster.report_frame_panic(ui_runtime);
+                return;
+            }
             WakeAction::PumpBackground => {
                 // Frames disabled (Hidden/Paused/Detached): service owner
                 // commands, async tasks, and input deadlines without a visual
@@ -616,29 +681,30 @@ impl DesktopFrameDriver {
         let pace_now = web_time::Instant::now();
         // The deferred first reveal: handed to the window on the first
         // presented frame, or at the fallback bound after a frame that ran
-        // and presented nothing (`FirstReveal`).
-        if first_reveal.after_frame(presented, pace_now)
-            && let Some(window) = reveal_window.upgrade()
-        {
-            window.reveal_after_first_frame();
-            // What the run registers with Windows waits for its first frame
-            // shown, so it never competes with the start.
-            #[cfg(windows)]
-            super::associations::start_pending();
-        }
-        if presented {
-            fallback.record_present(pace_now);
-        } else if keeps_gate_open {
-            let deadline =
-                self.deadlines
-                    .defer_after_no_present(ui_runtime, presentation, pace_now);
-            tracing::trace!(
-                target: "flui.pace",
-                event = "fallback_armed",
-                in_us = deadline.saturating_duration_since(pace_now).as_micros() as u64,
-                "frame presented nothing with the gate open; deferring the next \
-                 ticker wake"
-            );
+        // and presented nothing (`FirstReveal`). A frame a raster thread
+        // still holds is neither: its settlement wakes and paces the window.
+        match after_pump(presented, self.raster.has_pending(), keeps_gate_open) {
+            AfterPump::Presented => self.after_presented(pace_now),
+            AfterPump::Held => {}
+            AfterPump::NotPresented { defer } => {
+                if defer {
+                    let deadline =
+                        self.deadlines
+                            .defer_after_no_present(ui_runtime, presentation, pace_now);
+                    tracing::trace!(
+                        target: "flui.pace",
+                        event = "fallback_armed",
+                        in_us = deadline.saturating_duration_since(pace_now).as_micros() as u64,
+                        "frame presented nothing with the gate open; deferring the next \
+                         ticker wake"
+                    );
+                }
+                // The reveal runs platform code: after the deferral is
+                // armed, so a panic there leaves the wake paced.
+                if first_reveal.after_frame(false, pace_now) {
+                    self.reveal();
+                }
+            }
         }
     }
 }

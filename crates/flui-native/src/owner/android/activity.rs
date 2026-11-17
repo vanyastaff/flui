@@ -13,7 +13,7 @@ use jni::{JavaVM, objects::JObject, refs::Global};
 /// borrow. A query that fails leaves no pending Java exception behind.
 ///
 /// # Errors
-/// [`PreferenceQueryError::Native`] when the thread cannot attach or the query
+/// [`PreferenceQueryError::Platform`] when the thread cannot attach or the query
 /// fails.
 #[expect(
     unsafe_code,
@@ -38,7 +38,5 @@ pub(crate) fn with_activity<T>(
         }
         result
     })
-    .map_err(|error| PreferenceQueryError::Native {
-        message: error.to_string(),
-    })
+    .map_err(|error| PreferenceQueryError::failed(error.to_string()))
 }

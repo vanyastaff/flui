@@ -549,9 +549,9 @@ pub mod decode {
         /// is described by `query`, which asks the server for that one
         /// device; `None` when it lists no enabled pointer by that id.
         ///
-        /// A change asks at most [`MAX_DEVICES`] times however many devices
+        /// A change asks at most `MAX_DEVICES` (128) times however many devices
         /// it names, and never for a device it could not know: once
-        /// [`MAX_DEVICES`] are known, only those are asked about again.
+        /// `MAX_DEVICES` are known, only those are asked about again.
         pub fn hierarchy(
             &mut self,
             change: &[HierarchyInfo],
@@ -2419,7 +2419,7 @@ mod live {
                     return Ok(*loaded);
                 }
                 let Some(handle) = state.cursors.as_ref() else {
-                    return Err(CursorError::Backend(
+                    return Err(CursorError::failed(
                         "the X server's cursors cannot be loaded".into(),
                     ));
                 };
@@ -2434,11 +2434,11 @@ mod live {
                             break;
                         }
                         Ok(_) => {}
-                        Err(error) => return Err(CursorError::Backend(error.to_string())),
+                        Err(error) => return Err(CursorError::failed(error.to_string())),
                     }
                 }
                 if loaded == x11rb::NONE {
-                    return Err(CursorError::Backend(format!(
+                    return Err(CursorError::failed(format!(
                         "the cursor theme has no {cursor:?} cursor"
                     )));
                 }
@@ -2449,9 +2449,9 @@ mod live {
                 window.xid,
                 &ChangeWindowAttributesAux::new().cursor(loaded),
             )
-            .map_err(|error| CursorError::Backend(error.to_string()))?;
+            .map_err(|error| CursorError::failed(error.to_string()))?;
             xcb.flush()
-                .map_err(|error| CursorError::Backend(error.to_string()))
+                .map_err(|error| CursorError::failed(error.to_string()))
         }
 
         fn keyboard_layout(&self) -> String {

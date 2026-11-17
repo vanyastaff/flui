@@ -1094,12 +1094,15 @@ where
                 let ingress = Ingress::new(proxy, startup == StartupWindow::Open);
                 let handle = ingress.handle();
                 install_owner_platform(owner)?;
+                // Read with the loop's state free: an unknown value is logged.
+                let placement = super::raster_host::desktop_placement();
                 APP_RUNTIME.with(|slot| {
                     let mut runtime = slot.borrow_mut();
                     runtime.main_ingress = Some(Arc::clone(&ingress));
                     runtime.capabilities = Some(registry);
                     runtime.main_host_lifecycle = flui_scheduler::AppLifecycleState::Resumed;
-                    runtime.raster_host = super::raster_host::SharedRasterHost::new(renderers);
+                    runtime.raster_host =
+                        super::raster_host::SharedRasterHost::new(renderers, placement);
                     runtime.reopen_lifecycles();
                     runtime.ensure_execution();
                 });
@@ -1116,6 +1119,14 @@ where
                     reopen
                         .upgrade()
                         .is_some_and(|ingress| ingress.request_native_show())
+                });
+                let asked = Arc::downgrade(&ingress);
+                super::host::route_quit_asked(move || {
+                    asked
+                        .upgrade()
+                        .map_or(flui_native::QuitAnswer::Quit, |ingress| {
+                            ingress.platform_quit_asked()
+                        })
                 });
                 // The driver agent (ADR-0239), beside the application's own hooks,
                 // when launched with an endpoint; a driver that goes under

@@ -927,7 +927,7 @@ trait depends on `flui-platform` instead.
   host `Unknown` ([gaps](../../docs/gaps.md#only-win32-says-when-the-user-places-a-window-and-not-for-every-placement)).
 - **The application's handler is passed to `run` (ADR-0254 §4).**
   `AppHandler` (in `platform.rs`) has one method per obligation:
-  `ready(OwnerPlatform)`, `quit_requested`, `reopen`, `session_end`,
+  `ready(OwnerPlatform)`, `quit_requested`, `quit_asked`, `reopen`, `session_end`,
   `host_notice`, `exit_policy`, `wake_deadline` and `turn_deadline`, each
   borrowing the owner capability. Every loop keeps one `owner::app_delivery::AppDelivery`, which
   its sources report to from construction on: `run` binds the handler on the
@@ -939,7 +939,7 @@ trait depends on `flui-platform` instead.
   another method runs, or on another thread, it waits and is delivered in
   order on the owner thread (an owner turn of the loop's signal for a report
   from another thread); the quit is heard once per run. A question (session
-  end, exit policy, wake deadline) is asked at once, re-entrantly if need be,
+  end, quit, exit policy, wake deadline) is asked at once, re-entrantly if need be,
   and a report it raises is delivered right after its answer; the answer is
   kept beside the panic of a report delivered after it (`Asked`), and that
   panic takes the path the same report's takes delivered alone, whether or
@@ -982,6 +982,21 @@ trait depends on `flui-platform` instead.
   is replaced" of `handlers_run_outside_every_lock_of_the_headless_platform`,
   `tests/app_handler.rs::app_handler_obligation_table` and the application
   rows of `tests/handler_reentry.rs`.
+- **A quit the user asks for is the application's to decide; a phone holds
+  its background for its writes (ADR-0350).** AppKit cancels
+  `applicationShouldTerminate:` for a quit outside a session end and asks
+  `AppHandler::quit_asked` in a task of its own on the owner lane: `Quit`
+  stops the loop in order, `KeepRunning` leaves every window and its handler
+  as they were. A handler that panics answers `KeepRunning`
+  (`AppDelivery::quit_asked`), no handler `Quit`. The headless host asks when
+  a test reports one (`HeadlessHostEvents::quit`); Win32, X11 and Wayland
+  hear no application-wide quit. iOS and Android report
+  `SessionEndSupport::Background`: `Ending` once per trip to the background,
+  whose `Block` iOS holds as a UIKit background task, ended exactly once on
+  release, expiry or the scene's return (`owner::background`), and
+  Android needs no task for. Tests: the row "a quit the user asks for is the
+  handler's to decide" of `app_handler_obligation_table`,
+  `owner::background` tests.
 - **The OS enters the crate through one boundary (ADR-0151 §16).** An entry is
   code the operating system calls, or a library from inside its own entry: a
   function with a foreign ABI (a window procedure, an enumeration callback, a
@@ -2541,7 +2556,7 @@ override) publishes it in its window state, a new revision only when it
 changed. One read failing neither discards nor delays the other's accepted
 value.
 
-The snapshot's `appearance` is the user's theme on every backend, never a
+The snapshot's `brightness` is the user's theme on every backend, never a
 value the backend chose for its own chrome, and the handler's `state_changed` announces
 it only when it changed. Windows reads `AppsUseLightTheme` and sets the DWM dark
 title-bar flag to match it on creation and on each `WM_SETTINGCHANGE` that

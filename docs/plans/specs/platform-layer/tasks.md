@@ -7011,6 +7011,69 @@ GPU-память простаивающего или невидимого окн
   истечении; записано в `docs/gaps.md` («Leaving fullscreen publishes a mode in between on
   AppKit, X11 and Wayland»). Проверки и непрогнанное — в теле PR #2680.
 
+- [x] **LY133** — ветка `native/quit-contract`, решение — ADR-0350 (заменяет первое предложение
+  §4 ADR-0259). Обе находки подтверждены на `main` @ `ac3b1ee58`: `LoopControl::terminate_requested`
+  на выход вне конца сессии ставил явный выход, и `finish` снимал доставку каждого окна до
+  `Close`; iOS сообщал конец сессии только из `applicationWillTerminate:` и не держал фоновой
+  задачи. Построено: `AppHandler::quit_asked` → `QuitAnswer { Quit, KeepRunning }`; AppKit
+  отменяет запрос и спрашивает приложение отдельной задачей полосы владельца, паника обработчика
+  отвечает `KeepRunning`, отсутствие обработчика — `Quit`; headless спрашивает по
+  `HeadlessHostEvents::quit`; Win32, X11 и Wayland выхода приложения не слышат (каждое закрытие
+  доходит до одного окна, Restart Manager — конец сессии). `flui-app` отвечает той же
+  консультацией, что `AppHandle::request_quit` (`Ingress::platform_quit_asked`): каждое окно в
+  порядке регистрации, сторож, затем обработчик, отказ с записью откладывает выход, без записи
+  отменяет. Фон телефона: `SessionEndSupport::Background { window }` у iOS и Android; iOS сообщает
+  `Ending` на `sceneDidEnterBackground:` раз за поход в фон, `Block` держит фоновую задачу UIKit,
+  которая кончается ровно раз — отпусканием, истечением (с предупреждением) или возвратом сцены
+  (`owner::background`); Android задачи не держит. `flui-app` после встроенного сброса с
+  записями в пути отвечает `Block`, поток ждёт их (`WritesInFlight::wait_until`) до окна,
+  называет в журнале неспасённые значения и будит владельца, чей ход отпускает платформу.
+  Тесты, в скобках результат с откатом: строка «a quit the user asks for is the handler's to
+  decide» таблицы `app_handler_obligation_table` (строка «kept running» находит платформу
+  остановленной); `a_quit_nothing_refuses_ends_the_loop`,
+  `a_refused_quit_waits_for_the_record_then_exits`, `a_quit_the_window_stays_open_for_is_cancelled`
+  в `runner_close`, каждая для выхода от приложения и от платформы (платформа отвечает `Quit`
+  вместо консультации); `a_phone_holds_its_background_for_the_writes_in_flight` в
+  `runner_teardown` (нет `Block` на запись в пути); `background_window_ends_each_task_exactly_once`,
+  `background_window_hands_back_a_task_it_cannot_hold` (возврат на экран, оставивший поход
+  объявленным, не объявляет следующий). Не прогнано: AppKit и UIKit собирает только CI
+  (macOS и Android type-check в WSL на nightly прошли, iOS не собирается здесь); прогон на Mac
+  (Quit из Dock с отказом окна, затем согласие) и на iOS (запись через уход в фон) — заметки
+  строк `quit-exit-request-last-window-policy` и `session-end-log-off-shutdown-with-veto` в
+  `platform-parity.toml`. Приостановленная Activity Android по-прежнему не выполняет заданий
+  владельца (`docs/gaps.md`): записи реестра идут в пуле IO и от этого не зависят.
+
+- [x] **LY118** — ветка `platform/window-vocabulary`, решение — ADR-0349 (заменяет в ADR-0254 §2
+  абзац о `reveal_after_first_frame`). Все находки подтверждены на `main` @ `ac3b1ee58` чтением кода.
+  Тема окна — `WindowState::brightness: Brightness`; `WindowAppearance` с `From` удалён (его
+  `Vibrant*` не производил ни один хост), материал — `WindowMaterial`. Журнал и протокол не
+  меняются: поле `appearance` и четыре значения остаются, читатель берёт `vibrant_*` как их тему.
+  Фокус и активность — одно `WindowState::focus: WindowFocus` (`Inactive`, `Active`, `Focused`)
+  вместо `focused` и `active`: «фокус без активности» не строится. Предположение подтвердилось:
+  Win32 шлёт `WM_ACTIVATE(WA_INACTIVE)` до `WM_KILLFOCUS`, X11 читает `XGetInputFocus` и
+  `_NET_ACTIVE_WINDOW`, который менеджер окон пишет позже. Каждый хост (Win32, X11, Wayland,
+  AppKit, UIKit, Android, веб, headless, двойник `flui-testing`) читает свои два отчёта через
+  `WindowFocus::reported`, где побеждает фокус; `successor` публикует скрытое окно `Inactive`;
+  журнал пишет `is_focused`/`is_active` и читает пару через `reported`. Отказ системы окон —
+  одна форма: `CursorError::Platform(PlatformFailure)` и `PreferenceQueryError::Platform(PlatformFailure)`
+  вместо `Backend(String)` и `Native { message }` (у каждой ошибки `failed`). У методов
+  `PlatformWindow` нет тел по умолчанию: `gesture_geometry`, `window_at` и
+  `reveal_after_first_frame` обязательны у каждого хоста и двойника; `gesture_geometry` остаётся
+  единственным запросом рядом со `state()` (системная настройка в масштабе окна, может не
+  ответить и повторяется). `reveal_after_first_frame` остаётся методом: успех показа знает только
+  встраивающий, запись в `docs/gaps.md` о расхождении с ADR-0254 §2 снята. `flui_platform::testing`
+  существует только с фичей `testing`; примеры трейта пишут свою цель без поверхности. Документы
+  переписаны: `crates/flui-platform/ARCHITECTURE.md` (корень крейта и его модули, долг `ui-events`
+  снят, правило одного факта и одной формы отказа), `WindowOptions` (имена строителей, без
+  `is_visible()`), `text_input.rs` (`PlatformSystemChrome` есть), сводка `PlatformWindow`.
+  Тесты: `focus_implies_activation_and_a_hidden_window_has_neither` (таблица
+  `window_command_validate`; без строки `successor`, сбрасывающей фокус, скрытое окно публикуется
+  `Focused` и `Active`); `compile_fail`-доктест `reveal_after_first_frame` (окно без метода не
+  компилируется, E0046); строка conformance `the_snapshot_agrees_with_the_window_system` сравнивает
+  `focus` с двумя отчётами системы через `reported`. Строимого не осталось, прогонов на
+  устройствах не нужно: поведение хостов не меняется, кроме момента, когда Win32 и X11
+  рассогласованы, — он теперь публикуется `Focused`, как и раньше по полю `focused`.
+
 ## Отступление от порядка, решённое владельцем
 
 - 2026-10-21: LY22 ждёт свои зависимости (LY24, LY9, text-ime, teardown), хотя ни одна ветка не

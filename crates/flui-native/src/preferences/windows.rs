@@ -467,9 +467,9 @@ fn mouse_geometry(dpi: u32) -> Result<NativeMouseGeometry, PreferenceQueryError>
             (value, GetLastError())
         };
         if value == 0 && error.0 != 0 {
-            return Err(PreferenceQueryError::Native {
-                message: windows::core::Error::from(error).to_string(),
-            });
+            return Err(PreferenceQueryError::failed(
+                windows::core::Error::from(error).to_string(),
+            ));
         }
         Ok(value)
     };
