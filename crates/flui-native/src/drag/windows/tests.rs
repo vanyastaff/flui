@@ -53,7 +53,8 @@ use windows::Win32::System::Ole::{
 use windows::Win32::System::SystemServices::{MK_LBUTTON, MODIFIERKEYS_FLAGS};
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::WindowsAndMessaging::{
-    DispatchMessageW, GUITHREADINFO, GetGUIThreadInfo, GetWindowRect, HWND_TOPMOST, MSG,
+    DispatchMessageW, FindWindowExW, GUITHREADINFO, GetGUIThreadInfo, GetWindowRect,
+    GetWindowTextW, GetWindowThreadProcessId, HWND_TOPMOST, IsWindowVisible, MSG,
     MsgWaitForMultipleObjects, PM_REMOVE, PeekMessageW, PostMessageW, QS_ALLINPUT, SMTO_NORMAL,
     SWP_NOMOVE, SWP_NOSIZE, SendMessageTimeoutW, SendMessageW, SetWindowPos, TranslateMessage,
     WM_DPICHANGED, WM_MOUSEMOVE, WM_NULL, WindowFromPoint,
@@ -349,6 +350,67 @@ fn open(
         seen,
         offer,
     }
+}
+
+impl Drop for Window {
+    /// Hides the window as its case ends: a dropped platform leaves its
+    /// windows open and shown ([`no_case_leaves_a_window_shown`]). Hidden,
+    /// not closed: the text services of the next window opened on this thread
+    /// take two seconds to activate once a closed window deactivated them,
+    /// in every case after it. A window the case closed refuses the command.
+    fn drop(&mut self) {
+        let _: Result<(), flui_platform::CommandRefusal> = self
+            .host
+            .admit_and_apply(flui_platform::WindowCommand::Hide);
+    }
+}
+
+/// The title of the window `hwnd`, to name it in a failure.
+fn title(hwnd: HWND) -> String {
+    let mut text = [0_u16; 128];
+    // SAFETY: `text` is a live buffer the call fills up to its length.
+    let len = unsafe { GetWindowTextW(hwnd, &mut text) };
+    String::from_utf16_lossy(&text[..usize::try_from(len).unwrap_or(0)])
+}
+
+/// The titles of the windows of FLUI's class this thread still shows.
+fn shown_windows() -> Vec<String> {
+    // SAFETY: an argument-free query of the calling thread.
+    let this_thread = unsafe { GetCurrentThreadId() };
+    let mut shown = Vec::new();
+    let mut after = None;
+    loop {
+        // SAFETY: the class name is a NUL-terminated static, and the handle
+        // the walk continues after is passed by value: a window closed
+        // meanwhile only ends the walk.
+        let next =
+            unsafe { FindWindowExW(None, after, crate::owner::windows::WINDOW_CLASS_NAME, None) };
+        let Ok(hwnd) = next else {
+            return shown;
+        };
+        // SAFETY: queries of a handle by value; a dead one answers zero.
+        let (thread, visible) = unsafe {
+            (
+                GetWindowThreadProcessId(hwnd, None),
+                IsWindowVisible(hwnd).as_bool(),
+            )
+        };
+        if thread == this_thread && visible {
+            shown.push(title(hwnd));
+        }
+        after = Some(hwnd);
+    }
+}
+
+/// No case leaves a window shown. A dropped platform leaves its windows
+/// open, and one an earlier case raised stays topmost: where no window is in
+/// the foreground (the test desktop, ADR-0355) a window raised later does not
+/// stay above it, so for a point over both OLE's loop and `WindowFromPoint`
+/// answer the earlier case's window, and a drag over the later one never
+/// enters it. Runs last. Red-check: remove `Window`'s `Drop`.
+fn no_case_leaves_a_window_shown() {
+    let _ = pump_until(|| false, Duration::from_millis(50));
+    assert_eq!(shown_windows(), Vec::<String>::new());
 }
 
 /// Answer every hover with `accept`.
@@ -1297,11 +1359,16 @@ fn a_drag_into_a_window_of_this_process_drops_through_the_loop() {
         request(&ended),
         scripted(decide),
     );
+    // SAFETY: a query by value.
+    let under = unsafe { WindowFromPoint(POINT { x: at.x, y: at.y }) };
     assert_eq!(
         ended.get(),
         Some(OsDragEnd::Dropped(TransferActions::COPY)),
-        "{:?}",
-        target.seen.borrow()
+        "the target saw {:?}; the window under its point is {:?} ({:?}), the target {:?}",
+        target.seen.borrow(),
+        title(under),
+        under.0,
+        hwnd.0
     );
     let seen = target.seen.borrow();
     assert!(
@@ -1884,6 +1951,10 @@ fn ole_drag_and_drop_on_real_windows() {
             (
                 "a_drag_source_reads_only_its_own_windows_contacts",
                 a_drag_source_reads_only_its_own_windows_contacts,
+            ),
+            (
+                "no_case_leaves_a_window_shown",
+                no_case_leaves_a_window_shown,
             ),
         ],
     );

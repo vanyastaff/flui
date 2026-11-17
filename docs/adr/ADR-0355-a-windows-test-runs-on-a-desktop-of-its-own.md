@@ -117,7 +117,12 @@ test desktop") lists them.
 No window of the test desktop is in the foreground. A process's other shown windows then take and
 lose the activation while one of them stands in a modal loop, so a case that counts what runs on
 the owner thread during an idle modal loop runs in a process of its own
-(`windows_window_commands::native_idle_modal_loops`).
+(`windows_window_commands::native_idle_modal_loops`). The window the activation moves to goes
+above the others of its band, so a window a case raised topmost does not stay above a topmost
+window an earlier case of the process left shown, and OLE's `DoDragDrop` loop and
+`WindowFromPoint` answer the earlier one for a point over both. A table of cases that asks which
+window is under a point hides each case's windows as the case ends, since a dropped platform
+leaves its windows open (`no_case_leaves_a_window_shown` in `drag::windows::tests`).
 
 ### Consequences
 

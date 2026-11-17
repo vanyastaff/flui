@@ -488,6 +488,7 @@ impl WindowSlot {
         let (config, supports_copy_src, color) = crate::Renderer::derive_surface_config(
             surface,
             gpu.adapter,
+            self.lease.pacing(),
             width,
             height,
             self.latency,
