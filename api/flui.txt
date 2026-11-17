@@ -15537,6 +15537,31 @@ pub fn flui::platform::testing::ScriptedResponse::ok(body: impl Into<Vec<u8>>) -
 variant flui::platform::testing::ScriptedResponse::Fail(flui::platform::http::HttpError) // at 1
 variant flui::platform::testing::ScriptedResponse::Respond { status: flui::platform::http::StatusCode, body: Vec<u8> } // at 0
 pub mod flui::platform::text_store
+#[non_exhaustive] pub enum flui::platform::text_store::Autofill
+impl Clone for flui::platform::text_store::Autofill
+impl Copy for flui::platform::text_store::Autofill
+impl Eq for flui::platform::text_store::Autofill
+impl PartialEq for flui::platform::text_store::Autofill
+impl core::fmt::Debug for flui::platform::text_store::Autofill
+impl core::hash::Hash for flui::platform::text_store::Autofill
+impl core::marker::StructuralPartialEq for flui::platform::text_store::Autofill
+variant flui::platform::text_store::Autofill::CurrentPassword // at 1
+variant flui::platform::text_store::Autofill::NewPassword // at 2
+variant flui::platform::text_store::Autofill::OneTimeCode // at 3
+variant flui::platform::text_store::Autofill::Username // at 0
+#[non_exhaustive] pub enum flui::platform::text_store::Capitalization
+impl Clone for flui::platform::text_store::Capitalization
+impl Copy for flui::platform::text_store::Capitalization
+impl Default for flui::platform::text_store::Capitalization
+impl Eq for flui::platform::text_store::Capitalization
+impl PartialEq for flui::platform::text_store::Capitalization
+impl core::fmt::Debug for flui::platform::text_store::Capitalization
+impl core::hash::Hash for flui::platform::text_store::Capitalization
+impl core::marker::StructuralPartialEq for flui::platform::text_store::Capitalization
+variant flui::platform::text_store::Capitalization::Characters // at 3
+variant flui::platform::text_store::Capitalization::None // at 0
+variant flui::platform::text_store::Capitalization::Sentences // at 1
+variant flui::platform::text_store::Capitalization::Words // at 2
 pub struct flui::platform::text_store::CommitGate { .. }
 impl Clone for flui::platform::text_store::CommitGate
 impl Default for flui::platform::text_store::CommitGate
@@ -15569,7 +15594,34 @@ impl core::marker::StructuralPartialEq for flui::platform::text_store::Compositi
 variant flui::platform::text_store::CompositionEnd::Abandoned // at 1
 variant flui::platform::text_store::CompositionEnd::Committed // at 0
 variant flui::platform::text_store::CompositionEnd::Deferred // at 2
+#[non_exhaustive] pub enum flui::platform::text_store::Correction
+impl Clone for flui::platform::text_store::Correction
+impl Copy for flui::platform::text_store::Correction
+impl Eq for flui::platform::text_store::Correction
+impl PartialEq for flui::platform::text_store::Correction
+impl core::fmt::Debug for flui::platform::text_store::Correction
+impl core::hash::Hash for flui::platform::text_store::Correction
+impl core::marker::StructuralPartialEq for flui::platform::text_store::Correction
+variant flui::platform::text_store::Correction::Autocorrect // at 2
+variant flui::platform::text_store::Correction::Off // at 0
+variant flui::platform::text_store::Correction::Suggestions // at 1
 pub const flui::platform::text_store::DEFERRED_LOCK_CAPACITY: usize = 16
+#[non_exhaustive] pub enum flui::platform::text_store::EnterAction
+impl Clone for flui::platform::text_store::EnterAction
+impl Copy for flui::platform::text_store::EnterAction
+impl Default for flui::platform::text_store::EnterAction
+impl Eq for flui::platform::text_store::EnterAction
+impl PartialEq for flui::platform::text_store::EnterAction
+impl core::fmt::Debug for flui::platform::text_store::EnterAction
+impl core::hash::Hash for flui::platform::text_store::EnterAction
+impl core::marker::StructuralPartialEq for flui::platform::text_store::EnterAction
+variant flui::platform::text_store::EnterAction::Default // at 0
+variant flui::platform::text_store::EnterAction::Done // at 1
+variant flui::platform::text_store::EnterAction::Go // at 2
+variant flui::platform::text_store::EnterAction::Next // at 3
+variant flui::platform::text_store::EnterAction::Previous // at 4
+variant flui::platform::text_store::EnterAction::Search // at 5
+variant flui::platform::text_store::EnterAction::SendMessage // at 6
 pub enum flui::platform::text_store::LockGrant
 impl core::fmt::Debug for flui::platform::text_store::LockGrant
 pub fn flui::platform::text_store::LockGrant::kind(&self) -> flui::platform::text_store::LockKind
@@ -15581,31 +15633,6 @@ pub enum flui::platform::text_store::LockKind
 impl Clone for flui::platform::text_store::LockKind
 impl Copy for flui::platform::text_store::LockKind
 impl Eq for flui::platform::text_store::LockKind
-#[non_exhaustive] pub enum flui::platform::text_store::Autofill
-impl Clone for flui::platform::text_store::Autofill
-impl Copy for flui::platform::text_store::Autofill
-impl Eq for flui::platform::text_store::Autofill
-impl PartialEq for flui::platform::text_store::Autofill
-impl core::fmt::Debug for flui::platform::text_store::Autofill
-impl core::hash::Hash for flui::platform::text_store::Autofill
-impl core::marker::StructuralPartialEq for flui::platform::text_store::Autofill
-variant flui::platform::text_store::Autofill::CurrentPassword // at 1
-variant flui::platform::text_store::Autofill::NewPassword // at 2
-variant flui::platform::text_store::Autofill::OneTimeCode // at 3
-variant flui::platform::text_store::Autofill::Username // at 0
-#[non_exhaustive] pub enum flui::platform::text_store::Capitalization
-impl Clone for flui::platform::text_store::Capitalization
-impl Copy for flui::platform::text_store::Capitalization
-impl Default for flui::platform::text_store::Capitalization
-impl Eq for flui::platform::text_store::Capitalization
-impl PartialEq for flui::platform::text_store::Capitalization
-impl core::fmt::Debug for flui::platform::text_store::Capitalization
-impl core::hash::Hash for flui::platform::text_store::Capitalization
-impl core::marker::StructuralPartialEq for flui::platform::text_store::Capitalization
-variant flui::platform::text_store::Capitalization::Characters // at 3
-variant flui::platform::text_store::Capitalization::None // at 0
-variant flui::platform::text_store::Capitalization::Sentences // at 1
-variant flui::platform::text_store::Capitalization::Words // at 2
 impl PartialEq for flui::platform::text_store::LockKind
 impl core::fmt::Debug for flui::platform::text_store::LockKind
 impl core::marker::StructuralPartialEq for flui::platform::text_store::LockKind
@@ -15629,6 +15656,18 @@ impl core::fmt::Debug for flui::platform::text_store::LockTiming
 impl core::marker::StructuralPartialEq for flui::platform::text_store::LockTiming
 variant flui::platform::text_store::LockTiming::Async // at 1
 variant flui::platform::text_store::LockTiming::Sync // at 0
+pub struct flui::platform::text_store::NumberFormat
+field flui::platform::text_store::NumberFormat::decimal: bool // at 1
+field flui::platform::text_store::NumberFormat::signed: bool // at 0
+impl Clone for flui::platform::text_store::NumberFormat
+impl Copy for flui::platform::text_store::NumberFormat
+impl Default for flui::platform::text_store::NumberFormat
+impl Eq for flui::platform::text_store::NumberFormat
+impl PartialEq for flui::platform::text_store::NumberFormat
+impl core::fmt::Debug for flui::platform::text_store::NumberFormat
+impl core::hash::Hash for flui::platform::text_store::NumberFormat
+impl core::marker::StructuralPartialEq for flui::platform::text_store::NumberFormat
+pub const flui::platform::text_store::NumberFormat::WHOLE: Self = _
 #[non_exhaustive] pub enum flui::platform::text_store::OffsetError
 impl Clone for flui::platform::text_store::OffsetError
 impl Copy for flui::platform::text_store::OffsetError
@@ -15638,34 +15677,7 @@ impl PartialEq for flui::platform::text_store::OffsetError
 impl core::error::Error for flui::platform::text_store::OffsetError
 impl core::fmt::Debug for flui::platform::text_store::OffsetError
 impl core::fmt::Display for flui::platform::text_store::OffsetError
-#[non_exhaustive] pub enum flui::platform::text_store::Correction
-impl Clone for flui::platform::text_store::Correction
-impl Copy for flui::platform::text_store::Correction
-impl Eq for flui::platform::text_store::Correction
-impl PartialEq for flui::platform::text_store::Correction
-impl core::fmt::Debug for flui::platform::text_store::Correction
-impl core::hash::Hash for flui::platform::text_store::Correction
-impl core::marker::StructuralPartialEq for flui::platform::text_store::Correction
-variant flui::platform::text_store::Correction::Autocorrect // at 2
-variant flui::platform::text_store::Correction::Off // at 0
-variant flui::platform::text_store::Correction::Suggestions // at 1
 impl core::marker::StructuralPartialEq for flui::platform::text_store::OffsetError
-#[non_exhaustive] pub enum flui::platform::text_store::EnterAction
-impl Clone for flui::platform::text_store::EnterAction
-impl Copy for flui::platform::text_store::EnterAction
-impl Default for flui::platform::text_store::EnterAction
-impl Eq for flui::platform::text_store::EnterAction
-impl PartialEq for flui::platform::text_store::EnterAction
-impl core::fmt::Debug for flui::platform::text_store::EnterAction
-impl core::hash::Hash for flui::platform::text_store::EnterAction
-impl core::marker::StructuralPartialEq for flui::platform::text_store::EnterAction
-variant flui::platform::text_store::EnterAction::Default // at 0
-variant flui::platform::text_store::EnterAction::Done // at 1
-variant flui::platform::text_store::EnterAction::Go // at 2
-variant flui::platform::text_store::EnterAction::Next // at 3
-variant flui::platform::text_store::EnterAction::Previous // at 4
-variant flui::platform::text_store::EnterAction::Search // at 5
-variant flui::platform::text_store::EnterAction::SendMessage // at 6
 variant flui::platform::text_store::OffsetError::Inverted { start: usize, end: usize } // at 3
 variant flui::platform::text_store::OffsetError::NotCharBoundary(usize) // at 2
 variant flui::platform::text_store::OffsetError::PastEnd { offset: usize, len: usize } // at 0
@@ -15700,18 +15712,6 @@ impl core::hash::Hash for flui::platform::text_store::PointMode
 impl core::marker::StructuralPartialEq for flui::platform::text_store::PointMode
 pub const flui::platform::text_store::PointMode::EXACT: Self = _
 pub const flui::platform::text_store::PointMode::NEAREST: Self = _
-pub struct flui::platform::text_store::NumberFormat
-field flui::platform::text_store::NumberFormat::decimal: bool // at 1
-field flui::platform::text_store::NumberFormat::signed: bool // at 0
-impl Clone for flui::platform::text_store::NumberFormat
-impl Copy for flui::platform::text_store::NumberFormat
-impl Default for flui::platform::text_store::NumberFormat
-impl Eq for flui::platform::text_store::NumberFormat
-impl PartialEq for flui::platform::text_store::NumberFormat
-impl core::fmt::Debug for flui::platform::text_store::NumberFormat
-impl core::hash::Hash for flui::platform::text_store::NumberFormat
-impl core::marker::StructuralPartialEq for flui::platform::text_store::NumberFormat
-pub const flui::platform::text_store::NumberFormat::WHOLE: Self = _
 pub struct flui::platform::text_store::RangeRect
 field flui::platform::text_store::RangeRect::bounds: flui::geometry::Bounds<f64> // at 0
 field flui::platform::text_store::RangeRect::clipped: bool // at 1
@@ -15743,6 +15743,26 @@ impl Eq for flui::platform::text_store::TextChange
 impl PartialEq for flui::platform::text_store::TextChange
 impl core::fmt::Debug for flui::platform::text_store::TextChange
 impl core::marker::StructuralPartialEq for flui::platform::text_store::TextChange
+#[non_exhaustive] pub struct flui::platform::text_store::TextInputOptions
+field flui::platform::text_store::TextInputOptions::autofill: Option<flui::platform::text_store::Autofill> // at 4
+field flui::platform::text_store::TextInputOptions::capitalization: flui::platform::text_store::Capitalization // at 2
+field flui::platform::text_store::TextInputOptions::correction: flui::platform::text_store::Correction // at 3
+field flui::platform::text_store::TextInputOptions::enter_action: flui::platform::text_store::EnterAction // at 1
+field flui::platform::text_store::TextInputOptions::purpose: flui::platform::text_store::TextInputPurpose // at 0
+impl Clone for flui::platform::text_store::TextInputOptions
+impl Copy for flui::platform::text_store::TextInputOptions
+impl Default for flui::platform::text_store::TextInputOptions
+impl Eq for flui::platform::text_store::TextInputOptions
+impl PartialEq for flui::platform::text_store::TextInputOptions
+impl core::fmt::Debug for flui::platform::text_store::TextInputOptions
+impl core::hash::Hash for flui::platform::text_store::TextInputOptions
+impl core::marker::StructuralPartialEq for flui::platform::text_store::TextInputOptions
+pub const flui::platform::text_store::TextInputOptions::TEXT: Self = _
+pub const fn flui::platform::text_store::TextInputOptions::autofill(self, autofill: flui::platform::text_store::Autofill) -> Self
+pub const fn flui::platform::text_store::TextInputOptions::capitalization(self, capitalization: flui::platform::text_store::Capitalization) -> Self
+pub const fn flui::platform::text_store::TextInputOptions::correction(self, correction: flui::platform::text_store::Correction) -> Self
+pub const fn flui::platform::text_store::TextInputOptions::enter_action(self, enter_action: flui::platform::text_store::EnterAction) -> Self
+pub const fn flui::platform::text_store::TextInputOptions::new(purpose: flui::platform::text_store::TextInputPurpose) -> Self
 #[non_exhaustive] pub enum flui::platform::text_store::TextInputPurpose
 impl Clone for flui::platform::text_store::TextInputPurpose
 impl Copy for flui::platform::text_store::TextInputPurpose
@@ -15787,26 +15807,6 @@ variant flui::platform::text_store::TextStoreError::Offset(flui::platform::text_
 variant flui::platform::text_store::TextStoreError::PointOutside // at 5
 variant flui::platform::text_store::TextStoreError::Protected // at 3
 variant flui::platform::text_store::TextStoreError::SyncLockUnavailable // at 0
-#[non_exhaustive] pub struct flui::platform::text_store::TextInputOptions
-field flui::platform::text_store::TextInputOptions::autofill: Option<flui::platform::text_store::Autofill> // at 4
-field flui::platform::text_store::TextInputOptions::capitalization: flui::platform::text_store::Capitalization // at 2
-field flui::platform::text_store::TextInputOptions::correction: flui::platform::text_store::Correction // at 3
-field flui::platform::text_store::TextInputOptions::enter_action: flui::platform::text_store::EnterAction // at 1
-field flui::platform::text_store::TextInputOptions::purpose: flui::platform::text_store::TextInputPurpose // at 0
-impl Clone for flui::platform::text_store::TextInputOptions
-impl Copy for flui::platform::text_store::TextInputOptions
-impl Default for flui::platform::text_store::TextInputOptions
-impl Eq for flui::platform::text_store::TextInputOptions
-impl PartialEq for flui::platform::text_store::TextInputOptions
-impl core::fmt::Debug for flui::platform::text_store::TextInputOptions
-impl core::hash::Hash for flui::platform::text_store::TextInputOptions
-impl core::marker::StructuralPartialEq for flui::platform::text_store::TextInputOptions
-pub const flui::platform::text_store::TextInputOptions::TEXT: Self = _
-pub const fn flui::platform::text_store::TextInputOptions::autofill(self, autofill: flui::platform::text_store::Autofill) -> Self
-pub const fn flui::platform::text_store::TextInputOptions::capitalization(self, capitalization: flui::platform::text_store::Capitalization) -> Self
-pub const fn flui::platform::text_store::TextInputOptions::correction(self, correction: flui::platform::text_store::Correction) -> Self
-pub const fn flui::platform::text_store::TextInputOptions::enter_action(self, enter_action: flui::platform::text_store::EnterAction) -> Self
-pub const fn flui::platform::text_store::TextInputOptions::new(purpose: flui::platform::text_store::TextInputPurpose) -> Self
 reexport flui::platform::text_store::TextStoreHost => flui::platform::TextStoreHost
 #[non_exhaustive] pub enum flui::platform::text_store::TextStoreHostError
 impl Clone for flui::platform::text_store::TextStoreHostError
@@ -15826,6 +15826,7 @@ reexport flui::platform::text_store::TextStoreRead => flui::platform::TextStoreR
 #[non_exhaustive] pub struct flui::platform::text_store::TextStoreStatus
 field flui::platform::text_store::TextStoreStatus::protected: bool // at 0
 field flui::platform::text_store::TextStoreStatus::single_line: bool // at 1
+field flui::platform::text_store::TextStoreStatus::text_input: flui::platform::text_store::TextInputOptions // at 2
 impl Clone for flui::platform::text_store::TextStoreStatus
 impl Copy for flui::platform::text_store::TextStoreStatus
 impl Eq for flui::platform::text_store::TextStoreStatus
@@ -15833,6 +15834,7 @@ impl PartialEq for flui::platform::text_store::TextStoreStatus
 impl core::fmt::Debug for flui::platform::text_store::TextStoreStatus
 impl core::marker::StructuralPartialEq for flui::platform::text_store::TextStoreStatus
 pub const flui::platform::text_store::TextStoreStatus::EDITABLE_SINGLE_LINE: Self = _
+pub const fn flui::platform::text_store::TextStoreStatus::holds_secret(&self) -> bool
 pub const fn flui::platform::text_store::TextStoreStatus::with_protected(self, protected: bool) -> Self
 pub const fn flui::platform::text_store::TextStoreStatus::with_single_line(self, single_line: bool) -> Self
 pub const fn flui::platform::text_store::TextStoreStatus::with_text_input(self, text_input: flui::platform::text_store::TextInputOptions) -> Self
@@ -15871,7 +15873,6 @@ reexport flui::platform::text_store::utf16::OffsetError => flui::platform::text_
 reexport flui::platform::text_store::utf16::Utf16Offset => flui::platform::text_store::Utf16Offset
 reexport flui::platform::text_store::utf16::Utf16Range => flui::platform::text_store::Utf16Range
 pub fn flui::platform::text_store::utf16::byte_offset(text: &str, offset: flui::platform::text_store::Utf16Offset) -> Result<usize, flui::platform::text_store::OffsetError>
-field flui::platform::text_store::TextStoreStatus::text_input: flui::platform::text_store::TextInputOptions // at 2
 pub fn flui::platform::text_store::utf16::byte_range(text: &str, range: flui::platform::text_store::Utf16Range) -> Result<core::ops::range::Range<usize>, flui::platform::text_store::OffsetError>
 pub fn flui::platform::text_store::utf16::utf16_len(text: &str) -> flui::platform::text_store::Utf16Offset
 pub fn flui::platform::text_store::utf16::utf16_offset(text: &str, byte: usize) -> Result<flui::platform::text_store::Utf16Offset, flui::platform::text_store::OffsetError>
@@ -15879,7 +15880,6 @@ pub fn flui::platform::text_store::utf16::utf16_range(text: &str, bytes: core::o
 macro flui::platform::window_takes_no_frame_verbs!
 pub mod flui::prelude
 pub struct flui::prelude::AbsorbPointer { .. }
-pub const fn flui::platform::text_store::TextStoreStatus::holds_secret(&self) -> bool
 impl Clone for flui::prelude::AbsorbPointer
 impl Default for flui::prelude::AbsorbPointer
 impl core::fmt::Debug for flui::prelude::AbsorbPointer
@@ -16730,6 +16730,7 @@ pub fn flui::prelude::EditableText::required(self, required: bool) -> Self
 pub fn flui::prelude::EditableText::selection_style(self, style: flui::prelude::SelectionStyle) -> Self
 pub fn flui::prelude::EditableText::semantic_hint(self, hint: impl Into<String>) -> Self
 pub fn flui::prelude::EditableText::semantic_label(self, label: impl Into<String>) -> Self
+pub fn flui::prelude::EditableText::text_input(self, text_input: flui::platform::text_store::TextInputOptions) -> Self
 pub fn flui::prelude::EditableText::text_style(self, style: flui::painting::typography::TextStyle) -> Self
 pub struct flui::prelude::EditableTextState { .. }
 impl core::fmt::Debug for flui::prelude::EditableTextState
@@ -16774,7 +16775,6 @@ pub fn flui::prelude::ElementNode::registered_global_key_hash(&self) -> Option<u
 pub fn flui::prelude::ElementNode::slot(&self) -> usize
 #[non_exhaustive] pub struct flui::prelude::ElementOwner<'a> { .. }
 impl core::fmt::Debug for flui::prelude::ElementOwner<'_>
-pub fn flui::prelude::EditableText::text_input(self, text_input: flui::platform::text_store::TextInputOptions) -> Self
 pub fn flui::prelude::ElementOwner::clear_pending_dependency_change(&mut self, id: flui::foundation::ElementId) // impl flui::prelude::ElementOwner<'_>
 pub fn flui::prelude::ElementOwner::dirty_count(&self) -> usize // impl flui::prelude::ElementOwner<'_>
 pub fn flui::prelude::ElementOwner::displace_global_key(&mut self, losing_parent: flui::foundation::ElementId, child: flui::foundation::ElementId, key: &dyn flui::foundation::ViewKey, taken_by: flui::foundation::ElementId) // impl flui::prelude::ElementOwner<'_>
@@ -18092,6 +18092,7 @@ pub fn flui::prelude::RawTextField::new(controller: flui::prelude::TextEditingCo
 pub fn flui::prelude::RawTextField::obscure_text(self, obscure: bool) -> Self
 pub fn flui::prelude::RawTextField::on_changed<F, R>(self, callback: F) -> Self where F: Fn(&mut flui::prelude::EventContext<'_>, &str) -> R + 'static, R: flui::prelude::EventOutcome
 pub fn flui::prelude::RawTextField::on_submitted<F, R>(self, callback: F) -> Self where F: Fn(&mut flui::prelude::EventContext<'_>, &str) -> R + 'static, R: flui::prelude::EventOutcome
+pub fn flui::prelude::RawTextField::text_input(self, text_input: flui::platform::text_store::TextInputOptions) -> Self
 pub struct flui::prelude::RawTextFieldState { .. }
 impl core::fmt::Debug for flui::prelude::RawTextFieldState
 impl flui::prelude::ViewState<flui::prelude::RawTextField> for flui::prelude::RawTextFieldState
@@ -18112,6 +18113,7 @@ pub fn flui::prelude::RawTextFormField::obscure_text(self, obscure: bool) -> Sel
 pub fn flui::prelude::RawTextFormField::on_reset<F, R>(self, on_reset: F) -> Self where F: Fn(&mut flui::prelude::EventContext<'_>) -> R + 'static, R: flui::prelude::EventOutcome
 pub fn flui::prelude::RawTextFormField::on_saved<F, R>(self, on_saved: F) -> Self where F: Fn(&mut flui::prelude::EventContext<'_>, &String) -> R + 'static, R: flui::prelude::EventOutcome
 pub fn flui::prelude::RawTextFormField::on_submitted<F, R>(self, callback: F) -> Self where F: Fn(&mut flui::prelude::EventContext<'_>, &str) -> R + 'static, R: flui::prelude::EventOutcome
+pub fn flui::prelude::RawTextFormField::text_input(self, text_input: flui::platform::text_store::TextInputOptions) -> Self
 pub fn flui::prelude::RawTextFormField::validator(self, validator: impl Fn(&String) -> Option<String> + 'static) -> Self
 pub fn flui::prelude::RawTextFormField::with_initial_value(value: impl Into<String>) -> Self
 pub struct flui::prelude::RebuildHandle { .. }
@@ -18135,7 +18137,6 @@ pub fn flui::prelude::RenderObjectContext::depend_on<I: flui::prelude::Inherited
 pub fn flui::prelude::RenderObjectContext::detach_mouse_region(&self, target: flui_interaction::pointer::interaction_lane::MouseRegionTarget) -> Result<(), flui::prelude::RenderObjectContextError> // impl<'a> flui::prelude::RenderObjectContext<'a>
 pub fn flui::prelude::RenderObjectContext::register_local_payload(&self, payload: alloc::rcs::rc::Rc<dyn core::any::Any>) -> Result<flui_interaction::pointer::interaction_lane::LocalPayloadTarget, flui::prelude::RenderObjectContextError> // impl<'a> flui::prelude::RenderObjectContext<'a>
 pub fn flui::prelude::RenderObjectContext::register_mouse_region(&self, callbacks: flui_interaction::pointer::interaction_lane::MouseRegionCallbacks) -> Result<flui_interaction::pointer::interaction_lane::MouseRegionTarget, flui::prelude::RenderObjectContextError> // impl<'a> flui::prelude::RenderObjectContext<'a>
-pub fn flui::prelude::RawTextField::text_input(self, text_input: flui::platform::text_store::TextInputOptions) -> Self
 pub fn flui::prelude::RenderObjectContext::register_pan_zoom(&self, handler: impl Fn(flui_interaction::pointer::interaction_lane::PanZoomDispatch<'_>) -> flui::prelude::EventPropagation + 'static) -> Result<flui::rendering::PanZoomTarget, flui::prelude::RenderObjectContextError> // impl<'a> flui::prelude::RenderObjectContext<'a>
 pub fn flui::prelude::RenderObjectContext::register_path_clipper(&self, clipper: impl Fn(flui::geometry::Size) -> flui::painting::paint::Path + 'static) -> Result<flui_interaction::pointer::interaction_lane::PathClipTarget, flui::prelude::RenderObjectContextError> // impl<'a> flui::prelude::RenderObjectContext<'a>
 pub fn flui::prelude::RenderObjectContext::register_pointer(&self, handler: impl Fn(flui::interaction::PointerDispatch<'_>) + 'static) -> Result<flui::rendering::PointerTarget, flui::prelude::RenderObjectContextError> // impl<'a> flui::prelude::RenderObjectContext<'a>
@@ -18157,7 +18158,6 @@ pub fn flui::prelude::RenderObjectContext::unregister_path_clipper(&self, target
 pub fn flui::prelude::RenderObjectContext::unregister_pointer(&self, target: flui::rendering::PointerTarget) -> Result<(), flui::prelude::RenderObjectContextError> // impl<'a> flui::prelude::RenderObjectContext<'a>
 pub fn flui::prelude::RenderObjectContext::unregister_scroll(&self, target: flui::rendering::ScrollTarget) -> Result<(), flui::prelude::RenderObjectContextError> // impl<'a> flui::prelude::RenderObjectContext<'a>
 pub fn flui::prelude::RenderObjectContext::unregister_shader_mask(&self, target: flui_interaction::pointer::interaction_lane::ShaderMaskTarget) -> Result<(), flui::prelude::RenderObjectContextError> // impl<'a> flui::prelude::RenderObjectContext<'a>
-pub fn flui::prelude::RawTextFormField::text_input(self, text_input: flui::platform::text_store::TextInputOptions) -> Self
 pub fn flui::prelude::RenderObjectContext::unregister_smart_zoom(&self, target: flui::rendering::SmartZoomTarget) -> Result<(), flui::prelude::RenderObjectContextError> // impl<'a> flui::prelude::RenderObjectContext<'a>
 pub fn flui::prelude::RenderObjectContext::withdraw_scroll_contact_feed(&self, target: flui::rendering::PointerTarget) -> Result<(), flui::prelude::RenderObjectContextError> // impl<'a> flui::prelude::RenderObjectContext<'a>
 pub fn flui::prelude::RenderObjectContext::withdraw_scroll_target_axis(&self, target: flui::rendering::ScrollTarget) -> Result<(), flui::prelude::RenderObjectContextError> // impl<'a> flui::prelude::RenderObjectContext<'a>
@@ -33107,6 +33107,23 @@ variant flui_protocol::native_recording::Appearance::Dark // at 1
 variant flui_protocol::native_recording::Appearance::Light // at 0
 variant flui_protocol::native_recording::Appearance::VibrantDark // at 3
 variant flui_protocol::native_recording::Appearance::VibrantLight // at 2
+#[non_exhaustive] pub enum flui_protocol::native_recording::Autofill
+impl Clone for flui_protocol::native_recording::Autofill
+impl Copy for flui_protocol::native_recording::Autofill
+impl Eq for flui_protocol::native_recording::Autofill
+impl PartialEq for flui_protocol::native_recording::Autofill
+impl core::fmt::Debug for flui_protocol::native_recording::Autofill
+impl core::hash::Hash for flui_protocol::native_recording::Autofill
+impl core::marker::StructuralPartialEq for flui_protocol::native_recording::Autofill
+impl schemars::JsonSchema for flui_protocol::native_recording::Autofill
+impl serde_core::ser::Serialize for flui_protocol::native_recording::Autofill
+impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::native_recording::Autofill
+pub const flui_protocol::native_recording::Autofill::ALL: &'static [Self] = _
+pub const fn flui_protocol::native_recording::Autofill::name(self) -> &'static str
+variant flui_protocol::native_recording::Autofill::CurrentPassword // at 1
+variant flui_protocol::native_recording::Autofill::NewPassword // at 2
+variant flui_protocol::native_recording::Autofill::OneTimeCode // at 3
+variant flui_protocol::native_recording::Autofill::Username // at 0
 #[non_exhaustive] pub enum flui_protocol::native_recording::Availability
 impl Clone for flui_protocol::native_recording::Availability
 impl Copy for flui_protocol::native_recording::Availability
@@ -33146,23 +33163,6 @@ variant flui_protocol::native_recording::Backend::Win32 // at 0
 variant flui_protocol::native_recording::Backend::X11 // at 4
 #[non_exhaustive] pub enum flui_protocol::native_recording::CancelReason
 impl Clone for flui_protocol::native_recording::CancelReason
-#[non_exhaustive] pub enum flui_protocol::native_recording::Autofill
-impl Clone for flui_protocol::native_recording::Autofill
-impl Copy for flui_protocol::native_recording::Autofill
-impl Eq for flui_protocol::native_recording::Autofill
-impl PartialEq for flui_protocol::native_recording::Autofill
-impl core::fmt::Debug for flui_protocol::native_recording::Autofill
-impl core::hash::Hash for flui_protocol::native_recording::Autofill
-impl core::marker::StructuralPartialEq for flui_protocol::native_recording::Autofill
-impl schemars::JsonSchema for flui_protocol::native_recording::Autofill
-impl serde_core::ser::Serialize for flui_protocol::native_recording::Autofill
-impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::native_recording::Autofill
-pub const flui_protocol::native_recording::Autofill::ALL: &'static [Self] = _
-pub const fn flui_protocol::native_recording::Autofill::name(self) -> &'static str
-variant flui_protocol::native_recording::Autofill::CurrentPassword // at 1
-variant flui_protocol::native_recording::Autofill::NewPassword // at 2
-variant flui_protocol::native_recording::Autofill::OneTimeCode // at 3
-variant flui_protocol::native_recording::Autofill::Username // at 0
 impl Copy for flui_protocol::native_recording::CancelReason
 impl Eq for flui_protocol::native_recording::CancelReason
 impl PartialEq for flui_protocol::native_recording::CancelReason
@@ -33226,6 +33226,24 @@ pub const fn flui_protocol::native_recording::Capability::platform_absence() -> 
 variant flui_protocol::native_recording::Capability::Emulated // at 1
 variant flui_protocol::native_recording::Capability::Native // at 0
 variant flui_protocol::native_recording::Capability::Unavailable(flui_protocol::native_recording::Absence) // at 2
+#[non_exhaustive] pub enum flui_protocol::native_recording::Capitalization
+impl Clone for flui_protocol::native_recording::Capitalization
+impl Copy for flui_protocol::native_recording::Capitalization
+impl Default for flui_protocol::native_recording::Capitalization
+impl Eq for flui_protocol::native_recording::Capitalization
+impl PartialEq for flui_protocol::native_recording::Capitalization
+impl core::fmt::Debug for flui_protocol::native_recording::Capitalization
+impl core::hash::Hash for flui_protocol::native_recording::Capitalization
+impl core::marker::StructuralPartialEq for flui_protocol::native_recording::Capitalization
+impl schemars::JsonSchema for flui_protocol::native_recording::Capitalization
+impl serde_core::ser::Serialize for flui_protocol::native_recording::Capitalization
+impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::native_recording::Capitalization
+pub const flui_protocol::native_recording::Capitalization::ALL: &'static [Self] = _
+pub const fn flui_protocol::native_recording::Capitalization::name(self) -> &'static str
+variant flui_protocol::native_recording::Capitalization::Characters // at 3
+variant flui_protocol::native_recording::Capitalization::None // at 0
+variant flui_protocol::native_recording::Capitalization::Sentences // at 1
+variant flui_protocol::native_recording::Capitalization::Words // at 2
 pub struct flui_protocol::native_recording::ClickSettings
 field flui_protocol::native_recording::ClickSettings::height: f64 // at 2
 field flui_protocol::native_recording::ClickSettings::interval_ns: u64 // at 0
@@ -33265,24 +33283,6 @@ impl core::fmt::Debug for flui_protocol::native_recording::CloseCause
 impl core::hash::Hash for flui_protocol::native_recording::CloseCause
 impl core::marker::StructuralPartialEq for flui_protocol::native_recording::CloseCause
 impl schemars::JsonSchema for flui_protocol::native_recording::CloseCause
-#[non_exhaustive] pub enum flui_protocol::native_recording::Capitalization
-impl Clone for flui_protocol::native_recording::Capitalization
-impl Copy for flui_protocol::native_recording::Capitalization
-impl Default for flui_protocol::native_recording::Capitalization
-impl Eq for flui_protocol::native_recording::Capitalization
-impl PartialEq for flui_protocol::native_recording::Capitalization
-impl core::fmt::Debug for flui_protocol::native_recording::Capitalization
-impl core::hash::Hash for flui_protocol::native_recording::Capitalization
-impl core::marker::StructuralPartialEq for flui_protocol::native_recording::Capitalization
-impl schemars::JsonSchema for flui_protocol::native_recording::Capitalization
-impl serde_core::ser::Serialize for flui_protocol::native_recording::Capitalization
-impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::native_recording::Capitalization
-pub const flui_protocol::native_recording::Capitalization::ALL: &'static [Self] = _
-pub const fn flui_protocol::native_recording::Capitalization::name(self) -> &'static str
-variant flui_protocol::native_recording::Capitalization::Characters // at 3
-variant flui_protocol::native_recording::Capitalization::None // at 0
-variant flui_protocol::native_recording::Capitalization::Sentences // at 1
-variant flui_protocol::native_recording::Capitalization::Words // at 2
 impl serde_core::ser::Serialize for flui_protocol::native_recording::CloseCause
 impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::native_recording::CloseCause
 pub const flui_protocol::native_recording::CloseCause::ALL: &'static [Self] = _
@@ -33301,6 +33301,22 @@ impl core::marker::StructuralPartialEq for flui_protocol::native_recording::Colo
 impl schemars::JsonSchema for flui_protocol::native_recording::Color
 impl serde_core::ser::Serialize for flui_protocol::native_recording::Color
 impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::native_recording::Color
+#[non_exhaustive] pub enum flui_protocol::native_recording::Correction
+impl Clone for flui_protocol::native_recording::Correction
+impl Copy for flui_protocol::native_recording::Correction
+impl Eq for flui_protocol::native_recording::Correction
+impl PartialEq for flui_protocol::native_recording::Correction
+impl core::fmt::Debug for flui_protocol::native_recording::Correction
+impl core::hash::Hash for flui_protocol::native_recording::Correction
+impl core::marker::StructuralPartialEq for flui_protocol::native_recording::Correction
+impl schemars::JsonSchema for flui_protocol::native_recording::Correction
+impl serde_core::ser::Serialize for flui_protocol::native_recording::Correction
+impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::native_recording::Correction
+pub const flui_protocol::native_recording::Correction::ALL: &'static [Self] = _
+pub const fn flui_protocol::native_recording::Correction::name(self) -> &'static str
+variant flui_protocol::native_recording::Correction::Autocorrect // at 2
+variant flui_protocol::native_recording::Correction::Off // at 0
+variant flui_protocol::native_recording::Correction::Suggestions // at 1
 pub struct flui_protocol::native_recording::Counter
 field flui_protocol::native_recording::Counter::count: u64 // at 0
 field flui_protocol::native_recording::Counter::frequency: u64 // at 1
@@ -33340,22 +33356,6 @@ impl core::marker::StructuralPartialEq for flui_protocol::native_recording::Devi
 impl schemars::JsonSchema for flui_protocol::native_recording::Device
 impl serde_core::ser::Serialize for flui_protocol::native_recording::Device
 impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::native_recording::Device
-#[non_exhaustive] pub enum flui_protocol::native_recording::Correction
-impl Clone for flui_protocol::native_recording::Correction
-impl Copy for flui_protocol::native_recording::Correction
-impl Eq for flui_protocol::native_recording::Correction
-impl PartialEq for flui_protocol::native_recording::Correction
-impl core::fmt::Debug for flui_protocol::native_recording::Correction
-impl core::hash::Hash for flui_protocol::native_recording::Correction
-impl core::marker::StructuralPartialEq for flui_protocol::native_recording::Correction
-impl schemars::JsonSchema for flui_protocol::native_recording::Correction
-impl serde_core::ser::Serialize for flui_protocol::native_recording::Correction
-impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::native_recording::Correction
-pub const flui_protocol::native_recording::Correction::ALL: &'static [Self] = _
-pub const fn flui_protocol::native_recording::Correction::name(self) -> &'static str
-variant flui_protocol::native_recording::Correction::Autocorrect // at 2
-variant flui_protocol::native_recording::Correction::Off // at 0
-variant flui_protocol::native_recording::Correction::Suggestions // at 1
 pub struct flui_protocol::native_recording::Display
 field flui_protocol::native_recording::Display::bounds: [i32; 4] // at 2
 field flui_protocol::native_recording::Display::color: flui_protocol::native_recording::DisplayColor // at 8
@@ -33409,6 +33409,26 @@ pub const flui_protocol::native_recording::DynamicRange::ALL: &'static [Self] = 
 pub const fn flui_protocol::native_recording::DynamicRange::name(self) -> &'static str
 variant flui_protocol::native_recording::DynamicRange::High // at 1
 variant flui_protocol::native_recording::DynamicRange::Standard // at 0
+#[non_exhaustive] pub enum flui_protocol::native_recording::EnterAction
+impl Clone for flui_protocol::native_recording::EnterAction
+impl Copy for flui_protocol::native_recording::EnterAction
+impl Eq for flui_protocol::native_recording::EnterAction
+impl PartialEq for flui_protocol::native_recording::EnterAction
+impl core::fmt::Debug for flui_protocol::native_recording::EnterAction
+impl core::hash::Hash for flui_protocol::native_recording::EnterAction
+impl core::marker::StructuralPartialEq for flui_protocol::native_recording::EnterAction
+impl schemars::JsonSchema for flui_protocol::native_recording::EnterAction
+impl serde_core::ser::Serialize for flui_protocol::native_recording::EnterAction
+impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::native_recording::EnterAction
+pub const flui_protocol::native_recording::EnterAction::ALL: &'static [Self] = _
+pub const fn flui_protocol::native_recording::EnterAction::name(self) -> &'static str
+variant flui_protocol::native_recording::EnterAction::Default // at 0
+variant flui_protocol::native_recording::EnterAction::Done // at 1
+variant flui_protocol::native_recording::EnterAction::Go // at 2
+variant flui_protocol::native_recording::EnterAction::Next // at 3
+variant flui_protocol::native_recording::EnterAction::Previous // at 4
+variant flui_protocol::native_recording::EnterAction::Search // at 5
+variant flui_protocol::native_recording::EnterAction::SendMessage // at 6
 #[non_exhaustive] pub enum flui_protocol::native_recording::Execution
 impl Clone for flui_protocol::native_recording::Execution
 impl Copy for flui_protocol::native_recording::Execution
@@ -33448,26 +33468,6 @@ impl schemars::JsonSchema for flui_protocol::native_recording::FailureKind
 impl serde_core::ser::Serialize for flui_protocol::native_recording::FailureKind
 impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::native_recording::FailureKind
 pub const flui_protocol::native_recording::FailureKind::ALL: &'static [Self] = _
-#[non_exhaustive] pub enum flui_protocol::native_recording::EnterAction
-impl Clone for flui_protocol::native_recording::EnterAction
-impl Copy for flui_protocol::native_recording::EnterAction
-impl Eq for flui_protocol::native_recording::EnterAction
-impl PartialEq for flui_protocol::native_recording::EnterAction
-impl core::fmt::Debug for flui_protocol::native_recording::EnterAction
-impl core::hash::Hash for flui_protocol::native_recording::EnterAction
-impl core::marker::StructuralPartialEq for flui_protocol::native_recording::EnterAction
-impl schemars::JsonSchema for flui_protocol::native_recording::EnterAction
-impl serde_core::ser::Serialize for flui_protocol::native_recording::EnterAction
-impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::native_recording::EnterAction
-pub const flui_protocol::native_recording::EnterAction::ALL: &'static [Self] = _
-pub const fn flui_protocol::native_recording::EnterAction::name(self) -> &'static str
-variant flui_protocol::native_recording::EnterAction::Default // at 0
-variant flui_protocol::native_recording::EnterAction::Done // at 1
-variant flui_protocol::native_recording::EnterAction::Go // at 2
-variant flui_protocol::native_recording::EnterAction::Next // at 3
-variant flui_protocol::native_recording::EnterAction::Previous // at 4
-variant flui_protocol::native_recording::EnterAction::Search // at 5
-variant flui_protocol::native_recording::EnterAction::SendMessage // at 6
 pub const fn flui_protocol::native_recording::FailureKind::name(self) -> &'static str
 variant flui_protocol::native_recording::FailureKind::Deferred // at 0
 variant flui_protocol::native_recording::FailureKind::Displays // at 2
@@ -34083,8 +34083,14 @@ pub const fn flui_protocol::native_recording::StoreLockKind::name(self) -> &'sta
 variant flui_protocol::native_recording::StoreLockKind::Read // at 0
 variant flui_protocol::native_recording::StoreLockKind::ReadWrite // at 1
 pub struct flui_protocol::native_recording::StoreStatus
+field flui_protocol::native_recording::StoreStatus::autofill: Option<flui_protocol::native_recording::Autofill> // at 8
+field flui_protocol::native_recording::StoreStatus::capitalization: flui_protocol::native_recording::Capitalization // at 6
+field flui_protocol::native_recording::StoreStatus::correction: Option<flui_protocol::native_recording::Correction> // at 7
+field flui_protocol::native_recording::StoreStatus::decimal: bool // at 4
+field flui_protocol::native_recording::StoreStatus::enter_action: Option<flui_protocol::native_recording::EnterAction> // at 5
 field flui_protocol::native_recording::StoreStatus::protected: bool // at 0
 field flui_protocol::native_recording::StoreStatus::purpose: flui_protocol::native_recording::InputPurpose // at 2
+field flui_protocol::native_recording::StoreStatus::signed: bool // at 3
 field flui_protocol::native_recording::StoreStatus::single_line: bool // at 1
 impl Clone for flui_protocol::native_recording::StoreStatus
 impl Copy for flui_protocol::native_recording::StoreStatus
@@ -34122,14 +34128,8 @@ impl core::fmt::Debug for flui_protocol::native_recording::Stream
 impl core::hash::Hash for flui_protocol::native_recording::Stream
 impl core::marker::StructuralPartialEq for flui_protocol::native_recording::Stream
 impl schemars::JsonSchema for flui_protocol::native_recording::Stream
-field flui_protocol::native_recording::StoreStatus::autofill: Option<flui_protocol::native_recording::Autofill> // at 8
-field flui_protocol::native_recording::StoreStatus::capitalization: flui_protocol::native_recording::Capitalization // at 6
-field flui_protocol::native_recording::StoreStatus::correction: Option<flui_protocol::native_recording::Correction> // at 7
-field flui_protocol::native_recording::StoreStatus::decimal: bool // at 4
-field flui_protocol::native_recording::StoreStatus::enter_action: Option<flui_protocol::native_recording::EnterAction> // at 5
 impl serde_core::ser::Serialize for flui_protocol::native_recording::Stream
 impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::native_recording::Stream
-field flui_protocol::native_recording::StoreStatus::signed: bool // at 3
 pub const flui_protocol::native_recording::Stream::ALL: &'static [Self] = _
 pub const fn flui_protocol::native_recording::Stream::name(self) -> &'static str
 variant flui_protocol::native_recording::Stream::App // at 1
