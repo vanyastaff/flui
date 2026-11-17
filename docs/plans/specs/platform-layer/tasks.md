@@ -7064,10 +7064,11 @@ GPU-память простаивающего или невидимого окн
   `input_purpose` во всех слоях полей. Тесты, в скобках результат с откатом:
   `ime_events_project_onto_the_store_as_the_text_input_contract_says` (выделение схлопнуто в
   конец отрезка); `enter_moves_the_focus_as_the_fields_enter_key_says` (фокус остаётся на первом
-  поле); `the_store_reports_the_text_input_the_field_was_built_with` (без сравнения всего значения
-  в `did_update_view` смена одной метки не доходит до хранилища);
-  `a_store_focus_keeps_every_field_of_its_status` (без новых полей записи метка и исправление
-  теряются при чтении); таблицы хостов `a_fields_options_pick_its_return_key_capitalization_correction_and_content`,
+  поле); `the_store_reports_the_text_input_the_field_was_built_with` (без записи нового значения
+  в ячейку в `did_update_view` хранилище сообщает первое);
+  `a_push_platform_is_told_the_focused_fields_status` (при сравнении одного назначения платформе
+  не сообщают новую метку Enter); `a_store_focus_keeps_every_field_of_its_status` (без метки и
+  исправления в записи строка читается назад не той, что записана); таблицы хостов `a_fields_options_pick_its_return_key_capitalization_correction_and_content`,
   `the_text_input_options_reach_the_editor_info`,
   `the_capitalization_and_correction_a_field_asks_for_are_its_hints`,
   `a_fields_capitalization_and_correction_reach_each_protocol`,

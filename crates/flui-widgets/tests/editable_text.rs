@@ -3241,8 +3241,11 @@ pub(crate) fn replacing_the_controller_retires_the_old_selection_contact() {
 /// follows a rebuild that changes any part of it (the Enter key's label as
 /// much as the purpose), and is independent of obscuring.
 ///
-/// Red-check: compare only the purpose in `did_update_view` — the store
-/// keeps reporting the first Enter action after the swap.
+/// Red-check: leave `did_update_view` reading the cell without replacing it
+/// — the store keeps reporting the first options after the swap. Comparing
+/// only the purpose there is caught by
+/// `a_push_platform_is_told_the_focused_fields_status` instead: the platform
+/// is not told of a new Enter key label.
 pub(crate) fn the_store_reports_the_text_input_the_field_was_built_with() {
     use flui_platform::text_store::{
         Autofill, Capitalization, Correction, EnterAction, TextInputOptions, TextInputPurpose,
