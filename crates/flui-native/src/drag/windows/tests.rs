@@ -86,14 +86,18 @@ mod scripted {
     use windows_core::{BOOL, HRESULT, implement};
 
     #[implement(IDropSource)]
-    pub(super) struct Scripted(pub(super) Box<dyn Fn() -> HRESULT>);
+    pub(super) struct Scripted(
+        pub(super) Box<dyn Fn() -> HRESULT>,
+        pub(super) Box<dyn Fn(u32)>,
+    );
 
     impl IDropSource_Impl for Scripted_Impl {
         fn QueryContinueDrag(&self, _escape: BOOL, _keys: MODIFIERKEYS_FLAGS) -> HRESULT {
             (self.0)()
         }
 
-        fn GiveFeedback(&self, _effect: DROPEFFECT) -> HRESULT {
+        fn GiveFeedback(&self, effect: DROPEFFECT) -> HRESULT {
+            (self.1)(effect.0);
             DRAGDROP_S_USEDEFAULTCURSORS
         }
     }
@@ -204,7 +208,7 @@ mod endless {
 }
 
 fn scripted(decide: impl Fn() -> HRESULT + 'static) -> IDropSource {
-    scripted::Scripted(Box::new(decide)).into()
+    scripted::Scripted(Box::new(decide), Box::new(|_| {})).into()
 }
 
 /// Wakes `DoDragDrop`'s loop on this thread every few milliseconds while
@@ -1326,6 +1330,15 @@ fn a_drag_into_a_window_of_this_process_drops_through_the_loop() {
     );
     // SAFETY: a query by value.
     let under = unsafe { WindowFromPoint(POINT { x: at.x, y: at.y }) };
+    if ended.get() != Some(OsDragEnd::Dropped(TransferActions::COPY))
+        || std::env::var_os("FLUI_PROBE").is_some()
+    {
+        let probes: Vec<String> = (0..8).map(probe::attempt).collect();
+        eprintln!("PROBE first {:?}", ended.get());
+        for probe in probes {
+            eprintln!("{probe}");
+        }
+    }
     assert_eq!(
         ended.get(),
         Some(OsDragEnd::Dropped(TransferActions::COPY)),
@@ -1352,6 +1365,239 @@ fn a_drag_into_a_window_of_this_process_drops_through_the_loop() {
         matches!(&text, Ok(TransferPayload::Text(text)) if text == "dragged \u{2713}"),
         "{text:?}"
     );
+}
+
+/// TEMPORARY: reads what OLE's loop sees on the runner.
+mod probe {
+    use super::*;
+    use windows::Win32::UI::Input::KeyboardAndMouse::GetCapture;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetClassNameW, GetCursorPos, GetMessagePos, GetSystemMetrics, SM_CXSCREEN, SM_CYSCREEN,
+        SetCursorPos,
+    };
+
+    fn window(hwnd: HWND) -> String {
+        let mut class = [0_u16; 96];
+        let mut rect = RECT::default();
+        let mut pid = 0_u32;
+        // SAFETY: live locals sized for each query.
+        let (len, tid, visible) = unsafe {
+            let _ = GetWindowRect(hwnd, &raw mut rect);
+            (
+                GetClassNameW(hwnd, &mut class),
+                GetWindowThreadProcessId(hwnd, Some(&raw mut pid)),
+                IsWindowVisible(hwnd).as_bool(),
+            )
+        };
+        format!(
+            "{:?} class={:?} title={:?} pid={pid} tid={tid} visible={visible} rect=({},{},{},{})",
+            hwnd.0,
+            String::from_utf16_lossy(&class[..usize::try_from(len).unwrap_or(0)]),
+            title(hwnd),
+            rect.left,
+            rect.top,
+            rect.right,
+            rect.bottom
+        )
+    }
+
+    fn cursor() -> Result<(i32, i32), String> {
+        let mut at = POINT::default();
+        // SAFETY: a live local.
+        unsafe { GetCursorPos(&raw mut at) }
+            .map(|()| (at.x, at.y))
+            .map_err(|error| format!("{error:?}"))
+    }
+
+    fn state(target: HWND, at: POINTL) -> String {
+        // SAFETY: queries by value.
+        unsafe {
+            format!(
+                "at=({},{}) pid={} tid={} cursor={:?} msgpos={:#x} screen={}x{}\n   target: {}\n   under: {}\n   capture: {}",
+                at.x,
+                at.y,
+                std::process::id(),
+                GetCurrentThreadId(),
+                cursor(),
+                GetMessagePos(),
+                GetSystemMetrics(SM_CXSCREEN),
+                GetSystemMetrics(SM_CYSCREEN),
+                window(target),
+                window(WindowFromPoint(POINT { x: at.x, y: at.y })),
+                window(GetCapture()),
+            )
+        }
+    }
+
+    /// 0: as the case. 1: screen coordinates in the move. 2: the left button
+    /// in the move. 3: `SetCursorPos` first. 4: the target moved under the
+    /// cursor, where it can be read. 5: moves sent, not posted. 6: no pacing.
+    pub(super) fn attempt(variant: u32) -> String {
+        let transport = OleTransfer::new();
+        let platform = platform_over(&transport);
+        let transfer = platform.data_transfer();
+        let target = open(
+            &platform,
+            "flui probe target",
+            answering(&transfer, Some(TransferActions::COPY)),
+        );
+        let before = cursor();
+        if variant == 4
+            && let Ok((x, y)) = before
+        {
+            // SAFETY: the case's own live window, on its thread.
+            let _ = unsafe {
+                SetWindowPos(
+                    target.hwnd,
+                    Some(HWND_TOPMOST),
+                    x - 80,
+                    y - 80,
+                    0,
+                    0,
+                    SWP_NOSIZE,
+                )
+            };
+        }
+        if variant == 7 {
+            // SAFETY: an argument-free query of the calling thread.
+            let pos = unsafe { GetMessagePos() };
+            let (x, y) = ((pos & 0xffff) as i16, (pos >> 16) as i16);
+            // SAFETY: the case's own live window, on its thread.
+            let _ = unsafe {
+                SetWindowPos(
+                    target.hwnd,
+                    Some(HWND_TOPMOST),
+                    i32::from(x) - 80,
+                    i32::from(y) - 80,
+                    0,
+                    0,
+                    SWP_NOSIZE,
+                )
+            };
+        }
+        let at = raise(target.hwnd);
+        let _ = pump_until(|| false, Duration::from_millis(50));
+        let set_cursor = (variant == 3).then(|| {
+            // SAFETY: by value.
+            let set = unsafe { SetCursorPos(at.x, at.y) };
+            format!("{set:?} then {:?}", cursor())
+        });
+        let seen = Rc::clone(&target.seen);
+        let hwnd = target.hwnd;
+        let started = Instant::now();
+        let calls = Rc::new(Cell::new(0_u32));
+        let counted = Rc::clone(&calls);
+        let report = Rc::new(RefCell::new(String::new()));
+        let reported = Rc::clone(&report);
+        let decide = move || {
+            counted.set(counted.get() + 1);
+            let entered = seen.borrow().iter().any(|line| line.starts_with("entered"));
+            if !entered && started.elapsed() < Duration::from_secs(2) {
+                return S_OK;
+            }
+            *reported.borrow_mut() = state(hwnd, at);
+            if entered {
+                DRAGDROP_S_DROP
+            } else {
+                DRAGDROP_S_CANCEL
+            }
+        };
+        let stats = Arc::new([const { AtomicU64::new(0) }; 4]);
+        let counts = Arc::clone(&stats);
+        let stop = Arc::new(AtomicBool::new(false));
+        let stopping = Arc::clone(&stop);
+        // SAFETY: an argument-free query of the calling thread.
+        let owner_thread = unsafe { GetCurrentThreadId() };
+        let poke = std::thread::spawn(move || {
+            while !stopping.load(Ordering::Acquire) {
+                std::thread::sleep(Duration::from_millis(20));
+                let mut info = GUITHREADINFO {
+                    cbSize: u32::try_from(size_of::<GUITHREADINFO>()).expect("small"),
+                    ..Default::default()
+                };
+                // SAFETY: as `Poke`.
+                unsafe {
+                    if GetGUIThreadInfo(owner_thread, &raw mut info).is_err() {
+                        counts[3].fetch_add(1, Ordering::Relaxed);
+                        continue;
+                    }
+                    if info.hwndCapture.is_invalid() {
+                        counts[1].fetch_add(1, Ordering::Relaxed);
+                        continue;
+                    }
+                    let mut point = POINT { x: at.x, y: at.y };
+                    if variant != 1 {
+                        let _ = ScreenToClient(info.hwndCapture, &raw mut point);
+                    }
+                    let packed = (point.x & 0xffff) | ((point.y & 0xffff) << 16);
+                    let wparam = WPARAM(usize::from(variant == 2));
+                    if variant == 5 {
+                        let _ = SendMessageTimeoutW(
+                            info.hwndCapture,
+                            WM_MOUSEMOVE,
+                            wparam,
+                            LPARAM(packed as isize),
+                            SMTO_NORMAL,
+                            100,
+                            None,
+                        );
+                        counts[0].fetch_add(1, Ordering::Relaxed);
+                    } else {
+                        let posted = PostMessageW(
+                            Some(info.hwndCapture),
+                            WM_MOUSEMOVE,
+                            wparam,
+                            LPARAM(packed as isize),
+                        );
+                        counts[if posted.is_ok() { 0 } else { 2 }].fetch_add(1, Ordering::Relaxed);
+                    }
+                    let _ = SendMessageTimeoutW(
+                        info.hwndCapture,
+                        WM_NULL,
+                        WPARAM(0),
+                        LPARAM(0),
+                        SMTO_NORMAL,
+                        100,
+                        None,
+                    );
+                }
+            }
+        });
+        let ended = Rc::new(Cell::new(None));
+        let feedback = Rc::new(RefCell::new(Vec::new()));
+        let fed = Rc::clone(&feedback);
+        let owner = transport.owner().expect("owner state");
+        OleTransfer::run_session(
+            &owner,
+            owner_window(&transport),
+            (variant != 6).then(|| owner_pacing(&platform)),
+            request(&ended),
+            scripted::Scripted(
+                Box::new(decide),
+                Box::new(move |effect| {
+                    let mut fed = fed.borrow_mut();
+                    if fed.len() < 8 {
+                        fed.push(effect);
+                    }
+                }),
+            )
+            .into(),
+        );
+        stop.store(true, Ordering::Release);
+        let _ = poke.join();
+        format!(
+            "PROBE variant {variant}: ended={:?} seen={:?} decide_calls={} feedback={:?} cursor_before={before:?} set_cursor={set_cursor:?} poke(sent,no_capture,post_failed,no_info)={:?}\n   {}",
+            ended.get(),
+            target.seen.borrow(),
+            calls.get(),
+            feedback.borrow(),
+            stats
+                .iter()
+                .map(|n| n.load(Ordering::Relaxed))
+                .collect::<Vec<u64>>(),
+            report.borrow()
+        )
+    }
 }
 
 /// Panics as it is dropped: a user capture of a session's provider.
