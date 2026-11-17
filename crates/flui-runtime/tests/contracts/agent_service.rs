@@ -562,7 +562,7 @@ fn a_recording_streams_the_runtimes_rows_to_its_connection_until_it_stops() {
             &header["clock"],
             &header["keep_text"]
         ),
-        (&json!(5), &json!("virtual"), &json!(false)),
+        (&json!(6), &json!("virtual"), &json!(false)),
         "{header}"
     );
     assert_eq!(

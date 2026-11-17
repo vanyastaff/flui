@@ -21,7 +21,7 @@
 
 /// The input recording format's major version. It changes only with an incompatible change;
 /// unknown fields are skipped within one version.
-pub const FORMAT_VERSION: u32 = 5;
+pub const FORMAT_VERSION: u32 = 6;
 
 /// The header field that names the format and its major version.
 pub const VERSION_KEY: &str = "flui_recording";

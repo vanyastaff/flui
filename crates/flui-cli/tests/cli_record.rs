@@ -21,7 +21,7 @@ use tempfile::TempDir;
 const TOKEN: &str = "0123456789abcdef0123456789abcdef";
 
 const HEADER: &str =
-    r#"{"flui_recording":5,"clock":"virtual","windows":[{"window":1,"scale_factor":2.0}]}"#;
+    r#"{"flui_recording":6,"clock":"virtual","windows":[{"window":1,"scale_factor":2.0}]}"#;
 
 /// A data row at `t`.
 fn deadline(t: u64) -> Value {
