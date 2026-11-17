@@ -1169,6 +1169,13 @@ impl GpuContext {
     /// has built one and none is under way: the first slot to name its
     /// format overlaps the driver's compilation with the application's first
     /// build (ADR-0305 §1). wasm32 builds it on the frame.
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            clippy::unused_self,
+            reason = "wasm32 has no thread to warm pipelines on; the frame builds them"
+        )
+    )]
     pub(crate) fn warm_pipelines(&mut self, format: wgpu::TextureFormat) {
         #[cfg(not(target_arch = "wasm32"))]
         if self.painter.is_none() && self.pipelines.is_none() && self.warmup.is_none() {
@@ -1189,6 +1196,25 @@ impl GpuContext {
         let _ = format;
     }
 
+    /// The library a warm-up built, once its worker is done; `None` when no
+    /// warm-up is under way.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn take_warmed(&mut self) -> Option<PipelineLibrary> {
+        self.warmup
+            .take()
+            .map(crate::pipeline_warmup::PipelineWarmup::finish)
+    }
+
+    /// wasm32 warms nothing up: the frame builds the library.
+    #[cfg(target_arch = "wasm32")]
+    #[expect(
+        clippy::unused_self,
+        reason = "wasm32 has no thread to warm pipelines on; the frame builds them"
+    )]
+    fn take_warmed(&mut self) -> Option<PipelineLibrary> {
+        None
+    }
+
     /// The shared painter, retargeted to `format`; built first, sized for
     /// `size`, when no complete frame left one, over the pipelines an unwound
     /// frame's painter left.
@@ -1206,14 +1232,7 @@ impl GpuContext {
             if self.pipelines.is_none() {
                 // A warm-up's panic resumes here with the warm-up gone, so
                 // the next frame builds the library itself.
-                #[cfg(not(target_arch = "wasm32"))]
-                let warmed = self
-                    .warmup
-                    .take()
-                    .map(crate::pipeline_warmup::PipelineWarmup::finish);
-                #[cfg(target_arch = "wasm32")]
-                let warmed = None;
-                let library = warmed.unwrap_or_else(|| {
+                let library = self.take_warmed().unwrap_or_else(|| {
                     #[cfg(test)]
                     {
                         self.builds.pipeline_sets += 1;
