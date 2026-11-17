@@ -579,6 +579,8 @@ struct Opened {
     note: Option<flui_view::persist::Persisted<Note>>,
     hold: Option<flui_view::CloseHold>,
     lifecycle: Vec<flui_view::AppLifecycleState>,
+    /// How many session-ended notices reached the window.
+    session_ended: usize,
     _observation: Option<flui_view::LifecycleSubscription>,
     _notices: Option<flui_view::HostNoticeSubscription>,
 }
@@ -630,10 +632,14 @@ impl ViewState<Notebook> for NotebookState {
         let lifecycle = Rc::clone(&self.0.opened);
         let save_on_detach = self.0.save_on_detach;
         let panic_at_session_end = self.0.panic_at_session_end;
+        let noticed = Rc::clone(&self.0.opened);
         let notices = ctx
             .lifecycle_handle()
             .expect("a hosted window has a lifecycle")
             .subscribe_notices(move |notice| {
+                if matches!(notice, flui_platform::HostNotice::SessionEnded) {
+                    noticed.borrow_mut().session_ended += 1;
+                }
                 assert!(
                     !(panic_at_session_end
                         && matches!(notice, flui_platform::HostNotice::SessionEnded)),
@@ -665,6 +671,7 @@ impl ViewState<Notebook> for NotebookState {
             note: Some(flui_view::persist::Persisted::open(ctx)),
             hold: self.0.hold_close.then(|| guard.hold()),
             lifecycle: Vec::new(),
+            session_ended: 0,
             _observation: Some(observation),
             _notices: Some(notices),
         };
@@ -880,6 +887,196 @@ fn showing_an_unfocused_window_leaves_it_unfocused() {
         Some(&Inactive),
         "the OS focus never came back"
     );
+}
+
+/// A trip to the background walks the lifecycle down to `Paused` in a
+/// phone's order and tells the application its session may end, with the
+/// window still open; the return walks it back up to `Resumed`.
+///
+/// Fails against a tester that only hides the window: the application stops
+/// at `Hidden` and hears nothing of its session.
+#[test]
+fn a_trip_to_the_background_pauses_the_application_and_its_return_resumes_it() {
+    use flui_view::AppLifecycleState::{Hidden, Inactive, Paused, Resumed};
+
+    use flui_platform::{SessionEndAnswer, TargetPlatform};
+
+    let (view, opened) = notebook(false);
+    let mut t = Tester::mount_in(
+        view,
+        TestWindow::default().platform(TargetPlatform::Android),
+    );
+    opened.borrow_mut().lifecycle.clear();
+    assert_eq!(t.try_foreground(), Err(TestError::InForeground));
+
+    assert_eq!(
+        t.background(),
+        SessionEndAnswer::Proceed,
+        "nothing in flight"
+    );
+    assert_eq!(opened.borrow().lifecycle, [Inactive, Hidden, Paused]);
+    assert_eq!(
+        opened.borrow().session_ended,
+        1,
+        "a phone reports its session may end on each trip to the background"
+    );
+    assert!(
+        !t.is_closed(),
+        "the window stays open for the user's return"
+    );
+    assert_eq!(
+        t.try_background(),
+        Err(TestError::InBackground),
+        "a phone reports no second trip before a return"
+    );
+    assert_eq!(opened.borrow().session_ended, 1, "announced once a trip");
+
+    opened.borrow_mut().lifecycle.clear();
+    t.foreground();
+    assert_eq!(opened.borrow().lifecycle, [Hidden, Inactive, Resumed]);
+}
+
+/// Only a phone leaves the screen this way: a window that names no phone is
+/// refused, and nothing is reported to it.
+#[test]
+fn a_window_that_names_no_phone_has_no_trip_to_the_background() {
+    use flui_platform::TargetPlatform;
+
+    for platform in [
+        None,
+        Some(TargetPlatform::Windows),
+        Some(TargetPlatform::Linux),
+    ] {
+        let (view, opened) = notebook(false);
+        let mut window = TestWindow::default();
+        if let Some(platform) = platform {
+            window = window.platform(platform);
+        }
+        let mut t = Tester::mount_in(view, window);
+        opened.borrow_mut().lifecycle.clear();
+        assert_eq!(
+            t.try_background(),
+            Err(TestError::NotAPhone {
+                platform: platform.unwrap_or(TargetPlatform::Unknown)
+            })
+        );
+        assert!(opened.borrow().lifecycle.is_empty(), "{platform:?}");
+    }
+}
+
+/// A phone's trip to the background with a write still in flight answers
+/// `Block`, so the platform keeps the process running for it (ADR-0350 §2).
+///
+/// Fails against a host that answers `Proceed` to every session end.
+#[test]
+fn a_trip_to_the_background_with_a_write_in_flight_holds_the_process() {
+    use flui_platform::{SessionEndAnswer, TargetPlatform};
+
+    let (view, opened) = notebook(false);
+    let mut t = Tester::mount_in(
+        view,
+        TestWindow::default().platform(TargetPlatform::Android),
+    );
+    let _ = settle(&mut t, note(&opened).load()).expect("an empty storage loads");
+    let storage = t
+        .storage()
+        .cloned()
+        .expect("a mounted window has a storage");
+    let hold = storage.hold_writes();
+    note(&opened)
+        .set(Note("in flight".to_owned()))
+        .expect("a loaded note takes a value");
+    assert_eq!(t.background(), SessionEndAnswer::Block);
+    drop(hold);
+}
+
+/// Closing the application's only window retires it, as on a real host: the
+/// window detaches, and the tester keeps pumping a host with nothing left to
+/// frame.
+///
+/// Fails against a host whose loop asks the retired runtime when to wake:
+/// the close's own frame panics.
+#[test]
+fn closing_the_only_window_retires_the_application() {
+    use flui_view::AppLifecycleState::Detached;
+
+    let (view, opened) = notebook(false);
+    let mut t = Tester::mount(view);
+    assert!(t.request_close(), "nothing holds the window open");
+    assert!(t.is_closed());
+    assert_eq!(opened.borrow().lifecycle.last(), Some(&Detached));
+    t.pump();
+    t.pump_and_settle();
+}
+
+/// The capability a widget acquires.
+struct GreetingCapability;
+
+impl flui_platform::capability::Capability for GreetingCapability {
+    type Handle = &'static str;
+    const NAME: &'static str = "test-greeting";
+}
+
+/// A plugin that provides [`GreetingCapability`] with its greeting.
+struct Greets(&'static str);
+
+impl flui_platform::capability::Plugin for Greets {
+    fn register(&self, registrar: &mut flui_platform::capability::CapabilityRegistrar) {
+        let greeting = self.0;
+        registrar.provide::<GreetingCapability>(
+            move |_: &flui_platform::capability::ProviderContext<'_>| Ok(greeting),
+        );
+    }
+}
+
+/// Shows the greeting [`GreetingCapability`] answers, or the refusal's
+/// reason.
+#[derive(Clone, StatefulView)]
+struct Greeter;
+
+struct GreeterState {
+    shown: String,
+}
+
+impl StatefulView for Greeter {
+    type State = GreeterState;
+
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
+        GreeterState {
+            shown: match ctx.capability::<GreetingCapability>() {
+                Ok(greeting) => greeting.to_owned(),
+                Err(refusal) => format!("{:?}", refusal.reason),
+            },
+        }
+    }
+}
+
+impl ViewState<Greeter> for GreeterState {
+    fn build(&self, _view: &Greeter, _ctx: &dyn BuildContext) -> impl IntoView {
+        Center::new().child(Text::new(self.shown.clone()))
+    }
+}
+
+/// A plugin the test registers answers the application's widget, an
+/// override answers in its place, and a relaunch registers both again;
+/// without either the widget is refused, as in a run without them.
+#[test]
+fn a_plugin_the_test_registers_answers_and_an_override_replaces_it() {
+    let mut t = Tester::mount(Greeter);
+    t.expect(find::text("NotRegistered")).to_exist();
+
+    let mut t = Tester::mount_in(Greeter, TestWindow::default().plugin(Greets("hello")));
+    t.expect(find::text("hello")).to_exist();
+
+    let window = TestWindow::default()
+        .plugin(Greets("hello"))
+        .capability::<GreetingCapability>(|_: &flui_platform::capability::ProviderContext<'_>| {
+            Ok("overridden")
+        });
+    let mut t = Tester::mount_in(Greeter, window);
+    t.expect(find::text("overridden")).to_exist();
+    let mut t = t.restart();
+    t.expect(find::text("overridden")).to_exist();
 }
 
 /// A restart is the user quitting and opening the application again: a write

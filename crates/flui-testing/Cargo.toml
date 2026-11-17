@@ -24,6 +24,13 @@ autotests = false
 [lints]
 workspace = true
 
+[features]
+# The scripted HTTP client the headless host registers, as a runner registers
+# HTTP only with its own `http` feature: the facade's `http` turns both on, so
+# a test runs with the capabilities the application's build has. This crate's
+# own tests turn it on through the dev-dependency on itself.
+http = []
+
 [dependencies]
 # The virtual clock (`ManualClock`) + clock-bound gesture arena (deadline
 # polling). `features = ["testing"]` on the NORMAL edge, not just the dev one:
@@ -115,6 +122,7 @@ flui-protocol = { workspace = true, features = ["serde"] }
 rustc-hash = { workspace = true }
 
 [dev-dependencies]
+flui-testing = { path = ".", features = ["http"] }
 static_assertions.workspace = true
 # `CountingWaker` and `panicking_waker` for tests that count or fail a waker.
 flui-foundation = { workspace = true, features = ["testing"] }

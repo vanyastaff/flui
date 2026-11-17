@@ -49,7 +49,7 @@ fn host_on(window: HeadlessWindow, log: &Rc<RefCell<Vec<&'static str>>>) -> Head
 /// not committed, so pointer input waits for the next presented frame.
 fn uncommitted(log: &Rc<RefCell<Vec<&'static str>>>) -> HeadlessHost {
     let mut host = attached(HeadlessWindow::new(200, 200), log);
-    host.defer_presents(1);
+    host.leave_unshown(1, flui_testing::UnshownFrame::NotReady);
     let _ = host.pump(Duration::from_millis(16));
     host
 }

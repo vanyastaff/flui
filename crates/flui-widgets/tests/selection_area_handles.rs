@@ -28,7 +28,7 @@ use flui_widgets::{
     SelectionInput, SizedBox, Text, WidgetsApp,
 };
 
-use crate::common::{LaidOut, lay_out, tight};
+use crate::common::{LaidOut, lay_out_on, tight};
 
 const WORDS: &str = "alpha beta gamma";
 
@@ -64,7 +64,11 @@ impl Scene {
     }
 
     fn laid_out(app: WidgetsApp, heard: Heard) -> Self {
-        let mut laid = lay_out(app, tight(400.0, 300.0));
+        let mut laid = lay_out_on(
+            app,
+            tight(400.0, 300.0),
+            flui_platform::TargetPlatform::Linux,
+        );
         laid.pump();
         Self { laid, heard }
     }
@@ -584,7 +588,11 @@ fn with_failing_wake() -> (Scene, std::sync::Arc<std::sync::atomic::AtomicBool>)
     use std::sync::atomic::{AtomicBool, Ordering};
 
     let armed = Arc::new(AtomicBool::new(false));
-    let mut laid = lay_out(SizedBox::new(1.0, 1.0), tight(400.0, 300.0));
+    let mut laid = lay_out_on(
+        SizedBox::new(1.0, 1.0),
+        tight(400.0, 300.0),
+        flui_platform::TargetPlatform::Linux,
+    );
     let arm = Arc::clone(&armed);
     laid.with_build_owner_mut(|owner| {
         owner.set_on_build_scheduled(move || {
@@ -956,7 +964,11 @@ pub(crate) fn failing_wakes_as_the_focus_leaves_are_reported_not_raised() {
         Arc::new(AtomicBool::new(false)),
         Arc::new(AtomicUsize::new(0)),
     );
-    let mut laid = lay_out(SizedBox::new(1.0, 1.0), tight(400.0, 300.0));
+    let mut laid = lay_out_on(
+        SizedBox::new(1.0, 1.0),
+        tight(400.0, 300.0),
+        flui_platform::TargetPlatform::Linux,
+    );
     let (arm, count) = (Arc::clone(&armed), Arc::clone(&failures));
     laid.with_build_owner_mut(|owner| {
         owner.set_on_build_scheduled(move || {

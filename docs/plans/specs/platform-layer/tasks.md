@@ -7476,6 +7476,66 @@ GPU-память простаивающего или невидимого окн
   сценарий отзыва после `OleUninitialize` здесь не воспроизведён, удержание — по типам. Ожидание
   trybuild `owner_platform_is_not_send` не устарело: локально у тулчейна нет `rust-src`, и
   фрагменты из `$RUST/core` выпадают из вывода; на CI (с `rust-src`) оно верно.
+- [ ] **LY145** — ветка `testing/headless-fidelity`. Проверено на `main` @ `817b30989`.
+  Закрытие: `HeadlessHost` больше не держит основное окно отдельно — открытые окна одним списком,
+  основное читается и после закрытия; окно, которое переживает другое, закрывается через
+  `close_presentation_entered` (снимается, фокус ОС переходит к выжившему), последнее
+  останавливает представление и роняет `UiRuntime`, как владелец отставляет runtime без
+  представлений, так что удержанные ответы кончаются `OwnerRetired`, их замыкания не исполняются
+  (`is_retired`; накачка отставленного хоста двигает только время, сценарий, записи и фоновые
+  дорожки). Тем же путём закрывает и `LaidOut::request_close` (теперь `&mut self`; старый путь
+  «только остановить» был второй его формой); `UiRuntime::stop_presentation_for_test` удалён.
+  Встроенные возможности — как у runner: primary selection только на Linux (по платформе
+  основного окна), сценарный HTTP только с фичей `http` у `flui-testing`, которую фасадный `http`
+  включает вместе с `flui-app/http`; возможность нативного окна принадлежит `flui-app` и выше
+  этого крейта — тест виджета с `flui::native` идёт на `flui_app::testing` (записано в
+  `ARCHITECTURE.md`). Плагины и override: `TestWindow::plugin`, `TestWindow::capability` (в
+  ярусах runner, перезапуск регистрирует заново). Жизненный цикл: `set_window_execution`,
+  `notify` (сон, пробуждение, блокировка, давление памяти), `leave_unshown` с `UnshownFrame`
+  (не готова, снята, потеряна, устройство потеряно, сбой, отказ) вместо `defer_presents`;
+  `end_session(Ending)` доставляет уведомление о конце сеанса до записи, как runner;
+  `Tester::background`/`foreground` в порядке Android и UIKit, окно остаётся открытым
+  (ADR-0350 §2); доки `set_window_visible` больше не обещают фон телефона. Сервисы:
+  `ServiceContext::lifecycle` — `LifecycleWatch` (наиболее активное состояние живых runtime,
+  `Detached` без них, `current`/`changed`), его кормит runner там, где строит каждый runtime;
+  давление памяти сервис уже получает через `AppConfig::memory_reclaim` — эта половина находки
+  опровергнута. Нативный headless-хост (`flui-native`) уже доставляет исполнение, поверхность и
+  уведомления (`simulate_execution_state`, `simulate_surface_change`,
+  `HeadlessHostEvents::notice`) — для него находка устарела. Тесты, в скобках результат с
+  откатом: `closing_the_focused_window_moves_the_focus_to_a_survivor` (TAB уходит в закрытое
+  окно); строка последнего окна в `a_read_pending_when_its_runtime_drops_ends_as_owner_retired`
+  (замыкание исполняется); `a_dialog_of_the_last_window_ends_with_its_runtime` (заменил
+  `a_dialog_ends_when_its_window_begins_to_close`, который проверял остановку без отставки);
+  строки платформ в `a_runtime_without_a_primary_selection_answers_not_registered` и строка
+  Windows в `a_middle_press_pastes_the_primary_selection_where_it_lands` (вставка проходит под
+  Windows); `a_plugin_the_test_registers_answers_and_an_override_replaces_it` (`NotRegistered`);
+  `a_trip_to_the_background_pauses_the_application_and_its_return_resumes_it` (лестница
+  останавливается на `Hidden`, уведомления нет); `an_unshown_frame_is_recovered_as_its_reason_says`
+  (кадр засчитан показанным); `a_system_notice_reaches_the_subscribers`;
+  `a_service_watches_the_application_pause_and_resume` (`Detached` всё время). Тесты выделения и
+  средней кнопки называют `TargetPlatform::Linux` (`lay_out_on`, `harness::mount_with_ime_on`).
+  По независимому чтению: закрытие, которого просит виджет (`WindowHandle::request_close`), идёт
+  в очередь и исполняется на следующем ходе после вопроса стражу, как в очереди окна runner
+  (`a_close_a_widget_asks_for_is_carried_out_at_the_next_turn`); каждое созревшее закрытие
+  исполняется в сдерживании, первая паника — после всех
+  (`every_due_close_is_carried_out_past_one_that_panics`); созревшее закрытие `Program` — согласие
+  на выход, само ничего не закрывает
+  (`a_held_program_close_is_consent_to_a_quit_and_closes_nothing`); выход `request_quit` опрашивает
+  все окна, откладывается на записанном отказе и отменяется оставленным окном
+  (`a_quit_nothing_holds_closes_every_window`, `a_quit_a_hold_refuses_waits_for_its_release`,
+  `a_quit_a_window_stays_open_for_is_cancelled`); конец сеанса следует платформе окна: десктоп
+  закрывает и отставляет, телефон оставляет окна и отвечает `Block`, пока записи в полёте
+  (`a_session_end_follows_the_platform_the_window_names`,
+  `a_trip_to_the_background_with_a_write_in_flight_holds_the_process`); поездка в фон — только на
+  телефоне и одна до возврата (`a_window_that_names_no_phone_has_no_trip_to_the_background`);
+  закрытое окно не слышит ввода и фактов, команды его ручки отвечают `Closed`;
+  `close_delivery_is_idempotent` теперь действительно пробует повторное закрытие из наблюдателя;
+  `LifecycleWatch` кончается с циклом, следующий запуск получает свежий
+  (`a_service_watches_the_application_pause_and_resume`); ранг состояний —
+  `AppLifecycleState::most_active`, общий с агрегатом runtime. Строка не отмечена: headless-хост
+  зеркалит ход владельца runner, а не вызывает его (`flui-testing` ниже `flui-app`), и остаётся
+  без обработчика закрытия приложения, уведомления `SessionEnding`, возможности нативного окна и
+  моста хоста — запись `docs/gaps.md` «The headless host mirrors the runner's owner turn».
 - [x] **LY154** — ветка `docs/platform-citations`. Цитаты Flutter читаются по коммиту тега 3.50.0,
   `flutter/flutter@ab2912035e` (правило `owner/repo@sha` в ADR-0151, 0152, 0154, 0254, 0255 стоит;
   рядом для читателя «3.50.0»); исходники читались через `gh` и неглубокий клон в `.flutter/`.
@@ -8388,6 +8448,7 @@ LY104–LY113 и задачи второго прохода LY114–LY154 сво
 | `submit_reports_a_refusal_and_a_closed_window` | LY42 | под этим именем не был; `a_refused_command_is_never_queued`, `a_closed_window_answers_closed` (`crates/flui-app/src/app/window_control_tests.rs`) |
 | `a_window_step_and_its_destruction_reach_every_hook_in_order` | LY29 | снят самой LY29, как запись и говорит |
 | `a_state_change_survives_a_failed_callback` | LY41 | снят в #1915 вместе с `owner::handlers`; паника при доставке фактов окна — `a_panicking_delivery_keeps_the_later_facts` (`flui-app`, `owner_dispatch/state_follow_tests.rs`) |
+| `a_dialog_ends_when_its_window_begins_to_close` | LY143 | снят в LY145: последнее окно отставляет runtime; правило держат `a_dialog_ends_with_its_window` и `a_dialog_of_the_last_window_ends_with_its_runtime` (`crates/flui-system/tests/dialogs.rs`) |
 | `KeyboardSource` | LY83 | под этим именем в коде не был; источник раскладки — `KeymapSource` (`input/linux/xkb.rs`) |
 | `owner/handlers.rs` | LY26 | удалён в #2650; точка вызова — `owner/call_point.rs`, доставка окна — `owner/window_delivery.rs` |
 | `window_placement.rs` | LY27 | с #1864 — `window/windows/` (`window.rs`, `set.rs`, `proc.rs`) |

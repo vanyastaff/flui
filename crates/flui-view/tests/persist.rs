@@ -1141,7 +1141,7 @@ fn a_hide_while_clean_does_not_hurry_a_later_busy_retry() {
 }
 
 /// A case of a retry hurried: its name and what hurries it.
-struct HurryCase(&'static str, fn(&LaidOut));
+struct HurryCase(&'static str, fn(&mut LaidOut));
 
 /// A retry waiting out its back-off runs at once when the application is
 /// hidden or a close is asked for, not when the back-off ends.
@@ -1159,7 +1159,7 @@ fn a_hidden_application_or_a_close_retries_a_busy_write_at_once() {
         storage.fail_next(StorageError::Busy);
         assert!(notes.set(Note("second".into())).is_ok());
         laid.pump();
-        hurry(&laid);
+        hurry(&mut laid);
         laid.pump();
         laid.pump();
         assert_eq!(

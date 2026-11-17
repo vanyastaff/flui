@@ -47,7 +47,7 @@ use flui_view::dev_agent::{AgentAnswer, AgentWindow, DevAgentHook, InputLease};
 use flui_view::{CloseReason, View};
 use parking_lot::Mutex;
 
-use crate::host::KitStorage;
+use crate::host::{AppRegistrations, KitStorage};
 use crate::storage::{MemoryStorage, RunId};
 use crate::{HeadlessDevAgent, HeadlessHost, HeadlessWindow};
 
@@ -74,14 +74,30 @@ const VISIBLE_READS: usize = 4;
 const DUE_NOW_FRAMES: u32 = 8;
 
 /// The window a [`Tester`] mounts its view in: its logical size, the
-/// platform whose conventions the application follows, and the storage its
-/// documents are kept in.
-#[derive(Debug, Clone)]
+/// platform whose conventions the application follows, the storage its
+/// documents are kept in, and the capability providers the application
+/// registers.
+#[derive(Clone)]
 pub struct TestWindow {
     width: u32,
     height: u32,
     platform: Option<flui_platform::TargetPlatform>,
     storage: WindowStorage,
+    registrations: AppRegistrations,
+}
+
+impl std::fmt::Debug for TestWindow {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let (overrides, plugins) = self.registrations.counts();
+        f.debug_struct("TestWindow")
+            .field("width", &self.width)
+            .field("height", &self.height)
+            .field("platform", &self.platform)
+            .field("storage", &self.storage)
+            .field("overrides", &overrides)
+            .field("plugins", &plugins)
+            .finish()
+    }
 }
 
 /// Where a [`TestWindow`]'s application keeps its documents.
@@ -105,7 +121,33 @@ impl TestWindow {
             height,
             platform: None,
             storage: WindowStorage::Fresh,
+            registrations: AppRegistrations::new(),
         }
+    }
+
+    /// Register `plugin`'s providers, as `Application::plugin` does: a widget
+    /// acquires what it provides and nothing else does. A
+    /// [`restart`](Tester::restart) registers it again.
+    ///
+    /// The mount panics when two registrations conflict, as a run fails
+    /// before its platform starts.
+    #[must_use]
+    pub fn plugin(mut self, plugin: impl flui_platform::capability::Plugin) -> Self {
+        self.registrations.plugin(plugin);
+        self
+    }
+
+    /// Provide the capability `C` with `provider`, in place of the built-in
+    /// one and of any plugin's, as `Application::capability` does.
+    ///
+    /// The mount panics when two registrations conflict.
+    #[must_use]
+    pub fn capability<C: flui_platform::capability::Capability>(
+        mut self,
+        provider: impl flui_platform::capability::CapabilityProvider<C>,
+    ) -> Self {
+        self.registrations.capability::<C, _>(provider);
+        self
     }
 
     /// Follow `platform`'s conventions (chords, handles, menus, transitions)
@@ -286,6 +328,22 @@ pub enum TestError {
         /// How many children the inspection left out.
         children: u32,
     },
+    /// A trip to the background or back was asked of a window that names no
+    /// phone: only Android and iOS leave the screen that way.
+    #[error(
+        "{platform:?} is no phone: only a window that names Android or iOS goes to the background"
+    )]
+    NotAPhone {
+        /// The platform the window names.
+        platform: flui_platform::TargetPlatform,
+    },
+    /// A trip to the background was asked while the application is already
+    /// there: a phone reports no second trip before a return.
+    #[error("the application is already in the background; bring it back with `foreground` first")]
+    InBackground,
+    /// A return was asked while the application is not in the background.
+    #[error("the application is not in the background; send it there with `background` first")]
+    InForeground,
 }
 
 impl From<ErrorObject> for TestError {
@@ -333,6 +391,9 @@ pub struct Tester {
     run: Option<RunId>,
     /// Mounts the same view again in a window: what [`Tester::restart`] runs.
     relaunch: Rc<dyn Fn(TestWindow) -> Tester>,
+    /// Whether the application is on a trip to the background
+    /// ([`Tester::background`]).
+    in_background: bool,
 }
 
 impl std::fmt::Debug for Tester {
@@ -388,12 +449,13 @@ impl Tester {
         let windows = Arc::new(Mutex::new(Vec::new()));
         let mut agent = HeadlessDevAgent::attach(Windows(Arc::clone(&windows)));
         let (run_storage, run) = storage.as_ref().map(MemoryStorage::for_run).unzip();
-        let mut host = HeadlessHost::with_storage(
+        let mut host = HeadlessHost::with_application(
             headless,
             run_storage.map(|storage| KitStorage {
                 host: Arc::new(storage),
                 provided: None,
             }),
+            config.registrations.clone(),
         )
         .with_dev_agent(&mut agent);
         host.attach(&view)
@@ -415,6 +477,7 @@ impl Tester {
             held_keys: Vec::new(),
             run,
             relaunch: Rc::new(move |window| Self::mount_in(view.clone(), window)),
+            in_background: false,
         };
         // The window collects semantics from the frame after its agent took
         // it; run that frame so the first locate reads a tree.
@@ -1169,9 +1232,11 @@ impl Tester {
         }
     }
 
-    /// Stop this run and launch the same view in the same window over the
-    /// same storage, as when the application quits and is opened again: the
-    /// window commits its composition and closes past every hold, what the
+    /// End this run by force and launch the same view in the same window over
+    /// the same storage, as when the application is made to quit and is
+    /// opened again. Nothing is asked, unlike a quit the user asks for
+    /// ([`request_quit`](Self::request_quit)): the window commits its
+    /// composition and closes past every hold, what the
     /// documents published is written (a write the storage holds is not
     /// waited for: it lands when the hold ends, ahead of the next run's,
     /// which read the storage without it and so conflicts with it, as on a
@@ -1243,22 +1308,140 @@ impl Tester {
         self.host.is_closed(self.host.primary_window())
     }
 
-    /// The operating system ends the user's session: the session-ended notice
-    /// reaches the application, the window commits its composition and closes
-    /// past every hold, as a session that is ending no longer asks, and then
-    /// what the application's documents published is written, as in
-    /// [`Self::restart`]: a write the storage holds is not waited for, and
-    /// what any document still owes then is lost.
-    pub fn end_session(&mut self) {
-        self.host.end_session_now();
+    /// The user quits the application, as `AppHandle::request_quit` and
+    /// AppKit's Dock Quit ask it (ADR-0350 §1): the frame after asks the
+    /// window, as for the program's close; a refusal its guard records
+    /// defers the quit until the hold is released, a refusal without one
+    /// cancels it and leaves the window as it was, and a quit nothing holds
+    /// closes the window, writes what the documents published and ends the
+    /// run ([`is_closed`](Self::is_closed)).
+    pub fn request_quit(&mut self) {
+        self.host.request_quit();
+        self.run_due_now();
+    }
+
+    /// The operating system ends the user's session, as the platform the
+    /// window names does it ([`HeadlessHost::end_session`]): on a desktop the
+    /// session-ended notice reaches the application, the window commits its
+    /// composition and closes past every hold, as a session that is ending no
+    /// longer asks, and what the documents published is written, as in
+    /// [`Self::restart`] (a write the storage holds is not waited for, and
+    /// what any document still owes then is lost); on a phone the notice and
+    /// the write leave the window open. Returns the application's answer:
+    /// [`Block`](flui_platform::SessionEndAnswer::Block) on a phone while
+    /// writes are in flight.
+    pub fn end_session(&mut self) -> flui_platform::SessionEndAnswer {
+        self.host
+            .end_session(flui_platform::SessionEndPhase::Ending)
     }
 
     /// The window becomes hidden (`false`) or shown again (`true`), as when
-    /// the user minimizes it or switches away on a phone; then the frame that
-    /// reports it runs.
+    /// the user minimizes it or another window covers it on a desktop; then
+    /// the frame that reports it runs. Its focus and whether it may run stay
+    /// as they were: a phone's trip to the background is
+    /// [`background`](Self::background).
     pub fn set_window_visible(&mut self, visible: bool) {
         self.host.set_window_visible(visible);
         self.run_due_now();
+    }
+
+    /// The application leaves the screen on a phone, in the order Android
+    /// and UIKit report it: the window loses the focus, its execution is
+    /// suspended, it is hidden, and then the session's end is announced once
+    /// for the trip: the session-ended notice arrives and what the documents
+    /// published is written (ADR-0350 §2). The window stays open;
+    /// [`foreground`](Self::foreground) brings it back. Then the frame that
+    /// reports it runs. Returns the application's answer to the session's
+    /// end: [`Block`](flui_platform::SessionEndAnswer::Block) while writes are
+    /// in flight, released once they end
+    /// ([`HeadlessHost::session_end_releases`]).
+    ///
+    /// # Errors
+    ///
+    /// [`TestError::NotAPhone`] for a window that names no phone (only
+    /// Android and iOS leave the screen this way), and
+    /// [`TestError::InBackground`] while the application is already in the
+    /// background: a phone reports no second trip before a return.
+    ///
+    /// # Panics
+    ///
+    /// With the first panic of a notice subscriber or the write.
+    pub fn try_background(&mut self) -> Result<flui_platform::SessionEndAnswer, TestError> {
+        self.phone()?;
+        if self.in_background {
+            return Err(TestError::InBackground);
+        }
+        self.in_background = true;
+        let window = self.host.primary_window();
+        self.host.set_window_focused(false);
+        self.host
+            .set_window_execution(window, flui_platform::WindowExecutionState::Suspended);
+        self.host.set_window_visible(false);
+        let answer = self
+            .host
+            .end_session(flui_platform::SessionEndPhase::Ending);
+        self.run_due_now();
+        Ok(answer)
+    }
+
+    /// [`try_background`](Self::try_background), panicking at its caller
+    /// with its refusal.
+    ///
+    /// # Panics
+    ///
+    /// When `try_background` refuses, or as it panics.
+    #[track_caller]
+    pub fn background(&mut self) -> flui_platform::SessionEndAnswer {
+        self.try_background()
+            .unwrap_or_else(|error| panic!("{error}"))
+    }
+
+    /// The application comes back to the screen on a phone, in the order
+    /// Android and UIKit report it: the window is shown, it may run again,
+    /// and it takes the focus. Then the frame that reports it runs.
+    ///
+    /// # Errors
+    ///
+    /// [`TestError::NotAPhone`] for a window that names no phone, and
+    /// [`TestError::InForeground`] when the application is not in the
+    /// background.
+    pub fn try_foreground(&mut self) -> Result<(), TestError> {
+        self.phone()?;
+        if !self.in_background {
+            return Err(TestError::InForeground);
+        }
+        self.in_background = false;
+        let window = self.host.primary_window();
+        self.host.set_window_visible(true);
+        self.host
+            .set_window_execution(window, flui_platform::WindowExecutionState::Running);
+        self.host.set_window_focused(true);
+        self.run_due_now();
+        Ok(())
+    }
+
+    /// [`try_foreground`](Self::try_foreground), panicking at its caller
+    /// with its refusal.
+    ///
+    /// # Panics
+    ///
+    /// When `try_foreground` refuses.
+    #[track_caller]
+    pub fn foreground(&mut self) {
+        self.try_foreground()
+            .unwrap_or_else(|error| panic!("{error}"));
+    }
+
+    /// `Ok` when the window names a phone.
+    fn phone(&self) -> Result<(), TestError> {
+        match self.config.platform {
+            Some(flui_platform::TargetPlatform::Android | flui_platform::TargetPlatform::iOS) => {
+                Ok(())
+            }
+            platform => Err(TestError::NotAPhone {
+                platform: platform.unwrap_or(flui_platform::TargetPlatform::Unknown),
+            }),
+        }
     }
 
     /// The window loses (`false`) or regains (`true`) the operating system's

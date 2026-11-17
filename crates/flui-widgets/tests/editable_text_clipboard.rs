@@ -31,11 +31,34 @@ fn mount_field(
     controller: &TextEditingController,
     configure: impl FnOnce(EditableText) -> EditableText,
 ) -> (crate::common::harness::Harness, Rc<FocusNode>) {
+    mount_field_on(
+        controller,
+        configure,
+        flui_platform::TargetPlatform::Unknown,
+    )
+}
+
+/// [`mount_field`] on Linux, the platform with a primary selection.
+fn mount_linux_field(
+    controller: &TextEditingController,
+    configure: impl FnOnce(EditableText) -> EditableText,
+) -> (crate::common::harness::Harness, Rc<FocusNode>) {
+    mount_field_on(controller, configure, flui_platform::TargetPlatform::Linux)
+}
+
+fn mount_field_on(
+    controller: &TextEditingController,
+    configure: impl FnOnce(EditableText) -> EditableText,
+    platform: flui_platform::TargetPlatform,
+) -> (crate::common::harness::Harness, Rc<FocusNode>) {
     let focus_node = FocusNode::with_debug_label("clipboard field");
-    let harness = crate::common::harness::mount(configure(EditableText::new(
-        controller.clone(),
-        Rc::clone(&focus_node),
-    )));
+    let harness = crate::common::harness::mount_on(
+        configure(EditableText::new(
+            controller.clone(),
+            Rc::clone(&focus_node),
+        )),
+        platform,
+    );
     let _ = focus_node.request_focus();
     assert!(focus_node.has_primary_focus(), "precondition: focused");
     (harness, focus_node)
@@ -407,7 +430,7 @@ pub(crate) fn paste_rechecks_focus_after_committing_composition() {
 /// Fails without the change: nothing claimed the primary selection.
 pub(crate) fn a_field_selection_is_offered_lazily_as_the_primary_selection() {
     let controller = TextEditingController::with_text("hello world");
-    let (harness, _node) = mount_field(&controller, |field| field);
+    let (harness, _node) = mount_linux_field(&controller, |field| field);
     let primary = harness.primary_selection();
     assert!(!primary.is_claimed(), "a caret selects nothing");
     controller.set_selection(0, 5);
@@ -432,7 +455,7 @@ pub(crate) fn a_field_selection_is_offered_lazily_as_the_primary_selection() {
     assert!(!primary.is_claimed(), "an empty selection lets go");
 
     let secret = TextEditingController::with_text("secret");
-    let (harness, _node) = mount_field(&secret, |field| field.obscure_text(true));
+    let (harness, _node) = mount_linux_field(&secret, |field| field.obscure_text(true));
     secret.set_selection(0, 6);
     assert!(
         !harness.primary_selection().is_claimed(),
@@ -441,18 +464,38 @@ pub(crate) fn a_field_selection_is_offered_lazily_as_the_primary_selection() {
 }
 
 /// A middle press pastes the primary selection where it lands, once the
-/// read settles, and starts no selection drag.
+/// read settles, and starts no selection drag. Under a platform without a
+/// primary selection the press pastes nothing, as on that platform.
 ///
 /// Fails without the change: the press moved the caret and pasted nothing.
+/// The Windows row fails against a headless host that provides a primary
+/// selection on every platform: the press pastes it there too.
 pub(crate) fn a_middle_press_pastes_the_primary_selection_where_it_lands() {
     use flui_interaction::events::PointerButton;
 
     let controller = TextEditingController::with_text("abc");
+    let mut harness = crate::common::harness::mount_with_ime_on(
+        EditableText::new(
+            controller.clone(),
+            FocusNode::with_debug_label("windows field"),
+        ),
+        flui_platform::TargetPlatform::Windows,
+    );
+    harness.primary_selection().select("XY\n");
+    harness.dispatch_pointer_down_with_button(1.0, 5.0, PointerButton::AUXILIARY);
+    harness.tick();
+    assert_eq!(
+        controller.text(),
+        "abc",
+        "Windows has no primary selection to paste"
+    );
+
+    let controller = TextEditingController::with_text("abc");
     let focus_node = FocusNode::with_debug_label("middle-pressed field");
-    let mut harness = crate::common::harness::mount_with_ime(EditableText::new(
-        controller.clone(),
-        Rc::clone(&focus_node),
-    ));
+    let mut harness = crate::common::harness::mount_with_ime_on(
+        EditableText::new(controller.clone(), Rc::clone(&focus_node)),
+        flui_platform::TargetPlatform::Linux,
+    );
     harness.primary_selection().select("XY\n");
 
     harness.dispatch_pointer_down_with_button(1.0, 5.0, PointerButton::AUXILIARY);
@@ -478,7 +521,7 @@ pub(crate) fn a_middle_press_pastes_the_primary_selection_where_it_lands() {
 pub(crate) fn a_selection_held_before_mounting_is_offered() {
     let controller = TextEditingController::with_text("hello world");
     controller.set_selection(0, 5);
-    let (harness, _node) = mount_field(&controller, |field| field);
+    let (harness, _node) = mount_linux_field(&controller, |field| field);
     let primary = harness.primary_selection();
     assert!(primary.is_claimed(), "the existing selection is claimed");
     assert_eq!(primary.text().as_deref(), Some("hello"));
@@ -492,10 +535,10 @@ pub(crate) fn a_panicking_listener_keeps_the_middle_press_paste() {
 
     let controller = TextEditingController::with_text("abc");
     let focus_node = FocusNode::with_debug_label("middle-pressed field");
-    let mut harness = crate::common::harness::mount_with_ime(EditableText::new(
-        controller.clone(),
-        Rc::clone(&focus_node),
-    ));
+    let mut harness = crate::common::harness::mount_with_ime_on(
+        EditableText::new(controller.clone(), Rc::clone(&focus_node)),
+        flui_platform::TargetPlatform::Linux,
+    );
     harness.primary_selection().select("XY");
     harness.dispatch_pointer_down_with_button(1.0, 5.0, PointerButton::AUXILIARY);
 
@@ -571,15 +614,18 @@ impl Drop for CollapsesOnDrop {
 pub(crate) fn a_selection_changed_while_the_field_claims_stands() {
     let controller = TextEditingController::with_text("hello world");
     let handle = Rc::new(std::cell::RefCell::new(None));
-    let harness = crate::common::harness::mount(flui_widgets::Column::new((
-        PrimaryAcquirer {
-            handle: Rc::clone(&handle),
-        },
-        EditableText::new(
-            controller.clone(),
-            FocusNode::with_debug_label("re-entered field"),
-        ),
-    )));
+    let harness = crate::common::harness::mount_on(
+        flui_widgets::Column::new((
+            PrimaryAcquirer {
+                handle: Rc::clone(&handle),
+            },
+            EditableText::new(
+                controller.clone(),
+                FocusNode::with_debug_label("re-entered field"),
+            ),
+        )),
+        flui_platform::TargetPlatform::Linux,
+    );
     let primary = harness.primary_selection();
     let other = handle
         .borrow()
@@ -637,7 +683,10 @@ pub(crate) fn an_unobscuring_rebuild_claims_for_the_new_controller() {
             EditableText::new(controller.clone(), Rc::clone(&focus)).obscure_text(obscure),
         ))
     };
-    let mut harness = crate::common::harness::mount(field(&secret, true));
+    let mut harness = crate::common::harness::mount_on(
+        field(&secret, true),
+        flui_platform::TargetPlatform::Linux,
+    );
     let primary = harness.primary_selection();
     assert!(!primary.is_claimed(), "an obscured field offers nothing");
     let read = Rc::new(std::cell::RefCell::new(Vec::new()));

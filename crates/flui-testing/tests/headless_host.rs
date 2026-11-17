@@ -4,14 +4,14 @@
 
 use std::cell::{Cell, RefCell};
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::rc::{Rc, Weak};
+use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use flui_foundation::geometry::Size;
 use flui_rendering::prelude::{BoxLayoutContext, BoxParentData, Leaf, PaintContext, RenderBox};
-use flui_testing::widgets::{LaidOut, lay_out, tight};
+use flui_testing::widgets::{lay_out, tight};
 use flui_testing::{HeadlessHost, HeadlessWindow};
 use flui_view::{
     AppLifecycleState, BuildContext, CloseReason, IntoView, LifecycleContext, RenderView,
@@ -239,27 +239,39 @@ fn an_uncontained_unwind_is_raised_as_itself() {
     let _outcome = assert_progress_after_unwind(&mut ui_runtime);
 }
 
-/// Counts the Detached deliveries its presentation makes, and asks for the
-/// close again from inside the first one, as an application closing its
-/// window from a lifecycle observer does.
+/// Counts the Detached deliveries its window makes, and asks its window to
+/// close again from inside the first one, through the window's handle, as an
+/// application closing its window from a lifecycle observer does.
 #[derive(Clone)]
 struct ClosesAgainOnDetach {
     detached: Rc<Cell<usize>>,
-    tree: Rc<RefCell<Weak<LaidOut>>>,
+    /// What each close asked from inside the observer was answered.
+    asked: Rc<RefCell<Vec<Result<(), flui_view::WindowClosed>>>>,
 }
 
+/// Born subscribed: the subscription lives as long as the state.
 struct ClosesAgainOnDetachState {
-    view: ClosesAgainOnDetach,
-    observation: Option<flui_view::LifecycleSubscription>,
+    _observation: flui_view::LifecycleSubscription,
 }
 
 impl StatefulView for ClosesAgainOnDetach {
     type State = ClosesAgainOnDetachState;
 
-    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
+        let ClosesAgainOnDetach { detached, asked } = self.clone();
+        let handle = ctx.window().expect("a hosted window has a handle");
+        let (_, observation) = ctx
+            .lifecycle_handle()
+            .expect("a ui_runtime presentation has a lifecycle")
+            .subscribe(move |state| {
+                if state == AppLifecycleState::Detached {
+                    detached.set(detached.get() + 1);
+                    asked.borrow_mut().push(handle.request_close());
+                }
+            })
+            .expect("the presentation is open");
         ClosesAgainOnDetachState {
-            view: self.clone(),
-            observation: None,
+            _observation: observation,
         }
     }
 }
@@ -271,57 +283,114 @@ impl View for ClosesAgainOnDetach {
 }
 
 impl ViewState<ClosesAgainOnDetach> for ClosesAgainOnDetachState {
-    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        let ClosesAgainOnDetach { detached, tree } = self.view.clone();
-        let (_, observation) = ctx
-            .lifecycle_handle()
-            .expect("a ui_runtime presentation has a lifecycle")
-            .subscribe(move |state| {
-                if state == AppLifecycleState::Detached {
-                    detached.set(detached.get() + 1);
-                    if let Some(tree) = tree.borrow().upgrade() {
-                        tree.request_close(CloseReason::User);
-                    }
-                }
-            })
-            .expect("the presentation is open");
-        self.observation = Some(observation);
-    }
-
     fn build(&self, _view: &ClosesAgainOnDetach, _ctx: &dyn BuildContext) -> impl IntoView {
         flui_widgets::SizedBox::new(10.0, 10.0)
     }
 }
 
-/// One close is delivered once: a close requested again from inside the
-/// Detached observer, and the close the UI runtime repeats when it drops, deliver
-/// nothing a second time.
+/// One close is delivered once: a close the window asks for again from
+/// inside its Detached observer reaches the host and closes nothing more,
+/// the turn after carries nothing out, and the close the UI runtime repeats
+/// as it retires delivers nothing a second time.
 ///
-/// Holds before the shared close delivery exists, because the lifecycle
-/// source commits Detached only once; it stays as the guard that the
-/// delivery's latch keeps it so.
+/// Fails against a host that carries out the ask the observer makes while
+/// its window closes: the retired host's next turn panics reaching the UI
+/// runtime it dropped.
 #[test]
 fn close_delivery_is_idempotent() {
     let detached = Rc::new(Cell::new(0));
-    let slot = Rc::new(RefCell::new(Weak::new()));
-    let tree = Rc::new(lay_out(
-        ClosesAgainOnDetach {
-            detached: Rc::clone(&detached),
-            tree: Rc::clone(&slot),
-        },
-        tight(10.0, 10.0),
-    ));
-    *slot.borrow_mut() = Rc::downgrade(&tree);
+    let asked = Rc::new(RefCell::new(Vec::new()));
+    let mut host = HeadlessHost::new(HeadlessWindow::new(10, 10));
+    host.attach(&ClosesAgainOnDetach {
+        detached: Rc::clone(&detached),
+        asked: Rc::clone(&asked),
+    })
+    .expect("a fresh host has no root");
+    let _ = host.pump(Duration::ZERO);
+    let primary = host.primary_window();
 
-    tree.request_close(CloseReason::User);
-    tree.request_close(CloseReason::Program);
-    drop(tree);
-
+    assert!(host.request_close(primary, CloseReason::User));
+    assert_eq!(
+        asked.borrow().len(),
+        1,
+        "the observer asked for the close again"
+    );
+    assert!(
+        !host.request_close(primary, CloseReason::Program),
+        "a closed window closes no more"
+    );
+    let _ = host.pump(Duration::ZERO);
+    drop(host);
     assert_eq!(
         detached.get(),
         1,
         "the presentation is told it is detached exactly once"
     );
+}
+
+/// A close a widget asks for through its window's handle is carried out at
+/// the host's next turn, as a runner's window queue carries it out: the
+/// window's guard is asked first, and a hold keeps the window open.
+///
+/// Fails against a host that only counts the request: the window stays open.
+#[test]
+fn a_close_a_widget_asks_for_is_carried_out_at_the_next_turn() {
+    let handle = Rc::new(RefCell::new(None));
+    let mut host = HeadlessHost::new(HeadlessWindow::new(10, 10));
+    let second = host.open_window(HeadlessWindow::new(10, 10));
+    host.attach_to(
+        second,
+        &TakesHandle {
+            handle: Rc::clone(&handle),
+        },
+    )
+    .expect("a fresh window has no root");
+    let _ = host.pump(Duration::ZERO);
+    let window = handle.borrow().clone().expect("init_state took the handle");
+
+    window.request_close().expect("the window is open");
+    assert!(!host.is_closed(second), "the close waits for the next turn");
+    let _ = host.pump(Duration::ZERO);
+    assert!(
+        host.is_closed(second),
+        "the next turn carried the close out"
+    );
+    assert_eq!(host.window_of(host.primary_window()).close_requests(), 0);
+    assert_eq!(
+        window.request_close(),
+        Err(flui_view::WindowClosed),
+        "a closed window's handle answers that it closed"
+    );
+}
+
+/// Keeps its window's handle.
+#[derive(Clone)]
+struct TakesHandle {
+    handle: Rc<RefCell<Option<flui_view::WindowHandle>>>,
+}
+
+/// Holds no state of its own.
+struct TakesHandleState;
+
+impl StatefulView for TakesHandle {
+    type State = TakesHandleState;
+
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
+        self.handle.replace(ctx.window());
+        TakesHandleState
+    }
+}
+
+impl View for TakesHandle {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateful(self)
+    }
+}
+
+impl ViewState<TakesHandle> for TakesHandleState {
+    fn build(&self, _view: &TakesHandle, _ctx: &dyn BuildContext) -> impl IntoView {
+        flui_widgets::SizedBox::new(10.0, 10.0)
+    }
 }
 
 /// A window opened after another closed gets an id no window of the host
@@ -1009,6 +1078,190 @@ fn tab_moves_focus_in_a_headless_host_attached_app() {
             first.has_primary_focus(),
             "Shift+Tab moves focus back (secondary window: {on_secondary})"
         );
+    }
+}
+
+/// Closing the window that holds the OS focus moves the focus to a window
+/// that survives it, as a real host does: the next key reaches the survivor's
+/// tree, and the closed window is gone from the host.
+///
+/// Fails against a host that only stops the closed window: the focus stays
+/// with it, and the key reaches nobody.
+#[test]
+fn closing_the_focused_window_moves_the_focus_to_a_survivor() {
+    use flui_interaction::focus::FocusNode;
+    use flui_platform::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, Modifiers, NamedKey};
+    use flui_platform::{EventTime, PlatformInput};
+    use flui_view::ViewExt as _;
+    use flui_widgets::{Column, Focus, SizedBox};
+
+    let mut host = HeadlessHost::new(HeadlessWindow::new(100, 100));
+    let first = FocusNode::with_debug_label("first");
+    let second = FocusNode::with_debug_label("second");
+    let field = |node: &Rc<FocusNode>| {
+        Focus::new(SizedBox::new(100.0, 20.0))
+            .focus_node(Rc::clone(node))
+            .boxed()
+    };
+    let survivor = host.open_window(HeadlessWindow::new(100, 100));
+    host.attach_to(survivor, &Column::new((field(&first), field(&second))))
+        .expect("a fresh window has no root");
+    host.attach(&SizedBox::new(10.0, 10.0))
+        .expect("a fresh host has no root");
+    let _ = host.pump(Duration::ZERO);
+    let _ = first.request_focus();
+    let primary = host.primary_window();
+    host.focus_window(primary);
+    let _ = host.pump(Duration::ZERO);
+
+    assert!(host.request_close(primary, CloseReason::User));
+    assert!(host.is_closed(primary));
+    assert!(
+        !host.is_retired(),
+        "a window survives, so the runtime lives"
+    );
+    for state in [KeyState::Down(KeyPress::First), KeyState::Up] {
+        host.dispatch_to(
+            survivor,
+            PlatformInput::Keyboard(
+                KeyEvent::new(
+                    state,
+                    Key::Named(NamedKey::Tab),
+                    Code::Tab,
+                    EventTime::from_nanos(0),
+                )
+                .with_modifiers(Modifiers::NONE),
+            ),
+        );
+    }
+    let _ = host.pump(Duration::ZERO);
+    assert!(
+        second.has_primary_focus(),
+        "the survivor holds the OS focus, so Tab reaches its tree"
+    );
+}
+
+/// A frame the sink leaves unshown is not presented, whatever the reason a
+/// real surface gives, and the UI runtime recovers as it does on screen: a
+/// surface not ready, withdrawn or lost, and a lost device or a failed frame,
+/// are retried and the next frame is shown; a refused surface retries nothing
+/// until the window asks for a frame again.
+///
+/// Fails against a sink that presents every frame: the unshown frame counts
+/// as a submit.
+#[test]
+fn an_unshown_frame_is_recovered_as_its_reason_says() {
+    use flui_testing::UnshownFrame;
+
+    // (reason, retried by itself, raised by the pump as a dropped frame)
+    for (how, retried, dropped) in [
+        (UnshownFrame::NotReady, true, false),
+        (UnshownFrame::Withdrawn, true, false),
+        (UnshownFrame::SurfaceLost, true, false),
+        (UnshownFrame::DeviceLost, true, true),
+        (UnshownFrame::Failed, true, false),
+        (UnshownFrame::Refused, false, false),
+    ] {
+        let mut host = HeadlessHost::new(HeadlessWindow::new(40, 24));
+        host.attach(&flui_widgets::SizedBox::new(10.0, 10.0))
+            .expect("a fresh host has no root");
+        host.leave_unshown(1, how);
+        let first = catch_unwind(AssertUnwindSafe(|| host.pump(Duration::ZERO)));
+        assert_eq!(
+            first.is_err(),
+            dropped,
+            "{how:?}: the pump raises the dropped frame: {dropped}"
+        );
+        assert_eq!(
+            host.sink().submits(),
+            0,
+            "{how:?}: the first frame is unshown"
+        );
+
+        let _ = host.pump_until_settled(Duration::from_millis(16), 60);
+        assert_eq!(
+            host.sink().submits() > 0,
+            retried,
+            "{how:?}: retried without being asked: {retried}"
+        );
+        // The window's next change asks for a frame, which is shown.
+        let primary = host.primary_window();
+        host.set_scale_factor(
+            primary,
+            flui_foundation::geometry::DevicePixelRatio::try_new(2.0).expect("a ratio in range"),
+        );
+        let _ = host.pump_until_settled(Duration::from_millis(16), 60);
+        assert!(
+            host.sink().submits() > 0,
+            "{how:?}: a frame the window asks for after a change is shown"
+        );
+    }
+}
+
+/// A system notice reaches the application's subscribers as a host delivers
+/// it.
+#[test]
+fn a_system_notice_reaches_the_subscribers() {
+    use flui_platform::{MemoryPressureLevel, SystemNotice};
+
+    let heard = Rc::new(RefCell::new(Vec::new()));
+    let host = HeadlessHost::new(HeadlessWindow::new(40, 24));
+    host.attach(&HearsNotices {
+        heard: Rc::clone(&heard),
+    })
+    .expect("a fresh host has no root");
+    let mut host = host;
+    let _ = host.pump(Duration::ZERO);
+
+    host.notify(SystemNotice::MemoryPressure(MemoryPressureLevel::Critical));
+    host.notify(SystemNotice::Wake);
+    assert_eq!(
+        *heard.borrow(),
+        [
+            format!(
+                "{:?}",
+                flui_platform::HostNotice::MemoryPressure(MemoryPressureLevel::Critical)
+            ),
+            format!("{:?}", flui_platform::HostNotice::Wake),
+        ]
+    );
+}
+
+/// Records every host notice its window hears.
+#[derive(Clone)]
+struct HearsNotices {
+    heard: Rc<RefCell<Vec<String>>>,
+}
+
+/// Holds the subscription for its drop alone.
+struct HearsNoticesState {
+    _subscription: flui_view::HostNoticeSubscription,
+}
+
+impl StatefulView for HearsNotices {
+    type State = HearsNoticesState;
+
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
+        let heard = Rc::clone(&self.heard);
+        HearsNoticesState {
+            _subscription: ctx
+                .lifecycle_handle()
+                .expect("a hosted window has a lifecycle")
+                .subscribe_notices(move |notice| heard.borrow_mut().push(format!("{notice:?}")))
+                .expect("the window is open"),
+        }
+    }
+}
+
+impl View for HearsNotices {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateful(self)
+    }
+}
+
+impl ViewState<HearsNotices> for HearsNoticesState {
+    fn build(&self, _view: &HearsNotices, _ctx: &dyn BuildContext) -> impl IntoView {
+        flui_widgets::SizedBox::new(10.0, 10.0)
     }
 }
 
