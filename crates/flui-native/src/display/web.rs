@@ -1484,12 +1484,20 @@ pub(crate) mod source {
             );
             let id = self.source.mint(&DisplayKey::Web("primary".into()));
             let displays = id.map_or_default(|id| {
-                vec![with_period(
-                    DisplayInfo::new(id, "Browser Screen", bounds, scale_factor)
-                        .with_primary(true)
-                        .with_color(self.page_color(window)),
-                    period,
-                )]
+                crate::display::source::device_display(
+                    id,
+                    "Browser Screen".to_owned(),
+                    bounds,
+                    bounds,
+                    scale_factor,
+                )
+                .map(|info| {
+                    vec![with_period(
+                        info.with_primary(true).with_color(self.page_color(window)),
+                        period,
+                    )]
+                })
+                .unwrap_or_default()
             });
             Ok((displays, id))
         }
@@ -1544,7 +1552,7 @@ pub(crate) mod source {
             );
             let displays = listed
                 .iter()
-                .map(|(screen, id)| {
+                .filter_map(|(screen, id)| {
                     // A screen that reports no ratio of its own is at the base
                     // ratio; one that reports a number reads it by the hosts'
                     // one rule.
@@ -1562,16 +1570,20 @@ pub(crate) mod source {
                         // ratio, which includes page zoom, so the scale behaves the
                         // same with and without screen access. Its estimate belongs
                         // to it alone.
-                        with_period(
-                            screen_info(screen, *id, own_ratio, Some(window_scale)),
-                            period,
+                        Some(
+                            with_period(
+                                screen_info(screen, *id, own_ratio, Some(window_scale))?,
+                                period,
+                            )
+                            .with_color(self.page_color(window)),
                         )
-                        .with_color(self.page_color(window))
                     } else {
                         // A page's media queries describe the screen it is on;
                         // the browser says nothing of the others' colour.
-                        screen_info(screen, *id, own_ratio, None)
-                            .with_color(Err(CapabilityAbsence::NOT_ON_THIS_PLATFORM))
+                        Some(
+                            screen_info(screen, *id, own_ratio, None)?
+                                .with_color(Err(CapabilityAbsence::NOT_ON_THIS_PLATFORM)),
+                        )
                     }
                 })
                 .collect();
@@ -1597,7 +1609,7 @@ pub(crate) mod source {
         id: DisplayId,
         own_ratio: DevicePixelRatio,
         scale_override: Option<DevicePixelRatio>,
-    ) -> DisplayInfo {
+    ) -> Option<DisplayInfo> {
         let scale_factor = scale_override.unwrap_or(own_ratio);
         let number = |name: &str, fallback: f64| get_number(screen, name).unwrap_or(fallback);
         let device = |css: f64| device_pixels(css, own_ratio.get());
@@ -1623,9 +1635,10 @@ pub(crate) mod source {
             .filter(|label| !label.is_empty())
             .unwrap_or_else(|| "Browser Screen".to_string());
         let is_primary = is_primary(screen);
-        DisplayInfo::new(id, label, bounds, scale_factor)
-            .with_usable_bounds(usable)
-            .with_primary(is_primary)
+        Some(
+            crate::display::source::device_display(id, label, bounds, usable, scale_factor)?
+                .with_primary(is_primary),
+        )
     }
 
     fn with_period(info: DisplayInfo, period: Option<RefreshPeriod>) -> DisplayInfo {

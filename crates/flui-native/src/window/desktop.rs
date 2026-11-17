@@ -133,7 +133,10 @@ impl DisplayFrame {
 /// that names a monitor for a rectangle chooses it (Win32's
 /// `MonitorFromRect` with `MONITOR_DEFAULTTONEAREST`). `None` for a snapshot
 /// with no displays.
-pub(crate) fn display_of_rect(snapshot: &DisplaySnapshot, rect: Bounds<i32>) -> Option<DisplayFrame> {
+pub(crate) fn display_of_rect(
+    snapshot: &DisplaySnapshot,
+    rect: Bounds<i32>,
+) -> Option<DisplayFrame> {
     let left = i64::from(rect.origin.x);
     let top = i64::from(rect.origin.y);
     let right = left + i64::from(rect.size.width.max(0));
@@ -142,21 +145,30 @@ pub(crate) fn display_of_rect(snapshot: &DisplaySnapshot, rect: Bounds<i32>) -> 
         let [l, t, r, b] = frame.edges();
         let width = (right.min(r) - left.max(l)).max(0);
         let height = (bottom.min(b) - top.max(t)).max(0);
-        // Each side is below 2^34, so the product fits.
-        width * height
+        // Each side is below 2^34, so the product needs 128 bits, not 64.
+        i128::from(width) * i128::from(height)
     };
     let distance = |frame: &DisplayFrame| {
         let [l, t, r, b] = frame.edges();
         let gap = |low: i64, high: i64, from: i64, to: i64| (from - high).max(low - to).max(0);
         let (dx, dy) = (gap(l, r, left, right), gap(t, b, top, bottom));
-        dx * dx + dy * dy
+        i128::from(dx) * i128::from(dx) + i128::from(dy) * i128::from(dy)
     };
-    let frames = snapshot.displays().iter().map(DisplayFrame::of);
-    frames
-        .clone()
-        .filter(|frame| shared(frame) > 0)
-        .max_by_key(shared)
-        .or_else(|| frames.min_by_key(distance))
+    // The first of equals either way, so the answer does not depend on how
+    // a tie rounds.
+    let mut most: Option<(i128, DisplayFrame)> = None;
+    let mut nearest: Option<(i128, DisplayFrame)> = None;
+    for frame in snapshot.displays().iter().map(DisplayFrame::of) {
+        let area = shared(&frame);
+        if area > 0 && most.is_none_or(|(best, _)| area > best) {
+            most = Some((area, frame));
+        }
+        let gap = distance(&frame);
+        if nearest.is_none_or(|(best, _)| gap < best) {
+            nearest = Some((gap, frame));
+        }
+    }
+    most.or(nearest).map(|(_, frame)| frame)
 }
 
 #[cfg(test)]
@@ -229,26 +241,12 @@ mod tests {
                 (3.0e9, 0.0),
                 None,
             ),
-            (
-                "scaled past every number",
-                hidpi,
-                (f64::MAX, 0.0),
-                None,
-            ),
-            (
-                "far left of every display",
-                left,
-                (-1.0e10, 0.0),
-                None,
-            ),
+            ("scaled past every number", hidpi, (f64::MAX, 0.0), None),
+            ("far left of every display", left, (-1.0e10, 0.0), None),
         ];
         for (case, frame, (x, y), expected) in rows {
             let pixel = frame.to_desktop(Point::new(x, y));
-            assert_eq!(
-                pixel.map(|pixel| (pixel.x, pixel.y)),
-                expected,
-                "{case}"
-            );
+            assert_eq!(pixel.map(|pixel| (pixel.x, pixel.y)), expected, "{case}");
             if let Some(pixel) = pixel
                 && x.fract() == 0.0
             {
@@ -281,9 +279,21 @@ mod tests {
             ("wholly on the primary", rect(100, 800), Some(primary_id)),
             ("mostly on the primary", rect(1500, 800), Some(primary_id)),
             ("mostly on the right", rect(1800, 800), Some(hidpi_id)),
-            ("off every display, nearest the right", rect(9000, 800), Some(hidpi_id)),
-            ("off every display, nearest the left", rect(-5000, 800), Some(primary_id)),
-            ("an empty rectangle on the right", rect(2500, 0), Some(hidpi_id)),
+            (
+                "off every display, nearest the right",
+                rect(9000, 800),
+                Some(hidpi_id),
+            ),
+            (
+                "off every display, nearest the left",
+                rect(-5000, 800),
+                Some(primary_id),
+            ),
+            (
+                "an empty rectangle on the right",
+                rect(2500, 0),
+                Some(hidpi_id),
+            ),
         ];
         for (case, rect, expected) in rows {
             assert_eq!(

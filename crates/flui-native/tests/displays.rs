@@ -33,11 +33,8 @@ fn injected_displays_are_laid_out_and_the_first_is_primary() {
     };
     assert_ne!(left.id, right.id);
     assert!(left.is_primary && !right.is_primary);
-    assert_eq!(left.bounds.origin.x, 0);
-    assert_eq!(
-        right.bounds.origin.x, 1920,
-        "displays lay out left to right"
-    );
+    assert_eq!(left.origin.get().x, 0);
+    assert_eq!(right.origin.get().x, 1920, "displays lay out left to right");
     assert_eq!(right.scale_factor, two());
     assert_eq!(
         left.refresh_period.map(flui_platform::RefreshPeriod::get),

@@ -9,11 +9,12 @@
 
 use std::collections::HashMap;
 
-use flui_foundation::geometry::{Bounds, DevicePixelRatio};
+use flui_foundation::geometry::DevicePixelRatio;
 #[cfg(any(feature = "x11", test))]
-use flui_foundation::geometry::{Point, Size};
+use flui_foundation::geometry::{Bounds, Point, Size};
 use flui_platform::{
-    CapabilityAbsence, DisplayColor, DisplayId, DisplayInfo, DisplayKey, RefreshPeriod,
+    CapabilityAbsence, DesktopOrigin, DisplayBounds, DisplayColor, DisplayId, DisplayInfo,
+    DisplayKey, RefreshPeriod,
 };
 
 /// How an output is told apart from the others.
@@ -37,8 +38,11 @@ pub(crate) struct OutputView {
     /// `wl_output`, the CRTCs of an X11 monitor.
     pub natives: Vec<u32>,
     pub name: String,
-    pub bounds: Bounds<i32>,
-    pub usable_bounds: Bounds<i32>,
+    /// Where the output sits in the protocol's desktop: device pixels on X11,
+    /// the compositor's logical units on Wayland.
+    pub origin: DesktopOrigin,
+    /// Its extent and usable area in its own logical pixels.
+    pub bounds: DisplayBounds,
     pub scale_factor: DevicePixelRatio,
     pub refresh_period: Option<RefreshPeriod>,
     pub is_primary: bool,
@@ -101,10 +105,15 @@ impl FreshIds {
                 }),
             };
             let Some(id) = id else { continue };
-            let mut info = DisplayInfo::new(id, view.name.clone(), view.bounds, view.scale_factor)
-                .with_usable_bounds(view.usable_bounds)
-                .with_primary(view.is_primary)
-                .with_color(view.color);
+            let mut info = DisplayInfo::new(
+                id,
+                view.name.clone(),
+                view.origin,
+                view.bounds,
+                view.scale_factor,
+            )
+            .with_primary(view.is_primary)
+            .with_color(view.color);
             info.refresh_period = view.refresh_period;
             info.persistent_key.clone_from(&view.persistent_key);
             displays.push(info);
@@ -155,13 +164,14 @@ mod tests {
     use super::*;
 
     fn view(identity: Identity, name: &str) -> OutputView {
-        let bounds = Bounds::new(Point::new(0, 0), Size::new(1920, 1080));
+        let bounds = DisplayBounds::whole(flui_foundation::geometry::Size::new(1920.0, 1080.0))
+            .expect("a display");
         OutputView {
             identity,
             natives: vec![1],
             name: name.into(),
+            origin: DesktopOrigin::default(),
             bounds,
-            usable_bounds: bounds,
             scale_factor: DevicePixelRatio::ONE,
             refresh_period: None,
             is_primary: false,

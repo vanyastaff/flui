@@ -26,11 +26,16 @@ use crate::input::availability as input_availability;
 use crate::input::windows::InputWindow;
 use crate::window::windows::WindowsWindow;
 use crate::{host_window::HostWindow, platform::Platform as _};
-use flui_platform::{DispatchEventResult, PlatformInput, WindowOptions};
+use flui_platform::{DispatchEventResult, PlatformInput, WindowExtent, WindowOptions};
 
 use ViewportStatus::{Ready, Running};
 
 type Log = Arc<Mutex<Vec<String>>>;
+
+/// A window extent of this size.
+fn extent(width: f64, height: f64) -> WindowExtent {
+    WindowExtent::try_new(Size::new(width, height)).expect("a finite extent")
+}
 
 struct Fixture {
     // Field order: the window closes before its platform goes.
@@ -113,7 +118,7 @@ fn fixture(nested: Option<fn(HWND)>) -> Fixture {
         .open_window(
             WindowOptions::default()
                 .title("flui touchpad")
-                .size(Size::new(200.0, 120.0))
+                .size(extent(200.0, 120.0))
                 // Shown: a hidden window keeps no update region.
                 .visible(true),
             handler.clone(),

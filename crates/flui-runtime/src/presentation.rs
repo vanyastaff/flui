@@ -320,7 +320,7 @@ pub(crate) enum PresentationLifecycle {
 /// contacts (ADR-0212 §2) and hands it its input regions again (ADR-0217 §5).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct ContentPlacement {
-    position: Option<flui_foundation::geometry::Point<f64>>,
+    position: Option<flui_platform::WindowPosition>,
     display: Option<flui_platform::DisplayId>,
     frame: flui_platform::WindowFrame,
 }

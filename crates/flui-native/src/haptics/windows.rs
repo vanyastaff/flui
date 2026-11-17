@@ -551,7 +551,12 @@ mod tests {
     use crate::platform::Platform as _;
     use crate::window::windows::WindowsWindow;
     use flui_platform::HapticFeedback;
-    use flui_platform::WindowOptions;
+    use flui_platform::{WindowExtent, WindowOptions};
+
+    /// A window extent of this size.
+    fn extent(width: f64, height: f64) -> WindowExtent {
+        WindowExtent::try_new(Size::new(width, height)).expect("a finite extent")
+    }
 
     fn taps() -> HapticPattern {
         HapticPattern::builder()
@@ -597,7 +602,7 @@ mod tests {
             .open_window(
                 WindowOptions::default()
                     .title("flui haptics")
-                    .size(Size::new(160.0, 120.0)),
+                    .size(extent(160.0, 120.0)),
                 flui_testing::window_handler::RecordingWindowHandler::new(),
             )
             .expect("window");
@@ -643,7 +648,7 @@ mod tests {
                 .open_window(
                     WindowOptions::default()
                         .title(title)
-                        .size(Size::new(160.0, 120.0)),
+                        .size(extent(160.0, 120.0)),
                     flui_testing::window_handler::RecordingWindowHandler::new(),
                 )
                 .expect("window")

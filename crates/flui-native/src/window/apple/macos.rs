@@ -56,13 +56,13 @@ use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 use flui_foundation::geometry::{Bounds, Point, Size};
 use flui_platform::{
     AdmittedCommand, ApplyError, SizeConstraints, WindowCapabilities, WindowCommand, WindowFrame,
-    WindowGeometry, WindowMode, WindowState,
+    WindowGeometry, WindowMode, WindowPosition, WindowState,
 };
 
 use crate::window::apple::geometry::{
     frame::{
         cocoa_frame, cocoa_frame_keeping_top, cocoa_top_left_point, constraints_of_content_limits,
-        content_limits_of_constraints, globalize, top_left_of_frame,
+        content_limits_of_constraints, desktop_point, position_on, top_left_of_frame,
     },
     mode::{ANIMATION_LIMIT, FixedSize, ModeSequence, ModeStep, WindowFlags, capabilities_of},
     title_bar::{ControlsLayout, FrameStyle},
@@ -342,6 +342,13 @@ fn objc_address(object: &AnyObject) -> ObjcId {
 pub(crate) struct Opening {
     options: WindowOptions,
     geometry: flui_platform::OpeningGeometry,
+    /// Where the options place the window's top-left corner, as a point of
+    /// AppKit's flipped desktop: their position on its screen; `None` for no
+    /// position, or one on a screen the snapshot no longer holds.
+    at: Option<Point<f64>>,
+    /// Where the rectangle a maximized or full-screen opening returns to
+    /// starts, as the same kind of point.
+    returns_to: Option<Point<f64>>,
 }
 
 fn defers_first_reveal(options: &WindowOptions) -> bool {
@@ -374,9 +381,9 @@ impl MacOSWindow {
 
     /// Create a new macOS window, on the main thread `mtm` proves this is.
     ///
-    /// `options.position` and `options.normal_geometry` are read as global
-    /// logical pixels from the primary screen's top-left corner; a display
-    /// named in `options.display` is resolved by the window position's `open`
+    /// The options' position and the position of their `normal_geometry` are
+    /// read from `opening` as points of AppKit's flipped desktop, which the
+    /// window position's `open` turned them into through their screens
     /// before the window is built.
     ///
     /// # Errors
@@ -490,6 +497,7 @@ impl MacOSWindow {
             constraints,
             ..
         } = opening.geometry;
+        let (placed_at, returns_to) = (opening.at, opening.returns_to);
         let mut options = opening.options;
         // A window's owner lane is the AppKit main queue — the one lane all
         // other process AppKit traffic already serializes on (see
@@ -602,8 +610,7 @@ impl MacOSWindow {
             // Where the window opens. Placed before it is ordered front, so
             // it never shows at the system's choice first.
             let primary_height = primary_screen_height();
-            let placed_at = options
-                .position
+            let placed_at = placed_at
                 .zip(primary_height)
                 .map(|(at, height)| cocoa_top_left_point(at, height));
             let mut placed = placed_at.is_some();
@@ -618,7 +625,7 @@ impl MacOSWindow {
             {
                 let current: NSRect = msg_send![ns_window, frame];
                 let size = normal.size();
-                let frame = match (normal.position(), primary_height) {
+                let frame = match (returns_to, primary_height) {
                     (Some(at), Some(height)) => {
                         placed = true;
                         cocoa_frame(at, size, height)
@@ -1282,28 +1289,24 @@ fn hypervisor_guest() -> bool {
     read == 0 && present == 1
 }
 
-/// Turn a position and a normal rectangle measured on a display into global
-/// logical pixels, which is all a window knows how to place. A display that is
-/// gone leaves them global, as the options document.
-fn measure_placement_globally(displays: &dyn HostDisplays, options: &mut WindowOptions) {
-    let Some(display) = options.display.take() else {
-        return;
-    };
-    let Some(mtm) = MainThreadMarker::new() else {
-        return;
-    };
-    let Ok(snapshot) = displays.snapshot(mtm) else {
-        return;
-    };
-    let display = snapshot.get(display);
-    options.position = options.position.map(|at| globalize(at, display));
-    // A rectangle a display's scale carries out of the finite numbers is not
-    // one to return to.
-    options.normal_geometry = options.normal_geometry.and_then(|normal| {
-        normal
-            .at(normal.position().map(|at| globalize(at, display)))
-            .ok()
-    });
+/// The options' position and the position of their normal rectangle as
+/// points of AppKit's flipped desktop, each through its own screen in the
+/// published snapshot, which is all a window knows how to place. A position on
+/// a screen the snapshot no longer holds is no place: the system places the
+/// window, as the options document.
+fn desktop_placement(
+    displays: &dyn HostDisplays,
+    options: &WindowOptions,
+) -> (Option<Point<f64>>, Option<Point<f64>>) {
+    let snapshot = displays.published();
+    let place = |at: WindowPosition| desktop_point(at, snapshot.get(at.display())?);
+    (
+        options.position.and_then(place),
+        options
+            .normal_geometry
+            .and_then(flui_platform::WindowGeometry::position)
+            .and_then(place),
+    )
 }
 
 impl host::Window<MacOSLoop> for MacOSWindow {
@@ -1313,7 +1316,7 @@ impl host::Window<MacOSLoop> for MacOSWindow {
     fn open(
         owner: &MacOSLoop,
         windows: &Arc<MacOSWindows>,
-        mut options: WindowOptions,
+        options: WindowOptions,
         handler: Rc<dyn WindowHandler>,
     ) -> Result<Rc<dyn HostWindow>, OpenWindowError> {
         owner
@@ -1327,9 +1330,9 @@ impl host::Window<MacOSLoop> for MacOSWindow {
         }
         // Refused before an id is taken, for what a command is refused for,
         // and checked as the application wrote it, before the position is
-        // made global.
+        // turned into a point of the desktop.
         let opening = options.geometry()?;
-        measure_placement_globally(owner.displays.as_ref(), &mut options);
+        let (at, returns_to) = desktop_placement(owner.displays.as_ref(), &options);
         // The loop still crosses threads until its owner-local step (ADR-0327 §5), so
         // only asking AppKit proves this is the main thread the window's
         // calls need; a release build keeps the check the assertion above
@@ -1351,6 +1354,8 @@ impl host::Window<MacOSLoop> for MacOSWindow {
             Opening {
                 options,
                 geometry: opening,
+                at,
+                returns_to,
             },
             handler,
             Arc::clone(&owner.windows),
@@ -1592,7 +1597,7 @@ impl PlatformWindow for MacOSWindow {
         match command {
             WindowCommand::SetTitle(title) => self.set_native_title(&title),
             WindowCommand::SetPosition(at) => self.set_native_position(at)?,
-            WindowCommand::SetSize(size) => self.set_content_size(size),
+            WindowCommand::SetSize(size) => self.set_content_size(size.get()),
             WindowCommand::SetConstraints(constraints) => self.set_native_constraints(constraints),
             WindowCommand::SetResizable(on) => {
                 self.set_style_bit(NSWindowStyleMask::Resizable, on)?;
@@ -2209,9 +2214,7 @@ impl MacOSWindow {
             };
             let mask: NSWindowStyleMask = msg_send![self.ns_window, styleMask];
             let mode = mode_of(flags.mode_flags());
-            let position = primary_screen_height().and_then(|height| {
-                top_left_of_frame(crate::owner::apple::macos::bounds_of(frame), height)
-            });
+            let position = self.position_of_frame(frame, display);
             let geometry =
                 WindowGeometry::try_new(position, Size::new(frame.size.width, frame.size.height))
                     .and_then(|outer| {
@@ -2312,16 +2315,33 @@ impl MacOSWindow {
     // of `self`, on the window's owner thread: a window is used there only, as
     // it is neither `Send` nor `Sync`.
 
-    /// The window's outer rectangle now; `None` for a frame that describes
-    /// no window.
+    /// The top-left of a window whose frame AppKit reports as `frame`, on
+    /// `display`, the screen the window is on: its point in AppKit's flipped
+    /// desktop less the screen's corner. `None` where the window is on no
+    /// screen the published snapshot holds, or a number is not finite.
+    fn position_of_frame(
+        &self,
+        frame: NSRect,
+        display: Option<DisplayId>,
+    ) -> Option<WindowPosition> {
+        let snapshot = self.displays.get()?.published();
+        let screen = snapshot.get(display?)?;
+        let desktop = top_left_of_frame(
+            crate::owner::apple::macos::bounds_of(frame),
+            primary_screen_height()?,
+        )?;
+        position_on(desktop, screen)
+    }
+
+    /// The window's outer rectangle now, its position on the screen it is
+    /// on; `None` for a frame that describes no window.
     fn outer_geometry(&self) -> Option<WindowGeometry> {
+        let display = self.state.lock().display;
         // SAFETY: see the note above these bodies.
         unsafe {
             let frame: NSRect = msg_send![self.ns_window, frame];
             WindowGeometry::try_new(
-                primary_screen_height().and_then(|height| {
-                    top_left_of_frame(crate::owner::apple::macos::bounds_of(frame), height)
-                }),
+                self.position_of_frame(frame, display),
                 Size::new(frame.size.width, frame.size.height),
             )
             .ok()
@@ -2361,14 +2381,31 @@ impl MacOSWindow {
         }
     }
 
-    /// Move the window's outer top-left corner.
-    fn set_native_position(&self, at: Point<f64>) -> Result<(), ApplyError> {
+    /// Move the window's outer top-left corner to `at`, a point of a screen in
+    /// its points from its corner, whichever screen the window is on now.
+    ///
+    /// # Errors
+    /// [`ApplyError::DisplayGone`] for a screen the published snapshot no
+    /// longer holds; [`ApplyError::Platform`] for a point past the finite
+    /// numbers or no primary screen to measure from.
+    fn set_native_position(&self, at: WindowPosition) -> Result<(), ApplyError> {
+        let snapshot = self
+            .displays
+            .get()
+            .map(|displays| displays.published())
+            .unwrap_or_else(flui_platform::DisplaySnapshot::empty);
+        let screen = snapshot
+            .get(at.display())
+            .ok_or(ApplyError::DisplayGone(at.display()))?;
+        let desktop = desktop_point(at, screen).ok_or(ApplyError::Platform(
+            flui_platform::PlatformFailure::OutOfRange,
+        ))?;
         // SAFETY: see the note above these bodies.
         unsafe {
             let height = primary_screen_height().ok_or_else(|| {
                 ApplyError::failed("there is no screen to measure a position from".into())
             })?;
-            let point = cocoa_top_left_point(at, height);
+            let point = cocoa_top_left_point(desktop, height);
             let _: () = msg_send![
                 self.ns_window,
                 setFrameTopLeftPoint: NSPoint::new(point.x, point.y)

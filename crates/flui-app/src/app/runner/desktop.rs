@@ -103,7 +103,8 @@ impl OpeningWindow {
         config: &AppConfig,
         owner: &flui_native::OwnerPlatform,
     ) -> Result<flui_native::WindowOpen, flui_native::OpenWindowError> {
-        let mut options = flui_platform::WindowOptions::from(config)
+        let mut options = config
+            .window_options_on(owner.display_snapshot().ok().as_ref())
             .reveal(flui_platform::WindowReveal::AfterFirstFrame);
         if let Some(remembered) = &self.remembered {
             remembered.restore_into(&mut options, owner);

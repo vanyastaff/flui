@@ -648,7 +648,10 @@ mod tests {
         use std::sync::Arc;
         use std::sync::atomic::{AtomicBool, Ordering};
 
-        let marker_size = flui_foundation::geometry::Size::new(4001.0, 4002.0);
+        let marker_size = flui_platform::WindowExtent::try_new(
+            flui_foundation::geometry::Size::new(4001.0, 4002.0),
+        )
+        .expect("a finite extent");
 
         let platform = flui_native::headless_platform();
         let window = platform

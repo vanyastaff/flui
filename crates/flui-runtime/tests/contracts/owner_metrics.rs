@@ -2465,8 +2465,10 @@ impl flui_platform::PlatformWindow for RegionWindow {
     }
 }
 
-/// The window state a host publishes: its content moves with `position`.
+/// The window state a host publishes: its content moves with `position`, a
+/// point of `display`.
 struct MovingWindow {
+    display: flui_platform::DisplayId,
     position: std::sync::Mutex<(
         flui_foundation::geometry::Point<f64>,
         flui_platform::WindowRevision,
@@ -2483,8 +2485,14 @@ impl flui_platform::WindowControl for SharedControl {
         let (position, revision) = *self.0.position.lock().expect("position");
         let size = Size::new(40.0, 40.0);
         let mut state = flui_platform::WindowState::new(
-            flui_platform::WindowGeometry::try_new(Some(position), size)
-                .expect("a finite rectangle"),
+            flui_platform::WindowGeometry::try_new(
+                Some(
+                    flui_platform::WindowPosition::try_new(self.0.display, position)
+                        .expect("a finite position"),
+                ),
+                size,
+            )
+            .expect("a finite rectangle"),
             flui_platform::WindowExtent::try_new(size).expect("a finite size"),
         );
         state.revision = revision;
@@ -2532,6 +2540,9 @@ fn a_failed_move_keeps_its_regions_subscribers_and_row() {
     )
     .expect("runtime");
     let control = Arc::new(MovingWindow {
+        display: flui_platform::DisplayRegistry::new()
+            .mint(&flui_platform::DisplayKey::Injected(1))
+            .expect("a fresh registry has ids"),
         position: Mutex::new((Point::new(0.0, 0.0), WindowRevision::ZERO)),
         capabilities: flui_platform::WindowCapabilities::NONE
             .publish()

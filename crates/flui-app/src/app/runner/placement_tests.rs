@@ -7,10 +7,10 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use flui_foundation::ManualClock;
-use flui_foundation::geometry::{Point, Size};
+use flui_foundation::geometry::{DevicePixelRatio, Point, Size};
 use flui_platform::capability::ProviderContext;
 use flui_platform::{
-    PlatformWindow, Storage, StorageName, Unsupported, WindowInteraction, WindowMode,
+    PlatformWindow, Storage, StorageName, Unsupported, WindowExtent, WindowInteraction, WindowMode,
     WindowPlacement,
 };
 use flui_testing::storage::MemoryStorage;
@@ -29,9 +29,9 @@ fn stored() -> WindowPlacement {
     WindowPlacement::new(
         None,
         Some(Point::new(40.0, 30.0)),
-        Size::new(640.0, 480.0),
+        WindowExtent::try_new(Size::new(640.0, 480.0)).expect("a finite extent"),
         WindowMode::Normal,
-        1.0,
+        DevicePixelRatio::ONE,
     )
 }
 

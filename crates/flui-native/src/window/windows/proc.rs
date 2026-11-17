@@ -1887,7 +1887,8 @@ pub(crate) fn sample_state(hwnd: HWND, record: WindowRecord, tracking: OwnerTrac
         let normal = restore
             .map(|bounds| {
                 WindowGeometry::try_new(
-                    display_of_rect(&desktop, bounds).and_then(|frame| frame.position(bounds.origin)),
+                    display_of_rect(&desktop, bounds)
+                        .and_then(|frame| frame.position(bounds.origin)),
                     Size::new(
                         f64::from(bounds.size.width) / scale,
                         f64::from(bounds.size.height) / scale,

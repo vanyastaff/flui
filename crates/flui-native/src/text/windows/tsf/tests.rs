@@ -28,7 +28,12 @@ use windows_core::Interface as _;
 use super::document::{TsfStore, TsfStore_Impl, ts_status};
 use super::{Serving, TextServices, same_object};
 use crate::platform::Platform;
-use flui_platform::WindowOptions;
+use flui_platform::{WindowExtent, WindowOptions};
+
+/// A window extent of this size.
+fn extent(width: f64, height: f64) -> WindowExtent {
+    WindowExtent::try_new(Size::new(width, height)).expect("a finite extent")
+}
 
 /// "ab" with "かな" composing after it, as the store sees it.
 fn composing_store() -> Rc<InMemoryTextStore> {
@@ -931,7 +936,7 @@ fn a_window_offers_its_text_services_as_its_host() {
         .open_window(
             WindowOptions::default()
                 .title("flui window host")
-                .size(Size::new(200.0, 80.0))
+                .size(extent(200.0, 80.0))
                 .visible(false),
             flui_testing::window_handler::RecordingWindowHandler::new(),
         )
@@ -1039,7 +1044,7 @@ fn a_moved_window_tells_tsf_its_layout_changed() {
         .open_window(
             WindowOptions::default()
                 .title("flui moved field")
-                .size(Size::new(200.0, 80.0))
+                .size(extent(200.0, 80.0))
                 .visible(false),
             flui_testing::window_handler::RecordingWindowHandler::new(),
         )
@@ -1159,7 +1164,7 @@ fn a_rescaled_window_answers_layout_at_its_new_scale() {
         .open_window(
             WindowOptions::default()
                 .title("flui rescaled field")
-                .size(Size::new(200.0, 80.0))
+                .size(extent(200.0, 80.0))
                 .visible(false),
             flui_testing::window_handler::RecordingWindowHandler::new(),
         )
@@ -1201,7 +1206,7 @@ fn the_text_services_answer_a_completion_for_its_store() {
         .open_window(
             WindowOptions::default()
                 .title("flui text services")
-                .size(Size::new(200.0, 80.0))
+                .size(extent(200.0, 80.0))
                 .visible(false),
             flui_testing::window_handler::RecordingWindowHandler::new(),
         )
@@ -1470,7 +1475,7 @@ fn a_panicking_activation_diagnostic_orphans_no_window() {
             platform.open_window(
                 WindowOptions::default()
                     .title(TITLE)
-                    .size(Size::new(200.0, 80.0))
+                    .size(extent(200.0, 80.0))
                     .visible(false),
                 flui_testing::window_handler::RecordingWindowHandler::new(),
             )
@@ -1517,7 +1522,7 @@ fn a_window_destroyed_during_activation_fails_the_open() {
     let opened = platform.open_window(
         WindowOptions::default()
             .title("flui destroyed during activation")
-            .size(Size::new(200.0, 80.0))
+            .size(extent(200.0, 80.0))
             .visible(false),
         flui_testing::window_handler::RecordingWindowHandler::new(),
     );
@@ -1566,7 +1571,7 @@ fn a_window_dropped_after_its_platform_retires_tsf_inside_com() {
         .open_window(
             WindowOptions::default()
                 .title("flui outlives its platform")
-                .size(Size::new(200.0, 80.0))
+                .size(extent(200.0, 80.0))
                 .visible(false),
             flui_testing::window_handler::RecordingWindowHandler::new(),
         )

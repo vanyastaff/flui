@@ -21,7 +21,13 @@ use crate::error::PlatformError;
 /// sent for the whole desktop) leaves the display usable as a whole, with a
 /// warning; a display with no area is left out of the snapshot (`None`),
 /// with a warning, and its windows name no display.
-#[cfg(any(windows, target_os = "linux", target_os = "android", test))]
+#[cfg(any(
+    windows,
+    target_os = "linux",
+    target_os = "android",
+    target_arch = "wasm32",
+    test
+))]
 pub(crate) fn device_display(
     id: DisplayId,
     name: String,
@@ -745,7 +751,7 @@ mod mapping {
 mod tests {
     use std::cell::Cell;
 
-    use flui_foundation::geometry::{Bounds, DevicePixelRatio};
+    use flui_foundation::geometry::{Bounds, DevicePixelRatio, Point, Size};
     use flui_platform::{DisplayInfo, DisplayKey};
 
     use super::DisplaySource;
@@ -756,7 +762,8 @@ mod tests {
             .mint(&DisplayKey::Injected(1))
             .expect("ids are not exhausted");
         let scale = DevicePixelRatio::try_new(scale).expect("a positive ratio");
-        vec![DisplayInfo::new(id, "Test", Bounds::default(), scale)]
+        let bounds = Bounds::new(Point::new(0, 0), Size::new(1, 1));
+        vec![DisplayInfo::from_device(id, "Test", bounds, bounds, scale).expect("a display")]
     }
 
     /// A source with a counted sample that reads one display.

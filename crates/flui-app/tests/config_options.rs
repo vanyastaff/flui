@@ -20,7 +20,7 @@ fn the_title_is_kept() {
 
 fn the_size_is_kept() {
     assert_eq!(
-        options(&AppConfig::new().size(900, 700)).size,
+        options(&AppConfig::new().size(900, 700)).size.get(),
         Size::new(900.0, 700.0)
     );
 }
@@ -55,12 +55,14 @@ fn the_frame_flags_are_kept() {
     }
 }
 
+/// A position is measured on a display, which a conversion without the
+/// displays cannot name: the configuration keeps it, and the runner places it
+/// on the primary display when it opens the window.
 fn the_position_is_kept() {
-    assert_eq!(
-        options(&AppConfig::new().position(Point::new(-1200.0, 80.0))).position,
-        Some(Point::new(-1200.0, 80.0))
-    );
-    assert_eq!(options(&AppConfig::new()).position, None);
+    let config = AppConfig::new().position(-1200, 80);
+    assert_eq!(config.position, Some(Point::new(-1200, 80)));
+    assert_eq!(options(&config).position, None);
+    assert_eq!(AppConfig::new().position, None);
 }
 
 fn the_mode_is_kept() {

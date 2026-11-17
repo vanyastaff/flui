@@ -169,7 +169,9 @@ fn commands_reach_the_control_checked_and_in_order() {
     ));
     handle.set_frame(frame).expect("accepted");
     assert_eq!(
-        handle.set_size(Size::new(0.0, 10.0)),
+        handle.set_size(
+            flui_platform::WindowExtent::try_new(Size::new(0.0, 10.0)).expect("a finite extent")
+        ),
         Err(SubmitError::Admission(AdmissionError::InvalidGeometry(
             flui_platform::InvalidGeometry::Empty {
                 width: 0.0,

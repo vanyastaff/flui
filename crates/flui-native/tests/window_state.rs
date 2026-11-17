@@ -20,8 +20,8 @@ use flui_native::{
     Platform as _,
 };
 use flui_platform::{
-    AdmissionError, ApplyError, WindowCapabilities, WindowCommand, WindowMode, WindowOptions,
-    WindowState,
+    AdmissionError, ApplyError, DisplayId, InvalidGeometry, WindowCapabilities, WindowCommand,
+    WindowExtent, WindowMode, WindowOptions, WindowPosition, WindowState,
 };
 
 /// What a window answers for a command its capabilities leave out.
@@ -59,22 +59,47 @@ fn applied(window: &Rc<dyn HostWindow>, command: WindowCommand) -> (WindowState,
 
 type Change = fn(&WindowState) -> bool;
 
-/// Each row: the command, and what the snapshot must show afterwards.
-fn commands() -> Vec<(&'static str, WindowCommand, Change)> {
+/// A command, made for the display of the window it is sent to.
+type Command = fn(DisplayId) -> WindowCommand;
+
+/// A window extent of this size.
+fn extent(width: f64, height: f64) -> WindowExtent {
+    WindowExtent::try_new(Size::new(width, height)).expect("a finite extent")
+}
+
+/// The display `window` opened on: the primary display of its platform.
+fn display_of(window: &Rc<dyn HostWindow>) -> DisplayId {
+    window
+        .state()
+        .display
+        .expect("a headless window opens on a display")
+}
+
+/// A position at `(x, y)` of `display`.
+fn position(display: DisplayId, x: f64, y: f64) -> WindowPosition {
+    WindowPosition::try_new(display, Point::new(x, y)).expect("a finite position")
+}
+
+/// Each row: the command a window on a display is sent, and what the snapshot
+/// must show afterwards.
+fn commands() -> Vec<(&'static str, Command, Change)> {
     vec![
         (
             "set_title",
-            WindowCommand::SetTitle("Renamed".into()),
+            |_| WindowCommand::SetTitle("Renamed".into()),
             |state| state.title.as_deref() == Some("Renamed"),
         ),
         (
             "set_position",
-            WindowCommand::SetPosition(Point::new(120.0, 80.0)),
-            |state| state.outer.position() == Some(Point::new(120.0, 80.0)),
+            |display| WindowCommand::SetPosition(position(display, 120.0, 80.0)),
+            |state| {
+                state.outer.position().map(WindowPosition::at) == Some(Point::new(120.0, 80.0))
+                    && state.outer.position().map(WindowPosition::display) == state.display
+            },
         ),
         (
             "set_size",
-            WindowCommand::SetSize(Size::new(640.0, 480.0)),
+            |_| WindowCommand::SetSize(extent(640.0, 480.0)),
             |state| {
                 state.content_size == Size::new(640.0, 480.0)
                     && state.outer.size() == Size::new(640.0, 480.0)
@@ -82,10 +107,12 @@ fn commands() -> Vec<(&'static str, WindowCommand, Change)> {
         ),
         (
             "set_constraints",
-            WindowCommand::SetConstraints(limits(
-                Some(Size::new(300.0, 200.0)),
-                Some(Size::new(1200.0, 900.0)),
-            )),
+            |_| {
+                WindowCommand::SetConstraints(limits(
+                    Some(Size::new(300.0, 200.0)),
+                    Some(Size::new(1200.0, 900.0)),
+                ))
+            },
             |state| {
                 state.constraints.min.map(flui_platform::WindowExtent::get)
                     == Some(Size::new(300.0, 200.0))
@@ -93,30 +120,30 @@ fn commands() -> Vec<(&'static str, WindowCommand, Change)> {
         ),
         (
             "set_resizable",
-            WindowCommand::SetResizable(false),
+            |_| WindowCommand::SetResizable(false),
             |state| !state.resizable,
         ),
         (
             "set_frame",
-            WindowCommand::SetFrame(WindowFrame::None),
+            |_| WindowCommand::SetFrame(WindowFrame::None),
             |state| !state.frame.has_system_title_bar(),
         ),
         (
             "maximize",
-            WindowCommand::SetMode(WindowMode::Maximized),
+            |_| WindowCommand::SetMode(WindowMode::Maximized),
             |state| state.mode == WindowMode::Maximized && state.normal_geometry.is_some(),
         ),
         (
             "minimize",
-            WindowCommand::SetMode(WindowMode::Minimized),
+            |_| WindowCommand::SetMode(WindowMode::Minimized),
             |state| state.mode == WindowMode::Minimized && !state.focus.is_focused(),
         ),
         (
             "fullscreen",
-            WindowCommand::SetMode(WindowMode::Fullscreen),
+            |_| WindowCommand::SetMode(WindowMode::Fullscreen),
             |state| state.mode == WindowMode::Fullscreen && !state.frame.has_system_title_bar(),
         ),
-        ("hide", WindowCommand::Hide, |state| !state.visible),
+        ("hide", |_| WindowCommand::Hide, |state| !state.visible),
     ]
 }
 
@@ -124,7 +151,7 @@ fn every_command_changes_the_snapshot_and_advances_the_revision_by_one() {
     for (name, command, shows) in commands() {
         let platform = HeadlessPlatform::new();
         let window = open(&platform);
-        let (before, after) = applied(&window, command);
+        let (before, after) = applied(&window, command(display_of(&window)));
         assert!(shows(&after), "{name}: the snapshot does not show it");
         assert_eq!(
             after.revision.get(),
@@ -261,6 +288,7 @@ fn repeating_a_command_keeps_the_revision_and_stays_silent() {
         let platform = HeadlessPlatform::new();
         let window = open(&platform);
         let changes = count_changes(&window);
+        let command = command(display_of(&window));
         let (_, first) = applied(&window, command.clone());
         assert_eq!(
             changes.load(Ordering::SeqCst),
@@ -283,7 +311,7 @@ fn the_host_clamp_is_visible_in_the_snapshot() {
         HeadlessWindowPolicy::default().with_max_window_size(Size::new(800.0, 600.0)),
     );
     let window = open(&platform);
-    let (_, after) = applied(&window, WindowCommand::SetSize(Size::new(2000.0, 1500.0)));
+    let (_, after) = applied(&window, WindowCommand::SetSize(extent(2000.0, 1500.0)));
     assert_eq!(
         after.content_size,
         Size::new(800.0, 600.0),
@@ -307,7 +335,7 @@ fn a_size_past_the_largest_surface_is_held_at_it() {
         (2.0, largest, largest / 2.0),
     ] {
         mock(&window).simulate_scale_factor_change(scale);
-        let (_, after) = applied(&window, WindowCommand::SetSize(Size::new(asked, 100.0)));
+        let (_, after) = applied(&window, WindowCommand::SetSize(extent(asked, 100.0)));
         assert_eq!(
             after.content_size,
             Size::new(published, 100.0),
@@ -340,7 +368,7 @@ fn a_false_capability_is_unsupported_and_changes_nothing() {
         let changes = count_changes(&window);
         let before = window.state();
         assert_eq!(
-            window.admit_and_apply(command),
+            window.admit_and_apply(command(display_of(&window))),
             Err(CommandRefusal::Admission(AdmissionError::Unsupported(
                 NOT_HERE
             ))),
@@ -382,10 +410,23 @@ fn invalid_geometry_is_refused_before_the_host() {
     let platform = HeadlessPlatform::new();
     let window = open(&platform);
     let before = window.state();
+    // Numbers that are no position and no extent cannot be put in a command.
+    assert_eq!(
+        WindowExtent::try_new(Size::new(f64::NAN, 100.0)),
+        Err(InvalidGeometry::Extent {
+            width: f64::NAN,
+            height: 100.0,
+        })
+    );
+    assert_eq!(
+        WindowPosition::try_new(display_of(&window), Point::new(f64::INFINITY, 0.0)),
+        Err(InvalidGeometry::Position {
+            x: f64::INFINITY,
+            y: 0.0,
+        })
+    );
     for command in [
-        WindowCommand::SetSize(Size::new(f64::NAN, 100.0)),
-        WindowCommand::SetSize(Size::new(0.0, 100.0)),
-        WindowCommand::SetPosition(Point::new(f64::INFINITY, 0.0)),
+        WindowCommand::SetSize(extent(0.0, 100.0)),
         WindowCommand::SetConstraints(limits(
             Some(Size::new(500.0, 500.0)),
             Some(Size::new(100.0, 100.0)),
@@ -453,11 +494,9 @@ fn a_bad_report_keeps_the_geometry_and_publishes_the_rest() {
 /// options a command would be refused for open no window, and the error names
 /// the option and its numbers.
 fn options_that_describe_no_window_open_none() {
-    use flui_platform::{InvalidGeometry, WindowExtent, WindowOption};
+    use flui_platform::WindowOption;
 
     let platform = HeadlessPlatform::new();
-    let extent =
-        |width, height| WindowExtent::try_new(Size::new(width, height)).expect("an extent");
     let rows = [
         (
             WindowOptions::default()
@@ -478,19 +517,11 @@ fn options_that_describe_no_window_open_none() {
             },
         ),
         (
-            WindowOptions::default().size(Size::new(f64::NAN, 600.0)),
+            WindowOptions::default().size(extent(0.0, 600.0)),
             WindowOption::Size,
-            InvalidGeometry::Extent {
-                width: f64::NAN,
+            InvalidGeometry::Empty {
+                width: 0.0,
                 height: 600.0,
-            },
-        ),
-        (
-            WindowOptions::default().position(Some(Point::new(f64::INFINITY, 0.0))),
-            WindowOption::Position,
-            InvalidGeometry::Position {
-                x: f64::INFINITY,
-                y: 0.0,
             },
         ),
     ];
@@ -638,7 +669,11 @@ fn the_user_resizing_and_moving_publish_too() {
 
     mock(&window).simulate_move(Point::new(30.0, 40.0));
     let moved = window.state();
-    assert_eq!(moved.outer.position(), Some(Point::new(30.0, 40.0)));
+    assert_eq!(
+        moved.outer.position(),
+        Some(position(display_of(&window), 30.0, 40.0)),
+        "the position is on the display the window is on"
+    );
     assert_eq!(moved.revision.get(), resized.revision.get() + 1);
     assert_eq!(changes.load(Ordering::SeqCst), 2);
 
@@ -691,9 +726,15 @@ fn a_window_without_position_reports_none() {
 
 fn opening_options_are_reflected_in_the_first_snapshot() {
     let platform = HeadlessPlatform::new();
-    let normal = geometry(Some(Point::new(50.0, 60.0)), Size::new(700.0, 500.0));
+    let primary = platform
+        .display_snapshot()
+        .expect("a display snapshot")
+        .primary()
+        .expect("the headless platform has a primary display")
+        .id;
+    let normal = geometry(Some(position(primary, 50.0, 60.0)), Size::new(700.0, 500.0));
     let options = WindowOptions::default()
-        .position(Some(Point::new(50.0, 60.0)))
+        .position(Some(position(primary, 50.0, 60.0)))
         .mode(WindowMode::Maximized)
         .normal_geometry(Some(normal));
     let window: Rc<dyn HostWindow> = platform
@@ -958,7 +999,7 @@ fn limits(
 
 /// A rectangle with this position and size.
 fn geometry(
-    position: Option<flui_foundation::geometry::Point<f64>>,
+    position: Option<WindowPosition>,
     size: flui_foundation::geometry::Size<f64>,
 ) -> flui_platform::WindowGeometry {
     flui_platform::WindowGeometry::try_new(position, size).expect("a finite rectangle")

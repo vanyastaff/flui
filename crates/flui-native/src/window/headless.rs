@@ -19,10 +19,10 @@ use flui_platform::text_store::TextStoreHost;
 use flui_platform::{
     AdmittedCommand, ApplyError, Brightness, Cursor, CursorError, CursorGrab, DispatchEventResult,
     DisplayId, DisplayInfo, PlatformHaptics, PlatformInput, PlatformTextInput, PlatformWindow,
-    SizeConstraints,
-    SurfaceChange, Unsupported, UnsupportedReason, WindowCapabilities, WindowCommand, WindowFocus,
-    WindowFrame, WindowGeometry, WindowHandler, WindowId, WindowIdMint, WindowInteraction,
-    WindowLevel, WindowMaterial, WindowMode, WindowOptions, WindowPosition, WindowState,
+    SizeConstraints, SurfaceChange, Unsupported, UnsupportedReason, WindowCapabilities,
+    WindowCommand, WindowFocus, WindowFrame, WindowGeometry, WindowHandler, WindowId, WindowIdMint,
+    WindowInteraction, WindowLevel, WindowMaterial, WindowMode, WindowOptions, WindowPosition,
+    WindowState,
 };
 use parking_lot::Mutex;
 

@@ -49,7 +49,7 @@ use std::rc::Rc;
 
 use flui_engine::{EngineError, Recoverability, Renderer};
 use flui_layer::{Scene, SceneBuilder};
-use flui_platform::{DispatchEventResult, FrameOutcome, PlatformInput, WindowOptions};
+use flui_platform::{DispatchEventResult, FrameOutcome, PlatformInput};
 
 use super::AppConfig;
 
@@ -130,7 +130,9 @@ pub fn run_direct(
 
         // 1. Open window. `Ready` is guaranteed inside `on_ready`
         // (ADR-0039 §1).
-        let options: WindowOptions = (&config).into();
+        let options = owner_platform_installed(|owner| {
+            config.window_options_on(owner.display_snapshot().ok().as_ref())
+        });
         let routes = crate::app::runner::window_routes::WindowRoutes::new();
         let window =
             match owner_platform_installed(|owner| owner.open_window(options, routes.clone()))
