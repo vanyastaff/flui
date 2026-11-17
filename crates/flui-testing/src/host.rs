@@ -1359,7 +1359,11 @@ impl HeadlessHost {
     /// this one frames or moves the clock; with the first dropped-frame
     /// report of this pump (a segment panic or a pipeline error the UI runtime
     /// contained), after the pump returned; or with a panic that unwound out
-    /// of the pump when nothing was reported before it. See the
+    /// of the pump when nothing was reported before it; after a frame that
+    /// failed nothing, when a window's semantics publication found an author
+    /// error (an attribute its node's role does not support, or in debug
+    /// builds siblings sharing an identifier), in every open window at once;
+    /// a frame that failed otherwise drops its findings with it. See the
     /// [module docs](self#failures).
     pub fn pump(&mut self, dt: Duration) -> FrameOutcome {
         let pending = std::mem::take(&mut *self.failures.lock());
@@ -1422,8 +1426,18 @@ impl HeadlessHost {
             failures.clear();
             first
         };
+        // Taken on every outcome: a failed frame's findings are its own, and
+        // the failure that is raised already fails the test.
+        let semantics_findings = self.take_semantics_findings();
         match (attempt, first_failure) {
-            (Ok(outcome), None) => outcome,
+            (Ok(outcome), None) => {
+                assert!(
+                    semantics_findings.is_empty(),
+                    "the frame's semantics publication found author errors, by presentation: \
+                     {semantics_findings:?}"
+                );
+                outcome
+            }
             (Ok(_), Some(failure)) => panic!("{failure}"),
             (Err(payload), None) => resume_unwind(payload),
             (Err(payload), Some(failure)) => {
@@ -1438,6 +1452,32 @@ impl HeadlessHost {
                 panic!("{failure}")
             }
         }
+    }
+
+    /// Takes every open window's semantics findings from the frame that just
+    /// ran ([`crate::take_semantics_findings`]), each beside its presentation;
+    /// none once the last window closed and the UI runtime retired.
+    /// Every pump takes them, whatever its outcome, so a finding is never
+    /// reported against a later frame.
+    fn take_semantics_findings(
+        &self,
+    ) -> Vec<(
+        flui_foundation::PresentationId,
+        Vec<flui_rendering::semantics::SemanticsDiagnostic>,
+    )> {
+        let Some(ui_runtime) = self.try_ui_runtime() else {
+            return Vec::new();
+        };
+        self.open
+            .iter()
+            .filter_map(|window| {
+                let pipeline = ui_runtime
+                    .presentation_widgets_for_test(window.id)
+                    .pipeline_owner()?;
+                let findings = crate::take_semantics_findings(&pipeline);
+                (!findings.is_empty()).then_some((window.id, findings))
+            })
+            .collect::<Vec<_>>()
     }
 
     /// Leave the next `frames` frames unshown for the reason `how` names, as
@@ -2281,7 +2321,9 @@ impl HeadlessHost {
     /// # Panics
     ///
     /// If the recording names a window this host has not opened or a surface
-    /// it has not embedded, or with the first panic an applied input raised.
+    /// it has not embedded, or with the first panic an applied input or frame
+    /// raised, a frame's semantics author error included ([`pump`](Self::pump)):
+    /// a recording of an application with one stops at that frame.
     pub fn replay(
         &mut self,
         recording: &crate::recording::ReplayableRecording,
@@ -2375,7 +2417,8 @@ impl HeadlessHost {
     ///
     /// # Panics
     ///
-    /// With the first panic a delivered input or frame raised.
+    /// With the first panic a delivered input or frame raised, a frame's
+    /// semantics author error included ([`pump`](Self::pump)).
     pub fn run_script(&mut self, script: &crate::replay::PointerScript) {
         let window = self.primary_window();
         let base = self.event_now();

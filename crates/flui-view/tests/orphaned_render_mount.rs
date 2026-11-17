@@ -13,8 +13,9 @@
 //! is exactly where the refusal belongs.
 //!
 //! The legal bare-mount root (render element mounted as the element-tree
-//! root, no element-tree parent) is pinned by
-//! `flui-testing/tests/mount_bootstrap.rs` and is untouched.
+//! root, no element-tree parent) is pinned by flui-testing's
+//! `the_mount_frame_installs_the_render_root_at_the_window_size_and_paints`
+//! (`tests/mount_bootstrap.rs`) and is untouched.
 
 use flui_objects::RenderSizedBox;
 use flui_rendering::RenderUpdateImpact;

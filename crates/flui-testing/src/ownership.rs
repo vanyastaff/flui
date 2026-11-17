@@ -4,8 +4,8 @@
 //! 45° and 46° rows with first-sample noise, the [`PanClaim`] rows and an
 //! `allowed_devices` row (a pen draws, a finger scrolls), each
 //! for a touch and a mouse contact. Every row scripts its contact with a
-//! [`PointerScript`] and dispatches it through a [`HeadlessBinding`] on a hit
-//! route of nested targets, the member under test innermost, so the arena sees
+//! [`PointerScript`] and replays it in a [`HeadlessHost`](crate::HeadlessHost) on a hit
+//! route of nested `RawGestureDetector`s, the member under test innermost, so the arena sees
 //! the members in the order a real route admits them.
 //!
 //! The widget rows mount the widgets themselves: a `PageView` over a
@@ -24,12 +24,12 @@ use std::{
     time::Duration,
 };
 
+use flui_foundation::ValueKey;
 use flui_foundation::geometry::{Axis, EdgeInsets, Offset};
 use flui_interaction::{
-    DragAxis, DragGestureRecognizer, GestureRecognizer, HitTestEntry, HitTestResult,
-    LongPressGestureRecognizer, MultiDragAxis, MultiDragEndDetails, MultiDragGestureRecognizer,
-    MultiDragHandle, MultiDragUpdateDetails, PointerId, PointerKind, PointerKindSet, RecognizerSet,
-    RenderId, ScaleGestureRecognizer, TapAndDragGestureRecognizer,
+    DragAxis, DragGestureRecognizer, GestureRecognizer, LongPressGestureRecognizer, MultiDragAxis,
+    MultiDragEndDetails, MultiDragGestureRecognizer, MultiDragHandle, MultiDragUpdateDetails,
+    PointerId, PointerKind, PointerKindSet, ScaleGestureRecognizer, TapAndDragGestureRecognizer,
     gesture::{GestureArena, GestureSettings, PanClaim, ScaleStartMode, SequencedBranch},
 };
 use flui_painting::styling::Color;
@@ -39,13 +39,13 @@ use flui_view::prelude::*;
 use flui_view::{BoxedView, LifecycleContext, ViewState};
 use flui_widgets::{
     Alternative, ColoredBox, Column, GestureAlternatives, GestureCommand, GestureDetector,
-    InteractiveViewer, Listener, MenuSpec, PageController, PageIntent, PageView, ScrollController,
-    ScrollView, SingleChildScrollView, SizedBox, SwipeAction, SwipeActions, SwipeAlternative,
-    ZoomIntent,
+    GestureRecognizerFactory, InteractiveViewer, Listener, MenuSpec, PageController, PageIntent,
+    PageView, RawGestureDetector, RecognizerContext, ScrollController, ScrollView,
+    SingleChildScrollView, SizedBox, SwipeAction, SwipeActions, SwipeAlternative, ZoomIntent,
 };
 
 use crate::{
-    HeadlessBinding,
+    HeadlessHost, HeadlessWindow,
     replay::{MouseScript, PenScript, PointerScript, TouchScript},
     widgets::{LaidOut, lay_out, tight},
 };
@@ -231,11 +231,32 @@ fn hold_then_move(device: PointerKind, to: Offset<f64>) -> PointerScript {
 
 type Starts = Rc<RefCell<Vec<&'static str>>>;
 
-/// A hit route under construction: levels innermost first, each a target
-/// that feeds its recognizers.
+/// The side of the window a route row runs in: every scripted position,
+/// [`ORIGIN`] plus 1.5 × a 40 px heading, lies inside it.
+const ROUTE_WINDOW: u32 = 300;
+
+/// Hands a [`RawGestureDetector`] the recognizer a row built on the host's
+/// arena, or on a region or composition branch of it, so the row and not the
+/// detector decides what competes.
+struct Prebuilt<R>(Rc<R>);
+
+impl<R: GestureRecognizer + 'static> GestureRecognizerFactory for Prebuilt<R> {
+    type Recognizer = R;
+
+    fn create(&self, _ctx: &RecognizerContext) -> Rc<R> {
+        Rc::clone(&self.0)
+    }
+
+    fn update(&self, _recognizer: &R) {}
+}
+
+/// A hit route under construction: levels innermost first, each a detector
+/// that feeds its recognizers, mounted nested in a [`HeadlessHost`].
 struct Route {
-    binding: HeadlessBinding,
-    levels: Vec<RecognizerSet>,
+    host: HeadlessHost,
+    levels: Vec<RawGestureDetector>,
+    /// Recognizers attached so far, so each gets a key of its own.
+    attached: usize,
     starts: Starts,
     owners: Vec<Rc<dyn Any>>,
 }
@@ -243,28 +264,35 @@ struct Route {
 impl Route {
     fn new() -> Self {
         Self {
-            binding: HeadlessBinding::new(),
+            host: HeadlessHost::new(HeadlessWindow::new(ROUTE_WINDOW, ROUTE_WINDOW)),
             levels: Vec::new(),
+            attached: 0,
             starts: Starts::default(),
             owners: Vec::new(),
         }
     }
 
     fn arena(&self) -> GestureArena {
-        self.binding.arena().clone()
+        self.host.arena().clone()
     }
 
-    /// Open the next level outwards.
+    /// Open the next level outwards. Each level is hit wherever the window
+    /// is, so every contact meets every level.
     fn level(&mut self) -> &mut Self {
-        self.levels.push(RecognizerSet::default());
+        self.levels
+            .push(RawGestureDetector::new().behavior(HitTestBehavior::Opaque));
         self
     }
 
     fn attach<R: GestureRecognizer + 'static>(&mut self, recognizer: Rc<R>) -> &mut Self {
+        let level = self
+            .levels
+            .pop()
+            .expect("BUG: a row attaches after opening a level");
+        let key = ValueKey::new(self.attached);
+        self.attached += 1;
         self.levels
-            .last_mut()
-            .expect("BUG: a row attaches after opening a level")
-            .attach(&recognizer);
+            .push(level.recognizer_with_key(key, Prebuilt(Rc::clone(&recognizer))));
         self.owners.push(recognizer);
         self
     }
@@ -342,23 +370,48 @@ impl Route {
         self
     }
 
-    /// Replay `script` on this route and report who started, in order.
-    fn run(mut self, script: &PointerScript) -> Vec<&'static str> {
-        let handle = self.binding.interaction_dispatch_handle();
-        let levels = std::mem::take(&mut self.levels);
-        let route = self.binding.enter_owner_scope(|| {
-            let mut route = HitTestResult::new();
-            for (index, set) in levels.into_iter().enumerate() {
-                let target = handle
-                    .register_pointer(move |dispatch| set.dispatch(dispatch))
-                    .expect("register ownership level");
-                route.add(HitTestEntry::new(RenderId::new(index + 1)).pointer_target(target));
+    /// Mount the levels, replay `script` on them and report who started, in
+    /// order.
+    ///
+    /// Before each step a frame of the UI runtime advances the virtual clock
+    /// by the gap since the previous step, so deadlines fire as the script's
+    /// timing says, then the step's event goes through the window's input
+    /// path. One more frame follows the last event.
+    fn run(self, script: &PointerScript) -> Vec<&'static str> {
+        let Self {
+            mut host,
+            levels,
+            starts,
+            owners,
+            ..
+        } = self;
+        let window = f64::from(ROUTE_WINDOW);
+        let mut route: BoxedView = SizedBox::new(window, window).boxed();
+        for level in levels {
+            route = level.child(route).boxed();
+        }
+        host.attach(&route)
+            .expect("BUG: a fresh host has no root attached");
+        let _ = host.pump(SAMPLE);
+
+        let base = flui_platform::EventTime::from_nanos(
+            u64::try_from(host.clock().elapsed().as_nanos())
+                .expect("BUG: a headless test's virtual time fits the event timeline"),
+        );
+        let mut previous = Duration::ZERO;
+        for step in script.steps() {
+            let _ = host.pump(step.at().saturating_sub(previous));
+            previous = step.at();
+            if let flui_runtime::HostInput::Platform(
+                input @ flui_platform::PlatformInput::Pointer(_),
+            ) = step.to_input(base)
+            {
+                host.dispatch(input);
             }
-            route
-        });
-        self.binding.replay_with(script, |_, _, _| route.clone());
-        self.binding.pump_frame(SAMPLE);
-        self.starts.take()
+        }
+        let _ = host.pump(SAMPLE);
+        drop(owners);
+        starts.take()
     }
 }
 
