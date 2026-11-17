@@ -458,9 +458,8 @@ pub trait LifecycleContext: BuildContext {
     /// `None` when the tree is not bound to a binding (a bare `ElementTree` in a
     /// unit test), reported honestly rather than by silently spawning into a
     /// driver nobody polls. Never reach for some OTHER binding's or UI runtime's
-    /// `UpdateScheduler` from a widget: `HeadlessBinding` drives its own
-    /// binding-local `UpdateScheduler`, and a production `UiRuntime` likewise owns
-    /// its own — a task spawned into the wrong one would never run.
+    /// `UpdateScheduler` from a widget: each `UiRuntime`, a headless host's
+    /// included, owns its own — a task spawned into the wrong one would never run.
     fn async_driver(&self) -> Option<crate::AsyncDriver>;
 
     /// The UI runtime's timer: [`Sleep`](crate::Sleep) futures that resolve

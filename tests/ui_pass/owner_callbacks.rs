@@ -3,17 +3,21 @@ use std::{cell::Cell, rc::Rc, time::Duration};
 use flui::animation::{Animation, AnimationController, AnimationStatus, Vsync};
 use flui::foundation::ChangeNotifier;
 use flui::view::{FrameWaker, PostFrameHandle};
+use flui::widgets::SizedBox;
+use flui_testing::widgets::{lay_out, tight};
 
 fn require_thread_spawnable<T: Send + Sync + 'static>(_: T) {}
 
 fn main() {
-    let binding = flui_testing::HeadlessBinding::new();
-    let scheduler = binding.scheduler();
+    let mut laid = lay_out(SizedBox::new(10.0, 10.0), tight(10.0, 10.0));
+    let scheduler = laid.scheduler();
     let calls = Rc::new(Cell::new(0));
     let observed = calls.clone();
-    PostFrameHandle::new(scheduler)
+    PostFrameHandle::new(&scheduler)
         .schedule(move |_| observed.set(observed.get() + 1))
         .expect("live owner");
+    laid.pump_for(Duration::from_millis(16));
+    assert_eq!(calls.get(), 1, "the UI runtime's next frame runs the post-frame callback");
 
     let notifier = ChangeNotifier::new();
     let observed = calls.clone();
@@ -43,7 +47,7 @@ fn main() {
     vsync.tick_all(
         &flui::animation::MotionClock::new().frame(std::time::Duration::from_secs_f64(0.1)),
     );
-    assert_eq!(calls.get(), 3);
+    assert_eq!(calls.get(), 4);
     owner.dispose();
     assert!(vsync.is_empty());
     assert!(matches!(

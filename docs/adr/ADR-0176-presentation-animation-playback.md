@@ -112,8 +112,8 @@ automatically; callers can read its clock state first.
 `agent_motion_sets_rate_and_steps_a_paused_window` pins owner admission,
 atomic validation, accepted state and closed-window refusal.
 `motion_op_round_trips_over_the_endpoint` exercises the actual local endpoint.
-`presentation_rates_pause_and_step_are_independent` drives two testing
-presentations through different rates, pause and one-frame step.
+`agent_playback_drives_independent_windows_and_one_paused_step_frame` drives two
+windows of one UI runtime through different rates, pause and one-frame step.
 
 `starting_an_idle_bound_controller_requests_its_first_frame` and
 `starting_an_idle_presentation_animation_requests_its_first_frame` assert the

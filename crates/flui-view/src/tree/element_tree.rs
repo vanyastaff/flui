@@ -703,11 +703,10 @@ impl ElementTree {
     /// install [`PipelineOwner::root_id`](flui_rendering::PipelineOwner::root_id)
     /// for an ordinary render-producing view — only
     /// [`crate::RootRenderView`] / `RootRenderElement` owns that invariant.
-    /// Production and the headless harness therefore wrap the user view in
-    /// `RootRenderView` before calling this (`WidgetsBinding::attach_root_widget`,
-    /// `HeadlessBinding::mount_root`).
+    /// The UI runtime therefore wraps the user view in
+    /// `RootRenderView` before calling this (`WidgetsBinding::attach_root_widget`).
     ///
-    /// Callers that need a live render pipeline must use one of those
+    /// Callers that need a live render pipeline must use that
     /// root-bootstrap APIs (or an equivalent `RootRenderView` wrap). Direct
     /// use here remains appropriate for element-tree unit tests that never
     /// drive layout/paint from `root_id`.

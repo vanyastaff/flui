@@ -7,7 +7,7 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
-description = "Test support for FLUI: a deterministic headless frame driver on a virtual clock, the canonical mount bootstrap, gesture replay, and race-free tracing capture"
+description = "Test support for FLUI: a headless host that pumps the UI runtime on a virtual clock, the widget harness, gesture replay, and race-free tracing capture"
 keywords = ["ui", "gesture", "headless", "testing"]
 categories = ["gui"]
 
@@ -18,7 +18,7 @@ exclude = ["/ARCHITECTURE.md"]
 # module of `tests/main.rs` (one link of the full dep stack instead of 2
 # separate binaries). See the `[[test]] name = "flui_testing_it"` target below.
 # Ambient-state note: no root test writes process-global state (each test
-# drives its own `HeadlessBinding` instance), so no isolated targets.
+# drives its own host or binding), so no isolated targets.
 autotests = false
 
 [lints]
@@ -40,10 +40,9 @@ http = []
 # support and never enters a production graph (dev edges only, plus the
 # facade's optional `testing` feature), so the feature travels nowhere new.
 flui-interaction = { workspace = true, features = ["testing"] }
-# PresentationId, the multi-presentation clock registry's key -- it now
-# appears directly in HeadlessBinding's own public method signatures
-# (install_presentation_clock/pump_presentation/pump_all/etc.), which is what
-# promotes this from a transitive (dev-only) dependency to a normal one.
+# Geometry and panic containment, named in the host's and the
+# harness's public signatures, which promotes this from a transitive
+# (dev-only) dependency to a normal one.
 flui-foundation = { workspace = true }
 # The log capture's home: `log_capture` is a re-export of `flui_log::testing`.
 flui-log = { workspace = true }
@@ -55,7 +54,7 @@ flui-platform = { workspace = true, features = ["testing"] }
 # window conformance checks query (ADR-0254 §5).
 raw-window-handle = { workspace = true }
 # Canonical hit-test positions accepted by the production input pipeline.
-# The element tree + build owner this binding drives each frame (`build_scope`
+# The element tree + build owner the widget harness probes (`build_scope`
 # drains the external inbox an animation/listenable tick fills).
 # `testing` for `clear_frame_build_report_for_test`, which `LaidOut::pump_report`
 # runs before its frame so a frame that builds nothing reports nothing, and for
@@ -82,19 +81,16 @@ parking_lot = { workspace = true }
 # measures alike on every host) and the painting values the widget harness
 # reads.
 flui-painting = { workspace = true }
-# Registered `AnimationController`s the frame loop ticks on the virtual timeline,
-# restart-aware via the controller's `run_generation` counter.
+# The `Vsync` registries the widget harness adopts and ticks at the UI runtime's
+# frame time.
 flui-animation = { workspace = true }
-# The frame phases and the binding's `OwnerFrame`. `pump_frame` runs the SAME
-# `UpdateScheduler::drive_frame` a UI runtime's pump runs, whose begin frame polls the
+# The scheduler the harness hands out (`LaidOut::scheduler`); `HeadlessHost`'s
+# frames run the UI runtime's own `drive_frame`, whose begin frame polls the
 # owner-local tasks in the same slot — between the vsync tick and `build_scope`.
 # `testing` exposes the scheduler's test probes (`AsyncDriver::set_request_frame`,
 # `is_unlocked`) to every test that links this crate, the scheduler's own
 # integration tests included.
 flui-scheduler = { workspace = true, features = ["testing"] }
-# Names the shared `Arc<RwLock<PipelineOwner>>` the element tree and the binding
-# both hold (render-object attachment shares the owner; the binding does not own
-# it exclusively).
 # The accessibility tree the query-by-role API asserts against. flui-testing
 # reads the assembled `SemanticsOwner` tree out of the pipeline owner and
 # translates it with `flui_semantics::tree_to_update` -- the SAME translation a
@@ -123,15 +119,11 @@ rustc-hash = { workspace = true }
 
 [dev-dependencies]
 flui-testing = { path = ".", features = ["http"] }
-static_assertions.workspace = true
 # `CountingWaker` and `panicking_waker` for tests that count or fail a waker.
 flui-foundation = { workspace = true, features = ["testing"] }
 # The headless backend whose windows the conformance checks run against.
 flui-native = { workspace = true }
-# The long-press deadline recognizer + settings exercised by the pump_frame test,
-# plus the geometry/offset types for the synthetic pointer-down. The `testing`
-# feature is NOT required: `add_pointer`/`poll_deadlines` are part of the release
-# API, so the deterministic deadline test runs against the public surface.
+# The painting values the integration tests' widgets paint with.
 flui-painting = { workspace = true }
 
 [[test]]

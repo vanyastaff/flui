@@ -565,7 +565,7 @@ write a widget opens inside its own `build` is refused with `WrittenDuringBuild`
 not a `WriteTarget`, and no context hands it out: `BuildContext::graph` takes a crate-private
 token. Host code writes through `BuildOwner::writer_source` (`writer_source_for(slot)` routes a
 cross-thread `UiCommand::SignalWrite` to the presentation that minted the slot), and
-`HeadlessBinding::writer_source` serves tests. Only the `testing` feature reaches the graph
+the widget harness's `SignalProbe` serves tests. Only the `testing` feature reaches the graph
 itself (`BuildOwner::signal_graph`, which no build context reaches), for minting test signals
 and inspecting the reader registry; writing still needs a source. An event callback may
 return `()` or a write's `Result`; `EventOutcome::report` logs a refused write on

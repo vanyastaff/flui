@@ -65,12 +65,12 @@ Scheduler::drive_frame(vsync_time, pipeline):
     end_frame           post-frame callbacks, timing, → Idle
 ```
 
-Every frame driver — `HeadlessBinding::pump_frame` on its binding-local scheduler and each
-platform runner on the singleton — goes through `drive_frame`. A pipeline that returns an
+Every frame driver — `UiRuntime::pump`, which each platform runner and each headless host
+calls on its UI runtime's own scheduler — goes through `drive_frame`. A pipeline that returns an
 error completes the frame; one that panics is caught, the frame is aborted
 (`abort_frame`: phase → `Idle`, no post-frame callbacks, queued callbacks survive) and the
 unwind resumes. The pipeline occupies Flutter's persistent slot without being a registered
-callback, because a headless binding owns its tree by value; consequently a registered
+callback, because the frame's owner holds its tree by value; consequently a registered
 persistent callback runs *before* the pipeline, where Flutter's runs after. Post-frame parity
 is claimed; persistent-phase parity is not.
 

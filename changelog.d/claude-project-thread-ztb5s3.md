@@ -30,9 +30,18 @@
   `flui::testing::rendering`.
 - `flui_testing::BuildCapabilities` and `MountOptions::with_capabilities`: a headless bootstrap always
   installs every build capability.
+- `flui_testing::HeadlessBinding` is removed (ADR-0083 §4), with `pump_frame`, `pump_presentation`,
+  `pump_all`, the per-presentation clocks, the tree it mounted (`with_tree`, `bind_tree`,
+  `mount_root` and the `bootstrap` module with `MountOptions`, `MountOwners` and `Mounted`), its
+  scheduler, input pipeline and replay driver, and `a11y::NotTreeBound`. A test drives frames with
+  `HeadlessHost::pump` or `widgets::lay_out` (a script with `HeadlessHost::run_script` or
+  `LaidOut::replay`), runs presentations at independent cadences as separate hosts, and reaches a
+  UI runtime's scheduler through `LaidOut::scheduler`.
 
 ### Fixed
 
+- `HeadlessHost::pump` fails a frame whose semantics publication found an author error in any open
+  window, as the widget harness's frames already did, so `Tester` and a bare host report it too.
 - A window hidden from `Resumed` passes through `Inactive` before `Hidden`, for its lifecycle
   subscribers and the scheduler's lifecycle listeners alike: a presentation now starts in the
   state its window snapshot gives instead of none, and the application's aggregate lifecycle

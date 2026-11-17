@@ -79,7 +79,7 @@ alive as a recovery shortcut would keep weak authority usable and is rejected.
 or commit guard and runs no deferred-grant anchor. Admitted framework guards
 restore enclosing state on return or unwind. Its internal result is a boolean,
 so deferred native-grant failures after scheduler return cannot destroy an
-opaque pipeline result. `HeadlessBinding` uses the same owner execution seam.
+opaque pipeline result. A headless host's UI runtime uses the same owner execution seam.
 
 Physical pacing remains in presentation clocks and host drivers. Unsupported
 performance-mode requests have no executor policy consumer and are removed;

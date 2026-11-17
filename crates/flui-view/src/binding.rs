@@ -305,7 +305,7 @@ pub use flui_scheduler::AppLifecycleState;
 /// # Ownership
 ///
 /// Not a singleton: the binding is owned by its `UiRuntime` (one per UI
-/// session; `HeadlessBinding` owns its own for tests). Construct via
+/// session, a headless host's included). Construct via
 /// [`WidgetsBinding::new`]:
 ///
 /// ```rust,ignore
@@ -614,9 +614,8 @@ impl WidgetsBinding {
     /// Drain after the build segment before forwarding diagnostics. If a
     /// host omits the drain, the next
     /// [`Self::draw_frame`] discards the stale records with an aggregate
-    /// warning. `flui-testing`'s `HeadlessBinding::build_owner_mut` reaches
-    /// the same underlying `BuildOwner::take_recovered_panics` directly for
-    /// tests that want the drain without a UI runtime in the loop.
+    /// warning. A test without a UI runtime in the loop reaches
+    /// the same underlying `BuildOwner::take_recovered_panics` directly.
     ///
     /// Each record's [`context`](RecoveredPanic::context) path is read here
     /// from the live element tree when its seam left none: from the panicked
@@ -1247,8 +1246,8 @@ impl WidgetsBinding {
     /// most recent layout pass.
     ///
     /// This is the **production entry point** for lazy `SliverList` /
-    /// `ListView::builder` child building. It mirrors step 6 of
-    /// `HeadlessBinding::pump_frame`, and must be called immediately after
+    /// `ListView::builder` child building, on a platform runner and a headless
+    /// host alike, and must be called immediately after
     /// `PipelineOwner::run_frame` releases its write-lock so no `NodePtr`
     /// alias is live.
     ///
@@ -1272,14 +1271,10 @@ impl WidgetsBinding {
     /// before calling, but the unconditional call is simpler and the cost is
     /// negligible in practice.
     ///
-    /// # Production↔headless convergence point
+    /// # One path for every frame
     ///
-    /// This call site is the **production↔headless convergence point** for the
-    /// post-`run_frame` pipeline tail steps. `HeadlessBinding::pump_frame`
-    /// step 6 and `UiRuntime::draw_frame` (via this method) now execute the
-    /// same code path. Future gap-#2 work (production Vsync / implicit-animation
-    /// tick) will land at the same `draw_frame` call site immediately after this
-    /// call, keeping both bindings in sync.
+    /// A headless host runs the same `UiRuntime::draw_frame` a platform runner
+    /// does, so the post-`run_frame` pipeline tail steps have this one call site.
     pub fn service_child_requests(&self, pipeline: &PipelineCell) {
         let mut inner = self.inner.write_in(TreePhase::Building);
         let WidgetsBindingInner {
@@ -1296,12 +1291,9 @@ impl WidgetsBinding {
     /// takes it out under the write guard and restores it before the builders
     /// run, because `build_scope` mounts render objects through that same lock.
     ///
-    /// This is the second production↔headless convergence point:
-    /// `UiRuntime::draw_frame` reaches the shared fixpoint through here, and
-    /// `HeadlessBinding::pump_frame` calls
-    /// `BuildOwner::run_frame_with_layout_builders` directly (it owns its
-    /// `BuildOwner` and `ElementTree` without a lock). Both end up in the same
-    /// helper; neither hand-rolls the loop.
+    /// `UiRuntime::draw_frame` reaches the shared fixpoint through here, on a
+    /// platform runner and a headless host alike; no frame path hand-rolls the
+    /// loop.
     ///
     /// With no `LayoutBuilder` mounted, this is exactly `PipelineOwner::run_frame`.
     pub fn run_frame_with_layout_builders(
@@ -1677,8 +1669,8 @@ mod tests {
 
     fn binding_is_not_a_singleton_two_instances_are_independent() {
         // The binding is ui_runtime-owned; two bindings are two
-        // independent trees (HeadlessBinding's "many can exist" contract,
-        // now true of the widgets binding itself).
+        // independent trees (the "many can exist" contract a headless test
+        // relies on).
         let binding1 = WidgetsBinding::new();
         let binding2 = WidgetsBinding::new();
         assert!(!Rc::ptr_eq(&binding1.inner, &binding2.inner));
