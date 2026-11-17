@@ -635,9 +635,9 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 
 > **Environments:** all · **Who it hurts:** Apps that scale a scene node down (a thumbnail, a zoomed-out canvas) over content a fractional clip cuts · **Parity:** [Quality bar](platform-parity.md#quality-bar)
 
-- A node's stored subtree bound is kept in its own space, and a clip in its content that cuts content away whole keeps the strip within one device pixel of that content, measured by the transforms inside the content ([ADR-0304](adr/ADR-0304-the-scene-is-retained-and-damage-is-the-footprint-of-its-patch.md) §4). A transform above the node that scales by less than 1 is not known there, so content up to `1/scale` units short of the clip falls outside the strip: the cull drops the node, and a partial frame leaves the pixel the clip's anti-aliased edge shares with that content stale. Damage, which maps through the whole chain, already takes the pixel.
-- `an_ancestor_scale_below_1_still_loses_the_pixel_a_content_clip_shares` (`crates/flui-layer/tests/scene_damage.rs`) pins the miss.
-- The entry closes when a stored bound carries what the surface map needs to keep the strip under any scale, and that test asserts the cull keeps the node.
+- A node's stored subtree bound is kept in its own space, and a clip in its content that cuts content away whole keeps the strip within one device pixel of that content, measured by the transforms inside the content ([ADR-0304](adr/ADR-0304-the-scene-is-retained-and-damage-is-the-footprint-of-its-patch.md) §4). A transform above the node that scales by less than 1, and a follower's resolved map, are not known there and are taken at 1, so content up to `1/scale` units short of the clip falls outside the strip. The cull then drops the node, and the damage that reads the stored bound misses the pixel the clip's anti-aliased edge shares with that content: a placement of the node, a slot added for it, a composited update of an effect above it. A partial frame leaves that pixel stale. A repaint inside the node and a change of the clip itself map through the whole chain and take the pixel.
+- `an_ancestor_scale_below_1_still_loses_the_pixel_a_content_clip_shares` (`crates/flui-layer/tests/scene_damage.rs`) pins the cull's miss and a placement's.
+- The entry closes when a stored bound carries what the surface map needs to keep the strip under any scale, and that test asserts the cull keeps the node and the placement damages the pixel.
 
 ### Two rest distances for logical pixels
 

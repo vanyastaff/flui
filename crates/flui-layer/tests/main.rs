@@ -424,6 +424,10 @@ fn scene_patch_damage() {
                 d::a_clip_in_a_nodes_own_content_under_a_scale_below_1_keeps_the_pixel_it_shares,
             ),
             (
+                "a_child_under_a_content_clip_grows_its_parent_by_the_pixel_it_shares",
+                d::a_child_under_a_content_clip_grows_its_parent_by_the_pixel_it_shares,
+            ),
+            (
                 "a_moved_clip_in_a_nodes_own_content_damages_the_pixel_it_shared",
                 d::a_moved_clip_in_a_nodes_own_content_damages_the_pixel_it_shared,
             ),

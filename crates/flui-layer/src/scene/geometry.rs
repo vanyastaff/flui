@@ -229,8 +229,8 @@ fn edge_of(content: Reach, clip: Rect<f64>, scale: f64) -> Reach {
     };
     let reach = scale.recip();
     if !reach.is_finite() {
-        // A map that collapses the space puts every distance in it under a
-        // pixel.
+        // A map that collapses a direction, or one out of the plane
+        // (`least_scale`), bounds no distance: the clip bounds what it shows.
         return Reach::rect(clip);
     }
     content
@@ -240,7 +240,8 @@ fn edge_of(content: Reach, clip: Rect<f64>, scale: f64) -> Reach {
 }
 
 /// The least factor by which the maps of `links` grow a length, taken
-/// together: no less than the product of each one's.
+/// together: the product of each one's, which the least factor of a product
+/// of plane maps is no less than.
 pub(crate) fn least_scale_of(links: &Links<'_>) -> f64 {
     links
         .steps
@@ -252,15 +253,29 @@ pub(crate) fn least_scale_of(links: &Links<'_>) -> f64 {
         .product()
 }
 
-/// The least factor by which `matrix`'s plane part grows a length: the
-/// smaller singular value of its 2×2 linear part. A projective map is taken
-/// at that part alone.
+/// The least factor by which `matrix` grows a length in the plane: the
+/// smaller singular value of its 2×2 linear part, from the two hypotenuses
+/// that neither overflow nor cancel. A map that moves the plane out of
+/// itself (a turn about an axis in it, a projection) is 0: a length it maps
+/// has no lower bound there.
 fn least_scale(matrix: &Matrix4) -> f64 {
-    let [a, b, c, d] = [matrix.m[0], matrix.m[1], matrix.m[4], matrix.m[5]];
-    let sum = a * a + b * b + c * c + d * d;
-    let det = a * d - b * c;
-    let root = (sum * sum - 4.0 * det * det).max(0.0).sqrt();
-    ((sum - root) / 2.0).max(0.0).sqrt()
+    let entries = &matrix.m;
+    // Column-major: the plane's linear part is entries 0, 1, 4 and 5; z
+    // couples through 2, 6, 8 and 9; the projective row is 3, 7, 11 and 15.
+    let in_plane = entries[2] == 0.0
+        && entries[6] == 0.0
+        && entries[8] == 0.0
+        && entries[9] == 0.0
+        && entries[3] == 0.0
+        && entries[7] == 0.0
+        && entries[11] == 0.0
+        && entries[15] == 1.0;
+    if !in_plane {
+        return 0.0;
+    }
+    let [a, b, c, d] = [entries[0], entries[1], entries[4], entries[5]];
+    let (sum, difference) = ((a + d).hypot(b - c), (a - d).hypot(b + c));
+    (sum - difference).abs() / 2.0
 }
 
 /// Where something lands, in one space.
@@ -782,6 +797,10 @@ impl<'v> Geometry<'v> {
             },
             entry.get() + 1,
             None,
+            // One inside serves both versions, whose chains differ, so it is
+            // folded at a scale of 1. It cuts no clip: the shared path folds an
+            // inside only when no effect lies under the changed one, since
+            // `effects_damage` counts each of them changed with it.
             1.0,
         )
     }
@@ -836,11 +855,7 @@ impl<'v> Geometry<'v> {
                         local: content.effect_scope(next_effect).chunks,
                         kernel: 0.0,
                     });
-                    let at = Address {
-                        node: key,
-                        entry: index,
-                    };
-                    under.push(held * self.map_scale(&content.layers()[next_effect], at));
+                    under.push(held * Self::map_scale(&content.layers()[next_effect]));
                     positions.push(next_effect);
                     next_effect += 1;
                 }
@@ -887,14 +902,13 @@ impl<'v> Geometry<'v> {
         whole
     }
 
-    /// The least the map of the effect `layer` at `at` grows a length: a
-    /// transform's and a resolved follower's, 1 for a translation.
-    fn map_scale(self, layer: &Layer, at: Address) -> f64 {
+    /// The least the map of the effect `layer` grows a length: a
+    /// transform's, 1 for a translation and for a follower, whose map the
+    /// fold resolves once, for its links, and does not resolve again here
+    /// ([gap](../../../../docs/gaps.md#a-clip-in-a-nodes-own-content-under-an-ancestors-scale-below-1)).
+    fn map_scale(layer: &Layer) -> f64 {
         match layer {
             Layer::Transform(transform) => least_scale(transform.transform()),
-            Layer::Follower(_) => self
-                .resolve(at, 0)
-                .map_or(1.0, |transform| least_scale(&transform)),
             _ => 1.0,
         }
     }

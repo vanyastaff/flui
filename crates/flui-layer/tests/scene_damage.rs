@@ -1811,13 +1811,13 @@ pub(crate) fn damage_under_a_fractional_clip_edge_takes_the_shared_pixel() {
 }
 
 /// A holder slotted at the origin of the root, whose own content clips a box
-/// with an anti-aliased `clip`, under a `scale` transform outside the clip
+/// with an anti-aliased `clip`, under `transform` outside the clip
 /// when there is one, and a cull of the pixels `pixels` meet it after the
 /// box repaints; the damage of that repaint is returned.
 fn content_clip_repaint(
     clip: Rect<f64>,
     boxed: Rect<f64>,
-    scale: Option<f64>,
+    transform: Option<Matrix4>,
     pixels: Rect<f64>,
 ) -> (Vec<DamageRect>, bool) {
     let mut owner = SceneOwner::new();
@@ -1827,9 +1827,9 @@ fn content_clip_repaint(
     let content = |writer: &mut flui_layer::SceneWriter<'_>| {
         let version = writer.next_content_version().expect("a version");
         let mut content = BoundaryContent::builder();
-        if let Some(scale) = scale {
+        if let Some(transform) = transform {
             content.push_effect(
-                Layer::from(TransformLayer::new(Matrix4::scaling(scale, scale, 1.0))),
+                Layer::from(TransformLayer::new(transform)),
                 RenderId::new(3),
                 0,
             );
@@ -1841,7 +1841,7 @@ fn content_clip_repaint(
         );
         content.chunk(chunk(2, version, boxed));
         content.pop_effect();
-        if scale.is_some() {
+        if transform.is_some() {
             content.pop_effect();
         }
         content.finish()
@@ -1865,12 +1865,14 @@ fn content_clip_repaint(
 
 pub(crate) fn a_clip_in_a_nodes_own_content_keeps_the_pixel_it_shares() {
     let column = Rect::from_ltrb(89.0, 4.0, 90.0, 28.0);
-    for (name, right) in [
-        ("a box short of the clip", 89.3),
-        ("a box up to the clip", 89.6),
+    // (row, the clip's left edge, the box's right edge)
+    for (name, left, right) in [
+        ("a box short of the clip", 89.6, 89.3),
+        ("a box up to the clip", 89.6, 89.6),
+        ("a box 0.9 short, in the clip's edge pixel", 89.95, 89.05),
     ] {
         let (damage, kept) = content_clip_repaint(
-            Rect::from_ltrb(89.6, 0.0, 128.0, 40.0),
+            Rect::from_ltrb(left, 0.0, 128.0, 40.0),
             Rect::from_ltrb(70.0, 4.0, right, 28.0),
             None,
             column,
@@ -1896,20 +1898,92 @@ pub(crate) fn a_clip_in_a_nodes_own_content_keeps_the_pixel_it_shares() {
 }
 
 pub(crate) fn a_clip_in_a_nodes_own_content_under_a_scale_below_1_keeps_the_pixel_it_shares() {
-    // Under a scale of 0.5 the clip's edge at 179.2 lands at 89.6 and the
-    // box's at 178.1 at 89.05: 1.1 apart in their space, one pixel on the
-    // surface.
-    let (damage, kept) = content_clip_repaint(
-        Rect::from_ltrb(179.2, 0.0, 256.0, 80.0),
-        Rect::from_ltrb(140.0, 8.0, 178.1, 56.0),
-        Some(0.5),
-        Rect::from_ltrb(89.0, 4.0, 90.0, 28.0),
+    for (name, transform, clip, boxed, pixels) in [
+        // The clip's edge at 179.2 lands at 89.6 and the box's at 178.1 at
+        // 89.05: 1.1 apart in their space, one pixel on the surface.
+        (
+            "a scale of 0.5",
+            Matrix4::scaling(0.5, 0.5, 1.0),
+            Rect::from_ltrb(179.2, 0.0, 256.0, 80.0),
+            Rect::from_ltrb(140.0, 8.0, 178.1, 56.0),
+            Rect::from_ltrb(89.0, 4.0, 90.0, 28.0),
+        ),
+        // The same gap along y, the axis the map shrinks, while it grows x.
+        (
+            "a scale of 2 across and 0.5 down",
+            Matrix4::scaling(2.0, 0.5, 1.0),
+            Rect::from_ltrb(0.0, 179.2, 64.0, 256.0),
+            Rect::from_ltrb(35.0, 140.0, 60.0, 178.1),
+            Rect::from_ltrb(70.0, 89.0, 120.0, 90.0),
+        ),
+    ] {
+        let (damage, kept) = content_clip_repaint(clip, boxed, Some(transform), pixels);
+        let shared = DamageRect::try_covering(pixels, SURFACE.size)
+            .expect("finite")
+            .expect("on the surface");
+        assert!(
+            covered(&damage, shared),
+            "{name}: the repaint damages the shared pixels: {damage:?}"
+        );
+        assert!(kept, "{name}: a cull of the shared pixels keeps the holder");
+    }
+}
+
+/// A holder whose content is a scale of 0.5 over an anti-aliased clip over
+/// a child far from it, whose repaint moves its box to 0.55 short of the
+/// clip's edge, in the pixel the edge
+/// covers in part: the repaint grows the holder's bound by the
+/// strip, so a cull of that pixel keeps the holder.
+pub(crate) fn a_child_under_a_content_clip_grows_its_parent_by_the_pixel_it_shares() {
+    let mut owner = SceneOwner::new();
+    let mut writer = owner.writer();
+    let root = writer.current().root();
+    let holder = writer.mint_node();
+    let child = writer.mint_node();
+    let boxed = |writer: &mut flui_layer::SceneWriter<'_>, right: f64| {
+        let version = writer.next_content_version().expect("a version");
+        let mut content = BoundaryContent::builder();
+        content.chunk(chunk(2, version, Rect::from_ltrb(140.0, 8.0, right, 56.0)));
+        content.finish()
+    };
+    let content = boxed(&mut writer, 150.0);
+    writer.push(publish(child, content));
+    let mut held = BoundaryContent::builder();
+    held.push_effect(
+        Layer::from(TransformLayer::new(Matrix4::scaling(0.5, 0.5, 1.0))),
+        RenderId::new(3),
+        0,
     );
+    held.push_effect(
+        Layer::from(ClipRectLayer::new(
+            Rect::from_ltrb(179.2, 0.0, 256.0, 80.0),
+            Clip::AntiAlias,
+        )),
+        RenderId::new(1),
+        0,
+    );
+    held.slot(child);
+    held.pop_effect();
+    held.pop_effect();
+    writer.push(publish(holder, held.finish()));
+    let mut top = BoundaryContent::builder();
+    top.slot(holder);
+    writer.push(publish(root, top.finish()));
+    writer.push(place(child, 0.0, 0.0));
+    writer.push(place(holder, 0.0, 0.0));
+    owner.apply(SURFACE).expect("a clipped child");
+
+    let mut writer = owner.writer();
+    let content = boxed(&mut writer, 178.1);
+    writer.push(publish(child, content));
+    owner.apply(SURFACE).expect("the child repaints");
     assert!(
-        covered(&damage, covering(89.0, 4.0, 90.0, 28.0)),
-        "the repaint damages the shared pixel: {damage:?}"
+        owner
+            .current()
+            .subtree_cull(Rect::from_ltrb(89.0, 4.0, 90.0, 28.0))
+            .meets(holder),
+        "a cull of the shared pixel keeps the holder"
     );
-    assert!(kept, "a cull of the shared pixel keeps the holder");
 }
 
 /// How a test moves a clip.
@@ -1922,19 +1996,22 @@ enum ClipMove {
     /// A composited-layer update replaces the clip alone.
     Update,
 }
-
 pub(crate) fn a_moved_clip_in_a_nodes_own_content_damages_the_pixel_it_shared() {
-    // Edges on the surface; under an ancestor's scale of 0.5 the box ends
-    // 1.1 short of the clip in the holder's space, one pixel on the surface.
+    // Edges on the surface, under the ancestors' scales: under 0.5 the box
+    // ends 1.1 short of the clip in the holder's space, under two of 0.5 2.2
+    // short, one pixel on the surface either way.
+    let half: &[f64] = &[0.5];
+    let quarter: &[f64] = &[0.5, 0.5];
     let rows = [
-        (89.6, 95.0, 89.3, None),
-        (95.0, 89.6, 89.3, None),
-        (89.6, 95.0, 89.05, Some(0.5)),
-        (95.0, 89.6, 89.05, Some(0.5)),
+        (89.6, 95.0, 89.3, &[][..]),
+        (95.0, 89.6, 89.3, &[][..]),
+        (89.6, 95.0, 89.05, half),
+        (95.0, 89.6, 89.05, half),
+        (89.6, 95.0, 89.05, quarter),
     ];
-    for (from, to, right, ancestor) in rows {
+    for (from, to, right, ancestors) in rows {
         for how in [ClipMove::Republish, ClipMove::Repaint, ClipMove::Update] {
-            let local = 1.0 / ancestor.unwrap_or(1.0);
+            let local = 1.0 / ancestors.iter().product::<f64>();
             let clip = |left: f64| {
                 Layer::from(ClipRectLayer::new(
                     Rect::from_ltrb(left * local, 0.0, 128.0 * local, 40.0 * local),
@@ -1967,15 +2044,15 @@ pub(crate) fn a_moved_clip_in_a_nodes_own_content_damages_the_pixel_it_shared() 
                 content: Arc::clone(&first),
             });
             let mut top = BoundaryContent::builder();
-            if let Some(scale) = ancestor {
+            for (index, &scale) in ancestors.iter().enumerate() {
                 top.push_effect(
                     Layer::from(TransformLayer::new(Matrix4::scaling(scale, scale, 1.0))),
-                    RenderId::new(3),
+                    RenderId::new(3 + index),
                     0,
                 );
             }
             top.slot(holder);
-            if ancestor.is_some() {
+            for _ in ancestors {
                 top.pop_effect();
             }
             writer.push(publish(root, top.finish()));
@@ -2001,7 +2078,7 @@ pub(crate) fn a_moved_clip_in_a_nodes_own_content_damages_the_pixel_it_shared() 
             let damage = shown(owner.patch_damage());
             assert!(
                 covered(&damage, covering(89.0, 4.0, 90.0, 28.0)),
-                "{how:?} from {from} to {to} under {ancestor:?}: the pixel the box shows in \
+                "{how:?} from {from} to {to} under {ancestors:?}: the pixel the box shows in \
                  before or after: {damage:?}"
             );
         }
@@ -2089,7 +2166,8 @@ pub(crate) fn an_ancestor_scale_below_1_still_loses_the_pixel_a_content_clip_sha
     // ancestor's scale below 1": the holder's bound is kept in its own space,
     // where the scale above it is not known, so a box 1.1 short of the clip
     // there is cut away although the surface shows it in the clip's edge
-    // pixel. This test pins the miss; it flips when the gap closes.
+    // pixel, by the cull and by the damage of a move. This test pins the
+    // misses; it flips when the gap closes.
     let mut owner = SceneOwner::new();
     let mut writer = owner.writer();
     let root = writer.current().root();
@@ -2124,6 +2202,15 @@ pub(crate) fn an_ancestor_scale_below_1_still_loses_the_pixel_a_content_clip_sha
             .subtree_cull(Rect::from_ltrb(89.0, 4.0, 90.0, 28.0))
             .meets(holder),
         "the known gap: a cull of the shared pixel drops the holder"
+    );
+    // A placement reads the same stored bound: moving the holder damages
+    // neither the pixel it leaves nor the one it comes to.
+    let mut writer = owner.writer();
+    writer.push(place(holder, 0.0, 100.0));
+    owner.apply(SURFACE).expect("the holder moves");
+    assert!(
+        shown(owner.patch_damage()).is_empty(),
+        "the known gap: the move damages nothing"
     );
 }
 
