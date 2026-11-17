@@ -78,17 +78,21 @@ fn every_vocabulary_enum_is_spelled_as_it_is_named() {
     spelled_as_named(Verdict::ALL, Verdict::name);
     {
         use flui_protocol::native_recording::{
-            Absence, Appearance, Availability, Backend, CancelReason, CloseAnswer, CloseCause,
-            CutReason, DynamicRange, Execution, FailureKind, Gamut, GestureComponent, GesturePhase,
-            InputPurpose, MemoryPressureLevel, Modifier, PointerKind, ScrollPhase, ScrollUnit,
-            SessionEndPhase, StoreError, StoreLockKind, Stream, ViewportStatus, WheelAxis,
-            WindowMode,
+            Absence, Appearance, Autofill, Availability, Backend, CancelReason, Capitalization,
+            CloseAnswer, CloseCause, Correction, CutReason, DynamicRange, EnterAction, Execution,
+            FailureKind, Gamut, GestureComponent, GesturePhase, InputPurpose, MemoryPressureLevel,
+            Modifier, PointerKind, ScrollPhase, ScrollUnit, SessionEndPhase, StoreError,
+            StoreLockKind, Stream, ViewportStatus, WheelAxis, WindowMode,
         };
         spelled_as_named(Absence::ALL, Absence::name);
         spelled_as_named(CloseAnswer::ALL, CloseAnswer::name);
         spelled_as_named(CloseCause::ALL, CloseCause::name);
         spelled_as_named(CutReason::ALL, CutReason::name);
         spelled_as_named(InputPurpose::ALL, InputPurpose::name);
+        spelled_as_named(EnterAction::ALL, EnterAction::name);
+        spelled_as_named(Capitalization::ALL, Capitalization::name);
+        spelled_as_named(Correction::ALL, Correction::name);
+        spelled_as_named(Autofill::ALL, Autofill::name);
         spelled_as_named(StoreError::ALL, StoreError::name);
         spelled_as_named(StoreLockKind::ALL, StoreLockKind::name);
         spelled_as_named(Appearance::ALL, Appearance::name);

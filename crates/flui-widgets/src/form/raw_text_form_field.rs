@@ -7,7 +7,7 @@ use std::rc::Rc;
 use flui_interaction::FocusNode;
 use flui_painting::styling::Color;
 use flui_painting::typography::TextStyle;
-use flui_platform::text_store::TextInputPurpose;
+use flui_platform::text_store::TextInputOptions;
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
 
@@ -128,10 +128,11 @@ impl RawTextFormField {
         self
     }
 
-    /// What the field is for (default [`TextInputPurpose::Text`]).
+    /// What the field asks of the input method and the on-screen keyboard
+    /// (default [`TextInputOptions::TEXT`]).
     #[must_use]
-    pub fn input_purpose(mut self, purpose: TextInputPurpose) -> Self {
-        self.config.input_purpose = purpose;
+    pub fn text_input(mut self, text_input: TextInputOptions) -> Self {
+        self.config.text_input = text_input;
         self
     }
 
@@ -196,7 +197,7 @@ impl ViewState<RawTextFormField> for RawTextFormFieldState {
             let error = input.field.error_text();
             let mut field = RawTextField::new(input.controller.clone())
                 .obscure_text(input.obscure_text)
-                .input_purpose(input.input_purpose)
+                .text_input(input.text_input)
                 .enabled(input.enabled)
                 .autofocus(input.autofocus)
                 .invalid(error.is_some())

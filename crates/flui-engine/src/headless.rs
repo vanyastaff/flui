@@ -686,19 +686,19 @@ impl crate::frame_protocol::FrameSteps for CaptureFrame<'_> {
         _view: &wgpu::TextureView,
         texture: &wgpu::Texture,
         _retained: bool,
-        partial: Option<flui_foundation::geometry::Rect<f64>>,
+        partial: Option<&crate::damage::RegionPlan>,
         encoder: &mut wgpu::CommandEncoder,
-    ) -> EngineResult<bool> {
+    ) -> EngineResult<crate::frame_protocol::RecordedContent> {
         if std::mem::take(self.fail) {
             return Err(EngineError::Timeout);
         }
-        let straddled = crate::Renderer::record_frame_content(self.painter, self.scene, partial)?;
+        let recorded = crate::Renderer::record_frame_content(self.painter, self.scene, partial)?;
         assert!(
             !std::mem::take(self.panic),
             "injected panic after the frame was recorded"
         );
         self.painter.render_to_texture(texture, encoder)?;
-        Ok(straddled)
+        Ok(recorded)
     }
 
     fn blit(
@@ -790,7 +790,28 @@ impl RetainedCapture {
     }
 
     pub(crate) fn mark_dirty(&mut self, rect: flui_foundation::geometry::Rect<f64>) {
-        self.frame.mark_dirty(rect);
+        self.frame.mark_dirty(rect, self.size);
+    }
+
+    /// Owes `damage`, as a window slot applies a publication's damage:
+    /// a region rect by rect.
+    pub(crate) fn apply_damage(&mut self, damage: flui_layer::DamageRegion) {
+        match damage {
+            flui_layer::DamageRegion::Region(region) => self.frame.mark_region(&region),
+            flui_layer::DamageRegion::Unchanged => {}
+            flui_layer::DamageRegion::Full(_) => self.frame.mark_full_repaint(),
+        }
+    }
+
+    /// Plans every later partial frame rect by rect, as production does not
+    /// yet.
+    pub(crate) fn plan_rect_by_rect(&mut self) {
+        self.frame.plan_rect_by_rect();
+    }
+
+    /// The passes the last frame redrew its region in.
+    pub(crate) fn region_passes(&self) -> u32 {
+        self.frame.region_passes()
     }
 
     pub(crate) fn mark_full_repaint(&mut self) {

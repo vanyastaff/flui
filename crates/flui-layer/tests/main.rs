@@ -186,7 +186,8 @@ fn texture_registry() {
 
 /// A damage region holds at most eight disjoint rects, merges a ninth into
 /// the cheapest pair, and escalates a non-finite rect to `Full`, whose first
-/// reason survives a union (ADR-0304 §5).
+/// reason survives a union (ADR-0304 §5); a rect enclosing the pixels a caller
+/// marked takes them with no margin.
 #[test]
 fn region_contract() {
     use region as r;
@@ -208,6 +209,10 @@ fn region_contract() {
             (
                 "full_keeps_its_first_reason",
                 r::full_keeps_its_first_reason,
+            ),
+            (
+                "an_enclosing_rect_takes_its_whole_pixels_without_a_margin",
+                r::an_enclosing_rect_takes_its_whole_pixels_without_a_margin,
             ),
         ],
     );

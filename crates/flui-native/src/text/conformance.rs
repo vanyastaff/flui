@@ -206,16 +206,17 @@ impl AndroidMirror {
     /// When the store refuses a synchronous read, which a free store grants.
     #[must_use]
     pub fn focus(store: Rc<dyn TextStore>) -> Self {
-        use crate::text::android::ime::{Change, Ledger, Mirror};
+        use crate::text::android::ime::{Change, EditorInfo, Ledger, Mirror};
         use flui_platform::text_store::{LockGrant, LockTiming};
 
         let ledger = Rc::new(Ledger::default());
+        let editor = EditorInfo::of(store.status());
         let read = Rc::new(std::cell::RefCell::new(None));
         let (out, publisher) = (Rc::clone(&read), Rc::clone(&ledger));
         let _granted = store
             .request_lock(
                 LockGrant::read(move |session| {
-                    *out.borrow_mut() = Some(publisher.publish(session, Change::Focus));
+                    *out.borrow_mut() = Some(publisher.publish(session, Change::Focus, editor));
                 }),
                 LockTiming::Sync,
             )

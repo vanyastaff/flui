@@ -1385,9 +1385,13 @@ impl Renderer {
         &self.capabilities
     }
 
-    /// Mark a screen region as dirty (needs repaint).
+    /// Mark a screen region as dirty (needs repaint): the whole surface
+    /// pixels `rect` touches. Rects marked apart stay apart, up to
+    /// [`flui_layer::Region::MAX`], and a partial frame redraws their
+    /// bounding box; a rect that is not finite repaints the whole frame.
     pub fn mark_dirty(&mut self, rect: flui_foundation::geometry::Rect<f64>) {
-        self.frame.mark_dirty(rect);
+        self.frame
+            .mark_dirty(rect, (self.config.width, self.config.height));
     }
 
     /// Give back the GPU memory the next frames can rebuild: pooled buffers and,
@@ -2006,11 +2010,13 @@ impl Renderer {
         }
     }
 
-    /// Records one frame's content into `painter`: binds the target, resets the
-    /// per-frame state, opens a partial frame when `partial_damage` is set
-    /// (`damage::begin_partial`: the scissor and the clear inside it), walks
-    /// the scene, and reports whether an advanced shape straddles the damage
-    /// edge — in which case the caller forces its next frame full.
+    /// Records one frame's content into `painter`: resets the per-frame
+    /// state and walks the scene, once for a full frame and once per pass of
+    /// `partial`'s [`RegionPlan`](crate::damage::RegionPlan). Each pass opens
+    /// with `damage::begin_partial` (its rect's scissor and the clear inside
+    /// it) and walks the scene culled by its own rect. Answers whether an
+    /// advanced shape straddles the rect of the pass that drew it, in which
+    /// case the caller forces its next frame full, and the passes drawn.
     ///
     /// The windowed renderer and the crate's headless retained capture both
     /// record through this, so the partial-frame protocol a readback test
@@ -2019,64 +2025,69 @@ impl Renderer {
     pub(crate) fn record_frame_content(
         painter: &mut crate::painter::WgpuPainter,
         scene: &flui_layer::Scene,
-        partial_damage: Option<flui_foundation::geometry::Rect<f64>>,
-    ) -> EngineResult<bool> {
+        partial: Option<&crate::damage::RegionPlan>,
+    ) -> EngineResult<crate::frame_protocol::RecordedContent> {
         use crate::layer_dispatcher::LayerDispatcher;
 
-        let mut backend = LayerDispatcher::new(painter);
-
-        // Reset per-frame clip/transform/opacity/layer state so that
-        // partial-damage scissors from frame N cannot leak into frame N+1.
-        // This must happen BEFORE the damage clip_rect below.
-        backend.painter_mut().begin_frame_in_scope();
-
-        // A partial frame scissors every draw to its damage and repaints the
-        // background there first (`damage::begin_partial`); `partial_damage`
-        // is `None` for a full frame, which needs neither.
-        // The walk culls by the whole pixels the scissor admits, not the raw
-        // damage: a boundary that reaches only the partly covered edge pixel
-        // still draws its share of that pixel, which the clear wiped.
-        let mut redrawn = None;
-        if let Some(damage) = partial_damage {
-            redrawn = Some(crate::damage::begin_partial(backend.painter_mut(), damage));
+        let Some(plan) = partial else {
+            let mut backend = LayerDispatcher::new(painter);
+            // Reset per-frame clip/transform/opacity/layer state so that
+            // partial-damage scissors from frame N cannot leak into frame N+1.
+            backend.painter_mut().begin_frame_in_scope();
+            crate::layer_walk::record_scene(scene.content(), None, &mut backend)?;
+            return Ok(crate::frame_protocol::RecordedContent::default());
+        };
+        let mut recorded = crate::frame_protocol::RecordedContent::default();
+        for (pass, &rect) in (0_u32..).zip(plan.rects()) {
+            // A dispatcher per pass: its Drop calls flush_active_transform(),
+            // which balances any deferred lazy-coalescing save left by
+            // `with_transform`, so the reset below finds the stacks balanced
+            // and the next pass starts from no scissor but its own.
+            let mut backend = LayerDispatcher::new(painter);
+            backend.painter_mut().begin_frame_in_scope();
+            backend.painter_mut().begin_region_pass(pass);
+            let first_item = backend.painter().recorded_items();
+            // The walk culls by the whole pixels the scissor admits: a
+            // boundary that reaches only the edge pixel still draws its share
+            // of that pixel, which the clear wiped.
+            let redrawn = crate::damage::begin_partial(backend.painter_mut(), rect);
             tracing::trace!(
-                left = damage.left(),
-                top = damage.top(),
-                width = damage.width(),
-                height = damage.height(),
+                left = rect.left(),
+                top = rect.top(),
+                right = rect.right(),
+                bottom = rect.bottom(),
                 "Damage scissor applied"
             );
-        }
+            // Depth-first traversal of the scene. Backdrop-filter and
+            // advanced-blend passes read from `render_texture`, which always
+            // has COPY_SRC here: the swapchain image when the surface offers
+            // it, the retained target (created with it) otherwise. A
+            // version's walk skips the boundaries this rect cannot reach.
+            crate::layer_walk::record_scene(scene.content(), Some(redrawn), &mut backend)?;
 
-        // Depth-first traversal of the scene. Backdrop-filter and
-        // advanced-blend passes read from `render_texture`, which always has
-        // COPY_SRC here: the swapchain image when the surface offers it, the
-        // retained target (created with it) otherwise. A version's walk skips
-        // the boundaries the damage cannot reach.
-        crate::layer_walk::record_scene(scene.content(), redrawn, &mut backend)?;
-
-        // An advanced shape (one that reads the destination) whose bounds
-        // straddle the damage edge was drawn clipped, so outside the damage
-        // the retained pixels under it may be stale: the caller repaints the
-        // next frame in full. A retained version needs no such check: the
-        // damage of a chunk that reads the destination is closed over what it
-        // shows (ADR-0304 §6), which a clip over it cuts, while the shape's
-        // bounds here are uncut, so the check would repaint a correct frame
-        // (`a_clipped_destination_reading_chunk_redraws_inside_its_clip`).
-        // A tree built by hand carries no such guarantee and keeps it.
-        let straddled = scene.version().is_none()
-            && redrawn
-                .is_some_and(|damage| backend.painter().has_advanced_shape_straddling(damage));
-        if straddled {
-            tracing::debug!(
-                "Advanced shape straddles partial damage; scheduling full repaint next frame"
-            );
+            // An advanced shape (one that reads the destination) whose bounds
+            // straddle the pass's rect was drawn clipped, so outside the rect
+            // the retained pixels under it may be stale: the caller repaints
+            // the next frame in full. A retained version needs no such check:
+            // the damage of a chunk that reads the destination is closed over
+            // what it shows (ADR-0304 §6), which a clip over it cuts, while
+            // the shape's bounds here are uncut, so the check would repaint a
+            // correct frame
+            // (`a_clipped_destination_reading_chunk_redraws_inside_its_clip`).
+            // A tree built by hand carries no such guarantee and keeps it.
+            if scene.version().is_none()
+                && backend
+                    .painter()
+                    .has_advanced_shape_straddling(redrawn, first_item)
+            {
+                tracing::debug!(
+                    "Advanced shape straddles partial damage; scheduling full repaint next frame"
+                );
+                recorded.straddled = true;
+            }
+            recorded.region_passes += 1;
         }
-        // The dispatcher drops here: its Drop calls flush_active_transform(),
-        // which balances any deferred lazy-coalescing save left by
-        // `with_transform`, before the caller renders the painter's batches.
-        drop(backend);
-        Ok(straddled)
+        Ok(recorded)
     }
 }
 
@@ -3274,8 +3285,9 @@ mod tests {
             builder.add(PictureLayer::new(canvas.finish()));
             let scene = Scene::new(builder.build());
             painter.begin_frame().expect("optimized FXC frame opens");
-            Renderer::record_frame_content(&mut painter, &scene, None)
-                .expect("optimized FXC scene records through the window frame path");
+            let _recorded: crate::frame_protocol::RecordedContent =
+                Renderer::record_frame_content(&mut painter, &scene, None)
+                    .expect("optimized FXC scene records through the window frame path");
             let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("optimized FXC clip encoder"),
             });

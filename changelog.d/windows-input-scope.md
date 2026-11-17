@@ -1,9 +1,10 @@
 ### Added
 
-- `TextInputPurpose` (free text, email, URL, phone, number, search) and `TextStoreStatus::purpose`,
-  set from `EditableText::input_purpose`, `TextField::input_purpose` and
-  `RawTextFormField::input_purpose` and the Material `TextField` and `TextFormField` (the type is `flui_sdk::platform::TextInputPurpose`). It shapes the layout and suggestions an input method
-  offers and never filters what the field accepts.
+- `TextInputPurpose` (free text, email, URL, phone, a number with its `NumberFormat`, search),
+  part of the `TextInputOptions` a field passes to `EditableText::text_input`,
+  `TextField::text_input`, `RawTextFormField::text_input` and the Material `TextField` and
+  `TextFormField` (the types are in `flui_sdk::platform`). It shapes the layout and suggestions an
+  input method offers and never filters what the field accepts.
 
 ### Fixed
 
