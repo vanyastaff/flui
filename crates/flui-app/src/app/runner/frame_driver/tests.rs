@@ -1144,11 +1144,11 @@ fn deadlines_survive_a_sibling_install_and_close() {
         .expect("clock supports a recent past deadline");
     let mut installed = Vec::new();
     for offset in [0, 2] {
-        let reveal = Arc::new(FirstReveal::new());
+        let reveal = Rc::new(FirstReveal::new());
         assert!(!reveal.after_frame(false, now + web_time::Duration::from_secs(offset)));
         let deadline = reveal.next_deadline().expect("armed reveal");
-        let sources = Arc::new(DesktopWakeDeadlines {
-            fallback: Arc::new(FallbackWake::new()),
+        let sources = Rc::new(DesktopWakeDeadlines {
+            fallback: Rc::new(FallbackWake::new()),
             first_reveal: reveal,
         });
         let mut installation = super::super::owner_dispatch::prepare_ui_runtime_alongside(
@@ -1245,9 +1245,9 @@ fn a_window_whose_frames_are_off_wakes_the_loop_for_none_of_its_surface() {
     let _clear = OwnerHostClearGuard::arm();
     let mut installed = Vec::new();
     for _ in 0..2 {
-        let sources = Arc::new(DesktopWakeDeadlines {
-            fallback: Arc::new(FallbackWake::new()),
-            first_reveal: Arc::new(FirstReveal::new()),
+        let sources = Rc::new(DesktopWakeDeadlines {
+            fallback: Rc::new(FallbackWake::new()),
+            first_reveal: Rc::new(FirstReveal::new()),
         });
         let mut installation = super::super::owner_dispatch::prepare_ui_runtime_alongside(
             UiRuntime::for_test(),

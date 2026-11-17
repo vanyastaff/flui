@@ -24,8 +24,8 @@ use crate::send_positions::{ALLOWLIST, ROOTS, listed_items};
 ///   the facade re-exports, or sit inside a multi-line `pub use`
 ///   ([`in_a_public_use`]);
 /// - a changed line, in the file that defines an item the list names, that
-///   holds a name of the item's path there (`AppConfig`,
-///   `memory_reclaim`): a rename or a move takes the path off its entry,
+///   holds a name of the item's path there (`LaunchError`,
+///   `Platform`): a rename or a move takes the path off its entry,
 ///   on whichever line the bound sits. A method its type's module file does
 ///   not declare is looked for in that module's directory. Without a diff,
 ///   any change to that file.
@@ -196,7 +196,7 @@ fn words(line: &str) -> impl Iterator<Item = &str> {
 }
 
 /// The repo-relative source file of each item the list names, with the names
-/// its path takes inside that file (`AppConfig`, `memory_reclaim`): the
+/// its path takes inside that file (`LaunchError`, `Platform`): the
 /// module file of its longest module path that exists in its crate (`a::b` is
 /// `src/a/b.rs` or `src/a/b/mod.rs`, the crate root `src/lib.rs`).
 fn defining_files(
@@ -388,10 +388,10 @@ mod tests {
     /// the gate, so a rename on a line apart from its bound is seen; another
     /// line of that file and the same line in another file do not.
     fn a_listed_items_name_reaches_the_gate() {
-        let config = "crates/flui-app/src/app/config.rs";
-        let rename = Some("-    pub fn memory_reclaim(");
-        assert_eq!(reaches(config, rename).as_deref(), Some(config));
-        assert_eq!(reaches(config, Some("+    let frames = 3;")), None);
+        let launch = "crates/flui-app/src/app/launch.rs";
+        let rename = Some("-pub enum LaunchError {");
+        assert_eq!(reaches(launch, rename).as_deref(), Some(launch));
+        assert_eq!(reaches(launch, Some("+    let frames = 3;")), None);
         // an implementation's entry names its paths after `impl` (and `for`)
         let lifecycle = "crates/flui-app/src/app/lifecycle.rs";
         let method = Some("-    pub fn spawn_io<T, F, Fut>(");

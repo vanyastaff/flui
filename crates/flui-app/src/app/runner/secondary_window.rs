@@ -1135,7 +1135,7 @@ fn finish_open_secondary_window(
                     let ui_runtime_id = shared_with?;
                     let status = state.installed_host.logical().runtime_status(ui_runtime_id).ok()?;
                     Some(PresentationDispatcher {
-                        owner_thread: state.owner_thread?,
+                        owner_thread: state.loop_thread()?,
                         address: status.primary,
                     })
                 })
