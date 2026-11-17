@@ -27,6 +27,11 @@
   is retried, and the window's next change asks for the frame
   ([ADR-0334](/docs/adr/ADR-0334-a-failed-frame-is-painted-again-after-the-dropped-frame-backoff.md) §4).
   `SubmitVerdict` is matched without a wildcard, so code that matches it adds the arm.
+- **`flui-runtime`**: `DeviceRecovery::Dead`, reported once with a `DeviceLost` frame failure when
+  the raster thread died or stopped answering
+  ([ADR-0305](/docs/adr/ADR-0305-one-gpu-context-serves-every-surface-through-a-raster-executor.md) §9).
+  The presentation's frames go on without drawing, and `AppHandle::retry_render_device` leaves it
+  as it is.
 
 ### Changed
 
@@ -83,3 +88,12 @@
   answer the OS used. A build that removes the target a drag's last move was accepted by withdraws
   that answer at once, so the OS refuses the drop instead of telling the source a move succeeded
   that no target took ([ADR-0211](/docs/adr/ADR-0211-unified-drag-and-drop.md) §16).
+- **`flui-app`**: a window whose raster thread is wedged keeps taking pointer input, lifecycle
+  changes and agent requests: the frames the dead thread holds settle as finished with nothing to
+  present, so the input held for their commit replays, and every open window is woken to learn of
+  the death. A window closed meanwhile keeps its surface target until the process exits, since the
+  wedged thread may still present over it
+  ([ADR-0305](/docs/adr/ADR-0305-one-gpu-context-serves-every-surface-through-a-raster-executor.md) §9).
+- **`flui-engine`**: a scene dropped when the raster executor dies, whose destructor panics, is
+  that scene's slot's failure, reported to its own window, instead of a panic resumed in whichever
+  window's drain came first.
