@@ -20,7 +20,7 @@ use quote::{format_ident, quote, quote_spanned};
 use syn::ext::IdentExt as _;
 use syn::{Data, DeriveInput, Fields, Ident};
 
-use crate::hygiene::local;
+use crate::hygiene::{local, receiver};
 use crate::refusals::Refusals;
 
 /// The mask carries this many fields.
@@ -97,11 +97,12 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
     // The parameter and the local of the generated `field_mask_diff`.
     let other = local("other");
     let changed = local("changed");
+    let this = receiver();
     // Spanned at the field, so a field that is not `PartialEq` is reported
     // there and not at the derive.
     let diffs = entries.iter().map(|(name, const_ident, _)| {
         quote_spanned! {name.span()=>
-            if self.#name != #other.#name {
+            if #this.#name != #other.#name {
                 #changed = #changed.union(Self::#const_ident);
             }
         }

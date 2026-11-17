@@ -15,7 +15,7 @@ use quote::{quote, quote_spanned};
 use syn::{Data, DeriveInput, GenericParam, spanned::Spanned};
 
 use crate::generics::mentions_param;
-use crate::hygiene::local;
+use crate::hygiene::{local, receiver};
 use crate::refusals::Refusals;
 
 /// Expand `#[derive(TwoWayConverter)]`.
@@ -75,6 +75,7 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
     let index = local("index");
     let other = local("other");
     let t = local("t");
+    let this = receiver();
     let mut width = quote!(0usize);
     let mut reads = Vec::with_capacity(fields.len());
     let mut thresholds = Vec::with_capacity(fields.len());
@@ -93,7 +94,7 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
         // vector's type would carry the same failure to wherever it is read.
         reads.push(quote_spanned! {ty.span()=>
             #vector[#start..#end].copy_from_slice(::core::convert::AsRef::<[f64]>::as_ref(
-                &<#ty as #runtime::TwoWayConverter>::to_vector(&self.#member),
+                &<#ty as #runtime::TwoWayConverter>::to_vector(&#this.#member),
             ));
         });
         thresholds.push(quote_spanned! {ty.span()=>
@@ -108,7 +109,7 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
             )
         });
         lerps.push(quote_spanned! {ty.span()=>
-            #member: <#ty as #runtime::Lerp>::lerp_to(&self.#member, &#other.#member, #t)
+            #member: <#ty as #runtime::Lerp>::lerp_to(&#this.#member, &#other.#member, #t)
         });
         width = end;
     }

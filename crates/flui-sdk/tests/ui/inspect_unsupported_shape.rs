@@ -72,4 +72,11 @@ struct InAFieldsType {
     call: fn(#[inspect(name = "x")] u32),
 }
 
+// A refused entry does not end its list: each one is reported.
+#[derive(Inspect)]
+struct EveryEntry {
+    #[inspect(level = bogus, unit = bogus, nmae = "w")]
+    width: f64,
+}
+
 fn main() {}

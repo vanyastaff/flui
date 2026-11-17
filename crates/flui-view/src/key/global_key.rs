@@ -63,9 +63,7 @@ pub enum KeyLookup {
 /// let form = Form { key: form_key.clone() };
 ///
 /// // Access from anywhere
-/// if let Some(state) = form_key.current_state() {
-///     state.validate();
-/// }
+/// form_key.with_current_state(|state| state.validate());
 /// ```
 ///
 /// # Performance Note

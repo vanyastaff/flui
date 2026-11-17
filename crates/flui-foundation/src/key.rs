@@ -29,7 +29,7 @@
 //!
 //! A view holds its key in a field and marks it `#[view(key)]`; the view
 //! derives of `flui-view` read the field through [`AsViewKey`], so the field is
-//! a key, an `Option` of one, or a shared `Rc<dyn ViewKey>`.
+//! a key, an `Option` of one, or an `Rc<dyn ViewKey>` or `Box<dyn ViewKey>`.
 //!
 //! ```rust,ignore
 //! use flui_foundation::{Key, ValueKey};

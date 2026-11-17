@@ -59,6 +59,9 @@ struct RouteField<'a> {
 struct QueryField<'a> {
     /// The query key: the field's name, or its `rename`.
     key: String,
+    /// Whether `key` is the one the author gave: false when a `rename` was
+    /// refused, so that the key is not compared with the other fields' keys.
+    key_stated: bool,
     kind: QueryKind,
     /// The type one value parses as: `T` of `Option<T>` and `Vec<T>`, else
     /// the field's type.
@@ -318,7 +321,7 @@ fn route<'a>(variant: &'a Variant, refusals: &mut Refusals) -> Option<Route<'a>>
         }
         let mut keys: Vec<(&str, &Ident)> = Vec::new();
         for field in fields {
-            let Some(query) = &field.query else {
+            let Some(query) = field.query.as_ref().filter(|query| query.key_stated) else {
                 continue;
             };
             match keys.iter().find(|(key, _)| *key == query.key) {
@@ -417,6 +420,7 @@ fn query_attribute<'a>(
         ));
     }
     let mut key: Option<String> = None;
+    let mut key_stated = true;
     if !matches!(attribute.meta, syn::Meta::Path(_)) {
         let mut renamed = false;
         parse_entries(
@@ -435,11 +439,15 @@ fn query_attribute<'a>(
                 if twice {
                     refusals.push(meta.error("`rename` is given twice"));
                 }
+                // Until this `rename` reads, the field's key is unknown: which of two
+                // the author meant, or none for a value that is refused.
+                key_stated = false;
                 let name = name?;
                 if name.value().is_empty() {
                     return Err(syn::Error::new(name.span(), "a query key is not empty"));
                 }
                 key = Some(name.value());
+                key_stated = !twice;
                 Ok(())
             },
         );
@@ -453,6 +461,7 @@ fn query_attribute<'a>(
     };
     Some(QueryField {
         key: key.unwrap_or_else(|| name.to_owned()),
+        key_stated,
         kind,
         value,
     })
@@ -780,6 +789,17 @@ mod tests {
                 D { y: u8, #[query(rename = "k")] p: u8, #[query(rename = "k")] q: u8 },
                 #[route("/n/:other")]
                 Shadow { other: u8 },
+                #[route("/e")]
+                E {
+                    #[query(rename = 2)]
+                    q: u8,
+                    #[query(rename = "q")]
+                    other: u8,
+                    #[query(rename = "r", rename = 3)]
+                    r: u8,
+                    #[query(rename = "r")]
+                    s: u8,
+                },
             }
         };
         assert_refused(
@@ -803,6 +823,11 @@ mod tests {
                 "field `q` reads the query key `k`, which field `p` already reads",
                 "`/b/:y` has the same shape as the pattern of `C`",
                 "`/n/:other` has the same shape as the pattern of `Note`",
+                // A refused `rename` leaves the field's key unknown: no field of `E` is
+                // said to share a key.
+                "expected string literal",
+                "`rename` is given twice",
+                "expected string literal",
             ],
         );
 

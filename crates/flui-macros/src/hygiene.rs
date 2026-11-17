@@ -1,6 +1,7 @@
 //! Names an expansion declares beside its author's tokens.
 
-use proc_macro2::{Ident, Span};
+use proc_macro2::{Ident, Span, TokenStream};
+use quote::quote;
 use syn::Lifetime;
 
 /// An identifier for a local, a pattern binding or a parameter of generated code.
@@ -18,4 +19,15 @@ pub(crate) fn local(name: &str) -> Ident {
 /// A label for a block of generated code, resolved as [`local`] resolves a name.
 pub(crate) fn label(name: &str) -> Lifetime {
     Lifetime::new(&format!("'{name}"), Span::mixed_site())
+}
+
+/// `self` for generated code that is spanned at an author's token.
+///
+/// `self` is hygienic: written inside `quote_spanned!` at a field or its type,
+/// it takes that token's context, and when the field comes from a
+/// `macro_rules!` the derive does not, it no longer names the `&self` of the
+/// generated signature (E0424). Interpolated from here it keeps the call
+/// site's context, which the signature has.
+pub(crate) fn receiver() -> TokenStream {
+    quote!(self)
 }

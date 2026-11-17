@@ -16,6 +16,9 @@ enum AppRoute {
         page: u32,
         #[query(rename = "s", rename = "sort")]
         sort: String,
+        // A refused entry does not end its list: each one is reported.
+        #[query(order = 1, rename = "")]
+        order: String,
     },
     #[route("/pair")]
     Pair {

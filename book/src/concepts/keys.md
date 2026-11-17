@@ -7,7 +7,7 @@ of children is reordered or filtered.
 The base key types — `Key`, `ValueKey`, `UniqueKey`, `ViewKey` — live in `flui-foundation` and are
 re-exported through `flui-view`'s `key` module. A view holds its key in a field marked
 `#[view(key)]`, which the `StatelessView` and `StatefulView` derives read: the field is a key, an
-`Option` of one, or an `Rc<dyn ViewKey>`.
+`Option` of one, or an `Rc<dyn ViewKey>` or `Box<dyn ViewKey>`.
 
 ```rust,ignore
 #[derive(Clone, StatelessView)]

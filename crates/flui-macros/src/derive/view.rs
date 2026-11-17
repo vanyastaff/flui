@@ -28,7 +28,7 @@ use syn::{Attribute, Data, DeriveInput, Field, GenericParam, Ident, Member, pars
 
 use super::attribute::{is_named, named, parse_entries, refuse_unread};
 use crate::generics::mentions_param;
-use crate::hygiene::local;
+use crate::hygiene::{local, receiver};
 use crate::refusals::Refusals;
 use crate::runtime_path::Runtime;
 
@@ -238,9 +238,10 @@ pub(crate) fn expand(input: &DeriveInput, kind: ViewKind) -> syn::Result<TokenSt
                     .predicates
                     .push(parse_quote!(#ty: #foundation::key::AsViewKey));
             }
+            let this = receiver();
             // Spanned at the field's type, where a type that is not a key is reported.
             let key = quote_spanned! {ty.span()=>
-                <#ty as #foundation::key::AsViewKey>::as_view_key(&self.#member)
+                <#ty as #foundation::key::AsViewKey>::as_view_key(&#this.#member)
             };
             methods.extend(quote! {
                 fn key(&self) -> ::core::option::Option<&dyn #foundation::ViewKey> {

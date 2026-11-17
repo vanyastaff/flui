@@ -9,8 +9,10 @@
 use proc_macro2::TokenTree;
 use syn::ext::IdentExt;
 use syn::meta::ParseNestedMeta;
+use syn::parse::ParseStream;
+use syn::parse::discouraged::Speculative;
 use syn::visit::Visit;
-use syn::{Attribute, DeriveInput, Field, Path, Token, Variant};
+use syn::{Attribute, DeriveInput, Expr, Field, Path, Token, Variant};
 
 use crate::refusals::Refusals;
 
@@ -30,12 +32,13 @@ pub(crate) fn named<'a>(
 /// Read each entry of the list `attr` carries with `entry`, recording every
 /// one it refuses.
 ///
-/// A refused entry does not end its list: the reading goes on after the next
-/// comma, so one build names each of them. That covers an entry `entry`
-/// refuses and one followed by tokens it did not read (`skip = 1`). A list
-/// without an entry names nothing the derive could act on and is refused
-/// with `expected`, what the author writes instead. Only a list that is not
-/// one ends early: `#[inspect = "x"]`, or a literal where an entry's name goes.
+/// A refused entry does not end its list: the reading steps over the rest of
+/// it (`skip_entry`) and goes on, so one build names each of them. That covers
+/// an entry `entry` refuses and one followed by tokens it did not read
+/// (`skip = 1`). A list without an entry names nothing the derive could act on
+/// and is refused with `expected`, what the author writes instead. Only a list
+/// that is not one ends early: `#[inspect = "x"]`, or a literal or nothing
+/// where an entry's name goes (`#[inspect(1)]`, `#[inspect(skip,, debug)]`).
 pub(crate) fn parse_entries(
     attr: &Attribute,
     expected: &str,
@@ -46,9 +49,8 @@ pub(crate) fn parse_entries(
     let read = attr.parse_nested_meta(|meta| {
         any = true;
         let rest = meta.input;
-        let ends = || rest.is_empty() || rest.peek(Token![,]);
         let read = entry(meta, refusals).and_then(|()| {
-            if ends() {
+            if ends(rest) {
                 Ok(())
             } else {
                 Err(rest.error("expected `,`"))
@@ -56,9 +58,7 @@ pub(crate) fn parse_entries(
         });
         if let Err(refused) = read {
             refusals.push(refused);
-            while !ends() {
-                rest.parse::<TokenTree>()?;
-            }
+            skip_entry(rest)?;
         }
         Ok(())
     });
@@ -70,6 +70,32 @@ pub(crate) fn parse_entries(
             format!("the list is empty; expected {expected}"),
         )),
     }
+}
+
+/// Whether `rest` is at the end of an entry: the end of the list or its comma.
+fn ends(rest: ParseStream<'_>) -> bool {
+    rest.is_empty() || rest.peek(Token![,])
+}
+
+/// Step over what is left of a refused entry, up to the comma that ends it.
+///
+/// A value is read as an expression where it is one, so a comma inside its
+/// generic arguments (`HashMap::<u8, u8>::new()`, `<Map<K, V>>::describe`)
+/// does not end the entry. What does not read as one is stepped over a token
+/// at a time.
+fn skip_entry(rest: ParseStream<'_>) -> syn::Result<()> {
+    let value = rest.fork();
+    if value.peek(Token![=]) {
+        value.parse::<Token![=]>()?;
+    }
+    if value.parse::<Expr>().is_ok() && ends(&value) {
+        rest.advance_to(&value);
+        return Ok(());
+    }
+    while !ends(rest) {
+        rest.parse::<TokenTree>()?;
+    }
+    Ok(())
 }
 
 /// Refuse each helper of `names` written where no derive reads one.

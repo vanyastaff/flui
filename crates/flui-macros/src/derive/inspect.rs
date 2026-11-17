@@ -204,26 +204,22 @@ impl FieldAttrs {
                     read
                 });
             }
-            if attrs.skip
-                && (attrs.name.is_some()
-                    || attrs.default.is_some()
-                    || attrs.level.is_some()
-                    || attrs.unit.is_some()
-                    || attrs.with.is_some()
-                    || attrs.debug)
-            {
+            // The combinations are of what the author wrote, whether or not each value
+            // read, so a refused value does not hide them until the next build.
+            let wrote = |entry: Entry| given.contains(&entry);
+            if wrote(Entry::Skip) && given.iter().any(|entry| *entry != Entry::Skip) {
                 refusals.push(syn::Error::new_spanned(
                     field,
                     "a skipped field takes no other inspect attribute",
                 ));
             }
-            if attrs.debug && attrs.with.is_some() {
+            if wrote(Entry::Debug) && wrote(Entry::With) {
                 refusals.push(syn::Error::new_spanned(
                     field,
                     "`debug` and `with` both map the field; keep one",
                 ));
             }
-            if attrs.debug && attrs.default.is_some() {
+            if wrote(Entry::Debug) && wrote(Entry::Default) {
                 refusals.push(syn::Error::new_spanned(
                     field,
                     "a `debug` field has no typed value to compare a default with; map it with `with` instead",
@@ -676,6 +672,10 @@ mod tests {
                     c: T,
                     #[inspect(level = bogus, unit = bogus, level = detail, nonsense = out, name = "d")]
                     d: f64,
+                    #[inspect(nmae = HashMap::<u8, u8>::new(), with = <Map<K, V>>::describe, nmae = 1 < 2, nonsense)]
+                    e: f64,
+                    #[inspect(skip, name = 1)]
+                    f: f64,
                 },
             }
         };
@@ -697,6 +697,12 @@ mod tests {
                 "expected `logical_px`",
                 "given twice",
                 "unsupported inspect attribute",
+                "unsupported inspect attribute",
+                "expected identifier",
+                "unsupported inspect attribute",
+                "unsupported inspect attribute",
+                "expected string literal",
+                "a skipped field takes no other inspect attribute",
             ],
         );
     }

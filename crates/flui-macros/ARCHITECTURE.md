@@ -127,12 +127,18 @@ Two things end a reading early. A shape the macro does not take (a union, a
 struct where `Routable` takes an enum, a tuple struct where `InheritedData`
 takes named fields) leaves no variants or fields to read; what was recorded
 before it is reported with it. An attribute that is not a list of entries
-(`#[inspect = "x"]`, a literal where an entry's name goes) has no next entry
-to read on from; the item's other lists are still read. A refused entry does
-not end its list: `derive::attribute::parse_entries` records it and reads on
-after the next comma, whether the derive does not know the entry, refuses its
-value, was given it twice or finds tokens after it that it does not take
-(`skip = 1`). `Routable` reads on past a variant it
+(`#[inspect = "x"]`, a literal or nothing where an entry's name goes:
+`#[inspect(1)]`, `#[inspect(skip,, debug)]`) has no next entry to read on
+from; the item's other lists are still read. A refused entry does not end its
+list: `derive::attribute::parse_entries` records it and steps over the rest of
+it, its value read as an expression so that a comma between generic arguments
+(`HashMap::<u8, u8>::new()`) stays inside it, whether the derive does not know
+the entry, refuses its value, was given it twice or finds tokens after it that
+it does not take (`skip = 1`). The checks of what a field's entries combine to
+(`skip` with another entry, `debug` with `with` or `default`) read which
+entries were written, so a refused value does not hide them; a `#[query]`
+whose `rename` was refused has no key the derive could compare with the other
+fields' keys. `Routable` reads on past a variant it
 refuses: a variant whose pattern reads is compared with the patterns after it
 whatever its fields got wrong, and a field whose `#[query]` is refused still
 counts as a query field, so it is not also reported as missing from the
@@ -182,6 +188,14 @@ converter is reported once, at the field (`non_motion_field` in `flui-sdk`).
 The field of an enum's variant has to be read through a binding the derive
 declares, so `Inspect` reports its unmapped type at the derive and labels the
 field (`inspect_unmapped_field`).
+
+`self` is hygienic too. Written inside code spanned at a field or its type it
+takes that token's context, and where the field comes from a `macro_rules!`
+the derive does not, it no longer names the generated signature's `&self`
+(E0424). Such code interpolates `hygiene::receiver`, a `self` of the call
+site's context (`a_derive_reads_fields_a_macro_rules_caller_wrote` in
+`flui-view`, the `a type from a macro` row of `flui-animation`'s
+`two_way_converter_derive_contract`).
 
 ### A view's key is a field
 
