@@ -20,11 +20,6 @@ traits = ["Send"]
 
 [[allow]]
 crate = "flui-native"
-type = "ApartmentHold"
-traits = ["Send", "Sync"]
-
-[[allow]]
-crate = "flui-native"
 type = "KeptView"
 traits = ["Send"]
 
