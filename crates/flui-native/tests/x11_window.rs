@@ -55,9 +55,8 @@ mod cases {
     use x11rb::protocol::sync::ConnectionExt as _;
     use x11rb::protocol::xproto::{
         AtomEnum, ChangeWindowAttributesAux, ClientMessageEvent, ConfigureNotifyEvent,
-        ConfigureWindowAux, ConnectionExt as _, CreateWindowAux, EventMask, GrabMode,
-        GrabStatus, InputFocus, MapState, PropMode,
-        WindowClass,
+        ConfigureWindowAux, ConnectionExt as _, CreateWindowAux, EventMask, GrabMode, GrabStatus,
+        InputFocus, MapState, PropMode, WindowClass,
     };
     use x11rb::rust_connection::RustConnection;
     use x11rb::wrapper::ConnectionExt as _;

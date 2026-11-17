@@ -2812,18 +2812,20 @@ fn a_grab_is_held_while_focused_and_let_go_with_the_focus() {
     let window = open(&platform, options());
     settle();
     let hwnd = hwnd_of(&window);
-    // A grab is taken only by the window with the keyboard: the test takes
-    // the foreground as a click would, and cannot check anything without it.
-    assert!(
-        take_foreground(hwnd),
-        "the test window must be able to take the foreground to hold the pointer"
-    );
+    // A grab is taken only by the window with the keyboard: the test brings
+    // the window forward as a click would (on a desktop of the test's own it
+    // is in front already), gives it the focus, and cannot check anything
+    // without it.
+    let _ = take_foreground(hwnd);
     // SAFETY: this thread's window.
     let _ = unsafe { SetFocus(Some(hwnd)) };
     settle();
     // SAFETY: a plain query of this thread's focus.
     let focus = unsafe { GetFocus() };
-    assert_eq!(focus, hwnd, "the foreground window holds the keyboard");
+    assert_eq!(
+        focus, hwnd,
+        "the test window must hold the keyboard to hold the pointer"
+    );
     for grab in [CursorGrab::Confined, CursorGrab::Locked] {
         apply(&window, WindowCommand::SetCursorGrab(grab));
         settle();
