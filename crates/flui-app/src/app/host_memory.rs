@@ -7,25 +7,30 @@
 //!
 //! One [`HostMemory`] per host is reclaimed once per notice, however many
 //! windows it has, and a window opened later is reached along with the
-//! receivers of the windows opened before it. The list is cloned out before
-//! any receiver runs, so a receiver may register or release another without
-//! meeting this lock.
+//! receivers of the windows opened before it.
+//!
+//! Owner-thread state (ADR-0323 §1): the host's run start replaces the
+//! receivers and the owner's turn for a memory-pressure notice reclaims
+//! them, both on the loop's thread. The list is cloned out before any
+//! receiver runs and a replaced list is dropped after the new one is
+//! stored, so a receiver's `reclaim` or `Drop` finds the list free.
 //!
 //! [`AppConfig::memory_reclaim`]: crate::app::AppConfig::memory_reclaim
 
-use std::sync::Arc;
+use std::cell::RefCell;
+use std::rc::Rc;
 
 use flui_foundation::memory::{MemoryPressureLevel, ReclaimMemory, reclaim_each};
 use flui_foundation::panic::FirstPanic;
-use parking_lot::Mutex;
 
-/// Receivers an application registered, shared with every UI runtime.
-pub(crate) type SharedReceiver = Arc<dyn ReclaimMemory + Send + Sync>;
+/// Receivers an application registered, shared by the clones of its
+/// configuration.
+pub(crate) type SharedReceiver = Rc<dyn ReclaimMemory>;
 
 /// What a host trims on a memory-pressure notice.
 #[derive(Default)]
 pub(crate) struct HostMemory {
-    receivers: Mutex<Vec<SharedReceiver>>,
+    receivers: RefCell<Vec<SharedReceiver>>,
 }
 
 impl HostMemory {
@@ -33,14 +38,14 @@ impl HostMemory {
     /// are trimmed. A run starts from its own configuration, not the previous
     /// run's.
     pub(crate) fn replace_receivers(&self, receivers: Vec<SharedReceiver>) {
-        let previous = std::mem::replace(&mut *self.receivers.lock(), receivers);
+        let previous = self.receivers.replace(receivers);
         drop(previous);
     }
 }
 
 impl ReclaimMemory for HostMemory {
     fn reclaim(&self, level: MemoryPressureLevel) {
-        let receivers = self.receivers.lock().clone();
+        let receivers = self.receivers.borrow().clone();
         let mut failure = FirstPanic::new();
         reclaim_each(
             receivers.iter().map(|receiver| &**receiver),
@@ -53,37 +58,34 @@ impl ReclaimMemory for HostMemory {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-    use std::sync::Mutex;
+    use std::cell::RefCell;
+    use std::rc::Rc;
 
     use flui_foundation::memory::{MemoryPressureLevel, ReclaimMemory};
 
     use super::HostMemory;
 
-    struct Named(&'static str, Arc<Mutex<Vec<String>>>);
+    struct Named(&'static str, Rc<RefCell<Vec<String>>>);
 
     impl ReclaimMemory for Named {
         fn reclaim(&self, level: MemoryPressureLevel) {
-            self.1
-                .lock()
-                .expect("log")
-                .push(format!("{} {level:?}", self.0));
+            self.1.borrow_mut().push(format!("{} {level:?}", self.0));
         }
     }
 
     #[test]
     fn the_registered_receivers_are_trimmed_in_order_and_a_new_run_replaces_them() {
-        let log = Arc::new(Mutex::new(Vec::new()));
+        let log = Rc::new(RefCell::new(Vec::new()));
         let memory = HostMemory::default();
         memory.replace_receivers(vec![
-            Arc::new(Named("assets", Arc::clone(&log))),
-            Arc::new(Named("cache", Arc::clone(&log))),
+            Rc::new(Named("assets", Rc::clone(&log))),
+            Rc::new(Named("cache", Rc::clone(&log))),
         ]);
         memory.reclaim(MemoryPressureLevel::Critical);
-        memory.replace_receivers(vec![Arc::new(Named("next run", Arc::clone(&log)))]);
+        memory.replace_receivers(vec![Rc::new(Named("next run", Rc::clone(&log)))]);
         memory.reclaim(MemoryPressureLevel::Moderate);
         assert_eq!(
-            *log.lock().expect("log"),
+            *log.borrow(),
             ["assets Critical", "cache Critical", "next run Moderate"]
         );
     }

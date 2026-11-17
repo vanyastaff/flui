@@ -403,6 +403,39 @@ the dispatch layer moves there too.
   `the_host_feed_runs_off_the_owner_thread_and_wakes_once`,
   `a_landed_host_feed_wakes_every_ui_runtime_window`).
 
+- **State only the loop's thread reaches holds no lock (ADR-0323 §1, §5).**
+  The close-request router and the handlers it calls, the host's memory
+  receivers, a window's pacing fallback, background pace and first reveal,
+  the browser's GPU-loss ledger, an installation's closed flag and window
+  snapshot, the data-transfer slot and direct mode's renderer are `Rc` with
+  `Cell` or `RefCell`: each is reached only from the loop's routes, its frame
+  drivers and its wake-deadline query, none of which another thread calls.
+  No call checks its thread at run time: the router and a handler are
+  neither `Send` nor `Sync` (`close_request_matrix` asserts it), and a thread
+  that runs no loop finds no runtime of its own, so a close it asks for is
+  answered `NoHostedRuntime`
+  (`a_close_from_a_thread_without_a_loop_is_refused`). A table is borrowed
+  only inside its owner's methods (the router's publication holds the router,
+  not a borrow of its table), and code the owner does not own (a handler, a
+  guard's signal, a receiver, a `tracing` event, a window command, the drop
+  of a removed entry) runs after the borrow ends: a handler that closes its
+  own window from inside its answer finds the router free
+  (`a_handler_that_closes_its_own_window_closes_it_once`), and a subscriber
+  that reads the pacing deadline inside its event finds it stored
+  (`a_subscriber_reading_the_deadline_inside_its_abandonment_event_finds_it_gone`).
+  Direct mode's closure builds its scene with the renderer free; a scene
+  built across a resize is not drawn and the frame is asked again, and a
+  frame asked for inside the build declines
+  (`a_scene_built_across_a_resize_is_not_drawn_and_the_frame_is_asked_again`,
+  `a_frame_asked_for_inside_the_build_declines`). A close handler and a
+  memory receiver may hold `Rc` state
+  (`a_refused_quit_waits_for_the_record_then_exits`,
+  `an_owner_thread_memory_receiver_is_reclaimed_per_notice`). What another
+  thread reaches keeps its lock or atomic: the application's handle and its
+  device retry, a pending window's waker, the frame wake and redraw flag, the
+  raster thread's redraw list, the agent endpoint, workers and services,
+  storage lanes and the development hooks.
+
 ## Mapping decisions
 
 ### Lifecycle observations are typed and lossless
@@ -731,4 +764,4 @@ Pinned by `service_lifecycle_matrix`.
 `owner_dispatch` implements no `Drop`: the exit's failure is held in the terminal slot and resumed
 by the function that ends the loop (`teardown_platform_ui_runtime`), after every step has run, so
 no field drop glue runs inside that unwind. A UI runtime the exit drops raises its own first
-failure only after destroying its application values (`flui-runtime`, #1165).
+failure only after destroying its application values (`flui-runtime`).

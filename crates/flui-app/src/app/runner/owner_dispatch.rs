@@ -380,7 +380,7 @@ pub(super) fn prepare_replacement_ui_runtime(
     let installation = super::window_install::WindowInstall::new(host.clone(), prepared, window);
     let displaced = APP_RUNTIME.with(|slot| {
         let mut state = slot.borrow_mut();
-        state.owner_thread = Some(std::thread::current().id());
+        state.hosts_loop = true;
         let _ = state.ensure_services();
         let _ = state.ensure_execution();
         #[cfg(not(target_arch = "wasm32"))]
@@ -412,9 +412,7 @@ pub(super) fn prepare_ui_runtime_alongside(
 ) -> super::window_install::WindowInstall {
     let host = APP_RUNTIME.with(|slot| {
         let mut state = slot.borrow_mut();
-        state
-            .owner_thread
-            .get_or_insert_with(|| std::thread::current().id());
+        state.hosts_loop = true;
         let _ = state.ensure_services();
         state.installed_host.clone()
     });
@@ -733,7 +731,7 @@ pub(super) fn deliver_host_notice_while(
         let Ok(runtime) = slot.try_borrow() else {
             return Vec::new();
         };
-        let Some(owner_thread) = runtime.owner_thread else {
+        let Some(owner_thread) = runtime.loop_thread() else {
             return Vec::new();
         };
         runtime
@@ -783,7 +781,7 @@ pub(super) fn deliver_session_end_close(deadline: std::time::Instant, margin: st
         let Ok(runtime) = slot.try_borrow() else {
             return Vec::new();
         };
-        let Some(owner_thread) = runtime.owner_thread else {
+        let Some(owner_thread) = runtime.loop_thread() else {
             return Vec::new();
         };
         let logical = runtime.installed_host.logical();
@@ -839,7 +837,7 @@ fn reclaim_host_memory(level: flui_foundation::memory::MemoryPressureLevel) {
     let memory = APP_RUNTIME.with(|slot| {
         slot.try_borrow()
             .ok()
-            .map(|state| std::sync::Arc::clone(&state.host_memory))
+            .map(|state| Rc::clone(&state.host_memory))
     });
     if let Some(memory) = memory {
         memory.reclaim(level);
@@ -1303,7 +1301,7 @@ pub(super) fn teardown_platform_ui_runtime() {
 /// offer.
 #[cfg(not(target_arch = "wasm32"))]
 pub(super) fn teardown_platform_ui_runtime_logged(log: &mut dyn FnMut(TeardownStep)) {
-    APP_RUNTIME.with(|slot| slot.borrow_mut().owner_thread = None);
+    APP_RUNTIME.with(|slot| slot.borrow_mut().hosts_loop = false);
     let mut first_panic = FirstPanic::new();
     retire_installed_host(&mut first_panic);
     log(TeardownStep::UiRuntimes);

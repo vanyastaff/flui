@@ -141,10 +141,10 @@ where
         // would notice. The loss wakes the owner, whose next turn retires the
         // GPU context and asks for another; the same ledger takes a lost WebGPU
         // device, whose driver report wakes the owner too (`on_device_lost`).
-        let gpu_loss = Arc::new(GpuLossLedger::default());
+        let gpu_loss = std::rc::Rc::new(GpuLossLedger::default());
         let wake = ui_runtime.wake_handle();
         {
-            let (gpu_loss, wake) = (Arc::clone(&gpu_loss), Arc::clone(&wake));
+            let (gpu_loss, wake) = (std::rc::Rc::clone(&gpu_loss), Arc::clone(&wake));
             routes.route_surface_changed(move |change| {
                 if change == flui_platform::SurfaceChange::Rebuild {
                     gpu_loss.record_context_restore();
@@ -245,7 +245,7 @@ pub(super) struct WebFrameDriver {
     /// The external textures the page's widgets register.
     textures: Option<flui_layer::TextureRegistry>,
     /// What the browser or the executor reported lost, and not yet rebuilt.
-    gpu_loss: std::sync::Arc<GpuLossLedger>,
+    gpu_loss: std::rc::Rc<GpuLossLedger>,
     /// Wakes the owner: the next turn draws on a rebuilt context without
     /// waiting for a frame.
     owner_wake: std::sync::Arc<dyn Fn() + Send + Sync>,

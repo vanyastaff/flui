@@ -231,7 +231,7 @@ fn the_shared_memory_is_reclaimed_once_however_many_windows_there_are() {
     APP_RUNTIME.with(|slot| {
         slot.borrow()
             .host_memory
-            .replace_receivers(vec![Arc::new(Counting(Arc::clone(&reclaimed)))]);
+            .replace_receivers(vec![Rc::new(Counting(Arc::clone(&reclaimed)))]);
     });
     let first = open_window();
     let second = open_window();
