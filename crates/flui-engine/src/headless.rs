@@ -79,7 +79,10 @@ impl HeadlessRenderer {
         ))
     }
 
-    fn over(context: GpuContext) -> Self {
+    fn over(mut context: GpuContext) -> Self {
+        // Every capture draws in one format, so its pipelines can be built
+        // while the caller prepares the first tree.
+        context.warm_pipelines(CAPTURE_FORMAT);
         Self {
             capture: RefCell::new(Capture {
                 context,
@@ -908,6 +911,41 @@ mod target_size_tests {
                 other => panic!("expected InvalidTargetSize for {size:?}, got {other:?}"),
             }
         }
+    }
+}
+
+/// Serialized with the other GPU readbacks: its module name matches the
+/// `gpu-readback` test group in `.config/nextest.toml`.
+#[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
+mod warmup_readback_tests {
+    use super::HeadlessRenderer;
+    use flui_layer::LayerTree;
+
+    /// A headless renderer starts its capture format's pipelines on a worker
+    /// when it is made, and its first capture takes them (ADR-0305 §1).
+    ///
+    /// Red-check: drop the `warm_pipelines` call from `HeadlessRenderer::over`
+    /// and no warm-up is under way before the first capture.
+    #[test]
+    fn a_new_renderer_warms_its_capture_pipelines_and_the_first_capture_takes_them() {
+        let renderer = match pollster::block_on(HeadlessRenderer::new()) {
+            Ok(renderer) => renderer,
+            Err(error) => {
+                crate::test_support::resolve_unavailable_gpu(
+                    &error.to_string(),
+                    crate::test_support::require_gpu(),
+                );
+                return;
+            }
+        };
+        assert!(renderer.context().warming_up(), "made, it is warming up");
+        renderer
+            .render_layer_tree(&LayerTree::default(), (8, 8))
+            .expect("the capture draws");
+        let context = renderer.context();
+        assert!(!context.warming_up(), "the capture took the warm-up");
+        assert_eq!(context.builds().pipeline_sets, 1);
     }
 }
 

@@ -45,6 +45,7 @@ use wayland_client::protocol::wl_seat::WlSeat;
 use wayland_client::protocol::wl_surface::WlSurface;
 use wayland_client::{Connection, Dispatch, Proxy, QueueHandle, event_created_child};
 
+use crate::host::{MAX_OFFERED_TYPES, MAX_TYPE_LEN};
 use crate::owner::linux::wayland::WaylandState;
 use crate::owner::slot::OwnerCell;
 
@@ -53,14 +54,6 @@ pub(crate) mod pipe;
 /// The newest `wl_data_device_manager`: version 3 adds the drag actions,
 /// version 2 lets a device be released.
 const MANAGER_VERSION: u32 = 3;
-
-/// The most MIME types an offer keeps: a source offering more offers
-/// nothing past them.
-pub(crate) const MAX_TYPES: usize = 100;
-
-/// The longest MIME type kept: a media type's type and subtype are at most
-/// 127 characters each (RFC 6838), so a longer name names nothing.
-pub(crate) const MAX_TYPE_LEN: usize = 255;
 
 /// What a feature hears of the devices.
 pub(crate) trait DeviceListener: Send + Sync {
@@ -487,10 +480,13 @@ pub(crate) struct OfferData {
 /// What the compositor told of one offer.
 #[derive(Default)]
 struct OfferTold {
-    /// Each type offered, once, in the order first offered: at most
-    /// [`MAX_TYPES`], none longer than [`MAX_TYPE_LEN`], however often the
-    /// owner repeats an `offer` event.
+    /// Each type offered, once, in the order first offered, of the first
+    /// [`MAX_OFFERED_TYPES`] `offer` events, none longer than
+    /// [`MAX_TYPE_LEN`]: the types every host's drag reads of its source.
     types: Vec<String>,
+    /// How many `offer` events were read, up to [`MAX_OFFERED_TYPES`]: a
+    /// repeated or over-long name counts, as it does in an X11 type list.
+    read: usize,
     /// The actions a drag's source permits (`source_actions`, version 3);
     /// `None` before the compositor told them.
     source_actions: Option<DndAction>,
@@ -507,14 +503,16 @@ impl OfferData {
         }
     }
 
-    /// Record an `offer` event: a type not offered before, while the offer
-    /// holds fewer than [`MAX_TYPES`].
+    /// Record an `offer` event: one of the first [`MAX_OFFERED_TYPES`] keeps
+    /// its type when it is no longer than [`MAX_TYPE_LEN`] and not offered
+    /// before; every later one is ignored.
     pub(crate) fn offer(&self, mime_type: String) {
-        if mime_type.len() > MAX_TYPE_LEN {
-            return;
-        }
         self.told.with(|told| {
-            if told.types.len() < MAX_TYPES && !told.types.contains(&mime_type) {
+            if told.read == MAX_OFFERED_TYPES {
+                return;
+            }
+            told.read += 1;
+            if mime_type.len() <= MAX_TYPE_LEN && !told.types.contains(&mime_type) {
                 told.types.push(mime_type);
             }
         });
@@ -749,17 +747,17 @@ mod tests {
         assert_eq!(offers.into_held().collect::<Vec<u32>>(), [2, 3]);
     }
 
-    /// An owner that repeats its `offer` events grows nothing past one entry
-    /// per type, keeps the order first offered, and keeps nothing past
-    /// [`MAX_TYPES`] or longer than [`MAX_TYPE_LEN`].
+    /// An offer keeps each type once, in the order first offered, of the
+    /// first [`MAX_OFFERED_TYPES`] `offer` events, none longer than
+    /// [`MAX_TYPE_LEN`]: a repeated or over-long name counts toward them, and
+    /// nothing past them is read, however many the owner sends.
     #[test]
     fn an_offer_keeps_each_type_once_and_no_more_than_its_bound() {
         let data = OfferData::new();
-        for _ in 0..10_000 {
-            data.offer("text/plain;charset=UTF-8".to_owned());
-            data.offer("UTF8_STRING".to_owned());
-        }
+        data.offer("text/plain;charset=UTF-8".to_owned());
         data.offer("x".repeat(MAX_TYPE_LEN + 1));
+        data.offer("text/plain;charset=UTF-8".to_owned());
+        data.offer("UTF8_STRING".to_owned());
         assert_eq!(
             data.types(<[String]>::to_vec),
             Some(vec![
@@ -770,6 +768,14 @@ mod tests {
         for n in 0..10_000 {
             data.offer(format!("application/x-{n}"));
         }
-        assert_eq!(data.types(<[String]>::len), Some(MAX_TYPES));
+        assert_eq!(
+            data.types(<[String]>::len),
+            Some(2 + MAX_OFFERED_TYPES - 4),
+            "the events past the first {MAX_OFFERED_TYPES} are not read"
+        );
+        assert_eq!(
+            data.types(|types| types.last().cloned()),
+            Some(Some(format!("application/x-{}", MAX_OFFERED_TYPES - 5)))
+        );
     }
 }

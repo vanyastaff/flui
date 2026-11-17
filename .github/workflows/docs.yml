@@ -1,22 +1,17 @@
 name: Docs
 
 # Builds the mdBook site under `book/` and deploys it to GitHub Pages from
-# `main`. Scoped to `book/**` plus this file itself via `paths:`, so it
-# never runs on a PR that doesn't touch the book — the opposite direction
-# from `ci.yml`'s docs-only skip, which exists to skip *compiling* jobs on
-# a docs-only PR; this workflow is the compiling (well, mdBook-building)
-# side of a docs change and has nothing to gate against non-docs changes.
+# `main`. Scoped to `book/**`, `src/book.rs` and this file via `paths:`, so it
+# never runs on a PR that doesn't touch the book; `ci.yml`'s main-only
+# `doc-test` job runs the book's samples with every other doctest after any
+# change to the facade they compile against.
 #
-# No `mdbook test`-equivalent step: most Rust fences in this book are
-# prose-adjacent snippets copied from a real example or CLI template, not
-# standalone compiling programs, so they are fenced `rust,ignore` rather
-# than plain `rust` (see AGENTS.md's "no invented API" rule for this book
-# and `book/book.toml`'s own comment). What this workflow does check is
-# every internal link, via `lychee` in `--offline` mode over the built
-# HTML — an external-link check is deliberately left out of the required
-# gate (rate limits and third-party downtime would make it flaky), but is
-# free to add later as an advisory job if that becomes useful, the same
-# way `weekly.yml` runs its own advisory checks.
+# `mdbook test` is not used: it compiles each fence without the workspace's
+# crates. The `samples` job compiles the book's Rust fences as doctests of the
+# facade instead (src/book.rs). The `build` job checks every internal link,
+# via `lychee` in `--offline` mode over the built HTML; an external-link check
+# is left out of the required gate (rate limits and third-party downtime
+# would make it flaky).
 #
 # Enabling this requires a one-time repo setting only the repo owner can
 # make: Settings → Pages → Source = "GitHub Actions". Until that's set,
@@ -28,10 +23,12 @@ on:
     branches: [main]
     paths:
       - 'book/**'
+      - 'src/book.rs'
       - '.github/workflows/docs.yml'
   pull_request:
     paths:
       - 'book/**'
+      - 'src/book.rs'
       - '.github/workflows/docs.yml'
 
 permissions:
@@ -72,6 +69,36 @@ jobs:
         if: github.ref == 'refs/heads/main' && github.event_name == 'push'
         with:
           path: book/book
+
+  # Every `rust` fence in the book compiles against the facade, and the ones
+  # not marked `no_run` run: src/book.rs makes each chapter a doctest, and its
+  # unit tests refuse an `ignore` fence and a chapter missing from the list.
+  # ci.yml's `doc-test` runs the same doctests on main, where a facade change
+  # can break a sample without touching the book.
+  samples:
+    name: samples
+    runs-on: ubuntu-26.04
+    timeout-minutes: 45
+    env:
+      RUSTUP_HOME: ${{ github.workspace }}/../flui-rustup
+      CARGO_INCREMENTAL: 0
+      CARGO_BUILD_WARNINGS: deny
+      RUSTDOCFLAGS: -D warnings
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+      CARGO_PROFILE_TEST_DEBUG: line-tables-only
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install pinned Rust
+        uses: ./.github/actions/rust-toolchain
+
+      - name: The book's chapter list and fences
+        run: "cargo test -p flui --locked --lib book::"
+
+      - name: The book's samples
+        run: "cargo test -p flui --locked --features testing --doc book::"
 
   deploy:
     name: deploy

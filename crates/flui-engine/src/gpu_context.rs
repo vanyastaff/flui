@@ -288,6 +288,10 @@ pub struct GpuContext {
     /// to build on: a panic costs the caches every slot shares, not the
     /// pipelines.
     pipelines: Option<PipelineLibrary>,
+    /// The library of the first format a slot named, built on a worker until
+    /// a frame takes it (ADR-0305 §1).
+    #[cfg(not(target_arch = "wasm32"))]
+    warmup: Option<crate::pipeline_warmup::PipelineWarmup>,
     /// The presentation blit of window slots whose frames render into a
     /// retained target, one pipeline per surface format; built at the first
     /// window frame.
@@ -313,6 +317,9 @@ pub struct GpuContext {
     /// subscriber can.
     #[cfg(test)]
     panic_in_next_setup: bool,
+    /// When set, the next warm-up panics on its worker.
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    panic_in_warmup: bool,
     /// When set, the next torn painter's drop panics.
     #[cfg(test)]
     panic_in_next_cleanup: bool,
@@ -540,6 +547,8 @@ impl GpuContext {
             refusals: RebuildRefusals::default(),
             painter: None,
             pipelines: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            warmup: None,
             blit: None,
             slots: SlotTable::default(),
             textures: FxHashMap::default(),
@@ -558,6 +567,8 @@ impl GpuContext {
             panic_in_next_cleanup: false,
             #[cfg(test)]
             panic_in_next_setup: false,
+            #[cfg(all(test, not(target_arch = "wasm32")))]
+            panic_in_warmup: false,
             #[cfg(test)]
             rebuilds_failing: 0,
             _one_mutator: PhantomData,
@@ -594,6 +605,10 @@ impl GpuContext {
         // What the old device made goes before the new device is used.
         self.painter = None;
         self.pipelines = None;
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.warmup = None;
+        }
         self.blit = None;
         for kept in self.textures.values_mut() {
             kept.leave_device();
@@ -688,7 +703,9 @@ impl GpuContext {
                 format,
                 size,
             }),
-        )
+        )?;
+        self.warm_pipelines(format);
+        Ok(())
     }
 
     /// Attach a window slot under `slot`, presenting to `surface`.
@@ -710,7 +727,12 @@ impl GpuContext {
             config.display,
             config.latency,
         )?;
-        self.insert(slot, SurfaceSlot::Window(Box::new(window)))
+        let format = window.expected_format(&self.gpu());
+        self.insert(slot, SurfaceSlot::Window(Box::new(window)))?;
+        if let Some(format) = format {
+            self.warm_pipelines(format);
+        }
+        Ok(())
     }
 
     fn insert(&mut self, slot: SlotId, surface: SurfaceSlot) -> EngineResult<()> {
@@ -1081,6 +1103,12 @@ impl GpuContext {
         self.builds
     }
 
+    /// Whether a pipeline warm-up is under way.
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    pub(crate) fn warming_up(&self) -> bool {
+        self.warmup.is_some()
+    }
+
     /// Make the next offscreen frame panic after its recording, before its
     /// submission.
     #[cfg(test)]
@@ -1100,6 +1128,13 @@ impl GpuContext {
     #[cfg(test)]
     pub(crate) fn panic_in_next_setup(&mut self) {
         self.panic_in_next_setup = true;
+    }
+
+    /// Make the next pipeline warm-up panic on its worker, as wgpu's error
+    /// handler can.
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    pub(crate) fn panic_in_next_warmup(&mut self) {
+        self.panic_in_warmup = true;
     }
 
     /// Make the drop of the next torn painter panic, as a cached value's
@@ -1129,6 +1164,56 @@ impl GpuContext {
         panics
     }
 
+    /// Start building `format`'s pipeline library on a worker, when no frame
+    /// has built one and none is under way: the first slot to name its
+    /// format overlaps the driver's compilation with the application's first
+    /// build (ADR-0305 §1). wasm32 builds it on the frame.
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            clippy::unused_self,
+            reason = "wasm32 has no thread to warm pipelines on; the frame builds them"
+        )
+    )]
+    pub(crate) fn warm_pipelines(&mut self, format: wgpu::TextureFormat) {
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.painter.is_none() && self.pipelines.is_none() && self.warmup.is_none() {
+            let device = Arc::clone(self.domain.device());
+            #[cfg(test)]
+            let panics = std::mem::take(&mut self.panic_in_warmup);
+            self.warmup = crate::pipeline_warmup::PipelineWarmup::start(move || {
+                #[cfg(test)]
+                assert!(!panics, "injected panic in a pipeline warm-up");
+                PipelineLibrary::new(&device, format)
+            });
+            #[cfg(test)]
+            if self.warmup.is_some() {
+                self.builds.pipeline_sets += 1;
+            }
+        }
+        #[cfg(target_arch = "wasm32")]
+        let _ = format;
+    }
+
+    /// The library a warm-up built, once its worker is done; `None` when no
+    /// warm-up is under way.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn take_warmed(&mut self) -> Option<PipelineLibrary> {
+        self.warmup
+            .take()
+            .map(crate::pipeline_warmup::PipelineWarmup::finish)
+    }
+
+    /// wasm32 warms nothing up: the frame builds the library.
+    #[cfg(target_arch = "wasm32")]
+    #[expect(
+        clippy::unused_self,
+        reason = "wasm32 has no thread to warm pipelines on; the frame builds them"
+    )]
+    fn take_warmed(&mut self) -> Option<PipelineLibrary> {
+        None
+    }
+
     /// The shared painter, retargeted to `format`; built first, sized for
     /// `size`, when no complete frame left one, over the pipelines an unwound
     /// frame's painter left.
@@ -1144,11 +1229,16 @@ impl GpuContext {
                 self.builds.glyph_atlases += 1;
             }
             if self.pipelines.is_none() {
-                #[cfg(test)]
-                {
-                    self.builds.pipeline_sets += 1;
-                }
-                self.pipelines = Some(PipelineLibrary::new(self.domain.device(), format));
+                // A warm-up's panic resumes here with the warm-up gone, so
+                // the next frame builds the library itself.
+                let library = self.take_warmed().unwrap_or_else(|| {
+                    #[cfg(test)]
+                    {
+                        self.builds.pipeline_sets += 1;
+                    }
+                    PipelineLibrary::new(self.domain.device(), format)
+                });
+                self.pipelines = Some(library);
             }
             self.painter = Some(WgpuPainter::with_pipelines(
                 Arc::clone(&self.domain),
@@ -2655,5 +2745,170 @@ mod tests {
             window.owes_a_frame(),
             "the reconfigured swapchain is repainted"
         );
+    }
+
+    /// Attach one RGBA offscreen slot of 32×16 to `sender`'s executor.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn attach_rgba(
+        sender: &crate::raster_executor::RasterSender,
+    ) -> (SlotId, PresentationAddress, SurfaceGeneration) {
+        let slot = sender.mint_slot().expect("a slot id is left");
+        let address = PresentationAddress {
+            ui_runtime_id: UiRuntimeId::new(1),
+            presentation_id: PresentationId::new(slot.index() as usize + 1),
+        };
+        let receipt = sender
+            .send(RasterCommand::Attach {
+                slot,
+                address,
+                target: SlotTarget::Offscreen {
+                    size: DeviceSize::new(32, 16),
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                },
+                config: SlotConfig::new(),
+            })
+            .expect("the attach is accepted");
+        let SendReceipt::Configured(generation) = receipt else {
+            panic!("an attach of a positive size configures the slot: {receipt:?}");
+        };
+        (slot, address, generation)
+    }
+
+    /// Send `slot` one frame, turn the executor and answer its verdict.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn draw_once(
+        executor: &mut RasterExecutor<GpuContext>,
+        sender: &crate::raster_executor::RasterSender,
+        (slot, address, generation): (SlotId, PresentationAddress, SurfaceGeneration),
+    ) -> RasterVerdict {
+        sender
+            .send(frame(slot, address, generation, square_and_glyph()))
+            .expect("the frame is accepted");
+        let _ = executor.turn();
+        let mut settled = Vec::new();
+        sender.drain_settlements(slot, &mut settled);
+        assert_eq!(settled.len(), 1, "the frame settles once");
+        settled[0].verdict
+    }
+
+    /// The first slot's attach starts its format's pipeline library on a
+    /// worker, and the first frame takes that library instead of building
+    /// another (ADR-0305 §1).
+    ///
+    /// Red-check: drop the `warm_pipelines` call from `attach_offscreen` and
+    /// no warm-up is under way after the attach.
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn the_first_slots_attach_builds_its_pipelines_on_a_worker_once() {
+        let Some(context) = context_or_skip() else {
+            return;
+        };
+        let (mut executor, sender) = RasterExecutor::new(
+            context,
+            std::rc::Rc::new(flui_foundation::SystemClock),
+            || {},
+        );
+        let slot = attach_rgba(&sender);
+        // The executor applies the attach on its turn.
+        let _ = executor.turn();
+        assert!(
+            executor.backend().warming_up(),
+            "the attach starts the warm-up"
+        );
+        assert_eq!(executor.backend().builds().pipeline_sets, 1);
+
+        assert_eq!(
+            draw_once(&mut executor, &sender, slot),
+            RasterVerdict::Presented
+        );
+        assert!(!executor.backend().warming_up(), "the frame took it");
+        assert_eq!(
+            executor.backend().builds().pipeline_sets,
+            1,
+            "the frame built no second library"
+        );
+        // A second slot of the same format starts nothing.
+        let _second = attach_rgba(&sender);
+        let _ = executor.turn();
+        assert!(!executor.backend().warming_up());
+    }
+
+    /// A warm-up whose worker panics resumes that panic on the frame that
+    /// joins it, so the slot settles `Retry` and keeps the panic; the next
+    /// frame builds the library itself and presents.
+    ///
+    /// Red-check: discard the worker's payload in `PipelineWarmup::finish`
+    /// instead of resuming it and the first frame has no library to draw with.
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn a_warm_up_that_panics_fails_the_frame_that_joins_it_and_the_next_builds_inline() {
+        use crate::raster_executor::SlotFailure;
+
+        let Some(mut context) = context_or_skip() else {
+            return;
+        };
+        context.panic_in_next_warmup();
+        let (mut executor, sender) = RasterExecutor::new(
+            context,
+            std::rc::Rc::new(flui_foundation::SystemClock),
+            || {},
+        );
+        let slot = attach_rgba(&sender);
+        assert_eq!(
+            draw_once(&mut executor, &sender, slot),
+            RasterVerdict::Retry
+        );
+        let Some(SlotFailure::Panicked(payload)) = sender.take_failure(slot.0) else {
+            panic!("the slot's record holds the worker's panic");
+        };
+        assert_eq!(
+            payload.downcast_ref::<&str>(),
+            Some(&"injected panic in a pipeline warm-up")
+        );
+        flui_foundation::panic::discard_payload(payload);
+        assert!(!executor.backend().warming_up(), "the join took it");
+
+        assert_eq!(
+            draw_once(&mut executor, &sender, slot),
+            RasterVerdict::Presented
+        );
+        assert_eq!(
+            executor.backend().builds().pipeline_sets,
+            2,
+            "the worker's attempt and the frame's own build"
+        );
+    }
+
+    /// A device rebuild drops a warm-up still under way: its library is the
+    /// lost device's, and the next frame builds one on the new device.
+    ///
+    /// Red-check: keep the warm-up across `GpuContext::rebuild` and it is still
+    /// under way after the rebuild, its library the lost device's.
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn a_device_rebuild_drops_a_warm_up_under_way() {
+        let Some(context) = context_or_skip() else {
+            return;
+        };
+        let (mut executor, sender) = RasterExecutor::new(
+            context,
+            std::rc::Rc::new(flui_foundation::SystemClock),
+            || {},
+        );
+        let (slot, address, _generation) = attach_rgba(&sender);
+        let _ = executor.turn();
+        assert!(executor.backend().warming_up());
+        executor.backend().lose_device();
+        let _ = executor.turn();
+        assert!(!executor.backend().warming_up(), "the rebuild dropped it");
+        let generation = sender
+            .record(slot)
+            .expect("the owner holds the slot")
+            .required_generation;
+        assert_eq!(
+            draw_once(&mut executor, &sender, (slot, address, generation)),
+            RasterVerdict::Presented
+        );
+        assert_eq!(executor.backend().builds().pipeline_sets, 2);
     }
 }

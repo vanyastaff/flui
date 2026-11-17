@@ -1,5 +1,8 @@
 ### Added
 
+- The book has a tutorial: a first window with `run_app`, `Application` and `#[flui::main]`, a
+  screen laid out with `Column`, `Row`, `Padding` and `Expanded`, and state in a `StatefulView`.
+  Every sample compiles, and the ones that do not open a window run.
 - `flui::testing::Tester`, the application test API: `Tester::mount` mounts a view as `run_app`
   does, `flui::testing::find` builds the driver's `Locator`s over the semantics tree, `tap`,
   `long_press`, `drag` and `enter_text` act through the window's input path after the
@@ -18,6 +21,9 @@
 
 ### Changed
 
+- Every Rust sample in the book compiles against the `flui` facade: each chapter is a doctest of
+  the facade (`src/book.rs`), the docs workflow runs them on every pull request that touches the
+  book, and the concept, catalog and testing chapters show complete samples instead of excerpts.
 - `flui create`'s counter and widget templates test through `Tester`; the counter's test no longer
   wraps the app in a `MediaQuery` or computes tap coordinates.
 

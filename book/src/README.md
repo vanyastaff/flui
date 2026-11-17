@@ -15,13 +15,13 @@ recorded in the repository's
 API and feature choices can change between releases.
 
 The book is incomplete. Chapters link to the working examples and reference material where
-more detail is needed. A code sample is either copied from an example or CLI template, or
-fenced as `rust,ignore`. Building this site does not compile those snippets: check the linked
-source for the exact API and required features.
+more detail is needed. Every Rust sample compiles and runs against the `flui` crate as a test of
+the repository; the linked source has the required features.
 
 ## Where to start
 
-- New to FLUI and want to build an application: [Getting Started](getting-started/installation.md).
+- New to FLUI and want to build an application: [Getting Started](getting-started/installation.md),
+  then the [Tutorial](tutorial/first-app.md).
 - Ready to change a working example: the [Cookbook](cookbook/overview.md) for forms, async work,
   themes, animation, and testing.
 - Choosing a state model or learning how a view becomes a frame:

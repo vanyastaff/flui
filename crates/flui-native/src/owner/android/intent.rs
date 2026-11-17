@@ -6,14 +6,15 @@
 //! A `VIEW` intent's data is a link (a custom scheme, a verified `https` app
 //! link) or a document; a share (`SEND`, `SEND_MULTIPLE`) carries documents
 //! as its streams. A document comes as a `file:` URI, opened by its path, or
-//! as a `content:` URI a provider serves, which names no path: the owner
-//! opens it for reading through the content resolver and the application
-//! hears the open descriptor, held by its `OpenedFile` (`/proc/self/fd/N`)
-//! with the name the provider shows.
+//! as a `content:` URI a provider serves, which names no path: it is opened
+//! for reading through the content resolver off the owner thread
+//! ([`documents`](super::documents)), and the application hears the open
+//! descriptor, held by its `OpenedFile` (`/proc/self/fd/N`) with the name the
+//! provider shows.
 
 use std::path::PathBuf;
 
-use flui_platform::{Launch, OpenTarget, Opened, OpenedFile};
+use flui_platform::Launch;
 
 use crate::owner::file_uri::{PathConvention, file_uri_path};
 
@@ -127,36 +128,6 @@ impl Opening {
         }
         opening
     }
-
-    /// What the application hears, for the application as a whole: Android
-    /// keeps one task of the Activity, and its window's id changes with each
-    /// surface, so the runner's last focused window is the one the intent
-    /// reached. Each provider's document is opened by `open` (the content
-    /// resolver, on the owner thread), at most as many as an [`Opened`]
-    /// carries after the links it keeps (an over-long link takes no room);
-    /// one it cannot open is left out, and `open` logs why. What bounding
-    /// drops, the documents past the room included, is reported as every host
-    /// reports it (`owner::opened::bounded`), even when nothing is left.
-    pub(crate) fn opened(self, mut open: impl FnMut(&str) -> Option<OpenedFile>) -> Opened {
-        let room = crate::owner::opened::room_for_files(&self.links);
-        let unopened = self.documents.len().saturating_sub(room);
-        let files: Vec<OpenedFile> = self
-            .documents
-            .into_iter()
-            .take(room)
-            .filter_map(|document| match document {
-                Document::Path(path) => Some(OpenedFile::new(path)),
-                Document::Content(uri) => open(&uri),
-            })
-            .collect();
-        crate::owner::opened::bounded(
-            self.links,
-            files,
-            unopened,
-            OpenTarget::Application,
-            self.launch,
-        )
-    }
 }
 
 /// The scheme of `uri` (RFC 3986 §3.1), `None` when it has none.
@@ -172,7 +143,9 @@ fn scheme(uri: &str) -> Option<&str> {
 mod tests {
     use std::path::PathBuf;
 
-    use flui_platform::{Launch, MAX_OPENED_ITEMS, OpenTarget, OpenedFile};
+    use flui_platform::Launch;
+    #[cfg(not(target_arch = "wasm32"))]
+    use flui_platform::{MAX_OPENED_ITEMS, OpenTarget, OpenedFile};
 
     use super::{Document, Opening, ReceivedIntent};
 
@@ -186,9 +159,36 @@ mod tests {
         )
     }
 
+    /// What the application hears of `opening`, its provider's documents
+    /// opened by `open` (`None` a refusal) as the worker would hand them back.
+    #[cfg(not(target_arch = "wasm32"))]
+    trait Open {
+        fn opened(self, open: impl FnMut(&str) -> Option<OpenedFile>) -> flui_platform::Opened;
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    impl Open for Opening {
+        fn opened(self, mut open: impl FnMut(&str) -> Option<OpenedFile>) -> flui_platform::Opened {
+            use crate::owner::android::documents::{OpenRefusal, Openings};
+
+            let mut openings = Openings::default();
+            let jobs = openings
+                .accept(self, std::time::Instant::now())
+                .expect("room");
+            for job in jobs {
+                let stray = openings.finish(job.ticket, open(&job.uri).ok_or(OpenRefusal::Failed));
+                assert!(stray.is_none(), "each answer finds its document");
+            }
+            let mut ready = openings.take_ready();
+            assert_eq!(ready.len(), 1, "every document has an outcome");
+            ready.remove(0).opened
+        }
+    }
+
     /// An intent whose only link is past the length bound opens nothing, and
     /// what bounding dropped is still reported, once; so are the documents
     /// past the room the links leave.
+    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn an_intent_reports_what_bounding_dropped_even_when_nothing_is_left() {
         use crate::owner::opened::reports_in;
@@ -318,6 +318,7 @@ mod tests {
     /// application as a whole: a provider's document as the content resolver
     /// opened it, one it could not open left out, and no more opened than an
     /// `Opened` carries beside the links.
+    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn a_provider_document_opens_through_the_resolver_or_is_left_out() {
         let mut asked = Vec::new();

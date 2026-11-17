@@ -87,7 +87,9 @@ use x11rb::protocol::xproto::{
 use x11rb::wrapper::ConnectionExt as _;
 use x11rb::{COPY_FROM_PARENT, CURRENT_TIME, NONE};
 
-use crate::drag::offers::{Kind, OfferTable, representations, too_large};
+use crate::drag::offers::{
+    Kind, MAX_OFFERED_TYPES, MAX_TYPE_LEN, OfferTable, representations, too_large,
+};
 use crate::owner::linux::x11::{
     InputTarget, LoopDrag, PeerHeard, PeerInterest, PeerSelect, WindowRef, X11Connection,
 };
@@ -103,16 +105,12 @@ const MAX_FETCHES: usize = 4;
 /// The most bytes an `INCR` fetch reserves on its announcement.
 const RESERVED: usize = 4 * 1024 * 1024;
 
-/// The most types read of a source's `XdndTypeList`.
-const MAX_TYPES: u32 = 100;
-
 /// The most atom names the transfer keeps, of the types sources offered.
 const MAX_NAMES: usize = 1024;
 
-/// The longest type name read as a type: a media type's type and subtype are
-/// at most 127 characters each (RFC 6838), so a longer name offers nothing,
-/// and no name held or compared is longer.
-const MAX_NAME_LEN: usize = 255;
+/// The longest type name read as a type ([`MAX_TYPE_LEN`]): a longer name
+/// offers nothing, and no name held or compared is longer.
+const MAX_NAME_LEN: usize = MAX_TYPE_LEN;
 
 /// The most actions read of a source's `XdndActionList`.
 const MAX_ACTIONS: u32 = 16;
@@ -1478,10 +1476,13 @@ impl X11Drag {
         }
     }
 
-    /// The hover `source` entered offers the types it lists, or `types`.
+    /// The hover `source` entered offers the types it lists, or `types`: of
+    /// its `XdndTypeList`, the first [`MAX_OFFERED_TYPES`], as every host's
+    /// drag reads its source's.
     fn learn_types(&self, source: xproto::Window, listed: bool, types: Vec<xproto::Atom>) {
         let types = if listed {
-            self.atoms_of(source, self.atoms.type_list, MAX_TYPES)
+            let most = u32::try_from(MAX_OFFERED_TYPES).unwrap_or(u32::MAX);
+            self.atoms_of(source, self.atoms.type_list, most)
         } else {
             types
         };

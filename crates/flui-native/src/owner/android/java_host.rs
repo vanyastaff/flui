@@ -31,7 +31,7 @@ use crate::PlatformError;
 /// the native methods and their signatures, the methods the library calls,
 /// the entries of the queue, and what each means. `FluiHost.PROTOCOL` states
 /// it on the Java side; the two are raised together.
-pub(crate) const PROTOCOL: i32 = 5;
+pub(crate) const PROTOCOL: i32 = 6;
 
 /// The binary name of the Activity class the manifest names.
 pub(crate) const ACTIVITY_CLASS: &str = "dev.flui.platform.FluiActivity";
@@ -186,6 +186,32 @@ pub(crate) fn load_class<'local>(
 /// `FluiHost.TRIM_MEMORY`: the kind of an `onTrimMemory` entry.
 const TRIM_MEMORY: i32 = 1;
 
+/// `FluiHost.OPEN_FAILED`: the provider refused or failed.
+#[cfg(all(test, not(target_arch = "wasm32")))]
+const OPEN_FAILED: i32 = -1;
+/// `FluiHost.OPEN_GRANT_ENDED`: the read grant the intent carried has ended.
+#[cfg(any(target_os = "android", all(test, not(target_arch = "wasm32"))))]
+const OPEN_GRANT_ENDED: i32 = -2;
+/// `FluiHost.OPEN_CANCELLED`: the open was cancelled.
+#[cfg(any(target_os = "android", all(test, not(target_arch = "wasm32"))))]
+const OPEN_CANCELLED: i32 = -3;
+
+/// What `FluiHost.openDocument` answered: the descriptor it detached, or why
+/// it has none. A cancelled open passed its deadline, the only reason the
+/// library cancels one before it retires, and an answer it does not know is
+/// a failure.
+#[cfg(any(target_os = "android", all(test, not(target_arch = "wasm32"))))]
+pub(crate) fn opened_descriptor(answer: i32) -> Result<i32, super::documents::OpenRefusal> {
+    use super::documents::OpenRefusal;
+    match answer {
+        descriptor if descriptor >= 0 => Ok(descriptor),
+        OPEN_GRANT_ENDED => Err(OpenRefusal::GrantEnded),
+        OPEN_CANCELLED => Err(OpenRefusal::TimedOut),
+        // `OPEN_FAILED`, and any answer this library does not know.
+        _ => Err(OpenRefusal::Failed),
+    }
+}
+
 /// One entry of `FluiHost`'s queue, as the owner drains it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum HostEntry {
@@ -250,7 +276,7 @@ impl HostEntry {
 }
 
 #[cfg(target_os = "android")]
-pub(crate) use queue::{HostQueue, host_class};
+pub(crate) use queue::{HostQueue, JavaSignal, host_class, spawn_documents};
 
 #[cfg(target_os = "android")]
 mod queue {
@@ -269,6 +295,9 @@ mod queue {
     use super::{HOST_CLASS, HostEntry, load_class};
     use crate::owner::android::activity::with_activity;
     use crate::owner::android::activity_results::Answer;
+    use crate::owner::android::documents::{
+        CancelSignal, DocumentProvider, OpenRefusal, Opener, Outcome, work,
+    };
     use crate::owner::android::java_view::strings;
     use crate::owner::android::main_thread;
     use crate::owner::android::native_call::jni_native;
@@ -421,39 +450,6 @@ mod queue {
             (entries, answers.unwrap_or_default())
         }
 
-        /// The document `uri`, a `content:` URI an intent brought, opened for
-        /// reading through the Activity's content resolver and held by the
-        /// file the application hears, with the name its provider shows;
-        /// `None`, logged, when it cannot be opened. Owner thread: a provider
-        /// can take long, and the Java main thread stays free meanwhile.
-        pub(crate) fn open_document(&self, uri: &str) -> Option<OpenedFile> {
-            let opened = with_activity(&self.app, |env, activity| {
-                env.with_local_frame(8, |env| open_document(env, activity, uri))
-            });
-            let (descriptor, name) = match opened {
-                Ok(Some(opened)) => opened,
-                // `FluiHost.openDocument` logged the provider's refusal.
-                Ok(None) => return None,
-                Err(error) => {
-                    tracing::warn!(
-                        target: "flui_native::android",
-                        %error,
-                        "a document an intent opened could not be read"
-                    );
-                    return None;
-                }
-            };
-            OpenedFile::try_from_descriptor(descriptor, name)
-                .inspect_err(|error| {
-                    tracing::warn!(
-                        target: "flui_native::android",
-                        %error,
-                        "a document an intent opened could not be held"
-                    );
-                })
-                .ok()
-        }
-
         /// One drain of `FluiHost`, or `None` when it failed: what it queued
         /// stays queued, and the next turn tries again.
         fn drained<T>(
@@ -553,28 +549,148 @@ mod queue {
         Ok(out)
     }
 
-    /// `FluiHost.openDocument` and `FluiHost.documentName` for `uri`: the
-    /// descriptor this library then owns, and the name, or `None` when the
-    /// provider refused. A failure after the descriptor is taken closes it.
+    /// The Java side of opening the documents an intent names, on the
+    /// documents' worker: `FluiHost.openDocument` and `documentName` through
+    /// the Activity's content resolver, each under the open's
+    /// `CancellationSignal`.
+    pub(crate) struct JavaDocuments {
+        app: AndroidApp,
+    }
+
+    /// An open's `android.os.CancellationSignal`. Its `cancel` tells the
+    /// provider through a one-way binder call, so the owner thread that sends
+    /// it never waits for the provider.
+    pub(crate) struct JavaSignal {
+        app: AndroidApp,
+        signal: Global<JObject<'static>>,
+    }
+
+    impl CancelSignal for JavaSignal {
+        fn cancel(&self) {
+            let cancelled = with_activity(&self.app, |env, _| {
+                env.call_method(
+                    self.signal.as_ref(),
+                    jni_str!("cancel"),
+                    jni_sig!("()V"),
+                    &[],
+                )
+                .map(drop)
+            });
+            if let Err(error) = cancelled {
+                tracing::warn!(
+                    target: "flui_native::android",
+                    %error,
+                    "a document's open could not be cancelled"
+                );
+            }
+        }
+    }
+
+    impl DocumentProvider for JavaDocuments {
+        type Signal = JavaSignal;
+
+        fn signal(&mut self) -> Result<JavaSignal, OpenRefusal> {
+            with_activity(&self.app, |env, _| {
+                let signal = env.new_object(
+                    jni_str!("android/os/CancellationSignal"),
+                    jni_sig!("()V"),
+                    &[],
+                )?;
+                env.new_global_ref(&signal)
+            })
+            .map(|signal| JavaSignal {
+                app: self.app.clone(),
+                signal,
+            })
+            .map_err(|error| {
+                tracing::warn!(
+                    target: "flui_native::android",
+                    %error,
+                    "no cancellation signal for a document's open"
+                );
+                OpenRefusal::Failed
+            })
+        }
+
+        fn open(&mut self, uri: &str, signal: &JavaSignal) -> Outcome {
+            let opened = with_activity(&self.app, |env, activity| {
+                env.with_local_frame(8, |env| {
+                    open_document(env, activity, uri, signal.signal.as_ref())
+                })
+            });
+            let (descriptor, name) = match opened {
+                Ok(opened) => opened?,
+                Err(error) => {
+                    tracing::warn!(
+                        target: "flui_native::android",
+                        %error,
+                        "a document an intent opened could not be read"
+                    );
+                    return Err(OpenRefusal::Failed);
+                }
+            };
+            OpenedFile::try_from_descriptor(descriptor, name).map_err(|error| {
+                tracing::warn!(
+                    target: "flui_native::android",
+                    %error,
+                    "a document an intent opened could not be held"
+                );
+                OpenRefusal::Failed
+            })
+        }
+    }
+
+    /// Start the worker that opens the documents `opener` queues, waking the
+    /// owner through `signal` as each is opened.
+    pub(crate) fn spawn_documents(
+        app: AndroidApp,
+        opener: Arc<Opener<JavaSignal>>,
+        signal: Weak<OwnerSignal>,
+    ) -> std::io::Result<()> {
+        std::thread::Builder::new()
+            .name("flui-documents".to_owned())
+            .spawn(move || {
+                let mut provider = JavaDocuments { app };
+                work(&opener, &mut provider, || {
+                    if let Some(signal) = signal.upgrade() {
+                        let _ = signal.wake();
+                    }
+                });
+            })
+            .map(drop)
+    }
+
+    /// `FluiHost.openDocument` and `FluiHost.documentName` for `uri` under
+    /// `signal`: the descriptor this library then owns and the name, or why
+    /// the provider gave none. A failure after the descriptor is taken
+    /// closes it.
     #[expect(unsafe_code, reason = "a detached descriptor becomes an OwnedFd")]
     fn open_document(
         env: &mut Env<'_>,
         activity: &JObject<'_>,
         uri: &str,
-    ) -> jni::errors::Result<Option<(OwnedFd, Option<String>)>> {
+        signal: &JObject<'_>,
+    ) -> jni::errors::Result<Result<(OwnedFd, Option<String>), OpenRefusal>> {
         let class = host_class(env, activity)?;
         let text = env.new_string(uri)?;
-        let raw = env
+        let answer = env
             .call_static_method(
                 &class,
                 jni_str!("openDocument"),
-                jni_sig!("(Landroid/content/Context;Ljava/lang/String;)I"),
-                &[JValue::Object(activity), JValue::Object(&text)],
+                jni_sig!(
+                    "(Landroid/content/Context;Ljava/lang/String;Landroid/os/CancellationSignal;)I"
+                ),
+                &[
+                    JValue::Object(activity),
+                    JValue::Object(&text),
+                    JValue::Object(signal),
+                ],
             )?
             .i()?;
-        if raw < 0 {
-            return Ok(None);
-        }
+        let raw = match super::opened_descriptor(answer) {
+            Ok(raw) => raw,
+            Err(refusal) => return Ok(Err(refusal)),
+        };
         // SAFETY: `openDocument` answers `ParcelFileDescriptor.detachFd()`,
         // which hands the descriptor over: no Java object owns or closes it
         // any more, so this is its only owner.
@@ -583,8 +699,14 @@ mod queue {
             .call_static_method(
                 &class,
                 jni_str!("documentName"),
-                jni_sig!("(Landroid/content/Context;Ljava/lang/String;)Ljava/lang/String;"),
-                &[JValue::Object(activity), JValue::Object(&text)],
+                jni_sig!(
+                    "(Landroid/content/Context;Ljava/lang/String;Landroid/os/CancellationSignal;)Ljava/lang/String;"
+                ),
+                &[
+                    JValue::Object(activity),
+                    JValue::Object(&text),
+                    JValue::Object(signal),
+                ],
             )?
             .l()?;
         let name = env.cast_local::<JString<'_>>(name)?;
@@ -593,8 +715,9 @@ mod queue {
         } else {
             Some(name.try_to_string(env)?)
         };
-        Ok(Some((descriptor, name)))
+        Ok(Ok((descriptor, name)))
     }
+
     /// Every intent's record `FluiHost` queued, oldest first, each read in a
     /// frame of its own so that a full queue holds no more local references
     /// than one record; `FluiHost` lets go of exactly those once all are
@@ -832,6 +955,44 @@ mod tests {
             HostEntry::from_pairs(&[TRIM_MEMORY, 5, TRIM_MEMORY]),
             [HostEntry::TrimMemory(5)]
         );
+    }
+
+    /// `FluiHost.openDocument` answers as the library reads it: a descriptor,
+    /// or the refusal its code names (the grant ended, the open cancelled at
+    /// its deadline, the provider failed, and any code this library does not
+    /// know as a failure); it opens and names the document under the
+    /// signal the library cancels.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_document_open_answers_as_the_java_classes_state_it() {
+        use super::super::documents::OpenRefusal;
+        use super::{OPEN_CANCELLED, OPEN_FAILED, OPEN_GRANT_ENDED, opened_descriptor};
+
+        let host = java_source(HOST_CLASS);
+        for stated in [
+            format!("static final int OPEN_FAILED = {OPEN_FAILED};"),
+            format!("static final int OPEN_GRANT_ENDED = {OPEN_GRANT_ENDED};"),
+            format!("static final int OPEN_CANCELLED = {OPEN_CANCELLED};"),
+            "static int openDocument(Context context, String uri, CancellationSignal signal)"
+                .to_owned(),
+            ".openFileDescriptor(Uri.parse(uri), \"r\", signal)".to_owned(),
+            "static String documentName(Context context, String uri, CancellationSignal signal)"
+                .to_owned(),
+        ] {
+            assert!(host.contains(&stated), "{stated:?} in FluiHost");
+        }
+        assert_eq!(opened_descriptor(0), Ok(0));
+        assert_eq!(opened_descriptor(41), Ok(41));
+        assert_eq!(
+            opened_descriptor(OPEN_GRANT_ENDED),
+            Err(OpenRefusal::GrantEnded)
+        );
+        assert_eq!(
+            opened_descriptor(OPEN_CANCELLED),
+            Err(OpenRefusal::TimedOut)
+        );
+        assert_eq!(opened_descriptor(OPEN_FAILED), Err(OpenRefusal::Failed));
+        assert_eq!(opened_descriptor(-99), Err(OpenRefusal::Failed));
     }
 
     /// One entry or intent record that cannot be read does not hold the rest
