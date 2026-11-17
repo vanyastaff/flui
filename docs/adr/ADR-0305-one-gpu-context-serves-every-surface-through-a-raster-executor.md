@@ -482,7 +482,11 @@ executor and slot.
   (`take_executor_failure`) and logged, with no panic
   on its thread. A window closed while the thread does not answer its detach keeps its native
   window and its surface target until the process exits, since the wedged thread may still
-  present over them.
+  present over them. Once the thread is known wedged (a detach or an attach it did not answer), the owner calls
+  `SurfaceTarget::keep_past_close` on every window it served, open ones included, and a close by
+  the user, a command or the exit then hides the native window instead of destroying it, so the
+  window is closed to the application
+  (no handler, in no window list, no input) while what its handles name lives on.
 - `Died` is terminal for the application's rendering, as a dead runtime is under ADR-0258 §2: the
   owner does not bootstrap a second context while the wedged thread still holds the first and its
   quarantined windows, `retry_render_device` leaves a dead renderer as it is, and the application

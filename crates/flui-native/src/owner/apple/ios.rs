@@ -1780,12 +1780,18 @@ impl IOSLoop {
                     }
                 };
                 if let Some(record) = record {
-                    record.window.close_for_good();
-                    if let Err(error) = self.tell_scene_consumer(|consumer| {
-                        consumer.installation_aborted(origin.session, origin.attachment)
-                    }) {
-                        tracing::error!(%error, "scene installation rollback observer failed");
-                    }
+                    // A panic out of the close (its handler's `closed`) waits
+                    // until the consumer has heard the rollback.
+                    let mut failure = flui_foundation::panic::FirstPanic::new();
+                    failure.contain(|| record.window.close_for_good());
+                    failure.contain(|| {
+                        if let Err(error) = self.tell_scene_consumer(|consumer| {
+                            consumer.installation_aborted(origin.session, origin.attachment)
+                        }) {
+                            tracing::error!(%error, "scene installation rollback observer failed");
+                        }
+                    });
+                    failure.resume();
                 }
             }
             SceneAction::Discard(session, request_native) => {
@@ -1802,11 +1808,17 @@ impl IOSLoop {
                     }
                 };
                 let Some(record) = record else { return };
-                record.window.close_for_good();
-                if let Err(error) = self.tell_scene_consumer(|consumer| consumer.discarded(session))
-                {
-                    tracing::error!(%error, "scene discard observer failed");
-                }
+                // A panic out of the close (its handler's `closed`) waits
+                // until the scene is torn down.
+                let mut failure = flui_foundation::panic::FirstPanic::new();
+                failure.contain(|| record.window.close_for_good());
+                failure.contain(|| {
+                    if let Err(error) =
+                        self.tell_scene_consumer(|consumer| consumer.discarded(session))
+                    {
+                        tracing::error!(%error, "scene discard observer failed");
+                    }
+                });
                 if request_native {
                     let handler = scene_error::destruction_error_handler();
                     UIApplication::sharedApplication(marker)
@@ -1816,6 +1828,7 @@ impl IOSLoop {
                             Some(&handler),
                         );
                 }
+                failure.resume();
             }
         }
     }
