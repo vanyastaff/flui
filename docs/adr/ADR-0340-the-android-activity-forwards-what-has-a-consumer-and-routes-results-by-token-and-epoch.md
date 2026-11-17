@@ -75,7 +75,7 @@ on every host but Android's, and the host table and `Platform` gain nothing: `an
 returns an `AndroidStart` with the platform and the Activity's bridge, which every Android
 platform has (one whose epoch cannot be read does not start). The composition root installs the
 bridge in a `HostBridge` only it holds, which hands the bridge its `ResultMint`; a
-`ResultTicket`, a `ResultData`, an `ActivityResult` and a `ResultRequest` are made only with it,
+`ResultTicket`, a `ResultIntent`, an `ActivityResult` and a `ResultRequest` are made only with it,
 so a provider holds only what the host handed it. `Activity::launch_for_result(completions, key,
 fill)` lends the provider an empty `Intent` the host made (`IntentFrame`), so no reference flows
 from a provider's JNI code into the host, and answers with a
@@ -107,9 +107,9 @@ not taken within a deadline the loop waits for), `Cancelled`, `ActivityEnded`, `
 `DataLost` (an `Intent` the host could not keep, with the answer's code) or `AnswerUnreadable` (a
 record the library cannot read); every record the host takes off Java's queue settles a request or
 is reported. The answered `Intent` stays with the host on the owner thread, under its request's
-token and capability, until that capability's provider hands the answer's `ResultData` to
+token and capability, until that capability's provider hands the answer's `ResultIntent` to
 `Activity::take_data` (another capability's is refused as `DataRefused::OtherCapability`); a
-`ResultData` dropped unread releases it.
+`ResultIntent` dropped unread releases it.
 
 Each count has one owner. `FluiHost` counts the requests it holds, waiting to start, started, or
 answered and not drained, of every Activity of the process: at most `MAX_OPEN_REQUESTS` in all and

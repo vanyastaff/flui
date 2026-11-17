@@ -88,7 +88,7 @@ fn describe(input: &PlatformInput) -> String {
 }
 
 fn pointer(event: &PointerEvent) -> String {
-    let head = |verb: &str, info: &flui_platform::pointer::PointerInfo| {
+    let head = |verb: &str, info: &flui_platform::pointer::PointerSource| {
         format!("{verb} p{} {:?}", info.id.get(), info.kind)
     };
     match event {

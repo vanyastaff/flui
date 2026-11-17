@@ -33,14 +33,14 @@ use flui_platform::pointer::{
 use flui_platform::text_store::TextStore;
 use flui_platform::{
     AppTitleBar, Availability, Brightness, CapabilityAbsence, CapabilityParts, CloseDecision,
-    ColorGamut, ControlsOffset, DisplayColor, DisplayId, DisplayInfo, DisplayParts, GestureParts,
-    Headroom, HourCycle, ImeEvent, InsetCurve, InsetMotion, InvalidPreference, KeyboardInset,
-    Locale, MeasurementSystem, MemoryPressureLevel, MotionPreference, NativeMouseGeometry,
-    NativeTouchGeometry, NumberingSystem, PlatformInput, PreferenceParts, RefreshPeriod,
-    RegionOverride, RegionalParts, SessionEndPhase, SizeConstraints, SystemControls, SystemNotice,
-    SystemPreferences, TextWeightPreference, Weekday, WheelParts, WheelStep, WindowCapability,
-    WindowExecutionState, WindowExtent, WindowFrame, WindowGeometry, WindowInsets,
-    WindowInteraction, WindowMode, WindowState, WindowStateParts,
+    ColorGamut, ControlsOffset, DisplayColor, DisplayDescription, DisplayId, DisplayParts,
+    GestureParts, Headroom, HourCycle, ImeEvent, InsetCurve, InsetMotion, InvalidPreference,
+    KeyboardInset, Locale, MeasurementSystem, MemoryPressureLevel, MotionPreference,
+    NativeMouseGeometry, NativeTouchGeometry, NumberingSystem, PlatformInput, PreferenceParts,
+    RefreshPeriod, RegionOverride, RegionalParts, SessionEndPhase, SizeConstraints, SystemControls,
+    SystemNotice, SystemPreferences, TextWeightPreference, Weekday, WheelParts, WheelStep,
+    WindowCapability, WindowExecutionState, WindowExtent, WindowFrame, WindowGeometry,
+    WindowInsets, WindowInteraction, WindowMode, WindowState, WindowStateParts,
 };
 use flui_protocol::native_recording as wire;
 use serde::Serialize;
@@ -400,7 +400,7 @@ pub enum DisplayRead {
 ///
 /// The label is the number the recording platform's registry issued; it names
 /// the display within the recording only, so a replay issues an id of its own
-/// for each label ([`DisplayParts::into_info`]).
+/// for each label ([`DisplayParts::into_description`]).
 #[derive(Debug, Clone, PartialEq)]
 pub struct RecordedDisplay {
     /// The display within this recording.
@@ -411,7 +411,7 @@ pub struct RecordedDisplay {
 
 impl RecordedDisplay {
     /// The display `info`, labelled with its id's number.
-    pub fn of(info: DisplayInfo) -> Self {
+    pub fn of(info: DisplayDescription) -> Self {
         let (id, parts) = info.into_parts();
         Self {
             label: id.get(),

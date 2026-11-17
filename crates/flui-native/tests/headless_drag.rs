@@ -150,10 +150,10 @@ impl Desktop {
         use flui_foundation::geometry::Point as At;
         use flui_platform::EventTime;
         use flui_platform::pointer::{
-            PointerButton, PointerButtons, PointerEvent, PointerId, PointerInfo, PointerKind,
-            PointerPosition, PointerPress, PointerRelease, PointerSample,
+            PointerButton, PointerButtons, PointerEvent, PointerId, PointerKind, PointerPosition,
+            PointerPress, PointerRelease, PointerSample, PointerSource,
         };
-        let mouse = PointerInfo::new(PointerId::try_from(3_u64).expect("id"), PointerKind::Mouse);
+        let mouse = PointerSource::new(PointerId::try_from(3_u64).expect("id"), PointerKind::Mouse);
         let at = PointerSample::new(
             EventTime::from_nanos(10),
             PointerPosition::try_new(At::new(1.0, 1.0)).expect("finite"),

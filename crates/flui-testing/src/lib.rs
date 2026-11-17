@@ -72,7 +72,7 @@
 //! use flui_foundation::geometry::Point;
 //! use flui_platform::EventTime;
 //! use flui_platform::pointer::{
-//!     PointerButton, PointerButtons, PointerEvent, PointerInfo, PointerKind,
+//!     PointerButton, PointerButtons, PointerEvent, PointerSource, PointerKind,
 //!     PointerPosition, PointerPress, PointerSample,
 //! };
 //!
@@ -93,7 +93,7 @@
 //!     PointerPosition::try_new(Point::new(10.0, 10.0)).expect("finite position"),
 //! );
 //! let down = PointerEvent::Down(PointerPress::new(
-//!     PointerInfo::new(pointer, PointerKind::Touch),
+//!     PointerSource::new(pointer, PointerKind::Touch),
 //!     PointerButton::PRIMARY,
 //!     PointerButtons::NONE,
 //!     sample,

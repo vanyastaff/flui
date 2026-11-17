@@ -6,7 +6,7 @@
 //! - the capability traits [`PlatformTextInput`], [`PlatformHaptics`] and
 //!   the data-transfer transport
 //!   ([`data_transfer::DragTransport`], ADR-0312);
-//! - the display vocabulary: [`DisplaySnapshot`], [`DisplayInfo`], the opaque
+//! - the display vocabulary: [`DisplaySnapshot`], [`DisplayDescription`], the opaque
 //!   [`DisplayId`] a [`DisplayRegistry`] issues, the validated
 //!   [`RefreshPeriod`] (ADR-0236), and each display's colour profile
 //!   ([`DisplayColor`]: its [`SurfaceColorSpace`] and [`Headroom`]);
@@ -167,7 +167,7 @@ pub use clipboard::{ClipboardError, ClipboardRead, ClipboardWrite, ClipboardWrit
 pub use cursor_icon::CursorIcon;
 pub use data_transfer::{DataTransferOffer, DragTransport, NullDragTransport};
 pub use display::{
-    ColorGamut, DisplayColor, DisplayId, DisplayIdsExhausted, DisplayInfo, DisplayKey,
+    ColorGamut, DisplayColor, DisplayId, DisplayIdsExhausted, DisplayDescription, DisplayKey,
     DisplayParts, DisplayRegistry, DisplayRevision, DisplayRevisionExhausted, DisplaySnapshot,
     DynamicRange, FrameRateHint, Headroom, InvalidHeadroom, InvalidRefreshPeriod, RefreshPeriod,
     SurfaceColorSpace, WindowDisplay,
@@ -195,7 +195,7 @@ pub use placement::{PlacementError, ResolvedPlacement, WindowPlacement};
 pub use platform_window::{PlatformWindow, WindowAt};
 pub use pointer::{
     ButtonChange, CancelReason, DeviceId, PanZoomEvent, PanZoomPhase, PanZoomTransform, PenTool,
-    PointerButton, PointerButtons, PointerCancel, PointerEvent, PointerId, PointerInfo,
+    PointerButton, PointerButtons, PointerCancel, PointerEvent, PointerId, PointerSource,
     PointerKind, PointerMove, PointerPosition, PointerPress, PointerRelease, PointerRole,
     PointerSample, ScrollDelta, ScrollEvent, ScrollInversion, ScrollPhase, ScrollPrecision,
     ScrollUnit, SmartZoomEvent, SwipeOffset, TouchpadHoldEvent, TouchpadHoldPhase,

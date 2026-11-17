@@ -1,7 +1,7 @@
 //! Where a window was, remembered across runs and fitted to the displays of the
 //! next run (ADR-0237 decision 6).
 //!
-//! A [`WindowPlacement`] names its display by [`DisplayInfo::persistent_key`],
+//! A [`WindowPlacement`] names its display by [`DisplayDescription::persistent_key`],
 //! never by a [`DisplayId`] (an id means nothing in another run), and measures
 //! the window from the origin of the display's usable area in that display's
 //! logical pixels, so a mixed-scale desktop does not skew it.
@@ -36,7 +36,7 @@ use std::fmt::Write as _;
 use flui_foundation::geometry::{Point, Size};
 
 use crate::{
-    DisplayId, DisplayInfo, DisplaySnapshot, WindowCapabilities, WindowCommand, WindowMode,
+    DisplayDescription, DisplayId, DisplaySnapshot, WindowCapabilities, WindowCommand, WindowMode,
     WindowState,
 };
 
@@ -47,7 +47,7 @@ const END_LINE: &str = "end";
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub struct WindowPlacement {
-    /// The display's [`persistent_key`](DisplayInfo::persistent_key), or `None`
+    /// The display's [`persistent_key`](DisplayDescription::persistent_key), or `None`
     /// when the window was on a display with none: the next run then uses its
     /// primary display.
     pub display: Option<String>,
@@ -307,7 +307,7 @@ impl WindowPlacement {
     /// the outer size, so a window never hangs past the work area by its frame.
     ///
     /// - The display is the one with this placement's
-    ///   [`persistent_key`](DisplayInfo::persistent_key); with no such display,
+    ///   [`persistent_key`](DisplayDescription::persistent_key); with no such display,
     ///   or no key, the primary display, else the first. A display with a scale
     ///   that is not finite and positive, or with no usable area, is not a
     ///   candidate. On a display other than the remembered one the window keeps
@@ -412,7 +412,7 @@ struct Usable {
     size: Size<f64>,
 }
 
-fn usable(display: &DisplayInfo) -> Option<Usable> {
+fn usable(display: &DisplayDescription) -> Option<Usable> {
     let ratio = display.scale_factor;
     let bounds = display.usable_bounds;
     let logical = |device: i32| ratio.to_logical(f64::from(device));

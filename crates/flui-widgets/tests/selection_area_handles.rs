@@ -16,8 +16,8 @@ use flui_interaction::testing::input::KeyEventBuilder;
 use flui_painting::typography::{TextDirection, TextStyle};
 use flui_platform::EventTime;
 use flui_platform::pointer::{
-    PointerButton, PointerButtons, PointerEvent, PointerId, PointerInfo, PointerKind, PointerMove,
-    PointerPosition, PointerPress, PointerRelease, PointerSample,
+    PointerButton, PointerButtons, PointerEvent, PointerId, PointerKind, PointerMove,
+    PointerPosition, PointerPress, PointerRelease, PointerSample, PointerSource,
 };
 use flui_rendering::semantics::{DocumentPosition, DocumentSelection};
 use flui_testing::replay::{MouseScript, PointerScript};
@@ -151,7 +151,7 @@ impl Scene {
 
     /// A primary mouse click at `at` with Shift held.
     fn shift_click(&mut self, at: Offset<f64>) {
-        let mouse = PointerInfo::new(
+        let mouse = PointerSource::new(
             PointerId::try_from(77_u64).expect("a nonzero id"),
             PointerKind::Mouse,
         );
@@ -177,7 +177,7 @@ impl Scene {
     /// One step of touch contact `finger` by hand, `millis` into it, for a test
     /// whose release lands where no move reported.
     fn touch(&mut self, finger: u64, step: Touch, millis: u64, at: Offset<f64>) {
-        let finger = PointerInfo::new(
+        let finger = PointerSource::new(
             PointerId::try_from(finger).expect("a nonzero id"),
             PointerKind::Touch,
         );

@@ -20,7 +20,7 @@ use flui_platform::drag::{
     OsDragStart, OsDragTerms, OsOffer, PlatformDragSource, ProcessNonce, plan_os_session,
     validate_session,
 };
-use flui_platform::pointer::{PointerInfo, PressId};
+use flui_platform::pointer::{PointerSource, PressId};
 use flui_platform::{
     DragDropEvent, EventTime, PlatformWindow, Unsupported, UnsupportedReason, WindowAt, WindowId,
 };
@@ -120,7 +120,7 @@ pub struct DragStart {
     items: Vec<DragItem>,
     allowed: AllowedActions,
     reach: Option<DragReach>,
-    pointer: Option<PointerInfo>,
+    pointer: Option<PointerSource>,
     press: Option<PressId>,
     window: Option<std::rc::Weak<dyn PlatformWindow>>,
     hit_test: Option<HitTestHandle>,
@@ -156,7 +156,7 @@ impl DragStart {
     }
 
     /// The contact that drags, and so the kind hit tests ask with.
-    pub fn pointer(mut self, pointer: PointerInfo) -> Self {
+    pub fn pointer(mut self, pointer: PointerSource) -> Self {
         self.pointer = Some(pointer);
         self
     }

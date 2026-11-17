@@ -242,7 +242,7 @@ fn a_profile_change_reaches_the_snapshot_as_a_new_revision() {
     let off = platform.display_snapshot().expect("snapshot");
     assert!(off.revision() > on.revision());
     assert_eq!(
-        off.get(id).map(flui_platform::DisplayInfo::headroom),
+        off.get(id).map(flui_platform::DisplayDescription::headroom),
         Some(Ok(Headroom::SDR))
     );
 }

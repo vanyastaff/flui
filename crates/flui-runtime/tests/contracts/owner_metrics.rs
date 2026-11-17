@@ -1749,8 +1749,8 @@ fn native_fling_profile_controls_real_scroll_inertia() {
         geometry::{DevicePixelRatio, Point},
     };
     use flui_platform::pointer::{
-        PointerButton, PointerButtons, PointerEvent, PointerInfo, PointerKind, PointerMove,
-        PointerPosition, PointerPress, PointerRelease, PointerSample,
+        PointerButton, PointerButtons, PointerEvent, PointerKind, PointerMove, PointerPosition,
+        PointerPress, PointerRelease, PointerSample, PointerSource,
     };
     use flui_platform::{FlingSpeeds, GestureGeometry, PlatformInput, SystemPreferences};
     use std::{
@@ -1767,7 +1767,7 @@ fn native_fling_profile_controls_real_scroll_inertia() {
         )
     };
     let event = |millis: u64, y: f64, phase: u8| {
-        let info = PointerInfo::new(
+        let info = PointerSource::new(
             flui_interaction::PointerId::try_from(1).expect("pointer"),
             PointerKind::Touch,
         );
@@ -3274,7 +3274,7 @@ fn native_geometry_controls_admission_and_retries_without_a_frame() {
 
 fn wheel_preferences_reach_the_next_mounted_input() {
     use flui_platform::pointer::{
-        PointerEvent, PointerId, PointerInfo, PointerKind, PointerPosition, ScrollDelta,
+        PointerEvent, PointerId, PointerKind, PointerPosition, PointerSource, ScrollDelta,
         ScrollEvent, ScrollUnit,
     };
     use flui_platform::{EventTime, PlatformInput, SystemPreferences, WheelPreferences, WheelStep};
@@ -3334,7 +3334,7 @@ fn wheel_preferences_reach_the_next_mounted_input() {
         let input = owner.presentation_dispatcher(address).expect("input");
         let dispatch = |unit, distance| {
             let event = PointerEvent::Scroll(ScrollEvent::new(
-                PointerInfo::new(
+                PointerSource::new(
                     PointerId::try_from(1_u64).expect("pointer"),
                     PointerKind::Mouse,
                 ),
@@ -4041,7 +4041,7 @@ fn an_older_preference_revision_cannot_replace_a_newer_seed() {
 /// step of the revision accepted just before it, not of an earlier or later one.
 fn queued_preferences_are_not_coalesced_across_an_input() {
     use flui_platform::pointer::{
-        PointerEvent, PointerId, PointerInfo, PointerKind, PointerPosition, ScrollDelta,
+        PointerEvent, PointerId, PointerKind, PointerPosition, PointerSource, ScrollDelta,
         ScrollEvent, ScrollUnit,
     };
     use flui_platform::{EventTime, PlatformInput, SystemPreferences, WheelPreferences, WheelStep};
@@ -4078,7 +4078,7 @@ fn queued_preferences_are_not_coalesced_across_an_input() {
     };
     let detents = |count: f64| {
         PlatformInput::Pointer(PointerEvent::Scroll(ScrollEvent::new(
-            PointerInfo::new(
+            PointerSource::new(
                 PointerId::try_from(1_u64).expect("pointer"),
                 PointerKind::Mouse,
             ),

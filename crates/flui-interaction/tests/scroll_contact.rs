@@ -11,7 +11,7 @@ use flui_interaction::{
 use flui_platform::{
     EventTime, PointerEvent,
     pointer::{
-        DeviceId, PointerId, PointerInfo, PointerKind, PointerPosition, ScrollDelta, ScrollEvent,
+        DeviceId, PointerId, PointerKind, PointerPosition, PointerSource, ScrollDelta, ScrollEvent,
         ScrollPhase, ScrollPrecision, ScrollUnit,
     },
 };
@@ -25,8 +25,8 @@ enum Seen {
     Cancel,
 }
 
-fn source() -> PointerInfo {
-    PointerInfo::new(
+fn source() -> PointerSource {
+    PointerSource::new(
         PointerId::try_from(3_u64).expect("pointer"),
         PointerKind::Mouse,
     )
@@ -313,8 +313,8 @@ mod identity {
         }
     }
 
-    fn native(id: u64, kind: PointerKind) -> PointerInfo {
-        PointerInfo::new(PointerId::try_from(id).expect("pointer"), kind)
+    fn native(id: u64, kind: PointerKind) -> PointerSource {
+        PointerSource::new(PointerId::try_from(id).expect("pointer"), kind)
             .with_device(DeviceId::try_from(2_u64).expect("device"))
     }
 

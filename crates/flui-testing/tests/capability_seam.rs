@@ -1048,7 +1048,7 @@ impl flui_platform::capability::ActivityBridge for EndedActivity {
     fn take_data(
         &self,
         _capability: &flui_platform::capability::CapabilityId,
-        _data: flui_platform::capability::ResultData,
+        _data: flui_platform::capability::ResultIntent,
         _f: &mut dyn FnMut(flui_platform::capability::JniFrame),
     ) -> Result<(), flui_platform::capability::DataRefused> {
         Err(flui_platform::capability::DataRefused::NotHeld)

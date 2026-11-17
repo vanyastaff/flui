@@ -23,7 +23,7 @@ use super::hit_test::{EventPropagation, HitTestEntry, HitTestResult, transform_p
 use super::pointer_capture::{CaptureRequest, ContactCapture, PointerCapture, PointerCaptureError};
 use crate::containment::RoutePanic;
 use crate::events::{
-    PanZoomEvent, PointerEvent, PointerEventExt, PointerInfo, ScrollEvent, SmartZoomEvent,
+    PanZoomEvent, PointerEvent, PointerEventExt, PointerSource, ScrollEvent, SmartZoomEvent,
 };
 
 static NEXT_LANE_ID: AtomicU64 = AtomicU64::new(1);
@@ -539,13 +539,13 @@ type PathClipper = Rc<dyn Fn(Size) -> Path + 'static>;
 type ShaderMaskFactory = Rc<dyn Fn(Rect<f64>) -> Shader + 'static>;
 
 /// Callback for mouse enter events.
-pub type MouseEnterCallback = Rc<dyn Fn(PointerInfo, Offset<f64>) + 'static>;
+pub type MouseEnterCallback = Rc<dyn Fn(PointerSource, Offset<f64>) + 'static>;
 
 /// Callback for mouse exit events.
-pub type MouseExitCallback = Rc<dyn Fn(PointerInfo, Offset<f64>) + 'static>;
+pub type MouseExitCallback = Rc<dyn Fn(PointerSource, Offset<f64>) + 'static>;
 
 /// Callback for mouse hover events.
-pub type MouseHoverCallback = Rc<dyn Fn(PointerInfo, Offset<f64>) + 'static>;
+pub type MouseHoverCallback = Rc<dyn Fn(PointerSource, Offset<f64>) + 'static>;
 
 /// Owner-local callback set for one mouse region target.
 #[doc(hidden)]
@@ -2676,7 +2676,7 @@ impl InteractionDispatchHandle {
                 .collect()
         };
 
-        let pointer = crate::events::pointer_info(event).copied();
+        let pointer = crate::events::pointer_source(event).copied();
         let position = event.position();
         let mut first_panic = None;
         for entry in resolved {

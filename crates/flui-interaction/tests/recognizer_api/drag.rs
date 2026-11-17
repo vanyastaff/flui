@@ -321,8 +321,8 @@ fn fling_row(
     use flui_platform::{
         EventTime,
         pointer::{
-            PointerButton, PointerButtons, PointerInfo, PointerMove, PointerPosition, PointerPress,
-            PointerRelease, PointerSample,
+            PointerButton, PointerButtons, PointerMove, PointerPosition, PointerPress,
+            PointerRelease, PointerSample, PointerSource,
         },
     };
     {
@@ -336,7 +336,7 @@ fn fling_row(
                     .push((details.fling_velocity(), details.global_fling_velocity()));
             })
             .build();
-        let info = PointerInfo::new(
+        let info = PointerSource::new(
             PointerId::try_from(2).expect("nonzero contact"),
             PointerKind::Touch,
         );
@@ -626,8 +626,8 @@ fn remaining_touches_continue_in_admission_order_without_a_jump() {
     use flui_platform::{
         EventTime,
         pointer::{
-            PointerButton, PointerButtons, PointerInfo, PointerMove, PointerPosition, PointerPress,
-            PointerRelease, PointerSample,
+            PointerButton, PointerButtons, PointerMove, PointerPosition, PointerPress,
+            PointerRelease, PointerSample, PointerSource,
         },
     };
     for strategy in [
@@ -654,7 +654,7 @@ fn remaining_touches_continue_in_admission_order_without_a_jump() {
             _ => unreachable!("listed strategy rows"),
         };
         let send = |id: u64, millis: u64, x: f64, phase| {
-            let info = PointerInfo::new(
+            let info = PointerSource::new(
                 PointerId::try_from(id).expect("nonzero contact"),
                 PointerKind::Touch,
             );

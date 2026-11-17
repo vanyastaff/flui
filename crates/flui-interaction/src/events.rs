@@ -20,7 +20,7 @@ pub use keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, Modifiers, NamedKey}
 pub use pointer::{
     ButtonChange, CancelReason, DeviceId, InputValueError, PanZoomEvent, PanZoomPhase,
     PanZoomTransform, PointerButton, PointerButtons, PointerCancel, PointerEvent, PointerId,
-    PointerInfo, PointerKind, PointerMove, PointerPosition, PointerPress, PointerRelease,
+    PointerSource, PointerKind, PointerMove, PointerPosition, PointerPress, PointerRelease,
     PointerRole, PointerSample, PointerSignal, ScrollDelta, ScrollEvent, ScrollInversion,
     SmartZoomEvent, SwipeOffset, TouchpadHoldEvent, TouchpadHoldPhase, TouchpadSwipeEvent,
     TouchpadSwipePhase,
@@ -63,7 +63,7 @@ pub(crate) fn instant_at(
 
 /// Extract the contact metadata when this event describes a contact.
 #[must_use]
-pub(crate) fn pointer_info(event: &PointerEvent) -> Option<&PointerInfo> {
+pub(crate) fn pointer_source(event: &PointerEvent) -> Option<&PointerSource> {
     match event {
         PointerEvent::Down(data) | PointerEvent::ButtonChange(ButtonChange::Pressed(data)) => {
             Some(&data.pointer)
@@ -176,13 +176,13 @@ impl PointerEventExt for PointerEvent {
     }
 
     fn pointer_id(&self) -> Option<PointerId> {
-        pointer_info(self).map(|pointer| pointer.id)
+        pointer_source(self).map(|pointer| pointer.id)
     }
 
     fn pointer_kind(&self) -> Option<PointerKind> {
         match self {
             PointerEvent::DeviceAdded(data) | PointerEvent::DeviceRemoved(data) => Some(data.kind),
-            _ => pointer_info(self).map(|pointer| pointer.kind),
+            _ => pointer_source(self).map(|pointer| pointer.kind),
         }
     }
 
@@ -191,7 +191,7 @@ impl PointerEventExt for PointerEvent {
             PointerEvent::DeviceAdded(data) | PointerEvent::DeviceRemoved(data) => {
                 Some(data.device)
             }
-            _ => pointer_info(self).and_then(|pointer| pointer.device),
+            _ => pointer_source(self).and_then(|pointer| pointer.device),
         }
     }
 }
@@ -248,7 +248,7 @@ pub fn make_down_event_for_id_with_button(
     button: PointerButton,
 ) -> Result<PointerEvent, InputValueError> {
     Ok(PointerEvent::Down(PointerPress::new(
-        PointerInfo::new(id, kind).with_role(PointerRole::Primary),
+        PointerSource::new(id, kind).with_role(PointerRole::Primary),
         button,
         PointerButtons::NONE,
         test_sample(position)?,
@@ -293,7 +293,7 @@ pub fn make_up_event_for_id_with_button(
     button: PointerButton,
 ) -> Result<PointerEvent, InputValueError> {
     Ok(PointerEvent::Up(PointerRelease::new(
-        PointerInfo::new(id, kind).with_role(PointerRole::Primary),
+        PointerSource::new(id, kind).with_role(PointerRole::Primary),
         button,
         PointerButtons::only(button),
         test_sample(position)?,
@@ -317,7 +317,7 @@ pub fn make_move_event_for_id(
     kind: PointerKind,
 ) -> Result<PointerEvent, InputValueError> {
     Ok(PointerEvent::Move(PointerMove::new(
-        PointerInfo::new(id, kind).with_role(PointerRole::Primary),
+        PointerSource::new(id, kind).with_role(PointerRole::Primary),
         PointerButtons::only(PointerButton::PRIMARY),
         test_sample(position)?,
     )))
@@ -332,7 +332,7 @@ pub fn make_move_event_for_id_with_button(
     button: PointerButton,
 ) -> Result<PointerEvent, InputValueError> {
     Ok(PointerEvent::Move(PointerMove::new(
-        PointerInfo::new(id, kind).with_role(PointerRole::Primary),
+        PointerSource::new(id, kind).with_role(PointerRole::Primary),
         PointerButtons::only(button),
         test_sample(position)?,
     )))
@@ -346,7 +346,7 @@ pub fn make_move_event_with_button(
     button: PointerButton,
 ) -> Result<PointerEvent, InputValueError> {
     Ok(PointerEvent::Move(PointerMove::new(
-        PointerInfo::new(test_pointer_id(), kind).with_role(PointerRole::Primary),
+        PointerSource::new(test_pointer_id(), kind).with_role(PointerRole::Primary),
         PointerButtons::only(button),
         test_sample(position)?,
     )))
@@ -362,7 +362,7 @@ pub fn make_cancel_event(kind: PointerKind) -> PointerEvent {
 #[cfg(any(test, feature = "testing"))]
 pub fn make_cancel_event_for_id(id: PointerId, kind: PointerKind) -> PointerEvent {
     PointerEvent::Cancel(PointerCancel::new(
-        PointerInfo::new(id, kind).with_role(PointerRole::Primary),
+        PointerSource::new(id, kind).with_role(PointerRole::Primary),
         flui_platform::EventTime::from_nanos(0),
         CancelReason::Platform,
     ))
@@ -378,7 +378,7 @@ pub fn make_pinch_gesture_event(
         EventTime,
         pointer::{PanZoomPhase, PanZoomTransform},
     };
-    let pointer = PointerInfo::new(
+    let pointer = PointerSource::new(
         PointerId::try_from(u64::MAX).expect("BUG: nonzero synthetic gesture identity"),
         PointerKind::Trackpad,
     );
@@ -409,7 +409,7 @@ pub fn make_scroll_event_with_modifiers(
     modifiers: Modifiers,
 ) -> Result<PointerEvent, InputValueError> {
     use flui_platform::{EventTime, pointer::ScrollUnit};
-    let pointer = PointerInfo::new(test_pointer_id(), PointerKind::Mouse);
+    let pointer = PointerSource::new(test_pointer_id(), PointerKind::Mouse);
     let position = test_sample(position)?.position;
     let delta = ScrollDelta::try_new(ScrollUnit::Pixels, delta.dx, delta.dy)?;
     Ok(PointerEvent::Scroll(

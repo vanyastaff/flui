@@ -3,7 +3,7 @@
 //! [`PointerId`] and [`DeviceId`] are the exact owned contract identities from
 //! `flui-platform` (ADR-0143). Pointer identity names a contact; device
 //! identity names connected hardware. Neither is a truncated hash or a signed
-//! compatibility label. Primary contact status lives in `PointerInfo`, not an ID.
+//! compatibility label. Primary contact status lives in `PointerSource`, not an ID.
 //!
 //! # Local IDs
 //!

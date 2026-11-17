@@ -284,17 +284,17 @@ mod tests {
     #[test]
     fn placement_display_is_measured_from_the_usable_area() {
         use flui_foundation::geometry::Bounds;
-        use flui_platform::{DisplayInfo, DisplayKey, DisplayRegistry};
+        use flui_platform::{DisplayDescription, DisplayKey, DisplayRegistry};
 
         let registry = DisplayRegistry::new();
         let id = |_| registry.mint(&DisplayKey::Unkeyed).expect("an id");
         // A 1920x1080 display at scale 2 with a 56-pixel panel along its top.
         let bounds = Bounds::new(Point::new(1920, 0), Size::new(1920, 1080));
         let usable = Bounds::new(Point::new(1920, 56), Size::new(1920, 1024));
-        let main = DisplayInfo::new(id(0), "main", bounds, ratio(2.0))
+        let main = DisplayDescription::new(id(0), "main", bounds, ratio(2.0))
             .with_usable_bounds(usable)
             .with_primary(true);
-        let other = DisplayInfo::new(id(1), "other", bounds, DevicePixelRatio::ONE);
+        let other = DisplayDescription::new(id(1), "other", bounds, DevicePixelRatio::ONE);
         let (main_id, other_id) = (main.id, other.id);
         let snapshot = DisplaySnapshot::empty()
             .successor(vec![main, other])

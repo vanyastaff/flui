@@ -10,8 +10,8 @@ use flui_foundation::geometry::Point;
 use flui_platform::{
     EventTime,
     pointer::{
-        DeviceId, PointerEvent, PointerId, PointerInfo, PointerKind, PointerPosition, ScrollDelta,
-        ScrollEvent, ScrollPhase, ScrollPrecision, ScrollUnit,
+        DeviceId, PointerEvent, PointerId, PointerKind, PointerPosition, PointerSource,
+        ScrollDelta, ScrollEvent, ScrollPhase, ScrollPrecision, ScrollUnit,
     },
 };
 use flui_widgets::{
@@ -19,7 +19,7 @@ use flui_widgets::{
 };
 
 fn packet(phase: ScrollPhase, dx: f64, dy: f64, nanos: u64) -> PointerEvent {
-    let pointer = PointerInfo::new(
+    let pointer = PointerSource::new(
         PointerId::try_from(1_u64).expect("pointer"),
         PointerKind::Mouse,
     )

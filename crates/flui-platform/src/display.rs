@@ -19,13 +19,13 @@
 //! keeps its id when it is unplugged and plugged back in during the session; two
 //! identical monitors differ by connector; swapping the cables swaps the
 //! identities; an output with no stable native key gets a fresh id each time it
-//! appears. An identity that survives a restart is [`DisplayInfo::persistent_key`]
+//! appears. An identity that survives a restart is [`DisplayDescription::persistent_key`]
 //! (ADR-0237): a string the platform derives from the monitor itself, compared
 //! only for equality and absent where the platform has none.
 //!
 //! # Refresh period
 //!
-//! [`DisplayInfo::refresh_period`] is the period of the mode the display is
+//! [`DisplayDescription::refresh_period`] is the period of the mode the display is
 //! running, never its maximum, and a variable-rate range is not modelled. A
 //! value that does not describe a cadence (zero, a zero denominator, a
 //! non-positive rate, or a period outside 1 ms to 1 s) is recorded as unknown
@@ -35,7 +35,7 @@
 //!
 //! # Colour
 //!
-//! [`DisplayInfo::color`] is the display's colour profile: the
+//! [`DisplayDescription::color`] is the display's colour profile: the
 //! [`SurfaceColorSpace`] the operating system shows surfaces on it in (gamut
 //! and dynamic range) and its [`Headroom`] over SDR white. A display that
 //! enters or leaves HDR, or whose headroom or gamut moves, is a new snapshot
@@ -43,7 +43,7 @@
 //! display change like a mode switch, ordered by the same revision, so a later
 //! sample never loses to an earlier one. Where the operating system does not
 //! say, the colour is the [`CapabilityAbsence`] that says why, and
-//! [`DisplayInfo::color_space`] and [`DisplayInfo::headroom`] answer it as
+//! [`DisplayDescription::color_space`] and [`DisplayDescription::headroom`] answer it as
 //! [`Unsupported`]. A headroom is finite and at least `1.0` by construction.
 
 use std::collections::HashMap;
@@ -321,7 +321,7 @@ impl TryFrom<Duration> for RefreshPeriod {
 /// One display as the operating system describes it right now.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
-pub struct DisplayInfo {
+pub struct DisplayDescription {
     /// The framework-issued identity.
     pub id: DisplayId,
     /// The display's name, such as "Built-in Display". A label, never an
@@ -355,7 +355,7 @@ pub struct DisplayInfo {
     pub color: Result<DisplayColor, CapabilityAbsence>,
 }
 
-impl DisplayInfo {
+impl DisplayDescription {
     /// A display with its bounds as usable area, an unknown refresh period, not
     /// primary, and a colour the host has not read
     /// ([`CapabilityAbsence::NOT_YET_ON_THIS_HOST`]). Refine it with the `with_*`
@@ -624,7 +624,7 @@ pub struct DisplayRevisionExhausted;
 #[derive(Debug, Clone, PartialEq)]
 pub struct DisplaySnapshot {
     revision: DisplayRevision,
-    displays: Arc<[DisplayInfo]>,
+    displays: Arc<[DisplayDescription]>,
 }
 
 impl DisplaySnapshot {
@@ -644,7 +644,10 @@ impl DisplaySnapshot {
     /// # Errors
     /// [`DisplayRevisionExhausted`] when `displays` differ and the revision is
     /// the last one. The revision never wraps.
-    pub fn successor(&self, displays: Vec<DisplayInfo>) -> Result<Self, DisplayRevisionExhausted> {
+    pub fn successor(
+        &self,
+        displays: Vec<DisplayDescription>,
+    ) -> Result<Self, DisplayRevisionExhausted> {
         if *self.displays == *displays {
             return Ok(self.clone());
         }
@@ -662,19 +665,19 @@ impl DisplaySnapshot {
 
     /// Every display, in the order the source listed them.
     #[must_use]
-    pub fn displays(&self) -> &[DisplayInfo] {
+    pub fn displays(&self) -> &[DisplayDescription] {
         &self.displays
     }
 
     /// The display with this id, if the snapshot holds it.
     #[must_use]
-    pub fn get(&self, id: DisplayId) -> Option<&DisplayInfo> {
+    pub fn get(&self, id: DisplayId) -> Option<&DisplayDescription> {
         self.displays.iter().find(|display| display.id == id)
     }
 
     /// The primary display, if the platform has one.
     #[must_use]
-    pub fn primary(&self) -> Option<&DisplayInfo> {
+    pub fn primary(&self) -> Option<&DisplayDescription> {
         self.displays.iter().find(|display| display.is_primary)
     }
 
@@ -719,7 +722,7 @@ pub struct WindowDisplay {
     /// That display's refresh period; `None` when unknown.
     pub refresh_period: Option<RefreshPeriod>,
     /// That display's colour profile; `None` where the platform reports none
-    /// ([`DisplayInfo::color`] says why).
+    /// ([`DisplayDescription::color`] says why).
     pub color: Option<DisplayColor>,
 }
 
@@ -810,7 +813,7 @@ mod tests {
         };
         let registry = DisplayRegistry::new();
         let id = registry.mint(&DisplayKey::Injected(1)).expect("id");
-        let display = DisplayInfo::new(id, "d", Bounds::default(), DevicePixelRatio::ONE);
+        let display = DisplayDescription::new(id, "d", Bounds::default(), DevicePixelRatio::ONE);
         assert_eq!(
             at_last.successor(vec![display]),
             Err(DisplayRevisionExhausted),
@@ -823,39 +826,39 @@ mod tests {
     }
 }
 
-/// The fields of a [`DisplayInfo`] other than its id, public: the boundary
+/// The fields of a [`DisplayDescription`] other than its id, public: the boundary
 /// every serialization and mirror of a display goes through (a recording's
 /// schema).
 ///
-/// Deliberately not `#[non_exhaustive]`, unlike [`DisplayInfo`]: a mirror
+/// Deliberately not `#[non_exhaustive]`, unlike [`DisplayDescription`]: a mirror
 /// builds and destructures this struct exhaustively, so a field added to a
 /// display breaks every mirror at compile time until it carries the field,
 /// instead of dropping it from a recording. The id stays apart because it is
 /// issued by a [`DisplayRegistry`] and means nothing outside it: a mirror
 /// writes a label for it and the reader mints its own
-/// ([`DisplayInfo::into_parts`], [`Self::into_info`]).
+/// ([`DisplayDescription::into_parts`], [`Self::into_description`]).
 #[derive(Debug, Clone, PartialEq)]
 pub struct DisplayParts {
-    /// [`DisplayInfo::name`].
+    /// [`DisplayDescription::name`].
     pub name: String,
-    /// [`DisplayInfo::bounds`].
+    /// [`DisplayDescription::bounds`].
     pub bounds: Bounds<i32>,
-    /// [`DisplayInfo::usable_bounds`].
+    /// [`DisplayDescription::usable_bounds`].
     pub usable_bounds: Bounds<i32>,
-    /// [`DisplayInfo::scale_factor`].
+    /// [`DisplayDescription::scale_factor`].
     pub scale_factor: DevicePixelRatio,
-    /// [`DisplayInfo::refresh_period`].
+    /// [`DisplayDescription::refresh_period`].
     pub refresh_period: Option<RefreshPeriod>,
-    /// [`DisplayInfo::is_primary`].
+    /// [`DisplayDescription::is_primary`].
     pub is_primary: bool,
-    /// [`DisplayInfo::persistent_key`].
+    /// [`DisplayDescription::persistent_key`].
     pub persistent_key: Option<String>,
-    /// [`DisplayInfo::color`]. A mirror matches the colour's variants, each
+    /// [`DisplayDescription::color`]. A mirror matches the colour's variants, each
     /// of which holds all it says.
     pub color: Result<DisplayColor, CapabilityAbsence>,
 }
 
-impl DisplayInfo {
+impl DisplayDescription {
     /// Take the display apart into its id and the rest of its fields.
     #[must_use]
     pub fn into_parts(self) -> (DisplayId, DisplayParts) {
@@ -890,7 +893,7 @@ impl DisplayParts {
     /// The display these fields describe, under `id`; every field is valid by
     /// its type.
     #[must_use]
-    pub fn into_info(self, id: DisplayId) -> DisplayInfo {
+    pub fn into_description(self, id: DisplayId) -> DisplayDescription {
         let Self {
             name,
             bounds,
@@ -901,7 +904,7 @@ impl DisplayParts {
             persistent_key,
             color,
         } = self;
-        DisplayInfo {
+        DisplayDescription {
             id,
             name,
             bounds,

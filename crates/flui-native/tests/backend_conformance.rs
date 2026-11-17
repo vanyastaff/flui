@@ -60,8 +60,8 @@ use flui_platform::input_capabilities::InputCapabilities;
 use flui_platform::input_regions::{CaptionButton, InputRegionKind, ResizeEdge};
 use flui_platform::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, Modifiers, NamedKey};
 use flui_platform::pointer::{
-    CancelReason, PenTool, PointerButton, PointerEvent, PointerId, PointerInfo, PointerKind,
-    PointerPosition, PointerRole, ScrollDelta, ScrollEvent, ScrollPrecision, ScrollUnit,
+    CancelReason, PenTool, PointerButton, PointerEvent, PointerId, PointerKind, PointerPosition,
+    PointerRole, PointerSource, ScrollDelta, ScrollEvent, ScrollPrecision, ScrollUnit,
 };
 use flui_platform::text_store::{LockGrant, LockTiming, TextStore, Utf16Offset, Utf16Range};
 use flui_platform::{DeviceId, HapticFeedback, PlatformHaptics, Unsupported, UnsupportedReason};
@@ -1138,7 +1138,7 @@ impl SharedAssembly {
             } => {
                 let time = self.contacts.stamp(time).expect("finite");
                 let pointer =
-                    PointerInfo::new(PointerId::new(NonZeroU64::MIN), PointerKind::Trackpad)
+                    PointerSource::new(PointerId::new(NonZeroU64::MIN), PointerKind::Trackpad)
                         .with_role(PointerRole::Primary);
                 let position = PointerPosition::try_new(Point::new(10.0, 20.0)).expect("finite");
                 let delta =

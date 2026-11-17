@@ -824,7 +824,7 @@ pub(crate) mod placement {
     #![forbid(unsafe_code)]
 
     use flui_foundation::geometry::{Bounds, DevicePixelRatio, Point, Size};
-    use flui_platform::{DisplayInfo, DisplaySnapshot, InvalidGeometry, WindowGeometry};
+    use flui_platform::{DisplayDescription, DisplaySnapshot, InvalidGeometry, WindowGeometry};
 
     /// `pixels`, already rounded, as the whole number it is, when it is one
     /// between `min` and `max`.
@@ -938,7 +938,7 @@ pub(crate) mod placement {
     /// The scale a window on `display` has: the display's, else `last`, the
     /// window's last one.
     pub(crate) fn window_scale(
-        display: Option<&DisplayInfo>,
+        display: Option<&DisplayDescription>,
         last: DevicePixelRatio,
     ) -> DevicePixelRatio {
         display.map_or(last, |display| display.scale_factor)
@@ -961,8 +961,8 @@ pub(crate) mod placement {
     pub(crate) fn display_of(
         snapshot: &DisplaySnapshot,
         bounds: Bounds<i32>,
-    ) -> Option<&DisplayInfo> {
-        let mut best: Option<(i64, &DisplayInfo)> = None;
+    ) -> Option<&DisplayDescription> {
+        let mut best: Option<(i64, &DisplayDescription)> = None;
         for display in snapshot.displays() {
             let area = overlap(display.bounds, bounds);
             if area > 0 && best.is_none_or(|(most, _)| area > most) {
@@ -1055,7 +1055,7 @@ pub(crate) mod placement {
             let registry = DisplayRegistry::new();
             let at = |scale: f64| {
                 let id = registry.mint(&DisplayKey::Unkeyed).expect("an id");
-                DisplayInfo::new(
+                DisplayDescription::new(
                     id,
                     "display",
                     Bounds::new(Point::new(0, 0), Size::new(1920, 1080)),
@@ -1082,7 +1082,7 @@ pub(crate) mod placement {
             let registry = DisplayRegistry::new();
             let display = |name: &str, x: i32| {
                 let id = registry.mint(&DisplayKey::Unkeyed).expect("an id");
-                DisplayInfo::new(
+                DisplayDescription::new(
                     id,
                     name,
                     Bounds::new(Point::new(x, 0), Size::new(1920, 1080)),

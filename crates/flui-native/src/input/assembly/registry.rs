@@ -8,7 +8,7 @@ use flui_platform::EventTime;
 use flui_platform::input_capabilities::PointerKindSet;
 use flui_platform::pointer::{
     ButtonChange, CancelReason, ContactSize, DeviceId, PanZoomEvent, PenOrientation,
-    PointerButtons, PointerCancel, PointerDeviceChange, PointerEvent, PointerId, PointerInfo,
+    PointerButtons, PointerCancel, PointerDeviceChange, PointerEvent, PointerId, PointerSource,
     PointerKind, PointerMove, PointerPosition, PointerPress, PointerRelease, PointerRole,
     PointerSample, PointerSignal, PressId, Pressure, SwipeOffset, TangentialPressure,
     TouchpadHoldEvent, TouchpadHoldPhase, TouchpadSwipeEvent, TouchpadSwipePhase, Twist,
@@ -275,7 +275,7 @@ struct OpenPress {
 #[derive(Debug, Clone)]
 struct Contact {
     key: ContactKey,
-    info: PointerInfo,
+    info: PointerSource,
     buttons: HeldButtons,
     clock: ClockChoice,
     last_time: Option<EventTime>,
@@ -524,7 +524,7 @@ impl ContactRegistry {
         surface: NativeSurface,
         device: Option<NativeDevice>,
         contact: NativeContact,
-    ) -> Option<PointerInfo> {
+    ) -> Option<PointerSource> {
         let index = self.find(ContactKey {
             surface,
             device,
@@ -817,7 +817,7 @@ impl ContactRegistry {
         } else {
             PointerRole::Additional
         };
-        let mut info = PointerInfo::new(PointerId::new(id), reading.kind).with_role(role);
+        let mut info = PointerSource::new(PointerId::new(id), reading.kind).with_role(role);
         if let Some(native) = reading.device {
             let (device, added) = self.devices.admit(native, reading.kind)?;
             info = info.with_device(device);

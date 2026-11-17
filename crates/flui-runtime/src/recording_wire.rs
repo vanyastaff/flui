@@ -39,7 +39,7 @@ use flui_platform::keyboard::{
 use flui_platform::pointer::{
     ButtonChange, CancelReason, ContactSize, DeviceId, HoverDistance, PanZoomEvent, PanZoomPhase,
     PanZoomTransform, PenOrientation, PenTool, PointerButton, PointerButtonEvent, PointerButtons,
-    PointerCancel, PointerDeviceChange, PointerEvent, PointerId, PointerInfo, PointerKind,
+    PointerCancel, PointerDeviceChange, PointerEvent, PointerId, PointerSource, PointerKind,
     PointerMove, PointerPosition, PointerRole, PointerSample, PointerSignal, Pressure, ScrollDelta,
     ScrollEvent, ScrollInversion, ScrollPhase, ScrollPrecision, ScrollUnit, SmartZoomEvent,
     SwipeOffset, TangentialPressure, TouchpadHoldEvent, TouchpadHoldPhase, TouchpadSwipeEvent,
@@ -470,8 +470,8 @@ impl Convert<rec::PointerKind> for PointerKind {
     }
 }
 
-impl TryConvert<&PointerInfo> for rec::PointerInfo {
-    fn try_convert(info: &PointerInfo) -> Result<Self> {
+impl TryConvert<&PointerSource> for rec::PointerInfo {
+    fn try_convert(info: &PointerSource) -> Result<Self> {
         Ok(Self {
             id: info.id.get().get(),
             device: info.device.map(|device| device.get().get()),
@@ -481,7 +481,7 @@ impl TryConvert<&PointerInfo> for rec::PointerInfo {
     }
 }
 
-impl TryConvert<rec::PointerInfo> for PointerInfo {
+impl TryConvert<rec::PointerInfo> for PointerSource {
     fn try_convert(info: rec::PointerInfo) -> Result<Self> {
         let mut pointer =
             Self::new(pointer_id(info.id)?, info.kind.convert_into()).with_role(if info.primary {

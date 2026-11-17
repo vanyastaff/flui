@@ -8,7 +8,7 @@ and data-transfer vocabulary, with no OS backend behind them.
 - Capability traits: `PlatformTextInput` (IME), `PlatformHaptics`,
   the clipboard's plain-text vocabulary (`ClipboardRead`, `ClipboardWrite`),
   and the drag-and-drop transport (`data_transfer::DragTransport`, ADR-0312).
-- Display vocabulary: `DisplaySnapshot`, `DisplayInfo`, the opaque `DisplayId`
+- Display vocabulary: `DisplaySnapshot`, `DisplayDescription`, the opaque `DisplayId`
   a `DisplayRegistry` issues, and the validated `RefreshPeriod` (ADR-0236).
 - Input vocabulary: `PlatformInput`, `DispatchEventResult`, `DragDropEvent`,
   the pointer and keyboard types, and the pixel conversion helpers.

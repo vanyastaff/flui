@@ -24,7 +24,7 @@ use flui_interaction::events::{
 use flui_interaction::{
     GestureBinding, HitMetadata, HitTestEntry, HitTestHandle, HitTestProbe, HitTestResult,
     InteractionDispatchError, InteractionDispatchHandle, InteractionLane, LocalPayloadTarget,
-    PenTool, PointerEvent, PointerId, PointerInfo,
+    PenTool, PointerEvent, PointerId, PointerSource,
 };
 use flui_platform::data_transfer::{
     DataTransferOffer, DragTransport, DropFeedback, Mime, RepresentationIndex, TransferActions,
@@ -515,7 +515,7 @@ impl Fixture {
         press: Option<PressId>,
     ) -> DragSession {
         let mut start = DragStart::new(self.presentation, items, allowed)
-            .pointer(PointerInfo::new(
+            .pointer(PointerSource::new(
                 PointerId::try_from(1_u64).expect("pointer"),
                 PointerKind::Touch,
             ))
@@ -3168,7 +3168,7 @@ fn a_receiver_under_perspective_sees_its_own_plane() {
                     vec![DragItem::new().with_value("payload".to_owned())],
                     AllowedActions::within(COPY),
                 )
-                .pointer(PointerInfo::new(
+                .pointer(PointerSource::new(
                     PointerId::try_from(1_u64).expect("pointer"),
                     PointerKind::Touch,
                 ))

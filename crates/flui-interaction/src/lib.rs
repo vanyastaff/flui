@@ -202,7 +202,7 @@ pub use events::{CursorIcon, KeyEvent, PointerEvent, PointerEventExt};
 // Re-export observability surface — typed event names + span constants.
 pub use flui_platform::pointer::{
     ButtonChange, CancelReason, PanZoomEvent, PanZoomPhase, PanZoomTransform, PenTool,
-    PointerButton, PointerButtons, PointerInfo, PointerKind, PointerMove, PointerPosition,
+    PointerButton, PointerButtons, PointerSource, PointerKind, PointerMove, PointerPosition,
     PointerPress, PointerRelease, PointerRole, PointerSample, ScrollDelta, ScrollEvent,
     ScrollPhase, ScrollPrecision, ScrollUnit, SmartZoomEvent, SwipeOffset, TouchpadHoldEvent,
     TouchpadHoldPhase, TouchpadSwipeEvent, TouchpadSwipePhase,

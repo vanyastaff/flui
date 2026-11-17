@@ -65,7 +65,7 @@ fn press_move(raw: u64, readings: &[(u64, f64)], predictions: &[(u64, f64)]) -> 
     let current = sample(readings.last().expect("current reading"));
     PointerEvent::Move(
         PointerMove::new(
-            flui_interaction::events::PointerInfo::new(pointer(raw), pen_kind()),
+            flui_interaction::events::PointerSource::new(pointer(raw), pen_kind()),
             flui_interaction::events::PointerButtons::only(PointerButton::PRIMARY),
             current,
         )
