@@ -47,7 +47,7 @@ impl ViewState<NotesScreen> for NotesState {
                 // Enter in the field adds the note too.
                 .on_submitted(move |ctx, _text| submit(ctx)),
             RawButton::new(Text::new("Add note")).on_pressed(add),
-            Text::new(format!("{} notes", titles.len())),
+            Text::new(format!("Notes: {}", titles.len())),
             Column::new(titles.into_iter().map(Text::new).collect::<Vec<Text>>()),
         ))
     }
@@ -57,15 +57,18 @@ impl ViewState<NotesScreen> for NotesState {
 # t.enter_text(&find::id("new-note"), "Groceries");
 # t.tap(&find::button("Add note"));
 # t.expect(find::text("Groceries")).to_exist();
+# t.expect(find::id("new-note")).to_have_value("");
 # // A blank title adds nothing.
 # t.enter_text(&find::id("new-note"), "   ");
 # t.tap(&find::button("Add note"));
-# t.expect(find::text("1 notes")).to_exist();
+# t.expect(find::text("Notes: 1")).to_exist();
+# t.expect(find::id("new-note")).to_have_value("");
 # // Enter in the field adds what it holds.
 # t.enter_text(&find::id("new-note"), "Talk outline");
 # t.press_keys(&["Enter"]);
 # t.expect(find::text("Talk outline")).to_exist();
-# t.expect(find::text("2 notes")).to_exist();
+# t.expect(find::text("Notes: 2")).to_exist();
+# t.expect(find::id("new-note")).to_have_value("");
 ```
 
 - The controller is created with the state and shared by clone: the field edits it, the button's
