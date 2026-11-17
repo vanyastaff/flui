@@ -91,7 +91,7 @@ impl ConnectRetry {
 
     /// The pause before the next connection, after one on which the portal
     /// answered a read (`answered`) or not; `None` once the schedule is spent.
-    fn after(&mut self, answered: bool) -> Option<Duration> {
+    fn pause_after(&mut self, answered: bool) -> Option<Duration> {
         if answered {
             self.left = self.schedule;
         }
@@ -260,7 +260,7 @@ async fn observe_through<F>(
         if let Some(ready) = ready.take() {
             let _ = ready.send(());
         }
-        let Some(pause) = retries.after(answered) else {
+        let Some(pause) = retries.pause_after(answered) else {
             return;
         };
         tokio::time::sleep(pause).await;
@@ -779,7 +779,7 @@ mod tests {
         let pauses = |retries: &mut ConnectRetry, answered: &[bool]| {
             answered
                 .iter()
-                .map(|&answered| retries.after(answered).map(|pause| pause.as_secs()))
+                .map(|&answered| retries.pause_after(answered).map(|pause| pause.as_secs()))
                 .collect::<Vec<Option<u64>>>()
         };
         assert_eq!(
