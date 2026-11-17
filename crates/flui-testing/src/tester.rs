@@ -633,17 +633,20 @@ impl Tester {
     #[must_use]
     pub fn draw_commands(&mut self) -> Vec<flui_painting::DrawCommandBuf> {
         use flui_foundation::geometry::Matrix4;
-        use flui_rendering::layer::{Layer, LayerId, LayerTree, resolve_follower_transform};
+        use flui_rendering::layer::{Layer, resolve_follower_transform};
 
-        /// Pre-order is paint order: a parent's children are kept in the
-        /// order they paint, a repaint boundary's content under its slot.
-        fn walk(
-            tree: &LayerTree,
-            id: LayerId,
-            above: Matrix4,
-            commands: &mut Vec<flui_painting::DrawCommandBuf>,
-        ) {
-            let Some(node) = tree.get(id) else { return };
+        self.run_due_now();
+        let mut commands = Vec::new();
+        let Some(tree) = self.host.sink().layer_tree() else {
+            return commands;
+        };
+        // Pre-order is paint order: a parent keeps its children in the order
+        // they paint, a repaint boundary's content under its slot. An
+        // explicit stack, children pushed last first, so a deep chain of
+        // effects cannot overflow the test thread's stack.
+        let mut pending = vec![(tree.root(), Matrix4::IDENTITY)];
+        while let Some((id, above)) = pending.pop() {
+            let Some(node) = tree.get(id) else { continue };
             let local = match node.layer() {
                 Layer::Picture(picture) => {
                     commands.extend(picture.picture().iter().map(|command| {
@@ -656,7 +659,7 @@ impl Tester {
                 Layer::Transform(layer) => *layer.transform(),
                 Layer::Follower(_) => match resolve_follower_transform(tree, id) {
                     Some(transform) => transform,
-                    None => return,
+                    None => continue,
                 },
                 layer => {
                     let offset = layer.local_translation();
@@ -664,15 +667,7 @@ impl Tester {
                 }
             };
             let placed = above * local;
-            for &child in node.children() {
-                walk(tree, child, placed, commands);
-            }
-        }
-
-        self.run_due_now();
-        let mut commands = Vec::new();
-        if let Some(tree) = self.host.sink().layer_tree() {
-            walk(tree, tree.root(), Matrix4::IDENTITY, &mut commands);
+            pending.extend(node.children().iter().rev().map(|&child| (child, placed)));
         }
         commands
     }

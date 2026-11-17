@@ -257,7 +257,7 @@ impl HeadlessBinding {
     ///    build-during-layout content;
     /// 7. run the lazy-sliver service pass, as every pumped frame's pipeline
     ///    does;
-    /// 8. bind the owners under the requested capability policy, retaining the
+    /// 8. bind the owners with the binding's own capabilities, retaining the
     ///    committed layer tree.
     ///
     /// # What the bootstrap is NOT

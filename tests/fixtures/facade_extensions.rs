@@ -756,35 +756,29 @@ struct LifecycleProbe {
     captured: Rc<RefCell<Option<flui::view::LifecycleHandle>>>,
     events: Rc<RefCell<Vec<flui::view::AppLifecycleState>>>,
 }
+/// Born subscribed: the subscription lives as long as the state.
 struct LifecycleProbeState {
-    view: LifecycleProbe,
-    subscription: Option<flui::view::LifecycleSubscription>,
+    _subscription: flui::view::LifecycleSubscription,
 }
 impl StatefulView for LifecycleProbe {
     type State = LifecycleProbeState;
-    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
-        LifecycleProbeState {
-            view: self.clone(),
-            subscription: None,
-        }
-    }
-}
-impl ViewState<LifecycleProbe> for LifecycleProbeState {
-    fn init_state(&mut self, context: &dyn LifecycleContext) {
-        let handle = context.lifecycle_handle().expect("a mounted application has a lifecycle");
-        let events = self.view.events.clone();
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
+        let handle = ctx.lifecycle_handle().expect("a mounted application has a lifecycle");
+        let events = self.events.clone();
         let (initial, subscription) = handle
             .subscribe(move |state| events.borrow_mut().push(state))
             .expect("open");
         // The window opens focused and shown.
         assert_eq!(initial, Some(flui::view::AppLifecycleState::Resumed));
         assert!(
-            self.view.events.borrow().is_empty(),
+            self.events.borrow().is_empty(),
             "no callback before token storage"
         );
-        self.subscription = Some(subscription);
-        *self.view.captured.borrow_mut() = Some(handle);
+        *self.captured.borrow_mut() = Some(handle);
+        LifecycleProbeState { _subscription: subscription }
     }
+}
+impl ViewState<LifecycleProbe> for LifecycleProbeState {
     fn build(&self, _: &LifecycleProbe, _: &dyn BuildContext) -> impl IntoView {
         SizedBox::new(20.0, 20.0)
     }

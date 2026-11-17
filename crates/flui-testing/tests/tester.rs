@@ -1389,3 +1389,41 @@ fn draw_commands_follow_paint_order_across_repaint_boundaries() {
         ]
     );
 }
+
+/// `draw_commands` places a command under a transform layer with the whole
+/// matrix, composed in order with the canvas transform it was recorded
+/// under: a swatch padded by 5 inside a repaint boundary, under a twofold
+/// scale, lands scaled at the scaled padding.
+///
+/// Fails if the read applies only a transform layer's translation, or
+/// composes a layer's transform or a command's on the wrong side.
+#[test]
+fn draw_commands_place_a_command_through_a_transform_layer() {
+    use flui_foundation::geometry::{Matrix4, Size};
+
+    let mut t = Tester::mount(
+        Center::new().child(
+            flui_widgets::Transform::new(Matrix4::scaling(2.0, 2.0, 1.0)).child(
+                flui_widgets::RepaintBoundary::new().child(
+                    flui_widgets::Padding::all(5.0).child(
+                        flui_widgets::CustomPaint::new()
+                            .size(Size::new(10.0, 10.0))
+                            .painter(SwatchPainter(flui_painting::styling::Color::rgb(1, 0, 0))),
+                    ),
+                ),
+            ),
+        ),
+    );
+    let transforms: Vec<Matrix4> = t
+        .draw_commands()
+        .into_iter()
+        .filter(|command| matches!(command.op, flui_painting::DrawOp::Rect { .. }))
+        .map(|command| command.transform)
+        .collect();
+    // The 20 px box sits centred at (390, 290); the scale about its origin
+    // doubles the 5 px padding.
+    let placed = Matrix4::translation(390.0, 290.0, 0.0)
+        * Matrix4::scaling(2.0, 2.0, 1.0)
+        * Matrix4::translation(5.0, 5.0, 0.0);
+    assert_eq!(transforms, [placed]);
+}

@@ -8,7 +8,7 @@
   the application has a frame or work due and fails at once, with the window's outline, when it is
   idle. Each action has a `try_` twin returning `TestError`.
 - `Tester::draw_commands` reads every draw command of the window's last submitted scene, after
-  the frames due now, each with the canvas transform it was recorded under, so a test checks what a
+  the frames due now, in paint order and each placed in the window, so a test checks what a
   `CustomPainter` or a render object drew.
 
 ### Changed
@@ -23,7 +23,7 @@
   `render_snapshot` are no longer reachable through the facade. Use `Tester`,
   `flui::testing::find`, `Tester::inspect_render` and `Tester::draw_commands`; render objects keep
   `flui::testing::rendering`.
-- `flui_testing::BuildCapabilities` and `MountOptions::capabilities`: a headless bootstrap always
+- `flui_testing::BuildCapabilities` and `MountOptions::with_capabilities`: a headless bootstrap always
   installs every build capability.
 
 ### Fixed
