@@ -1179,7 +1179,7 @@ fn two_ui_runtimes_via_isolated_policy_share_nothing() {
             let id = host.runtime_ids().expect("host readable").into_iter()
                 .find(|id| *id != dispatcher_a.address.ui_runtime_id)?;
             Some(PresentationDispatcher {
-                owner_thread: state.owner_thread?,
+                owner_thread: state.loop_thread()?,
                 address: host.runtime_status(id).ok()?.primary,
             })
         })
@@ -2346,7 +2346,9 @@ fn isolated_windows_shape_over_the_runtimes_font_collection() {
 
     let secondaries: Vec<PresentationDispatcher> = APP_RUNTIME.with(|slot| {
         let state = slot.borrow();
-        let owner_thread = state.owner_thread.expect("the owner platform is installed");
+        let owner_thread = state
+            .loop_thread()
+            .expect("the owner platform is installed");
         state
             .installed_host
             .logical()

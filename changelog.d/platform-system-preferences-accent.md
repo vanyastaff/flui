@@ -9,7 +9,7 @@
   and what a click in the track does (`ScrollTrackClick`): Windows' "Always show scrollbars",
   macOS's "Show scroll bars" and "Click in the scroll bar to", GNOME's overlay scrolling.
   `MediaQueryData::scroll_bars` and `MediaQuery::scroll_bars_of` carry it to widgets.
-- Input and native recordings carry both preferences (agent protocol 0.20).
+- Input and native recordings carry both preferences (agent protocol 0.22).
 
 ### Changed
 

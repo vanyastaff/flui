@@ -500,6 +500,12 @@ struct Walk<'q> {
     /// AccessKit falls back to the root when nothing does.
     root_claims_focus: bool,
     diagnostics: Vec<TreeDiagnostic>,
+    /// How many nodes each lifted identifier `diagnostics` reports it under,
+    /// up to [`MAX_PARENTS_PER_IDENTIFIER`].
+    lifted: Vec<(String, usize)>,
+    /// How many lifted identifiers `diagnostics` reports, up to
+    /// [`MAX_LIFTED_IDENTIFIERS`].
+    lifted_reported: usize,
     filter: AgentFilter,
 }
 
@@ -544,6 +550,37 @@ impl Walk<'_> {
         let children: Vec<NodeRef<'_>> = node
             .filtered_children(|child| filter.apply(child))
             .collect();
+        // An identifier on a node the read lifts into this one selects
+        // nothing: reported with this node, so an author learns why
+        // (ADR-0240 §3). A lifted node has one published parent, so an
+        // identifier repeats here only among this node's lifted descendants.
+        // A row template repeating one identifier reports its first rows
+        // only, so it does not crowd out the rest.
+        let mut here: Vec<String> = Vec::new();
+        lifted_identifiers(filter, node, &mut |identifier| {
+            if self.lifted_reported >= MAX_LIFTED_IDENTIFIERS
+                || here.iter().any(|known| known == identifier)
+            {
+                return;
+            }
+            // At most `MAX_LIFTED_IDENTIFIERS` entries, so a scan.
+            match self
+                .lifted
+                .iter_mut()
+                .find(|(known, _)| known == identifier)
+            {
+                Some((_, parents)) if *parents >= MAX_PARENTS_PER_IDENTIFIER => return,
+                Some((_, parents)) => *parents += 1,
+                None => self.lifted.push((identifier.to_owned(), 1)),
+            }
+            self.lifted_reported += 1;
+            here.push(identifier.to_owned());
+            self.diagnostics
+                .push(TreeDiagnostic::UnpublishedIdentifier {
+                    identifier: identifier.to_owned(),
+                    parent: id,
+                });
+        });
         if children.is_empty() {
             return out;
         }
@@ -579,6 +616,33 @@ impl Walk<'_> {
             out.children.push(child);
         }
         out
+    }
+}
+
+/// The most nodes one read reports a lifted identifier under: a row template
+/// that lifts one identifier in every row names its first rows, and the
+/// rest of the cap stays for other identifiers.
+const MAX_PARENTS_PER_IDENTIFIER: usize = 4;
+
+/// The most lifted identifiers one read reports: a tree that hides
+/// thousands of them would otherwise grow the reply past what one line of
+/// the protocol carries. An author fixes the first ones and reads again.
+const MAX_LIFTED_IDENTIFIERS: usize = 256;
+
+/// Calls `found` with the identifier of each node `filter` lifts into
+/// `node`: a descendant it passes through (`ExcludeNode`), reached through
+/// such nodes only, in tree order. The walk keeps its own stack, so a deep
+/// chain of lifted nodes does not grow the thread's.
+fn lifted_identifiers<'a>(filter: AgentFilter, node: &NodeRef<'a>, found: &mut impl FnMut(&str)) {
+    let mut pending: Vec<NodeRef<'a>> = node.children().rev().collect();
+    while let Some(child) = pending.pop() {
+        if filter.apply(&child) != FilterResult::ExcludeNode {
+            continue;
+        }
+        if let Some(identifier) = child.author_id() {
+            found(identifier);
+        }
+        pending.extend(child.children().rev());
     }
 }
 
@@ -761,6 +825,8 @@ impl SemanticsOwner {
                 truncated: false,
                 root_claims_focus,
                 diagnostics: Vec::new(),
+                lifted: Vec::new(),
+                lifted_reported: 0,
                 filter: AgentFilter::of(self),
             };
             if walk.remaining == 0 {

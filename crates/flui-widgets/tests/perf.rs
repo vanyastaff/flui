@@ -743,7 +743,9 @@ fn perf_a_caret_blink_in_a_10k_list_costs_the_same_on_any_tree_size() {
 /// of the heap: every buffer a frame uses is one the runtime keeps.
 #[test]
 fn perf_an_idle_frame_leaves_the_retained_scene_alone() {
-    const IDLE_FRAMES: usize = 4;
+    // Enough frames to show the steady state, not only the first few after
+    // the mount.
+    const IDLE_FRAMES: usize = 100;
     let (position, _writer) = ScrollPosition::with_writer(0.0);
     let app = PerfApp {
         label: SharedSignal::new(String::from("label")),

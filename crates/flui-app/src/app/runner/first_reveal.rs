@@ -7,6 +7,7 @@
 //! frame outcome earns the reveal, kept pure so it is host-tested while the
 //! desktop frame closure that consults it stays glue.
 
+use std::cell::Cell;
 use std::time::Duration;
 
 use web_time::Instant;
@@ -16,11 +17,12 @@ use web_time::Instant;
 /// bounded fallback so a surface that never presents still yields a window
 /// the user can see and close.
 ///
-/// `Send + Sync` behind one `parking_lot::Mutex`: captured by the desktop
-/// frame closure, whose registration requires `Send`, and consulted from the
-/// wake-deadline hook on the same thread.
+/// Owner-thread state (ADR-0323 §1): the window's frame driver reports to it
+/// and the loop's wake-deadline query reads it, both on the thread that
+/// opened the window; a frame a raster thread finishes reaches it through
+/// that thread's settlement, not from the raster thread.
 pub(super) struct FirstReveal {
-    state: parking_lot::Mutex<State>,
+    state: Cell<State>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,7 +46,7 @@ impl FirstReveal {
 
     pub(super) fn new() -> Self {
         Self {
-            state: parking_lot::Mutex::new(State::Waiting),
+            state: Cell::new(State::Waiting),
         }
     }
 
@@ -53,28 +55,25 @@ impl FirstReveal {
     /// first non-presenting report at or past the armed fallback deadline.
     #[must_use]
     pub(super) fn after_frame(&self, presented: bool, now: Instant) -> bool {
-        let mut state = self.state.lock();
-        match *state {
-            State::Revealed => false,
-            State::Waiting | State::FallbackArmed { .. } if presented => {
-                *state = State::Revealed;
-                true
-            }
-            State::Waiting => {
-                *state = State::FallbackArmed {
+        let (next, reveals) = match self.state.get() {
+            State::Revealed => (State::Revealed, false),
+            State::Waiting | State::FallbackArmed { .. } if presented => (State::Revealed, true),
+            State::Waiting => (
+                State::FallbackArmed {
                     reveal_by: now + Self::FALLBACK,
-                };
-                false
-            }
-            State::FallbackArmed { reveal_by } => {
+                },
+                false,
+            ),
+            armed @ State::FallbackArmed { reveal_by } => {
                 if now >= reveal_by {
-                    *state = State::Revealed;
-                    true
+                    (State::Revealed, true)
                 } else {
-                    false
+                    (armed, false)
                 }
             }
-        }
+        };
+        self.state.set(next);
+        reveals
     }
 
     /// The armed fallback deadline, for the wake-deadline hook and the frame
@@ -84,8 +83,7 @@ impl FirstReveal {
     /// consulted. `None` while waiting for the first report, and after the
     /// reveal.
     pub(super) fn next_deadline(&self) -> Option<Instant> {
-        let state = *self.state.lock();
-        match state {
+        match self.state.get() {
             State::FallbackArmed { reveal_by } => Some(reveal_by),
             State::Waiting | State::Revealed => None,
         }

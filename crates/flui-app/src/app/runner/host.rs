@@ -82,7 +82,7 @@ pub(super) fn install_host_storage(config: &crate::app::AppConfig) {
     // inherit the previous run's on this thread.
     APP_RUNTIME.with(|slot| slot.borrow_mut().install_host_storage(store));
     // The run's receivers replace the last run's, for the same reason.
-    let memory = APP_RUNTIME.with(|slot| Arc::clone(&slot.borrow().host_memory));
+    let memory = APP_RUNTIME.with(|slot| Rc::clone(&slot.borrow().host_memory));
     memory.replace_receivers(config.memory_reclaimers.0.clone());
 }
 

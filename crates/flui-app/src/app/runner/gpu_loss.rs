@@ -10,18 +10,20 @@
 //! started against a context that has not come back.
 //!
 //! It holds no browser type, so its rules run under the native test runner.
+//! Everything that reaches it runs on the page's one thread (ADR-0323 §1): the
+//! canvas's surface route, the frame driver, and the rebuild future the page's
+//! local executor polls.
 
-use std::sync::Arc;
-
-use parking_lot::Mutex;
+use std::cell::Cell;
+use std::rc::Rc;
 
 /// The graphics losses seen since the renderer was last rebuilt.
 #[derive(Default)]
 pub(super) struct GpuLossLedger {
-    state: Mutex<State>,
+    state: Cell<State>,
 }
 
-#[derive(Default)]
+#[derive(Clone, Copy, Default)]
 struct State {
     /// Something was lost and no rebuild has taken it on.
     rebuild_owed: bool,
@@ -36,32 +38,43 @@ struct State {
 }
 
 impl GpuLossLedger {
+    /// Change the state with `change` and return what it answers. `change`
+    /// works on a copy and never reaches the cell, so no write is lost.
+    fn update<R>(&self, change: impl FnOnce(&mut State) -> R) -> R {
+        let mut state = self.state.get();
+        let answer = change(&mut state);
+        self.state.set(state);
+        answer
+    }
+
     /// The WebGL context was lost. Frames stop and no rebuild starts until
     /// [`record_context_restore`](Self::record_context_restore).
     pub(super) fn record_context_loss(&self) {
-        let mut state = self.state.lock();
-        state.context_lost = true;
-        state.rebuild_owed = true;
+        self.update(|state| {
+            state.context_lost = true;
+            state.rebuild_owed = true;
+        });
     }
 
     /// The WebGL context came back: what was built on the lost one is dead,
     /// so a rebuild is owed now that it can succeed.
     pub(super) fn record_context_restore(&self) {
-        let mut state = self.state.lock();
-        state.context_lost = false;
-        state.rebuild_owed = true;
+        self.update(|state| {
+            state.context_lost = false;
+            state.rebuild_owed = true;
+        });
     }
 
     /// The graphics device is lost (`GPUDevice.lost`, which the GPU context
     /// reports to the raster host).
     /// A new one can be asked for at once.
     pub(super) fn record_device_loss(&self) {
-        self.state.lock().rebuild_owed = true;
+        self.update(|state| state.rebuild_owed = true);
     }
 
     /// Whether a frame may draw: not while the WebGL context is lost.
     pub(super) fn can_draw(&self) -> bool {
-        !self.state.lock().context_lost
+        !self.state.get().context_lost
     }
 
     /// Claim the rebuild, when one is owed, can succeed and none is running.
@@ -69,15 +82,17 @@ impl GpuLossLedger {
     /// A loss that arrives while the claim is held owes another rebuild: the
     /// claim clears the debt, the loss sets it again.
     #[must_use]
-    pub(super) fn claim_rebuild(self: &Arc<Self>) -> Option<RebuildClaim> {
-        let mut state = self.state.lock();
-        if !state.rebuild_owed || state.context_lost || state.rebuilding {
-            return None;
-        }
-        state.rebuild_owed = false;
-        state.rebuilding = true;
-        Some(RebuildClaim {
-            ledger: Arc::clone(self),
+    pub(super) fn claim_rebuild(self: &Rc<Self>) -> Option<RebuildClaim> {
+        let claimed = self.update(|state| {
+            if !state.rebuild_owed || state.context_lost || state.rebuilding {
+                return false;
+            }
+            state.rebuild_owed = false;
+            state.rebuilding = true;
+            true
+        });
+        claimed.then(|| RebuildClaim {
+            ledger: Rc::clone(self),
             succeeded: false,
         })
     }
@@ -87,10 +102,10 @@ impl GpuLossLedger {
     /// adapter is being asked for does not start a second one beside it.
     /// Dropped unfinished, it owes the build again.
     #[must_use]
-    pub(super) fn claim_initialization(self: &Arc<Self>) -> RebuildClaim {
-        self.state.lock().rebuilding = true;
+    pub(super) fn claim_initialization(self: &Rc<Self>) -> RebuildClaim {
+        self.update(|state| state.rebuilding = true);
         RebuildClaim {
-            ledger: Arc::clone(self),
+            ledger: Rc::clone(self),
             succeeded: false,
         }
     }
@@ -99,7 +114,7 @@ impl GpuLossLedger {
     /// it clears it.
     #[must_use]
     pub(super) fn take_repaint_owed(&self) -> bool {
-        std::mem::take(&mut self.state.lock().repaint_owed)
+        self.update(|state| std::mem::take(&mut state.repaint_owed))
     }
 }
 
@@ -111,7 +126,7 @@ impl GpuLossLedger {
 /// asked in a tight loop, and the browser's animation frames pace a visible
 /// tab.
 pub(super) struct RebuildClaim {
-    ledger: Arc<GpuLossLedger>,
+    ledger: Rc<GpuLossLedger>,
     succeeded: bool,
 }
 
@@ -124,24 +139,26 @@ impl RebuildClaim {
 
 impl Drop for RebuildClaim {
     fn drop(&mut self) {
-        let mut state = self.ledger.state.lock();
-        state.rebuilding = false;
-        if self.succeeded {
-            state.repaint_owed = true;
-        } else {
-            state.rebuild_owed = true;
-        }
+        let succeeded = self.succeeded;
+        self.ledger.update(|state| {
+            state.rebuilding = false;
+            if succeeded {
+                state.repaint_owed = true;
+            } else {
+                state.rebuild_owed = true;
+            }
+        });
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::rc::Rc;
 
     use super::GpuLossLedger;
 
-    fn ledger() -> Arc<GpuLossLedger> {
-        Arc::default()
+    fn ledger() -> Rc<GpuLossLedger> {
+        Rc::default()
     }
 
     #[test]

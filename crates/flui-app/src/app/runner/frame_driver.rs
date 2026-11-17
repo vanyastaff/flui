@@ -63,7 +63,7 @@ pub(super) enum FrameDriver {
         not(target_os = "ios"),
         not(target_arch = "wasm32")
     ))]
-    TestDeadlines(std::sync::Arc<super::desktop::DesktopWakeDeadlines>),
+    TestDeadlines(std::rc::Rc<super::desktop::DesktopWakeDeadlines>),
 }
 
 #[cfg(all(test, not(target_os = "android"), not(target_arch = "wasm32")))]
@@ -269,7 +269,7 @@ struct FrameRecord {
         not(target_os = "ios"),
         not(target_arch = "wasm32")
     ))]
-    deadlines: Option<std::sync::Arc<super::desktop::DesktopWakeDeadlines>>,
+    deadlines: Option<std::rc::Rc<super::desktop::DesktopWakeDeadlines>>,
     binding: FrameBinding,
     state: RefCell<DriverState>,
     /// Closing forbids new publication while earlier admitted frames finish.
@@ -291,9 +291,9 @@ impl PreparedFrame {
             not(target_arch = "wasm32")
         ))]
         let deadlines = match &driver {
-            FrameDriver::Desktop(driver) => Some(std::sync::Arc::clone(&driver.deadlines)),
+            FrameDriver::Desktop(driver) => Some(Rc::clone(&driver.deadlines)),
             #[cfg(test)]
-            FrameDriver::TestDeadlines(deadlines) => Some(std::sync::Arc::clone(deadlines)),
+            FrameDriver::TestDeadlines(deadlines) => Some(Rc::clone(deadlines)),
             #[cfg(test)]
             FrameDriver::Test(_) => None,
         };

@@ -57,27 +57,30 @@
 //! question — how long teardown may take *after* a close is agreed — and
 //! belongs with journaled state, not here.
 //!
-//! # Not in this slice (stated, not silently assumed)
+//! # Where a handler comes from, and where it is asked
 //!
-//! - **A widget-tier capability.** A handler is registered through
-//!   [`AppConfig::close_request_handler`](crate::AppConfig::close_request_handler),
-//!   the same embedder-facing route
-//!   [`FrameFailureHandler`](crate::FrameFailureHandler) and
-//!   [`ExitPolicy`](crate::ExitPolicy) take. There is deliberately no
-//!   `LifecycleContext`-acquired handle yet — the widget
-//!   that would consume one (a `PopScope`-shaped "this subtree has unsaved
-//!   work" declaration) does not exist either, and shipping half of that
-//!   pair is how a seam ends up unreachable. Same deliberate remainder
-//!   [`TaskSpawner`](crate::TaskSpawner) carries in
-//!   [`lifecycle`](super::lifecycle).
-//! - **Backends that never consult the seam.** No code path in the web or
-//!   Android backend asks a window's handler `close_requested`: neither
-//!   system lets the application refuse a close, so a handler registered
-//!   there is never asked. That is a property of those backends, not of
-//!   this module.
+//! A handler is registered through
+//! [`AppConfig::close_request_handler`](crate::AppConfig::close_request_handler),
+//! the same embedder-facing route
+//! [`FrameFailureHandler`](crate::FrameFailureHandler) and
+//! [`ExitPolicy`](crate::ExitPolicy) take. A widget declares its own
+//! unsaved work through the presentation's close guard, which this router
+//! asks before the handler.
+//!
+//! No code path in the web or Android backend asks a window's handler
+//! `close_requested`: neither system lets the application refuse a close,
+//! so a handler registered there is never asked.
+//!
+//! # One thread
+//!
+//! The router, its entries and the handlers it calls live on the owner
+//! thread that opened the windows (ADR-0323 §1): the router is held in an
+//! `Rc` and every entry holds a `Weak` to its window, so neither can reach
+//! another thread, and a handler may capture `Rc`, `Cell` and `RefCell`
+//! state. No call checks its thread at run time; the types do.
 
-use std::sync::Arc;
-use std::thread::ThreadId;
+use std::cell::RefCell;
+use std::rc::Rc;
 
 use flui_foundation::PresentationAddress;
 use flui_foundation::panic::payload_text;
@@ -85,7 +88,6 @@ use flui_platform::PlatformWindow;
 
 use flui_platform::CommandRefusal;
 pub use flui_view::CloseReason;
-use parking_lot::Mutex;
 
 // ============================================================================
 // The question, and the answer
@@ -166,30 +168,26 @@ pub enum CloseResponse {
 ///
 /// # Contract
 ///
-/// Invoked **synchronously on the UI (owner) thread**, from inside the
-/// platform's close-request handling. `Fn`, not `FnMut`: the runtime clones
-/// the callback out of its lock before calling it, so a handler may freely
-/// call back into this seam (closing another window, say) without
-/// deadlocking; put any state it needs to mutate behind interior
-/// mutability.
+/// Invoked **synchronously on the owner thread**, from inside the
+/// platform's close-request handling; it never leaves that thread, so it
+/// may capture `Rc`, `Cell` and `RefCell` state. `Fn`, not `FnMut`: the
+/// router takes the handler out of its table before calling it, so a
+/// handler may call back into this seam (closing another window, closing
+/// its own, opening one) and finds the table free.
 ///
-/// Two failure modes are answered with [`CloseResponse::KeepOpen`] — the
-/// same conservative veto a host's window delivery already applies to a
-/// close request raised inside a handler method — because neither can produce a trustworthy
-/// answer and closing on a wrong answer destroys data:
-///
-/// - a handler that **panics** (contained here, logged at error level; the
-///   handler stays registered and a later request reaches it normally);
-/// - an invocation arriving on a **thread other than the one that
-///   registered the handler**, which would mean a backend broke
-///   [`PlatformWindow`]'s own same-thread callback contract.
+/// A handler that **panics** is answered with [`CloseResponse::KeepOpen`],
+/// the same conservative veto a host's window delivery applies to a close
+/// request raised inside a handler method: a panic is no trustworthy
+/// answer, and closing on a wrong answer destroys data. The panic is
+/// contained and logged at error level; the handler stays registered and a
+/// later request reaches it normally.
 #[derive(Clone)]
-pub struct CloseRequestHandler(Arc<dyn Fn(&CloseRequest) -> CloseResponse + Send + Sync>);
+pub struct CloseRequestHandler(Rc<dyn Fn(&CloseRequest) -> CloseResponse>);
 
 impl CloseRequestHandler {
     /// Wrap a callback as a registerable handler.
-    pub fn new(handler: impl Fn(&CloseRequest) -> CloseResponse + Send + Sync + 'static) -> Self {
-        Self(Arc::new(handler))
+    pub fn new(handler: impl Fn(&CloseRequest) -> CloseResponse + 'static) -> Self {
+        Self(Rc::new(handler))
     }
 
     fn call(&self, request: &CloseRequest) -> CloseResponse {
@@ -222,12 +220,6 @@ pub enum CloseRequestError {
         /// The address that was asked for.
         address: PresentationAddress,
     },
-    /// Closing a window is an owner-thread operation; this call arrived on
-    /// another thread. Distinct from [`Self::NoHostedRuntime`]: the
-    /// presentation is registered and this process hosts it, just on a
-    /// different thread than the caller.
-    #[error("a close must be requested from the owner thread")]
-    WrongThread,
     /// The calling thread hosts no FLUI runtime at all, so it has no
     /// presentations to close.
     ///
@@ -284,12 +276,6 @@ struct PresentationCloseEntry {
     /// established.
     window: std::rc::Weak<dyn PlatformWindow>,
     handler: Option<CloseRequestHandler>,
-    /// The thread that registered this entry. Every `PlatformWindow`
-    /// callback must be invoked on the thread that registered it (see the
-    /// contract at the top of `PlatformWindow`'s callback section), so a
-    /// mismatch means a backend broke that contract — never something to
-    /// answer by reaching into UI runtime state anyway.
-    owner_thread: ThreadId,
     /// The presentation's close guard: a close one of its holds refuses is
     /// recorded there and answered `KeepOpen` before the handler is asked.
     guard: Option<flui_view::__runtime::CloseGuardSource>,
@@ -297,13 +283,13 @@ struct PresentationCloseEntry {
 
 /// Loop-scoped registry of per-presentation close-request handlers.
 ///
-/// Held by [`AppRuntime`](super::runtime::AppRuntime) as an `Arc` rather
-/// than inline, so the close-request route each window is opened with can
-/// hold its own clone and answer **without** re-entering the `APP_RUNTIME`
-/// thread-local at all. That matters: a close request can arrive while a
-/// UI runtime is checked out for dispatch, and a router reached through the
-/// UI runtime would then have to fail closed on a bookkeeping detail the
-/// application never asked about.
+/// Held by the loop's native bindings in an `Rc`, so the close-request
+/// route each window is opened with holds its own clone and answers
+/// **without** re-entering the `APP_RUNTIME` thread-local at all. That
+/// matters: a close request can arrive while a UI runtime is checked out
+/// for dispatch, and a router reached through the UI runtime would then
+/// have to fail closed on a bookkeeping detail the application never asked
+/// about.
 ///
 /// Deliberately not a second window authority:
 /// [`WindowRegistry`](super::window_registry::WindowRegistry) owns the
@@ -311,11 +297,15 @@ struct PresentationCloseEntry {
 /// while this keys on the address itself and carries the handler plus a
 /// *weak* window. Nothing here names, accepts, or resolves a native window
 /// key — the address is the only identity this module knows.
+///
+/// The table is borrowed only inside this type's methods, and no method
+/// runs code it does not own while it holds the borrow: a handler, a
+/// guard's signal, a window's close and the drop of a removed entry all
+/// run after the borrow ends. A handler that re-enters the router finds the
+/// table free.
 #[derive(Default)]
 pub(crate) struct CloseRequestRouter {
-    /// Private, and no guard ever escapes this type's own methods:
-    /// every caller gets a value out, never a lock.
-    entries: Mutex<Vec<PresentationCloseEntry>>,
+    entries: RefCell<Vec<PresentationCloseEntry>>,
 }
 
 /// An unpublished handler and weak native window, prepared outside all guards.
@@ -339,7 +329,6 @@ impl PreparedCloseRequest {
             address,
             window: std::rc::Rc::downgrade(window),
             handler,
-            owner_thread: std::thread::current().id(),
             guard: None,
         })
     }
@@ -360,29 +349,36 @@ impl PreparedCloseRequest {
     }
 }
 
-/// Capacity and identity reservation held through joint native publication.
-pub(crate) struct ClosePublication<'a>(parking_lot::MutexGuard<'a, Vec<PresentationCloseEntry>>);
+/// The router's reservation for one presentation, held through joint native
+/// publication: its address had no entry and the table has room for it. It
+/// holds the router, not a borrow of its table, so nothing that runs between
+/// the reservation and the publication finds the table busy. The native
+/// bindings publish it in the same call, with no code of another owner in
+/// between.
+pub(crate) struct ClosePublication<'a>(&'a CloseRequestRouter);
 
 impl ClosePublication<'_> {
-    pub(crate) fn publish(mut self, prepared: PreparedCloseRequest) {
-        self.0.push(prepared.0);
+    pub(crate) fn publish(self, prepared: PreparedCloseRequest) {
+        self.0.entries.borrow_mut().push(prepared.0);
     }
 }
 
 impl std::fmt::Debug for CloseRequestRouter {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CloseRequestRouter")
-            .field("registered", &self.entries.lock().len())
+            .field("registered", &self.entries.borrow().len())
             .finish()
     }
 }
 
 impl CloseRequestRouter {
+    /// Reserve `prepared`'s address and room for its entry; `None` when the
+    /// address already has one.
     pub(crate) fn publication(
         &self,
         prepared: &PreparedCloseRequest,
     ) -> Option<ClosePublication<'_>> {
-        let mut entries = self.entries.lock();
+        let mut entries = self.entries.borrow_mut();
         if entries
             .iter()
             .any(|entry| entry.address == prepared.0.address)
@@ -390,7 +386,7 @@ impl CloseRequestRouter {
             return None;
         }
         entries.reserve(1);
-        Some(ClosePublication(entries))
+        Some(ClosePublication(self))
     }
     /// An empty router.
     pub(crate) fn new() -> Self {
@@ -400,7 +396,7 @@ impl CloseRequestRouter {
     /// Remove the entry and return its handler for retirement outside host borrows.
     pub(crate) fn take(&self, address: PresentationAddress) -> Option<CloseRequestHandler> {
         let removed = {
-            let mut entries = self.entries.lock();
+            let mut entries = self.entries.borrow_mut();
             let index = entries.iter().position(|entry| entry.address == address)?;
             entries.remove(index)
         };
@@ -416,7 +412,7 @@ impl CloseRequestRouter {
     /// same thread reuses this `AppRuntime`, those would otherwise be
     /// consulted by the NEXT loop's windows.
     pub(crate) fn take_all(&self) -> Vec<CloseRequestHandler> {
-        let removed = std::mem::take(&mut *self.entries.lock());
+        let removed = self.entries.take();
         removed
             .into_iter()
             .filter_map(|entry| entry.handler)
@@ -456,34 +452,9 @@ impl CloseRequestRouter {
         address: PresentationAddress,
         reason: CloseReason,
     ) -> CloseResponse {
-        // Clone the handler and the guard out from under the lock before
-        // asking either (ADR-0039): application code may re-enter this router
-        // — closing a sibling window, registering a handler — and this
-        // `Mutex` is not reentrant.
-        let Some((handler, guard, owner_thread)) = ({
-            let entries = self.entries.lock();
-            entries
-                .iter()
-                .find(|e| e.address == address)
-                .map(|e| (e.handler.clone(), e.guard.clone(), e.owner_thread))
-        }) else {
+        let Some((handler, guard)) = self.answerers(address) else {
             return CloseResponse::Close;
         };
-
-        if handler.is_none() && guard.is_none() {
-            return CloseResponse::Close;
-        }
-        let current = std::thread::current().id();
-        if current != owner_thread {
-            tracing::error!(
-                ?address,
-                ?owner_thread,
-                ?current,
-                "close-request handler reached on a non-owner thread; vetoing the close rather \
-                 than answering from the wrong thread"
-            );
-            return CloseResponse::KeepOpen;
-        }
 
         // The guard comes first: a close its holds refuse is recorded there
         // and carried out once the last hold is released, without asking the
@@ -526,24 +497,9 @@ impl CloseRequestRouter {
     /// that panics keeps the window open and records nothing.
     pub(crate) fn consult_session_end(&self, address: PresentationAddress) -> CloseResponse {
         let reason = CloseReason::SessionEnd;
-        // Cloned out from under the lock: the handler may re-enter.
-        let Some((handler, guard, owner_thread)) = ({
-            let entries = self.entries.lock();
-            entries
-                .iter()
-                .find(|e| e.address == address)
-                .map(|e| (e.handler.clone(), e.guard.clone(), e.owner_thread))
-        }) else {
+        let Some((handler, guard)) = self.answerers(address) else {
             return CloseResponse::Close;
         };
-        if std::thread::current().id() != owner_thread {
-            tracing::error!(
-                ?address,
-                "session-end query reached on a non-owner thread; refusing rather than \
-                 answering from the wrong thread"
-            );
-            return CloseResponse::KeepOpen;
-        }
         if let Some(handler) = handler {
             let request = CloseRequest { address, reason };
             #[expect(
@@ -579,10 +535,37 @@ impl CloseRequestRouter {
         }
     }
 
+    /// The handler and the guard registered at `address`, cloned out of the
+    /// table so that asking either runs with the table free: application
+    /// code may re-enter this router (closing a sibling window, closing its
+    /// own, registering a handler). `None` for an unregistered address.
+    fn answerers(
+        &self,
+        address: PresentationAddress,
+    ) -> Option<(
+        Option<CloseRequestHandler>,
+        Option<flui_view::__runtime::CloseGuardSource>,
+    )> {
+        self.entries
+            .borrow()
+            .iter()
+            .find(|entry| entry.address == address)
+            .map(|entry| (entry.handler.clone(), entry.guard.clone()))
+    }
+
+    /// The guard registered at `address`, cloned out of the table: what it
+    /// is asked signals the owner.
+    fn guard_of(
+        &self,
+        address: PresentationAddress,
+    ) -> Option<flui_view::__runtime::CloseGuardSource> {
+        self.answerers(address).and_then(|(_, guard)| guard)
+    }
+
     /// Every registered presentation, in registration order.
     pub(crate) fn addresses(&self) -> Vec<PresentationAddress> {
         self.entries
-            .lock()
+            .borrow()
             .iter()
             .map(|entry| entry.address)
             .collect()
@@ -592,15 +575,7 @@ impl CloseRequestRouter {
     /// presentation at `address`, if one is: the platform cancelled it, as a
     /// cancelled log-off does. Closes recorded for other reasons stay.
     pub(crate) fn withdraw(&self, address: PresentationAddress, reason: CloseReason) {
-        // Cloned out from under the lock: the withdrawal signals the owner.
-        let guard = {
-            let entries = self.entries.lock();
-            entries
-                .iter()
-                .find(|entry| entry.address == address)
-                .and_then(|entry| entry.guard.clone())
-        };
-        if let Some(guard) = guard {
+        if let Some(guard) = self.guard_of(address) {
             guard.withdraw(reason);
         }
     }
@@ -617,14 +592,8 @@ impl CloseRequestRouter {
     /// `reason` recorded and waiting. `false` for a presentation without a
     /// guard and for one no longer registered.
     pub(crate) fn is_recorded(&self, address: PresentationAddress, reason: CloseReason) -> bool {
-        let guard = {
-            let entries = self.entries.lock();
-            entries
-                .iter()
-                .find(|entry| entry.address == address)
-                .and_then(|entry| entry.guard.clone())
-        };
-        guard.is_some_and(|guard| guard.is_recorded(reason))
+        self.guard_of(address)
+            .is_some_and(|guard| guard.is_recorded(reason))
     }
 
     /// Close the window at `address` programmatically, bypassing the
@@ -650,20 +619,17 @@ impl CloseRequestRouter {
         address: PresentationAddress,
     ) -> Result<(), CloseRequestError> {
         let window = {
-            let entries = self.entries.lock();
+            let entries = self.entries.borrow();
             let entry = entries
                 .iter()
                 .find(|e| e.address == address)
                 .ok_or(CloseRequestError::UnknownPresentation { address })?;
-            if std::thread::current().id() != entry.owner_thread {
-                return Err(CloseRequestError::WrongThread);
-            }
             entry
                 .window
                 .upgrade()
                 .ok_or(CloseRequestError::WindowGone { address })?
         };
-        // Outside the lock: closing fires the window's own `on_close`,
+        // With the table free: closing fires the window's own `on_close`,
         // which re-enters flui-app (`close_this_window`) and may re-enter
         // this router.
         flui_platform::WindowCommand::Close
@@ -677,13 +643,17 @@ impl CloseRequestRouter {
 
 #[cfg(test)]
 mod tests {
-    use std::rc::Rc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::cell::Cell;
 
     use flui_foundation::{PresentationId, UiRuntimeId};
 
     use super::*;
     use crate::app::window_test_support::TestWindow;
+
+    // What replaced the run-time thread checks: neither the router nor a
+    // handler can reach another thread.
+    static_assertions::assert_not_impl_any!(CloseRequestRouter: Send, Sync);
+    static_assertions::assert_not_impl_any!(CloseRequestHandler: Send, Sync);
 
     fn address(ui_runtime: usize, presentation: usize) -> PresentationAddress {
         PresentationAddress {
@@ -721,14 +691,14 @@ mod tests {
         let closes = address(1, 2);
         let other_ui_runtime = address(2, 1);
 
-        let keeps_open_asked = Arc::new(AtomicUsize::new(0));
-        let asked = Arc::clone(&keeps_open_asked);
+        let keeps_open_asked = Rc::new(Cell::new(0_usize));
+        let asked = Rc::clone(&keeps_open_asked);
         register(
             &router,
             keeps_open,
             &window(1),
             Some(CloseRequestHandler::new(move |_| {
-                asked.fetch_add(1, Ordering::SeqCst);
+                asked.set(asked.get() + 1);
                 CloseResponse::KeepOpen
             })),
         );
@@ -744,7 +714,7 @@ mod tests {
             CloseResponse::Close
         );
         assert_eq!(
-            keeps_open_asked.load(Ordering::SeqCst),
+            keeps_open_asked.get(),
             0,
             "a sibling's close request must not consult this presentation's handler at all"
         );
@@ -768,8 +738,8 @@ mod tests {
     fn a_panicking_handler_vetoes_and_stays_registered() {
         let router = CloseRequestRouter::new();
         let a = address(1, 1);
-        let panics = Arc::new(std::sync::atomic::AtomicBool::new(true));
-        let panics_in_handler = Arc::clone(&panics);
+        let panics = Rc::new(Cell::new(true));
+        let panics_in_handler = Rc::clone(&panics);
 
         register(
             &router,
@@ -777,7 +747,7 @@ mod tests {
             &window(1),
             Some(CloseRequestHandler::new(move |_| {
                 assert!(
-                    !panics_in_handler.load(Ordering::SeqCst),
+                    !panics_in_handler.get(),
                     "deliberate handler panic under test"
                 );
                 CloseResponse::Close
@@ -809,7 +779,7 @@ mod tests {
             "the reported payload must be the handler's own message, got {reported:?}"
         );
 
-        panics.store(false, Ordering::SeqCst);
+        panics.set(false);
         assert_eq!(
             router.consult(a, CloseReason::User),
             CloseResponse::Close,
@@ -823,14 +793,14 @@ mod tests {
     fn a_close_request_carries_its_reason() {
         let router = CloseRequestRouter::new();
         let a = address(1, 1);
-        let reasons = Arc::new(Mutex::new(Vec::new()));
-        let seen = Arc::clone(&reasons);
+        let reasons = Rc::new(RefCell::new(Vec::new()));
+        let seen = Rc::clone(&reasons);
         register(
             &router,
             a,
             &window(1),
             Some(CloseRequestHandler::new(move |request| {
-                seen.lock().push(request.reason());
+                seen.borrow_mut().push(request.reason());
                 CloseResponse::KeepOpen
             })),
         );
@@ -839,7 +809,7 @@ mod tests {
         router.consult(a, CloseReason::User);
 
         assert_eq!(
-            *reasons.lock(),
+            *reasons.borrow(),
             [CloseReason::Program, CloseReason::User],
             "each request reaches the handler with the reason it was asked for"
         );
@@ -888,8 +858,8 @@ mod tests {
     fn a_held_guard_keeps_the_close_before_the_handler_is_asked() {
         let router = CloseRequestRouter::new();
         let at = address(1, 1);
-        let asked = Arc::new(AtomicUsize::new(0));
-        let counted = Arc::clone(&asked);
+        let asked = Rc::new(Cell::new(0_usize));
+        let counted = Rc::clone(&asked);
         let source = flui_view::__runtime::CloseGuardSource::new(
             &[CloseReason::User],
             flui_view::__runtime::OwnerNotify::new(|_| Ok(())),
@@ -898,7 +868,7 @@ mod tests {
             at,
             &window(1),
             Some(CloseRequestHandler::new(move |_| {
-                counted.fetch_add(1, Ordering::SeqCst);
+                counted.set(counted.get() + 1);
                 CloseResponse::Close
             })),
         )
@@ -914,7 +884,7 @@ mod tests {
             router.consult(at, CloseReason::User),
             CloseResponse::KeepOpen
         );
-        assert_eq!(asked.load(Ordering::SeqCst), 0, "the guard answers first");
+        assert_eq!(asked.get(), 0, "the guard answers first");
         assert_eq!(
             guard.pending().map(|pending| pending.reason()),
             Some(CloseReason::User),
@@ -928,7 +898,7 @@ mod tests {
             "releasing the hold makes the recorded close due"
         );
         assert_eq!(router.consult(at, CloseReason::User), CloseResponse::Close);
-        assert_eq!(asked.load(Ordering::SeqCst), 1);
+        assert_eq!(asked.get(), 1);
     }
 
     /// A handler's `KeepOpen` records the close on the guard for the
@@ -937,8 +907,8 @@ mod tests {
     fn a_kept_open_close_is_recorded_for_its_reason() {
         let router = CloseRequestRouter::new();
         let at = address(1, 1);
-        let panics = Arc::new(std::sync::atomic::AtomicBool::new(true));
-        let panicking = Arc::clone(&panics);
+        let panics = Rc::new(Cell::new(true));
+        let panicking = Rc::clone(&panics);
         let source = flui_view::__runtime::CloseGuardSource::new(
             &[CloseReason::User, CloseReason::Program],
             flui_view::__runtime::OwnerNotify::new(|_| Ok(())),
@@ -947,10 +917,7 @@ mod tests {
             at,
             &window(1),
             Some(CloseRequestHandler::new(move |_| {
-                assert!(
-                    !panicking.load(Ordering::SeqCst),
-                    "deliberate handler panic under test"
-                );
+                assert!(!panicking.get(), "deliberate handler panic under test");
                 CloseResponse::KeepOpen
             })),
         )
@@ -970,7 +937,7 @@ mod tests {
             "a panic is no answer to wait on"
         );
 
-        panics.store(false, Ordering::SeqCst);
+        panics.set(false);
         for _ in 0..2 {
             assert_eq!(
                 router.consult(at, CloseReason::Program),
@@ -1014,27 +981,17 @@ mod tests {
         );
     }
 
-    thread_local! {
-        /// The router a [`RegisterOnDrop`] registers on: a handler is `Send`,
-        /// the router, which holds windows, is not.
-        #[allow(
-            clippy::missing_const_for_thread_local,
-            reason = "the initializer is `const`; clippy for the Android target reports it anyway"
-        )]
-        static ROUTER: std::cell::RefCell<std::rc::Weak<CloseRequestRouter>> =
-            const { std::cell::RefCell::new(std::rc::Weak::new()) };
-    }
-
+    /// Registers a handler on the router when the handler capturing it is
+    /// dropped. Weak: a handler is held by the router it registers on.
     struct RegisterOnDrop {
+        router: std::rc::Weak<CloseRequestRouter>,
         window_id: u64,
         address: PresentationAddress,
     }
 
     impl Drop for RegisterOnDrop {
         fn drop(&mut self) {
-            let router = ROUTER
-                .with_borrow(std::rc::Weak::upgrade)
-                .expect("router still owned");
+            let router = self.router.upgrade().expect("router still owned");
             register(
                 &router,
                 self.address,
@@ -1049,8 +1006,8 @@ mod tests {
             let router = Rc::new(CloseRequestRouter::new());
             let old = address(1, 1);
             let next = address(2, 2);
-            ROUTER.set(Rc::downgrade(&router));
             let capture = RegisterOnDrop {
+                router: Rc::downgrade(&router),
                 window_id: 2,
                 address: next,
             };

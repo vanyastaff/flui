@@ -29,7 +29,8 @@ application has a frame or work due now, and fails at once, listing what the win
 application is idle: advance the clock yourself with `pump_for` to reach a timer.
 
 A failure names what was looked for and what the window showed instead. A widget that publishes
-no semantics is found by the identifier you give it with `Semantics::identifier` and `find::id`.
+no semantics is found by the identifier you give a group around it,
+`Semantics::new().container(true).role(SemanticsRole::Group).identifier(..)`, and `find::id`.
 
 `flui::testing::rendering` tests a render object of your own without widgets. The
 [test tiers](https://github.com/vanyastaff/flui/blob/main/docs/testing.md) map the framework's own
