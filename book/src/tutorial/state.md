@@ -31,7 +31,7 @@ impl ViewState<NotesScreen> for NotesState {
         let notes = self.notes;
         let titles = notes.get(ctx);
         Column::new((
-            Text::new(format!("{} notes", titles.len())),
+            Text::new(format!("Notes: {}", titles.len())),
             Column::new(titles.into_iter().map(Text::new).collect::<Vec<Text>>()),
             RawButton::new(Text::new("Add note")).on_pressed(move |ctx| {
                 notes.update(ctx, |list| {
@@ -43,10 +43,10 @@ impl ViewState<NotesScreen> for NotesState {
     }
 }
 # let mut t = flui::testing::Tester::mount(NotesScreen);
-# t.expect(flui::testing::find::text("0 notes")).to_exist();
+# t.expect(flui::testing::find::text("Notes: 0")).to_exist();
 # t.tap(&flui::testing::find::button("Add note"));
 # t.tap(&flui::testing::find::button("Add note"));
-# t.expect(flui::testing::find::text("2 notes")).to_exist();
+# t.expect(flui::testing::find::text("Notes: 2")).to_exist();
 # t.expect(flui::testing::find::text("Note 2")).to_exist();
 ```
 
@@ -61,3 +61,5 @@ impl ViewState<NotesScreen> for NotesState {
 
 [State](../concepts/state.md) covers the other forms of state: data shared down the tree with an
 `InheritedView`, and a `ValueNotifier` that code outside the tree listens to.
+
+Next, [Handling input](input.md) lets the user name each note.
