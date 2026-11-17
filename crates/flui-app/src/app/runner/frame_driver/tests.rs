@@ -1232,6 +1232,30 @@ fn deadlines_survive_a_sibling_install_and_close() {
     teardown_platform_ui_runtime();
 }
 
+/// The loop's own raster host, put back however a row that swapped in its
+/// own ends.
+#[cfg(all(feature = "testing", not(target_os = "ios")))]
+struct LoopRasterHost(Option<super::super::raster_host::SharedRasterHost>);
+
+#[cfg(all(feature = "testing", not(target_os = "ios")))]
+impl LoopRasterHost {
+    /// Make `shared` the loop's raster host until the answer drops.
+    fn swap_in(shared: &super::super::raster_host::SharedRasterHost) -> Self {
+        Self(Some(super::super::host::APP_RUNTIME.with(|slot| {
+            std::mem::replace(&mut slot.borrow_mut().raster_host, shared.clone())
+        })))
+    }
+}
+
+#[cfg(all(feature = "testing", not(target_os = "ios")))]
+impl Drop for LoopRasterHost {
+    fn drop(&mut self) {
+        if let Some(host) = self.0.take() {
+            super::super::host::APP_RUNTIME.with(|slot| slot.borrow_mut().raster_host = host);
+        }
+    }
+}
+
 /// A window whose frames are off wakes the loop for none of its raster work:
 /// the surface it is owed is served only by its own frame, so the loop's
 /// wake reporting it would hand the platform a past instant that no wake
@@ -1277,19 +1301,7 @@ fn a_window_whose_frames_are_off_wakes_the_loop_for_none_of_its_surface() {
         RasterFactory::Scripted(slots.clone()),
         flui_engine::RasterPlacement::Inline,
     );
-    /// Puts the loop's raster host back however the row ends.
-    struct LoopRasterHost(Option<SharedRasterHost>);
-    impl Drop for LoopRasterHost {
-        fn drop(&mut self) {
-            if let Some(host) = self.0.take() {
-                super::super::host::APP_RUNTIME.with(|slot| slot.borrow_mut().raster_host = host);
-            }
-        }
-    }
-    let _previous =
-        LoopRasterHost(Some(super::super::host::APP_RUNTIME.with(|slot| {
-            std::mem::replace(&mut slot.borrow_mut().raster_host, shared.clone())
-        })));
+    let _previous = LoopRasterHost::swap_in(&shared);
     let (hidden, shown) = (installed[1].0.address, installed[0].0.address);
     attach_a_window(&shared, shown, 1);
     let owed = owe_a_surface(&shared, &slots, hidden, 2);
@@ -1334,7 +1346,7 @@ fn a_window_whose_frames_are_off_wakes_the_loop_for_none_of_its_surface() {
 ))]
 fn the_loop_wakes_for_no_floor_of_a_window_the_raster_thread_settled() {
     use super::super::raster_host::{
-        RasterSlot, SharedRasterHost,
+        RasterSlot,
         tests::{THREAD_WAIT, threaded_host_for_two},
     };
     let _clear = OwnerHostClearGuard::arm();
@@ -1351,19 +1363,7 @@ fn the_loop_wakes_for_no_floor_of_a_window_the_raster_thread_settled() {
     let (mut settled, mut drawn) = (prepared(), prepared());
     let (settled_at, drawn_at) = (settled.dispatcher().address, drawn.dispatcher().address);
     let (shared, slots, wakes) = threaded_host_for_two(settled_at, drawn_at);
-    /// Puts the loop's raster host back however the row ends.
-    struct LoopRasterHost(Option<SharedRasterHost>);
-    impl Drop for LoopRasterHost {
-        fn drop(&mut self) {
-            if let Some(host) = self.0.take() {
-                super::super::host::APP_RUNTIME.with(|slot| slot.borrow_mut().raster_host = host);
-            }
-        }
-    }
-    let _previous =
-        LoopRasterHost(Some(super::super::host::APP_RUNTIME.with(|slot| {
-            std::mem::replace(&mut slot.borrow_mut().raster_host, shared.clone())
-        })));
+    let _previous = LoopRasterHost::swap_in(&shared);
     let install = |installation: &mut WindowInstall| {
         let dispatcher = installation.dispatcher();
         let frame = installation
@@ -1412,8 +1412,24 @@ fn the_loop_wakes_for_no_floor_of_a_window_the_raster_thread_settled() {
         .expect("the runtime answers");
         floor.get()
     };
-    let (settled_floor, drawn_floor) = (floor_of(settled_window), floor_of(drawn_window));
-    let earliest = super::super::host::APP_RUNTIME.with(|slot| slot.borrow().next_wake());
+    // A floor rounds up from now in 50 ms steps, so which window's comes
+    // first depends on when it is read. Read at a moment the settled
+    // window's comes first, with no step crossed during the reads: the loop
+    // reporting the earlier floor then tells the waived one from the kept.
+    let loop_wake = || super::super::host::APP_RUNTIME.with(|slot| slot.borrow().next_wake());
+    let reads_until = std::time::Instant::now() + THREAD_WAIT;
+    let mut read = None;
+    while read.is_none() && std::time::Instant::now() < reads_until {
+        let (settled_floor, drawn_floor) = (floor_of(settled_window), floor_of(drawn_window));
+        let earliest = loop_wake();
+        let unmoved =
+            (floor_of(settled_window), floor_of(drawn_window)) == (settled_floor, drawn_floor);
+        if unmoved && settled_floor.is_some() && settled_floor < drawn_floor {
+            read = Some((settled_floor, drawn_floor, earliest));
+        } else {
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+    }
 
     // Everything the row installed goes before it asserts, so a failed
     // assertion leaves the table's later rows the loop they expect.
@@ -1427,10 +1443,9 @@ fn the_loop_wakes_for_no_floor_of_a_window_the_raster_thread_settled() {
         "the thread settled the first frame and woke its window"
     );
     assert!(rendering, "the thread renders the second frame");
-    assert!(
-        settled_floor.is_some() && drawn_floor.is_some(),
-        "each window has a frame in flight: {settled_floor:?} {drawn_floor:?}"
-    );
+    let Some((settled_floor, drawn_floor, earliest)) = read else {
+        panic!("the settled window's floor never came first: both windows hold a frame in flight");
+    };
     assert_ne!(
         earliest, settled_floor,
         "the loop wakes for no floor of the settled window"

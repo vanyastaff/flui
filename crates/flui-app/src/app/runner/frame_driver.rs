@@ -266,9 +266,9 @@ impl FrameDriver {
             Self::TestRaster(slot) => {
                 // What the raster thread finished settles first, then the
                 // frame draws through the slot, as the desktop driver's wake.
-                let (_settled, caught) = slot.settle(runtime);
+                let (_settled, mut caught) = slot.settle(runtime);
                 runtime.mark_primary_needs_full_repaint();
-                let _ = slot.pump(runtime, web_time::Instant::now(), None);
+                let _ran = caught.contain(|| slot.pump(runtime, web_time::Instant::now(), None));
                 caught.resume();
             }
             #[cfg(target_os = "android")]
