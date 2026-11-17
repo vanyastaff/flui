@@ -833,7 +833,9 @@ pub mod manipulation {
     //!
     //! One manipulation is a pan or a pinch, decided by whichever passes its slop
     //! first; the translation of a pinch is the centroid moving, and is not a
-    //! scroll. A viewport that returns to `Ready` asks to be reset to the origin
+    //! scroll. Until one does, the fingers rest: the viewport's `Running`
+    //! begins a touchpad hold, which the pan or pinch cancels as it begins and
+    //! a stop with no slop passed ends. A viewport that returns to `Ready` asks to be reset to the origin
     //! ([`Delivered::reset`]); the content update that reset causes arrives while
     //! no manipulation is open and is not input.
 
@@ -842,11 +844,12 @@ pub mod manipulation {
     use flui_foundation::geometry::Point;
     use flui_platform::pointer::{
         PointerEvent, PointerPosition, ScrollDelta, ScrollEvent, ScrollPrecision, ScrollUnit,
+        TouchpadHoldPhase,
     };
     use smallvec::SmallVec;
 
     use crate::input::assembly::{
-        ClockChoice, ContactRegistry, ContentTransform, DecodeError, GestureComponent,
+        Assembled, ClockChoice, ContactRegistry, ContentTransform, DecodeError, GestureComponent,
         GestureDelta, GesturePhase, GestureReading, NativeContact, NativeReading, NativeSurface,
         ReadingAction, ScrollPhases, ScrollReading, TouchpadFrame, ViewportReading, ViewportStatus,
         decode_derived,
@@ -864,6 +867,9 @@ pub mod manipulation {
     /// range of `WM_POINTER` ids.
     pub const PINCH_CONTACT: NativeContact = NativeContact(1 << 33);
 
+    /// The trackpad contact every hold of a window reads as, beside the pinch's.
+    pub const HOLD_CONTACT: NativeContact = NativeContact((1 << 33) + 1);
+
     /// What the decoder publishes for a reading.
     #[derive(Debug, Clone, Copy, PartialEq)]
     #[non_exhaustive]
@@ -880,6 +886,9 @@ pub mod manipulation {
         },
         /// A pinch component.
         Pinch(GestureReading),
+        /// Fingers resting on the touchpad: the viewport runs and its
+        /// manipulation has passed no slop yet.
+        Hold(TouchpadHoldPhase),
         /// The viewport has stopped: return its content to the origin.
         ResetViewport,
     }
@@ -971,7 +980,10 @@ pub mod manipulation {
                     if state == State::Momentum {
                         out.push(scroll(None, Some(Ended), 0.0, 0.0));
                     }
+                    // Fingers touched: until they pass a slop they rest, and
+                    // what coasts stops (a fling of the framework's own too).
                     if matches!(state, State::Idle | State::Momentum | State::Settling) {
+                        out.push(Manipulation::Hold(TouchpadHoldPhase::Begin));
                         self.state = State::Undecided;
                     }
                 }
@@ -986,6 +998,9 @@ pub mod manipulation {
                         self.state = State::Settling;
                     }
                     State::Undecided | State::Idle => {
+                        if state == State::Undecided {
+                            out.push(Manipulation::Hold(TouchpadHoldPhase::End));
+                        }
                         out.push(scroll(None, Some(Began), 0.0, 0.0));
                         self.state = State::Momentum;
                     }
@@ -1018,7 +1033,14 @@ pub mod manipulation {
         ) {
             match self.state {
                 State::Idle => return,
-                State::Undecided | State::Settling => {}
+                State::Undecided => {
+                    out.push(Manipulation::Hold(if fingers == GesturePhase::Ended {
+                        TouchpadHoldPhase::End
+                    } else {
+                        TouchpadHoldPhase::Cancelled
+                    }))
+                }
+                State::Settling => {}
                 State::Panning => out.push(scroll(Some(fingers), None, 0.0, 0.0)),
                 State::Pinching => out.push(pinch(fingers, GestureDelta::None)),
                 State::Momentum => out.push(scroll(None, Some(momentum), 0.0, 0.0)),
@@ -1041,11 +1063,15 @@ pub mod manipulation {
             match self.state {
                 State::Idle | State::Settling => self.anchor = transform,
                 State::Undecided => {
+                    // The resting fingers start a gesture: their hold is
+                    // cancelled before the gesture begins.
                     if (zoom - 1.0).abs() >= PINCH_SLOP {
+                        out.push(Manipulation::Hold(TouchpadHoldPhase::Cancelled));
                         out.push(pinch(Began, GestureDelta::Scale(zoom)));
                         self.state = State::Pinching;
                         self.anchor = transform;
                     } else if moved.0.hypot(moved.1) >= PAN_SLOP {
+                        out.push(Manipulation::Hold(TouchpadHoldPhase::Cancelled));
                         out.push(scroll(Some(Began), None, dx, dy));
                         self.state = State::Panning;
                         self.anchor = transform;
@@ -1152,25 +1178,47 @@ pub mod manipulation {
                             .extend(self.scroll(contacts, reading, (dx, dy), frame));
                     }
                     Manipulation::Pinch(gesture) => {
-                        let (x, y) = frame.position;
-                        let native = NativeReading::new(
+                        delivered.inputs.extend(self.trackpad(
+                            contacts,
                             PINCH_CONTACT,
-                            flui_platform::pointer::PointerKind::Trackpad,
                             ReadingAction::Gesture(gesture),
-                            frame.time,
-                        )
-                        .on(self.surface)
-                        .with_primary(true)
-                        .with_modifiers(frame.modifiers)
-                        .at_device(x, y, frame.scale);
-                        delivered.inputs.extend(
-                            decode_derived(contacts, &native)
-                                .unwrap_or_else(DecodeError::into_inputs),
-                        );
+                            frame,
+                        ));
+                    }
+                    Manipulation::Hold(phase) => {
+                        delivered.inputs.extend(self.trackpad(
+                            contacts,
+                            HOLD_CONTACT,
+                            ReadingAction::Hold(phase),
+                            frame,
+                        ));
                     }
                 }
             }
             delivered
+        }
+
+        /// A trackpad gesture's reading of `contact` at the cursor, assembled
+        /// against `contacts`.
+        fn trackpad(
+            &self,
+            contacts: &mut ContactRegistry,
+            contact: NativeContact,
+            action: ReadingAction,
+            frame: TouchpadFrame,
+        ) -> Assembled {
+            let (x, y) = frame.position;
+            let native = NativeReading::new(
+                contact,
+                flui_platform::pointer::PointerKind::Trackpad,
+                action,
+                frame.time,
+            )
+            .on(self.surface)
+            .with_primary(true)
+            .with_modifiers(frame.modifiers)
+            .at_device(x, y, frame.scale);
+            decode_derived(contacts, &native).unwrap_or_else(DecodeError::into_inputs)
         }
 
         fn scroll(

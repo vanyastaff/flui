@@ -27,7 +27,9 @@ use std::time::Duration;
 use flui_foundation::geometry::{Bounds, DevicePixelRatio, EdgeInsets, Point, Size, WindowMetrics};
 use flui_platform::EventTime;
 use flui_platform::keyboard::Modifiers;
-use flui_platform::pointer::{PenTool, PointerButton, PointerButtons, PointerEvent, PointerKind};
+use flui_platform::pointer::{
+    PenTool, PointerButton, PointerButtons, PointerEvent, PointerKind, TouchpadHoldPhase,
+};
 use flui_platform::text_store::TextStore;
 use flui_platform::{
     AppTitleBar, Availability, Brightness, CapabilityAbsence, CapabilityParts, CloseDecision,
@@ -47,8 +49,8 @@ use crate::input::assembly::{
     ClickSettings, ContactRegistry, ContactScroll, ContentTransform, CounterAnchor, DecodeError,
     GestureComponent, GestureDelta, GesturePhase, GestureReading, MoveBatch, NativeCancel,
     NativeClock, NativeContact, NativeDevice, NativeReading, NativeSurface, NativeTime, PenAngles,
-    QpcTicks, RawPoint, RawSensors, ReadingAction, ReadingTime, TouchpadFrame, ViewportReading,
-    ViewportStatus, WheelAxis, WheelReading, decode,
+    QpcTicks, RawPoint, RawSensors, ReadingAction, ReadingTime, SwipeReading, TouchpadFrame,
+    ViewportReading, ViewportStatus, WheelAxis, WheelReading, decode,
 };
 use crate::input::windows::direct_manipulation::manipulation::TouchpadAssembler;
 
@@ -1473,12 +1475,7 @@ fn gesture_to_wire(gesture: GestureReading) -> wire::Gesture {
             GestureComponent::Rotation => wire::GestureComponent::Rotation,
             GestureComponent::Session => wire::GestureComponent::Session,
         },
-        phase: match gesture.phase {
-            GesturePhase::Began => wire::GesturePhase::Began,
-            GesturePhase::Changed => wire::GesturePhase::Changed,
-            GesturePhase::Ended => wire::GesturePhase::Ended,
-            GesturePhase::Cancelled => wire::GesturePhase::Cancelled,
-        },
+        phase: gesture_phase_to_wire(gesture.phase),
         delta: match gesture.delta {
             GestureDelta::Scale(factor) => wire::GestureDelta::Scale(factor),
             GestureDelta::Rotation(radians) => wire::GestureDelta::Rotation(radians),
@@ -1495,19 +1492,68 @@ fn gesture_from_wire(gesture: wire::Gesture) -> DtoResult<GestureReading> {
             wire::GestureComponent::Session => GestureComponent::Session,
             other => return Err(unread(other.name())),
         },
-        phase: match gesture.phase {
-            wire::GesturePhase::Began => GesturePhase::Began,
-            wire::GesturePhase::Changed => GesturePhase::Changed,
-            wire::GesturePhase::Ended => GesturePhase::Ended,
-            wire::GesturePhase::Cancelled => GesturePhase::Cancelled,
-            other => return Err(unread(other.name())),
-        },
+        phase: gesture_phase_from_wire(gesture.phase)?,
         delta: match gesture.delta {
             wire::GestureDelta::Scale(factor) => GestureDelta::Scale(factor),
             wire::GestureDelta::Rotation(radians) => GestureDelta::Rotation(radians),
             wire::GestureDelta::None => GestureDelta::None,
             _ => return Err(unread("GestureDelta")),
         },
+    })
+}
+
+const fn gesture_phase_to_wire(phase: GesturePhase) -> wire::GesturePhase {
+    match phase {
+        GesturePhase::Began => wire::GesturePhase::Began,
+        GesturePhase::Changed => wire::GesturePhase::Changed,
+        GesturePhase::Ended => wire::GesturePhase::Ended,
+        GesturePhase::Cancelled => wire::GesturePhase::Cancelled,
+    }
+}
+
+fn gesture_phase_from_wire(phase: wire::GesturePhase) -> DtoResult<GesturePhase> {
+    Ok(match phase {
+        wire::GesturePhase::Began => GesturePhase::Began,
+        wire::GesturePhase::Changed => GesturePhase::Changed,
+        wire::GesturePhase::Ended => GesturePhase::Ended,
+        wire::GesturePhase::Cancelled => GesturePhase::Cancelled,
+        other => return Err(unread(other.name())),
+    })
+}
+
+const fn hold_to_wire(phase: TouchpadHoldPhase) -> wire::HoldPhase {
+    match phase {
+        TouchpadHoldPhase::Begin => wire::HoldPhase::Begin,
+        TouchpadHoldPhase::End => wire::HoldPhase::End,
+        TouchpadHoldPhase::Cancelled => wire::HoldPhase::Cancelled,
+    }
+}
+
+fn hold_from_wire(phase: wire::HoldPhase) -> DtoResult<TouchpadHoldPhase> {
+    Ok(match phase {
+        wire::HoldPhase::Begin => TouchpadHoldPhase::Begin,
+        wire::HoldPhase::End => TouchpadHoldPhase::End,
+        wire::HoldPhase::Cancelled => TouchpadHoldPhase::Cancelled,
+        other => return Err(unread(other.name())),
+    })
+}
+
+const fn swipe_to_wire(swipe: SwipeReading) -> wire::Swipe {
+    wire::Swipe {
+        fingers: swipe.fingers.get(),
+        phase: gesture_phase_to_wire(swipe.phase),
+        dx: swipe.dx,
+        dy: swipe.dy,
+    }
+}
+
+fn swipe_from_wire(swipe: wire::Swipe) -> DtoResult<SwipeReading> {
+    Ok(SwipeReading {
+        fingers: NonZeroU8::new(swipe.fingers)
+            .ok_or_else(|| invalid("a touchpad swipe of no fingers"))?,
+        phase: gesture_phase_from_wire(swipe.phase)?,
+        dx: swipe.dx,
+        dy: swipe.dy,
     })
 }
 
@@ -1557,6 +1603,8 @@ fn action_to_wire(action: ReadingAction) -> wire::Action {
         ReadingAction::Release(button) => wire::Action::Release(button.number().get()),
         ReadingAction::Cancel(reason) => wire::Action::Cancel(cancel_to_wire(reason)),
         ReadingAction::Gesture(gesture) => wire::Action::Gesture(gesture_to_wire(gesture)),
+        ReadingAction::Hold(phase) => wire::Action::Hold(hold_to_wire(phase)),
+        ReadingAction::Swipe(swipe) => wire::Action::Swipe(swipe_to_wire(swipe)),
     }
 }
 
@@ -1569,6 +1617,8 @@ fn action_from_wire(action: wire::Action) -> DtoResult<ReadingAction> {
         wire::Action::Release(number) => ReadingAction::Release(button(number)?),
         wire::Action::Cancel(reason) => ReadingAction::Cancel(cancel_from_wire(reason)?),
         wire::Action::Gesture(gesture) => ReadingAction::Gesture(gesture_from_wire(gesture)?),
+        wire::Action::Hold(phase) => ReadingAction::Hold(hold_from_wire(phase)?),
+        wire::Action::Swipe(swipe) => ReadingAction::Swipe(swipe_from_wire(swipe)?),
         _ => return Err(unread("Action")),
     })
 }

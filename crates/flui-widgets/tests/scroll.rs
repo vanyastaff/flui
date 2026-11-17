@@ -2376,10 +2376,13 @@ pub(crate) fn resting_fingers_catch_a_fling_and_leave_wheel_easing() {
         tight(300.0, 300.0),
         vsync,
     );
+    // A hold's begin catches the fling; its end, when the fingers lift
+    // without moving, changes nothing more.
     let rest = TrackpadScript::new("fingers rest", Offset::new(150.0, 150.0))
         .rest()
+        .lift()
         .build()
-        .expect("one discrete event");
+        .expect("a hold that begins and ends");
 
     dispatch_typed_wheel(&laid, Notched, 100.0);
     laid.pump_for(Duration::ZERO);

@@ -99,6 +99,77 @@ fn every_backend_states_its_availability() {
     }
 }
 
+/// Resting fingers reach a window from a precision touchpad's
+/// DirectManipulation viewport, AppKit's scroll phases and Wayland's hold
+/// gesture (version 3); a swipe of several fingers from Wayland's and
+/// XInput 2.4's swipe gestures. Win32, AppKit and Android keep or report no
+/// swipe, and the browser, UIKit and Android report no hold. Columns: hold,
+/// swipe.
+#[test]
+fn every_backend_says_whether_a_touchpad_hold_and_swipe_reach_it() {
+    use crate::input::availability::{self as table, AndroidInputApis, WaylandInputGlobals};
+    use Availability::{Native, Unavailable};
+    let wayland = |pointer_gestures, pointer_gesture_hold| {
+        table::wayland(WaylandInputGlobals {
+            tablet: false,
+            pointer_gestures,
+            pointer_gesture_hold,
+        })
+    };
+    let rows = [
+        (
+            "windows with DirectManipulation",
+            table::windows(true),
+            [Native, Unavailable],
+        ),
+        (
+            "windows without DirectManipulation",
+            table::windows(false),
+            [Unavailable; 2],
+        ),
+        ("macos", table::macos(), [Native, Unavailable]),
+        ("ios", table::ios(), [Unavailable; 2]),
+        (
+            "android",
+            table::android(AndroidInputApis {
+                gesture_exclusion: true,
+                touchpad_gestures: true,
+                drag_source: true,
+            }),
+            [Unavailable; 2],
+        ),
+        ("web", table::web(true), [Unavailable; 2]),
+        (
+            "x11 with XInput 2.4",
+            table::x11(true),
+            [Unavailable, Native],
+        ),
+        ("x11 before XInput 2.4", table::x11(false), [Unavailable; 2]),
+        (
+            "wayland with gestures 3",
+            wayland(true, true),
+            [Native, Native],
+        ),
+        (
+            "wayland with gestures 1",
+            wayland(true, false),
+            [Unavailable, Native],
+        ),
+        (
+            "wayland without gestures",
+            wayland(false, false),
+            [Unavailable; 2],
+        ),
+    ];
+    for (backend, capabilities, expected) in rows {
+        assert_eq!(
+            [capabilities.touchpad_hold(), capabilities.touchpad_swipe()],
+            expected,
+            "{backend}"
+        );
+    }
+}
+
 /// Win32 answers the system's hit test from every chrome region and AppKit
 /// moves the window from a move area (ADR-0286 §7, §8); the native X11 host
 /// moves and resizes a window from them through its window manager (§10) and

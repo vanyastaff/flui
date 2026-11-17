@@ -196,7 +196,8 @@ pub use pointer::{
     PointerButton, PointerButtons, PointerCancel, PointerEvent, PointerId, PointerInfo,
     PointerKind, PointerMove, PointerPosition, PointerPress, PointerRelease, PointerRole,
     PointerSample, ScrollDelta, ScrollEvent, ScrollInversion, ScrollPhase, ScrollPrecision,
-    ScrollUnit, SmartZoomEvent,
+    ScrollUnit, SmartZoomEvent, SwipeOffset, TouchpadHoldEvent, TouchpadHoldPhase,
+    TouchpadSwipeEvent, TouchpadSwipePhase,
 };
 pub use preferences::{
     Distance, DurationScale, FlingSpeeds, GestureGeometry, GestureParts, GesturePreferences,

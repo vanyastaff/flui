@@ -1,6 +1,7 @@
 //! A precision-touchpad pan reaches the same owners a touch drag would: a
 //! pan-only `GestureDetector`, or the `Scrollable` the ownership table picks
-//! (ADR-0251).
+//! (ADR-0251). A swipe of three fingers reaches swipe recognizers, and no
+//! scrollable.
 
 use std::{cell::RefCell, rc::Rc};
 
@@ -128,4 +129,138 @@ pub(crate) fn a_plain_list_scrolls_with_a_touchpad_pan_as_before() {
     let laid = lay_out(list(&controller, 1000.0), tight(300.0, 300.0));
     pan(&laid, &[(0.0, 40.0), (0.0, 40.0)]);
     assert_eq!(controller.pixels(), 80.0);
+}
+
+/// A swipe recognizer for each axis, the vertical one around the horizontal
+/// one, over a list that can scroll: the edges each reported, by the kind of
+/// device that swiped.
+mod swipes {
+    use std::cell::RefCell;
+    use std::num::NonZeroU8;
+    use std::rc::Rc;
+    use std::time::Duration;
+
+    use flui_foundation::geometry::{Axis, Offset};
+    use flui_interaction::{PhysicalEdge, PointerKind, SwipeGestureRecognizer, SwipeStart};
+    use flui_view::environment::GestureArenaScope;
+    use flui_view::prelude::*;
+    use flui_widgets::prelude::HitTestBehavior;
+    use flui_widgets::{Listener, ScrollController};
+
+    pub(super) type Swiped = Rc<RefCell<Vec<(Axis, PhysicalEdge, PointerKind)>>>;
+
+    #[derive(Clone)]
+    pub(super) struct Swipes {
+        pub(super) swiped: Swiped,
+        pub(super) list: ScrollController,
+    }
+
+    impl View for Swipes {
+        fn create_element(self: Rc<Self>) -> flui_view::element::ElementKind {
+            flui_view::element::ElementKind::stateful(self)
+        }
+    }
+
+    pub(super) struct State {
+        vertical: Rc<SwipeGestureRecognizer>,
+        horizontal: Rc<SwipeGestureRecognizer>,
+    }
+
+    fn recognizer(
+        ctx: &dyn LifecycleContext,
+        axis: Axis,
+        swiped: &Swiped,
+    ) -> Rc<SwipeGestureRecognizer> {
+        let swiped = Rc::clone(swiped);
+        SwipeGestureRecognizer::builder(GestureArenaScope::of(ctx), SwipeStart::Anywhere(axis))
+            .on_swipe(move |details| {
+                swiped
+                    .borrow_mut()
+                    .push((axis, details.towards, details.kind));
+            })
+            .build()
+    }
+
+    impl StatefulView for Swipes {
+        type State = State;
+        fn create_state(&self, ctx: &dyn LifecycleContext) -> State {
+            State {
+                vertical: recognizer(ctx, Axis::Vertical, &self.swiped),
+                horizontal: recognizer(ctx, Axis::Horizontal, &self.swiped),
+            }
+        }
+    }
+
+    impl ViewState<Swipes> for State {
+        fn build(&self, view: &Swipes, _: &dyn BuildContext) -> impl IntoView {
+            Listener::new()
+                .behavior(HitTestBehavior::Opaque)
+                .recognizer(&self.vertical)
+                .child(
+                    Listener::new()
+                        .behavior(HitTestBehavior::Opaque)
+                        .recognizer(&self.horizontal)
+                        .child(super::list(&view.list, 1000.0)),
+                )
+        }
+    }
+
+    /// A swipe of three fingers from the middle, `step` a sample, six samples
+    /// 16 ms apart, then the lift.
+    pub(super) fn swipe(step: Offset<f64>) -> flui_testing::replay::PointerScript {
+        let mut script = flui_testing::TrackpadScript::new("swipe", Offset::new(150.0, 150.0))
+            .swipe_start(NonZeroU8::new(3).expect("three fingers"));
+        let mut travel = Offset::new(0.0, 0.0);
+        for _ in 0..6 {
+            travel += step;
+            script = script.wait(Duration::from_millis(16)).swipe_to(travel);
+        }
+        script
+            .wait(Duration::from_millis(8))
+            .swipe_end()
+            .build()
+            .expect("a swipe that starts and ends")
+    }
+}
+
+/// A touchpad swipe of three fingers is a gesture, never a scroll: the swipe
+/// recognizer of its axis takes it from the arena keyed by the swipe's
+/// pointer and reports the edge it heads to as a trackpad's, the recognizer of
+/// the other axis loses it, and the list under both never moves.
+pub(crate) fn a_touchpad_swipe_is_a_gesture_and_no_scroll() {
+    use flui_foundation::geometry::{Axis, Offset};
+    use flui_interaction::{PhysicalEdge, PointerKind};
+
+    for (step, (axis, edge)) in [
+        (
+            Offset::new(40.0, 2.0),
+            (Axis::Horizontal, PhysicalEdge::Right),
+        ),
+        (
+            Offset::new(-40.0, 0.0),
+            (Axis::Horizontal, PhysicalEdge::Left),
+        ),
+        (
+            Offset::new(1.0, 40.0),
+            (Axis::Vertical, PhysicalEdge::Bottom),
+        ),
+        (Offset::new(0.0, -40.0), (Axis::Vertical, PhysicalEdge::Top)),
+    ] {
+        let swiped = swipes::Swiped::default();
+        let list = ScrollController::new();
+        let mut laid = lay_out(
+            swipes::Swipes {
+                swiped: Rc::clone(&swiped),
+                list: list.clone(),
+            },
+            tight(300.0, 300.0),
+        );
+        laid.replay(&swipes::swipe(step));
+        assert_eq!(
+            *swiped.borrow(),
+            [(axis, edge, PointerKind::Trackpad)],
+            "a swipe of {step:?}"
+        );
+        assert_eq!(list.pixels(), 0.0, "a swipe of {step:?} scrolled the list");
+    }
 }

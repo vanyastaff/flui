@@ -6,6 +6,13 @@
 //! members. Once it owns the contact, a release fast enough to fling fires
 //! [`on_swipe`](SwipeGestureRecognizerBuilder::on_swipe) with the edge the
 //! swipe heads towards; a slow release fires nothing.
+//!
+//! A touchpad swipe of three fingers or more
+//! ([`TouchpadSwipe`](crate::events::PointerEvent::TouchpadSwipe)) is followed
+//! the same way: its start opens the contact, its travel is the contact's
+//! motion and its lift the release, so the same recognizer answers a finger
+//! on a screen and fingers on a touchpad, with
+//! [`SwipeDetails::kind`] saying which.
 
 use std::{
     cell::RefCell,
@@ -24,7 +31,7 @@ use super::{
 };
 use crate::gesture::observer::GestureContest;
 use crate::{
-    events::{PointerEvent, PointerEventExt, PointerKind},
+    events::{PointerEvent, PointerEventExt, PointerKind, SwipeOffset, TouchpadSwipePhase},
     gesture::arena::{GestureArena, GestureArenaMember, MotionRole},
     gesture::settings::GestureSettingsProvider,
     gesture::{Velocity, VelocityTracker, on_rail},
@@ -239,9 +246,38 @@ impl SwipeGestureRecognizer {
     }
 
     fn handle_move(&self, event: &PointerEvent, global: &PointerEvent) {
-        let (Some(snapshot), Some(position), Some(global)) =
-            (self.contact.current(), event.position(), global.position())
-        else {
+        let (Some(position), Some(global)) = (event.position(), global.position()) else {
+            return;
+        };
+        self.track(position, global, event_time(event), motion_history(event));
+    }
+
+    /// A touchpad swipe's travel since its start, local and root-space: the
+    /// fingers are where the start was, moved by the travel, though the
+    /// pointer itself stays put.
+    fn handle_touchpad_travel(&self, local: SwipeOffset, global: SwipeOffset, stamp: Option<u64>) {
+        let Some(snapshot) = self.contact.current() else {
+            return;
+        };
+        self.track(
+            snapshot.local + local.get(),
+            snapshot.global + global.get(),
+            stamp,
+            std::iter::empty(),
+        );
+    }
+
+    /// Follow the contact to `position` (`global` in root space) at `stamp`,
+    /// after the readings of `history`, and claim it once it crosses the slop
+    /// on the swipe's axis.
+    fn track(
+        &self,
+        position: Offset<f64>,
+        global: Offset<f64>,
+        stamp: Option<u64>,
+        history: impl Iterator<Item = (Option<u64>, Offset<f64>)>,
+    ) {
+        let Some(snapshot) = self.contact.current() else {
             return;
         };
         let axis = self.start.axis();
@@ -251,11 +287,11 @@ impl SwipeGestureRecognizer {
             let Some(state) = state.as_mut() else {
                 return;
             };
-            for (stamp, sample) in motion_history(event) {
-                let time = state.timeline.instant(stamp, now);
+            for (sample_stamp, sample) in history {
+                let time = state.timeline.instant(sample_stamp, now);
                 state.velocity.add_position(time, sample);
             }
-            let time = state.timeline.instant(event_time(event), now);
+            let time = state.timeline.instant(stamp, now);
             state.velocity.add_position(time, position);
             let travel = component(
                 slop_travel(position - snapshot.local, global - snapshot.global),
@@ -342,9 +378,65 @@ impl GestureRecognizer for SwipeGestureRecognizer {
     }
 
     fn add_pointer(&self, down: crate::pointer::PointerDispatch<'_>) {
-        if !is_primary_down(down.local) {
+        if is_primary_down(down.local) {
+            self.admit(down);
+        }
+    }
+
+    /// A touchpad swipe is a swipe too: its travel is followed as a
+    /// contact's motion would be, and its lift decides as a release does.
+    fn add_touchpad_swipe(&self, start: crate::pointer::PointerDispatch<'_>) {
+        if matches!(
+            start.local,
+            PointerEvent::TouchpadSwipe(swipe) if swipe.phase == TouchpadSwipePhase::Start
+        ) {
+            self.admit(start);
+        }
+    }
+
+    fn handle_event(&self, dispatch: crate::pointer::PointerDispatch<'_>) {
+        if !dispatch
+            .local
+            .pointer_id()
+            .is_some_and(|pointer| self.contact.tracks(pointer))
+        {
             return;
         }
+        match (dispatch.local, dispatch.global) {
+            (PointerEvent::Move(_), _) => self.handle_move(dispatch.local, dispatch.global),
+            (PointerEvent::Up(_), _) => self.handle_up(dispatch.local),
+            (PointerEvent::TouchpadSwipe(local), PointerEvent::TouchpadSwipe(global)) => {
+                match (local.phase, global.phase) {
+                    (TouchpadSwipePhase::Update(local), TouchpadSwipePhase::Update(global)) => {
+                        self.handle_touchpad_travel(local, global, event_time(dispatch.local));
+                    }
+                    (TouchpadSwipePhase::End, _) => self.handle_up(dispatch.local),
+                    (TouchpadSwipePhase::Cancelled, _) => {
+                        let _ = self.cancel();
+                    }
+                    _ => {}
+                }
+            }
+            (PointerEvent::Cancel(_), _) => {
+                let _ = self.cancel();
+            }
+            _ => {}
+        }
+    }
+
+    fn cancel(&self) -> CancelOutcome {
+        self.state.replace(None);
+        if self.contact.cancel().is_some() {
+            CancelOutcome::Cancelled
+        } else {
+            CancelOutcome::Idle
+        }
+    }
+}
+
+impl SwipeGestureRecognizer {
+    /// Open the contact a primary Down or a touchpad swipe's start begins.
+    fn admit(&self, down: crate::pointer::PointerDispatch<'_>) {
         let Some(position) = down.local.position() else {
             return;
         };
@@ -364,33 +456,6 @@ impl GestureRecognizer for SwipeGestureRecognizer {
             timeline,
             velocity,
         }));
-    }
-
-    fn handle_event(&self, dispatch: crate::pointer::PointerDispatch<'_>) {
-        if !dispatch
-            .local
-            .pointer_id()
-            .is_some_and(|pointer| self.contact.tracks(pointer))
-        {
-            return;
-        }
-        match dispatch.local {
-            PointerEvent::Move(_) => self.handle_move(dispatch.local, dispatch.global),
-            PointerEvent::Up(_) => self.handle_up(dispatch.local),
-            PointerEvent::Cancel(_) => {
-                let _ = self.cancel();
-            }
-            _ => {}
-        }
-    }
-
-    fn cancel(&self) -> CancelOutcome {
-        self.state.replace(None);
-        if self.contact.cancel().is_some() {
-            CancelOutcome::Cancelled
-        } else {
-            CancelOutcome::Idle
-        }
     }
 }
 

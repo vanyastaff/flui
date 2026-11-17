@@ -1,4 +1,4 @@
-//! The X11 host's input: XInput 2's pointers, touches, pens, touchpad pinches
+//! The X11 host's input: XInput 2's pointers, touches, pens, touchpad pinches and swipes
 //! and smooth scrolling, XKB's keyboard, and the cursor.
 //!
 //! The pure half ([`decode`]) turns XInput 2 events, copied into plain
@@ -29,7 +29,11 @@
 //! - **A pinch is one pan-zoom.** XInput 2.4 reports a touchpad pinch's scale
 //!   since it began and its rotation since the last update, as Wayland's
 //!   `pointer-gestures` does; each update's own factor and clockwise radians
-//!   are assembled about the cursor. Swipes are the window manager's.
+//!   are assembled about the cursor.
+//! - **A swipe is a gesture.** XInput 2.4 reports a touchpad swipe of its
+//!   finger count with the fingers' accelerated step since the last event;
+//!   the steps are summed into the travel since the swipe began. XInput has
+//!   no hold, so nothing stops a fling from resting fingers here.
 //! - **A grab that takes the pointer mid-press ends the press.** A `Leave` in
 //!   grab mode (the window manager's move, another client's grab) cancels the
 //!   pressed contact; the implicit grab of a press delivers its release.
@@ -47,6 +51,7 @@ pub mod decode {
     #![forbid(unsafe_code)]
 
     use std::collections::{HashMap, HashSet};
+    use std::num::NonZeroU8;
 
     use flui_platform::EventTime;
     use flui_platform::PlatformInput;
@@ -61,7 +66,7 @@ pub mod decode {
         ContactRegistry, ContactScroll, DecodeError, GestureComponent, GestureDelta, GesturePhase,
         GestureReading, MoveBatch, NativeCancel, NativeClock, NativeContact, NativeDevice,
         NativeReading, NativeSurface, NativeTime, PenAngles, RawSensors, ReadingAction,
-        ReadingTime, decode,
+        ReadingTime, SwipeReading, decode,
     };
     use crate::input::linux::xkb::{XkbModifier, modifiers_of};
     use crate::input::scroll::{WheelAmount, wheel_step};
@@ -76,6 +81,8 @@ pub mod decode {
     pub const PINCH: NativeContact = NativeContact(u64::MAX - 1);
     /// A pen on a window.
     pub const PEN: NativeContact = NativeContact(u64::MAX - 2);
+    /// A touchpad swipe of a master pointer.
+    pub const SWIPE: NativeContact = NativeContact(u64::MAX - 3);
 
     /// A master device's XInput 2 id, which the server gives another device
     /// once this one is gone.
@@ -170,6 +177,22 @@ pub mod decode {
         /// (`XIGesturePinchEventCancelled`).
         PinchEnd {
             /// The pinch was cancelled.
+            cancelled: bool,
+        },
+        /// `XI_GestureSwipeBegin`; the event's `detail` is the finger count.
+        SwipeBegin,
+        /// `XI_GestureSwipeUpdate`.
+        SwipeUpdate {
+            /// The fingers' accelerated step since the last event, in device
+            /// pixels.
+            dx: f64,
+            /// The vertical step.
+            dy: f64,
+        },
+        /// `XI_GestureSwipeEnd`; `cancelled` when the gesture was
+        /// (`XIGestureSwipeEventCancelled`).
+        SwipeEnd {
+            /// The swipe was cancelled.
             cancelled: bool,
         },
     }
@@ -408,8 +431,15 @@ pub mod decode {
         scale: f64,
     }
 
+    /// A swipe in progress.
+    #[derive(Debug, Clone, Copy)]
+    struct OpenSwipe {
+        surface: NativeSurface,
+        fingers: NonZeroU8,
+    }
+
     /// One master pointer: its labels, the contact it moves now and where,
-    /// and its pinch.
+    /// and its pinch or swipe.
     #[derive(Debug, Clone, Copy)]
     struct Master {
         label: NativeDevice,
@@ -419,6 +449,7 @@ pub mod decode {
         /// window it moved it on.
         current: Option<(NativeSurface, Target)>,
         pinch: Option<Pinch>,
+        swipe: Option<OpenSwipe>,
     }
 
     /// What one event delivers to its window.
@@ -627,6 +658,7 @@ pub mod decode {
                         gestures: None,
                         current: None,
                         pinch: None,
+                        swipe: None,
                     },
                 );
                 if let Some(change) = self.contacts.add_device(label, PointerKind::Mouse, time) {
@@ -722,6 +754,9 @@ pub mod decode {
             for master in self.masters.values_mut() {
                 if master.current.is_some_and(|(on, _)| on == surface) {
                     master.current = None;
+                }
+                if master.swipe.is_some_and(|swipe| swipe.surface == surface) {
+                    master.swipe = None;
                 }
                 if master.pinch.is_some_and(|pinch| pinch.surface == surface) {
                     master.pinch = None;
@@ -840,6 +875,13 @@ pub mod decode {
                 self.pinch(surface, scale, event, &mut decoded.inputs);
                 return decoded;
             }
+            if matches!(
+                event.action,
+                XiAction::SwipeBegin | XiAction::SwipeUpdate { .. } | XiAction::SwipeEnd { .. }
+            ) {
+                self.swipe(surface, scale, event, &mut decoded.inputs);
+                return decoded;
+            }
             let Some(target) = self.target_of(event) else {
                 return decoded;
             };
@@ -910,8 +952,12 @@ pub mod decode {
                 XiAction::TouchEnd => {
                     self.assemble(&read(ReadingAction::Release(PointerButton::PRIMARY)), out);
                 }
-                XiAction::PinchBegin | XiAction::PinchUpdate { .. } | XiAction::PinchEnd { .. } => {
-                }
+                XiAction::PinchBegin
+                | XiAction::PinchUpdate { .. }
+                | XiAction::PinchEnd { .. }
+                | XiAction::SwipeBegin
+                | XiAction::SwipeUpdate { .. }
+                | XiAction::SwipeEnd { .. } => {}
             }
             decoded
         }
@@ -1027,6 +1073,97 @@ pub mod decode {
             }
         }
 
+        /// The label of `master`'s touchpad gestures: a device of their own,
+        /// announced with the master's first gesture.
+        fn gestures_of(
+            &mut self,
+            master: &mut Master,
+            event: &XiEvent,
+            out: &mut Vec<PlatformInput>,
+        ) -> NativeDevice {
+            if let Some(device) = master.gestures {
+                return device;
+            }
+            let device = self.mint();
+            let time = self
+                .contacts
+                .stamp(event.time.reading_time())
+                .unwrap_or(event.time.arrival);
+            if let Some(change) = self
+                .contacts
+                .add_device(device, PointerKind::Trackpad, time)
+            {
+                out.push(PlatformInput::Pointer(PointerEvent::DeviceAdded(change)));
+            }
+            master.gestures = Some(device);
+            device
+        }
+
+        /// A touchpad swipe of the event's master: one swipe of its finger
+        /// count where the cursor rests, its steps summed into its travel.
+        fn swipe(
+            &mut self,
+            surface: NativeSurface,
+            scale: f64,
+            event: &XiEvent,
+            out: &mut Vec<PlatformInput>,
+        ) {
+            let Some(mut master) = self.masters.get(&event.master).copied() else {
+                return;
+            };
+            let device = self.gestures_of(&mut master, event, out);
+            let step = match event.action {
+                XiAction::SwipeBegin => {
+                    // The server names at least one finger; a count past a
+                    // byte is still a swipe of every finger a byte holds.
+                    let fingers = u8::try_from(event.detail).unwrap_or(u8::MAX);
+                    NonZeroU8::new(fingers).map(|fingers| {
+                        master.swipe = Some(OpenSwipe { surface, fingers });
+                        (fingers, GesturePhase::Began, (0.0, 0.0))
+                    })
+                }
+                XiAction::SwipeUpdate { dx, dy } => master
+                    .swipe
+                    .filter(|swipe| swipe.surface == surface)
+                    .map(|swipe| (swipe.fingers, GesturePhase::Changed, (dx, dy))),
+                XiAction::SwipeEnd { cancelled } => master
+                    .swipe
+                    .take()
+                    .filter(|swipe| swipe.surface == surface)
+                    .map(|swipe| {
+                        let phase = if cancelled {
+                            GesturePhase::Cancelled
+                        } else {
+                            GesturePhase::Ended
+                        };
+                        (swipe.fingers, phase, (0.0, 0.0))
+                    }),
+                _ => None,
+            };
+            self.masters.insert(event.master, master);
+            let Some((fingers, phase, (dx, dy))) = step else {
+                return;
+            };
+            let target = Target {
+                device,
+                contact: SWIPE,
+                kind: PointerKind::Trackpad,
+            };
+            let reading = Self::reading(
+                event,
+                surface,
+                scale,
+                target,
+                ReadingAction::Swipe(SwipeReading {
+                    fingers,
+                    phase,
+                    dx,
+                    dy,
+                }),
+            );
+            self.assemble(&reading, out);
+        }
+
         /// A touchpad pinch of the event's master: one pan-zoom about the
         /// cursor.
         fn pinch(
@@ -1039,25 +1176,7 @@ pub mod decode {
             let Some(mut master) = self.masters.get(&event.master).copied() else {
                 return;
             };
-            let device = if let Some(device) = master.gestures {
-                device
-            } else {
-                // The touchpad's gestures are a device of their own, announced
-                // with the master's first pinch.
-                let device = self.mint();
-                let time = self
-                    .contacts
-                    .stamp(event.time.reading_time())
-                    .unwrap_or(event.time.arrival);
-                if let Some(change) = self
-                    .contacts
-                    .add_device(device, PointerKind::Trackpad, time)
-                {
-                    out.push(PlatformInput::Pointer(PointerEvent::DeviceAdded(change)));
-                }
-                master.gestures = Some(device);
-                device
-            };
+            let device = self.gestures_of(&mut master, event, out);
             let readings: Vec<(GestureComponent, GesturePhase, GestureDelta)> = match event.action {
                 XiAction::PinchBegin => {
                     master.pinch = Some(Pinch {
@@ -1640,6 +1759,23 @@ mod live {
                 },
             )
         };
+        let swipe = |action, e: &xinput::GestureSwipeBeginEvent| {
+            xi_event(
+                action,
+                &XiFields {
+                    window: e.event,
+                    master: e.deviceid,
+                    source: e.sourceid,
+                    detail: e.detail,
+                    time: e.time,
+                    position: (e.event_x, e.event_y),
+                    modifiers: e.mods.effective,
+                    mask: &[],
+                    values: &[],
+                    emulated: false,
+                },
+            )
+        };
         Some(match event {
             Event::XinputMotion(e) => pointer(XiAction::Motion, e),
             Event::XinputButtonPress(e) => pointer(XiAction::ButtonPress, e),
@@ -1666,6 +1802,22 @@ mod live {
                 XiAction::PinchEnd {
                     cancelled: u32::from(e.flags)
                         & u32::from(xinput::GesturePinchEventFlags::GESTURE_PINCH_CANCELLED)
+                        != 0,
+                },
+                e,
+            ),
+            Event::XinputGestureSwipeBegin(e) => swipe(XiAction::SwipeBegin, e),
+            Event::XinputGestureSwipeUpdate(e) => swipe(
+                XiAction::SwipeUpdate {
+                    dx: fp1616(e.delta_x),
+                    dy: fp1616(e.delta_y),
+                },
+                e,
+            ),
+            Event::XinputGestureSwipeEnd(e) => swipe(
+                XiAction::SwipeEnd {
+                    cancelled: u32::from(e.flags)
+                        & u32::from(xinput::GestureSwipeEventFlags::GESTURE_SWIPE_CANCELLED)
                         != 0,
                 },
                 e,
@@ -2167,7 +2319,10 @@ mod live {
                 mask = mask
                     | bit(xinput::GESTURE_PINCH_BEGIN_EVENT)
                     | bit(xinput::GESTURE_PINCH_UPDATE_EVENT)
-                    | bit(xinput::GESTURE_PINCH_END_EVENT);
+                    | bit(xinput::GESTURE_PINCH_END_EVENT)
+                    | bit(xinput::GESTURE_SWIPE_BEGIN_EVENT)
+                    | bit(xinput::GESTURE_SWIPE_UPDATE_EVENT)
+                    | bit(xinput::GESTURE_SWIPE_END_EVENT);
             }
             let selected = self.connection.xcb().xinput_xi_select_events(
                 window,
