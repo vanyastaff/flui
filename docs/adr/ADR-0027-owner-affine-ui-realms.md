@@ -196,8 +196,8 @@ pub struct SceneSnapshot {           // Send + Sync; moves by value; never Arc<S
   generation mismatches is refused before rendering with the verdict `SurfaceStale`.
 - The slot answers each frame with a `RasterVerdict` (`Presented`, `NoPresent`, `NotShown`,
   `Retry`, `SurfaceStale`, `DeviceLost`, `Failed`).
-- The executor runs inline on the owner thread (ADR-0305); no raster thread ships, and a threaded
-  placement would keep this protocol.
+- The executor runs on a raster thread on the Wayland host and inline on the owner thread
+  elsewhere (ADR-0305 §10); both placements keep this protocol.
 
 ### 6. Identity, versioning, cancellation — freshness is per work class
 

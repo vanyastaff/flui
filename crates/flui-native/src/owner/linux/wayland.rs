@@ -682,12 +682,53 @@ pub(crate) mod wait {
     //! since would turn a window that declines its frames, or one the
     //! compositor does not draw, into a busy loop. Only the deadline armed
     //! bounds the wait.
+    //!
+    //! A frame asked of a window whose frame callback is out waits for that
+    //! callback or its grace, and one asked of a window the compositor has not
+    //! configured or has suspended waits for the compositor. So the loop wakes
+    //! for a deadline no earlier than the first window lets a frame through
+    //! ([`deadline_wake`]): a deadline that moves on each answer, as the
+    //! runtime's in-flight floor does while a raster thread holds a frame,
+    //! would otherwise wake the loop at its own pace for frames no window
+    //! delivers, where the window is never polled.
 
     #![forbid(unsafe_code)]
 
     use std::time::Duration;
 
     use web_time::Instant;
+
+    /// When a frame asked of a window now goes through, ordered from the
+    /// soonest: the first of several windows is their minimum.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    pub(crate) enum FrameHold {
+        /// At once: nothing holds the window's next frame back.
+        Free,
+        /// Once the frame callback that is out is given up at this instant,
+        /// or sooner, when the compositor answers it.
+        Until(Instant),
+        /// Only once the compositor says so: it has not configured the
+        /// window, or suspended it. What it sends wakes the loop.
+        Compositor,
+    }
+
+    /// When the loop wakes for the wake deadline `deadline`, which it serves
+    /// by asking every window for a frame, where `first` is the soonest
+    /// [`FrameHold`] of its windows (`None`: it holds none): at the deadline,
+    /// but not before a window lets a frame through, and not at all while
+    /// only the compositor can release one. A deadline the loop wakes for
+    /// later is still armed and delivered then.
+    pub(crate) fn deadline_wake(
+        deadline: Option<Instant>,
+        first: Option<FrameHold>,
+    ) -> Option<Instant> {
+        let deadline = deadline?;
+        match first {
+            None | Some(FrameHold::Free) => Some(deadline),
+            Some(FrameHold::Until(released)) => Some(deadline.max(released)),
+            Some(FrameHold::Compositor) => None,
+        }
+    }
 
     /// What one turn of the loop knows when it chooses how long to block.
     #[derive(Debug, Clone, Copy)]
@@ -837,6 +878,63 @@ pub(crate) mod wait {
             }
         }
 
+        /// A wake deadline wakes the loop no sooner than a window lets a
+        /// frame through: at once for a window nothing holds or with no
+        /// window, at the end of a callback's grace for one whose callback
+        /// is out, and never by time for one only the compositor releases.
+        /// Several windows are released by the first of them.
+        #[test]
+        fn a_wake_deadline_waits_for_a_window_to_take_its_frame() {
+            let now = Instant::now();
+            let ms = Duration::from_millis;
+            let deadline = Some(now + ms(50));
+            let grace = now + ms(1_000);
+            let first = |holds: &[FrameHold]| holds.iter().copied().min();
+            for (case, deadline, holds, expected) in [
+                ("no deadline", None, vec![FrameHold::Free], None),
+                ("no window", deadline, vec![], deadline),
+                ("a free window", deadline, vec![FrameHold::Free], deadline),
+                (
+                    "a callback out",
+                    deadline,
+                    vec![FrameHold::Until(grace)],
+                    Some(grace),
+                ),
+                (
+                    "a callback given up before the deadline",
+                    deadline,
+                    vec![FrameHold::Until(now)],
+                    deadline,
+                ),
+                (
+                    "a suspended or unconfigured window",
+                    deadline,
+                    vec![FrameHold::Compositor],
+                    None,
+                ),
+                (
+                    "a held window beside a free one",
+                    deadline,
+                    vec![FrameHold::Until(grace), FrameHold::Free],
+                    deadline,
+                ),
+                (
+                    "a held window beside a suspended one",
+                    deadline,
+                    vec![FrameHold::Compositor, FrameHold::Until(grace)],
+                    Some(grace),
+                ),
+                (
+                    "two callbacks out",
+                    deadline,
+                    vec![FrameHold::Until(grace + ms(500)), FrameHold::Until(grace)],
+                    Some(grace),
+                ),
+            ] {
+                assert_eq!(deadline_wake(deadline, first(&holds)), expected, "{case}");
+            }
+        }
+
         /// Events a dispatch recorded are carried out before the loop sleeps,
         /// and a flush the socket cut short is finished when the socket takes
         /// more: neither waits for an unrelated wake.
@@ -921,7 +1019,9 @@ mod event_loop {
     use super::activation::{ActivationToken, LAUNCH_TOKEN_VARIABLE, launch_token};
     use super::outputs::OnOutputs;
     use super::user_input::{Inputs, UserInput};
-    use super::wait::{BeforePoll, Flush, LoopTurn, before_poll, poll_timeout};
+    use super::wait::{
+        BeforePoll, Flush, FrameHold, LoopTurn, before_poll, deadline_wake, poll_timeout,
+    };
     use crate::error::PlatformError;
     use crate::executor::NativeExecutor;
     use crate::host;
@@ -1617,6 +1717,9 @@ mod event_loop {
         /// with a frame asked for behind it: a present that was skipped never
         /// commits the callback it armed.
         fn frame_wait(&self) -> Option<Instant>;
+
+        /// What holds back a frame asked of the window now.
+        fn frame_hold(&self) -> FrameHold;
 
         /// A wake deadline came due: ask the window for a frame.
         fn request_frame(&self);
@@ -2725,6 +2828,9 @@ mod event_loop {
                 .iter()
                 .filter_map(|window| window.frame_wait())
                 .min();
+            // The wake deadline is served by the windows' frames: the loop
+            // wakes for it once one of them can take a frame.
+            let first_release = windows.iter().map(|window| window.frame_hold()).min();
             drop(windows);
             // A loop that stopped accepting work asks for no deadline, as the
             // X11 and Win32 loops do.
@@ -2733,7 +2839,10 @@ mod event_loop {
             } else {
                 None
             };
-            let wake_deadline = self.deadline.borrow_mut().arm(answer, self.frames.get());
+            let wake_deadline = deadline_wake(
+                self.deadline.borrow_mut().arm(answer, self.frames.get()),
+                first_release,
+            );
             let turn_answer = if self.signal.accepting() {
                 self.app.turn_deadline().or_resume(None)
             } else {
@@ -3174,6 +3283,9 @@ mod event_loop {
             }
             fn frame_wait(&self) -> Option<Instant> {
                 None
+            }
+            fn frame_hold(&self) -> FrameHold {
+                FrameHold::Free
             }
             fn request_frame(&self) {}
             fn release(&self) {}
