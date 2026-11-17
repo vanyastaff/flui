@@ -47,6 +47,7 @@ use crate::build::app_floor::{AppFloors, PlatformsConfig};
 use crate::build::app_version::AppVersion;
 use crate::build::web_page::{BaseHref, ThemeColor, WebPage};
 use crate::error::{CliError, CliResult, ResultExt};
+use crate::types::ProjectName;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
@@ -119,7 +120,7 @@ impl WebConfig {
 #[must_use]
 pub(crate) fn web_page(project: Option<&Project>) -> WebPage {
     project.map_or_else(WebPage::default, |Project { config, dir }| WebPage {
-        title: Some(config.app.name.clone()),
+        title: Some(config.app.name.to_string()),
         description: config.web.description.clone(),
         theme_color: config.web.theme_color.clone(),
         base_href: config.web.base_href.clone(),
@@ -142,8 +143,7 @@ impl FluiConfig {
             });
         }
 
-        let content = std::fs::read_to_string(path)
-            .with_context(|| format!("failed to read {}", path.display()))?;
+        let content = read_bounded(path)?;
 
         if let Some(id) = legacy_organization_id(&content) {
             return Err(CliError::InvalidConfig {
@@ -173,6 +173,41 @@ impl FluiConfig {
         std::fs::write(dir.join("flui.toml"), content).context("failed to write flui.toml")?;
         Ok(())
     }
+}
+
+/// The most bytes a `flui.toml` may hold. A project file is a few hundred
+/// bytes; one past this bound is refused before it is decoded, so a file that
+/// is not a project file (or never ends) is never read into memory whole.
+const MAX_CONFIG_BYTES: usize = 1024 * 1024;
+
+/// The text of the `flui.toml` at `path`, read only up to
+/// [`MAX_CONFIG_BYTES`].
+///
+/// # Errors
+///
+/// When the file cannot be read, holds more than [`MAX_CONFIG_BYTES`], or is
+/// not UTF-8.
+fn read_bounded(path: &Path) -> CliResult<String> {
+    use std::io::Read as _;
+
+    let file =
+        std::fs::File::open(path).with_context(|| format!("failed to read {}", path.display()))?;
+    let mut bytes = Vec::new();
+    file.take(MAX_CONFIG_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)
+        .with_context(|| format!("failed to read {}", path.display()))?;
+    if bytes.len() > MAX_CONFIG_BYTES {
+        return Err(CliError::InvalidConfig {
+            file: path.display().to_string(),
+            reason: format!(
+                "holds more than {MAX_CONFIG_BYTES} bytes, which no project file needs"
+            ),
+        });
+    }
+    String::from_utf8(bytes).map_err(|_| CliError::InvalidConfig {
+        file: path.display().to_string(),
+        reason: "is not UTF-8 text".to_owned(),
+    })
 }
 
 /// The floors a build in `root` uses: those of the nearest `flui.toml` at or
@@ -271,8 +306,11 @@ fn legacy_organization_id(content: &str) -> Option<String> {
 /// Application metadata.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct AppConfig {
-    /// Application name (used as crate name).
-    pub(crate) name: String,
+    /// Application name: the crate's name, and the name each package and
+    /// generated project states. It is a [`ProjectName`], checked when the
+    /// file loads, so a quote, a `$`, a slash or a space never reaches the
+    /// Kotlin, XML, JSON or HTML it is written into.
+    pub(crate) name: ProjectName,
     /// The application's version, SemVer, from which every package's version
     /// is derived ([`AppVersion`]).
     pub(crate) version: AppVersion,
@@ -427,7 +465,7 @@ mod tests {
     fn sample() -> FluiConfig {
         FluiConfig {
             app: AppConfig {
-                name: "my-app".into(),
+                name: ProjectName::new("my-app").expect("a project name"),
                 version: AppVersion::try_new("0.1.0").expect("a SemVer version"),
                 id: AppId::try_new("com.example.my_app").expect("an identifier"),
             },
@@ -553,6 +591,43 @@ mod tests {
         assert!(
             FluiConfig::load_from(&path).is_err(),
             "a refused identifier"
+        );
+    }
+
+    /// What the project file says is checked when it loads, before any
+    /// command writes a value of it into a generated file: a name that is
+    /// not a project name (a quote that would close the Kotlin string of
+    /// `settings.gradle.kts`, a `$` Kotlin reads as a template, a space, a
+    /// slash) is refused naming the name, and a file past the size bound is
+    /// refused before it is decoded.
+    #[test]
+    fn a_project_file_is_checked_when_it_loads() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("flui.toml");
+        let with_name = |name: &str| {
+            format!("[app]\nname = {name}\nversion = \"0.1.0\"\nid = \"com.example.notes\"\n")
+        };
+        for (name, accepted) in [
+            ("\"notes\"", true),
+            ("\"notes-app_2\"", true),
+            ("'my\"app'", false),
+            ("\"my$app\"", false),
+            ("\"my app\"", false),
+            ("\"../app\"", false),
+            ("\"\"", false),
+        ] {
+            std::fs::write(&path, with_name(name)).expect("write flui.toml");
+            let loaded = FluiConfig::load_from(&path);
+            assert_eq!(loaded.is_ok(), accepted, "{name}: {loaded:?}");
+        }
+        let mut oversized = with_name("\"notes\"");
+        oversized.push_str(&"#".repeat(MAX_CONFIG_BYTES));
+        std::fs::write(&path, oversized).expect("write flui.toml");
+        let refused = FluiConfig::load_from(&path).expect_err("past the size bound");
+        assert!(
+            matches!(&refused, CliError::InvalidConfig { reason, .. }
+                if reason.contains("more than 1048576 bytes")),
+            "{refused:?}"
         );
     }
 

@@ -205,6 +205,18 @@ mod tests {
             if found != (Ok(code), name.to_owned(), apple.to_owned()) {
                 failures.push(format!("{text}: {found:?}"));
             }
+            // What Apple takes for both keys: at most three period-separated
+            // integers, digits and periods only.
+            let apple_form = &found.2;
+            if apple_form.split('.').count() > 3
+                || !apple_form
+                    .split('.')
+                    .all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit()))
+            {
+                failures.push(format!(
+                    "{text}: {apple_form} is not an Apple bundle version"
+                ));
+            }
         }
         for (text, refusal) in [
             (

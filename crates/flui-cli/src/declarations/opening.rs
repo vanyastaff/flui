@@ -157,7 +157,61 @@ impl FileType {
     pub(crate) fn name(&self) -> &str {
         &self.name.0
     }
+
+    /// The identifier Apple's systems declare for this extension themselves
+    /// (`public.png` for `png`), when they do: a bundle opens such a file by
+    /// that type and declares none of its own. `None` for an extension only
+    /// the application gives a type, which its bundle exports.
+    #[must_use]
+    pub(crate) fn apple_system_type(&self) -> Option<&'static str> {
+        APPLE_SYSTEM_TYPES
+            .iter()
+            .find(|(_, extensions)| extensions.contains(&self.extension()))
+            .map(|(identifier, _)| *identifier)
+    }
 }
+
+/// The extensions of the type Apple's systems declare as `identifier`, as a
+/// bundle names it in `LSItemContentTypes`; none for any other identifier.
+#[must_use]
+pub(crate) fn apple_system_type_extensions(identifier: &str) -> &'static [&'static str] {
+    APPLE_SYSTEM_TYPES
+        .iter()
+        .find(|(declared, _)| *declared == identifier)
+        .map_or(&[], |(_, extensions)| extensions)
+}
+
+/// Types macOS and iOS declare themselves (the `UTType` constants of the
+/// Uniform Type Identifiers framework), with the file extensions they claim.
+/// A bundle that exported one of these under its own identifier would claim
+/// to own every PNG or PDF on the machine.
+const APPLE_SYSTEM_TYPES: [(&str, &[&str]); 25] = [
+    ("public.png", &["png"]),
+    ("public.jpeg", &["jpg", "jpeg"]),
+    ("com.compuserve.gif", &["gif"]),
+    ("public.tiff", &["tif", "tiff"]),
+    ("public.heic", &["heic"]),
+    ("com.microsoft.bmp", &["bmp"]),
+    ("org.webmproject.webp", &["webp"]),
+    ("com.microsoft.ico", &["ico"]),
+    ("public.svg-image", &["svg"]),
+    ("com.adobe.pdf", &["pdf"]),
+    ("public.plain-text", &["txt"]),
+    ("public.json", &["json"]),
+    ("public.xml", &["xml"]),
+    ("public.yaml", &["yaml", "yml"]),
+    ("public.html", &["html", "htm"]),
+    ("public.comma-separated-values-text", &["csv"]),
+    ("public.rtf", &["rtf"]),
+    ("public.zip-archive", &["zip"]),
+    ("org.gnu.gnu-zip-archive", &["gz"]),
+    ("public.tar-archive", &["tar"]),
+    ("public.mp3", &["mp3"]),
+    ("com.microsoft.waveform-audio", &["wav"]),
+    ("com.apple.m4a-audio", &["m4a"]),
+    ("public.mpeg-4", &["mp4"]),
+    ("com.apple.quicktime-movie", &["mov"]),
+];
 
 /// A file extension without its `.`: 1 to 32 ASCII letters and digits, kept
 /// in lower case.

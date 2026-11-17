@@ -35,7 +35,11 @@
 //! served may be reload long polls; one past them is a short poll, answered
 //! at once with the current generation. The page is served with the generation it
 //! is, which its first poll waits past. A request's head must arrive
-//! within `REQUEST_HEAD`. Every response is `nosniff`.
+//! within `REQUEST_HEAD`, and a response must be written within
+//! `RESPONSE_WRITE`, however slowly the client reads. A file of the build is
+//! copied from disk as it is written, never read whole; the page, which is
+//! read whole to carry the reload script, is answered 500 past `MAX_PAGE`
+//! before it is read. Every response is `nosniff`.
 //!
 //! Standard library only: a thread accepts, a thread per connection serves,
 //! and every response closes its connection. A browser fetching a dozen
@@ -61,6 +65,14 @@ const RELOAD_SCRIPT_PATH: &str = "/__flui/reload.js";
 const LONG_POLL: Duration = Duration::from_secs(25);
 /// Upper bound on a request head; anything longer is not a browser.
 const MAX_HEAD: usize = 16 * 1024;
+/// How long one response may take to write, all of it. A module of a debug
+/// build is tens of megabytes, which the loopback carries in well under a
+/// second; a client reading slower than this holds no place for longer.
+const RESPONSE_WRITE: Duration = Duration::from_secs(60);
+/// The largest page the server reads whole to add its reload script to;
+/// every other file is copied from disk as it is written. A larger page is
+/// answered 500, naming the bound.
+const MAX_PAGE: u64 = 4 * 1024 * 1024;
 
 /// The page's script waits for a generation other than the one the page was
 /// served with (its `src` carries it, `?generation=N`), so a rebuild between
@@ -93,6 +105,8 @@ struct Shared {
     root: PathBuf,
     /// The path the build is served under.
     base: BaseHref,
+    /// How long a response may take to write, all of it: `RESPONSE_WRITE`.
+    response_write: Duration,
     generation: AtomicU64,
     changed: Condvar,
     lock: Mutex<()>,
@@ -108,11 +122,22 @@ struct Shared {
 impl DevServer {
     /// Serve `root` under `base` on `127.0.0.1:port`; `0` picks a free port.
     pub(crate) fn start(root: PathBuf, port: u16, base: BaseHref) -> io::Result<Self> {
+        Self::serve(root, port, base, RESPONSE_WRITE)
+    }
+
+    /// [`DevServer::start`], each response written within `response_write`.
+    fn serve(
+        root: PathBuf,
+        port: u16,
+        base: BaseHref,
+        response_write: Duration,
+    ) -> io::Result<Self> {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, port))?;
         let addr = listener.local_addr()?;
         let shared = Arc::new(Shared {
             root,
             base,
+            response_write,
             generation: AtomicU64::new(1),
             changed: Condvar::new(),
             lock: Mutex::new(()),
@@ -217,9 +242,7 @@ fn accept_loop(listener: &TcpListener, shared: &Arc<Shared>) {
             } else if let Some(held) = Held::take(shared, Count::Refusals) {
                 (held, |stream, _| {
                     let busy = Response::text("503 Service Unavailable", "too many connections\n");
-                    if stream.set_write_timeout(Some(REFUSAL)).is_ok() {
-                        refuse(stream, &busy, Instant::now() + REFUSAL);
-                    }
+                    refuse(stream, busy, Instant::now() + REFUSAL);
                 })
             } else {
                 continue;
@@ -294,25 +317,26 @@ impl Drop for Held {
 /// One HTTP/1.x exchange, then the connection closes.
 fn serve_connection(stream: &mut TcpStream, shared: &Shared) -> io::Result<()> {
     stream.set_read_timeout(Some(Duration::from_secs(10)))?;
-    stream.set_write_timeout(Some(Duration::from_secs(30)))?;
     let request = match read_request(stream)? {
         Head::Request(request) => request,
         Head::Closed => return Ok(()),
         Head::TooLarge => {
             let refused = Response::text("431 Request Header Fields Too Large", "too large\n");
-            refuse(stream, &refused, Instant::now() + REQUEST_HEAD);
+            refuse(stream, refused, Instant::now() + REQUEST_HEAD);
             return Ok(());
         }
         Head::NoHost => {
             let refused = Response::text("400 Bad Request", "exactly one Host header\n");
-            refuse(stream, &refused, Instant::now() + REQUEST_HEAD);
+            refuse(stream, refused, Instant::now() + REQUEST_HEAD);
             return Ok(());
         }
     };
     // The method and the `Host` are checked before any path's own answer,
     // the reload poll's included.
+    let head_only = request.method == "HEAD";
     if let Some(refused) = refusal(&request) {
-        return write_response(stream, &refused, request.method == "HEAD");
+        let until = Instant::now() + shared.response_write;
+        return write_response(stream, refused, head_only, until);
     }
     // A long poll holds its connection for up to `LONG_POLL`: past its own
     // smaller bound it is answered at once with the current generation (a
@@ -325,9 +349,12 @@ fn serve_connection(stream: &mut TcpStream, shared: &Shared) -> io::Result<()> {
             let short = Response {
                 status: "200 OK",
                 content_type: "application/json",
-                body: format!("{{\"generation\":{generation},\"short\":true}}").into_bytes(),
+                body: Body::Bytes(
+                    format!("{{\"generation\":{generation},\"short\":true}}").into_bytes(),
+                ),
             };
-            return write_response(stream, &short, false);
+            let until = Instant::now() + shared.response_write;
+            return write_response(stream, short, false, until);
         };
         Some(slot)
     } else {
@@ -343,7 +370,10 @@ fn serve_connection(stream: &mut TcpStream, shared: &Shared) -> io::Result<()> {
             response.body.len()
         ));
     }
-    write_response(stream, &response, request.method == "HEAD")
+    // Counted from the answer, not the request: a long poll's wait is not
+    // the write's.
+    let until = Instant::now() + shared.response_write;
+    write_response(stream, response, head_only, until)
 }
 
 struct Request {
@@ -362,7 +392,31 @@ struct Request {
 struct Response {
     status: &'static str,
     content_type: &'static str,
-    body: Vec<u8>,
+    body: Body,
+}
+
+/// What follows a response's head.
+enum Body {
+    /// Bytes the server made: a status text, a poll's answer, the page with
+    /// its reload script.
+    Bytes(Vec<u8>),
+    /// A file of the build, copied from disk as it is written, so a large
+    /// module is never held in memory once per connection.
+    File {
+        file: std::fs::File,
+        /// Its length when opened, the `Content-Length` sent.
+        len: u64,
+    },
+}
+
+impl Body {
+    fn len(&self) -> u64 {
+        match self {
+            // A `usize` length always fits a `u64` on the targets the CLI runs on.
+            Self::Bytes(bytes) => bytes.len() as u64,
+            Self::File { len, .. } => *len,
+        }
+    }
 }
 
 impl Response {
@@ -370,7 +424,7 @@ impl Response {
         Self {
             status,
             content_type: "text/plain; charset=utf-8",
-            body: body.as_bytes().to_vec(),
+            body: Body::Bytes(body.as_bytes().to_vec()),
         }
     }
 }
@@ -560,13 +614,13 @@ fn respond(request: &Request, shared: &Shared) -> Response {
             Response {
                 status: "200 OK",
                 content_type: "application/json",
-                body: format!("{{\"generation\":{generation}}}").into_bytes(),
+                body: Body::Bytes(format!("{{\"generation\":{generation}}}").into_bytes()),
             }
         }
         RELOAD_SCRIPT_PATH => Response {
             status: "200 OK",
             content_type: "text/javascript",
-            body: RELOAD_SCRIPT.as_bytes().to_vec(),
+            body: Body::Bytes(RELOAD_SCRIPT.as_bytes().to_vec()),
         },
         // The base with its slash left off is the base too.
         path => match path
@@ -601,12 +655,12 @@ fn serve_file(root: &Path, request_path: &str, navigation: bool, generation: u64
         .rsplit('/')
         .next()
         .is_none_or(|segment| !segment.contains('.'));
-    let (relative, body) = match read_inside(root, &relative) {
-        Some(body) => (relative, body),
+    let (relative, (file, len)) = match open_inside(root, &relative) {
+        Some(opened) => (relative, opened),
         None if navigation && names_a_route => {
             let page = PathBuf::from("index.html");
-            match read_inside(root, &page) {
-                Some(body) => (page, body),
+            match open_inside(root, &page) {
+                Some(opened) => (page, opened),
                 None => return not_found(),
             }
         }
@@ -614,9 +668,26 @@ fn serve_file(root: &Path, request_path: &str, navigation: bool, generation: u64
     };
     let content_type = mime_for(&relative);
     let body = if relative == Path::new("index.html") {
-        inject_reload_script(&body, generation)
+        // The page is read whole to carry the reload script, so its size is
+        // checked first and the read is cut at the bound whatever it grew to.
+        let mut page = Vec::new();
+        let read = len <= MAX_PAGE
+            && file
+                .take(MAX_PAGE + 1)
+                .read_to_end(&mut page)
+                .is_ok_and(|read| read as u64 <= MAX_PAGE);
+        if !read {
+            return Response::text(
+                "500 Internal Server Error",
+                &format!(
+                    "the page is larger than {MAX_PAGE} bytes, the most the server adds its \
+                     reload script to\n"
+                ),
+            );
+        }
+        Body::Bytes(inject_reload_script(&page, generation))
     } else {
-        body
+        Body::File { file, len }
     };
     Response {
         status: "200 OK",
@@ -625,17 +696,21 @@ fn serve_file(root: &Path, request_path: &str, navigation: bool, generation: u64
     }
 }
 
-/// The bytes of the file `relative` names under `root`, when it is a file,
-/// its canonical path, every link followed, is still under `root`'s, and it
-/// ends in `relative` as written: on a file system that ignores case,
-/// `/PKG/APP.JS` names no file, so a type is never decided on another
-/// spelling of the file's name.
-fn read_inside(root: &Path, relative: &Path) -> Option<Vec<u8>> {
+/// The file `relative` names under `root`, opened, with its length, when it
+/// is a file, its canonical path, every link followed, is still under
+/// `root`'s, and it ends in `relative` as written: on a file system that
+/// ignores case, `/PKG/APP.JS` names no file, so a type is never decided on
+/// another spelling of the file's name. Whether it is a file is asked of the
+/// opened handle, so the answer is about what is served.
+fn open_inside(root: &Path, relative: &Path) -> Option<(std::fs::File, u64)> {
     let root = root.canonicalize().ok()?;
-    let file = root.join(relative).canonicalize().ok()?;
-    (file.starts_with(&root) && file.ends_with(relative) && file.is_file())
-        .then(|| std::fs::read(&file).ok())
-        .flatten()
+    let path = root.join(relative).canonicalize().ok()?;
+    if !(path.starts_with(&root) && path.ends_with(relative)) {
+        return None;
+    }
+    let file = std::fs::File::open(&path).ok()?;
+    let metadata = file.metadata().ok()?;
+    metadata.is_file().then_some((file, metadata.len()))
 }
 
 /// `request_path`, percent-decoded, as a path under the served directory:
@@ -724,9 +799,10 @@ fn inject_reload_script(html: &[u8], generation: u64) -> Vec<u8> {
 /// Answer a refused request with `response` and close: the write side is
 /// shut after the response, and the request's bytes still arriving are read
 /// and dropped, at most `MAX_HEAD` of them and until `until`, so the client
-/// reads the status rather than a connection reset.
-fn refuse(stream: &mut TcpStream, response: &Response, until: Instant) {
-    if write_response(stream, response, false).is_err() {
+/// reads the status rather than a connection reset. The write and the drain
+/// both end by `until`.
+fn refuse(stream: &mut TcpStream, response: Response, until: Instant) {
+    if write_response(stream, response, false, until).is_err() {
         return;
     }
     let _ = stream.shutdown(Shutdown::Write);
@@ -739,18 +815,58 @@ fn refuse(stream: &mut TcpStream, response: &Response, until: Instant) {
     );
 }
 
-fn write_response(stream: &mut TcpStream, response: &Response, head_only: bool) -> io::Result<()> {
+/// Write `response` whole by `until`, however slowly the client reads: a
+/// client that takes one byte at a time does not hold its connection, and
+/// its place, past the deadline. A file body is copied in pieces; one that
+/// shrank since it was opened ends the response short, which the client
+/// reads as a body shorter than its `Content-Length`.
+fn write_response(
+    stream: &mut TcpStream,
+    response: Response,
+    head_only: bool,
+    until: Instant,
+) -> io::Result<()> {
+    let mut writer = DeadlineWriter { stream, until };
     write!(
-        stream,
+        writer,
         "HTTP/1.1 {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\n\r\n",
         response.status,
         response.content_type,
         response.body.len()
     )?;
     if !head_only {
-        stream.write_all(&response.body)?;
+        match response.body {
+            Body::Bytes(bytes) => writer.write_all(&bytes)?,
+            Body::File { file, len } => {
+                io::copy(&mut file.take(len), &mut writer)?;
+            }
+        }
     }
-    stream.flush()
+    writer.flush()
+}
+
+/// A stream whose writes end at `until`, however slowly the client reads.
+struct DeadlineWriter<'a> {
+    stream: &'a mut TcpStream,
+    until: Instant,
+}
+
+impl Write for DeadlineWriter<'_> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        let left = self.until.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "the response took too long to write",
+            ));
+        }
+        self.stream.set_write_timeout(Some(left))?;
+        self.stream.write(buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.stream.flush()
+    }
 }
 
 #[cfg(test)]
@@ -1282,6 +1398,11 @@ mod tests {
             "/..%5cflui-serve-outside.txt",
             "/pkg%5c..%5c..%5cflui-serve-outside.txt",
             "/C:%5cWindows%5cwin.ini",
+            "/C:/Windows/win.ini",
+            "//server/share/flui-serve-outside.txt",
+            "/%2f%2fserver%2fshare%2fflui-serve-outside.txt",
+            "/%5c%5cserver%5cshare%5cflui-serve-outside.txt",
+            "/%5c%5c%3f%5cC:%5cWindows%5cwin.ini",
             "/index.html:stream",
             "/pkg//app.js",
             "/%zz",
@@ -1323,6 +1444,72 @@ mod tests {
         ] {
             assert!(response.0.starts_with("HTTP/1.1 404"), "{}", response.0);
         }
+    }
+
+    /// A file of the build is copied whole, byte for byte, however large; the
+    /// page, which the server reads whole to add its script, is refused past
+    /// `MAX_PAGE` before it is read.
+    fn a_large_file_is_served_whole_and_a_page_past_its_bound_is_refused() {
+        let (dir, server) = fixture();
+        let module: Vec<u8> = (0..8 * 1024 * 1024_u32)
+            .map(|at| u8::try_from(at % 251).expect("below 251"))
+            .collect();
+        std::fs::write(dir.path().join("pkg/large.wasm"), &module).expect("a large module");
+        let (head, body) = get(server.addr, "GET", "/pkg/large.wasm");
+        assert!(head.starts_with("HTTP/1.1 200"), "{head}");
+        assert!(body == module, "the module arrives as it is on disk");
+        let page_bound = usize::try_from(MAX_PAGE).expect("the page bound fits memory");
+        let mut page = "<html><body>".to_owned();
+        page.push_str(&" ".repeat(page_bound));
+        page.push_str("</body></html>");
+        std::fs::write(dir.path().join("index.html"), page).expect("a large page");
+        for response in [
+            get(server.addr, "GET", "/"),
+            navigate(server.addr, "/route"),
+        ] {
+            assert!(response.0.starts_with("HTTP/1.1 500"), "{}", response.0);
+        }
+    }
+
+    /// A client that stops reading holds its connection no longer than the
+    /// response's write deadline: the server ends the response short and its
+    /// place is free for the next request.
+    fn a_client_that_stops_reading_is_cut_off_at_the_write_deadline() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        std::fs::create_dir_all(dir.path().join("pkg")).expect("pkg");
+        let module_len = 64 * 1024 * 1024;
+        std::fs::write(dir.path().join("pkg/large.wasm"), vec![7_u8; module_len])
+            .expect("a large module");
+        let deadline = Duration::from_millis(500);
+        let server = DevServer::serve(dir.path().to_path_buf(), 0, BaseHref::root(), deadline)
+            .expect("server");
+        let mut stream = TcpStream::connect(server.addr).expect("connect");
+        stream
+            .set_read_timeout(Some(Duration::from_secs(10)))
+            .expect("a timeout");
+        write!(
+            stream,
+            "GET /pkg/large.wasm HTTP/1.1\r\nHost: {}\r\n\r\n",
+            server.addr
+        )
+        .expect("a request");
+        // The client reads nothing for four times the deadline, then all it
+        // can: what the sockets held when the server gave up, not the module.
+        std::thread::sleep(deadline * 4);
+        let mut received = 0;
+        let mut buffer = vec![0_u8; 64 * 1024];
+        loop {
+            match stream.read(&mut buffer) {
+                Ok(0) | Err(_) => break,
+                Ok(read) => received += read,
+            }
+        }
+        assert!(
+            received < module_len,
+            "the whole module was written past the deadline ({received} bytes with the head)"
+        );
+        let (head, _) = get(server.addr, "GET", "/pkg/missing.wasm");
+        assert!(head.starts_with("HTTP/1.1 404"), "{head}");
     }
 
     fn a_build_served_under_its_base_path_is_reached_only_there() {
@@ -1400,6 +1587,14 @@ mod tests {
             (
                 "serves files with their mime types and no caching",
                 serves_files_with_their_mime_types_and_no_caching,
+            ),
+            (
+                "a large file is served whole and a page past its bound is refused",
+                a_large_file_is_served_whole_and_a_page_past_its_bound_is_refused,
+            ),
+            (
+                "a client that stops reading is cut off at the write deadline",
+                a_client_that_stops_reading_is_cut_off_at_the_write_deadline,
             ),
             (
                 "missing files traversal and directories are 404 and head has no body",

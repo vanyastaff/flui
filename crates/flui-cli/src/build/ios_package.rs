@@ -1,4 +1,5 @@
 //! Native library delivery without a consumer Xcode project.
+use crate::build::app_version::AppVersion;
 use crate::build::error::{BuildError, BuildResult};
 use crate::build::{BuildArtifacts, BuilderContext, FinalArtifacts, Platform};
 use crate::declarations::{Build, Declarations, Selection};
@@ -468,23 +469,18 @@ pub(crate) async fn package_application(
         return Err(invalid("an application requires exactly one iOS target"));
     }
     let triple = targets[0].clone();
-    let mut bundle = if let Some(bundle) = &ctx.bundle {
+    let bundle = if let Some(bundle) = &ctx.bundle {
         bundle.clone()
     } else {
         let package = artifacts.package.as_ref().ok_or_else(|| {
             invalid("application bundle metadata or Cargo package metadata is required")
         })?;
-        let mut bundle = crate::build::AppBundle::new(
+        crate::build::AppBundle::new(
             &package.name,
             crate::app_id::AppId::unconfigured(&package.name).apple_bundle_id(),
-        );
-        bundle.version.clone_from(&package.version);
-        bundle
+        )
     };
-    let version = crate::build::app_version::AppVersion::try_new(&bundle.version)
-        .map_err(|error| invalid(format!("invalid application version: {error}")))?;
-    let numeric = version.apple_bundle_version();
-    bundle.version = version.to_string();
+    let version = bundle.version_of(artifacts.package.as_ref())?;
     validate_bundle(&bundle)?;
     let executable = executable.canonicalize()?;
     if !executable.is_file() {
@@ -555,7 +551,7 @@ pub(crate) async fn package_application(
         let staged = work.path().join(&filename);
         fs::create_dir(&staged)?;
         fs::copy(&executable, staged.join("flui_app"))?;
-        let plist = application_info_plist(&bundle, &numeric, &minimum, platform, &declarations);
+        let plist = application_info_plist(&bundle, &version, &minimum, platform, &declarations);
         let info = staged.join("Info.plist");
         fs::write(
             &info,
@@ -708,12 +704,12 @@ fn privacy_manifest(
 /// and file types, from the crates' declarations.
 fn application_info_plist(
     bundle: &crate::build::AppBundle,
-    numeric: &str,
+    version: &AppVersion,
     minimum: &str,
     platform: &str,
     declarations: &Declarations,
 ) -> serde_json::Value {
-    let mut plist = application_base_plist(bundle, numeric, minimum, platform);
+    let mut plist = application_base_plist(bundle, version, minimum, platform);
     if let serde_json::Value::Object(keys) = &mut plist {
         keys.extend(crate::build::apple_opening::info_plist_keys(
             &bundle.identifier,
@@ -726,15 +722,16 @@ fn application_info_plist(
 
 fn application_base_plist(
     bundle: &crate::build::AppBundle,
-    numeric: &str,
+    version: &AppVersion,
     minimum: &str,
     platform: &str,
 ) -> serde_json::Value {
+    let numeric = version.apple_bundle_version();
     serde_json::json!({
         "CFBundlePackageType":"APPL", "CFBundleExecutable":"flui_app",
         "CFBundleName":bundle.name, "CFBundleDisplayName":bundle.name,
         "CFBundleIdentifier":bundle.identifier, "CFBundleVersion":numeric,
-        "CFBundleShortVersionString":numeric, "FLUIVersion":bundle.version,
+        "CFBundleShortVersionString":numeric, "FLUIVersion":version.to_string(),
         "MinimumOSVersion":minimum, "LSRequiresIPhoneOS":true,
         "CFBundleSupportedPlatforms":[if platform == "IOS" {"iPhoneOS"} else {"iPhoneSimulator"}],
         "UIDeviceFamily":[1,2], "UILaunchScreen":{},
@@ -879,7 +876,8 @@ mod tests {
             "schema = 3\nurl-schemes = [\"notes\"]\n[[file-types]]\nextension = \"note\"\n\
              mime = \"application/x-notes-note\"\nname = \"Note\"\n",
         );
-        let plist = application_info_plist(&bundle, "1.0.0", "15.0", "IOS", &declarations);
+        let version = AppVersion::try_new("1.0.0").expect("a SemVer version");
+        let plist = application_info_plist(&bundle, &version, "15.0", "IOS", &declarations);
         assert_eq!(
             plist["CFBundleURLTypes"][0]["CFBundleURLSchemes"],
             serde_json::json!(["notes"])
@@ -890,17 +888,18 @@ mod tests {
         );
         assert_eq!(plist["CFBundleIdentifier"], "com.example.notes");
         let plain =
-            application_info_plist(&bundle, "1.0.0", "15.0", "IOS", &Declarations::default());
+            application_info_plist(&bundle, &version, "15.0", "IOS", &Declarations::default());
         assert!(plain.get("CFBundleURLTypes").is_none(), "{plain}");
     }
 
     fn info_plist_lifts_the_phone_frame_duration_cap_and_reads_the_pointer() {
-        let mut bundle = crate::build::AppBundle::new("Demo", "dev.flui.demo".to_owned());
-        bundle.version = "1.2.3".into();
+        let version = AppVersion::try_new("1.2.3").expect("a SemVer version");
+        let bundle = crate::build::AppBundle::new("Demo", "dev.flui.demo".to_owned())
+            .version(version.clone());
         for platform in ["IOS", "IOSSIMULATOR"] {
             let plist = application_info_plist(
                 &bundle,
-                "1.2.3",
+                &version,
                 "15.0",
                 platform,
                 &Declarations::default(),

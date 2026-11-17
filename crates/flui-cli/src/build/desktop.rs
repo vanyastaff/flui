@@ -6,8 +6,6 @@ use std::path::Path;
 use crate::build::error::{BuildError, BuildResult};
 use crate::build::platform::{BuildArtifacts, BuilderContext, FinalArtifacts};
 use crate::build::util::cargo;
-#[cfg(target_os = "macos")]
-use crate::build::util::xml::xml_escape;
 use crate::declarations::{Build, Declarations, Selection};
 
 /// Builder for desktop platforms (Windows, macOS, Linux)
@@ -270,47 +268,13 @@ impl DesktopBuilder {
         };
         // What the application opens, from the crates it links for this target.
         let declarations = Self::declarations(ctx, artifacts, &triple)?;
-        let plist = format!(
-            r#"<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>CFBundlePackageType</key>
-    <string>APPL</string>
-    <key>CFBundleName</key>
-    <string>{name}</string>
-    <key>CFBundleDisplayName</key>
-    <string>{name}</string>
-    <key>CFBundleIdentifier</key>
-    <string>{identifier}</string>
-    <key>CFBundleExecutable</key>
-    <string>{executable}</string>
-    <key>CFBundleVersion</key>
-    <string>1</string>
-    <key>CFBundleShortVersionString</key>
-    <string>1.0</string>
-    <key>LSMinimumSystemVersion</key>
-    <string>{minimum}</string>
-    <key>NSPrincipalClass</key>
-    <string>NSApplication</string>
-    <key>NSHighResolutionCapable</key>
-    <true/>
-{opening}</dict>
-</plist>
-"#,
-            name = xml_escape(&bundle.name),
-            identifier = xml_escape(&bundle.identifier),
-            executable = xml_escape(&exe_name),
-            minimum = ctx.floors.macos(&triple),
-            opening = crate::build::apple_opening::plist_xml_entries(
-                &crate::build::apple_opening::info_plist_keys(
-                    &bundle.identifier,
-                    &declarations,
-                    crate::build::apple_opening::ApplePlatform::Macos,
-                ),
-                1,
-            ),
-        );
+        let plist = macos_info_plist(&MacosBundleFacts {
+            bundle,
+            version: &bundle.version_of(artifacts.package.as_ref())?,
+            executable: &exe_name,
+            minimum: &ctx.floors.macos(&triple).to_string(),
+            declarations: &declarations,
+        });
         std::fs::write(contents.join("Info.plist"), plist)?;
 
         let size_bytes = calculate_dir_size(&app_dir)?;
@@ -323,17 +287,82 @@ impl DesktopBuilder {
     }
 }
 
-/// Public bundle display names must also be safe single filesystem components.
+/// What a macOS bundle's `Info.plist` states.
+#[cfg(any(target_os = "macos", test))]
+struct MacosBundleFacts<'a> {
+    bundle: &'a crate::build::platform::AppBundle,
+    /// The version the bundle states ([`AppBundle::version_of`]).
+    ///
+    /// [`AppBundle::version_of`]: crate::build::platform::AppBundle::version_of
+    version: &'a crate::build::app_version::AppVersion,
+    /// The file name of the executable in `Contents/MacOS`.
+    executable: &'a str,
+    /// The release the binary was linked for (`LSMinimumSystemVersion`).
+    minimum: &'a str,
+    /// What the application opens.
+    declarations: &'a Declarations,
+}
+
+/// The `Info.plist` of a macOS application bundle, as an XML property list.
+///
+/// `CFBundleVersion` and `CFBundleShortVersionString` are the version's
+/// `major.minor.patch`, the one form both keys take, as the iOS bundle
+/// states them; the version as written (a pre-release, build metadata) is
+/// `FLUIVersion`. Every value is a property-list string, escaped as the
+/// XML renderer escapes each one, never spliced into the document's text.
+#[cfg(any(target_os = "macos", test))]
+fn macos_info_plist(facts: &MacosBundleFacts<'_>) -> String {
+    use crate::build::apple_opening::{ApplePlatform, info_plist_keys, plist_xml_document};
+    use serde_json::Value;
+
+    let bundle_version = facts.version.apple_bundle_version();
+    let mut keys = serde_json::Map::new();
+    for (key, value) in [
+        ("CFBundlePackageType", Value::from("APPL")),
+        ("CFBundleName", Value::from(facts.bundle.name.as_str())),
+        (
+            "CFBundleDisplayName",
+            Value::from(facts.bundle.name.as_str()),
+        ),
+        (
+            "CFBundleIdentifier",
+            Value::from(facts.bundle.identifier.as_str()),
+        ),
+        ("CFBundleExecutable", Value::from(facts.executable)),
+        ("CFBundleVersion", Value::from(bundle_version.as_str())),
+        (
+            "CFBundleShortVersionString",
+            Value::from(bundle_version.as_str()),
+        ),
+        ("FLUIVersion", Value::from(facts.version.to_string())),
+        ("LSMinimumSystemVersion", Value::from(facts.minimum)),
+        ("NSPrincipalClass", Value::from("NSApplication")),
+        ("NSHighResolutionCapable", Value::Bool(true)),
+    ] {
+        keys.insert(key.to_owned(), value);
+    }
+    keys.extend(info_plist_keys(
+        &facts.bundle.identifier,
+        facts.declarations,
+        ApplePlatform::Macos,
+    ));
+    plist_xml_document(&keys)
+}
+
+/// Refuse a bundle name that is not one plain file name, or that holds a
+/// control character, which no XML property list can carry.
 #[cfg(target_os = "macos")]
 fn validate_bundle_name(name: &str) -> BuildResult<()> {
     let mut components = Path::new(name).components();
     if name.contains(['/', '\\', '\0'])
+        || name.chars().any(char::is_control)
         || !matches!(components.next(), Some(std::path::Component::Normal(_)))
         || components.next().is_some()
     {
         return Err(BuildError::invalid_config(
             "bundle.name",
-            "Application name must be a single nonempty filename component without separators, NUL, '.' or '..'",
+            "Application name must be a single nonempty filename component without separators, \
+             control characters, '.' or '..'",
         ));
     }
     Ok(())
@@ -356,4 +385,63 @@ fn calculate_dir_size(dir: &Path) -> BuildResult<u64> {
         }
     }
     Ok(total)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MacosBundleFacts, macos_info_plist};
+    use crate::build::app_version::AppVersion;
+    use crate::build::platform::AppBundle;
+    use crate::declarations::Declarations;
+
+    /// The macOS bundle states the version `flui.toml` declares, in the one
+    /// form Apple's two version keys take, and the version as written beside
+    /// it; a name holding XML's metacharacters stays one well-formed string.
+    /// The whole document is the golden, so a value hard-coded again shows.
+    #[test]
+    fn the_macos_info_plist_states_the_application_version() {
+        let version = AppVersion::try_new("1.4.2-beta.1+build.7").expect("a SemVer version");
+        let bundle = AppBundle::new("R&D \"Notes\" <β>", "com.example.notes".to_owned())
+            .declared()
+            .version(version.clone());
+        let declarations = Declarations::of_table(
+            "notes",
+            "schema = 3\nurl-schemes = [\"notes\"]\n\
+             [[file-types]]\nextension = \"note\"\nmime = \"application/x-notes-note\"\n\
+             name = \"Note\"\n\
+             [[file-types]]\nextension = \"png\"\nmime = \"image/png\"\nname = \"Image\"\n",
+        );
+        let plist = macos_info_plist(&MacosBundleFacts {
+            bundle: &bundle,
+            version: &version,
+            executable: "notes",
+            minimum: "11.0",
+            declarations: &declarations,
+        });
+        let parsed = roxmltree::Document::parse_with_options(
+            &plist,
+            roxmltree::ParsingOptions {
+                allow_dtd: true,
+                ..roxmltree::ParsingOptions::default()
+            },
+        )
+        .expect("the plist is XML");
+        let value_of = |key: &str| {
+            parsed
+                .descendants()
+                .find(|node| node.has_tag_name("key") && node.text() == Some(key))
+                .and_then(|node| node.next_sibling_element())
+                .and_then(|node| node.text())
+                .map(str::to_owned)
+        };
+        for (key, expected) in [
+            ("CFBundleVersion", "1.4.2"),
+            ("CFBundleShortVersionString", "1.4.2"),
+            ("FLUIVersion", "1.4.2-beta.1+build.7"),
+            ("CFBundleName", "R&D \"Notes\" <β>"),
+        ] {
+            assert_eq!(value_of(key).as_deref(), Some(expected), "{key}");
+        }
+        insta::assert_snapshot!("macos_info_plist", plist);
+    }
 }
