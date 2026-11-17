@@ -73,8 +73,9 @@ readback не меняются.
 
 ## Счётчики
 
-Каждая задача, которая вводит механизм, вводит и его счётчик в `FrameReport`
-(`crates/flui-testing/src/lib.rs`, `counters()`), иначе ворота нечем мерить.
+Каждая задача, которая вводит механизм, вводит и его счётчик, иначе ворота нечем мерить: счётчик
+сцены и конвейера — в `FrameReport` (`crates/flui-testing/src/lib.rs`, `counters()`), счётчик движка —
+в `RasterCounters` (ниже).
 
 | Счётчик | Кто вводит | Что считает |
 |---|---|---|
@@ -82,12 +83,15 @@ readback не меняются.
 | `scene_nodes_visited` | RS8 | узлы сцены, прочитанные `apply` и `flatten` (после RS9 только `apply` и отсечение) |
 | `damage_rects`, `damage_full` | RS8 | прямоугольники опубликованного региона (0 для `Unchanged`) и число публикаций `Full` |
 | `followers_resolved`, `scene_depth_updates`, `pending_log_folds` | RS5, RS6, RS7 | как в ADR-0304 §3, §4, §7 |
-| `chunks_recorded`, `region_passes` | RS9, RS11 | записи кусков в IR и проходы региона |
+| `nodes_entered`, `cull_tests`, `chunks_recorded`, `region_passes` | RS12, RS11 | узлы, в которые вошёл обход движка, вопросы отсечению, записи кусков в IR и проходы региона |
 | `recording_cache_hits`, `recording_cache_evictions`, `recording_cache_bytes` | RS12 | кэш записей |
 | `gpu_devices`, `glyph_atlases`, `pipeline_builds` | RS14 | для G5, читаются из `GpuContext` в тестах движка |
 
-Счётчики движка попадают в `FrameReport` через `RasterCompletion`, как сегодня попадает профиль
-кадра; в headless без GPU они читаются из тестового бэкенда растра.
+Счётчики движка — `RasterCounters` (`crates/flui-engine/src/frame_protocol.rs`): поля фиксированы,
+тип `Copy`, счёт ничего не аллоцирует. Протокол кадра хранит их за последний кадр и пишет в trace-событие
+кадра; ворота движка (половины G1, G3, G4, G6) читают их в тестах движка на lavapipe (`gpu-test`).
+`HeadlessHost` их не сообщает, и в `FrameReport` их нет: путь через расчёт слота в `FrameReport`
+появится вместе с первым читателем вне тестов ([docs/gaps.md](../../../gaps.md)).
 
 ## Значения констант-гипотез
 

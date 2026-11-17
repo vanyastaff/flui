@@ -809,9 +809,9 @@ impl RetainedCapture {
         self.frame.plan_rect_by_rect();
     }
 
-    /// The passes the last frame redrew its region in.
-    pub(crate) fn region_passes(&self) -> u32 {
-        self.frame.region_passes()
+    /// What the last frame's walk and recording did.
+    pub(crate) fn counters(&self) -> crate::frame_protocol::RasterCounters {
+        self.frame.counters()
     }
 
     pub(crate) fn mark_full_repaint(&mut self) {

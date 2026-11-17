@@ -2033,7 +2033,8 @@ impl Renderer {
     /// with `damage::begin_partial` (its rect's scissor and the clear inside
     /// it) and walks the scene culled by its own rect. Answers whether an
     /// advanced shape straddles the rect of the pass that drew it, in which
-    /// case the caller forces its next frame full, and the passes drawn.
+    /// case the caller forces its next frame full, and what its walk and
+    /// recording did.
     ///
     /// The windowed renderer and the crate's headless retained capture both
     /// record through this, so the partial-frame protocol a readback test
@@ -2051,8 +2052,11 @@ impl Renderer {
             // Reset per-frame clip/transform/opacity/layer state so that
             // partial-damage scissors from frame N cannot leak into frame N+1.
             backend.painter_mut().begin_frame_in_scope();
-            crate::layer_walk::record_scene(scene.content(), None, &mut backend)?;
-            return Ok(crate::frame_protocol::RecordedContent::default());
+            let counters = crate::layer_walk::record_scene(scene.content(), None, &mut backend)?;
+            return Ok(crate::frame_protocol::RecordedContent {
+                straddled: false,
+                counters,
+            });
         };
         let mut recorded = crate::frame_protocol::RecordedContent::default();
         for (pass, &rect) in (0_u32..).zip(plan.rects()) {
@@ -2081,7 +2085,8 @@ impl Renderer {
             // it, the retained target (created with it) otherwise. A
             // version's walk skips the boundaries and chunks this rect cannot
             // reach.
-            crate::layer_walk::record_scene(scene.content(), Some(redrawn), &mut backend)?;
+            recorded.counters +=
+                crate::layer_walk::record_scene(scene.content(), Some(redrawn), &mut backend)?;
 
             // An advanced shape (one that reads the destination) whose bounds
             // straddle the pass's rect was drawn clipped, so outside the rect
@@ -2103,7 +2108,7 @@ impl Renderer {
                 );
                 recorded.straddled = true;
             }
-            recorded.region_passes += 1;
+            recorded.counters.region_passes = recorded.counters.region_passes.saturating_add(1);
         }
         Ok(recorded)
     }
