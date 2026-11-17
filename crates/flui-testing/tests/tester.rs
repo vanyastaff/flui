@@ -1429,11 +1429,12 @@ fn draw_commands_place_a_command_through_a_transform_layer() {
 }
 
 /// An element named only by its identifier is found by it: a `Semantics`
-/// container with an identifier and nothing else forms a node the agent
-/// reports, as Flutter's `Semantics(identifier:)` does.
+/// container with an identifier and nothing else is published as a group an
+/// automation client selects, as Flutter's `Semantics(identifier:)` keeps a
+/// node.
 ///
-/// Fails if the agent leaves such a node out as a generic container, the
-/// way the OS adapters do, which drops its identifier with it.
+/// Fails if translation publishes such a node as a generic container, which
+/// every AccessKit filter drops with its identifier.
 #[test]
 fn an_element_named_only_by_its_identifier_is_found() {
     let mut t = Tester::mount(
@@ -1446,4 +1447,36 @@ fn an_element_named_only_by_its_identifier_is_found() {
     );
     let rect = t.rect(&find::id("swatch"));
     assert_eq!((rect.width, rect.height), (24.0, 16.0));
+}
+
+/// An identifier given inside a button names the button: a container named
+/// only by its identifier around the button's label is lifted into the
+/// button, which carries the identifier and keeps the name its label gives
+/// it, as a merging `Semantics` absorbs a descendant's identifier in Flutter.
+///
+/// Fails if the container is published as a generic container that keeps
+/// its identifier (every AccessKit filter drops it), or as a group, which
+/// cuts the button's name from its label.
+#[test]
+fn an_identifier_inside_a_button_names_the_button() {
+    let mut t = Tester::mount(
+        Center::new().child(
+            RawButton::new(
+                flui_widgets::Semantics::new()
+                    .container(true)
+                    .identifier("save")
+                    .child(
+                        flui_widgets::Semantics::new()
+                            .container(true)
+                            .label("Save")
+                            .child(SizedBox::new(40.0, 20.0)),
+                    ),
+            )
+            .on_pressed(|_| {}),
+        ),
+    );
+    assert_eq!(
+        t.rect(&find::id("save").name("Save")),
+        t.rect(&find::button("Save"))
+    );
 }

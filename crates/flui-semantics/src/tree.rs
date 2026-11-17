@@ -555,7 +555,7 @@ impl SemanticsTree {
     /// omitted, so a published node never references one the platform was not
     /// given.
     pub(crate) fn publish_view<'a>(
-        &self,
+        &'a self,
         node: &'a SemanticsNode,
     ) -> Option<crate::accesskit_translation::PublishView<'a>> {
         Some(crate::accesskit_translation::PublishView {
@@ -584,7 +584,97 @@ impl SemanticsTree {
                 children
             },
             text_selection: self.published_document_selection(node),
+            identifier: self.identifier_placement(node),
         })
+    }
+
+    /// Where `node`'s identifier is published (ADR-0240 §3): a container
+    /// named only by its identifier inside a control that takes its name from
+    /// its contents stays generic, and that control publishes the first such
+    /// identifier when it has none of its own.
+    fn identifier_placement<'a>(
+        &'a self,
+        node: &'a SemanticsNode,
+    ) -> crate::accesskit_translation::IdentifierPlacement<'a> {
+        use crate::accesskit_translation::{IdentifierPlacement, names_from_contents};
+        let attrs = node.config().attributes();
+        if crate::accesskit_translation::publishes_generic(attrs) {
+            if attrs.identifier.is_some()
+                && self
+                    .contents_owner(node)
+                    .is_some_and(|(_, owner)| names_from_contents(owner.config().attributes()))
+            {
+                return IdentifierPlacement::InControl;
+            }
+        } else if attrs.identifier.is_none()
+            && names_from_contents(attrs)
+            && let Some(identifier) = self.lifted_identifier(node)
+        {
+            return IdentifierPlacement::FromContents(identifier);
+        }
+        IdentifierPlacement::Own
+    }
+
+    /// The nearest ancestor of `node` that publishes a role of its own: the
+    /// node a generic container is lifted into. The walk is bounded by the
+    /// arena's size, so a parent cycle (an assembly defect) ends it.
+    fn contents_owner(&self, node: &SemanticsNode) -> Option<(SemanticsId, &SemanticsNode)> {
+        let mut parent = node.parent();
+        for _ in 0..self.len() {
+            let id = parent?;
+            let ancestor = self.get(id)?;
+            if !crate::accesskit_translation::publishes_generic(ancestor.config().attributes()) {
+                return Some((id, ancestor));
+            }
+            parent = ancestor.parent();
+        }
+        None
+    }
+
+    /// The generic containers lifted into `node`, in child order: the
+    /// descendants reached through generic containers only. The walk is
+    /// bounded by the arena's size, so a child cycle ends it.
+    fn lifted_contents<'a>(
+        &'a self,
+        node: &SemanticsNode,
+    ) -> impl Iterator<Item = (SemanticsId, &'a SemanticsNode)> {
+        let mut pending: SmallVec<[SemanticsId; 8]> =
+            node.children().iter().rev().copied().collect();
+        let mut budget = self.len();
+        std::iter::from_fn(move || {
+            while budget > 0 {
+                budget -= 1;
+                let id = pending.pop()?;
+                let Some(child) = self.get(id) else {
+                    continue;
+                };
+                if crate::accesskit_translation::publishes_generic(child.config().attributes()) {
+                    pending.extend(child.children().iter().rev().copied());
+                    return Some((id, child));
+                }
+            }
+            None
+        })
+    }
+
+    /// The first identifier of a container lifted into `node`.
+    fn lifted_identifier<'a>(&'a self, node: &SemanticsNode) -> Option<&'a str> {
+        self.lifted_contents(node)
+            .find_map(|(_, child)| child.config().attributes().identifier.as_deref())
+    }
+
+    /// The nodes whose published payload reads `node`'s role or identifier
+    /// besides `node` itself: the nearest ancestor with a role of its own,
+    /// which a generic `node` is lifted into (or was, before a change gave
+    /// `node` a role), and the generic containers lifted into `node`. An
+    /// incremental publish re-translates them with `node`, since they are not
+    /// dirty themselves.
+    pub(crate) fn placement_dependents(&self, node: &SemanticsNode) -> SmallVec<[SemanticsId; 4]> {
+        self.contents_owner(node)
+            .map(|(id, _)| id)
+            .into_iter()
+            .chain(self.lifted_contents(node).map(|(id, _)| id))
+            .collect()
     }
 
     /// The text runs `node` lists after its children: the runs of the text it

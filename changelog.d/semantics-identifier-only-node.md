@@ -1,6 +1,7 @@
 ### Fixed
 
-- `find::id` and the agent find a `Semantics` container named only by its identifier. The agent
-  left it out as a generic container, as the OS adapters do, so a widget that publishes no
-  semantics of its own could not be selected by the identifier its author gave it. The tree the
-  OS adapters receive is unchanged.
+- A `Semantics` container named only by its identifier is published as a group, so `find::id`, the
+  agent and OS automation clients (UI Automation's `AutomationId`, `AXIdentifier`, AT-SPI) find it:
+  it was a generic container, which AccessKit's filter drops with its identifier. Inside a button,
+  checkbox, radio button, link or menu item it stays generic and the control carries its
+  identifier, so the control keeps the name its label gives it.

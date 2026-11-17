@@ -931,7 +931,9 @@ impl SemanticsConfiguration {
     /// ancestor, merged by `MergeSemantics`, or contributing nothing) publishes
     /// no identifier: [`absorb`](Self::absorb) never carries one upward, so a
     /// merged parent keeps its own. Name a node by setting the identifier where
-    /// its boundary is declared.
+    /// its boundary is declared. A node named only by its identifier inside
+    /// a control that takes its name from its contents gives the control its
+    /// identifier instead (ADR-0240 §2).
     pub fn set_identifier(&mut self, identifier: impl Into<Arc<str>>) {
         self.attributes.identifier = Some(identifier.into());
     }

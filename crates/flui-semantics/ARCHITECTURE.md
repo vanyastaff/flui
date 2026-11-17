@@ -644,7 +644,7 @@ in `src/accesskit_translation/coverage_matrix.rs`; `collection_places_conflict_o
 **Rule.** `SemanticsOwner::read_wire` (`src/agent.rs`) answers an agent with ADR-0080 wire
 nodes projected from `to_accesskit_tree_update`, the update the platform adapter is handed,
 read through `accesskit_consumer`: `common_filter` without its clip rule decides which nodes
-appear (a hidden node drops its subtree, a `GenericContainer` is lifted into its parent unless its author named it with an identifier, a
+appear (a hidden node drops its subtree, a `GenericContainer` is lifted into its parent, a
 focused node is kept), so an agent reads every built node, a row a scrollable keeps past its
 viewport included, while a screen reader stops at the first row past each edge. A static text is named by its value, and the actions follow UI Automation's pattern predicates
 (`is_invocable`; `Toggle` for a toggled node that is not a selection item; `SelectionItem` as
@@ -826,20 +826,27 @@ the configuration annotated nor makes it a boundary, and `absorb` never takes it
 with only an identifier contributes nothing, and one absorbed into an ancestor or a
 `MergeSemantics` loses it while the receiver keeps its own. A widget names its node where the node
 is formed: a container `Semantics`, `MergeSemantics::identifier`, or a control whose own
-configuration is the outermost of its parts.
+configuration is the outermost of its parts. A node named only by its identifier publishes as a
+`Group`, since every AccessKit filter drops a `GenericContainer` with its `author_id`; inside a
+control AccessKit names from its contents it stays generic, and the control publishes the
+identifier, its own or the first lifted into it (ADR-0240 §2). The role reads the ancestors and the
+control's identifier its contents, so an incremental publish re-translates the nodes a dirty one
+places (`SemanticsTree::placement_dependents`).
 
 **Why.** An identifier that annotated or split nodes would change the tree, and so what a screen
 reader says, by adding a test id; one carried upward would name a node with another node's id, and
-a merged parent would collect its children's.
+a merged parent would collect its children's. A container lifted into a control is no node an
+automation client sees, so its identifier names the control, the node a test of it selects.
 
 **Test.** `the_identifier_is_exported_unannounced_unmerged_and_no_boundary` in
-`tests/identifier.rs`; the `identifier` row of `every_published_attribute_reads_through_the_consumer`.
+`tests/identifier.rs`, `a_container_named_only_by_its_identifier_is_a_group_or_names_its_control`
+there; the `identifier` row of `every_published_attribute_reads_through_the_consumer`.
 
 ### Siblings sharing an identifier are reported, not repaired
 
 **Rule.** An identifier is unique among its siblings (ADR-0240 §4), and nothing enforces it:
 translation publishes every identifier as its author wrote it. Siblings are the children an
-agent sees: `accesskit_consumer::common_filter`'s without its clip rule, where an unlabelled container's
+agent sees: `accesskit_consumer::common_filter`'s without its clip rule, where a generic container's
 children join its parent's. `read_wire` lists a `TreeDiagnostic::DuplicateIdentifier` for each
 clash, naming the parent and the siblings in tree order, and checks the children of every node
 it reaches, including those its budget leaves out. In debug builds, a publish that changes an

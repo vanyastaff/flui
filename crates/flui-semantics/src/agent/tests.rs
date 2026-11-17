@@ -93,6 +93,7 @@ fn published_role(role: SemanticsRole, label: bool) -> accesskit::Role {
         clips_children: false,
         children: smallvec::SmallVec::new(),
         text_selection: None,
+        identifier: crate::accesskit_translation::IdentifierPlacement::Own,
     })
 }
 
@@ -411,11 +412,11 @@ fn generic_containers_are_lifted_and_hidden_subtrees_dropped() {
     );
 }
 
-/// A generic container its author named with an identifier stays in the
-/// read, so a locator selects it by that identifier, and a control around it
-/// keeps the name its text gives it: the published role stays generic.
+/// A container named only by its identifier inside a button is lifted into
+/// it, and the button reads with that identifier and the name its text
+/// gives it, so a locator on the identifier selects the button (ADR-0240 §3).
 #[test]
-fn a_named_generic_container_is_kept_and_its_control_keeps_its_name() {
+fn a_container_named_only_by_its_identifier_names_its_button() {
     let mut f = Fixture::new();
     let root = f.add(None, 1, |_| {});
     let button = f.add(Some(root), 2, |c| c.set_role(SemanticsRole::Button));
@@ -426,16 +427,14 @@ fn a_named_generic_container_is_kept_and_its_control_keeps_its_name() {
     assert_eq!(
         outline(&tree.roots),
         format!(
-            "- window [ref={}] [window=w1]\n  - button \"Save\" [ref={}]\n    - group [ref={}] \
-             [identifier=\"swatch\"]\n      - label \"Save\" [ref={}]\n",
+            "- window [ref={}] [window=w1]\n  - button \"Save\" [ref={}] \
+             [identifier=\"swatch\"]\n    - label \"Save\" [ref={}]\n",
             e(1),
             e(2),
-            e(3),
             e(4)
         )
     );
 }
-
 /// A role ARIA forbids a name reaches an agent with its text as the
 /// description, as UI Automation reports it, rather than not at all.
 #[test]
