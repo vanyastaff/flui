@@ -4,8 +4,8 @@
 //! opens one more window.
 //!
 //! It is what the runs of the threaded placement use (ADR-0305 §10): on
-//! Linux the raster thread draws every window, and on Windows and macOS the
-//! owner thread does until a run there makes them threaded.
+//! Wayland the raster thread draws every window, and on X11, Windows and
+//! macOS the owner thread does until a run there makes them threaded.
 //!
 //! Run with: cargo run --example two_windows --features unstable-windows
 

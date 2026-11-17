@@ -41,7 +41,8 @@ The engine configured every surface `Fifo`. A `Fifo` swapchain on Wayland waits 
 answer: Mesa's, where the compositor has no `wp_fifo_v1` (every compositor before GNOME 48 and
 KWin 6.3), loops in `vkQueuePresentKHR` until the previous present's frame callback comes, with no
 bound. So the frame the host delivers once the grace runs out blocks in its present until the
-compositor shows the window again, and the raster executor runs that present on the owner thread:
+compositor shows the window again, and the raster executor ran that present on the owner thread
+(on the Wayland host's raster thread now, ADR-0305 §10, it would hold every window's frames):
 input, timers, every other window and a quit wait with it. A run against the scripted compositor
 of `flui-native`'s testing kit showed it: an animating application whose window the compositor
 never draws does not carry out the quit it asks for. (A resize does not show it: the swapchain it
@@ -52,8 +53,9 @@ How does a surface present so that no present waits on a compositor that does no
 
 ## Decision drivers
 
-- The frame path is synchronous and the owner thread runs the present (ADR-0305): a present that
-  waits on a peer holds the whole application.
+- The frame path is synchronous and a present runs on the thread the executor turns on, the owner
+  thread where it is inline (ADR-0305 §10): a present that
+  waits on a peer holds the whole application inline, and every window on the one raster thread.
 - The loop blocks until woken (ADR-0249), so a present mode that never blocks needs a pacer that
   does not rely on the present call: ADR-0347 decision 5 asks for exactly that before `Mailbox`
   enters.
@@ -110,7 +112,8 @@ pub(crate) fn present_mode(pacing: FramePacing, offered: &[wgpu::PresentMode]) -
 ### Consequences
 
 - Good, because a window its compositor does not draw costs one frame per grace and never holds the
-  owner thread; the application keeps answering input, timers and its other windows.
+  thread that presents it, the owner thread inline or the raster thread every window shares on
+  Wayland; the application keeps answering input, timers and its other windows.
 - Good, because a shown window's cadence does not change: the callback still holds it to the
   compositor's refresh, and under `Mailbox` the compositor shows each committed buffer whole.
 - Bad, because a Wayland swapchain holds one image more under `Mailbox` than under `Fifo`.

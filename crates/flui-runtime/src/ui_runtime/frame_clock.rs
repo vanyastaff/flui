@@ -4,7 +4,7 @@ use super::UiRuntime;
 use crate::presentation::PresentationState;
 use crate::renderer_binding::RenderingBinding;
 use flui_animation::Vsync;
-use flui_foundation::PresentationId;
+use flui_foundation::{PresentationAddress, PresentationId};
 use flui_rendering::binding::RendererBinding as _;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -637,8 +637,22 @@ impl UiRuntime {
     /// that draws nothing still times it out.
     #[must_use]
     pub fn next_wake(&self) -> Option<web_time::Instant> {
+        self.next_wake_owing_floors(&|_| true)
+    }
+
+    /// [`Self::next_wake`] with the in-flight floor of a presentation only where `floor_owed`
+    /// holds for its address (ADR-0305 §5). The floor guards a settlement whose wake may be
+    /// lost; a host whose raster side has settled every frame it holds of a window, and asked
+    /// that window for the frame that drains them, owes the window that frame instead, which
+    /// the window's own host delivers once it can take one. Every other deadline counts.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn next_wake_owing_floors(
+        &self,
+        floor_owed: &dyn Fn(PresentationAddress) -> bool,
+    ) -> Option<web_time::Instant> {
         [
-            self.next_wake_excluding_agent_waits(),
+            self.next_wake_excluding_agent_waits_owing(floor_owed),
             self.next_agent_wait_deadline(),
         ]
         .into_iter()
@@ -649,6 +663,15 @@ impl UiRuntime {
     /// [`Self::next_wake`] without the deadlines of waits an agent parked: what keeps a window
     /// from being settled.
     pub(crate) fn next_wake_excluding_agent_waits(&self) -> Option<web_time::Instant> {
+        self.next_wake_excluding_agent_waits_owing(&|_| true)
+    }
+
+    /// [`Self::next_wake_excluding_agent_waits`] with the floors `floor_owed` holds for alone.
+    fn next_wake_excluding_agent_waits_owing(
+        &self,
+        floor_owed: &dyn Fn(PresentationAddress) -> bool,
+    ) -> Option<web_time::Instant> {
+        let ui_runtime_id = self.id();
         self.presentations
             .iter()
             .filter(|presentation| !presentation.closing_requested.get())
@@ -671,7 +694,12 @@ impl UiRuntime {
                     presentation
                         .failure_retry_at()
                         .filter(|_| !presentation.frames_in_flight().is_saturated()),
-                    presentation.in_flight_floor(),
+                    presentation.in_flight_floor().filter(|_| {
+                        floor_owed(PresentationAddress {
+                            ui_runtime_id,
+                            presentation_id: presentation.id(),
+                        })
+                    }),
                 ]
             })
             .flatten()

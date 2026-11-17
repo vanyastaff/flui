@@ -1526,8 +1526,8 @@ fn a_frame_drawn_after_a_panicked_upload_does_not_move_the_base() {
     assert_eq!(shown, None, "the base is forgotten");
 }
 
-/// The desktop loop turns its executor on a raster thread on the Wayland and
-/// X11 hosts, and inline on the headless host (ADR-0305 §10).
+/// The desktop loop turns its executor on a raster thread on the Wayland host
+/// alone, and inline on the X11 and headless hosts (ADR-0305 §10).
 #[test]
 fn the_host_places_the_desktop_executor() {
     use flui_native::CurrentHost;
@@ -1535,7 +1535,7 @@ fn the_host_places_the_desktop_executor() {
     #[cfg(target_os = "linux")]
     hosts.extend([
         (CurrentHost::Wayland, RasterPlacement::Threaded),
-        (CurrentHost::X11, RasterPlacement::Threaded),
+        (CurrentHost::X11, RasterPlacement::Inline),
     ]);
     #[cfg(windows)]
     hosts.push((CurrentHost::Windows, RasterPlacement::Inline));
@@ -1622,6 +1622,115 @@ fn a_window_wake_settles_what_the_raster_thread_finished() {
     assert_eq!(
         ui_runtime.settle_frame(foreign),
         flui_runtime::sink::Settled::Stale
+    );
+}
+
+/// A window whose frame the raster thread has settled owes the loop no
+/// in-flight floor, beside a window whose frame the thread still renders:
+/// the settled window was asked for the frame whose wake drains it, which
+/// its host delivers once the window can take one, and its floor would only
+/// wake the loop to ask the other window for frames it does not owe
+/// (ADR-0305 §5). The window whose frame the thread holds keeps its floor,
+/// and the settled window's wake still settles its frame.
+///
+/// Red-check: answer `true` from `RasterHost::floor_owed` and the settled
+/// window's runtime wakes at its floor.
+#[test]
+fn a_window_the_raster_thread_settled_owes_no_floor_beside_one_it_renders() {
+    let runtime = || {
+        let ui_runtime = crate::app::ui_runtime::UiRuntime::for_test();
+        ui_runtime
+            .attach_root_widget(&flui_widgets::SizedBox::new(20.0, 20.0))
+            .expect("the root attaches");
+        let at = PresentationAddress {
+            ui_runtime_id: ui_runtime.id(),
+            presentation_id: ui_runtime.active_presentation_for_test(),
+        };
+        (ui_runtime, at)
+    };
+    let (mut drawn, drawn_at) = runtime();
+    let (mut settled, settled_at) = runtime();
+    let (shared, slots, wakes) = threaded_host_at(settled_at, None);
+    shared
+        .try_with(|host| {
+            host.attach_target(
+                Arc::new(FakeWindow::new(2)),
+                None,
+                drawn_at,
+                &crate::app::AppConfig::default(),
+                None,
+                None,
+            )
+        })
+        .expect("the host is idle")
+        .expect("the scripted backend attaches any window");
+    let slot = |address| RasterSlot {
+        host: shared.clone(),
+        address,
+        size: SIZE,
+        device: DeviceHealth::Healthy,
+        renderer_dead: false,
+    };
+    let (mut settled_slot, mut drawn_slot) = (slot(settled_at), slot(drawn_at));
+    let frame = |slot: &mut RasterSlot, ui_runtime: &mut crate::app::ui_runtime::UiRuntime| {
+        ui_runtime.mark_primary_needs_full_repaint();
+        let presented = slot.pump(ui_runtime, web_time::Instant::now(), None);
+        assert!(!presented, "a queued frame has not presented yet");
+    };
+    // The first window's frame settles on the thread, whose wake asks the
+    // window for the frame that drains it.
+    frame(&mut settled_slot, &mut settled);
+    let started = std::time::Instant::now();
+    while wakes.load(std::sync::atomic::Ordering::SeqCst) == 0 && started.elapsed() < THREAD_WAIT {
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    assert!(
+        wakes.load(std::sync::atomic::Ordering::SeqCst) > 0,
+        "the thread settled the frame and woke the window"
+    );
+    // The second window's frame stays on the thread.
+    let render = slots.hold_next_render();
+    frame(&mut drawn_slot, &mut drawn);
+    assert!(render.began_within(THREAD_WAIT), "the thread renders it");
+    let floor_owed = |address| {
+        shared
+            .try_read(|host| host.floor_owed(address))
+            .expect("the host is idle")
+    };
+    // Each runtime's wake with every floor, with none, and with the floors
+    // the host owes.
+    let wakes_of = |ui_runtime: &crate::app::ui_runtime::UiRuntime| {
+        (
+            ui_runtime.next_wake(),
+            ui_runtime.next_wake_owing_floors(&|_| false),
+            ui_runtime.next_wake_owing_floors(&floor_owed),
+        )
+    };
+    let (with_floor, without, owed) = wakes_of(&settled);
+    assert!(
+        with_floor.is_some_and(|floor| without.is_none_or(|other| floor < other)),
+        "the settled window's runtime holds its frame pending, its floor first: \
+         {with_floor:?} before {without:?}"
+    );
+    assert_eq!(owed, without, "the settled window owes no floor");
+    let (with_floor, without, owed) = wakes_of(&drawn);
+    assert!(
+        with_floor.is_some_and(|floor| without.is_none_or(|other| floor < other)),
+        "the rendered window's floor comes first: {with_floor:?} before {without:?}"
+    );
+    assert_eq!(
+        owed, with_floor,
+        "the window whose frame the thread renders keeps its floor"
+    );
+    render.release();
+    // The settled window's wake drains its frame: nothing is left pending.
+    let (verdict, caught) = settled_slot.settle(&mut settled);
+    assert!(caught.into_payload().is_none(), "nothing panicked");
+    assert_eq!(verdict, ThreadSettled::Presented, "its frame presented");
+    assert_eq!(
+        settled.next_wake(),
+        settled.next_wake_owing_floors(&|_| false),
+        "no frame is left in flight, nor its floor"
     );
 }
 

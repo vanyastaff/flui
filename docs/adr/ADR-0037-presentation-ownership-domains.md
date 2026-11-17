@@ -85,7 +85,7 @@ returns `OwnerGone`.
 Owners on different threads exchange owned `Send` data through bounded
 channels or dedicated one-shot completions — never UI closures or a generic
 "run this on the UI thread" job. `RuntimeEvent` (native/host observations → UI runtime) and
-`RasterSendError`-checked commands (UI → raster) and each slot's settlement record (raster → UI) are the shapes of that traffic; the one placement shipped is the inline executor on the owner thread, so a `Frame` and a `Configure` go through the slot's mutex-guarded inbox, and the lifecycle commands (`Attach`, `Release`, `Restore`, `Detach`, `RetryDevice`) through one bounded channel (`LIFECYCLE_CAPACITY`) that the executor drains with `try_recv` on the owner thread; the channel is a queue the bounded-queue rule below covers. The rules:
+`RasterSendError`-checked commands (UI → raster) and each slot's settlement record (raster → UI) are the shapes of that traffic; the executor turns on a raster thread on the Wayland host and inline on the owner thread elsewhere (ADR-0305 §10), and in both a `Frame` and a `Configure` go through the slot's mutex-guarded inbox, and the lifecycle commands (`Attach`, `Release`, `Restore`, `Detach`, `RetryDevice`) through one bounded channel (`LIFECYCLE_CAPACITY`) that the executor drains with `try_recv` on the thread it turns on; the channel is a queue the bounded-queue rule below covers. The rules:
 
 - every routable message carries, or is structurally bound to, its exact
   `PresentationAddress`;

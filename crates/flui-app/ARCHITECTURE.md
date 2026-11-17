@@ -240,7 +240,7 @@ the dispatch layer moves there too.
   later window mints a slot on it. Inline, a frame is sent and the executor
   turns at once, so its settlement is in hand before the pump returns; a frame
   that finds the host already turning is answered `Retry`. Threaded (the
-  Wayland and X11 hosts; every other host stays inline, `desktop_placement`,
+  Wayland host; every other host stays inline, `desktop_placement`,
   ADR-0305 §10), a frame is answered `Queued` or `QueuedReplacing`, two may be
   in flight (one for a window whose compositor paces its surface, since only
   the present arms the frame callback that withholds its next frame,

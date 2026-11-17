@@ -55,7 +55,7 @@ and production ran inline:
 - Every native window (desktop, Android, iOS) was a slot on the loop's one inline raster executor
   (`crates/flui-app/src/app/runner/raster_host.rs`, ADR-0305), turned on the owner thread with no
   lock.
-- No production raster thread existed; Linux draws on one now (§5).
+- No production raster thread existed; the Wayland host draws on one now (§5).
 - The web's canvas is a slot on the same inline executor, attached once the page's GPU context
   has been awaited (`crates/flui-app/src/app/runner/web.rs`).
 - Every renderer creates its own `wgpu::Instance`, surface and adapter
@@ -133,12 +133,13 @@ contention counter as its metric.
 
 ADR-0045's single criterion becomes a table. A platform is threaded when surface acquisition and
 present run on the raster thread and the ADR-0045 pacing budget (median, p90 and max
-inter-present interval against the display period) holds on that platform. Linux, the Wayland and X11 hosts, is threaded (ADR-0305 §10, its runs recorded in `docs/platform-parity.md`); every other native window draws through the inline executor, so the Lane column is the target a threaded placement there has to meet.
+inter-present interval against the display period) holds on that platform. The Wayland host is threaded (ADR-0305 §10, its run recorded in `docs/platform-parity.md`); every other native window, X11 included until a run on a real X server, draws through the inline executor, so the Lane column is the target a threaded placement there has to meet.
 
 | Platform | Lane | Reason recorded |
 |---|---|---|
 | Win32 | threaded | — |
-| Linux (Wayland, X11) | threaded | — |
+| Linux (Wayland) | threaded | — |
+| Linux (X11) | threaded once run | Xvfb has no vsync, so its run could not judge pacing; an unmapped window's `Fifo` present may block the one raster thread (`docs/gaps.md`) |
 | macOS | inline | `wgpu-hal`'s Metal `acquire_texture` messages `NSWindow` from the acquiring thread; ADR-0045 decision 1 and its reopen condition (tracked as issue #653) |
 | wasm | inline | no raster thread; the canvas is a slot of the inline executor |
 | Android, iOS | inline until measured | no platform reason is recorded against threading; the lane is threaded once a device run meets the budget |

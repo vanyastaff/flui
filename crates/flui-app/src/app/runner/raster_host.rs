@@ -2329,6 +2329,35 @@ impl RasterHost {
             .map_or(NonZeroUsize::MIN, |slot| slot.in_flight_limit)
     }
 
+    /// Whether the in-flight floor of `address`'s presentation still guards
+    /// a settlement (ADR-0305 §5): `false` only once a raster thread has
+    /// settled every frame it holds of the window. The thread writes a
+    /// settlement before its wake asks every window for a frame, so the
+    /// window has been asked for the frame whose wake drains them, which its
+    /// host delivers once the window can take one: woken at the floor's pace
+    /// before then, the loop would only ask the other windows for frames
+    /// they do not owe. Inline, with no slot, or with a frame still on the
+    /// thread, the floor stands.
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            dead_code,
+            reason = "the browser's animation frames wake the page; no deadline does"
+        )
+    )]
+    pub(crate) fn floor_owed(&self, address: PresentationAddress) -> bool {
+        let Some(placed) = self.placed.as_ref() else {
+            return true;
+        };
+        if placed.executor.inline().is_some() {
+            return true;
+        }
+        let Some(slot) = placed.slots.get(&address) else {
+            return true;
+        };
+        slot.pending.is_empty() || placed.sender.settlements_waiting(slot.slot) < slot.pending.len()
+    }
+
     /// Whether `address`'s window holds frames a raster thread has not
     /// settled yet.
     #[cfg_attr(
@@ -2438,9 +2467,11 @@ fn damage_mode() -> DamageMode {
 }
 
 /// Where the desktop loop's executor turns on `host` (ADR-0305 §10): on its
-/// raster thread on the Wayland and X11 hosts, where the two-window runs met
-/// the pacing budget, and inline on every other host until a run on it does.
-/// Windows waits too until the owner's wait for the raster thread services
+/// raster thread on the Wayland host, where the two-window run met the
+/// pacing budget, and inline on every other host until a run on it does.
+/// X11 waits for a run on a real X server, since Xvfb has no vsync and an
+/// unmapped window's `Fifo` present may block the one thread every window
+/// shares; Windows also until the owner's wait for the raster thread services
 /// the sent messages a swap chain's thread sends it (ADR-0305 §9); the
 /// headless host stays inline, as ADR-0305 §10 places it.
 #[cfg_attr(
@@ -2449,10 +2480,7 @@ fn damage_mode() -> DamageMode {
 )]
 pub(crate) fn desktop_placement(host: flui_native::CurrentHost) -> RasterPlacement {
     #[cfg(target_os = "linux")]
-    if matches!(
-        host,
-        flui_native::CurrentHost::Wayland | flui_native::CurrentHost::X11
-    ) {
+    if host == flui_native::CurrentHost::Wayland {
         return RasterPlacement::Threaded;
     }
     let _ = host;

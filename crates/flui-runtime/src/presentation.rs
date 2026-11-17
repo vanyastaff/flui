@@ -2020,7 +2020,9 @@ impl PresentationState {
     /// multiple of [`IN_FLIGHT_FLOOR`](crate::ui_runtime::IN_FLIGHT_FLOOR) since the oldest
     /// pending frame was handed to its sink, so a lost settlement wake costs at most that interval, and a
     /// frame that never settles wakes the owner once per interval, not on every read
-    /// (ADR-0305 §5).
+    /// (ADR-0305 §5). A host whose raster thread has settled every pending frame of this
+    /// presentation, and so already woke it, leaves the floor out
+    /// (`UiRuntime::next_wake_owing_floors`).
     pub(crate) fn in_flight_floor(&self) -> Option<Instant> {
         let queued = self.pending_frames.borrow().front()?.submitted_at();
         let floor = crate::ui_runtime::IN_FLIGHT_FLOOR;
