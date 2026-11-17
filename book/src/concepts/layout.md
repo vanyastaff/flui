@@ -9,8 +9,9 @@ position directly, and a parent never dictates an exact size without also allowi
 choose within a range.
 
 A size satisfies a `BoxConstraints` if and only if `min_width <= width <= max_width` and
-`min_height <= height <= max_height`. This is what a `Padding` does with the constraints it
-receives before it hands them to its child:
+`min_height <= height <= max_height`. A parent derives its child's constraints from its own: a
+`Padding` deflates them by its insets, so a tight window stays tight for its child, and a `Center`
+or an `Align` loosens them, so its child may pick any size up to the parent's:
 
 ```rust
 use flui::geometry::{EdgeInsets, Size};
@@ -20,13 +21,17 @@ use flui::rendering::BoxConstraints;
 let window = BoxConstraints::tight(Size::new(400.0, 300.0));
 assert!(window.is_satisfied_by(Size::new(400.0, 300.0)));
 
-// Padding takes 16 from each side and lets its child pick any size up to the rest.
-let child = window.deflate(EdgeInsets::all(16.0)).loosen();
-assert_eq!(child.biggest(), Size::new(368.0, 268.0));
-assert_eq!(child.smallest(), Size::new(0.0, 0.0));
+// A Padding takes 16 from each side: its child must be exactly the rest.
+let padded = window.deflate(EdgeInsets::all(16.0));
+assert_eq!(padded.biggest(), Size::new(368.0, 268.0));
+assert_eq!(padded.smallest(), Size::new(368.0, 268.0));
+
+// A Center inside it lets its child pick any size up to that.
+let centered = padded.loosen();
+assert_eq!(centered.smallest(), Size::new(0.0, 0.0));
 
 // A child that asks for more than it may have gets the closest size that fits.
-assert_eq!(child.constrain(Size::new(500.0, 20.0)), Size::new(368.0, 20.0));
+assert_eq!(centered.constrain(Size::new(500.0, 20.0)), Size::new(368.0, 20.0));
 ```
 
 A render object implements the protocol in `perform_layout`: it lays out each child against the

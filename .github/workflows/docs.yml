@@ -2,10 +2,9 @@ name: Docs
 
 # Builds the mdBook site under `book/` and deploys it to GitHub Pages from
 # `main`. Scoped to `book/**`, `src/book.rs` and this file via `paths:`, so it
-# never runs on a PR that doesn't touch the book — the opposite direction
-# from `ci.yml`'s docs-only skip, which exists to skip *compiling* jobs on
-# a docs-only PR; this workflow is the compiling (well, mdBook-building)
-# side of a docs change and has nothing to gate against non-docs changes.
+# never runs on a PR that doesn't touch the book; `ci.yml`'s main-only
+# `doc-test` job runs the book's samples with every other doctest after any
+# change to the facade they compile against.
 #
 # `mdbook test` is not used: it compiles each fence without the workspace's
 # crates. The `samples` job compiles the book's Rust fences as doctests of the

@@ -53,5 +53,6 @@ let row_key = ObjectKey::new(&note);
 // A key that will name one `NoteState` wherever it is mounted.
 struct NoteState;
 let editor_key: GlobalKey<NoteState> = GlobalKey::new();
-assert_eq!(editor_key.with_current_state(|_state| ()), None, "not mounted yet");
+// Outside a running application no element can hold it, so nothing is found.
+assert_eq!(editor_key.with_current_state(|_state| ()), None);
 ```

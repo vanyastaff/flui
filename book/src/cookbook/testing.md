@@ -35,8 +35,9 @@ t.tap(&find::button("Increment"));
 t.expect(find::text("1")).to_exist();
 ```
 
-The view under test is the counter from
-[View, Element, RenderObject](../concepts/view-element-render.md); its definition is hidden here.
+The view under test is a counter like the one in
+[View, Element, RenderObject](../concepts/view-element-render.md), with a labelled button; its
+definition is hidden here.
 
 `Tester::mount` mounts the view as `run_app` does, with the runtime's root scopes, in an 800 by
 600 window on a manual clock (`Tester::mount_in` with a `TestWindow` for another size or

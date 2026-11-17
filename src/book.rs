@@ -89,12 +89,20 @@ mod tests {
                 "BUG: every listed chapter exists, as mdBook's create-missing = false checks",
             );
             for (index, line) in text.lines().enumerate() {
-                let Some(info) = line.trim_start().strip_prefix("```") else {
+                // a fence may sit in a block quote or a list item, and open
+                // with backticks or tildes
+                let fenced = line.trim_start_matches(|c: char| c.is_whitespace() || c == '>');
+                let Some(info) = fenced
+                    .strip_prefix("```")
+                    .or_else(|| fenced.strip_prefix("~~~"))
+                else {
                     continue;
                 };
+                // rustdoc splits a fence's attributes on commas and spaces, and
+                // `ignore-<target>` skips the sample on that target
                 if info
-                    .split(',')
-                    .any(|attribute| attribute.trim() == "ignore")
+                    .split(|c: char| c == ',' || c.is_whitespace())
+                    .any(|attribute| attribute == "ignore" || attribute.starts_with("ignore-"))
                 {
                     ignored.push(format!("{chapter}:{}", index + 1));
                 }
