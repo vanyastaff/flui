@@ -53,6 +53,8 @@ pub mod decode {
     use std::collections::{HashMap, HashSet};
     use std::num::NonZeroU8;
 
+    use smallvec::SmallVec;
+
     use flui_platform::EventTime;
     use flui_platform::PlatformInput;
     use flui_platform::input_capabilities::PointerKindSet;
@@ -443,7 +445,7 @@ pub mod decode {
     #[derive(Debug, Clone, Copy)]
     struct Master {
         label: NativeDevice,
-        /// The label of its touchpad's gestures, once it pinched.
+        /// The label of its touchpad's gestures, from its first pinch or swipe.
         gestures: Option<NativeDevice>,
         /// The contact its last event moved, the cursor or a pen, and the
         /// window it moved it on.
@@ -1112,56 +1114,67 @@ pub mod decode {
                 return;
             };
             let device = self.gestures_of(&mut master, event, out);
-            let step = match event.action {
-                XiAction::SwipeBegin => {
-                    // The server names at least one finger; a count past a
-                    // byte is still a swipe of every finger a byte holds.
-                    let fingers = u8::try_from(event.detail).unwrap_or(u8::MAX);
-                    NonZeroU8::new(fingers).map(|fingers| {
-                        master.swipe = Some(OpenSwipe { surface, fingers });
-                        (fingers, GesturePhase::Began, (0.0, 0.0))
-                    })
-                }
-                XiAction::SwipeUpdate { dx, dy } => master
-                    .swipe
-                    .filter(|swipe| swipe.surface == surface)
-                    .map(|swipe| (swipe.fingers, GesturePhase::Changed, (dx, dy))),
-                XiAction::SwipeEnd { cancelled } => master
-                    .swipe
-                    .take()
-                    .filter(|swipe| swipe.surface == surface)
-                    .map(|swipe| {
-                        let phase = if cancelled {
-                            GesturePhase::Cancelled
-                        } else {
-                            GesturePhase::Ended
-                        };
-                        (swipe.fingers, phase, (0.0, 0.0))
-                    }),
-                _ => None,
-            };
-            self.masters.insert(event.master, master);
-            let Some((fingers, phase, (dx, dy))) = step else {
-                return;
-            };
-            let target = Target {
-                device,
-                contact: SWIPE,
-                kind: PointerKind::Trackpad,
-            };
-            let reading = Self::reading(
-                event,
-                surface,
-                scale,
-                target,
+            let swipe = |fingers, phase, (dx, dy)| {
                 ReadingAction::Swipe(SwipeReading {
                     fingers,
                     phase,
                     dx,
                     dy,
-                }),
-            );
-            self.assemble(&reading, out);
+                })
+            };
+            // A swipe open on another window than the event's ends there,
+            // cancelled: it is never left open behind the one that follows.
+            let cancel = ReadingAction::Cancel(NativeCancel::Platform);
+            let mut steps: SmallVec<[(NativeSurface, ReadingAction); 2]> = SmallVec::new();
+            match event.action {
+                XiAction::SwipeBegin => {
+                    if let Some(open) = master.swipe.take()
+                        && open.surface != surface
+                    {
+                        steps.push((open.surface, cancel));
+                    }
+                    // The server names at least one finger; a count past a
+                    // byte is still a swipe of every finger a byte holds.
+                    let fingers = u8::try_from(event.detail).unwrap_or(u8::MAX);
+                    if let Some(fingers) = NonZeroU8::new(fingers) {
+                        master.swipe = Some(OpenSwipe { surface, fingers });
+                        steps.push((surface, swipe(fingers, GesturePhase::Began, (0.0, 0.0))));
+                    }
+                }
+                XiAction::SwipeUpdate { dx, dy } => {
+                    if let Some(open) = master.swipe.filter(|open| open.surface == surface) {
+                        steps.push((
+                            surface,
+                            swipe(open.fingers, GesturePhase::Changed, (dx, dy)),
+                        ));
+                    }
+                }
+                XiAction::SwipeEnd { cancelled } => {
+                    if let Some(open) = master.swipe.take() {
+                        let phase = if cancelled {
+                            GesturePhase::Cancelled
+                        } else {
+                            GesturePhase::Ended
+                        };
+                        steps.push(if open.surface == surface {
+                            (surface, swipe(open.fingers, phase, (0.0, 0.0)))
+                        } else {
+                            (open.surface, cancel)
+                        });
+                    }
+                }
+                _ => {}
+            }
+            self.masters.insert(event.master, master);
+            let target = Target {
+                device,
+                contact: SWIPE,
+                kind: PointerKind::Trackpad,
+            };
+            for (on, action) in steps {
+                let reading = Self::reading(event, on, scale, target, action);
+                self.assemble(&reading, out);
+            }
         }
 
         /// A touchpad pinch of the event's master: one pan-zoom about the

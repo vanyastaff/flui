@@ -325,7 +325,6 @@ impl Contact {
         matches!(self.info.kind, PointerKind::Pen { .. } | PointerKind::Mouse)
             && !self.buttons.in_sequence()
             && !self.gesture.is_active()
-            && self.touchpad.is_none()
     }
 
     /// The event that ends this contact's sequence, if it has one in progress.
@@ -1170,27 +1169,29 @@ impl ContactRegistry {
             }
             ReadingAction::Hold(phase) => {
                 if let Some((position, _)) = contact.last_position {
-                    let delivered = match (phase, contact.touchpad) {
-                        (TouchpadHoldPhase::Begin, None) => {
-                            contact.touchpad = Some(TouchpadGesture::Hold);
-                            true
-                        }
-                        (
-                            TouchpadHoldPhase::End | TouchpadHoldPhase::Cancelled,
-                            Some(TouchpadGesture::Hold),
-                        ) => {
-                            contact.touchpad = None;
-                            true
-                        }
-                        // A repeated begin, or an end of a hold that never
-                        // began, says nothing new.
-                        _ => false,
-                    };
-                    if delivered {
-                        output.push(PlatformInput::Pointer(PointerEvent::TouchpadHold(
+                    let hold = |phase| {
+                        PlatformInput::Pointer(PointerEvent::TouchpadHold(
                             TouchpadHoldEvent::new(info, time, position, phase)
                                 .with_modifiers(modifiers),
-                        )));
+                        ))
+                    };
+                    let open = contact.touchpad == Some(TouchpadGesture::Hold);
+                    match phase {
+                        TouchpadHoldPhase::Begin => {
+                            // A begin over a hold whose end was lost ends
+                            // that one first: no hold is left open behind it.
+                            if open {
+                                output.push(hold(TouchpadHoldPhase::Cancelled));
+                            }
+                            contact.touchpad = Some(TouchpadGesture::Hold);
+                            output.push(hold(TouchpadHoldPhase::Begin));
+                        }
+                        // An end of a hold that never began says nothing.
+                        TouchpadHoldPhase::End | TouchpadHoldPhase::Cancelled if open => {
+                            contact.touchpad = None;
+                            output.push(hold(phase));
+                        }
+                        TouchpadHoldPhase::End | TouchpadHoldPhase::Cancelled => {}
                     }
                 }
                 remove = contact.touchpad.is_none() && !contact.gesture.is_active();
@@ -1198,8 +1199,22 @@ impl ContactRegistry {
             ReadingAction::Swipe(swipe) => {
                 if let Some((position, _)) = contact.last_position {
                     let phase = match (swipe.phase, &mut contact.touchpad) {
-                        (GesturePhase::Began, None) => {
-                            contact.touchpad = Some(TouchpadGesture::Swipe {
+                        (GesturePhase::Began, open) => {
+                            // A start over a swipe whose end was lost ends
+                            // that one first: its steps never feed the next.
+                            if let Some(TouchpadGesture::Swipe { fingers, .. }) = *open {
+                                output.push(PlatformInput::Pointer(PointerEvent::TouchpadSwipe(
+                                    TouchpadSwipeEvent::new(
+                                        info,
+                                        time,
+                                        position,
+                                        fingers,
+                                        TouchpadSwipePhase::Cancelled,
+                                    )
+                                    .with_modifiers(modifiers),
+                                )));
+                            }
+                            *open = Some(TouchpadGesture::Swipe {
                                 fingers: swipe.fingers,
                                 travel: SwipeOffset::ZERO,
                             });
@@ -1227,8 +1242,8 @@ impl ContactRegistry {
                             contact.touchpad = None;
                             Some((fingers, TouchpadSwipePhase::Cancelled))
                         }
-                        // A repeated start, or a step of a swipe that never
-                        // started, says nothing new.
+                        // A step or an end of a swipe that never started
+                        // says nothing.
                         _ => None,
                     };
                     if let Some((fingers, phase)) = phase {

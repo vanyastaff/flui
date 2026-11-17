@@ -9,13 +9,14 @@
 use std::cell::RefCell;
 
 use flui_foundation::geometry::Offset;
-use flui_platform::pointer::{DeviceId, TouchpadSwipeEvent, TouchpadSwipePhase};
+use flui_platform::pointer::{CancelReason, DeviceId, TouchpadSwipeEvent, TouchpadSwipePhase};
 use smallvec::SmallVec;
 
 use super::{GestureBinding, pointer_sequences::MAX_SIMULTANEOUS_POINTERS};
 use crate::{
     containment::RoutePanic,
     events::{PointerEvent, PointerEventExt as _},
+    gesture::{ContestCancel, arena::GestureArena},
     ids::{InputSurface, PointerId},
     pointer::HitTestResult,
 };
@@ -163,12 +164,20 @@ impl GestureBinding {
                 let Some(open) = self.touchpad_swipes.close(surface, swipe) else {
                     return;
                 };
+                // The swipe's own contest leaves the maps before user code
+                // runs, so a contest a callback opens for the same pointer
+                // (a newer start, a press reusing the id) is not the one
+                // settled here.
+                let contest = self.arena.detach(pointer);
                 first_panic = self.dispatch_ephemeral(event, &open.path);
                 let settled = RoutePanic::capture(|| {
                     if swipe.phase == TouchpadSwipePhase::End {
-                        arena.sweep(pointer);
+                        arena.sweep_detached(contest);
                     } else {
-                        arena.abandon(pointer);
+                        GestureArena::abandon_detached(
+                            contest,
+                            ContestCancel::Pointer(CancelReason::Platform),
+                        );
                     }
                 });
                 RoutePanic::preserve_first(&mut first_panic, settled, "touchpad swipe arena end");
@@ -190,10 +199,12 @@ impl GestureBinding {
     ) {
         let mut cancel = open.last;
         cancel.phase = TouchpadSwipePhase::Cancelled;
+        let contest = self.arena.detach(open.pointer());
         let delivered = self.dispatch_ephemeral(&PointerEvent::TouchpadSwipe(cancel), &open.path);
         RoutePanic::preserve_first(first_panic, delivered, "touchpad swipe cancel");
-        let pointer = open.pointer();
-        let abandoned = RoutePanic::capture(|| self.arena.arena().abandon(pointer));
+        let abandoned = RoutePanic::capture(|| {
+            GestureArena::abandon_detached(contest, ContestCancel::Abandoned);
+        });
         RoutePanic::preserve_first(first_panic, abandoned, "touchpad swipe arena abandon");
         let dropped = RoutePanic::capture(|| drop(open));
         RoutePanic::preserve_first(first_panic, dropped, "touchpad swipe path");

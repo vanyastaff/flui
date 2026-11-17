@@ -18,8 +18,9 @@ use crate::keyboard::Modifiers;
     reason = "fingers come to rest on a touchpad, then lift or start a gesture"
 )]
 pub enum TouchpadHoldPhase {
-    /// Fingers came to rest on the touchpad without moving. Whatever coasts under the
-    /// pointer, a framework fling or the platform's momentum, stops here.
+    /// Fingers came to rest on the touchpad without moving. A fling under the pointer (a
+    /// scrollable's, an interactive viewer's inertia) stops here, as the platform's own
+    /// momentum does, and stays stopped whichever phase follows.
     Begin,
     /// The fingers lifted without moving: the hold was the whole gesture.
     End,

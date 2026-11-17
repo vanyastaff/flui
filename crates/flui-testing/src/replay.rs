@@ -486,6 +486,9 @@ pub enum ScriptError {
     /// resting, or never lifted.
     #[error("a trackpad hold is not begun and ended once")]
     UnpairedHold,
+    /// A swipe's travel is NaN or infinite.
+    #[error("a trackpad swipe's travel is not finite")]
+    NonFiniteTravel,
 }
 
 /// A time-ordered script of host input, built by a per-device builder.
@@ -825,6 +828,11 @@ struct Timeline {
     down: BTreeSet<PointerId>,
     pinching: bool,
     holding: bool,
+    /// The pointer of the hold or swipe under way: a fresh one for each, as a
+    /// host mints one for each gesture, so none shares the cursor's contest.
+    gesture: PointerId,
+    /// The holds and swipes begun so far.
+    gestures_begun: u64,
     /// The finger count of the swipe under way.
     swiping: Option<NonZeroU8>,
     error: Option<ScriptError>,
@@ -839,6 +847,8 @@ impl Timeline {
             down: BTreeSet::new(),
             pinching: false,
             holding: false,
+            gesture: contact(GESTURE_IDS),
+            gestures_begun: 0,
             swiping: None,
             error: None,
         }
@@ -846,6 +856,12 @@ impl Timeline {
 
     fn fail(&mut self, error: ScriptError) {
         self.error.get_or_insert(error);
+    }
+
+    /// A hold or swipe begins under a pointer of its own.
+    fn begin_gesture(&mut self) {
+        self.gesture = contact(GESTURE_IDS.saturating_add(self.gestures_begun));
+        self.gestures_begun = self.gestures_begun.saturating_add(1);
     }
 
     fn pointer(&mut self, mut event: ScriptedPointer) {
@@ -1045,6 +1061,10 @@ pub struct MouseScript {
 
 /// The mouse's contact id in a script.
 const CURSOR: u64 = 1;
+
+/// The first id a trackpad script gives a hold or swipe, past every contact
+/// a script numbers.
+const GESTURE_IDS: u64 = 1 << 32;
 
 impl MouseScript {
     /// An empty mouse script under `name`.
@@ -1394,6 +1414,7 @@ impl TrackpadScript {
             self.timeline.fail(ScriptError::UnpairedHold);
         }
         self.timeline.holding = true;
+        self.timeline.begin_gesture();
         self.hold(TouchpadHoldPhase::Begin)
     }
 
@@ -1413,11 +1434,17 @@ impl TrackpadScript {
         }
         self = self.gesture_starts();
         self.timeline.swiping = Some(fingers);
+        self.timeline.begin_gesture();
         self.swipe(ScriptedSwipePhase::Start)
     }
 
     /// The swiping fingers have travelled `travel` since the swipe started.
-    pub fn swipe_to(self, travel: Offset<f64>) -> Self {
+    /// A travel that is not finite fails the script.
+    pub fn swipe_to(mut self, travel: Offset<f64>) -> Self {
+        if !(travel.dx.is_finite() && travel.dy.is_finite()) {
+            self.timeline.fail(ScriptError::NonFiniteTravel);
+            return self;
+        }
         self.swipe(ScriptedSwipePhase::Update { travel })
     }
 
@@ -1450,7 +1477,7 @@ impl TrackpadScript {
             .steps
             .push(ScriptStep::TouchpadHold(ScriptedTouchpadHold {
                 at,
-                pointer: contact(CURSOR),
+                pointer: self.timeline.gesture,
                 position: self.at,
                 phase,
             }));
@@ -1467,7 +1494,7 @@ impl TrackpadScript {
             .steps
             .push(ScriptStep::TouchpadSwipe(ScriptedTouchpadSwipe {
                 at,
-                pointer: contact(CURSOR),
+                pointer: self.timeline.gesture,
                 position: self.at,
                 fingers,
                 phase,

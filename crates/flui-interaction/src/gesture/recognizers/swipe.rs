@@ -385,11 +385,16 @@ impl GestureRecognizer for SwipeGestureRecognizer {
 
     /// A touchpad swipe is a swipe too: its travel is followed as a
     /// contact's motion would be, and its lift decides as a release does.
+    /// Only a swipe that may start anywhere takes one: a touchpad swipe
+    /// starts where the cursor rests, not from an edge, so a recognizer
+    /// along an edge would answer whatever swipe the cursor sat over.
     fn add_touchpad_swipe(&self, start: crate::pointer::PointerDispatch<'_>) {
-        if matches!(
-            start.local,
-            PointerEvent::TouchpadSwipe(swipe) if swipe.phase == TouchpadSwipePhase::Start
-        ) {
+        if matches!(self.start, SwipeStart::Anywhere(_))
+            && matches!(
+                start.local,
+                PointerEvent::TouchpadSwipe(swipe) if swipe.phase == TouchpadSwipePhase::Start
+            )
+        {
             self.admit(start);
         }
     }

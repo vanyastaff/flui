@@ -504,7 +504,7 @@ pub struct ButtonEvent {
     pub sample: Sample,
 }
 
-/// A pointer signal: an enter, a leave or a scroll-inertia cancel.
+/// A pointer signal: an enter or a leave.
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
@@ -1216,8 +1216,8 @@ pub enum Availability {
     /// The `emulated` availability.
     #[cfg_attr(feature = "serde", serde(rename = "emulated"))]
     Emulated,
-    /// The `unavailable` availability: what a recording that does not name a
-    /// capability says of it.
+    /// The `unavailable` availability: what a capability a writer leaves out
+    /// reads as.
     #[cfg_attr(feature = "serde", serde(rename = "unavailable"))]
     #[default]
     Unavailable,

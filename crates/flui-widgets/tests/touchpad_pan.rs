@@ -153,6 +153,8 @@ mod swipes {
     pub(super) struct Swipes {
         pub(super) swiped: Swiped,
         pub(super) list: ScrollController,
+        /// Where the inner, horizontal recognizer's swipes may start.
+        pub(super) horizontal: SwipeStart,
     }
 
     impl View for Swipes {
@@ -168,11 +170,11 @@ mod swipes {
 
     fn recognizer(
         ctx: &dyn LifecycleContext,
-        axis: Axis,
+        (axis, start): (Axis, SwipeStart),
         swiped: &Swiped,
     ) -> Rc<SwipeGestureRecognizer> {
         let swiped = Rc::clone(swiped);
-        SwipeGestureRecognizer::builder(GestureArenaScope::of(ctx), SwipeStart::Anywhere(axis))
+        SwipeGestureRecognizer::builder(GestureArenaScope::of(ctx), start)
             .on_swipe(move |details| {
                 swiped
                     .borrow_mut()
@@ -185,8 +187,12 @@ mod swipes {
         type State = State;
         fn create_state(&self, ctx: &dyn LifecycleContext) -> State {
             State {
-                vertical: recognizer(ctx, Axis::Vertical, &self.swiped),
-                horizontal: recognizer(ctx, Axis::Horizontal, &self.swiped),
+                vertical: recognizer(
+                    ctx,
+                    (Axis::Vertical, SwipeStart::Anywhere(Axis::Vertical)),
+                    &self.swiped,
+                ),
+                horizontal: recognizer(ctx, (Axis::Horizontal, self.horizontal), &self.swiped),
             }
         }
     }
@@ -226,25 +232,38 @@ mod swipes {
 /// A touchpad swipe of three fingers is a gesture, never a scroll: the swipe
 /// recognizer of its axis takes it from the arena keyed by the swipe's
 /// pointer and reports the edge it heads to as a trackpad's, the recognizer of
-/// the other axis loses it, and the list under both never moves.
+/// the other axis loses it, and the list under both never moves. A swipe
+/// recognizer that only takes swipes from an edge takes no touchpad swipe,
+/// which starts where the cursor rests, not from an edge.
 pub(crate) fn a_touchpad_swipe_is_a_gesture_and_no_scroll() {
     use flui_foundation::geometry::{Axis, Offset};
-    use flui_interaction::{PhysicalEdge, PointerKind};
+    use flui_interaction::{PhysicalEdge, PointerKind, SwipeStart};
 
-    for (step, (axis, edge)) in [
+    let anywhere = SwipeStart::Anywhere(Axis::Horizontal);
+    let from_left = SwipeStart::FromEdge(PhysicalEdge::Left);
+    let swiped_to = |axis, edge| vec![(axis, edge, PointerKind::Trackpad)];
+    for (horizontal, step, expected) in [
         (
+            anywhere,
             Offset::new(40.0, 2.0),
-            (Axis::Horizontal, PhysicalEdge::Right),
+            swiped_to(Axis::Horizontal, PhysicalEdge::Right),
         ),
         (
+            anywhere,
             Offset::new(-40.0, 0.0),
-            (Axis::Horizontal, PhysicalEdge::Left),
+            swiped_to(Axis::Horizontal, PhysicalEdge::Left),
         ),
         (
+            anywhere,
             Offset::new(1.0, 40.0),
-            (Axis::Vertical, PhysicalEdge::Bottom),
+            swiped_to(Axis::Vertical, PhysicalEdge::Bottom),
         ),
-        (Offset::new(0.0, -40.0), (Axis::Vertical, PhysicalEdge::Top)),
+        (
+            anywhere,
+            Offset::new(0.0, -40.0),
+            swiped_to(Axis::Vertical, PhysicalEdge::Top),
+        ),
+        (from_left, Offset::new(40.0, 0.0), Vec::new()),
     ] {
         let swiped = swipes::Swiped::default();
         let list = ScrollController::new();
@@ -252,14 +271,15 @@ pub(crate) fn a_touchpad_swipe_is_a_gesture_and_no_scroll() {
             swipes::Swipes {
                 swiped: Rc::clone(&swiped),
                 list: list.clone(),
+                horizontal,
             },
             tight(300.0, 300.0),
         );
         laid.replay(&swipes::swipe(step));
         assert_eq!(
             *swiped.borrow(),
-            [(axis, edge, PointerKind::Trackpad)],
-            "a swipe of {step:?}"
+            expected,
+            "a swipe of {step:?} over {horizontal:?}"
         );
         assert_eq!(list.pixels(), 0.0, "a swipe of {step:?} scrolled the list");
     }

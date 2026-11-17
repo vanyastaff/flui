@@ -96,7 +96,7 @@ use flui_interaction::gesture::{
 };
 use flui_interaction::pointer::EventPropagation;
 use flui_interaction::{GestureEndReason, InputSequenceId, RemainderHandoff, Velocity};
-use flui_interaction::{PointerEvent, WheelPreferencesProvider};
+use flui_interaction::{PointerEvent, TouchpadHoldPhase, WheelPreferencesProvider};
 use flui_objects::SubtreeAnchor;
 use flui_painting::Alignment;
 use flui_painting::paint::Clip;
@@ -2402,6 +2402,19 @@ impl InteractiveViewerState {
                         }));
                     }
                     down_core.fling.stop_friction();
+                })
+                // Fingers resting on a touchpad stop the inertia as a press
+                // does; a hold that ends or turns into a gesture leaves it
+                // stopped.
+                .on_pointer_signal({
+                    let core = Rc::clone(&core);
+                    move |_, dispatch| {
+                        if let PointerEvent::TouchpadHold(hold) = dispatch.local
+                            && hold.phase == TouchpadHoldPhase::Begin
+                        {
+                            core.fling.stop_friction();
+                        }
+                    }
                 })
                 .on_scroll_claim(scroll_claim)
                 .child(recognized);

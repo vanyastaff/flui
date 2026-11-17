@@ -73,8 +73,12 @@ PointerEvent::TouchpadHold(TouchpadHoldEvent)
 ```
 
 `ScrollInertiaCancel` leaves the vocabulary, the binding, the listener and the recording. A hold is
-delivered as a signal where the pointer rests (`Listener::on_pointer_signal`); a scrollable stops a
-fling it drives at `Begin`. Windows begins a hold when its DirectManipulation viewport runs and
+delivered as a signal where the pointer rests (`Listener::on_pointer_signal`). Every ballistic
+motion under the pointer stops at `Begin`, as a press stops it: a `Scrollable`'s fling and an
+`InteractiveViewer`'s inertia (pagers, carousels and wheels scroll through a `Scrollable`). A hold
+that ends or is cancelled, because the fingers lifted or started a gesture, leaves the motion
+stopped, as GTK 4 does; the gesture that follows drives it anew. An `AnchoredDrag`'s settle to an
+anchor (sheets, swipe rows) is not inertia and is not stopped. Windows begins a hold when its DirectManipulation viewport runs and
 cancels it as the pan or pinch passes its slop; macOS at a scroll's `MayBegin`, ended by AppKit's
 cancel of a scroll that never began and cancelled by the scroll's `Began`; Wayland binds
 `zwp_pointer_gestures_v1` at version 3 for `zwp_pointer_gesture_hold_v1`.
@@ -93,12 +97,16 @@ PointerEvent::TouchpadSwipe(TouchpadSwipeEvent)
 The travel is cumulative, as `PanZoomTransform` is; the shared assembly sums a host's steps
 (`ReadingAction::Swipe`). `position` is where the pointer rests, which no swipe moves. The binding
 hit-tests a swipe's `Start`, delivers every phase along that path (`TouchpadSwipes`), closes the
-arena keyed by the swipe's pointer after the start, sweeps it after `End` and abandons it after
-`Cancelled`, and cancels an open swipe itself on focus loss, its device's removal or a newer start
-of its pointer. `RecognizerSet` offers a start to `GestureRecognizer::add_touchpad_swipe` of every
-recognizer that admits a trackpad (a default method that admits nothing), so no contact recognizer
-reads a swipe; `SwipeGestureRecognizer` follows the travel as a contact's motion and its lift as a
-release, and reports `SwipeDetails::kind` as a trackpad. Wayland binds `zwp_pointer_gesture_swipe_v1`;
+arena keyed by the swipe's pointer after the start, and at `End` or `Cancelled` detaches that
+contest before any user code runs, then sweeps or abandons the detached generation, so a contest a
+callback opens for the same pointer is never the one settled. It cancels an open swipe itself on
+focus loss, its device's removal or a newer start of its pointer. A host mints a pointer for each
+swipe, and a start over a swipe whose end was lost cancels that one first (the shared assembly).
+`RecognizerSet` offers a start to `GestureRecognizer::add_touchpad_swipe` of every recognizer that
+admits a trackpad (a default method that admits nothing), so no contact recognizer reads a swipe;
+`SwipeGestureRecognizer` with `SwipeStart::Anywhere` follows the travel as a contact's motion and
+its lift as a release, and reports `SwipeDetails::kind` as a trackpad. A `SwipeStart::FromEdge`
+recognizer takes none: a touchpad swipe starts where the cursor rests, not from an edge. Wayland binds `zwp_pointer_gesture_swipe_v1`;
 X11 selects XInput 2.4's swipe events and reads the finger count from their `detail`.
 
 ### 3. Where each reaches a window
@@ -112,16 +120,19 @@ fraction of the touchpad; UIKit and the Web report neither.
 
 ### 4. The recording and the protocol follow
 
-The input recording carries `touchpad_hold` and `touchpad_swipe` rows and the two capabilities
-(absent in a recording that predates them, read as `unavailable`); the format is version 5 and
-refuses version 4. The native recording's reading action gains `hold` and `swipe`. Protocol 0.20
+The input recording carries `touchpad_hold` and `touchpad_swipe` rows and the two capabilities.
+A version 4 recording may hold a `scroll_inertia_cancel` row, which no reader has any more, so the
+format's version moves and the older one is refused by its version (`RecordingError::Version`), never
+read halfway. The two capabilities default to `unavailable` when a writer leaves them out only
+because the protocol refuses a field made required (ADR-0342); no older recording reaches that
+default. The native recording's reading action gains `hold` and `swipe`. Protocol 0.20
 is a break (ADR-0342 §1 for the added variants) and lists `scroll_inertia_cancel` in `BREAKING`'s
 `removed`.
 
 ### Consequences
 
-- Good, because a fling stops when fingers rest on every host that reports it, and the end of a
-  hold is said.
+- Good, because a fling or a viewer's inertia stops when fingers rest, on every host that reports
+  resting fingers, and the end of a hold is said.
 - Good, because a swipe competes for its consumer in the arena, so a horizontal and a vertical
   swipe recognizer nested in one another split swipes by axis, and a scrollable never moves.
 - Bad, because a 0.19 agent client is refused by a 0.20 application, and version 4 recordings no

@@ -840,7 +840,57 @@ fn a_swipe_sums_its_steps_into_its_travel() {
     );
 }
 
-/// A hold begins once, ends or is cancelled once; a device removed with a
+/// A start over a hold or swipe whose end was lost cancels that one before
+/// it begins: the old travel never feeds the new swipe, and its finger count
+/// is the new one's.
+fn a_start_over_an_open_gesture_cancels_it_first() {
+    let mut contacts = registry();
+    let read = |contact, action, ms| {
+        NativeReading::new(
+            NativeContact(contact),
+            PointerKind::Trackpad,
+            action,
+            at_ms(ms),
+        )
+        .from_device(NativeDevice(3))
+        .at_logical(10.0, 10.0)
+    };
+    let four = ReadingAction::Swipe(SwipeReading {
+        fingers: NonZeroU8::new(4).expect("four fingers"),
+        phase: GesturePhase::Began,
+        dx: 0.0,
+        dy: 0.0,
+    });
+    let mut lines = Vec::new();
+    for (contact, action, ms) in [
+        (1, ReadingAction::Hold(TouchpadHoldPhase::Begin), 1),
+        (1, ReadingAction::Hold(TouchpadHoldPhase::Begin), 2),
+        (2, swipe(GesturePhase::Began, 0.0, 0.0), 3),
+        (2, swipe(GesturePhase::Changed, 30.0, 0.0), 4),
+        (2, four, 5),
+        (2, swipe(GesturePhase::Changed, 5.0, 0.0), 6),
+    ] {
+        lines.extend(touchpad(
+            &decode(&mut contacts, &read(contact, action, ms)).expect("valid"),
+        ));
+    }
+    assert_eq!(
+        lines,
+        [
+            "device added",
+            "hold Begin",
+            "hold Cancelled",
+            "hold Begin",
+            "swipe 3 Start",
+            "swipe 3 travel (30, 0)",
+            "swipe 3 Cancelled",
+            "swipe 4 Start",
+            "swipe 4 travel (5, 0)",
+        ]
+    );
+}
+
+/// A hold ends or is cancelled once; a device removed with a
 /// hold or a swipe open ends it cancelled, before the device goes.
 fn a_hold_and_a_swipe_end_with_their_device() {
     let mut contacts = registry();
@@ -856,7 +906,6 @@ fn a_hold_and_a_swipe_end_with_their_device() {
     };
     let mut lines = Vec::new();
     for (contact, action, ms) in [
-        (1, ReadingAction::Hold(TouchpadHoldPhase::Begin), 1),
         (1, ReadingAction::Hold(TouchpadHoldPhase::Begin), 2),
         (1, ReadingAction::Hold(TouchpadHoldPhase::End), 3),
         (1, ReadingAction::Hold(TouchpadHoldPhase::Begin), 4),
@@ -1391,6 +1440,10 @@ fn pointer_assembly_contracts() {
             (
                 "a_hold_and_a_swipe_end_with_their_device",
                 a_hold_and_a_swipe_end_with_their_device,
+            ),
+            (
+                "a_start_over_an_open_gesture_cancels_it_first",
+                a_start_over_an_open_gesture_cancels_it_first,
             ),
             (
                 "pan_zoom_carries_only_scale_and_rotation",

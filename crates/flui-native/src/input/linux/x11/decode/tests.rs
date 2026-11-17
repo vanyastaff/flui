@@ -919,6 +919,56 @@ fn a_touchpad_swipe_is_one_gesture_of_its_fingers() {
     );
 }
 
+/// A swipe that ends, or starts again, on another window than its own is
+/// cancelled on its own window: it is never left open, and the next swipe
+/// is a whole swipe of its own fingers.
+#[test]
+fn a_swipe_ended_on_another_window_is_cancelled_on_its_own() {
+    use flui_platform::pointer::TouchpadSwipePhase;
+    const OTHER: NativeSurface = NativeSurface(2);
+    let mut pointers = pointers();
+    let at = (10.0, 10.0);
+    let begin = |fingers| XiEvent {
+        detail: fingers,
+        ..event(XiAction::SwipeBegin, TOUCHPAD, at)
+    };
+    let mut swiped = Vec::new();
+    for (surface, event) in [
+        (SURFACE, begin(3)),
+        (
+            OTHER,
+            event(XiAction::SwipeEnd { cancelled: false }, TOUCHPAD, at),
+        ),
+        (SURFACE, begin(3)),
+        (OTHER, begin(4)),
+        (
+            OTHER,
+            event(XiAction::SwipeUpdate { dx: 2.0, dy: 0.0 }, TOUCHPAD, at),
+        ),
+    ] {
+        for input in pointer_events(pointers.event(surface, 1.0, &event).inputs) {
+            if let PointerEvent::TouchpadSwipe(swipe) = input {
+                let phase = match swipe.phase {
+                    TouchpadSwipePhase::Update(travel) => format!("travel {}", travel.get().dx),
+                    phase => format!("{phase:?}"),
+                };
+                swiped.push(format!("{} {phase}", swipe.fingers));
+            }
+        }
+    }
+    assert_eq!(
+        swiped,
+        [
+            "3 Start",
+            "3 Cancelled",
+            "3 Start",
+            "3 Cancelled",
+            "4 Start",
+            "4 travel 2",
+        ]
+    );
+}
+
 /// The valuators a mask names: a bit past the 16 bits of a valuator's
 /// number skips its value without a panic, as does a value the event lacks.
 #[test]
