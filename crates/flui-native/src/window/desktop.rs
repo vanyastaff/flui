@@ -67,6 +67,7 @@ impl DisplayFrame {
     }
 
     /// The display.
+    #[cfg(any(x11_host, test))]
     pub(crate) const fn display(self) -> DisplayId {
         self.display
     }

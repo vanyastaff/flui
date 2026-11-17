@@ -685,6 +685,51 @@ fn the_user_resizing_and_moving_publish_too() {
     );
 }
 
+/// A position is a point of the display it names: a window moved onto the
+/// second display, at another scale, is on that display, at the point asked
+/// for, and its bridge is told the corner through that display's origin and
+/// scale; a position on a display the platform does not hold is refused with
+/// it, and the window stays where it was.
+fn a_position_lands_on_the_display_it_names() {
+    use flui_native::DisplaySpec;
+
+    let platform = HeadlessPlatform::new().with_displays(vec![
+        DisplaySpec::new("left", 1920, 1080),
+        DisplaySpec::new("right", 3840, 2160)
+            .scale_factor(DevicePixelRatio::try_new(2.0).expect("a ratio")),
+    ]);
+    let displays = platform.display_snapshot().expect("a snapshot");
+    let (left, right) = (displays.displays()[0].id, displays.displays()[1].id);
+    let window = open(&platform);
+    assert_eq!(window.state().display, Some(left), "opened on the primary");
+
+    let asked = position(right, 100.0, 50.0);
+    window
+        .admit_and_apply(WindowCommand::SetPosition(asked))
+        .expect("the platform holds the display");
+    let moved = window.state();
+    assert_eq!(moved.outer.position(), Some(asked));
+    assert_eq!(moved.display, Some(right), "the window is on the display it was put on");
+    let told = mock(&window)
+        .window_system()
+        .accessibility_bounds
+        .expect("a bridge was told");
+    assert_eq!(
+        told.outer().origin,
+        Point::new(1920 + 200, 100),
+        "the right display's origin plus the position at its scale"
+    );
+
+    let gone = flui_platform::DisplayRegistry::new()
+        .mint(&flui_platform::DisplayKey::Injected(1))
+        .expect("an id");
+    assert_eq!(
+        window.admit_and_apply(WindowCommand::SetPosition(position(gone, 1.0, 1.0))),
+        Err(CommandRefusal::Apply(flui_platform::ApplyError::DisplayGone(gone)))
+    );
+    assert_eq!(window.state().outer.position(), Some(asked), "it stays where it was");
+}
+
 /// A headless window tells its accessibility bridge where it lies, as every
 /// native window does: in device pixels, from its opening, after a move and
 /// after a change of scale, and the content is the whole window, which this
@@ -892,6 +937,10 @@ fn window_state_contract() {
     crate::run_table(
         "window_state_contract",
         &[
+            (
+                "a_position_lands_on_the_display_it_names",
+                a_position_lands_on_the_display_it_names as fn(),
+            ),
             (
                 "app_title_bar_controls_survive_open_commands_and_fullscreen",
                 app_title_bar_controls_survive_open_commands_and_fullscreen as fn(),
