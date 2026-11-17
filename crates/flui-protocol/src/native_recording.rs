@@ -1779,10 +1779,88 @@ vocabulary! {
         Url => "url",
         /// A telephone number.
         Phone => "phone",
-        /// A whole number.
+        /// A number; [`StoreStatus::signed`] and [`StoreStatus::decimal`] say
+        /// what it holds beside the digits.
         Number => "number",
         /// A search query.
         Search => "search",
+    }
+}
+
+vocabulary! {
+    /// What a text field's on-screen Enter key says.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
+    #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+    pub enum EnterAction {
+        /// The keyboard's own label.
+        Default => "default",
+        /// Done.
+        Done => "done",
+        /// Go.
+        Go => "go",
+        /// Next.
+        Next => "next",
+        /// Previous.
+        Previous => "previous",
+        /// Search.
+        Search => "search",
+        /// Send.
+        Send => "send",
+    }
+}
+
+vocabulary! {
+    /// Which letters a text field's on-screen keyboard shifts on its own.
+    #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
+    #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+    pub enum Capitalization {
+        /// None.
+        #[default]
+        None => "none",
+        /// The first letter of each sentence.
+        Sentences => "sentences",
+        /// The first letter of each word.
+        Words => "words",
+        /// Every letter.
+        Characters => "characters",
+    }
+}
+
+vocabulary! {
+    /// Whether a text field's input method suggests and corrects words.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
+    #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+    pub enum Correction {
+        /// Neither.
+        Off => "off",
+        /// Suggestions and the spell check, no word replaced on its own.
+        Suggestions => "suggestions",
+        /// Suggestions, and misspelled words replaced as the user types.
+        Autocorrect => "autocorrect",
+    }
+}
+
+vocabulary! {
+    /// What the system may fill a text field with, beyond its purpose.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
+    #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+    pub enum Autofill {
+        /// An account's user name.
+        Username => "username",
+        /// An account's existing password.
+        CurrentPassword => "current_password",
+        /// A password being chosen.
+        NewPassword => "new_password",
+        /// A one-time code.
+        OneTimeCode => "one_time_code",
     }
 }
 
@@ -1809,6 +1887,46 @@ pub struct StoreStatus {
         serde(default, skip_serializing_if = "crate::skip::is_default")
     )]
     pub purpose: InputPurpose,
+    /// A number purpose's minus sign: the number may be negative. Set only with
+    /// [`InputPurpose::Number`].
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "std::ops::Not::not")
+    )]
+    pub signed: bool,
+    /// A number purpose's decimal separator: the number may have a fractional
+    /// part. Set only with [`InputPurpose::Number`].
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "std::ops::Not::not")
+    )]
+    pub decimal: bool,
+    /// What its Enter key says; absent, the default its purpose picks (Search
+    /// for a search, the keyboard's own otherwise).
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub enter_action: Option<EnterAction>,
+    /// Which letters its keyboard shifts on its own.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "crate::skip::is_default")
+    )]
+    pub capitalization: Capitalization,
+    /// Whether its input method suggests and corrects; absent, the default its
+    /// purpose picks (prose corrected, an address or a number not).
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub correction: Option<Correction>,
+    /// What the system may fill it with.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub autofill: Option<Autofill>,
 }
 
 /// The text store a window's input method was told to serve.

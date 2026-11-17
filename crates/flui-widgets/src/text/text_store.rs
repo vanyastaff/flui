@@ -62,7 +62,7 @@ use flui_objects::{RenderEditable, SubtreeAnchor};
 use flui_painting::text_boundaries::graphemes;
 use flui_platform::text_store::{
     CommitGate, Composition, LockGrant, LockOutcome, LockTiming, OwnerCalls, PointMode, RangeRect,
-    Selection, TextChange, TextInputPurpose, TextStore, TextStoreChange, TextStoreEdit,
+    Selection, TextChange, TextInputOptions, TextStore, TextStoreChange, TextStoreEdit,
     TextStoreError, TextStoreObserver, TextStoreRead, TextStoreStatus, Utf16Offset, Utf16Range,
     utf16,
 };
@@ -245,7 +245,7 @@ pub(super) struct EditableTextStore {
     pipeline: Option<PipelineCell>,
     inner_anchor: SubtreeAnchor,
     obscure: Rc<Cell<bool>>,
-    input_purpose: Rc<Cell<TextInputPurpose>>,
+    text_input: Rc<Cell<TextInputOptions>>,
     obscuring_character: Rc<Cell<char>>,
     edits: EditObserver,
 }
@@ -282,7 +282,7 @@ pub(super) struct FieldParts {
     pub(super) pipeline: Option<PipelineCell>,
     pub(super) inner_anchor: SubtreeAnchor,
     pub(super) obscure: Rc<Cell<bool>>,
-    pub(super) input_purpose: Rc<Cell<TextInputPurpose>>,
+    pub(super) text_input: Rc<Cell<TextInputOptions>>,
     pub(super) obscuring_character: Rc<Cell<char>>,
     pub(super) edits: EditObserver,
 }
@@ -306,7 +306,7 @@ impl EditableTextStore {
             pipeline: parts.pipeline,
             inner_anchor: parts.inner_anchor,
             obscure: parts.obscure,
-            input_purpose: parts.input_purpose,
+            text_input: parts.text_input,
             obscuring_character: parts.obscuring_character,
             edits: parts.edits,
         })
@@ -782,7 +782,7 @@ impl TextStore for EditableTextStore {
     fn status(&self) -> TextStoreStatus {
         TextStoreStatus::EDITABLE_SINGLE_LINE
             .with_protected(self.obscure.get())
-            .with_purpose(self.input_purpose.get())
+            .with_text_input(self.text_input.get())
     }
 
     fn request_lock(

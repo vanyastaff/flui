@@ -2178,8 +2178,10 @@ of that tap without one give the focus back. A field attached outside a tap
 focuses the editor only while the canvas has the page's focus.
 `navigator.userActivation.isActive` is not used: it stays true for seconds
 after a tap, outside its handler. The `EditContext` path writes the canvas's
-`inputmode` through `owner::web::CanvasWrites` and puts the page's value and
-the canvas's own `editContext` back when it lets the field go. The
+`inputmode` and `enterkeyhint` through `owner::web::CanvasWrites` and puts the
+page's values and the canvas's own `editContext` back when it lets the field
+go; an `EditContext` has no capitalization, correction or autofill for the
+browser to read, so those reach only the editors. The
 headless-Chrome tests (constructed events; the test driver has no trusted
 input) `a_tap_focuses_an_editor_the_field_attached_after_it_takes_over`,
 `a_tap_no_field_follows_gives_the_focus_back_to_the_canvas`,
@@ -2300,8 +2302,9 @@ and writes only what changed between two specs.
   host writes no published value over a served field, and a field no store is
   served through shows its published value again after an edit and once the
   text input releases it (`FocusedField::on_release`). The field's
-  hints are the store's status (`inputmode`, an `autocomplete` of its
-  purpose, `enterkeyhint`). The focus leaving the field, the field's removal
+  hints are the store's status (`inputmode`, an `autocomplete` of its autofill
+  or purpose, `enterkeyhint`, `autocapitalize`, `autocorrect`, `spellcheck`).
+  The focus leaving the field, the field's removal
   or the host's retirement moves the store back to the canvas, and the
   element keeps no listener of the text input's. A hidden editor that takes
   the store over takes the canvas's focus only, never another element's of the

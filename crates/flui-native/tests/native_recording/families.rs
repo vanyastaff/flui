@@ -106,7 +106,8 @@ impl ReplayTarget for WindowTarget {
         if let Some(focus) = focus {
             let store = InMemoryTextStore::new("");
             store.set_protected(focus.status.protected);
-            store.set_purpose(focus.status.purpose);
+            store.set_single_line(focus.status.single_line);
+            store.set_text_input(focus.status.text_input);
             self.stores.insert(focus.store, store);
         }
         Ok(())
@@ -1228,8 +1229,89 @@ fn a_header_out_of_its_stream_is_refused() {
     }
 }
 
+/// A store's focus keeps every field of its status: what the field asks of
+/// the input method reads back as it was written, an Enter action and a
+/// correction left out read as the defaults the purpose picks, and a sign or
+/// a separator on a purpose that is not a number is refused.
+fn a_store_focus_keeps_every_field_of_its_status() {
+    use flui_platform::text_store::{
+        Autofill, Capitalization, Correction, EnterAction, NumberFormat, TextInputOptions,
+        TextInputPurpose, TextStoreStatus,
+    };
+
+    let header =
+        r#"{"flui_native_recording":2,"backend":"headless","stream":"window","devices":[]}"#;
+    let focused = |status: &str| {
+        format!(r#"{{"row":"store_focus","focus":{{"store":1,"status":{status}}}}}"#)
+    };
+    let plain = TextStoreStatus::EDITABLE_SINGLE_LINE;
+    let signed_decimal = TextInputPurpose::Number(NumberFormat {
+        signed: true,
+        decimal: true,
+    });
+    for (status, expected) in [
+        (r#"{"single_line":true}"#, plain),
+        (
+            r#"{"single_line":true,"purpose":"search"}"#,
+            plain.with_text_input(TextInputOptions::new(TextInputPurpose::Search)),
+        ),
+        (
+            r#"{"protected":true,"purpose":"number","signed":true,"decimal":true,"enter_action":"next","capitalization":"words","correction":"suggestions","autofill":"one_time_code"}"#,
+            plain
+                .with_protected(true)
+                .with_single_line(false)
+                .with_text_input(
+                    TextInputOptions::new(signed_decimal)
+                        .enter_action(EnterAction::Next)
+                        .capitalization(Capitalization::Words)
+                        .correction(Correction::Suggestions)
+                        .autofill(Autofill::OneTimeCode),
+                ),
+        ),
+        (
+            r#"{"single_line":true,"purpose":"search","enter_action":"default","correction":"off","autofill":"new_password"}"#,
+            plain.with_text_input(
+                TextInputOptions::new(TextInputPurpose::Search)
+                    .enter_action(EnterAction::Default)
+                    .correction(Correction::Off)
+                    .autofill(Autofill::NewPassword),
+            ),
+        ),
+    ] {
+        let text = format!("{header}\n{}\n", focused(status));
+        let recording = NativeRecording::read(text.as_bytes()).expect("a status it reads");
+        let Some(Row::StoreFocus(Some(focus))) = recording.rows.first() else {
+            panic!("one focus: {:?}", recording.rows);
+        };
+        assert_eq!(focus.status, expected, "{status}");
+        let mut written = Vec::new();
+        recording.write(&mut written).expect("written");
+        let written = String::from_utf8(written).expect("UTF-8");
+        assert_eq!(
+            written.lines().nth(1),
+            Some(focused(status).as_str()),
+            "written back as read"
+        );
+    }
+    let signed_email = format!(
+        "{header}\n{}\n",
+        focused(r#"{"purpose":"email","signed":true}"#)
+    );
+    assert!(
+        matches!(
+            NativeRecording::read(signed_email.as_bytes()),
+            Err(CodecError::Invalid { line: 2, .. })
+        ),
+        "a sign on an address is refused"
+    );
+}
+
 /// The cases of the streams beside a registry's.
-pub(super) const CASES: [(&str, fn()); 13] = [
+pub(super) const CASES: [(&str, fn()); 14] = [
+    (
+        "a_store_focus_keeps_every_field_of_its_status",
+        a_store_focus_keeps_every_field_of_its_status,
+    ),
     (
         "close_rows_out_of_order_are_refused",
         close_rows_out_of_order_are_refused,

@@ -7042,6 +7042,41 @@ GPU-память простаивающего или невидимого окн
   устройствах не нужно: поведение хостов не меняется, кроме момента, когда Win32 и X11
   рассогласованы, — он теперь публикуется `Focused`, как и раньше по полю `focused`.
 
+- [x] **LY119** — ветка `platform/text-field-status`, решение — ADR-0352 (заменяет в ADR-0348 §3
+  клавиши действия редактора). Обе находки подтверждены на `main` @ `9e309039d`: статус — только
+  `protected`, `single_line`, `purpose`, хосты угадывали метку Enter по назначению, многострочный
+  статус строился правкой `pub`-поля; проекция `project_ime_event` оставляла конец курсора
+  предредактирования (новый тест на `main` падает: выделение `6..6` вместо `4..6`). Построено:
+  `TextStoreStatus::text_input: TextInputOptions` — назначение (`Number(NumberFormat { signed,
+  decimal })`), `EnterAction`, `Capitalization`, `Correction::{Off, Suggestions, Autocorrect}`
+  (три состояния вместо двух флагов), `Autofill`; `TextInputOptions::new(purpose)` выбирает
+  умолчания по назначению, у назначения нет строителя; `with_single_line` и `with_text_input` у
+  статуса. Каждый хост передаёт то, для чего у платформы есть слово: iOS (`returnKeyType`,
+  `autocapitalizationType`, `textContentType`, клавиатуры decimal и numbers-and-punctuation),
+  Android (`IME_ACTION_*`, `TYPE_TEXT_FLAG_CAP_*`, `AUTO_CORRECT`, `NO_SUGGESTIONS`, флаги знака и
+  дроби), Web (`enterkeyhint` и на холсте `EditContext`, `autocapitalize`, `autocorrect`,
+  `spellcheck`, `autocomplete` автозаполнения), Wayland, IBus и Fcitx5 (подсказки капитализации,
+  дополнения и проверки, `digits` для целого), TSF (`IS_NUMBER` для числа со знаком или дробью).
+  Метка Enter только метка: каждый хост, Android тоже (было Tab и Shift+Tab), доставляет Enter, а
+  `EditableText` после `on_submitted` переводит фокус на Next и Previous. Проекция выделяет
+  целевой отрезок внутри композиции. Журнал записывает все поля статуса (протокол 0.18, поля
+  необязательны, старая запись читается как была). Виджеты: `text_input(TextInputOptions)` вместо
+  `input_purpose` во всех слоях полей. Тесты, в скобках результат с откатом:
+  `ime_events_project_onto_the_store_as_the_text_input_contract_says` (выделение схлопнуто в
+  конец отрезка); `enter_moves_the_focus_as_the_fields_enter_key_says` (фокус остаётся на первом
+  поле); `the_store_reports_the_text_input_the_field_was_built_with` (без сравнения всего значения
+  в `did_update_view` смена одной метки не доходит до хранилища);
+  `a_store_focus_keeps_every_field_of_its_status` (без новых полей записи метка и исправление
+  теряются при чтении); таблицы хостов `a_fields_options_pick_its_return_key_capitalization_correction_and_content`,
+  `the_text_input_options_reach_the_editor_info`,
+  `the_capitalization_and_correction_a_field_asks_for_are_its_hints`,
+  `a_fields_capitalization_and_correction_reach_each_protocol`,
+  `the_status_picks_capitalization_and_correction`, `the_status_labels_the_enter_key`,
+  `a_field_gets_the_scope_its_status_asks_for`. Прогоны на устройствах (метки Enter, капитализация
+  и автоисправление на Android и iOS, `textContentType`, Enter вместо Tab у Next на Android) —
+  в строках «Input purpose and hints» и «Autofill» `platform-parity.toml`; автозаполнение Android
+  (структура виртуальных view) не строится в этой серии и записано там же и в `docs/gaps.md`.
+
 ## Отступление от порядка, решённое владельцем
 
 - 2026-10-21: LY22 ждёт свои зависимости (LY24, LY9, text-ime, teardown), хотя ни одна ветка не

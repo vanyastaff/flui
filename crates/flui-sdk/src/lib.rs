@@ -97,6 +97,12 @@ pub mod platform {
     pub use flui_platform::WheelStep;
     pub use flui_platform::WindowMode;
     pub use flui_platform::WindowState;
+    pub use flui_platform::text_store::Autofill;
+    pub use flui_platform::text_store::Capitalization;
+    pub use flui_platform::text_store::Correction;
+    pub use flui_platform::text_store::EnterAction;
+    pub use flui_platform::text_store::NumberFormat;
+    pub use flui_platform::text_store::TextInputOptions;
     pub use flui_platform::text_store::TextInputPurpose;
 
     /// The capability seam (ADR-0152): what a package declares, provides and

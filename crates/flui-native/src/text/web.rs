@@ -30,21 +30,30 @@ pub(crate) mod ime {
     #![forbid(unsafe_code)]
 
     use flui_platform::text_store::{
-        Composition, Selection, TextInputPurpose, TextStoreEdit, TextStoreStatus, Utf16Offset,
-        Utf16Range,
+        Autofill, Capitalization, Composition, Correction, EnterAction, NumberFormat, Selection,
+        TextInputPurpose, TextStoreEdit, TextStoreStatus, Utf16Offset, Utf16Range,
     };
 
     /// The `inputmode` (and `EditContext.inputMode`) a field of `purpose` asks the
-    /// browser's virtual keyboard for.
+    /// browser's virtual keyboard for. A signed number asks for the text
+    /// keyboard: the numeric and decimal pads of iOS have no minus sign.
     #[must_use]
     pub(crate) const fn input_mode(purpose: TextInputPurpose) -> &'static str {
         match purpose {
             TextInputPurpose::Email => "email",
             TextInputPurpose::Url => "url",
             TextInputPurpose::Phone => "tel",
-            TextInputPurpose::Number => "numeric",
+            TextInputPurpose::Number(NumberFormat {
+                signed: false,
+                decimal: false,
+            }) => "numeric",
+            TextInputPurpose::Number(NumberFormat {
+                signed: false,
+                decimal: true,
+            }) => "decimal",
             TextInputPurpose::Search => "search",
-            // Free text, and any purpose added later that has no keyboard here.
+            // Free text, a signed number, and any purpose added later that has
+            // no keyboard here.
             _ => "text",
         }
     }
@@ -53,30 +62,78 @@ pub(crate) mod ime {
     /// The hidden editor in the text-input host offers nothing to fill, and a
     /// protected one tells a password manager it is no login field. The
     /// semantics host's field (`native`), which a screen reader user reads and
-    /// edits as the page's own, is filled as a native field of its purpose
-    /// would be: with an address, a phone number or a password.
+    /// edits as the page's own, is filled as a native field would be: with
+    /// what its autofill names, else a password for a protected field, else
+    /// an address or a phone number its purpose names.
     #[must_use]
     pub(crate) const fn autocomplete(status: &TextStoreStatus, native: bool) -> &'static str {
-        match (native, status.protected, status.purpose) {
-            (false, true, _) => "new-password",
-            (true, true, _) => "current-password",
-            (true, false, TextInputPurpose::Email) => "email",
-            (true, false, TextInputPurpose::Url) => "url",
-            (true, false, TextInputPurpose::Phone) => "tel",
-            // Free text, a number or a query has nothing to fill it with.
-            _ => "off",
+        if !native {
+            return if status.protected {
+                "new-password"
+            } else {
+                "off"
+            };
+        }
+        match (status.text_input.autofill, status.protected) {
+            (Some(Autofill::Username), _) => "username",
+            (Some(Autofill::NewPassword), _) => "new-password",
+            (Some(Autofill::OneTimeCode), _) => "one-time-code",
+            // An existing password, asked for or a protected field's.
+            (Some(Autofill::CurrentPassword), _) | (_, true) => "current-password",
+            _ => match status.text_input.purpose {
+                TextInputPurpose::Email => "email",
+                TextInputPurpose::Url => "url",
+                TextInputPurpose::Phone => "tel",
+                // Free text, a number or a query has nothing to fill it with.
+                _ => "off",
+            },
         }
     }
 
     /// The `enterkeyhint` a field of `status` labels the virtual keyboard's
-    /// Enter key with: a search for a query, a new line for a field of many
-    /// lines; `None` leaves the browser's own.
+    /// Enter key with: the action it names, else a new line for a field of
+    /// many lines; `None` leaves the browser's own.
     #[must_use]
     pub(crate) const fn enter_key_hint(status: &TextStoreStatus) -> Option<&'static str> {
-        match status.purpose {
-            TextInputPurpose::Search => Some("search"),
+        match status.text_input.enter_action {
+            EnterAction::Done => Some("done"),
+            EnterAction::Go => Some("go"),
+            EnterAction::Next => Some("next"),
+            EnterAction::Previous => Some("previous"),
+            EnterAction::Search => Some("search"),
+            EnterAction::Send => Some("send"),
+            // The keyboard's own, and any action added later.
             _ if !status.single_line => Some("enter"),
             _ => None,
+        }
+    }
+
+    /// The `autocapitalize` an editor of a field of `status` gives the
+    /// browser; a protected field's keyboard shifts nothing.
+    #[must_use]
+    pub(crate) const fn autocapitalize(status: &TextStoreStatus) -> &'static str {
+        match status.text_input.capitalization {
+            _ if status.protected => "off",
+            Capitalization::Sentences => "sentences",
+            Capitalization::Words => "words",
+            Capitalization::Characters => "characters",
+            // None, and any capitalization added later.
+            _ => "off",
+        }
+    }
+
+    /// The `autocorrect` (Safari's) and `spellcheck` an editor of a field of
+    /// `status` gives the browser: both for [`Correction::Autocorrect`], the
+    /// spell check alone for [`Correction::Suggestions`], neither for
+    /// [`Correction::Off`] or a protected field.
+    #[must_use]
+    pub(crate) const fn correction(status: &TextStoreStatus) -> (&'static str, &'static str) {
+        match status.text_input.correction {
+            _ if status.protected => ("off", "false"),
+            Correction::Autocorrect => ("on", "true"),
+            Correction::Suggestions => ("off", "true"),
+            // Off, and any correction added later.
+            _ => ("off", "false"),
         }
     }
 
@@ -454,8 +511,8 @@ mod input {
     use wasm_bindgen::{JsCast, prelude::*};
 
     use super::ime::{
-        FieldValue, autocomplete, composition_end, enter_key_hint, field_change, field_edit,
-        input_mode, range, text_update,
+        FieldValue, autocapitalize, autocomplete, composition_end, correction, enter_key_hint,
+        field_change, field_edit, input_mode, range, text_update,
     };
     use crate::owner::panic_boundary::contain_owner_callback;
     use crate::owner::slot::OwnerSlot;
@@ -718,7 +775,8 @@ mod input {
     /// set here on every transition: serving a field of `status`, that
     /// field's hints ([`set_editor_hints`]) and no `aria-hidden`; serving none,
     /// `aria-hidden="true"`, `inputmode="none"` (no keyboard while a tap waits
-    /// for its field), `autocomplete="off"`, no `enterkeyhint` and no value.
+    /// for its field), `autocomplete="off"`, no capitalization, correction or
+    /// spell check, no `enterkeyhint` and no value.
     /// The value is replaced from script, which clears the element's undo
     /// history in Chromium, Gecko and WebKit, so the browser's undo cannot
     /// bring a field's text back into the next one. `tabindex="-1"` is set
@@ -733,6 +791,9 @@ mod input {
                 ("aria-hidden", "true"),
                 ("inputmode", "none"),
                 ("autocomplete", "off"),
+                ("autocapitalize", "off"),
+                ("autocorrect", "off"),
+                ("spellcheck", "false"),
             ]
             .into_iter()
             .try_for_each(|(name, value)| element.set_attribute(name, value))
@@ -1241,7 +1302,9 @@ mod input {
             match &*surface {
                 // The canvas gets back what it had before the context came.
                 Surface::Context(_) => {
-                    self.canvas_writes.restore("inputmode");
+                    for name in CANVAS_HINTS {
+                        self.canvas_writes.restore(name);
+                    }
                     if let Err(error) = attach_edit_context(
                         self.canvas.unchecked_ref(),
                         self.canvas_writes.found_edit_context(),
@@ -1367,8 +1430,7 @@ mod input {
                 create_edit_context(text, as_u32(selected.start()), as_u32(selected.end()))?;
             // The browser reads the keyboard hints from the element the context
             // is associated with, not from the context.
-            self.canvas_writes
-                .set("inputmode", input_mode(store.status().purpose))?;
+            set_canvas_hints(&self.canvas_writes, &store.status())?;
             let target: &web_sys::EventTarget = context.as_ref();
             let mut listeners = Vec::new();
             let listen = |kind: &'static str, body: Box<dyn Fn(web_sys::Event)>| {
@@ -1452,9 +1514,7 @@ mod input {
             };
             let status = store.status();
             let result = match surface {
-                Surface::Context(_) => self
-                    .canvas_writes
-                    .set("inputmode", input_mode(status.purpose)),
+                Surface::Context(_) => set_canvas_hints(&self.canvas_writes, &status),
                 Surface::Editor { hidden: true, .. } => {
                     let hidden = self.hidden.borrow().clone();
                     if let Some(hidden) = hidden {
@@ -2101,19 +2161,56 @@ mod input {
 
     /// The attributes an editor's hints are written to, which the semantics
     /// host's field loses once nothing is served through it.
-    const EDITOR_HINTS: [&str; 3] = ["inputmode", "autocomplete", "enterkeyhint"];
+    const EDITOR_HINTS: [&str; 6] = [
+        "inputmode",
+        "autocomplete",
+        "enterkeyhint",
+        "autocapitalize",
+        "autocorrect",
+        "spellcheck",
+    ];
+
+    /// The attributes of the canvas an `EditContext` serves through that the
+    /// browser's keyboard reads, which the canvas gets back as it held them
+    /// once nothing is served through it.
+    const CANVAS_HINTS: [&str; 2] = ["inputmode", "enterkeyhint"];
+
+    /// The hints the canvas gives the browser's keyboard for the field its
+    /// `EditContext` serves ([`CANVAS_HINTS`]): the keyboard its purpose asks
+    /// for and the label of its Enter key, or the canvas's own label where
+    /// the field names none. The browser reads them from the element, not
+    /// from the context; an `EditContext` has no capitalization, correction
+    /// or autofill to read.
+    fn set_canvas_hints(
+        canvas: &crate::owner::web::CanvasWrites,
+        status: &TextStoreStatus,
+    ) -> Result<(), JsValue> {
+        canvas.set("inputmode", input_mode(status.text_input.purpose))?;
+        match enter_key_hint(status) {
+            Some(hint) => canvas.set("enterkeyhint", hint),
+            None => {
+                canvas.restore("enterkeyhint");
+                Ok(())
+            }
+        }
+    }
 
     /// The hints an editor gives the browser for the field's status
     /// ([`EDITOR_HINTS`]): the keyboard its purpose asks for, what the
     /// browser may fill it with (`native` for the semantics host's field,
-    /// see [`autocomplete`]) and the label of the keyboard's Enter key.
+    /// see [`autocomplete`]), how it capitalizes and corrects, and the label
+    /// of the keyboard's Enter key.
     fn set_editor_hints(
         element: &web_sys::HtmlElement,
         status: &TextStoreStatus,
         native: bool,
     ) -> Result<(), JsValue> {
-        element.set_attribute("inputmode", input_mode(status.purpose))?;
+        let (autocorrect, spellcheck) = correction(status);
+        element.set_attribute("inputmode", input_mode(status.text_input.purpose))?;
         element.set_attribute("autocomplete", autocomplete(status, native))?;
+        element.set_attribute("autocapitalize", autocapitalize(status))?;
+        element.set_attribute("autocorrect", autocorrect)?;
+        element.set_attribute("spellcheck", spellcheck)?;
         match enter_key_hint(status) {
             Some(hint) => element.set_attribute("enterkeyhint", hint),
             None => element.remove_attribute("enterkeyhint"),

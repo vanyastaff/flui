@@ -65,10 +65,9 @@ pub(crate) mod ime {
 
     use flui_foundation::IdMint;
     use flui_foundation::geometry::{Bounds, Point};
-    use flui_platform::keyboard::NamedKey;
     use flui_platform::text_store::{
-        Composition, Selection, TextInputPurpose, TextStoreEdit, TextStoreError, TextStoreRead,
-        TextStoreStatus, Utf16Offset, Utf16Range,
+        Capitalization, Composition, Correction, EnterAction, Selection, TextInputPurpose,
+        TextStoreEdit, TextStoreError, TextStoreRead, TextStoreStatus, Utf16Offset, Utf16Range,
     };
 
     use crate::text::ime::{diff, document_text};
@@ -488,55 +487,98 @@ pub(crate) mod ime {
 
     /// `EditorInfo.TYPE_CLASS_NUMBER`.
     pub const TYPE_CLASS_NUMBER: i32 = 0x2;
+    /// `EditorInfo.TYPE_NUMBER_FLAG_SIGNED`.
+    pub const TYPE_NUMBER_FLAG_SIGNED: i32 = 0x1000;
+    /// `EditorInfo.TYPE_NUMBER_FLAG_DECIMAL`.
+    pub const TYPE_NUMBER_FLAG_DECIMAL: i32 = 0x2000;
     /// `EditorInfo.TYPE_CLASS_PHONE`.
     pub const TYPE_CLASS_PHONE: i32 = 0x3;
     /// `EditorInfo.TYPE_TEXT_VARIATION_URI`.
     pub const TYPE_TEXT_VARIATION_URI: i32 = 0x10;
     /// `EditorInfo.TYPE_TEXT_VARIATION_EMAIL_ADDRESS`.
     pub const TYPE_TEXT_VARIATION_EMAIL_ADDRESS: i32 = 0x20;
+    /// `EditorInfo.TYPE_TEXT_FLAG_CAP_CHARACTERS`.
+    pub const TYPE_TEXT_FLAG_CAP_CHARACTERS: i32 = 0x1000;
+    /// `EditorInfo.TYPE_TEXT_FLAG_CAP_WORDS`.
+    pub const TYPE_TEXT_FLAG_CAP_WORDS: i32 = 0x2000;
+    /// `EditorInfo.TYPE_TEXT_FLAG_CAP_SENTENCES`.
+    pub const TYPE_TEXT_FLAG_CAP_SENTENCES: i32 = 0x4000;
+    /// `EditorInfo.TYPE_TEXT_FLAG_AUTO_CORRECT`.
+    pub const TYPE_TEXT_FLAG_AUTO_CORRECT: i32 = 0x8000;
+    /// `EditorInfo.TYPE_TEXT_FLAG_NO_SUGGESTIONS`.
+    pub const TYPE_TEXT_FLAG_NO_SUGGESTIONS: i32 = 0x8_0000;
+    /// `EditorInfo.IME_ACTION_GO`.
+    pub const IME_ACTION_GO: i32 = 2;
     /// `EditorInfo.IME_ACTION_SEARCH`.
     pub const IME_ACTION_SEARCH: i32 = 3;
+    /// `EditorInfo.IME_ACTION_SEND`.
+    pub const IME_ACTION_SEND: i32 = 4;
 
-    /// The `EditorInfo` input type and options a field of `status` asks for: the
-    /// keyboard its purpose names (email, web address, number, phone, search), a
-    /// password variation that the keyboard does not learn from for a protected
-    /// field (which wins over the purpose), a multi-line field whose Enter breaks
-    /// lines, and Done otherwise.
+    /// The `EditorInfo` input type and options a field of `status` asks for:
+    ///
+    /// - the keyboard its purpose names (email, web address, phone, search, a
+    ///   number with the sign and decimal flags its format allows);
+    /// - for text, the capitalization it asks for, auto-correction for
+    ///   [`Correction::Autocorrect`] and no suggestion strip for
+    ///   [`Correction::Off`];
+    /// - the action its Enter key names, Done for the keyboard's own; a
+    ///   multi-line field keeps an action it names, and breaks lines on Enter
+    ///   otherwise;
+    /// - a protected field is a password the keyboard neither suggests,
+    ///   corrects nor learns from, whatever its purpose and options.
     #[must_use]
     pub const fn editor_info(status: TextStoreStatus) -> (i32, i32) {
-        let mut input_type = TYPE_CLASS_TEXT;
-        let mut options = IME_ACTION_DONE;
-        match status.purpose {
-            TextInputPurpose::Email => input_type |= TYPE_TEXT_VARIATION_EMAIL_ADDRESS,
-            TextInputPurpose::Url => input_type |= TYPE_TEXT_VARIATION_URI,
-            TextInputPurpose::Number => input_type = TYPE_CLASS_NUMBER,
-            TextInputPurpose::Phone => input_type = TYPE_CLASS_PHONE,
-            TextInputPurpose::Search => options = IME_ACTION_SEARCH,
-            // Free text, and any purpose added later that has no keyboard here.
-            _ => {}
-        }
+        let text_input = status.text_input;
+        let mut input_type = match text_input.purpose {
+            TextInputPurpose::Email => TYPE_CLASS_TEXT | TYPE_TEXT_VARIATION_EMAIL_ADDRESS,
+            TextInputPurpose::Url => TYPE_CLASS_TEXT | TYPE_TEXT_VARIATION_URI,
+            TextInputPurpose::Number(format) => {
+                let mut number = TYPE_CLASS_NUMBER;
+                if format.signed {
+                    number |= TYPE_NUMBER_FLAG_SIGNED;
+                }
+                if format.decimal {
+                    number |= TYPE_NUMBER_FLAG_DECIMAL;
+                }
+                number
+            }
+            TextInputPurpose::Phone => TYPE_CLASS_PHONE,
+            // Free text, a search, and any purpose added later that has no
+            // keyboard here.
+            _ => TYPE_CLASS_TEXT,
+        };
+        let mut options = match text_input.enter_action {
+            EnterAction::Go => IME_ACTION_GO,
+            EnterAction::Next => IME_ACTION_NEXT,
+            EnterAction::Previous => IME_ACTION_PREVIOUS,
+            EnterAction::Search => IME_ACTION_SEARCH,
+            EnterAction::Send => IME_ACTION_SEND,
+            // Done, the keyboard's own, and any action added later.
+            _ => IME_ACTION_DONE,
+        };
         if status.protected {
             input_type = TYPE_CLASS_TEXT | TYPE_TEXT_VARIATION_PASSWORD;
             options |= IME_FLAG_NO_PERSONALIZED_LEARNING;
+        } else if input_type & 0xf == TYPE_CLASS_TEXT {
+            input_type |= match text_input.capitalization {
+                Capitalization::Sentences => TYPE_TEXT_FLAG_CAP_SENTENCES,
+                Capitalization::Words => TYPE_TEXT_FLAG_CAP_WORDS,
+                Capitalization::Characters => TYPE_TEXT_FLAG_CAP_CHARACTERS,
+                _ => 0,
+            };
+            input_type |= match text_input.correction {
+                Correction::Autocorrect => TYPE_TEXT_FLAG_AUTO_CORRECT,
+                Correction::Suggestions => 0,
+                _ => TYPE_TEXT_FLAG_NO_SUGGESTIONS,
+            };
         }
         if !status.single_line && input_type & 0xf == TYPE_CLASS_TEXT {
             input_type |= TYPE_TEXT_FLAG_MULTI_LINE;
-            options |= IME_FLAG_NO_ENTER_ACTION;
+            if matches!(text_input.enter_action, EnterAction::Default) {
+                options |= IME_FLAG_NO_ENTER_ACTION;
+            }
         }
         (input_type, options)
-    }
-
-    /// The key an editor action (`performEditorAction`) arrives as, and whether
-    /// Shift is held: Next is Tab, Previous is Shift+Tab, and every other action
-    /// (Done, Go, Search, Send) is Enter, which a field answers as it answers a
-    /// keyboard's.
-    #[must_use]
-    pub const fn editor_action_key(action: i32) -> (NamedKey, bool) {
-        match action {
-            IME_ACTION_NEXT => (NamedKey::Tab, false),
-            IME_ACTION_PREVIOUS => (NamedKey::Tab, true),
-            _ => (NamedKey::Enter, false),
-        }
     }
 
     /// Where the caret and the field are for `CursorAnchorInfo`, in the view's
@@ -734,8 +776,7 @@ mod input {
 
     use super::ime::{
         Change, CharacterBounds, EditorReport, ImeEdit, Install, Ledger, Mirror, Replayed,
-        Snapshot, character_bounds, cursor_anchor, editor_action_key, editor_info,
-        starts_handwriting,
+        Snapshot, character_bounds, cursor_anchor, editor_info, starts_handwriting,
     };
     use crate::owner::android::EditorState;
     use crate::owner::panic_boundary::contain_owner_callback;
@@ -750,29 +791,24 @@ mod input {
     use crate::owner::android::java_view::{InputMethod, InputMethodReply, JavaView, ViewEvent};
     use crate::owner::android::{ActivityRef, ActivityWindow, ActivityWindowId};
 
-    /// The key presses an input method's editor action arrives as: `key`
-    /// pressed and released at `uptime_ms`, with Shift when `shift`.
-    fn editor_action_keys(
-        key: flui_platform::keyboard::NamedKey,
-        shift: bool,
-        uptime_ms: i64,
-    ) -> [flui_platform::PlatformInput; 2] {
-        use flui_platform::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, Modifiers};
+    /// The key presses an input method's editor action arrives as: Enter
+    /// pressed and released at `uptime_ms`, whatever the action. The field
+    /// acts on Enter by the action its status names (a Next field moves the
+    /// focus on), as it does on every host.
+    fn editor_action_keys(uptime_ms: i64) -> [flui_platform::PlatformInput; 2] {
+        use flui_platform::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, NamedKey};
         let time = flui_platform::EventTime::from_nanos(
             u64::try_from(uptime_ms)
                 .unwrap_or(0)
                 .saturating_mul(1_000_000),
         );
-        let modifiers = if shift {
-            Modifiers::SHIFT
-        } else {
-            Modifiers::NONE
-        };
         [KeyState::Down(KeyPress::First), KeyState::Up].map(|state| {
-            flui_platform::PlatformInput::Keyboard(
-                KeyEvent::new(state, Key::Named(key), Code::Unidentified, time)
-                    .with_modifiers(modifiers),
-            )
+            flui_platform::PlatformInput::Keyboard(KeyEvent::new(
+                state,
+                Key::Named(NamedKey::Enter),
+                Code::Unidentified,
+                time,
+            ))
         })
     }
 
@@ -883,7 +919,7 @@ mod input {
             })
         }
 
-        fn editor_action(&self, action: i32, uptime_ms: i64) -> InputMethodReply {
+        fn editor_action(&self, _action: i32, uptime_ms: i64) -> InputMethodReply {
             let fields = Arc::clone(&self.fields);
             InputMethodReply {
                 composing: None,
@@ -891,10 +927,9 @@ mod input {
                     if let Some(input) = fields.of(window.activity_id()) {
                         input.editor_action();
                     }
-                    // The action arrives as the key it stands for, which a field
-                    // answers as it answers a keyboard's.
-                    let (key, shift) = editor_action_key(action);
-                    for key_input in editor_action_keys(key, shift, uptime_ms) {
+                    // The action arrives as Enter, which a field answers as it
+                    // answers a keyboard's.
+                    for key_input in editor_action_keys(uptime_ms) {
                         window.delivery().dispatch_input(key_input);
                     }
                 }),

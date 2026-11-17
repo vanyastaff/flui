@@ -7,26 +7,31 @@
 use std::rc::Rc;
 
 use super::{
-    FieldValue, autocomplete, composition_end, enter_key_hint, field_change, field_edit,
-    input_mode, range, text_update,
+    FieldValue, autocapitalize, autocomplete, composition_end, correction, enter_key_hint,
+    field_change, field_edit, input_mode, range, text_update,
 };
 use flui_platform::text_store::{
-    Composition, LockGrant, LockTiming, Selection, TextInputPurpose, TextStore, TextStoreEdit,
+    Autofill, Capitalization, Composition, Correction, EnterAction, LockGrant, LockTiming,
+    NumberFormat, Selection, TextInputOptions, TextInputPurpose, TextStore, TextStoreEdit,
     TextStoreStatus, Utf16Offset,
 };
 use flui_testing::text_store_kit::InMemoryTextStore;
 
 /// The purpose a field was built with picks the virtual keyboard the browser
-/// shows; free text and a purpose this backend has no keyboard for get plain
-/// text.
+/// shows; free text, a signed number (iOS's pads have no minus) and a
+/// purpose this backend has no keyboard for get plain text.
 #[test]
 fn the_purpose_picks_the_input_mode() {
+    let number = |signed, decimal| TextInputPurpose::Number(NumberFormat { signed, decimal });
     let rows = [
         (TextInputPurpose::Text, "text"),
         (TextInputPurpose::Email, "email"),
         (TextInputPurpose::Url, "url"),
         (TextInputPurpose::Phone, "tel"),
-        (TextInputPurpose::Number, "numeric"),
+        (number(false, false), "numeric"),
+        (number(false, true), "decimal"),
+        (number(true, false), "text"),
+        (number(true, true), "text"),
         (TextInputPurpose::Search, "search"),
     ];
     for (purpose, expected) in rows {
@@ -36,48 +41,134 @@ fn the_purpose_picks_the_input_mode() {
 
 /// The hidden editor offers the browser nothing to fill, and a protected one
 /// is no login field; the semantics host's field is filled as a native field
-/// of its purpose is.
+/// is: with what its autofill names, else a password when protected, else
+/// what its purpose names.
 #[test]
 fn the_status_picks_what_the_browser_fills_in() {
-    let status = |purpose, protected| {
+    let status = |options, protected| {
         TextStoreStatus::EDITABLE_SINGLE_LINE
-            .with_purpose(purpose)
+            .with_text_input(options)
             .with_protected(protected)
     };
+    let of = TextInputOptions::new;
+    let text = TextInputOptions::TEXT;
     let rows = [
-        (TextInputPurpose::Text, false, "off", "off"),
-        (TextInputPurpose::Email, false, "off", "email"),
-        (TextInputPurpose::Url, false, "off", "url"),
-        (TextInputPurpose::Phone, false, "off", "tel"),
-        (TextInputPurpose::Number, false, "off", "off"),
-        (TextInputPurpose::Search, false, "off", "off"),
+        (text, false, "off", "off"),
+        (of(TextInputPurpose::Email), false, "off", "email"),
+        (of(TextInputPurpose::Url), false, "off", "url"),
+        (of(TextInputPurpose::Phone), false, "off", "tel"),
         (
-            TextInputPurpose::Text,
+            of(TextInputPurpose::Number(NumberFormat::WHOLE)),
+            false,
+            "off",
+            "off",
+        ),
+        (of(TextInputPurpose::Search), false, "off", "off"),
+        (text, true, "new-password", "current-password"),
+        (text.autofill(Autofill::Username), false, "off", "username"),
+        (
+            text.autofill(Autofill::NewPassword),
+            true,
+            "new-password",
+            "new-password",
+        ),
+        (
+            text.autofill(Autofill::CurrentPassword),
             true,
             "new-password",
             "current-password",
         ),
+        (
+            of(TextInputPurpose::Number(NumberFormat::WHOLE)).autofill(Autofill::OneTimeCode),
+            false,
+            "off",
+            "one-time-code",
+        ),
     ];
-    for (purpose, protected, hidden, native) in rows {
-        let status = status(purpose, protected);
-        assert_eq!(autocomplete(&status, false), hidden, "{purpose:?} hidden");
-        assert_eq!(autocomplete(&status, true), native, "{purpose:?} native");
+    for (options, protected, hidden, native) in rows {
+        let status = status(options, protected);
+        assert_eq!(autocomplete(&status, false), hidden, "{options:?} hidden");
+        assert_eq!(autocomplete(&status, true), native, "{options:?} native");
     }
 }
 
-/// A query's Enter key searches and a field of many lines' breaks the line;
-/// any other single-line field keeps the browser's own label.
+/// The Enter key says the action the field names; with none, a query's
+/// searches (the default its purpose picks), a field of many lines' breaks
+/// the line, and any other single-line field keeps the browser's own label.
 #[test]
 fn the_status_labels_the_enter_key() {
     let single = TextStoreStatus::EDITABLE_SINGLE_LINE;
     assert_eq!(enter_key_hint(&single), None);
     assert_eq!(
-        enter_key_hint(&single.with_purpose(TextInputPurpose::Search)),
+        enter_key_hint(&single.with_text_input(TextInputOptions::new(TextInputPurpose::Search))),
         Some("search")
     );
-    let mut multi = single;
-    multi.single_line = false;
+    let multi = single.with_single_line(false);
     assert_eq!(enter_key_hint(&multi), Some("enter"));
+    for (action, expected) in [
+        (EnterAction::Done, "done"),
+        (EnterAction::Go, "go"),
+        (EnterAction::Next, "next"),
+        (EnterAction::Previous, "previous"),
+        (EnterAction::Search, "search"),
+        (EnterAction::Send, "send"),
+    ] {
+        let options = TextInputOptions::TEXT.enter_action(action);
+        assert_eq!(
+            enter_key_hint(&single.with_text_input(options)),
+            Some(expected),
+            "{action:?}"
+        );
+        assert_eq!(
+            enter_key_hint(&multi.with_text_input(options)),
+            Some(expected),
+            "{action:?} on many lines"
+        );
+    }
+}
+
+/// The capitalization and correction a field asks for are its
+/// `autocapitalize`, `autocorrect` and `spellcheck`; a protected field gets
+/// none of them.
+#[test]
+fn the_status_picks_capitalization_and_correction() {
+    let status = |options, protected| {
+        TextStoreStatus::EDITABLE_SINGLE_LINE
+            .with_text_input(options)
+            .with_protected(protected)
+    };
+    let text = TextInputOptions::TEXT;
+    for (shift, expected) in [
+        (Capitalization::None, "off"),
+        (Capitalization::Sentences, "sentences"),
+        (Capitalization::Words, "words"),
+        (Capitalization::Characters, "characters"),
+    ] {
+        assert_eq!(
+            autocapitalize(&status(text.capitalization(shift), false)),
+            expected,
+            "{shift:?}"
+        );
+        assert_eq!(
+            autocapitalize(&status(text.capitalization(shift), true)),
+            "off"
+        );
+    }
+    for (corrects, expected) in [
+        (Correction::Off, ("off", "false")),
+        (Correction::Suggestions, ("off", "true")),
+        (Correction::Autocorrect, ("on", "true")),
+    ] {
+        assert_eq!(
+            correction(&status(text.correction(corrects), false)),
+            expected,
+            "{corrects:?}"
+        );
+        assert_eq!(
+            correction(&status(text.correction(corrects), true)),
+            ("off", "false")
+        );
+    }
 }
 
 fn units(text: &str) -> Vec<u16> {

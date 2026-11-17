@@ -36,9 +36,9 @@ use std::rc::{Rc, Weak};
 use flui_foundation::geometry::Bounds;
 use flui_platform::text_store::utf16::{self, Utf16Offset, Utf16Range};
 use flui_platform::text_store::{
-    Composition, CompositionEnd, LockGrant, LockOutcome, LockTiming, Selection, TextChange,
-    TextInputPurpose, TextStore, TextStoreEdit, TextStoreHost, TextStoreHostError,
-    TextStoreObserver, TextStoreRead,
+    Capitalization, Composition, CompositionEnd, Correction, LockGrant, LockOutcome, LockTiming,
+    NumberFormat, Selection, TextChange, TextInputPurpose, TextStore, TextStoreEdit, TextStoreHost,
+    TextStoreHostError, TextStoreObserver, TextStoreRead, TextStoreStatus,
 };
 
 use crate::owner::panic_boundary::contain_owner_callback;
@@ -71,6 +71,17 @@ pub(crate) struct ContentType {
 }
 
 impl ContentType {
+    /// `content_hint.completion`: suggest word completions.
+    pub(crate) const HINT_COMPLETION: u32 = 0x1;
+    /// `content_hint.spellcheck`: suggest word corrections.
+    pub(crate) const HINT_SPELLCHECK: u32 = 0x2;
+    /// `content_hint.auto_capitalization`: shift the first letter of each
+    /// sentence.
+    pub(crate) const HINT_AUTO_CAPITALIZATION: u32 = 0x4;
+    /// `content_hint.uppercase`: every letter.
+    pub(crate) const HINT_UPPERCASE: u32 = 0x10;
+    /// `content_hint.titlecase`: the first letter of each word.
+    pub(crate) const HINT_TITLECASE: u32 = 0x20;
     /// `content_hint.multiline`.
     pub(crate) const HINT_MULTILINE: u32 = 0x200;
     /// `content_hint.hidden_text`.
@@ -80,7 +91,9 @@ impl ContentType {
 
     /// `content_purpose.normal`.
     pub(crate) const NORMAL: u32 = 0;
-    /// `content_purpose.number`.
+    /// `content_purpose.digits`: digits only.
+    pub(crate) const DIGITS: u32 = 2;
+    /// `content_purpose.number`: a number, with its sign and separator.
     pub(crate) const NUMBER: u32 = 3;
     /// `content_purpose.phone`.
     pub(crate) const PHONE: u32 = 4;
@@ -91,32 +104,57 @@ impl ContentType {
     /// `content_purpose.password`.
     pub(crate) const PASSWORD: u32 = 8;
 
-    /// What a field of `purpose` tells the input method. A protected field
-    /// is a password whose text the input method neither shows nor learns;
-    /// a search field composes as free text, as the protocol has no search
-    /// purpose.
-    pub(crate) fn of(purpose: TextInputPurpose, protected: bool, single_line: bool) -> Self {
-        let mut hint = if single_line { 0 } else { Self::HINT_MULTILINE };
-        let purpose = if protected {
-            hint |= Self::HINT_HIDDEN_TEXT | Self::HINT_SENSITIVE_DATA;
-            Self::PASSWORD
+    /// What a field of `status` tells the input method: its purpose (a whole
+    /// number of digits only, any other number as a number; a search composes
+    /// as free text, as the protocol has no search purpose), its
+    /// capitalization, completions and corrections for
+    /// [`Correction::Autocorrect`] and corrections alone for
+    /// [`Correction::Suggestions`], and a field of many lines. A protected
+    /// field is a password whose text the input method neither shows, shifts,
+    /// corrects nor learns, whatever it asks. The protocol has no Enter key
+    /// label: the input method draws none.
+    pub(crate) fn of(status: TextStoreStatus) -> Self {
+        let mut hint = if status.single_line {
+            0
         } else {
-            match purpose {
-                TextInputPurpose::Email => Self::EMAIL,
-                TextInputPurpose::Url => Self::URL,
-                TextInputPurpose::Phone => Self::PHONE,
-                TextInputPurpose::Number => Self::NUMBER,
-                // Free text, a search, and a purpose added after this table.
-                _ => Self::NORMAL,
-            }
+            Self::HINT_MULTILINE
+        };
+        let text_input = status.text_input;
+        if status.protected {
+            hint |= Self::HINT_HIDDEN_TEXT | Self::HINT_SENSITIVE_DATA;
+            return Self {
+                hint,
+                purpose: Self::PASSWORD,
+            };
+        }
+        hint |= match text_input.capitalization {
+            Capitalization::Sentences => Self::HINT_AUTO_CAPITALIZATION,
+            Capitalization::Words => Self::HINT_TITLECASE,
+            Capitalization::Characters => Self::HINT_UPPERCASE,
+            // None, and a capitalization added after this table.
+            _ => 0,
+        };
+        hint |= match text_input.correction {
+            Correction::Autocorrect => Self::HINT_COMPLETION | Self::HINT_SPELLCHECK,
+            Correction::Suggestions => Self::HINT_SPELLCHECK,
+            // Off, and a correction added after this table.
+            _ => 0,
+        };
+        let purpose = match text_input.purpose {
+            TextInputPurpose::Email => Self::EMAIL,
+            TextInputPurpose::Url => Self::URL,
+            TextInputPurpose::Phone => Self::PHONE,
+            TextInputPurpose::Number(NumberFormat::WHOLE) => Self::DIGITS,
+            TextInputPurpose::Number(_) => Self::NUMBER,
+            // Free text, a search, and a purpose added after this table.
+            _ => Self::NORMAL,
         };
         Self { hint, purpose }
     }
 
     /// What `store`'s field tells the input method.
     pub(crate) fn of_store(store: &dyn TextStore) -> Self {
-        let status = store.status();
-        Self::of(status.purpose, status.protected, status.single_line)
+        Self::of(store.status())
     }
 }
 

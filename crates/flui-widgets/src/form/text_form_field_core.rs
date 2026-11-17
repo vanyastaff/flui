@@ -10,7 +10,7 @@
 use std::rc::Rc;
 
 use flui_interaction::FocusNode;
-use flui_platform::text_store::TextInputPurpose;
+use flui_platform::text_store::TextInputOptions;
 use flui_view::prelude::*;
 
 use super::AutovalidateMode;
@@ -48,8 +48,8 @@ pub struct TextFormFieldConfig {
     pub force_error_text: Option<String>,
     /// Whether every character shows as a bullet.
     pub obscure_text: bool,
-    /// What the field is for.
-    pub input_purpose: TextInputPurpose,
+    /// What the field asks of the input method.
+    pub text_input: TextInputOptions,
     /// A caller-owned focus node for the input.
     pub focus_node: Option<Rc<FocusNode>>,
     /// Called with the text when Enter is pressed.
@@ -94,7 +94,7 @@ impl TextFormFieldConfig {
             autovalidate_mode: AutovalidateMode::Disabled,
             force_error_text: None,
             obscure_text: false,
-            input_purpose: TextInputPurpose::Text,
+            text_input: TextInputOptions::TEXT,
             focus_node: None,
             on_submitted: None,
             handle: None,
@@ -116,8 +116,8 @@ pub struct TextFormFieldInput {
     pub autofocus: bool,
     /// Whether every character shows as a bullet.
     pub obscure_text: bool,
-    /// What the field is for.
-    pub input_purpose: TextInputPurpose,
+    /// What the field asks of the input method.
+    pub text_input: TextInputOptions,
     /// A caller-owned focus node for the input.
     pub focus_node: Option<Rc<FocusNode>>,
     /// Called with the text when Enter is pressed.
@@ -212,7 +212,7 @@ impl TextFormFieldCore {
         let enabled = config.enabled;
         let autofocus = config.autofocus;
         let obscure_text = config.obscure_text;
-        let input_purpose = config.input_purpose;
+        let text_input = config.text_input;
         let focus_node = config.focus_node.clone();
         let on_submitted = config.on_submitted.clone();
         let sink = self.controller.clone();
@@ -224,7 +224,7 @@ impl TextFormFieldCore {
                 enabled,
                 autofocus,
                 obscure_text,
-                input_purpose,
+                text_input,
                 focus_node: focus_node.clone(),
                 on_submitted: on_submitted.clone(),
             })

@@ -17,7 +17,10 @@
 //!   answers. [`CommitGate`] is the presentation's frame transaction as a
 //!   store reads it.
 //! - [`TextStore`] and [`TextStoreObserver`]: the field side and the
-//!   platform side of the connection.
+//!   platform side of the connection. The store's [`TextStoreStatus`] says
+//!   whether its text may be read out and how many lines it holds, and its
+//!   [`TextInputOptions`] what it asks of the input method and the
+//!   on-screen keyboard.
 //! - [`TextStoreHost`]: what a pull-model window offers the presentation:
 //!   which field it serves, and ending that field's composition (ADR-0135);
 //!   [`commit_composition_in_place`] when the platform cannot end it.
@@ -31,6 +34,7 @@
 //! (ADR-0151 §6, ADR-0264).
 
 mod host;
+mod input_options;
 mod lock;
 mod owner_calls;
 mod projection;
@@ -39,6 +43,10 @@ mod store;
 pub mod utf16;
 
 pub use host::{CompositionEnd, TextStoreHost, TextStoreHostError, commit_composition_in_place};
+pub use input_options::{
+    Autofill, Capitalization, Correction, EnterAction, NumberFormat, TextInputOptions,
+    TextInputPurpose,
+};
 pub use lock::{
     CommitGate, DEFERRED_LOCK_CAPACITY, LockGrant, LockKind, LockOutcome, LockTiming,
     TextStoreError,
@@ -46,8 +54,8 @@ pub use lock::{
 pub use owner_calls::OwnerCalls;
 pub use projection::project_ime_event;
 pub use session::{
-    Composition, PointMode, RangeRect, Selection, TextChange, TextInputPurpose, TextStoreEdit,
-    TextStoreRead, TextStoreStatus,
+    Composition, PointMode, RangeRect, Selection, TextChange, TextStoreEdit, TextStoreRead,
+    TextStoreStatus,
 };
 pub use store::{TextStore, TextStoreChange, TextStoreObserver};
 pub use utf16::{OffsetError, Utf16Offset, Utf16Range};
