@@ -119,11 +119,14 @@ pub trait AppHandler: 'static {
     /// UIKit.
     fn exit_policy(&self, owner: &OwnerPlatform) -> ExitAnswer;
 
-    /// The earliest wall-clock instant the loop must wake at even with
+    /// The earliest wall-clock instant the loop is to wake at even with
     /// nothing else to do (a gesture's hold deadline, a timer), or `None`.
     /// Asked once per idle iteration by the hosts that wait idle (Win32,
     /// AppKit, X11, Wayland, Android, iOS); the headless and web hosts have no idle
-    /// wait to bound.
+    /// wait to bound. A loop that serves the deadline with frames wakes for it
+    /// no sooner than a window can take one: the Wayland loop waits out a
+    /// window's frame callback, and does not wake by time while every window
+    /// waits for the compositor. The deadline stays armed until delivered.
     fn wake_deadline(&self, owner: &OwnerPlatform) -> Option<web_time::Instant>;
 
     /// The earliest wall-clock instant the owner must get a turn at, with or

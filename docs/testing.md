@@ -215,8 +215,7 @@ compositor `WAYLAND_DISPLAY` names. No one compositor runs them all:
 | `wayland_scripted::` | the compositor of the case's own, in the Xvfb suite of `cargo xtask test` | What no installed compositor does on demand: `configure_bounds`, a seat older than `repeat_info`, a scale change while the host runs, a strict buffer-scale rule on cursors, frame callbacks never answered, an output removed with no `leave`, a configure storm, a connection closed mid-request, a touchpad swipe and hold on a gestures global of a chosen version. |
 
 The `wayland_scripted` harness and `flui-app`'s
-`native_linux::an_app_whose_window_is_never_drawn_still_quits` and
-`native_linux::a_raster_thread_presents_one_frame_per_frame_callback` need no
+`native_linux::an_app_whose_window_is_never_drawn_still_quits` need no
 compositor installed: each case starts `flui-native`'s
 `testing::wayland_compositor::ScriptedCompositor`, a compositor on
 `wayland-server`'s pure-Rust backend at a socket of its own, which offers the
@@ -1320,8 +1319,8 @@ reaches what the check reads. `plan` decides this in its outputs, and each job i
 - `perf-gates` runs its baseline comparison (`cargo xtask perf --check`) when `perf_required` is
   set: a changed file under a source that runs for every node of a frame
   (`crates/flui-view/src/tree/`, `crates/flui-view/src/owner/`, `crates/flui-rendering/src/storage/`,
-  `crates/flui-rendering/src/pipeline/`, `crates/flui-semantics/src/`), where one more
-  allocation is a rise in every scenario, or a change to the baseline
+  `crates/flui-rendering/src/pipeline/`, `crates/flui-layer/src/`, `crates/flui-semantics/src/`),
+  where one more allocation is a rise in every scenario, or a change to the baseline
   (`crates/flui-widgets/perf/baseline/`), the scenarios (`crates/flui-widgets/tests/perf.rs`),
   what counts for them (`crates/flui-testing/src/heap.rs`, `crates/flui-testing/src/control_cost.rs`),
   the task (`tools/xtask/src/perf.rs`) or this rule

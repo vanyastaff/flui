@@ -457,7 +457,7 @@ impl crate::frame_protocol::FrameSteps for SwapchainFrame<'_> {
 
     /// Traverses the scene's layer tree, once per pass of a partial frame,
     /// and flushes all painter batches to the GPU, reporting the
-    /// damage-straddle check and the passes drawn.
+    /// damage-straddle check and what the walk and recording did.
     fn content(
         &mut self,
         render_view: &wgpu::TextureView,

@@ -126,6 +126,11 @@ pub(crate) struct InboxState {
     pub(crate) in_flight: u32,
     /// Settlements not drained yet, oldest first.
     pub(crate) settlements: VecDeque<SlotSettlement>,
+    /// Settlements written over the slot's life, and how many of them a wake
+    /// that returned has announced: those not announced yet are the newest
+    /// of `settlements`.
+    pub(crate) written: u64,
+    pub(crate) announced: u64,
     pub(crate) phase: SlotPhase,
     pub(crate) failure: Option<SlotFailure>,
     /// Whether a panic of the slot was held since its last settlement and
@@ -161,6 +166,8 @@ impl SlotInbox {
                 generation,
                 in_flight: 0,
                 settlements: VecDeque::with_capacity(depth),
+                written: 0,
+                announced: 0,
                 phase: SlotPhase::Attaching,
                 failure: None,
                 panicked: false,
@@ -219,12 +226,29 @@ impl InboxState {
     pub(crate) fn settle(&mut self, frame: &SceneSnapshot, verdict: RasterVerdict) {
         debug_assert!(self.in_flight > 0, "BUG: a settled frame was in flight");
         self.in_flight = self.in_flight.saturating_sub(1);
+        // A u64 count of frames does not wrap in any process lifetime.
+        self.written = self.written.saturating_add(1);
         self.settlements.push_back(SlotSettlement {
             address: frame.stamp.address,
             epoch: frame.stamp.epoch,
             verdict,
             panicked: std::mem::take(&mut self.panicked),
         });
+    }
+
+    /// Mark every settlement written so far as announced: the wake that
+    /// followed them returned, so each window was asked for the frame that
+    /// drains its slot.
+    pub(crate) fn announce(&mut self) {
+        self.announced = self.written;
+    }
+
+    /// How many undrained settlements a returned wake has announced. A
+    /// settlement whose wake has not run yet, or panicked, is not counted.
+    pub(crate) fn announced_waiting(&self) -> usize {
+        let unannounced =
+            usize::try_from(self.written.saturating_sub(self.announced)).unwrap_or(usize::MAX);
+        self.settlements.len().saturating_sub(unannounced)
     }
 
     /// Keep `failure` if none is held, or in place of a held refusal when it

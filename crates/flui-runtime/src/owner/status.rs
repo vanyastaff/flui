@@ -168,6 +168,20 @@ impl OwnerHost {
     /// # Errors
     /// Returns `Busy` during runtime execution or a pure publication.
     pub fn next_wake(&self) -> Result<Option<web_time::Instant>, DispatchError> {
+        self.next_wake_owing_floors(&|_| true)
+    }
+
+    /// [`Self::next_wake`] with each presentation's in-flight floor only where `floor_owed`
+    /// holds for its address, as `UiRuntime::next_wake_owing_floors` folds them. `floor_owed` runs
+    /// under the registry borrow, so it reads its own state only and never reaches a runtime.
+    ///
+    /// # Errors
+    /// Returns `Busy` during runtime execution or a pure publication.
+    #[doc(hidden)]
+    pub fn next_wake_owing_floors(
+        &self,
+        floor_owed: &dyn Fn(PresentationAddress) -> bool,
+    ) -> Result<Option<web_time::Instant>, DispatchError> {
         let state = self
             .core
             .state
@@ -180,7 +194,9 @@ impl OwnerHost {
             .runtimes
             .iter()
             .filter_map(|entry| match &entry.residence {
-                Residence::Resident(runtime) if !state.closed => runtime.next_wake(),
+                Residence::Resident(runtime) if !state.closed => {
+                    runtime.next_wake_owing_floors(floor_owed)
+                }
                 _ => None,
             })
             .min())
