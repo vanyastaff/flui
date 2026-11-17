@@ -49,7 +49,7 @@ For the hold:
 
 For the swipe:
 
-- (a) **A `PanZoom` with a finger count**, as the comparison sketched. `PanZoomTransform` has no
+- (a) **A `PanZoom` with a finger count.** `PanZoomTransform` has no
   translation (ADR-0217 §4), and every pinch consumer would meet swipes.
 - (b) **A phased scroll.** A scrollable would scroll on it, which is the defect.
 - (c) **`PointerEvent::TouchpadSwipe` with its finger count and a cumulative travel**, delivered by

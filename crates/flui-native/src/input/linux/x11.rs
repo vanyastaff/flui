@@ -2302,39 +2302,56 @@ mod live {
             if !self.xinput {
                 return;
             }
-            let mut mask = XIEventMask::MOTION
-                | XIEventMask::BUTTON_PRESS
-                | XIEventMask::BUTTON_RELEASE
-                | XIEventMask::ENTER
-                | XIEventMask::LEAVE
-                | XIEventMask::KEY_PRESS
-                | XIEventMask::KEY_RELEASE
-                | XIEventMask::TOUCH_BEGIN
-                | XIEventMask::TOUCH_UPDATE
-                | XIEventMask::TOUCH_END;
+            let mut events = vec![
+                xinput::MOTION_EVENT,
+                xinput::BUTTON_PRESS_EVENT,
+                xinput::BUTTON_RELEASE_EVENT,
+                xinput::ENTER_EVENT,
+                xinput::LEAVE_EVENT,
+                xinput::KEY_PRESS_EVENT,
+                xinput::KEY_RELEASE_EVENT,
+                xinput::TOUCH_BEGIN_EVENT,
+                xinput::TOUCH_UPDATE_EVENT,
+                xinput::TOUCH_END_EVENT,
+            ];
             if self.gestures {
-                // x11rb names no XInput 2.4 mask bit; each is its event's
-                // type, as every XInput 2 mask bit is.
-                let bit = |event: u16| XIEventMask::from(1_u32 << u32::from(event));
-                mask = mask
-                    | bit(xinput::GESTURE_PINCH_BEGIN_EVENT)
-                    | bit(xinput::GESTURE_PINCH_UPDATE_EVENT)
-                    | bit(xinput::GESTURE_PINCH_END_EVENT)
-                    | bit(xinput::GESTURE_SWIPE_BEGIN_EVENT)
-                    | bit(xinput::GESTURE_SWIPE_UPDATE_EVENT)
-                    | bit(xinput::GESTURE_SWIPE_END_EVENT);
+                events.extend([
+                    xinput::GESTURE_PINCH_BEGIN_EVENT,
+                    xinput::GESTURE_PINCH_UPDATE_EVENT,
+                    xinput::GESTURE_PINCH_END_EVENT,
+                    xinput::GESTURE_SWIPE_BEGIN_EVENT,
+                    xinput::GESTURE_SWIPE_UPDATE_EVENT,
+                    xinput::GESTURE_SWIPE_END_EVENT,
+                ]);
             }
             let selected = self.connection.xcb().xinput_xi_select_events(
                 window,
                 &[xinput::EventMask {
                     deviceid: xinput::Device::ALL_MASTER.into(),
-                    mask: vec![mask],
+                    mask: event_mask(&events),
                 }],
             );
             if let Err(error) = selected {
                 tracing::debug!(%error, "an X11 window's input goes unheard");
             }
         }
+    }
+
+    /// The XInput 2 mask selecting `events`, by type: the bit of an event is
+    /// its type, and the mask is as many 32-bit words as the highest type
+    /// needs (`XI_GestureSwipeEnd`, type 32, is the second word's first bit;
+    /// x11rb names no mask bit past `XI_BarrierLeave`).
+    pub(super) fn event_mask(events: &[u16]) -> Vec<XIEventMask> {
+        let words = events
+            .iter()
+            .map(|event| usize::from(*event) / 32 + 1)
+            .max()
+            .unwrap_or(0);
+        let mut mask = vec![0_u32; words];
+        for event in events {
+            mask[usize::from(*event) / 32] |= 1 << (event % 32);
+        }
+        mask.into_iter().map(XIEventMask::from).collect()
     }
 
     impl CoreKeyboard {
