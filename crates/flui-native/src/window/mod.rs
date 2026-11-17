@@ -39,8 +39,10 @@ pub(crate) mod safe_area;
 #[cfg(any(linux_host, test))]
 pub(crate) mod linux {
     //! The Linux windows: the native Wayland host's (`wayland`) and the native
-    //! X11 host's (`x11`).
+    //! X11 host's (`x11`), and the class both name the application by
+    //! (`class`).
 
+    pub(crate) mod class;
     #[cfg(any(wayland_host, test))]
     pub(crate) mod wayland;
     #[cfg(any(x11_host, test))]

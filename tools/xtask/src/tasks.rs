@@ -224,7 +224,8 @@ const WAYLAND_OPTIONAL_TESTS: &str = "test(/^wayland_window::optional::/)";
 /// What a headless sway offers of those subjects and CI's headless Weston
 /// lacks, as `FLUI_REQUIRE_COMPOSITOR` lists it: a case that finds one of
 /// them missing fails instead of saying it skipped it.
-const SWAY_OFFERS: &str = "fractional-scale,seat,xdg-activation,xdg-decoration,xdg-foreign";
+const SWAY_OFFERS: &str =
+    "foreign-toplevel,fractional-scale,seat,xdg-activation,xdg-decoration,xdg-foreign";
 
 /// [`WAYLAND_OPTIONAL_TESTS`] against the compositor `WAYLAND_DISPLAY` names,
 /// which must offer [`SWAY_OFFERS`]: CI starts a headless sway for it. One
@@ -1438,7 +1439,7 @@ mod tests {
         assert_eq!(
             lines(&wayland_optional_plan()),
             [
-                "$ FLUI_REQUIRE_WAYLAND=1 FLUI_REQUIRE_COMPOSITOR=fractional-scale,seat,xdg-activation,xdg-decoration,xdg-foreign cargo nextest run -p flui-native --locked --all-features --no-fail-fast --test-threads 1 --success-output final -E 'test(/^wayland_window::optional::/)'"
+                "$ FLUI_REQUIRE_WAYLAND=1 FLUI_REQUIRE_COMPOSITOR=foreign-toplevel,fractional-scale,seat,xdg-activation,xdg-decoration,xdg-foreign cargo nextest run -p flui-native --locked --all-features --no-fail-fast --test-threads 1 --success-output final -E 'test(/^wayland_window::optional::/)'"
             ]
         );
     }
