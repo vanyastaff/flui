@@ -1,34 +1,58 @@
 # Keys
 
+Flutter counterpart: `Key`, `ValueKey`, `ObjectKey`, `GlobalKey`.
+
 Keys control how the reconciler matches a new `View` against an existing `Element` when a parent
-rebuilds — without one, matching falls back to position and type, which breaks state when a list
+rebuilds. Without one, matching falls back to position and type, which breaks state when a list
 of children is reordered or filtered.
 
-The base key types — `Key`, `ValueKey`, `UniqueKey`, `ViewKey` — live in `flui-foundation` and are
-re-exported through `flui-view`'s `key` module. A view holds its key in a field marked
-`#[view(key)]`, which the `StatelessView` and `StatefulView` derives read: the field is a key, an
-`Option` of one, or an `Rc<dyn ViewKey>` or `Box<dyn ViewKey>`.
+The key types live in `flui::view::key`: `ValueKey`, `UniqueKey` and the `ViewKey` trait, plus two
+widget-layer keys. A view holds its key in a field marked `#[view(key)]`, which the
+`StatelessView` and `StatefulView` derives read: the field is a key, an `Option` of one, or an
+`Rc<dyn ViewKey>` or `Box<dyn ViewKey>`.
 
-```rust,ignore
+```rust
+# use flui::prelude::*;
+use flui::view::key::ValueKey;
+
 #[derive(Clone, StatelessView)]
 struct TodoRow {
     #[view(key)]
     key: ValueKey<u64>,
     title: String,
 }
+
+impl StatelessView for TodoRow {
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+        Text::new(self.title.clone())
+    }
+}
+
+let row = TodoRow { key: ValueKey::new(7), title: "Buy milk".to_owned() };
+# let _ = row;
 ```
 
-Two widget-layer key types are defined in `flui-view` itself:
+The two widget-layer key types:
 
-- `ObjectKey` (`crates/flui-view/src/key/object_key.rs`) — keyed by a value's identity/equality,
-  for reordering a list of items each backed by a distinct object.
-- `GlobalKey<T>` (`crates/flui-view/src/key/global_key.rs`) — a key unique across the whole tree,
-  letting you reach an `Element`'s `State` (or an associated `RenderObject`) directly from outside
-  the normal parent-to-child data flow. Use it sparingly: it breaks locality.
+- `ObjectKey` is keyed by a value's identity, for reordering a list of items each backed by a
+  distinct object.
+- `GlobalKey<T>` is unique across the whole tree and reaches an element's state from outside the
+  normal parent-to-child data flow. Use it sparingly: it breaks locality.
 
-```rust,ignore
-use flui_view::key::{GlobalKey, ObjectKey};
+```rust
+use std::rc::Rc;
+use flui::view::key::{GlobalKey, ObjectKey};
+
+struct Note { title: String }
+
+let note = Rc::new(Note { title: "Groceries".to_owned() });
+// Equal for the same `Rc`, different for another `Note` with the same title.
+let row_key = ObjectKey::new(&note);
+# let _ = (row_key, &note.title);
+
+// A key that will name one `NoteState` wherever it is mounted.
+struct NoteState;
+let editor_key: GlobalKey<NoteState> = GlobalKey::new();
+// Outside a running application no element can hold it, so nothing is found.
+assert_eq!(editor_key.with_current_state(|_state| ()), None);
 ```
-
-*(illustrative import path — see the `key` module's own doc comment in
-`crates/flui-view/src/key/mod.rs` for the authoritative re-export list.)*

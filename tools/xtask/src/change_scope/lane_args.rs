@@ -14,7 +14,8 @@
 //! - tests exclude flui-native (its suite needs a display server: a separate
 //!   headless leg runs it when it is in scope);
 //! - the facade's catalogs, none on by default, join the run
-//!   when `flui` is in scope (`--features flui/material,flui/cupertino`);
+//!   when `flui` is in scope (`--features flui/material,flui/cupertino`), and
+//!   the doctests add `flui/testing` for the book's testing chapter;
 //! - cfg-gated code the Linux lane would never compile gets a check on its own
 //!   target: source-derived native Cargo targets (mirroring cross-typecheck), and wasm32
 //!   for the wasm-capable packages in scope (mirroring wasm-check; a package
@@ -40,6 +41,10 @@ use std::fmt::Write as _;
 /// every scoped step that selects `flui` names them, so the Notes example is
 /// built where the facade is tested.
 const FACADE_CATALOGS: [&str; 2] = ["flui/material", "flui/cupertino"];
+
+/// The facade's test support, which the doctests of `flui` name beside its
+/// catalogs so the book's testing chapter compiles.
+const FACADE_TESTING: &str = "flui/testing";
 
 use super::classify::{Mode, Package, Repo, Scope, Workspace};
 
@@ -305,9 +310,14 @@ pub(super) fn lane_args(repo: &Repo, scope: &Scope, event: Event) -> anyhow::Res
                 })
             }))
         };
-        // `flui` has a library, so it is selected whenever `has("flui")`
+        // `flui` has a library, so it is selected whenever `has("flui")`;
+        // `flui/testing` compiles the book's testing chapter (src/book.rs)
         if has("flui") {
-            let _ = write!(doctest_args, " --features {}", FACADE_CATALOGS.join(","));
+            let _ = write!(
+                doctest_args,
+                " --features {},{FACADE_TESTING}",
+                FACADE_CATALOGS.join(",")
+            );
         }
     }
 
@@ -562,7 +572,7 @@ mod tests {
         // flui-sdk is in scope through its dev-dependency on the facade
         assert_eq!(
             a.doctest_args,
-            "-p flui -p flui-material -p flui-sdk --features flui/material,flui/cupertino"
+            "-p flui -p flui-material -p flui-sdk --features flui/material,flui/cupertino,flui/testing"
         );
         // an included README is doctest source
         assert!(
@@ -593,7 +603,7 @@ mod tests {
         );
         assert!(
             a.doctest_args
-                .ends_with(" --features flui/material,flui/cupertino"),
+                .ends_with(" --features flui/material,flui/cupertino,flui/testing"),
             "{}",
             a.doctest_args
         );
@@ -652,7 +662,7 @@ mod tests {
                 a.packages.as_str()
             ),
             (
-                "--workspace --features flui/material,flui/cupertino",
+                "--workspace --features flui/material,flui/cupertino,flui/testing",
                 "",
                 ""
             )
