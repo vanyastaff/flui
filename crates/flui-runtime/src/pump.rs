@@ -3,7 +3,7 @@
 //! the host's pacing.
 //!
 //! The host decides *whether* a wake becomes a frame (its per-backend wake
-//! gate, ADR-0058); the pump is the frame itself once that gate says render.
+//! gate, ADR-0353); the pump is the frame itself once that gate says render.
 
 /// Where a pump reads its frame's timestamp (the vsync time).
 ///

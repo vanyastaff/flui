@@ -3459,7 +3459,7 @@ visible bit):
   from where it runs.
 - A diagnostic redraw tick in the backend (an `NSTimer`/thread poke behind a
   `FLUI_MACOS_REDRAW_POKE_MS`-style knob, which was implemented while diagnosing
-  this). Deleted, not deferred: it contradicts ADR-0058 — the platform paces
+  this). Deleted, not deferred: it contradicts ADR-0353 — the platform paces
   production, a sleep never does — and it pre-empts the `PlatformProxy` redraw
   verb ADR-0045 decision 5 scopes to #559 by shipping a second, private frame
   source. The primer that starts a measurement belongs to the measuring harness.

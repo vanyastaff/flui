@@ -3,7 +3,8 @@ use flui_view::View;
 use flui_widgets::app_root;
 
 use super::frame_pacing::{
-    BackgroundPace, FallbackGate, WakeAction, frame_is_dirty, keeps_frame_gate_open, wake_action,
+    BackgroundPace, FallbackGate, PendingWork, WakeAction, frame_is_dirty, keeps_frame_gate_open,
+    wake_action,
 };
 use super::host::{APP_RUNTIME, OwnerHostClearGuard, install_owner_platform, with_owner_platform};
 use super::owner_dispatch::{
@@ -520,11 +521,11 @@ impl AndroidFrameDriver {
             let dirty = frame_is_dirty(
                 inbox_redraw,
                 ui_runtime.needs_redraw(),
-                ui_runtime.has_pending_work(),
+                PendingWork::of(ui_runtime),
                 raster_deadline,
                 // Android paces only its backgrounded pump
                 // (`BackgroundPace`): a rendering wake has no fallback
-                // deferral to consult (ADR-0058).
+                // deferral to consult (ADR-0353).
                 FallbackGate::default(),
             );
             let scheduler = ui_runtime.scheduler();
@@ -565,7 +566,7 @@ impl AndroidFrameDriver {
                 ui_runtime.pump_background();
                 // A self-re-arming task has no vsync or present to bound it
                 // here, so work that asks for another wake defers the next
-                // pump by a pace (ADR-0058). A deadline, not a sleep: the
+                // pump by a pace (ADR-0353). A deadline, not a sleep: the
                 // loop thread keeps delivering input and lifecycle events.
                 if keeps_frame_gate_open(
                     ui_runtime.needs_redraw(),

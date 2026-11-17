@@ -21,7 +21,7 @@
   acceptance criterion becomes per platform)
 - **Related:** [ADR-0037](ADR-0037-presentation-ownership-domains.md),
   [ADR-0044](ADR-0044-driver-loop-hybrid.md), [ADR-0047](ADR-0047-unified-execution-services.md),
-  [ADR-0058](ADR-0058-the-platform-paces-production-not-a-sleep.md),
+  [ADR-0353](ADR-0353-production-is-paced-by-the-platform-and-a-frame-that-showed-nothing-waits-for-the-fallback.md),
   [ADR-0063](ADR-0063-the-renderer-owns-its-surface-target.md),
   [ADR-0067](ADR-0067-engine-owned-glyph-atlas.md),
   [ADR-0083](ADR-0083-one-frame-transaction-in-flui-runtime.md),

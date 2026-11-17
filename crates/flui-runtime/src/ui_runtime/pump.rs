@@ -213,7 +213,7 @@ impl UiRuntime {
     /// each presentation's motion clock. Scheduler tickers are retired;
     /// complete owner execution is described by ADR-0175/0182.
     /// Whether a wake becomes a frame at all is the host's decision (its wake
-    /// gate, ADR-0058), not this method's.
+    /// gate, ADR-0353), not this method's.
     pub fn pump(
         &mut self,
         clock: &mut dyn FrameClockSource,

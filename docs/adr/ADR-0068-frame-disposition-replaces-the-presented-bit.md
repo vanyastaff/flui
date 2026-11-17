@@ -9,7 +9,7 @@
   for §3's commit (a withheld frame commits nothing) and §4's park (past the budget each attempt
   waits out the dropped-frame backoff, and the withheld streak clears only when a frame presents
   or finds no damage, or the window is shown again).
-- **Related:** [ADR-0044](ADR-0044-driver-loop-hybrid.md) §7 (wall-clock wake); [ADR-0058](ADR-0058-the-platform-paces-production-not-a-sleep.md) (the fallback gate)
+- **Related:** [ADR-0044](ADR-0044-driver-loop-hybrid.md) §7 (wall-clock wake); [ADR-0353](ADR-0353-production-is-paced-by-the-platform-and-a-frame-that-showed-nothing-waits-for-the-fallback.md) (the fallback gate)
 
 *A `Result<bool>` cannot say "this frame owed the screen something and did not
 get it there". Collapsing that into "nothing was owed" parked the native macOS
