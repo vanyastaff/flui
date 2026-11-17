@@ -38,10 +38,10 @@ use flui_protocol::method::{
     SemanticsLocate, SemanticsRead,
 };
 use flui_protocol::{
-    ActionSequence, Actionability, ActionabilityCheck, ActionabilityParams, Checked, ErrorObject,
-    ImeAction, InputParams, InputSource, InspectParams, InspectReading, KeyAction, LocateParams,
-    Locator, LogicalPoint, LogicalRect, Match, Node, PointerAction, PointerButton, PointerDevice,
-    ReadParams, Tree, WindowParams, outline,
+    ActionSequence, Actionability, ActionabilityCheck, ActionabilityParams, Checked, ElementId,
+    ErrorObject, ImeAction, InputParams, InputSource, InspectParams, InspectReading, KeyAction,
+    LocateParams, Locator, LogicalPoint, LogicalRect, Match, Node, PointerAction, PointerButton,
+    PointerDevice, ReadParams, Role, Tree, TreeDiagnostic, WindowParams, outline,
 };
 use flui_view::dev_agent::{AgentAnswer, AgentWindow, DevAgentHook, InputLease};
 use flui_view::{CloseReason, View};
@@ -148,12 +148,34 @@ pub enum TestError {
     /// Nothing matches the locator.
     #[error(
         "nothing matches {locator:?}.\nThe window shows:\n{shown}\nA widget that publishes no \
-         semantics is found by an identifier: give it one with `Semantics::identifier` and find \
-         it with `find::id`."
+         semantics is found by an identifier on a group around it: wrap it in \
+         `Semantics::new().container(true).role(SemanticsRole::Group).identifier(..)` and find it \
+         with `find::id`. An identifier alone forms no node a reader sees."
     )]
     NotFound {
         /// What was looked for.
         locator: Box<Locator>,
+        /// The window's outline, cut to its first lines.
+        shown: String,
+    },
+    /// Nothing matches the locator, and an identifier it names is on a node
+    /// the agent and the accessibility adapters lift into its parent, so
+    /// nothing selects it by that identifier (ADR-0240 §3).
+    #[error(
+        "nothing matches {locator:?}: the identifier {identifier:?} is on a node that publishes \
+         nothing of its own (no role, label or text, or a generic or presentation role), which the \
+         agent and accessibility clients lift into its parent, so nothing \
+         selects it. {fix}\nThe window shows:\n{shown}",
+        fix = unpublished_identifier_fix(control.as_deref())
+    )]
+    UnpublishedIdentifier {
+        /// What was looked for.
+        locator: Box<Locator>,
+        /// The identifier nothing selects.
+        identifier: String,
+        /// The control the node is lifted into, as its outline line, when it
+        /// is one AccessKit names from its contents.
+        control: Option<String>,
         /// The window's outline, cut to its first lines.
         shown: String,
     },
@@ -472,7 +494,10 @@ impl Tester {
     /// # Errors
     ///
     /// [`TestError::NotFound`] or [`TestError::Ambiguous`] unless exactly one
-    /// element matches (or the locator picks one).
+    /// element matches (or the locator picks one);
+    /// [`TestError::UnpublishedIdentifier`] in place of `NotFound` when an
+    /// identifier the locator names is on a node the read lifts into its
+    /// parent.
     pub fn try_read(&mut self, locator: &Locator) -> Result<Node, TestError> {
         Ok(self.resolve(locator)?.node)
     }
@@ -1148,10 +1173,7 @@ impl Tester {
     fn resolve(&mut self, locator: &Locator) -> Result<Match, TestError> {
         let mut matches = self.try_find_all(locator)?;
         match matches.len() {
-            0 => Err(TestError::NotFound {
-                locator: Box::new(locator.clone()),
-                shown: self.shown(),
-            }),
+            0 => Err(self.not_found(locator)),
             1 => Ok(matches.remove(0)),
             count => Err(TestError::Ambiguous {
                 locator: Box::new(locator.clone()),
@@ -1164,6 +1186,71 @@ impl Tester {
                     .join("\n"),
             }),
         }
+    }
+
+    /// Why nothing matches `locator`: an identifier it or a scope of it names
+    /// is on a node the window reports as lifted, or else nothing carries it.
+    fn not_found(&mut self, locator: &Locator) -> TestError {
+        self.unpublished_identifier(locator)
+            .unwrap_or_else(|| TestError::NotFound {
+                locator: Box::new(locator.clone()),
+                shown: self.shown(),
+            })
+    }
+
+    /// [`TestError::UnpublishedIdentifier`] when `locator`, which matched
+    /// nothing, names an identifier the window reports on a node it lifts
+    /// away: its own identifier, or a scope's (`within`, `has`) that no
+    /// published node carries. A scope a published node satisfies leaves the
+    /// miss to the rest of the locator (ADR-0240 §4 lets one identifier stand
+    /// in several places); the target's own identifier is blamed even then,
+    /// since the lifted instance may be the one its scope holds. It only
+    /// explains a failure, so a misplaced guess costs a hint, never a verdict.
+    fn unpublished_identifier(&mut self, locator: &Locator) -> Option<TestError> {
+        let mut scopes: Vec<&str> = Vec::new();
+        let mut pending: Vec<&Locator> = Vec::new();
+        pending.extend(locator.within.as_deref());
+        pending.extend(locator.has.as_deref());
+        while let Some(scope) = pending.pop() {
+            scopes.extend(scope.identifier.as_deref());
+            pending.extend(scope.within.as_deref());
+            pending.extend(scope.has.as_deref());
+        }
+        if locator.identifier.is_none() && scopes.is_empty() {
+            return None;
+        }
+        let tree = self.try_semantics().ok()?;
+        scopes.retain(|identifier| !carries_identifier(&tree.roots, identifier));
+        let mut wanted = scopes;
+        wanted.extend(locator.identifier.as_deref());
+        // A node lifted inside a control is preferred, since that fix
+        // differs.
+        let mut lifted = tree
+            .diagnostics
+            .iter()
+            .filter_map(|diagnostic| match diagnostic {
+                TreeDiagnostic::UnpublishedIdentifier { identifier, parent }
+                    if wanted.contains(&identifier.as_str()) =>
+                {
+                    Some((identifier, *parent))
+                }
+                _ => None,
+            })
+            .peekable();
+        let first = lifted.peek().map(|(identifier, _)| (*identifier).clone())?;
+        let (identifier, control) = lifted
+            .find_map(|(identifier, parent)| {
+                let control =
+                    find_node(&tree.roots, parent).filter(|node| names_from_contents(node.role))?;
+                Some((identifier.clone(), Some(line_of(control))))
+            })
+            .unwrap_or((first, None));
+        Some(TestError::UnpublishedIdentifier {
+            locator: Box::new(locator.clone()),
+            identifier,
+            control,
+            shown: self.shown(),
+        })
     }
 
     fn actionability(&mut self, found: &Match) -> Result<Actionability, TestError> {
@@ -1290,7 +1377,9 @@ impl Expectation<'_> {
         self.to_have_count(1);
     }
 
-    /// No element matches: `findsNothing`.
+    /// No element matches: `findsNothing`. A node whose identifier the read
+    /// lifts away matches nothing, so this passes for it: give such a node a
+    /// role to find it (ADR-0240 §3).
     #[track_caller]
     pub fn to_be_gone(self) {
         self.to_have_count(0);
@@ -1407,6 +1496,17 @@ fn wait(
         // Only a frame due now keeps the expectation pumping: a timer due
         // later is the test's to reach with `pump_for`.
         let next = tester.host.time_to_next_frame();
+        let gives_up = next != Some(Duration::ZERO) || waited >= timeout;
+        // An expectation that gives up matching nothing, on an identifier
+        // nothing selects, says why, as a lookup does. The reason only
+        // explains a failure: an expectation that holds by matching nothing
+        // (`to_be_gone`) passes, whatever lifted node carries the identifier.
+        if gives_up
+            && matches.is_empty()
+            && let Some(error) = tester.unpublished_identifier(locator)
+        {
+            return Err(error);
+        }
         if next != Some(Duration::ZERO) {
             return Err(TestError::Idle {
                 expected: expected.to_owned(),
@@ -1428,6 +1528,55 @@ fn wait(
         tester.pump();
         waited += FRAME;
     }
+}
+
+/// What [`TestError::UnpublishedIdentifier`] tells the author to do: give
+/// the identifier to the control the node is lifted into, since a group
+/// there would cut the name the control's label gives it, or else give the
+/// node a role.
+fn unpublished_identifier_fix(control: Option<&str>) -> String {
+    match control {
+        Some(control) => format!(
+            "Give the identifier to the control it is inside, `{control}`: a group there can \
+             cut the name its label gives it."
+        ),
+        None => "Give that node a role other than generic or presentation, as \
+                 `Semantics::new().container(true).role(SemanticsRole::Group).identifier(..)`."
+            .to_owned(),
+    }
+}
+
+/// Whether AccessKit names a node of `role` from the labels beneath it, so a
+/// group between them would cut its name.
+fn names_from_contents(role: Role) -> bool {
+    matches!(
+        role,
+        Role::Button | Role::CheckBox | Role::RadioButton | Role::Link | Role::MenuItem
+    )
+}
+
+/// Whether a node under `roots` is published with `identifier`.
+fn carries_identifier(roots: &[Node], identifier: &str) -> bool {
+    let mut pending: Vec<&Node> = roots.iter().collect();
+    while let Some(node) = pending.pop() {
+        if node.identifier.as_deref() == Some(identifier) {
+            return true;
+        }
+        pending.extend(&node.children);
+    }
+    false
+}
+
+/// The node `id` names among `roots` and their descendants.
+fn find_node(roots: &[Node], id: ElementId) -> Option<&Node> {
+    let mut pending: Vec<&Node> = roots.iter().collect();
+    while let Some(node) = pending.pop() {
+        if node.id == id {
+            return Some(node);
+        }
+        pending.extend(&node.children);
+    }
+    None
 }
 
 /// `node` as one outline line.
