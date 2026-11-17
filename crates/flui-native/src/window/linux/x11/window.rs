@@ -84,7 +84,6 @@ use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
 
 use flui_foundation::geometry::{Bounds, DevicePixelRatio, Point, Size, WindowMetrics};
-use flui_foundation::geometry::{DevicePixelRatio, Point, Size, WindowMetrics};
 use flui_foundation::panic::FirstPanic;
 use flui_platform::input_regions::ResizeEdge;
 use flui_platform::{
@@ -110,8 +109,7 @@ use x11rb::protocol::xproto::{
 };
 use x11rb::wrapper::ConnectionExt as _;
 
-use super::hints::{WM_HINTS, motif_hints, size_limits};
-use super::hints::{motif_hints, resize_steps, size_limits};
+use super::hints::{WM_HINTS, motif_hints, resize_steps, size_limits};
 use super::mode::{
     LevelAtoms, NetWmState, NetWmStateAtoms, WmState, level_of, mode_flags, with_level, with_mode,
 };
