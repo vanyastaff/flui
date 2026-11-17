@@ -988,6 +988,13 @@ name = "native_window"
 path = "examples/native_window.rs"
 required-features = ["native"]
 
+# A second window beside the first, both drawn by the one raster executor; the
+# device runs of its threaded placement use it (ADR-0305 §10).
+[[example]]
+name = "two_windows"
+path = "examples/two_windows.rs"
+required-features = ["unstable-windows"]
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Build Profiles
 # ═══════════════════════════════════════════════════════════════════════════════

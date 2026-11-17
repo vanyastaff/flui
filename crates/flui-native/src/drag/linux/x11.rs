@@ -21,6 +21,14 @@
 //!   a refusal answers `XdndFinished` at once and the window hears `Exited`.
 //!   An accepted drop keeps the offer until the target concludes it, which
 //!   answers `XdndFinished` with the action.
+//! - **Losing the source.** From the enter until the hover ends and every
+//!   offer of it is concluded, the source's window is selected for its end
+//!   ([`PeerInterest::DropSource`]): a source that crashes, or destroys its
+//!   drag's window without `XdndLeave`, tells nothing else. Its `DestroyNotify`
+//!   ends the hover as if it left, and a dropped offer of it answers every
+//!   request [`TransferError::SourceGone`] until the target concludes it. A
+//!   source gone before its window is heard is told by the refusal, and one
+//!   whose `XdndSelection` nobody owns at its enter is taken as gone too.
 //! - **Fetching.** A request converts `XdndSelection` to the
 //!   representation's type at the drag's last time, into a window made for
 //!   that fetch alone and destroyed as it ends, so an answer a source writes
@@ -59,6 +67,7 @@ use std::time::Duration;
 
 use flui_foundation::DataTransferId;
 use flui_foundation::geometry::Point;
+use flui_foundation::panic::FirstPanic;
 use flui_platform::data_transfer::{
     DataTransferOffer, DragTransport, DropFeedback, RepresentationDescriptor, RepresentationIndex,
     TransferActions, TransferCompleter, TransferError, TransferLimits, TransferPayload,
@@ -69,7 +78,7 @@ use flui_platform::{DragDropEvent, PlatformInput};
 use parking_lot::Mutex;
 use web_time::Instant;
 use x11rb::connection::Connection as _;
-use x11rb::errors::{ConnectionError, ReplyOrIdError};
+use x11rb::errors::{ConnectionError, ReplyError, ReplyOrIdError};
 use x11rb::protocol::Event;
 use x11rb::protocol::xproto::{
     self, AtomEnum, ClientMessageEvent, ConnectionExt as _, CreateWindowAux, EventMask, PropMode,
@@ -79,7 +88,9 @@ use x11rb::wrapper::ConnectionExt as _;
 use x11rb::{COPY_FROM_PARENT, CURRENT_TIME, NONE};
 
 use crate::drag::offers::{Kind, OfferTable, representations, too_large};
-use crate::owner::linux::x11::{InputTarget, LoopDrag, WindowRef, X11Connection};
+use crate::owner::linux::x11::{
+    InputTarget, LoopDrag, PeerHeard, PeerInterest, PeerSelect, WindowRef, X11Connection,
+};
 use crate::owner::slot::OwnerCell;
 use model::{Message, MessageAtoms};
 
@@ -747,10 +758,25 @@ struct Hover {
     listed: Option<TransferActions>,
 }
 
+/// What hearing the source of a drag that entered found
+/// (`X11Drag::watch_source`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SourceWatch {
+    /// Its end is heard, or it is the platform's own window, which hears its
+    /// own end.
+    Watched,
+    /// Its window is gone already.
+    Destroyed,
+    /// Nobody owns `XdndSelection`: the source went, or gave the drag up.
+    Abandoned,
+}
+
 /// A live offer, hovering or dropped.
 #[derive(Debug)]
 struct Offer {
-    source: xproto::Window,
+    /// The source's window; `None` once the server destroyed it, which
+    /// answers no conversion and is sent no finish.
+    source: Option<xproto::Window>,
     /// The window the drag is over or was dropped on, which answers the
     /// source.
     window: xproto::Window,
@@ -815,16 +841,23 @@ struct State {
     /// [`MAX_NAMES`]: its name, or `None` for one it cannot name or names
     /// past [`MAX_NAME_LEN`], so a source repeating it costs no lookup.
     names: HashMap<xproto::Atom, Option<String>>,
+    /// The sources whose hover ended or whose offer retired since the
+    /// loop's last turn ended: at its end, on the owner thread, where the
+    /// table of peer windows is, the drag stops hearing each that neither
+    /// the hover nor a live offer still names ([`X11Drag::release_sources`]).
+    released: Vec<xproto::Window>,
 }
 
 /// What a step leaves to do once the lock is let go: diagnostics to emit,
-/// completers to resolve and an event for a window, and whether a fetch
-/// started.
+/// completers to resolve and an event for a window, and whether the loop
+/// must wake.
 #[derive(Default)]
 struct After {
     notes: Vec<Note>,
     completions: Vec<(TransferCompleter, Result<TransferPayload, TransferError>)>,
-    started: bool,
+    /// Whether the loop must wake: a fetch started, whose deadline it may not
+    /// be waiting for, or a source is left to stop hearing ([`State::released`]).
+    wake: bool,
     dispatch: Option<(InputTarget, DragDropEvent)>,
 }
 
@@ -939,6 +972,18 @@ impl State {
     /// starts in the fetches it leaves.
     fn retire(&mut self, id: DataTransferId, wire: &Wire<'_>, after: &mut After) -> Option<Offer> {
         let _ = self.table.retire(id);
+        self.end_requests(id, wire, after);
+        let offer = self.offers.remove(&id)?;
+        if let Some(source) = offer.source {
+            self.release(source, after);
+        }
+        Some(offer)
+    }
+
+    /// Resolve the fetches and waiting requests of `id` as
+    /// [`TransferError::SourceGone`], and start what waits for another
+    /// offer in the fetches they leave.
+    fn end_requests(&mut self, id: DataTransferId, wire: &Wire<'_>, after: &mut After) {
         let (stale, kept): (Vec<Fetch>, Vec<Fetch>) = std::mem::take(&mut self.fetches)
             .into_iter()
             .partition(|fetch| fetch.wanted.id == id);
@@ -954,7 +999,51 @@ impl State {
             after.gone(wanted.completer);
         }
         self.start_waiting(wire, after);
-        self.offers.remove(&id)
+    }
+
+    /// The drag may no longer need to hear `source`: the loop's turn ends
+    /// by asking ([`Self::released`]).
+    fn release(&mut self, source: xproto::Window, after: &mut After) {
+        self.released.push(source);
+        after.wake = true;
+    }
+
+    /// Whether the hover or a live offer still names `source`.
+    fn names_source(&self, source: xproto::Window) -> bool {
+        self.hover
+            .as_ref()
+            .is_some_and(|hover| hover.source == source)
+            || self
+                .offers
+                .values()
+                .any(|offer| offer.source == Some(source))
+    }
+
+    /// The server destroyed `window`. A hover it was the source of ends as
+    /// if it left; a dropped offer of it stays the window's to conclude, its
+    /// requests answered [`TransferError::SourceGone`] now and from now on.
+    /// Nothing more is selected on it: it is not there.
+    fn source_destroyed(&mut self, window: xproto::Window, wire: &Wire<'_>, after: &mut After) {
+        if self
+            .hover
+            .as_ref()
+            .is_some_and(|hover| hover.source == window)
+        {
+            self.end_hover(wire, after);
+        }
+        let dropped: Vec<DataTransferId> = self
+            .offers
+            .iter_mut()
+            .filter(|(_, offer)| offer.source == Some(window))
+            .map(|(id, offer)| {
+                offer.source = None;
+                *id
+            })
+            .collect();
+        for id in dropped {
+            self.end_requests(id, wire, after);
+        }
+        self.released.retain(|&source| source != window);
     }
 
     /// End the drag over a window: its offer, if minted and not dropped, is
@@ -963,6 +1052,7 @@ impl State {
         let Some(hover) = self.hover.take() else {
             return;
         };
+        self.release(hover.source, after);
         let Phase::Over(id) = hover.phase else {
             return;
         };
@@ -997,7 +1087,7 @@ impl State {
                 // The fetch times out.
                 after.notes.push(Note::Unopened(error));
             }
-            after.started = true;
+            after.wake = true;
             self.fetches.push(Fetch {
                 requestor,
                 wanted,
@@ -1108,8 +1198,7 @@ impl X11Drag {
     /// owes the source an answer sends it before the panic goes on.
     fn try_finish(&self, after: After) -> std::thread::Result<()> {
         let flushed = self.connection.xcb().flush();
-        if after.started {
-            // A fetch has a deadline the loop may not be waiting for.
+        if after.wake {
             (self.wake)();
         }
         #[expect(
@@ -1263,13 +1352,129 @@ impl X11Drag {
         };
         // The new hover learns its types before a failure of the hover it
         // replaced goes on: the next position must not offer a drag with
-        // none.
-        let finished = self.try_finish(after);
-        if entered {
-            self.learn_types(source, listed, types);
+        // none. A failure of a step after it is folded behind the first.
+        let mut failure = FirstPanic::new();
+        if let Err(payload) = self.try_finish(after) {
+            failure.record(payload);
         }
-        if let Err(failure) = finished {
-            std::panic::resume_unwind(failure);
+        if entered {
+            match self.watch_source(source) {
+                SourceWatch::Watched => self.learn_types(source, listed, types),
+                SourceWatch::Destroyed => {
+                    if let Err(payload) = self.end_source(source) {
+                        failure.record(payload);
+                    }
+                }
+                SourceWatch::Abandoned => {
+                    let mut after = After::default();
+                    {
+                        let mut state = self.state.lock();
+                        if state
+                            .hover
+                            .as_ref()
+                            .is_some_and(|hover| hover.source == source)
+                        {
+                            state.end_hover(&self.wire(), &mut after);
+                        }
+                    }
+                    if let Err(payload) = self.try_finish(after) {
+                        failure.record(payload);
+                    }
+                }
+            }
+        }
+        failure.resume();
+    }
+
+    /// Hear the end of `source`'s window, which entered a window: a source
+    /// that crashes is known only by its window going. The selection is
+    /// checked: a window already gone sent its `DestroyNotify` to nobody that
+    /// asked, and only the refusal tells ([`SourceWatch::Destroyed`]). A live
+    /// source owns `XdndSelection` for as long as it drags, and a dead one's
+    /// ownership reverts to nobody, so a selection nobody owns after the
+    /// window is heard is a source that went, even when another client's
+    /// new window took its id meanwhile ([`SourceWatch::Abandoned`]).
+    ///
+    /// The platform's own windows are not selected on here: each of them
+    /// hears its own end as it is made.
+    fn watch_source(&self, source: xproto::Window) -> SourceWatch {
+        match self.connection.hear_peer(
+            source,
+            PeerInterest::DropSource,
+            EventMask::STRUCTURE_NOTIFY,
+        ) {
+            PeerHeard::Heard => {}
+            PeerHeard::Gone => return SourceWatch::Destroyed,
+            PeerHeard::Failed(error) => {
+                tracing::debug!(%error, "cannot hear the end of an XDND source");
+                return SourceWatch::Watched;
+            }
+            // The platform's own window, or asked off the owner thread,
+            // where no XDND message is heard.
+            PeerHeard::NotAPeer | PeerHeard::OffOwnerThread => return SourceWatch::Watched,
+        }
+        let owner = self
+            .connection
+            .xcb()
+            .get_selection_owner(self.atoms.selection)
+            .map_err(ReplyError::from)
+            .and_then(x11rb::cookie::Cookie::reply);
+        match owner {
+            Ok(reply) if reply.owner == NONE => SourceWatch::Abandoned,
+            Ok(_) => SourceWatch::Watched,
+            Err(error) => {
+                tracing::debug!(%error, "cannot read the owner of XdndSelection");
+                SourceWatch::Watched
+            }
+        }
+    }
+
+    /// The server destroyed `window`: the session lets go of what it wrote
+    /// to it, and the hover and offers of which it is the source end
+    /// ([`State::source_destroyed`]). A window neither names costs no lock
+    /// past the look and sends nothing. The window's handler's panic is
+    /// handed back.
+    fn end_source(&self, window: xproto::Window) -> std::thread::Result<()> {
+        self.requestor_gone(window);
+        let mut after = After::default();
+        {
+            let mut state = self.state.lock();
+            if !state.names_source(window) {
+                return Ok(());
+            }
+            state.source_destroyed(window, &self.wire(), &mut after);
+        }
+        self.try_finish(after)
+    }
+
+    /// Stop hearing each source whose hover ended or whose offer retired,
+    /// that neither the hover nor a live offer names any more. Called only
+    /// from the loop's turn, on the owner thread, where the table of peer
+    /// windows is; a source a step off it released waits in
+    /// [`State::released`] until then.
+    fn release_sources(&self) {
+        debug_assert!(
+            self.session.with(|_| ()).is_some(),
+            "BUG: the loop's turn runs on the owner thread, where the peer table is"
+        );
+        let released: Vec<xproto::Window> = {
+            let mut state = self.state.lock();
+            if state.released.is_empty() {
+                return;
+            }
+            let mut released = std::mem::take(&mut state.released);
+            released.sort_unstable();
+            released.dedup();
+            released.retain(|&source| !state.names_source(source));
+            released
+        };
+        for source in released {
+            if let PeerSelect::Sent(Err(error)) = self
+                .connection
+                .forget_peer(source, PeerInterest::DropSource)
+            {
+                tracing::debug!(%error, "cannot stop hearing an XDND source");
+            }
         }
     }
 
@@ -1360,7 +1565,7 @@ impl X11Drag {
                             offers.insert(
                                 id,
                                 Offer {
-                                    source,
+                                    source: Some(source),
                                     window,
                                     types: Arc::clone(&hover.types),
                                     feedback: DropFeedback::default(),
@@ -1540,7 +1745,7 @@ impl X11Drag {
             {
                 state
                     .retire(id, &self.wire(), &mut after)
-                    .map(|offer| (offer.source, offer.window))
+                    .and_then(|offer| Some((offer.source?, offer.window)))
             } else {
                 None
             }
@@ -1806,6 +2011,12 @@ impl LoopDrag for X11Drag {
         }
     }
 
+    fn window_destroyed(&self, window: xproto::Window) {
+        if let Err(failure) = self.end_source(window) {
+            std::panic::resume_unwind(failure);
+        }
+    }
+
     fn deadline(&self) -> Option<Instant> {
         let fetches = self
             .state
@@ -1823,6 +2034,7 @@ impl LoopDrag for X11Drag {
 
     fn expire(&self, now: Instant) {
         self.session_expire(now);
+        self.release_sources();
         let mut after = After::default();
         {
             let mut state = self.state.lock();
@@ -1865,6 +2077,9 @@ impl DragTransport for X11Drag {
                     index: representation,
                 }));
             };
+            if offer.source.is_none() {
+                return TransferRequest::ready(Err(TransferError::SourceGone));
+            }
             let time = offer.time;
             let (request, completer) = TransferRequest::pending();
             state.waiting.push_back(Wanted {
@@ -1909,7 +2124,7 @@ impl DragTransport for X11Drag {
                 .retire(id, &self.wire(), &mut after)
                 .and_then(|offer| {
                     let action = offer.dropped?;
-                    Some((offer.source, offer.window, action))
+                    Some((offer.source?, offer.window, action))
                 })
         };
         if let Some((source, window, action)) = finished {
