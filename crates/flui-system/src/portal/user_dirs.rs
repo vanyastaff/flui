@@ -1,8 +1,8 @@
 //! The user's folders as the XDG user directories name them
 //! (`$XDG_CONFIG_HOME/user-dirs.dirs`, written by `xdg-user-dirs-update`).
 //!
-//! No portal names them: the file is read on the portal's thread, never on
-//! the owner's. Inside Flatpak the application's `XDG_CONFIG_HOME` is its
+//! No portal names them: the file is read on a blocking pool thread, never on
+//! the owner's or the portal's. Inside Flatpak the application's `XDG_CONFIG_HOME` is its
 //! own, which a sandbox without access to the host's file leaves to the
 //! defaults; the parity source records that run as owed.
 
@@ -38,7 +38,8 @@ impl UserDirBackend for XdgUserDirs {
             return;
         }
         self.portal.spawn(move |_| async move {
-            let _ = answer.resolve(locate(dir, &Environment::of_process()));
+            let located = zruntime::unblock(move || locate(dir, &Environment::of_process())).await;
+            let _ = answer.resolve(located);
         });
     }
 }

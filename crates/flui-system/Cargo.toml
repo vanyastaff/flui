@@ -27,7 +27,7 @@ libc = { workspace = true }
 raw-window-handle = { workspace = true }
 serde = { workspace = true }
 zbus = { workspace = true }
-zruntime = { version = "0.2", default-features = false, features = ["runtime", "event"] }
+zruntime = { version = "0.2", default-features = false, features = ["runtime", "event", "unblock"] }
 
 [dev-dependencies]
 flui-platform = { workspace = true, features = ["testing"] }

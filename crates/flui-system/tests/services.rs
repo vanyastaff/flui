@@ -227,12 +227,47 @@ fn an_untaken_binding_drops_its_oldest_presses_and_keeps_its_answer() {
     let system = plugin.shortcuts().bindings().remove(0);
     let bound = ShortcutEvent::Bound(vec![BoundShortcut::new(id("record"), None)]);
     system.send(bound.clone());
-    // The answer and the presses fill the bound; the release takes the
+    // The presses fill their bound beside the answer; the release takes the
     // oldest press's place.
-    for _ in 1..ShortcutFeed::MAX_QUEUED {
+    for _ in 0..ShortcutFeed::MAX_QUEUED {
         system.send(ShortcutEvent::Pressed(id("record")));
     }
     system.send(ShortcutEvent::Released(id("record")));
     assert_eq!(binding.dropped(), 1);
     assert_eq!(settled(&mut host, binding.next()), Ok(bound));
+}
+
+/// A `Bound` or `Changed` carries the whole binding, so a newer one takes
+/// the place of the one queued: an untaken binding holds one, and a `Changed`
+/// that follows an untaken `Bound` keeps it a `Bound` with the newer list.
+#[test]
+fn a_newer_whole_binding_takes_the_place_of_the_queued_one() {
+    let scenario = Scenario::new();
+    let (mut host, plugin) = scripted(&scenario);
+    let shortcuts =
+        acquire_on::<GlobalShortcutCapability>(&mut host).expect("the scripted plugin provides it");
+    let binding = shortcuts.bind(vec![Shortcut::new(id("record"), "Record")]);
+    let system = plugin.shortcuts().bindings().remove(0);
+    let triggered =
+        |trigger: &str| vec![BoundShortcut::new(id("record"), Some(trigger.to_owned()))];
+    system.send(ShortcutEvent::Bound(triggered("Ctrl+R")));
+    system.send(ShortcutEvent::Pressed(id("record")));
+    for trigger in ["Ctrl+1", "Ctrl+2", "Ctrl+3"] {
+        system.send(ShortcutEvent::Changed(triggered(trigger)));
+    }
+    assert_eq!(
+        settled(&mut host, binding.next()),
+        Ok(ShortcutEvent::Bound(triggered("Ctrl+3")))
+    );
+    assert_eq!(
+        settled(&mut host, binding.next()),
+        Ok(ShortcutEvent::Pressed(id("record")))
+    );
+    system.send(ShortcutEvent::Changed(triggered("Ctrl+4")));
+    system.send(ShortcutEvent::Changed(triggered("Ctrl+5")));
+    assert_eq!(
+        settled(&mut host, binding.next()),
+        Ok(ShortcutEvent::Changed(triggered("Ctrl+5")))
+    );
+    assert_eq!(binding.dropped(), 0);
 }

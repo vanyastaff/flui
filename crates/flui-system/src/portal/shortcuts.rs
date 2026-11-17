@@ -139,15 +139,16 @@ async fn watch(
     dismissal: Dismissal,
     mut tokens: Tokens,
 ) {
-    // Only the first session asks with the window: a renewal answers no
-    // question the user did not already answer.
+    // The window names the first question the user sees, so it is kept until
+    // a `BindShortcuts` was answered; a renewal answers no question the user
+    // did not already answer.
     let mut parent = Some(parent);
     let mut misses = 0;
     loop {
         let end = session(
             &bus,
             &shortcuts,
-            parent.take(),
+            &mut parent,
             &feed,
             &dismissal,
             &mut tokens,
@@ -190,7 +191,7 @@ async fn ended(dismissal: &Dismissal, bus: &Bus) {
 async fn session(
     bus: &Bus,
     shortcuts: &[Shortcut],
-    parent: Option<PortalParent>,
+    parent: &mut Option<PortalParent>,
     feed: &ShortcutFeed,
     dismissal: &Dismissal,
     tokens: &mut Tokens,
@@ -222,9 +223,7 @@ async fn session(
         Response::Answered(results) => {
             // The handle is the path asked for; a portal that names another
             // is outside its contract, and its signals would not be heard.
-            let handle = results
-                .get("session_handle")
-                .and_then(|handle| String::try_from(handle.clone()).ok());
+            let handle = session_handle(&results);
             if handle.as_deref() != Some(session_path.as_str()) {
                 close(&desktop, &session_path).await;
                 return Err(SessionEnd::Final(SystemFailure::MalformedAnswer.into()));
@@ -258,8 +257,12 @@ async fn session(
         Some(dismissal),
     )
     .await;
-    // The window's export lasts until the request that names it ended.
-    drop(parent);
+    // The window's export lasts until the portal answered the request that
+    // names it; a request that failed before an answer keeps it for the
+    // retry, which is still the user's first question.
+    if bound.is_ok() {
+        drop(parent.take());
+    }
     let failure = match bound {
         Ok(Response::Answered(results)) => match listed(results.get("shortcuts")) {
             Ok(list) => {
@@ -431,5 +434,46 @@ fn shortcut_error(error: PortalError) -> ShortcutError {
     match error {
         PortalError::Unsupported(unsupported) => ShortcutError::Unsupported(unsupported),
         PortalError::Failed(failure) => ShortcutError::Failed(failure),
+    }
+}
+
+/// The session a `CreateSession` answer names: a string, as the
+/// specification types it, or an object path, as some portals send it.
+fn session_handle(results: &HashMap<String, OwnedVariant>) -> Option<String> {
+    let handle = results.get("session_handle")?;
+    String::try_from(handle.clone()).ok().or_else(|| {
+        zbus::OwnedObjectPath::try_from(handle.clone())
+            .ok()
+            .map(|path| path.as_str().to_owned())
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use zbus::{OwnedVariant, Variant};
+
+    use super::session_handle;
+
+    #[test]
+    fn a_session_handle_is_read_as_a_string_or_an_object_path() {
+        let path = "/org/freedesktop/portal/desktop/session/1_7/flui3_1";
+        let answer = |value: Variant<'static>| {
+            HashMap::from([(
+                "session_handle".to_owned(),
+                OwnedVariant::try_from(value).expect("an owned value"),
+            )])
+        };
+        let object = zbus::ObjectPath::try_from(path).expect("a path");
+        let cases = [
+            (answer(Variant::from(path)), Some(path)),
+            (answer(Variant::from(object)), Some(path)),
+            (answer(Variant::from(7_u32)), None),
+            (HashMap::new(), None),
+        ];
+        for (results, expected) in cases {
+            assert_eq!(session_handle(&results).as_deref(), expected, "{results:?}");
+        }
     }
 }

@@ -6,18 +6,39 @@
 //! ADR-0351), and a dock that listens (KDE Plasma's task manager, Dash to
 //! Dock, Ubuntu Dock) draws it. Nothing answers, so the handle reports the
 //! entry as unconfirmed. GNOME's own dash does not listen.
+//!
+//! One task per UI runtime sends the signal ([`EntryFeed`]): it takes the
+//! newest state each time it is free, so the dock ends on the last state set
+//! however a burst of changes and a slow connection interleave.
 
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use flui_platform::{Unsupported, UnsupportedReason};
+use futures_util::future::select;
 use zbus::Variant;
 
-use super::{AppName, Portal, lock};
+use super::{AppName, Bus, Portal, lock};
 use crate::taskbar::{EntryState, Honoured, Progress, TaskbarBackend, TaskbarCapability};
 
 const INTERFACE: &str = "com.canonical.Unity.LauncherEntry";
+
+/// What one UI runtime's entry sends, shared by its handles and the one task
+/// that sends: the newest state not sent yet, and the wake for that task.
+#[derive(Default)]
+pub(crate) struct EntryFeed {
+    latest: Mutex<Option<EntryState>>,
+    wake: zruntime::Event,
+    /// Whether the sending task was started.
+    sending: AtomicBool,
+}
+
+/// One UI runtime's [`EntryFeed`], which every handle of the runtime sends
+/// through (a runtime-local value).
+#[derive(Default)]
+pub(crate) struct EntryFeedSlot(pub(crate) Arc<EntryFeed>);
 
 /// [`TaskbarBackend`] over the launcher entry signal.
 pub(crate) struct LauncherEntry {
@@ -26,13 +47,12 @@ pub(crate) struct LauncherEntry {
     uri: Arc<str>,
     /// The object path the signal is sent from, derived from the id.
     path: Arc<str>,
-    /// The state the next send carries; taken by the send, so a burst of
-    /// changes sends the latest once.
-    latest: Arc<Mutex<Option<EntryState>>>,
+    feed: Arc<EntryFeed>,
 }
 
 impl LauncherEntry {
-    /// The entry of the application `app_id` names.
+    /// The entry of the application `app_id` names, sending through `feed`,
+    /// its runtime's.
     ///
     /// # Errors
     ///
@@ -41,6 +61,7 @@ impl LauncherEntry {
     pub(crate) fn try_new(
         portal: Rc<Portal>,
         app_id: Option<AppName>,
+        feed: Arc<EntryFeed>,
     ) -> Result<Self, Unsupported> {
         let app_id = app_id.ok_or(Unsupported::of::<TaskbarCapability>(
             UnsupportedReason::NotDeclared {
@@ -62,7 +83,7 @@ impl LauncherEntry {
             portal,
             uri: format!("application://{}.desktop", app_id.as_str()).into(),
             path: format!("/com/canonical/unity/launcherentry/{element}").into(),
-            latest: Arc::default(),
+            feed,
         })
     }
 }
@@ -73,32 +94,49 @@ impl TaskbarBackend for LauncherEntry {
             // No thread to send from: nothing a caller of a signal can do.
             return;
         }
-        *lock(&self.latest) = Some(state);
-        let latest = Arc::clone(&self.latest);
-        let uri = Arc::clone(&self.uri);
-        let path = Arc::clone(&self.path);
-        self.portal.spawn(move |bus| async move {
-            let Some(state) = lock(&latest).take() else {
-                // A send spawned later carried it already.
-                return;
-            };
-            let Ok(connection) = bus.connection().await else {
-                return;
-            };
-            let _ = connection
-                .emit_signal(
-                    None::<&str>,
-                    &*path,
-                    INTERFACE,
-                    "Update",
-                    &(&*uri, properties(state)),
-                )
-                .await;
-        });
+        *lock(&self.feed.latest) = Some(state);
+        self.feed.wake.notify(1);
+        if !self.feed.sending.swap(true, Ordering::AcqRel) {
+            let feed = Arc::clone(&self.feed);
+            let uri = Arc::clone(&self.uri);
+            let path = Arc::clone(&self.path);
+            self.portal
+                .spawn(move |bus| async move { send(&bus, &feed, &uri, &path).await });
+        }
     }
 
     fn honours(&self) -> Honoured {
         Honoured::new(true, false, true, false)
+    }
+}
+
+/// Send the newest state of `feed` each time there is one, until the UI
+/// runtime retires: one sender, so no older state is sent after a newer one.
+async fn send(bus: &Bus, feed: &EntryFeed, uri: &str, path: &str) {
+    loop {
+        // Listen before taking, so a state set meanwhile wakes the next turn.
+        let woken = feed.wake.listen();
+        let next = lock(&feed.latest).take();
+        let Some(state) = next else {
+            let woken = std::pin::pin!(woken);
+            let retired = std::pin::pin!(bus.retired());
+            if let futures_util::future::Either::Right(_) = select(woken, retired).await {
+                return;
+            }
+            continue;
+        };
+        if let Ok(connection) = bus.connection().await {
+            // A signal nobody answers; a failure to send has no one to tell.
+            let _ = connection
+                .emit_signal(
+                    None::<&str>,
+                    path,
+                    INTERFACE,
+                    "Update",
+                    &(uri, properties(state)),
+                )
+                .await;
+        }
     }
 }
 

@@ -329,18 +329,66 @@ struct FeedState {
     dropped: u64,
 }
 
+impl FeedState {
+    /// Queue `event` within the bound: a `Bound` or `Changed` carries the
+    /// whole binding, so it takes the place of one already queued (a
+    /// `Changed` keeping a queued `Bound` a `Bound`, with the new list); a
+    /// press or release past [`ShortcutFeed::MAX_QUEUED`] of them drops the
+    /// oldest press or release.
+    fn queue(&mut self, event: ShortcutEvent) {
+        let whole = self
+            .queued
+            .iter_mut()
+            .find(|queued| matches!(queued, ShortcutEvent::Bound(_) | ShortcutEvent::Changed(_)));
+        match (event, whole) {
+            (ShortcutEvent::Changed(list), Some(ShortcutEvent::Bound(queued))) => *queued = list,
+            (event @ (ShortcutEvent::Bound(_) | ShortcutEvent::Changed(_)), Some(queued)) => {
+                *queued = event;
+            }
+            (event @ (ShortcutEvent::Pressed(_) | ShortcutEvent::Released(_)), _) => {
+                let inputs = self
+                    .queued
+                    .iter()
+                    .filter(|queued| {
+                        matches!(
+                            queued,
+                            ShortcutEvent::Pressed(_) | ShortcutEvent::Released(_)
+                        )
+                    })
+                    .count();
+                if inputs >= ShortcutFeed::MAX_QUEUED {
+                    let oldest = self.queued.iter().position(|queued| {
+                        matches!(
+                            queued,
+                            ShortcutEvent::Pressed(_) | ShortcutEvent::Released(_)
+                        )
+                    });
+                    if let Some(oldest) = oldest {
+                        drop(self.queued.remove(oldest));
+                    }
+                    self.dropped += 1;
+                }
+                self.queued.push_back(event);
+            }
+            (event, _) => self.queued.push_back(event),
+        }
+    }
+}
+
 /// Where a [`ShortcutBackend`] sends what the system tells one binding.
 ///
 /// `Send` and cheap to clone; the system's events arrive on whichever thread
 /// the backend hears them. The binding takes them in order with
-/// [`ShortcutBinding::next`]. At most [`Self::MAX_QUEUED`] wait untaken; a
-/// press or release beyond that drops the oldest press or release, never a
-/// `Bound`, a `Changed` or the end.
+/// [`ShortcutBinding::next`]. At most [`Self::MAX_QUEUED`] + 2 wait untaken:
+/// [`Self::MAX_QUEUED`] presses and releases, one whole binding (a `Bound` or
+/// `Changed` takes the place of the one queued) and the end. A press or
+/// release past its bound drops the oldest press or release, counted by
+/// [`ShortcutBinding::dropped`].
 #[derive(Clone)]
 pub struct ShortcutFeed(Arc<Mutex<FeedState>>);
 
 impl ShortcutFeed {
-    /// The most events a binding holds that nobody took.
+    /// The most presses and releases a binding holds that nobody took.
     pub const MAX_QUEUED: usize = 256;
 
     fn new() -> Self {
@@ -373,32 +421,7 @@ impl ShortcutFeed {
             if let Some(waiting) = state.waiting.pop_front() {
                 Some((waiting, event))
             } else {
-                if state.queued.len() >= Self::MAX_QUEUED {
-                    let input = state.queued.iter().position(|queued| {
-                        matches!(
-                            queued,
-                            ShortcutEvent::Pressed(_) | ShortcutEvent::Released(_)
-                        )
-                    });
-                    match input {
-                        Some(oldest) => {
-                            drop(state.queued.remove(oldest));
-                            state.dropped += 1;
-                        }
-                        // Only bindings and changes queued: this press
-                        // or release is the one that goes.
-                        None if matches!(
-                            event,
-                            ShortcutEvent::Pressed(_) | ShortcutEvent::Released(_)
-                        ) =>
-                        {
-                            state.dropped += 1;
-                            return;
-                        }
-                        None => {}
-                    }
-                }
-                state.queued.push_back(event);
+                state.queue(event);
                 None
             }
         };
@@ -410,7 +433,7 @@ impl ShortcutFeed {
 
     /// The next event, for `completions`' owner.
     fn next(&self, completions: &CompletionSource) -> Completion<ShortcutEvent> {
-        let (completion, answer) = completions.pending();
+        let (completion, answer) = completions.pending::<ShortcutEvent>();
         let ready = {
             let mut state = self.lock();
             let event = state

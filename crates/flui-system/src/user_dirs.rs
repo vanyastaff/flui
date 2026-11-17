@@ -100,7 +100,7 @@ impl UserDirs {
     /// The folder the system names for `dir`, read when asked: a user who
     /// moved their documents since is answered the new folder.
     pub fn locate(&self, dir: UserDir) -> Completion<UserDirResult> {
-        let (completion, answer) = self.completions.pending();
+        let (completion, answer) = self.completions.pending::<UserDirResult>();
         self.backend.locate(dir, answer);
         completion
     }

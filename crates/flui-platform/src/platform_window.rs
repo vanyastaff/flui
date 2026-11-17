@@ -625,7 +625,8 @@ pub trait PlatformWindow {
     /// An X11 window answers `x11:<XID>` at once. A Wayland window exports
     /// itself for the request (`xdg-foreign`) and answers `wayland:<handle>`
     /// once the compositor named the export, which the answer's drop
-    /// releases; a compositor with no exporter answers no window. Called on
+    /// releases, and the window's close releases with it whoever holds the
+    /// answer; a compositor with no exporter answers no window. Called on
     /// the owner thread, through
     /// [`WindowRef::portal_parent`](crate::capability::WindowRef::portal_parent),
     /// only while the window is open.

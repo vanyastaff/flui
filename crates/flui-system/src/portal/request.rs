@@ -79,6 +79,7 @@ where
         connection,
         owner,
         retired,
+        ..
     } = desktop;
     let expected = object_path(connection, "request", token)?;
     let mut departures = subscribe_departures(connection).await?;

@@ -27,9 +27,10 @@ const TRASH: Interface = Interface::new("org.freedesktop.portal.Trash", 1);
 
 /// [`LauncherBackend`] over the desktop portal.
 ///
-/// Every request touches the file system on the portal's thread, never on
-/// the owner's: a file on a stalled mount delays that request alone, and
-/// its answer goes to the resolver of the request that asked.
+/// Every request touches the file system on a blocking pool thread, never
+/// on the owner's or the portal's: a file on a stalled mount delays that
+/// request alone, and its answer goes to the resolver of the request that
+/// asked.
 pub(crate) struct PortalLauncher {
     portal: Rc<Portal>,
     /// The acquiring widget's window, which the portal's application
@@ -74,7 +75,10 @@ impl PortalLauncher {
         with_parent(self.window.as_ref(), &self.completions, move |parent| {
             let token = portal.token();
             portal.spawn(move |bus| async move {
-                let body = match argument(parent.as_str(), token.clone()) {
+                let named = parent.as_str().to_owned();
+                let asked = token.clone();
+                let made = zruntime::unblock(move || argument(&named, asked)).await;
+                let body = match made {
                     Ok(body) => body,
                     Err(refusal) => {
                         let _ = answer.resolve(Err(refusal));
@@ -250,7 +254,8 @@ impl LauncherBackend for PortalLauncher {
             return;
         }
         self.portal.spawn(move |bus| async move {
-            let file = match open(&path, Purpose::Trash) {
+            let opened = zruntime::unblock(move || open(&path, Purpose::Trash)).await;
+            let file = match opened {
                 Ok(file) => zbus::OwnedFd::from(std::os::fd::OwnedFd::from(file)),
                 Err(refusal) => {
                     let _ = answer.resolve(Err(refusal));

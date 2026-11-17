@@ -12,7 +12,7 @@
 //!
 //! A request that shows something names the acquiring widget's window as its
 //! `parent_window` ([`with_parent`]): the window's
-//! [`PortalParent`](flui_platform::capability::PortalParent), held by the
+//! [`PortalParent`], held by the
 //! request until it ends, so a Wayland window's export lasts exactly as long.
 //!
 //! An unsandboxed application is named to the portal by its id
@@ -49,7 +49,7 @@ use crate::user_dirs::{UserDirCapability, UserDirs};
 pub(crate) use background::PortalAutostart;
 pub(crate) use dialogs::PortalDialogs;
 pub(crate) use launcher::PortalLauncher;
-pub(crate) use launcher_entry::LauncherEntry;
+pub(crate) use launcher_entry::{EntryFeedSlot, LauncherEntry};
 pub(crate) use shortcuts::PortalShortcuts;
 pub(crate) use user_dirs::XdgUserDirs;
 
@@ -189,6 +189,8 @@ pub(crate) struct Desktop {
     /// Ends when the UI runtime that owns the portal retires: a request
     /// still showing something closes it then.
     pub(crate) retired: Dismissal,
+    /// The versions the bus has read of this portal instance.
+    versions: Arc<Mutex<Versions>>,
 }
 
 impl Desktop {
@@ -196,25 +198,50 @@ impl Desktop {
     /// a request depends on it: an absent interface or an older version is
     /// [`UnsupportedReason::NotOnThisDevice`], never a call that hangs or
     /// fails in a way nobody can tell from a broken portal.
+    ///
+    /// Each interface is read once per portal instance.
     pub(crate) async fn require(&self, interface: Interface) -> Result<(), PortalError> {
+        let known = {
+            let versions = lock(&self.versions);
+            (versions.portal.as_ref() == Some(&self.owner))
+                .then(|| versions.reported.get(interface.name).copied())
+                .flatten()
+        };
+        let version = if let Some(version) = known {
+            version
+        } else {
+            let version = self.read_version(interface.name).await?;
+            let mut versions = lock(&self.versions);
+            if versions.portal.as_ref() != Some(&self.owner) {
+                versions.portal = Some(self.owner.clone());
+                versions.reported.clear();
+            }
+            versions.reported.insert(interface.name, version);
+            version
+        };
+        if version >= interface.since {
+            Ok(())
+        } else {
+            Err(PortalError::too_old())
+        }
+    }
+
+    /// The version the portal reports of `interface`, `0` for one it does
+    /// not serve.
+    async fn read_version(&self, interface: &'static str) -> Result<u32, PortalError> {
         let properties = zbus::fdo::PropertiesProxy::builder(&self.connection)
             .destination(self.owner.as_str())
             .path(request::PATH)
             .build()
             .await?;
-        let name = zbus::names::InterfaceName::try_from(interface.name)?;
-        let version = match properties.get(name, "version").await {
-            Ok(version) => version,
+        let name = zbus::names::InterfaceName::try_from(interface)?;
+        match properties.get(name, "version").await {
+            Ok(version) => u32::try_from(version)
+                .map_err(|_| PortalError::Failed(SystemFailure::MalformedAnswer)),
             // xdg-desktop-portal answers a property of an interface it does
             // not serve with `InvalidArgs`.
-            Err(zbus::fdo::Error::InvalidArgs(_)) => return Err(PortalError::too_old()),
-            Err(error) => return Err(error.into()),
-        };
-        let version = u32::try_from(version).map_err(|_| SystemFailure::MalformedAnswer);
-        match version {
-            Ok(version) if version >= interface.since => Ok(()),
-            Ok(_) => Err(PortalError::too_old()),
-            Err(failure) => Err(PortalError::Failed(failure)),
+            Err(zbus::fdo::Error::InvalidArgs(_) | zbus::fdo::Error::UnknownProperty(_)) => Ok(0),
+            Err(error) => Err(error.into()),
         }
     }
 }
@@ -244,9 +271,26 @@ impl AppName {
 /// Where the application stands with the portal's `Registry`.
 #[derive(Default)]
 struct Registration {
-    /// The portal instance the application was named to, or found it could
-    /// not be named to; a portal that restarted needs naming again.
-    settled_with: Option<zbus::names::OwnedUniqueName>,
+    /// The connection and the portal instance the application was named
+    /// to, or found it could not be named to: a new connection or a portal
+    /// that restarted needs naming again, and a task still on an old
+    /// connection cannot mark a new one named.
+    settled_with: Option<Peers>,
+}
+
+/// One connection to one portal instance, by their unique names.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Peers {
+    connection: Option<zbus::names::OwnedUniqueName>,
+    portal: zbus::names::OwnedUniqueName,
+}
+
+/// The interface versions one portal instance reported, read once per
+/// instance: a portal that restarted may be another version.
+#[derive(Default)]
+struct Versions {
+    portal: Option<zbus::names::OwnedUniqueName>,
+    reported: rustc_hash::FxHashMap<&'static str, u32>,
 }
 
 /// The bus connection the requests of one portal share, made by the first
@@ -258,6 +302,8 @@ pub(crate) struct Bus {
     app_id: Option<AppName>,
     connection: Mutex<Option<zbus::Connection>>,
     registration: Mutex<Registration>,
+    /// What each portal instance reported of its interfaces.
+    versions: Arc<Mutex<Versions>>,
     /// Whether the process runs inside Flatpak or Snap, read once on the
     /// portal's thread.
     sandboxed: OnceLock<bool>,
@@ -285,6 +331,7 @@ impl Bus {
             app_id,
             connection: Mutex::new(None),
             registration: Mutex::new(Registration::default()),
+            versions: Arc::default(),
             sandboxed: OnceLock::new(),
             retire: Mutex::new(Some(retire)),
             retired,
@@ -348,6 +395,7 @@ impl Bus {
             connection,
             owner,
             retired: self.retired.clone(),
+            versions: Arc::clone(&self.versions),
         })
     }
 
@@ -363,7 +411,11 @@ impl Bus {
         if *self.sandboxed.get_or_init(is_sandboxed) {
             return;
         }
-        if lock(&self.registration).settled_with.as_ref() == Some(owner) {
+        let peers = Peers {
+            connection: connection.unique_name().cloned(),
+            portal: owner.clone(),
+        };
+        if lock(&self.registration).settled_with.as_ref() == Some(&peers) {
             return;
         }
         let options = std::collections::HashMap::<&str, zbus::Variant<'_>>::new();
@@ -376,7 +428,7 @@ impl Bus {
                 &(app_id.as_str(), options),
             )
             .await;
-        lock(&self.registration).settled_with = Some(owner.clone());
+        lock(&self.registration).settled_with = Some(peers);
     }
 }
 
@@ -587,7 +639,8 @@ pub(crate) fn register(
     registrar.provide::<TaskbarCapability>(move |ctx: &ProviderContext<'_>| {
         let portal = entry(ctx);
         let app_id = portal.app_id.borrow().clone();
-        LauncherEntry::try_new(portal, app_id).map(|entry| TaskbarEntry::new(entry, ctx))
+        let feed = std::sync::Arc::clone(&ctx.runtime_local::<EntryFeedSlot>().0);
+        LauncherEntry::try_new(portal, app_id, feed).map(|entry| TaskbarEntry::new(entry, ctx))
     });
     let dirs = configure;
     registrar.provide::<UserDirCapability>(move |ctx: &ProviderContext<'_>| {

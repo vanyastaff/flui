@@ -138,33 +138,52 @@ pub struct HeadlessWindow {
 #[derive(Clone, Debug)]
 pub struct HeadlessPortalExports {
     handle: Arc<str>,
-    live: Arc<std::sync::atomic::AtomicUsize>,
+    /// Each export a request may still hold; one released is `true`.
+    exports: Arc<Mutex<Vec<std::sync::Weak<AtomicBool>>>>,
 }
 
 impl HeadlessPortalExports {
     /// How many exports portal requests hold now: one per request between
-    /// its ask and its end.
+    /// its ask and its end, none once the window closed.
     #[must_use]
     pub fn live(&self) -> usize {
-        self.live.load(Ordering::SeqCst)
+        self.lock()
+            .iter()
+            .filter_map(std::sync::Weak::upgrade)
+            .filter(|released| !released.load(Ordering::SeqCst))
+            .count()
     }
 
-    /// A new export, counted until the parent holding it drops.
+    fn lock(&self) -> parking_lot::MutexGuard<'_, Vec<std::sync::Weak<AtomicBool>>> {
+        self.exports.lock()
+    }
+
+    /// A new export, counted until the parent holding it drops or the window
+    /// closes.
     fn export(&self) -> flui_platform::capability::PortalParent {
         /// One export; its drop is the release.
-        struct Export(Arc<std::sync::atomic::AtomicUsize>);
+        struct Export(Arc<AtomicBool>);
 
         impl Drop for Export {
             fn drop(&mut self) {
-                self.0.fetch_sub(1, Ordering::SeqCst);
+                self.0.store(true, Ordering::SeqCst);
             }
         }
 
-        self.live.fetch_add(1, Ordering::SeqCst);
-        flui_platform::capability::PortalParent::wayland(
-            &self.handle,
-            Export(Arc::clone(&self.live)),
-        )
+        let released = Arc::new(AtomicBool::new(false));
+        let mut exports = self.lock();
+        exports.retain(|export| export.strong_count() > 0);
+        exports.push(Arc::downgrade(&released));
+        drop(exports);
+        flui_platform::capability::PortalParent::wayland(&self.handle, Export(released))
+    }
+
+    /// The window closed: every export is released, as a compositor revokes
+    /// a destroyed toplevel's, whoever still holds its parent.
+    fn release_all(&self) {
+        for export in self.lock().iter().filter_map(std::sync::Weak::upgrade) {
+            export.store(true, Ordering::SeqCst);
+        }
     }
 }
 
@@ -337,14 +356,15 @@ impl HeadlessWindow {
 
     /// Name the window to a desktop portal as a Wayland window the compositor
     /// exports under `handle`: every request is answered
-    /// `wayland:<handle>` and holds an export of its own until it ends, which
-    /// [`HeadlessPortalExports::live`] counts. Without it the window answers
-    /// no window, as one of a system with no portals does.
+    /// `wayland:<handle>` and holds an export of its own until it ends or the
+    /// window closes, which [`HeadlessPortalExports::live`] counts; a closed
+    /// window answers no window. Without it the window answers no window, as
+    /// one of a system with no portals does.
     #[must_use]
     pub fn with_portal_export(mut self, handle: impl Into<String>) -> Self {
         self.portal_exports = Some(HeadlessPortalExports {
             handle: handle.into().into(),
-            live: Arc::default(),
+            exports: Arc::default(),
         });
         self
     }
@@ -563,10 +583,11 @@ impl PlatformWindow for HeadlessWindow {
         &self,
         answer: flui_platform::capability::Resolver<flui_platform::capability::PortalParent>,
     ) {
-        let parent = self.portal_exports.as_ref().map_or_else(
-            flui_platform::capability::PortalParent::none,
-            HeadlessPortalExports::export,
-        );
+        // A closed window names nothing, as on every host.
+        let parent = match &self.portal_exports {
+            Some(exports) if !self.closed.load(Ordering::Relaxed) => exports.export(),
+            _ => flui_platform::capability::PortalParent::none(),
+        };
         // The owner retiring first leaves nothing waiting for the answer.
         let _ = answer.resolve(parent);
     }
@@ -2799,6 +2820,9 @@ impl HeadlessHost {
         };
         let closed = self.open.remove(position);
         closed.window.closed.store(true, Ordering::Relaxed);
+        if let Some(exports) = &closed.window.portal_exports {
+            exports.release_all();
+        }
         // A window that is gone holds no quit.
         self.quit_consented(id);
         if !self.open.is_empty() {

@@ -165,7 +165,7 @@ impl Autostart {
     /// what the system granted: [`AutostartState::Disabled`] to a request
     /// that enables means the system left it off.
     pub fn request(&self, request: AutostartRequest) -> Completion<AutostartResult> {
-        let (completion, answer) = self.completions.pending();
+        let (completion, answer) = self.completions.pending::<AutostartResult>();
         match request.check() {
             Ok(()) => self.backend.request(request, answer),
             Err(malformed) => {

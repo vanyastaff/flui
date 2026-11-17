@@ -60,7 +60,9 @@ impl AutostartBackend for PortalAutostart {
         with_parent(self.window.as_ref(), &self.completions, move |parent| {
             let token = portal.token();
             portal.spawn(move |bus| async move {
-                let options = match options(&request, &token) {
+                let asked = token.clone();
+                let made = zruntime::unblock(move || options(&request, &asked)).await;
+                let options = match made {
                     Ok(options) => options,
                     Err(refusal) => {
                         let _ = answer.resolve(Err(refusal));
@@ -99,7 +101,7 @@ impl AutostartBackend for PortalAutostart {
 /// The options of one request: its token, whether to start at login, the
 /// reason, and the program to start, which this process is.
 ///
-/// Read on the portal's thread (`/proc/self/exe`). The portal joins the
+/// Read on a blocking pool thread (`/proc/self/exe`). The portal joins the
 /// command line with spaces into the entry's `Exec` without quoting it, so
 /// a program whose path a desktop entry cannot hold unquoted is refused here
 /// rather than written as an entry that starts something else.

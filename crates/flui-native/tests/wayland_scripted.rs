@@ -353,7 +353,8 @@ mod cases {
     /// Every portal request exports the window anew (`xdg-foreign`) and is
     /// answered with the compositor's handle; the export lives while the
     /// request holds its parent and is destroyed when the request lets it go,
-    /// so no handle names the window between requests. A closed window is
+    /// so no handle names the window between requests. The window's close
+    /// destroys the export a request still holds, and a closed window is
     /// exported for nobody.
     fn each_portal_request_exports_the_window_and_releases_the_export_as_it_ends() {
         let session = Session::open(
@@ -388,12 +389,20 @@ mod cases {
             heard.exported.is_empty()
         });
 
+        // A request still holding its parent when the window closes loses
+        // the export with the window.
+        let held = portal_parent(&session);
+        assert_eq!(held.as_str(), "wayland:flui-export-3");
         session.window.close_for_cleanup();
+        session.heard_until("the closed window's export released", |heard| {
+            heard.exported.is_empty()
+        });
+        drop(held);
         assert!(
             portal_parent(&session).is_none(),
             "a closed window names no parent"
         );
-        assert_eq!(session.compositor.heard().exports, 2, "and is not exported");
+        assert_eq!(session.compositor.heard().exports, 3, "and is not exported");
     }
 
     /// Where the compositor offers no exporter, a request is answered at once

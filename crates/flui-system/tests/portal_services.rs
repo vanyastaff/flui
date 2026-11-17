@@ -13,6 +13,7 @@ use flui_platform::capability::Abandoned;
 use flui_platform::keyboard::{Key, Modifiers};
 use flui_platform::launch::{ExternalUri, LaunchError, LauncherCapability, Scheme};
 use flui_platform::{SystemFailure, UnsupportedReason};
+use flui_sdk::view::CloseReason;
 use flui_system::autostart::{
     AutostartCapability, AutostartError, AutostartRequest, AutostartState,
 };
@@ -26,8 +27,8 @@ use flui_system::user_dirs::{UserDir, UserDirCapability};
 use flui_testing::{HeadlessHost, HeadlessWindow};
 use zbus::{MatchRule, MessageStream, OwnedVariant, Variant};
 
-use crate::portal::{Call, Results, StandIn, pump_until, settle};
-use crate::{acquire, acquire_on, outcome_slot};
+use crate::portal::{Call, PrivateBus, Results, StandIn, pump_until, settle};
+use crate::{acquire, acquire_in, acquire_on, acquire_twice_on, outcome_slot, turn};
 
 /// A host whose window plays a Wayland window exported as `handle`, its
 /// widgets acquiring what `portal` provides, and the window's exports.
@@ -40,6 +41,161 @@ fn exported_host(
         .portal_exports()
         .expect("the window plays an exported window");
     (HeadlessHost::with_plugin(window, &portal.plugin()), exports)
+}
+
+/// A launch outlives its window's close, and loses the window's export with
+/// it; a launch asked from a closed window names no window.
+#[test]
+fn a_closed_window_takes_its_exports_with_it_and_names_no_parent() {
+    let portal = StandIn::serve();
+    let mut host = HeadlessHost::with_plugin(HeadlessWindow::new(10, 10), &portal.plugin());
+    let window = HeadlessWindow::new(10, 10).with_portal_export("h3");
+    let exports = window
+        .portal_exports()
+        .expect("the window plays an exported window");
+    let id = host.open_window(window);
+    let launcher =
+        acquire_in::<LauncherCapability>(&mut host, id).expect("the portal provides a launcher");
+    let uri = ExternalUri::try_new("https://example.com/", &[Scheme::HTTPS]).expect("a web URI");
+    portal.hold();
+
+    let slot = outcome_slot::<Result<flui_platform::launch::LaunchResult, Abandoned>>();
+    let into = Rc::clone(&slot);
+    launcher
+        .open_uri(&uri)
+        .on_complete(move |outcome| *into.borrow_mut() = Some(outcome));
+    pump_until(&mut host, "the launch reached the portal", || {
+        !portal.held().is_empty()
+    });
+    assert_eq!(exports.live(), 1, "the launch holds its export");
+    assert!(host.request_close(id, CloseReason::User));
+    turn(&mut host);
+    assert_eq!(
+        exports.live(),
+        0,
+        "the window's close released the export the launch still holds"
+    );
+    let (_, path) = portal.held().remove(0);
+    portal.release(&path, 0, Results::new());
+    pump_until(&mut host, "the launch answered", || slot.borrow().is_some());
+    assert_eq!(
+        slot.borrow_mut().take(),
+        Some(Ok(Ok(()))),
+        "the launch went on"
+    );
+
+    let _later = launcher.open_uri(&uri);
+    pump_until(&mut host, "the later launch reached the portal", || {
+        portal.held().len() == 2
+    });
+    let parents = portal
+        .calls()
+        .into_iter()
+        .filter_map(|call| match call {
+            Call::OpenUri { parent, .. } => Some(parent),
+            _ => None,
+        })
+        .collect::<Vec<String>>();
+    assert_eq!(
+        parents,
+        ["wayland:h3", ""],
+        "a closed window's id may name another window: none is handed on"
+    );
+}
+
+/// A binding whose first attempt finds no portal keeps the window for the
+/// retry, which is the user's first question.
+#[test]
+fn a_binding_retried_after_its_first_attempt_failed_still_names_its_window() {
+    let bus = PrivateBus::start();
+    let plugin = flui_system::testing::PortalOnBus::new(bus.address.as_str());
+    let window = HeadlessWindow::new(10, 10).with_portal_export("h4");
+    let mut host = HeadlessHost::with_plugin(window, &plugin);
+    let shortcuts =
+        acquire_on::<GlobalShortcutCapability>(&mut host).expect("the portal provides shortcuts");
+    let binding = shortcuts.bind(vec![record()]);
+    // The first attempt finds no portal on the bus and waits for its retry.
+    let first_attempt = Instant::now() + Duration::from_millis(300);
+    while Instant::now() < first_attempt {
+        turn(&mut host);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let portal = StandIn::serve_on(bus);
+    assert!(matches!(
+        settle(&mut host, binding.next()),
+        Ok(ShortcutEvent::Bound(_))
+    ));
+    let parents = portal
+        .calls()
+        .into_iter()
+        .filter_map(|call| match call {
+            Call::BindShortcuts { parent, .. } => Some(parent),
+            _ => None,
+        })
+        .collect::<Vec<String>>();
+    assert_eq!(parents, ["wayland:h4"]);
+}
+
+/// A burst of changes at startup, while the connection is still being made,
+/// leaves the dock on the last state set.
+#[test]
+fn a_burst_of_entry_changes_ends_on_the_last_state() {
+    let portal = StandIn::serve();
+    let (sender, heard) = mpsc::channel::<f64>();
+    let address = portal.address().to_owned();
+    let (ready, listening) = mpsc::channel::<()>();
+    let listener = std::thread::spawn(move || {
+        zruntime::block_on(async move {
+            use futures_util::StreamExt as _;
+            let connection = zbus::connection::Builder::address(address.as_str())
+                .build()
+                .await
+                .expect("the listener connects");
+            let rule = MatchRule::builder()
+                .msg_type(zbus::message::Type::Signal)
+                .interface("com.canonical.Unity.LauncherEntry")
+                .member("Update")
+                .build()
+                .expect("a rule");
+            let mut updates = MessageStream::for_match_rule(rule, &connection, None)
+                .await
+                .expect("the listener subscribes");
+            let _ = ready.send(());
+            while let Some(Ok(message)) = updates.next().await {
+                let (_, properties) = message
+                    .body()
+                    .deserialize::<(String, HashMap<String, OwnedVariant>)>()
+                    .expect("an update");
+                let progress =
+                    f64::try_from(properties["progress"].clone()).expect("a progress value");
+                if sender.send(progress).is_err() {
+                    return;
+                }
+            }
+        });
+    });
+    listening
+        .recv_timeout(Duration::from_secs(10))
+        .expect("the listener subscribed");
+
+    let plugin = portal.plugin().app_id("org.example.Notes");
+    let mut host = HeadlessHost::with_plugin(HeadlessWindow::new(10, 10), &plugin);
+    let [first, second] = acquire_twice_on::<TaskbarCapability>(&mut host)
+        .map(|entry| entry.expect("an application with an id has an entry"));
+    for step in 1..=20_u32 {
+        let entry = if step % 2 == 0 { &first } else { &second };
+        let fraction = Fraction::try_new(f64::from(step) / 20.0).expect("a fraction");
+        entry.set_progress(Progress::Done(fraction));
+    }
+    let mut last = None;
+    while let Ok(progress) = heard.recv_timeout(Duration::from_millis(500)) {
+        last = Some(progress);
+    }
+    assert_eq!(last, Some(1.0), "the dock ends on the last state set");
+    drop(heard);
+    drop(host);
+    drop(portal);
+    let _ = listener.join();
 }
 
 fn variant(value: impl Into<Variant<'static>>) -> OwnedVariant {

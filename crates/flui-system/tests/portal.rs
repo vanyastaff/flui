@@ -29,13 +29,13 @@ use zbus::{OwnedFd, OwnedObjectPath, OwnedVariant, Variant};
 use crate::{acquire, outcome_slot, turn};
 
 /// A `dbus-daemon` of the test's own.
-struct PrivateBus {
+pub(crate) struct PrivateBus {
     daemon: Child,
-    address: String,
+    pub(crate) address: String,
 }
 
 impl PrivateBus {
-    fn start() -> Self {
+    pub(crate) fn start() -> Self {
         Self::spawn(Command::new("dbus-daemon").arg("--session"))
     }
 
@@ -604,7 +604,7 @@ impl StandIn {
     }
 
     /// The stand-in on `bus`, which may have started it.
-    fn serve_on(bus: PrivateBus) -> Self {
+    pub(crate) fn serve_on(bus: PrivateBus) -> Self {
         let script = Arc::new(Script::default());
         let server = Self::own(&bus, &script);
         Self {

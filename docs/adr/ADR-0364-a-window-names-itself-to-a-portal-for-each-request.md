@@ -67,7 +67,9 @@ the notion in the seam.
    request. An X11 window answers `x11:<XID>` at once. A Wayland window calls
    `zxdg_exporter_v2.export_toplevel` for the request and answers when the compositor's `handle`
    event comes, the answer holding the `zxdg_exported_v2`, whose drop destroys it and flushes the
-   connection. A compositor with no exporter, and a closed window, answer `none()`. The default
+   connection. **The window's close releases every export a request still holds**, so no export
+   outlives its toplevel; the request goes on without a parent, which the portals allow. A
+   compositor with no exporter, and a closed window, answer `none()`. The default
    answers `none()`: only a Linux desktop has portals. The window no longer exports itself as it
    opens.
 3. **`WindowRef::new(&Rc<dyn PlatformWindow>, WindowLifetime)`** makes the reference from the
@@ -76,7 +78,8 @@ the notion in the seam.
    one its host let go, else asks the window. No other window method becomes reachable.
 4. **A provider holds the parent until its request ends**: `flui-system` moves it into the
    request's task and drops it when the portal answered, the request was closed (the caller
-   dropped it, the window closed, the UI runtime retired), or it failed. A dialog that ends
+   dropped it, a dialog's window closed, the UI runtime retired), or it failed; whatever the
+   request, its export goes with its window (item 2). A dialog that ends
    before its window was named shows nothing.
 5. **`ProviderContext::app_id() -> Option<AppId>`** names the application, from
    `HostBridge::name_application`, which the desktop composition root calls with the id its

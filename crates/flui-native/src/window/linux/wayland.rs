@@ -546,6 +546,8 @@ mod toplevel {
         /// What the window exports itself through for a portal's request
         /// (`xdg-foreign`); `None` where the compositor offers no exporter.
         exporter: Option<ZxdgExporterV2>,
+        /// The exports requests still hold, which the window's close releases.
+        exports: Arc<Mutex<Exports>>,
         /// The last user input, which an activation token names.
         last_input: LastInput,
         live: LiveOutputs,
@@ -877,6 +879,7 @@ mod toplevel {
                 presentation: protocol.presentation,
                 activation: protocol.activation,
                 exporter: protocol.exporter,
+                exports: Arc::default(),
                 last_input: protocol.last_input,
                 live: protocol.live,
                 displays,
@@ -1441,6 +1444,8 @@ mod toplevel {
             let mut failure = flui_foundation::panic::FirstPanic::new();
             // No later request names a serial the closed window took.
             failure.contain(|| self.last_input.surface_gone(&self.surface.0));
+            // Before the role objects go: no export outlives its toplevel.
+            failure.contain(|| Exports::close(&self.exports));
             failure.contain(|| self.input.detach(self.id));
             failure.contain(|| self.drag.detach(self.id));
             if let Some(client_frame) = self.client_frame.borrow_mut().take() {
@@ -1988,6 +1993,7 @@ mod toplevel {
                     let pending = Arc::new(PendingExport {
                         answer: Mutex::new(Some(answer)),
                         connection: self.connection.clone(),
+                        exports: Arc::clone(&self.exports),
                     });
                     // The proxy is held by the answer once the handle comes;
                     // until then the compositor's event reaches it through
@@ -2002,26 +2008,63 @@ mod toplevel {
         }
     }
 
-    /// One export a portal request waits for: who hears the handle, and the
-    /// connection its release is sent on.
+    /// One export a portal request waits for: who hears the handle, the
+    /// connection its release is sent on, and the window's exports it joins.
     pub(crate) struct PendingExport {
         answer: Mutex<Option<Resolver<PortalParent>>>,
         connection: Connection,
+        exports: Arc<Mutex<Exports>>,
     }
 
-    /// An export a portal request holds: released (`destroy`, sent at once)
-    /// when the request drops its parent, on whichever thread it ends.
-    struct HeldExport {
-        exported: ZxdgExportedV2,
+    /// The exports of one window that requests still hold, and whether the
+    /// window closed: its close releases every one, whoever holds its
+    /// parent, so no export outlives the toplevel it names.
+    #[derive(Default)]
+    pub(crate) struct Exports {
+        closed: bool,
+        held: Vec<Weak<ExportCell>>,
+    }
+
+    impl Exports {
+        /// The window closed: release every export still held.
+        fn close(exports: &Mutex<Self>) {
+            let held = {
+                let mut exports = exports.lock();
+                exports.closed = true;
+                std::mem::take(&mut exports.held)
+            };
+            for cell in held.iter().filter_map(Weak::upgrade) {
+                cell.release();
+            }
+        }
+    }
+
+    /// One export, released once: by the request's end or the window's.
+    struct ExportCell {
+        exported: Mutex<Option<ZxdgExportedV2>>,
         connection: Connection,
     }
 
+    impl ExportCell {
+        /// Destroy the export unless that happened already, and send it at
+        /// once: the request may end off the owner thread, where no loop turn
+        /// flushes after it; a connection that failed has nothing to send.
+        fn release(&self) {
+            let exported = self.exported.lock().take();
+            if let Some(exported) = exported {
+                exported.destroy();
+                let _ = self.connection.flush();
+            }
+        }
+    }
+
+    /// An export a portal request holds, released when the request drops its
+    /// parent, on whichever thread it ends.
+    struct HeldExport(Arc<ExportCell>);
+
     impl Drop for HeldExport {
         fn drop(&mut self) {
-            self.exported.destroy();
-            // The request may end off the owner thread, where no loop turn
-            // flushes after it; a connection that failed has nothing to send.
-            let _ = self.connection.flush();
+            self.0.release();
         }
     }
 
@@ -2516,19 +2559,34 @@ mod toplevel {
             let zxdg_exported_v2::Event::Handle { handle } = event else {
                 return;
             };
-            let held = HeldExport {
-                exported: exported.clone(),
+            let cell = Arc::new(ExportCell {
+                exported: Mutex::new(Some(exported.clone())),
                 connection: pending.connection.clone(),
-            };
+            });
             // Taken out before it is answered: resolving runs no code of the
             // request's, but the lock is still released first.
             let answer = pending.answer.lock().take();
+            let window_open = {
+                let mut exports = pending.exports.lock();
+                if !exports.closed {
+                    exports.held.retain(|held| held.strong_count() > 0);
+                    exports.held.push(Arc::downgrade(&cell));
+                }
+                !exports.closed
+            };
             match answer {
-                Some(answer) => {
+                Some(answer) if window_open => {
+                    let held = HeldExport(cell);
                     let _ = answer.resolve(PortalParent::wayland(&handle, held));
                 }
+                // The window closed before the compositor named the export:
+                // it names nothing.
+                Some(answer) => {
+                    cell.release();
+                    let _ = answer.resolve(PortalParent::none());
+                }
                 // The protocol sends one handle; a second has no request.
-                None => drop(held),
+                None => cell.release(),
             }
         }
     }
