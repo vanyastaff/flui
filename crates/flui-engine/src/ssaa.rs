@@ -103,7 +103,11 @@ impl SsaaDownsamplePipeline {
     /// `output_format` is the target format of the 1× tile — always
     /// `surface_format` so the tile is compatible with the premultiplied
     /// texture compositor.
-    pub(crate) fn new(device: &wgpu::Device, output_format: wgpu::TextureFormat) -> Self {
+    pub(crate) fn new(
+        gpu: crate::pipeline_device::PipelineDevice<'_>,
+        output_format: wgpu::TextureFormat,
+    ) -> Self {
+        let device = gpu.device();
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("SSAA Box Downsample Shader"),
             source: wgpu::ShaderSource::Wgsl(
@@ -195,7 +199,7 @@ impl SsaaDownsamplePipeline {
                 alpha_to_coverage_enabled: false,
             },
             multiview_mask: None,
-            cache: None,
+            cache: gpu.cache(),
         });
 
         // Create the fullscreen quad vertex buffer ONCE — reused for every

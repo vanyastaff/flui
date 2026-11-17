@@ -96,6 +96,7 @@ mod new_probes_before_gpu_work_tests {
             wgpu::Features::IMMEDIATES,
             wgpu::Features::TIMESTAMP_QUERY,
             wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS,
+            wgpu::Features::PIPELINE_CACHE,
         ] {
             let capabilities = super::GpuCapabilities {
                 backend: crate::GpuBackend::WebGpu,
@@ -108,6 +109,12 @@ mod new_probes_before_gpu_work_tests {
             assert!(
                 features.contains(requested),
                 "device request {requested:?} exceeds adapter features {features:?}"
+            );
+            // The pipeline cache is asked for wherever it is offered.
+            assert_eq!(
+                requested.contains(wgpu::Features::PIPELINE_CACHE),
+                features.contains(wgpu::Features::PIPELINE_CACHE),
+                "{features:?}"
             );
         }
     }
@@ -697,7 +704,7 @@ impl Renderer {
         crate::offscreen::OffscreenRenderer,
     ) {
         let painter = frame.new_painter(Arc::clone(&domain), format, size);
-        let offscreen = crate::offscreen::OffscreenRenderer::with_domain(domain);
+        let offscreen = crate::offscreen::OffscreenRenderer::with_domain(domain, None);
         (painter, offscreen)
     }
 
@@ -1162,6 +1169,10 @@ impl Renderer {
         if capabilities.supports_dual_source_blending() {
             features |= wgpu::Features::DUAL_SOURCE_BLENDING;
         }
+
+        // The driver's pipeline cache, which `GpuContext::load_pipeline_cache`
+        // keeps between runs; wgpu offers it on Vulkan alone.
+        features |= capabilities.features & wgpu::Features::PIPELINE_CACHE;
 
         features
     }

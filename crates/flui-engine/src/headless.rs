@@ -262,7 +262,7 @@ impl HeadlessRenderer {
             queue: Arc::clone(domain.queue()),
             device,
             painter: WgpuPainter::with_domain(Arc::clone(&domain), CAPTURE_FORMAT, size),
-            offscreen: crate::offscreen::OffscreenRenderer::with_domain(domain),
+            offscreen: crate::offscreen::OffscreenRenderer::with_domain(domain, None),
             surface,
             surface_view,
             frame: crate::frame_protocol::FrameProtocol::new(),

@@ -326,11 +326,19 @@ shared handle is a wgpu ref-count.
 | `Renderer::painter`, `Renderer::offscreen` | `WgpuPainter`, `OffscreenRenderer` | Owned outright; the painter records content and the offscreen renderer blits retained presentation |
 | `Renderer::_single_mutator` | `PhantomData<Cell<()>>` | Makes `Renderer: !Sync` by declaration rather than by whichever field happens to be `!Sync`; pinned by `assert_impl_all!(Renderer: Send)` / `assert_not_impl_any!(Renderer: Sync)` |
 | `TexturePool` | inventory + mpsc return channel | Single-mutator by construction; `Send` only (the receiver is `!Sync`) |
-| `GpuContext::warmup` | `Option<PipelineWarmup>` over a `JoinHandle<PipelineLibrary>` | Owned. The worker holds its own `Arc<wgpu::Device>` and hands the library back whole at the join; dropping the warm-up joins the worker, so no build outlives the context or the device a rebuild let go |
+| `GpuContext::warmup` | `Option<PipelineWarmup>` over a `JoinHandle<PipelineLibrary>` | Owned. The worker holds its own `Arc<DeviceDomain>` and hands the library back whole at the join; dropping the warm-up joins the worker, so no build outlives the context or the device a rebuild let go |
+| `GpuContext::pipeline_store` | `Option<PipelineStore>`: a `wgpu::PipelineCache`, its adapter key and an `Arc<dyn Storage>` | Owned; cloned into the warm-up worker, which saves the cache once its library is built. Every pipeline is created through it (`PipelineDevice`); a structure that builds pipelines on first use keeps a clone of the cache handle. A rebuild replaces it with a cold cache on the new device, unsaved from the lost one, and the context's `Drop` joins the warm-up and then saves it. `Storage::publish` accepts the bytes before returning and writes them on the store's threads, so no save waits on a disk or takes a lock on the frame path |
 | `RasterExecutor` shared state | one `Mutex` per slot inbox (`SlotInbox`); in `Shared` (`raster_executor/sender.rs`) one `Mutex` for the device's record, the atomics `health`, `sending` and `trim`, and the bounded `crossbeam_channel` lifecycle queue | The mutexes are held only to swap values and nothing that can run user code runs under them (`raster_executor` module doc); the atomics take no lock, and the executor only `try_recv`s the queue and waits on no lock |
 
-**Unsafe.** `#![cfg_attr(not(test), deny(unsafe_code))]` in `lib.rs`, and one
-production exception with its own `expect`: `renderer::dxgi_frame_statistics`
+**Unsafe.** `#![cfg_attr(not(test), deny(unsafe_code))]` in `lib.rs`, and two
+production exceptions, each with its own `expect`. `pipeline_store::create_cache`
+creates the driver's pipeline cache from stored bytes, which wgpu offers only as
+an `unsafe fn` whose precondition is that the bytes are ones `PipelineCache::get_data`
+returned on an adapter with the same `pipeline_cache_key`; the bytes reach it only
+through the store's envelope, which names that key and carries a SHA-256 digest of
+key and payload, so a torn, foreign or corrupted value is refused before wgpu sees
+it, and the value lives in the application's own machine-local data directory.
+The other is `renderer::dxgi_frame_statistics`
 (Windows only), which reads DXGI frame statistics from wgpu's DX12 swap chain
 before each present, for the window's presentation report. wgpu hands the swap
 chain out only through `Surface::as_hal`, whose precondition is that the

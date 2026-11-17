@@ -86,6 +86,14 @@ pub(super) fn install_host_storage(config: &crate::app::AppConfig) {
     memory.replace_receivers(config.memory_reclaimers.0.clone());
 }
 
+/// The host's own byte storage ([`install_host_storage`]), whatever storage
+/// the run's capability registry gives widgets; `None` without one.
+/// `APP_RUNTIME` must not be mutably borrowed when this is called.
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) fn host_storage() -> Option<Arc<dyn flui_platform::Storage>> {
+    APP_RUNTIME.with(|slot| slot.borrow().host_storage.current())
+}
+
 /// The directory the run's storage lives in under the data roots: the one
 /// [`AppConfig::storage_dir`](crate::app::AppConfig::storage_dir)
 /// names, else the application's identifier, else, where the roots belong to

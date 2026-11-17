@@ -12,11 +12,13 @@
 // are not the reason. It is an `expect`, not an `allow`: if the last such
 // type gains `Debug`, the attribute must go with it.
 #![expect(missing_debug_implementations)]
-// No hand-written production `unsafe` in this crate but one: surfaces come from wgpu's safe
+// No hand-written production `unsafe` in this crate but two: surfaces come from wgpu's safe
 // `create_surface` over an owned `WindowTarget` (ADR-0063), and every GPU
-// handle is a wgpu value type. The exception is the read of DXGI frame
+// handle is a wgpu value type. The exceptions are the read of DXGI frame
 // statistics (`renderer::dxgi_frame_statistics`), whose swap chain wgpu hands
-// out only through its hal escape; it carries its own `expect`. `deny` rather than `forbid` because
+// out only through its hal escape, and the creation of the pipeline cache
+// from stored data (`pipeline_store::create_cache`), which wgpu offers only as
+// an `unsafe fn`; each carries its own `expect`. `deny` rather than `forbid` because
 // wgsl_bindgen's generated wrappers (`*/generated.rs`) declare an
 // `unsafe fn from_raw` this crate never calls and `allow` it locally.
 // `fake_window_target` uses test-only raw-handle borrows for synthetic window
@@ -336,12 +338,18 @@ mod path_cache;
 /// (opaque/alpha-blend factory methods + bitfield queries), `PipelineCache`
 /// (get_or_create, viewport_bind_group_layout), and `pipeline_key_from_paint`.
 mod pipeline_cache;
+/// A device paired with the driver pipeline cache its pipelines are created
+/// through.
+mod pipeline_device;
 /// `pipeline_set.rs` — `PipelineSet` composes the live `PipelineCache` from
 /// `pipeline_cache.rs` and adds the nine named pipelines previously scattered
 /// as painter fields. The name-colliding earlier file with its own
 /// `PipelineCache`/`PipelineBuilder` is gone; this module is the surviving
 /// half.
 pub(crate) mod pipeline_set;
+/// The pipeline cache's data saved between runs in machine-local storage.
+#[cfg(not(target_arch = "wasm32"))]
+mod pipeline_store;
 #[cfg(not(target_arch = "wasm32"))]
 mod pipeline_warmup;
 mod portable_coverage;

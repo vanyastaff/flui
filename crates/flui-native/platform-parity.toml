@@ -451,6 +451,13 @@ note = "The desktop loop draws every window on one raster thread on the Wayland 
 evidence = "Two windows, one occluded, on lavapipe, 2026-11-17 (ADR-0305 Confirmation). Wayland under Weston: threaded, a median interval of 26.6 ms (p99 29–31 ms) and none of 1108 intervals under 5 ms; inline, a median of 26.5 ms; the compositor runs at about 26 ms. X11 under Xvfb, which has no vsync, so its pacing was not judged: the occluded window did not slow the visible one (threaded 1.13/1.43/11.0 ms median/p90/max, inline 1.71/2.08/24.1 ms), and X11 stays inline. An update frame takes about 0.3 ms on the owner's thread and 0.7–4.3 ms of raster CPU (`crates/flui-app/benches/raster_share.rs`). `native_linux::an_app_whose_window_is_never_drawn_still_quits` draws on the Wayland host's raster thread one frame per frame callback; a window whose frame the thread has settled owes the loop no in-flight floor (`a_window_the_raster_thread_settled_owes_no_floor_beside_one_it_renders`), and `wayland_scripted::a_moving_wake_deadline_polls_no_window_the_compositor_never_draws` wakes the loop for a deadline only once a window can take a frame."
 
 [[group.section.row]]
+id = "pipeline-cache-kept-between-launches"
+feature = 'Pipeline cache kept between launches'
+status = { windows = "partial", macos = "na", wayland = "partial", x11 = "partial", ios = "na", android = "partial", web = "na", headless = "na" }
+note = "On Vulkan the GPU context creates its pipelines through a `wgpu::PipelineCache` whose data it saves in the application's machine-local storage and loads at the next launch (ADR-0305 §1); Metal, D3D12, GLES and WebGPU have no such cache in wgpu, and Windows has it only where it runs on Vulkan. Run on lavapipe only, which stores nothing in the cache but its header. Owed: on an Android device and on a desktop Vulkan driver, the first frame of a second launch timed against the first, and a corrupt value starting cold."
+evidence = "`gpu_context::tests` on lavapipe: a finished warm-up saves an envelope for the adapter's key, the next context is seeded from it, a retiring context saves, a corrupt value is emptied and the context starts cold, a device rebuild starts a cold cache; `pipeline_store::tests` refuse a truncated, extended, re-hashed, other-adapter or oversized value. lavapipe's cache data is the 96-byte header alone, so no launch has been timed."
+
+[[group.section.row]]
 id = "presentation-feedback-when-each-frame-reached-the-screen"
 feature = 'Presentation feedback: when each frame reached the screen'
 status = { windows = "yes", macos = "yes", wayland = "yes", x11 = "na", ios = "missing", android = "missing", web = "na", headless = "yes" }

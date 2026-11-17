@@ -121,6 +121,10 @@ wgpu = { workspace = true, default-features = false, features = ["vulkan", "gles
 # waits for wgpu's adapter and device requests there (ADR-0305 §8); on the web
 # the rebuild is a future the owner spawns.
 pollster = { workspace = true }
+# The digest of the stored pipeline cache's envelope (`pipeline_store`),
+# which proves the bytes handed to the driver are the ones it saved. WebGPU
+# has no pipeline cache.
+sha2 = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 # fragile-send-sync-non-atomic-wasm: wgpu types are Rc/RefCell-based on the
@@ -161,6 +165,12 @@ image = { workspace = true }
 # crate/version flui-painting uses for its compile-fail suite
 # (`crates/flui-painting/tests/compile_fail.rs`).
 trybuild = { workspace = true }
+
+# The in-memory `Storage` the pipeline cache's tests save to and load from
+# (ADR-0243): a dev-only edge up the tiers to the kit, as flui-scheduler's.
+# Checkout-only: versionless, so Cargo drops it from the published manifest.
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+flui-testing = { path = "../flui-testing" }
 
 # Executing wasm32 tests for the frame-timing helper (issue #1045). Pinned
 # exactly like flui-foundation / flui-app: 0.3.77 pairs with the locked

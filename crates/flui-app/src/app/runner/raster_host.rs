@@ -1133,7 +1133,10 @@ impl RasterHost {
     }
 
     /// The application's GPU context over `first`, the first window,
-    /// bootstrapped on the owner thread, which waits for it.
+    /// bootstrapped on the owner thread, which waits for it, its pipeline
+    /// cache loaded from the host's storage before any window attaches, so
+    /// a driver without a disk cache of its own does not compile every
+    /// pipeline again at each launch.
     #[cfg(not(target_arch = "wasm32"))]
     fn bootstrap_now(
         first: Arc<dyn SurfaceTarget>,
@@ -1141,7 +1144,14 @@ impl RasterHost {
         let display =
             super::host::with_owner_platform(flui_native::OwnerPlatform::display_connection)
                 .ok_or_else(|| refused("no platform owns this thread"))?;
-        pollster::block_on(flui_engine::GpuContext::bootstrap(display, Some(first)))
+        let storage = super::host::host_storage();
+        pollster::block_on(async move {
+            let mut bootstrap = flui_engine::GpuContext::bootstrap(display, Some(first)).await?;
+            if let Some(storage) = storage {
+                bootstrap.context.load_pipeline_cache(storage).await;
+            }
+            Ok::<_, EngineError>(bootstrap)
+        })
     }
 
     /// The web cannot wait on its owner thread: its runner awaits the
