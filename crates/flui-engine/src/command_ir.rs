@@ -1098,19 +1098,29 @@ impl DrawSegment {
         regions: &mut crate::recording_budget::BudgetVec<ScissorRegion>,
         scissor: ScissorRect,
     ) {
+        Self::push_scissor_span(regions, scissor, 1);
+    }
+
+    /// [`Self::push_scissor_region`] for `count` instances at once: the one
+    /// merge rule a recording and a replayed recording both follow.
+    pub(crate) fn push_scissor_span(
+        regions: &mut crate::recording_budget::BudgetVec<ScissorRegion>,
+        scissor: ScissorRect,
+        count: u32,
+    ) {
         if regions.failed() {
             return;
         }
         if let Some(last) = regions.last_mut()
             && last.scissor == scissor
         {
-            last.count += 1;
+            last.count += count;
             return;
         }
         regions.push(ScissorRegion {
             scissor,
             start: regions.last().map_or(0, |r| r.start + r.count),
-            count: 1,
+            count,
         });
     }
 
@@ -1127,6 +1137,19 @@ impl DrawSegment {
         blend: BlendMode,
         mesh: Option<std::ops::Range<u32>>,
     ) {
+        Self::push_gradient_span(runs, scissor, blend, 1, mesh);
+    }
+
+    /// [`Self::push_gradient_run`] for `count` instances at once (one for a
+    /// mesh run): the one merge rule a recording and a replayed recording
+    /// both follow.
+    pub(crate) fn push_gradient_span(
+        runs: &mut crate::recording_budget::BudgetVec<GradientRun>,
+        scissor: ScissorRect,
+        blend: BlendMode,
+        count: u32,
+        mesh: Option<std::ops::Range<u32>>,
+    ) {
         if runs.failed() {
             return;
         }
@@ -1136,14 +1159,14 @@ impl DrawSegment {
             && last.scissor == scissor
             && last.blend == blend
         {
-            last.count += 1;
+            last.count += count;
             return;
         }
         runs.push(GradientRun {
             scissor,
             blend,
             start: runs.last().map_or(0, |r| r.start + r.count),
-            count: 1,
+            count,
             mesh,
         });
     }

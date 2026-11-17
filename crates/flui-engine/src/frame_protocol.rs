@@ -31,7 +31,7 @@ pub(crate) struct RecordedContent {
 /// The raster side's work for one frame of the frame protocol, which the
 /// engine's gate tests read (ADR-0304 §9) and the frame's trace event
 /// carries; an offscreen slot's frame (`GpuContext`) keeps no count. Fixed
-/// fields, so counting allocates nothing; each adds saturating. A partial
+/// fields, so counting allocates nothing; each count adds saturating. A partial
 /// frame of several passes sums them: a node or chunk two rects reach counts
 /// once per pass.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -50,6 +50,16 @@ pub(crate) struct RasterCounters {
     /// The passes a partial frame redrew its region in, one per rect of its
     /// [`RegionPlan`]; `0` for a full frame.
     pub(crate) region_passes: u64,
+    /// The chunks whose kept recording the frame replayed instead of
+    /// recording them (ADR-0304 §9); a chunk counts here or in
+    /// [`Self::chunks_recorded`], never both.
+    pub(crate) recording_cache_hits: u64,
+    /// The recordings that left the painter's cache over the frame: evicted
+    /// over its budget, replaced, or dropped with a resource epoch.
+    pub(crate) recording_cache_evictions: u64,
+    /// The bytes the cache held once the frame's recording settled: a level,
+    /// not a count, so adding two counts keeps the larger.
+    pub(crate) recording_cache_bytes: u64,
 }
 
 impl std::ops::AddAssign for RasterCounters {
@@ -58,6 +68,13 @@ impl std::ops::AddAssign for RasterCounters {
         self.cull_tests = self.cull_tests.saturating_add(rhs.cull_tests);
         self.chunks_recorded = self.chunks_recorded.saturating_add(rhs.chunks_recorded);
         self.region_passes = self.region_passes.saturating_add(rhs.region_passes);
+        self.recording_cache_hits = self
+            .recording_cache_hits
+            .saturating_add(rhs.recording_cache_hits);
+        self.recording_cache_evictions = self
+            .recording_cache_evictions
+            .saturating_add(rhs.recording_cache_evictions);
+        self.recording_cache_bytes = self.recording_cache_bytes.max(rhs.recording_cache_bytes);
     }
 }
 
@@ -85,7 +102,8 @@ pub(crate) trait FrameSteps {
 
     /// Records and encodes the frame's content into `(view, texture)`;
     /// `retained` says the target is the retained texture rather than the
-    /// surface, `partial` how a partial frame redraws its region. Answers
+    /// surface, `partial` how a partial frame redraws its region, `reads`
+    /// whether it may replay kept recordings. Answers
     /// what the recording found, an advanced shape straddling a pass's rect
     /// among it, in which case the next frame renders in full.
     ///
@@ -97,6 +115,7 @@ pub(crate) trait FrameSteps {
         texture: &wgpu::Texture,
         retained: bool,
         partial: Option<&RegionPlan>,
+        reads: crate::recording_cache::CacheReads,
         encoder: &mut wgpu::CommandEncoder,
     ) -> EngineResult<RecordedContent>;
 
@@ -160,6 +179,9 @@ pub(crate) struct FrameProtocol {
     /// protocol ([`Self::end_unmanaged`]).
     force_full_next_frame: bool,
     font_source: FontSource,
+    /// Whether damage applied since the last frame that ran was switched off
+    /// (`Full(DamageOff)`): that frame records every chunk.
+    damage_off: bool,
     /// What the last frame [`Self::run`] was handed did: zero after a skipped
     /// frame or one that failed.
     counters: RasterCounters,
@@ -182,6 +204,7 @@ impl FrameProtocol {
             retained: RetainedTarget::default(),
             force_full_next_frame: false,
             font_source: FontSource::Ordinary,
+            damage_off: false,
             counters: RasterCounters::default(),
             plan_region: RegionPlan::of,
         }
@@ -226,9 +249,20 @@ impl FrameProtocol {
         self.damage.mark_dirty(rect, surface);
     }
 
-    /// Adds a publication's region to the damage owed, rect by rect.
-    pub(crate) fn mark_region(&mut self, region: &flui_layer::Region) {
-        self.damage.mark_region(region);
+    /// Owes a publication's `damage`: a region rect by rect, a full repaint
+    /// for any [`FullReason`](flui_layer::FullReason). Damage switched off
+    /// (`Full(DamageOff)`) also keeps the next frame that runs from replaying
+    /// kept recordings.
+    pub(crate) fn apply_damage(&mut self, damage: flui_layer::DamageRegion) {
+        use flui_layer::{DamageRegion, FullReason};
+        match damage {
+            DamageRegion::Region(region) => self.damage.mark_region(&region),
+            DamageRegion::Unchanged => {}
+            DamageRegion::Full(reason) => {
+                self.damage_off |= reason == FullReason::DamageOff;
+                self.damage.mark_full_repaint();
+            }
+        }
     }
 
     /// Owes a full repaint.
@@ -434,6 +468,11 @@ impl FrameProtocol {
             texture,
             retained.is_some(),
             partial.as_ref(),
+            if self.damage_off {
+                crate::recording_cache::CacheReads::Off
+            } else {
+                crate::recording_cache::CacheReads::On
+            },
             &mut encoder,
         )?;
         let mut permits = Vec::new();
@@ -451,12 +490,16 @@ impl FrameProtocol {
             self.retained.commit(candidate);
         }
         self.force_full_next_frame = recorded.straddled;
+        self.damage_off = false;
         self.counters = recorded.counters;
         tracing::trace!(
             nodes_entered = self.counters.nodes_entered,
             cull_tests = self.counters.cull_tests,
             chunks_recorded = self.counters.chunks_recorded,
             region_passes = self.counters.region_passes,
+            recording_cache_hits = self.counters.recording_cache_hits,
+            recording_cache_evictions = self.counters.recording_cache_evictions,
+            recording_cache_bytes = self.counters.recording_cache_bytes,
             "frame submitted"
         );
         Ok(())

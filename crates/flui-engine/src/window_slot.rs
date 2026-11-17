@@ -337,11 +337,7 @@ impl WindowSlot {
         damage: DamageRegion,
         frame: FrameStamp,
     ) -> EngineResult<PresentDisposition> {
-        match damage {
-            DamageRegion::Region(region) => self.frame.mark_region(&region),
-            DamageRegion::Unchanged => {}
-            DamageRegion::Full(_) => self.frame.mark_full_repaint(),
-        }
+        self.frame.apply_damage(damage);
         self.frame
             .select_font_source(painter, FontSource::Ordinary, false);
         self.present(gpu, painter, offscreen, scene, Some(frame))

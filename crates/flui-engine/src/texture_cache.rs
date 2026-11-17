@@ -476,6 +476,12 @@ impl TextureCache {
         }
     }
 
+    /// Marks the atlas full, as a failed allocation does.
+    #[cfg(test)]
+    pub(crate) fn mark_atlas_full(&mut self) {
+        self.atlas_full = true;
+    }
+
     /// Reclaim the shared atlas if it filled up and holds stale entries.
     ///
     /// The shelf packer never frees individual slots, so once it fills, every

@@ -345,6 +345,9 @@ pub(crate) mod pipeline_set;
 mod portable_coverage;
 mod profiler;
 mod recording_budget;
+/// A chunk's IR kept past its frame and replayed for an unchanged chunk drawn
+/// under the same transform and ambient state (ADR-0304 §9).
+mod recording_cache;
 /// Frame render-target descriptor: `view` + optional back-reference `texture`
 /// for dst-read blend passes.  Frame-scoped borrow, never stored in IR types.
 pub(crate) mod render_target;

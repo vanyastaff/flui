@@ -71,6 +71,24 @@ pub(crate) struct ClipTape {
 }
 
 impl ClipChain {
+    /// The chain's links by value, innermost first: what two chains built
+    /// apart (two frames, two painters) compare by where identity cannot.
+    #[cfg(test)]
+    pub(crate) fn describe(&self) -> String {
+        use std::fmt::Write as _;
+        let mut text = String::new();
+        let mut cursor = self.0.as_deref();
+        while let Some(link) = cursor {
+            let _ = write!(
+                text,
+                "[{:?} {:?} {:?} {}]",
+                link.shape, link.affine, link.op, link.hard
+            );
+            cursor = link.parent.0.as_deref();
+        }
+        text
+    }
+
     /// These clips have exact hardware-scissor coverage in root device pixels.
     pub(crate) fn integral_rect_scissor(&self) -> crate::command_ir::ScissorRect {
         if self.is_unclipped() {

@@ -344,11 +344,13 @@ fn close_until<V: SceneVisitor>(
 }
 
 /// Record every consumer through the same layer semantics; GPU effects remain
-/// ordered IR. A partial frame passes its damage as `cull`. Answers what the
+/// ordered IR. A partial frame passes its damage as `cull`; `reads` says
+/// whether a chunk may replay its kept recording. Answers what the
 /// walk and the recording did.
 pub(crate) fn record_scene(
     scene: SceneContent<'_>,
     cull: Option<Rect<f64>>,
+    reads: crate::recording_cache::CacheReads,
     backend: &mut crate::layer_dispatcher::LayerDispatcher<'_>,
 ) -> crate::EngineResult<crate::frame_protocol::RasterCounters> {
     struct Recorder<'a, 'b> {
@@ -356,6 +358,7 @@ pub(crate) fn record_scene(
         error: Option<crate::EngineError>,
         followers: Vec<SiteKey>,
         counters: crate::frame_protocol::RasterCounters,
+        reads: crate::recording_cache::CacheReads,
     }
     impl Recorder<'_, '_> {
         fn enter_layer(&mut self, site: Site<'_>, layer: &Layer) -> Step {
@@ -446,8 +449,21 @@ pub(crate) fn record_scene(
                     Step::Descend
                 }
                 Item::Chunk(chunk) => {
-                    self.counters.chunks_recorded = self.counters.chunks_recorded.saturating_add(1);
-                    crate::dispatch::dispatch_commands(chunk.commands(), self.backend);
+                    use crate::painter::ChunkStart;
+                    match self.backend.painter_mut().begin_chunk(chunk, self.reads) {
+                        ChunkStart::Replayed => {
+                            self.counters.recording_cache_hits =
+                                self.counters.recording_cache_hits.saturating_add(1);
+                        }
+                        ChunkStart::Record(entry) => {
+                            self.counters.chunks_recorded =
+                                self.counters.chunks_recorded.saturating_add(1);
+                            crate::dispatch::dispatch_commands(chunk.commands(), self.backend);
+                            if let Some(entry) = entry {
+                                self.backend.painter_mut().end_chunk(entry);
+                            }
+                        }
+                    }
                     Step::Descend
                 }
             };
@@ -479,6 +495,7 @@ pub(crate) fn record_scene(
         error: None,
         followers: Vec::new(),
         counters: crate::frame_protocol::RasterCounters::default(),
+        reads,
     };
     let cull_tests = walk_scene(scene, cull, &mut recorder);
     if let Some(error) = recorder.error {

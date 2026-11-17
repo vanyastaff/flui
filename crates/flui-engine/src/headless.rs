@@ -268,6 +268,8 @@ impl HeadlessRenderer {
             fail_after_begin: false,
             panic_after_record: false,
             last_plan: None,
+            last_ir: None,
+            keep_ir: false,
         })
     }
 }
@@ -456,6 +458,10 @@ pub(crate) struct RetainedCapture {
     /// it is submitted, and the flag clears itself.
     panic_after_record: bool,
     last_plan: Option<crate::damage::FramePlan>,
+    /// The IR the last frame that recorded content recorded.
+    last_ir: Option<Vec<u8>>,
+    /// Whether a frame keeps its IR in `last_ir`.
+    keep_ir: bool,
 }
 
 #[cfg(test)]
@@ -596,9 +602,32 @@ impl RetainedCapture {
         self.intermediate_required = true;
     }
 
+    /// Reclaims the painter's caches at `level`, between frames, as the
+    /// windowed renderer does under memory pressure.
+    pub(crate) fn reclaim(&mut self, level: flui_foundation::memory::MemoryPressureLevel) {
+        self.painter.reclaim(level);
+    }
+
+    /// Marks the painter's image atlas full, so the frame boundary resets it
+    /// once an entry goes a frame unused.
+    pub(crate) fn mark_image_atlas_full(&mut self) {
+        self.painter.mark_image_atlas_full();
+    }
+
     /// How many faces the capture's glyph rasterizer has registered.
     pub(crate) fn glyph_face_count(&mut self) -> usize {
         self.painter.glyph_face_count()
+    }
+
+    /// Keeps the IR each later frame records, for [`Self::last_ir`].
+    pub(crate) fn keep_recorded_ir(&mut self) {
+        self.keep_ir = true;
+    }
+
+    /// The IR the last frame recorded before its replay, as bytes; `None`
+    /// before a frame recorded with [`Self::keep_recorded_ir`] on.
+    pub(crate) fn last_ir(&self) -> Option<&[u8]> {
+        self.last_ir.as_deref()
     }
 
     /// The plan the last frame ran.
@@ -656,6 +685,8 @@ struct CaptureFrame<'a> {
     scene: &'a flui_layer::Scene,
     fail: &'a mut bool,
     panic: &'a mut bool,
+    /// The IR the frame recorded, read before it is replayed.
+    ir: Option<&'a mut Option<Vec<u8>>>,
 }
 
 #[cfg(test)]
@@ -687,12 +718,17 @@ impl crate::frame_protocol::FrameSteps for CaptureFrame<'_> {
         texture: &wgpu::Texture,
         _retained: bool,
         partial: Option<&crate::damage::RegionPlan>,
+        reads: crate::recording_cache::CacheReads,
         encoder: &mut wgpu::CommandEncoder,
     ) -> EngineResult<crate::frame_protocol::RecordedContent> {
         if std::mem::take(self.fail) {
             return Err(EngineError::Timeout);
         }
-        let recorded = crate::Renderer::record_frame_content(self.painter, self.scene, partial)?;
+        let recorded =
+            crate::Renderer::record_frame_content(self.painter, self.scene, partial, reads)?;
+        if let Some(ir) = self.ir.as_deref_mut() {
+            *ir = Some(self.painter.recorded_ir());
+        }
         assert!(
             !std::mem::take(self.panic),
             "injected panic after the frame was recorded"
@@ -753,6 +789,7 @@ impl RetainedCapture {
             scene,
             fail: &mut self.fail_after_begin,
             panic: &mut self.panic_after_record,
+            ir: self.keep_ir.then_some(&mut self.last_ir),
         };
         self.frame.run(
             plan,
@@ -796,11 +833,7 @@ impl RetainedCapture {
     /// Owes `damage`, as a window slot applies a publication's damage:
     /// a region rect by rect.
     pub(crate) fn apply_damage(&mut self, damage: flui_layer::DamageRegion) {
-        match damage {
-            flui_layer::DamageRegion::Region(region) => self.frame.mark_region(&region),
-            flui_layer::DamageRegion::Unchanged => {}
-            flui_layer::DamageRegion::Full(_) => self.frame.mark_full_repaint(),
-        }
+        self.frame.apply_damage(damage);
     }
 
     /// Plans every later partial frame rect by rect, as production does not

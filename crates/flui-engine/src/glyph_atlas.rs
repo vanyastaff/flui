@@ -298,6 +298,13 @@ pub(crate) struct GlyphAtlas<R: GlyphRasterizer> {
     frame: u64,
     /// Whether a glyph was dropped this frame because a page could not grow.
     reported_full: bool,
+    /// Whether a slot was freed (evicted, dropped by a grow, reset) since
+    /// [`Self::take_slots_lost`] last read it: a key placed again after that
+    /// may sit at other texels than an instance recorded before it holds.
+    slots_lost: bool,
+    /// The keys [`Self::slot`] placed since [`Self::log_slots`] began a log,
+    /// `None` while no log is kept.
+    slot_log: Option<Vec<R::Key>>,
 }
 
 impl<R: GlyphRasterizer> GlyphAtlas<R> {
@@ -329,6 +336,8 @@ impl<R: GlyphRasterizer> GlyphAtlas<R> {
             bind_group,
             frame: 0,
             reported_full: false,
+            slots_lost: false,
+            slot_log: None,
         }
     }
 
@@ -354,6 +363,15 @@ impl<R: GlyphRasterizer> GlyphAtlas<R> {
     /// frame (reported once per frame). The glyph is skipped and nothing is
     /// cached, so its next use asks again.
     pub(crate) fn slot(&mut self, key: R::Key) -> Option<GlyphSlot> {
+        let slot = self.place(key)?;
+        if let Some(log) = &mut self.slot_log {
+            log.push(key);
+        }
+        Some(slot)
+    }
+
+    /// [`Self::slot`] without the log.
+    fn place(&mut self, key: R::Key) -> Option<GlyphSlot> {
         let frame = self.frame;
         if let Some(entry) = self.entries.get_mut(&key) {
             entry.last_used = frame;
@@ -436,15 +454,20 @@ impl<R: GlyphRasterizer> GlyphAtlas<R> {
                 return Some(allocation);
             }
             if page.evict_unused(&mut self.entries, frame) > 0 {
+                self.slots_lost = true;
                 continue;
             }
-            if page.grow(
+            let placed = self.entries.len();
+            let grew = page.grow(
                 &mut self.entries,
                 frame,
                 &self.device,
                 &self.queue,
                 &mut self.rasterizer,
-            ) {
+            );
+            // A grow drops the glyphs that cannot reproduce their bitmap.
+            self.slots_lost |= self.entries.len() != placed;
+            if grew {
                 self.bind_group = create_bind_group(
                     &self.device,
                     &self.layout,
@@ -495,6 +518,38 @@ impl<R: GlyphRasterizer> GlyphAtlas<R> {
             &self.sampler,
         );
         self.reported_full = false;
+        self.slots_lost = true;
+    }
+
+    /// Whether a slot was freed since the last call, which clears it.
+    pub(crate) fn take_slots_lost(&mut self) -> bool {
+        std::mem::take(&mut self.slots_lost)
+    }
+
+    /// Starts a log of the keys [`Self::slot`] places, dropping any earlier
+    /// one.
+    pub(crate) fn log_slots(&mut self) {
+        let mut log = self.slot_log.take().unwrap_or_default();
+        log.clear();
+        self.slot_log = Some(log);
+    }
+
+    /// The keys placed since [`Self::log_slots`], ending the log.
+    pub(crate) fn take_slot_log(&mut self) -> Vec<R::Key> {
+        self.slot_log.take().unwrap_or_default()
+    }
+
+    /// Marks every key of `keys` used this frame, as drawing them does, so no
+    /// later allocation this frame evicts them. `false` when one of them is no
+    /// longer placed: nothing recorded against it can be drawn.
+    pub(crate) fn retain(&mut self, keys: &[R::Key]) -> bool {
+        let frame = self.frame;
+        keys.iter().all(|key| {
+            self.entries.get_mut(key).is_some_and(|entry| {
+                entry.last_used = frame;
+                true
+            })
+        })
     }
 
     /// How many glyphs the atlas holds, both pages, empty glyphs included.

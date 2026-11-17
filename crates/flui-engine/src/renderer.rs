@@ -2039,11 +2039,31 @@ impl Renderer {
     /// The windowed renderer and the crate's headless retained capture both
     /// record through this, so the partial-frame protocol a readback test
     /// pins is the one the swapchain path runs. Submitting the painter's
-    /// batches stays with the caller.
+    /// batches stays with the caller. `reads` says whether the walk may
+    /// replay kept recordings; the cache settles under its budget once the
+    /// walk is done, and the counters carry what it evicted and holds.
     pub(crate) fn record_frame_content(
         painter: &mut crate::painter::WgpuPainter,
         scene: &flui_layer::Scene,
         partial: Option<&crate::damage::RegionPlan>,
+        reads: crate::recording_cache::CacheReads,
+    ) -> EngineResult<crate::frame_protocol::RecordedContent> {
+        let mut recorded = Self::record_passes(painter, scene, partial, reads)?;
+        let (evictions, bytes) = painter.settle_recording_cache();
+        recorded.counters.recording_cache_evictions = recorded
+            .counters
+            .recording_cache_evictions
+            .saturating_add(evictions);
+        recorded.counters.recording_cache_bytes = bytes;
+        Ok(recorded)
+    }
+
+    /// [`Self::record_frame_content`]'s walks.
+    fn record_passes(
+        painter: &mut crate::painter::WgpuPainter,
+        scene: &flui_layer::Scene,
+        partial: Option<&crate::damage::RegionPlan>,
+        reads: crate::recording_cache::CacheReads,
     ) -> EngineResult<crate::frame_protocol::RecordedContent> {
         use crate::layer_dispatcher::LayerDispatcher;
 
@@ -2052,7 +2072,8 @@ impl Renderer {
             // Reset per-frame clip/transform/opacity/layer state so that
             // partial-damage scissors from frame N cannot leak into frame N+1.
             backend.painter_mut().begin_frame_in_scope();
-            let counters = crate::layer_walk::record_scene(scene.content(), None, &mut backend)?;
+            let counters =
+                crate::layer_walk::record_scene(scene.content(), None, reads, &mut backend)?;
             return Ok(crate::frame_protocol::RecordedContent {
                 straddled: false,
                 counters,
@@ -2085,8 +2106,12 @@ impl Renderer {
             // it, the retained target (created with it) otherwise. A
             // version's walk skips the boundaries and chunks this rect cannot
             // reach.
-            recorded.counters +=
-                crate::layer_walk::record_scene(scene.content(), Some(redrawn), &mut backend)?;
+            recorded.counters += crate::layer_walk::record_scene(
+                scene.content(),
+                Some(redrawn),
+                reads,
+                &mut backend,
+            )?;
 
             // An advanced shape (one that reads the destination) whose bounds
             // straddle the pass's rect was drawn clipped, so outside the rect
@@ -2992,8 +3017,13 @@ mod tests {
         );
         let mut backend = LayerDispatcher::new(&mut painter);
 
-        crate::layer_walk::record_scene(flui_layer::SceneContent::Tree(&tree), None, &mut backend)
-            .expect("layer tree records");
+        crate::layer_walk::record_scene(
+            flui_layer::SceneContent::Tree(&tree),
+            None,
+            crate::recording_cache::CacheReads::On,
+            &mut backend,
+        )
+        .expect("layer tree records");
         drop(backend);
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -3102,8 +3132,13 @@ mod tests {
         );
         let mut backend = LayerDispatcher::new(&mut painter);
 
-        crate::layer_walk::record_scene(flui_layer::SceneContent::Tree(&tree), None, &mut backend)
-            .expect("layer tree records");
+        crate::layer_walk::record_scene(
+            flui_layer::SceneContent::Tree(&tree),
+            None,
+            crate::recording_cache::CacheReads::On,
+            &mut backend,
+        )
+        .expect("layer tree records");
         drop(backend);
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -3308,9 +3343,13 @@ mod tests {
             builder.add(PictureLayer::new(canvas.finish()));
             let scene = Scene::new(builder.build());
             painter.begin_frame().expect("optimized FXC frame opens");
-            let _recorded: crate::frame_protocol::RecordedContent =
-                Renderer::record_frame_content(&mut painter, &scene, None)
-                    .expect("optimized FXC scene records through the window frame path");
+            let _recorded: crate::frame_protocol::RecordedContent = Renderer::record_frame_content(
+                &mut painter,
+                &scene,
+                None,
+                crate::recording_cache::CacheReads::On,
+            )
+            .expect("optimized FXC scene records through the window frame path");
             let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("optimized FXC clip encoder"),
             });
