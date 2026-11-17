@@ -2168,3 +2168,32 @@ fn a_recording_spliced_after_another_prefix_equals_one_recorded_there() {
         );
     }
 }
+
+/// A fill of the whole target records the target's size, so a chunk drawn
+/// at one size and then at another records again at the second and fills
+/// it, as a fresh renderer does.
+#[test]
+fn a_target_fill_drawn_at_a_new_size_fills_the_new_size() {
+    use flui_painting::paint::BlendMode;
+    let Some(renderer) = crate::test_support::renderer_or_skip() else {
+        return;
+    };
+    let mut owner = SceneOwner::new();
+    let fill = chunk_of(&mut owner.writer(), 2, |canvas| {
+        canvas.draw_color(Color::RED, BlendMode::SrcOver);
+    });
+    let scene = Scene::of_version(publish_root(&mut owner, &[fill], None));
+    renderer
+        .render_scene(&scene, (32, 32))
+        .expect("the small frame renders");
+    let large = renderer
+        .render_scene(&scene, (64, 64))
+        .expect("the large frame renders");
+    let fresh = crate::test_support::renderer_or_skip()
+        .expect("a second renderer on the same device")
+        .render_scene(&scene, (64, 64))
+        .expect("the fresh frame renders");
+    let corner = ((63 * 64 + 63) * 4) as usize;
+    assert_eq!(&large[corner..corner + 4], &RED, "the far corner is filled");
+    assert_eq!(pixels_differing(&large, &fresh), 0);
+}

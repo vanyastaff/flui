@@ -859,6 +859,7 @@ impl WgpuPainter {
                 &ctm,
                 chunk.bounds(),
                 self.compositor.current_opacity(),
+                self.size,
             ),
         ) else {
             return ChunkStart::Record(None);

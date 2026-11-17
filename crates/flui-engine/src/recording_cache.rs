@@ -113,22 +113,27 @@ pub(crate) enum AmbientScissor {
 }
 
 /// What a chunk's IR bakes from outside it, beyond its transform: the scissor
-/// and the opacity bits it is entered under. The SDF clip and the clip chain
-/// are attached at the splice, so they are not in it.
+/// and the opacity bits it is entered under, and the size of the target, which
+/// a fill of the whole target (`DrawOp::Color`, `DrawOp::Paint`) records. The
+/// SDF clip and the clip chain are attached at the splice, so they are not in
+/// it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct AmbientKey {
     scissor: AmbientScissor,
     opacity: u32,
+    viewport: (u32, u32),
 }
 
 impl AmbientKey {
     /// The ambient of a chunk with `bounds`, entered under `ctm` (already
-    /// admitted by [`RasterKey::of`]) and `scissor` at `opacity`.
+    /// admitted by [`RasterKey::of`]) and `scissor` at `opacity`, on a target
+    /// of `viewport` pixels.
     pub(crate) fn of(
         scissor: ScissorRect,
         ctm: &Matrix4,
         bounds: Bounds,
         opacity: f32,
+        viewport: (u32, u32),
     ) -> Option<Self> {
         let scissor = match scissor {
             None => AmbientScissor::Covers,
@@ -148,6 +153,7 @@ impl AmbientKey {
         Some(Self {
             scissor,
             opacity: canonical_bits(opacity),
+            viewport,
         })
     }
 }
