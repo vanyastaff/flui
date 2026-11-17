@@ -5,7 +5,8 @@
 //! [`PlatformInput`] against a [`ContactRegistry`]. The registry owns contact
 //! identity, device presence ([`DeviceRegistry`]), held buttons
 //! ([`HeldButtons`]), click counting ([`ClickCounter`]), trackpad pinch and
-//! rotate accumulation ([`PanZoomAccumulator`]) and per-sequence clock choice;
+//! rotate accumulation ([`PanZoomAccumulator`]), touchpad holds and swipes
+//! ([`SwipeReading`] steps summed into a travel) and per-sequence clock choice;
 //! [`ScrollPhases`] gives every backend's scrolling one phase grammar, a
 //! two-finger pan included;
 //! [`MoveBatch`] attaches a native batch's coalesced and predicted readings to
@@ -48,7 +49,7 @@ use std::num::NonZeroU8;
 use flui_platform::keyboard::Modifiers;
 use flui_platform::pointer::{
     CancelReason, InputValueError, PanZoomEvent, PointerButton, PointerButtons, PointerCancel,
-    PointerEvent, PointerKind,
+    PointerEvent, PointerKind, TouchpadHoldEvent, TouchpadHoldPhase, TouchpadSwipeEvent,
 };
 use smallvec::SmallVec;
 
@@ -185,6 +186,22 @@ pub struct GestureReading {
     pub delta: GestureDelta,
 }
 
+/// One reading of a touchpad swipe: its finger count, its phase, and the
+/// fingers' travel since the swipe's previous reading, in the reading's raw
+/// unit (zero for every phase but [`GesturePhase::Changed`]). The registry
+/// sums the steps into the cumulative travel the vocabulary carries.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SwipeReading {
+    /// How many fingers swipe.
+    pub fingers: NonZeroU8,
+    /// Its phase.
+    pub phase: GesturePhase,
+    /// The horizontal step, positive right.
+    pub dx: f64,
+    /// The vertical step, positive down.
+    pub dy: f64,
+}
+
 /// What a reading says the contact did.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
@@ -203,6 +220,10 @@ pub enum ReadingAction {
     Cancel(NativeCancel),
     /// A trackpad gesture component.
     Gesture(GestureReading),
+    /// Fingers resting on a touchpad, lifting, or starting a gesture.
+    Hold(TouchpadHoldPhase),
+    /// A touchpad swipe of several fingers.
+    Swipe(SwipeReading),
 }
 
 /// Why the platform ended a contact's sequence: every [`CancelReason`] but
@@ -422,12 +443,14 @@ pub struct DecodeError {
     cancel: Option<Ending>,
 }
 
-/// The event that ends a contact's sequence early. The rare pan-zoom ending
-/// is boxed so a decode result stays small.
+/// The event that ends a contact's sequence early. The rare trackpad
+/// endings are boxed so a decode result stays small.
 #[derive(Debug, Clone, PartialEq)]
 enum Ending {
     Pointer(PointerCancel),
     PanZoom(Box<PanZoomEvent>),
+    TouchpadHold(Box<TouchpadHoldEvent>),
+    TouchpadSwipe(Box<TouchpadSwipeEvent>),
 }
 
 impl Ending {
@@ -435,6 +458,8 @@ impl Ending {
         PlatformInput::Pointer(match self {
             Self::Pointer(cancel) => PointerEvent::Cancel(cancel),
             Self::PanZoom(event) => PointerEvent::PanZoom(*event),
+            Self::TouchpadHold(event) => PointerEvent::TouchpadHold(*event),
+            Self::TouchpadSwipe(event) => PointerEvent::TouchpadSwipe(*event),
         })
     }
 }

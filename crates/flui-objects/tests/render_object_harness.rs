@@ -1290,7 +1290,7 @@ fn error_box_size(run: &flui_rendering::testing::FrameRun) -> (f64, f64) {
         .find_by_kind("RenderErrorBox")
         .unique()
         .expect("error box")
-        .get_fact::<Size>("size")
+        .fact_as::<Size>("size")
         .expect("committed size");
     (size.width, size.height)
 }

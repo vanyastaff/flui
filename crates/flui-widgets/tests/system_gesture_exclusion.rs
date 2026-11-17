@@ -225,7 +225,7 @@ pub(crate) fn a_region_crossing_the_perspective_horizon_is_dropped() {
     // w = 1 - 0.02·x: positive at the region's left edge, -1 at its right edge, while
     // every corner quotient stays finite.
     let mut perspective = Matrix4::IDENTITY;
-    *perspective.get_mut(3, 0) = -0.02;
+    perspective[(3, 0)] = -0.02;
     let (laid, log) = log_capture::capture(|| {
         lay_out(
             beside_a_sibling(Transform::new(perspective).child(excluded(100.0, 10.0))),

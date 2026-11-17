@@ -154,32 +154,30 @@ extern crate self as flui_foundation;
 #[cfg(test)]
 mod test_cases;
 
-pub mod affinity;
+mod affinity;
 // The application identifier every platform names the application by.
-pub mod app_id;
+mod app_id;
 #[expect(
     unsafe_code,
     reason = "ADR-0328: the frame arena implements `Allocator`, an unsafe trait"
 )]
 pub mod arena;
 // Compile-time child-count markers the render protocol attaches to nodes.
-pub mod arity;
-pub mod async_snapshot;
+mod arity;
 // Whether a build is running, for controllers below the signal graph (ADR-0086 §7).
-pub mod build_phase;
+mod build_phase;
 // Generic at-most-once request/reply primitive (ADR-0039 §3): the
 // owner lanes' claim-slot reply protocol composes this; its state-machine
 // tests live here so CI actually runs them (same rationale as `affinity`).
-pub mod claim_slot;
-pub mod clock;
-pub mod consts;
+mod claim;
+mod clock;
 // Monotonic generation/version counters for the window-runtime protocol:
 // FrameEpoch, SurfaceGeneration.
-pub mod epoch;
+mod epoch;
 // The frame-identity group (address/epoch/surface_generation) bundled for
 // the raster boundary — see the module doc for why it exists as its own
 // builder-constructed type instead of positional constructor arguments.
-pub mod frame_stamp;
+mod frame_stamp;
 // A slot's typed generation, and the one generation bookkeeping (`GenSlots`)
 // under every packed generational key: fresh and recycled mints, the
 // release's peek (before user code) and commit (after the release's own
@@ -187,20 +185,14 @@ pub mod frame_stamp;
 pub mod generation;
 // Geometry values: points, offsets, sizes, rectangles, insets, radii, matrices (ADR-0098).
 pub mod geometry;
-pub mod text_sizing;
-pub use text_sizing::{
-    TextScaleProfile, TextSize, TextSizeError, TextSizeRequest, TextSizingIntent,
-};
-// Text flow direction, the one value the paint, semantics and reading-order
-// paths share.
-pub mod id;
-pub mod key;
+mod id;
+mod key;
 pub mod memory;
-mod text_direction;
+mod text;
 // Input sequence identity and its owner-local mint (ADR-0207 §4)
-pub mod sequence;
+mod sequence;
 // Tickets that match an asynchronous answer to its request (ADR-0287 §5).
-pub mod ticket;
+mod ticket;
 // Panic-payload text extraction and the `BUG:` internal-invariant
 // classifier every `catch_unwind` boundary in the workspace shares. Not in
 // the prelude: this is a narrow, deliberately-reached-for utility, not a
@@ -210,9 +202,9 @@ pub mod panic;
 #[cfg_attr(docsrs, doc(cfg(feature = "testing")))]
 pub mod testing;
 // A child's position during reconciliation (index plus previous sibling).
-pub mod slot;
+mod child_slot;
 // Slot-addressed side tables: membership and position without hashing.
-pub mod slot_index;
+mod slot_table;
 
 // Shared field-name vocabulary for structured tracing events. Foundation owns
 // the names because every framework crate emits them; *installing* a subscriber
@@ -222,132 +214,55 @@ pub mod diagnostics;
 // Dependency-inverted tree observation (ADR-0040) + the typed rebuild
 // causes its events carry.
 pub mod observe;
-pub mod rebuild_reason;
+mod rebuild_reason;
 
 // Reactive programming - change notification and observables
-pub mod notifier;
+mod notifier;
 // The read side of the ui_runtime's signal graph (ADR-0085 §2): handles, errors and
 // the `ReadScope` contract. The graph itself lives in `flui-view`. Not
 // re-exported from the root: reached as `flui_foundation::read_scope::…`.
 pub mod read_scope;
 
-// Generic typed notification channel
-pub mod notifier_generic;
-
 // Typed self-description of the trees (ADR-0242); replaces `debug`'s string properties.
 pub mod inspect;
 
 // Where a value was created (`#[track_caller]`), kept in debug builds or with `creation-site`.
-pub mod creation_site;
+mod creation_site;
 
 // An error with the path to the node it happened at, attached by the tree's owner.
-pub mod tree_error;
+mod tree_error;
 
-// ============================================================================
-// RE-EXPORTS
-// ============================================================================
-
-// Core types - IDs for all tree levels
+// One path per item: a private module's items are named at the crate root, a
+// public module's items only through the module.
 pub use affinity::OwnerAffinity;
 pub use app_id::{APP_ID_MAX_LEN, AppId, AppIdError, executable_class};
-// Arity markers. Kept out of the prelude: a glob import of `Range` would
-// shadow `std::ops::Range`.
+// `Range`, `Never` and `Optional` share their names with std and core: name
+// them through the crate (`flui_foundation::Range`), never by a glob.
 pub use arity::{Arity, AtLeast, Exact, Leaf, Never, Optional, Range, Single, Variable};
-pub use async_snapshot::{AsyncSnapshot, ConnectionState};
 pub use build_phase::{BuildPhase, BuildPhaseGuard, MutatedDuringBuild};
-// Claim-slot request/reply primitive (ADR-0039 §3)
-pub use claim_slot::{ClaimHandle, ClaimOutcome, ClaimSlot, claim_slot};
-// Monotonic time source (OS / virtual clock) — foundational primitive injected
-// by deadline- and frame-driven subsystems (gesture arena, headless binding).
+pub use child_slot::IndexedSlot;
+pub use claim::{ClaimHandle, ClaimOutcome, ClaimSlot, claim_slot};
 pub use clock::{ManualClock, MonotonicClock, SystemClock, event_epoch};
-pub use consts::EPSILON;
 pub use creation_site::CreationSite;
+pub use epoch::{FrameEpoch, SurfaceGeneration};
+pub use frame_stamp::FrameStamp;
+pub use id::{
+    DataTransferId, ElementId, GenId, Id, Identifier, LayerId, Marker, PresentationAddress,
+    PresentationId, RawId, RenderId, SemanticsId, TreeId, UiRuntimeId, ViewId, markers,
+};
+pub use key::{AsViewKey, SaltedKey, UniqueKey, ValueKey, ViewKey};
+pub use notifier::{
+    ChangeNotifier, Listenable, ListenerCallback, ListenerObserver, NotificationCallback, Notifier,
+    NotifierCallback, RecoveryCallback, Subscription, ValueListenable, ValueNotifier,
+};
+pub use rebuild_reason::{RebuildReason, RebuildReasons};
 pub use sequence::{
     AtomicIdMint, DragSessionId, FrameCallbackId, IdExhausted, IdMint, InputSequenceId, ListenerId,
     MintedId, PressId, TaskId,
 };
-pub use text_direction::TextDirection;
+pub use slot_table::{SlotIndex, SlotKey, SlotSet};
+pub use text::{
+    TextDirection, TextScaleProfile, TextSize, TextSizeError, TextSizeRequest, TextSizingIntent,
+};
 pub use ticket::{Ticket, TicketSource};
 pub use tree_error::{PathEntry, TREE_CONTEXT_DEPTH, TreeContext, TreeError};
-// Window-runtime generation/version counters + commit-time freshness gate.
-pub use epoch::{FrameEpoch, SurfaceGeneration};
-// The frame-identity group bundled for the raster boundary.
-pub use frame_stamp::FrameStamp;
-pub use id::{
-    // Data-transfer offer identity (ADR-0312)
-    DataTransferId,
-    // Core tree IDs (5-tree architecture)
-    ElementId,
-    // Generic ID system
-    Id,
-    Identifier,
-    LayerId,
-    Marker,
-    // The full (UiRuntimeId, PresentationId) routable address of one presentation
-    PresentationAddress,
-    // Presentation identity — one presentation-runtime incarnation
-    PresentationId,
-    RawId,
-    RenderId,
-    SemanticsId,
-    // Minimal tree-generic bound (does not expose raw index; ElementId satisfies this)
-    TreeId,
-    // Runtime identity — one UiRuntime incarnation
-    UiRuntimeId,
-    ViewId,
-    // Marker types module
-    markers,
-};
-pub use key::{SaltedKey, UniqueKey, ValueKey, ViewKey};
-// Change notification (Listenable pattern)
-pub use notifier::{
-    ChangeNotifier, Listenable, ListenerCallback, ListenerObserver, Subscription, ValueListenable,
-    ValueNotifier,
-};
-pub use rebuild_reason::{RebuildReason, RebuildReasons};
-pub use slot::IndexedSlot;
-pub use slot_index::{SlotIndex, SlotKey, SlotSet};
-// Generic typed channel
-pub use notifier_generic::{ArgCallback, Notifier};
-// WASM compatibility
-
-// ============================================================================
-// PRELUDE
-// ============================================================================
-
-/// The foundation prelude - commonly used types and traits.
-///
-/// This module contains the most commonly used items from flui-foundation
-/// to make them easy to import:
-///
-/// ```rust
-/// use flui_foundation::prelude::*;
-/// ```
-pub mod prelude {
-    pub use crate::{
-        // Change notification
-        ChangeNotifier,
-        EPSILON,
-        // IDs
-        ElementId,
-        // Generic ID system
-        Id,
-        Identifier,
-        LayerId,
-        Listenable,
-        ListenerCallback,
-        ListenerId,
-        PresentationAddress,
-        PresentationId,
-        RenderId,
-        SemanticsId,
-        TreeId,
-        UiRuntimeId,
-        UniqueKey,
-        ValueKey,
-        ValueListenable,
-        ValueNotifier,
-        ViewId,
-        ViewKey,
-    };
-}

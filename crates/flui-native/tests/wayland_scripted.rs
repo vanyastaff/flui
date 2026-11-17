@@ -35,7 +35,8 @@ mod cases {
     };
     use flui_native::{HostWindow, Platform as _, WaylandPlatform};
     use flui_platform::keyboard::{KeyPress, KeyState};
-    use flui_platform::{PlatformInput, WindowOptions};
+    use flui_platform::pointer::{PointerEvent, TouchpadSwipePhase};
+    use flui_platform::{Availability, PlatformInput, WindowOptions};
     use flui_testing::window_handler::{HandlerCall, RecordingWindowHandler};
 
     /// The cursor theme the harness writes and names.
@@ -97,6 +98,14 @@ mod cases {
             (
                 "the_compositor_refuses_each_request_a_strict_compositor_refuses",
                 the_compositor_refuses_each_request_a_strict_compositor_refuses,
+            ),
+            (
+                "a_touchpad_swipe_and_hold_reach_the_window_through_the_wire",
+                a_touchpad_swipe_and_hold_reach_the_window_through_the_wire,
+            ),
+            (
+                "a_gestures_global_without_holds_gives_the_window_none",
+                a_gestures_global_without_holds_gives_the_window_none,
             ),
         ]
         .into_iter()
@@ -406,6 +415,124 @@ mod cases {
         );
         run_for(&session.platform, Duration::from_millis(50))
             .expect("the connection is still open");
+    }
+
+    impl Session {
+        /// The touchpad holds and swipes the window heard, in order.
+        fn touchpad(&self) -> Vec<String> {
+            self.handler
+                .calls()
+                .into_iter()
+                .filter_map(|call| match call {
+                    HandlerCall::Input(PlatformInput::Pointer(PointerEvent::TouchpadHold(
+                        hold,
+                    ))) => Some(format!("hold {:?}", hold.phase)),
+                    HandlerCall::Input(PlatformInput::Pointer(PointerEvent::TouchpadSwipe(
+                        swipe,
+                    ))) => Some(match swipe.phase {
+                        TouchpadSwipePhase::Update(travel) => format!(
+                            "swipe {} travel ({}, {})",
+                            swipe.fingers,
+                            travel.get().dx,
+                            travel.get().dy
+                        ),
+                        phase => format!("swipe {} {phase:?}", swipe.fingers),
+                    }),
+                    _ => None,
+                })
+                .collect()
+        }
+
+        /// The last touchpad hold and swipe availability the window heard.
+        fn touchpad_availability(&self) -> Option<(Availability, Availability)> {
+            self.handler
+                .calls()
+                .into_iter()
+                .rev()
+                .find_map(|call| match call {
+                    HandlerCall::Input(PlatformInput::Capabilities(capabilities)) => {
+                        Some((capabilities.touchpad_hold(), capabilities.touchpad_swipe()))
+                    }
+                    _ => None,
+                })
+        }
+    }
+
+    /// A touchpad hold and swipe the compositor sends through
+    /// `zwp_pointer_gestures_v1` version 3 reach the window as one hold and
+    /// one swipe, its steps summed into its travel where the cursor rests,
+    /// and the window is told both reach it.
+    fn a_touchpad_swipe_and_hold_reach_the_window_through_the_wire() {
+        let session = Session::open(
+            Offer::default().seat(7).pointer_gestures(3),
+            WindowOptions::default().title("gestures"),
+        );
+        session.heard_until("a swipe and a hold object", |heard| {
+            heard.swipes > 0 && heard.holds > 0
+        });
+        session.turn_until("the window's first frame", |session| {
+            session.compositor.heard().frames > 0
+        });
+        for step in [
+            Step::PointerEnter { x: 40.0, y: 30.0 },
+            Step::HoldBegin { fingers: 2 },
+            Step::HoldEnd { cancelled: true },
+            Step::SwipeBegin { fingers: 3 },
+            Step::SwipeUpdate { dx: -20.0, dy: 0.0 },
+            Step::SwipeUpdate { dx: -10.0, dy: 4.0 },
+            Step::SwipeEnd { cancelled: false },
+        ] {
+            session.compositor.play(step);
+        }
+        session.turn_until("the swipe's end", |session| {
+            session.touchpad().last().map(String::as_str) == Some("swipe 3 End")
+        });
+        assert_eq!(
+            session.touchpad(),
+            [
+                "hold Begin",
+                "hold Cancelled",
+                "swipe 3 Start",
+                "swipe 3 travel (-20, 0)",
+                "swipe 3 travel (-30, 4)",
+                "swipe 3 End",
+            ]
+        );
+        assert_eq!(
+            session.touchpad_availability(),
+            Some((Availability::Native, Availability::Native))
+        );
+    }
+
+    /// A gestures global older than version 3 has no hold: the host binds no
+    /// hold object, the window is told no hold reaches it, and a swipe still
+    /// does.
+    fn a_gestures_global_without_holds_gives_the_window_none() {
+        let session = Session::open(
+            Offer::default().seat(7).pointer_gestures(2),
+            WindowOptions::default().title("no holds"),
+        );
+        let heard = session.heard_until("a swipe object", |heard| heard.swipes > 0);
+        assert_eq!((heard.gestures, heard.holds), (Some(2), 0));
+        session.turn_until("the window's first frame", |session| {
+            session.compositor.heard().frames > 0
+        });
+        for step in [
+            Step::PointerEnter { x: 40.0, y: 30.0 },
+            Step::HoldBegin { fingers: 2 },
+            Step::SwipeBegin { fingers: 4 },
+            Step::SwipeEnd { cancelled: true },
+        ] {
+            session.compositor.play(step);
+        }
+        session.turn_until("the swipe's cancel", |session| {
+            session.touchpad().last().map(String::as_str) == Some("swipe 4 Cancelled")
+        });
+        assert_eq!(session.touchpad(), ["swipe 4 Start", "swipe 4 Cancelled"]);
+        assert_eq!(
+            session.touchpad_availability(),
+            Some((Availability::Unavailable, Availability::Native))
+        );
     }
 
     /// A held key repeats on a seat older than `repeat_info` (version 4),

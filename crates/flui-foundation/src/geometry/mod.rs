@@ -62,6 +62,10 @@ pub mod transform;
 pub mod vector;
 pub mod window_metrics;
 
+/// The largest difference, in logical pixels, that layout treats as rounding
+/// error rather than a real overflow or correction.
+pub const PRECISION_ERROR_TOLERANCE: f64 = 1e-10;
+
 /// Common imports.
 pub mod prelude {
     pub use super::axis::Axis;

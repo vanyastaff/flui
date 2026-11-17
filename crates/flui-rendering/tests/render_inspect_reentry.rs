@@ -142,7 +142,7 @@ fn a_description_that_checks_the_owner_out_is_recorded_on_its_node() {
         .inspect_render(SnapshotQuery::default())
         .expect("the snapshot is taken");
     let failure = root
-        .get_fact::<&str>(INSPECT_FAILED)
+        .fact_as::<&str>(INSPECT_FAILED)
         .expect("the refusal is recorded");
     assert!(failure.contains("with_mut called reentrantly"), "{failure}");
 }

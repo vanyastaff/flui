@@ -4,7 +4,7 @@ use flui_foundation::{AtomicIdMint, IdExhausted};
 use std::num::NonZeroU64;
 
 use flui_foundation::generation::Generation;
-use flui_foundation::id::{GenId, Marker};
+use flui_foundation::{GenId, Marker};
 
 /// Which scene owner a version, a content version or a node id comes from.
 ///

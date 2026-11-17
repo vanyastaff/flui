@@ -111,7 +111,7 @@ Implements [`Probe`](../src/testing/inspect.rs) and [`BoxQueryRun`](../src/testi
 | `sliver_geometry(id)` | Committed sliver geometry |
 | `hit(x, y)` / `hit_first` | Hit-test path (leaf-first) |
 | `render_snapshot()` | Typed snapshot of the whole render tree |
-| `node_snapshot(id)` | Typed snapshot of one node (`get::<T>("name")`, `get_fact::<T>("size")`) |
+| `node_snapshot(id)` | Typed snapshot of one node (`get::<T>("name")`, `fact_as::<T>("size")`) |
 | `dump()` | Printable outline (for failure messages) |
 
 ### `BoxQueryRun` (intrinsics / dry probes)

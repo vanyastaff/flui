@@ -13,7 +13,7 @@ use crate::Availability;
 use crate::input_regions::InputRegionKind;
 
 /// The input capabilities of one surface's backend that no handle answers for: pen input,
-/// precise (phased) scrolling, trackpad pinch and rotate, each kind of input region and outgoing drags,
+/// precise (phased) scrolling, trackpad pinch and rotate, touchpad holds and swipes, each kind of input region and outgoing drags,
 /// with the kinds of pointer device attached now.
 ///
 /// Haptics and IME answer through their own handles
@@ -37,6 +37,8 @@ use crate::input_regions::InputRegionKind;
 ///     pen: Availability::Native,
 ///     precise_scroll: Availability::Native,
 ///     trackpad_gestures: Availability::Native,
+///     touchpad_hold: Availability::Native,
+///     touchpad_swipe: Availability::Native,
 ///     system_gesture_exclusion: Availability::Native,
 ///     window_move: Availability::Native,
 ///     window_resize: Availability::Native,
@@ -67,6 +69,8 @@ pub struct InputCapabilities {
     pen: Availability,
     precise_scroll: Availability,
     trackpad_gestures: Availability,
+    touchpad_hold: Availability,
+    touchpad_swipe: Availability,
     system_gesture_exclusion: Availability,
     window_move: Availability,
     window_resize: Availability,
@@ -82,6 +86,8 @@ impl InputCapabilities {
         pen: Availability::Unavailable,
         precise_scroll: Availability::Unavailable,
         trackpad_gestures: Availability::Unavailable,
+        touchpad_hold: Availability::Unavailable,
+        touchpad_swipe: Availability::Unavailable,
         system_gesture_exclusion: Availability::Unavailable,
         window_move: Availability::Unavailable,
         window_resize: Availability::Unavailable,
@@ -118,6 +124,22 @@ impl InputCapabilities {
     #[must_use]
     pub const fn trackpad_gestures(&self) -> Availability {
         self.trackpad_gestures
+    }
+
+    /// Fingers resting on a touchpad, delivered as
+    /// [`TouchpadHold`](crate::pointer::PointerEvent::TouchpadHold): where it is unavailable,
+    /// nothing stops a fling but a new scroll or a press.
+    #[must_use]
+    pub const fn touchpad_hold(&self) -> Availability {
+        self.touchpad_hold
+    }
+
+    /// A swipe of three fingers or more, delivered as
+    /// [`TouchpadSwipe`](crate::pointer::PointerEvent::TouchpadSwipe). Where it is unavailable
+    /// the OS keeps such swipes for itself, or reports none.
+    #[must_use]
+    pub const fn touchpad_swipe(&self) -> Availability {
+        self.touchpad_swipe
     }
 
     /// Whether the OS honours `kind` regions: [`PlatformWindow::set_input_regions`](crate::PlatformWindow::set_input_regions)
@@ -209,6 +231,22 @@ impl InputCapabilitiesBuilder {
     pub const fn trackpad_gestures(self, availability: Availability) -> Self {
         Self(InputCapabilities {
             trackpad_gestures: availability,
+            ..self.0
+        })
+    }
+
+    /// Fingers resting on a touchpad.
+    pub const fn touchpad_hold(self, availability: Availability) -> Self {
+        Self(InputCapabilities {
+            touchpad_hold: availability,
+            ..self.0
+        })
+    }
+
+    /// Swipes of three fingers or more.
+    pub const fn touchpad_swipe(self, availability: Availability) -> Self {
+        Self(InputCapabilities {
+            touchpad_swipe: availability,
             ..self.0
         })
     }

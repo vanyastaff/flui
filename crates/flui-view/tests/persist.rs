@@ -10,7 +10,7 @@ use std::rc::Rc;
 use std::task::{Context, Poll, Waker};
 use std::time::Duration;
 
-use flui_foundation::notifier::Listenable;
+use flui_foundation::Listenable;
 use flui_objects::RenderSizedBox;
 use flui_platform::StorageName;
 use flui_platform::{StorageError, UnsupportedReason};

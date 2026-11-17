@@ -2376,10 +2376,13 @@ pub(crate) fn resting_fingers_catch_a_fling_and_leave_wheel_easing() {
         tight(300.0, 300.0),
         vsync,
     );
+    // A hold's begin catches the fling; its end, when the fingers lift
+    // without moving, changes nothing more.
     let rest = TrackpadScript::new("fingers rest", Offset::new(150.0, 150.0))
         .rest()
+        .lift()
         .build()
-        .expect("one discrete event");
+        .expect("a hold that begins and ends");
 
     dispatch_typed_wheel(&laid, Notched, 100.0);
     laid.pump_for(Duration::ZERO);
@@ -4013,7 +4016,7 @@ fn assert_notification_failures(log: &flui_testing::log_capture::CapturedLog, ex
     let reported: Vec<_> = log
         .records()
         .iter()
-        .filter(|record| record.target == "flui_foundation::notifier_generic")
+        .filter(|record| record.target == "flui.notifier")
         .filter_map(|record| record.field("panic_payload"))
         .collect();
     assert!(

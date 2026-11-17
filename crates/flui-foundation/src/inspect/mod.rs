@@ -12,7 +12,7 @@
 //!
 //! - an owned [`SnapshotNode`] ([`snapshot()`]) that keeps the tree's facts apart from the
 //!   object's own fields, and that tests read by type ([`SnapshotNode::get`],
-//!   [`SnapshotNode::get_fact`], [`SnapshotNode::find_by_link`], [`SnapshotNode::find_by_kind`]);
+//!   [`SnapshotNode::fact_as`], [`SnapshotNode::find_by_link`], [`SnapshotNode::find_by_kind`]);
 //! - a structural [`diff()`] whose tolerances come from each field's [`Unit`];
 //! - one human outline ([`render()`]), coloured by role only on a terminal without `NO_COLOR`.
 //!

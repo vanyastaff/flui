@@ -43,7 +43,7 @@ mod tests {
 
     fn an_interpreted_source_asks_for_the_job() {
         for f in [
-            "crates/flui-foundation/src/notifier_generic.rs",
+            "crates/flui-foundation/src/notifier/channel.rs",
             "crates/flui-log/src/backend/mod.rs",
             "crates/flui-rendering/src/storage/tree.rs",
             "tools/xtask/src/tasks.rs",

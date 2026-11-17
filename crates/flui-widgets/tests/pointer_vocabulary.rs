@@ -689,6 +689,43 @@ pub(crate) fn viewer_focal_fling_advances_then_stops_on_new_input() {
         stopped,
         "new contact stops the previous focal fling"
     );
+    // Flung again, the scene stops when fingers come to rest on a touchpad,
+    // and stays stopped once they lift.
+    for (millis, x) in [(110, 110.0), (120, 140.0), (130, 170.0)] {
+        laid.dispatch_pointer_event(&movement(millis, x));
+        laid.pump_for(Duration::from_millis(10));
+    }
+    laid.dispatch_pointer_event(&PointerEvent::Up(PointerRelease::new(
+        source,
+        PointerButton::PRIMARY,
+        PointerButtons::NONE,
+        sample(131, 170.0),
+    )));
+    laid.pump_for(Duration::from_millis(16));
+    let before = controller.value().transform_point(0.0, 0.0).0;
+    laid.pump_for(Duration::from_millis(16));
+    laid.pump_for(Duration::from_millis(16));
+    assert!(
+        controller.value().transform_point(0.0, 0.0).0 > before,
+        "the second fling coasts"
+    );
+    let rest = flui_testing::TrackpadScript::new(
+        "fingers rest",
+        flui_foundation::geometry::Offset::new(100.0, 100.0),
+    )
+    .rest()
+    .lift()
+    .build()
+    .expect("a hold that begins and ends");
+    laid.replay(&rest);
+    let held = controller.value();
+    laid.pump_for(Duration::from_millis(16));
+    laid.pump_for(Duration::from_millis(16));
+    assert_eq!(
+        controller.value(),
+        held,
+        "resting fingers stop the focal fling"
+    );
     viewer_focal_fling_without_clock_preserves_the_scene();
 }
 

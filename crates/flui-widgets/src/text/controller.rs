@@ -13,7 +13,7 @@ use flui_painting::text_boundaries::{
     previous_word_start,
 };
 
-use flui_foundation::notifier::{ChangeNotifier, Listenable};
+use flui_foundation::{ChangeNotifier, Listenable};
 use flui_interaction::text_input::{EditGeneration, committed_text};
 
 // ============================================================================
