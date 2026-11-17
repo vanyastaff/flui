@@ -126,14 +126,22 @@ pub(super) fn frame_is_dirty(
     next_attempt_at: Option<web_time::Instant>,
     fallback: FallbackGate,
 ) -> bool {
-    // `needs_redraw` is also the ui_runtime's OWN echo: every pump with a
-    // running animation ends by re-requesting a frame through `wake_frame`,
-    // which sets it. While a fallback wake is pending that echo is exactly
-    // the wake being deferred, so it does not count; inbox redraws, pending
-    // build/gesture work and a due recovery attempt always do. The due
-    // fallback itself is the fifth term — a deadline source has to be in
-    // the dirty predicate AND self-clearing, or its wake is a no-op.
+    // A pending fallback means the last frame presented nothing: no present
+    // blocked at vsync and no compositor paces the next one, so the next
+    // frame waits for the fallback, about one display period away. That
+    // holds for the ui_runtime's OWN echo (`needs_redraw`, which every pump
+    // with a running animation sets again through `wake_frame`) and for the
+    // build, layout and gesture work a frame leaves or finds dirty
+    // (`has_pending_work`): a tree that dirties itself each frame would
+    // otherwise run its frames at CPU speed into a sink that shows none of
+    // them (a dead raster executor, an occluded window). Input is still
+    // dispatched when it arrives; only the frame that would show it waits,
+    // and nothing is shown before that frame anyway. Inbox redraws and a due
+    // recovery attempt always count. The due fallback itself is the fifth
+    // term — a deadline source has to be in the dirty predicate AND
+    // self-clearing, or its wake is a no-op.
     let needs_redraw = needs_redraw && !fallback.pending;
+    let has_pending_work = has_pending_work && !fallback.pending;
     inbox_redraw || needs_redraw || has_pending_work || next_attempt_at.is_some() || fallback.due
 }
 
@@ -506,8 +514,9 @@ impl FallbackWake {
 ///   `a_pending_fallback_defers_a_wake_with_no_dirty_work_but_never_dirty_work`.
 /// - **No-present fallback deadline** (ADR-0058's non-blocking deadline):
 ///   `the_fallback_deadline_is_anchored_to_the_last_present` pins where
-///   the deadline sits; no test bounds the pipeline passes over repeated
-///   no-present wakes.
+///   the deadline sits, and
+///   `leftover_work_after_a_frame_that_presented_nothing_waits_for_the_fallback`
+///   that the build and layout work such a frame leaves waits for it too.
 /// - **Wake coalescing** (N `wake_frame` calls -> one draw) and the
 ///   pending-work leg of `keeps_frame_gate_open` have no test here.
 #[cfg(all(
@@ -645,8 +654,8 @@ mod desktop_pacing_tests {
                 }
             ),
             WakeAction::Render,
-            "real dirty work overrides a pending deferral — input and state changes are \
-             never paced behind the fallback"
+            "work the dirty predicate counts (an inbox redraw, a due raster attempt) overrides \
+             a pending deferral"
         );
     }
 
@@ -678,6 +687,47 @@ mod desktop_pacing_tests {
             );
         }
     }
+
+    /// A frame that presented nothing paces the next one at the fallback,
+    /// even when that frame left build or layout work dirty: a tree that
+    /// dirties itself every frame into a sink that shows nothing (a dead
+    /// raster executor, an occluded window) runs one frame per fallback, not
+    /// one per wake. An inbox redraw and a due raster attempt still count at
+    /// once, and the due fallback runs the frame.
+    ///
+    /// Red-check: count `has_pending_work` past a pending fallback and the
+    /// leftover work is dirty on every wake.
+    fn leftover_work_after_a_frame_that_presented_nothing_waits_for_the_fallback() {
+        use super::frame_is_dirty;
+        let pending = FallbackGate {
+            pending: true,
+            due: false,
+        };
+        let due = FallbackGate {
+            pending: false,
+            due: true,
+        };
+        assert!(
+            !frame_is_dirty(false, true, true, None, pending),
+            "the echo and the leftover work wait for the fallback"
+        );
+        assert!(
+            frame_is_dirty(false, false, true, None, due),
+            "the due fallback runs the frame"
+        );
+        assert!(
+            frame_is_dirty(false, false, true, None, FallbackGate::default()),
+            "with no fallback armed, pending work runs at once"
+        );
+        assert!(
+            frame_is_dirty(true, false, false, None, pending),
+            "an inbox redraw does not wait"
+        );
+        assert!(
+            frame_is_dirty(false, false, false, Some(Instant::now()), pending),
+            "nor does a raster attempt that is due"
+        );
+    }
     #[test]
     fn desktop_pacing_matrix() {
         crate::table_test::run_table(
@@ -707,6 +757,11 @@ mod desktop_pacing_tests {
                 (
                     "a_held_frame_arms_no_fallback",
                     a_held_frame_arms_no_fallback as fn(),
+                ),
+                (
+                    "leftover_work_after_a_frame_that_presented_nothing_waits_for_the_fallback",
+                    leftover_work_after_a_frame_that_presented_nothing_waits_for_the_fallback
+                        as fn(),
                 ),
             ],
         );
