@@ -8511,7 +8511,7 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
   нового (`android-activity` запускает свой `android_main` на каждый экземпляр); `singleTop` не
   мешает второму экземпляру в задаче вызывающего; комментарий манифеста обещал, что FLUI
   обрабатывает back, а ни один класс не регистрирует `OnBackInvokedCallback`, и запись gaps
-  связывала потерю `KEYCODE_BACK` с targetSdk 36. Построено: `lifecycle::android::rule::ActivityStanding`
+  связывала потерю `KEYCODE_BACK` с targetSdk 36. Построено: `owner::android::activity_callbacks::ActivityStanding`
   держит три факта (`visible`, `foreground`, `focused`; сигнал `ActivitySignal::Foreground` вместо
   `Execution`) и отвечает, что сообщает окно: работает, пока на экране (`runs`, `execution`),
   сфокусировано, пока в фокусе и на переднем плане (`focus`, правило LifecycleChannel Flutter);

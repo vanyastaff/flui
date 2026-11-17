@@ -15,8 +15,8 @@
 - **Sources:** Flutter 3.50.0, `flutter/flutter@ab2912035e`
   [`engine/src/flutter/shell/platform/android/io/flutter/embedding/engine/systemchannels/LifecycleChannel.java`](https://github.com/flutter/flutter/blob/ab2912035e/engine/src/flutter/shell/platform/android/io/flutter/embedding/engine/systemchannels/LifecycleChannel.java)
   (a paused Activity is `inactive`, a stopped one `hidden` then `paused`; `resumed` needs the
-  focus too); `android-activity` 0.6.1 `src/native_activity/glue.rs` (`ANativeActivity_onCreate`
-  spawns one `android_main` thread per Activity instance)
+  focus too); the `android-activity` 0.6.1 crate, whose native-activity glue's
+  `ANativeActivity_onCreate` spawns one `android_main` thread per Activity instance
 
 ## Context and problem statement
 
@@ -72,7 +72,7 @@ application the activities it started for results.
 
 ### §1 The window runs while the Activity is on screen
 
-`lifecycle::android::rule::ActivityStanding` holds the three facts (`visible`, `foreground`,
+`owner::android::activity_callbacks::ActivityStanding` holds the three facts (`visible`, `foreground`,
 `focused`) that `onStart`/`onStop`, `onResume`/`onPause` and `onWindowFocusChanged` report
 (`ActivitySignal::{Visibility, Foreground, Focus}`), and answers what the window reports:
 

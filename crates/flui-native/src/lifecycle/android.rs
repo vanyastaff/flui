@@ -15,7 +15,8 @@
 //! | `onStop` / `onSaveInstanceState` | the process may be killed without notice | session end |
 //!
 //! What the window reports follows from the three facts together
-//! ([`rule::ActivityStanding`], ADR-0364): it runs while it is on screen, so a
+//! (`ActivityStanding`, beside the looper's callbacks, ADR-0364): it runs
+//! while it is on screen, so a
 //! paused Activity that stays visible (split screen, picture-in-picture, a
 //! translucent or dialog Activity over it) keeps drawing, taking input and
 //! serving its owner, and only `onStop` suspends it; it is focused while it has
@@ -57,99 +58,9 @@ impl ActivityCallbacks for ActivityRule {
 #[cfg(any(target_os = "android", test))]
 #[forbid(unsafe_code)]
 pub(crate) mod rule {
-    use flui_platform::{MemoryPressureLevel, WindowExecutionState, WindowFocus};
+    use flui_platform::MemoryPressureLevel;
 
     use crate::owner::android::activity_callbacks::{ActivityEvent, ActivitySignal, Reaction};
-
-    /// The Activity's three lifecycle facts as its callbacks last reported
-    /// them, and what the window reports from them (ADR-0364).
-    ///
-    /// Android keeps a paused Activity on screen wherever another one holds the
-    /// foreground without covering it: the other half of a split screen below
-    /// API 29, a translucent or dialog Activity on top, picture-in-picture. Such
-    /// a window keeps drawing; only `onStop` takes it off screen.
-    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-    pub(crate) struct ActivityStanding {
-        /// Between `onStart` and `onStop`.
-        pub(crate) visible: bool,
-        /// Between `onResume` and `onPause`.
-        pub(crate) foreground: bool,
-        /// The window's input focus, as `onWindowFocusChanged` reports it.
-        pub(crate) focused: bool,
-    }
-
-    impl ActivityStanding {
-        /// Whether the loop delivers the window's frames and input and samples
-        /// its preferences: while the Activity is on screen, paused or not.
-        #[must_use]
-        pub(crate) const fn runs(self) -> bool {
-            self.visible
-        }
-
-        /// The window's execution state: running while it is on screen,
-        /// suspended from `onStop` to `onStart`, whatever the focus and the
-        /// native window.
-        #[must_use]
-        pub(crate) const fn execution(self) -> WindowExecutionState {
-            if self.runs() {
-                WindowExecutionState::Running
-            } else {
-                WindowExecutionState::Suspended
-            }
-        }
-
-        /// The window's focus: focused while it has the input focus and the
-        /// Activity is in the foreground. A paused Activity is not the one the
-        /// user works in even where a focus report is still to come, so its
-        /// lifecycle reads `Inactive` from `onPause` on. An Activity has no
-        /// activation apart from its window's focus.
-        #[must_use]
-        pub(crate) const fn focus(self) -> WindowFocus {
-            let focused = self.focused && self.foreground;
-            WindowFocus::reported(focused, focused)
-        }
-
-        /// The standing once `signal` is recorded.
-        #[must_use]
-        pub(crate) const fn with(self, signal: ActivitySignal) -> Self {
-            match signal {
-                ActivitySignal::Visibility(visible) => Self { visible, ..self },
-                ActivitySignal::Foreground(foreground) => Self { foreground, ..self },
-                ActivitySignal::Focus(focused) => Self { focused, ..self },
-            }
-        }
-
-        /// The standing of an Activity whose loop ended: off screen, in the
-        /// background, unfocused, so no frame or input is delivered after it.
-        pub(crate) const RETIRED: Self = Self {
-            visible: false,
-            foreground: false,
-            focused: false,
-        };
-
-        const VISIBLE: u8 = 1;
-        const FOREGROUND: u8 = 1 << 1;
-        const FOCUSED: u8 = 1 << 2;
-
-        /// The standing as one byte, which the loop and its window share
-        /// through one atomic, so a reader never sees half of a change.
-        #[must_use]
-        pub(crate) const fn to_bits(self) -> u8 {
-            (if self.visible { Self::VISIBLE } else { 0 })
-                | (if self.foreground { Self::FOREGROUND } else { 0 })
-                | (if self.focused { Self::FOCUSED } else { 0 })
-        }
-
-        /// The standing [`Self::to_bits`] wrote; other bits are ignored.
-        #[must_use]
-        pub(crate) const fn from_bits(bits: u8) -> Self {
-            Self {
-                visible: bits & Self::VISIBLE != 0,
-                foreground: bits & Self::FOREGROUND != 0,
-                focused: bits & Self::FOCUSED != 0,
-            }
-        }
-    }
 
     // `android.content.ComponentCallbacks2` constants.
     const TRIM_MEMORY_RUNNING_MODERATE: i32 = 5;
@@ -233,12 +144,10 @@ pub(crate) mod rule {
 
     #[cfg(test)]
     mod tests {
-        use super::{
-            ActivityLifecycle, ActivityStanding, MemoryPressureLevel, pressure_for_trim_level,
-        };
+        use super::{ActivityLifecycle, MemoryPressureLevel, pressure_for_trim_level};
         use crate::owner::android::activity_callbacks::{
             ActivityEvent::{self, *},
-            ActivitySignal, Reaction,
+            ActivitySignal, ActivityStanding, Reaction,
         };
         use flui_platform::WindowExecutionState::{Running, Suspended};
         use flui_platform::WindowFocus;

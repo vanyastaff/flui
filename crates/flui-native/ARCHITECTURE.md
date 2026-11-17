@@ -6250,7 +6250,7 @@ means. The window's published state is refreshed before its observer is told.
 
 **Choice:** `onStart`/`onStop` give visibility, `onResume`/`onPause` the foreground,
 `onWindowFocusChanged` focus; none implies another. The window reports from the three together
-(`rule::ActivityStanding`, ADR-0364): running while visible, so a paused Activity that stays on
+(`activity_callbacks::ActivityStanding`, ADR-0364): running while visible, so a paused Activity that stays on
 screen keeps drawing, taking input and serving its owner; focused while focused and in the
 foreground. `onLowMemory` is `Critical`, and
 each `onTrimMemory`, which `FluiActivity` forwards through `FluiHost`'s queue, is the level its

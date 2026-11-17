@@ -63,8 +63,6 @@ use std::{
 use android_activity::{AndroidApp, InputStatus, MainEvent, PollEvent};
 use flui_platform::{MemoryPressureLevel, SessionEndPhase, SystemNotice};
 
-use crate::lifecycle::android::rule::ActivityStanding;
-
 use crate::host;
 use crate::owner::android::{
     ActivityInput, ActivityPreferences, ActivityWindowId, ActivityWindowIds, AndroidHost,
@@ -81,6 +79,7 @@ use crate::{
     owner::android::activity_callbacks::ActivityCallbacks,
     owner::android::activity_callbacks::ActivityEvent,
     owner::android::activity_callbacks::ActivitySignal,
+    owner::android::activity_callbacks::ActivityStanding,
     owner::android::activity_callbacks::ActivityTarget,
     owner::android::activity_callbacks::Reaction,
     owner::android::frame_clock::{FrameClock, FrameStamp},
