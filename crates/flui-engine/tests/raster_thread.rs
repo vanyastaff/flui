@@ -986,3 +986,82 @@ fn a_raster_thread_that_does_not_answer_an_attach_dies_at_its_deadline() {
     assert_eq!(thread.handle.health(), ExecutorHealth::Died);
     held.release();
 }
+
+/// A value whose destructor panics: the user code a scene can carry.
+#[derive(Debug)]
+struct PanicsOnDrop;
+
+impl Drop for PanicsOnDrop {
+    fn drop(&mut self) {
+        panic!("a scene's destructor panicked");
+    }
+}
+
+/// When the executor dies, a frame it settles failed in a slot no render
+/// holds has its scene dropped by whichever window's drain came first; a
+/// destructor that panics there is that frame's slot's failure, held with
+/// its settlement's mark, and never the draining window's (ADR-0305 §9).
+///
+/// Red-check: resume the drop's panic at the end of `settle_after_death`
+/// and the wedged slot's drain unwinds with the other slot's panic.
+#[test]
+fn a_scene_dropped_at_the_death_panics_into_its_own_slot() {
+    let thread = spawn();
+    let wedged = attach(&thread.sender);
+    let other = attach(&thread.sender);
+    let idle = attach(&thread.sender);
+    let hold = thread.backend.hold_next_render();
+    thread.sender.send(frame(wedged, 1)).expect("accepted");
+    assert!(hold.began_within(PATIENCE), "the thread starts the render");
+    let panicking = Scene::new(LayerTree::new(Layer::from(
+        flui_layer::AnnotatedRegionLayer::new(
+            flui_foundation::geometry::Rect::from_ltrb(0.0, 0.0, 1.0, 1.0),
+            Arc::new(PanicsOnDrop),
+        ),
+    )));
+    thread
+        .sender
+        .send(RasterCommand::Frame {
+            slot: idle.slot,
+            snapshot: SceneSnapshot::new(
+                FrameStamp::new(idle.address, epoch(1), idle.generation),
+                DamageRegion::Unchanged,
+                panicking,
+            ),
+        })
+        .expect("accepted");
+    let waited = Duration::from_millis(50);
+    assert_eq!(
+        thread.handle.detach(&thread.sender, other.slot, waited),
+        Err(ExecutorFailure::Wedged { waited })
+    );
+    let mut settled = Vec::new();
+    let failure = thread
+        .sender
+        .drain_settlements_and_failure(wedged.slot, &mut settled);
+    assert!(
+        failure.is_none(),
+        "the wedged slot's drain holds no failure"
+    );
+    assert_eq!(settled, Vec::new(), "the wedged render has not settled");
+    let failure = thread
+        .sender
+        .drain_settlements_and_failure(idle.slot, &mut settled);
+    let Some(flui_engine::SlotFailure::Panicked(payload)) = failure else {
+        panic!("the dropped scene's panic is its slot's failure: {failure:?}");
+    };
+    assert_eq!(
+        flui_foundation::panic::payload_text(payload.as_ref()),
+        Some("a scene's destructor panicked")
+    );
+    flui_foundation::panic::discard_payload(payload);
+    assert_eq!(
+        settled
+            .iter()
+            .map(|settlement| (settlement.epoch, settlement.verdict, settlement.panicked))
+            .collect::<Vec<_>>(),
+        vec![(epoch(1), RasterVerdict::Failed, true)],
+        "the frame settles failed, marked with the panic it came with"
+    );
+    hold.release();
+}

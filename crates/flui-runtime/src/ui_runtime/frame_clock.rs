@@ -292,15 +292,25 @@ impl UiRuntime {
     /// asks for a frame, since nothing was shown meanwhile; a rebuild that
     /// succeeds is repainted by the renderer's owner, which knows whether the
     /// frame it runs next still needs one.
+    ///
+    /// A renderer found dead reports one with
+    /// [`DeviceRecovery::Dead`](crate::frame_failure::DeviceRecovery::Dead), even
+    /// over a given-up rebuild, and releases any hold: the frames go on, the
+    /// host answers them without drawing, and the first of them, asked for
+    /// here with a full repaint, commits the tree a frame dropped before the
+    /// death left uncommitted, with the input it held.
     pub fn note_primary_device_recovery(
         &self,
         recovery: Option<crate::frame_failure::DeviceRecovery>,
     ) {
         let presentation = self.presentations.primary();
-        let was_abandoned = presentation.device_abandoned();
-        presentation.replace_device_recovery(recovery);
+        let previous = presentation.replace_device_recovery(recovery);
+        let was_abandoned =
+            previous.is_some_and(crate::frame_failure::DeviceRecovery::is_abandoned);
         let abandons = recovery.is_some_and(crate::frame_failure::DeviceRecovery::is_abandoned);
-        if abandons && !was_abandoned {
+        let dies =
+            recovery == Some(crate::frame_failure::DeviceRecovery::Dead) && previous != recovery;
+        if (abandons && !was_abandoned) || dies {
             presentation.disarm_failure_retry();
             self.report_frame_failure(
                 presentation,
@@ -308,7 +318,8 @@ impl UiRuntime {
                     recovery: recovery.unwrap_or_default(),
                 },
             );
-        } else if was_abandoned && !abandons {
+        }
+        if (was_abandoned && !abandons) || dies {
             self.mark_needs_full_repaint_for(presentation);
             self.wake_frame();
         }

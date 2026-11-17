@@ -169,6 +169,7 @@ where
             address: installation.dispatcher().address,
             size: (size.width as u32, size.height as u32),
             device: flui_engine::DeviceHealth::Healthy,
+            renderer_dead: false,
         };
         installation.submit_web(super::frame_driver::FrameDriver::Web(WebFrameDriver {
             raster,
