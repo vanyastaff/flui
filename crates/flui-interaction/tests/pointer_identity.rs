@@ -11,13 +11,13 @@ use flui_platform::{
     EventTime,
     pointer::{
         ButtonChange, CancelReason, DeviceId, PenTool, PointerButton, PointerButtons,
-        PointerCancel, PointerEvent, PointerId, PointerInfo, PointerKind, PointerMove,
-        PointerPosition, PointerPress, PointerRelease, PointerRole, PointerSample, Pressure,
+        PointerCancel, PointerEvent, PointerId, PointerKind, PointerMove, PointerPosition,
+        PointerPress, PointerRelease, PointerRole, PointerSample, PointerSource, Pressure,
     },
 };
 
-fn source(device: u64, kind: PointerKind) -> PointerInfo {
-    PointerInfo::new(PointerId::try_from(7_u64).expect("nonzero pointer"), kind)
+fn source(device: u64, kind: PointerKind) -> PointerSource {
+    PointerSource::new(PointerId::try_from(7_u64).expect("nonzero pointer"), kind)
         .with_device(DeviceId::try_from(device).expect("nonzero device"))
         .with_role(PointerRole::Primary)
 }
@@ -29,7 +29,7 @@ fn sample(time: u64, x: f64) -> PointerSample {
     )
 }
 
-fn down(pointer: PointerInfo, time: u64) -> PointerEvent {
+fn down(pointer: PointerSource, time: u64) -> PointerEvent {
     PointerEvent::Down(PointerPress::new(
         pointer,
         PointerButton::PRIMARY,
@@ -38,7 +38,7 @@ fn down(pointer: PointerInfo, time: u64) -> PointerEvent {
     ))
 }
 
-fn up(pointer: PointerInfo, time: u64) -> PointerEvent {
+fn up(pointer: PointerSource, time: u64) -> PointerEvent {
     PointerEvent::Up(PointerRelease::new(
         pointer,
         PointerButton::PRIMARY,
@@ -56,7 +56,7 @@ enum ForeignEdge {
     ButtonRelease,
 }
 
-fn foreign_event(edge: ForeignEdge, pointer: PointerInfo) -> PointerEvent {
+fn foreign_event(edge: ForeignEdge, pointer: PointerSource) -> PointerEvent {
     let held = PointerButtons::only(PointerButton::PRIMARY);
     match edge {
         ForeignEdge::Move => PointerEvent::Move(PointerMove::new(pointer, held, sample(30, 200.0))),
@@ -148,7 +148,7 @@ fn foreign_button_release_preserves_contact() {
     foreign_device_does_not_consume_the_captured_contact(ForeignEdge::ButtonRelease);
 }
 
-fn metadata_change_preserves_contact_and_measured_samples(changed: PointerInfo) {
+fn metadata_change_preserves_contact_and_measured_samples(changed: PointerSource) {
     let lane = InteractionLane::try_new().expect("interaction lane");
     let handle = lane.dispatch_handle();
     let binding = GestureBinding::new();

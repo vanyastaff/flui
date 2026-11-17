@@ -11,7 +11,7 @@
 //! method reads the field's store instead (the pull model, ADR-0135), or that
 //! has no input method, returns `None` from the accessor instead of every
 //! `PlatformWindow` implementor inheriting IME methods it cannot honor.
-//! [`PlatformHaptics`](crate::PlatformHaptics) and
+//! [`PlatformHaptics`](crate::haptics::PlatformHaptics) and
 //! [`PlatformSystemChrome`](crate::PlatformSystemChrome) follow the same
 //! template ([`PlatformWindow::haptics`](crate::PlatformWindow::haptics),
 //! [`PlatformWindow::system_chrome`](crate::PlatformWindow::system_chrome),
@@ -25,7 +25,7 @@ use flui_foundation::geometry::Bounds;
 ///
 /// This trait only carries the platform *composition* controls
 /// (enable/disable IME, place the candidate window). The document the input
-/// method reads and edits is the field's [`TextStore`](crate::TextStore)
+/// method reads and edits is the field's [`TextStore`](crate::text_store::TextStore)
 /// (ADR-0090), attached through `flui-interaction`'s presentation-owned
 /// text-input owner, which projects incoming [`ImeEvent`](crate::ImeEvent)s onto
 /// it. A backend cannot hold that store through this trait yet: the trait is

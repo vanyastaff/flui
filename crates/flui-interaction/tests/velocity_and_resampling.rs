@@ -8,7 +8,7 @@ use std::{cell::RefCell, rc::Rc, time::Duration};
 
 use flui_foundation::geometry::Offset;
 use flui_interaction::events::{
-    PointerEvent, PointerInfo, PointerKind, PointerPosition, ScrollDelta, ScrollEvent,
+    PointerEvent, PointerKind, PointerPosition, PointerSource, ScrollDelta, ScrollEvent,
     make_cancel_event_for_id, make_down_event_for_id, make_move_event_for_id, make_up_event_for_id,
     pointer::ScrollUnit,
 };
@@ -905,7 +905,7 @@ fn interleaved_non_moves_stay_bounded() {
         let x = f64::from(i);
         resampler.add_event_at(
             PointerEvent::Scroll(ScrollEvent::new(
-                PointerInfo::new(contact(), PointerKind::Mouse),
+                PointerSource::new(contact(), PointerKind::Mouse),
                 flui_platform::EventTime::from_nanos(0),
                 PointerPosition::try_new(flui_foundation::geometry::Point::new(x, 0.0))
                     .expect("finite scroll position"),
@@ -1289,7 +1289,7 @@ fn binding_reentry_orders_motion_before_observing_input() {
                             binding.handle_pointer_event(
                                 &PointerEvent::ButtonChange(ButtonChange::Pressed(
                                     PointerPress::new(
-                                        PointerInfo::new(contact(), PointerKind::Mouse),
+                                        PointerSource::new(contact(), PointerKind::Mouse),
                                         PointerButton::SECONDARY,
                                         PointerButtons::only(PointerButton::PRIMARY)
                                             .with(PointerButton::SECONDARY),
@@ -1381,7 +1381,7 @@ fn binding_keeps_all_measured_packets_and_only_latest_predictions() {
         };
         for at in [10_u64, 20, 30] {
             let update = PointerMove::new(
-                PointerInfo::new(contact(), kind),
+                PointerSource::new(contact(), kind),
                 PointerButtons::NONE,
                 sample(at),
             )
@@ -1685,7 +1685,7 @@ fn pinch_scale_is_finite_and_positive() {
         let mut path = HitTestResult::new();
         path.add(HitTestEntry::new(flui_foundation::RenderId::new(1)).pan_zoom_target(target));
         let event = PointerEvent::PanZoom(PanZoomEvent::new(
-            PointerInfo::new(contact(), PointerKind::Trackpad),
+            PointerSource::new(contact(), PointerKind::Trackpad),
             flui_platform::EventTime::from_nanos(1_000),
             PointerPosition::try_new(flui_foundation::geometry::Point::ZERO)
                 .expect("finite focal position"),

@@ -7,8 +7,8 @@ use flui_platform::{
     EventTime,
     pointer::{
         ButtonChange, DeviceId, PointerButton, PointerButtons, PointerEvent, PointerId,
-        PointerInfo, PointerKind, PointerMove, PointerPosition, PointerPress, PointerRelease,
-        PointerRole, PointerSample,
+        PointerKind, PointerMove, PointerPosition, PointerPress, PointerRelease, PointerRole,
+        PointerSample, PointerSource,
     },
 };
 
@@ -98,7 +98,7 @@ fn assert_button_contacts(move_panics: bool, edge_panics: bool, resampling: bool
         let both = primary.with(PointerButton::SECONDARY);
         for (identity, base) in [(1, 0), (2, 40)] {
             observed.borrow_mut().clear();
-            let pointer = PointerInfo::new(
+            let pointer = PointerSource::new(
                 PointerId::try_from(identity).expect("nonzero contact"),
                 PointerKind::Mouse,
             )

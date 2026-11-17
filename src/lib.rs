@@ -307,54 +307,169 @@ pub mod native {
     pub use flui_app::native::windows;
     pub use flui_app::native::{HostWindow, NativeWindow, NativeWindowCapability, with_window};
 }
-/// The platform contracts and input vocabulary (`flui-platform`).
+/// What the system reports and offers (`flui-platform`): its preferences,
+/// locale and displays, the windows an application opens, storage, launch and
+/// the clipboard, and the host contracts other facade signatures name. Each
+/// item has one path: an item of one of `flui-platform`'s modules is named
+/// through that module, and the input vocabulary widgets use is in
+/// [`interaction`]. A package reaches the rest of the crate through
+/// `flui-sdk`.
 ///
 /// [`input_capabilities`](flui_platform::input_capabilities) and
 /// [`haptics`](flui_platform::haptics), the second haptic tier with its
 /// requests and outcomes, are unstable and present only under the additive
 /// `unstable-input` feature (ADR-0213 §5, ADR-0210 §9). Without it the modules
-/// are private, not merely undocumented:
+/// do not exist:
 ///
-#[cfg_attr(not(feature = "unstable-input"), doc = "```compile_fail,E0603")]
+#[cfg_attr(not(feature = "unstable-input"), doc = "```compile_fail,E0432")]
 #[cfg_attr(feature = "unstable-input", doc = "```")]
 /// use flui::platform::input_capabilities::InputCapabilities;
 /// ```
 ///
-#[cfg_attr(not(feature = "unstable-input"), doc = "```compile_fail,E0603")]
+#[cfg_attr(not(feature = "unstable-input"), doc = "```compile_fail,E0432")]
 #[cfg_attr(feature = "unstable-input", doc = "```")]
 /// use flui::platform::haptics::HapticPattern;
 /// ```
 pub mod platform {
-    pub use flui_platform::*;
+    pub use flui_platform::{
+        AdmissionError, AdmittedCommand, AppDataDir, AppTitleBar, ApplyError, AspectRatio,
+        Availability, Brightness, CapabilityAbsence, CapabilityParts, ClipboardError,
+        ClipboardRead, ClipboardWrite, ClipboardWritten, ColorGamut, CommandRefusal, Concealment,
+        ControlsOffset, CopiedAside, Cursor, CursorError, CursorGrab, CursorIcon, CursorImage,
+        CursorImageError, DisplayColor, DisplayDescription, DisplayId, DisplayParts,
+        DisplayRevision, DisplayRevisionExhausted, DisplaySnapshot, Distance, DragDropEvent,
+        DurationScale, DxgiFrameStatistics, DxgiShown, DxgiStatistics, DynamicRange,
+        EmptyPointerFrame, Environment, FlingSpeeds, FramePacing, FramePresented, FrameRateHint,
+        FrameRequest, GestureGeometry, GestureParts, GesturePreferences, HapticFeedback, Headroom,
+        HostNotice, HourCycle, ImeEvent, InputLatency, InsetCurve, InsetMotion, InvalidAppDataDir,
+        InvalidControlsOffset, InvalidGeometry, InvalidHeadroom, InvalidInsets, InvalidLocale,
+        InvalidPreference, InvalidRefreshPeriod, InvalidRegionalFormat, InvalidWindowOption,
+        KeyboardInset, Launch, Locale, MAX_OPENED_URL_LEN, MAX_SURFACE_EXTENT, MeasurementSystem,
+        MotionPreference, NativeMouseGeometry, NativeTouchGeometry, NumberingSystem, OpenTarget,
+        Opened, OpenedFile, OpenedOverflow, OpeningGeometry, OsRelease, PlacementError,
+        PlatformFailure, PlatformInput, PlatformSystemChrome, PlatformTextInput, PlatformWindow,
+        PointerFrame, PreferenceParts, PreferenceQueryError, PublicationMint, RedrawRequester,
+        RefreshPeriod, RegionOverride, RegionalFormats, RegionalParts, ResolvedPlacement,
+        ScrollBarParts, ScrollBarPreferences, ScrollBarVisibility, ScrollTrackClick,
+        SessionEndAnswer, SessionEndBlock, SessionEndBlockError, SessionEndRequest,
+        SizeConstraints, SrgbColor, Storage, StorageError, StorageFuture, StorageName, Stored,
+        StoredVersion, SubmitError, SurfaceColorSpace, SurfaceTarget, SwapChainStatistics,
+        SystemControls, SystemFailure, SystemNotice, SystemPreferences, SystemUiOverlayStyle,
+        TargetPlatform, TextWeightPreference, Unsupported, UnsupportedReason, Weekday, WheelParts,
+        WheelPreferences, WheelStep, WindowAt, WindowCapabilities, WindowCapability, WindowCommand,
+        WindowDisplay, WindowExecutionState, WindowExtent, WindowFocus, WindowFrame,
+        WindowGeometry, WindowId, WindowInsets, WindowInteraction, WindowLevel, WindowMaterial,
+        WindowMode, WindowOption, WindowOptions, WindowPlacement, WindowReveal, WindowRevision,
+        WindowRevisionExhausted, WindowState, WindowStateParts, WriteMode,
+    };
+    /// Capabilities: what an application registers, and the contracts a provider and a host meet.
+    pub mod capability {
+        pub use flui_platform::capability::{
+            Abandoned, Activity, ActivityBridge, ActivityResult, Capability, CapabilityId,
+            CapabilityProvider, CapabilityRegistrar, Completion, CompletionSource, DataRefused,
+            HostBridge, IntentFrame, InvalidResultKey, JniFrame, OwnerJob, OwnerPoster,
+            OwnerRetired, OwnerScope, PendingCompletions, Plugin, ProviderContext,
+            RegisteredProvider, RequestKey, Resolver, ResultCode, ResultIntent, ResultIntentHold,
+            ResultKey, ResultMint, ResultOutcome, ResultRefused, ResultRequest, ResultTicket,
+            ResultTicketHold, ResultToken, RuntimeLocals, WindowCloseWatch, WindowLifetime,
+            WindowRef,
+        };
+        /// Scripted capability scenarios for tests; with the `testing` feature.
+        #[cfg(feature = "testing")]
+        pub mod scripted {
+            pub use flui_platform::capability::scripted::{
+                AlreadyDriven, Answer, EventSubscription, Events, Expect, FailureReport,
+                RequestTicket, Scenario, ScenarioDriver, ScenarioFailure, ScenarioFailures, Script,
+                ServiceState, StreamEnd, StreamItem, Track,
+            };
+        }
+    }
+    /// Data a drag or a paste carries, in the formats its source offers.
+    pub mod data_transfer {
+        pub use flui_platform::data_transfer::{
+            DataTransferOffer, DragTransport, DropFeedback, Mime, RepresentationDescriptor,
+            RepresentationIndex, TransferCompleter, TransferError, TransferFormat, TransferLimits,
+            TransferPayload, TransferRequest,
+        };
+    }
+    /// An operating-system drag session, as the host runs it.
+    pub mod drag {
+        pub use flui_platform::drag::{
+            DragRequestError, DragSessionKey, OsDragEnd, OsDragEndHook, OsDragParts,
+            OsDragProvider, OsDragRequest, OsDragStart, OsDragTerms, PlatformDragSource,
+            ProcessNonce,
+        };
+    }
+    /// Where background work runs.
+    pub mod executor {
+        pub use flui_platform::executor::{Executor, Lane, RoomFuture};
+    }
+    /// HTTP requests through the system's stack (ADR-0280).
+    pub mod http {
+        pub use flui_platform::http::{
+            BodySource, HeaderName, HeaderValue, Headers, Http, HttpAuthority, HttpClient,
+            HttpError, HttpFuture, HttpRequest, HttpResponse, InvalidHeader, Method, ResponseBody,
+            StatusCode,
+        };
+    }
+    /// The regions of a window the system treats as caption, buttons or resize edges.
+    pub mod input_regions {
+        pub use flui_platform::input_regions::{
+            CaptionButton, InputRegion, InputRegionKind, ResizeEdge,
+        };
+    }
+    /// Keyboard input beyond the keys `flui::interaction` names: composition and produced text.
+    pub mod keyboard {
+        pub use flui_platform::keyboard::{ImeComposition, KeyText};
+    }
+    /// Opening a URI or a path with the system's handler.
+    pub mod launch {
+        pub use flui_platform::launch::{
+            ExternalUri, InvalidUri, LaunchError, LaunchResult, Launcher, LauncherBackend,
+            MAX_EXTERNAL_URI_LEN, REFUSED_SCHEMES, Scheme,
+        };
+    }
+    /// Pointer events as the host delivers them; the vocabulary widgets use is in `flui::interaction`.
+    pub mod pointer {
+        pub use flui_platform::pointer::{
+            ButtonDirection, ContactSize, HoverDistance, InputValueError, InvalidButtonNumber,
+            MismatchedPointerSource, MotionAcceleration, MotionDelta, PenOrientation,
+            PointerButtonEvent, PointerCancel, PointerDeviceChange, PointerSignal, Press, Pressure,
+            Quantity, RawMotion, Release, SmartZoomEvent, SwipeOffset, TangentialPressure,
+            TouchpadHoldEvent, TouchpadHoldPhase, TouchpadSwipeEvent, TouchpadSwipePhase, Twist,
+        };
+    }
+    /// The text store a text field shares with the system's input method.
+    pub mod text_store {
+        pub use flui_platform::text_store::{
+            Autofill, Capitalization, CommitGate, Composition, CompositionEnd, Correction,
+            EnterAction, LockGrant, LockKind, LockOutcome, LockTiming, NumberFormat, OwnerCalls,
+            PointMode, RangeRect, Selection, TextChange, TextInputOptions, TextInputPurpose,
+            TextStore, TextStoreChange, TextStoreEdit, TextStoreError, TextStoreHost,
+            TextStoreHostError, TextStoreObserver, TextStoreRead, TextStoreStatus,
+        };
+        /// UTF-16 offsets, the unit the input method counts in.
+        pub mod utf16 {
+            pub use flui_platform::text_store::utf16::{OffsetError, Utf16Offset, Utf16Range};
+        }
+    }
+    pub use flui_platform::os_options;
     /// Handle-less input capabilities (ADR-0213); unstable.
     #[cfg(feature = "unstable-input")]
     pub mod input_capabilities {
-        pub use flui_platform::input_capabilities::{InputCapabilities, PointerKindSet};
+        pub use flui_platform::input_capabilities::{
+            InputCapabilities, InputCapabilitiesBuilder, PointerKindSet,
+        };
     }
-    // Shadows the glob's module of the same name, so the unstable types are
-    // unreachable through the facade without the feature.
-    #[cfg(not(feature = "unstable-input"))]
-    #[expect(
-        hidden_glob_reexports,
-        reason = "hiding the unstable module from the glob is the point (ADR-0213 §5)"
-    )]
-    mod input_capabilities {}
     /// Haptic patterns, requests and outcomes (ADR-0210); unstable.
     #[cfg(feature = "unstable-input")]
     pub mod haptics {
         pub use flui_platform::haptics::{
             ControlPoint, HapticCapabilities, HapticEvent, HapticOutcome, HapticPattern,
             HapticPatternBuilder, HapticPatternError, HapticRequest, HapticTicket, HapticTiming,
-            Intensity, ParameterCurve, PatternPlayback, Sharpness, UnitRangeError,
+            Intensity, ParameterCurve, PatternPlayback, PlatformHaptics, Sharpness, UnitRangeError,
         };
     }
-    // The same shadowing for the second haptic tier (ADR-0210 §9).
-    #[cfg(not(feature = "unstable-input"))]
-    #[expect(
-        hidden_glob_reexports,
-        reason = "hiding the unstable module from the glob is the point (ADR-0210 §9)"
-    )]
-    mod haptics {}
 }
 pub use flui_widgets as widgets;
 

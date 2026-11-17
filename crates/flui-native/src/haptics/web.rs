@@ -13,7 +13,9 @@ use crate::haptics::degradation::{WebVibration, web_feedback, web_pattern};
 use flui_platform::haptics::{
     HapticCapabilities, HapticOutcome, HapticPattern, HapticRequest, PatternPlayback,
 };
-use flui_platform::{DeviceId, HapticFeedback, PlatformHaptics, Unsupported, UnsupportedReason};
+use flui_platform::{
+    HapticFeedback, Unsupported, UnsupportedReason, haptics::PlatformHaptics, pointer::DeviceId,
+};
 
 /// The page's haptic actuator.
 #[derive(Debug, Default)]

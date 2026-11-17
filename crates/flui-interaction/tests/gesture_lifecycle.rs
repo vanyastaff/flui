@@ -1327,7 +1327,7 @@ fn selected_velocity_cases(family: &str) {
             };
             let last = samples.last().expect("authored history");
             let movement = flui_platform::pointer::PointerMove::new(
-                flui_platform::pointer::PointerInfo::new(id(2), PointerKind::Touch),
+                flui_platform::pointer::PointerSource::new(id(2), PointerKind::Touch),
                 flui_platform::pointer::PointerButtons::NONE.with(PointerButton::PRIMARY),
                 sample(last.0, last.1),
             )

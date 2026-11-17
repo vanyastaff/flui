@@ -15,9 +15,9 @@ use flui_interaction::events::{PointerEvent, PointerEventExt};
 use flui_interaction::pointer::PointerEventResampler;
 use flui_platform::EventTime;
 use flui_platform::pointer::{
-    CancelReason, PointerButton, PointerButtons, PointerCancel, PointerId, PointerInfo,
-    PointerKind, PointerMove, PointerPosition, PointerPress, PointerRelease, PointerRole,
-    PointerSample,
+    CancelReason, PointerButton, PointerButtons, PointerCancel, PointerId, PointerKind,
+    PointerMove, PointerPosition, PointerPress, PointerRelease, PointerRole, PointerSample,
+    PointerSource,
 };
 
 const SECOND: u64 = 1_000_000_000;
@@ -39,8 +39,8 @@ impl Terminal {
     }
 }
 
-fn pointer() -> PointerInfo {
-    PointerInfo::new(PointerId::new(NonZeroU64::MIN), PointerKind::Touch)
+fn pointer() -> PointerSource {
+    PointerSource::new(PointerId::new(NonZeroU64::MIN), PointerKind::Touch)
         .with_role(PointerRole::Primary)
 }
 

@@ -413,8 +413,8 @@ pub(crate) fn mounted_back_swipe_settle_uses_the_admitted_fling_bound() {
     use flui_platform::{
         EventTime,
         pointer::{
-            PointerButton, PointerButtons, PointerEvent, PointerId, PointerInfo, PointerKind,
-            PointerMove, PointerPosition, PointerPress, PointerRelease, PointerSample,
+            PointerButton, PointerButtons, PointerEvent, PointerId, PointerKind, PointerMove,
+            PointerPosition, PointerPress, PointerRelease, PointerSample, PointerSource,
         },
     };
     use flui_view::environment::VsyncScope;
@@ -449,7 +449,7 @@ pub(crate) fn mounted_back_swipe_settle_uses_the_admitted_fling_bound() {
     let top = navigator.current().expect("pushed route is current");
     let held = PointerButtons::only(PointerButton::PRIMARY);
     for contact in [1_u64, 2] {
-        let info = PointerInfo::new(
+        let info = PointerSource::new(
             PointerId::try_from(contact).expect("nonzero touch"),
             PointerKind::Touch,
         );

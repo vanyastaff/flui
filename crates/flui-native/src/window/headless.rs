@@ -18,10 +18,10 @@ use flui_platform::input_regions::{DeviceInputRegion, InputRegion};
 use flui_platform::text_store::TextStoreHost;
 use flui_platform::{
     AdmittedCommand, ApplyError, Brightness, Cursor, CursorError, CursorGrab, DispatchEventResult,
-    DisplayId, PlatformHaptics, PlatformInput, PlatformTextInput, PlatformWindow, SizeConstraints,
-    SurfaceChange, Unsupported, UnsupportedReason, WindowCapabilities, WindowCommand, WindowFocus,
-    WindowFrame, WindowGeometry, WindowHandler, WindowId, WindowIdMint, WindowInteraction,
-    WindowLevel, WindowMaterial, WindowMode, WindowOptions, WindowState,
+    DisplayId, PlatformInput, PlatformTextInput, PlatformWindow, SizeConstraints, SurfaceChange,
+    Unsupported, UnsupportedReason, WindowCapabilities, WindowCommand, WindowFocus, WindowFrame,
+    WindowGeometry, WindowHandler, WindowId, WindowIdMint, WindowInteraction, WindowLevel,
+    WindowMaterial, WindowMode, WindowOptions, WindowState, haptics::PlatformHaptics,
 };
 use parking_lot::Mutex;
 

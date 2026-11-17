@@ -24,8 +24,8 @@ use flui_platform::pointer::{
     ButtonChange, CancelReason, ContactSize, DeviceId, HoverDistance, MotionAcceleration,
     MotionDelta, PanZoomEvent, PanZoomPhase, PanZoomTransform, PenOrientation, PenTool,
     PointerButton, PointerButtons, PointerCancel, PointerDeviceChange, PointerEvent, PointerId,
-    PointerInfo, PointerKind, PointerMove, PointerPosition, PointerPress, PointerRelease,
-    PointerRole, PointerSample, PointerSignal, Pressure, RawMotion, ScrollDelta, ScrollEvent,
+    PointerKind, PointerMove, PointerPosition, PointerPress, PointerRelease, PointerRole,
+    PointerSample, PointerSignal, PointerSource, Pressure, RawMotion, ScrollDelta, ScrollEvent,
     ScrollInversion, ScrollPhase, ScrollPrecision, ScrollUnit, SmartZoomEvent, SwipeOffset,
     TangentialPressure, TouchpadHoldEvent, TouchpadHoldPhase, TouchpadSwipeEvent,
     TouchpadSwipePhase, Twist,
@@ -77,13 +77,13 @@ fn pointer_event(event: PointerEvent) -> InputRecord {
     platform(PlatformInput::Pointer(event))
 }
 
-fn info(kind: PointerKind, role: PointerRole) -> PointerInfo {
-    PointerInfo::new(PointerId::try_from(4_u64).expect("nonzero"), kind)
+fn info(kind: PointerKind, role: PointerRole) -> PointerSource {
+    PointerSource::new(PointerId::try_from(4_u64).expect("nonzero"), kind)
         .with_device(DeviceId::try_from(9_u64).expect("nonzero"))
         .with_role(role)
 }
 
-fn touch() -> PointerInfo {
+fn touch() -> PointerSource {
     info(PointerKind::Touch, PointerRole::Primary)
 }
 
@@ -106,7 +106,7 @@ fn plain_sample(t: u64) -> PointerSample {
     PointerSample::new(at(t), position(10.0, 20.0))
 }
 
-fn press(pointer: PointerInfo) -> PointerPress {
+fn press(pointer: PointerSource) -> PointerPress {
     PointerPress::new(
         pointer,
         PointerButton::SECONDARY,
@@ -117,7 +117,7 @@ fn press(pointer: PointerInfo) -> PointerPress {
     .with_click_count(NonZeroU8::new(2).expect("nonzero"))
 }
 
-fn release(pointer: PointerInfo) -> PointerRelease {
+fn release(pointer: PointerSource) -> PointerRelease {
     PointerRelease::new(
         pointer,
         PointerButton::BACK,
@@ -126,11 +126,11 @@ fn release(pointer: PointerInfo) -> PointerRelease {
     )
 }
 
-fn down_with(pointer: PointerInfo) -> InputRecord {
+fn down_with(pointer: PointerSource) -> InputRecord {
     pointer_event(PointerEvent::Down(press(pointer)))
 }
 
-fn signal(pointer: PointerInfo) -> PointerSignal {
+fn signal(pointer: PointerSource) -> PointerSignal {
     PointerSignal::new(pointer, at(12)).with_position(position(0.5, 0.25))
 }
 

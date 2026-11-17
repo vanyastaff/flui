@@ -19,7 +19,7 @@
   blocks (`Platform::release_session_end`), or after four seconds; one it does not hold terminates at
   once after the hook hears `Ending`. A quit nobody announced (Cmd-Q, the Dock menu) still goes
   through the run loop.
-- **`flui-native`, macOS**: `DisplayInfo::persistent_key` is the display's UUID.
+- **`flui-native`, macOS**: `DisplayDescription::persistent_key` is the display's UUID.
 - **`flui-native`, iOS**: `applicationDidReceiveMemoryWarning:` is a critical memory-pressure
   notice, and `applicationWillTerminate:` tells the session-end hook the session is ending before the
   quit handler runs.

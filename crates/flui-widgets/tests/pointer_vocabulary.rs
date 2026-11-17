@@ -10,8 +10,8 @@ use flui_platform::{
     keyboard::Modifiers,
     pointer::{
         DeviceId, PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerButton, PointerButtons,
-        PointerEvent, PointerId, PointerInfo, PointerKind, PointerMove, PointerPosition,
-        PointerPress, PointerRelease, PointerRole, PointerSample, ScrollDelta, ScrollEvent,
+        PointerEvent, PointerId, PointerKind, PointerMove, PointerPosition, PointerPress,
+        PointerRelease, PointerRole, PointerSample, PointerSource, ScrollDelta, ScrollEvent,
         ScrollPhase, ScrollPrecision, ScrollUnit,
     },
 };
@@ -492,7 +492,7 @@ fn viewer_focal_inertia_uses_profile(native: bool) {
     );
     laid.adopt_vsync(vsync).expect("clock admission");
     for attempt in 0..3 {
-        let info = PointerInfo::new(
+        let info = PointerSource::new(
             PointerId::try_from(100_u64 + attempt).expect("contact identity"),
             if native {
                 PointerKind::Mouse
@@ -627,7 +627,7 @@ pub(crate) fn viewer_focal_fling_advances_then_stops_on_new_input() {
         tight(200.0, 200.0),
     );
     laid.adopt_vsync(vsync).expect("clock admission");
-    let source = PointerInfo::new(
+    let source = PointerSource::new(
         PointerId::try_from(81_u64).expect("contact"),
         PointerKind::Touch,
     );
@@ -998,8 +998,8 @@ pub(crate) fn viewer_reports_scale_velocity_separately_from_focal_velocity() {
     assert!(observed[0].velocity.pixels_per_second.dy.abs() < 1e-9);
 }
 
-fn mouse() -> PointerInfo {
-    PointerInfo::new(
+fn mouse() -> PointerSource {
+    PointerSource::new(
         PointerId::try_from(7_u64).expect("valid pointer"),
         PointerKind::Mouse,
     )
@@ -1072,7 +1072,7 @@ pub(crate) fn pointer_delivery_preserves_source_and_sample_families() {
             .child(SizedBox::new(100.0, 100.0)),
         tight(100.0, 100.0),
     );
-    let pointer = PointerInfo::new(
+    let pointer = PointerSource::new(
         PointerId::try_from(3_u64).expect("authored contact"),
         PointerKind::Pen {
             tool: PenTool::Eraser,

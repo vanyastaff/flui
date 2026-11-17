@@ -24,7 +24,7 @@
 //! recordings in `tests/` decode with are public and hidden from the
 //! documentation; nothing outside the crate's own tests names them.
 
-use flui_platform::pointer::{PointerId, PointerInfo, PointerKind, PointerRole};
+use flui_platform::pointer::{PointerId, PointerKind, PointerRole, PointerSource};
 
 #[doc(hidden)]
 pub mod assembly;
@@ -53,11 +53,11 @@ pub fn event_timestamp_ns() -> u64 {
     flui_platform::EventTime::now().as_nanos()
 }
 
-/// Create a `PointerInfo` for the primary mouse pointer.
+/// Create a `PointerSource` for the primary mouse pointer.
 #[inline]
 #[must_use]
-pub(crate) fn primary_mouse_info() -> PointerInfo {
-    PointerInfo::new(
+pub(crate) fn primary_mouse_info() -> PointerSource {
+    PointerSource::new(
         PointerId::try_from(1_u64).expect("BUG: primary mouse identity is nonzero"),
         PointerKind::Mouse,
     )

@@ -557,7 +557,9 @@ struct PartialTextFrame {
     controller: flui_widgets::TextEditingController,
     focus: std::rc::Rc<flui_interaction::focus::FocusNode>,
     rebuild: std::rc::Rc<std::cell::RefCell<Option<flui_view::RebuildHandle>>>,
-    store: std::rc::Rc<std::cell::RefCell<Option<std::rc::Rc<dyn flui_platform::TextStore>>>>,
+    store: std::rc::Rc<
+        std::cell::RefCell<Option<std::rc::Rc<dyn flui_platform::text_store::TextStore>>>,
+    >,
     grant: std::rc::Rc<std::cell::RefCell<Option<ImeGeometryRead>>>,
     lock_outcome: std::rc::Rc<
         std::cell::RefCell<
@@ -1253,9 +1255,9 @@ fn animated_preparation_retains_its_tick(failing_deadline: bool) {
         })
         .build();
         let down = flui_interaction::events::make_down_event_for_id(
-            flui_platform::PointerId::new(std::num::NonZeroU64::MIN),
+            flui_platform::pointer::PointerId::new(std::num::NonZeroU64::MIN),
             flui_foundation::geometry::Offset::new(10.0, 10.0),
-            flui_platform::PointerKind::Touch,
+            flui_platform::pointer::PointerKind::Touch,
         )
         .expect("finite retained contact");
         recognizer.add_pointer(flui_interaction::PointerDispatch::at_root(&down));
@@ -1473,7 +1475,7 @@ struct PendingEditable {
     runtime: flui_runtime::ui_runtime::UiRuntime,
     sink: PreparedTextSink,
     writer: flui_painting::TextSizingAdmission,
-    store: std::rc::Rc<dyn flui_platform::TextStore>,
+    store: std::rc::Rc<dyn flui_platform::text_store::TextStore>,
     completed: std::rc::Rc<std::cell::Cell<usize>>,
     work: flui_runtime::ui_runtime::TextSizingWork,
 }
@@ -1627,7 +1629,7 @@ fn retained_deadline_failure_case(background: bool, fail_query: bool) {
         fail_query,
     });
     let _entry = runtime.gestures().arena().add(
-        flui_platform::PointerId::new(std::num::NonZeroU64::new(99).expect("contact")),
+        flui_platform::pointer::PointerId::new(std::num::NonZeroU64::new(99).expect("contact")),
         &member,
     );
     let attempt = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

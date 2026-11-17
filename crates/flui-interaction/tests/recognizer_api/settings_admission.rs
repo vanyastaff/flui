@@ -20,8 +20,8 @@ use flui_interaction::{
 use flui_platform::{
     EventTime, GestureGeometry, GesturePreferences,
     pointer::{
-        PointerButton, PointerButtons, PointerInfo, PointerMove, PointerPosition, PointerPress,
-        PointerRelease, PointerSample, Pressure,
+        PointerButton, PointerButtons, PointerMove, PointerPosition, PointerPress, PointerRelease,
+        PointerSample, PointerSource, Pressure,
     },
 };
 
@@ -33,7 +33,7 @@ fn sample(millis: u64, x: f64, y: f64) -> PointerSample {
 }
 
 fn event(id: u64, kind: PointerKind, millis: u64, x: f64, y: f64, phase: u8) -> PointerEvent {
-    let info = PointerInfo::new(PointerId::try_from(id).expect("nonzero fixture"), kind);
+    let info = PointerSource::new(PointerId::try_from(id).expect("nonzero fixture"), kind);
     let buttons = PointerButtons::NONE.with(PointerButton::PRIMARY);
     let sample = sample(millis, x, y);
     match phase {
@@ -1087,7 +1087,7 @@ fn force_press_rejects_measured_excursion_before_pressure_returns_to_origin() {
             data.sample.pressure = Some(Pressure::try_new(0.2).expect("valid pressure"));
         }
         send(&*force, &arena, &down);
-        let info = PointerInfo::new(
+        let info = PointerSource::new(
             PointerId::try_from(id).expect("nonzero fixture"),
             PointerKind::Touch,
         );
@@ -1248,7 +1248,7 @@ fn force_press_snapshots_live_drift_policy_at_down() {
         if id == 190 {
             source.replace(old.clone().try_with_touch_slop(2.0).expect("valid slop"));
         }
-        let info = PointerInfo::new(
+        let info = PointerSource::new(
             PointerId::try_from(id).expect("nonzero pointer"),
             PointerKind::Touch,
         );
@@ -1342,7 +1342,7 @@ fn native_scale_retains_estimator_until_end_and_readmits_next_begin() {
         .settings(source.provider())
         .on_end(move |details| output.borrow_mut().push(details.focal_velocity.dx()))
         .build();
-    let info = PointerInfo::new(
+    let info = PointerSource::new(
         PointerId::try_from(510_u64).expect("nonzero"),
         PointerKind::Touch,
     );

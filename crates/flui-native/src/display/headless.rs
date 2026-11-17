@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use flui_foundation::geometry::{Bounds, DevicePixelRatio, Point, Size};
 use flui_platform::{
-    CapabilityAbsence, ColorGamut, DisplayColor, DisplayId, DisplayInfo, DisplayKey,
+    CapabilityAbsence, ColorGamut, DisplayColor, DisplayDescription, DisplayId, DisplayKey,
     DisplayRegistry, DisplayRevisionExhausted, DisplaySnapshot,
 };
 use parking_lot::Mutex;
@@ -51,7 +51,7 @@ impl DisplaySpec {
         }
     }
 
-    /// The display's colour profile, as [`DisplayInfo::color`] reports it: a
+    /// The display's colour profile, as [`DisplayDescription::color`] reports it: a
     /// colour space and headroom, or the reason a platform would give none.
     #[must_use]
     pub fn color(mut self, color: Result<DisplayColor, CapabilityAbsence>) -> Self {
@@ -60,7 +60,7 @@ impl DisplaySpec {
     }
 
     /// The key that names this display again in another run, as
-    /// [`DisplayInfo::persistent_key`] reports it.
+    /// [`DisplayDescription::persistent_key`] reports it.
     #[must_use]
     pub fn persistent_key(mut self, key: impl Into<String>) -> Self {
         self.persistent_key = Some(key.into());
@@ -135,7 +135,7 @@ pub(crate) fn laid_out(specs: Vec<DisplaySpec>) -> DisplaySnapshot {
                 .expect("BUG: a fresh registry has ids for the displays a test names");
             let bounds = Bounds::new(Point::new(next_x, 0), spec.size);
             next_x = next_x.saturating_add(spec.size.width);
-            let mut info = DisplayInfo::new(id, spec.name, bounds, spec.scale_factor)
+            let mut info = DisplayDescription::new(id, spec.name, bounds, spec.scale_factor)
                 .with_primary(index == 0)
                 .with_color(spec.color);
             if let Some(period) = spec.refresh_period {
@@ -263,7 +263,7 @@ impl HeadlessDisplayControls {
     /// # Errors
     /// [`DisplayChangeError::RevisionExhausted`] when the snapshot revision
     /// cannot advance.
-    pub fn replace(&self, displays: Vec<DisplayInfo>) -> Result<(), DisplayChangeError> {
+    pub fn replace(&self, displays: Vec<DisplayDescription>) -> Result<(), DisplayChangeError> {
         let Some(simulated) = self.displays.upgrade() else {
             return Ok(());
         };

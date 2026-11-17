@@ -17,8 +17,8 @@ use flui_interaction::{
 };
 use flui_platform::EventTime;
 use flui_platform::pointer::{
-    DeviceId, PointerDeviceChange, PointerEvent, PointerId, PointerInfo, PointerKind,
-    PointerPosition, TouchpadSwipeEvent, TouchpadSwipePhase,
+    DeviceId, PointerDeviceChange, PointerEvent, PointerId, PointerKind, PointerPosition,
+    PointerSource, TouchpadSwipeEvent, TouchpadSwipePhase,
 };
 
 type Log = Rc<RefCell<Vec<String>>>;
@@ -28,8 +28,8 @@ type OnEnd = Box<dyn Fn(&Rc<GestureBinding>)>;
 
 const DEVICE: u64 = 5;
 
-fn pointer(id: u64) -> PointerInfo {
-    PointerInfo::new(
+fn pointer(id: u64) -> PointerSource {
+    PointerSource::new(
         PointerId::try_from(id).expect("nonzero"),
         PointerKind::Trackpad,
     )

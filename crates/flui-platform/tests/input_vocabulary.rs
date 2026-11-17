@@ -10,8 +10,8 @@ use flui_platform::EventTime;
 use flui_platform::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, NamedKey};
 use flui_platform::pointer::{
     ContactSize, HoverDistance, InputValueError, PanZoomTransform, PenOrientation, PointerButton,
-    PointerButtons, PointerId, PointerInfo, PointerKind, PointerMove, PointerPosition,
-    PointerPress, PointerRelease, PointerRole, PointerSample, Pressure, Quantity, ScrollDelta,
+    PointerButtons, PointerId, PointerKind, PointerMove, PointerPosition, PointerPress,
+    PointerRelease, PointerRole, PointerSample, PointerSource, Pressure, Quantity, ScrollDelta,
     ScrollEvent, ScrollPhase, ScrollUnit, TangentialPressure, Twist,
 };
 
@@ -19,8 +19,8 @@ use crate::run_table;
 
 const T0: EventTime = EventTime::from_nanos(1_000);
 
-fn mouse() -> PointerInfo {
-    PointerInfo::new(
+fn mouse() -> PointerSource {
+    PointerSource::new(
         PointerId::try_from(1_u64).expect("non-zero"),
         PointerKind::Mouse,
     )
@@ -483,19 +483,19 @@ fn bounded_coalesced_history_keeps_latest_readings_and_predictions() {
 }
 
 fn coalescing_refuses_every_pointer_metadata_mismatch_without_mutation() {
-    use flui_platform::pointer::{DeviceId, MismatchedPointerInfo};
+    use flui_platform::pointer::{DeviceId, MismatchedPointerSource};
     let base = mouse();
     for other in [
-        PointerInfo::new(PointerId::try_from(2_u64).expect("nonzero"), base.kind)
+        PointerSource::new(PointerId::try_from(2_u64).expect("nonzero"), base.kind)
             .with_role(base.role),
         base.with_device(DeviceId::try_from(3_u64).expect("nonzero")),
-        PointerInfo::new(base.id, PointerKind::Touch).with_role(base.role),
+        PointerSource::new(base.id, PointerKind::Touch).with_role(base.role),
         base.with_role(PointerRole::Additional),
     ] {
         let older = PointerMove::new(other, PointerButtons::NONE, sampled_at(0));
         let mut newer = PointerMove::new(base, PointerButtons::NONE, sampled_at(20));
         let before = newer.clone();
-        assert_eq!(newer.try_coalesce(&older), Err(MismatchedPointerInfo));
+        assert_eq!(newer.try_coalesce(&older), Err(MismatchedPointerSource));
         assert_eq!(newer, before);
         assert_eq!(*older.current(), sampled_at(0));
         assert_eq!(older.pointer, other);
@@ -507,7 +507,7 @@ fn coalescing_refuses_every_pointer_metadata_mismatch_without_mutation() {
         let old_before = older.clone();
         assert_eq!(
             newer.try_coalesce_from(&mut older),
-            Err(MismatchedPointerInfo)
+            Err(MismatchedPointerSource)
         );
         assert_eq!(newer, before);
         assert_eq!(older, old_before, "refusal retains both owned histories");

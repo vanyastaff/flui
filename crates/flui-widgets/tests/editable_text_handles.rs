@@ -15,8 +15,8 @@ use flui_interaction::focus::FocusNode;
 use flui_interaction::testing::input::KeyEventBuilder;
 use flui_painting::typography::TextStyle;
 use flui_platform::pointer::{
-    PointerButton, PointerButtons, PointerEvent, PointerId, PointerInfo, PointerKind,
-    PointerPosition, PointerPress, PointerRelease, PointerSample,
+    PointerButton, PointerButtons, PointerEvent, PointerId, PointerKind, PointerPosition,
+    PointerPress, PointerRelease, PointerSample, PointerSource,
 };
 use flui_platform::{EventTime, TargetPlatform};
 use flui_testing::replay::{PointerScript, TouchScript};
@@ -188,7 +188,7 @@ impl Scene {
 
     /// A primary mouse click at `at`.
     fn click(&mut self, at: Offset<f64>) {
-        let mouse = PointerInfo::new(
+        let mouse = PointerSource::new(
             PointerId::try_from(77_u64).expect("a nonzero id"),
             PointerKind::Mouse,
         );
@@ -549,7 +549,7 @@ pub(crate) fn a_panic_on_the_last_drag_move_still_ends_the_drag() {
     }));
     let from = scene.handle_at(caret);
     let shift = |prefix: &str| from + Offset::new(start_of(prefix) - caret, 0.0);
-    let info = PointerInfo::new(
+    let info = PointerSource::new(
         PointerId::try_from(5_u64).expect("a nonzero id"),
         PointerKind::Touch,
     );
@@ -623,7 +623,7 @@ pub(crate) fn a_panic_on_a_long_press_release_still_ends_the_press() {
             }
         }
     }));
-    let info = PointerInfo::new(
+    let info = PointerSource::new(
         PointerId::try_from(6_u64).expect("a nonzero id"),
         PointerKind::Touch,
     );
@@ -693,7 +693,7 @@ pub(crate) fn a_panic_on_the_long_press_selection_still_claims_the_contact() {
             }
         }
     }));
-    let info = PointerInfo::new(
+    let info = PointerSource::new(
         PointerId::try_from(7_u64).expect("a nonzero id"),
         PointerKind::Touch,
     );

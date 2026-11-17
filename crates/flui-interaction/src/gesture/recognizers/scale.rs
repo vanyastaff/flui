@@ -21,7 +21,7 @@ use std::{
 };
 
 use flui_foundation::geometry::{Axis, Offset};
-use flui_platform::pointer::{PanZoomPhase, PointerInfo};
+use flui_platform::pointer::{PanZoomPhase, PointerSource};
 use web_time::Instant;
 
 use super::{
@@ -851,7 +851,7 @@ enum Outcome {
 #[derive(Debug)]
 struct NativeScale {
     id: ContactId,
-    source: PointerInfo,
+    source: PointerSource,
     settings: GestureSettings,
     started: bool,
     focal: Offset<f64>,
@@ -869,7 +869,7 @@ struct NativeScale {
 impl NativeScale {
     fn new(
         id: ContactId,
-        source: PointerInfo,
+        source: PointerSource,
         focal: Offset<f64>,
         global_focal: Offset<f64>,
         settings: &GestureSettings,
@@ -897,7 +897,7 @@ impl NativeScale {
         }
     }
 
-    fn matches(&self, source: PointerInfo) -> bool {
+    fn matches(&self, source: PointerSource) -> bool {
         self.source.id == source.id && self.source.device == source.device
     }
 
