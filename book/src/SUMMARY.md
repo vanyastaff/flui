@@ -7,6 +7,12 @@
 - [Installation and first run](getting-started/installation.md)
 - [Contributing to FLUI](getting-started/contributing.md)
 
+# Tutorial
+
+- [Your first window](tutorial/first-app.md)
+- [Laying out a screen](tutorial/layout.md)
+- [Adding state](tutorial/state.md)
+
 # Concepts
 
 - [Overview](concepts/overview.md)
