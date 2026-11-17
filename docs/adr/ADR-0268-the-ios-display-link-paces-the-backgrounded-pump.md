@@ -32,7 +32,7 @@ sleep, take Android's deadline, or let the link pace the arm?
 
 ## Decision drivers
 
-- The main thread never blocks on a timer: UIKit's input and lifecycle delivery run on it (ADR-0058).
+- The main thread never blocks on a timer: UIKit's input and lifecycle delivery run on it (ADR-0353).
 - No accepted work is dropped: a pump the pace defers must still run.
 - One frame-demand state machine per platform (`flui-native`'s `owner::frame_demand`).
 

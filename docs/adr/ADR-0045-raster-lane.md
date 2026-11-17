@@ -2,7 +2,7 @@
 
 - **Status:** Superseded (2026-11-03)
 - **Date:** 2026-08-07
-- **Amended by:** ADR-0058 (decision 3), ADR-0063 (decision 1, §7)
+- **Amended by:** ADR-0353 (decision 3), ADR-0063 (decision 1, §7)
 - **Superseded-by:** [ADR-0254](ADR-0254-window-contract.md), in part: decision 5's relay as a new
   `PlatformProxy` verb. A thread that is not a window's owner asks it for a frame through the
   window's `RedrawRequester` (ADR-0254 §5); the rule that the raster side never asks stays.
@@ -138,16 +138,16 @@ already names worker-cache freshness). It lives in `flui-engine`, which owns all
 ### 3. What paces production once the produce loop stops blocking
 
 The blocking `Fifo` acquire/present paces production only while the raster owner runs inline on the
-produce thread (ADR-0058). Under a threaded lane both calls move to the raster side and the produce
+produce thread (ADR-0353). Under a threaded lane both calls move to the raster side and the produce
 loop reaches neither. Production is then paced by:
 
 - `FrameClock`'s in-flight capacity gate (`Skip(Backpressure)`, live in production for the first
   time — closing ADR-0044 §9's boundary) and `min_produce_interval`;
-- the platform's own pacing signal, armed before every present (ADR-0058 decision 1): the
+- the platform's own pacing signal, armed before every present (ADR-0353 decision 1): the
   window's slot calls its `SurfaceTarget::pre_present_notify` (ADR-0305)
   immediately before `queue.present`, for a frame that will present only;
 - for frames that ran the pipeline but did not present, a `FallbackWake` **deadline** delivered
-  through the wake-deadline hook (`ControlFlow::WaitUntil`, ADR-0044 §7; ADR-0058 decision 2).
+  through the wake-deadline hook (`ControlFlow::WaitUntil`, ADR-0044 §7; ADR-0353 decision 2).
   **Never a sleep:** the event-loop thread does not block.
 
 **The fallback deadline applies only when `in_flight == 0` and the last completion did not
@@ -256,7 +256,7 @@ topology is named `RasterMode { Inline, Threaded }`. `Overlap` on an `Inline` la
 | GL backend | as above; wgpu ignores `desired_maximum_frame_latency` there |
 
 The clock-side threshold and wgpu's `desired_maximum_frame_latency` (a single source literal; see
-ADR-0058 decision 0) stay decoupled. At depth 2 with one producer a pending frame is never
+ADR-0353 decision 0) stay decoupled. At depth 2 with one producer a pending frame is never
 superseded, so `latest_frame_wins_supersedes_pending` stays covered only by the threaded harness.
 
 ### 7. Lane health, and bounded teardown

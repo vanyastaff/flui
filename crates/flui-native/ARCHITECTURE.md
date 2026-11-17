@@ -1387,10 +1387,15 @@ trait depends on `flui-platform` instead.
   compositor's `wm_capabilities` where it sends them (version 5); one that
   sends none (sway 1.9) is taken to offer every mode. A window tiled and in
   no mode takes the tiling's size, so `SetSize` is `NotOnThisDevice` while it
-  is. Its buffer is drawn at the compositor's fractional scale
-  (`wp_fractional_scale_v1`), else the surface's preferred whole scale, else
-  its output's, and at scale 1 without a viewport: `scale::buffer_scale` is
-  the one place that decides. Its frame is the compositor's answer through
+  is. A configure that leaves the size to a window still at the size it
+  opened at holds that size within the compositor's `configure_bounds`
+  (version 4), each axis on its own; a size asked for or taken since is not
+  held to them (`configure::Bounds`,
+  `a_window_opens_within_the_compositors_bounds`). Its buffer is drawn at the
+  compositor's fractional scale (`wp_fractional_scale_v1`), else the
+  surface's preferred whole scale, else the largest of its outputs', and at
+  scale 1 without a viewport: `scale::buffer_scale` is the one place that
+  decides. Its frame is the compositor's answer through
   `xdg-decoration`, never the request; a configure after a request that names
   no mode answers it with the mode unchanged (wlroots sends no mode twice).
   Where the compositor offers none, or leaves the frame to the client, a
@@ -1409,9 +1414,22 @@ trait depends on `flui-platform` instead.
   OS extension; until that reader exists the handle is kept and read under
   `testing` only. The window tells its AT-SPI bridge each change of the
   compositor's activation, which `UnixAccessibility::focus_changed` passes to
-  the adapter (the X11 window already called it); the bridge reaches the
-  adapter through `AtSpiAdapter`, the two calls it makes of
-  `accesskit_unix::Adapter`. `Activate` is a request with an
+  the adapter (the X11 window already called it), and where its content is
+  (`WindowAccessibility::bounds_changed`): the compositor tells a client
+  nothing of its window's position, so the window is at the origin and its
+  content below the title bar it draws itself (`scale::unplaced_bounds`),
+  while the X11 window passes its frame's and its content's rectangles on the
+  root each time a read of the server finds them changed. That read follows
+  the events the server sends the window (`ConfigureNotify`, including the
+  synthetic one ICCCM 4.1.5 has a window manager send when it moves a frame,
+  `ReparentNotify`, `_NET_FRAME_EXTENTS`, the focus), so a manager that moves
+  a frame without telling the client leaves the old position until the next
+  such event ([gaps](../../docs/gaps.md)). The headless window passes its
+  simulated rectangle, which `HeadlessWindowSystem::accessibility_bounds`
+  reports. AT-SPI's screen
+  coordinates of a node are the content's origin plus the node's place; the
+  bridge reaches the adapter through `AtSpiAdapter`, the three calls it makes
+  of `accesskit_unix::Adapter`. `Activate` is a request with an
   `xdg-activation` token (`activation`): the window asks for one naming the
   last user input (its seat, serial and surface, `UserInput`, kept by the
   loop in `LastInput`, which the windows read; no input records into it until
@@ -2606,12 +2624,25 @@ waits at most 500ms before the bootstrap (`AppHandler::ready`); unavailable or s
 unknown and can recover later. No D-Bus call runs in the frame path. Successful
 unsigned `org.freedesktop.appearance/reduced-motion` values map 1 to Reduce and
 other values to NoPreference. A missing key permits the GNOME
-`org.gnome.desktop.interface/enable-animations` fallback; transient errors
+`org.gnome.desktop.interface/enable-animations` fallback, and with neither key
+motion is unobserved, as every other key without a value is; failed reads
 preserve the last accepted snapshot. Settings v1 uses its double-variant `Read`
-reply. Healthy observations use notifications; failed reads retain a bounded
-retry that unrelated notifications cannot postpone. Service-owner changes
-refresh the same observation set. Shutdown fences owner admission before
-cancelling the task, whose state holds no strong owner/source cycle.
+reply. The watch never polls. A refresh is retried on `READ_RETRIES`' doubling
+schedule, which runs out and which unrelated notifications cannot postpone,
+after a read that fails in a way that passes by itself (the call timed out, no
+reply, the portal's `Failed`), and after a refresh in which the portal answered
+no setting at all: `xdg-desktop-portal` folds a backend that has not started
+or has gone into `NotFound` for every key, and the backend's return changes no
+owner on the bus and sends no signal. A key missing beside others that answer,
+a portal without the Settings interface and a portal not on the bus
+(`ServiceUnknown`) wait for the next `SettingChanged` or `NameOwnerChanged`,
+each of which refreshes the same observation set and starts the schedule over.
+A session bus that does not answer, or a connection that ends before the portal
+answered on it, is tried again on `CONNECT_RETRIES`' schedule, which only a
+connection the portal answered on starts over, and once it runs out the watch
+ends with the observation it has.
+Shutdown fences owner admission before cancelling the task, whose state holds
+no strong owner/source cycle.
 
 The same connection reads `org.freedesktop.appearance/color-scheme`: 1 is dark,
 everything else (no preference, prefers light, a missing key) light. It is kept
@@ -3428,7 +3459,7 @@ visible bit):
   from where it runs.
 - A diagnostic redraw tick in the backend (an `NSTimer`/thread poke behind a
   `FLUI_MACOS_REDRAW_POKE_MS`-style knob, which was implemented while diagnosing
-  this). Deleted, not deferred: it contradicts ADR-0058 — the platform paces
+  this). Deleted, not deferred: it contradicts ADR-0353 — the platform paces
   production, a sleep never does — and it pre-empts the `PlatformProxy` redraw
   verb ADR-0045 decision 5 scopes to #559 by shipping a second, private frame
   source. The primer that starts a measurement belongs to the measuring harness.
@@ -4255,7 +4286,11 @@ handler that opens or closes a window, sets a cursor or quits finds the
 input as it was; events a handler's roundtrip records meanwhile are
 delivered in the same turn. A held key repeats on the client, by
 `wl_keyboard.repeat_info`, and the loop's wait is bounded by the next repeat
-(`LoopTurn::input_due`).
+(`LoopTurn::input_due`). A keyboard of a seat bound below version 4 is never
+told its repeat and repeats at `repeat::UNTOLD`, 25 a second after 600 ms: its
+keymap, which a compositor sends first, carries the keyboard's version
+(`a_keyboard_never_told_its_repeat_still_repeats`,
+`a_keymap_of_an_old_keyboard_brings_its_repeat`).
 
 What the translation decides is in the module docs of
 `input::linux::wayland`; the parts with a test of their own: a pointer frame
@@ -4282,8 +4317,20 @@ replays to exactly what the window heard and is checked in as
 source in a headless compositor: their translation is held by the wire
 tests alone. A compositor without `cursor-shape` (Weston 13) gets the
 cursor theme's image (`wayland-cursor`, `XCURSOR_THEME` and `XCURSOR_SIZE`)
-on a surface of the pointer's own, drawn at the window's scale rounded up;
-`wayland_input` sees Weston 13 show the theme's pointer.
+on a surface of the pointer's own, drawn for the window's scale rounded up;
+`wayland_input` sees Weston 13 show the theme's pointer. A theme ships a few
+sizes, and the nearest to the asked one need not be a multiple of that scale
+(Adwaita's 64 at 3), while `wl_surface.attach` refuses a buffer whose size is
+not a multiple of the surface's buffer scale with a protocol error that ends
+the connection. So the image is put on the surface at the scale only where it
+divides both sides, else through a `wp_viewport` at the image's logical size
+with buffer scale 1, else, with no viewporter, at the largest smaller scale
+that divides it (`cursor::CursorBuffer::fit`,
+`a_theme_image_fits_its_cursor_surface`); the requests the surface is sent
+for each are `CursorBuffer::requests`, which the dispatch carries out one by
+one (`a_cursor_surface_is_sent_what_its_image_needs`). A window that publishes
+another scale tells the input (`WaylandInput::rescaled`), which draws a theme
+cursor over it again for that scale.
 
 Each seat's keyboard has its own keymap, window and repeat (`SeatKey` on
 every keyboard wire, `keyboards::Keyboards`); a key repeats only while its
@@ -4771,7 +4818,16 @@ names a window's output by number; the X11 host does not.
 
 **What reaches the window.** A Wayland window is on the first output its surface
 entered that it has not left, so a window the compositor moves to another output
-names that output's display, whatever its scale. A change of the monitor list
+names that output's display, whatever its scale. Where the compositor prefers no
+scale for the surface (no `wp_fractional_scale_v1`, `wl_surface` before version
+6), the buffer is drawn at the largest scale of the outputs the surface is on,
+so a window across a scale-1 and a scale-2 output is sharp on the denser one
+whichever it entered first, while it still names the display of the first: a
+window's scale is its own fact, not its display's. Both are read from one
+snapshot (`WaylandDisplays::on_outputs`, `owner::linux::wayland::outputs::OnOutputs`);
+an output the surface entered first that the snapshot does not hold yet leaves
+the window on no display rather than on the next one
+(`a_window_is_on_its_first_output_and_drawn_for_the_densest`). A change of the monitor list
 needs no event of its own: the thread wakes the owner and the host derives every
 window's display from the new snapshot.
 
