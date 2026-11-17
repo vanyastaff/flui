@@ -9,6 +9,8 @@
   window is not `Send`); [ADR-0039](ADR-0039-event-loop-affinity-capability.md) §1's `shared()` and §2 only (which
   methods stay on a `Send + Sync` `Platform`; another thread reaches the owner through
   `PlatformProxy` alone)
+- **Superseded-by:** [ADR-0351](ADR-0351-a-linux-window-and-its-desktop-entry-carry-the-application-id.md)
+  for §3's signature of `CurrentHost::start_with` only (it also takes the application id)
 - **Related:** [ADR-0323](ADR-0323-a-value-stays-on-the-owner-thread-unless-its-signature-names-what-crosses.md)
   §1, §2 and §4 (the rule this record applies to `flui-native`, and the five capability traits
   of `flui-platform` whose bounds wait on it), [ADR-0047](ADR-0047-unified-execution-services.md)

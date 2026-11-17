@@ -10,7 +10,8 @@
 //!   supports (`_NET_SUPPORTING_WM_CHECK`, `_NET_SUPPORTED`): with no window
 //!   manager, nothing minimizes, maximizes or enters fullscreen;
 //! - [`hints`]: the size limits a window asks in `WM_NORMAL_HINTS`, and the
-//!   decorations in `_MOTIF_WM_HINTS`;
+//!   decorations in `_MOTIF_WM_HINTS`, and the input focus it takes in
+//!   `WM_HINTS`;
 //! - [`placement`]: the window's outer rectangle from its content and the
 //!   frame the window manager put around it, the display it is on, and
 //!   logical numbers as the 16-bit coordinates and extents X11 takes.
@@ -1066,7 +1067,8 @@ pub(crate) mod hints {
     //! What an X11 window asks of the window manager in its properties: the
     //! content sizes it is held between, in `WM_NORMAL_HINTS` (ICCCM), and
     //! whether it is decorated, in `_MOTIF_WM_HINTS`, the property window
-    //! managers read for it.
+    //! managers read for it, and that it takes the input focus, in
+    //! `WM_HINTS` (ICCCM).
 
     #![forbid(unsafe_code)]
 
@@ -1118,6 +1120,16 @@ pub(crate) mod hints {
         const DECORATIONS: u32 = 1 << 1;
         [DECORATIONS, 0, u32::from(decorated), 0, 0]
     }
+
+    /// `WM_HINTS` (ICCCM §4.1.2.4) saying the window takes the input focus
+    /// when the window manager gives it (`InputHint`, input `True`): a
+    /// window manager that reads a missing hint as "never focus this window"
+    /// still focuses it. No other field is set.
+    #[cfg(x11_host)]
+    pub(crate) const WM_HINTS: [u32; 9] = {
+        const INPUT_HINT: u32 = 1;
+        [INPUT_HINT, 1, 0, 0, 0, 0, 0, 0, 0]
+    };
 
     #[cfg(test)]
     mod tests {
