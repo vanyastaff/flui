@@ -22,8 +22,8 @@ pub(crate) mod log;
 pub(crate) mod parity;
 #[cfg(all(target_os = "linux", feature = "wayland"))]
 pub mod wayland;
-/// A Wayland compositor a test scripts, which a Wayland host connects to:
-/// a server alone, so it needs only the `testing` feature.
+// A server alone, so it needs only the `testing` feature. Its own `//!` is its
+// doc: an outer doc here would resolve that one's links in this scope.
 #[cfg(all(target_os = "linux", feature = "testing"))]
 pub mod wayland_compositor;
 #[cfg(all(target_os = "linux", feature = "x11"))]

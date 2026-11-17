@@ -274,7 +274,7 @@ struct WindowedGpuStack {
 /// Cross-platform GPU renderer
 ///
 /// `Send` by compiler derivation: every field is `Send`, including
-/// `gpu_stack_origin`'s `Arc<dyn WindowTarget>` (via [`WindowTarget`]'s own
+/// `gpu_stack_origin`'s `Arc<dyn WindowTarget>` (via the surface target's own
 /// `Send + Sync + 'static` bound) and its `wgpu::Surface<'static>` (`Send +
 /// Sync` per wgpu, on wasm32 via the crate's `fragile-send-sync-non-atomic-wasm`
 /// feature). Issue #1043 deleted the crate's one hand-written `unsafe impl
@@ -885,7 +885,7 @@ impl Renderer {
 
     /// Rebuild the GPU device and surface after a device-lost event.
     ///
-    /// Re-probes the SAME retained [`WindowTarget`] the renderer was built
+    /// Re-probes the SAME retained surface target the renderer was built
     /// from, then — only if that probe succeeds — rebuilds the entire GPU
     /// stack (instance → adapter → device → surface → painter → offscreen)
     /// and swaps the new pieces into `self`. The recovered surface is
@@ -1646,7 +1646,7 @@ impl Renderer {
     /// path and rebuilds the whole stack; a suspend never sets the device-lost
     /// flag, so routing a resume through it would discard a perfectly good
     /// device. The new surface is created from the lease's retained
-    /// [`WindowTarget`], so it binds to whatever native handle is current now,
+    /// surface target, so it binds to whatever native handle is current now,
     /// which after a real activity recreation is a different one from the
     /// released surface's.
     ///
