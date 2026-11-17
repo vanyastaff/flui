@@ -342,6 +342,8 @@ mod pipeline_cache;
 /// `PipelineCache`/`PipelineBuilder` is gone; this module is the surviving
 /// half.
 pub(crate) mod pipeline_set;
+#[cfg(not(target_arch = "wasm32"))]
+mod pipeline_warmup;
 mod portable_coverage;
 mod profiler;
 mod recording_budget;
