@@ -900,11 +900,15 @@ impl WgpuPainter {
 
     /// Closes the chunk `entry` opened once its commands are recorded, and
     /// keeps the recording when it completed and stayed one fragment of the
-    /// segment: no clip of its own, no draw item or layer, no refusal, and
-    /// the resources it names unchanged since it began.
+    /// segment: no clip of its own, no draw item or layer, no refusal, every
+    /// glyph it asked for placed, and the resources it names unchanged since
+    /// it began.
     pub(crate) fn end_chunk(&mut self, entry: ChunkEntry) {
         let glyph_keys = self.glyph_atlas.take_slot_log();
         let clip_opened = self.state.take_clip_opened();
+        let Some(glyph_keys) = glyph_keys else {
+            return;
+        };
         if clip_opened
             || self.draw_order.len() != entry.items
             || self.compositor.depth() != entry.layer_depth
