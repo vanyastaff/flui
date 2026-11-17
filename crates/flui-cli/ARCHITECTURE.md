@@ -209,9 +209,36 @@ What the application opens (schema 3: `url-schemes`, `associated-domains`, `file
 value checked in `declarations/opening.rs`) becomes `FluiActivity`'s intent filters, a verified
 one for the domains' `https` links (`the_activity_filters_what_the_application_opens`), and the
 keys both Apple bundles' `Info.plist` take from `build/apple_opening.rs`: `CFBundleURLTypes`, and
-per file type an exported uniform type under the bundle identifier that the bundle opens as its
-owner (`a_bundle_registers_what_the_application_opens`). The macOS bundle's XML plist renders the
-same keys (`the_keys_render_as_xml_property_list_entries`). Schemes and domains are the
+per file type a document type (ADR-0361). A type the system declares itself (`public.png`,
+`com.adobe.pdf`: the table `APPLE_SYSTEM_TYPES` in `declarations/opening.rs`) is named by that
+identifier and opened as an alternate viewer, never declared; a type the application crate
+declares is exported as a uniform type under the bundle identifier that the bundle opens as its
+owner; a type only a linked crate declares is imported under that identifier, opened as an
+alternate viewer, and warned about (`a_bundle_registers_what_the_application_opens`,
+`a_type_the_system_declares_is_opened_and_not_owned`). Joined across the targets of one build, as
+across its crates, an extension keeps one MIME type
+(`declarations_joined_across_targets_give_an_extension_one_type`). The macOS bundle's XML plist
+is rendered whole from the same keys, every value escaped by the renderer
+(`the_keys_render_as_xml_property_list_entries`); every name a generated XML file takes
+(`[app] display_name`, a bundle name, a file type's name) is refused when it holds a character
+XML cannot carry (`util::xml::is_xml_name_text`). Every package's version numbers come from one
+rule, `AppVersion::package_numbers`: `CFBundleShortVersionString` is `major.minor.patch`, the
+version as written is `versionName` and `FLUIVersion`, and the build number (`versionCode`,
+`CFBundleVersion`) is `[app] build`, else derived, with a release build of a pre-release refused
+without it; the derived code's limits are checked when `flui.toml` loads, so every packager takes
+the same versions (`every_package_states_the_one_version`,
+`a_release_of_a_pre_release_needs_a_build_number`,
+`a_version_no_packager_takes_is_refused_when_read`). A bundle named from its directory takes the
+version of the package the build compiled (`AppBundle::package_numbers`,
+`the_macos_info_plist_states_the_application_version`). The macOS bundle decides its plist, and
+makes every refusal, before it removes an earlier bundle. A library build for iOS is always
+delivered as an XCFramework, whatever Xcode project the project's iOS directory holds
+(`a_library_build_beside_an_xcode_project_is_delivered_as_a_framework`). `[app] name` is a
+`ProjectName`, checked when `flui.toml` loads, so no generated Kotlin, XML, JSON or HTML file
+receives a name that breaks out of its string; the shown name is `[app] display_name`
+(`DisplayName`, free text that each writer escapes), used for `CFBundleDisplayName`, the desktop
+entry's `Name`, the Android label and the web title. The file is refused past `MAX_CONFIG_BYTES`
+before it is decoded (`a_project_file_is_checked_when_it_loads`). Schemes and domains are the
 application's own: a crate another crate of the build links by a normal or build edge is refused
 when it declares them (`only_the_application_declares_the_links_it_opens`), since the run admits
 what `#[flui::main]` reads from the crate it marks. A Linux build writes the desktop entry and the
@@ -578,9 +605,17 @@ never waits on a refused client; a refused client has its request bytes read
 before the close, so it reads the status. The page is served with the
 generation it is (`reload.js?generation=N`), which its first poll waits past,
 so a rebuild before that poll still reloads it. It cuts a request head off
-at `REQUEST_HEAD` however slowly it arrives, and sends
-`X-Content-Type-Options: nosniff`. A missing asset and a request that is not
-a navigation get a 404 (`dev_server_contract`).
+at `REQUEST_HEAD` however slowly it arrives, and a response off at
+`RESPONSE_WRITE` however slowly it is read (the socket's timeout is set again
+only once the time left has shrunk by `WRITE_TIMEOUT_SLACK`), so a client that
+stops reading gives its place back. Only a regular file is served: a FIFO, a
+socket or a device is a 404 before it is opened, and on Unix the open is
+non-blocking, since opening a FIFO for reading waits for a writer and would
+hold the place for good. A file of the build is copied from disk as it is
+written, so a large module is never held in memory once per connection; the
+page, read whole to carry the reload script, is answered 500 past `MAX_PAGE`
+before it is read. It sends `X-Content-Type-Options: nosniff`. A missing asset
+and a request that is not a navigation get a 404 (`dev_server_contract`).
 
 ## The watcher is dev-machine code
 
