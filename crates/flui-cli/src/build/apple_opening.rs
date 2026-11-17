@@ -1,8 +1,13 @@
 //! What an Apple bundle's `Info.plist` states about what the application
 //! opens (ADR-0307 §4): its URL schemes (`CFBundleURLTypes`) and its file
-//! types, each exported as a uniform type the bundle owns
-//! (`UTExportedTypeDeclarations`) and opened as a document of that type
-//! (`CFBundleDocumentTypes`). One source for the iOS and the macOS bundle.
+//! types, each opened as a document of its type (`CFBundleDocumentTypes`).
+//! A type the system declares (`public.png`, `com.adobe.pdf`) is named by
+//! its own identifier and opened as an alternate viewer; a type the
+//! application crate declares is exported as a uniform type the bundle owns
+//! (`UTExportedTypeDeclarations`) and opened as its owner; a type only a
+//! linked crate declares is imported (`UTImportedTypeDeclarations`) and
+//! opened as an alternate viewer, with a warning (ADR-0361). One source for
+//! the iOS and the macOS bundle.
 //!
 //! The associated domains are not here: they are an entitlement
 //! (`com.apple.developer.associated-domains`), which a signed build carries.
@@ -11,7 +16,7 @@ use serde_json::{Map, Value, json};
 
 #[cfg(any(target_os = "macos", test))]
 use crate::build::util::xml::xml_escape;
-use crate::declarations::Declarations;
+use crate::declarations::{Declarations, FileType};
 
 /// Which bundle the keys are for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,30 +50,51 @@ pub(crate) fn info_plist_keys(
         );
     }
     let mut exported = Vec::new();
+    let mut imported = Vec::new();
     let mut documents = Vec::new();
     for (file_type, _) in declarations.file_types() {
-        let uniform = format!("{identifier}.{}", file_type.extension());
-        exported.push(json!({
-            "UTTypeIdentifier": uniform,
-            "UTTypeDescription": file_type.name(),
-            "UTTypeConformsTo": ["public.data", "public.content"],
-            "UTTypeTagSpecification": {
-                "public.filename-extension": [file_type.extension()],
-                "public.mime-type": [file_type.mime()],
-            },
-        }));
+        let (content_type, rank) = match type_kind(file_type, declarations) {
+            // Opened by the system's identifier, as one viewer among others.
+            TypeKind::System(system) => (system.to_owned(), "Alternate"),
+            // Declared under the bundle's identifier: exported and owned when
+            // the application defines it, imported as one viewer among
+            // others when only a crate it links names it.
+            kind => {
+                let uniform = format!("{identifier}.{}", file_type.extension());
+                let declaration = json!({
+                    "UTTypeIdentifier": uniform,
+                    "UTTypeDescription": file_type.name(),
+                    "UTTypeConformsTo": ["public.data", "public.content"],
+                    "UTTypeTagSpecification": {
+                        "public.filename-extension": [file_type.extension()],
+                        "public.mime-type": [file_type.mime()],
+                    },
+                });
+                if kind == TypeKind::Application {
+                    exported.push(declaration);
+                    (uniform, "Owner")
+                } else {
+                    imported.push(declaration);
+                    (uniform, "Alternate")
+                }
+            }
+        };
         documents.push(json!({
             "CFBundleTypeName": file_type.name(),
             "CFBundleTypeRole": "Viewer",
-            "LSHandlerRank": "Owner",
-            "LSItemContentTypes": [uniform],
+            "LSHandlerRank": rank,
+            "LSItemContentTypes": [content_type],
         }));
     }
+    for (key, declarations) in [
+        ("UTExportedTypeDeclarations", exported),
+        ("UTImportedTypeDeclarations", imported),
+    ] {
+        if !declarations.is_empty() {
+            keys.insert(key.to_owned(), Value::Array(declarations));
+        }
+    }
     if !documents.is_empty() {
-        keys.insert(
-            "UTExportedTypeDeclarations".to_owned(),
-            Value::Array(exported),
-        );
         keys.insert("CFBundleDocumentTypes".to_owned(), Value::Array(documents));
         if platform == ApplePlatform::Ios {
             // The application gets its own copy of a file it is handed,
@@ -80,6 +106,71 @@ pub(crate) fn info_plist_keys(
         }
     }
     keys
+}
+
+/// How a bundle states one file type it opens.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TypeKind {
+    /// A type the system declares, opened by this identifier.
+    System(&'static str),
+    /// A type the application crate declares and the system does not: the
+    /// application's own format.
+    Application,
+    /// A type only a crate the application links declares, which the system
+    /// does not know: another party's format.
+    Linked,
+}
+
+fn type_kind(file_type: &FileType, declarations: &Declarations) -> TypeKind {
+    match file_type.apple_system_type() {
+        Some(system) => TypeKind::System(system),
+        None if declarations.is_application_type(file_type) => TypeKind::Application,
+        None => TypeKind::Linked,
+    }
+}
+
+/// The file types the bundle opens that neither the system nor the
+/// application declares: a crate it links names them, so the bundle imports
+/// each under its own identifier and does not own it. A packager warns about
+/// each, since another application that exports the type may give it a
+/// different identifier.
+fn types_only_a_linked_crate_declares(
+    declarations: &Declarations,
+) -> impl Iterator<Item = (&FileType, &std::collections::BTreeSet<String>)> {
+    declarations
+        .file_types()
+        .filter(|(file_type, _)| type_kind(file_type, declarations) == TypeKind::Linked)
+}
+
+/// Warn about each type [`types_only_a_linked_crate_declares`] names, as a
+/// bundle is staged with it.
+pub(crate) fn warn_about_types_only_a_linked_crate_declares(declarations: &Declarations) {
+    for (file_type, crates) in types_only_a_linked_crate_declares(declarations) {
+        let crates = crates.iter().cloned().collect::<Vec<_>>().join(", ");
+        // A warning that cannot be printed changes nothing the build writes.
+        let _ = crate::ui::warning(format!(
+            "`.{}` ({}) is declared by {crates}, not by the application, and the system does \
+             not declare it: the bundle opens it as an imported type and does not own it",
+            file_type.extension(),
+            file_type.mime()
+        ));
+    }
+}
+
+/// `keys` as a whole XML property list document, its top `<dict>` holding
+/// them in key order.
+#[must_use]
+#[cfg(any(target_os = "macos", test))]
+pub(crate) fn plist_xml_document(keys: &Map<String, Value>) -> String {
+    let mut document = String::from(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+         <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \
+         \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n\
+         <plist version=\"1.0\">\n<dict>\n",
+    );
+    document.push_str(&plist_xml_entries(keys, 1));
+    document.push_str("</dict>\n</plist>\n");
+    document
 }
 
 /// `keys` as the entries of an XML property list's top `<dict>`, each line
@@ -147,9 +238,9 @@ fn indent(out: &mut String, depth: usize) {
 
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
+    use serde_json::{Value, json};
 
-    use super::{ApplePlatform, info_plist_keys, plist_xml_entries};
+    use super::{ApplePlatform, info_plist_keys, plist_xml_document, plist_xml_entries};
     use crate::declarations::Declarations;
 
     fn notes() -> Declarations {
@@ -213,6 +304,87 @@ mod tests {
             )
             .is_empty()
         );
+    }
+
+    /// A file type the system declares (`png`, `jpg`, `docx`) is opened by
+    /// the system's identifier as an alternate viewer and never exported: a
+    /// bundle exporting `com.example.notes.png` would claim to own every PNG.
+    /// The application crate's own type is exported and owned; a type only a
+    /// linked crate declares, unknown to the system, is imported and opened
+    /// as an alternate viewer, and is the one the packager warns about. The
+    /// doctor reads all three back from the property list the bundle writes.
+    #[test]
+    fn a_type_the_system_declares_is_opened_and_not_owned() {
+        use crate::declarations::verify::Manifest;
+
+        let mut declarations = Declarations::of_table(
+            "notes",
+            "schema = 3\n\
+             [[file-types]]\nextension = \"note\"\nmime = \"application/x-notes-note\"\n\
+             name = \"Note\"\n\
+             [[file-types]]\nextension = \"png\"\nmime = \"image/png\"\nname = \"Image\"\n\
+             [[file-types]]\nextension = \"JPG\"\nmime = \"image/jpeg\"\nname = \"Photo\"\n\
+             [[file-types]]\nextension = \"docx\"\n\
+             mime = \"application/vnd.openxmlformats-officedocument.wordprocessingml.document\"\n\
+             name = \"Word document\"\n",
+        );
+        declarations
+            .join(Declarations::of_dependency_table(
+                "vectors",
+                "schema = 3\n[[file-types]]\nextension = \"vec\"\n\
+                 mime = \"application/x-vectors\"\nname = \"Vectors\"\n",
+            ))
+            .expect("one type per extension");
+        let identifiers = |keys: &serde_json::Map<String, Value>, key: &str| -> Vec<Value> {
+            keys.get(key)
+                .and_then(Value::as_array)
+                .map_or_default(|declared| {
+                    declared
+                        .iter()
+                        .map(|declaration| declaration["UTTypeIdentifier"].clone())
+                        .collect()
+                })
+        };
+        for platform in [ApplePlatform::Ios, ApplePlatform::Macos] {
+            let keys = info_plist_keys("com.example.notes", &declarations, platform);
+            assert_eq!(
+                identifiers(&keys, "UTExportedTypeDeclarations"),
+                [json!("com.example.notes.note")],
+                "{platform:?}: only the application's own type is exported"
+            );
+            assert_eq!(
+                identifiers(&keys, "UTImportedTypeDeclarations"),
+                [json!("com.example.notes.vec")],
+                "{platform:?}: a type only a linked crate declares is imported"
+            );
+            let opened: Vec<(&Value, &Value)> = keys["CFBundleDocumentTypes"]
+                .as_array()
+                .expect("document types")
+                .iter()
+                .map(|document| (&document["LSItemContentTypes"], &document["LSHandlerRank"]))
+                .collect();
+            assert_eq!(
+                opened,
+                [
+                    (
+                        &json!(["org.openxmlformats.wordprocessingml.document"]),
+                        &json!("Alternate")
+                    ),
+                    (&json!(["public.jpeg"]), &json!("Alternate")),
+                    (&json!(["com.example.notes.note"]), &json!("Owner")),
+                    (&json!(["public.png"]), &json!("Alternate")),
+                    (&json!(["com.example.notes.vec"]), &json!("Alternate")),
+                ],
+                "{platform:?}"
+            );
+            let linked: Vec<&str> = super::types_only_a_linked_crate_declares(&declarations)
+                .map(|(file_type, _)| file_type.extension())
+                .collect();
+            assert_eq!(linked, ["vec"], "the type the packager warns about");
+            let written = Manifest::parse(plist_xml_document(&keys).as_bytes())
+                .expect("the plist reads back");
+            assert_eq!(written.missing(&declarations), [], "{platform:?}");
+        }
     }
 
     /// The XML form escapes every string and nests arrays and dictionaries,

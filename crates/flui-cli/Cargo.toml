@@ -127,13 +127,16 @@ rustls = { workspace = true, features = ["std", "aws_lc_rs"] }
 # Terminal mode for `flui run`'s hot-keys (see commands/run.rs `raw_mode`):
 # canonical mode and echo off for the session, restored on every exit path.
 # `rustix` gives safe termios wrappers, so the CLI stays free of `unsafe` on
-# Unix, and the effective user, as root runs Chromium only without its sandbox.
+# Unix, the effective user, as root runs Chromium only without its sandbox,
+# and `O_NONBLOCK`, with which the dev server opens a file so a FIFO never
+# holds a connection (serve.rs `open_inside`).
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1.1", default-features = false, features = [
     "std",
     "termios",
     "stdio",
     "process",
+    "fs",
 ] }
 
 # `SetHandleInformation`: the CLI's own stdio handles are made

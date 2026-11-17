@@ -563,8 +563,8 @@ fn describe(dir: &Path, target: &Target) -> CliResult<Described> {
         let declarations =
             Declarations::of_linked_crate(dir, &metadata, application, package, &[triple])?;
         match kind {
-            Some(ManifestKind::Android) => android.join(declarations),
-            Some(_) => apple.join(declarations),
+            Some(ManifestKind::Android) => android.join(declarations)?,
+            Some(_) => apple.join(declarations)?,
             None => {}
         }
     }

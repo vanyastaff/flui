@@ -490,6 +490,10 @@ pub(crate) struct Declarations {
     url_schemes: BTreeMap<UrlScheme, BTreeSet<String>>,
     associated_domains: BTreeMap<AssociatedDomain, BTreeSet<String>>,
     file_types: BTreeMap<FileType, BTreeSet<String>>,
+    /// The file types the application crate itself declares, which an Apple
+    /// bundle may export as its own (ADR-0361); a type only a dependency
+    /// declares is one the application opens, not one it defines.
+    application_file_types: BTreeSet<FileType>,
     /// Whether a graph joined here links `flui-native` with its
     /// `single-instance` feature, the code that hands a later launch on
     /// Linux and Windows to the running instance.
@@ -549,7 +553,7 @@ impl Declarations {
                 },
                 &metadata,
             )?;
-            joined.join(Self::of_build(&metadata, root, edges, &linked)?);
+            joined.join(Self::of_build(&metadata, root, edges, &linked)?)?;
         }
         Ok(joined)
     }
@@ -717,23 +721,24 @@ impl Declarations {
         }
         self.add_android(package, declares.schema, &declares.android)?;
         self.add_apple(name, &declares.apple)?;
-        self.add_opening(name, declares.schema, Opening::of_declares(&declares))?;
+        self.add_opening(name, role, declares.schema, Opening::of_declares(&declares))?;
         for (feature, part) in &declares.features {
             if features.contains(feature) {
                 self.add_android(package, declares.schema, &part.android)?;
                 self.add_apple(name, &part.apple)?;
-                self.add_opening(name, declares.schema, Opening::of_part(part))?;
+                self.add_opening(name, role, declares.schema, Opening::of_part(part))?;
             }
         }
         Ok(())
     }
 
-    /// Add what `crate_name`'s table, which states `schema`, says the
-    /// application opens. Two crates giving one extension two types is
-    /// refused: the system can open a file by one type only.
+    /// Add what `crate_name`'s table, a crate of `role` that states `schema`,
+    /// says the application opens. Two crates giving one extension two types
+    /// is refused: the system can open a file by one type only.
     fn add_opening(
         &mut self,
         crate_name: &str,
+        role: CrateRole,
         schema: u32,
         opening: Opening<'_>,
     ) -> BuildResult<()> {
@@ -754,21 +759,11 @@ impl Declarations {
             ));
         }
         for file_type in opening.file_types {
-            if let Some((other, crates)) = self.file_types.iter().find(|(other, _)| {
-                other.extension() == file_type.extension() && *other != file_type
-            }) {
-                return Err(refused(format!(
-                    "declares `.{}` as {}, and {} declares it as {}",
-                    file_type.extension(),
-                    file_type.mime(),
-                    crates.iter().cloned().collect::<Vec<_>>().join(", "),
-                    other.mime()
-                )));
+            self.add_file_type(file_type.clone(), [crate_name.to_owned()])
+                .map_err(refused)?;
+            if role == CrateRole::Application {
+                self.application_file_types.insert(file_type.clone());
             }
-            self.file_types
-                .entry(file_type.clone())
-                .or_default()
-                .insert(crate_name.to_owned());
         }
         for scheme in opening.url_schemes {
             self.url_schemes
@@ -782,6 +777,37 @@ impl Declarations {
                 .or_default()
                 .insert(crate_name.to_owned());
         }
+        Ok(())
+    }
+
+    /// Add `file_type`, declared by `crates`, unless another type already
+    /// holds its extension: the system opens a file by one type only, so two
+    /// MIME types for one extension are refused, whether two crates of one
+    /// build state them or one crate states them for two targets.
+    ///
+    /// # Errors
+    ///
+    /// Why the type is refused, naming the extension, both MIME types and
+    /// the crates that declared the one already held.
+    fn add_file_type(
+        &mut self,
+        file_type: FileType,
+        crates: impl IntoIterator<Item = String>,
+    ) -> Result<(), String> {
+        if let Some((other, others)) = self
+            .file_types
+            .iter()
+            .find(|(other, _)| other.extension() == file_type.extension() && **other != file_type)
+        {
+            return Err(format!(
+                "declares `.{}` as {}, and {} declares it as {}",
+                file_type.extension(),
+                file_type.mime(),
+                others.iter().cloned().collect::<Vec<_>>().join(", "),
+                other.mime()
+            ));
+        }
+        self.file_types.entry(file_type).or_default().extend(crates);
         Ok(())
     }
 
@@ -866,7 +892,23 @@ impl Declarations {
         Ok(())
     }
 
-    pub(crate) fn join(&mut self, other: Self) {
+    /// Add what `other`, the declarations of another target's build (or of
+    /// another manifest's crates), says.
+    ///
+    /// # Errors
+    ///
+    /// [`BuildError::InvalidConfig`] when `other` gives an extension a MIME
+    /// type other than the one this already holds ([`Self::add_file_type`]).
+    pub(crate) fn join(&mut self, other: Self) -> BuildResult<()> {
+        for (file_type, crates) in other.file_types {
+            let declarers = crates.iter().cloned().collect::<Vec<_>>().join(", ");
+            self.add_file_type(file_type, crates).map_err(|reason| {
+                BuildError::invalid_config(
+                    format!("{declarers}'s [package.metadata.flui.{KEY}]"),
+                    format!("{reason}, for another target of the build"),
+                )
+            })?;
+        }
         for (permission, crates) in other.android_permissions {
             self.android_permissions
                 .entry(permission)
@@ -891,17 +933,28 @@ impl Declarations {
                 .or_default()
                 .extend(crates);
         }
-        for (file_type, crates) in other.file_types {
-            self.file_types.entry(file_type).or_default().extend(crates);
-        }
+        self.application_file_types
+            .extend(other.application_file_types);
         self.one_instance |= other.one_instance;
+        Ok(())
     }
 
     /// What one crate's `[package.metadata.flui.declares]`, given as TOML,
     /// declares of the parts no crate directory resolves: what the
-    /// application opens and its accessed APIs.
+    /// application opens and its accessed APIs. The crate is the application.
     #[cfg(test)]
     pub(crate) fn of_table(crate_name: &str, table: &str) -> Self {
+        Self::of_table_as(crate_name, CrateRole::Application, table)
+    }
+
+    /// [`Declarations::of_table`] for a crate the application depends on.
+    #[cfg(test)]
+    pub(crate) fn of_dependency_table(crate_name: &str, table: &str) -> Self {
+        Self::of_table_as(crate_name, CrateRole::Dependency, table)
+    }
+
+    #[cfg(test)]
+    fn of_table_as(crate_name: &str, role: CrateRole, table: &str) -> Self {
         let declares: Declares =
             toml::from_str(table).expect("BUG: a test's declarations table parses");
         let mut declarations = Self::default();
@@ -909,9 +962,20 @@ impl Declarations {
             .add_apple(crate_name, &declares.apple)
             .expect("BUG: a test's accessed APIs are well formed");
         declarations
-            .add_opening(crate_name, declares.schema, Opening::of_declares(&declares))
+            .add_opening(
+                crate_name,
+                role,
+                declares.schema,
+                Opening::of_declares(&declares),
+            )
             .expect("BUG: a test's opened types are well formed");
         declarations
+    }
+
+    /// Whether the application crate itself declares `file_type`, rather
+    /// than only a crate it links.
+    pub(crate) fn is_application_type(&self, file_type: &FileType) -> bool {
+        self.application_file_types.contains(file_type)
     }
 
     /// Every URL scheme the application opens, in order, with the crates
@@ -2042,5 +2106,48 @@ mod tests {
         ] {
             assert_eq!(PrivacyReason::try_new(code).is_ok(), accepted, "{code}");
         }
+    }
+
+    /// Declarations joined across the targets of one build hold an extension
+    /// under one MIME type, as one target's crates do: a crate whose feature
+    /// for one target types `.note` differently from its feature for another
+    /// is refused, naming both types, and the same type from two targets
+    /// joins with both declarers kept.
+    #[test]
+    fn declarations_joined_across_targets_give_an_extension_one_type() {
+        let file_type = |crate_name: &str, mime: &str| {
+            Declarations::of_table(
+                crate_name,
+                &format!(
+                    "schema = 3\n[[file-types]]\nextension = \"note\"\nmime = \"{mime}\"\n\
+                     name = \"Note\"\n"
+                ),
+            )
+        };
+        let mut joined = file_type("notes", "text/x-note");
+        let refused = joined
+            .join(file_type("notes", "application/x-note"))
+            .expect_err("two types for `.note`");
+        assert!(
+            refused.to_string().contains(
+                "declares `.note` as application/x-note, and notes declares it as text/x-note, \
+                 for another target of the build"
+            ),
+            "{refused}"
+        );
+        let mut joined = file_type("notes", "text/x-note");
+        joined
+            .join(file_type("sketch", "text/x-note"))
+            .expect("one type for `.note`");
+        let declarers: Vec<(&str, Vec<&str>)> = joined
+            .file_types()
+            .map(|(file_type, crates)| {
+                (
+                    file_type.mime(),
+                    crates.iter().map(String::as_str).collect(),
+                )
+            })
+            .collect();
+        assert_eq!(declarers, [("text/x-note", vec!["notes", "sketch"])]);
     }
 }
