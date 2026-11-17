@@ -1,6 +1,5 @@
 //! Swallowed removal-hook payloads are dropped after containment and never restart unwinding.
 use super::dense_reconcile_containment::{DenseHealthyLeaf, DenseRow};
-use flui_foundation::ViewKey;
 use flui_rendering::{
     pipeline::{PipelineCell, PipelineOwner},
     protocol::BoxProtocol,
@@ -53,8 +52,9 @@ impl Observed {
         }
     }
 }
-#[derive(Clone)]
+#[derive(Clone, StatefulView)]
 struct StateSubject {
+    #[view(key)]
     key: Option<GlobalKey<HookState>>,
     observed: Observed,
 }
@@ -79,14 +79,6 @@ impl ViewState<StateSubject> for HookState {
         if matches!(self.0.hook, Hook::Deactivate) {
             self.0.invoke();
         }
-    }
-}
-impl View for StateSubject {
-    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
-        flui_view::element::ElementKind::stateful(self)
-    }
-    fn key(&self) -> Option<&dyn ViewKey> {
-        self.key.as_ref().map(|key| key as &dyn ViewKey)
     }
 }
 #[derive(Clone)]

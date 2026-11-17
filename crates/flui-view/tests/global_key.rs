@@ -11,7 +11,6 @@
 //! creates fresh state on remount; the implementation below makes them
 //! pass.
 
-use flui_foundation::ViewKey;
 use flui_view::LifecycleContext;
 // The duplicate-key fixture runs only where the debug check panics.
 #[cfg(debug_assertions)]
@@ -47,8 +46,9 @@ impl View for Spacer {
 ///
 /// `key` is wrapped in `Option` because `Default` is not derived (and a
 /// global key counter would otherwise tick on every construction).
-#[derive(Clone)]
+#[derive(Clone, StatefulView)]
 struct KeyedCounter {
+    #[view(key)]
     key: GlobalKey<KeyedCounterState>,
     initial: i32,
 }
@@ -87,16 +87,6 @@ impl StatefulView for KeyedCounter {
 impl ViewState<KeyedCounter> for KeyedCounterState {
     fn build(&self, _view: &KeyedCounter, _ctx: &dyn BuildContext) -> impl IntoView {
         crate::global_key_duplication::Leaf.boxed()
-    }
-}
-
-impl View for KeyedCounter {
-    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
-        flui_view::element::ElementKind::stateful(self)
-    }
-
-    fn key(&self) -> Option<&dyn ViewKey> {
-        Some(&self.key)
     }
 }
 

@@ -88,15 +88,8 @@ pub trait StatelessView: Clone + 'static {
     }
 }
 
-// The legacy `impl_stateless_view!` declarative macro was deleted
-// (FR-010 "MUST NOT be two parallel authoring paths").
-// Widget authors now write `#[derive(StatelessView)]` from
-// `flui-macros` instead; the derive is re-exported from
-// `flui_view::prelude` for ergonomic single-import access. See
-// `crates/flui-macros/src/derive_stateless.rs` for the generated
-// `impl View` block this used to emit by hand-rolled `macro_rules!`.
-//
-// NOTE: StatelessElement implementation has been moved to unified Element
-// architecture. See crates/flui-view/src/element/unified.rs and
-// element/behavior.rs The type alias is exported from element/mod.rs:
-//   pub type StatelessElement<V> = Element<V, Single, StatelessBehavior>;
+// `#[derive(StatelessView)]` (`crates/flui-macros/src/derive/view.rs`, exported beside the trait
+// and from
+// `flui_view::prelude`) writes the `impl View` of a stateless view. Its element is
+// `StatelessElement<V> = Element<V, Single, StatelessBehavior>`, exported from
+// `element/mod.rs`.

@@ -30,13 +30,9 @@ use flui_animation::{
     Animation, AnimationController, AnimationStatus, CurvedAnimation, DrivenController, Vsync,
     VsyncUpdate, curves,
 };
-use flui_foundation::ViewKey;
 use flui_painting::Alignment;
-use flui_view::element::ElementKind;
-use flui_view::prelude::{BuildContext, LifecycleContext, StatefulView};
-use flui_view::{
-    BoxedView, IntoView, RebuildHandle, StatelessView, ValueKey, View, ViewExt, ViewState,
-};
+use flui_view::prelude::{BuildContext, LifecycleContext, StatefulView, StatelessView};
+use flui_view::{BoxedView, IntoView, RebuildHandle, ValueKey, View, ViewExt, ViewState};
 
 use super::animate::{Animate, Trigger};
 use super::transition::Transition;
@@ -255,10 +251,8 @@ impl AnimatedSwitcher {
     /// The default `transition_builder`: cross-fades `child` via
     /// [`FadeTransition`].
     ///
-    /// `FadeTransition` has no `.key(...)` setter (a keyed `impl View`
-    /// cannot come from `impl_animated_view!`'s generated block — see
-    /// `flui-macros`' "Keyed widgets" doc), so the child's own key is not
-    /// re-applied here; the entry's OWN stable identity (this builder's
+    /// `FadeTransition` takes no key, so the child's own key is not
+    /// re-applied here; the entry's own stable identity (this builder's
     /// caller wraps the result in a per-entry key) is what carries the slot.
     pub fn default_transition_builder(
         child: BoxedView,
@@ -297,8 +291,9 @@ impl std::fmt::Debug for AnimatedSwitcher {
 /// `child_number`, never rebuilt once assigned, so calls to
 /// [`ChildEntry::update_transition`] can swap the wrapped content without
 /// losing the slot's element identity.
-#[derive(Clone)]
+#[derive(Clone, StatelessView)]
 struct KeyedEntry {
+    #[view(key)]
     key: ValueKey<u64>,
     child: BoxedView,
 }
@@ -317,16 +312,6 @@ impl std::fmt::Debug for KeyedEntry {
         f.debug_struct("KeyedEntry")
             .field("key", &self.key)
             .finish_non_exhaustive()
-    }
-}
-
-impl View for KeyedEntry {
-    fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
-        ElementKind::stateless(self)
-    }
-
-    fn key(&self) -> Option<&dyn ViewKey> {
-        Some(&self.key)
     }
 }
 
@@ -721,18 +706,12 @@ mod retirement_tests {
     use super::*;
     use std::panic::{AssertUnwindSafe, catch_unwind};
 
-    #[derive(Clone)]
+    #[derive(Clone, StatelessView)]
     struct Capture {
         drops: Rc<Cell<usize>>,
         armed: Rc<Cell<bool>>,
         fails: bool,
         label: &'static str,
-    }
-
-    impl View for Capture {
-        fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
-            ElementKind::stateless(self)
-        }
     }
 
     impl StatelessView for Capture {

@@ -39,6 +39,10 @@ pub use error::{ErrorView, ErrorViewBuilder, FrameworkError};
 // / `update_or_substitute` and the lazy-sliver item builder are its only
 // callers.
 pub(crate) use error::recovery_view_for;
+// Each derive is exported beside the trait it serves, under the trait's name:
+// importing `StatelessView` brings the trait and `#[derive(StatelessView)]`
+// together, as `Clone` or `serde::Serialize` do.
+pub use flui_macros::{InheritedData, StatefulView, StatelessView};
 pub use inherited::{FieldMask, FieldSet, InheritedData, InheritedView};
 pub use into_view::{BoxedElement, BoxedView, ElementExt, IntoElement, IntoView, ViewExt};
 pub use memo::Memo;
