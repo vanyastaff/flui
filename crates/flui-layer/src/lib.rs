@@ -77,7 +77,9 @@ mod tree;
 pub use compositor::SceneBuilder;
 #[cfg(feature = "testing")]
 pub use damage::LayerDiffer;
-pub use damage::{Closure, DamageMode, MAX_CLOSURE_ROUNDS, RasterBase, close_over, read_closure};
+pub use damage::{
+    Closure, Closures, DamageMode, MAX_CLOSURE_ROUNDS, RasterBase, close_over, read_closure,
+};
 pub use flui_foundation::LayerId;
 pub use layer::{
     AnnotatedRegionLayer, AnnotationValue, BackdropFilterLayer, BackdropGroupKey, CanvasLayer,

@@ -138,14 +138,17 @@ the platform's convention belongs to the title bars the design packages build fr
 
 §7. **Win32.** A window with `AppTitleBar` keeps the overlapped style, so the system still
 resizes, snaps, animates and offers its window menu. `WM_NCCALCSIZE` keeps the client the default
-procedure computes but moves its top to the window's (a maximized window's to the monitor's), so
-the caption and the top border go and the side and bottom borders stay. `WM_NCHITTEST` keeps the
+procedure computes but moves its top to the window's (a maximized window's to the work area's,
+standing back from a monitor edge that holds an auto-hide taskbar so the taskbar can still be
+revealed), so the caption and the top border go and the side and bottom borders stay. `WM_NCHITTEST` keeps the
 default answer over those borders and otherwise answers from the regions the last composited frame
 handed `set_input_regions`, through `chrome_hit`: a resize band of the sizing frame's thickness
 along the top of a resizable window that is not maximized, then `HTCAPTION`, the resize edges and
 `HTMINBUTTON`, `HTMAXBUTTON` (the snap layouts) and `HTCLOSE`. The non-client pointer messages over
-a caption button reach the application's button as client ones and never the default procedure, so
-the application's tap decides. A `WindowFrame::None` window answers from the regions without the
+a caption button, and the legacy non-client mouse messages where the mouse is not a pointer, reach
+the application's button as client ones and never the default procedure, so the application's tap
+decides. Where the system draws the title bar, its caption buttons are its own, and their messages
+go to the default procedure. A `WindowFrame::None` window answers from the regions without the
 band. A fullscreen window answers as the system does.
 
 §8. **AppKit.** A window with `AppTitleBar` keeps `NSWindowStyleMaskTitled` and adds

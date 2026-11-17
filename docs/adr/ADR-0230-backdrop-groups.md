@@ -33,6 +33,13 @@ Content painted after the group's first filter is therefore not part of what
 later grouped filters sample, including an earlier pane's own child: that is
 the contract, not an artifact.
 
+A partial frame keeps the capture where a full one makes it. The capture
+belongs to the group's first member that writes a pixel. Damage that meets one member
+takes the rect over every member's read footprint (ADR-0304 §6), so the
+whole group lies in one rect of the region: the frame, and the one region
+pass that redraws the group, replay every member that writes in a full frame,
+and the first of them captures.
+
 `flui-widgets` adds `BackdropFilter` (filter, blend mode, enabled, and
 `grouped()`), and `BackdropGroup`, a stateful widget whose key lives in its
 state, so rebuilding it keeps the identity and does not repaint its filters.
@@ -44,7 +51,15 @@ A grouped filter with no group above it reads the live backdrop.
 `layer_effects_capture_as_specified` GPU family, reads back an overlapping
 pane that is tinted by the first pane's child when ungrouped or in different
 groups, untinted in one group, and tinted again when the two members sit on
-different surfaces. `harness_backdrop_filter_carries_its_group_to_the_layer`
+different surfaces. Both engine readbacks named
+`a_backdrop_group_outside_the_damage_still_captures_at_its_first_member` (the
+tree path and the version path) draw a partial frame whose damage meets only
+the second member, with the first under the root, in its own node, and with
+one pass per rect, and compare it with a full frame;
+`a_backdrop_group_takes_one_rect_of_a_region_frame` plans two damaged
+members as one rect;
+`damage_under_one_backdrop_group_member_takes_every_member` pins the closure.
+`harness_backdrop_filter_carries_its_group_to_the_layer`
 pins the render object, and
 `backdrop_filters_in_one_group_share_a_stable_identity` pins the widgets,
 including identity across a rebuild.

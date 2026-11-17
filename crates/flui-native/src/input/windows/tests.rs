@@ -123,3 +123,86 @@ fn a_window_the_input_never_saw_has_no_input() {
     );
     assert_eq!(inputs.hovered(this), Some(false));
 }
+
+/// Over the application's caption buttons the input takes a pointer's
+/// non-client messages for the application's button, on the pointer route and
+/// on the legacy mouse route, and keeps the hover the buttons saw; the first
+/// move over the bar ends it, and the next has none to end. Over the caption
+/// buttons the system draws it takes nothing: those messages are the
+/// default procedure's.
+#[test]
+fn the_input_takes_only_the_applications_caption_buttons_and_ends_their_hover() {
+    use flui_platform::{AppTitleBar, SystemControls, WindowFrame};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        HTCAPTION, HTMAXBUTTON, WM_NCMOUSEMOVE, WM_NCPOINTERUPDATE,
+    };
+
+    use super::caption::CaptionPointer;
+
+    let platform = WindowsPlatform::try_new().expect("platform");
+    let open_with = |frame: WindowFrame| {
+        platform
+            .open_window(
+                WindowOptions::default()
+                    .title("flui caption input")
+                    .size(Size::new(160.0, 120.0))
+                    .visible(false)
+                    .frame(frame),
+                flui_testing::window_handler::RecordingWindowHandler::new(),
+            )
+            .expect("window")
+    };
+    let application = open_with(WindowFrame::AppTitleBar(
+        AppTitleBar::new().with_system_controls(SystemControls::Hidden),
+    ));
+    let system = open_with(WindowFrame::System);
+    let (application, system) = (window_ref(&application), window_ref(&system));
+    let hover = |window: WindowRef| {
+        testing::window_input(window.hwnd())
+            .expect("the window's input")
+            .caption_hover
+            .get()
+    };
+    let pointer_at: fn(u32) -> usize = |hit| ((hit as usize) << 16) | 7;
+    let mouse_at: fn(u32) -> usize = |hit| hit as usize;
+    for (route, message, at, pointer) in [
+        (
+            "pointer",
+            WM_NCPOINTERUPDATE,
+            pointer_at,
+            CaptionPointer::Pointer(7),
+        ),
+        ("mouse", WM_NCMOUSEMOVE, mouse_at, CaptionPointer::Mouse),
+    ] {
+        let send = |window: WindowRef, hit: u32| {
+            // SAFETY: a message to a live window of this thread, with plain
+            // values.
+            unsafe {
+                SendMessageW(
+                    window.hwnd(),
+                    message,
+                    Some(WPARAM(at(hit))),
+                    Some(LPARAM(0)),
+                )
+            };
+        };
+        send(application, HTMAXBUTTON);
+        assert_eq!(
+            hover(application),
+            Some(pointer),
+            "{route}: over the application's button"
+        );
+        send(application, HTCAPTION);
+        assert_eq!(
+            hover(application),
+            None,
+            "{route}: the move over the bar ends it"
+        );
+        send(system, HTMAXBUTTON);
+        assert_eq!(
+            hover(system),
+            None,
+            "{route}: the system's button keeps its messages"
+        );
+    }
+}

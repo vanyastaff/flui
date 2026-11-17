@@ -360,6 +360,10 @@ fn scene_patch_damage() {
                 d::an_unattached_leader_never_shadows_the_attached_one,
             ),
             (
+                "damage_under_one_backdrop_group_member_takes_every_member",
+                d::damage_under_one_backdrop_group_member_takes_every_member,
+            ),
+            (
                 "a_magnifier_damages_its_sampling_fringe",
                 d::a_magnifier_damages_its_sampling_fringe,
             ),
