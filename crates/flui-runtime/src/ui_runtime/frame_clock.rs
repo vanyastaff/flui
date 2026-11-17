@@ -508,37 +508,47 @@ impl UiRuntime {
     }
 
     /// Check if there is pending work in ANY presentation this UI runtime hosts:
-    /// its [frame work](Self::has_pending_frame_work) or its
+    /// its [tree work](Self::has_pending_tree_work), its
+    /// [input work](Self::has_pending_input_work) or its
     /// [due work](Self::has_pending_due_work).
-    /// The runner's frame gate keeps itself open on it and
-    /// reads this every frame. Production may host multiple presentations,
-    /// although secondary windows are contentless today, so the union must
-    /// remain presentation-wide rather than assuming the primary is the
-    /// UI runtime's only source of pending work.
+    /// The runner's frame gate keeps itself open on it. Production may host
+    /// multiple presentations, although secondary windows are contentless
+    /// today, so the union must remain presentation-wide rather than assuming
+    /// the primary is the UI runtime's only source of pending work.
     /// This observation applies no invalidation, queries no deadline extension
     /// and invokes no observer or diagnostics. Queued requests, including ones
     /// whose attachment later retired, contribute until the next owner turn.
     pub fn has_pending_work(&self) -> bool {
-        self.has_pending_due_work() || self.has_pending_frame_work()
+        // Input work before due work: a gesture deadline that comes due
+        // between the two reads is then counted by one of them.
+        self.has_pending_tree_work() || self.has_pending_input_work() || self.has_pending_due_work()
     }
 
-    /// Whether a presentation has work its next frame does, whenever that
-    /// frame runs: a pending build, a dirty render node, a completion the
-    /// next frame takes, pointer motion to resample, or a gesture deadline
-    /// still armed. A presentation waiting out a dropped frame's backoff, one
-    /// whose sink holds as many frames as it may and one whose device rebuild
-    /// was given up have no tree work: the backoff's deadline is
+    /// Whether a presentation's tree waits for a frame: a pending build, a
+    /// dirty render node, or a completion the next frame takes. A
+    /// presentation waiting out a dropped frame's backoff, one whose sink
+    /// holds as many frames as it may and one whose device rebuild was given
+    /// up have none: the backoff's deadline is
     /// [due work](Self::has_pending_due_work), and a settlement or a new
-    /// rebuild asks for the frame. This is the work a runner may pace behind
-    /// a frame that showed nothing before it (ADR-0353 decision 4).
-    pub fn has_pending_frame_work(&self) -> bool {
+    /// rebuild asks for the frame. A frame that showed nothing and left tree
+    /// work behind is what a runner paces (ADR-0353 decision 4).
+    pub fn has_pending_tree_work(&self) -> bool {
         self.presentations.iter().any(|presentation| {
-            let tree = presentation.failure_retry_at().is_none()
+            presentation.failure_retry_at().is_none()
                 && !presentation.frames_in_flight().is_saturated()
                 && !presentation.device_abandoned()
                 && (presentation.has_pending_work_snapshot()
-                    || presentation.has_eligible_completion());
-            tree || presentation.gestures().has_pending_motion()
+                    || presentation.has_eligible_completion())
+        })
+    }
+
+    /// Whether a presentation carries input its frames continue: pointer
+    /// motion to resample, or a gesture deadline (a long press, a double
+    /// tap's window) still armed and not yet come. Each frame serves it, but
+    /// none is owed before the display's next period (ADR-0353 decision 4).
+    pub fn has_pending_input_work(&self) -> bool {
+        self.presentations.iter().any(|presentation| {
+            presentation.gestures().has_pending_motion()
                 || (flui_interaction::__runtime::has_pending_deadlines_snapshot(
                     presentation.gestures(),
                 ) && !Self::gesture_deadline_due(presentation))

@@ -106,7 +106,7 @@ pub(super) fn wake_action(
 ///
 /// Its sources, all required: `inbox_redraw` (a command drained this frame
 /// boundary asked for a redraw), `needs_redraw` and `pending` (the UI runtime's
-/// own dirty state, its frame work and its due work), the fallback, and `next_attempt_at.is_some()` —
+/// own dirty state, its tree, input and due work), the fallback, and `next_attempt_at.is_some()` —
 /// an armed raster deadline of the window's own (`RasterSlot::frame_deadline`:
 /// a device rebuild, or a restore of this window's surface the raster host
 /// paces; the loop wakes for it while the window's frames run,
@@ -129,47 +129,54 @@ pub(super) fn frame_is_dirty(
     // A pending fallback means the last frame presented nothing: no present
     // blocked at vsync and no compositor paces the next one, so the next
     // frame waits for the fallback, about one display period away. That holds
-    // for the ui_runtime's OWN echo (`needs_redraw`, which every pump with a
-    // running animation sets again through `wake_frame`), and for the frame
-    // work (a build, a dirty node, pointer motion to resample) when the frame
-    // that armed the fallback left some
-    // (`holds_work`): a tree that dirties itself each frame would otherwise
-    // run its frames at CPU speed into a sink that shows none of them (a dead
-    // raster executor, an occluded window). Due work (a timer, a gesture
-    // deadline, a dropped frame's retry) runs on the wake its deadline
-    // brings, and frame work that arrives after a frame that left none (a link
-    // opened, a tap's state change) runs at once, as do inbox redraws and an
-    // armed recovery attempt. The due fallback itself is the last term — a
-    // deadline source has to be in the dirty predicate AND self-clearing, or
-    // its wake is a no-op.
+    // for what every frame continues: the ui_runtime's OWN echo
+    // (`needs_redraw`, which every pump with a running animation sets again
+    // through `wake_frame`) and its input work (pointer motion to resample, a
+    // gesture deadline still armed). It holds for tree work only when the
+    // frame that armed the fallback left some (`holds_work`): a tree that
+    // dirties itself each frame would otherwise run its frames at CPU speed
+    // into a sink that shows none of them (a dead raster executor, an
+    // occluded window), while tree work that arrives after a frame that left
+    // none (a link opened, a tap's state change) runs at once. Due work (a
+    // timer, a gesture deadline that came, a dropped frame's retry) runs on
+    // the wake its deadline brings, as do inbox redraws and an armed recovery
+    // attempt. The due fallback itself is the last term — a deadline source
+    // has to be in the dirty predicate AND self-clearing, or its wake is a
+    // no-op.
     let needs_redraw = needs_redraw && !fallback.pending;
-    let frame = pending.frame && !(fallback.pending && fallback.holds_work);
+    let input = pending.input && !fallback.pending;
+    let tree = pending.tree && !(fallback.pending && fallback.holds_work);
     inbox_redraw
         || needs_redraw
-        || frame
+        || input
+        || tree
         || pending.due
         || next_attempt_at.is_some()
         || fallback.due
 }
 
-/// A UI runtime's pending work as the frame gate weighs it: what its next frame does
-/// (`UiRuntime::has_pending_frame_work`), which a frame that showed nothing
-/// and left it paces, and work due at an instant of its own
-/// (`UiRuntime::has_pending_due_work`), which never waits behind a pacing
-/// deferral.
+/// A UI runtime's pending work as the frame gate weighs it: its tree work
+/// (`UiRuntime::has_pending_tree_work`), which a frame that showed nothing
+/// and left some paces; its input work (`UiRuntime::has_pending_input_work`),
+/// which every frame continues and none owes before the next period; and its
+/// due work (`UiRuntime::has_pending_due_work`), which never waits behind a
+/// pacing deferral.
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(super) struct PendingWork {
-    pub(super) frame: bool,
+    pub(super) tree: bool,
+    pub(super) input: bool,
     pub(super) due: bool,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 impl PendingWork {
-    /// What `ui_runtime` has pending now.
+    /// What `ui_runtime` has pending now. Input work is read before due work,
+    /// so a gesture deadline that comes between the reads is counted once.
     pub(super) fn of(ui_runtime: &crate::app::ui_runtime::UiRuntime) -> Self {
         Self {
-            frame: ui_runtime.has_pending_frame_work(),
+            tree: ui_runtime.has_pending_tree_work(),
+            input: ui_runtime.has_pending_input_work(),
             due: ui_runtime.has_pending_due_work(),
         }
     }
@@ -332,7 +339,7 @@ pub(super) struct FallbackGate {
     /// it (see [`FallbackWake::gate`]).
     pub(super) due: bool,
     /// A pending deadline was armed by a frame that left its tree dirty
-    /// (`UiRuntime::has_pending_frame_work`): that frame work waits for the deadline too,
+    /// (`UiRuntime::has_pending_tree_work`): that tree work waits for the deadline too,
     /// since a tree that dirties itself every frame would otherwise run its
     /// frames at CPU speed into a sink that shows none of them.
     pub(super) holds_work: bool,
@@ -740,24 +747,29 @@ mod desktop_pacing_tests {
     /// A frame that presented nothing and left its tree dirty paces the next
     /// one at the fallback: a tree that dirties itself every frame into a
     /// sink that shows nothing (a dead raster executor, an occluded window)
-    /// runs one frame per fallback, not one per wake. Due work (a timer, a
-    /// gesture deadline, a dropped frame's retry) runs on its own wake, frame
-    /// work that arrives after a frame that left none runs at once, as do an
-    /// inbox redraw and an armed raster attempt, and the due fallback runs the
-    /// frame.
+    /// runs one frame per fallback, not one per wake. Input work (pointer
+    /// motion, an armed gesture deadline) waits for any pending fallback. Due
+    /// work (a timer, a gesture deadline that came, a dropped frame's retry)
+    /// runs on its own wake; tree work that arrives after a frame that left
+    /// none runs at once, as do an inbox redraw and an armed raster attempt;
+    /// and the due fallback runs the frame.
     ///
-    /// Red-check: count frame work past a pending fallback that holds work and
-    /// the leftover work is dirty on every wake; mask due work with it and a
-    /// timer waits for the fallback.
+    /// Red-check: count tree work past a pending fallback that holds work and
+    /// the leftover work is dirty on every wake; count input work and a held
+    /// press renders on every wake; mask due work and a timer waits.
     fn leftover_work_after_a_frame_that_presented_nothing_waits_for_the_fallback() {
         use super::{PendingWork, frame_is_dirty};
-        let frame_work = PendingWork {
-            frame: true,
-            due: false,
+        let tree = PendingWork {
+            tree: true,
+            ..PendingWork::default()
+        };
+        let input = PendingWork {
+            input: true,
+            ..PendingWork::default()
         };
         let due_work = PendingWork {
-            frame: false,
             due: true,
+            ..PendingWork::default()
         };
         let none = PendingWork::default();
         let fallback = FallbackWake::new();
@@ -770,8 +782,8 @@ mod desktop_pacing_tests {
             "the arm records the tree the frame left"
         );
         assert!(
-            !frame_is_dirty(false, true, frame_work, None, holding),
-            "the echo and the leftover frame work wait for the fallback"
+            !frame_is_dirty(false, true, tree, None, holding),
+            "the echo and the leftover tree work wait for the fallback"
         );
         assert!(
             frame_is_dirty(false, false, due_work, None, holding),
@@ -787,22 +799,26 @@ mod desktop_pacing_tests {
         );
         let due = fallback.gate(now + period);
         assert!(
-            frame_is_dirty(false, false, frame_work, None, due),
+            frame_is_dirty(false, false, tree, None, due),
             "the due fallback runs the frame"
         );
         let _armed = fallback.arm_after_no_present(now + period, period, false);
-        let echo_only = fallback.gate(now + period);
+        let pressed = fallback.gate(now + period);
         assert!(
-            frame_is_dirty(false, true, frame_work, None, echo_only),
-            "frame work that arrives after a frame that left none runs at once"
+            !frame_is_dirty(false, true, input, None, pressed),
+            "a held press waits for the fallback even when the frame left no tree work"
         );
         assert!(
-            !frame_is_dirty(false, true, none, None, echo_only),
-            "while the echo alone still waits"
+            frame_is_dirty(false, true, tree, None, pressed),
+            "tree work that arrives after a frame that left none runs at once"
         );
         assert!(
-            frame_is_dirty(false, false, frame_work, None, FallbackGate::default()),
-            "with no fallback armed, frame work runs at once"
+            frame_is_dirty(false, false, tree, None, FallbackGate::default()),
+            "with no fallback armed, tree work runs at once"
+        );
+        assert!(
+            frame_is_dirty(false, false, input, None, FallbackGate::default()),
+            "and so does input work"
         );
     }
     #[test]

@@ -108,25 +108,29 @@ it. The first report of a due deadline is answered however late the loop asks; a
 due and left unanswered for a full period is abandoned instead of re-reported (the hidden Wayland
 surface), bounded at about one wasted wake, and clearing it lifts the echo suppression.
 
-**4. While a fallback is pending, the frame work its frame left waits for it like the redraw echo.**
+**4. While a fallback is pending, the work its frame left waits for it like the redraw echo.**
 `frame_is_dirty` (`crates/flui-app/src/app/runner/frame_pacing.rs`) takes a `FallbackGate`:
 `pending` (armed and not yet due), `due` (this wake is the deferred one) and `holds_work` (the
-frame that armed it left frame work: `FallbackWake::arm_after_no_present` records
-`UiRuntime::has_pending_frame_work` right after that pump). It also takes the runtime's
-`PendingWork`, split in two. Frame work (`has_pending_frame_work`) is what the next frame does
-whenever it runs: a pending build, a dirty render node, a completion the next frame takes, pointer
-motion to resample, a gesture deadline still armed. Due work (`has_pending_due_work`) has an instant
-of its own: a due task deadline, a dropped frame whose backoff is over, a gesture deadline that
-came due, a haptic delivery, a frame-rate hold that ran out. Their union is `has_pending_work`.
-With `pending`, the UI runtime's own redraw echo (`needs_redraw`,
-which every pump with a running ticker sets again) is not dirty, and with `holds_work` too, neither
-is frame work. Due work is never masked: it runs on the wake its own deadline brings, so a timer or
-a long press is not served late and its wake is not skipped and re-armed. An inbox redraw, an armed
+frame that armed it left tree work: `FallbackWake::arm_after_no_present` records
+`UiRuntime::has_pending_tree_work` right after that pump). It also takes the runtime's
+`PendingWork`, split in three; their union is `has_pending_work`. Tree work
+(`has_pending_tree_work`) is what the next frame does to the tree: a pending build, a dirty render
+node, a completion the next frame takes. Input work (`has_pending_input_work`) is what a frame does
+for input still in progress: pointer motion to resample, a gesture deadline still armed. Due work
+(`has_pending_due_work`) has an instant of its own: a due task deadline, a dropped frame whose
+backoff is over, a gesture deadline that came due, a haptic delivery, a frame-rate hold that ran
+out. With `pending`, the UI runtime's own redraw echo (`needs_redraw`, which every pump with a
+running ticker sets again) is not dirty, and neither is input work: a held press re-arms its
+deadline every frame, so it would spin as surely as the echo, and the frame that serves it can wait
+one fallback. Tree work is not dirty only with `holds_work` too, so tree work that arrives after a
+frame that left none (a link opened, a tap's state change) runs at once. Due work is never masked:
+it runs on the wake its own deadline brings, so a timer or a long press is not served late and its
+wake is not skipped and re-armed. The runtime reads input work before due work, so a gesture
+deadline that comes due between the two reads is counted by one of them. An inbox redraw, an armed
 raster attempt (`next_attempt_at`, a device rebuild or a surface restore) and the due fallback
-count at once, and so does frame work that arrives after a frame that left none (a link opened, a
-tap's state change). A frame's immediate retry (a panicking resize asking again) is frame work that
-frame left, so it waits for the fallback and cannot spin; a dropped frame's paced retry is due work
-at its backoff deadline. With no fallback armed, every pending work is dirty at once. Input is
+count at once. A frame's immediate retry (a panicking resize asking again) is tree work that frame
+left, so it waits for the fallback and cannot spin; a dropped frame's paced retry is due work at
+its backoff deadline. With no fallback armed, every pending work is dirty at once. Input is
 dispatched when it arrives (the platform input callback calls `handle_input_addressed` directly);
 only the frame that would show it waits, at most one fallback (0.95 display period). A deadline
 source must be in the dirty predicate and self-clearing, or its wake arrives and is skipped: each
@@ -204,10 +208,13 @@ Tests in `crates/flui-app/src/app/runner/frame_pacing.rs`, rows of `desktop_paci
 `background_pace_tests`:
 
 - `leftover_work_after_a_frame_that_presented_nothing_waits_for_the_fallback` (decision 4: the arm
-  records the tree its frame left; the echo and that frame work wait, due work runs on its own
-  wake, the due fallback runs the frame, frame work after a frame that left none runs at once, as do
-  an inbox redraw and an armed raster attempt; red when frame work counts past a pending fallback
-  that holds work), and in `flui-app`'s `app_it`,
+  records the tree work its frame left; the echo and that tree work wait, a held press waits even
+  when the frame left no tree work, due work runs on its own wake, the due fallback runs the frame,
+  tree work after a frame that left none runs at once, as do an inbox redraw and an armed raster
+  attempt; red when tree work counts past a pending fallback that holds work, and red when input
+  work counts past any pending fallback), in `flui-runtime`'s contracts,
+  `a_dropped_frames_retry_is_due_work_and_a_repaint_is_tree_work` (the split of
+  `has_pending_work`), and in `flui-app`'s `app_it`,
   `a_resize_that_keeps_panicking_is_not_retried_forever` (a panicking resize is retried once, at
   the fallback's deadline, not on every period).
 - `a_pending_fallback_defers_a_wake_with_no_dirty_work_but_never_dirty_work` (decision 4).
