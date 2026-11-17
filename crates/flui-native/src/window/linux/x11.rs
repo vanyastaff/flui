@@ -427,9 +427,20 @@ pub(crate) mod support {
         /// (`_NET_WM_FRAME_DRAWN`), reading the window's extended XSync
         /// counter: odd while a frame draws, even once it is drawn.
         pub paces_frames: bool,
+        /// A compositing manager owns the screen's `_NET_WM_CM_S<n>`
+        /// selection (EWMH): it redirects the windows, and the server reads
+        /// every redirected window unobscured, so a covering is not told.
+        pub composited: bool,
     }
 
     impl WindowManagerSupport {
+        /// This support with a compositing manager running (`composited`) or
+        /// not.
+        #[must_use]
+        pub(crate) fn with_compositing(self, composited: bool) -> Self {
+            Self { composited, ..self }
+        }
+
         /// The support of `manager`, which lists `supported` in
         /// `_NET_SUPPORTED`. A list says something only of a window manager
         /// that answers `_NET_SUPPORTING_WM_CHECK`: one left by a window
@@ -446,6 +457,7 @@ pub(crate) mod support {
                 fullscreen: lists(atoms.fullscreen),
                 moves_and_resizes: lists(atoms.moveresize),
                 paces_frames: lists(atoms.frame_drawn),
+                composited: false,
             }
         }
 
@@ -518,7 +530,11 @@ pub(crate) mod support {
         capabilities.places_at_open = Availability::Native;
         // The server tells a covering (`VisibilityNotify`), except of a window a
         // compositing manager redirects, which it reads unobscured.
-        capabilities.reports_occlusion = Native;
+        capabilities.reports_occlusion = if support.composited {
+            Absent(CapabilityAbsence::NOT_ON_THIS_DEVICE)
+        } else {
+            Native
+        };
         capabilities.app_title_bar = from_the_window_manager(support.moves_and_resizes);
         capabilities.minimizes = from_the_window_manager(support.managed());
         capabilities.observes_minimized = if support.managed() {
@@ -731,6 +747,22 @@ pub(crate) mod support {
                 Some(UnsupportedReason::NotOnThisPlatform)
             );
             assert_eq!(reason(WindowCommand::SetMode(WindowMode::Normal)), None);
+        }
+
+        /// A window reports a covering while no compositing manager runs, and
+        /// says it cannot once one does: the server reads a redirected window
+        /// unobscured. Red-check: keep `Native` whatever the compositing.
+        #[test]
+        fn a_compositing_manager_takes_away_the_covering_report() {
+            let support = WindowManagerSupport::read(WindowManager::Extended, &[], &ATOMS);
+            assert_eq!(
+                capabilities(support).reports_occlusion(),
+                WindowCapability::Native
+            );
+            assert_eq!(
+                capabilities(support.with_compositing(true)).reports_occlusion(),
+                WindowCapability::Absent(CapabilityAbsence::NOT_ON_THIS_DEVICE)
+            );
         }
 
         /// Every capability of an X11 window under a window manager that lists

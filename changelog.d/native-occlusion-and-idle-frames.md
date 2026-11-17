@@ -1,14 +1,15 @@
 ### Added
 
 - `WindowCapabilities::reports_occlusion` (and `CapabilityParts::reports_occlusion`): whether a
-  covering by other windows reaches `WindowState::occluded`. Native on macOS and X11, emulated on
-  Windows, absent on Wayland, iOS, Android and the Web, where an unoccluded snapshot no longer
-  reads as "seen". The native recording carries it (protocol 0.19).
+  covering by other windows reaches `WindowState::occluded`. Native on macOS, on X11 while no
+  compositing manager runs and on Wayland compositors with `xdg_toplevel` version 6; absent on
+  Windows, iOS, Android and the Web, where an unoccluded snapshot does not mean "seen". The native
+  recording carries it (protocol 0.19).
+- `flui_platform::Backoff`: the doubling wait, from a first value up to a ceiling, that a surface
+  showing nothing backs off on.
 
 ### Changed
 
-- A Windows window that other windows cover now reads occluded (still shown), so it draws no
-  frames until it is uncovered; it reads seen again as soon as the desktop uncovers it.
 - A Wayland window whose compositor stops answering its frame callbacks, without suspending it,
   is asked for frames less and less often (a one-second grace doubling to eight seconds) instead
   of once a second forever, and is paced again by the compositor's next answer.

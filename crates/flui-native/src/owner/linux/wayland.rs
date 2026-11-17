@@ -2578,6 +2578,13 @@ mod event_loop {
             self.protocol.activation.is_some()
         }
 
+        /// Whether the compositor's `xdg_wm_base` is new enough to say when it
+        /// suspends a toplevel, so a window reports a covering.
+        pub(crate) fn tells_suspension(&self) -> bool {
+            self.protocol.wm_base.version()
+                >= crate::window::linux::wayland::frame::SUSPENSION_VERSION
+        }
+
         /// Run turns for `span` on the owner thread, for a test that drives
         /// the loop's windows without running it.
         ///

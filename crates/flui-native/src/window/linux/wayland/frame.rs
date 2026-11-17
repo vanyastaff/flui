@@ -27,6 +27,15 @@ use std::time::Duration;
 
 use web_time::Instant;
 
+/// The `xdg_toplevel` version from which the compositor says when it
+/// suspends a toplevel: one it does not show, covered by other windows among
+/// the reasons xdg-shell names.
+#[cfg_attr(
+    not(wayland_host),
+    expect(dead_code, reason = "the live host reads it; its tests build everywhere")
+)]
+pub(crate) const SUSPENSION_VERSION: u32 = 6;
+
 /// How long a window waits for a frame callback before it gives it up,
 /// while the compositor answered the last one.
 pub(crate) const CALLBACK_GRACE: Duration = Duration::from_secs(1);
@@ -35,13 +44,17 @@ pub(crate) const CALLBACK_GRACE: Duration = Duration::from_secs(1);
 /// callbacks in a row went unanswered.
 pub(crate) const MAX_CALLBACK_GRACE: Duration = Duration::from_secs(8);
 
+/// The schedule a window's callback graces follow: the one every surface that
+/// shows nothing backs off on, from [`CALLBACK_GRACE`] to
+/// [`MAX_CALLBACK_GRACE`].
+const GRACES: flui_platform::Backoff =
+    flui_platform::Backoff::new(CALLBACK_GRACE, MAX_CALLBACK_GRACE);
+
 /// The grace of a callback armed after `unanswered` callbacks in a row were
 /// given up: [`CALLBACK_GRACE`] doubled once per callback given up, at most
 /// [`MAX_CALLBACK_GRACE`].
 pub(crate) fn grace(unanswered: u32) -> Duration {
-    CALLBACK_GRACE
-        .checked_mul(1_u32.checked_shl(unanswered).unwrap_or(u32::MAX))
-        .map_or(MAX_CALLBACK_GRACE, |grace| grace.min(MAX_CALLBACK_GRACE))
+    GRACES.after(unanswered)
 }
 
 /// A frame callback that is out: when it was armed, its ticket, and the
@@ -90,11 +103,16 @@ impl Callbacks {
     /// The compositor answered the callback `ticket` (`done`): it draws the
     /// window, so the backoff ends. The callback out is released when it is
     /// that one or an older one: a commit's callback comes after every
-    /// earlier commit's.
+    /// earlier commit's. An answer to an older callback does not release the
+    /// one out, whose commit the compositor has not shown, but ends its
+    /// backoff too: it keeps the first grace, so a present that committed
+    /// nothing holds a window the compositor paces for no longer than that.
     pub(crate) fn answered(&mut self, ticket: u64) {
         self.unanswered = 0;
-        if self.out.is_some_and(|out| out.ticket <= ticket) {
-            self.out = None;
+        match self.out {
+            Some(out) if out.ticket <= ticket => self.out = None,
+            Some(ref mut out) => out.grace = out.grace.min(grace(0)),
+            None => {}
         }
     }
 
@@ -330,8 +348,9 @@ mod tests {
         callbacks.answered(older);
         assert_eq!(
             callbacks.gives_up_at(),
-            Some(now + MAX_CALLBACK_GRACE),
-            "an older `done` leaves the callback out"
+            Some(now + CALLBACK_GRACE),
+            "an older `done` leaves the callback out, at the first grace: the compositor paces \
+             the window again"
         );
         callbacks.answered(current);
         assert_eq!(callbacks.gives_up_at(), None, "its own `done` releases it");

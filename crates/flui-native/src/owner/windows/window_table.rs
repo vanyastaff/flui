@@ -88,19 +88,6 @@ impl<T> WindowTable<T> {
         self.windows.borrow().is_empty()
     }
 
-    /// Every window the table keeps a value for, with a copy of the value,
-    /// read out with the table released.
-    pub(crate) fn entries(&self) -> Vec<(WindowRef, T)>
-    where
-        T: Copy,
-    {
-        self.windows
-            .borrow()
-            .values()
-            .map(|kept| (kept.window, kept.value))
-            .collect()
-    }
-
     /// The window `hwnd` names, while the table keeps a value for it.
     pub(crate) fn window_of(&self, hwnd: HWND) -> Option<WindowRef> {
         self.windows

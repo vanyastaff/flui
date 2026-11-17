@@ -7824,36 +7824,36 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
   — изменение до первого хода, до появления хука, замена хука, паника доставки. Каждую строку валит
   своя мутация (сохранение порога ревизии, насыщение вместо отказа, слияние или вытеснение
   предпочтений в очереди, хук без восстановления после паники, зажим масштаба и т. д.).
-- [ ] **LY148** — ветка `native/occlusion-and-idle-frames`. Проверено на `main` @ `fbd43ebf2`.
-  Перекрытие на Win32 подтверждено: `Occlusion` знал только cloak и блокировку. Построено:
-  `WindowCapabilities::reports_occlusion` (сообщает ли окно перекрытие другими окнами в
-  `occluded`): AppKit и X11 — `Native`, Win32 — `Emulated`, Wayland, iOS, Android, Web —
-  `NOT_ON_THIS_PLATFORM`, headless — что задал тест (`with_window_capabilities`); запись несёт поле
-  (протокол 0.19, аддитивно). Win32: обход z-order (`window/windows/cover.rs`, чистая часть
-  `coverage.rs`) при сроке кадра окна (`WindowStep::FrameDue`, не чаще `WALK_INTERVAL` = 250 мс,
-  остаток — таймер класса) и, пока окно потока перекрыто, по событиям рабочего стола из
-  out-of-context хука WinEvent (foreground, конец move/size, minimize, show/hide/destroy,
-  statechange, cloak); без опроса. Wayland: окно, чьи frame callback остаются без ответа (не
-  `suspended`), спрашивалось раз в секунду вечно — теперь грейс удваивается от `CALLBACK_GRACE`
-  (1 с) до `MAX_CALLBACK_GRACE` (8 с), первый `done` кончает отступ; каждый callback несёт билет,
-  старый `done` не освобождает новый (`frame::Callbacks`). Вопрос про `Occluded` при acquire
-  опровергнут как вращение: отказанная поверхность уже отступает по ADR-0335 §2 (128 попыток в темпе
-  дисплея, затем удваивающаяся пауза до `FAILURE_RETRY_CAP`), это держит
-  `the_withheld_retry_is_bounded_and_then_waits_out_the_backoff`; добавлен один `warn!`
-  (`surface_withholds_frames`, `flui.pace`) на презентацию при выходе серии за бюджет, с
-  `host_reports_occlusion`. Тесты: `a_window_is_covered_once_the_windows_above_leave_none_of_it_on_screen`
-  и `a_window_too_fragmented_to_follow_reads_seen` (таблица обхода);
-  `a_window_another_covers_reads_occluded_until_it_is_uncovered` (`native_window_commands`, попап
-  `STATIC` поверх окна и скрытый снова) — падает без шага `FrameDue` («перекрытым не читается») и
-  без хука («не читается видимым снова»); `unanswered_callbacks_back_off_to_the_ceiling_until_one_is_answered`
-  — падает с постоянным `grace(0)` и с освобождением по любому `done`;
-  `a_surface_that_keeps_withholding_frames_is_reported_once` — падает, если отчёт повторяется.
-  Осталось и записано в `docs/gaps.md`: «устоявшийся» кадр перекрытого окна (не измерено, сколько
-  DWM показывает старый кадр при раскрытии), окно, сдвинутое программой одним `SetWindowPos`
-  (видно на следующем событии или кадре), X11 под композитным менеджером (`reports_occlusion`
-  `Native`, сервер читает окна неперекрытыми); счётчик кадров без темпа для показанных кадров не
-  построен (не показано, что FLUI так вращается). В строке паритета: прогон Wayland с композитором,
-  который не отвечает на callback.
+- [ ] **LY148** — ветка `native/occlusion-and-idle-frames`, решение — ADR-0357. Проверено на
+  `main` @ `fbd43ebf2`. Построено: `WindowCapabilities::reports_occlusion` (доходит ли перекрытие
+  другими окнами до `occluded`): AppKit — `Native`; X11 — `Native`, пока selection
+  `_NET_WM_CM_S<n>` никто не держит, иначе `NOT_ON_THIS_DEVICE`; Wayland — `Native` при
+  `xdg_toplevel` версии 6 и выше (`suspended`), иначе `NOT_ON_THIS_DEVICE`; Win32 —
+  `NOT_YET_ON_THIS_HOST`; iOS, Android, Web — `NOT_ON_THIS_PLATFORM`; headless — что задал тест;
+  запись несёт поле (протокол 0.19, аддитивно). Трекер перекрытия Win32 (обход z-order и хук
+  WinEvent на потоке владельца) построен и снят по решению координатора: ложные перекрытия (окна
+  `WS_EX_TOOLWINDOW`, прозрачные per-pixel, захват), окно, поднятое своей программой через
+  `SetWindowPos`, оставалось «перекрытым» 3 с, пробуждения от каждого show/hide любого процесса;
+  что нужно верному трекеру — в `docs/gaps.md`. Win32 говорит «не видно» только о скрытом,
+  свёрнутом, cloaked и при заблокированной сессии. Один график отступа — `flui_platform::Backoff`
+  (первое ожидание, удвоение, потолок): им отступает повтор отказанного и упавшего кадра в runtime
+  (период дисплея → `FAILURE_RETRY_CAP`, десять удвоений ADR-0258 §6) и ожидание неотвеченного
+  frame callback на Wayland (`CALLBACK_GRACE` 1 с → `MAX_CALLBACK_GRACE` 8 с; раньше раз в секунду
+  вечно); ответ сопоставлен по билету: старый `done` не освобождает новый callback, но кончает
+  отступ и возвращает ему первый грейс. Один `warn!` `surface_withholds_frames` на презентацию,
+  когда серия отказов выходит за бюджет, с `host_reports_occlusion`. Вопрос про `Occluded` при
+  acquire опровергнут как вращение (ADR-0335 §2 уже отступает). Тесты (каждый падает при откате
+  своей строки): `a_compositing_manager_takes_away_the_covering_report`,
+  `the_capabilities_follow_the_compositor`, `unanswered_callbacks_back_off_to_the_ceiling_until_one_is_answered`
+  (постоянный `grace(0)`; освобождение по любому `done`),
+  `the_record_backs_off_unanswered_callbacks_and_matches_answers_by_ticket` (шов хоста: без
+  `deliver` в `deliver_frame`, `u64::MAX` в `callback_done`),
+  `a_withholding_surface_backs_off_to_the_ceiling_and_starts_over_once_it_shows` (график без
+  удвоения), `a_surface_that_keeps_withholding_frames_is_reported_once` (отчёт на каждой попытке),
+  `an_unseen_window_with_nothing_asked_runs_no_frame` (Win32) и
+  `an_unseen_window_asks_for_no_wake_until_it_is_seen` (headless). Осталось: трекер Win32,
+  отключённая удалённая сессия, выход композитного менеджера X11, старый кадр при раскрытии
+  (`docs/gaps.md`); прогон Wayland с композитором, не отвечающим на callback, — в строке паритета.
 
 ## Чего нет в этой серии
 

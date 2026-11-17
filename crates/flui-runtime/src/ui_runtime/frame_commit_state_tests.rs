@@ -616,6 +616,68 @@ fn a_subscriber_that_panics_on_the_trace_of_a_withheld_frame_keeps_the_retry() {
     );
 }
 
+/// A surface that never shows a frame backs off on the whole schedule: past the budget each wait
+/// doubles until it reaches `FAILURE_RETRY_CAP` and stays there, every attempt a deadline, and
+/// once a frame presents the next withdrawal starts over from the display rate.
+///
+/// Fails when a wait shrinks while the surface keeps withholding, when the waits stop short of
+/// the ceiling or pass it, or when a present leaves the next withdrawal at the ceiling.
+pub(crate) fn a_withholding_surface_backs_off_to_the_ceiling_and_starts_over_once_it_shows() {
+    let budget = super::MAX_NOT_SHOWN_RETRIES;
+    let ui_runtime = mount_box();
+    let mut withheld = ScriptedSink::new(|_, _| SubmitVerdict::NotShown);
+    let presentation = || ui_runtime.presentations.primary();
+    let wait = || {
+        presentation()
+            .failure_retry_at()
+            .map(|at| at.saturating_duration_since(presentation().clock().now()))
+    };
+    for _ in 0..=budget {
+        let _ = ui_runtime.render_frame(&mut withheld);
+    }
+    let mut waits = vec![wait().expect("past the budget an attempt waits")];
+    while waits.len() < 16 {
+        assert!(ui_runtime.wait_out_failure_retry_for_test());
+        assert!(!ui_runtime.render_frame(&mut withheld));
+        waits.push(wait().expect("every attempt past the budget waits"));
+    }
+    let cap = crate::frame_failure::FAILURE_RETRY_CAP;
+    // Each wait is read against the clock a moment after it was armed.
+    let slack = std::time::Duration::from_millis(1);
+    assert!(
+        waits.windows(2).all(|pair| pair[0] <= pair[1] + slack),
+        "the wait never shrinks while the surface withholds: {waits:?}"
+    );
+    assert!(
+        waits.iter().all(|wait| *wait <= cap),
+        "never past the ceiling: {waits:?}"
+    );
+    assert!(
+        waits.last().is_some_and(|last| *last + slack >= cap),
+        "the schedule reaches its ceiling: {waits:?}"
+    );
+
+    press_primary(&ui_runtime);
+    assert!(ui_runtime.render_frame(&mut ScriptedSink::always_presents()));
+    assert_eq!(wait(), None, "the present ends the wait");
+    // The shown tree is clean: the next withdrawal starts with a repaint.
+    ui_runtime.mark_needs_full_repaint_for(presentation());
+    for _ in 0..budget {
+        let _ = ui_runtime.render_frame(&mut withheld);
+    }
+    assert_eq!(
+        wait(),
+        None,
+        "a new withdrawal is ridden out at the display rate again"
+    );
+    let _ = ui_runtime.render_frame(&mut withheld);
+    let restarted = wait().expect("past the new budget an attempt waits");
+    assert!(
+        restarted < cap,
+        "and its first wait starts the schedule over, not at the ceiling: {restarted:?}"
+    );
+}
+
 /// A subscriber, scoped to the current thread, that keeps the `host_reports_occlusion` of each
 /// `surface_withholds_frames` event.
 #[derive(Clone, Default)]

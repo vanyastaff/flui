@@ -230,7 +230,7 @@ impl ClassWindows for WindowSet {
                     // delivered deadline until unrelated input. Request the
                     // frame directly instead: its frame services timers and
                     // gestures for a window nothing can see.
-                    context.request_frame(window.hwnd());
+                    context.request_frame();
                 } else {
                     PlatformWindow::request_redraw(window.as_ref());
                 }

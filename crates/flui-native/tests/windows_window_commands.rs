@@ -967,6 +967,50 @@ fn a_burst_of_frame_requests_on_a_hidden_window_is_one_frame() {
         > 1));
 }
 
+/// A window that is not seen, for each fact the host knows for certain
+/// (hidden, minimized, cloaked, its session locked), with nothing asked of
+/// it, runs no frame over half a second: nothing of the host wakes it on a
+/// clock of its own. Red-check: arm a periodic timer on the window that
+/// requests a frame, and the count grows.
+fn an_unseen_window_with_nothing_asked_runs_no_frame() {
+    let platform = platform();
+    let hidden_window = open(&platform, hidden());
+    let minimized = open(&platform, options());
+    apply(&minimized, WindowCommand::SetMode(WindowMode::Minimized));
+    let cloaked = open(&platform, options());
+    let value = BOOL::from(true);
+    // SAFETY: `value` is a live `BOOL`, the size `DWMWA_CLOAK` reads.
+    unsafe {
+        DwmSetWindowAttribute(
+            hwnd_of(&cloaked),
+            DWMWA_CLOAK,
+            (&raw const value).cast(),
+            std::mem::size_of::<BOOL>() as u32,
+        )
+    }
+    .expect("the window cloaks");
+    let locked = open(&platform, options());
+    send(&locked, WM_WTSSESSION_CHANGE, WTS_SESSION_LOCK as usize, 1);
+    settle();
+    let windows = [&hidden_window, &minimized, &cloaked, &locked];
+    for window in windows {
+        assert!(!window.state().is_seen(), "not seen: {:?}", window.state());
+    }
+    let counts: Vec<_> = windows.iter().map(|window| count_frames(window)).collect();
+    let _ = pump_until(Duration::from_millis(500), || false);
+    let frames: Vec<usize> = counts
+        .iter()
+        .map(|count| count.load(Ordering::SeqCst))
+        .collect();
+    assert_eq!(frames, [0, 0, 0, 0], "hidden, minimized, cloaked, locked");
+    send(
+        &locked,
+        WM_WTSSESSION_CHANGE,
+        WTS_SESSION_UNLOCK as usize,
+        1,
+    );
+}
+
 /// The window stays on its thread; another thread asks for a frame through
 /// its redraw requester, and the window's frame callback runs (ADR-0254 §5).
 fn a_redraw_asked_from_another_thread_reaches_the_window() {
@@ -2831,9 +2875,7 @@ fn a_locked_session_or_a_cloak_occludes_a_shown_window() {
 /// window opened first still hears one after the other closed.
 fn each_window_hears_its_own_cloak() {
     let platform = platform();
-    // Side by side: one over the other would read covered.
-    let beside = options().position(Some(Point::new(100.0 + CONTENT.width + 40.0, 80.0)));
-    let (first, second) = (open(&platform, options()), open(&platform, beside));
+    let (first, second) = (open(&platform, options()), open(&platform, options()));
     settle();
     let (first_events, second_events) = (record_visibility(&first), record_visibility(&second));
     let cloak = |window: &Opened, on: bool| {
@@ -2878,78 +2920,6 @@ fn each_window_hears_its_own_cloak() {
     cloak(&first, false);
     assert!(heard(&first_events, 2));
     assert_eq!(*first_events.lock().expect("log"), [false, true]);
-}
-
-/// A window another window opens over reads occluded, still shown, once a
-/// frame is due for it, and seen again once the window over it is hidden,
-/// with no frame of its own: the desktop's change is heard while it is
-/// covered. The window over it is a plain Win32 popup that takes no
-/// activation, so nothing of FLUI's runs for it and the window under it is
-/// neither activated nor repainted when it goes. Red-check: drop the frame's
-/// `WindowStep::FrameDue` and the window never reads covered; hold no desktop
-/// hook and it never reads seen again.
-fn a_window_another_covers_reads_occluded_until_it_is_uncovered() {
-    use windows::Win32::UI::WindowsAndMessaging::{
-        CreateWindowExW, DestroyWindow, SW_HIDE, WS_EX_NOACTIVATE, WS_POPUP, WS_VISIBLE,
-    };
-
-    let platform = platform();
-    let under = open(&platform, options());
-    settle();
-    assert!(under.state().is_seen(), "nothing covers it yet");
-    let events = record_visibility(&under);
-    let below = rect(&under);
-    // SAFETY: a top-level popup of the system's `STATIC` class on this
-    // thread, with no parent, menu or creation data; destroyed below.
-    let over = unsafe {
-        CreateWindowExW(
-            WS_EX_NOACTIVATE,
-            w!("STATIC"),
-            w!("over"),
-            WS_POPUP | WS_VISIBLE,
-            below.left - 20,
-            below.top - 20,
-            below.right - below.left + 40,
-            below.bottom - below.top + 40,
-            None,
-            None,
-            None,
-            None,
-        )
-    }
-    .expect("a popup opens over the window");
-    settle();
-    under.request_redraw();
-    assert!(
-        pump_until(Duration::from_secs(2), || {
-            *events.lock().expect("log") == [false]
-        }),
-        "a frame due under another window finds it covered: {:?}",
-        events.lock().expect("log")
-    );
-    let covered = under.state();
-    assert!(
-        covered.visible && covered.occluded && !covered.is_seen(),
-        "covered, shown and not seen: {covered:?}"
-    );
-    assert_eq!(
-        covered.capabilities.reports_occlusion(),
-        flui_platform::WindowCapability::Emulated
-    );
-
-    // SAFETY: the popup made above, on this thread.
-    let _ = unsafe { ShowWindow(over, SW_HIDE) };
-    let uncovered = pump_until(Duration::from_secs(2), || {
-        *events.lock().expect("log") == [false, true]
-    });
-    // SAFETY: as above, destroyed once.
-    let _ = unsafe { DestroyWindow(over) };
-    assert!(
-        uncovered,
-        "hiding the window over it uncovers it: {:?}",
-        events.lock().expect("log")
-    );
-    assert!(under.state().is_seen());
 }
 
 /// A close command closes the window without asking the should-close veto: a
@@ -3190,6 +3160,10 @@ fn native_window_commands() {
             a_burst_of_frame_requests_on_a_hidden_window_is_one_frame,
         ),
         (
+            "an_unseen_window_with_nothing_asked_runs_no_frame",
+            an_unseen_window_with_nothing_asked_runs_no_frame,
+        ),
+        (
             "a_redraw_asked_from_another_thread_reaches_the_window",
             a_redraw_asked_from_another_thread_reaches_the_window,
         ),
@@ -3264,10 +3238,6 @@ fn native_window_commands() {
         (
             "each_window_hears_its_own_cloak",
             each_window_hears_its_own_cloak,
-        ),
-        (
-            "a_window_another_covers_reads_occluded_until_it_is_uncovered",
-            a_window_another_covers_reads_occluded_until_it_is_uncovered,
         ),
         (
             "a_tree_published_inside_the_activation_answers_it",

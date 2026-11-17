@@ -296,10 +296,7 @@ impl WindowMessages for InputWindows {
             // The double-click rectangle is measured at the window's scale, and
             // the double-click time and size are settings too.
             WindowStep::Rescaled | WindowStep::SettingChanged => input.measure_clicks(),
-            WindowStep::ScaleApplied
-            | WindowStep::SessionLocked(_)
-            | WindowStep::FrameDue
-            | WindowStep::Closed => {}
+            WindowStep::ScaleApplied | WindowStep::SessionLocked(_) | WindowStep::Closed => {}
         }
     }
 

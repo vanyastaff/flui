@@ -23,9 +23,6 @@
 //!   window class;
 //! - `cloak`: the owner thread's one subscription to cloak changes, the hook
 //!   `CloakWatch` the host registers beside it;
-//! - `cover`: the owner thread's covering walk, which reads whether other
-//!   windows cover a window from the desktop's z-order (the pure `coverage`),
-//!   the hook `CoverWatch` the host registers beside it;
 //! - `backdrop`: what the desktop window manager draws around and behind the
 //!   window, and the extension trait that sets it.
 
@@ -44,10 +41,6 @@ pub(crate) mod backdrop;
 pub(crate) mod chrome;
 #[cfg(windows)]
 mod cloak;
-#[cfg(windows)]
-mod cover;
-#[cfg(any(windows, test))]
-mod coverage;
 pub(crate) mod frame_timing;
 pub(crate) mod limits;
 #[cfg(windows)]
@@ -66,8 +59,6 @@ mod delivery_tests;
 
 #[cfg(windows)]
 pub(crate) use cloak::CloakWatch;
-#[cfg(windows)]
-pub(crate) use cover::CoverWatch;
 #[cfg(windows)]
 pub(crate) use set::WindowSet;
 #[cfg(windows)]

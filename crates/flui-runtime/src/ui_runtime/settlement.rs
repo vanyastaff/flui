@@ -548,8 +548,8 @@ impl UiRuntime {
                                     frame = frame_number,
                                     streak,
                                     host_reports_occlusion = ?host_reports_occlusion,
-                                    "the window's surface withheld {} frames in a row; each \
-                                     further attempt waits out the dropped-frame backoff. With \
+                                    "the window's surface withheld {} frames in a row; \
+                                     retrying after the dropped-frame backoff. With \
                                      `host_reports_occlusion` false the window is likely covered \
                                      by another window its host cannot tell of; with it true the \
                                      host reads the window seen while its surface shows nothing",

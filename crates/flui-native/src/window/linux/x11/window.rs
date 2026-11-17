@@ -205,6 +205,9 @@ pub(crate) struct WindowAtoms {
     /// The screen's `WM_S<n>` selection, which a window manager owns while it
     /// runs (ICCCM §2.8).
     wm_selection: xproto::Atom,
+    /// The screen's `_NET_WM_CM_S<n>` selection, which a compositing manager
+    /// owns while it runs (EWMH).
+    cm_selection: xproto::Atom,
     /// The message a window manager that took the selection sends the root.
     manager: xproto::Atom,
     /// The protocol a window manager asks whether the window's process still
@@ -269,11 +272,16 @@ impl WindowAtoms {
         let selection = xcb
             .intern_atom(false, selection_name.as_bytes())
             .map_err(|error| failed(&error))?;
+        let compositing_name = format!("_NET_WM_CM_S{}", connection.screen_number());
+        let compositing = xcb
+            .intern_atom(false, compositing_name.as_bytes())
+            .map_err(|error| failed(&error))?;
         let mut atoms = [0; NAMES.len()];
         for (atom, cookie) in atoms.iter_mut().zip(cookies) {
             *atom = cookie.reply().map_err(|error| failed(&error))?.atom;
         }
         let wm_selection = selection.reply().map_err(|error| failed(&error))?.atom;
+        let cm_selection = compositing.reply().map_err(|error| failed(&error))?.atom;
         let [
             wm_protocols,
             wm_delete_window,
@@ -329,6 +337,7 @@ impl WindowAtoms {
             gtk_application_id,
             net_wm_moveresize,
             wm_selection,
+            cm_selection,
             manager,
             net_wm_ping,
             net_wm_sync_request,
@@ -2229,11 +2238,24 @@ impl X11Windows {
             .and_then(|cookie| cookie.reply().ok())
             .and_then(|reply| Some(reply.value32()?.collect()))
             .unwrap_or_default();
-        self.support.set(WindowManagerSupport::read(
-            manager,
-            &supported,
-            &self.atoms.support(),
-        ));
+        self.support.set(
+            WindowManagerSupport::read(manager, &supported, &self.atoms.support())
+                .with_compositing(self.compositing_manager_runs()),
+        );
+    }
+
+    /// Whether a compositing manager owns the screen's `_NET_WM_CM_S<n>`
+    /// selection (EWMH). Read with the window manager's support, again when a
+    /// manager announces that it took the selection; a compositing manager
+    /// that quits announces nothing, and the windows keep saying they cannot
+    /// tell a covering until the support is next read.
+    fn compositing_manager_runs(&self) -> bool {
+        self.connection
+            .xcb()
+            .get_selection_owner(self.atoms.cm_selection)
+            .ok()
+            .and_then(|cookie| cookie.reply().ok())
+            .is_some_and(|reply| reply.owner != x11rb::NONE)
     }
 
     /// The supporting window of a window manager that speaks EWMH: the one
@@ -2584,9 +2606,11 @@ impl X11Windows {
         if let Event::ClientMessage(message) = event
             && message.window == root
             && message.type_ == self.atoms.manager
-            && message.data.as_data32()[1] == self.atoms.wm_selection
+            && [self.atoms.wm_selection, self.atoms.cm_selection]
+                .contains(&message.data.as_data32()[1])
         {
-            // A window manager took the screen's selection (ICCCM §2.8).
+            // A window manager or a compositing manager took the screen's
+            // selection (ICCCM §2.8, EWMH).
             self.support_unread.set(true);
             self.mark_all();
             return;
