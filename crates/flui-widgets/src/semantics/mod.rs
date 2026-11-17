@@ -356,7 +356,11 @@ impl Semantics {
     /// it does not make a node: it names this widget's node only when the
     /// widget forms one ([`container`](Self::container), or under a parent
     /// that requires explicit child nodes). Absorbed into an ancestor or
-    /// merged by `MergeSemantics`, it is dropped, not carried up.
+    /// merged by `MergeSemantics`, it is dropped, not carried up. A node that
+    /// publishes nothing else (no role, label or text) is lifted into its
+    /// parent by the agent and the AccessKit adapters, its identifier with
+    /// it: to select a widget with no semantics of its own, give the node a
+    /// role as well, as `.role(SemanticsRole::Group)`.
     #[must_use]
     pub fn identifier(mut self, identifier: impl Into<std::sync::Arc<str>>) -> Self {
         self.configuration.set_identifier(identifier);

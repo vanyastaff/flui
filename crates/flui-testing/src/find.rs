@@ -6,8 +6,8 @@
 //! one (`find::button("Save").within(find::id("dialog"))`) or write one in
 //! full where these helpers stop. A locator is resolved over the window's
 //! published semantics tree at every use; a widget that publishes no
-//! semantics is found by the identifier its author gives a container around
-//! it (`Semantics::new().container(true).identifier(..)`, ADR-0240) and [`id`].
+//! semantics is found by the identifier its author gives a group around
+//! it (`Semantics::new().container(true).role(SemanticsRole::Group).identifier(..)`, ADR-0240) and [`id`].
 
 use flui_protocol::{Locator, Role, StateFilter, TextMatch};
 

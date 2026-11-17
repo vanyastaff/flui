@@ -48,7 +48,6 @@ fn read_tree<R>(
             clips_children: false,
             children: child_ids.clone(),
             text_selection: None,
-            in_named_control: false,
         }),
     )];
     for (&child, child_id) in children.iter().zip(&child_ids) {
@@ -62,7 +61,6 @@ fn read_tree<R>(
                 clips_children: false,
                 children: SmallVec::new(),
                 text_selection: None,
-                in_named_control: false,
             }),
         ));
     }

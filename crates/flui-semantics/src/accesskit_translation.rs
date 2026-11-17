@@ -8,8 +8,7 @@
 //!
 //! A node has one [`SemanticsRole`] and typed [`States`]
 //! (ADR-0206). [`resolve_role`] maps the role; a node that declares none is
-//! static text when it is named, a group when only an identifier names it
-//! (ADR-0240 §2), and a plain container otherwise. Conflicting
+//! static text when it is named and a plain container otherwise. Conflicting
 //! roles never reach here: merging settled them
 //! ([`more_specific_role`](crate::configuration::more_specific_role)).
 //!
@@ -56,40 +55,6 @@ pub(crate) struct PublishView<'a> {
     /// (ADR-0214 §3), or `None` when it declares none or an end names no
     /// current text there.
     pub(crate) text_selection: Option<accesskit::TextSelection>,
-    /// The node is lifted into a control AccessKit names from its contents
-    /// ([`names_from_contents`]), which only the tree around it decides: a
-    /// container named only by its identifier then stays generic
-    /// (ADR-0240 §2).
-    pub(crate) in_named_control: bool,
-}
-
-/// Whether a node's own attributes publish it as a generic container, which
-/// AccessKit lifts into its parent, unless an identifier makes it a group:
-/// no role but a generic one, no text and no label.
-pub(crate) fn publishes_generic(attrs: &SemanticsAttributes) -> bool {
-    match explicit_role(attrs.effective_role()) {
-        Some(role) => role == Role::GenericContainer,
-        None => attrs.text.is_none() && !has_label(attrs),
-    }
-}
-
-/// Whether a node is a control AccessKit names from its contents: the roles
-/// `accesskit_consumer`'s `NodeRef::labelled_by` names from descendant
-/// labels, read through generic containers only.
-pub(crate) fn names_from_contents(attrs: &SemanticsAttributes) -> bool {
-    explicit_role(attrs.effective_role()).is_some_and(|role| {
-        matches!(
-            role,
-            Role::Button
-                | Role::CheckBox
-                | Role::DefaultButton
-                | Role::Link
-                | Role::MenuItem
-                | Role::MenuItemCheckBox
-                | Role::MenuItemRadio
-                | Role::RadioButton
-        )
-    })
 }
 
 /// Whether `bits` carries `action`.
@@ -106,9 +71,7 @@ fn has_action(bits: u64, action: SemanticsAction) -> bool {
 /// no [`Role::GenericContainer`]. A node that carries a label (a plain `Text`,
 /// a labelled `Semantics` wrapper) is a [`Role::Label`] — static text — and a
 /// node with neither becomes [`Role::GenericContainer`], present in the tree
-/// for structure but making no claim about what it is, unless it carries an
-/// identifier and is not lifted into a control named from its contents
-/// ([`PublishView::in_named_control`]): then it is a [`Role::Group`].
+/// for structure but making no claim about what it is.
 ///
 /// The distinction is load-bearing at the OS boundary: AccessKit's consumer
 /// filter (`accesskit_consumer::common_filter`) drops `GenericContainer` nodes
@@ -125,8 +88,6 @@ pub(crate) fn resolve_role(data: &PublishView<'_>) -> Role {
     // beneath its regions (ADR-0214 §2 as amended).
     if data.attrs.text.is_some() || has_label(data.attrs) {
         Role::Label
-    } else if data.attrs.identifier.is_some() && !data.in_named_control {
-        Role::Group
     } else {
         Role::GenericContainer
     }
@@ -717,7 +678,6 @@ pub(crate) fn to_node(data: &PublishView<'_>) -> Node {
             clips_children: data.clips_children,
             children: data.children.clone(),
             text_selection: data.text_selection,
-            in_named_control: data.in_named_control,
         };
         &filtered
     } else {
@@ -1066,12 +1026,8 @@ pub(crate) fn to_published_node(
     if is_root && device_pixel_ratio != 1.0 {
         node.set_transform(Affine::scale(device_pixel_ratio));
     }
-    // Only a root that declares no role and has no name becomes the window,
-    // one named only by its identifier (a group anywhere else) included.
-    if is_root
-        && data.attrs.role == SemanticsRole::None
-        && matches!(node.role(), Role::GenericContainer | Role::Group)
-    {
+    // Only a root that declares no role and has no name becomes the window.
+    if is_root && data.attrs.role == SemanticsRole::None && node.role() == Role::GenericContainer {
         node.set_role(Role::Window);
     }
     // The window clips the root anyway, and AccessKit would count the owner's
@@ -1485,7 +1441,6 @@ mod tests {
             clips_children: false,
             children: SmallVec::new(),
             text_selection: None,
-            in_named_control: false,
         })
     }
 

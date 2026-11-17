@@ -826,26 +826,25 @@ the configuration annotated nor makes it a boundary, and `absorb` never takes it
 with only an identifier contributes nothing, and one absorbed into an ancestor or a
 `MergeSemantics` loses it while the receiver keeps its own. A widget names its node where the node
 is formed: a container `Semantics`, `MergeSemantics::identifier`, or a control whose own
-configuration is the outermost of its parts. A node named only by its identifier publishes as a
-`Group`, since every AccessKit filter drops a `GenericContainer` with its `author_id`; inside a
-control AccessKit names from its contents it stays generic, so the control keeps the name its
-labels give it, and selects nothing (ADR-0240 §2). Its role reads the ancestors it is lifted
-through, so a node whose published role changes has the containers beneath it re-translated in an
-incremental publish (`SemanticsTree::placement_dependents`).
+configuration is the outermost of its parts. A node that publishes nothing but its identifier is
+lifted into its parent with it, so nothing selects it: `read_wire` lists a
+`TreeDiagnostic::UnpublishedIdentifier` naming the node it is lifted into, and the testing kit's
+`TestError::UnpublishedIdentifier` gives the form that is found (a role on the node, or the
+identifier on the control).
 
 **Why.** An identifier that annotated or split nodes would change the tree, and so what a screen
 reader says, by adding a test id; one carried upward would name a node with another node's id, and
 a merged parent would collect its children's.
 
 **Test.** `the_identifier_is_exported_unannounced_unmerged_and_no_boundary` in
-`tests/identifier.rs` and `a_container_named_only_by_its_identifier_is_a_group_outside_a_control`;
+`tests/identifier.rs`, `an_identifier_on_a_node_that_publishes_nothing_else_is_reported` there;
 the `identifier` row of `every_published_attribute_reads_through_the_consumer`.
 
 ### Siblings sharing an identifier are reported, not repaired
 
 **Rule.** An identifier is unique among its siblings (ADR-0240 §4), and nothing enforces it:
 translation publishes every identifier as its author wrote it. Siblings are the children an
-agent sees: `accesskit_consumer::common_filter`'s without its clip rule, where a generic container's
+agent sees: `accesskit_consumer::common_filter`'s without its clip rule, where an unlabelled container's
 children join its parent's. `read_wire` lists a `TreeDiagnostic::DuplicateIdentifier` for each
 clash, naming the parent and the siblings in tree order, and checks the children of every node
 it reaches, including those its budget leaves out. In debug builds, a publish that changes an
@@ -866,7 +865,7 @@ is user code, under the pipeline's borrows.
 
 **Rule.** A `Locator` resolves over the filtered tree the adapters see, reading the same wire
 `Node` as `semantics.read`, so a locator matches what the outline shows. `within` and `has` are
-scopes over that tree: a generic container that is lifted away is no ancestor. A strict
+scopes over that tree: an unlabelled container that is lifted away is no ancestor. A strict
 locator lists every match in `locate_wire`; `resolve_wire_locator` is where one element is needed
 and answers `Ambiguous` (the first ten outline lines) or `NotFound` (the ten nearest by held
 criteria, then name distance). Actionability is two calls with the caller's hit-test between them:

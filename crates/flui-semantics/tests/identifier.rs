@@ -194,7 +194,7 @@ fn the_identifier_is_exported_unannounced_unmerged_and_no_boundary() {
 /// read reports the clash beside the tree, naming the parent and every
 /// sibling carrying it, and publishes the identifiers as written. The same
 /// identifier on nodes that are not siblings is no clash, siblings are the
-/// children an agent sees (a child lifted out of a generic container is
+/// children an agent sees (a child lifted out of an unlabelled container is
 /// one), and the check covers the children of a node whose children the
 /// budget leaves out.
 #[test]
@@ -350,128 +350,68 @@ fn debug_builds_queue_a_published_clash_once_per_shape() {
     );
 }
 
-/// A container named only by its identifier is published where an automation
-/// client finds it, as a group, except inside a control that takes its name
-/// from its contents, where it stays generic so the control keeps the name
-/// its label gives it. A change of an ancestor's role republishes the
-/// container, which did not change itself.
-///
-/// Fails if the container publishes as a generic container beside other
-/// content (every AccessKit filter drops it with its identifier), as a group
-/// inside the button (the button loses its name), or if an incremental
-/// publish leaves it as the previous role placed it.
+/// An identifier on a node that publishes nothing else (no role, label or
+/// text) is reported beside the read, naming the node it is lifted into:
+/// the agent and the AccessKit adapters lift such a node, so nothing
+/// selects it, and the author learns why, in the order the read reaches
+/// the nodes they are lifted into. A node the identifier keeps visible, a
+/// group, is not reported, and the tree is published as written.
 #[test]
-fn a_container_named_only_by_its_identifier_is_a_group_outside_a_control() {
-    use std::collections::BTreeMap;
-
-    use accesskit_consumer::{FilterResult, common_filter};
-
-    let received: Arc<Mutex<Vec<TreeUpdate>>> = Arc::default();
-    let sink = Arc::clone(&received);
-    let mut owner = SemanticsOwner::new(Arc::new(move |update: &TreeUpdate| {
-        sink.lock().push(update.clone());
-    }));
-    let node = |index: u32| {
+fn an_identifier_on_a_node_that_publishes_nothing_else_is_reported() {
+    let mut owner = SemanticsOwner::new(Arc::new(|_: &TreeUpdate| {}));
+    let node = |index: u32, configure: &dyn Fn(&mut SemanticsConfiguration)| {
         let mut node = SemanticsNode::new().with_source_render_id(render_id(index));
-        node.set_rect(Rect::from_ltwh(0.0, 0.0, 80.0, 30.0));
+        node.set_rect(Rect::from_ltwh(0.0, f64::from(index) * 10.0, 80.0, 10.0));
+        configure(node.config_mut());
         node
     };
-    let mut root = node(1);
-    root.config_mut().set_label("Inbox");
-    let root = owner.insert(root);
-    let host = owner.insert(node(2));
-    let between = owner.insert(node(3));
-    let mut swatch = node(4);
-    swatch.config_mut().set_identifier("swatch");
-    let swatch = owner.insert(swatch);
-    let mut text = node(5);
-    text.config_mut().set_label("Save");
-    let text = owner.insert(text);
-    owner.add_child(root, host);
-    owner.add_child(host, between);
-    owner.add_child(between, swatch);
-    owner.add_child(swatch, text);
+    let root = owner.insert(node(1, &|c| c.set_label("Window")));
+    let button = owner.insert(node(2, &|c| c.set_role(SemanticsRole::Button)));
+    let inside = owner.insert(node(3, &|c| c.set_identifier("save")));
+    let label = owner.insert(node(4, &|c| c.set_label("Save")));
+    let bare = owner.insert(node(5, &|c| c.set_identifier("swatch")));
+    let deeper = owner.insert(node(6, &|c| c.set_identifier("dot")));
+    let group = owner.insert(node(7, &|c| {
+        c.set_role(SemanticsRole::Group);
+        c.set_identifier("legend");
+    }));
+    for child in [button, bare, group] {
+        owner.add_child(root, child);
+    }
+    owner.add_child(button, inside);
+    owner.add_child(inside, label);
+    owner.add_child(bare, deeper);
     owner.set_root(Some(root));
+    owner.flush();
 
-    // What the adapter holds after every delivered update, against what a
-    // full publish of the same tree gives.
-    let mut held: BTreeMap<u64, accesskit::Node> = BTreeMap::new();
-    let mut publish = |owner: &mut SemanticsOwner| {
-        owner.flush();
-        for update in received.lock().drain(..) {
-            held.extend(update.nodes.into_iter().map(|(id, node)| (id.0, node)));
-        }
-        let full = owner
-            .to_accesskit_tree_update(None)
-            .expect("the tree is published");
-        for (id, node) in &full.nodes {
-            assert_eq!(held.get(&id.0), Some(node), "node {id:?} as held");
-        }
-        accesskit_consumer::Tree::new(full, true)
+    let element = |index: u32| {
+        ElementId::from_u64(AccessibilityNodeId::from(render_id(index)).as_u64())
+            .expect("an accessibility id is non-zero")
     };
-    type Shown = (accesskit::Role, Option<String>, Option<String>);
-    // The first node an adapter lists under the root, with its identifier
-    // and name, and the identifiers it can select anywhere.
-    let shown = |tree: &accesskit_consumer::Tree| -> (Shown, Vec<String>) {
-        let state = tree.state();
-        let first = state
-            .root()
-            .filtered_children(common_filter)
-            .next()
-            .expect("the root lists a node");
-        assert_eq!(common_filter(&first), FilterResult::Include);
-        let mut identifiers = Vec::new();
-        let mut pending = vec![state.root()];
-        while let Some(node) = pending.pop() {
-            identifiers.extend(node.author_id().map(str::to_owned));
-            pending.extend(node.filtered_children(common_filter));
-        }
-        (
-            (
-                first.role(),
-                first.author_id().map(str::to_owned),
-                first.label(),
-            ),
-            identifiers,
-        )
-    };
-    let set_role = |owner: &mut SemanticsOwner, id, role| {
-        owner
-            .get_mut(id)
-            .expect("the node is in the tree")
-            .config_mut()
-            .set_role(role);
-        owner.mark_dirty(id);
-    };
-    let group = (
-        (accesskit::Role::Group, Some("swatch".to_owned()), None),
-        vec!["swatch".to_owned()],
+    let unpublished =
+        |identifier: &str, parent: u32| flui_protocol::TreeDiagnostic::UnpublishedIdentifier {
+            identifier: identifier.into(),
+            parent: element(parent),
+        };
+    let placement = Placement::new(
+        DevicePixelRatio::try_new(1.0).expect("1 is a ratio"),
+        WindowId::from_u64(1).expect("non-zero"),
     );
-    let named_button = (
-        (accesskit::Role::Button, None, Some("Save".to_owned())),
-        Vec::new(),
-    );
-
-    let tree = publish(&mut owner);
-    assert_eq!(shown(&tree), group, "beside other content");
-    set_role(&mut owner, host, SemanticsRole::Button);
-    let tree = publish(&mut owner);
-    assert_eq!(shown(&tree), named_button, "inside a button");
-    set_role(&mut owner, between, SemanticsRole::Group);
-    let tree = publish(&mut owner);
+    let tree = owner
+        .read_wire(&ReadQuery::new(), placement)
+        .expect("the published tree reads");
     assert_eq!(
-        shown(&tree),
-        (
-            (accesskit::Role::Button, None, None),
-            vec!["swatch".to_owned()]
-        ),
-        "under a group inside the button"
+        tree.diagnostics,
+        [
+            unpublished("swatch", 1),
+            unpublished("dot", 1),
+            unpublished("save", 2),
+        ]
     );
-    set_role(&mut owner, between, SemanticsRole::None);
-    let tree = publish(&mut owner);
-    assert_eq!(shown(&tree), named_button, "the group between gone");
-    set_role(&mut owner, host, SemanticsRole::None);
-    let tree = publish(&mut owner);
-    assert_eq!(shown(&tree), group, "back beside other content");
-    let _ = text;
+    let shown: Vec<Option<&str>> = tree.roots[0]
+        .children
+        .iter()
+        .map(|node| node.identifier.as_deref())
+        .collect();
+    assert_eq!(shown, [None, Some("legend")], "the button and the group");
 }

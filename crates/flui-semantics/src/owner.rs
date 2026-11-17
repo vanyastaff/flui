@@ -2079,7 +2079,6 @@ impl SemanticsOwner {
         // the update carrying it is delivered (or found unchanged).
         let mut offer_updates: Vec<(accesskit::NodeId, OfferRecord)> = Vec::new();
         let mut findings: Vec<SemanticsDiagnostic> = Vec::new();
-        let mut placed: SmallVec<[SemanticsId; 8]> = SmallVec::new();
         for sid in dirty {
             // The set is a conservative superset: skip members that died
             // since marking or whose bit a caller cleaned through a borrow.
@@ -2124,19 +2123,7 @@ impl SemanticsOwner {
             {
                 Self::adopt_announcers(announcements, &mut translated);
             }
-            // A container named only by its identifier reads the role of the
-            // node it is lifted into (ADR-0240 §2): a changed role
-            // re-translates those beneath it, which are not dirty themselves.
-            // A node the adapter does not hold reshapes the tree, which is
-            // published in full.
-            if let Some(published) = held(&id) {
-                if published.role() != translated.role() {
-                    placed.extend(self.tree.placement_dependents(node));
-                }
-                if published != &translated {
-                    changed.push((id, translated));
-                }
-            } else {
+            if held(&id) != Some(&translated) {
                 changed.push((id, translated));
             }
             // A field's runs change with its text or layout, which dirties it.
@@ -2147,13 +2134,9 @@ impl SemanticsOwner {
             }
         }
 
-        // The clean containers a changed role places are re-translated and
-        // diffed too. A relation's target can change identity while its
-        // source stays clean, so every clean source is re-translated as well.
-        placed.retain(|sid| !self.relations.sources.contains(sid));
-        placed.sort_unstable();
-        placed.dedup();
-        for &sid in placed.iter().chain(&self.relations.sources) {
+        // A relation's target can change identity while its source stays
+        // clean, so every clean source is re-translated and diffed too.
+        for &sid in &self.relations.sources {
             let Some(node) = self.tree.get(sid).filter(|node| !node.is_dirty()) else {
                 continue;
             };

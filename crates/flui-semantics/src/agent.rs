@@ -544,6 +544,15 @@ impl Walk<'_> {
         let children: Vec<NodeRef<'_>> = node
             .filtered_children(|child| filter.apply(child))
             .collect();
+        // An identifier on a node the read lifts into this one selects
+        // nothing: reported, so an author learns why (ADR-0240 §1).
+        lifted_identifiers(filter, node, &mut |identifier| {
+            self.diagnostics
+                .push(TreeDiagnostic::UnpublishedIdentifier {
+                    identifier: identifier.to_owned(),
+                    parent: id,
+                });
+        });
         if children.is_empty() {
             return out;
         }
@@ -579,6 +588,21 @@ impl Walk<'_> {
             out.children.push(child);
         }
         out
+    }
+}
+
+/// Calls `found` with the identifier of each node `filter` lifts into
+/// `node`: a descendant it passes through (`ExcludeNode`), reached through
+/// such nodes only, in tree order.
+fn lifted_identifiers(filter: AgentFilter, node: &NodeRef<'_>, found: &mut impl FnMut(&str)) {
+    for child in node.children() {
+        if filter.apply(&child) != FilterResult::ExcludeNode {
+            continue;
+        }
+        if let Some(identifier) = child.author_id() {
+            found(identifier);
+        }
+        lifted_identifiers(filter, &child, found);
     }
 }
 

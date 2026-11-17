@@ -270,6 +270,7 @@ fn custom_render_view_mounts_lays_out_and_paints() {
     let mut t = Tester::mount(Center::new().child(
         flui::widgets::Semantics::new()
             .container(true)
+            .role(SemanticsRole::Group)
             .identifier("leaf")
             .child(LeafView { paints: paints.clone() }),
     ));
@@ -319,6 +320,7 @@ fn gesture_recognizer_uses_headless_virtual_time() {
     let mut t = Tester::mount(Center::new().child(
         flui::widgets::Semantics::new()
             .container(true)
+            .role(SemanticsRole::Group)
             .identifier("press")
             .child(
                 GestureDetector::new()
@@ -362,7 +364,7 @@ fn pointer_input_schedules_a_widget_rebuild() {
             ))
     });
     let mut t = Tester::mount(Center::new().child(
-        flui::widgets::Semantics::new().container(true).identifier("target").child(view),
+        flui::widgets::Semantics::new().container(true).role(SemanticsRole::Group).identifier("target").child(view),
     ));
     let initial_builds = builds.load(Ordering::SeqCst);
     assert_eq!(t.rect(&find::id("target")).width, 40.0);
@@ -377,7 +379,7 @@ fn typed_drag_down_callback_is_available_from_the_widget_surface() {
     let downs = Arc::new(AtomicUsize::new(0));
     let observed = downs.clone();
     let mut t = Tester::mount(Center::new().child(
-        flui::widgets::Semantics::new().container(true).identifier("drag").child(
+        flui::widgets::Semantics::new().container(true).role(SemanticsRole::Group).identifier("drag").child(
             GestureDetector::new()
                 .drag(flui::widgets::DragSlot::horizontal().on_down(
                     move |_ctx, _details: flui::widgets::DragDownDetails| {
@@ -471,7 +473,7 @@ impl StatefulView for ArenaProbe {
 impl ViewState<ArenaProbe> for ArenaProbeState {
     fn build(&self, view: &ArenaProbe, _: &dyn BuildContext) -> impl IntoView {
         let recognizers = view.recognizers.borrow();
-        flui::widgets::Semantics::new().container(true).identifier("arena").child(
+        flui::widgets::Semantics::new().container(true).role(SemanticsRole::Group).identifier("arena").child(
             flui::widgets::Listener::new()
                 .behavior(HitTestBehavior::Opaque)
                 .recognizer(&recognizers[0])

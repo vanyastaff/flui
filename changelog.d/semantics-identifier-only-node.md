@@ -1,8 +1,14 @@
+### Added
+
+- Agent protocol 0.18: a semantics read lists an `unpublished_identifier` diagnostic for an
+  identifier on a node that publishes nothing else (no role, label or text), naming the node it
+  is lifted into; a 0.17 client ignores it. The Tester fails such a `find::id` with
+  `TestError::UnpublishedIdentifier`, which says why nothing selects it and gives the form that
+  is found.
+
 ### Fixed
 
-- A `Semantics` container named only by its identifier is published as a group, so `find::id`, the
-  agent and OS automation clients (UI Automation's `AutomationId`, `AXIdentifier`, AT-SPI) find it:
-  it was a generic container, which AccessKit's filter drops with its identifier. Inside a button,
-  checkbox, radio button, link or menu item it stays generic, so the control keeps the name its
-  label gives it; there the identifier selects nothing, and the Tester's failure says to give it
-  to the control.
+- `find`'s documentation, the Tester's failure hint, the book's testing pages and
+  `Semantics::identifier` taught that a container with only an identifier is found by
+  `find::id`; such a node is lifted into its parent, so they now give the form that is:
+  `Semantics::new().container(true).role(SemanticsRole::Group).identifier(..)`.

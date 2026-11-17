@@ -41,7 +41,7 @@ use flui_protocol::{
     ActionSequence, Actionability, ActionabilityCheck, ActionabilityParams, Checked, ErrorObject,
     ImeAction, InputParams, InputSource, InspectParams, InspectReading, KeyAction, LocateParams,
     Locator, LogicalPoint, LogicalRect, Match, Node, PointerAction, PointerButton, PointerDevice,
-    ReadParams, Tree, WindowParams, outline,
+    ReadParams, Tree, TreeDiagnostic, WindowParams, outline,
 };
 use flui_view::dev_agent::{AgentAnswer, AgentWindow, DevAgentHook, InputLease};
 use flui_view::{CloseReason, View};
@@ -148,12 +148,29 @@ pub enum TestError {
     /// Nothing matches the locator.
     #[error(
         "nothing matches {locator:?}.\nThe window shows:\n{shown}\nA widget that publishes no \
-         semantics is found by an identifier: wrap it in \
-         `Semantics::new().container(true).identifier(..)` and find it with `find::id`. An \
-         identifier inside a button, checkbox, radio button, link or menu item selects nothing: \
-         give it to the control."
+         semantics is found by an identifier on a group around it: wrap it in \
+         `Semantics::new().container(true).role(SemanticsRole::Group).identifier(..)` and find it \
+         with `find::id`. An identifier alone forms no node a reader sees."
     )]
     NotFound {
+        /// What was looked for.
+        locator: Box<Locator>,
+        /// The window's outline, cut to its first lines.
+        shown: String,
+    },
+    /// Nothing matches the locator, and the identifier it names is on a node
+    /// that publishes nothing else: the agent and the AccessKit adapters lift
+    /// such a node into its parent, so nothing selects it by that identifier
+    /// (ADR-0240 §3).
+    #[error(
+        "nothing matches {locator:?}: the identifier {identifier:?} is on a node that publishes \
+         nothing else (no role, label or text), which the agent and accessibility clients lift \
+         into its parent, so nothing selects it. Give that node a role, as \
+         `Semantics::new().container(true).role(SemanticsRole::Group).identifier(..)`, or give \
+         the identifier to the control it is inside.\nThe window shows:\n{shown}",
+        identifier = locator.identifier.as_deref().unwrap_or_default()
+    )]
+    UnpublishedIdentifier {
         /// What was looked for.
         locator: Box<Locator>,
         /// The window's outline, cut to its first lines.
@@ -1150,10 +1167,7 @@ impl Tester {
     fn resolve(&mut self, locator: &Locator) -> Result<Match, TestError> {
         let mut matches = self.try_find_all(locator)?;
         match matches.len() {
-            0 => Err(TestError::NotFound {
-                locator: Box::new(locator.clone()),
-                shown: self.shown(),
-            }),
+            0 => Err(self.not_found(locator)),
             1 => Ok(matches.remove(0)),
             count => Err(TestError::Ambiguous {
                 locator: Box::new(locator.clone()),
@@ -1165,6 +1179,29 @@ impl Tester {
                     .collect::<Vec<String>>()
                     .join("\n"),
             }),
+        }
+    }
+
+    /// Why nothing matches `locator`: its identifier is on a node no reader
+    /// selects, when the window reports one, or else nothing carries it.
+    fn not_found(&mut self, locator: &Locator) -> TestError {
+        let unpublished = locator.identifier.as_deref().is_some_and(|wanted| {
+            self.try_semantics().is_ok_and(|tree| {
+                tree.diagnostics.iter().any(|diagnostic| {
+                    matches!(
+                        diagnostic,
+                        TreeDiagnostic::UnpublishedIdentifier { identifier, .. }
+                            if identifier == wanted
+                    )
+                })
+            })
+        });
+        let locator = Box::new(locator.clone());
+        let shown = self.shown();
+        if unpublished {
+            TestError::UnpublishedIdentifier { locator, shown }
+        } else {
+            TestError::NotFound { locator, shown }
         }
     }
 

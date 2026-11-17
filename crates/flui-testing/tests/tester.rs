@@ -1428,19 +1428,16 @@ fn draw_commands_place_a_command_through_a_transform_layer() {
     assert_eq!(transforms, [placed]);
 }
 
-/// An element named only by its identifier is found by it: a `Semantics`
-/// container with an identifier and nothing else is published as a group an
-/// automation client selects, as Flutter's `Semantics(identifier:)` keeps a
-/// node.
-///
-/// Fails if translation publishes such a node as a generic container, which
-/// every AccessKit filter drops with its identifier.
+/// An element with no semantics of its own is found by the identifier on a
+/// group around it, the form `find`'s documentation and the failure below
+/// give.
 #[test]
-fn an_element_named_only_by_its_identifier_is_found() {
+fn an_element_is_found_by_the_identifier_on_a_group_around_it() {
     let mut t = Tester::mount(
         Center::new().child(
             flui_widgets::Semantics::new()
                 .container(true)
+                .role(flui_widgets::SemanticsRole::Group)
                 .identifier("swatch")
                 .child(SizedBox::new(24.0, 16.0)),
         ),
@@ -1449,37 +1446,54 @@ fn an_element_named_only_by_its_identifier_is_found() {
     assert_eq!((rect.width, rect.height), (24.0, 16.0));
 }
 
-/// An identifier given to a container inside a button selects nothing: the
-/// container is lifted into the button so the button keeps the name its
-/// label gives it, and the failure says to give the identifier to the
-/// button (ADR-0240 §2).
+/// An identifier on a node that publishes nothing else selects nothing, and
+/// the failure says so and gives the form that does: beside other content,
+/// and inside a button, which keeps the name its label gives it.
 ///
-/// Fails if the container inside the button is published as a group, which
-/// cuts the button's name from its label and makes the identifier found.
+/// Fails if the failure is the plain `NotFound`, which tells the author to
+/// do what they already did.
 #[test]
-fn an_identifier_inside_a_button_leaves_the_button_its_name() {
+fn an_identifier_on_a_node_that_publishes_nothing_else_fails_saying_so() {
+    let unpublished = |identifier: &str| {
+        flui_widgets::Semantics::new()
+            .container(true)
+            .identifier(identifier)
+    };
     let mut t = Tester::mount(
-        Center::new().child(
+        Center::new().child(Column::new((
+            unpublished("swatch").child(SizedBox::new(24.0, 16.0)),
             RawButton::new(
-                flui_widgets::Semantics::new()
-                    .container(true)
-                    .identifier("save")
-                    .child(
-                        flui_widgets::Semantics::new()
-                            .container(true)
-                            .label("Save")
-                            .child(SizedBox::new(40.0, 20.0)),
-                    ),
+                unpublished("save").child(
+                    flui_widgets::Semantics::new()
+                        .container(true)
+                        .label("Save")
+                        .child(SizedBox::new(40.0, 20.0)),
+                ),
             )
             .on_pressed(|_| {}),
-        ),
+        ))),
     );
     let _ = t.rect(&find::button("Save"));
-    let message = panic_text(|| {
-        let _ = t.rect(&find::id("save"));
-    });
+    for identifier in ["swatch", "save"] {
+        let error = t
+            .try_rect(&find::id(identifier))
+            .expect_err("an identifier on a lifted node selects nothing");
+        assert!(
+            matches!(error, TestError::UnpublishedIdentifier { .. }),
+            "{identifier}: {error}"
+        );
+        let message = error.to_string();
+        assert!(
+            message.contains("publishes nothing else")
+                && message.contains(".role(SemanticsRole::Group)"),
+            "{message}"
+        );
+    }
     assert!(
-        message.contains("give it to the control"),
-        "the failure names the way out: {message}"
+        matches!(
+            t.try_rect(&find::id("absent")),
+            Err(TestError::NotFound { .. })
+        ),
+        "an identifier nothing carries is not found"
     );
 }
