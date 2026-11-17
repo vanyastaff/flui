@@ -617,4 +617,24 @@ pub trait PlatformWindow {
     /// is `Unavailable`: the window system takes no such request, or this
     /// operating system build lacks it ([`NotOnThisDevice`](crate::UnsupportedReason::NotOnThisDevice)).
     fn set_frame_rate_hint(&self, hint: crate::FrameRateHint) -> Result<(), Unsupported>;
+
+    /// Name this window to a desktop portal for one request: answer `answer`
+    /// with the [`PortalParent`](crate::capability::PortalParent) the request
+    /// passes as `parent_window` and holds until it ends (ADR-0363).
+    ///
+    /// An X11 window answers `x11:<XID>` at once. A Wayland window exports
+    /// itself for the request (`xdg-foreign`) and answers `wayland:<handle>`
+    /// once the compositor named the export, which the answer's drop
+    /// releases; a compositor with no exporter answers no window. Called on
+    /// the owner thread, through
+    /// [`WindowRef::portal_parent`](crate::capability::WindowRef::portal_parent),
+    /// only while the window is open.
+    ///
+    /// The default answers [`PortalParent::none`](crate::capability::PortalParent::none):
+    /// only a Linux desktop has portals, so a window of any other system has
+    /// no name a portal takes.
+    fn portal_parent(&self, answer: crate::capability::Resolver<crate::capability::PortalParent>) {
+        // The owner retiring first leaves nothing waiting for the answer.
+        let _ = answer.resolve(crate::capability::PortalParent::none());
+    }
 }

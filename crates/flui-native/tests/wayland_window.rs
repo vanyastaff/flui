@@ -18,7 +18,7 @@ use flui_foundation::geometry::{Size, WindowMetrics};
 use flui_native::testing::app::{self, AppCall};
 use flui_native::testing::wayland::{
     ClientFrameReport, MAX_BUFFER_SCALE, bridge_focus, client_frame_report, compositor_report,
-    fullscreen_on, offers_activation, outputs, portal_parent, present, run_for, suspend,
+    PortalParentRequest, fullscreen_on, offers_activation, outputs, present, run_for, suspend,
 };
 use flui_native::{ExitAnswer, HostWindow, Platform as _, WaylandPlatform};
 use flui_platform::WindowFrame;
@@ -1613,42 +1613,66 @@ mod optional {
         drop(fixture);
     }
 
-    /// A window the compositor exports (`xdg-foreign` v2) hands out the portal
-    /// parent `wayland:<handle>`, which another client imports as a valid window,
-    /// and which names nothing once the window closes: the compositor revokes the
-    /// import, and the window hands out no parent. Where the compositor offers no
-    /// exporter (Weston), there is no parent.
+    /// The portal parent `fixture`'s window answers one request, once the
+    /// compositor named the export.
+    fn portal_parent(fixture: &WaylandFixture) -> flui_platform::capability::PortalParent {
+        let mut request = PortalParentRequest::ask(fixture.window.as_ref());
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            if let Some(parent) = request.answer() {
+                return parent;
+            }
+            assert!(Instant::now() < deadline, "the window named its parent");
+            run_for(&fixture.platform, Duration::from_millis(25)).expect("the loop turns");
+        }
+    }
+
+    /// A window the compositor exports (`xdg-foreign` v2) for a portal request
+    /// hands it the parent `wayland:<handle>`, which another client imports as
+    /// a valid window while the request holds it, and which names nothing once
+    /// the request lets it go: the compositor revokes the import. A closed
+    /// window hands out no parent. Where the compositor offers no exporter
+    /// (Weston), there is no parent.
     #[test]
-    fn a_portal_parent_names_the_exported_window() {
-        let case = "a_portal_parent_names_the_exported_window";
+    fn a_portal_parent_names_the_window_while_its_request_holds_the_export() {
+        let case = "a_portal_parent_names_the_window_while_its_request_holds_the_export";
         let Some(platform) = platform(case) else {
             return;
         };
         let mut fixture = WaylandFixture::open(platform, "a portal's parent");
         let mut other = foreign_client::ForeignClient::connect();
-        let parent = portal_parent(fixture.window.as_ref());
+        let parent = portal_parent(&fixture);
         if !other.exporter_offered {
-            assert_eq!(parent, None, "no export without an exporter");
+            assert!(parent.is_none(), "no export without an exporter");
             Optional::XdgForeign.missing(case, "only the absence of a parent was checked");
             return;
         }
-        let parent = parent.expect("an exported window names its portal parent");
-        let handle = parent
+        let name = parent.as_str().to_owned();
+        let handle = name
             .strip_prefix("wayland:")
-            .unwrap_or_else(|| panic!("a Wayland portal parent: {parent}"));
+            .unwrap_or_else(|| panic!("a Wayland portal parent: {name}"));
         other.import(handle);
         assert!(
             !other.revoked(),
-            "the compositor knows {handle} as a window"
+            "the compositor knows {handle} as a window while the request holds it"
         );
 
+        drop(parent);
+        run_for(&fixture.platform, Duration::from_millis(50)).expect("the loop turns");
+        assert!(
+            other.revoked(),
+            "the export is released when the request lets its parent go"
+        );
+
+        let second = portal_parent(&fixture);
+        assert_ne!(second.as_str(), name, "each request exports the window anew");
+        drop(second);
+
         fixture.close();
-        assert!(other.revoked(), "the closed window's export is revoked");
-        assert_eq!(
-            portal_parent(fixture.window.as_ref()),
-            None,
+        assert!(
+            portal_parent(&fixture).is_none(),
             "a closed window names no parent"
         );
-        eprintln!("{case}: {parent} imported, then revoked with the window");
+        eprintln!("{case}: {name} imported, then revoked with its request");
     }
 }

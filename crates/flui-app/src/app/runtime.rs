@@ -1427,10 +1427,11 @@ impl AppRuntime {
     /// What the installed platform offers capability providers beyond the
     /// window, shared with every registry this host builds.
     #[cfg_attr(
-        not(target_os = "android"),
+        any(target_os = "ios", target_arch = "wasm32"),
         expect(
             dead_code,
-            reason = "only the Android host offers an Activity to install"
+            reason = "the Android host installs its Activity and a desktop host names the \
+                      application; iOS and the web do neither yet"
         )
     )]
     pub(super) fn host_bridge(&self) -> flui_platform::capability::HostBridge {

@@ -127,6 +127,45 @@ pub struct HeadlessWindow {
     chrome: Mutex<KitChrome>,
     /// Whether the host closed the window: its commands answer `Closed`.
     closed: AtomicBool,
+    /// How the window is named to a portal, when it plays an exported
+    /// Wayland window ([`HeadlessWindow::with_portal_export`]).
+    portal_exports: Option<HeadlessPortalExports>,
+}
+
+/// A headless window's simulated `xdg-foreign` exports: the handle each portal
+/// request is answered with, and how many exports requests still hold.
+/// Cheap to clone; clones share the count.
+#[derive(Clone, Debug)]
+pub struct HeadlessPortalExports {
+    handle: Arc<str>,
+    live: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl HeadlessPortalExports {
+    /// How many exports portal requests hold now: one per request between
+    /// its ask and its end.
+    #[must_use]
+    pub fn live(&self) -> usize {
+        self.live.load(Ordering::SeqCst)
+    }
+
+    /// A new export, counted until the parent holding it drops.
+    fn export(&self) -> flui_platform::capability::PortalParent {
+        /// One export; its drop is the release.
+        struct Export(Arc<std::sync::atomic::AtomicUsize>);
+
+        impl Drop for Export {
+            fn drop(&mut self) {
+                self.0.fetch_sub(1, Ordering::SeqCst);
+            }
+        }
+
+        self.live.fetch_add(1, Ordering::SeqCst);
+        flui_platform::capability::PortalParent::wayland(
+            &self.handle,
+            Export(Arc::clone(&self.live)),
+        )
+    }
 }
 
 impl std::fmt::Debug for HeadlessWindow {
@@ -292,7 +331,29 @@ impl HeadlessWindow {
             capabilities: Self::published_capabilities(false),
             chrome: Mutex::default(),
             closed: AtomicBool::new(false),
+            portal_exports: None,
         }
+    }
+
+    /// Name the window to a desktop portal as a Wayland window the compositor
+    /// exports under `handle`: every request is answered
+    /// `wayland:<handle>` and holds an export of its own until it ends, which
+    /// [`HeadlessPortalExports::live`] counts. Without it the window answers
+    /// no window, as one of a system with no portals does.
+    #[must_use]
+    pub fn with_portal_export(mut self, handle: impl Into<String>) -> Self {
+        self.portal_exports = Some(HeadlessPortalExports {
+            handle: handle.into().into(),
+            live: Arc::default(),
+        });
+        self
+    }
+
+    /// The window's portal exports, when it was built
+    /// [`with_portal_export`](Self::with_portal_export).
+    #[must_use]
+    pub fn portal_exports(&self) -> Option<HeadlessPortalExports> {
+        self.portal_exports.clone()
     }
 
     /// The operating system's drag sessions this window plays: what a drag
@@ -494,6 +555,20 @@ impl PlatformWindow for HeadlessWindow {
         Err(flui_platform::Unsupported::new(
             flui_platform::UnsupportedReason::NotOnThisPlatform,
         ))
+    }
+
+    /// A new export for each request when the window plays an exported
+    /// Wayland window ([`HeadlessWindow::with_portal_export`]), else no window.
+    fn portal_parent(
+        &self,
+        answer: flui_platform::capability::Resolver<flui_platform::capability::PortalParent>,
+    ) {
+        let parent = self.portal_exports.as_ref().map_or_else(
+            flui_platform::capability::PortalParent::none,
+            HeadlessPortalExports::export,
+        );
+        // The owner retiring first leaves nothing waiting for the answer.
+        let _ = answer.resolve(parent);
     }
 
     /// Shown and focused, with no position (as on Wayland), its logical size

@@ -2051,6 +2051,20 @@ impl PlatformWindow for X11Window {
         Err(Unsupported::new(UnsupportedReason::NotOnThisPlatform))
     }
 
+    /// `x11:<XID>`: the server's id names the window to every client while
+    /// it exists, so the name needs nothing held.
+    fn portal_parent(
+        &self,
+        answer: flui_platform::capability::Resolver<flui_platform::capability::PortalParent>,
+    ) {
+        let parent = std::num::NonZeroU32::new(self.xid).map_or_else(
+            flui_platform::capability::PortalParent::none,
+            flui_platform::capability::PortalParent::x11,
+        );
+        // The owner retiring first leaves nothing waiting for the answer.
+        let _ = answer.resolve(parent);
+    }
+
     /// The chrome regions a press on a window without decorations is answered
     /// from (ADR-0286 §10), projected at the window's scale. X11 has no system
     /// edge gestures, so those regions are kept and never read.
