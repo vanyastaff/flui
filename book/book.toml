@@ -7,8 +7,8 @@ src = "src"
 
 [build]
 # Refuse a SUMMARY entry whose chapter is missing instead of creating a stub.
-# Building the book does not compile Rust fences; ignored snippets must be
-# checked against their linked source. See .github/workflows/docs.yml.
+# mdBook does not compile Rust fences; src/book.rs makes every chapter a
+# doctest of the facade (.github/workflows/docs.yml, job `samples`).
 create-missing = false
 
 [output.html]

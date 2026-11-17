@@ -5972,6 +5972,60 @@ them against a stand-in that runs one transaction at a time; with
 the application's identifier (`AppIdentity::with_app_id`) or `AppConfig::storage_dir`
 is the one switch.
 
+### Another application's content is read off the owner thread, its size first
+
+What another application hands the host (a clip, a drag, the documents an intent names) is
+untrusted: its size and its timing are the other application's. The rules, on every host that
+reads such content:
+
+- **No provider on the owner thread.** A content provider answers when its application does (a
+  cloud provider once it has downloaded the file), and the Android owner thread drains
+  NativeActivity's input queue and runs frames. The clipboard read takes the text the primary
+  clip's first item holds (`ClipData.Item.getText`, `clipboard::android::item_text`); an item that
+  is a URI or an intent holds none and reads `Ok(None)`, as a clipboard on every other host answers
+  one with no text representation, so no stream is opened. A paste on the Java side takes the same
+  text (`FluiView.clipText`, below API 31 and through the content receiver from it), and the
+  receiver hands back what it does not take. No class calls `coerceToText`.
+- **The limit is the clipboard's.** Text read or pasted is refused whole past
+  `host::MAX_TEXT` bytes, the limit of every host's clipboard read, on its UTF-8 length, counted
+  in Java before anything is copied (`FluiView.utf8Length`; `FluiView.MAX_PASTED_BYTES` states the
+  same value, and a test holds them equal). A read then copies the text three times, each within
+  the limit and at most two at once: the UTF-8 array Java encodes (`FluiView.utf8`), the bytes JNI
+  copies out of it, and the shared text the answer holds.
+- **Size first, then a read that stops.** A dropped URI's bytes are read on a thread of their own
+  (above); the size the provider states (`AssetFileDescriptor.getLength`, the file's size when it
+  states none) is asked before anything is read and one past the request's limit is refused, and
+  the read stops at the limit however much was stated. It holds one buffer of the bytes (two while
+  it grows and while the answer is copied out), the Rust side one more and the payload's shared
+  bytes, each made before the previous is dropped.
+- **Documents open on workers.** An intent's `content:` documents are opened
+  (`FluiHost.openDocument`, `documentName`) on worker threads of the loop's
+  (`owner::android::documents`): the owner accepts each intent, at most `MAX_WAITING_INTENTS` at
+  once, each document a job under a ticket of its own, and delivers the intents in the order they
+  arrived, each once every document has an outcome, so a slow provider holds back the later intents
+  and never the owner's turn. An outcome finds its document by its ticket alone; one for a document
+  already refused reaches no other and is dropped, which closes its descriptor. Every accepted
+  document ends with exactly one outcome: the file, or an `OpenRefusal` naming why (the provider
+  failed; the read grant ended with the Activity, `SecurityException`; the intent's
+  `OPEN_DEADLINE` passed, and the owner cancels the open through its `CancellationSignal`, a
+  one-way binder call that never waits for the provider; the platform retired; no thread could
+  start). The poll wakes for the earliest deadline (`LoopTurn::open_deadline`). One worker runs
+  while it keeps up; `ContentProvider.openFile` ignores the cancellation unless a provider
+  overrides it, so once every worker is inside an abandoned open, a job waiting starts another, up
+  to `MAX_WORKERS` (`host::MAX_PROVIDER_READS`, the bound of the drop reads too); past them the
+  jobs are refused at their own deadlines. What a worker finishes after the platform retired it
+  drops itself. An intent is heard after the trim levels `FluiHost` queued in the same turn: a
+  trim level never waits for another application's provider.
+- **A drag's types are bounded the same everywhere.** Every host's drag reads the first
+  `host::MAX_OFFERED_TYPES` types its source names and none past them, and leaves out a
+  type longer than `host::MAX_TYPE_LEN` bytes, which counts toward them
+  (`drag::offers::offered_types`): X11 reads that many atoms of `XdndTypeList`, Wayland that many
+  `wl_data_offer.offer` events (a repeated name counts), Windows that many entries of the format
+  enumerator, the Web that many `DataTransfer` types and files, and Android copies that many out of
+  the `ClipDescription` in Java (`FluiView.mimeTypes`) and reads them one local reference at a time
+  (`drag::android::clip::read_type_names`), so the native frame stays bounded on API 23 to 25,
+  whose local reference table holds 512 for the thread.
+
 ### Android samples its displays through JNI and refreshes them on announced change only
 
 **Rule:** `Platform::display_snapshot` runs on every owner wake, so a backend whose

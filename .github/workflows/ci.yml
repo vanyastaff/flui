@@ -1041,7 +1041,8 @@ jobs:
 
 
       - name: cargo test --doc
-        run: cargo test --workspace --locked --doc
+        # `flui/testing` compiles the book's chapters that run through Tester (src/book.rs).
+        run: cargo test --workspace --locked --doc --features flui/testing
 
   # ─────────────────────────────────────────────────────────────────────────
   # miri checks selected ownership and containment contracts without a GPU:

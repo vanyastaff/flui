@@ -40,3 +40,8 @@ This site is itself a FLUI-workspace artifact, under `book/`. See
 for how it builds and deploys. A page here is a guide for readers; the design records and
 reference material stay in the repository's own `docs/`, and the book links to them rather than
 copying them.
+
+Every `rust` sample in the book compiles: `src/book.rs` makes each chapter a doctest of the `flui`
+facade, so `cargo test -p flui --features testing --doc book::` builds them all and runs the ones
+not marked `no_run`. A new chapter is listed there as well as in `SUMMARY.md`, setup a reader does
+not need goes on hidden `# ` lines, and text that is not Rust is fenced `text`, never `ignore`.

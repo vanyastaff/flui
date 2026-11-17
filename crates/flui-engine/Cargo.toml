@@ -199,6 +199,10 @@ name = "offscreen_resource_cache"
 harness = false
 required-features = ["testing"]
 
+[[bench]]
+name = "first_frame"
+harness = false
+
 [lints]
 workspace = true
 

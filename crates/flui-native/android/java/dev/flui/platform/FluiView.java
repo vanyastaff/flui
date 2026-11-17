@@ -646,6 +646,45 @@ public final class FluiView extends View {
         return editing;
     }
 
+    /**
+     * The most text a paste carries, in UTF-8 bytes (64 MiB): the library's
+     * {@code MAX_TEXT}, which every host's clipboard read answers.
+     */
+    static final int MAX_PASTED_BYTES = 67108864;
+
+    /**
+     * The text {@code clip}'s items hold ({@link ClipData.Item#getText}),
+     * joined in order; null when none holds any, or when the joined text is
+     * longer than {@link #MAX_PASTED_BYTES} as UTF-8, which refuses it whole,
+     * as every host's clipboard read refuses it. Its length is counted before
+     * anything is copied. An item that holds no text (a URI, an intent, HTML
+     * alone) adds nothing: {@code coerceToText} would read a URI's content
+     * from another application's provider on this thread, all of it, before
+     * its size is known.
+     */
+    static CharSequence clipText(ClipData clip) {
+        long length = 0;
+        boolean any = false;
+        for (int index = 0; index < clip.getItemCount(); index++) {
+            CharSequence text = clip.getItemAt(index).getText();
+            if (text != null) {
+                any = true;
+                length = saturatingAdd(length, utf8Length(text));
+            }
+        }
+        if (!any || length > MAX_PASTED_BYTES) {
+            return null;
+        }
+        StringBuilder joined = new StringBuilder();
+        for (int index = 0; index < clip.getItemCount(); index++) {
+            CharSequence text = clip.getItemAt(index).getText();
+            if (text != null) {
+                joined.append(text);
+            }
+        }
+        return joined;
+    }
+
     // ------------------------------------------------------- drag and drop
 
     @Override
@@ -760,13 +799,31 @@ public final class FluiView extends View {
         return null;
     }
 
+    /**
+     * The most media types of a drag's description read: the library's
+     * {@code MAX_OFFERED_TYPES}, which every host's drag reads of its source.
+     */
+    static final int MAX_OFFERED_TYPES = 100;
+
+    /**
+     * The longest media type read, in UTF-16 units: the library's
+     * {@code MAX_TYPE_LEN}, in bytes, which no type within it is shorter than.
+     */
+    static final int MAX_TYPE_LENGTH = 255;
+
+    /**
+     * The first {@link #MAX_OFFERED_TYPES} media types another application's
+     * {@code description} names, each one longer than {@link #MAX_TYPE_LENGTH}
+     * left {@code null} in its place, so nothing past them crosses to native code.
+     */
     private static String[] mimeTypes(ClipDescription description) {
         if (description == null) {
             return new String[0];
         }
-        String[] types = new String[description.getMimeTypeCount()];
+        String[] types = new String[Math.min(description.getMimeTypeCount(), MAX_OFFERED_TYPES)];
         for (int index = 0; index < types.length; index++) {
-            types[index] = description.getMimeType(index);
+            String type = description.getMimeType(index);
+            types[index] = type != null && type.length() <= MAX_TYPE_LENGTH ? type : null;
         }
         return types;
     }
@@ -901,13 +958,20 @@ public final class FluiView extends View {
         return uris.isEmpty() ? null : uris.toArray(new String[0]);
     }
 
+    /** The most a read of a dropped URI reserves at once for a stated size. */
+    private static final int INITIAL_READ_CAPACITY = 16 * 1024 * 1024;
+
     /**
      * The bytes behind the first content URI of the drop held under
      * {@code offer}, at most {@code limit} of them, as FLUI's read
      * {@code ticket}; null when it cannot be read, is larger, or
-     * {@link #cancelDropRead} stopped it. {@code read[0]} is how many bytes
-     * it read, past {@code limit} when it stopped there. Called on a thread
-     * of FLUI's.
+     * {@link #cancelDropRead} stopped it. The size the provider states is
+     * asked before anything is read, and one past {@code limit} is refused
+     * then; a stream longer than it stated stops at {@code limit} all the
+     * same. {@code read[0]} is the stated size it refused, or how many bytes
+     * it read, past {@code limit} when it stopped there. While it reads it
+     * holds one buffer of the bytes (two while the buffer grows, and while
+     * the answer is copied out of it). Called on a thread of FLUI's.
      */
     public byte[] readDropBytes(long offer, long ticket, long limit, long[] read) {
         DropRead fresh = new DropRead();
@@ -926,11 +990,20 @@ public final class FluiView extends View {
             if (file == null) {
                 return null;
             }
+            // The size the provider states is asked first: one past the limit
+            // is refused before a byte is read. The read below still stops at
+            // the limit, whatever was stated.
+            long declared = file.getLength();
+            if (declared > limit) {
+                read[0] = declared;
+                return null;
+            }
             stream = file.createInputStream();
             if (!running.attach(stream)) {
                 return null;
             }
-            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            ByteArrayOutputStream out = new ByteArrayOutputStream(
+                    declared > 0 ? (int) Math.min(declared, INITIAL_READ_CAPACITY) : 16384);
             byte[] chunk = new byte[16384];
             int count;
             while ((count = stream.read(chunk)) > 0) {
@@ -1034,8 +1107,22 @@ public final class FluiView extends View {
         return a > Long.MAX_VALUE - b ? Long.MAX_VALUE : a + b;
     }
 
-    /** The UTF-8 length of {@code text}, a lone surrogate counted as U+FFFD. */
-    private static long utf8Length(CharSequence text) {
+    /**
+     * {@code text} as UTF-8, a lone surrogate as U+FFFD: the library's one
+     * copy of a clip's text, which it measures with {@link #utf8Length} first
+     * and asks for only within its limit. Any thread.
+     */
+    static byte[] utf8(CharSequence text) {
+        byte[] out = new byte[(int) Math.min(utf8Length(text), Integer.MAX_VALUE)];
+        encodeUtf8(text, out, 0);
+        return out;
+    }
+
+    /**
+     * The UTF-8 length of {@code text}, a lone surrogate counted as U+FFFD,
+     * counted without copying it. Any thread.
+     */
+    static long utf8Length(CharSequence text) {
         long length = 0;
         int count = text.length();
         for (int index = 0; index < count; index++) {

@@ -314,7 +314,8 @@ drivers stay local runs.
 
 ## Ownership and thread safety
 
-`flui-engine` runs on the render thread. No `Arc<Mutex<_>>` guards any
+`flui-engine` runs on the render thread, and one worker builds the first format's pipelines
+on the shared device while the first frame is built (ADR-0305 §1). No `Arc<Mutex<_>>` guards any
 engine subsystem, and none should come back; every
 shared handle is a wgpu ref-count.
 
@@ -325,6 +326,7 @@ shared handle is a wgpu ref-count.
 | `Renderer::painter`, `Renderer::offscreen` | `WgpuPainter`, `OffscreenRenderer` | Owned outright; the painter records content and the offscreen renderer blits retained presentation |
 | `Renderer::_single_mutator` | `PhantomData<Cell<()>>` | Makes `Renderer: !Sync` by declaration rather than by whichever field happens to be `!Sync`; pinned by `assert_impl_all!(Renderer: Send)` / `assert_not_impl_any!(Renderer: Sync)` |
 | `TexturePool` | inventory + mpsc return channel | Single-mutator by construction; `Send` only (the receiver is `!Sync`) |
+| `GpuContext::warmup` | `Option<PipelineWarmup>` over a `JoinHandle<PipelineLibrary>` | Owned. The worker holds its own `Arc<wgpu::Device>` and hands the library back whole at the join; dropping the warm-up joins the worker, so no build outlives the context or the device a rebuild let go |
 | `RasterExecutor` shared state | one `Mutex` per slot inbox (`SlotInbox`); in `Shared` (`raster_executor/sender.rs`) one `Mutex` for the device's record, the atomics `health`, `sending` and `trim`, and the bounded `crossbeam_channel` lifecycle queue | The mutexes are held only to swap values and nothing that can run user code runs under them (`raster_executor` module doc); the atomics take no lock, and the executor only `try_recv`s the queue and waits on no lock |
 
 **Unsafe.** `#![cfg_attr(not(test), deny(unsafe_code))]` in `lib.rs`, and one
