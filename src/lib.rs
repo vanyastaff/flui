@@ -220,7 +220,44 @@ pub use flui_cupertino as cupertino;
 /// feature.
 #[cfg(feature = "devtools")]
 pub use flui_devtools as devtools;
-pub use flui_foundation as foundation;
+/// The values every layer shares: keys, listenables, the ids and errors the
+/// trees report, text direction and sizing, the application id and the typed
+/// self-description of a node.
+///
+/// The rest of `flui-foundation` (the frame arena, claim slots, id mints, slot
+/// tables, the signal graph's read side, the rest of panic containment) is how the
+/// framework is built, not what an application names; an official package
+/// reaches it through `flui-sdk`. The arity markers are in [`rendering`],
+/// geometry in [`geometry`].
+pub mod foundation {
+    pub use flui_foundation::{
+        AppId, AppIdError, AsViewKey, BuildPhase, BuildPhaseGuard, ChangeNotifier, CreationSite,
+        DataTransferId, DragSessionId, ElementId, FrameCallbackId, FrameEpoch, FrameStamp, GenId,
+        Id, IdExhausted, Identifier, InputSequenceId, LayerId, Listenable, ListenerCallback,
+        ListenerId, ListenerObserver, ManualClock, Marker, MintedId, MonotonicClock,
+        MutatedDuringBuild, NotificationCallback, Notifier, NotifierCallback, PathEntry,
+        PresentationAddress, PresentationId, PressId, RawId, RebuildReason, RebuildReasons,
+        RecoveryCallback, RenderId, SemanticsId, Subscription, SurfaceGeneration, TextDirection,
+        TextScaleProfile, TextSize, TextSizeError, TextSizeRequest, TextSizingIntent, TreeContext,
+        TreeError, TreeId, UiRuntimeId, UniqueKey, ValueKey, ValueListenable, ValueNotifier,
+        ViewId, ViewKey, inspect, markers, observe,
+    };
+
+    /// A slot's typed generation, as the ids above carry it.
+    pub mod generation {
+        pub use flui_foundation::generation::{Generation, ReservedGenerationBit};
+    }
+
+    /// A holder of memory it can give back when the system asks.
+    pub mod memory {
+        pub use flui_foundation::memory::ReclaimMemory;
+    }
+
+    /// The scope an observer of a notification runs user code in, so a panic is caught once.
+    pub mod panic {
+        pub use flui_foundation::panic::RecoveryScope;
+    }
+}
 pub use flui_foundation::geometry;
 /// The typed self-description of a node, and its derive, for application-defined types.
 pub use flui_foundation::inspect::Inspect;

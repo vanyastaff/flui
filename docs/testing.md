@@ -889,7 +889,7 @@ tests/benches/examples via a self dev-dependency; downstream crates opt in with
 | `flui-rendering` | Real `PipelineOwner` trees (Box + Sliver), layout/frame depths, animation helpers. |
 | `flui-testing` | A whole headless frame on a virtual clock: gesture deadlines, animation ticks, async tasks, build/layout/paint/composite, semantics, scripted gesture replay. |
 | `flui-widgets` | A mounted widget tree: geometry probes, synthetic pointer/scroll input with per-contact identity, root swap, lazy-sliver settling. |
-| `flui-foundation` | The `inspect` substrate: `Inspect`, `SnapshotNode::{get, get_fact, find_by_kind}`, `render`. |
+| `flui-foundation` | The `inspect` substrate: `Inspect`, `SnapshotNode::{get, fact_as, find_by_kind}`, `render`. |
 
 Render-tree snapshots are backed by `flui_foundation::inspect::Inspect`: every
 node self-describes its own **user-config** fields (a `RenderFlex`'s
@@ -901,7 +901,7 @@ not Dart camelCase). Prefer a typed `Value` or `#[derive(Inspect)]` over
 
 Structured assertions should read the typed snapshot, `Probe::render_snapshot()`
 or `Probe::node_snapshot(id)`, by type: `node.get::<f64>("width")`,
-`node.get_fact::<Size>("size")`, `tree.find_by_kind("RenderFlex")`, instead of
+`node.fact_as::<Size>("size")`, `tree.find_by_kind("RenderFlex")`, instead of
 substring-matching `Probe::dump()`. In a widget test, `LaidOut::render_node(id)`
 is the one-node snapshot.
 A `Probe::dump()` is what a failing assertion should print to show *why*.

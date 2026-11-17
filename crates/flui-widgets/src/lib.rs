@@ -178,8 +178,8 @@ pub use animated::{
 pub use clip::{ClipOval, ClipPath, ClipRRect, ClipRSuperellipse, ClipRect, Oval};
 // `Image` widget over `RenderImage`; provider types live in the same module.
 pub use async_builders::{
-    BoxedResultFuture, BoxedResultStream, FutureBuilder, FutureFactory, InitialDataFactory,
-    SnapshotBuilder, Stream, StreamBuilder, StreamFactory,
+    AsyncSnapshot, BoxedResultFuture, BoxedResultStream, ConnectionState, FutureBuilder,
+    FutureFactory, InitialDataFactory, SnapshotBuilder, Stream, StreamBuilder, StreamFactory,
 };
 pub use container::Container;
 pub use context_menu::{ContextMenuArea, ContextMenuAreaState};

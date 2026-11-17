@@ -103,9 +103,9 @@ fn a_counters_elements_link_to_render_objects_that_link_to_semantics() {
         .find_by_kind("CounterView")
         .unique()
         .expect("one counter");
-    assert_eq!(view.get_fact::<&str>("element"), Ok("StatefulElement"));
+    assert_eq!(view.fact_as::<&str>("element"), Ok("StatefulElement"));
     assert_eq!(
-        view.get_fact::<Variant<'_>>("lifecycle").map(|it| it.name),
+        view.fact_as::<Variant<'_>>("lifecycle").map(|it| it.name),
         Ok("Active")
     );
 
@@ -161,7 +161,7 @@ fn render_facts_read_back_typed() {
         .find(|node| node.kind == "RenderParagraph")
         .expect("a paragraph");
     let size = paragraph
-        .get_fact::<flui_foundation::geometry::Size>("size")
+        .fact_as::<flui_foundation::geometry::Size>("size")
         .expect("a laid-out box has a size");
     assert!(size.width > 0.0 && size.height > 0.0, "{size:?}");
     let rect = paragraph.rect.expect("a laid-out box has a rect");
@@ -235,10 +235,10 @@ fn a_views_field_named_as_an_element_fact_reads_and_diffs_as_its_own() {
     assert_eq!(draft.get::<&str>("lifecycle"), Ok("draft"));
     assert_eq!(draft.get::<bool>("dirty"), Ok(true));
     assert_eq!(
-        draft.get_fact::<Variant<'_>>("lifecycle").map(|it| it.name),
+        draft.fact_as::<Variant<'_>>("lifecycle").map(|it| it.name),
         Ok("Active")
     );
-    assert_eq!(draft.get_fact::<bool>("dirty"), Ok(false));
+    assert_eq!(draft.fact_as::<bool>("dirty"), Ok(false));
 
     let again = app.inspect_elements(everything()).expect("mounted");
     assert_eq!(

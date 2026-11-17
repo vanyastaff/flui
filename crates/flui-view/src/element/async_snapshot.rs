@@ -1,12 +1,8 @@
-//! [`ConnectionState`] and [`AsyncSnapshot`] — the data model for
-//! `FutureBuilder` / `StreamBuilder`.
+//! [`ConnectionState`] and [`AsyncSnapshot`]: what `FutureBuilder` and
+//! `StreamBuilder` hand their `builder`.
 //!
-//! Pure data: no futures, no executor, no widget. The state machine lives here
-//! so the builders stay thin, and so `flui-material` never has to
-//! re-declare it.
-//!
-//! The builders themselves do not exist yet; this module is only the state
-//! machine they will share.
+//! Pure data: no futures, no executor, no widget. The builders fold each event
+//! of their future or stream into a snapshot.
 //!
 //! # Design notes
 //!
@@ -66,7 +62,7 @@ pub enum ConnectionState {
 /// # Example
 ///
 /// ```
-/// use flui_foundation::{AsyncSnapshot, ConnectionState};
+/// use flui_view::element::{AsyncSnapshot, ConnectionState};
 ///
 /// let snapshot: AsyncSnapshot<i32, String> = AsyncSnapshot::nothing();
 /// assert_eq!(snapshot.connection_state(), ConnectionState::None);
@@ -312,6 +308,7 @@ mod tests {
     // ── FutureBuilder transition table ───────────────────────────────────────
 
     /// `'tracks life-cycle of Future to success'`: `None` → `Waiting` → `Done + data`.
+    #[test]
     fn future_life_cycle_to_success() {
         let snapshot = Snap::initial(None);
         assert_eq!(snapshot.connection_state(), ConnectionState::None);
@@ -329,6 +326,7 @@ mod tests {
 
     /// Swapping streams: `after_disconnected` then `after_connected`, old value
     /// visible throughout. (`'gracefully handles transition to other stream'`.)
+    #[test]
     fn stream_reconnect_preserves_the_last_value() {
         let snapshot = Snap::initial(None)
             .after_connected()
@@ -338,18 +336,5 @@ mod tests {
 
         assert_eq!(snapshot.connection_state(), ConnectionState::Waiting);
         assert_eq!(snapshot.data(), Some(&NoClone(1)));
-    }
-
-    // ── misc ────────────────────────────────────────────────────────────────
-
-    #[test]
-    fn async_snapshot_transitions() {
-        crate::test_cases::run_cases(&[
-            ("future life cycle to success", future_life_cycle_to_success),
-            (
-                "stream reconnect preserves the last value",
-                stream_reconnect_preserves_the_last_value,
-            ),
-        ]);
     }
 }

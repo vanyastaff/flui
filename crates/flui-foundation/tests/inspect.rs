@@ -766,7 +766,7 @@ fn a_snapshot_reads_fields_by_type_and_finds_nodes_by_link_and_kind() {
             name: "right".to_owned(),
         })
     );
-    assert_eq!(padding.get_fact::<bool>("attached"), Ok(true));
+    assert_eq!(padding.fact_as::<bool>("attached"), Ok(true));
     assert_eq!(
         padding.get::<bool>("attached"),
         Err(FieldError::Missing {
@@ -1034,7 +1034,7 @@ fn a_fact_and_a_field_of_the_same_name_stay_apart() {
         .unique()
         .expect("one padding");
     assert_eq!(padding.get::<f64>("attached"), Ok(1.0));
-    assert_eq!(padding.get_fact::<bool>("attached"), Ok(true));
+    assert_eq!(padding.fact_as::<bool>("attached"), Ok(true));
     assert_eq!(padding.debug_fields, 0);
 
     let mut debug = String::new();
@@ -1308,7 +1308,7 @@ fn a_panicking_description_is_recorded_on_its_node_and_the_walk_goes_on() {
         .find_by_link(Link::Render(render_id(2)))
         .expect("r2 is still taken");
     assert_eq!(
-        padding.get_fact::<&str>(INSPECT_FAILED),
+        padding.fact_as::<&str>(INSPECT_FAILED),
         Ok("RenderPadding cannot describe itself")
     );
     assert_eq!(
