@@ -51,7 +51,9 @@ mod mapping {
     };
     use flui_platform::drag::{OsDragProvider, OsDragTerms};
 
-    use crate::drag::offers::{format_of, payload_of_bytes};
+    use crate::drag::offers::{
+        MAX_OFFERED_TYPES, MAX_TYPE_LEN, format_of, offered_types, payload_of_bytes,
+    };
 
     /// The actions an `effectAllowed` value permits. `uninitialized` (a drag
     /// from outside the page) and unknown values permit every action, as the
@@ -126,14 +128,18 @@ mod mapping {
     /// The representations a hovering drag offers, in the browser's order: one
     /// per string type FLUI announces (the identity with its parameters, its
     /// declared length zero), then one per file, by its media type
-    /// (`application/octet-stream` when the browser has none).
+    /// (`application/octet-stream` when the browser has none). The string
+    /// types and the files are each read as every host's drag reads its
+    /// source's types ([`offered_types`]): of the first
+    /// [`MAX_OFFERED_TYPES`], a type longer than [`MAX_TYPE_LEN`] bytes is
+    /// left out, a file keeping its index.
     #[must_use]
     pub(super) fn offered<'a>(
         types: impl IntoIterator<Item = &'a str>,
         file_types: impl IntoIterator<Item = &'a str>,
     ) -> Vec<(DomSource, RepresentationDescriptor)> {
         let mut offered: Vec<(DomSource, RepresentationDescriptor)> = Vec::new();
-        for dom_type in types {
+        for dom_type in offered_types(types) {
             let Some(format) = format_of(dom_type) else {
                 continue;
             };
@@ -149,7 +155,10 @@ mod mapping {
                 },
             ));
         }
-        for (index, file_type) in file_types.into_iter().enumerate() {
+        for (index, file_type) in file_types.into_iter().enumerate().take(MAX_OFFERED_TYPES) {
+            if file_type.len() > MAX_TYPE_LEN {
+                continue;
+            }
             let mime = if file_type.is_empty() {
                 "application/octet-stream"
             } else {
@@ -731,12 +740,18 @@ fn drag_position(event: &web_sys::Event) -> Point {
     pointer_position(event.unchecked_ref())
 }
 
-/// What a hovering drag offers.
+/// What a hovering drag offers ([`offered`]). Another page can name any
+/// number of types, of any length.
 #[cfg(target_arch = "wasm32")]
 fn offered_by(transfer: &web_sys::DataTransfer) -> Vec<(DomSource, RepresentationDescriptor)> {
+    use crate::drag::offers::MAX_OFFERED_TYPES;
+
+    // Copied out no further than `offered` reads; the `Files` entry may take
+    // one more place.
     let types: Vec<String> = transfer
         .types()
         .iter()
+        .take(MAX_OFFERED_TYPES + 1)
         .filter_map(|value| value.as_string())
         .filter(|dom_type| dom_type != FILES_TYPE)
         .collect();
@@ -744,6 +759,7 @@ fn offered_by(transfer: &web_sys::DataTransfer) -> Vec<(DomSource, Representatio
     let file_types: Vec<String> = (0..items.length())
         .filter_map(|index| items.get(index))
         .filter(|item| item.kind() == "file")
+        .take(MAX_OFFERED_TYPES)
         .map(|item| item.type_())
         .collect();
     offered(
