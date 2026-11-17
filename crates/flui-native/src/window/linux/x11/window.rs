@@ -55,6 +55,20 @@
 //! the loop delivers the frame on its next turn. An `Expose` asks for one, as
 //! does a change of the content size.
 //!
+//! # What the window manager asks
+//!
+//! Beside its close, a window lists `_NET_WM_PING` and, where the server has
+//! the SYNC extension, `_NET_WM_SYNC_REQUEST` in `WM_PROTOCOLS`, and names its
+//! machine and process (`WM_CLIENT_MACHINE`, `_NET_WM_PID`). A ping goes back
+//! to the root as the event loop hears it, on the owner thread: a window whose
+//! owner hangs answers nothing, and its window manager can offer to end it, as
+//! a Wayland compositor can by `xdg_wm_base.ping`. A synchronised resize is
+//! answered on the window's XSync counters (`protocols::ResizeSync`): at the
+//! turn's read when the configure asks no frame, otherwise once the frame the
+//! loop delivers after it returns. Under the inline raster that frame has been
+//! presented by then; a raster thread may still be drawing it, so the window
+//! manager may draw its frame once around content of the old size.
+//!
 //! # Close
 //!
 //! The window manager's close (`WM_DELETE_WINDOW`) asks the handler, which may
@@ -99,6 +113,7 @@ use rustc_hash::FxHashMap;
 use x11rb::connection::Connection as _;
 use x11rb::properties::{WmSizeHints, WmSizeHintsSpecification};
 use x11rb::protocol::Event;
+use x11rb::protocol::sync::{self as xsync, ConnectionExt as _};
 use x11rb::protocol::xproto::{
     self, AtomEnum, ChangeWindowAttributesAux, ClientMessageEvent, ConfigureWindowAux,
     ConnectionExt as _, CreateWindowAux, EventMask, InputFocus, MapState, PropMode, StackMode,
@@ -112,6 +127,7 @@ use super::placement::{
     FrameExtents, device_coordinate, device_extent, display_of, logical_geometry, outer_bounds,
     window_scale,
 };
+use super::protocols::{ClientMachine, CounterWrites, NameEncoding, ResizeSync, SyncRequest};
 use super::support::{SupportAtoms, WindowManager, WindowManagerSupport, capabilities};
 use crate::host::{self, ScreenBounds, WindowFacets, WindowPositions};
 use crate::host_window::HostWindow;
@@ -188,6 +204,16 @@ pub(crate) struct WindowAtoms {
     wm_selection: xproto::Atom,
     /// The message a window manager that took the selection sends the root.
     manager: xproto::Atom,
+    /// The protocol a window manager asks whether the window's process still
+    /// answers by (EWMH).
+    net_wm_ping: xproto::Atom,
+    /// The protocol a window manager asks for a synchronised resize by.
+    net_wm_sync_request: xproto::Atom,
+    /// The property naming the counters a synchronised resize waits on.
+    net_wm_sync_request_counter: xproto::Atom,
+    /// What a window manager that synchronises frames lists in
+    /// `_NET_SUPPORTED`.
+    net_wm_frame_drawn: xproto::Atom,
 }
 
 impl WindowAtoms {
@@ -198,7 +224,7 @@ impl WindowAtoms {
     /// [`PlatformError::Init`](crate::PlatformError::Init) when the server
     /// does not answer.
     pub(crate) fn intern(connection: &X11Connection) -> Result<Self, crate::PlatformError> {
-        const NAMES: [&[u8]; 23] = [
+        const NAMES: [&[u8]; 27] = [
             b"WM_PROTOCOLS",
             b"WM_DELETE_WINDOW",
             b"WM_STATE",
@@ -222,6 +248,10 @@ impl WindowAtoms {
             b"_GTK_APPLICATION_ID",
             b"_NET_WM_MOVERESIZE",
             b"MANAGER",
+            b"_NET_WM_PING",
+            b"_NET_WM_SYNC_REQUEST",
+            b"_NET_WM_SYNC_REQUEST_COUNTER",
+            b"_NET_WM_FRAME_DRAWN",
         ];
         let failed = |error: &dyn std::fmt::Display| crate::PlatformError::Init {
             message: format!("cannot intern the X11 window atoms: {error}"),
@@ -265,6 +295,10 @@ impl WindowAtoms {
             gtk_application_id,
             net_wm_moveresize,
             manager,
+            net_wm_ping,
+            net_wm_sync_request,
+            net_wm_sync_request_counter,
+            net_wm_frame_drawn,
         ] = atoms;
         Ok(Self {
             wm_protocols,
@@ -293,6 +327,10 @@ impl WindowAtoms {
             net_wm_moveresize,
             wm_selection,
             manager,
+            net_wm_ping,
+            net_wm_sync_request,
+            net_wm_sync_request_counter,
+            net_wm_frame_drawn,
         })
     }
 
@@ -303,6 +341,7 @@ impl WindowAtoms {
             maximized_vert: self.states.maximized_vert,
             fullscreen: self.states.fullscreen,
             moveresize: self.net_wm_moveresize,
+            frame_drawn: self.net_wm_frame_drawn,
         }
     }
 
@@ -328,6 +367,53 @@ struct Chrome {
     presses: ChromePresses,
     /// The button of the press the window took, whose release it takes too.
     held: Option<u32>,
+}
+
+/// The two XSync counters a window names in `_NET_WM_SYNC_REQUEST_COUNTER`,
+/// in that order: the one a window manager without frame synchronisation
+/// waits on, and the extended one (`protocols`).
+#[derive(Debug, Clone, Copy)]
+struct SyncCounters {
+    basic: xsync::Counter,
+    extended: xsync::Counter,
+}
+
+impl SyncCounters {
+    /// Two counters made on `xcb` at 0, or `None` when the connection has no
+    /// ids left or failed.
+    fn create(xcb: &x11rb::xcb_ffi::XCBConnection) -> Option<Self> {
+        let zero = xsync::Int64 { hi: 0, lo: 0 };
+        let make = || -> Option<xsync::Counter> {
+            let counter = xcb.generate_id().ok()?;
+            xcb.sync_create_counter(counter, zero).ok()?;
+            Some(counter)
+        };
+        Some(Self {
+            basic: make()?,
+            extended: make()?,
+        })
+    }
+}
+
+/// The SYNC version a connection asks for: 3.1, what libXext asks for GDK and
+/// Qt. The counters a window makes are in every version.
+const SYNC_VERSION: (u8, u8) = (3, 1);
+
+/// Initialise the SYNC extension on `xcb`, as the extension asks before any
+/// other of its requests: whether the server has it and answered.
+fn initialize_sync(xcb: &x11rb::xcb_ffi::XCBConnection) -> bool {
+    use x11rb::connection::RequestConnection as _;
+
+    let present = matches!(
+        xcb.extension_information(xsync::X11_EXTENSION_NAME),
+        Ok(Some(_))
+    );
+    present
+        && xcb
+            .sync_initialize(SYNC_VERSION.0, SYNC_VERSION.1)
+            .ok()
+            .and_then(|cookie| cookie.reply().ok())
+            .is_some()
 }
 
 /// The `_NET_WM_MOVERESIZE` direction that moves a window.
@@ -430,6 +516,12 @@ pub struct X11Window {
     /// The chrome regions a press is answered from, and the window's presses
     /// on them (ADR-0286 §10).
     chrome: RefCell<Chrome>,
+    /// The counters a synchronised resize waits on, where the server has the
+    /// SYNC extension.
+    counters: Option<SyncCounters>,
+    /// When those counters are set; never borrowed across code the window
+    /// does not own.
+    resize_sync: RefCell<ResizeSync>,
     /// An event said the window may differ from its snapshot, and the loop
     /// has not had it read itself since.
     unread: Cell<bool>,
@@ -608,8 +700,98 @@ impl X11Window {
         if resized {
             self.request_redraw();
         }
+        // A synchronised resize's configure is read: answered now if no frame
+        // is asked for, else after the frame (`deliver_frame`).
+        let asked = self.redraw.load(Ordering::Acquire);
+        let writes = self.resize_sync.borrow_mut().read(asked);
+        self.write_counters(writes);
         if published.changed || unannounced {
             self.delivery.dispatch_state_changed();
+        }
+    }
+
+    /// Set the window's counters to `writes`, where it has counters, and send
+    /// them at once: the GPU driver may present on a connection of its own,
+    /// and a compositor that reads the extended counter must see a frame
+    /// begin before its present and end as soon as it has.
+    fn write_counters(&self, writes: CounterWrites) {
+        let Some(counters) = self.counters else {
+            return;
+        };
+        let writes = [
+            (counters.basic, writes.basic),
+            (counters.extended, writes.extended),
+        ];
+        let mut sent = false;
+        for (counter, value) in writes {
+            let Some(value) = value else {
+                continue;
+            };
+            let (hi, lo) = value.halves();
+            match self
+                .xcb()
+                .sync_set_counter(counter, xsync::Int64 { hi, lo })
+            {
+                Ok(_) => sent = true,
+                Err(error) => {
+                    tracing::debug!(%error, "cannot set an X11 window's resize counter");
+                }
+            }
+        }
+        if sent && let Err(error) = self.xcb().flush() {
+            tracing::debug!(%error, "cannot send an X11 window's resize counter");
+        }
+    }
+
+    /// Deliver the frame the window asked for, if it did and is open. A
+    /// synchronised resize waiting for it is answered after it, and the
+    /// extended counter a window manager that synchronises frames (`paced`)
+    /// reads is odd while it draws, on every exit of the handler: one that
+    /// panicked leaves neither a resize waiting nor a window the compositor
+    /// stops showing. The handler's panic goes on after.
+    fn deliver_frame(&self, paced: bool) {
+        if !self.take_redraw() || self.closed.get() {
+            return;
+        }
+        let (frame, begun) = self.resize_sync.borrow_mut().frame_begins(paced);
+        self.write_counters(begun);
+        let mut failure = FirstPanic::new();
+        failure.contain(|| self.delivery.dispatch_request_frame());
+        let ended = self.resize_sync.borrow_mut().frame_ends(frame);
+        // A window the handler closed has nothing left to synchronise.
+        if !self.closed.get() {
+            self.write_counters(ended);
+        }
+        failure.resume();
+    }
+
+    /// The window manager asks, in a `WM_PROTOCOLS` message, for what the
+    /// window takes: its close, an answer to its ping, or a synchronised
+    /// resize.
+    fn protocol_message(self: &Rc<Self>, message: &ClientMessageEvent) {
+        if message.format != 32 {
+            return;
+        }
+        let data = message.data.as_data32();
+        let protocol = data[0];
+        if protocol == self.atoms.wm_delete_window {
+            self.close_requested();
+        } else if protocol == self.atoms.net_wm_ping {
+            // EWMH: the message goes back to the root with nothing changed
+            // but its window. Answered here on the owner thread, so a window
+            // whose owner hangs answers nothing and its window manager can
+            // offer to end it.
+            self.send_to_root(ClientMessageEvent::new(
+                32,
+                self.connection.root(),
+                message.type_,
+                data,
+            ));
+        } else if protocol == self.atoms.net_wm_sync_request
+            && self.counters.is_some()
+            && let Some(request) = SyncRequest::from_message(data)
+        {
+            self.resize_sync.borrow_mut().request(request);
         }
     }
 
@@ -1465,12 +1647,25 @@ impl X11Window {
         };
         let connection = Arc::clone(&self.connection);
         let xid = self.xid;
+        // The counters are this connection's, which the server keeps until it
+        // closes: they go with the window, whoever destroyed it.
+        let counters = self.counters;
         self.delivery.clear_then(move || {
-            if !destroy {
+            if counters.is_none() && !destroy {
                 return;
             }
-            let destroyed = connection.xcb().destroy_window(xid);
-            if let Err(error) = destroyed.and_then(|_| connection.xcb().flush()) {
+            let xcb = connection.xcb();
+            let ignored = x11rb::cookie::VoidCookie::ignore_error;
+            let mut sent = Ok(());
+            if let Some(counters) = counters {
+                for counter in [counters.basic, counters.extended] {
+                    sent = sent.and_then(|()| xcb.sync_destroy_counter(counter).map(ignored));
+                }
+            }
+            if destroy {
+                sent = sent.and_then(|()| xcb.destroy_window(xid).map(drop));
+            }
+            if let Err(error) = sent.and_then(|()| xcb.flush()) {
                 tracing::debug!(%error, "cannot destroy an X11 window");
             }
         });
@@ -1514,11 +1709,8 @@ impl X11Window {
             Event::PropertyNotify(property) if self.atoms.concerns_window(property.atom) => {
                 self.mark_stale();
             }
-            Event::ClientMessage(message)
-                if message.type_ == self.atoms.wm_protocols
-                    && message.data.as_data32()[0] == self.atoms.wm_delete_window =>
-            {
-                self.close_requested();
+            Event::ClientMessage(message) if message.type_ == self.atoms.wm_protocols => {
+                self.protocol_message(message);
             }
             Event::DestroyNotify(_) => {
                 // Destroyed by another client (`xkill`): there is nothing
@@ -1529,8 +1721,11 @@ impl X11Window {
                 }
                 self.close();
             }
-            Event::ConfigureNotify(_)
-            | Event::UnmapNotify(_)
+            Event::ConfigureNotify(_) => {
+                self.resize_sync.borrow_mut().configured();
+                self.mark_stale();
+            }
+            Event::UnmapNotify(_)
             | Event::ReparentNotify(_)
             | Event::FocusIn(_)
             | Event::FocusOut(_) => self.mark_stale(),
@@ -1892,6 +2087,12 @@ pub struct X11Windows {
     atoms: WindowAtoms,
     /// The class every window carries in `WM_CLASS`.
     class: AppClass,
+    /// The machine every window names in `WM_CLIENT_MACHINE`, beside its
+    /// process; neither is written without it.
+    machine: Option<ClientMachine>,
+    /// The server has the SYNC extension, initialised on the connection: each
+    /// window makes the counters a synchronised resize waits on.
+    synchronises: bool,
     table: RefCell<WindowTable>,
     /// A window closed since the loop last asked.
     closed: Cell<bool>,
@@ -1928,11 +2129,12 @@ impl std::fmt::Debug for X11Windows {
 
 impl X11Windows {
     /// The windows of `connection`, each handing out what `positions` make,
-    /// with the atoms interned on it, and each carrying `class`. Hears the
-    /// root window's property changes from here on (the window manager's
-    /// support and the active window) and the messages sent to its structure
-    /// (a window manager announcing itself, ICCCM §2.8), and reads what the
-    /// window manager supports.
+    /// with the atoms interned on it, and each carrying `class` and the
+    /// machine `uname` names. Hears the root window's property changes from
+    /// here on (the window manager's support and the active window) and the
+    /// messages sent to its structure (a window manager announcing itself,
+    /// ICCCM §2.8), initialises the SYNC extension where the server has it,
+    /// and reads what the window manager supports.
     pub(crate) fn new(
         positions: WindowPositions<WindowRef>,
         connection: Arc<X11Connection>,
@@ -1957,6 +2159,8 @@ impl X11Windows {
             positions,
             atoms,
             class,
+            machine: ClientMachine::from_node_name(rustix::system::uname().nodename().to_bytes()),
+            synchronises: initialize_sync(connection.xcb()),
             table: RefCell::default(),
             closed: Cell::new(false),
             frames: FrameCount::default(),
@@ -2298,6 +2502,11 @@ impl X11Windows {
             unannounced: Cell::new(false),
             closed: Cell::new(false),
             chrome: RefCell::default(),
+            counters: self
+                .synchronises
+                .then(|| SyncCounters::create(xcb))
+                .flatten(),
+            resize_sync: RefCell::default(),
             native: Cell::new(NativeWindow::Live),
         });
         owner.notices().mark_stale_on_wake(&window.cell);
@@ -2305,7 +2514,7 @@ impl X11Windows {
             .delivery
             .publish_through_owner(&window, X11Window::publish_at_the_turns_read);
 
-        window.write_properties(position, &self.class);
+        window.write_properties(position, &self.class, self.machine.as_ref());
         if opens_in != WindowMode::Normal {
             window.seed_mode(opens_in);
         }
@@ -2407,10 +2616,18 @@ impl X11Windows {
 
 impl X11Window {
     /// Write what the window manager reads as it maps the window: the
-    /// protocols the window takes, its title, `class` and the application id
-    /// it claims, that it takes the input focus, its process, type, size
-    /// hints and decorations.
-    fn write_properties(&self, position: Option<(i16, i16)>, class: &AppClass) {
+    /// protocols the window takes (its close, the ping, and a synchronised
+    /// resize where it has counters, which it names), its title, `class` and
+    /// the application id it claims, that it takes the input focus, its
+    /// `machine` and process, type, size hints and decorations. Without a
+    /// machine the process is not written either: a window manager may end
+    /// a process by its id only on the machine named beside it (EWMH).
+    fn write_properties(
+        &self,
+        position: Option<(i16, i16)>,
+        class: &AppClass,
+        machine: Option<&ClientMachine>,
+    ) {
         let xcb = self.xcb();
         let atoms = &self.atoms;
         let (title, decorated) = {
@@ -2426,6 +2643,46 @@ impl X11Window {
                 app_id.as_bytes(),
             )
         });
+        let protocols = [
+            atoms.wm_delete_window,
+            atoms.net_wm_ping,
+            atoms.net_wm_sync_request,
+        ];
+        let protocols = match self.counters {
+            Some(_) => &protocols[..],
+            None => &protocols[..2],
+        };
+        let counters = self.counters.map(|counters| {
+            xcb.change_property32(
+                PropMode::REPLACE,
+                self.xid,
+                atoms.net_wm_sync_request_counter,
+                AtomEnum::CARDINAL,
+                &[counters.basic, counters.extended],
+            )
+        });
+        let process = machine.map(|machine| {
+            let encoding = match machine.encoding() {
+                NameEncoding::Latin1 => u32::from(AtomEnum::STRING),
+                NameEncoding::Utf8 => atoms.utf8_string,
+            };
+            [
+                xcb.change_property8(
+                    PropMode::REPLACE,
+                    self.xid,
+                    AtomEnum::WM_CLIENT_MACHINE,
+                    encoding,
+                    machine.name(),
+                ),
+                xcb.change_property32(
+                    PropMode::REPLACE,
+                    self.xid,
+                    atoms.net_wm_pid,
+                    AtomEnum::CARDINAL,
+                    &[std::process::id()],
+                ),
+            ]
+        });
         let written = [
             xcb.change_property32(
                 PropMode::REPLACE,
@@ -2439,7 +2696,7 @@ impl X11Window {
                 self.xid,
                 atoms.wm_protocols,
                 AtomEnum::ATOM,
-                &[atoms.wm_delete_window],
+                protocols,
             ),
             xcb.change_property8(
                 PropMode::REPLACE,
@@ -2451,19 +2708,18 @@ impl X11Window {
             xcb.change_property32(
                 PropMode::REPLACE,
                 self.xid,
-                atoms.net_wm_pid,
-                AtomEnum::CARDINAL,
-                &[std::process::id()],
-            ),
-            xcb.change_property32(
-                PropMode::REPLACE,
-                self.xid,
                 atoms.net_wm_window_type,
                 AtomEnum::ATOM,
                 &[atoms.net_wm_window_type_normal],
             ),
         ];
-        if let Some(error) = written.into_iter().chain(claimed).find_map(Result::err) {
+        let failed = written
+            .into_iter()
+            .chain(claimed)
+            .chain(counters)
+            .chain(process.into_iter().flatten())
+            .find_map(Result::err);
+        if let Some(error) = failed {
             tracing::debug!(%error, "cannot set an X11 window's properties");
         }
         self.write_title(&title);
@@ -2520,12 +2776,17 @@ impl LoopWindows for X11Windows {
             .is_some_and(|window| window.chrome_event(event))
     }
 
+    /// One handler's panic leaves the other windows their frames, and the
+    /// first goes on after the last.
     fn deliver_frames(&self) {
+        let paced = self.support().paces_frames;
+        let mut failure = FirstPanic::new();
         for window in self.open_windows() {
-            if window.take_redraw() && !window.closed.get() {
-                window.delivery.dispatch_request_frame();
-            }
+            // The handle goes inside the containment: it may be the last one
+            // of a window its handler closed.
+            failure.contain(move || window.deliver_frame(paced));
         }
+        failure.resume();
     }
 
     fn wants_frame(&self) -> bool {

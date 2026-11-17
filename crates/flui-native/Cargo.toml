@@ -412,6 +412,8 @@ x11rb = { workspace = true, optional = true, features = [
     "xinput",
     "xkb",
     "cursor",
+    # The XSync counters a window answers a synchronised resize on.
+    "sync",
 ] }
 # libxkbcommon and libxkbcommon-x11, loaded at run time:
 # the keymap, the keyboard state and compose, which both Linux hosts read
@@ -430,8 +432,9 @@ wayland-protocols = { workspace = true, optional = true, features = ["staging"] 
 wayland-backend = { workspace = true, optional = true }
 # `time`: the monotonic clock the X server and a Wayland compositor stamp
 # their input on, and the clock a compositor stamps presentation times on;
-# `fs`: the memory file a Wayland window's own frame is drawn into.
-rustix = { workspace = true, optional = true, features = ["time", "fs", "pipe"] }
+# `fs`: the memory file a Wayland window's own frame is drawn into; `system`:
+# the machine an X11 window names beside its process (`uname`).
+rustix = { workspace = true, optional = true, features = ["time", "fs", "pipe", "system"] }
 # The cursor theme the Wayland host draws a cursor from where the compositor
 # has no `cursor-shape`.
 wayland-cursor = { version = "0.31", optional = true }
@@ -725,9 +728,10 @@ libtest-mimic.workspace = true
 
 # The X11 host's input tests press keys and buttons and move the pointer on
 # their own X server through XTest, as a user's devices do; `wayland_input`
-# drives a Weston's X11 backend the same way.
+# drives a Weston's X11 backend the same way. `sync`: the window tests read a
+# window's resize counters as a window manager does.
 [target.'cfg(target_os = "linux")'.dev-dependencies]
-x11rb = { workspace = true, features = ["xtest"] }
+x11rb = { workspace = true, features = ["xtest", "sync"] }
 # The stand-in D-Bus services the logind and portal tests serve.
 zbus = { workspace = true, features = ["service"] }
 # The AT-SPI client `linux_atspi` reads a window's tree with: the proxies
