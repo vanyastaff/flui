@@ -22,9 +22,9 @@ use parking_lot::Mutex;
 use smallvec::SmallVec;
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{
-    KillTimer, MSG, MsgWaitForMultipleObjects, PM_NOREMOVE, PM_QS_SENDMESSAGE, PeekMessageW,
-    QS_SENDMESSAGE, SMTO_NORMAL, SendMessageTimeoutW, SetTimer, USER_TIMER_MAXIMUM,
-    USER_TIMER_MINIMUM, WM_APP, WM_TIMER,
+    DispatchMessageW, KillTimer, MSG, MsgWaitForMultipleObjects, PM_NOREMOVE, PM_QS_SENDMESSAGE,
+    PM_REMOVE, PeekMessageW, QS_SENDMESSAGE, SMTO_NORMAL, SendMessageTimeoutW, SetTimer,
+    USER_TIMER_MAXIMUM, USER_TIMER_MINIMUM, WM_APP, WM_TIMER,
 };
 
 use super::{ClassWindows, FrameCount, WindowsLoop};
@@ -137,18 +137,35 @@ impl ModalFrames {
     }
 }
 
-/// The modal loops running on one owner thread, which every procedure of the
-/// thread tells when it ran the platform's code ([`Self::ran`]): a window's
-/// message, an owner turn or the owner's other messages, a system broadcast, a
-/// cloak change, a drop target's event. Kept by FLUI's window class on the
-/// thread, so each owner on it shares them: a modal loop dispatches every
-/// window of its thread.
+/// The modal loops running on one owner thread, which every entry of the
+/// platform's code on the thread tells when that code ran ([`Self::ran`]): the
+/// procedures of FLUI's windows and of the owner window, the broadcast
+/// receiver, the cloak hook, and the COM objects OLE and TSF call (a drop
+/// target's event, a drop source's question, a data fetch, a text store's
+/// edit). Kept by FLUI's window class on the thread, so each owner on it
+/// shares them: a modal loop dispatches every window of its thread. What other
+/// threads hand the owner reaches them through [`Self::wake`].
 #[derive(Default)]
 pub(crate) struct ModalLoops {
     running: RefCell<SmallVec<[RcWeak<ModalPacing>; 2]>>,
+    wake: ModalWake,
 }
 
 impl ModalLoops {
+    /// The door through which work another thread hands the owner reaches a
+    /// modal loop that is otherwise idle.
+    pub(crate) fn wake(&self) -> &ModalWake {
+        &self.wake
+    }
+
+    /// A guard that tells the modal loops of the calling thread the
+    /// platform's code ran when it drops; `None` on a thread with no FLUI
+    /// window class. For an entry the OS calls directly rather than through
+    /// a procedure of FLUI's (a COM object's method).
+    pub(crate) fn ask_again_on_this_thread() -> Option<AskAgainAfter> {
+        super::thread_modal_loops().map(AskAgainAfter)
+    }
+
     /// `pacing` paces a modal loop until [`Self::exit`].
     fn enter(&self, pacing: RcWeak<ModalPacing>) {
         let mut running = self.running.borrow_mut();
@@ -208,6 +225,95 @@ impl Drop for AskAgainAfter {
     fn drop(&mut self) {
         self.0.ran();
     }
+}
+
+/// The cross-thread door to the owner thread's modal loops: what another
+/// thread hands the owner (a redraw, a posted delivery or frame, a wake of
+/// the owner signal) knocks here once it is handed over. The system's loops
+/// for a window dispatch posted messages and paints themselves, which ask
+/// their pacing again as they run; OLE's drag loop dispatches neither while
+/// the pointer rests, so its pacing thread, registered here while it runs, is
+/// set to deliver now. `Send + Sync`: it holds only the thread's handle and
+/// its pace, both made for other threads.
+#[derive(Clone, Default)]
+pub(crate) struct ModalWake(Arc<Mutex<Option<PacerDoor>>>);
+
+/// What a pacing thread leaves at the door: its pace and its handle.
+struct PacerDoor {
+    pace: Arc<Mutex<PacerPace>>,
+    thread: std::thread::Thread,
+}
+
+impl ModalWake {
+    /// Work for the owner thread was handed over: a pacing thread that runs
+    /// delivers at once, and a pacing that delivers dispatches the work.
+    /// Holds a lock only for the knock; runs no code of anyone else's.
+    pub(crate) fn wake(&self) {
+        let door = self.0.lock();
+        let Some(door) = door.as_ref() else {
+            return;
+        };
+        {
+            let mut pace = door.pace.lock();
+            if pace.stopped {
+                return;
+            }
+            pace.woken = true;
+        }
+        door.thread.unpark();
+    }
+
+    fn open(&self, door: PacerDoor) {
+        *self.0.lock() = Some(door);
+    }
+
+    fn close(&self, pace: &Arc<Mutex<PacerPace>>) {
+        let mut door = self.0.lock();
+        if door
+            .as_ref()
+            .is_some_and(|open| Arc::ptr_eq(&open.pace, pace))
+        {
+            *door = None;
+        }
+    }
+}
+
+/// The posted messages of FLUI's own range (`WM_APP` up to the registered
+/// messages) waiting on the owner thread: the owner's wake and exit policy, a
+/// window's posted frame, deliveries, close and fullscreen. OLE's drag loop
+/// leaves them queued while the pointer rests, so its pacing dispatches them
+/// as the main loop would, at most this many at a delivery; more asks for
+/// another delivery at once.
+const POSTED_PER_DELIVERY: usize = 64;
+
+/// Dispatch the posted messages of FLUI's range waiting on this thread, as
+/// the main loop would; `true` when more were left than one delivery takes.
+/// The procedures run user code; nothing is borrowed here.
+pub(crate) fn dispatch_posted_messages() -> bool {
+    /// The first message `RegisterWindowMessage` hands out.
+    const REGISTERED_MESSAGES: u32 = 0xC000;
+    for _ in 0..POSTED_PER_DELIVERY {
+        let mut msg = MSG::default();
+        // SAFETY: `msg` is a live local the call fills; the range names posted
+        // application messages, which carry plain integers, and removing one
+        // hands it to this thread's dispatch below and nowhere else.
+        let taken = unsafe {
+            PeekMessageW(
+                &raw mut msg,
+                None,
+                WM_APP,
+                REGISTERED_MESSAGES - 1,
+                PM_REMOVE,
+            )
+        };
+        if !taken.as_bool() {
+            return false;
+        }
+        // SAFETY: the message the peek just removed from this thread's queue,
+        // dispatched to its window's procedure on this thread.
+        unsafe { DispatchMessageW(&raw const msg) };
+    }
+    true
 }
 
 /// What fires a modal loop's deliveries.
@@ -352,22 +458,12 @@ impl ModalPacing {
         let mut timer = self.timer.get();
         timer.deliver();
         self.timer.set(timer);
-        let mut unwinding = DeliveryUnwind {
+        let mut delivery = Delivery {
             pacing: self,
-            returned: false,
+            outcome: Outcome::Unwound,
         };
         let frames = Rc::clone(&self.frames);
-        let deadline = frames.deliver();
-        unwinding.returned = true;
-        drop(unwinding);
-        // User code ended the loop, or ended it and started another, whose
-        // own first delivery stands: only this delivery's timer is set.
-        let mut timer = self.timer.get();
-        if self.running() && matches!(timer, PaceTimer::Delivering { .. }) {
-            let change = timer.delivered(deadline, web_time::Instant::now());
-            self.timer.set(timer);
-            self.apply(change);
-        }
+        delivery.outcome = Outcome::Answered(frames.deliver());
         true
     }
 
@@ -384,30 +480,55 @@ impl ModalPacing {
     }
 }
 
-/// A delivery that unwinds (the handler's panic, which the owner window's
-/// procedure contains) leaves no timer stuck delivering, which would hold
-/// every later request back: the pacing asks again, as after code that ran.
-struct DeliveryUnwind<'a> {
+/// One delivery of a [`ModalPacing`], which sets the clock as it ends, how
+/// ever it ends: for what the delivery answered, or, when it unwound (the
+/// handler's panic, which the owner window's procedure contains), soon, as
+/// after code that ran, so no timer is left delivering and holding every
+/// later request back. User code that ended the loop during the delivery, or
+/// ended it and started another whose own first delivery stands, leaves the
+/// timer alone.
+struct Delivery<'a> {
     pacing: &'a ModalPacing,
-    returned: bool,
+    outcome: Outcome,
 }
 
-impl Drop for DeliveryUnwind<'_> {
+/// How a [`Delivery`] ended.
+enum Outcome {
+    /// It did not return: it unwound.
+    Unwound,
+    /// It returned the earliest deadline it left armed.
+    Answered(Option<web_time::Instant>),
+}
+
+impl Drop for Delivery<'_> {
     fn drop(&mut self) {
-        if self.returned {
+        let pacing = self.pacing;
+        let mut timer = pacing.timer.get();
+        if !pacing.running() || !matches!(timer, PaceTimer::Delivering { .. }) {
             return;
         }
-        if matches!(self.pacing.timer.get(), PaceTimer::Delivering { .. }) {
-            self.pacing.timer.set(PaceTimer::Stopped);
-        }
-        self.pacing.ask_again();
+        let now = web_time::Instant::now();
+        let change = match self.outcome {
+            Outcome::Answered(deadline) => timer.delivered(deadline, now),
+            Outcome::Unwound => {
+                timer = PaceTimer::Stopped;
+                timer.ask_again(now)
+            }
+        };
+        pacing.timer.set(timer);
+        pacing.apply(change);
     }
 }
 
 /// When the drag loop's pacing thread sends next, and whether it stops.
 #[derive(Default)]
 struct PacerPace {
+    /// When the owner's pacing asked for the next delivery.
     due: Option<web_time::Instant>,
+    /// Another thread handed the owner work since the last delivery
+    /// ([`ModalWake::wake`]): kept apart from `due`, which the owner sets as
+    /// it delivers, so a knock during a delivery is never overwritten.
+    woken: bool,
     stopped: bool,
 }
 
@@ -417,12 +538,14 @@ struct PacerPace {
 pub(crate) struct PacerThread {
     pace: Arc<Mutex<PacerPace>>,
     thread: Option<std::thread::JoinHandle<()>>,
+    /// The door the thread waits at for work other threads hand the owner.
+    wake: ModalWake,
 }
 
 impl PacerThread {
-    /// The clock of a loop run from `owner_window`; `None`, with a warning,
-    /// when the thread does not start.
-    pub(crate) fn start(owner_window: HWND) -> Option<Self> {
+    /// The clock of a loop run from `owner_window`, left at `wake`'s door
+    /// while it runs; `None`, with a warning, when the thread does not start.
+    pub(crate) fn start(owner_window: HWND, wake: &ModalWake) -> Option<Self> {
         let address = owner_window.0 as isize;
         let pace = Arc::new(Mutex::new(PacerPace::default()));
         let paced = Arc::clone(&pace);
@@ -430,29 +553,33 @@ impl PacerThread {
             .name("flui-drag-frames".into())
             .spawn(move || {
                 loop {
-                    let due = {
+                    let (due, woken) = {
                         let pace = paced.lock();
                         if pace.stopped {
                             break;
                         }
-                        pace.due
+                        (pace.due, pace.woken)
                     };
-                    let Some(due) = due else {
-                        std::thread::park();
-                        continue;
-                    };
-                    let now = web_time::Instant::now();
-                    if due > now {
-                        std::thread::park_timeout(due - now);
-                        continue;
+                    if !woken {
+                        let Some(due) = due else {
+                            std::thread::park();
+                            continue;
+                        };
+                        let now = web_time::Instant::now();
+                        if due > now {
+                            std::thread::park_timeout(due - now);
+                            continue;
+                        }
                     }
-                    // Taken: the owner sets the next one as it delivers.
+                    // Taken: the owner sets the next one as it delivers, and
+                    // a knock after this one asks for another delivery.
                     {
                         let mut pace = paced.lock();
                         if pace.stopped {
                             break;
                         }
-                        if pace.due == Some(due) {
+                        pace.woken = false;
+                        if pace.due == due {
                             pace.due = None;
                         }
                     }
@@ -484,10 +611,17 @@ impl PacerThread {
                 }
             });
         match spawned {
-            Ok(thread) => Some(Self {
-                pace,
-                thread: Some(thread),
-            }),
+            Ok(thread) => {
+                wake.open(PacerDoor {
+                    pace: Arc::clone(&pace),
+                    thread: thread.thread().clone(),
+                });
+                Some(Self {
+                    pace,
+                    thread: Some(thread),
+                    wake: wake.clone(),
+                })
+            }
             Err(error) => {
                 tracing::warn!(%error, "no frames while the drag rests: the pacing thread did not start");
                 None
@@ -512,6 +646,7 @@ impl PacerThread {
 
 impl Drop for PacerThread {
     fn drop(&mut self) {
+        self.wake.close(&self.pace);
         self.pace.lock().stopped = true;
         let Some(thread) = self.thread.take() else {
             return;

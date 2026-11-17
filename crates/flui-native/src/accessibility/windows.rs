@@ -32,12 +32,14 @@
 
 use std::sync::Arc;
 
-use accesskit::TreeUpdate;
+use accesskit::{ActionHandler, ActivationHandler, TreeUpdate};
 use accesskit_windows::SubclassingAdapter;
 use parking_lot::Mutex;
 use windows::Win32::Foundation::HWND;
 
 use super::bridge::{Action, Activation, BridgeShared};
+use crate::owner::panic_boundary::{AfterPanic, os_entry};
+use crate::owner::windows::ModalLoops;
 use flui_semantics::{
     platform::AccessibilityActionListener, platform::AccessibilityActivationListener,
     platform::PlatformAccessibility,
@@ -115,8 +117,8 @@ impl WindowsAccessibility {
         let shared = Arc::new(BridgeShared::new());
         let adapter = SubclassingAdapter::new(
             hwnd,
-            Activation(Arc::clone(&shared)),
-            Action(Arc::clone(&shared)),
+            AskingAgain(Activation(Arc::clone(&shared))),
+            AskingAgain(Action(Arc::clone(&shared))),
         );
 
         Self {
@@ -124,6 +126,41 @@ impl WindowsAccessibility {
             adapter: Mutex::new(Some(adapter)),
             owner_thread: std::thread::current().id(),
         }
+    }
+}
+
+/// One of the bridge's AccessKit handlers, which UIA reaches outside FLUI's
+/// procedures: on the owner thread it tells the thread's modal loops that the
+/// platform's code ran, since the composition root's listener it calls may
+/// move a deadline. On another thread (an action UIA delivers there) it tells
+/// nothing: what that listener hands the owner wakes it.
+struct AskingAgain<H>(H);
+
+impl<H: ActivationHandler> ActivationHandler for AskingAgain<H> {
+    fn request_initial_tree(&mut self) -> Option<TreeUpdate> {
+        os_entry(
+            "AccessKit's activation",
+            (),
+            AfterPanic::Answer(|()| None),
+            || {
+                let _ask_again = ModalLoops::ask_again_on_this_thread();
+                self.0.request_initial_tree()
+            },
+        )
+    }
+}
+
+impl<H: ActionHandler> ActionHandler for AskingAgain<H> {
+    fn do_action(&mut self, request: accesskit::ActionRequest) {
+        os_entry(
+            "an AccessKit action",
+            (),
+            AfterPanic::Answer(|()| ()),
+            || {
+                let _ask_again = ModalLoops::ask_again_on_this_thread();
+                self.0.do_action(request);
+            },
+        );
     }
 }
 

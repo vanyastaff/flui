@@ -307,6 +307,5 @@ pub(crate) fn created_window() -> CreatedWindow {
         hooks: Rc::new([]),
         apartment: None,
         drag: Arc::new(NoDrag),
-        modal_loops: Rc::default(),
     }
 }

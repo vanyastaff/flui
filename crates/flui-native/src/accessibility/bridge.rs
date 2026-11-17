@@ -124,11 +124,14 @@ pub(crate) struct BridgeShared {
     /// every activation, so this retained answer is at worst one full
     /// publish behind and is corrected within a frame.
     latest: Mutex<Option<TreeUpdate>>,
-    /// The thread running the adapter's activation ([`Activation`]), while it
-    /// runs. The adapter holds its own state across that call (a `RefCell`
-    /// borrow under UIA and NSAccessibility, a mutex under AT-SPI), so a
-    /// publish the listener makes there must not reach it.
-    activation_thread: Mutex<Option<std::thread::ThreadId>>,
+    /// The threads running the adapter's activation ([`Activation`]), each
+    /// with how deep it is in it. The adapter holds its own state across that
+    /// call (a `RefCell` borrow under UIA and NSAccessibility, a mutex under
+    /// AT-SPI), so a publish the listener makes there must not reach it. Each
+    /// thread counts only its own entry, so activations of one bridge on two
+    /// threads, ending in either order, leave each other's marks alone.
+    #[cfg(not(target_arch = "wasm32"))]
+    activations: Mutex<smallvec::SmallVec<[(std::thread::ThreadId, u32); 1]>>,
     activation_listener: Mutex<Option<AccessibilityActivationListener>>,
     action_listener: Mutex<Option<AccessibilityActionListener>>,
 }
@@ -137,14 +140,24 @@ pub(crate) struct BridgeShared {
 /// included.
 #[cfg(not(target_arch = "wasm32"))]
 struct Activating<'a> {
-    thread: &'a Mutex<Option<std::thread::ThreadId>>,
-    previous: Option<std::thread::ThreadId>,
+    activations: &'a Mutex<smallvec::SmallVec<[(std::thread::ThreadId, u32); 1]>>,
+    thread: std::thread::ThreadId,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 impl Drop for Activating<'_> {
     fn drop(&mut self) {
-        *self.thread.lock() = self.previous;
+        let mut activations = self.activations.lock();
+        if let Some(index) = activations
+            .iter()
+            .position(|(thread, _)| *thread == self.thread)
+        {
+            let depth = &mut activations[index].1;
+            *depth = depth.saturating_sub(1);
+            if *depth == 0 {
+                activations.swap_remove(index);
+            }
+        }
     }
 }
 
@@ -198,13 +211,28 @@ impl BridgeShared {
     /// drops.
     #[cfg(not(target_arch = "wasm32"))]
     fn activating(&self) -> Activating<'_> {
-        let previous = self
-            .activation_thread
-            .lock()
-            .replace(std::thread::current().id());
+        let thread = std::thread::current().id();
+        let mut activations = self.activations.lock();
+        match activations
+            .iter_mut()
+            .find(|(running, _)| *running == thread)
+        {
+            Some((_, depth)) => *depth = depth.saturating_add(1),
+            None => activations.push((thread, 1)),
+        }
         Activating {
-            thread: &self.activation_thread,
-            previous,
+            activations: &self.activations,
+            thread,
+        }
+    }
+
+    /// Whether the adapter's activation runs on the calling thread.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn activating_here(&self) -> bool {
+        let activations = self.activations.lock();
+        !activations.is_empty() && {
+            let thread = std::thread::current().id();
+            activations.iter().any(|(running, _)| *running == thread)
         }
     }
 
@@ -223,11 +251,12 @@ impl BridgeShared {
         if update.tree.is_some() {
             *self.latest.lock() = Some(update.clone());
         }
-        let activating = *self.activation_thread.lock();
-        match activating {
-            Some(thread) if thread == std::thread::current().id() => None,
-            _ => Some(update),
+        // The web host has no adapter that calls into an activation.
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.activating_here() {
+            return None;
         }
+        Some(update)
     }
 
     /// The retained self-contained update, if any — the immediate answer to
@@ -397,5 +426,63 @@ mod activation_tests {
         }));
         let _ = Activation(Arc::clone(&shared)).request_initial_tree();
         assert_eq!(passed_on.load(Ordering::SeqCst), 1);
+    }
+
+    /// Two activations of one bridge on two threads overlap and the first
+    /// ends first: the second's publish from inside its listener is still its
+    /// answer, and once both ended no thread is left marked. Red-check: one
+    /// slot for the activating thread, restored on drop, and the second's
+    /// publish reaches the adapter while it is held.
+    #[test]
+    fn overlapping_activations_on_two_threads_keep_each_others_marks() {
+        use std::sync::{Barrier, mpsc};
+
+        let shared = Arc::new(BridgeShared::new());
+        let both_inside = Arc::new(Barrier::new(2));
+        let (first_ended, first_has_ended) = mpsc::channel::<()>();
+        let first_has_ended = Mutex::new(first_has_ended);
+        let reached_adapter = Arc::new(Mutex::new(Vec::new()));
+        let (inside, log) = (Arc::clone(&shared), Arc::clone(&reached_adapter));
+        shared.set_activation_listener(Arc::new(move |active| {
+            if !active {
+                return;
+            }
+            both_inside.wait();
+            if std::thread::current().name() == Some("second") {
+                first_has_ended
+                    .lock()
+                    .recv()
+                    .expect("the first activation ends");
+                log.lock().push(inside.publish(tree("second")).is_some());
+            }
+        }));
+        let activate = |name: &str, ended: Option<mpsc::Sender<()>>| {
+            let shared = Arc::clone(&shared);
+            std::thread::Builder::new()
+                .name(name.to_owned())
+                .spawn(move || {
+                    let answer = Activation(shared).request_initial_tree();
+                    if let Some(ended) = ended {
+                        let _ = ended.send(());
+                    }
+                    answer
+                })
+                .expect("an activating thread")
+        };
+        let first = activate("first", Some(first_ended));
+        let second = activate("second", None);
+        let _ = first.join().expect("the first activation");
+        let answer = second.join().expect("the second activation");
+
+        assert_eq!(
+            *reached_adapter.lock(),
+            [false],
+            "the second activation's publish stayed out of its adapter"
+        );
+        assert_eq!(answer.as_ref().and_then(label), Some("second"));
+        assert!(
+            shared.activations.lock().is_empty(),
+            "no thread left marked"
+        );
     }
 }

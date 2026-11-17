@@ -13,7 +13,9 @@
 //! here as one coalesced message (sent from the owner's next turn when the
 //! queue refuses it, [`OwnerQueue`]), so the hook always runs on a fresh owner
 //! turn rather than nested inside whatever code destroyed the window.
-use super::modal_loop::{MODAL_FRAME, ModalFrames, ModalLoops, ModalPacing};
+use super::modal_loop::{
+    MODAL_FRAME, ModalFrames, ModalLoops, ModalPacing, ModalWake, dispatch_posted_messages,
+};
 use super::{ClassWindows, FrameCount, WindowIdentity};
 use crate::{
     PlatformError, WakeRegistrationError,
@@ -331,6 +333,17 @@ pub(crate) struct OwnerSeeds<'a> {
     pub(crate) app: &'a Arc<AppDelivery>,
     /// Where the lifecycle hands system notices.
     pub(crate) notices: &'a Arc<dyn NoticeChannel>,
+    /// The door to the thread's modal loops, which the owner's queue knocks
+    /// at.
+    pub(crate) modal: &'a ModalWake,
+}
+
+impl OwnerSeeds<'_> {
+    /// The owner thread's queue, for a source that posts to a window of the
+    /// thread from another.
+    pub(crate) fn queue(&self) -> OwnerQueue {
+        OwnerQueue::new(Arc::downgrade(self.signal), self.modal.clone())
+    }
 }
 
 /// The system preference source the owner keeps for its host (ADR-0172).
@@ -422,17 +435,27 @@ impl OwnerControl {
                 message: error.to_string(),
             })?,
         );
+        let class = super::window_class::<H>().ok_or_else(|| PlatformError::Init {
+            message: "FLUI's window class: the thread's storage is torn down".into(),
+        })?;
+        let (window_hooks, modal_loops) = (class.hooks, class.modal_loops);
         let transport = Arc::clone(&wake);
+        let knock = modal_loops.wake().clone();
         let signal = OwnerSignal::new(Arc::new(move || {
             let address = target.lock();
             let raw = address.ok_or_else(|| PlatformError::EventLoop {
                 message: "owner message window is closed".into(),
             })?;
-            transport
-                .post(HWND(raw as *mut _))
-                .map_err(|error| PlatformError::EventLoop {
-                    message: error.to_string(),
-                })
+            let posted =
+                transport
+                    .post(HWND(raw as *mut _))
+                    .map_err(|error| PlatformError::EventLoop {
+                        message: error.to_string(),
+                    });
+            // The wake is handed over (posted, or set on the kernel event):
+            // a drag loop resting in OLE dispatches neither, its pacing does.
+            knock.wake();
+            posted
         }));
         let exit_policy_pending = Arc::new(AtomicBool::new(false));
         let app_hooks = Rc::new(RefCell::new(super::AppHooks::new(
@@ -443,11 +466,8 @@ impl OwnerControl {
             signal: &signal,
             app: &app,
             notices: &notices,
+            modal: modal_loops.wake(),
         };
-        let class = super::window_class::<H>().ok_or_else(|| PlatformError::Init {
-            message: "FLUI's window class: the thread's storage is torn down".into(),
-        })?;
-        let (window_hooks, modal_loops) = (class.hooks, class.modal_loops);
         let lifecycle = H::lifecycle(&seeds);
         let preferences = H::preferences(&seeds)?;
         let broadcasts = super::broadcast::Receiver::try_new(
@@ -463,6 +483,7 @@ impl OwnerControl {
             message: format!("the broadcast receiver: {error}"),
         })?;
         let owner_hooks: Rc<[Arc<dyn OwnerMessages>]> = owner_hooks.into();
+        let queue_knock = modal_loops.wake().clone();
         let frames = Rc::new(FrameCount::default());
         let context = Box::new(OwnerControlContext {
             identity,
@@ -520,7 +541,7 @@ impl OwnerControl {
                 address: Arc::clone(&address),
             });
         }
-        let queue = OwnerQueue::new(Arc::downgrade(&signal));
+        let queue = OwnerQueue::new(Arc::downgrade(&signal), queue_knock);
         Ok(Self {
             signal,
             wake,
@@ -845,10 +866,32 @@ unsafe fn receive(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> L
             return DefWindowProcW(hwnd, message, wparam, lparam);
         }
         if message == MODAL_FRAME {
-            // The drag loop's clock fired: its pacing delivers what is due and
-            // sets the clock again itself.
-            let pacing = Rc::clone(&(*pointer).modal_pacing);
-            let _ = pacing.tick();
+            // The drag loop's clock fired. OLE's loop, resting, dispatches
+            // nothing another thread handed the owner, so this delivery does
+            // what the main loop would: the posted messages of FLUI's range,
+            // the owner's turn (posted or set on the fallback event), then
+            // the pacing's deadlines and paints. The pacing sets its clock
+            // again itself; more posted work than one delivery takes asks
+            // for the next at once.
+            let (signal, turn, pacing, loops) = {
+                let context = &*pointer;
+                (
+                    Arc::clone(&context.signal),
+                    Rc::clone(&context.turn),
+                    Rc::clone(&context.modal_pacing),
+                    Rc::clone(&context.modal_loops),
+                )
+            };
+            if pacing.running() {
+                let more = dispatch_posted_messages();
+                if signal.drive_in(&turn) {
+                    quit_owner_loop(&signal, &turn);
+                }
+                let _ = pacing.tick();
+                if more {
+                    loops.wake().wake();
+                }
+            }
             return LRESULT(0);
         }
         let _ask_again = ModalLoops::ask_again_after(&(*pointer).modal_loops);

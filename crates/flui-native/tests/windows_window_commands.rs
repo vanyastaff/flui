@@ -1685,6 +1685,55 @@ fn a_deadline_a_turn_sets_during_an_idle_modal_loop_is_delivered_in_it() {
     );
 }
 
+/// A redraw another thread asks of a window while its move loop stands idle,
+/// with no deadline asked for, is painted inside the loop: the system's loop
+/// dispatches the paint itself, and the paint asks the pacing again.
+fn a_redraw_from_another_thread_is_painted_in_an_idle_modal_loop() {
+    let span = Arc::new(std::sync::Mutex::new(None));
+    let frames = Rc::new(std::cell::RefCell::new(Vec::new()));
+    let kept = Rc::new(std::cell::RefCell::new(None));
+    let (measured, holder, drawn) = (Arc::clone(&span), Rc::clone(&kept), Rc::clone(&frames));
+    Box::new(platform())
+        .run(crate::app::with_log(move |_, owner| {
+            let window = Opened::ready(&owner, options());
+            settle();
+            window.handler.react_to_frame(move |_| {
+                drawn.borrow_mut().push(Instant::now());
+            });
+            let redraw = window.redraw_requester();
+            let hwnd = hwnd_of(&window);
+            // SAFETY: a plain query of the live window.
+            let thread = unsafe { GetWindowThreadProcessId(hwnd, None) };
+            let mover = hold_an_idle_move_loop(
+                hwnd.0 as isize,
+                thread,
+                Duration::from_millis(600),
+                move || redraw.request_redraw(),
+                owner.proxy(),
+                measured,
+            );
+            post_move_loop(&window);
+            *holder.borrow_mut() = Some((window, mover));
+            Ok(())
+        }))
+        .expect("the Win32 loop");
+    if let Some((window, mover)) = kept.borrow_mut().take() {
+        mover.join().expect("the moving thread");
+        window.close_for_cleanup();
+    }
+    let span = span
+        .lock()
+        .expect("span")
+        .expect("the move loop was held idle");
+    assert!(span.in_loop, "the move loop ran through the span: {span:?}");
+    // Nothing else asks this window for a frame while the loop stands idle.
+    let frames = frames.borrow();
+    assert!(
+        frames.iter().any(|at| *at > span.from && *at < span.to),
+        "the redraw asked midway through {span:?} was painted inside it: {frames:?}"
+    );
+}
+
 /// A screen reader's first question (`WM_GETOBJECT` for the UIA root) runs the
 /// activation listener inside AccessKit's own handling of it. A listener that
 /// publishes a whole tree there answers the question with it, and the window
@@ -2819,6 +2868,10 @@ fn native_window_commands() {
         (
             "a_deadline_a_turn_sets_during_an_idle_modal_loop_is_delivered_in_it",
             a_deadline_a_turn_sets_during_an_idle_modal_loop_is_delivered_in_it,
+        ),
+        (
+            "a_redraw_from_another_thread_is_painted_in_an_idle_modal_loop",
+            a_redraw_from_another_thread_is_painted_in_an_idle_modal_loop,
         ),
         (
             "a_locked_session_or_a_cloak_occludes_a_shown_window",

@@ -187,7 +187,6 @@ fn created(hwnd: HWND) -> CreatedWindow {
         hooks: test_hooks(),
         apartment: None,
         drag: Arc::new(super::testing::NoDrag),
-        modal_loops: Rc::default(),
     }
 }
 

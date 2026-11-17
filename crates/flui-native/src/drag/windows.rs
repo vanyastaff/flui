@@ -20,11 +20,13 @@
 //! main loop that waits for wake deadlines and dispatches paints is suspended
 //! under OLE's, which dispatches neither while the pointer rests; the owner's
 //! pacing of the loop, entered for the session with a thread for its clock
-//! (`owner::windows::modal_loop`), has the owner window deliver due deadlines
-//! and paint every invalidated window instead, so every runtime on the thread
-//! keeps animating and a second window repaints. A drop target's event is the
-//! platform's code that OLE's loop runs directly, so it tells the thread's
-//! modal loops it ran, and the pacing asks the deadlines again.
+//! (`owner::windows::modal_loop`), has the owner window deliver due deadlines,
+//! the posted work and the owner's turn another thread handed over, and
+//! paint every invalidated window instead, so every runtime on the thread
+//! keeps animating and a second window repaints. The thread sleeps while
+//! nothing is due; every COM method here is the platform's code OLE's loop
+//! runs directly, so it tells the thread's modal loops it ran, and what
+//! another thread hands the owner knocks at them.
 //!
 //! Reentrancy: user code runs inside `DoDragDrop` (every window callback, and
 //! the session's provider when a target fetches), so no `RefCell` borrow or
@@ -50,7 +52,7 @@ mod tests;
 /// `HGLOBAL`, how `DROPEFFECT` bits map to [`TransferActions`], and when the
 /// drop source ends the modal loop. Plain functions over bytes and integers,
 /// so every host checks them; the COM objects around them only move bytes in
-/// and out of global memory. How often that loop asks for frames is the
+/// and out of global memory. When that loop asks for frames is the
 /// owner's (`owner::modal_pace`).
 ///
 /// [`TransferActions`]: flui_platform::data_transfer::TransferActions
@@ -878,7 +880,8 @@ struct PacedSession(Option<Rc<ModalPacing>>);
 impl PacedSession {
     fn enter(pacing: Option<Rc<ModalPacing>>, owner_window: HWND) -> Self {
         if let Some(pacing) = &pacing {
-            pacing.enter(|| PacerThread::start(owner_window).map(PaceClock::Thread));
+            let wake = pacing.loops().wake().clone();
+            pacing.enter(|| PacerThread::start(owner_window, &wake).map(PaceClock::Thread));
         }
         Self(pacing)
     }

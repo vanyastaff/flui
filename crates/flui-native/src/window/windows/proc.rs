@@ -179,6 +179,9 @@ impl FramePost {
             // SAFETY: as above; an invalidation of a window that closed
             // meanwhile fails and draws nothing.
             let _ = unsafe { InvalidateRect(Some(hwnd), None, false) };
+            // A drag loop resting in OLE dispatches no paint: its pacing
+            // paints the window once knocked.
+            self.0.queue.wake_modal();
         } else {
             self.0.ask();
         }

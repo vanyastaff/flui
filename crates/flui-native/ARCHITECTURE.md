@@ -393,22 +393,40 @@ trait depends on `flui-platform` instead.
     for the earliest deadline the last delivery armed, and within
     `ASK_AGAIN_MS` of the platform's code running on the thread, since that
     code may have moved a deadline, as the main loop asks again each time its
-    queue runs dry. Every procedure through which the platform's code runs on
-    the owner thread tells the thread's `ModalLoops` (kept by FLUI's window
-    class on the thread) after it ran: the class's procedure after each
-    window message but the pacing timer's own, the owner window's after every
-    message but `MODAL_FRAME` (a guard, so a contained panic tells it too), the
-    broadcast receiver after its subscribers, the cloak hook and a drop
-    target's event. With no deadline and nothing run, no clock is set: a menu
-    left open asks the handler nothing. A window destroyed in its loop ends
-    its pacing. Tests: `a_delivery_sets_the_timer_for_what_is_due_and_nothing_else`,
+    queue runs dry. Every entry of the platform's code on the owner thread
+    tells the thread's `ModalLoops` (kept by FLUI's window class on the thread)
+    after it ran: the class's procedure after each window message but the
+    pacing timer's own, the owner window's after every message but
+    `MODAL_FRAME` (a guard, so a contained panic tells it too), the broadcast
+    receiver after its subscribers, the cloak hook, and the COM objects the OS
+    calls directly: every OLE vtable method (`com_method`, `com_hresult`: a
+    drop target's event, a drop source's question, a fetch running the
+    provider), every TSF text-store method that reads or edits the document
+    (`document_method`), and the UIA activation and action handlers on the
+    owner thread. The text store's methods that read no document, and the
+    input scope, run no application code and tell nothing. What another thread
+    hands the owner knocks at `ModalLoops::wake` once handed over: a window's
+    post through the owner queue, an invalidation of a shown window, the owner
+    signal's wake (posted or set on its fallback event). The system's loops
+    dispatch posted messages and paints themselves, which tell the loops as
+    they run; OLE's drag loop dispatches neither while the pointer rests, so
+    the knock sets its pacing thread to deliver at once, and that delivery
+    dispatches the posted messages of FLUI's range (at most
+    `POSTED_PER_DELIVERY`, then another delivery), drives the owner's turn and
+    paints. With no deadline and nothing run or handed over, no clock is set:
+    a menu left open asks the handler nothing. A window destroyed in its loop
+    ends its pacing. Tests: `a_delivery_sets_the_timer_for_what_is_due_and_nothing_else`,
     `platform_code_asks_again_without_holding_the_timer_back`,
     `a_due_deadline_gets_one_modal_frame_per_generation`,
+    `a_delivery_that_panics_leaves_the_pacing_asking_again`,
     `an_idle_modal_loop_with_no_deadline_asks_nothing`,
     `a_deadline_a_turn_sets_during_an_idle_modal_loop_is_delivered_in_it`,
+    `a_redraw_from_another_thread_is_painted_in_an_idle_modal_loop`,
     `deadlines_are_delivered_while_the_window_is_moved`,
-    `a_second_window_repaints_while_the_modal_loop_rests`. Not run: the system
-    menu by the mouse, a drag held still over a window of another process.
+    `a_second_window_repaints_while_the_modal_loop_rests`,
+    `work_from_another_thread_reaches_a_resting_drag_loop`,
+    `a_com_entry_asks_a_running_modal_loop_again`. Not run: the system menu by
+    the mouse, a drag held still over a window of another process.
 
   On Android the table implements `owner::android::AndroidHost`, which makes
   what the loop holds (the displays, the preference source, the notice
@@ -610,8 +628,11 @@ trait depends on `flui-platform` instead.
   publish the listener makes on that thread, from inside the activation, is
   therefore retained and not handed on, and the activation answers it. A
   publish another thread makes meanwhile reaches the adapter, which
-  serializes it. Tests: `a_tree_published_from_inside_the_activation_is_its_answer`,
+  serializes it. The bridge keeps each activating thread's own depth, so
+  activations of one bridge on two threads, ending in either order, never
+  clear or leave each other's marks. Tests: `a_tree_published_from_inside_the_activation_is_its_answer`,
   `a_publish_on_another_thread_during_the_activation_reaches_the_adapter`,
+  `overlapping_activations_on_two_threads_keep_each_others_marks`,
   `a_tree_published_inside_the_activation_answers_it` (UIA on a real window).
 
   The table's positions make the accessibility adapter and the actuator a
@@ -2722,8 +2743,10 @@ Both paths drive the same owner-turn slot and quit policy. A strong `OwnedHandle
 owner spans every wait; closing admission prevents a retired proxy from posting.
 The event contains no callback or UI state and requires no polling thread.
 If both the post and kernel signal fail, the caller still receives an error and
-OwnerSignal retains its debt. A third-party modal loop does not wait on this
-private event; fallback delivery resumes when FLUI regains its loop.
+OwnerSignal retains its debt. The system's move, size and menu loops and a
+third-party modal loop do not wait on this private event; fallback delivery
+resumes when FLUI regains its loop. OLE's drag loop does not wait on it either,
+but the wake knocks at its pacing, whose delivery drives the owner's turn.
 
 Every other message the host posts to a window of its owner thread carries
 accepted work: a hidden or minimized window's frame request, the deliveries
@@ -5440,8 +5463,9 @@ dispatch: the owner delivers a due wake deadline as the main loop would (once
 per frame generation), sends `WM_PAINT` to every invalidated window with
 `UpdateWindow`, and sets the thread for the next delivery by the rule every
 modal loop shares (see "A modal loop asks for frames by the main loop's rule"):
-with nothing due the thread sleeps until a drop target's event or another
-procedure of the thread tells the loops the platform's code ran. The session's
+with nothing due the thread sleeps until the thread runs the platform's code (a
+drop target's event, a window message) or another thread hands the owner work, and
+a knocked delivery dispatches the posted work and the owner's turn too. The session's
 callbacks run with no `RefCell` borrow or lock held across a COM call or a
 dispatch: the provider is leased out of the data object while it runs, so a
 fetch from inside it is refused rather than reentered, and every COM method

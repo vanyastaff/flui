@@ -201,6 +201,13 @@ fn registered_class() -> Option<WindowClass> {
         .flatten()
 }
 
+/// The modal loops running on this thread, as FLUI's window class on it keeps
+/// them for the host the process registered the class for; `None` on a thread
+/// no owner of that host opened on.
+pub(crate) fn thread_modal_loops() -> Option<Rc<ModalLoops>> {
+    registered_class().map(|class| class.modal_loops)
+}
+
 /// What the input of FLUI's window class on this thread tells the other
 /// features of a window, for the host the process registered the class for;
 /// `None` on a thread no owner of that host opened on.
@@ -567,10 +574,6 @@ pub(crate) struct CreatedWindow {
     /// The loop's drag-and-drop transport, which makes the window a drop
     /// target.
     pub(crate) drag: Arc<dyn HostDrag>,
-    /// The modal loops running on the thread, which a feature tells when it
-    /// ran the platform's code outside the class's procedure (a drop target's
-    /// event, which OLE's loop calls directly).
-    pub(crate) modal_loops: Rc<ModalLoops>,
 }
 
 impl CreatedWindow {

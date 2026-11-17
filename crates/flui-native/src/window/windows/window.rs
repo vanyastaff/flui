@@ -512,10 +512,12 @@ impl WindowsWindow {
                 frames.counter(),
             ));
             // What the window posts to itself goes to the owner thread's
-            // queue, and from the owner's next turn when the queue refuses it.
-            let queue = crate::owner::windows::control::OwnerQueue::new(std::sync::Weak::clone(
-                &app_hooks.borrow().signal,
-            ));
+            // queue, and from the owner's next turn when the queue refuses it;
+            // either knocks at the thread's modal loops.
+            let queue = crate::owner::windows::control::OwnerQueue::new(
+                std::sync::Weak::clone(&app_hooks.borrow().signal),
+                modal_loops.wake().clone(),
+            );
             let frame_post = super::proc::FramePost::new(hwnd, identity, queue.clone());
             // What another thread raises for the window is delivered in a
             // turn of the window's own message queue, asked for once until
@@ -661,7 +663,6 @@ impl WindowsWindow {
                     hooks: Rc::clone(&window_hooks),
                     apartment,
                     drag,
-                    modal_loops,
                 },
                 || this.with_context("window_created", |_| ()).is_some(),
             )
