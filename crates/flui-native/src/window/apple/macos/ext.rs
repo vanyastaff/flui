@@ -12,14 +12,14 @@
 use std::sync::atomic::Ordering;
 
 use flui_platform::{Unsupported, UnsupportedReason};
-use objc2::msg_send;
+use objc2::rc::Retained;
 use objc2_app_kit::{
     NSFloatingWindowLevel, NSMainMenuWindowLevel, NSModalPanelWindowLevel, NSNormalWindowLevel,
     NSPopUpMenuWindowLevel, NSScreenSaverWindowLevel, NSStatusWindowLevel,
-    NSWindowCollectionBehavior, NSWindowLevel, NSWindowTabbingMode,
+    NSWindowCollectionBehavior, NSWindowLevel, NSWindowOrderingMode, NSWindowTabbingMode,
 };
 
-use super::{BObjC, MacOSWindow, NO, YES};
+use super::MacOSWindow;
 use crate::host_window::HostWindow;
 
 // ============================================================================
@@ -366,13 +366,7 @@ impl<'a> AppKitWindow<'a> {
     }
 
     fn set_tabbing_mode(self, mode: NSWindowTabbingMode) -> Result<(), AppKitWindowError> {
-        let window = self.open()?;
-        // SAFETY: `ns_window` is alive for the lifetime of `self` (which
-        // `window` reborrows), and the window is used on its owner thread
-        // only (it is neither `Send` nor `Sync`).
-        unsafe {
-            let _: () = msg_send![window.ns_window, setTabbingMode: mode];
-        }
+        self.open()?.ns_window.setTabbingMode(mode);
         Ok(())
     }
 
@@ -408,27 +402,20 @@ impl<'a> AppKitWindow<'a> {
             .as_any()
             .downcast_ref::<MacOSWindow>()
             .ok_or(TabJoinError::NotAppKit)?;
-        if this.ns_window == other.ns_window {
+        if this.native_key() == other.native_key() {
             return Err(TabJoinError::SameWindow);
         }
-        unsafe {
-            // SAFETY: both borrowed wrappers own live NSWindows, constructed
-            // with releasedWhenClosed:NO. Neither window is `Send` nor `Sync`,
-            // so both are on the AppKit main thread that made them. Extra
-            // retains keep both receivers alive through synchronous AppKit
-            // callback reentry.
-            if this.closed.load(Ordering::Acquire) || other.closed.load(Ordering::Acquire) {
-                return Err(TabJoinError::CLOSED);
-            }
-            let Some(_this_pin) = objc2::rc::Retained::retain(this.ns_window) else {
-                return Err(TabJoinError::CLOSED);
-            };
-            let Some(_other_pin) = objc2::rc::Retained::retain(other.ns_window) else {
-                return Err(TabJoinError::CLOSED);
-            };
-            let _: () = msg_send![this.ns_window, addTabbedWindow:other.ns_window ordered:0]; // NSWindowAbove
-            Ok(())
+        if this.closed.load(Ordering::Acquire) || other.closed.load(Ordering::Acquire) {
+            return Err(TabJoinError::CLOSED);
         }
+        // Neither window is `Send` nor `Sync`, so both are on the AppKit main
+        // thread that made them. Extra retains keep both receivers alive
+        // through synchronous AppKit callback reentry.
+        let _this_pin = Retained::clone(&this.ns_window);
+        let _other_pin = Retained::clone(&other.ns_window);
+        this.ns_window
+            .addTabbedWindow_ordered(&other.ns_window, NSWindowOrderingMode::Above);
+        Ok(())
     }
 
     /// Order the window at `level` among the windows of every application.
@@ -470,13 +457,9 @@ impl<'a> AppKitWindow<'a> {
         behavior: MacOSCollectionBehavior,
     ) -> Result<(), AppKitWindowError> {
         let window = self.open()?;
-        let flags = behavior.to_appkit();
-        // SAFETY: as in `set_tabbing_mode`; `flags` is one combination AppKit
-        // accepts, since each part of the behavior is one of its exclusive
-        // choices.
-        unsafe {
-            let _: () = msg_send![window.ns_window, setCollectionBehavior: flags];
-        }
+        // `to_appkit` is one combination AppKit accepts, since each part of
+        // the behavior is one of its exclusive choices.
+        window.ns_window.setCollectionBehavior(behavior.to_appkit());
         Ok(())
     }
 
@@ -485,12 +468,7 @@ impl<'a> AppKitWindow<'a> {
     /// # Errors
     /// [`AppKitWindowError`]: the window is closed.
     pub fn set_has_shadow(self, has_shadow: bool) -> Result<(), AppKitWindowError> {
-        let window = self.open()?;
-        let value: BObjC = if has_shadow { YES } else { NO };
-        // SAFETY: as in `set_tabbing_mode`.
-        unsafe {
-            let _: () = msg_send![window.ns_window, setHasShadow: value];
-        }
+        self.open()?.ns_window.setHasShadow(has_shadow);
         Ok(())
     }
 
@@ -504,10 +482,7 @@ impl<'a> AppKitWindow<'a> {
     pub fn set_alpha(self, alpha: MacOSWindowAlpha) -> Result<(), AppKitWindowError> {
         let window = self.open()?;
         if window.keep_alpha(alpha) {
-            // SAFETY: as in `set_tabbing_mode`.
-            unsafe {
-                let _: () = msg_send![window.ns_window, setAlphaValue: alpha.get()];
-            }
+            window.ns_window.setAlphaValue(alpha.get());
         }
         Ok(())
     }

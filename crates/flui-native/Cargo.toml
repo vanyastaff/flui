@@ -222,6 +222,13 @@ objc2-app-kit = { workspace = true, features = [
     "NSGraphics",
     "NSCursor",
     "NSVisualEffectView",
+    # Liquid Glass behind a window's content (`MacOSBackdrop::Glass`), looked
+    # up by name before it is used: the class exists from macOS 26.
+    "NSGlassEffectView",
+    # The traffic lights a window lays out (`standardWindowButton:`) and the
+    # direction it lays them out in.
+    "NSButton",
+    "NSUserInterfaceLayout",
     "NSWindowScripting",
     "NSAppearance",
     # The accent colour and the preferred scroller style (ADR-0359).

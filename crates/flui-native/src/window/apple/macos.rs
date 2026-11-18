@@ -15,13 +15,11 @@
 //! owner; the thread that presents its frames holds its `MacOSSurface`, and
 //! any thread asks it for a frame through its `MacOSRedraw` (ADR-0254 §5).
 
-// Direct AppKit objc calls have no safe wrapper: the window is one of the
-// crate's `unsafe` FFI islands, opted out at its module boundary.
+// The window reaches AppKit through objc2's typed API; what remains `unsafe` is
+// the few sends that API marks so (an initializer, `setReleasedWhenClosed:`)
+// and the raw pointers handed to other features: one of the crate's `unsafe`
+// FFI islands, opted out at its module boundary.
 #![expect(unsafe_code)]
-// The window still sends raw `msg_send!` in objc2's comma-less form and reads
-// its delegate's ivar by name, both deprecated by objc2 in favour of the typed
-// API this file has not moved to yet.
-#![expect(deprecated)]
 
 pub(crate) mod backdrop;
 pub(crate) mod cursor;
@@ -46,11 +44,14 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
-use objc2::class;
 use objc2::rc::Retained;
-use objc2::runtime::{AnyObject, Bool};
-use objc2::{MainThreadMarker, msg_send};
-use objc2_app_kit::{NSBackingStoreType, NSWindowCollectionBehavior, NSWindowStyleMask};
+use objc2::runtime::{AnyObject, ProtocolObject};
+use objc2::{MainThreadMarker, MainThreadOnly, msg_send};
+use objc2_app_kit::{
+    NSApplication, NSBackingStoreType, NSColor, NSEvent, NSScreen, NSUserInterfaceLayoutDirection,
+    NSView, NSWindow, NSWindowButton, NSWindowCollectionBehavior, NSWindowStyleMask,
+    NSWindowTitleVisibility,
+};
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 
 use flui_foundation::geometry::{Bounds, Point, Size};
@@ -74,18 +75,6 @@ use raw_window_handle::{
     AppKitDisplayHandle, AppKitWindowHandle, HasDisplayHandle, HasWindowHandle, RawDisplayHandle,
     RawWindowHandle,
 };
-
-// Mid-migration shims for the raw-send shape this file keeps: `NSWindow` is
-// `MainThreadOnly` in objc2's typed API, and this backend constructs windows
-// on a caller-supplied owner lane, which a `MainThreadMarker`-gated method
-// would refuse. The file therefore sends raw `msg_send!` (objc2's macro accepts a raw `*mut AnyObject` receiver,
-// `Bool` arguments, and a manual `release`) and these aliases keep the
-// Cocoa-era spelling readable.
-type ObjcId = *mut AnyObject;
-const NIL: ObjcId = std::ptr::null_mut();
-type BObjC = Bool;
-const YES: Bool = Bool::YES;
-const NO: Bool = Bool::NO;
 
 use crate::host::{self, WindowFacets, WindowPositions};
 use crate::host_window::HostWindow;
@@ -119,8 +108,15 @@ use flui_platform::{
 /// no other thread can reach it. What other threads need of it is handed out
 /// apart from it: its `MacOSSurface` and its `MacOSRedraw`.
 pub struct MacOSWindow {
-    /// Native window handle (NSWindow*)
-    ns_window: ObjcId,
+    /// The native window. The wrapper owns the `alloc`/`init` +1 (the window
+    /// is made with `releasedWhenClosed` off, so `-[NSWindow close]` never
+    /// balances it): the window's [`Drop`] lets it go after detaching what is
+    /// hooked to the content view, and before the view.
+    ns_window: ManuallyDrop<Retained<NSWindow>>,
+
+    /// The main thread this window was made on, which every message it sends
+    /// is sent from: the window is neither `Send` nor `Sync`.
+    main: MainThreadMarker,
 
     /// The id the platform issued for this window, which no other window of
     /// the platform has, whatever address AppKit gives the next `NSWindow`.
@@ -329,25 +325,20 @@ impl MacOSWindowState {
 }
 
 impl std::fmt::Debug for MacOSWindow {
-    // Hand-written: `ns_window` is a raw Objective-C `id` and `WindowDelivery`
-    // is a callback payload; neither has a useful Debug form. `owner` (the
-    // dispatch lane) has no useful Debug representation either, so it is
-    // skipped along with them by `finish_non_exhaustive`.
+    // Hand-written: `ns_window` is shown by its address (its `Debug` would
+    // message the object), and `WindowDelivery` is a callback payload; neither
+    // has a useful Debug form. `owner` (the dispatch lane) has no useful Debug
+    // representation either, so it is skipped along with them by
+    // `finish_non_exhaustive`.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("MacOSWindow")
-            .field("ns_window", &(self.ns_window as usize))
+            .field("ns_window", &self.native_key())
             .finish_non_exhaustive()
     }
 }
 
-/// Whether a window opened with `options` is ordered front at alpha 0 and
-/// revealed later (see `MacOSWindowState::first_reveal_pending`): only a
-/// `visible: true` window whose caller asked for
-/// [`WindowReveal::AfterFirstFrame`] and so committed to reporting its first
-/// presented frame. Everything else — the default `AtOpen`, or a hidden
-/// window — has alpha left alone.
-/// `object`'s address, as AppKit messages take it.
-fn objc_address(object: &AnyObject) -> ObjcId {
+/// `object`'s address, as the features beside the window hold it.
+fn objc_address(object: &AnyObject) -> *mut AnyObject {
     std::ptr::from_ref(object).cast_mut()
 }
 
@@ -367,14 +358,25 @@ pub(crate) struct Opening {
     returns_to: Option<Point<f64>>,
 }
 
+/// Whether a window opened with `options` is ordered front at alpha 0 and
+/// revealed later (see `MacOSWindowState::first_reveal_pending`): only a
+/// `visible: true` window whose caller asked for
+/// [`WindowReveal::AfterFirstFrame`] and so committed to reporting its first
+/// presented frame. Everything else — the default `AtOpen`, or a hidden
+/// window — has alpha left alone.
 fn defers_first_reveal(options: &WindowOptions) -> bool {
     options.visible && options.reveal == WindowReveal::AfterFirstFrame
 }
 
 impl MacOSWindow {
-    /// The window's FLUI view, as the address AppKit messages take.
-    fn view_ptr(&self) -> ObjcId {
+    /// The window's FLUI view, as the address the features beside it hold.
+    fn view_ptr(&self) -> *mut AnyObject {
         objc_address(&self.view)
+    }
+
+    /// The native window's address, which keys it in the loop's registry.
+    fn native_key(&self) -> u64 {
+        Retained::as_ptr(&self.ns_window).addr() as u64
     }
 
     /// Clear the deferred-first-reveal flag, returning whether it was set:
@@ -445,12 +447,7 @@ impl MacOSWindow {
         let Some(displays) = self.displays.get() else {
             return false;
         };
-        // SAFETY: `ns_window` is alive for the lifetime of `self`; the screen
-        // answer is nil or a live `NSScreen*` for the duration of this call.
-        let id = unsafe {
-            let screen: ObjcId = msg_send![self.ns_window, screen];
-            display_of_screen(displays.as_ref(), screen)
-        };
+        let id = display_of_screen(displays.as_ref(), self.ns_window.screen().as_deref());
         let mut state = self.state.borrow_mut();
         let changed = state.display != id;
         state.display = id;
@@ -461,13 +458,12 @@ impl MacOSWindow {
     /// presentation reports, when the display snapshot or the window's
     /// display moved since the last push: a rate change on the same display
     /// reaches it as a new snapshot revision. Owner lane on the main thread,
-    /// where the screens are read; elsewhere the reports keep what they have.
+    /// where the screens are read.
     fn sync_layer_refresh(&self) {
-        let (Some(displays), Some(mtm)) = (self.displays.get(), objc2::MainThreadMarker::new())
-        else {
+        let Some(displays) = self.displays.get() else {
             return;
         };
-        let Ok(snapshot) = displays.snapshot(mtm) else {
+        let Ok(snapshot) = displays.snapshot(self.main) else {
             return;
         };
         let push = {
@@ -525,331 +521,327 @@ impl MacOSWindow {
             .frame
             .at_open(&appkit_window_capabilities(windows.presentation));
         let style = FrameStyle::of(options.frame);
-        // SAFETY: AppKit makes and configures an NSWindow only on the main
-        // thread, which the `MainThreadMarker` this takes proves this is; all
-        // messaged objects are alive: the freshly allocated NSWindow is
-        // checked for NIL before further use.
-        unsafe {
-            // Convert logical size to NSRect
-            let frame = NSRect::new(
-                NSPoint::new(0.0, 0.0),
-                NSSize::new(content.width(), content.height()),
-            );
+        // Convert logical size to NSRect
+        let frame = NSRect::new(
+            NSPoint::new(0.0, 0.0),
+            NSSize::new(content.width(), content.height()),
+        );
 
-            // Build window style mask
-            let mut style_mask = NSWindowStyleMask::Closable | NSWindowStyleMask::Miniaturizable;
+        // Build window style mask
+        let mut style_mask = NSWindowStyleMask::Closable | NSWindowStyleMask::Miniaturizable;
 
-            // A title bar of the application's keeps the system's, under the
-            // content: the frame, its shadow and its traffic lights stay
-            // AppKit's, and the content size is the whole window's.
-            if style.titled {
-                style_mask |= NSWindowStyleMask::Titled;
-            }
-            if style.app_title_bar {
-                style_mask |= NSWindowStyleMask::FullSizeContentView;
-            }
-
-            if options.resizable {
-                style_mask |= NSWindowStyleMask::Resizable;
-            }
-
-            // Create NSWindow
-            let ns_window: ObjcId = msg_send![<FluiWindow as objc2::ClassType>::class(), alloc];
-            let ns_window: ObjcId = msg_send![ns_window,
-                initWithContentRect: frame
-                styleMask: style_mask
-                backing: NSBackingStoreType::Buffered
-                defer: NO
-            ];
-
-            if ns_window == NIL {
-                return Err(OpenWindowError::Backend {
-                    message: "Failed to create NSWindow".to_string(),
-                });
-            }
-
-            // AppKit's default for an alloc/init'd window is
-            // `releasedWhenClosed: YES`: `-[NSWindow close]` would then
-            // release the same +1 reference this constructor's `alloc`/
-            // `init` pair already owns, and `MacOSWindow::drop`'s `release`
-            // below would release it a second time — an over-release, and a
-            // dangling `ns_window` for every `msg_send!` this type sends
-            // afterward (including the `setNeedsDisplay:` behind every
-            // redraw request). Opting out here makes the `alloc`/`init` +1 released
-            // exactly once, by `Drop`, matching winit's own
-            // `setReleasedWhenClosed(false)` for its wrapped `NSWindow`.
-            let _: () = msg_send![ns_window, setReleasedWhenClosed: NO];
-
-            // Background colour. AppKit's default for a fresh alloc/init'd
-            // window is `windowBackgroundColor`, a near-white
-            // (`rgb(240,240,240)` measured on this host) that sits behind
-            // the content view for as long as the first frame is still being
-            // set up — on a cold launch, up to several seconds (2.81 s
-            // measured). The user-facing glitch this default produces is a
-            // blank white window: the window is
-            // ordered front *before* `Renderer::render_scene` ever reaches
-            // `queue.present`, so the viewer sees the bare background, not
-            // the application. Setting the background to
-            // `underPageBackgroundColor` — the dark neutral AppKit uses for
-            // content chrome — doesn't remove the gap, it just stops
-            // screaming about it: the window arrives as a dark field, and
-            // the compositor's first frame lands on top of it without a
-            // jarring white flash in between. The color is also the exact
-            // one the launch-render gate's blank-window control measures
-            // against, so the control and the production path disagree by
-            // construction (a deliberately dark background is no longer
-            // `rgb(240,240,240)` flat).
-            let bg: ObjcId = msg_send![class!(NSColor), underPageBackgroundColor];
-            let _: () = msg_send![ns_window, setBackgroundColor: bg];
-
-            // Set window title
-            let title = NSString::from_str(&options.title);
-            let _: () = msg_send![ns_window, setTitle: &*title];
-            style_title_bar(ns_window, style.app_title_bar);
-
-            // The limits are on the content size, like `options.size`, and the
-            // same pair is read back into the state.
-            let (min, max) = content_limits_of_constraints(constraints);
-            let _: () = msg_send![ns_window, setContentMinSize: NSSize::new(min.width, min.height)];
-            let _: () = msg_send![ns_window, setContentMaxSize: NSSize::new(max.width, max.height)];
-
-            // A window must opt in to the full-screen transition for
-            // `toggleFullScreen:` to do anything. Every window does, so one
-            // that becomes resizable later can enter full screen too; a window
-            // that cannot be resized is refused the mode by `change_mode`.
-            let behavior: NSWindowCollectionBehavior = msg_send![ns_window, collectionBehavior];
-            let _: () = msg_send![
-                ns_window,
-                setCollectionBehavior: behavior | NSWindowCollectionBehavior::FullScreenPrimary
-            ];
-
-            // Where the window opens. Placed before it is ordered front, so
-            // it never shows at the system's choice first.
-            let primary_height = primary_screen_height();
-            let placed_at = placed_at
-                .zip(primary_height)
-                .map(|(at, height)| cocoa_top_left_point(at, height));
-            let mut placed = placed_at.is_some();
-            if let Some(point) = placed_at {
-                let _: () =
-                    msg_send![ns_window, setFrameTopLeftPoint: NSPoint::new(point.x, point.y)];
-            }
-            // A window that opens maximized or full screen returns to
-            // `normal_geometry`: put it there first, then change the mode.
-            if options.mode != WindowMode::Normal
-                && let Some(normal) = options.normal_geometry
-            {
-                let current: NSRect = msg_send![ns_window, frame];
-                let size = normal.size();
-                let frame = match (returns_to, primary_height) {
-                    (Some(at), Some(height)) => {
-                        placed = true;
-                        cocoa_frame(at, size, height)
-                    }
-                    // Without a position the top-left corner stays where it is.
-                    _ => cocoa_frame_keeping_top(
-                        crate::owner::apple::macos::bounds_of(current),
-                        size,
-                    ),
-                };
-                let _: () = msg_send![
-                    ns_window,
-                    setFrame: NSRect::new(
-                        NSPoint::new(frame.origin.x, frame.origin.y),
-                        NSSize::new(frame.size.width, frame.size.height),
-                    ),
-                    display: NO
-                ];
-            }
-
-            // Without a position of its own, the window opens centred.
-            if !placed {
-                let _: () = msg_send![ns_window, center];
-            }
-
-            // The content size now: `normal_geometry` may have given the frame
-            // a size of its own, and no delegate exists yet to report it.
-            let content_size = {
-                let placed: NSRect = msg_send![ns_window, frame];
-                let content: NSRect = msg_send![ns_window, contentRectForFrameRect: placed];
-                Size::new(content.size.width, content.size.height)
-            };
-
-            // Get backing scale factor
-            let reported: f64 = msg_send![ns_window, backingScaleFactor];
-            // By the hosts' one rule; a refusal is reported here, nothing borrowed.
-            let mut scale_streak = crate::display::scale::ScaleStreak::default();
-            let (scale, refused) = scale_streak.read(reported, "NSWindow backingScaleFactor");
-            if let Some(refused) = refused {
-                refused.report();
-            }
-
-            // A window opened `visible: true` is ordered front now. With
-            // `WindowReveal::AfterFirstFrame` it is ordered fully
-            // transparent: AppKit shows a window the moment it is ordered,
-            // and the first frame reaches the compositor only after the GPU
-            // stack behind it is built and the first present lands —
-            // measured at 2.81 s on a cold launch — so an opaque window
-            // here shows its bare background for that whole gap. It cannot
-            // simply stay hidden either: an un-ordered window gets no Metal
-            // drawable (see `MacOSWindowState::first_reveal_pending`). Alpha
-            // 0 gives the surface a window to present into while the viewer
-            // sees nothing; `reveal_after_first_frame` restores the window's alpha.
-            // The default `WindowReveal::AtOpen` leaves alpha alone — the
-            // caller has no first frame to report — and `visible: false`
-            // stays hidden until asked, as before.
-            let first_reveal_pending = defers_first_reveal(&options);
-            if first_reveal_pending {
-                let _: () = msg_send![ns_window, setAlphaValue: 0.0f64];
-            }
-            if options.visible {
-                let _: () = msg_send![ns_window, makeKeyAndOrderFront: NIL];
-            }
-
-            let delivery = Arc::new(WindowDelivery::new(
-                handler,
-                crate::input::availability::macos(),
-            ));
-
-            // Create content view for input events. `frame` is
-            // objc2-foundation's `NSRect`, the type `create_content_view` takes.
-            let content_view =
-                content_view::create(frame, Arc::downgrade(&delivery), view_hooks, main);
-
-            // What the features beside the window make their part of it from.
-            let closed = Arc::new(AtomicBool::new(false));
-            let this = ContentViewRef {
-                view: objc_address(&content_view),
-                closed: Arc::clone(&closed),
-                owner,
-                owner_is_main,
-            };
-            let _: () = msg_send![ns_window, setContentView: &*content_view];
-
-            // Made once the content view is installed: the bridge subclasses
-            // it for VoiceOver, on the main thread, and the window's teardown
-            // detaches it before releasing the window and then the view.
-            let facets = windows.positions.for_window(&this);
-
-            let window = Rc::new(Self {
-                ns_window,
-                id,
-                view: ManuallyDrop::new(content_view),
-                state: RefCell::new(MacOSWindowState {
-                    bounds: Bounds {
-                        origin: Point::new(frame.origin.x, frame.origin.y),
-                        size: content_size,
-                    },
-                    scale_factor: scale,
-                    scale_streak,
-                    display: None,
-                    layer_refresh: LayerRefresh::default(),
-                    cursor: cursor::NativeCursor::ARROW,
-                    cursor_grab: CursorGrab::None,
-                    lock_at: None,
-                    level: objc2_app_kit::NSNormalWindowLevel,
-                    live_resize: false,
-                    resize_increments: None,
-                    aspect_ratio: None,
-                    normal: None,
-                    sequence: ModeSequence::default(),
-                    occlusion_visible: true,
-                    first_reveal_pending,
-                    alpha: MacOSWindowAlpha::OPAQUE,
-                    frame: options.frame,
-                    system_controls: None,
-                }),
-                windows_map: Arc::clone(&windows_map),
-                delivery,
-                closed,
-                loop_control: OnceLock::new(),
-                delegate: OnceCell::new(),
-                owner,
-                owner_is_main,
-                presentation: windows.presentation,
-                facets,
-                redraw: OnceCell::new(),
-                displays: OnceLock::new(),
-                snapshot: Arc::new(WindowStateCell::new(
-                    WindowState::new(WindowGeometry::unplaced(content), content)
-                        .with_title(Some(options.title.clone()))
-                        .with_constraints(constraints)
-                        .with_resizable(options.resizable)
-                        .with_frame(options.frame),
-                )),
-            });
-
-            let redraw = Arc::new(MacOSRedraw {
-                window: Arc::new(OwnerWeak::new(&window)),
-                owner,
-                owner_is_main,
-                wake_pump: OnceLock::new(),
-            });
-            assert!(
-                window.redraw.set(redraw).is_ok(),
-                "BUG: a window's redraw requester is set once, as the window is made"
-            );
-
-            window
-                .delivery
-                .publish_through_owner(&window, Self::read_state);
-
-            // The traffic lights over a title bar of the application's, hidden
-            // or moved as it asked.
-            window.place_system_controls();
-
-            // Enable mouse tracking for mouse moved events
-            content_view::enable_mouse_tracking(&window.view);
-
-            // Make content view first responder to receive keyboard events
-            let _: Bool = msg_send![ns_window, makeFirstResponder: window.view_ptr()];
-
-            // Set window delegate for lifecycle events
-            let delegate = create_window_delegate(Rc::downgrade(&window), main);
-            let _: () = msg_send![ns_window, setDelegate: &*delegate];
-            let _ = window.delegate.set(delegate);
-
-            // Store in windows map, which the owner thread alone reaches: the
-            // window is made there.
-            let native_key = ns_window as u64;
-            let tracked: Rc<dyn HostWindow> = Rc::clone(&window) as _;
-            if windows_map.insert(native_key, tracked).is_err() {
-                tracing::error!("a macOS window was made off its owner thread and is not tracked");
-            }
-
-            // The rectangle the window returns to is what it has now, placed
-            // as asked; then it enters the mode it opens in. A hidden window
-            // enters it when it is first shown.
-            window.state.borrow_mut().normal = window.outer_geometry();
-            if options.mode != WindowMode::Normal {
-                if options.visible {
-                    // A window that cannot take the mode opens normal, as the
-                    // options document; its first snapshot says so.
-                    let _ = window.change_mode(options.mode);
-                } else {
-                    window
-                        .state
-                        .borrow_mut()
-                        .sequence
-                        .enter_when_shown(options.mode);
-                }
-            }
-
-            tracing::info!(
-                handle = ?ns_window,
-                width = content.width(),
-                height = content.height(),
-                scale = scale.get(),
-                "a window opened"
-            );
-
-            Ok(window)
+        // A title bar of the application's keeps the system's, under the
+        // content: the frame, its shadow and its traffic lights stay
+        // AppKit's, and the content size is the whole window's.
+        if style.titled {
+            style_mask |= NSWindowStyleMask::Titled;
         }
+        if style.app_title_bar {
+            style_mask |= NSWindowStyleMask::FullSizeContentView;
+        }
+
+        if options.resizable {
+            style_mask |= NSWindowStyleMask::Resizable;
+        }
+
+        // Create NSWindow
+        let allocated = FluiWindow::alloc(main).set_ivars(());
+        // SAFETY: `initWithContentRect:styleMask:backing:defer:` is
+        // `NSWindow`'s designated initializer, sent once to the instance
+        // just allocated (the class has no ivars to set); it takes a
+        // rectangle, a style mask, a backing store type and a BOOL by
+        // value, on the main thread `main` proves.
+        let created: Option<Retained<FluiWindow>> = unsafe {
+            msg_send![
+                super(allocated),
+                initWithContentRect: frame,
+                styleMask: style_mask,
+                backing: NSBackingStoreType::Buffered,
+                defer: false
+            ]
+        };
+        let Some(created) = created else {
+            return Err(OpenWindowError::Backend {
+                message: "Failed to create NSWindow".to_string(),
+            });
+        };
+        let ns_window: Retained<NSWindow> = Retained::into_super(created);
+
+        // AppKit's default for an alloc/init'd window is
+        // `releasedWhenClosed: YES`: `-[NSWindow close]` would then
+        // release the same +1 reference this constructor's `alloc`/
+        // `init` pair already owns, and the release the `Retained` makes
+        // when the wrapper drops would release it a second time — an
+        // over-release, and a dangling `ns_window` for every message this
+        // type sends afterward (including the `setNeedsDisplay:` behind
+        // every redraw request). Opting out here makes the `alloc`/`init`
+        // +1 released exactly once, by `Drop`, matching winit's own
+        // `setReleasedWhenClosed(false)` for its wrapped `NSWindow`.
+        //
+        // SAFETY: the window is released by its `Retained` alone: `false`
+        // is the value that keeps `close` from releasing it as well.
+        unsafe { ns_window.setReleasedWhenClosed(false) };
+
+        // Background colour. AppKit's default for a fresh alloc/init'd
+        // window is `windowBackgroundColor`, a near-white
+        // (`rgb(240,240,240)` measured on this host) that sits behind
+        // the content view for as long as the first frame is still being
+        // set up — on a cold launch, up to several seconds (2.81 s
+        // measured). The user-facing glitch this default produces is a
+        // blank white window: the window is
+        // ordered front *before* `Renderer::render_scene` ever reaches
+        // `queue.present`, so the viewer sees the bare background, not
+        // the application. Setting the background to
+        // `underPageBackgroundColor` — the dark neutral AppKit uses for
+        // content chrome — doesn't remove the gap, it just stops
+        // screaming about it: the window arrives as a dark field, and
+        // the compositor's first frame lands on top of it without a
+        // jarring white flash in between. The color is also the exact
+        // one the launch-render gate's blank-window control measures
+        // against, so the control and the production path disagree by
+        // construction (a deliberately dark background is no longer
+        // `rgb(240,240,240)` flat).
+        ns_window.setBackgroundColor(Some(&NSColor::underPageBackgroundColor()));
+
+        // Set window title
+        ns_window.setTitle(&NSString::from_str(&options.title));
+        style_title_bar(&ns_window, style.app_title_bar);
+
+        // The limits are on the content size, like `options.size`, and the
+        // same pair is read back into the state.
+        let (min, max) = content_limits_of_constraints(constraints);
+        ns_window.setContentMinSize(NSSize::new(min.width, min.height));
+        ns_window.setContentMaxSize(NSSize::new(max.width, max.height));
+
+        // A window must opt in to the full-screen transition for
+        // `toggleFullScreen:` to do anything. Every window does, so one
+        // that becomes resizable later can enter full screen too; a window
+        // that cannot be resized is refused the mode by `change_mode`.
+        ns_window.setCollectionBehavior(
+            ns_window.collectionBehavior() | NSWindowCollectionBehavior::FullScreenPrimary,
+        );
+
+        // Where the window opens. Placed before it is ordered front, so
+        // it never shows at the system's choice first.
+        let primary_height = primary_screen_height(main);
+        let placed_at = placed_at
+            .zip(primary_height)
+            .map(|(at, height)| cocoa_top_left_point(at, height));
+        let mut placed = placed_at.is_some();
+        if let Some(point) = placed_at {
+            ns_window.setFrameTopLeftPoint(NSPoint::new(point.x, point.y));
+        }
+        // A window that opens maximized or full screen returns to
+        // `normal_geometry`: put it there first, then change the mode.
+        if options.mode != WindowMode::Normal
+            && let Some(normal) = options.normal_geometry
+        {
+            let current = ns_window.frame();
+            let size = normal.size();
+            let frame = match (returns_to, primary_height) {
+                (Some(at), Some(height)) => {
+                    placed = true;
+                    cocoa_frame(at, size, height)
+                }
+                // Without a position the top-left corner stays where it is.
+                _ => cocoa_frame_keeping_top(crate::owner::apple::macos::bounds_of(current), size),
+            };
+            ns_window.setFrame_display(
+                NSRect::new(
+                    NSPoint::new(frame.origin.x, frame.origin.y),
+                    NSSize::new(frame.size.width, frame.size.height),
+                ),
+                false,
+            );
+        }
+
+        // Without a position of its own, the window opens centred.
+        if !placed {
+            ns_window.center();
+        }
+
+        // The content size now: `normal_geometry` may have given the frame
+        // a size of its own, and no delegate exists yet to report it.
+        let content_size = {
+            let content = ns_window.contentRectForFrameRect(ns_window.frame());
+            Size::new(content.size.width, content.size.height)
+        };
+
+        // Get backing scale factor
+        let reported = ns_window.backingScaleFactor();
+        // By the hosts' one rule; a refusal is reported here, nothing borrowed.
+        let mut scale_streak = crate::display::scale::ScaleStreak::default();
+        let (scale, refused) = scale_streak.read(reported, "NSWindow backingScaleFactor");
+        if let Some(refused) = refused {
+            refused.report();
+        }
+
+        // A window opened `visible: true` is ordered front now. With
+        // `WindowReveal::AfterFirstFrame` it is ordered fully
+        // transparent: AppKit shows a window the moment it is ordered,
+        // and the first frame reaches the compositor only after the GPU
+        // stack behind it is built and the first present lands —
+        // measured at 2.81 s on a cold launch — so an opaque window
+        // here shows its bare background for that whole gap. It cannot
+        // simply stay hidden either: an un-ordered window gets no Metal
+        // drawable (see `MacOSWindowState::first_reveal_pending`). Alpha
+        // 0 gives the surface a window to present into while the viewer
+        // sees nothing; `reveal_after_first_frame` restores the window's alpha.
+        // The default `WindowReveal::AtOpen` leaves alpha alone — the
+        // caller has no first frame to report — and `visible: false`
+        // stays hidden until asked, as before.
+        let first_reveal_pending = defers_first_reveal(&options);
+        if first_reveal_pending {
+            ns_window.setAlphaValue(0.0);
+        }
+        if options.visible {
+            ns_window.makeKeyAndOrderFront(None);
+        }
+
+        let delivery = Arc::new(WindowDelivery::new(
+            handler,
+            crate::input::availability::macos(),
+        ));
+
+        // Create content view for input events. `frame` is
+        // objc2-foundation's `NSRect`, the type `create_content_view` takes.
+        let content_view = content_view::create(frame, Arc::downgrade(&delivery), view_hooks, main);
+
+        // What the features beside the window make their part of it from.
+        let closed = Arc::new(AtomicBool::new(false));
+        let this = ContentViewRef {
+            view: objc_address(&content_view),
+            closed: Arc::clone(&closed),
+            owner,
+            owner_is_main,
+        };
+        ns_window.setContentView(Some(&content_view));
+
+        // Made once the content view is installed: the bridge subclasses
+        // it for VoiceOver, on the main thread, and the window's teardown
+        // detaches it before releasing the window and then the view.
+        let facets = windows.positions.for_window(&this);
+
+        let window = Rc::new(Self {
+            ns_window: ManuallyDrop::new(ns_window),
+            main,
+            id,
+            view: ManuallyDrop::new(content_view),
+            state: RefCell::new(MacOSWindowState {
+                bounds: Bounds {
+                    origin: Point::new(frame.origin.x, frame.origin.y),
+                    size: content_size,
+                },
+                scale_factor: scale,
+                scale_streak,
+                display: None,
+                layer_refresh: LayerRefresh::default(),
+                cursor: cursor::NativeCursor::ARROW,
+                cursor_grab: CursorGrab::None,
+                lock_at: None,
+                level: objc2_app_kit::NSNormalWindowLevel,
+                live_resize: false,
+                resize_increments: None,
+                aspect_ratio: None,
+                normal: None,
+                sequence: ModeSequence::default(),
+                occlusion_visible: true,
+                first_reveal_pending,
+                alpha: MacOSWindowAlpha::OPAQUE,
+                frame: options.frame,
+                system_controls: None,
+            }),
+            windows_map: Arc::clone(&windows_map),
+            delivery,
+            closed,
+            loop_control: OnceLock::new(),
+            delegate: OnceCell::new(),
+            owner,
+            owner_is_main,
+            presentation: windows.presentation,
+            facets,
+            redraw: OnceCell::new(),
+            displays: OnceLock::new(),
+            snapshot: Arc::new(WindowStateCell::new(
+                WindowState::new(WindowGeometry::unplaced(content), content)
+                    .with_title(Some(options.title.clone()))
+                    .with_constraints(constraints)
+                    .with_resizable(options.resizable)
+                    .with_frame(options.frame),
+            )),
+        });
+
+        let redraw = Arc::new(MacOSRedraw {
+            window: Arc::new(OwnerWeak::new(&window)),
+            owner,
+            owner_is_main,
+            wake_pump: OnceLock::new(),
+        });
+        assert!(
+            window.redraw.set(redraw).is_ok(),
+            "BUG: a window's redraw requester is set once, as the window is made"
+        );
+
+        window
+            .delivery
+            .publish_through_owner(&window, Self::read_state);
+
+        // The traffic lights over a title bar of the application's, hidden
+        // or moved as it asked.
+        window.place_system_controls();
+
+        // Enable mouse tracking for mouse moved events
+        content_view::enable_mouse_tracking(&window.view);
+
+        // Make content view first responder to receive keyboard events
+        let _ = window.ns_window.makeFirstResponder(Some(&window.view));
+
+        // Set window delegate for lifecycle events
+        let delegate = create_window_delegate(Rc::downgrade(&window), main);
+        window
+            .ns_window
+            .setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
+        let _ = window.delegate.set(delegate);
+
+        // Store in windows map, which the owner thread alone reaches: the
+        // window is made there.
+        let tracked: Rc<dyn HostWindow> = Rc::clone(&window) as _;
+        if windows_map.insert(window.native_key(), tracked).is_err() {
+            tracing::error!("a macOS window was made off its owner thread and is not tracked");
+        }
+
+        // The rectangle the window returns to is what it has now, placed
+        // as asked; then it enters the mode it opens in. A hidden window
+        // enters it when it is first shown.
+        window.state.borrow_mut().normal = window.outer_geometry();
+        if options.mode != WindowMode::Normal {
+            if options.visible {
+                // A window that cannot take the mode opens normal, as the
+                // options document; its first snapshot says so.
+                let _ = window.change_mode(options.mode);
+            } else {
+                window
+                    .state
+                    .borrow_mut()
+                    .sequence
+                    .enter_when_shown(options.mode);
+            }
+        }
+
+        tracing::info!(
+            handle = ?window.ns_window(),
+            width = content.width(),
+            height = content.height(),
+            scale = scale.get(),
+            "a window opened"
+        );
+
+        Ok(window)
     }
 
     /// Get the NSWindow handle
-    pub fn ns_window(&self) -> ObjcId {
-        self.ns_window
+    pub fn ns_window(&self) -> *mut AnyObject {
+        Retained::as_ptr(&self.ns_window).cast_mut().cast()
     }
 
     /// Attach the owning standalone loop without creating a window/control cycle.
@@ -904,15 +896,11 @@ impl MacOSWindow {
     /// re-armed itself and was discarded" is what this whole path exists to
     /// make observable.
     ///
-    /// # Safety
-    ///
-    /// The caller must be on this window's owner lane: `ns_window` and its
-    /// content view are thread-affine AppKit objects. A window is neither
-    /// `Send` nor `Sync`, so whoever holds `&self` is on the thread that made
-    /// it; the `debug_assert` below checks that this thread is the lane's.
-    /// `&self` keeps `ns_window` live: the wrapper's balancing `release` runs
-    /// only from [`Drop`].
-    unsafe fn set_needs_display(&self, deferred: bool) {
+    /// Owner lane only: `ns_window` and its content view are thread-affine
+    /// AppKit objects. A window is neither `Send` nor `Sync`, so whoever holds
+    /// `&self` is on the thread that made it; the `debug_assert` below checks
+    /// that this thread is the lane's.
+    fn set_needs_display(&self, deferred: bool) {
         debug_assert!(
             on_owner_thread(self.owner, self.owner_is_main),
             "BUG: set_needs_display must run on the window's owner lane"
@@ -920,61 +908,41 @@ impl MacOSWindow {
         // The frame this asks for carries the display's current refresh: a
         // rate change since the last frame is a new snapshot revision.
         self.sync_layer_refresh();
-        unsafe {
-            // SAFETY: per the function's contract, the caller is on the owner
-            // lane (checked by the assertion above) and `ns_window` is live;
-            // the window holds `self.view`.
-            let content_view = self.view_ptr();
-            let _: () = msg_send![content_view, setNeedsDisplay: YES];
-            // AppKit owns the display pass that turns this into a
-            // call of `updateLayer` — nothing in this backend can observe it, so the
-            // two ends of the pump are instrumented separately: this line
-            // (the request went out) and the content view's `update_layer` (AppKit
-            // asked for content). A request with no matching `updateLayer` is
-            // otherwise invisible from here, so when a trace subscriber is
-            // attached, report the AppKit state the display pass is gated
-            // on. The reads are msg_sends, so they are behind the level
-            // check rather than unconditional fields.
-            if tracing::enabled!(tracing::Level::TRACE) {
-                let window_visible: bool = msg_send![self.ns_window, isVisible];
-                let occlusion: usize = msg_send![self.ns_window, occlusionState];
-                let needs_display: bool = msg_send![content_view, needsDisplay];
-                let view_window: ObjcId = msg_send![content_view, window];
-                let is_key: bool = msg_send![self.ns_window, isKeyWindow];
-                let app: ObjcId = msg_send![class!(NSApplication), sharedApplication];
-                let app_active: bool = msg_send![app, isActive];
-                let policy: i64 = msg_send![app, activationPolicy];
-                let window_number: i64 = msg_send![self.ns_window, windowNumber];
-                let on_active_space: bool = msg_send![self.ns_window, isOnActiveSpace];
-                let screen: ObjcId = msg_send![self.ns_window, screen];
-                let alpha: f64 = msg_send![self.ns_window, alphaValue];
-                let level: i64 = msg_send![self.ns_window, level];
-                let view_hidden: bool = msg_send![content_view, isHiddenOrHasHiddenAncestor];
-                let view_frame: NSRect = msg_send![content_view, frame];
-                let backing_scale: f64 = msg_send![self.ns_window, backingScaleFactor];
-                tracing::trace!(
-                    window_visible,
-                    occlusion,
-                    needs_display,
-                    view_in_window = view_window != NIL,
-                    is_key,
-                    app_active,
-                    policy,
-                    window_number,
-                    on_active_space,
-                    has_screen = screen != NIL,
-                    alpha,
-                    level,
-                    view_hidden,
-                    vx = view_frame.origin.x,
-                    vy = view_frame.origin.y,
-                    vw = view_frame.size.width,
-                    vh = view_frame.size.height,
-                    backing_scale,
-                    deferred,
-                    "request_redraw: setNeedsDisplay sent to content view"
-                );
-            }
+        self.view.setNeedsDisplay(true);
+        // AppKit owns the display pass that turns this into a
+        // call of `updateLayer` — nothing in this backend can observe it, so the
+        // two ends of the pump are instrumented separately: this line
+        // (the request went out) and the content view's `update_layer` (AppKit
+        // asked for content). A request with no matching `updateLayer` is
+        // otherwise invisible from here, so when a trace subscriber is
+        // attached, report the AppKit state the display pass is gated
+        // on. The reads are messages, so they are behind the level
+        // check rather than unconditional fields.
+        if tracing::enabled!(tracing::Level::TRACE) {
+            let app = NSApplication::sharedApplication(self.main);
+            let view_frame = self.view.frame();
+            tracing::trace!(
+                window_visible = self.ns_window.isVisible(),
+                occlusion = self.ns_window.occlusionState().0,
+                needs_display = self.view.needsDisplay(),
+                view_in_window = self.view.window().is_some(),
+                is_key = self.ns_window.isKeyWindow(),
+                app_active = app.isActive(),
+                policy = app.activationPolicy().0,
+                window_number = self.ns_window.windowNumber(),
+                on_active_space = self.ns_window.isOnActiveSpace(),
+                has_screen = self.ns_window.screen().is_some(),
+                alpha = self.ns_window.alphaValue(),
+                level = self.ns_window.level(),
+                view_hidden = self.view.isHiddenOrHasHiddenAncestor(),
+                vx = view_frame.origin.x,
+                vy = view_frame.origin.y,
+                vw = view_frame.size.width,
+                vh = view_frame.size.height,
+                backing_scale = self.ns_window.backingScaleFactor(),
+                deferred,
+                "request_redraw: setNeedsDisplay sent to content view"
+            );
         }
     }
 
@@ -988,9 +956,7 @@ impl MacOSWindow {
             // returned, so it carries the window's weak handle rather than a
             // borrow of it.
             || defer_redraw(self.owner, Arc::clone(handle), 0),
-            // SAFETY: a window is used on its owner thread only (it is neither
-            // `Send` nor `Sync`), which is the owner lane's.
-            || unsafe { self.set_needs_display(false) },
+            || self.set_needs_display(false),
         );
     }
 }
@@ -1058,11 +1024,11 @@ fn defer_redraw(
             return;
         }
         match window.upgrade() {
+            // The handle upgraded, so this turn runs on the window's owner
+            // thread (the only one it upgrades on), under the lane guard
+            // `exec_async_on_owner` installed.
             Some(window) if !window.closed.load(Ordering::SeqCst) => {
-                // SAFETY: the handle upgraded, so this turn runs on the
-                // window's owner thread (the only one it upgrades on), under
-                // the lane guard `exec_async_on_owner` installed.
-                unsafe { window.set_needs_display(true) };
+                window.set_needs_display(true);
             }
             _ => tracing::trace!(
                 "request_redraw: window closed before the deferred request ran; request dropped"
@@ -1457,69 +1423,40 @@ objc2::define_class!(
 
 /// Make the title bar of `ns_window` transparent with its title hidden, for a
 /// title bar of the application's drawn under it, or the system's again.
-///
-/// # Safety
-///
-/// `ns_window` must be a live `NSWindow*`, on the main thread.
-unsafe fn style_title_bar(ns_window: ObjcId, app_title_bar: bool) {
-    /// `NSWindowTitleVisible` and `NSWindowTitleHidden`.
-    const TITLE_VISIBLE: isize = 0;
-    const TITLE_HIDDEN: isize = 1;
-    let (transparent, visibility) = if app_title_bar {
-        (YES, TITLE_HIDDEN)
+fn style_title_bar(ns_window: &NSWindow, app_title_bar: bool) {
+    ns_window.setTitlebarAppearsTransparent(app_title_bar);
+    ns_window.setTitleVisibility(if app_title_bar {
+        NSWindowTitleVisibility::Hidden
     } else {
-        (NO, TITLE_VISIBLE)
-    };
-    // SAFETY: per the contract `ns_window` is a live NSWindow on the main
-    // thread; both setters take a value (BOOL, NSInteger) and have been
-    // NSWindow's since macOS 10.10.
-    unsafe {
-        let _: () = msg_send![ns_window, setTitlebarAppearsTransparent: transparent];
-        let _: () = msg_send![ns_window, setTitleVisibility: visibility];
-    }
+        NSWindowTitleVisibility::Visible
+    });
 }
 
 /// How much larger a titled, closable, miniaturizable and resizable window's
 /// frame is than its content, in points: the title bar. Asked of the class, so
 /// it is known before any window exists. The marker is the proof that the
 /// caller is on the main thread, where every AppKit message in this module runs.
-fn decorated_frame_inset(_main: MainThreadMarker) -> Size<f64> {
+fn decorated_frame_inset(main: MainThreadMarker) -> Size<f64> {
     let mask = NSWindowStyleMask::Titled
         | NSWindowStyleMask::Closable
         | NSWindowStyleMask::Miniaturizable
         | NSWindowStyleMask::Resizable;
-    // SAFETY: `frameRectForContentRect:styleMask:` takes a rectangle and a mask
-    // by value and returns a rectangle, and it messages no window; the main
-    // thread is witnessed by the marker.
-    let frame: NSRect = unsafe {
-        msg_send![
-            class!(NSWindow),
-            frameRectForContentRect: NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(0.0, 0.0)),
-            styleMask: mask
-        ]
-    };
+    let frame = NSWindow::frameRectForContentRect_styleMask(
+        NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(0.0, 0.0)),
+        mask,
+        main,
+    );
     Size::new(frame.size.width, frame.size.height)
 }
 
 /// The height of the primary screen (`NSScreen.screens[0]`), whose bottom-left
 /// corner is the origin AppKit measures every frame from; `None` with no screen.
-///
-/// # Safety
-///
-/// Must run on the owner thread, like every AppKit message in this file.
-unsafe fn primary_screen_height() -> Option<f64> {
-    // SAFETY: per the function contract; `screens` is an NSArray of NSScreen
-    // and `objectAtIndex:` is only sent when it holds one.
-    unsafe {
-        let screens: ObjcId = msg_send![class!(NSScreen), screens];
-        let count: usize = msg_send![screens, count];
-        if count == 0 {
-            return None;
-        }
-        let first: ObjcId = msg_send![screens, objectAtIndex: 0usize];
-        let frame: NSRect = msg_send![first, frame];
-        Some(frame.size.height)
-    }
+/// The marker is the proof that the caller is on the main thread, where every
+/// AppKit message in this module runs.
+fn primary_screen_height(main: MainThreadMarker) -> Option<f64> {
+    NSScreen::screens(main)
+        .firstObject()
+        .map(|primary| primary.frame().size.height)
 }
 
 /// Where a window at AppKit's `level` stands among the others: above the
@@ -1673,11 +1610,7 @@ impl PlatformWindow for MacOSWindow {
         if self.closed.load(Ordering::SeqCst) {
             return;
         }
-        // SAFETY: `ns_window` is alive for the lifetime of `self`, and a
-        // window is used on its owner thread only.
-        unsafe {
-            let _: () = msg_send![self.ns_window, setAlphaValue: alpha.get()];
-        }
+        self.ns_window.setAlphaValue(alpha.get());
         tracing::debug!("macOS: window revealed after its first presented frame");
     }
 
@@ -1770,22 +1703,17 @@ impl MacOSWindow {
         if self.closed.load(Ordering::SeqCst) {
             return Err(ApplyError::Closed);
         }
-        // SAFETY: self retains the native window, and a window is used on its
-        // owner thread only. Deminiaturizing and ordering do not toggle
-        // zoom/fullscreen.
-        unsafe {
-            if let Some(alpha) = reveal {
-                let _: () = msg_send![self.ns_window, setAlphaValue: alpha.get()];
-            }
-            let minimized: bool = msg_send![self.ns_window, isMiniaturized];
-            if minimized {
-                let _: () = msg_send![self.ns_window, deminiaturize: NIL];
-            }
-            if self.closed.load(Ordering::SeqCst) {
-                return Err(ApplyError::Closed);
-            }
-            let _: () = msg_send![self.ns_window, makeKeyAndOrderFront: NIL];
+        // Deminiaturizing and ordering do not toggle zoom/fullscreen.
+        if let Some(alpha) = reveal {
+            self.ns_window.setAlphaValue(alpha.get());
         }
+        if self.ns_window.isMiniaturized() {
+            self.ns_window.deminiaturize(None);
+        }
+        if self.closed.load(Ordering::SeqCst) {
+            return Err(ApplyError::Closed);
+        }
+        self.ns_window.makeKeyAndOrderFront(None);
         if self.closed.load(Ordering::SeqCst) {
             Err(ApplyError::Closed)
         } else {
@@ -1795,14 +1723,10 @@ impl MacOSWindow {
 
     fn activate_window(&self) {
         let reveal = self.take_pending_first_reveal();
-        // SAFETY: `ns_window` is alive for the lifetime of `self`, and a
-        // window is used on its owner thread only.
-        unsafe {
-            if let Some(alpha) = reveal {
-                let _: () = msg_send![self.ns_window, setAlphaValue: alpha.get()];
-            }
-            let _: () = msg_send![self.ns_window, makeKeyAndOrderFront: NIL];
+        if let Some(alpha) = reveal {
+            self.ns_window.setAlphaValue(alpha.get());
         }
+        self.ns_window.makeKeyAndOrderFront(None);
         self.enter_mode_when_shown();
     }
 
@@ -1816,11 +1740,7 @@ impl MacOSWindow {
     /// [`ApplyError::Platform`] when AppKit makes no transparent cursor or
     /// Quartz refuses to detach the mouse; nothing is held then.
     fn lock_pointer(&self) -> Result<(), ApplyError> {
-        // SAFETY: see the note above these bodies.
-        let (key, flags) = unsafe {
-            let key: bool = msg_send![self.ns_window, isKeyWindow];
-            (key, self.read_flags())
-        };
+        let (key, flags) = (self.ns_window.isKeyWindow(), self.read_flags());
         if !key
             || !flags.on_screen
             || flags.miniaturized
@@ -1832,12 +1752,9 @@ impl MacOSWindow {
         cursor::detach_mouse(true).map_err(ApplyError::Platform)?;
         // The pointer rests where it is over the content, or at its centre
         // when it is elsewhere, as the Win32 lock does.
-        // SAFETY: see the note above these bodies; `mouseLocation` is a class
-        // getter answering a point in screen coordinates.
-        let at = unsafe {
-            let screen: NSPoint = msg_send![class!(NSEvent), mouseLocation];
-            self.content_point_of_screen(screen)
-        };
+        // `mouseLocation` is a class getter answering a point in screen
+        // coordinates.
+        let at = self.content_point_of_screen(NSEvent::mouseLocation());
         // Committed before anything else is told: the view's input reads
         // motion from the next mouse event on.
         {
@@ -1853,32 +1770,21 @@ impl MacOSWindow {
 
     /// The content view's point under `screen`, a point in AppKit's screen
     /// coordinates; the content's centre when `screen` is not over it.
-    ///
-    /// # Safety
-    ///
-    /// Owner lane only, like every AppKit message in this file.
-    unsafe fn content_point_of_screen(&self, screen: NSPoint) -> Option<NSPoint> {
-        let view = self.view_ptr();
-        // SAFETY: per the function contract; the window and its view are
-        // alive for the lifetime of `self`, and every message takes and
-        // answers plain geometry.
-        unsafe {
-            let in_window: NSPoint = msg_send![self.ns_window, convertPointFromScreen: screen];
-            let in_view: NSPoint = msg_send![view, convertPoint: in_window, fromView: NIL];
-            let bounds: NSRect = msg_send![view, bounds];
-            let inside = (bounds.origin.x..bounds.origin.x + bounds.size.width)
-                .contains(&in_view.x)
-                && (bounds.origin.y..bounds.origin.y + bounds.size.height).contains(&in_view.y);
-            let at = if inside {
-                in_view
-            } else {
-                NSPoint::new(
-                    bounds.origin.x + bounds.size.width / 2.0,
-                    bounds.origin.y + bounds.size.height / 2.0,
-                )
-            };
-            (at.x.is_finite() && at.y.is_finite()).then_some(at)
-        }
+    fn content_point_of_screen(&self, screen: NSPoint) -> Option<NSPoint> {
+        let in_window = self.ns_window.convertPointFromScreen(screen);
+        let in_view = self.view.convertPoint_fromView(in_window, None);
+        let bounds = self.view.bounds();
+        let inside = (bounds.origin.x..bounds.origin.x + bounds.size.width).contains(&in_view.x)
+            && (bounds.origin.y..bounds.origin.y + bounds.size.height).contains(&in_view.y);
+        let at = if inside {
+            in_view
+        } else {
+            NSPoint::new(
+                bounds.origin.x + bounds.size.width / 2.0,
+                bounds.origin.y + bounds.size.height / 2.0,
+            )
+        };
+        (at.x.is_finite() && at.y.is_finite()).then_some(at)
     }
 
     /// Put a locked pointer back on the point of the content it rests at:
@@ -1891,26 +1797,21 @@ impl MacOSWindow {
         let Some(at) = self.state.borrow().lock_at else {
             return;
         };
-        let view = self.view_ptr();
-        // SAFETY: see the note above these bodies; the conversions take and
-        // answer plain geometry.
-        let global = unsafe {
-            let bounds: NSRect = msg_send![view, bounds];
-            let held = NSPoint::new(
-                at.x.clamp(
-                    bounds.origin.x,
-                    bounds.origin.x + (bounds.size.width - 1.0).max(0.0),
-                ),
-                at.y.clamp(
-                    bounds.origin.y,
-                    bounds.origin.y + (bounds.size.height - 1.0).max(0.0),
-                ),
-            );
-            let in_window: NSPoint = msg_send![view, convertPoint: held, toView: NIL];
-            let screen: NSPoint = msg_send![self.ns_window, convertPointToScreen: in_window];
-            // Quartz measures from the primary screen's top-left corner.
-            primary_screen_height().map(|height| (screen.x, height - screen.y))
-        };
+        let bounds = self.view.bounds();
+        let held = NSPoint::new(
+            at.x.clamp(
+                bounds.origin.x,
+                bounds.origin.x + (bounds.size.width - 1.0).max(0.0),
+            ),
+            at.y.clamp(
+                bounds.origin.y,
+                bounds.origin.y + (bounds.size.height - 1.0).max(0.0),
+            ),
+        );
+        let in_window = self.view.convertPoint_toView(held, None);
+        let screen = self.ns_window.convertPointToScreen(in_window);
+        // Quartz measures from the primary screen's top-left corner.
+        let global = primary_screen_height(self.main).map(|height| (screen.x, height - screen.y));
         let Some((x, y)) = global.filter(|(x, y)| x.is_finite() && y.is_finite()) else {
             return;
         };
@@ -1964,8 +1865,7 @@ impl MacOSWindow {
     /// unless the window is full screen, then recorded (AppKit's `setLevel:`
     /// refuses nothing), so the snapshot publishes what was set.
     fn keep_level(&self, value: objc2_app_kit::NSWindowLevel) {
-        // SAFETY: see the note above these bodies.
-        if !unsafe { self.read_flags() }.fullscreen {
+        if !self.read_flags().fullscreen {
             self.send_level(value);
         }
         self.state.borrow_mut().level = value;
@@ -1987,13 +1887,8 @@ impl MacOSWindow {
 
     /// `setLevel:`, unless the window stands at `value` already.
     fn send_level(&self, value: objc2_app_kit::NSWindowLevel) {
-        // SAFETY: see the note above these bodies; `setLevel:` takes an
-        // `NSInteger`, and the getter answers one.
-        unsafe {
-            let current: objc2_app_kit::NSWindowLevel = msg_send![self.ns_window, level];
-            if current != value {
-                let _: () = msg_send![self.ns_window, setLevel: value];
-            }
+        if self.ns_window.level() != value {
+            self.ns_window.setLevel(value);
         }
     }
 
@@ -2007,23 +1902,19 @@ impl MacOSWindow {
             let state = self.state.borrow();
             (state.resize_increments, state.aspect_ratio)
         };
-        // SAFETY: see the note above these bodies; both setters take an
-        // `NSSize`.
-        unsafe {
-            if let Some(ratio) = ratio {
-                let proportion = NSSize::new(
-                    f64::from(ratio.width().get()),
-                    f64::from(ratio.height().get()),
-                );
-                let _: () = msg_send![self.ns_window, setContentAspectRatio: proportion];
-                return;
-            }
-            let _: () = msg_send![self.ns_window, setContentAspectRatio: NSSize::new(0.0, 0.0)];
-            let increments = step.map_or(NSSize::new(1.0, 1.0), |step| {
-                NSSize::new(step.width(), step.height())
-            });
-            let _: () = msg_send![self.ns_window, setContentResizeIncrements: increments];
+        if let Some(ratio) = ratio {
+            let proportion = NSSize::new(
+                f64::from(ratio.width().get()),
+                f64::from(ratio.height().get()),
+            );
+            self.ns_window.setContentAspectRatio(proportion);
+            return;
         }
+        self.ns_window.setContentAspectRatio(NSSize::new(0.0, 0.0));
+        let increments = step.map_or(NSSize::new(1.0, 1.0), |step| {
+            NSSize::new(step.width(), step.height())
+        });
+        self.ns_window.setContentResizeIncrements(increments);
     }
 
     /// The user started or ended resizing the window by its frame
@@ -2070,12 +1961,7 @@ impl MacOSWindow {
         // user-initiated close takes. `handle_close` is therefore reached
         // by every route through this window's own `close`, and is where
         // `closed` is actually set.
-        //
-        // SAFETY: `ns_window` is alive for the lifetime of `self`, and a
-        // window is used on its owner thread only.
-        unsafe {
-            let _: () = msg_send![self.ns_window, close];
-        }
+        self.ns_window.close();
     }
 }
 
@@ -2087,7 +1973,7 @@ impl Drop for MacOSWindow {
             on_owner_thread(self.owner, self.owner_is_main),
             "BUG: a macOS window is dropped on its owner thread"
         );
-        tracing::debug!(handle = ?self.ns_window, "window closing");
+        tracing::debug!(handle = ?self.ns_window(), "window closing");
 
         // The window's surface targets and the features beside it outlive
         // it; from here on they hand out nothing of a view the release below
@@ -2119,31 +2005,25 @@ impl Drop for MacOSWindow {
         // come off is kept rather than released (`take_apart`).
         let a11y = Arc::clone(&self.facets.accessibility);
         let text = Arc::clone(&self.facets.text);
-        let ns_window = self.ns_window;
         // AppKit holds the delegate weakly: it is detached before the window
         // lets go of it, and released by the pool, since the drop may run
         // inside one of its methods (a handler that let the last wrapper go).
         if let Some(delegate) = self.delegate.take() {
-            // SAFETY: `ns_window` is alive until the release below, messaged
-            // on the main thread; a nil delegate is AppKit's "none".
-            unsafe {
-                let _: () = msg_send![ns_window, setDelegate: NIL];
-            }
+            self.ns_window.setDelegate(None);
             let _ = Retained::autorelease_ptr(delegate);
         }
         // SAFETY: `Drop` runs once, and nothing reads `self.view` after this.
         let view = unsafe { ManuallyDrop::take(&mut self.view) };
+        // SAFETY: `Drop` runs once, and nothing reads `self.ns_window` after
+        // this.
+        let mut ns_window = Some(unsafe { ManuallyDrop::take(&mut self.ns_window) });
         super::teardown::take_apart(
             view,
             &mut [&mut || a11y.detach(), &mut || text.detach()],
-            &mut || {
-                // SAFETY: the wrapper owns the `alloc`/`init` +1 of
-                // `ns_window` (`releasedWhenClosed` is off), and this is the
-                // one balancing release, sent on the owner thread.
-                unsafe {
-                    let _: () = msg_send![ns_window, release];
-                }
-            },
+            // The wrapper owns the `alloc`/`init` +1 of the window
+            // (`releasedWhenClosed` is off): this is the one balancing
+            // release, on the owner thread.
+            &mut || drop(ns_window.take()),
             |step| crate::owner::apple::macos::run_cleanup_guarded(step),
         );
     }
@@ -2161,12 +2041,9 @@ impl MacOSWindow {
         // holds while it lives.
         let view = unsafe { super::MainRetainedView::retain(self.view_ptr()) };
         super::clear_then_keep_if_kept(&self.delivery, view, |view| {
-            // SAFETY: `view` is a live `NSView`, messaged on the main thread;
-            // `window` answers nil once the view's window is gone, and a
-            // message to nil does nothing.
-            unsafe {
-                let window: ObjcId = msg_send![view, window];
-                let _: () = msg_send![window, orderOut: NIL];
+            // The view's window is gone once it answers none.
+            if let Some(window) = view.downcast_ref::<NSView>().and_then(NSView::window) {
+                window.orderOut(None);
             }
         });
     }
@@ -2213,31 +2090,15 @@ impl MacOSWindow {
         };
         let (grab, level, live_resize) = held;
         let hovered = self.delivery.hovered();
-        // SAFETY: `ns_window` is alive for the lifetime of `self`, and a
-        // window is used on its owner thread only. `title` returns an
-        // autoreleased NSString whose UTF8String buffer is copied before
-        // returning.
-        unsafe {
-            let frame: NSRect = msg_send![self.ns_window, frame];
-            let content: NSRect = msg_send![self.ns_window, contentRectForFrameRect: frame];
+        {
+            let frame = self.ns_window.frame();
+            let content = self.ns_window.contentRectForFrameRect(frame);
             let flags = self.read_flags();
-            let focused: bool = msg_send![self.ns_window, isKeyWindow];
-            let min: NSSize = msg_send![self.ns_window, contentMinSize];
-            let max: NSSize = msg_send![self.ns_window, contentMaxSize];
-            let ns_title: ObjcId = msg_send![self.ns_window, title];
-            let title = if ns_title == NIL {
-                String::new()
-            } else {
-                let c_str: *const i8 = msg_send![ns_title, UTF8String];
-                if c_str.is_null() {
-                    String::new()
-                } else {
-                    std::ffi::CStr::from_ptr(c_str)
-                        .to_string_lossy()
-                        .into_owned()
-                }
-            };
-            let mask: NSWindowStyleMask = msg_send![self.ns_window, styleMask];
+            let focused = self.ns_window.isKeyWindow();
+            let min = self.ns_window.contentMinSize();
+            let max = self.ns_window.contentMaxSize();
+            let title = self.ns_window.title().to_string();
+            let mask = self.ns_window.styleMask();
             let mode = mode_of(flags.mode_flags());
             let position = self.position_of_frame(frame, display);
             let geometry =
@@ -2257,11 +2118,7 @@ impl MacOSWindow {
                         })
                     });
             // The window's appearance, not NSApp's: a window may override it.
-            let appearance = content_view::effective_appearance(
-                (&*self.ns_window)
-                    .downcast_ref::<objc2_app_kit::NSWindow>()
-                    .expect("BUG: MacOSWindow wraps an NSWindow"),
-            );
+            let appearance = content_view::effective_appearance(&**self.ns_window);
             let capabilities = capabilities_of(
                 flags,
                 heading,
@@ -2317,28 +2174,16 @@ impl MacOSWindow {
     }
 
     /// What AppKit says about the window's mode, as flags.
-    ///
-    /// # Safety
-    ///
-    /// Owner lane only, like every AppKit message in this file.
-    unsafe fn read_flags(&self) -> WindowFlags {
-        // SAFETY: per the function contract; `ns_window` is alive for the
-        // lifetime of `self`.
-        unsafe {
-            let mask: NSWindowStyleMask = msg_send![self.ns_window, styleMask];
-            WindowFlags {
-                on_screen: msg_send![self.ns_window, isVisible],
-                fullscreen: mask.contains(NSWindowStyleMask::FullScreen),
-                miniaturized: msg_send![self.ns_window, isMiniaturized],
-                zoomed: msg_send![self.ns_window, isZoomed],
-                resizable: mask.contains(NSWindowStyleMask::Resizable),
-            }
+    fn read_flags(&self) -> WindowFlags {
+        let mask = self.ns_window.styleMask();
+        WindowFlags {
+            on_screen: self.ns_window.isVisible(),
+            fullscreen: mask.contains(NSWindowStyleMask::FullScreen),
+            miniaturized: self.ns_window.isMiniaturized(),
+            zoomed: self.ns_window.isZoomed(),
+            resizable: mask.contains(NSWindowStyleMask::Resizable),
         }
     }
-
-    // Every body below messages `ns_window`, which is alive for the lifetime
-    // of `self`, on the window's owner thread: a window is used there only, as
-    // it is neither `Send` nor `Sync`.
 
     /// The top-left of a window whose frame AppKit reports as `frame`, on
     /// `display`, the screen the window is on: its point in AppKit's flipped
@@ -2351,9 +2196,7 @@ impl MacOSWindow {
     ) -> Option<WindowPosition> {
         let snapshot = self.displays.get()?.published();
         let screen = snapshot.get(display?)?;
-        // SAFETY: a window is used on its owner thread only, as it is
-        // neither `Send` nor `Sync`, which is the function's contract.
-        let primary_height = unsafe { primary_screen_height() }?;
+        let primary_height = primary_screen_height(self.main)?;
         let desktop =
             top_left_of_frame(crate::owner::apple::macos::bounds_of(frame), primary_height)?;
         position_on(desktop, screen)
@@ -2363,15 +2206,12 @@ impl MacOSWindow {
     /// on; `None` for a frame that describes no window.
     fn outer_geometry(&self) -> Option<WindowGeometry> {
         let display = self.state.borrow().display;
-        // SAFETY: see the note above these bodies.
-        unsafe {
-            let frame: NSRect = msg_send![self.ns_window, frame];
-            WindowGeometry::try_new(
-                self.position_of_frame(frame, display),
-                Size::new(frame.size.width, frame.size.height),
-            )
-            .ok()
-        }
+        let frame = self.ns_window.frame();
+        WindowGeometry::try_new(
+            self.position_of_frame(frame, display),
+            Size::new(frame.size.width, frame.size.height),
+        )
+        .ok()
     }
 
     /// Remember the outer rectangle if the window is in normal mode: the
@@ -2390,8 +2230,7 @@ impl MacOSWindow {
     }
 
     fn record_normal_if(&self, is_normal: impl FnOnce(WindowFlags) -> bool) {
-        // SAFETY: see the note above these bodies.
-        if is_normal(unsafe { self.read_flags() })
+        if is_normal(self.read_flags())
             && let Some(outer) = self.outer_geometry()
         {
             self.state.borrow_mut().normal = Some(outer);
@@ -2399,12 +2238,7 @@ impl MacOSWindow {
     }
 
     fn set_native_title(&self, title: &str) {
-        // SAFETY: see the note above these bodies; the NSString is created
-        // from a valid Rust string and the window copies it.
-        unsafe {
-            let ns_title = NSString::from_str(title);
-            let _: () = msg_send![self.ns_window, setTitle: &*ns_title];
-        }
+        self.ns_window.setTitle(&NSString::from_str(title));
     }
 
     /// Move the window's outer top-left corner to `at`, a point of a screen in
@@ -2427,17 +2261,12 @@ impl MacOSWindow {
         let desktop = desktop_point(at, screen).ok_or(ApplyError::Platform(
             flui_platform::PlatformFailure::OutOfRange,
         ))?;
-        // SAFETY: see the note above these bodies.
-        unsafe {
-            let height = primary_screen_height().ok_or_else(|| {
-                ApplyError::failed("there is no screen to measure a position from".into())
-            })?;
-            let point = cocoa_top_left_point(desktop, height);
-            let _: () = msg_send![
-                self.ns_window,
-                setFrameTopLeftPoint: NSPoint::new(point.x, point.y)
-            ];
-        }
+        let height = primary_screen_height(self.main).ok_or_else(|| {
+            ApplyError::failed("there is no screen to measure a position from".into())
+        })?;
+        let point = cocoa_top_left_point(desktop, height);
+        self.ns_window
+            .setFrameTopLeftPoint(NSPoint::new(point.x, point.y));
         Ok(())
     }
 
@@ -2447,70 +2276,61 @@ impl MacOSWindow {
     /// too, so the size is first held to the window's limits, as a resize by
     /// the user is.
     fn set_content_size(&self, size: Size<f64>) {
-        // SAFETY: see the note above these bodies.
-        unsafe {
-            let min: NSSize = msg_send![self.ns_window, contentMinSize];
-            let max: NSSize = msg_send![self.ns_window, contentMaxSize];
-            let held = crate::window::state::held_to(
-                size,
-                constraints_of_content_limits(
-                    Size::new(min.width, min.height),
-                    Size::new(max.width, max.height),
-                ),
-            );
-            let _: () =
-                msg_send![self.ns_window, setContentSize: NSSize::new(held.width, held.height)];
-        }
+        let min = self.ns_window.contentMinSize();
+        let max = self.ns_window.contentMaxSize();
+        let held = crate::window::state::held_to(
+            size,
+            constraints_of_content_limits(
+                Size::new(min.width, min.height),
+                Size::new(max.width, max.height),
+            ),
+        );
+        self.ns_window
+            .setContentSize(NSSize::new(held.width, held.height));
     }
 
     fn set_native_constraints(&self, constraints: SizeConstraints) {
         let (min, max) = content_limits_of_constraints(constraints);
-        // SAFETY: see the note above these bodies.
-        unsafe {
-            let _: () =
-                msg_send![self.ns_window, setContentMinSize: NSSize::new(min.width, min.height)];
-            let _: () =
-                msg_send![self.ns_window, setContentMaxSize: NSSize::new(max.width, max.height)];
-        }
+        self.ns_window
+            .setContentMinSize(NSSize::new(min.width, min.height));
+        self.ns_window
+            .setContentMaxSize(NSSize::new(max.width, max.height));
     }
 
     /// Switch one style-mask bit (resizable, titled) on or off, keeping the
     /// content area where it is: removing the title bar shrinks the frame, not
     /// the content.
     fn set_style_bit(&self, bit: NSWindowStyleMask, on: bool) -> Result<(), ApplyError> {
-        // SAFETY: see the note above these bodies.
-        unsafe {
-            let mask: NSWindowStyleMask = msg_send![self.ns_window, styleMask];
-            if mask.contains(NSWindowStyleMask::FullScreen) {
-                return Err(ApplyError::failed(
-                    "AppKit does not restyle a window while it is full screen".into(),
-                ));
-            }
-            // A window that is no longer resizable reports a zoomed frame as
-            // normal and cannot be un-zoomed by the user, so it is restyled
-            // only from the mode it can be asked to return to.
-            let flags = self.read_flags();
-            if bit == NSWindowStyleMask::Resizable {
-                let decision = {
-                    let mut state = self.state.borrow_mut();
-                    let sequence = &mut state.sequence;
-                    if on {
-                        sequence.make_resizable();
-                        FixedSize::Apply
-                    } else {
-                        sequence.fix_size(std::time::Instant::now(), flags)
-                    }
-                };
-                match decision {
-                    FixedSize::Apply => {}
-                    // Carried out once the step ends (`handle_transition_ended`).
-                    FixedSize::Held => return Ok(()),
-                    FixedSize::Refused(why) => return Err(ApplyError::failed(why.into())),
-                }
-            }
-            let wanted = if on { mask | bit } else { mask - bit };
-            self.restyle(mask, wanted);
+        let mask = self.ns_window.styleMask();
+        if mask.contains(NSWindowStyleMask::FullScreen) {
+            return Err(ApplyError::failed(
+                "AppKit does not restyle a window while it is full screen".into(),
+            ));
         }
+        // A window that is no longer resizable reports a zoomed frame as
+        // normal and cannot be un-zoomed by the user, so it is restyled
+        // only from the mode it can be asked to return to.
+        let flags = self.read_flags();
+        if bit == NSWindowStyleMask::Resizable {
+            let decision = {
+                let mut state = self.state.borrow_mut();
+                let sequence = &mut state.sequence;
+                if on {
+                    sequence.make_resizable();
+                    FixedSize::Apply
+                } else {
+                    sequence.fix_size(std::time::Instant::now(), flags)
+                }
+            };
+            match decision {
+                FixedSize::Apply => {}
+                // Carried out once the step ends (`handle_transition_ended`).
+                FixedSize::Held => return Ok(()),
+                FixedSize::Refused(why) => return Err(ApplyError::failed(why.into())),
+            }
+        }
+        let wanted = if on { mask | bit } else { mask - bit };
+        self.restyle(mask, wanted);
         Ok(())
     }
 
@@ -2520,17 +2340,15 @@ impl MacOSWindow {
         if wanted == mask {
             return;
         }
-        // SAFETY: see the note above these bodies.
-        unsafe {
-            let frame: NSRect = msg_send![self.ns_window, frame];
-            let content: NSRect = msg_send![self.ns_window, contentRectForFrameRect: frame];
-            let _: () = msg_send![self.ns_window, setStyleMask: wanted];
-            let restyled: NSRect = msg_send![self.ns_window, frameRectForContentRect: content];
-            // `display: NO`: `YES` would draw a whole frame on this command's
-            // stack, before the resize reaches the host. The frame is asked
-            // for instead, so it comes on the next pass like any other.
-            let _: () = msg_send![self.ns_window, setFrame: restyled, display: NO];
-        }
+        let content = self
+            .ns_window
+            .contentRectForFrameRect(self.ns_window.frame());
+        self.ns_window.setStyleMask(wanted);
+        let restyled = self.ns_window.frameRectForContentRect(content);
+        // `display: false`: `true` would draw a whole frame on this command's
+        // stack, before the resize reaches the host. The frame is asked
+        // for instead, so it comes on the next pass like any other.
+        self.ns_window.setFrame_display(restyled, false);
         self.redraw().request_redraw();
     }
 
@@ -2540,26 +2358,23 @@ impl MacOSWindow {
     /// and lay the traffic lights out as the frame asks.
     fn set_frame(&self, frame: WindowFrame) -> Result<(), ApplyError> {
         let style = FrameStyle::of(frame);
-        // SAFETY: see the note above these bodies.
-        unsafe {
-            let mask: NSWindowStyleMask = msg_send![self.ns_window, styleMask];
-            if mask.contains(NSWindowStyleMask::FullScreen) {
-                return Err(ApplyError::failed(
-                    "AppKit does not restyle a window while it is full screen".into(),
-                ));
-            }
-            let with = |mask: NSWindowStyleMask, bit, on: bool| {
-                if on { mask | bit } else { mask - bit }
-            };
-            let wanted = with(
-                with(mask, NSWindowStyleMask::Titled, style.titled),
-                NSWindowStyleMask::FullSizeContentView,
-                style.app_title_bar,
-            );
-            self.state.borrow_mut().frame = frame;
-            self.restyle(mask, wanted);
-            style_title_bar(self.ns_window, style.app_title_bar);
+        let mask = self.ns_window.styleMask();
+        if mask.contains(NSWindowStyleMask::FullScreen) {
+            return Err(ApplyError::failed(
+                "AppKit does not restyle a window while it is full screen".into(),
+            ));
         }
+        let with = |mask: NSWindowStyleMask, bit, on: bool| {
+            if on { mask | bit } else { mask - bit }
+        };
+        let wanted = with(
+            with(mask, NSWindowStyleMask::Titled, style.titled),
+            NSWindowStyleMask::FullSizeContentView,
+            style.app_title_bar,
+        );
+        self.state.borrow_mut().frame = frame;
+        self.restyle(mask, wanted);
+        style_title_bar(&self.ns_window, style.app_title_bar);
         self.place_system_controls();
         Ok(())
     }
@@ -2573,84 +2388,81 @@ impl MacOSWindow {
     /// ([`ControlsLayout::moved`]); it lays them out again when the window
     /// resizes or leaves full screen, so `windowDidResize:` asks this again.
     fn place_system_controls(&self) {
-        /// `NSWindowCloseButton`, `NSWindowMiniaturizeButton`,
-        /// `NSWindowZoomButton`.
-        const BUTTONS: [usize; 3] = [0, 1, 2];
-        /// `NSUserInterfaceLayoutDirectionRightToLeft`.
-        const RIGHT_TO_LEFT: isize = 1;
-        // SAFETY: see the note above these bodies. `standardWindowButton:`
-        // answers a button the window owns or nil; its superview is the title
-        // bar view and that one's superview the title bar's container, both
-        // the window's for as long as it is titled. Each setter takes a value.
-        unsafe {
-            let mask: NSWindowStyleMask = msg_send![self.ns_window, styleMask];
-            if !mask.contains(NSWindowStyleMask::Titled)
-                || mask.contains(NSWindowStyleMask::FullScreen)
-            {
-                return;
-            }
-            let buttons: [ObjcId; 3] =
-                BUTTONS.map(|kind| msg_send![self.ns_window, standardWindowButton: kind]);
-            if buttons.iter().any(|button| button.is_null()) {
-                return;
-            }
-            let bar: ObjcId = msg_send![buttons[0], superview];
-            let container: ObjcId = if bar.is_null() {
-                NIL
-            } else {
-                msg_send![bar, superview]
-            };
-            if container.is_null() {
-                return;
-            }
-            let (system, frame) = {
-                let mut state = self.state.borrow_mut();
-                let system = *state.system_controls.get_or_insert_with(|| {
-                    let bar: NSRect = msg_send![container, frame];
-                    ControlsLayout {
-                        bar_height: bar.size.height,
-                        buttons: buttons.map(|button| {
-                            let frame: NSRect = msg_send![button, frame];
-                            Point::new(frame.origin.x, frame.origin.y)
-                        }),
-                    }
-                });
-                (system, state.frame)
-            };
-            let direction: isize = msg_send![self.ns_window, windowTitlebarLayoutDirection];
-            let controls = FrameStyle::of(frame)
-                .controls
-                .unwrap_or(flui_platform::SystemControls::Shown);
-            let layout = system.for_controls(controls, direction == RIGHT_TO_LEFT);
-            for button in buttons {
-                let _: () = msg_send![button, setHidden: Bool::new(layout.is_none())];
-            }
-            let Some(layout) = layout else {
-                return;
-            };
-            let window: NSRect = msg_send![self.ns_window, frame];
-            let mut bar: NSRect = msg_send![container, frame];
-            bar.origin.y = layout.bar_bottom(window.size.height);
-            bar.size.height = layout.bar_height;
-            let _: () = msg_send![container, setFrame: bar];
-            for (button, origin) in buttons.into_iter().zip(layout.buttons) {
-                let _: () = msg_send![button, setFrameOrigin: NSPoint::new(origin.x, origin.y)];
-            }
+        /// Close, miniaturize, zoom.
+        const BUTTONS: [NSWindowButton; 3] = [
+            NSWindowButton::CloseButton,
+            NSWindowButton::MiniaturizeButton,
+            NSWindowButton::ZoomButton,
+        ];
+        let mask = self.ns_window.styleMask();
+        if !mask.contains(NSWindowStyleMask::Titled) || mask.contains(NSWindowStyleMask::FullScreen)
+        {
+            return;
+        }
+        // `standardWindowButton:` answers a button the window owns or none;
+        // its superview is the title bar view and that one's superview the
+        // title bar's container, both the window's for as long as it is
+        // titled.
+        let found = BUTTONS.map(|kind| self.ns_window.standardWindowButton(kind));
+        let [Some(close), Some(miniaturize), Some(zoom)] = found else {
+            return;
+        };
+        let buttons = [close, miniaturize, zoom];
+        // SAFETY: `superview` is not retained by the view's own answer, so it
+        // must still be alive when the call retains it: the button is held by
+        // the title bar view, which the window's frame view holds, and
+        // nothing between the two reads reorders the hierarchy, on the main
+        // thread.
+        let bar = unsafe { buttons[0].superview() };
+        // SAFETY: as above, for the title bar view's own superview.
+        let container = bar.and_then(|bar| unsafe { bar.superview() });
+        let Some(container) = container else {
+            return;
+        };
+        let (system, frame) = {
+            let mut state = self.state.borrow_mut();
+            let system = *state.system_controls.get_or_insert_with(|| ControlsLayout {
+                bar_height: container.frame().size.height,
+                buttons: buttons.each_ref().map(|button| {
+                    let frame = button.frame();
+                    Point::new(frame.origin.x, frame.origin.y)
+                }),
+            });
+            (system, state.frame)
+        };
+        let direction = self.ns_window.windowTitlebarLayoutDirection();
+        let controls = FrameStyle::of(frame)
+            .controls
+            .unwrap_or(flui_platform::SystemControls::Shown);
+        let layout = system.for_controls(
+            controls,
+            direction == NSUserInterfaceLayoutDirection::RightToLeft,
+        );
+        for button in &buttons {
+            button.setHidden(layout.is_none());
+        }
+        let Some(layout) = layout else {
+            return;
+        };
+        let window = self.ns_window.frame();
+        let mut bar = container.frame();
+        bar.origin.y = layout.bar_bottom(window.size.height);
+        bar.size.height = layout.bar_height;
+        container.setFrame(bar);
+        for (button, origin) in buttons.iter().zip(layout.buttons) {
+            button.setFrameOrigin(NSPoint::new(origin.x, origin.y));
         }
     }
 
     /// Order the window out. A full-screen window is refused: ordering it out
     /// leaves its empty Space behind.
     fn hide(&self) -> Result<(), ApplyError> {
-        // SAFETY: see the note above these bodies.
-        unsafe {
-            if self.read_flags().fullscreen {
-                return Err(ApplyError::failed(
-                    "a full-screen window leaves full screen before it is hidden".into(),
-                ));
-            }
-            let _: () = msg_send![self.ns_window, orderOut: NIL];
+        if self.read_flags().fullscreen {
+            return Err(ApplyError::failed(
+                "a full-screen window leaves full screen before it is hidden".into(),
+            ));
         }
+        self.ns_window.orderOut(None);
         Ok(())
     }
 
@@ -2687,8 +2499,7 @@ impl MacOSWindow {
     }
 
     fn change_mode(&self, mode: WindowMode) -> Result<(), ApplyError> {
-        // SAFETY: see the note above these bodies.
-        let flags = unsafe { self.read_flags() };
+        let flags = self.read_flags();
         if !flags.resizable && matches!(mode, WindowMode::Maximized | WindowMode::Fullscreen) {
             return Err(ApplyError::failed(
                 "AppKit does not zoom or full-screen a window that cannot be resized".into(),
@@ -2707,22 +2518,13 @@ impl MacOSWindow {
             self.record_normal();
         }
         for step in &steps {
-            // SAFETY: see the note above these bodies. Each message is the
-            // AppKit request the step names.
-            unsafe {
-                match step {
-                    ModeStep::Deminiaturize => {
-                        let _: () = msg_send![self.ns_window, deminiaturize: NIL];
-                    }
-                    ModeStep::Miniaturize => {
-                        let _: () = msg_send![self.ns_window, miniaturize: NIL];
-                    }
-                    ModeStep::Zoom | ModeStep::Unzoom => {
-                        let _: () = msg_send![self.ns_window, zoom: NIL];
-                    }
-                    ModeStep::EnterFullscreen | ModeStep::ExitFullscreen => {
-                        let _: () = msg_send![self.ns_window, toggleFullScreen: NIL];
-                    }
+            // Each message is the AppKit request the step names.
+            match step {
+                ModeStep::Deminiaturize => self.ns_window.deminiaturize(None),
+                ModeStep::Miniaturize => self.ns_window.miniaturize(None),
+                ModeStep::Zoom | ModeStep::Unzoom => self.ns_window.zoom(None),
+                ModeStep::EnterFullscreen | ModeStep::ExitFullscreen => {
+                    self.ns_window.toggleFullScreen(None);
                 }
             }
         }

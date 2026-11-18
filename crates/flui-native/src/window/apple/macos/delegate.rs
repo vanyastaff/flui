@@ -8,35 +8,22 @@ use std::sync::atomic::Ordering;
 use flui_foundation::geometry::{Point, Size};
 use flui_platform::DisplayId;
 use objc2::rc::Retained;
-use objc2::runtime::AnyObject;
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send};
-use objc2_app_kit::{NSWindow, NSWindowDelegate, NSWindowStyleMask};
+use objc2_app_kit::{NSScreen, NSWindow, NSWindowDelegate, NSWindowStyleMask};
 use objc2_foundation::{NSNotification, NSObject, NSObjectProtocol, NSRect};
 
-use super::{MacOSWindow, NIL, ObjcId};
+use super::MacOSWindow;
 use crate::owner::apple::macos::HostDisplays;
 use crate::owner::panic_boundary::{AfterPanic, ContainedIvars, os_entry};
 use crate::window::apple::geometry::mode::HeldCommand;
 
-/// The display a raw `NSScreen*` names, or `None` when the pointer is nil (a
-/// window not on any screen) or the source leaves that screen out.
-///
-/// # Safety
-///
-/// `screen` must be null or a live `NSScreen*`, and the call must run on the
-/// owner lane (this messages the screen).
-pub(super) unsafe fn display_of_screen(
+/// The display `screen` names, or `None` when there is none (a window not on
+/// any screen) or the source leaves that screen out.
+pub(super) fn display_of_screen(
     displays: &dyn HostDisplays,
-    screen: ObjcId,
+    screen: Option<&NSScreen>,
 ) -> Option<DisplayId> {
-    // SAFETY: the caller's contract — nil or a live `NSScreen*` on the owner
-    // lane; the borrow is scoped to the `and_then` closure.
-    let screen = unsafe { screen.as_ref() }?;
-    // SAFETY: `NSScreen` and `AnyObject` share the Objective-C object layout,
-    // and the caller guarantees the pointee really is an `NSScreen`.
-    let screen: &objc2_app_kit::NSScreen =
-        unsafe { &*std::ptr::from_ref::<AnyObject>(screen).cast() };
-    displays.id_of(screen)
+    displays.id_of(screen?)
 }
 
 /// A delegate for `window`, made on the main thread `main` proves. AppKit
@@ -211,15 +198,12 @@ define_class!(
         #[unsafe(method(windowWillClose:))]
         fn window_will_close(&self, _notification: &NSNotification) {
             Self::notice(self, "windowWillClose:", |window| {
-                // SAFETY: the wrapper retains this live NSWindow. Pin it
-                // before user callbacks can drop the final wrapper;
-                // transferring that extra retain to AppKit's surrounding
-                // autorelease pool keeps the receiver alive until the native
-                // close stack has returned. Nested callback pools cannot
-                // drain this already-enqueued pin.
-                if let Some(pin) = unsafe { Retained::retain(window.ns_window) } {
-                    let _ = Retained::autorelease_ptr(pin);
-                }
+                // Pin the NSWindow before user callbacks can drop the final
+                // wrapper; transferring that extra retain to AppKit's
+                // surrounding autorelease pool keeps the receiver alive until
+                // the native close stack has returned. Nested callback pools
+                // cannot drain this already-enqueued pin.
+                let _ = Retained::autorelease_ptr(Retained::clone(&window.ns_window));
                 window.handle_close();
             });
         }
@@ -303,9 +287,7 @@ impl MacOSWindow {
         self.state.borrow_mut().sequence.step_ended();
         // A window that left full screen, or failed to enter it, stands at
         // its own level again; one still full screen stays at the normal one.
-        // SAFETY: `ns_window` is alive for the lifetime of `self`, on the
-        // main thread AppKit sends its notifications on.
-        let fullscreen = unsafe { self.read_flags() }.fullscreen;
+        let fullscreen = self.read_flags().fullscreen;
         self.apply_level(fullscreen);
         self.publish_state();
         let window = crate::owner::slot::OwnerWeak::new(self);
@@ -339,64 +321,56 @@ impl MacOSWindow {
 
     /// Handle window resize event
     fn handle_resize(&self) {
-        // SAFETY: `ns_window` is alive for the lifetime of `self`.
-        unsafe {
-            let frame: NSRect = msg_send![self.ns_window, frame];
-            let content_rect: NSRect = msg_send![self.ns_window, contentRectForFrameRect: frame];
+        let content_rect = self
+            .ns_window
+            .contentRectForFrameRect(self.ns_window.frame());
 
-            let new_size = Size::new(
-                content_rect.size.width as f64,
-                content_rect.size.height as f64,
-            );
+        let new_size = Size::new(content_rect.size.width, content_rect.size.height);
 
-            let moved_controls = {
-                let mut state = self.state.borrow_mut();
-                state.bounds.size = new_size;
-                state.moves_system_controls()
-            };
-            // AppKit lays the traffic lights out again as it resizes the
-            // window, and as it leaves full screen.
-            if moved_controls {
-                self.place_system_controls();
-            }
-            // A locked pointer rests over the content wherever it went.
-            self.keep_lock_point();
-            self.publish_state();
-
-            tracing::trace!(
-                handle = ?self.ns_window,
-                width = %new_size.width,
-                height = %new_size.height,
-                "window resized"
-            );
+        let moved_controls = {
+            let mut state = self.state.borrow_mut();
+            state.bounds.size = new_size;
+            state.moves_system_controls()
+        };
+        // AppKit lays the traffic lights out again as it resizes the
+        // window, and as it leaves full screen.
+        if moved_controls {
+            self.place_system_controls();
         }
+        // A locked pointer rests over the content wherever it went.
+        self.keep_lock_point();
+        self.publish_state();
+
+        tracing::trace!(
+            handle = ?self.ns_window(),
+            width = %new_size.width,
+            height = %new_size.height,
+            "window resized"
+        );
     }
 
     /// Handle window move event
     fn handle_move(&self) {
-        // SAFETY: `ns_window` is alive for the lifetime of `self`.
-        unsafe {
-            let frame: NSRect = msg_send![self.ns_window, frame];
+        let frame = self.ns_window.frame();
 
-            let new_origin = Point::new(frame.origin.x as f64, frame.origin.y as f64);
+        let new_origin = Point::new(frame.origin.x, frame.origin.y);
 
-            // Update state
-            {
-                let mut state = self.state.borrow_mut();
-                state.bounds.origin = new_origin;
-            }
-
-            // A locked pointer rests over the content wherever it went.
-            self.keep_lock_point();
-            self.publish_state();
-
-            tracing::debug!(
-                handle = ?self.ns_window,
-                x = %new_origin.x,
-                y = %new_origin.y,
-                "window moved"
-            );
+        // Update state
+        {
+            let mut state = self.state.borrow_mut();
+            state.bounds.origin = new_origin;
         }
+
+        // A locked pointer rests over the content wherever it went.
+        self.keep_lock_point();
+        self.publish_state();
+
+        tracing::debug!(
+            handle = ?self.ns_window(),
+            x = %new_origin.x,
+            y = %new_origin.y,
+            "window moved"
+        );
     }
 
     /// Handle focus gained event
@@ -437,12 +411,7 @@ impl MacOSWindow {
     /// for reasons other than the visible bit flipping: an unchanged snapshot
     /// publishes nothing.
     fn handle_occlusion_state_changed(&self) {
-        // SAFETY: `ns_window` is alive for the lifetime of `self`;
-        // `occlusionState` returns a plain NSUInteger bitmask.
-        let raw: u64 = unsafe {
-            let state: usize = msg_send![self.ns_window, occlusionState];
-            state as u64
-        };
+        let raw = self.ns_window.occlusionState().0 as u64;
         let visible = crate::window::apple::geometry::surface::occlusion_state_is_visible(raw);
         self.state.borrow_mut().occlusion_visible = visible;
         // Published outside the state lock, like every other handler here.
@@ -502,7 +471,7 @@ impl MacOSWindow {
         // removal is observable only as the intended lifetime change. The
         // removed entry drops at the end of this statement's scope, and the
         // delegate holds the window meanwhile.
-        let _prev = self.windows_map.remove(&(self.ns_window as u64));
+        let _prev = self.windows_map.remove(&self.native_key());
 
         failure.contain(|| {
             self.delivery.dispatch_close();
@@ -521,93 +490,78 @@ impl MacOSWindow {
         // the close.
         failure.contain(|| self.clear_then_keep_if_kept());
 
-        // Match winit's own `windowWillClose:` handling: NIL the delegate
+        // Match winit's own `windowWillClose:` handling: clear the delegate
         // so no further delegate method can fire against a window this
         // wrapper now treats as closed. Harmless even without this today
         // (the delegate holds only a weak reference to the window), but this
         // is the documented AppKit-recommended cleanup, not just a FLUI habit.
-        //
-        // SAFETY: `ns_window` is alive for the lifetime of `self`.
-        unsafe {
-            let _: () = msg_send![self.ns_window, setDelegate: NIL];
-        }
+        self.ns_window.setDelegate(None);
         if let Some(control) = self.loop_control.get().and_then(std::sync::Weak::upgrade) {
-            let main = objc2::MainThreadMarker::new()
-                .expect("BUG: AppKit closes a window on the main thread");
-            failure.contain(|| control.request(main, false));
+            failure.contain(|| control.request(self.main, false));
         }
         failure.resume();
     }
 
     /// Handle backing properties changed (Retina/DPI change)
     fn handle_backing_properties_changed(&self) {
-        // SAFETY: `ns_window` is alive for the lifetime of `self`; the
-        // content view is NIL-checked before use.
-        unsafe {
-            let reported: f64 = msg_send![self.ns_window, backingScaleFactor];
+        let reported = self.ns_window.backingScaleFactor();
 
-            // Update window state, by the hosts' one rule; the refusal and
-            // the change are reported once the state is let go.
-            let (changed, new_scale, refused) = {
-                let mut state = self.state.borrow_mut();
-                let (new_scale, refused) = state
-                    .scale_streak
-                    .read(reported, "NSWindow backingScaleFactor");
-                let changed = (state.scale_factor.get() - new_scale.get()).abs() > 0.01;
-                if changed {
-                    state.scale_factor = new_scale;
-                }
-                (changed, new_scale, refused)
-            };
-            if let Some(refused) = refused {
-                refused.report();
-            }
+        // Update window state, by the hosts' one rule; the refusal and
+        // the change are reported once the state is let go.
+        let (changed, new_scale, refused) = {
+            let mut state = self.state.borrow_mut();
+            let (new_scale, refused) = state
+                .scale_streak
+                .read(reported, "NSWindow backingScaleFactor");
+            let changed = (state.scale_factor.get() - new_scale.get()).abs() > 0.01;
             if changed {
-                tracing::info!(handle = ?self.ns_window, scale = new_scale.get(), "window scale changed");
-                // An image cursor is measured in points at the scale.
-                self.rescale_cursor();
+                state.scale_factor = new_scale;
             }
-
-            // Re-read the display in the same pass: this handler is reached on
-            // both a backing-properties change and a screen change
-            // (`handle_screen_changed` delegates here), and the display belongs
-            // to the window exactly as the scale does.
-            let moved = self.refresh_display();
-            if moved || changed {
-                // The display snapshot carries each display's scale, and a
-                // window that moved may sit on a display the last sample did
-                // not hold. Invalidated before the window's snapshot is
-                // published, so a consumer it wakes reads the displays again.
-                if let Some(displays) = self.displays.get() {
-                    displays.invalidate();
-                }
-            }
-            // After the invalidation, so the snapshot read is the one with the
-            // display the window moved to.
-            self.sync_layer_refresh();
-            // On another screen a locked pointer is put back over the content.
-            self.keep_lock_point();
-            self.publish_state();
+            (changed, new_scale, refused)
+        };
+        if let Some(refused) = refused {
+            refused.report();
         }
+        if changed {
+            tracing::info!(handle = ?self.ns_window(), scale = new_scale.get(), "window scale changed");
+            // An image cursor is measured in points at the scale.
+            self.rescale_cursor();
+        }
+
+        // Re-read the display in the same pass: this handler is reached on
+        // both a backing-properties change and a screen change
+        // (`handle_screen_changed` delegates here), and the display belongs
+        // to the window exactly as the scale does.
+        let moved = self.refresh_display();
+        if moved || changed {
+            // The display snapshot carries each display's scale, and a
+            // window that moved may sit on a display the last sample did
+            // not hold. Invalidated before the window's snapshot is
+            // published, so a consumer it wakes reads the displays again.
+            if let Some(displays) = self.displays.get() {
+                displays.invalidate();
+            }
+        }
+        // After the invalidation, so the snapshot read is the one with the
+        // display the window moved to.
+        self.sync_layer_refresh();
+        // On another screen a locked pointer is put back over the content.
+        self.keep_lock_point();
+        self.publish_state();
     }
 
     /// Handle screen changed (moved to different monitor)
     fn handle_screen_changed(&self) {
-        // SAFETY: `ns_window` is alive for the lifetime of `self`; the
-        // screen object is NIL-checked before messaging.
-        unsafe {
-            let screen: ObjcId = msg_send![self.ns_window, screen];
-            if screen != NIL {
-                let scale: f64 = msg_send![screen, backingScaleFactor];
-                tracing::debug!(handle = ?self.ns_window, scale, "window moved to another screen");
+        if let Some(screen) = self.ns_window.screen() {
+            let scale = screen.backingScaleFactor();
+            tracing::debug!(handle = ?self.ns_window(), scale, "window moved to another screen");
 
-                // Update scale factor (will trigger backing properties changed)
-                self.handle_backing_properties_changed();
-            } else if self.refresh_display() {
-                // Off every screen: the window names no display until it is
-                // on one again, and its scale is left as it was.
-                self.publish_state();
-            }
+            // Update scale factor (will trigger backing properties changed)
+            self.handle_backing_properties_changed();
+        } else if self.refresh_display() {
+            // Off every screen: the window names no display until it is
+            // on one again, and its scale is left as it was.
+            self.publish_state();
         }
     }
 }
