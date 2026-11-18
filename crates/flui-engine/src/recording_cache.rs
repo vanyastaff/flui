@@ -2,10 +2,10 @@
 //! the same device transform and ambient state replays it instead of
 //! recording its commands again (ADR-0304 §9).
 //!
-//! A [`ChunkRecording`] is the slice of the segment one chunk appended: every
+//! A `ChunkRecording` is the slice of the segment one chunk appended: every
 //! arena's new elements, with each range, offset and index made relative to
 //! where the chunk began, and runs that carry no clip chain. Splicing it
-//! ([`DrawSegment::splice`]) rebases them onto the segment as it stands,
+//! (`DrawSegment::splice`) rebases them onto the segment as it stands,
 //! attaches the clip chain, the SDF clip and the scissor the chunk is entered
 //! under, and re-runs each arena's merge rule on the first element only, as
 //! recording the chunk there would have. Only a chunk that leaves the
@@ -15,9 +15,9 @@
 //! writes.
 //!
 //! What the IR bakes from outside the chunk is in its key: the device
-//! transform ([`RasterKey`]), the scissor and opacity it was entered under and
-//! the size of the target ([`AmbientKey`]) and the painter's resources
-//! ([`ResourceEpoch`]): a glyph texel or an image's atlas rectangle is valid
+//! transform (`RasterKey`), the scissor and opacity it was entered under and
+//! the size of the target (`AmbientKey`) and the painter's resources
+//! (`ResourceEpoch`): a glyph texel or an image's atlas rectangle is valid
 //! only while no slot the recording names was freed since.
 
 use std::num::NonZeroU64;
