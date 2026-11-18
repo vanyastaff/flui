@@ -273,7 +273,7 @@ preparation debt and their `TextPainter` remain owner-local. `Canvas` and
 `TextPainter` are mutated through `&mut self` by one owner.
 The crate takes no lock of its own: its `clippy.toml` disallows `Mutex` and
 `RwLock`, with no `#[expect]`ed site, and it declares no process-global font
-state (`cargo xtask globals`).
+state.
 
 The Parley path takes no FLUI lock. A `TextContext` is `Send` and used
 through `&mut` by the UI runtime that owns it (flui-rendering lends it to one

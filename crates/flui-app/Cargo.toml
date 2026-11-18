@@ -224,13 +224,6 @@ harness = false
 tier = "H"
 tier-kind = "internal"
 order = 2
-# Process-global state, checked by `cargo xtask globals` (ADR-0097).
-globals = [
-    { item = "app::runner::host::APP_RUNTIME", grant = "ADR-0097", class = "trampoline", reason = "the host of every UI runtime, which OS event callbacks reach without a user-data pointer" },
-    { item = "app::runner::secondary_window::PENDING_SECONDARY_WINDOW_COMPLETIONS", exit = "ADR-0083", reason = "secondary-window completions queued beside the host cell; they fold into the runtime" },
-    { item = "app::runner::secondary_window::PENDING_SECONDARY_WINDOW_OPENS", exit = "ADR-0083", reason = "secondary-window open requests queued beside the host cell; they fold into the runtime" },
-    { item = "app::runner::secondary_window::POLLING_PENDING_WINDOWS", exit = "ADR-0083", reason = "reentrancy flag of the secondary-window queue; it folds into the runtime" },
-]
 
 # What the application's manifests need for flui-app's features (ADR-0307).
 [package.metadata.flui.declares]

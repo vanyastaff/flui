@@ -30,6 +30,8 @@
   for the reason of decision 6's `launchMode` bullet only: `singleTop` stands, and an Activity
   started in another application's task, or beside the running one, forwards its intent to the
   application's own task instead of starting a second runtime (ADR-0366 §2)
+  [ADR-0371](ADR-0371-before-the-first-release-no-xtask-gate-holds-a-rule-about-the-sources.md)
+  for the `xtask workspace` gate only (Confirmation): the rule stands and its reader confirms it.
 - **Related:** [ADR-0151](ADR-0151-platform-layer-boundary-and-names.md) (the platform crates and
   where host code lives), [ADR-0152](ADR-0152-capability-seam-revised.md) (the capability seam and
   `Completion`), [ADR-0154](ADR-0154-capability-crates.md) (capability crates and their native

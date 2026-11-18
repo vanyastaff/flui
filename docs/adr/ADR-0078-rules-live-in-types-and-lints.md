@@ -6,6 +6,9 @@
   only: a platform capability is reached through the seam, not as a method on `LifecycleContext`.
 - **Superseded-by:** [ADR-0303](ADR-0303-a-rule-takes-the-first-rung-that-states-it-and-an-xtask-gate-is-the-last.md) for the last clause of §4 condition 3
   only: a gate's self-test runs in `cargo test -p xtask`, not in `cargo xtask checks`.
+  [ADR-0371](ADR-0371-before-the-first-release-no-xtask-gate-holds-a-rule-about-the-sources.md)
+  for the `xtask workspace` and `xtask markers` gates only (§2, §4): the rule stands and its
+  reader confirms it.
 - **Amended:** 2026-10-31 — `LifecycleContext::on_unmount` hands a state its element's unmount; see
   [Amendment (2026-10-31)](#amendment-2026-10-31-a-state-hands-its-unmount-to-what-it-opens).
 - **Amended:** 2026-10-11 — the lifecycle example uses the single owner-local post-frame handle; geometry checks name the current trybuild suite.

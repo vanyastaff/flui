@@ -1,9 +1,0 @@
-accept ADR-0081
-reject ADR-9999
-reject ADR-081
-reject adr-0081
-reject W1-A5
-reject W2-P1
-reject ""
-reject ?
-reject ADR-0081 and more

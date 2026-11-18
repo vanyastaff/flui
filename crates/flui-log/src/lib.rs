@@ -12,8 +12,7 @@
 //! depend on `tracing` and nothing else — they emit events and have no opinion
 //! about where those events go. Only a composition root (`flui-app`,
 //! `flui-cli`, the `flui` facade, an example application) depends on this
-//! crate, and `cargo xtask workspace` enforces that for every framework crate
-//! (the `allowed-dependents` list in this crate's manifest).
+//! crate; the `allowed-dependents` list in this crate's manifest names them.
 //!
 //! That split is the whole point. Replacing or removing the default backend
 //! must never touch an instrumentation call site.

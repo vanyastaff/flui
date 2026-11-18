@@ -27,7 +27,7 @@ events and CPU spans through `tracing`. It is off by default; devtools'
 
 ## What is not
 
-No `flui-app`, `flui-engine` or `wgpu` in its normal dependency graph, which
-`cargo xtask reach` checks. The facade neither depends on nor re-exports this
+No `flui-app`, `flui-engine` or `wgpu` in its normal dependency graph. The facade
+neither depends on nor re-exports this
 crate. See
 [ADR-0088](../../docs/adr/ADR-0088-official-packages-sdk-and-facade.md).

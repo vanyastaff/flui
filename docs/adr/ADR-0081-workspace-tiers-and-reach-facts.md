@@ -4,6 +4,9 @@
 - **Date:** 2026-09-25
 - **Superseded-by:** [ADR-0154](ADR-0154-capability-crates.md) for §3's list of kinds and §2's
   reach table only (the kinds gain `capability`; the reach table gains its row).
+  [ADR-0371](ADR-0371-before-the-first-release-no-xtask-gate-holds-a-rule-about-the-sources.md)
+  for the `xtask workspace`, `xtask reach` and `xtask module-dag` gates only (§1, §2, §5,
+  Confirmation): the rule stands and its reader confirms it.
 - **Revised:** 2026-10-11 — current manifest inventory and testing/runtime order are distinguished from the original tier-migration evidence; qualified acceptance remains unchanged.
 - **Amended-by:** [ADR-0098](ADR-0098-owned-f64-geometry-values.md) (§8) — `flui-geometry` and
   `flui-types` are deleted; the V tier's values live in `flui-foundation` and their owners

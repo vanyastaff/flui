@@ -826,9 +826,9 @@ pub(crate) struct ChecksArgs {
 /// `cargo xtask checks`: run the source checks that need no workspace build (the CI `checks` job).
 ///
 /// `cargo fmt --check`, typos, taplo, and this crate's own checks in-process:
-/// `docs-links` (lychee), `docs-paths`, `workspace` (its self-test, then the workspace),
-/// `toolchain`, `wgsl` (its self-test, then the shaders), `paths-filter` and
-/// `font-assets --package-list`. All of them run; exit 1 if any failed.
+/// `docs-links` (lychee), `toolchain`, `unmounted-tests`, `adr-numbers`, `paths-filter`,
+/// `changelog --check` and the generated files against their sources
+/// (`font-assets --package-list` and the rest). All of them run; exit 1 if any failed.
 pub(crate) fn checks(args: &ChecksArgs) -> anyhow::Result<ExitCode> {
     done(checks::run(args.run.runner(), args.strict))
 }

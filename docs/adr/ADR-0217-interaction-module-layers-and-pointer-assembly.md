@@ -2,6 +2,9 @@
 
 - **Status:** Accepted (2026-10-13)
 - **Date:** 2026-10-13
+- **Superseded-by:** [ADR-0371](ADR-0371-before-the-first-release-no-xtask-gate-holds-a-rule-about-the-sources.md)
+  for the `xtask module-dag` gate only (Decision, Consequences): the rule stands and its reader
+  confirms it.
 - **Amended:** 2026-10-19 — the layer table follows the implemented manifest: DnD sessions are
   the `drag` module beside `gesture`, and `haptics` is layer 5, below `__runtime` and `testing`.
 - **Amended-by:** [ADR-0286](ADR-0286-window-chrome-regions-answer-the-system-hit-test.md): §5's chrome kinds, paint-order resolution and per-kind availability.

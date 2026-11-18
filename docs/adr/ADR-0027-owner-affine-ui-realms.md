@@ -13,6 +13,9 @@
   §4's former shutdown-completion and frame-telemetry rows, §5's raster protocol and §7 steps 3 and 4: a
   slot of the one raster executor settles each frame.
 - **Date:** 2026-07-11
+- **Superseded-by:** [ADR-0371](ADR-0371-before-the-first-release-no-xtask-gate-holds-a-rule-about-the-sources.md)
+  for the `xtask globals` gate only (the header's summary of ADR-0097): the rule stands and its
+  reader confirms it.
 - **Revised:** 2026-11-03 — the title no longer calls FLUI a multi-threaded runtime: one owner
   thread hosts every UI runtime (ADR-0266), and the parallelism is outside the UI transaction.
 - **Revised:** 2026-10-30 — §9 matches the code after the `!Send` flip: the view, render and

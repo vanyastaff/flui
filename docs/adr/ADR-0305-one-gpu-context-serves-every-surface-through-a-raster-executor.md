@@ -20,6 +20,9 @@
     frame-telemetry rows, §5's raster protocol and §7 steps 3 and 4 only (acknowledgements on a
     lossy telemetry lane, a one-shot shutdown completion, a raster owner per presentation): a slot
     of the one executor settles each frame with a verdict.
+- **Superseded-by:** [ADR-0371](ADR-0371-before-the-first-release-no-xtask-gate-holds-a-rule-about-the-sources.md)
+  for the `xtask globals` and `xtask send-impls` gates only (Confirmation): the rule stands and its
+  reader confirms it.
 - **Amends:** [ADR-0091](ADR-0091-one-owner-thread-isolated-realms-raster-thread.md) §3, §4 and §7
   (their shape: the executor owns the context, and a slot per presentation holds what §4 calls
   its raster owner state and §7's external textures);
