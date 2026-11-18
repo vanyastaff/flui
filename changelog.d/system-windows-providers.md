@@ -15,6 +15,11 @@
 
 ### Changed
 
+- On Windows, opening a file whose link leads to a network share, or a file on a mapped network
+  drive, is refused with `LaunchError::NotLocal`; revealing or trashing it is not.
+- A global shortcut registration a runtime cannot number any more answers
+  `ShortcutError::Exhausted`.
+
 - A file dialog's title or accept label that is longer than `dialog::MAX_TEXT_LEN` or holds a
   control character is refused with `MalformedRequest::Text` on every host, before anything is
   shown: Windows would have cut it at a NUL and the desktop portal refused it.

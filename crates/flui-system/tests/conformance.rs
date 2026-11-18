@@ -8,6 +8,14 @@
 //! provide yet answers a lasting refusal, which the row records and skips;
 //! a row that would show a dialog or launch something is not here, and its
 //! run on a desktop is owed in the parity source.
+//!
+//! What the table proves of the platform's providers is narrow: its windows
+//! are headless, with no native handle, and its requests are refused at the
+//! seam, so beyond acquisition no request reaches a provider's OS code. The
+//! one exception reads the system's name and the user's home folder, which
+//! changes nothing. Each Windows provider's own behaviour is tested beside
+//! it, behind its OS seam, with the system's answers as inputs
+//! (`win32::*::tests`).
 
 use std::cell::RefCell;
 use std::rc::Rc;

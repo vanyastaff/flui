@@ -5512,7 +5512,23 @@ GPU-память простаивающего или невидимого окн
   и `a_press_runs_the_listener_at_the_next_turn_until_the_registration_drops`; с ответом
   отменённого диалога — `a_dropped_hold_closes_the_dialog_on_its_thread_and_drops_its_answer`;
   с судом по данному пути вместо итогового —
-  `an_open_judges_the_file_the_handle_holds_not_the_path_it_was_given`. Не запускалось: ни один настоящий диалог, запуск, горячая
+  `an_open_judges_the_file_the_handle_holds_not_the_path_it_was_given`. После независимого
+  чтения: удержание файла читает данные и не разделяет удаление
+  (`a_held_file_cannot_be_renamed_until_it_is_let_go`, красный при открытии только атрибутов);
+  итоговое имя вне локального диска — `NotLocal`
+  (`a_link_on_a_local_drive_that_leads_off_it_is_refused_where_it_led`); стадия диалога уходит из
+  `Showing` на любом выходе, паника включена
+  (`a_dialog_whose_code_panics_ends_before_its_window_goes_and_a_later_drop_posts_nothing`); окно
+  держит один поток диалога, пока тот не вышел
+  (`a_window_takes_no_new_dialog_until_the_dismissed_one_has_left_its_thread`); id горячих клавиш
+  не переиспользуются, `ShortcutError::Exhausted`
+  (`a_press_queued_for_a_dropped_chord_never_reaches_the_chord_after_it`,
+  `a_runtime_that_numbered_every_hot_key_refuses_the_next_for_good`); каждая точка входа ОС —
+  через `owner::panic_boundary::os_entry`, `xtask panic-boundary` читает и `flui-system`; запрос
+  дольше `ShellThreads::ABANDON_AFTER` бросается со своим отказом
+  (`a_request_past_its_deadline_is_abandoned_its_caller_refused_and_its_place_reclaimed`); URI —
+  без класса схемы (выбор пользователя), однобуквенная схема отказывается. Каждый из этих тестов
+  красный с откатом своей правки. Не запускалось: ни один настоящий диалог, запуск, горячая
   клавиша, элемент автозапуска, изменение панели задач, jump list или share на рабочем столе —
   owed в заметках строк parity (System services, Dock menu/jump list); macOS, iOS, Android, wasm
   не компилировались здесь. Удаление `Platform::prompt_for_*`, `open_url`, `reveal_path`,

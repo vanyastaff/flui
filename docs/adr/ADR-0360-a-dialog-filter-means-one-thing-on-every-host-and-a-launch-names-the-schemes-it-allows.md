@@ -98,8 +98,15 @@ schemes (ADR-0307) are what it receives, not what it launches; a caller that lau
 the only prefixes admitted are a drive letter, plain or verbatim (`Prefix::Disk`,
 `Prefix::VerbatimDisk`); every other prefix (`UNC`, `VerbatimUNC`, `DeviceNS`, and `Verbatim`, which
 reaches a share through `\\?\GLOBALROOT\Device\Mup\…`) is refused. On every other system an
-absolute path has no prefix and is local. Locality is judged on the path as given, so a drive the
-user mapped stays theirs.
+absolute path has no prefix and is local. Locality is judged twice for an open: at the seam on the
+path as given, before any file system call, so a path naming a share never reaches the network; and
+by the backend on the final name of the handle it opened, so a link on a local drive that leads to a
+share is refused (`NotLocal`) before anything is handed on. A drive the user mapped to a share
+resolves to the share (`\\?\UNC\…`), so it is refused for an open; revealing or trashing a file there
+is judged on the path as given. Judging the final name comes after the open, which has already
+reached a share a link led to: refusing before that connection would mean resolving every component
+of the path, links and junctions in any of its folders included, as the system does, which no
+backend does.
 
 `open_path` refuses a name that runs when opened (`NotADocument`). The seam decides from the path
 alone and touches no file system on the owner thread: the last component ends in one of
