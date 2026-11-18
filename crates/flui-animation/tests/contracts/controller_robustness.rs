@@ -5,6 +5,7 @@
 //!
 //! The contract rows run in the ordinary suite.
 
+use flui_animation::__runtime::VsyncDriver;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -389,21 +390,21 @@ fn disposed_controller_drops_a_late_value_listener() {
 
 // --- frame time edges ------------------------------------------------------------------
 
-fn registered_run() -> (Vsync, DrivenController) {
-    let vsync = Vsync::new();
-    let owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&vsync));
+fn registered_run() -> (VsyncDriver, DrivenController) {
+    let driver = VsyncDriver::new();
+    let owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(driver.vsync()));
     let _run = owner.controller().forward().expect("run starts");
-    (vsync, owner)
+    (driver, owner)
 }
 
 fn finite_clock_time_anchors_a_run() {
-    let (vsync, owner) = registered_run();
+    let (driver, owner) = registered_run();
     let controller = owner.controller();
     assert!(controller.value().is_finite());
-    vsync.tick_all(
+    driver.tick_all(
         &flui_animation::MotionClock::new().frame(std::time::Duration::from_secs_f64(0.0)),
     );
-    vsync.tick_all(
+    driver.tick_all(
         &flui_animation::MotionClock::new().frame(std::time::Duration::from_secs_f64(0.5)),
     );
     assert_eq!(
@@ -411,7 +412,7 @@ fn finite_clock_time_anchors_a_run() {
         0.5,
         "the run is anchored at the first finite frame"
     );
-    vsync.tick_all(
+    driver.tick_all(
         &flui_animation::MotionClock::new().frame(std::time::Duration::from_secs_f64(1.0)),
     );
     assert_eq!(
@@ -422,12 +423,12 @@ fn finite_clock_time_anchors_a_run() {
 }
 
 fn backwards_frame_time_resumes_the_run() {
-    let (vsync, owner) = registered_run();
+    let (driver, owner) = registered_run();
     let controller = owner.controller();
-    vsync.tick_all(
+    driver.tick_all(
         &flui_animation::MotionClock::new().frame(std::time::Duration::from_secs_f64(10.0)),
     );
-    vsync.tick_all(
+    driver.tick_all(
         &flui_animation::MotionClock::new().frame(std::time::Duration::from_secs_f64(9.0)),
     );
     assert_eq!(
@@ -435,18 +436,18 @@ fn backwards_frame_time_resumes_the_run() {
         0.0,
         "time before the anchor samples the run's start"
     );
-    vsync.tick_all(
+    driver.tick_all(
         &flui_animation::MotionClock::new().frame(std::time::Duration::from_secs_f64(10.5)),
     );
     assert_eq!(controller.value(), 0.5);
-    vsync.tick_all(
+    driver.tick_all(
         &flui_animation::MotionClock::new().frame(std::time::Duration::from_secs_f64(11.0)),
     );
     assert_eq!(controller.status(), AnimationStatus::ForwardSettled);
 }
 
 fn repeated_frame_time_announces_completion_once() {
-    let (vsync, owner) = registered_run();
+    let (driver, owner) = registered_run();
     let controller = owner.controller();
     let statuses = Arc::new(Mutex::new(Vec::new()));
     let sink = Arc::clone(&statuses);
@@ -455,16 +456,16 @@ fn repeated_frame_time_announces_completion_once() {
             sink.lock().expect("status log").push(status);
         }))
         .forget();
-    vsync.tick_all(
+    driver.tick_all(
         &flui_animation::MotionClock::new().frame(std::time::Duration::from_secs_f64(0.0)),
     );
-    vsync.tick_all(
+    driver.tick_all(
         &flui_animation::MotionClock::new().frame(std::time::Duration::from_secs_f64(1.0)),
     );
-    vsync.tick_all(
+    driver.tick_all(
         &flui_animation::MotionClock::new().frame(std::time::Duration::from_secs_f64(1.0)),
     );
-    vsync.tick_all(
+    driver.tick_all(
         &flui_animation::MotionClock::new().frame(std::time::Duration::from_secs_f64(2.0)),
     );
     assert_eq!(
@@ -479,7 +480,8 @@ fn explicit_finish_completes_the_original_finite_run() {
 
     for (target, reverse) in [(1.0, false), (0.0, true), (0.25, false), (0.75, true)] {
         for paused in [false, true] {
-            let registry = Vsync::new();
+            let driver = VsyncDriver::new();
+            let registry = driver.vsync().clone();
             let owner = AnimationController::builder(Duration::from_secs(1))
                 .initial_value(0.4)
                 .build_on(Some(&registry));
@@ -491,8 +493,8 @@ fn explicit_finish_completes_the_original_finite_run() {
             }
             .expect("finite admitted run");
             let mut clock = MotionClock::new();
-            registry.tick_all(&clock.frame(Duration::ZERO));
-            registry.tick_all(&clock.frame(Duration::from_millis(400)));
+            driver.tick_all(&clock.frame(Duration::ZERO));
+            driver.tick_all(&clock.frame(Duration::from_millis(400)));
             assert_ne!(
                 controller.value(),
                 target,
@@ -547,7 +549,7 @@ fn explicit_finish_completes_the_original_finite_run() {
             assert_eq!(*events.borrow(), ["value", "status", "outcome"]);
             assert!(!registry.has_running());
             controller.finish().expect("idle finish is silent");
-            registry.tick_all(&clock.frame(Duration::from_secs(2)));
+            driver.tick_all(&clock.frame(Duration::from_secs(2)));
             assert_eq!(*events.borrow(), ["value", "status", "outcome"]);
             drop(status_listener);
             drop(subscription);
@@ -669,20 +671,21 @@ fn explicit_finish_reaches_native_physical_endpoints() {
 
 fn explicit_finish_distinguishes_parked_owned_work_and_disposal() {
     use flui_animation::{AnimationError, MotionClock, MotionOverride};
-    let registry = Vsync::new();
+    let driver = VsyncDriver::new();
+    let registry = driver.vsync().clone();
     let mut owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&registry));
     let controller = owner.controller().clone();
     let run = controller.repeat(RepeatMode::Alternate).unwrap();
     let mut clock = MotionClock::new();
     clock.set_override(MotionOverride::Reduce);
-    registry.tick_all(&clock.frame(Duration::ZERO));
+    driver.tick_all(&clock.frame(Duration::ZERO));
     assert!(run.is_pending());
     assert!(!registry.has_running(), "parked work requests no frames");
     assert_eq!(controller.finish(), Err(AnimationError::NoFiniteEndpoint));
     assert!(run.is_pending());
     clock.set_override(MotionOverride::Full);
-    registry.tick_all(&clock.frame(Duration::from_millis(500)));
-    registry.tick_all(&clock.frame(Duration::from_secs(1)));
+    driver.tick_all(&clock.frame(Duration::from_millis(500)));
+    driver.tick_all(&clock.frame(Duration::from_secs(1)));
     assert!(controller.value() > 0.0, "refused parked work can resume");
     owner.dispose();
     assert!(run.is_canceled());

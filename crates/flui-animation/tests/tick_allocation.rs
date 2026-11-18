@@ -12,6 +12,7 @@
 //! add allocations to another case's measured window. The retirement case has
 //! no active run or user callbacks; admission remains outside its window.
 
+use flui_animation::__runtime::VsyncDriver;
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 use std::hint::black_box;
@@ -140,7 +141,8 @@ fn retiring_idle_registry_owners_allocates_nothing() {
 ///    pass claim 1. It runs after the measured loop, so it cannot taint it.
 #[test]
 fn a_steady_state_frame_allocates_nothing() {
-    let vsync = Vsync::new();
+    let vsync_driver = VsyncDriver::new();
+    let vsync = vsync_driver.vsync().clone();
     let owner = AnimationController::builder(NEVER_ENDING).build_on(Some(&vsync));
     let controller = owner.controller();
     // Four listeners held for the whole measured frame, as the id form's
@@ -252,7 +254,7 @@ fn a_steady_state_frame_allocates_nothing() {
     let mut now = 0.0_f64;
     let mut clock = MotionClock::new();
     for _ in 0..16 {
-        vsync.tick_all(&clock.frame(Duration::from_secs_f64(now)));
+        vsync_driver.tick_all(&clock.frame(Duration::from_secs_f64(now)));
         now += FRAME;
     }
 
@@ -273,7 +275,7 @@ fn a_steady_state_frame_allocates_nothing() {
         let calls_before = read(&ALLOC_COUNT);
         let bytes_before = read(&ALLOC_BYTES);
 
-        vsync.tick_all(&clock.frame(Duration::from_secs_f64(now)));
+        vsync_driver.tick_all(&clock.frame(Duration::from_secs_f64(now)));
         now += FRAME;
 
         black_box(stream.value());
@@ -348,7 +350,8 @@ fn a_steady_state_frame_allocates_nothing() {
     // channel has only one listener, so this measures relay depth rather than
     // a listener snapshot exceeding its inline capacity.
     for depth in [1, 5, 32] {
-        let vsync = Vsync::new();
+        let vsync_driver = VsyncDriver::new();
+        let vsync = vsync_driver.vsync().clone();
         let owner = AnimationController::builder(NEVER_ENDING).build_on(Some(&vsync));
         let controller = owner.controller();
         let mut leaf: std::rc::Rc<dyn Animation<f64>> = std::rc::Rc::new(controller.clone());
@@ -362,7 +365,7 @@ fn a_steady_state_frame_allocates_nothing() {
         let mut clock = flui_animation::MotionClock::new();
         let mut now = 0.0;
         for _ in 0..16 {
-            vsync.tick_all(&clock.frame(Duration::from_secs_f64(now)));
+            vsync_driver.tick_all(&clock.frame(Duration::from_secs_f64(now)));
             now += FRAME;
         }
         let start_value = leaf.value();
@@ -370,7 +373,7 @@ fn a_steady_state_frame_allocates_nothing() {
         let calls_before = read(&ALLOC_COUNT);
         let bytes_before = read(&ALLOC_BYTES);
         for _ in 0..FRAMES {
-            vsync.tick_all(&clock.frame(Duration::from_secs_f64(now)));
+            vsync_driver.tick_all(&clock.frame(Duration::from_secs_f64(now)));
             now += FRAME;
         }
         let calls = read(&ALLOC_COUNT) - calls_before;
@@ -385,7 +388,8 @@ fn a_steady_state_frame_allocates_nothing() {
 
     // Real subtree registries must have the same steady-state contract as a
     // flat registry. Keep both seats alive: otherwise this prices detached work.
-    let root = Vsync::new();
+    let root_driver = VsyncDriver::new();
+    let root = root_driver.vsync().clone();
     let child = Vsync::new();
     let grandchild = Vsync::new();
     let _child_seat = root.attach_child(&child).expect("fresh child registry");
@@ -401,7 +405,7 @@ fn a_steady_state_frame_allocates_nothing() {
     let mut clock = MotionClock::new();
     let mut now = 0.0;
     for _ in 0..16 {
-        root.tick_all(&clock.frame(Duration::from_secs_f64(now)));
+        root_driver.tick_all(&clock.frame(Duration::from_secs_f64(now)));
         assert!(root.has_running());
         now += FRAME;
     }
@@ -410,7 +414,7 @@ fn a_steady_state_frame_allocates_nothing() {
     let calls_before = read(&ALLOC_COUNT);
     let bytes_before = read(&ALLOC_BYTES);
     for _ in 0..FRAMES {
-        root.tick_all(&clock.frame(Duration::from_secs_f64(now)));
+        root_driver.tick_all(&clock.frame(Duration::from_secs_f64(now)));
         black_box(root.has_running());
         now += FRAME;
     }

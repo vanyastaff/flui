@@ -46,8 +46,7 @@ mod measured {
         MotionSpec as _, MotionUpdate as _, PlaybackRate as _, RangeDefect as _, RepeatMode as _,
         RunCanceled as _, SharedCurve as _, Stagger as _, StaggerOrigin as _, Steps as _,
         Tween as _, TwoWayConverter as _, ValueRange as _, Vsync as _, VsyncPublication as _,
-        VsyncRegistration as _, VsyncRegistrationError as _, VsyncRetirement as _,
-        VsyncUpdate as _, curves as _,
+        VsyncRegistration as _, VsyncRegistrationError as _, VsyncUpdate as _, curves as _,
     };
     // The spring a loading indicator's morph follows.
     use flui_sdk::animation::{
@@ -495,6 +494,7 @@ fn declared_surface() -> Vec<&'static str> {
 #[test]
 fn the_public_surface_is_the_measured_list() {
     let pinned = [
+        "pub mod animation {",
         "pub mod capability {",
         "pub mod drag {",
         "pub mod haptics {",
@@ -508,7 +508,7 @@ fn the_public_surface_is_the_measured_list() {
         "pub mod rendering {",
         "pub mod text_input {",
         "pub mod view {",
-        "pub use flui_animation as animation;",
+        "pub use flui_animation::*;",
         "pub use flui_foundation as foundation;",
         "pub use flui_foundation::TextDirection;",
         "pub use flui_foundation::geometry;",

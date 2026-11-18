@@ -9,6 +9,7 @@
 //! retargets its controller in `did_update_view`); `pump_for(dt)` then advances
 //! the controller frame-by-frame.
 
+use flui_animation::__runtime::VsyncDriver;
 use flui_view::LifecycleContext;
 use std::sync::Arc;
 use std::time::Duration;
@@ -532,7 +533,8 @@ fn assert_registry_migration_survives_a_wake_failure<V: flui_view::View>(
     use std::rc::Rc;
     let outer = Vsync::new();
     let old = Vsync::new();
-    let next = Vsync::new();
+    let driver = VsyncDriver::new();
+    let next = driver.vsync().clone();
     outer.attach_child(&old).unwrap();
     outer.attach_child(&next).unwrap();
     let mut laid = lay_out_animated(tree(old.clone(), false), loose(300.0), outer);
@@ -542,7 +544,7 @@ fn assert_registry_migration_survives_a_wake_failure<V: flui_view::View>(
     assert!(old.has_running());
     let woke = Rc::new(Cell::new(false));
     let migrated = Rc::new(Cell::new(false));
-    next.set_frame_requester(Some(Rc::new({
+    driver.set_frame_requester(Some(Rc::new({
         let woke = Rc::clone(&woke);
         let migrated = Rc::clone(&migrated);
         let old = old.clone();
@@ -569,7 +571,7 @@ fn assert_registry_migration_survives_a_wake_failure<V: flui_view::View>(
         migrated.get(),
         "all properties must leave the old registry before the wake callback"
     );
-    next.set_frame_requester(None);
+    driver.set_frame_requester(None);
     laid.pump_widget(SizedBox::shrink());
     laid.pump_widget(tree(next.clone(), false));
     laid.pump_widget(tree(next.clone(), true));
@@ -1144,7 +1146,8 @@ fn exercise_switching_registry(fail_wake: bool) {
     use flui_widgets::{AnimatedSwitcher, ColoredBox};
 
     let old = Vsync::new();
-    let next = Vsync::new();
+    let driver = VsyncDriver::new();
+    let next = driver.vsync().clone();
     let tree = |registry, replacement| {
         let child = if replacement {
             ColoredBox::new(Color::rgb(10, 20, 30)).boxed()
@@ -1166,7 +1169,7 @@ fn exercise_switching_registry(fail_wake: bool) {
     let woke = std::rc::Rc::new(std::cell::Cell::new(false));
     let committed = std::rc::Rc::new(std::cell::Cell::new(true));
     if fail_wake {
-        next.set_frame_requester(Some(std::rc::Rc::new({
+        driver.set_frame_requester(Some(std::rc::Rc::new({
             let (woke, committed, old) = (woke.clone(), committed.clone(), old.clone());
             move || {
                 woke.set(true);
@@ -1185,7 +1188,7 @@ fn exercise_switching_registry(fail_wake: bool) {
             Some("switcher migration wake failed")
         );
     }
-    next.set_frame_requester(None);
+    driver.set_frame_requester(None);
     assert!(old.is_empty(), "incoming and outgoing owners both migrate");
     if fail_wake {
         assert!(woke.get(), "migration reaches the failing hook");
@@ -1243,9 +1246,10 @@ fn exercise_switching_registry(fail_wake: bool) {
 
 pub(crate) fn a_detached_ticker_mode_lands_an_implicit_run() {
     for closed_parent in [false, true] {
-        let parent = Vsync::new();
+        let driver = VsyncDriver::new();
+        let parent = driver.vsync().clone();
         if closed_parent {
-            parent.prepare_close().finish();
+            driver.prepare_close().finish();
         }
         let tree = |target| {
             let mode = flui_widgets::TickerMode::new(
