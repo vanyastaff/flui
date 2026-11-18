@@ -6230,7 +6230,12 @@ keyboard composed, committed, passed Escape on while composing and sent its acti
 
 `Platform::data_store` answers where an application keeps its data, so the host
 asks the running backend instead of guessing from the target. The default is
-`storage::data_dirs` (the `dirs` crate). Android overrides it, because `dirs`
+`storage::data_dirs` (the `dirs` crate), in the process's container when it
+runs in one (`storage::container`, read from the environment and the package
+identity, no file system call): a Flatpak's `~/.var/app/<id>/data` even without
+`XDG_DATA_HOME`, the macOS App Sandbox's container even without `HOME`, a
+packaged Windows application's `LocalState` and `RoamingState` instead of the
+`%APPDATA%` copy Windows would redirect it to (ADR-0380 §4). Android overrides it, because `dirs`
 has no root there: data under `internal_data_path()`, which Auto Backup copies,
 and machine-local values under its sibling `no_backup`, which Android never
 backs up. Headless never touches the user's directories: it answers with a

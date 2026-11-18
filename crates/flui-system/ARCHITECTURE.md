@@ -20,6 +20,7 @@ states the rules the code keeps.
 | Global shortcuts | `GlobalShortcuts` | `ShortcutBackend` | a `ShortcutBinding`'s events |
 | Launcher entry | `TaskbarEntry` | `TaskbarBackend` | none: the whole state is sent |
 | User folders | `UserDirs` | `UserDirBackend` | `Completion` |
+| Grants | `Grants` | `GrantBackend` | `Completion` |
 | Jump list | `JumpList` | `JumpListBackend` | `Completion` |
 | The OS | `Os` | `OsBackend` | a value |
 
@@ -458,6 +459,9 @@ container's, and the folders a container does not hold none. The system's name i
   `application://<id>.desktop`; an application with no id has none (`NotDeclared`). One task per
   UI runtime sends it, taking the newest state each time it is free, so a burst of changes ends
   on the last one.
+- A user folder is the one `user-dirs.dirs` names, answered only when it is there for the process:
+  a Flatpak sees the user's folders only as its manifest exposes them, which nothing but the file
+  system shows, and the layer names no folder the process cannot open.
 - The system information has no Linux provider yet and answers `NotYetOnThisHost`.
 
 ## Android (`android`)
@@ -631,8 +635,7 @@ public share. **The system information** is the system properties' release and A
   file it wrote. Once the user has chosen, the write completes even if the caller let the dialog
   go, on every host. A save without contents answers where to save, and on the web, iOS and
   Android, which have no path to answer, is refused with `NotOnThisPlatform`. Access to a pick
-  that outlasts the process (a security-scoped bookmark on macOS and iOS, a persisted URI grant on
-  Android) is not built: [`docs/gaps.md`](../../docs/gaps.md).
+  that outlasts the process is a grant (below).
 - The contents replace the chosen file whole or not at all: they go into a new file beside it,
   synced, which takes its name, so a failed write leaves the chosen file as it was. A chosen link
   is written through: the new file is made beside the file the link leads to and takes that
@@ -652,6 +655,36 @@ public share. **The system information** is the system properties' release and A
   of room, a read-only file, a file another process holds open without letting it be replaced (on
   Windows, open without `FILE_SHARE_DELETE`), where writing into it would empty a file someone
   else is using.
+
+## Grants (`grant`, `sandbox`)
+
+The decision is [ADR-0380](../../docs/adr/ADR-0380-a-pick-carries-a-grant-that-outlasts-the-process-and-no-reacquired-path-is-one-the-sandbox-keeps-closed.md);
+what is not built is in [`docs/gaps.md`](../../docs/gaps.md#sandbox-aware-file-access-is-partial).
+
+- An open that `keep_access` hands each pick over with a `Grant`, the system's lasting access
+  in its own form, tagged by its `GrantKind` and written as bytes behind a versioned header. A
+  pick the system grants nothing lasting for carries none; a web pick never does.
+- `Grants` is not bound to a window: an application reopens its last document before any window
+  shows. `resolve` refuses a grant of another kind than its backend's (`Foreign`) without asking
+  it, and holds every answer to the process's `Sandbox`: a path the sandbox does not reach and no
+  started `AccessScope` holds open is `Revoked`, contents past the request's bound `TooLarge`, a
+  folder of files, a download or a fresher grant of another kind `MalformedAnswer`.
+- The sandbox is read from the environment the system sets for a sandboxed process (the App
+  Sandbox's `APP_SANDBOX_CONTAINER_ID` and its container's `HOME` and `TMPDIR`, iOS's container,
+  `FLATPAK_ID`), never from the file system; Android's reaches no path, since every pick and
+  reacquired document there is its contents.
+- Per host: macOS makes a security-scoped bookmark of each pick on the work queue once the panel
+  answered (a queue with no place answers the picks without grants) and resolves it there with
+  its scope, which the `Access` stops when it drops, a stale one made again while the access is
+  held; iOS makes a minimal bookmark under the picker's access as the document is read; Android
+  persists each pick's read permission once every pick was read, and reacquires the document on a
+  worker as its contents, refused `Revoked` once the permission is no longer held; Linux and
+  Windows keep the path and ask the file system on the portal's pool or a shell thread, a file
+  gone from the document portal's folder answering `Revoked`, one gone elsewhere `Missing`. The
+  web refuses the capability (`NotYetOnThisHost`).
+- The scripted double (`testing::ScriptedGrants`) resolves from a `GrantStore` that outlives the
+  providers, as a system's permission store outlives the process, in the `Sandbox` the test set:
+  a restart is a new host over the same store.
 
 ## The web providers (`web`)
 
@@ -761,7 +794,8 @@ public share. **The system information** is the system properties' release and A
   against `SystemPlugin` on the host it runs on (the Windows shell, AppKit or the Linux portal),
   asking nothing a user answers. Against the platform's providers it proves acquisition, the seam's
   refusals and the launcher entry's shared state only (its windows are headless), and the system's
-  name and home folder.
+  name and home folder. `tests/grants.rs` runs the grants on a simulated sandbox: the layer's rule,
+  a restart over the same `GrantStore`, a revoked, deleted, stale and foreign grant.
 - `win32::*::tests`: each Windows provider at its OS seam, with the test owner
   (`testing::owner`) and the stand-ins of the crate's kit (`testing::win32`, test builds on
   Windows only); `win32::modal::tests` and

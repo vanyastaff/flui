@@ -42,6 +42,12 @@
 //! where the process may not show one (an App Sandbox without the
 //! user-selected-file entitlement, the panel service failing): the request
 //! then answers `Unavailable`.
+//!
+//! An open that keeps access answers once each pick carries a
+//! security-scoped bookmark (`apple::bookmark`), made on the work queue
+//! since it reads the file system: an App Sandbox's access to a pick lasts
+//! for the process alone. A queue with no place, or a pick Foundation makes
+//! no bookmark of, is answered without one.
 
 use std::path::{Path, PathBuf};
 
