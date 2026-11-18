@@ -20,8 +20,8 @@ pub(crate) mod sample {
 
     use flui_foundation::geometry::{Bounds, DevicePixelRatio, Point, Size};
     use flui_platform::{
-        Availability, CapabilityAbsence, DisplayColor, DisplayId, DisplayInfo, FrameRateHint,
-        Headroom, RefreshPeriod,
+        Availability, CapabilityAbsence, DisplayColor, DisplayDescription, DisplayId,
+        FrameRateHint, Headroom, RefreshPeriod,
     };
 
     use crate::display::scale::{RefusedScale, ScaleStreaks};
@@ -129,12 +129,15 @@ pub(crate) mod sample {
         /// The snapshot entry for this display under `id` at `scale`; `None`
         /// for a display that reports no size, which nothing could be laid out
         /// on.
-        pub(crate) fn info(&self, id: DisplayId, scale: DevicePixelRatio) -> Option<DisplayInfo> {
-            if self.width <= 0 || self.height <= 0 {
-                return None;
-            }
+        pub(crate) fn info(
+            &self,
+            id: DisplayId,
+            scale: DevicePixelRatio,
+        ) -> Option<DisplayDescription> {
             let bounds = Bounds::new(Point::new(0, 0), Size::new(self.width, self.height));
-            let mut info = DisplayInfo::new(id, &self.name, bounds, scale)
+            // A display that reports no size has no logical extent either.
+            let mut info = DisplayDescription::from_device(id, &self.name, bounds, bounds, scale)
+                .ok()?
                 .with_primary(self.display_id == Self::DEFAULT_DISPLAY_ID)
                 .with_color(display_color(self.color));
             info.refresh_period = RefreshPeriod::from_hz(f64::from(self.refresh_hz)).ok();
@@ -152,7 +155,7 @@ pub(crate) mod sample {
         displays: &'a [RawDisplay],
         mut mint: impl FnMut(i32) -> Option<DisplayId>,
         streaks: &mut ScaleStreaks<DisplayId>,
-    ) -> (Vec<(&'a RawDisplay, DisplayInfo)>, Vec<RefusedScale>) {
+    ) -> (Vec<(&'a RawDisplay, DisplayDescription)>, Vec<RefusedScale>) {
         let mut listed = Vec::with_capacity(displays.len());
         let mut read = Vec::with_capacity(displays.len());
         let mut refusals = Vec::new();
@@ -319,7 +322,10 @@ pub(crate) mod sample {
                 "420 dpi is 2.625 logical pixels"
             );
             assert!(info.is_primary, "display 0 is the built-in screen");
-            assert_eq!(info.bounds.size, Size::new(1080, 2400));
+            assert_eq!(
+                info.bounds.extent(),
+                Size::new(1080.0 / 2.625, 2400.0 / 2.625)
+            );
             assert_eq!(
                 info.refresh_period.map(|period| period.get().as_micros()),
                 Some(8_333)
@@ -385,7 +391,7 @@ pub(crate) mod sample {
             let info = failed
                 .info(id, DevicePixelRatio::ONE)
                 .expect("the display is still listed");
-            assert_eq!(info.bounds.size, Size::new(1920, 1080));
+            assert_eq!(info.bounds.extent(), Size::new(1920.0, 1080.0));
             assert_eq!(info.color, Err(CapabilityAbsence::NOT_ON_THIS_DEVICE));
             let reported = RawDisplay {
                 color: Ok(report(true, false, None)),
@@ -911,8 +917,8 @@ pub(crate) mod source {
                     revision = snapshot.revision().get(),
                     id = $info.id.get(),
                     name.public = %$info.name,
-                    width = $info.bounds.size.width,
-                    height = $info.bounds.size.height,
+                    width = $info.bounds.extent().width,
+                    height = $info.bounds.extent().height,
                     scale_factor = $info.scale_factor.get(),
                     refresh_period_us = $refresh_period_us,
                     primary = $info.is_primary,

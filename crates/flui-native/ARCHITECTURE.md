@@ -1394,7 +1394,14 @@ trait depends on `flui-platform` instead.
   deadline that came due is offered to the windows as frame requests once and
   armed again only after a frame ran (`owner::wake_deadline::WakeDeadline`,
   the X11 and Win32 loops' rule), so a window that declines its frames, or one
-  the compositor does not draw, leaves the loop idle; a loop that no longer
+  the compositor does not draw, leaves the loop idle. The loop wakes for a
+  wake deadline no sooner than a window can take a frame (`wait::FrameHold`,
+  `wait::deadline_wake`): not before a frame callback out is answered or given
+  up, and not by time while the compositor alone can release every window
+  (unconfigured or suspended), so a deadline that moves on each answer polls
+  no window
+  (`wayland_scripted::a_moving_wake_deadline_polls_no_window_the_compositor_never_draws`);
+  a loop that no longer
   accepts work asks for no deadline. A turn whose dispatch recorded events
   ends before it would block, so they are applied first, and a flush the socket cut short makes the
   wait watch the socket for writing (`wait::before_poll`). A frame callback a
@@ -1457,13 +1464,14 @@ trait depends on `flui-platform` instead.
   deadline of the loop's wait, never a poll, and the first `done` ends the
   backoff; a `done` releases the callback out only when it answers that
   callback or a later one, and an older one gives it the first grace
-  (`frame::Callbacks`, by ticket). Where the compositor offers `xdg-foreign` v2 the window is
-  exported as it opens, and the export lives until the window closes. Its
-  portal parent `wayland:<handle>` (`foreign::PortalParent`) is a
-  cross-platform fact (X11 names a window `x11:<XID>`), so it reaches the
-  capability crates through the contract's window reference, not through an
-  OS extension; until that reader exists the handle is kept and read under
-  `testing` only. The window tells its AT-SPI bridge each change of the
+  (`frame::Callbacks`, by ticket). Where the compositor offers `xdg-foreign` v2 the window
+  exports itself for each portal request that names it
+  (`PlatformWindow::portal_parent`, ADR-0365) and answers `wayland:<handle>` when the
+  compositor's `handle` event comes; the answer holds the `zxdg_exported_v2`, whose drop
+  destroys it and flushes the connection on whichever thread the request ended, so no handle
+  names the window between requests. The window's close destroys every export a request still
+  holds (`Exports::close`, before the role objects go), so none outlives its toplevel. A compositor with no exporter and a closed window answer no
+  window; an X11 window answers `x11:<XID>` at once. The window tells its AT-SPI bridge each change of the
   compositor's activation, which `UnixAccessibility::focus_changed` passes to
   the adapter (the X11 window already called it), and where its content is
   (`WindowAccessibility::bounds_changed`): the compositor tells a client
@@ -1766,8 +1774,8 @@ available; both SDK-tools packaging and generated Gradle configuration enforce i
 The owner accepts a reply only while its window remains live and the sampled
 physical size matches the current native window; a reply taken at an older size
 is asked for once more. The window asks on every resize, configuration change,
-new native window, `Resume` and inset change `FluiView` reports from
-`onApplyWindowInsets`; every 500 ms while resumed only until the view is in the
+new native window, `Start` and inset change `FluiView` reports from
+`onApplyWindowInsets`; every 500 ms while on screen only until the view is in the
 window. From API 30 the insets are the
 visible bars (`getInsets`), so hidden bars reserve no space; below it the stable
 insets are the only reading without keyboard occlusion. One query may be
@@ -2572,6 +2580,53 @@ native contract rows `refresh_is_the_rational_active_mode`,
 is not a CI row; it ran by hand (see
 `docs/platform-parity.md`). Unplugging a monitor on Windows was not run.
 
+### A window's position is a point of its display, converted through that display alone (ADR-0364)
+
+A `WindowPosition` names its display and is measured in that display's logical
+pixels from its corner, so a host converts it through the display it names and
+never through the window's own scale: the same position lands on the same
+pixel whichever display the window is on, and a position read back converts to
+the corner it was read from.
+
+- **Win32 and X11** lay their desktop out in device pixels, and share
+  `window::desktop::DisplayFrame`: the display's published `DesktopOrigin`
+  (device pixels there) and its scale. `to_desktop` is `origin + snap(at ×
+  scale)`, refused past the `i32` range; each host refuses past its own range
+  too (Win32's `DEVICE_COORDINATE_LIMIT`, X11's signed 16 bits), as
+  `PlatformFailure::OutOfRange`, never saturating. `position` is `(pixel −
+  origin) / scale`, in which a difference of two `i32`s is exact.
+  `display_of_rect` names the display holding the largest part of a device
+  rectangle, the first of equals, else the nearest (Win32's
+  `MonitorFromRect(MONITOR_DEFAULTTONEAREST)`), in 128-bit area and distance.
+  A Win32 window's outer position is measured on its `MonitorFromWindow`
+  display; the rectangle a maximized, minimized or full-screen window returns
+  to is measured on the display holding most of it, which need not be the
+  window's. An X11 window's display is `display_of_rect` of its outer
+  rectangle.
+- **Both read the published snapshot** (`HostDisplays::published`, which never
+  samples) while they report a window and when they apply `SetPosition`, so a
+  position an application read converts back with the same numbers. A
+  position whose display the snapshot no longer holds is refused with
+  `ApplyError::DisplayGone` before any call; an opening at one is placed by
+  the window system.
+- **AppKit** measures in points, its screens' logical pixels, and adds or
+  takes away the screen's corner (the AppKit section above).
+- **The headless host** keeps a window's position on its display and lays its
+  displays left to right in device pixels, so `window_at` and the
+  accessibility bridge read a window's place on that desktop through its
+  display's origin and scale. Maximize fills the display's usable area,
+  fullscreen the whole display.
+
+Rows: `a_position_converts_through_its_own_display`,
+`a_window_spanning_two_displays_has_one_pixel_and_two_names`,
+`a_rectangle_is_on_the_display_holding_most_of_it` (pure), `open_geometry`
+(Win32 opening), `a_position_set_on_a_normal_window_moves_it`, which checks the
+corner against `GetMonitorInfoW` and `GetDpiForMonitor`, and
+`a_position_on_a_display_the_host_does_not_hold_is_refused` (real Win32
+windows), `open_plan_places_by_display_origin_and_scale` and
+`a_window_is_on_the_display_it_overlaps_most` (X11). Two monitors of
+different DPI are not a CI row; the parity source owes the run.
+
 ### Windows preferences have a window-independent owner lifetime
 
 `Platform::preferences` reads text scale, animation preference, high contrast,
@@ -2779,7 +2834,7 @@ observation began is read too, and unregisters when detached and in `detach`,
 which clears its handle first. A view that never reaches the window, or that the
 native side detaches because it could not keep it, leaves nothing that could call
 a freed handle. Until the view is in the window, or if it never gets there, the
-host reads every 500ms while resumed, so no change is lost. The long-press
+host reads every 500ms while the Activity is on screen, so no change is lost. The long-press
 timeout is read from its secure setting, since `ViewConfiguration`'s copy can
 still be old when the observer fires. A failed read owes a retry at its deadline,
 which bounds the loop's wait like the cadence does, so errors preserve the
@@ -3017,6 +3072,53 @@ file list, the locale), never forcing another owner's delayed rendering of
 anything else and never setting OLE's private formats again; a restore that
 fails is reported, never panicked on.
 
+### A host clears an expiring entry only while the system still shows it
+
+`NativeClipboard::clear_expired` clears the clipboard for an expiring write's
+entry (`ClipboardWrite::expires_after`) only while the clipboard still holds it
+(ADR-0363 §3); when to ask is the composition root's rule, not a host's. A
+clear is served in order with the writes, so one asked after a write is
+checked against what that write left (the X11 thread holds a clear behind a
+write that waits for its timestamp). When an expiring write lands the host
+records its entry with the system's token; any other write that lands forgets
+it; an entry whose token no longer matches is forgotten for good
+(`host::clipboard::ExpiringRecord`, the part Win32, AppKit, UIKit, Android and
+the in-memory clipboard share).
+
+- **Win32.** The token is the sequence number with the owner, read after the
+  write's session closed, since closing a session that changed the clipboard
+  moves the number once more; a clipboard the thread's window no longer owns by
+  then lost the entry, and nothing is recorded. The owner is read before the
+  number, so a copy landing between the two reads moves the number past any
+  stamp that could equal it. The clear reads the stamp and empties the
+  clipboard inside one session, which no other process can change.
+- **AppKit and UIKit.** The change count, which moves when the pasteboard
+  changes hands. The check and `clearContents` (`setItems:` on UIKit) are two
+  calls: a copy made between them is cleared too. UIKit also sets
+  `UIPasteboardOptionExpirationDate`, so the system removes the item at its time
+  after the process too.
+- **Android.** A writer mark (the process's random hash seed) and the entry's
+  number in the clip description's extras; the clear reads the description and
+  clears in a second binder call. Without input focus the system hands no
+  description: `ExpiredClear::Unseen`, which the composition root asks again when
+  the application is next in front (`ExpiryClearing::AtTimeOrInFront`).
+- **X11.** The window gives the selection up at the time it took it, which the
+  server ignores once another client took it later: one step of the server.
+- **Wayland.** The entry's source is destroyed; the compositor serves requests
+  in order, so a selection another client set first already cancelled it.
+- **The loop's end.** Win32 queues the clear and waits for it within the bound
+  it is given, since the window station's clipboard outlives the process;
+  AppKit, UIKit and Android clear at once; X11 and Wayland answer `NotHeld`,
+  since the selection ends with the connection the loop releases.
+
+Tests: `an_expiring_entry_is_cleared_only_under_its_stamp` and
+`an_expiring_entry_clears_only_while_the_clipboard_still_holds_it` (Win32, the
+second on the real clipboard, saved and put back),
+`an_expiring_entry_is_given_up_only_while_the_clipboard_still_holds_it` (X11),
+the expiring step of `wayland_clipboard`'s `the_selection_crosses_between_clients`,
+`an_expiring_entry_is_cleared_only_while_it_is_still_there` and
+`a_record_forgets_an_entry_its_token_no_longer_matches`.
+
 ### Win32 callbacks live in the window's owner-thread context
 
 `WindowsPlatform`, `WindowsLoop` and `WindowsWindow` are neither `Send` nor
@@ -3226,13 +3328,18 @@ after three seconds. AppKit keeps no rectangle to return to from a zoomed,
 minimized or full-screen window, so the backend records the outer rectangle
 just before the window leaves normal mode.
 
-A position is the outer top-left in global logical points: AppKit measures from
-the bottom-left corner of the primary screen, so `window::apple::geometry::frame`
-flips through the primary screen's height. The display snapshot is measured the
-same way (device pixels of that screen from the primary screen's top-left
-corner), so a position and a display origin share one space. `Platform::open_window`
-turns a position measured on a display into a global one before the window is
-built.
+A position is the outer top-left on the screen the window is on, in that
+screen's points from its corner (ADR-0364). AppKit measures from the bottom-left
+corner of the primary screen, so `window::apple::geometry::frame` flips through
+the primary screen's height into points from its top-left, and a screen
+publishes its corner in that flipped desktop as its `DesktopOrigin` and its
+extent and visible frame in its own points. A position is the desktop point
+less its screen's corner (`position_on`), and back (`desktop_point`), with no
+scale between them: a screen's logical pixels are points. Both read the
+published snapshot, so a position an application read converts back to the
+same frame; `Platform::open_window` turns the options' positions into desktop
+points before the window is built, and one on a screen the snapshot no longer
+holds leaves the place to AppKit.
 
 The notice sources (`NSWorkspace` sleep and wake, the distributed screen lock
 notifications, the memory-pressure dispatch source) start in `run`, after the
@@ -3340,9 +3447,10 @@ can be lost and an "already present, do nothing" rule would then keep a surface
 built from a dead window for the rest of the process's life. `SurfaceChange` has
 these two directions and no third: a third state of the *surface* belongs in its
 own method, per ADR-0035's split of this family by signal rather than by arity.
-Android and the Web emit it. Android's `Pause` and `TerminateWindow` send `Release`,
-`Resume` and `InitWindow` send `Rebuild` — `owner/android/looper.rs`'s module doc
-carries why that pair, and not `Pause` alone, is the correct mapping. The Web sends
+Android and the Web emit it. Android's `Stop` and `TerminateWindow` send `Release`,
+`Start` and `InitWindow` send `Rebuild` — `owner/android/looper.rs`'s module doc
+carries why that pair, and not `Stop` alone, is the correct mapping; `Pause` keeps the
+surface, since a paused Activity that stays on screen keeps drawing (ADR-0366). The Web sends
 `Release` on `webglcontextlost` and `Rebuild` on `webglcontextrestored`: the canvas stays, the context behind it is gone, and
 whatever was built on it must be rebuilt once the browser gives one back. The loss is
 cancelled with `preventDefault` — without that the browser never restores the context —
@@ -3387,19 +3495,19 @@ winit and bevy is deliberate: winit 0.30.13 keys on the window events alone —
 `src/platform_impl/android/mod.rs` maps `MainEvent::InitWindow` to `Resumed`
 and `MainEvent::TerminateWindow` to `Suspended`, while its `Start` and `Stop`
 arms are `warn!("TODO: forward …")` stubs that forward nothing — and bevy
-consumes those same two events. This backend keys on `Pause`/`Resume` *as
+consumes those same two events. This backend keys on `Stop`/`Start` *as
 well as* `TerminateWindow`/`InitWindow`: the window pair is where the handle
 actually dies and returns, and the lifecycle pair is where the framework is
 told the app is going away, so emitting on both is the more conservative
 choice, at the cost the trade-off below books.
 
-**Trade-off:** releasing on `Pause` unconditionally makes the cost per-edge rather
-than per-defect. Android maps `false` to both `Pause` and `TerminateWindow` and
-`true` to both `Resume` and `InitWindow`, and the seam attempts a recreation on
-every `true`, so every `Pause`/`Resume` pair pays a release, a create/configure,
-a lane generation mint and a full repaint — including the pauses where the native
-window was never destroyed, such as a dialog over the activity or a multi-window
-deactivation. A second `true` over a surface still held on the same window is not
+**Trade-off:** releasing on `Stop` unconditionally makes the cost per-edge rather
+than per-defect. Android maps `false` to both `Stop` and `TerminateWindow` and
+`true` to both `Start` and `InitWindow`, and the seam attempts a recreation on
+every `true`, so every `Stop`/`Start` pair pays a release, a create/configure,
+a lane generation mint and a full repaint — including the stops where the native
+window was never destroyed. A dialog over the activity or a multi-window
+deactivation only pauses it, and pays nothing. A second `true` over a surface still held on the same window is not
 paid twice but refused: Vulkan allows one `VkSurfaceKHR` per `ANativeWindow`, so
 the second create fails, the held surface stays, and no second mint or repaint
 follows (ADR-0063 decision 6 books what that refusal costs under the vendored
@@ -3408,7 +3516,7 @@ a configured `wgpu::Surface` is
 not cheap either: it reaches `vkDeviceWaitIdle` before destroying anything, which is
 an unbounded wait on whichever thread runs the callback. That is why the release is
 a synchronous, surface-only operation that performs no lane handoff, no probe and no
-submit, and why the `TerminateWindow` release that follows `Pause` in the ordinary
+submit, and why the `TerminateWindow` release that follows `Stop` in the ordinary
 cycle is an idempotent no-op — while its caller holds the raster lane's guard across
 it by design, so the wait does happen with the lane held.
 
@@ -3979,9 +4087,10 @@ promise only a frame-loop owner can keep, and the promise is selected at the
 one place that keeps it: `flui-app`'s desktop runner asks for
 `AfterFirstFrame` at its two open sites (the main window and a content-bearing
 secondary window, through `runner::desktop::OpeningWindow::open`), whose
-frame closure performs the reveal. Its shared `From<&AppConfig> for
-WindowOptions` conversion stays at `AtOpen` on purpose — `run_direct` and the
-bare `open_secondary_window` use it and have no frame loop that would reveal.
+frame closure performs the reveal. The options every open site builds
+(`AppConfig::window_options`) stay at `AtOpen` on purpose — `run_direct` and
+the bare `open_secondary_window` use them and have no frame loop that would
+reveal.
 A direct consumer of this crate — the platform probes — likewise has no first frame to report, and a window
 whose reveal waits for a call that never comes is a window nobody sees. The
 default `WindowReveal::AtOpen` therefore leaves alpha untouched and those
@@ -4024,13 +4133,14 @@ true background suspension pauses the display link and releases it. Foreground
 restores execution while unfocused; duplicate foreground preserves established
 focus. Headless simulation exercises the same observation contract.
 
-Android publishes `Resume`/`Pause` as a shared execution snapshot before invoking
-embedder callbacks. Its window reports `Running` only while resumed and otherwise
-reports `Suspended`; focus and native-window availability remain separate facts.
+Android records `Start`/`Stop` in the standing it shares with its window before
+invoking embedder callbacks. Its window reports `Running` while the Activity is on
+screen, paused or not, and otherwise `Suspended` (ADR-0366); the foreground refines
+the focus, and native-window availability remains a separate fact.
 This makes redraw-backed owner continuations honest: the loop consumes redraw
-flags only after polling confirms execution is still running. A queued `Pause`
+flags only after polling confirms execution is still running. A queued `Stop`
 therefore preserves the flag rather than acknowledging a continuation whose frame
-will be refused; `Resume` makes the callback deliverable again. The app also retains
+will be refused; `Start` makes the callback deliverable again. The app also retains
 a logical continuation when the initial actuator refuses it and retries from the
 next fresh native root.
 
@@ -5720,9 +5830,10 @@ android-dex`, and declared in this crate's `[package.metadata.flui.declares.andr
 links into its APK, and a Gradle build compiles the sources. The generated manifest names
 `FluiActivity`, a `NativeActivity` subclass, with `hasCode="true"` (ADR-0255 decisions 1 and 4).
 Before the platform starts, `owner::android::java_host` reads through the Activity's class loader
-whether the APK has `FluiHost`, whether its `PROTOCOL` is the library's and whether the Activity is
-a `FluiActivity`; anything else refuses the start with `PlatformError::HostProtocol` or `Init`,
-naming what it found, before any native method is bound (decision 5). `owner::android::java_view`
+whether the APK has `FluiHost`, whether its `PROTOCOL` is the library's, whether the Activity is
+a `FluiActivity` and whether it owns `FluiHost`'s queues; anything else refuses the start with
+`PlatformError::HostProtocol`, `Init` or `SecondActivity`, naming what it found, before any
+native method is bound (decision 5, ADR-0366). `owner::android::java_view`
 then loads `FluiView` through the same loader on the Java main thread, binds its native methods
 with `RegisterNatives` on the class it returned (`FindClass` would search the system loader), and
 lays one full-window view over the Activity's content (ADR-0348). Every owner-to-view call is posted
@@ -5736,10 +5847,20 @@ then frees it, both on the Java main thread, the only thread that calls the view
 2): `onTrimMemory`, at most one entry per trim level; each intent `onCreate` and `onNewIntent`
 receive, at most `MAX_OPENED_ITEMS`; and each answer `onActivityResult` brings to a request for a
 result (below). The queues are Java statics: they buffer what arrives before `android_main` runs
-or between two platforms of one process. `java_host::HostQueue` registers `nativeWake` and binds its wake handle (a
-`Box<Arc<Inbox>>`) on the Java main thread when the platform starts, and an entry queued before
-wakes it at once; each later entry wakes the owner, which takes the inbox's flag and only then
-drains the queue through JNI, each loop turn, resumed or not. At the loop's exit `FluiHost`
+or between two platforms of one process. A process runs one platform, in a task of its own
+application (ADR-0366 §2): `FluiHost.admit` decides in `onCreate`, before the library starts, which
+instance owns the queues, and any other one starts the Activity again in the application's own task
+with what it received, granting it the shared URIs, or, already forwarded beside a live owner,
+queues it for the owner, and finishes. `owner::android::admission` is that decision as data, held
+to the Java side by its test. Such an instance runs none of the application: `android_hands_over`
+tells the entry first, and `java_host::check` refuses it with `PlatformError::SecondActivity`.
+`java_host::HostQueue`
+registers `nativeWake` and binds its wake handle (a `Box<Arc<Inbox>>`) on the Java main thread
+when the platform starts, and an entry queued before wakes it at once; each later entry wakes the
+owner, which takes the inbox's flag and only then drains the queue through JNI, each loop turn,
+running or not. `bind` and the reads take the Activity and answer a non-owner nothing, so a
+finishing platform takes nothing that arrived for its successor, and a new owner forgets the old
+handle. At the loop's exit `FluiHost`
 forgets the handle, unless a later platform bound its own since, and the handle is freed, both
 on the Java main thread, the only thread that passes it to `nativeWake`. The Java side queues
 and wakes and never waits for the owner; the lock guards the deques alone.
@@ -5807,7 +5928,7 @@ the library does not know settles it as `AnswerUnreadable`, and one whose `Inten
 not keep as `DataLost` with its code, each logged: every record taken off the queue ends a request
 or is reported. The result `Intent` never leaves the owner thread or the host: the router holds it
 by a global reference under its request's token and capability, and that capability's provider
-reads it once by handing the answer's `ResultData` to `Activity::take_data`. A `ResultData`
+reads it once by handing the answer's `ResultIntent` to `Activity::take_data`. A `ResultIntent`
 dropped unread (a completion nobody receives, a retired runtime, a provider that went) releases
 it, which the router sweeps. A request lives while its provider holds its `ResultTicket`; the drop
 records the release and wakes the owner through its signal, and that turn's sweep ends it as
@@ -5965,6 +6086,60 @@ them against a stand-in that runs one transaction at a time; with
 the application's identifier (`AppIdentity::with_app_id`) or `AppConfig::storage_dir`
 is the one switch.
 
+### Another application's content is read off the owner thread, its size first
+
+What another application hands the host (a clip, a drag, the documents an intent names) is
+untrusted: its size and its timing are the other application's. The rules, on every host that
+reads such content:
+
+- **No provider on the owner thread.** A content provider answers when its application does (a
+  cloud provider once it has downloaded the file), and the Android owner thread drains
+  NativeActivity's input queue and runs frames. The clipboard read takes the text the primary
+  clip's first item holds (`ClipData.Item.getText`, `clipboard::android::item_text`); an item that
+  is a URI or an intent holds none and reads `Ok(None)`, as a clipboard on every other host answers
+  one with no text representation, so no stream is opened. A paste on the Java side takes the same
+  text (`FluiView.clipText`, below API 31 and through the content receiver from it), and the
+  receiver hands back what it does not take. No class calls `coerceToText`.
+- **The limit is the clipboard's.** Text read or pasted is refused whole past
+  `host::MAX_TEXT` bytes, the limit of every host's clipboard read, on its UTF-8 length, counted
+  in Java before anything is copied (`FluiView.utf8Length`; `FluiView.MAX_PASTED_BYTES` states the
+  same value, and a test holds them equal). A read then copies the text three times, each within
+  the limit and at most two at once: the UTF-8 array Java encodes (`FluiView.utf8`), the bytes JNI
+  copies out of it, and the shared text the answer holds.
+- **Size first, then a read that stops.** A dropped URI's bytes are read on a thread of their own
+  (above); the size the provider states (`AssetFileDescriptor.getLength`, the file's size when it
+  states none) is asked before anything is read and one past the request's limit is refused, and
+  the read stops at the limit however much was stated. It holds one buffer of the bytes (two while
+  it grows and while the answer is copied out), the Rust side one more and the payload's shared
+  bytes, each made before the previous is dropped.
+- **Documents open on workers.** An intent's `content:` documents are opened
+  (`FluiHost.openDocument`, `documentName`) on worker threads of the loop's
+  (`owner::android::documents`): the owner accepts each intent, at most `MAX_WAITING_INTENTS` at
+  once, each document a job under a ticket of its own, and delivers the intents in the order they
+  arrived, each once every document has an outcome, so a slow provider holds back the later intents
+  and never the owner's turn. An outcome finds its document by its ticket alone; one for a document
+  already refused reaches no other and is dropped, which closes its descriptor. Every accepted
+  document ends with exactly one outcome: the file, or an `OpenRefusal` naming why (the provider
+  failed; the read grant ended with the Activity, `SecurityException`; the intent's
+  `OPEN_DEADLINE` passed, and the owner cancels the open through its `CancellationSignal`, a
+  one-way binder call that never waits for the provider; the platform retired; no thread could
+  start). The poll wakes for the earliest deadline (`LoopTurn::open_deadline`). One worker runs
+  while it keeps up; `ContentProvider.openFile` ignores the cancellation unless a provider
+  overrides it, so once every worker is inside an abandoned open, a job waiting starts another, up
+  to `MAX_WORKERS` (`host::MAX_PROVIDER_READS`, the bound of the drop reads too); past them the
+  jobs are refused at their own deadlines. What a worker finishes after the platform retired it
+  drops itself. An intent is heard after the trim levels `FluiHost` queued in the same turn: a
+  trim level never waits for another application's provider.
+- **A drag's types are bounded the same everywhere.** Every host's drag reads the first
+  `host::MAX_OFFERED_TYPES` types its source names and none past them, and leaves out a
+  type longer than `host::MAX_TYPE_LEN` bytes, which counts toward them
+  (`drag::offers::offered_types`): X11 reads that many atoms of `XdndTypeList`, Wayland that many
+  `wl_data_offer.offer` events (a repeated name counts), Windows that many entries of the format
+  enumerator, the Web that many `DataTransfer` types and files, and Android copies that many out of
+  the `ClipDescription` in Java (`FluiView.mimeTypes`) and reads them one local reference at a time
+  (`drag::android::clip::read_type_names`), so the native frame stays bounded on API 23 to 25,
+  whose local reference table holds 512 for the thread.
+
 ### Android samples its displays through JNI and refreshes them on announced change only
 
 **Rule:** `Platform::display_snapshot` runs on every owner wake, so a backend whose
@@ -5994,9 +6169,10 @@ other thread leaks that data instead of freeing what a late call could reach.
 The loop has no timer of its own (ADR-0249): every producer wakes the looper
 (`request_redraw` on the request that sets its flag, `OwnerSignal`, the Java
 view's queue, the inset reply, this callback), and `poll_timeout` blocks until
-the next wake deadline or 500 ms preference sample while resumed, and while
-paused until a deadline still ahead or a wake. A deadline already behind while
-paused waits for a frame, so it does not cut the wait to zero.
+the next wake deadline or 500 ms preference sample while the Activity is on
+screen, and while stopped until a deadline still ahead or a wake (ADR-0366). A
+deadline already behind while stopped waits for a frame, so it does not cut the
+wait to zero.
 
 `owner/android/ndk.rs` reads the API level once, when the platform is
 built, and keeps it in the platform (no `static`): `android_get_device_api_level`
@@ -6038,7 +6214,7 @@ change goes unnoticed until the next one or a resume. The JNI path, the
 choreographer registration and the frame-rate request run only on a device; the
 host tests cover the level lookup (`os_capability_table`), the value
 classification (`android_display_table`) and the poll timeout
-(`a_paused_loop_blocks_until_it_is_woken`), and CI type-checks the rest for
+(`a_stopped_loop_blocks_until_it_is_woken`), and CI type-checks the rest for
 `aarch64-linux-android`.
 
 ### A Win32 window opens hidden, in its mode, and is shown by its first frame
@@ -6176,8 +6352,11 @@ Remote Desktop Services at logon), lock and unlock stay unreported for the proce
 `AndroidLoop` implements; nothing in the event loop decides what a callback
 means. The window's published state is refreshed before its observer is told.
 
-**Choice:** `onStart`/`onStop` give visibility, `onResume`/`onPause` the execution
-state, `onWindowFocusChanged` focus; none implies another. `onLowMemory` is `Critical`, and
+**Choice:** `onStart`/`onStop` give visibility, `onResume`/`onPause` the foreground,
+`onWindowFocusChanged` focus; none implies another. The window reports from the three together
+(`activity_callbacks::ActivityStanding`, ADR-0366): running while visible, so a paused Activity that stays on
+screen keeps drawing, taking input and serving its owner; focused while focused and in the
+foreground. `onLowMemory` is `Critical`, and
 each `onTrimMemory`, which `FluiActivity` forwards through `FluiHost`'s queue, is the level its
 value asks for, delivered as it arrives, a repeated level included: every call asks for memory
 back again. The session ends once per start-to-stop
@@ -6187,6 +6366,8 @@ so the notice repeats on every trip to the background and asks for saving. The
 application's handler is asked through the call point, and stays bound when it
 panics.
 
-**Verified by:** `android_lifecycle_mapping*` and `app_delivery_contracts` on
-the host, and `the_host_queue_is_read_as_the_java_classes_lay_it_out`; the `MainEvent` match
+**Verified by:** `android_lifecycle_mapping*`, `a_paused_activity_that_stays_visible_keeps_running`
+and `app_delivery_contracts` on the host, and `the_host_queue_is_read_as_the_java_classes_lay_it_out`
+and `only_the_activity_that_owns_the_queues_binds_and_reads_them`, and `owner::android::admission`'s
+tests; the `MainEvent` match
 and the queue's JNI run only on a device.

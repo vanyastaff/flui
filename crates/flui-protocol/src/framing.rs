@@ -1,7 +1,7 @@
 //! How a byte transport frames the protocol (ADR-0238 §2): newline-delimited JSON lines of at
 //! most [`MAX_LINE`] bytes, and binary payloads as frames of their own.
 //!
-//! A result that carries a payload announces it with a [`BlobRef`](crate::BlobRef); right
+//! A result that carries a payload announces it with a [`BlobRef`](crate::capture::BlobRef); right
 //! after that result's line the payload follows as one frame: a [`BlobHeader`] of
 //! [`BlobHeader::SIZE`] bytes, then exactly `len` bytes. A reader checks `len` against its own
 //! limit before reading or allocating. The BiDi transport has no binary frame and carries the
@@ -105,7 +105,11 @@ impl BlobHeader {
 #[derive(Debug, Clone)]
 pub struct LineReader {
     buffer: Vec<u8>,
-    /// How much of the buffer is known to hold no newline.
+    /// Where the bytes not yet taken as a line start. A line is copied out and passed over, and the
+    /// buffer drops what was taken once per [`push`](Self::push), so a read holding many lines
+    /// costs work linear in its length.
+    start: usize,
+    /// How much of the buffer past `start` is known to hold no newline.
     scanned: usize,
     max_len: usize,
 }
@@ -116,6 +120,7 @@ impl LineReader {
     pub const fn new(max_len: usize) -> Self {
         Self {
             buffer: Vec::new(),
+            start: 0,
             scanned: 0,
             max_len,
         }
@@ -123,6 +128,8 @@ impl LineReader {
 
     /// Adds what the transport read.
     pub fn push(&mut self, bytes: &[u8]) {
+        self.buffer.drain(..self.start);
+        self.start = 0;
         self.buffer.extend_from_slice(bytes);
     }
 
@@ -130,17 +137,19 @@ impl LineReader {
     ///
     /// # Errors
     ///
-    /// [`FramingError::LineTooLong`] once the line being read is longer than the limit.
+    /// [`FramingError::LineTooLong`] once the line being read is longer than the limit, and on
+    /// every call after that: the line stays in front of the stream.
     pub fn next_line(&mut self) -> Result<Option<Vec<u8>>, FramingError> {
         let too_long = FramingError::LineTooLong {
             max_len: self.max_len,
         };
-        let Some(found) = self.buffer[self.scanned..]
+        let pending = &self.buffer[self.start..];
+        let Some(found) = pending[self.scanned..]
             .iter()
             .position(|byte| *byte == b'\n')
         else {
-            self.scanned = self.buffer.len();
-            return if self.buffer.len() > self.max_len {
+            self.scanned = pending.len();
+            return if pending.len() > self.max_len {
                 Err(too_long)
             } else {
                 Ok(None)
@@ -150,11 +159,16 @@ impl LineReader {
         if end > self.max_len {
             return Err(too_long);
         }
-        let mut line: Vec<u8> = self.buffer.drain(..=end).collect();
+        let mut line = &pending[..end];
+        if let [rest @ .., b'\r'] = line {
+            line = rest;
+        }
+        let line = line.to_vec();
+        self.start += end + 1;
         self.scanned = 0;
-        line.pop();
-        if line.last() == Some(&b'\r') {
-            line.pop();
+        if self.start == self.buffer.len() {
+            self.buffer.clear();
+            self.start = 0;
         }
         Ok(Some(line))
     }
@@ -162,7 +176,7 @@ impl LineReader {
     /// How many bytes are buffered and not yet taken as a line.
     #[must_use]
     pub fn buffered(&self) -> usize {
-        self.buffer.len()
+        self.buffer.len() - self.start
     }
 }
 

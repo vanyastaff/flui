@@ -228,7 +228,7 @@ app-owned trampoline cell; the extraction does not wait for the `Send` removal.
 private `run_pipeline` are deleted; the headless driver calls `UiRuntime::pump` with a manual clock
 and a headless sink. It does not construct or drive `OwnerHost`: sharing the product frame
 transaction, not copying the production event-loop topology, is the test-driver contract.
-`pump_presentation`/`pump_all` become thin loops over the same call.
+Presentations at independent cadences are separate UI runtimes, each pumped on its own manual clock.
 `flui_widgets::testing` is absorbed into `flui-testing`.
 
 `flui-widgets` stops depending on `flui-testing` (`crates/flui-widgets/Cargo.toml:89` goes). That
@@ -306,11 +306,11 @@ the platform backend and the raster executor remain the three owners of ADR-0037
   Native-window routing, surface application and the platform/application tails of an owner
   turn stay in `flui-app`; moving a file wholesale is not the goal. The review targets under
   15k lines for `flui-app`; that is a goal, not a measurement.
-- Test code that constructs `HeadlessBinding` and calls `pump_frame` changes to the new driver.
-  Behaviour differences between the two drivers surface as test failures during the move; they
-  are fixed in the product path, not by keeping the old driver.
-- ADR-0021's statement that every frame driver, including `HeadlessBinding::pump_frame`, goes
-  through `drive_frame` (its "Every frame driver" paragraph) becomes historical; the rule it protects holds by construction.
+- Test code drives frames through `flui-testing`'s `HeadlessHost::pump`, which is `UiRuntime::pump`.
+  A behaviour the test driver and the runtime disagree on is fixed in the product path:
+  there is no second test driver to keep.
+- ADR-0021's "Every frame driver" paragraph names `UiRuntime::pump` as the one path, for
+  platform runners and headless hosts alike; the rule holds by construction.
 - ADR-0043's "`BuildOwner` and `WidgetsBinding` are public surface … consumed by
   `flui-hot-reload`" narrows: the frame entry of `WidgetsBinding` moves under `__runtime`.
 - Material and Cupertino tests that use `flui_widgets::testing` switch to `flui-testing`.
@@ -334,8 +334,8 @@ The crate is created first and filled in five moves, each independently mergeabl
 | 5b. Bounded owner batches (done; platform-target acceptance waits on CI) | Bound each continuation callback and request one sequence-stamped later opportunity when work remains. Fresh native roots and carried FIFO entries share the callback budget; a root stays synchronous while budget remains, and excess roots join the FIFO. Terminal close admission fences later work for that exact presentation incarnation. Desktop/iOS use their owner signal, Android uses a non-dirty redraw poke, and web consumes the continuation on the next RAF. Deterministic tests prove a self-enqueueing cross-UI runtime chain yields at every budget boundary and that fresh roots cannot extend a continuation beyond its budget | move 5a |
 | 5c. Closed owner operations | Replace arbitrary `RuntimeTask::Frame`/`Pump` closures with target-typed presentation, UI runtime and registry operations plus explicit pump/background-pump methods. Give lossless transitions, latest-value state and edge-coalesced wakes distinct admission rules. True cross-thread producers use a bounded typed ingress plus a wake capability; the owner-local dispatcher remains `!Send` | move 5b |
 | 5d. Transaction and host extraction (the pump has moved; acceptance of its Android, iOS and wasm sites waits on CI's `cross-typecheck`, `wasm-check` and `wasm-test`) | `UiRuntime::pump` absorbs the runners' `drive_frame_with_lane` calls: every runner's frame wake is its gate, then the pump, then its pacing; the device-recovery wrapper brackets the whole pump; the background arm is `UiRuntime::pump_background`; `flui-app`'s `RuntimeRaster` is test-only. Extract the UI runtime-neutral registry, FIFO, checkout and deferred-mutation machinery as ordinary `flui_runtime::OwnerHost`. `APP_RUNTIME` remains the sole TLS in `flui-app` and contains it beside the `WindowRegistry`, native frame drivers and other host-only state; no platform, engine, application-service or execution-pool owner moves with it. The pump verification tests remain in `flui-runtime`, where the pump lives: they reach its crate-private pipeline. Rollback: revert (no `legacy-frame-driver` feature, see `## Consequences`) | move 5c |
-| 6a. Test driver on the pump (done) | `flui-testing` moves above the runtime (`order = 6`, a normal dependent the runtime admits beside `flui-app`) and absorbs `flui_widgets::testing` as `flui_testing::widgets`; `flui-widgets` loses its `testing` feature. A UI runtime takes its clock as a `ClockSource`, so one `ManualClock` drives its frame time, gesture deadlines and produce gate. `HeadlessHost` hosts a `UiRuntime` over a headless window and sink and raises a contained frame failure after the pump, the first one authoritative. The widget harness (`lay_out`, `harness::mount`) runs every frame, the mount included, through `UiRuntime::pump`; the tests that pinned what the old driver lacked (no root `MediaQuery` or `VsyncScope`, no post-frame lanes, no text-input capability) mount on `HeadlessBinding` or assert the UI runtime's behaviour | move 4 |
-| 6b. Substrate suites on the pump | `HeadlessBinding::pump_frame`, `run_pipeline` and `pump_presentation`/`pump_all` are deleted; the raw-owner suites (`flui-view`, animation, scheduler, interaction, `flui-widgets`' `perf` target and its baseline, the facade's `tests/*.rs`) mount under the UI runtime's root scopes, which changes their tree shapes and needs its own review; per-presentation clocks become separate UI runtimes | move 6a |
+| 6a. Test driver on the pump (done) | `flui-testing` moves above the runtime (`order = 6`, a normal dependent the runtime admits beside `flui-app`) and absorbs `flui_widgets::testing` as `flui_testing::widgets`; `flui-widgets` loses its `testing` feature. A UI runtime takes its clock as a `ClockSource`, so one `ManualClock` drives its frame time, gesture deadlines and produce gate. `HeadlessHost` hosts a `UiRuntime` over a headless window and sink and raises a contained frame failure after the pump, the first one authoritative. The widget harness (`lay_out`, `harness::mount`) runs every frame, the mount included, through `UiRuntime::pump`; the tests that pinned what the old driver lacked (no root `MediaQuery` or `VsyncScope`, no post-frame lanes, no text-input capability) assert the UI runtime's behaviour | move 4 |
+| 6b. Substrate suites on the pump (done) | `flui-testing` has no frame driver but `HeadlessHost::pump`: `HeadlessBinding`, with its `pump_frame`, `run_pipeline` and `pump_presentation`/`pump_all`, is deleted, its suites mount on a `HeadlessHost` or the widget harness, and presentations at independent cadences are separate UI runtimes. A crate's own suite that tests one owner (`BuildOwner`, `PipelineOwner`, a `Vsync`) drives that owner directly; it tests the owner, not a frame | move 6a |
 
 §2 (sealing the entry points) and the widgets' inline test modules follow move 5d. Move 6 does
 not wait on 5c or 5d: §4 keeps the test driver off `OwnerHost`, so it needs only the pump.

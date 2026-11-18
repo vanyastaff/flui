@@ -58,7 +58,7 @@ mod cases {
     use flui_platform::drag::{
         DragSessionKey, OsDragEnd, OsDragRequest, OsDragTerms, ProcessNonce,
     };
-    use flui_platform::{DragDropEvent, PlatformInput, PointerEvent};
+    use flui_platform::{DragDropEvent, PlatformInput, pointer::PointerEvent};
     use flui_testing::window_commands::AdmitAndApply as _;
     use wayland_client::protocol::wl_data_device_manager::DndAction;
 

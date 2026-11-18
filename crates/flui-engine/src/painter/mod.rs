@@ -232,7 +232,12 @@ impl WgpuPainter {
     ) -> Self {
         // `PipelineSet::new` creates the viewport bind-group layout internally
         // and exposes it via `viewport_bind_group_layout()`.
-        let pipelines = PipelineLibrary::new(domain.device(), surface_format);
+        // A painter of its own keeps no pipeline cache: only a `GpuContext`
+        // saves one between runs.
+        let pipelines = PipelineLibrary::new(
+            crate::pipeline_device::PipelineDevice::uncached(domain.device()),
+            surface_format,
+        );
         Self::with_pipelines(domain, &mut Some(pipelines), size, source)
     }
 

@@ -110,6 +110,11 @@ impl Default for SharedRasterHost {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+mod bounded_wait;
+#[cfg(not(target_arch = "wasm32"))]
+use bounded_wait::{PIPELINE_CACHE_LOAD_BOUND, wait_within};
+
 /// What a window's detach needs of a raster thread without the host: the
 /// thread, its sender and each window's slot. The host writes it as it
 /// places the executor and attaches and detaches slots, with no code of
@@ -615,7 +620,7 @@ struct HostSlot {
     /// (ADR-0304 §7). Moved only by a frame the slot showed.
     base: RasterBase,
     /// Whether the platform gives the window a surface: `false` from the
-    /// platform's release (Android's `Pause` and `TerminateWindow`, a UIKit
+    /// platform's release (Android's `Stop` and `TerminateWindow`, a UIKit
     /// scene's backgrounding) until it gives one back. Only then is a
     /// surface the owner released made again.
     available: bool,
@@ -1133,7 +1138,10 @@ impl RasterHost {
     }
 
     /// The application's GPU context over `first`, the first window,
-    /// bootstrapped on the owner thread, which waits for it.
+    /// bootstrapped on the owner thread, which waits for it, its pipeline
+    /// cache loaded from the host's storage before any window attaches, so
+    /// a driver without a disk cache of its own does not compile every
+    /// pipeline again at each launch.
     #[cfg(not(target_arch = "wasm32"))]
     fn bootstrap_now(
         first: Arc<dyn SurfaceTarget>,
@@ -1141,7 +1149,27 @@ impl RasterHost {
         let display =
             super::host::with_owner_platform(flui_native::OwnerPlatform::display_connection)
                 .ok_or_else(|| refused("no platform owns this thread"))?;
-        pollster::block_on(flui_engine::GpuContext::bootstrap(display, Some(first)))
+        let mut bootstrap =
+            pollster::block_on(flui_engine::GpuContext::bootstrap(display, Some(first)))?;
+        if let Some(storage) = super::host::host_storage() {
+            // The read runs on the application's IO pool, which may be one
+            // the owner thread itself drives: past the bound the context
+            // starts with a cold cache rather than wait for a read that
+            // cannot come, and its warm-up still saves for the next launch.
+            let loaded = wait_within(
+                bootstrap.context.load_pipeline_cache(Arc::clone(&storage)),
+                PIPELINE_CACHE_LOAD_BOUND,
+            );
+            if loaded.is_none() {
+                tracing::warn!(
+                    target: "flui.gpu",
+                    event = "pipeline_cache_load_timed_out",
+                    "the pipeline cache was not read in time; the GPU context starts it cold"
+                );
+                bootstrap.context.start_pipeline_cache_cold(storage);
+            }
+        }
+        Ok(bootstrap)
     }
 
     /// The web cannot wait on its owner thread: its runner awaits the
@@ -2329,6 +2357,36 @@ impl RasterHost {
             .map_or(NonZeroUsize::MIN, |slot| slot.in_flight_limit)
     }
 
+    /// Whether the in-flight floor of `address`'s presentation still guards
+    /// a settlement (ADR-0305 §5): `false` only once a raster thread has
+    /// settled every frame it holds of the window and its wake has returned
+    /// after them, so the window was asked for the frame that drains them,
+    /// which its host delivers once the window can take one: woken at the
+    /// floor's pace before then, the loop would only ask the other windows
+    /// for frames they do not owe. Inline, with no slot, with a frame still
+    /// on the thread, or with a settlement whose wake has not returned (it
+    /// has not run yet, or a requester panicked), the floor stands.
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            dead_code,
+            reason = "the browser's animation frames wake the page; no deadline does"
+        )
+    )]
+    pub(crate) fn floor_owed(&self, address: PresentationAddress) -> bool {
+        let Some(placed) = self.placed.as_ref() else {
+            return true;
+        };
+        if placed.executor.inline().is_some() {
+            return true;
+        }
+        let Some(slot) = placed.slots.get(&address) else {
+            return true;
+        };
+        slot.pending.is_empty()
+            || placed.sender.settlements_announced(slot.slot) < slot.pending.len()
+    }
+
     /// Whether `address`'s window holds frames a raster thread has not
     /// settled yet.
     #[cfg_attr(
@@ -2437,52 +2495,28 @@ fn damage_mode() -> DamageMode {
     damage_mode_from(std::env::var(DAMAGE_ENV).ok().as_deref())
 }
 
-/// The environment variable that turns the executor on its own raster thread
-/// (ADR-0305 §10): `FLUI_RASTER_PLACEMENT=threaded`. Read only by a debug
-/// build on Linux, and ignored by every release build and every other host:
-/// it is the switch the threaded placement is run with on devices until a run
-/// makes a platform threaded, and goes then. Windows is left out while the
-/// owner's wait for the raster thread services no sent messages, which a
-/// swap chain's thread sends it (ADR-0305 §9).
-#[cfg(any(all(debug_assertions, target_os = "linux"), test))]
-const PLACEMENT_ENV: &str = "FLUI_RASTER_PLACEMENT";
-
-/// The placement [`PLACEMENT_ENV`]'s value selects: `threaded` (any case)
-/// turns the executor on its raster thread; unset, empty or `inline` keeps it
-/// inline; anything else keeps it inline and says so.
-#[cfg(any(all(debug_assertions, target_os = "linux"), test))]
-fn placement_from(value: Option<&str>) -> RasterPlacement {
-    match value.map(str::trim) {
-        None | Some("") => RasterPlacement::Inline,
-        Some(value) if value.eq_ignore_ascii_case("threaded") => RasterPlacement::Threaded,
-        Some(value) if value.eq_ignore_ascii_case("inline") => RasterPlacement::Inline,
-        Some(value) => {
-            tracing::warn!(
-                value,
-                "{PLACEMENT_ENV} takes `inline` or `threaded`; the executor stays inline"
-            );
-            RasterPlacement::Inline
-        }
-    }
-}
-
-/// Where the desktop loop's executor turns: inline, unless a debug build on
-/// Linux is asked otherwise through `FLUI_RASTER_PLACEMENT`. Read before the
-/// loop's state is borrowed: an unknown value is logged, and a subscriber is
-/// not ours.
+/// Where the desktop loop's executor turns on `host` (ADR-0305 §10): on its
+/// raster thread on the Wayland host, where the two-window run met the
+/// pacing budget, and inline on every other host until a run on it does.
+/// X11 waits for a run on a real X server, since Xvfb has no vsync and an
+/// unmapped window's `Fifo` present may block the one thread every window
+/// shares; Windows also until the owner's wait for the raster thread services
+/// the sent messages a swap chain's thread sends it (ADR-0305 §9); the
+/// headless host stays inline, as ADR-0305 §10 places it.
 #[cfg_attr(
-    any(target_os = "android", target_os = "ios", target_arch = "wasm32"),
+    all(
+        any(target_os = "android", target_os = "ios", target_arch = "wasm32"),
+        not(all(test, feature = "testing"))
+    ),
     expect(dead_code, reason = "only the desktop loop turns a raster thread")
 )]
-pub(crate) fn desktop_placement() -> RasterPlacement {
-    #[cfg(all(debug_assertions, target_os = "linux"))]
-    {
-        placement_from(std::env::var(PLACEMENT_ENV).ok().as_deref())
+pub(crate) fn desktop_placement(host: flui_native::CurrentHost) -> RasterPlacement {
+    #[cfg(target_os = "linux")]
+    if host == flui_native::CurrentHost::Wayland {
+        return RasterPlacement::Threaded;
     }
-    #[cfg(not(all(debug_assertions, target_os = "linux")))]
-    {
-        RasterPlacement::Inline
-    }
+    let _ = host;
+    RasterPlacement::Inline
 }
 
 /// One frame's sink: the window's size measured once at frame start, and the

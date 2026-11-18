@@ -11,7 +11,10 @@ use std::time::Duration;
 
 use flui_foundation::testing::CountingWaker;
 use flui_protocol::version::PROTOCOL_VERSION;
-use flui_protocol::{AppInfo, Greeting, Request, RequestId, ServerLine};
+use flui_protocol::{
+    envelope::Greeting, envelope::Request, envelope::RequestId, envelope::ServerLine,
+    session::AppDescription,
+};
 use flui_runtime::agent::{Limits, Service, ServiceConfig, Session};
 use flui_testing::{HeadlessDevAgent, HeadlessHost, HeadlessWindow};
 use flui_view::Signal;
@@ -81,7 +84,7 @@ pub(crate) fn service(
     Service::new(ServiceConfig {
         records_native: false,
         token: TOKEN.to_owned(),
-        app: AppInfo::new("counter", "headless"),
+        app: AppDescription::new("counter", "headless"),
         limits,
         on_driver_gone,
     })

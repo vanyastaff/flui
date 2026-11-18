@@ -116,9 +116,10 @@ mod cases {
     impl Opened {
         fn new(title: &str) -> Self {
             Self::open(
-                WindowOptions::default()
-                    .title(title)
-                    .size(Size::new(CONTENT.0, CONTENT.1)),
+                WindowOptions::default().title(title).size(
+                    flui_platform::WindowExtent::try_new(Size::new(CONTENT.0, CONTENT.1))
+                        .expect("an extent"),
+                ),
             )
         }
 
@@ -605,7 +606,10 @@ mod cases {
         let opened = Opened::open(
             WindowOptions::default()
                 .title("app title bar")
-                .size(Size::new(CONTENT.0, CONTENT.1))
+                .size(
+                    flui_platform::WindowExtent::try_new(Size::new(CONTENT.0, CONTENT.1))
+                        .expect("an extent"),
+                )
                 .frame(WindowFrame::AppTitleBar(AppTitleBar::new())),
         );
         let screen = session.screen();

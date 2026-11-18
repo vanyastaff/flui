@@ -819,10 +819,11 @@ fn run(laid: &mut LaidOut, duration: Duration) {
 /// A wheel tick of one line at `(x, y)`.
 fn wheel_line(laid: &LaidOut, x: f64, y: f64) {
     use flui_platform::pointer::{
-        PointerEvent, PointerId, PointerInfo, PointerPosition, ScrollDelta, ScrollEvent, ScrollUnit,
+        PointerEvent, PointerId, PointerPosition, PointerSource, ScrollDelta, ScrollEvent,
+        ScrollUnit,
     };
     laid.dispatch_pointer_event(&PointerEvent::Scroll(ScrollEvent::new(
-        PointerInfo::new(
+        PointerSource::new(
             PointerId::try_from(1_u64).expect("nonzero pointer"),
             PointerKind::Mouse,
         ),

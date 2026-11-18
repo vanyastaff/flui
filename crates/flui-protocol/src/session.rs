@@ -98,7 +98,7 @@ impl Hello {
 
     /// Naming the client, such as `flui-driver/0.1.0`.
     #[must_use]
-    pub fn with_client(mut self, client: impl Into<String>) -> Self {
+    pub fn client(mut self, client: impl Into<String>) -> Self {
         self.client = Some(client.into());
         self
     }
@@ -114,9 +114,15 @@ impl Hello {
 /// Who answered a hello.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+// The schema keeps the definition name it published as `AppInfo`: renaming a definition is a
+// break, and the bytes on the wire are the same.
+#[cfg_attr(
+    feature = "schemars",
+    derive(schemars::JsonSchema),
+    schemars(rename = "AppInfo")
+)]
 #[non_exhaustive]
-pub struct AppInfo {
+pub struct AppDescription {
     /// The application's name.
     pub name: String,
     /// Its process id, where it has one.
@@ -129,7 +135,7 @@ pub struct AppInfo {
     pub target: String,
 }
 
-impl AppInfo {
+impl AppDescription {
     /// The app `name`, running on `target`.
     #[must_use]
     pub fn new(name: impl Into<String>, target: impl Into<String>) -> Self {
@@ -161,7 +167,7 @@ pub struct HelloReply {
         feature = "serde",
         serde(default, skip_serializing_if = "Option::is_none")
     )]
-    pub app: Option<AppInfo>,
+    pub app: Option<AppDescription>,
     /// What it can do.
     #[cfg_attr(
         feature = "serde",
@@ -183,21 +189,22 @@ impl HelloReply {
 
     /// Naming the app.
     #[must_use]
-    pub fn with_app(mut self, app: AppInfo) -> Self {
+    pub fn app(mut self, app: AppDescription) -> Self {
         self.app = Some(app);
         self
     }
 
     /// Saying what it can do.
     #[must_use]
-    pub fn with_capabilities(mut self, capabilities: Capabilities) -> Self {
+    pub fn capabilities(mut self, capabilities: Capabilities) -> Self {
         self.capabilities = Some(capabilities);
         self
     }
 }
 
 vocabulary! {
-    /// Where OS input runs, so it cannot reach the user's own session (R14b).
+    /// Where OS input runs, so it cannot reach the user's own session (ADR-0238 §5): a session
+    /// and its report name the mode.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
     #[cfg_attr(
         feature = "serde",
@@ -329,13 +336,19 @@ pub struct AttachParams {
 /// What `session.launch` and `session.attach` answer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+// The schema keeps the definition name it published as `SessionInfo`: renaming a definition is a
+// break, and the bytes on the wire are the same.
+#[cfg_attr(
+    feature = "schemars",
+    derive(schemars::JsonSchema),
+    schemars(rename = "SessionInfo")
+)]
 #[non_exhaustive]
-pub struct SessionInfo {
+pub struct Attached {
     /// The schema the app speaks.
     pub protocol: ProtocolVersion,
     /// The app.
-    pub app: AppInfo,
+    pub app: AppDescription,
     /// Its windows when the session began.
     pub windows: Vec<WindowId>,
     /// What it can do.

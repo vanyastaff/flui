@@ -33,7 +33,7 @@ pub(crate) fn bounded(
 
 /// The room an [`Opened`] leaves for files after `urls`: the items it takes
 /// less the URLs it keeps (an over-long URL takes no room).
-#[cfg(any(target_os = "android", test))]
+#[cfg(any(target_os = "android", all(test, not(target_arch = "wasm32"))))]
 pub(crate) fn room_for_files<'a>(urls: impl IntoIterator<Item = &'a String>) -> usize {
     let kept = urls
         .into_iter()

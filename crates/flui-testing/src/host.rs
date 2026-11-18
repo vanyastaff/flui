@@ -39,18 +39,20 @@ use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+
+use crate::portal_exports::HeadlessPortalExports;
 use std::time::Duration;
 
 use flui_foundation::geometry::{Bounds, DevicePixelRatio, Size};
 use flui_foundation::panic::FirstPanic;
 use flui_foundation::{ManualClock, PresentationId};
-use flui_platform::TextStoreHost;
 use flui_platform::capability::scripted::{AlreadyDriven, Scenario, ScenarioDriver};
 use flui_platform::data_transfer::{RepresentationDescriptor, TransferActions};
 use flui_platform::drag::{
     DragError, OsDragEnd, OsDragParts, OsDragRequest, OsDragStart, PlatformDragSource,
 };
 use flui_platform::input_regions::{DeviceInputRegion, InputRegion};
+use flui_platform::text_store::TextStoreHost;
 use flui_platform::text_store::TextStoreStatus;
 use flui_platform::{
     Cursor, CursorError, CursorIcon, DisplayId, PlatformInput, PlatformTextInput, PlatformWindow,
@@ -127,6 +129,9 @@ pub struct HeadlessWindow {
     chrome: Mutex<KitChrome>,
     /// Whether the host closed the window: its commands answer `Closed`.
     closed: AtomicBool,
+    /// How the window is named to a portal, when it plays an exported
+    /// Wayland window ([`HeadlessWindow::with_portal_export`]).
+    portal_exports: Option<HeadlessPortalExports>,
 }
 
 impl std::fmt::Debug for HeadlessWindow {
@@ -292,7 +297,28 @@ impl HeadlessWindow {
             capabilities: Self::published_capabilities(false),
             chrome: Mutex::default(),
             closed: AtomicBool::new(false),
+            portal_exports: None,
         }
+    }
+
+    /// Name the window to a desktop portal as a Wayland window the compositor
+    /// exports under `handle`: every request is answered
+    /// `wayland:<handle>` and holds an export of its own until it ends or the
+    /// window closes, which [`HeadlessPortalExports::live`] counts; a closed
+    /// window answers no window. Without it the window answers no window, as
+    /// one of a system with no portals does.
+    #[must_use]
+    pub fn with_portal_export(mut self, handle: impl Into<String>) -> Self {
+        let handle: String = handle.into();
+        self.portal_exports = Some(HeadlessPortalExports::new(Arc::from(handle)));
+        self
+    }
+
+    /// The window's portal exports, when it was built
+    /// [`with_portal_export`](Self::with_portal_export).
+    #[must_use]
+    pub fn portal_exports(&self) -> Option<HeadlessPortalExports> {
+        self.portal_exports.clone()
     }
 
     /// The operating system's drag sessions this window plays: what a drag
@@ -466,8 +492,8 @@ impl PlatformWindow for HeadlessWindow {
         Ok(())
     }
 
-    fn haptics(&self) -> Option<Arc<dyn flui_platform::PlatformHaptics>> {
-        Some(Arc::clone(&self.haptics) as Arc<dyn flui_platform::PlatformHaptics>)
+    fn haptics(&self) -> Option<Arc<dyn flui_platform::haptics::PlatformHaptics>> {
+        Some(Arc::clone(&self.haptics) as Arc<dyn flui_platform::haptics::PlatformHaptics>)
     }
 
     fn system_chrome(&self) -> Option<Arc<dyn flui_platform::PlatformSystemChrome>> {
@@ -494,6 +520,21 @@ impl PlatformWindow for HeadlessWindow {
         Err(flui_platform::Unsupported::new(
             flui_platform::UnsupportedReason::NotOnThisPlatform,
         ))
+    }
+
+    /// A new export for each request when the window plays an exported
+    /// Wayland window ([`HeadlessWindow::with_portal_export`]), else no window.
+    fn portal_parent(
+        &self,
+        answer: flui_platform::capability::Resolver<flui_platform::capability::PortalParent>,
+    ) {
+        // A closed window names nothing, as on every host.
+        let parent = match &self.portal_exports {
+            Some(exports) if !self.closed.load(Ordering::Relaxed) => exports.export(),
+            _ => flui_platform::capability::PortalParent::none(),
+        };
+        // The owner retiring first leaves nothing waiting for the answer.
+        let _ = answer.resolve(parent);
     }
 
     /// Shown and focused, with no position (as on Wayland), its logical size
@@ -1359,7 +1400,11 @@ impl HeadlessHost {
     /// this one frames or moves the clock; with the first dropped-frame
     /// report of this pump (a segment panic or a pipeline error the UI runtime
     /// contained), after the pump returned; or with a panic that unwound out
-    /// of the pump when nothing was reported before it. See the
+    /// of the pump when nothing was reported before it; after a frame that
+    /// failed nothing, when a window's semantics publication found an author
+    /// error (an attribute its node's role does not support, or in debug
+    /// builds siblings sharing an identifier), in every open window at once;
+    /// a frame that failed otherwise drops its findings with it. See the
     /// [module docs](self#failures).
     pub fn pump(&mut self, dt: Duration) -> FrameOutcome {
         let pending = std::mem::take(&mut *self.failures.lock());
@@ -1422,8 +1467,18 @@ impl HeadlessHost {
             failures.clear();
             first
         };
+        // Taken on every outcome: a failed frame's findings are its own, and
+        // the failure that is raised already fails the test.
+        let semantics_findings = self.take_semantics_findings();
         match (attempt, first_failure) {
-            (Ok(outcome), None) => outcome,
+            (Ok(outcome), None) => {
+                assert!(
+                    semantics_findings.is_empty(),
+                    "the frame's semantics publication found author errors, by presentation: \
+                     {semantics_findings:?}"
+                );
+                outcome
+            }
             (Ok(_), Some(failure)) => panic!("{failure}"),
             (Err(payload), None) => resume_unwind(payload),
             (Err(payload), Some(failure)) => {
@@ -1438,6 +1493,32 @@ impl HeadlessHost {
                 panic!("{failure}")
             }
         }
+    }
+
+    /// Takes every open window's semantics findings from the frame that just
+    /// ran ([`crate::take_semantics_findings`]), each beside its presentation;
+    /// none once the last window closed and the UI runtime retired.
+    /// Every pump takes them, whatever its outcome, so a finding is never
+    /// reported against a later frame.
+    fn take_semantics_findings(
+        &self,
+    ) -> Vec<(
+        flui_foundation::PresentationId,
+        Vec<flui_rendering::semantics::SemanticsDiagnostic>,
+    )> {
+        let Some(ui_runtime) = self.try_ui_runtime() else {
+            return Vec::new();
+        };
+        self.open
+            .iter()
+            .filter_map(|window| {
+                let pipeline = ui_runtime
+                    .presentation_widgets_for_test(window.id)
+                    .pipeline_owner()?;
+                let findings = crate::take_semantics_findings(&pipeline);
+                (!findings.is_empty()).then_some((window.id, findings))
+            })
+            .collect::<Vec<_>>()
     }
 
     /// Leave the next `frames` frames unshown for the reason `how` names, as
@@ -2092,8 +2173,8 @@ impl HeadlessHost {
     }
 
     /// Report whether the platform lets `window` run, as a phone's host
-    /// reports its activity or scene pausing and resuming (Android's
-    /// `onPause`/`onResume`, a UIKit scene entering the background, a page
+    /// reports its activity or scene stopping and starting (Android's
+    /// `onStop`/`onStart`, a UIKit scene entering the background, a page
     /// frozen by the browser): the window's state says so, and the host
     /// delivers `WindowObservation::Execution(execution)`, which suspends
     /// (`Paused`) or resumes the window's lifecycle. Its focus and visibility
@@ -2281,7 +2362,9 @@ impl HeadlessHost {
     /// # Panics
     ///
     /// If the recording names a window this host has not opened or a surface
-    /// it has not embedded, or with the first panic an applied input raised.
+    /// it has not embedded, or with the first panic an applied input or frame
+    /// raised, a frame's semantics author error included ([`pump`](Self::pump)):
+    /// a recording of an application with one stops at that frame.
     pub fn replay(
         &mut self,
         recording: &crate::recording::ReplayableRecording,
@@ -2375,7 +2458,8 @@ impl HeadlessHost {
     ///
     /// # Panics
     ///
-    /// With the first panic a delivered input or frame raised.
+    /// With the first panic a delivered input or frame raised, a frame's
+    /// semantics author error included ([`pump`](Self::pump)).
     pub fn run_script(&mut self, script: &crate::replay::PointerScript) {
         let window = self.primary_window();
         let base = self.event_now();
@@ -2681,6 +2765,9 @@ impl HeadlessHost {
         };
         let closed = self.open.remove(position);
         closed.window.closed.store(true, Ordering::Relaxed);
+        if let Some(exports) = &closed.window.portal_exports {
+            exports.release_all();
+        }
         // A window that is gone holds no quit.
         self.quit_consented(id);
         if !self.open.is_empty() {

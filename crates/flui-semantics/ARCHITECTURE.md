@@ -345,7 +345,7 @@ text's name through `accesskit_consumer` the way the adapters do. For the joined
 an `ActionCall`, the action fused with exactly its payload; `semantics_action_request_for`
 decodes a platform request into one or refuses it with `ActionDecodeError` (a missing or
 mismatched payload, an unrouted action, an id FLUI never publishes) before any handler runs.
-The tools an agent calls (ADR-0080, `flui_protocol::ActionName`) arrive through
+The tools an agent calls (ADR-0080, `flui_protocol::wire::ActionName`) arrive through
 accesskit_windows 0.35.0 as: `invoke`, `toggle` and `select` → `Click`; `set_value` →
 `SetValue` with its text, or `SetNumericValue` with its number when the request carries
 `ActionData::NumericValue` (a slider through UI Automation's `RangeValue`) or, on the wire,
@@ -754,8 +754,8 @@ anything queued since. The runtime contains a reporting panic, so the frame's ou
 stays the one returned; the runtime also schedules another frame to retry the report.
 `RenderingBinding::draw_frame` lets the panic propagate and first gives the painted tree back to
 the pipeline, with no call out, so the next draw delivers the frame. A finding still queued and the same finding from a
-newer change are two reports. `flui-testing` fails every harness frame (the widget host's and
-`HeadlessBinding`'s) that left anything out, from a record the pipeline keeps apart from the
+newer change are two reports. `flui-testing`'s `HeadlessHost::pump` fails every frame in which an open window's publication
+left anything out (`a_bare_host_frame_fails_on_an_attribute_its_role_does_not_support`), from a record the pipeline keeps apart from the
 report queue (`PipelineOwner::take_unchecked_semantics_diagnostics`, with the `testing` feature),
 so a reporting subscriber cannot hide a finding and a widget's author error surfaces in its own
 tests.

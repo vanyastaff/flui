@@ -38,6 +38,8 @@ pub type BootstrapError = Box<dyn std::error::Error + Send + Sync + 'static>;
 ///   constructors, when the system is below FLUI's floor (ADR-0244 §3).
 /// * [`HostProtocol`](Self::HostProtocol) — the Android constructor, when the
 ///   APK's Java classes come from another FLUI version (ADR-0255).
+/// * [`SecondActivity`](Self::SecondActivity) — the Android constructor, over
+///   an Activity instance that does not run FLUI (ADR-0366).
 /// * [`EventLoop`](Self::EventLoop) — `Platform::run` when the loop itself
 ///   fails to start or exits abnormally.
 /// * [`Bootstrap`](Self::Bootstrap) — `Platform::run` when the embedder's
@@ -120,6 +122,17 @@ pub enum PlatformError {
         /// The protocol the classes in the APK state (`FluiHost.PROTOCOL`).
         packaged: i32,
     },
+
+    /// This Activity instance does not run FLUI (ADR-0366): a process runs
+    /// one platform, in a task of its own application, and this instance
+    /// forwards what it was opened with to that one and finishes.
+    /// `android_hands_over` tells it before anything starts. Android only,
+    /// raised before any native method is bound.
+    #[error(
+        "this Activity instance does not run FLUI; it forwards its intent to the one that does \
+         and finishes"
+    )]
+    SecondActivity,
 
     /// The platform event loop failed to start, or terminated abnormally.
     #[error("platform event loop failed: {message}")]

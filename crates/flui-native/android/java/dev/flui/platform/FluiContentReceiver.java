@@ -8,9 +8,11 @@ import android.view.View;
 /**
  * {@link FluiView}'s receiver of pasted and keyboard content (API 31).
  *
- * Text reaches the focused field as one input method edit at its selection.
- * What is not text is handed back, which tells the sender it was not taken:
- * FLUI's text store has no place for an image.
+ * Text reaches the focused field as one input method edit at its selection,
+ * within the size {@link FluiView#clipText} admits. What is not text, and
+ * text past that size, is handed back, which tells the sender it was not
+ * taken: FLUI's text store has no place for an image, and no provider's
+ * content is read here.
  *
  * Its own class, loaded only on API 31 and later: the interface it implements
  * does not exist before.
@@ -35,24 +37,23 @@ final class FluiContentReceiver implements OnReceiveContentListener {
             return payload;
         }
         ClipData clip = payload.getClip();
-        StringBuilder text = new StringBuilder();
+        CharSequence text = FluiView.clipText(clip);
+        if (text != null) {
+            view.receiveText(text);
+        }
+        // What holds no text, and text refused for its size, is not taken.
         java.util.ArrayList<ClipData.Item> rest = new java.util.ArrayList<ClipData.Item>();
         for (int index = 0; index < clip.getItemCount(); index++) {
             ClipData.Item item = clip.getItemAt(index);
-            CharSequence itemText = item.getText();
-            if (itemText != null) {
-                text.append(itemText);
-            } else if (item.getUri() == null && item.getIntent() == null) {
-                text.append(item.coerceToText(view.getContext()));
-            } else {
+            if (text == null || item.getText() == null) {
                 rest.add(item);
             }
         }
-        if (text.length() > 0) {
-            view.receiveText(text);
-        }
         if (rest.isEmpty()) {
             return null;
+        }
+        if (rest.size() == clip.getItemCount()) {
+            return payload;
         }
         ClipData remaining = new ClipData(clip.getDescription(), rest.get(0));
         for (int index = 1; index < rest.size(); index++) {

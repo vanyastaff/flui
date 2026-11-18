@@ -49,7 +49,9 @@ use crate::haptics::engine_state::{Engine, EngineState};
 use crate::owner::apple::ios::NativeOwner;
 use crate::owner::panic_boundary::{AfterPanic, os_entry};
 use flui_platform::haptics::{HapticCapabilities, HapticOutcome, HapticPattern, HapticRequest};
-use flui_platform::{DeviceId, HapticFeedback, PlatformHaptics, Unsupported, UnsupportedReason};
+use flui_platform::{
+    HapticFeedback, Unsupported, UnsupportedReason, haptics::PlatformHaptics, pointer::DeviceId,
+};
 
 /// Whether the generators take a view (iOS 17.5+).
 fn view_bound() -> bool {

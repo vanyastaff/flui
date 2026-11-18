@@ -32,6 +32,10 @@ impl ClipboardBackend for Inert {
     fn concealment(&self) -> flui_platform::Concealment {
         flui_platform::Concealment::Unavailable
     }
+
+    fn expiry_clearing(&self) -> flui_platform::ExpiryClearing {
+        flui_platform::ExpiryClearing::Unavailable
+    }
 }
 
 struct ClipboardPlugin;

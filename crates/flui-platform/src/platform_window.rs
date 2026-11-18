@@ -15,8 +15,8 @@ use std::sync::Arc;
 use flui_foundation::geometry::Point;
 
 use crate::{
-    AdmittedCommand, ApplyError, Cursor, CursorError, PlatformHaptics, PlatformTextInput,
-    RedrawRequester, SurfaceTarget, Unsupported, WindowId, WindowState,
+    AdmittedCommand, ApplyError, Cursor, CursorError, PlatformTextInput, RedrawRequester,
+    SurfaceTarget, Unsupported, WindowId, WindowState, haptics::PlatformHaptics,
 };
 
 /// What lies under a point given in one window's coordinates, as
@@ -100,7 +100,7 @@ pub enum WindowAt {
 /// use flui_platform::input_regions::InputRegion;
 /// use flui_platform::{
 ///     AdmissionError, AdmittedCommand, ApplyError, Cursor, CursorError, FrameRateHint,
-///     GestureGeometry, PlatformHaptics, PlatformSystemChrome, PlatformTextInput, PlatformWindow,
+///     GestureGeometry, haptics::PlatformHaptics, PlatformSystemChrome, PlatformTextInput, PlatformWindow,
 ///     PreferenceQueryError, RedrawRequester, SurfaceTarget, SwapChainStatistics, Unsupported,
 ///     UnsupportedReason, WindowAt, WindowCapabilities, WindowCommand, WindowExtent,
 ///     WindowGeometry, WindowId, WindowIdMint, WindowMaterial, WindowMode, WindowState,
@@ -252,7 +252,7 @@ pub enum WindowAt {
 /// use flui_platform::input_regions::InputRegion;
 /// use flui_platform::{
 ///     AdmittedCommand, ApplyError, Cursor, CursorError, FrameRateHint, GestureGeometry,
-///     PlatformHaptics, PlatformSystemChrome, PlatformTextInput, PlatformWindow,
+///     haptics::PlatformHaptics, PlatformSystemChrome, PlatformTextInput, PlatformWindow,
 ///     PreferenceQueryError, RedrawRequester, SurfaceTarget, Unsupported, UnsupportedReason,
 ///     WindowAt, WindowExtent, WindowGeometry, WindowId, WindowState,
 /// };
@@ -617,4 +617,25 @@ pub trait PlatformWindow {
     /// is `Unavailable`: the window system takes no such request, or this
     /// operating system build lacks it ([`NotOnThisDevice`](crate::UnsupportedReason::NotOnThisDevice)).
     fn set_frame_rate_hint(&self, hint: crate::FrameRateHint) -> Result<(), Unsupported>;
+
+    /// Name this window to a desktop portal for one request: answer `answer`
+    /// with the [`PortalParent`](crate::capability::PortalParent) the request
+    /// passes as `parent_window` and holds until it ends (ADR-0365).
+    ///
+    /// An X11 window answers `x11:<XID>` at once. A Wayland window exports
+    /// itself for the request (`xdg-foreign`) and answers `wayland:<handle>`
+    /// once the compositor named the export, which the answer's drop
+    /// releases, and the window's close releases with it whoever holds the
+    /// answer; a compositor with no exporter answers no window. Called on
+    /// the owner thread, through
+    /// [`WindowRef::portal_parent`](crate::capability::WindowRef::portal_parent),
+    /// only while the window is open.
+    ///
+    /// The default answers [`PortalParent::none`](crate::capability::PortalParent::none):
+    /// only a Linux desktop has portals, so a window of any other system has
+    /// no name a portal takes.
+    fn portal_parent(&self, answer: crate::capability::Resolver<crate::capability::PortalParent>) {
+        // The owner retiring first leaves nothing waiting for the answer.
+        let _ = answer.resolve(crate::capability::PortalParent::none());
+    }
 }

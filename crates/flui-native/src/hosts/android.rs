@@ -112,7 +112,8 @@ impl HostPlatform<Android> {
     /// as a second line behind `minSdk` (ADR-0244 §3);
     /// [`PlatformError::HostProtocol`] and [`PlatformError::Init`] when the
     /// APK's Java classes are another FLUI version's, missing, or not under a
-    /// `FluiActivity` (ADR-0255 decision 5).
+    /// `FluiActivity` (ADR-0255 decision 5); [`PlatformError::SecondActivity`]
+    /// over an instance that does not run FLUI (ADR-0366).
     pub(crate) fn try_new(app: AndroidApp) -> Result<Self, PlatformError> {
         // Opened once and kept for the platform's life by the loop.
         let library: Arc<dyn SymbolSource> = Arc::new(LoadedLibraries::open());

@@ -27,7 +27,7 @@ use std::num::{NonZeroU8, NonZeroU64};
 use std::rc::Rc;
 use std::time::Duration;
 
-use flui_foundation::geometry::{Bounds, DevicePixelRatio, EdgeInsets, Point, Size, WindowMetrics};
+use flui_foundation::geometry::{DevicePixelRatio, EdgeInsets, Point, Rect, Size, WindowMetrics};
 use flui_platform::EventTime;
 use flui_platform::keyboard::Modifiers;
 use flui_platform::pointer::{
@@ -36,11 +36,12 @@ use flui_platform::pointer::{
 use flui_platform::text_store::TextStore;
 use flui_platform::{
     AppTitleBar, Brightness, CapabilityAbsence, CloseDecision, ColorGamut, ControlsOffset,
-    CursorGrab, DisplayColor, DisplayId, DisplayInfo, DisplayParts, Headroom, ImeEvent, InsetCurve,
-    InsetMotion, KeyboardInset, MemoryPressureLevel, PlatformInput, RefreshPeriod, SessionEndPhase,
-    SizeConstraints, SystemControls, SystemNotice, SystemPreferences, WindowExecutionState,
-    WindowExtent, WindowFrame, WindowGeometry, WindowInsets, WindowInteraction, WindowLevel,
-    WindowMode, WindowState, WindowStateParts,
+    CursorGrab, DesktopOrigin, DisplayBounds, DisplayColor, DisplayDescription, DisplayId,
+    DisplayParts, Headroom, ImeEvent, InsetCurve, InsetMotion, KeyboardInset, MemoryPressureLevel,
+    PlatformInput, RefreshPeriod, SessionEndPhase, SizeConstraints, SystemControls, SystemNotice,
+    SystemPreferences, WindowExecutionState, WindowExtent, WindowFrame, WindowGeometry,
+    WindowInsets, WindowInteraction, WindowLevel, WindowMode, WindowPosition, WindowState,
+    WindowStateParts,
 };
 use flui_protocol::native_recording as wire;
 use serde::Serialize;
@@ -400,7 +401,7 @@ pub enum DisplayRead {
 ///
 /// The label is the number the recording platform's registry issued; it names
 /// the display within the recording only, so a replay issues an id of its own
-/// for each label ([`DisplayParts::into_info`]).
+/// for each label ([`DisplayParts::into_description`]).
 #[derive(Debug, Clone, PartialEq)]
 pub struct RecordedDisplay {
     /// The display within this recording.
@@ -411,7 +412,7 @@ pub struct RecordedDisplay {
 
 impl RecordedDisplay {
     /// The display `info`, labelled with its id's number.
-    pub fn of(info: DisplayInfo) -> Self {
+    pub fn of(info: DisplayDescription) -> Self {
         let (id, parts) = info.into_parts();
         Self {
             label: id.get(),
@@ -420,31 +421,81 @@ impl RecordedDisplay {
     }
 }
 
-/// One snapshot a window published: its revision, its facts, and the label of
-/// the display it is on.
+/// A window position as a recording holds it: the point, finite, and the
+/// label of the display it is measured on.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct RecordedPosition {
+    display: u64,
+    at: Point<f64>,
+}
+
+impl RecordedPosition {
+    /// The point `at` of the display labelled `display`.
+    ///
+    /// # Errors
+    /// [`InvalidGeometry::Position`](flui_platform::InvalidGeometry::Position)
+    /// when a coordinate is not finite.
+    fn try_new(display: u64, at: Point<f64>) -> Result<Self, flui_platform::InvalidGeometry> {
+        if at.x.is_finite() && at.y.is_finite() {
+            Ok(Self { display, at })
+        } else {
+            Err(flui_platform::InvalidGeometry::Position { x: at.x, y: at.y })
+        }
+    }
+
+    fn of(position: WindowPosition) -> Self {
+        Self {
+            display: position.display().get(),
+            at: position.at(),
+        }
+    }
+
+    /// The position on the display the replay issued for this label; `None`
+    /// when it holds none, and the window is then unplaced.
+    fn resolve(self, resolve: &mut impl FnMut(u64) -> Option<DisplayId>) -> Option<WindowPosition> {
+        WindowPosition::try_new(resolve(self.display)?, self.at).ok()
+    }
+}
+
+/// One snapshot a window published: its revision, its facts, and the labels
+/// of the display it is on and of the displays its positions are measured on.
 ///
-/// The label is the number the recording platform's registry issued the
+/// A label is the number the recording platform's registry issued the
 /// display, as a `platform` recording of the same session writes it; a replay
-/// issues an id of its own for each label, so the facts are handed out with
-/// the display the replay chose ([`Self::into_parts`]).
+/// issues an id of its own for each label, so the facts are handed out on the
+/// displays the replay chose ([`Self::into_parts`]).
 #[derive(Debug, Clone, PartialEq)]
 pub struct RecordedWindowState {
     revision: u64,
     display: Option<u64>,
-    /// The facts, with no display: `display` names it.
+    /// The outer rectangle's position, by its display's label.
+    outer_position: Option<RecordedPosition>,
+    /// The normal rectangle's position, by its display's label.
+    normal_position: Option<RecordedPosition>,
+    /// The facts, with no display and their rectangles unplaced: the labels
+    /// above name those.
     /// Boxed: a snapshot outweighs every other row several times over.
     parts: Box<WindowStateParts>,
 }
 
 impl RecordedWindowState {
-    /// The snapshot `state`, its display labelled with its id's number.
+    /// The snapshot `state`, each display labelled with its id's number.
     pub fn of(state: WindowState) -> Self {
         let revision = state.revision.get();
         let mut parts = state.into_parts();
         let display = parts.display.take().map(DisplayId::get);
+        let outer_position = parts.outer.position().map(RecordedPosition::of);
+        parts.outer = parts.outer.at(None);
+        let normal_position = parts
+            .normal_geometry
+            .and_then(WindowGeometry::position)
+            .map(RecordedPosition::of);
+        parts.normal_geometry = parts.normal_geometry.map(|normal| normal.at(None));
         Self {
             revision,
             display,
+            outer_position,
+            normal_position,
             parts: Box::new(parts),
         }
     }
@@ -464,11 +515,23 @@ impl RecordedWindowState {
         self.parts.title.as_deref()
     }
 
-    /// The facts, on `display`: the id the replay issued for
-    /// [`Self::display`]'s label.
-    pub fn into_parts(self, display: Option<DisplayId>) -> WindowStateParts {
+    /// The facts, on the displays `resolve` gives for each label: the ids the
+    /// replay issued. A position whose label the replay holds no display for
+    /// is no place there, and its rectangle is handed out unplaced.
+    pub fn into_parts(self, mut resolve: impl FnMut(u64) -> Option<DisplayId>) -> WindowStateParts {
+        let display = self.display.and_then(&mut resolve);
+        let outer = self
+            .parts
+            .outer
+            .at(self.outer_position.and_then(|at| at.resolve(&mut resolve)));
+        let normal_geometry = self
+            .parts
+            .normal_geometry
+            .map(|normal| normal.at(self.normal_position.and_then(|at| at.resolve(&mut resolve))));
         WindowStateParts {
             display,
+            outer,
+            normal_geometry,
             ..*self.parts
         }
     }
@@ -2079,17 +2142,26 @@ fn display_read_from_wire(read: wire::DisplayRead) -> DtoResult<DisplayRead> {
     })
 }
 
-const fn bounds_to_wire(bounds: Bounds<i32>) -> [i32; 4] {
-    [
-        bounds.origin.x,
-        bounds.origin.y,
-        bounds.size.width,
-        bounds.size.height,
-    ]
+/// `bounds` in the schema: the extent and the usable area as left, top,
+/// right, bottom.
+fn display_bounds_to_wire(bounds: DisplayBounds) -> ([f64; 2], [f64; 4]) {
+    let usable = bounds.usable();
+    (
+        size_to_wire(bounds.extent()),
+        [usable.left(), usable.top(), usable.right(), usable.bottom()],
+    )
 }
 
-const fn bounds_from_wire([x, y, width, height]: [i32; 4]) -> Bounds<i32> {
-    Bounds::new(Point::new(x, y), Size::new(width, height))
+/// The bounds `extent` and `usable` describe, refused when they are not a
+/// display's.
+fn display_bounds_from_wire(extent: [f64; 2], usable: [f64; 4]) -> DtoResult<DisplayBounds> {
+    let [width, height] = extent;
+    let [left, top, right, bottom] = usable;
+    DisplayBounds::try_new(
+        Size::new(width, height),
+        Rect::from_ltrb(left, top, right, bottom),
+    )
+    .map_err(|refused| invalid(refused.to_string()))
 }
 
 /// Every absence a capability can carry has a wire name: the match is over
@@ -2120,14 +2192,15 @@ fn absence_from_wire(absence: wire::Absence) -> DtoResult<CapabilityAbsence> {
 fn display_to_wire(display: &RecordedDisplay) -> DtoResult<wire::Display> {
     let DisplayParts {
         name,
+        origin,
         bounds,
-        usable_bounds,
         scale_factor,
         refresh_period,
         is_primary,
         persistent_key,
         color,
     } = display.parts.clone();
+    let (extent, usable) = display_bounds_to_wire(bounds);
     let color = match color {
         Ok(color) => {
             // The schema writes a standard range with the headroom it has by
@@ -2158,8 +2231,9 @@ fn display_to_wire(display: &RecordedDisplay) -> DtoResult<wire::Display> {
     Ok(wire::Display {
         label: display.label,
         name,
-        bounds: bounds_to_wire(bounds),
-        usable_bounds: bounds_to_wire(usable_bounds),
+        origin: [origin.get().x, origin.get().y],
+        extent,
+        usable,
         scale_factor: scale_factor.get(),
         refresh_period_ns: refresh_period
             .map(|period| duration_nanos(period.get()))
@@ -2175,8 +2249,9 @@ fn display_from_wire(wire: wire::Display) -> DtoResult<RecordedDisplay> {
     let wire::Display {
         label,
         name,
-        bounds,
-        usable_bounds,
+        origin,
+        extent,
+        usable,
         scale_factor,
         refresh_period_ns,
         primary,
@@ -2231,8 +2306,8 @@ fn display_from_wire(wire: wire::Display) -> DtoResult<RecordedDisplay> {
         label,
         parts: DisplayParts {
             name,
-            bounds: bounds_from_wire(bounds),
-            usable_bounds: bounds_from_wire(usable_bounds),
+            origin: DesktopOrigin::new(origin[0], origin[1]),
+            bounds: display_bounds_from_wire(extent, usable)?,
             scale_factor,
             refresh_period,
             is_primary: primary,
@@ -2253,20 +2328,43 @@ fn extent_from_wire([width, height]: [f64; 2], what: &str) -> DtoResult<WindowEx
         .map_err(|refused| invalid(format!("{what}: {refused}")))
 }
 
-fn geometry_to_wire(geometry: WindowGeometry) -> wire::WindowGeometry {
+/// A rectangle in the schema: its extent, and its position by the label of
+/// the display it is measured on.
+fn geometry_to_wire(
+    geometry: WindowGeometry,
+    position: Option<RecordedPosition>,
+) -> wire::WindowGeometry {
     wire::WindowGeometry {
-        position: geometry.position().map(|position| [position.x, position.y]),
+        position: position.map(|position| wire::WindowPosition {
+            display: position.display,
+            at: [position.at.x, position.at.y],
+        }),
         size: size_to_wire(geometry.size()),
     }
 }
 
-fn geometry_from_wire(geometry: wire::WindowGeometry, what: &str) -> DtoResult<WindowGeometry> {
+/// The rectangle `geometry` describes, unplaced, and the position it names
+/// by label; refused when a number is not one a snapshot holds.
+fn geometry_from_wire(
+    geometry: wire::WindowGeometry,
+    what: &str,
+) -> DtoResult<(WindowGeometry, Option<RecordedPosition>)> {
     let [width, height] = geometry.size;
-    WindowGeometry::try_new(
-        geometry.position.map(|[x, y]| Point::new(x, y)),
-        Size::new(width, height),
-    )
-    .map_err(|refused| invalid(format!("{what}: {refused}")))
+    let unplaced = WindowGeometry::try_new(None, Size::new(width, height))
+        .map_err(|refused| invalid(format!("{what}: {refused}")))?;
+    let position = geometry
+        .position
+        .map(
+            |wire::WindowPosition {
+                 display,
+                 at: [x, y],
+             }| {
+                RecordedPosition::try_new(display, Point::new(x, y))
+                    .map_err(|refused| invalid(format!("{what}: {refused}")))
+            },
+        )
+        .transpose()?;
+    Ok((unplaced, position))
 }
 
 /// `frame` in the schema.
@@ -2335,7 +2433,7 @@ fn window_state_to_wire(state: &RecordedWindowState) -> DtoResult<wire::WindowSt
     } = (*state.parts).clone();
     Ok(wire::WindowState {
         revision: state.revision,
-        outer: geometry_to_wire(outer),
+        outer: geometry_to_wire(outer, state.outer_position),
         content_size: size_to_wire(content_size.get()),
         mode: match mode {
             WindowMode::Normal => wire::WindowMode::Normal,
@@ -2344,7 +2442,8 @@ fn window_state_to_wire(state: &RecordedWindowState) -> DtoResult<wire::WindowSt
             WindowMode::Fullscreen => wire::WindowMode::Fullscreen,
             _ => return Err(DtoError::Unmirrored("WindowMode")),
         },
-        normal_geometry: normal_geometry.map(geometry_to_wire),
+        normal_geometry: normal_geometry
+            .map(|normal| geometry_to_wire(normal, state.normal_position)),
         visible,
         occluded,
         focused: focus.is_focused(),
@@ -2509,8 +2608,16 @@ fn window_state_from_wire(wire: wire::WindowState) -> DtoResult<RecordedWindowSt
         edges_from_wire(system_gestures),
     )
     .map_err(|error| invalid(format!("insets {safe_area:?} {system_gestures:?}: {error}")))?;
+    let (outer, outer_position) = geometry_from_wire(outer, "outer")?;
+    let (normal_geometry, normal_position) = match normal_geometry {
+        Some(normal) => {
+            let (normal, position) = geometry_from_wire(normal, "normal geometry")?;
+            (Some(normal), position)
+        }
+        None => (None, None),
+    };
     let parts = WindowStateParts {
-        outer: geometry_from_wire(outer, "outer")?,
+        outer,
         content_size: extent_from_wire(content_size, "content size")?,
         mode: match mode {
             wire::WindowMode::Normal => WindowMode::Normal,
@@ -2519,9 +2626,7 @@ fn window_state_from_wire(wire: wire::WindowState) -> DtoResult<RecordedWindowSt
             wire::WindowMode::Fullscreen => WindowMode::Fullscreen,
             other => return Err(unread(other.name())),
         },
-        normal_geometry: normal_geometry
-            .map(|geometry| geometry_from_wire(geometry, "normal geometry"))
-            .transpose()?,
+        normal_geometry,
         visible,
         occluded,
         // A hidden window stands nowhere, as `WindowState::successor` publishes it.
@@ -2583,6 +2688,8 @@ fn window_state_from_wire(wire: wire::WindowState) -> DtoResult<RecordedWindowSt
     Ok(RecordedWindowState {
         revision,
         display,
+        outer_position,
+        normal_position,
         parts: Box::new(parts),
     })
 }

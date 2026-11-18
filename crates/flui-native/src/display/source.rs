@@ -8,10 +8,43 @@
 //! each display source hands the value its platform reports straight to the
 //! one for its unit, and one check there refuses what describes no cadence.
 
-use flui_platform::{DisplayId, DisplayInfo, DisplayKey, DisplayRegistry, DisplaySnapshot};
+use flui_platform::{DisplayDescription, DisplayId, DisplayKey, DisplayRegistry, DisplaySnapshot};
 use parking_lot::Mutex;
 
 use crate::error::PlatformError;
+
+/// A display a window system lays out in device pixels (Win32, the web's
+/// screens), from its rectangle and usable area in the desktop's device
+/// pixels: the one rule every such source reads a display's bounds by.
+///
+/// A usable area that reaches past the display (a work area a window manager
+/// sent for the whole desktop) leaves the display usable as a whole, with a
+/// warning; a display with no area is left out of the snapshot (`None`),
+/// with a warning, and its windows name no display.
+#[cfg(any(windows, target_arch = "wasm32"))]
+pub(crate) fn device_display(
+    id: DisplayId,
+    name: String,
+    display: flui_foundation::geometry::Bounds<i32>,
+    usable: flui_foundation::geometry::Bounds<i32>,
+    scale: flui_foundation::geometry::DevicePixelRatio,
+) -> Option<DisplayDescription> {
+    match DisplayDescription::from_device(id, name.clone(), display, usable, scale) {
+        Ok(info) => Some(info),
+        Err(refused) => {
+            tracing::warn!(
+                %refused,
+                display = %name,
+                "a display's usable area is not inside it; the whole display is usable"
+            );
+            DisplayDescription::from_device(id, name, display, display, scale)
+                .inspect_err(|refused| {
+                    tracing::warn!(%refused, "a display with no area is left out of the snapshot");
+                })
+                .ok()
+        }
+    }
+}
 
 /// The gamut of a display whose platform reports only whether it shows the
 /// wide gamut, which on Apple and Android is Display P3.
@@ -90,7 +123,7 @@ impl MeasuredPeriod {
 /// One platform instance's display identities and last published snapshot.
 ///
 /// A backend mints ids for the outputs it sampled, hands the resulting
-/// [`DisplayInfo`] list to [`publish`](Self::publish) and returns what that
+/// [`DisplayDescription`] list to [`publish`](Self::publish) and returns what that
 /// answers from `Platform::display_snapshot`. An unchanged sample answers the
 /// previous snapshot with its revision, so a consumer that compares revisions
 /// sees no change.
@@ -194,7 +227,7 @@ impl DisplaySource {
     /// snapshot stays published.
     pub(crate) fn publish(
         &self,
-        displays: Vec<DisplayInfo>,
+        displays: Vec<DisplayDescription>,
     ) -> Result<DisplaySnapshot, PlatformError> {
         let mut last = self.last.lock();
         let next = last
@@ -256,7 +289,7 @@ impl DisplaySource {
     ))]
     pub(crate) fn snapshot_with(
         &self,
-        sample: impl FnOnce() -> Result<Vec<DisplayInfo>, PlatformError>,
+        sample: impl FnOnce() -> Result<Vec<DisplayDescription>, PlatformError>,
     ) -> Result<DisplaySnapshot, PlatformError> {
         self.snapshot_with_aux(|| sample().map(|displays| (displays, ())), |()| {})
     }
@@ -281,7 +314,7 @@ impl DisplaySource {
     ))]
     pub(crate) fn snapshot_with_aux<T>(
         &self,
-        sample: impl FnOnce() -> Result<(Vec<DisplayInfo>, T), PlatformError>,
+        sample: impl FnOnce() -> Result<(Vec<DisplayDescription>, T), PlatformError>,
         commit: impl FnOnce(T),
     ) -> Result<DisplaySnapshot, PlatformError> {
         use std::sync::atomic::Ordering;
@@ -712,18 +745,19 @@ mod mapping {
 mod tests {
     use std::cell::Cell;
 
-    use flui_foundation::geometry::{Bounds, DevicePixelRatio};
-    use flui_platform::{DisplayInfo, DisplayKey};
+    use flui_foundation::geometry::{Bounds, DevicePixelRatio, Point, Size};
+    use flui_platform::{DisplayDescription, DisplayKey};
 
     use super::DisplaySource;
     use crate::error::PlatformError;
 
-    fn one_display(source: &DisplaySource, scale: f64) -> Vec<DisplayInfo> {
+    fn one_display(source: &DisplaySource, scale: f64) -> Vec<DisplayDescription> {
         let id = source
             .mint(&DisplayKey::Injected(1))
             .expect("ids are not exhausted");
         let scale = DevicePixelRatio::try_new(scale).expect("a positive ratio");
-        vec![DisplayInfo::new(id, "Test", Bounds::default(), scale)]
+        let bounds = Bounds::new(Point::new(0, 0), Size::new(1, 1));
+        vec![DisplayDescription::from_device(id, "Test", bounds, bounds, scale).expect("a display")]
     }
 
     /// A source with a counted sample that reads one display.
@@ -784,7 +818,7 @@ mod tests {
         source.invalidate();
         let failed = source.snapshot_with_aux(
             || {
-                Err::<(Vec<DisplayInfo>, Vec<u32>), _>(PlatformError::Displays {
+                Err::<(Vec<DisplayDescription>, Vec<u32>), _>(PlatformError::Displays {
                     message: "the OS refused".into(),
                 })
             },

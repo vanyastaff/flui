@@ -9,7 +9,7 @@
 //! semantics is found by the identifier its author gives a group around
 //! it (`Semantics::new().container(true).role(SemanticsRole::Group).identifier(..)`, ADR-0240) and [`id`].
 
-use flui_protocol::{Locator, Role, StateFilter, TextMatch};
+use flui_protocol::{locator::Locator, locator::StateFilter, locator::TextMatch, wire::Role};
 
 /// Elements whose accessible name is exactly `text`: a `Text` reads as its
 /// text, a button as the text it holds.

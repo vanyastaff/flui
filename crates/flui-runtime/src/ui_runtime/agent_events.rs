@@ -17,7 +17,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use flui_protocol::{
-    Event, EventFilter, EventKind, FrameEvent, GapEvent, SemanticsEvent, WindowEvent, WindowId,
+    events::Event, events::EventFilter, events::EventKind, events::FrameEvent, events::GapEvent,
+    events::SemanticsEvent, events::WindowEvent, tree::WindowId,
 };
 use flui_view::__runtime::{EventSource, WakeSlot};
 use flui_view::dev_agent::AgentEvents;
@@ -203,7 +204,7 @@ impl Subscriber {
 pub(crate) struct EventHub {
     subscribers: Vec<Subscriber>,
     /// The last tree revision a `semantics` event named.
-    revision: Option<flui_protocol::TreeRevision>,
+    revision: Option<flui_protocol::tree::TreeRevision>,
     /// Frames presented and frames skipped that `frame` events already named.
     frames: (u64, u64),
 }
@@ -310,7 +311,7 @@ impl PresentationState {
             pipeline
                 .semantics_owner()
                 .map(flui_semantics::SemanticsOwner::revision)
-                .filter(|revision| revision.0 != 0)
+                .filter(|revision| *revision != flui_protocol::tree::TreeRevision::ZERO)
         });
         if let Some(revision) = revision {
             let changed = {

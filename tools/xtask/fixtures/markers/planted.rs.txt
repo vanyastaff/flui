@@ -17,6 +17,8 @@ pub fn raw() -> &'static str {
 // Follows the W1-A4 step. expect: wave
 // tracker H4 in a code comment. expect: tracker-h
 fn test_t064_x() {} // expect: spec-task
+/// The core set holds thirteen methods (R28a). expect: spec-requirement
+// as the render-scaling spec asks (RS12). expect: spec-requirement
 
 /// rustdoc removes the smallest indent before reading Markdown:
 ///
@@ -49,6 +51,7 @@ const W400: u16 = 400;
 // Phase 1: lay out the children, then position them
 // PR #1242 adds it, a history link
 // the keys F1-F12 and the weight W400
+// the register R6 and the case R2 of the table, with no parentheses
 fn nine_slice_advanced() {}
 // run with --slice 1/3 of the suite
 // a plain slice 1 of the work is a label again. expect: slice

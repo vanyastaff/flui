@@ -12,7 +12,7 @@
 //! shares with tests, devtools and agents; it is re-exported here so its path
 //! through this crate is unchanged.
 
-pub use flui_protocol::SemanticsRole;
+pub use flui_protocol::semantics::SemanticsRole;
 
 // ============================================================================
 // AccessibilityFocusBlockType

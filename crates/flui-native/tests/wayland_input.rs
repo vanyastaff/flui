@@ -535,20 +535,25 @@ mod cases {
         };
         let deadline = Instant::now() + Duration::from_secs(10);
         let mut raised = 0;
-        while !keys().contains(&KeyState::Down(KeyPress::First)) {
+        // The compositor may hand the release over in a later read than the
+        // press; a release the panicking turn dropped never comes.
+        while !keys().contains(&KeyState::Up) {
             let turned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 run_for(&platform, Duration::from_millis(20))
             }));
             if turned.is_err() {
                 raised += 1;
             }
-            assert!(Instant::now() < deadline, "the press never came");
+            assert!(
+                Instant::now() < deadline,
+                "the release never came: the press's panic dropped it"
+            );
         }
         assert_eq!(raised, 1, "the press's panic left the loop once");
         assert_eq!(
             keys(),
             [KeyState::Down(KeyPress::First), KeyState::Up],
-            "the release the turn took was dropped with the press's panic"
+            "the press and its release each reached the handler once"
         );
         window.close_for_cleanup();
         run_for(&platform, Duration::from_millis(50)).expect("the loop turns");

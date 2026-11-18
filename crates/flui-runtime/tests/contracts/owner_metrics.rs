@@ -1749,8 +1749,8 @@ fn native_fling_profile_controls_real_scroll_inertia() {
         geometry::{DevicePixelRatio, Point},
     };
     use flui_platform::pointer::{
-        PointerButton, PointerButtons, PointerEvent, PointerInfo, PointerKind, PointerMove,
-        PointerPosition, PointerPress, PointerRelease, PointerSample,
+        PointerButton, PointerButtons, PointerEvent, PointerKind, PointerMove, PointerPosition,
+        PointerPress, PointerRelease, PointerSample, PointerSource,
     };
     use flui_platform::{FlingSpeeds, GestureGeometry, PlatformInput, SystemPreferences};
     use std::{
@@ -1767,7 +1767,7 @@ fn native_fling_profile_controls_real_scroll_inertia() {
         )
     };
     let event = |millis: u64, y: f64, phase: u8| {
-        let info = PointerInfo::new(
+        let info = PointerSource::new(
             flui_interaction::PointerId::try_from(1).expect("pointer"),
             PointerKind::Touch,
         );
@@ -2344,7 +2344,7 @@ impl flui_platform::PlatformWindow for GeometryWindow {
         None
     }
 
-    fn haptics(&self) -> Option<std::sync::Arc<dyn flui_platform::PlatformHaptics>> {
+    fn haptics(&self) -> Option<std::sync::Arc<dyn flui_platform::haptics::PlatformHaptics>> {
         None
     }
 
@@ -2435,7 +2435,7 @@ impl flui_platform::PlatformWindow for RegionWindow {
     fn text_input(&self) -> Option<std::sync::Arc<dyn flui_platform::PlatformTextInput>> {
         None
     }
-    fn haptics(&self) -> Option<std::sync::Arc<dyn flui_platform::PlatformHaptics>> {
+    fn haptics(&self) -> Option<std::sync::Arc<dyn flui_platform::haptics::PlatformHaptics>> {
         None
     }
     fn system_chrome(&self) -> Option<std::sync::Arc<dyn flui_platform::PlatformSystemChrome>> {
@@ -2465,8 +2465,10 @@ impl flui_platform::PlatformWindow for RegionWindow {
     }
 }
 
-/// The window state a host publishes: its content moves with `position`.
+/// The window state a host publishes: its content moves with `position`, a
+/// point of `display`.
 struct MovingWindow {
+    display: flui_platform::DisplayId,
     position: std::sync::Mutex<(
         flui_foundation::geometry::Point<f64>,
         flui_platform::WindowRevision,
@@ -2483,8 +2485,14 @@ impl flui_platform::WindowControl for SharedControl {
         let (position, revision) = *self.0.position.lock().expect("position");
         let size = Size::new(40.0, 40.0);
         let mut state = flui_platform::WindowState::new(
-            flui_platform::WindowGeometry::try_new(Some(position), size)
-                .expect("a finite rectangle"),
+            flui_platform::WindowGeometry::try_new(
+                Some(
+                    flui_platform::WindowPosition::try_new(self.0.display, position)
+                        .expect("a finite position"),
+                ),
+                size,
+            )
+            .expect("a finite rectangle"),
             flui_platform::WindowExtent::try_new(size).expect("a finite size"),
         );
         state.revision = revision;
@@ -2532,6 +2540,9 @@ fn a_failed_move_keeps_its_regions_subscribers_and_row() {
     )
     .expect("runtime");
     let control = Arc::new(MovingWindow {
+        display: flui_platform::DisplayRegistry::new()
+            .mint(&flui_platform::DisplayKey::Injected(1))
+            .expect("a fresh registry has ids"),
         position: Mutex::new((Point::new(0.0, 0.0), WindowRevision::ZERO)),
         capabilities: flui_platform::WindowCapabilities::NONE
             .publish()
@@ -3268,7 +3279,7 @@ fn native_geometry_controls_admission_and_retries_without_a_frame() {
 
 fn wheel_preferences_reach_the_next_mounted_input() {
     use flui_platform::pointer::{
-        PointerEvent, PointerId, PointerInfo, PointerKind, PointerPosition, ScrollDelta,
+        PointerEvent, PointerId, PointerKind, PointerPosition, PointerSource, ScrollDelta,
         ScrollEvent, ScrollUnit,
     };
     use flui_platform::{EventTime, PlatformInput, SystemPreferences, WheelPreferences, WheelStep};
@@ -3328,7 +3339,7 @@ fn wheel_preferences_reach_the_next_mounted_input() {
         let input = owner.presentation_dispatcher(address).expect("input");
         let dispatch = |unit, distance| {
             let event = PointerEvent::Scroll(ScrollEvent::new(
-                PointerInfo::new(
+                PointerSource::new(
                     PointerId::try_from(1_u64).expect("pointer"),
                     PointerKind::Mouse,
                 ),
@@ -4035,7 +4046,7 @@ fn an_older_preference_revision_cannot_replace_a_newer_seed() {
 /// step of the revision accepted just before it, not of an earlier or later one.
 fn queued_preferences_are_not_coalesced_across_an_input() {
     use flui_platform::pointer::{
-        PointerEvent, PointerId, PointerInfo, PointerKind, PointerPosition, ScrollDelta,
+        PointerEvent, PointerId, PointerKind, PointerPosition, PointerSource, ScrollDelta,
         ScrollEvent, ScrollUnit,
     };
     use flui_platform::{EventTime, PlatformInput, SystemPreferences, WheelPreferences, WheelStep};
@@ -4072,7 +4083,7 @@ fn queued_preferences_are_not_coalesced_across_an_input() {
     };
     let detents = |count: f64| {
         PlatformInput::Pointer(PointerEvent::Scroll(ScrollEvent::new(
-            PointerInfo::new(
+            PointerSource::new(
                 PointerId::try_from(1_u64).expect("pointer"),
                 PointerKind::Mouse,
             ),

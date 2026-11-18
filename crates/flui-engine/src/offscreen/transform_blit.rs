@@ -23,6 +23,7 @@ pub(super) struct TransformPipeline {
 impl OffscreenRenderer {
     fn transform_pipeline(&mut self, format: wgpu::TextureFormat) -> &TransformPipeline {
         let device = &self.device;
+        let driver_cache = self.driver_cache.as_ref();
         self.transform_pipelines.entry(format).or_insert_with(|| {
             tracing::debug!(?format, "Creating colour-converting presentation pipeline");
             let bind_group_layout =
@@ -109,7 +110,7 @@ impl OffscreenRenderer {
                 depth_stencil: None,
                 multisample: wgpu::MultisampleState::default(),
                 multiview_mask: None,
-                cache: None,
+                cache: driver_cache,
             });
             let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
                 label: Some("Present Transform Nearest Sampler"),

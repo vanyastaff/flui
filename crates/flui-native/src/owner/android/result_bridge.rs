@@ -22,7 +22,7 @@ use std::sync::{Arc, Weak};
 use android_activity::AndroidApp;
 use flui_platform::capability::{
     ActivityBridge, CapabilityId, CompletionSource, DataRefused, IntentFrame, JniFrame, RequestKey,
-    ResultData, ResultMint, ResultRefused, ResultRequest, ResultToken,
+    ResultIntent, ResultMint, ResultRefused, ResultRequest, ResultToken,
 };
 use jni::objects::{JObject, JString};
 use jni::refs::Global;
@@ -285,7 +285,7 @@ fn frame(env: &Env<'_>, object: &JObject<'_>) -> Option<JniFrame> {
 
 impl ActivityBridge for ResultBridge {
     fn bind(&self, mint: ResultMint) {
-        // A dropped ticket or `ResultData` wakes the owner, whose turn ends
+        // A dropped ticket or `ResultIntent` wakes the owner, whose turn ends
         // the request; the drop itself records and wakes, nothing more.
         let signal = Weak::clone(&self.hand_offs.signal);
         let wake: Rc<dyn Fn()> = Rc::new(move || {
@@ -390,7 +390,7 @@ impl ActivityBridge for ResultBridge {
     fn take_data(
         &self,
         capability: &CapabilityId,
-        data: ResultData,
+        data: ResultIntent,
         f: &mut dyn FnMut(JniFrame),
     ) -> Result<(), DataRefused> {
         // Taken out of the router first: the provider's closure runs with no
@@ -548,8 +548,8 @@ pub(crate) fn drain_answers(
         .call_static_method(
             &class,
             jni_str!("peekAnswers"),
-            jni_sig!("(I)[Ljava/lang/Object;"),
-            &[JValue::Int(max)],
+            jni_sig!("(Landroid/app/Activity;I)[Ljava/lang/Object;"),
+            &[JValue::Object(activity), JValue::Int(max)],
         )?
         .l()?;
     let peeked = env.cast_local::<JObjectArray<'_>>(peeked)?;

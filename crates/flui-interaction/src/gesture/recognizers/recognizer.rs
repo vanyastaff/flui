@@ -102,7 +102,7 @@ pub(crate) fn is_primary_down(event: &PointerEvent) -> bool {
 /// The pointer kind a sequence is admitted as: its settings profile is the
 /// kind's (ADR-0212 §4). An event without one counts as an unknown device.
 pub(crate) fn admission_kind(event: &PointerEvent) -> crate::events::PointerKind {
-    crate::events::pointer_info(event)
+    crate::events::pointer_source(event)
         .map_or(crate::events::PointerKind::Unknown, |pointer| pointer.kind)
 }
 

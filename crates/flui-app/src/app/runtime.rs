@@ -292,7 +292,7 @@ pub(super) enum QuitNotification {
 /// UI runtime the host builds so their drags name one platform instance.
 #[derive(Clone)]
 pub(crate) struct PlatformDataTransfer {
-    pub(crate) source: Arc<dyn flui_platform::DragTransport>,
+    pub(crate) source: Arc<dyn flui_platform::data_transfer::DragTransport>,
     pub(crate) nonce: flui_platform::drag::ProcessNonce,
 }
 
@@ -486,7 +486,8 @@ pub(crate) struct AppRuntime {
     /// the clear half, a live platform resource (arboard on X11 owns a live
     /// X11 connection) would stay pinned behind this `Arc` past the event
     /// loop's exit. See [`Drop`]'s impl below for the last-resort third clear
-    /// path.
+    /// path. The slot holds the clipboard with the expiring entries owed a
+    /// clear on it (ADR-0363), whose times are part of [`Self::turn_deadline`].
     platform_clipboard: crate::app::capability::ClipboardSlot,
     /// The platform's primary selection, installed and cleared with the
     /// clipboard; empty where the platform has none.
@@ -1091,10 +1092,18 @@ impl AppRuntime {
     #[cfg(not(target_arch = "wasm32"))]
     #[must_use]
     pub(super) fn next_wake(&self) -> Option<web_time::Instant> {
+        // A floor whose window the raster thread has settled and asked for
+        // its frame is that window's to serve (`RasterHost::floor_owed`).
+        // While the host is turning the floor stands: that turn answers it.
+        let floor_owed = |address| {
+            self.raster_host
+                .try_read(|host| host.floor_owed(address))
+                .unwrap_or(true)
+        };
         let runtime = self
             .installed_host
             .logical()
-            .next_wake()
+            .next_wake_owing_floors(&floor_owed)
             .expect("BUG: wake deadline read before owner checkout returned");
         #[cfg(all(
             not(target_os = "android"),
@@ -1126,28 +1135,35 @@ impl AppRuntime {
         .min()
     }
 
-    /// When the owner needs a turn for work no frame serves: a window
-    /// placement held back by the write throttle or retrying a refused write,
-    /// and a window waiting for its placement read, which opens at the read's
-    /// bound. The loop gives that turn with or without a window open and asks
-    /// no window for a frame (`AppHandler::turn_deadline`); `after_turn`
-    /// ticks the placements and drives the main window.
-    #[cfg(all(
-        not(target_os = "android"),
-        not(target_os = "ios"),
-        not(target_arch = "wasm32")
-    ))]
+    /// When the owner needs a turn for work no frame serves: an expiring
+    /// clipboard entry's clear (ADR-0363), on every host; on the desktop, a
+    /// window placement held back by the write throttle or retrying a refused
+    /// write, and a window waiting for its placement read, which opens at the
+    /// read's bound. The loop gives that turn with or without a window open
+    /// and asks no window for a frame (`AppHandler::turn_deadline`); the
+    /// owner's turn serves the clears, and on the desktop `after_turn` ticks
+    /// the placements and drives the main window.
     #[must_use]
     pub(super) fn turn_deadline(&self) -> Option<web_time::Instant> {
-        [
+        let clipboard = self
+            .platform_clipboard
+            .try_borrow()
+            .ok()
+            .and_then(|slot| slot.as_ref().and_then(|expiries| expiries.next_due()));
+        #[cfg(all(
+            not(target_os = "android"),
+            not(target_os = "ios"),
+            not(target_arch = "wasm32")
+        ))]
+        let desktop = [
             self.placement.next_due(),
             self.main_controller
                 .as_ref()
                 .and_then(super::runner::main_window::MainController::recall_deadline),
-        ]
-        .into_iter()
-        .flatten()
-        .min()
+        ];
+        #[cfg(any(target_os = "android", target_os = "ios", target_arch = "wasm32"))]
+        let desktop: [Option<web_time::Instant>; 0] = [];
+        desktop.into_iter().chain([clipboard]).flatten().min()
     }
 
     /// Whether `address`'s UI runtime runs frames, which is what serves the
@@ -1379,8 +1395,19 @@ impl AppRuntime {
     pub(super) fn set_platform_clipboard(
         &self,
         clipboard: Rc<dyn flui_native::NativeClipboard>,
-    ) -> Option<Rc<dyn flui_native::NativeClipboard>> {
-        self.platform_clipboard.borrow_mut().replace(clipboard)
+    ) -> Option<Rc<crate::app::clipboard_expiry::ClipboardExpiries>> {
+        let expiries = crate::app::clipboard_expiry::ClipboardExpiries::new(
+            clipboard,
+            Rc::new(flui_foundation::SystemClock),
+        );
+        self.platform_clipboard.borrow_mut().replace(expiries)
+    }
+
+    /// The expiring entries of the installed clipboard, while one is.
+    pub(super) fn clipboard_expiries(
+        &self,
+    ) -> Option<Rc<crate::app::clipboard_expiry::ClipboardExpiries>> {
+        self.platform_clipboard.borrow().clone()
     }
 
     /// Install the platform's primary selection, or none where it has none.
@@ -1419,10 +1446,11 @@ impl AppRuntime {
     /// What the installed platform offers capability providers beyond the
     /// window, shared with every registry this host builds.
     #[cfg_attr(
-        not(target_os = "android"),
+        any(target_os = "ios", target_arch = "wasm32"),
         expect(
             dead_code,
-            reason = "only the Android host offers an Activity to install"
+            reason = "the Android host installs its Activity and a desktop host names the \
+                      application; iOS and the web do neither yet"
         )
     )]
     pub(super) fn host_bridge(&self) -> flui_platform::capability::HostBridge {
@@ -1434,7 +1462,7 @@ impl AppRuntime {
     /// retirement outside the caller's borrow.
     pub(super) fn set_platform_data_transfer(
         &self,
-        source: Arc<dyn flui_platform::DragTransport>,
+        source: Arc<dyn flui_platform::data_transfer::DragTransport>,
     ) -> Option<PlatformDataTransfer> {
         self.platform_data_transfer
             .borrow_mut()

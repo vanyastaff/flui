@@ -12,8 +12,8 @@ use flui_painting::styling::Color;
 use flui_painting::typography::TextDirection;
 use flui_platform::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, NamedKey};
 use flui_platform::pointer::{
-    DeviceId, PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerEvent, PointerId, PointerInfo,
-    PointerKind, PointerPosition, PointerRole, ScrollDelta, ScrollEvent, ScrollUnit,
+    DeviceId, PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerEvent, PointerId, PointerKind,
+    PointerPosition, PointerRole, PointerSource, ScrollDelta, ScrollEvent, ScrollUnit,
 };
 use flui_platform::{EventTime, keyboard::Modifiers};
 use flui_testing::a11y::{Action, ActionData, ActionRequest, TreeId};
@@ -473,7 +473,7 @@ pub(crate) fn viewer_release_failure_still_ends_the_sequence() {
 fn wheel(dy: f64, modifiers: Modifiers) -> PointerEvent {
     PointerEvent::Scroll(
         ScrollEvent::new(
-            PointerInfo::new(
+            PointerSource::new(
                 PointerId::try_from(7_u64).expect("a nonzero pointer"),
                 PointerKind::Mouse,
             )
@@ -854,7 +854,7 @@ pub(crate) fn viewer_degenerate_geometry_and_bounds_publish_finite_transforms() 
     );
     let native = |phase| {
         PointerEvent::PanZoom(PanZoomEvent::new(
-            PointerInfo::new(
+            PointerSource::new(
                 PointerId::try_from(9_u64).expect("a nonzero pointer"),
                 PointerKind::Trackpad,
             ),

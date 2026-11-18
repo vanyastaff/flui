@@ -41,7 +41,7 @@ this one path (ADR-0151 §9).
   `docs/gaps.md`, "A window larger than a renderer draws"), since `flui-native` and
   `flui-engine` both read this crate and neither the other.
 - **A headroom is finite and at least white; an absent colour says why.** A display's
-  colour profile is `DisplayInfo::color`: a `DisplayColor` or the `CapabilityAbsence` the
+  colour profile is `DisplayDescription::color`: a `DisplayColor` or the `CapabilityAbsence` the
   platform gives, which `color_space()` and `headroom()` answer as `Unsupported`.
   `DisplayColor` is `Standard(gamut)` or `High(gamut, headroom)`: only the high range
   carries a headroom (or the absence of one), so a standard-range display that
@@ -109,11 +109,24 @@ this one path (ADR-0151 §9).
   (`ApplyError::Platform`), a cursor (`CursorError::Platform`) and a
   preference query (`PreferenceQueryError::Platform`) the window system
   refused or failed carry a `PlatformFailure`, so a caller matches one type.
+- **A position names its display; a display's bounds are its own logical
+  pixels (ADR-0364).** A `WindowPosition` is a finite point of one display, in
+  that display's logical pixels from its corner, and is the one shape of a
+  window's place: the snapshot's outer and normal positions, `SetPosition`
+  and the options' positions. There is no global logical space. The snapshot's
+  outer position is measured on the window's `display`, which `successor`
+  sets from it. A `DisplayDescription` carries its extent and usable area in its own
+  logical pixels (`DisplayBounds`, the usable area inside the extent) and its
+  place in the window system's desktop as a `DesktopOrigin`, whose unit is
+  the window system's and which no arithmetic mixes with a logical position.
+  Commands and options carry the checked types (`WindowPosition`,
+  `WindowExtent`), so a number that is not finite cannot be asked for and
+  admission checks only an area and the limits' order.
 - **A snapshot holds no number that is not a window's.** Its rectangles are
   valid by construction, as its metrics and insets are: `WindowGeometry` is a
-  finite position and a `WindowExtent` (each side finite and not negative),
-  the content size is a `WindowExtent`, and so is each bound of
-  `SizeConstraints`. A window system's report can be numbers no window has (a
+  `WindowPosition` where the window system reports one and a `WindowExtent`
+  (each side finite and not negative), the content size is a `WindowExtent`,
+  and so is each bound of `SizeConstraints`. A window system's report can be numbers no window has (a
   size over a scale of zero, a NaN a compositor sent); a host builds the
   values with `try_new`, and a report it cannot build them from costs the
   snapshot its geometry and nothing else (`flui-native`'s window state cell
@@ -389,7 +402,7 @@ What only the host owns reaches a provider through its `ProviderContext`
 elsewhere. The Activity is scoped by the `CapabilityId` the registrar minted
 for the provider's registration, which only its `RegisteredProvider` puts in
 the context, so no caller names another capability by its string; the
-values the host hands providers (`ResultTicket`, `ResultData`,
+values the host hands providers (`ResultTicket`, `ResultIntent`,
 `ActivityResult`, `ResultRequest`) are made only with the `ResultMint`
 `HostBridge::install_activity` hands the bridge. `capability::activity_result` holds that vocabulary and no JNI
 type: a request is identified by a `ResultToken` the host mints per call and
@@ -399,7 +412,7 @@ replaces; it ends exactly once, with an `ActivityResult` or a typed
 `ResultRefused`, and lasts while the provider holds its `ResultTicket`, whose
 `Drop` the host reads as a cancel (the `Resolver` answers no liveness query);
 an answer's `Intent` stays with the host until the provider
-hands its `ResultData` back, and a `ResultData` dropped unread releases it;
+hands its `ResultIntent` back, and a `ResultIntent` dropped unread releases it;
 and the provider's own `jni` crate works on raw pointers the
 host lends for one call (`JniFrame`, `IntentFrame`), filling objects the host
 made instead of handing the host a reference it would have to trust.

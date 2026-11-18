@@ -58,8 +58,8 @@ The optional span contract is:
 Durations are inclusive extents, not disjoint portions of a CPU total. Registry
 time includes its sampling and listener work. They must not be summed to infer
 frame cost. Spans outside the profiler's owning scheduler frame are not assigned
-to a later or unrelated frame. The raw `HeadlessBinding` samples inside its
-pipeline closure before build/layout/paint, matching runtime sampling placement.
+to a later or unrelated frame. A headless host's frames are the UI runtime's, so it
+samples where the runtime samples, before build/layout/paint.
 Standalone controller tests and direct registry benchmarks still work without
 inventing a frame.
 

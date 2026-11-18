@@ -22,7 +22,10 @@ use std::time::{Duration, Instant};
 use flui_protocol::framing::LineReader;
 use flui_protocol::session::{ClientRole, Hello};
 use flui_protocol::version::PROTOCOL_VERSION;
-use flui_protocol::{ErrorCode, Event, Greeting, Request, RequestId, ServerLine};
+use flui_protocol::{
+    envelope::Greeting, envelope::Request, envelope::RequestId, envelope::ServerLine,
+    error::ErrorCode, events::Event,
+};
 use interprocess::local_socket::traits::Stream as _;
 use interprocess::local_socket::{Name, Stream};
 use serde_json::Value;
@@ -102,7 +105,7 @@ impl Connection {
             next_id: 1,
         };
         let hello = Hello::new(credentials.token.clone(), PROTOCOL_VERSION)
-            .with_client(CLIENT)
+            .client(CLIENT)
             .with_role(role);
         let refused = |why: String| {
             // The server closes unread on a wrong token.
@@ -247,7 +250,7 @@ impl Connection {
 }
 
 /// The app's error object as the agent hands it on.
-fn wire(error: &flui_protocol::ErrorObject) -> Failure {
+fn wire(error: &flui_protocol::error::ErrorObject) -> Failure {
     match serde_json::to_value(error) {
         Ok(error) => Failure::Wire(error),
         Err(e) => Failure::Transport(format!("the app's error did not serialize: {e}")),

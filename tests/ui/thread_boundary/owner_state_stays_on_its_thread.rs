@@ -5,14 +5,14 @@ use flui::view::PostFrameHandle;
 fn require_thread_spawnable<T: Send + 'static>(_: T) {}
 
 fn owner_capabilities(
-    binding: &flui_testing::HeadlessBinding,
+    laid: &flui_testing::widgets::LaidOut,
     post_frame: PostFrameHandle,
     run: AnimationRunFuture,
     controller: AnimationController,
     vsync: Vsync,
     notifier: ChangeNotifier,
 ) {
-    require_thread_spawnable(binding.scheduler().clone());
+    require_thread_spawnable(laid.scheduler());
     require_thread_spawnable(post_frame);
     require_thread_spawnable(run);
     require_thread_spawnable(controller);

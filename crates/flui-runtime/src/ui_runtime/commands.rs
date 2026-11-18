@@ -100,7 +100,7 @@ pub enum UiCommand {
         /// The presentation the agent's window addresses.
         presentation_id: PresentationId,
         /// The events to stream.
-        filters: Vec<flui_protocol::EventFilter>,
+        filters: Vec<flui_protocol::events::EventFilter>,
         /// Where the stream goes.
         reply: flui_view::__runtime::Reply<flui_view::dev_agent::AgentEvents>,
     },
@@ -110,7 +110,7 @@ pub enum UiCommand {
         /// The presentation the agent's window addresses.
         presentation_id: PresentationId,
         /// What to record.
-        params: flui_protocol::RecordParams,
+        params: flui_protocol::record::RecordParams,
         /// Where the recording goes.
         reply: flui_view::__runtime::Reply<flui_view::dev_agent::AgentRecording>,
     },
@@ -532,7 +532,7 @@ impl UiRuntime {
     pub(super) fn fail_agent_job<T>(
         &self,
         reply: &super::agent::ReplySender<T>,
-        element: Option<flui_protocol::ElementId>,
+        element: Option<flui_protocol::tree::ElementId>,
         answer: Result<T, super::AgentError>,
         payload: Box<dyn std::any::Any + Send>,
     ) -> ! {

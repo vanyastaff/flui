@@ -1,6 +1,6 @@
 //! Wheel and trackpad scrolling.
 
-use super::PointerInfo;
+use super::PointerSource;
 use super::value::{InputValueError, PointerPosition, Quantity, finite};
 use crate::EventTime;
 use crate::keyboard::Modifiers;
@@ -161,11 +161,11 @@ pub enum ScrollInversion {
 /// use flui_foundation::geometry::Point;
 /// use flui_platform::EventTime;
 /// use flui_platform::pointer::{
-///     PointerId, PointerInfo, PointerKind, PointerPosition, ScrollDelta, ScrollEvent,
+///     PointerId, PointerSource, PointerKind, PointerPosition, ScrollDelta, ScrollEvent,
 ///     ScrollPhase, ScrollPrecision, ScrollUnit,
 /// };
 ///
-/// let trackpad = PointerInfo::new(PointerId::try_from(1_u64)?, PointerKind::Mouse);
+/// let trackpad = PointerSource::new(PointerId::try_from(1_u64)?, PointerKind::Mouse);
 /// let at = PointerPosition::try_new(Point::new(100.0, 40.0))?;
 /// let scroll = ScrollEvent::new(
 ///     trackpad,
@@ -182,7 +182,7 @@ pub enum ScrollInversion {
 #[non_exhaustive]
 pub struct ScrollEvent {
     /// The device that scrolled. A wheel scroll reports the mouse pointer it came from.
-    pub pointer: PointerInfo,
+    pub pointer: PointerSource,
     /// When the platform observed the scroll.
     pub time: EventTime,
     /// Where the pointer was: what the scroll is hit-tested at.
@@ -205,7 +205,7 @@ impl ScrollEvent {
     /// modifiers.
     #[must_use]
     pub const fn new(
-        pointer: PointerInfo,
+        pointer: PointerSource,
         time: EventTime,
         position: PointerPosition,
         delta: ScrollDelta,

@@ -125,7 +125,7 @@ pub fn grammar(recording: &NativeRecording) -> Vec<String> {
         let Some(event) = input.as_pointer() else {
             continue;
         };
-        let head = |verb: &str, pointer: &flui_platform::pointer::PointerInfo| {
+        let head = |verb: &str, pointer: &flui_platform::pointer::PointerSource| {
             format!("{verb} p{} {:?}", pointer.id.get(), pointer.kind)
         };
         let line = match event {

@@ -145,7 +145,7 @@ impl PlatformWindow for CountingWindow {
         None
     }
 
-    fn haptics(&self) -> Option<std::sync::Arc<dyn flui_platform::PlatformHaptics>> {
+    fn haptics(&self) -> Option<std::sync::Arc<dyn flui_platform::haptics::PlatformHaptics>> {
         None
     }
 

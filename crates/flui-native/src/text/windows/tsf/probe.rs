@@ -59,7 +59,12 @@ use windows_core::{BOOL, GUID, PWSTR};
 use super::TextServices;
 use crate::platform::Platform;
 use crate::text::windows::geometry::range_rect_to_screen;
-use flui_platform::WindowOptions;
+use flui_platform::{WindowExtent, WindowOptions};
+
+/// A window extent of this size.
+fn extent(width: f64, height: f64) -> WindowExtent {
+    WindowExtent::try_new(Size::new(width, height)).expect("a finite extent")
+}
 
 /// Microsoft IME ja-JP: its TIP class and profile.
 const MS_IME_JA: (GUID, GUID) = (
@@ -423,7 +428,7 @@ fn text_services_probe() {
     let platform = crate::WindowsPlatform::try_new().expect("platform");
     let options = WindowOptions::default()
         .title("flui tsf probe")
-        .size(Size::new(640.0, 200.0));
+        .size(extent(640.0, 200.0));
     let window = platform
         .open_window(
             options,

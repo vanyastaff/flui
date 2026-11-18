@@ -32,7 +32,7 @@ use flui_interaction::{
 };
 use flui_platform::data_transfer::TransferActions;
 use flui_platform::haptics::{HapticRequest, HapticTiming};
-use flui_platform::pointer::{PointerInfo, PressId};
+use flui_platform::pointer::{PointerSource, PressId};
 use flui_platform::{CursorIcon, HapticFeedback};
 use flui_view::element::ElementKind;
 use flui_view::environment::GesturePolicy;
@@ -382,7 +382,7 @@ struct Capabilities {
 /// host named, which an OS drag from it starts from.
 #[derive(Clone, Copy)]
 struct PressedContact {
-    info: PointerInfo,
+    info: PointerSource,
     press: Option<PressId>,
 }
 
@@ -478,7 +478,7 @@ impl Source {
             .copied()
             .find(|contact| contact.info.id == pointer);
         let info = pressed.map_or_else(
-            || PointerInfo::new(pointer, flui_interaction::PointerKind::Unknown),
+            || PointerSource::new(pointer, flui_interaction::PointerKind::Unknown),
             |contact| contact.info,
         );
         // A frame lifts the feedback from the box around the child, so it

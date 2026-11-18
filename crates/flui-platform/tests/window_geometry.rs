@@ -2,7 +2,10 @@
 //! a window's geometry builds no value, so it cannot be published.
 
 use flui_foundation::geometry::{Point, Size};
-use flui_platform::{InvalidGeometry, SizeConstraints, WindowExtent, WindowGeometry};
+use flui_platform::{
+    DisplayKey, DisplayRegistry, InvalidGeometry, SizeConstraints, WindowExtent, WindowGeometry,
+    WindowPosition,
+};
 
 /// Sides no window has: what a size divided by a zero scale, a compositor's
 /// NaN or an inverted rectangle reads as.
@@ -29,27 +32,26 @@ fn an_extent_is_finite_and_not_negative() {
 }
 
 fn a_rectangle_is_a_finite_position_and_an_extent() {
+    let display = DisplayRegistry::new()
+        .mint(&DisplayKey::Injected(1))
+        .expect("an id");
+    let at = |x, y| WindowPosition::try_new(display, Point::new(x, y)).expect("a finite point");
     let size = Size::new(800.0, 600.0);
-    for position in [
-        None,
-        Some(Point::new(-1920.0, -40.0)),
-        Some(Point::new(0.0, 0.0)),
-    ] {
+    for position in [None, Some(at(-1920.0, -40.0)), Some(at(0.0, 0.0))] {
         let geometry = WindowGeometry::try_new(position, size).expect("a rectangle");
         assert_eq!(geometry.position(), position);
         assert_eq!(geometry.size(), size);
         assert_eq!(geometry.extent(), size);
     }
     for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
-        for at in [Point::new(bad, 0.0), Point::new(0.0, bad)] {
+        for point in [Point::new(bad, 0.0), Point::new(0.0, bad)] {
             assert!(
                 matches!(
-                    WindowGeometry::try_new(Some(at), size),
+                    WindowPosition::try_new(display, point),
                     Err(InvalidGeometry::Position { .. })
                 ),
-                "{at:?}"
+                "{point:?}"
             );
-            assert!(WindowGeometry::EMPTY.at(Some(at)).is_err(), "{at:?}");
         }
     }
     for bad in BAD_SIDES {
@@ -62,12 +64,12 @@ fn a_rectangle_is_a_finite_position_and_an_extent() {
         );
     }
     let moved = WindowGeometry::unplaced(WindowExtent::try_new(size).expect("an extent"))
-        .at(Some(Point::new(4.0, 2.0)))
-        .expect("a finite position");
+        .at(Some(at(4.0, 2.0)));
     assert_eq!(
         moved,
-        WindowGeometry::try_new(Some(Point::new(4.0, 2.0)), size).expect("a rectangle")
+        WindowGeometry::try_new(Some(at(4.0, 2.0)), size).expect("a rectangle")
     );
+    assert_eq!(moved.position().map(WindowPosition::display), Some(display));
 }
 
 fn limits_are_extents() {
@@ -94,8 +96,13 @@ fn limits_are_extents() {
 fn a_refusal_equals_itself() {
     let refusals = [
         WindowExtent::try_new(Size::new(f64::NAN, 600.0)).expect_err("a NaN side"),
-        WindowGeometry::try_new(Some(Point::new(0.0, f64::NAN)), Size::new(1.0, 1.0))
-            .expect_err("a NaN coordinate"),
+        WindowPosition::try_new(
+            DisplayRegistry::new()
+                .mint(&DisplayKey::Injected(1))
+                .expect("an id"),
+            Point::new(0.0, f64::NAN),
+        )
+        .expect_err("a NaN coordinate"),
         WindowExtent::try_new(Size::new(-1.0, 600.0)).expect_err("a negative side"),
     ];
     for (index, refusal) in refusals.iter().enumerate() {

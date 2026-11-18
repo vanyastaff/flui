@@ -14,12 +14,12 @@
 //! ```rust
 //! use flui_interaction::{PointerRouter, PointerId, PointerRouteHandler};
 //! use flui_platform::{EventTime, pointer::{CancelReason, PointerCancel,
-//!     PointerEvent, PointerInfo, PointerKind}};
+//!     PointerEvent, PointerSource, PointerKind}};
 //! use std::{cell::Cell, rc::Rc};
 //!
 //! let router = PointerRouter::new();
 //! let pointer_id = PointerId::try_from(1_u64)?;
-//! let pointer = PointerInfo::new(pointer_id, PointerKind::Touch);
+//! let pointer = PointerSource::new(pointer_id, PointerKind::Touch);
 //! let pointer_event = PointerEvent::Cancel(PointerCancel::new(pointer,
 //!     EventTime::from_nanos(10), CancelReason::Platform));
 //! let delivered = Rc::new(Cell::new(0));

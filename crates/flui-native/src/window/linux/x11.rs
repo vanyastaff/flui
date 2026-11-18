@@ -952,21 +952,9 @@ pub(crate) mod placement {
     #![forbid(unsafe_code)]
 
     use flui_foundation::geometry::{Bounds, DevicePixelRatio, Point, Size};
-    use flui_platform::{DisplayInfo, DisplaySnapshot, InvalidGeometry, WindowGeometry};
+    use flui_platform::{DisplaySnapshot, InvalidGeometry, WindowGeometry};
 
-    /// `pixels`, already rounded, as the whole number it is, when it is one
-    /// between `min` and `max`.
-    fn whole(pixels: f64, min: i32, max: i32) -> Option<i32> {
-        if !(pixels.is_finite() && pixels >= f64::from(min) && pixels <= f64::from(max)) {
-            return None;
-        }
-        #[expect(
-            clippy::cast_possible_truncation,
-            reason = "a whole number between two i32 bounds, checked just above"
-        )]
-        let whole = pixels as i32;
-        Some(whole)
-    }
+    use crate::window::desktop::{DisplayFrame, display_of_rect};
 
     /// A logical length at `scale` as a window extent in device pixels, by
     /// the hosts' one rule ([`state::device_extent`](crate::window::state::device_extent)),
@@ -974,13 +962,6 @@ pub(crate) mod placement {
     /// not finite and positive.
     pub(crate) fn device_extent(logical: f64, scale: DevicePixelRatio) -> Option<u16> {
         u16::try_from(crate::window::state::device_extent(logical, scale)?).ok()
-    }
-
-    /// A logical coordinate at `scale` as an X11 coordinate in device pixels,
-    /// rounded. `None` when it is not finite or does not fit 16 bits.
-    pub(crate) fn device_coordinate(logical: f64, scale: DevicePixelRatio) -> Option<i16> {
-        let pixels = scale.to_device(logical).round();
-        i16::try_from(whole(pixels, i32::from(i16::MIN), i32::from(i16::MAX))?).ok()
     }
 
     /// The frame a window manager put around a window, in device pixels, as
@@ -1043,22 +1024,22 @@ pub(crate) mod placement {
         )
     }
 
-    /// `bounds`, in device pixels, at `scale` as the logical geometry the
-    /// window state publishes.
+    /// `bounds`, in device pixels, as the geometry the window state
+    /// publishes: its position on the display it is on (`display`, which
+    /// converts through its own origin and scale), and its extent at the
+    /// window's `scale`. A window on no display has no position.
     ///
     /// # Errors
     /// [`InvalidGeometry`] when the rectangle over the scale describes no
     /// window.
     pub(crate) fn logical_geometry(
         bounds: Bounds<i32>,
+        display: Option<DisplayFrame>,
         scale: DevicePixelRatio,
     ) -> Result<WindowGeometry, InvalidGeometry> {
         let logical = |device: i32| scale.to_logical(f64::from(device));
         WindowGeometry::try_new(
-            Some(Point::new(
-                logical(bounds.origin.x),
-                logical(bounds.origin.y),
-            )),
+            display.and_then(|display| display.position(bounds.origin)),
             Size::new(logical(bounds.size.width), logical(bounds.size.height)),
         )
     }
@@ -1066,38 +1047,29 @@ pub(crate) mod placement {
     /// The scale a window on `display` has: the display's, else `last`, the
     /// window's last one.
     pub(crate) fn window_scale(
-        display: Option<&DisplayInfo>,
+        display: Option<DisplayFrame>,
         last: DevicePixelRatio,
     ) -> DevicePixelRatio {
-        display.map_or(last, |display| display.scale_factor)
+        display.map_or(last, DisplayFrame::scale)
     }
 
-    /// The area two rectangles share, in square device pixels.
-    fn overlap(a: Bounds<i32>, b: Bounds<i32>) -> i64 {
-        let span = |start_a: i32, len_a: i32, start_b: i32, len_b: i32| {
-            let start = i64::from(start_a).max(i64::from(start_b));
-            let end = (i64::from(start_a) + i64::from(len_a.max(0)))
-                .min(i64::from(start_b) + i64::from(len_b.max(0)));
-            (end - start).max(0)
-        };
-        span(a.origin.x, a.size.width, b.origin.x, b.size.width)
-            * span(a.origin.y, a.size.height, b.origin.y, b.size.height)
+    /// The X11 coordinates position `at` on `display` names: the desktop
+    /// pixel through the display's own origin and scale
+    /// ([`DisplayFrame::to_desktop`]), when it fits X11's signed 16 bits;
+    /// never a saturated coordinate.
+    pub(crate) fn x11_coordinates(display: DisplayFrame, at: Point<f64>) -> Option<(i16, i16)> {
+        let pixel = display.to_desktop(at)?;
+        Some((i16::try_from(pixel.x).ok()?, i16::try_from(pixel.y).ok()?))
     }
 
-    /// The display of `snapshot` that `bounds` overlaps most, the first of
-    /// equals; `None` when it overlaps none.
+    /// The display of `snapshot` a window at `bounds` is on: the one it
+    /// overlaps most, the first of equals, else the nearest
+    /// ([`display_of_rect`]); `None` for a snapshot with no display.
     pub(crate) fn display_of(
         snapshot: &DisplaySnapshot,
         bounds: Bounds<i32>,
-    ) -> Option<&DisplayInfo> {
-        let mut best: Option<(i64, &DisplayInfo)> = None;
-        for display in snapshot.displays() {
-            let area = overlap(display.bounds, bounds);
-            if area > 0 && best.is_none_or(|(most, _)| area > most) {
-                best = Some((area, display));
-            }
-        }
-        best.map(|(_, display)| display)
+    ) -> Option<DisplayFrame> {
+        display_of_rect(snapshot, bounds)
     }
 
     #[cfg(test)]
@@ -1114,7 +1086,8 @@ pub(crate) mod placement {
         fn logical_numbers_become_x11_numbers_only_when_they_fit() {
             let max = u16::try_from(flui_platform::MAX_SURFACE_EXTENT)
                 .expect("the largest surface fits X11's 16 bits");
-            // (case, logical, scale, extent, coordinate)
+            // (case, logical, scale, extent, coordinate on a display at the
+            // desktop's origin)
             let table = [
                 ("whole", 100.0, 1.0, Some(100), Some(100)),
                 ("scaled and rounded", 10.3, 1.5, Some(15), Some(15)),
@@ -1139,11 +1112,14 @@ pub(crate) mod placement {
                     extent,
                     "{case}: extent"
                 );
-                assert_eq!(
-                    device_coordinate(logical, ratio(scale)),
-                    coordinate,
-                    "{case}: coordinate"
-                );
+                if logical.is_finite() {
+                    let frame = DisplayFrame::of(&display("display", 0, scale));
+                    assert_eq!(
+                        x11_coordinates(frame, Point::new(logical, 0.0)).map(|(x, _)| x),
+                        coordinate,
+                        "{case}: coordinate"
+                    );
+                }
             }
         }
 
@@ -1167,79 +1143,104 @@ pub(crate) mod placement {
             let outer = outer_bounds(Point::new(i32::MIN, 0), Size::new(i32::MAX, 1), huge);
             assert_eq!(outer.origin.x, i32::MIN);
             assert_eq!(outer.size.width, i32::MAX);
+            // On a 2x display whose corner is at device x 40: the position is
+            // the corner's distance over that display's scale, the extent the
+            // window's own pixels over its scale.
+            let snapshot = DisplaySnapshot::empty()
+                .successor(vec![display("hidpi", 40, 2.0)])
+                .expect("a snapshot");
+            let frame = DisplayFrame::find(&snapshot, snapshot.displays()[0].id);
+            let geometry = logical_geometry(
+                Bounds::new(Point::new(98, 50), Size::new(646, 514)),
+                frame,
+                ratio(2.0),
+            )
+            .expect("a rectangle");
+            assert_eq!(
+                geometry.position().map(flui_platform::WindowPosition::at),
+                Some(Point::new(29.0, 25.0))
+            );
+            assert_eq!(geometry.size(), Size::new(323.0, 257.0));
             assert_eq!(
                 logical_geometry(
                     Bounds::new(Point::new(98, 50), Size::new(646, 514)),
+                    None,
                     ratio(2.0)
-                ),
-                WindowGeometry::try_new(Some(Point::new(49.0, 25.0)), Size::new(323.0, 257.0))
+                )
+                .map(WindowGeometry::position),
+                Ok(None),
+                "a window on no display has no position"
             );
+        }
+
+        fn display(name: &str, x: i32, scale: f64) -> flui_platform::DisplayDescription {
+            let id = DisplayRegistry::new()
+                .mint(&DisplayKey::Unkeyed)
+                .expect("an id");
+            let bounds = Bounds::new(Point::new(x, 0), Size::new(1920, 1080));
+            flui_platform::DisplayDescription::from_device(id, name, bounds, bounds, ratio(scale))
+                .expect("a display")
         }
 
         /// A window takes its display's scale, which is one by its type, and
         /// keeps its last one when it is on no display.
         #[test]
         fn a_window_takes_its_displays_scale() {
-            let registry = DisplayRegistry::new();
-            let at = |scale: f64| {
-                let id = registry.mint(&DisplayKey::Unkeyed).expect("an id");
-                DisplayInfo::new(
-                    id,
-                    "display",
-                    Bounds::new(Point::new(0, 0), Size::new(1920, 1080)),
-                    DevicePixelRatio::try_new(scale).expect("a positive ratio"),
-                )
-            };
+            let on = |scale: f64| DisplayFrame::of(&display("display", 0, scale));
             // (case, display scale, last, scale taken)
             let table = [
                 ("a scale", Some(2.0), 1.0, 2.0),
                 ("no display", None, 1.25, 1.25),
             ];
             for (case, scale, last, expected) in table {
-                let display = scale.map(at);
                 assert_eq!(
-                    window_scale(display.as_ref(), ratio(last)),
+                    window_scale(scale.map(on), ratio(last)),
                     ratio(expected),
                     "{case}"
                 );
             }
         }
 
+        /// A window is on the display it overlaps most, the first of equals,
+        /// and on the nearest one when it overlaps none: a window always has
+        /// a display while the snapshot has one, so it always has a place.
         #[test]
         fn a_window_is_on_the_display_it_overlaps_most() {
-            let registry = DisplayRegistry::new();
-            let display = |name: &str, x: i32| {
-                let id = registry.mint(&DisplayKey::Unkeyed).expect("an id");
-                DisplayInfo::new(
-                    id,
-                    name,
-                    Bounds::new(Point::new(x, 0), Size::new(1920, 1080)),
-                    DevicePixelRatio::ONE,
-                )
-            };
+            let (left, right) = (display("left", 0, 1.0), display("right", 1920, 1.0));
+            let (left_id, right_id) = (left.id, right.id);
             let snapshot = DisplaySnapshot::empty()
-                .successor(vec![display("left", 0), display("right", 1920)])
+                .successor(vec![left, right])
                 .expect("a snapshot");
             let on = |x: i32, width: i32| {
                 display_of(
                     &snapshot,
                     Bounds::new(Point::new(x, 100), Size::new(width, 300)),
                 )
-                .map(|display| display.name.as_str())
+                .map(DisplayFrame::display)
             };
             // (case, window x, window width, display)
             let table = [
-                ("inside the left", 100, 800, Some("left")),
-                ("mostly right", 1800, 800, Some("right")),
-                ("mostly left", 1500, 800, Some("left")),
-                ("evenly across: the first", 1520, 800, Some("left")),
-                ("off every display", 5000, 800, None),
-                ("no width", 100, 0, None),
-                ("at the edge of the range", i32::MAX - 10, i32::MAX, None),
+                ("inside the left", 100, 800, Some(left_id)),
+                ("mostly right", 1800, 800, Some(right_id)),
+                ("mostly left", 1500, 800, Some(left_id)),
+                ("evenly across: the first", 1520, 800, Some(left_id)),
+                ("off every display: the nearest", 5000, 800, Some(right_id)),
+                ("no width: the one it touches", 100, 0, Some(left_id)),
+                (
+                    "at the edge of the range: the nearest",
+                    i32::MAX - 10,
+                    i32::MAX,
+                    Some(right_id),
+                ),
             ];
             for (case, x, width, expected) in table {
                 assert_eq!(on(x, width), expected, "{case}");
             }
+            assert_eq!(
+                display_of(&DisplaySnapshot::empty(), Bounds::default()),
+                None,
+                "no display"
+            );
         }
     }
 }

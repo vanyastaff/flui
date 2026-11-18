@@ -5,8 +5,8 @@
   `PreferenceParts::try_into_preferences` with the same validation as the `with_*` methods). Every
   serialization of a preferences snapshot goes through them, so a new preference fails to compile
   in each mirror until it carries it.
-- **`flui-platform`**: `DisplayParts`, the public fields of `DisplayInfo` (apart from its id), for
-  the same reason (`DisplayInfo::into_parts`, `DisplayParts::into_info`).
+- **`flui-platform`**: `DisplayParts`, the public fields of `DisplayDescription` (apart from its id), for
+  the same reason (`DisplayDescription::into_parts`, `DisplayParts::into_description`).
 - **`flui-native`**: `HeadlessDisplayControls::replace` reports a whole new set of displays, and
   `HeadlessDisplayControls::fail_next_read` fails the next display read, as a native display
   source does.
@@ -29,7 +29,7 @@
   up after ten such failures, about twelve seconds after the loss: the window reports
   `DeviceRecovery::Abandoned` once and attempts no more frames until the application asks again.
 - **`flui-log`, `flui-testing`, `flui-painting`, `flui-assets`**: constructors that can fail are named `try_new` (`cargo xtask try-new` lists the rest):
-  `flui_log::AppIdentity` and `AppleBundleId`, `flui_testing` `RecordingReader` and
+  `flui_log::identity::AppIdentity` and `AppleBundleId`, `flui_testing` `RecordingReader` and
   `RecordingWriter`, `flui_painting` `CornerRounding` and `RoundedPolygon`, and
   `flui_assets::NetworkLoader`.
 - **`flui-objects`, `flui-interaction`**: the same for `AspectRatioFactor`, `FractionFactor`,

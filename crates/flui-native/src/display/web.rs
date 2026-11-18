@@ -1221,8 +1221,8 @@ pub(crate) mod source {
 
     use flui_foundation::geometry::{Bounds, DevicePixelRatio, Point, Size};
     use flui_platform::{
-        CapabilityAbsence, DisplayColor, DisplayId, DisplayInfo, DisplayKey, DisplaySnapshot,
-        RefreshPeriod,
+        CapabilityAbsence, DisplayColor, DisplayDescription, DisplayId, DisplayKey,
+        DisplaySnapshot, RefreshPeriod,
     };
     use parking_lot::Mutex;
     use wasm_bindgen::{JsCast, JsValue};
@@ -1417,7 +1417,7 @@ pub(crate) mod source {
             std::mem::replace(&mut state.details, details)
         }
 
-        fn sample(&self, state: &mut State) -> Result<Vec<DisplayInfo>, PlatformError> {
+        fn sample(&self, state: &mut State) -> Result<Vec<DisplayDescription>, PlatformError> {
             let window = web_sys::window().ok_or_else(|| PlatformError::Displays {
                 message: "no global window".into(),
             })?;
@@ -1465,7 +1465,7 @@ pub(crate) mod source {
             state: &mut State,
             window: &web_sys::Window,
             period: Option<RefreshPeriod>,
-        ) -> Result<(Vec<DisplayInfo>, Option<DisplayId>), PlatformError> {
+        ) -> Result<(Vec<DisplayDescription>, Option<DisplayId>), PlatformError> {
             let screen = window.screen().map_err(|_| PlatformError::Displays {
                 message: "the window has no screen".into(),
             })?;
@@ -1484,12 +1484,19 @@ pub(crate) mod source {
             );
             let id = self.source.mint(&DisplayKey::Web("primary".into()));
             let displays = id.map_or_default(|id| {
-                vec![with_period(
-                    DisplayInfo::new(id, "Browser Screen", bounds, scale_factor)
-                        .with_primary(true)
-                        .with_color(self.page_color(window)),
-                    period,
-                )]
+                crate::display::source::device_display(
+                    id,
+                    "Browser Screen".to_owned(),
+                    bounds,
+                    bounds,
+                    scale_factor,
+                )
+                .map_or_default(|info| {
+                    vec![with_period(
+                        info.with_primary(true).with_color(self.page_color(window)),
+                        period,
+                    )]
+                })
             });
             Ok((displays, id))
         }
@@ -1503,7 +1510,7 @@ pub(crate) mod source {
             window: &web_sys::Window,
             details: &JsValue,
             period: Option<RefreshPeriod>,
-        ) -> Option<(Vec<DisplayInfo>, Option<DisplayId>)> {
+        ) -> Option<(Vec<DisplayDescription>, Option<DisplayId>)> {
             let screens: Vec<JsValue> = js_sys::Array::from(&get(details, "screens")?).to_vec();
             if screens.is_empty() {
                 return None;
@@ -1544,7 +1551,7 @@ pub(crate) mod source {
             );
             let displays = listed
                 .iter()
-                .map(|(screen, id)| {
+                .filter_map(|(screen, id)| {
                     // A screen that reports no ratio of its own is at the base
                     // ratio; one that reports a number reads it by the hosts'
                     // one rule.
@@ -1562,16 +1569,20 @@ pub(crate) mod source {
                         // ratio, which includes page zoom, so the scale behaves the
                         // same with and without screen access. Its estimate belongs
                         // to it alone.
-                        with_period(
-                            screen_info(screen, *id, own_ratio, Some(window_scale)),
-                            period,
+                        Some(
+                            with_period(
+                                screen_info(screen, *id, own_ratio, Some(window_scale))?,
+                                period,
+                            )
+                            .with_color(self.page_color(window)),
                         )
-                        .with_color(self.page_color(window))
                     } else {
                         // A page's media queries describe the screen it is on;
                         // the browser says nothing of the others' colour.
-                        screen_info(screen, *id, own_ratio, None)
-                            .with_color(Err(CapabilityAbsence::NOT_ON_THIS_PLATFORM))
+                        Some(
+                            screen_info(screen, *id, own_ratio, None)?
+                                .with_color(Err(CapabilityAbsence::NOT_ON_THIS_PLATFORM)),
+                        )
                     }
                 })
                 .collect();
@@ -1588,16 +1599,16 @@ pub(crate) mod source {
     /// `devicePixelRatio`, which is the display's scale and does not include page
     /// zoom: bounds describe the physical screen and stay put while the page is
     /// zoomed. The reported scale is `scale_override` (the window's pixel ratio, zoom
-    /// included, for the screen the window is on) or else that same ratio. Origins
-    /// are converted the same way: the coordinate space of a mixed-ratio layout is
-    /// the browser's, and the origin is therefore the browser's value in that
-    /// screen's device pixels, not a global device layout.
+    /// included, for the screen the window is on) or else that same ratio. The
+    /// origin is the browser's own value in CSS pixels: the coordinate space of a
+    /// mixed-ratio layout is the browser's, and a screen's device pixels are not
+    /// a space its neighbours share.
     fn screen_info(
         screen: &JsValue,
         id: DisplayId,
         own_ratio: DevicePixelRatio,
         scale_override: Option<DevicePixelRatio>,
-    ) -> DisplayInfo {
+    ) -> Option<DisplayDescription> {
         let scale_factor = scale_override.unwrap_or(own_ratio);
         let number = |name: &str, fallback: f64| get_number(screen, name).unwrap_or(fallback);
         let device = |css: f64| device_pixels(css, own_ratio.get());
@@ -1623,12 +1634,20 @@ pub(crate) mod source {
             .filter(|label| !label.is_empty())
             .unwrap_or_else(|| "Browser Screen".to_string());
         let is_primary = is_primary(screen);
-        DisplayInfo::new(id, label, bounds, scale_factor)
-            .with_usable_bounds(usable)
-            .with_primary(is_primary)
+        let mut info =
+            crate::display::source::device_display(id, label, bounds, usable, scale_factor)?
+                .with_primary(is_primary);
+        // The extents are the screen's device pixels over the page's ratio;
+        // the origin is where the browser lays the screen out, in CSS pixels,
+        // the one space its screens of different ratios share.
+        info.origin = flui_platform::DesktopOrigin::new(
+            device_pixels(number("left", 0.0), 1.0),
+            device_pixels(number("top", 0.0), 1.0),
+        );
+        Some(info)
     }
 
-    fn with_period(info: DisplayInfo, period: Option<RefreshPeriod>) -> DisplayInfo {
+    fn with_period(info: DisplayDescription, period: Option<RefreshPeriod>) -> DisplayDescription {
         match period {
             Some(period) => info.with_refresh_period(period.get()),
             None => info,

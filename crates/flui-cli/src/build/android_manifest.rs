@@ -347,7 +347,11 @@ mod tests {
 
     /// The base names `FluiActivity` and the APK's code (ADR-0255 decision
     /// 6): `hasCode`, one running Activity for a new intent, predictive back
-    /// on, and every configuration change the host follows in place.
+    /// on, and every configuration change the host follows in place. The back
+    /// flag is what the host does: it registers no back callback (flui-native's
+    /// `no_java_class_takes_the_back_from_the_system`), so every back is the
+    /// system's, with its back-to-home animation, and the comment above it
+    /// says so.
     #[test]
     fn the_base_names_flui_activity_with_the_code_it_needs() {
         let manifest = render(&FACTS, &Declarations::default());
@@ -393,6 +397,17 @@ mod tests {
             if !changes.split('|').any(|declared| declared == change) {
                 failures.push(format!("configChanges lacks {change}: {changes}"));
             }
+        }
+        let comment = document
+            .descendants()
+            .filter(roxmltree::Node::is_comment)
+            .find_map(|node| {
+                node.text()
+                    .filter(|text| text.contains("enableOnBackInvokedCallback"))
+            })
+            .unwrap_or_else(|| panic!("a comment on the back flag in\n{manifest}"));
+        if !comment.contains("the system takes every back") {
+            failures.push(format!("the back flag's comment: {comment}"));
         }
         assert!(failures.is_empty(), "{failures:#?}\n{manifest}");
     }

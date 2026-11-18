@@ -31,13 +31,13 @@
 //! ([`ApplyError`]). An applied command is a request: its outcome is visible
 //! only in the next snapshot.
 
-use flui_foundation::geometry::{Point, Size, WindowMetrics};
+use flui_foundation::geometry::{Size, WindowMetrics};
 
 use crate::window_capabilities::Publication;
 use crate::{
     CapabilityParts, CursorGrab, DisplayId, InvalidGeometry, Unsupported, WindowCapabilities,
     WindowCapability, WindowExecutionState, WindowExtent, WindowFrame, WindowGeometry,
-    WindowInsets,
+    WindowInsets, WindowPosition,
 };
 
 /// The monotone version of a [`WindowState`]. Never wraps.
@@ -187,7 +187,7 @@ impl AspectRatio {
 /// exceed the maximum is asked of a command
 /// ([`WindowCommand::validate`]), not of what a window system reports: a
 /// snapshot shows the limits as the window system holds them.
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct SizeConstraints {
     /// The smallest inner size, if limited.
     pub min: Option<WindowExtent>,
@@ -352,14 +352,19 @@ impl WindowFocus {
 pub struct WindowState {
     /// This snapshot's version.
     pub revision: WindowRevision,
-    /// The window's outer rectangle (frame included).
+    /// The window's outer rectangle (frame included). Its position, where the
+    /// window system reports one, is measured on the window's
+    /// [`display`](Self::display), which [`successor`](Self::successor)
+    /// holds: the display a sample's position names is the display the
+    /// window is on.
     pub outer: WindowGeometry,
     /// The content (client) area extent.
     pub content_size: WindowExtent,
     /// How the window occupies its display.
     pub mode: WindowMode,
     /// The rectangle the window returns to from a maximized or fullscreen
-    /// mode, when the OS reports it.
+    /// mode, when the OS reports it. Its position names the display it lies
+    /// on, which need not be the one the window is on now.
     pub normal_geometry: Option<WindowGeometry>,
     /// Whether the window is shown: opened visible or shown since, and not
     /// hidden since ([`WindowCommand::Show`], [`WindowCommand::Hide`]). It is
@@ -393,8 +398,10 @@ pub struct WindowState {
     /// What frames the window: the system's title bar, the application's, or none.
     pub frame: WindowFrame,
     /// The display the window is on, named by the display snapshot's identity
-    /// (ADR-0236); `None` when the platform cannot tell, which a consumer reads
-    /// as an unknown display, never as the primary one.
+    /// (ADR-0236): the one that holds the largest part of it. `None` when the
+    /// platform cannot tell, which a consumer reads as an unknown display,
+    /// never as the primary one; a window with no display has no position
+    /// either, since a position is measured on one.
     pub display: Option<DisplayId>,
     /// The drawable area in device pixels and its ratio to logical pixels, as
     /// the window last reported a drawable one; `None` until it has. A report
@@ -629,9 +636,11 @@ impl WindowState {
     /// said: AppKit calls a miniaturized window occluded, which is no
     /// covering, and a hidden window has nothing to cover. Nor is a sample of
     /// a hidden window active or focused ([`WindowFocus::Inactive`]): the user
-    /// cannot work in a window that is not shown. And a sample of a window
+    /// cannot work in a window that is not shown. A sample of a window
     /// without the keyboard focus holds no pointer ([`CursorGrab::None`]): a
-    /// grab ends with the focus.
+    /// grab ends with the focus. And a sample whose outer position names a
+    /// display is on that display ([`display`](Self::display)): the position
+    /// is measured on the display the window is on, so the two are one fact.
     ///
     /// The capabilities' publication and their own
     /// [`revision`](WindowCapabilities::revision) are this function's to
@@ -678,6 +687,9 @@ impl WindowState {
         if !sample.focus.is_focused() {
             sample.cursor_grab = CursorGrab::None;
         }
+        if let Some(position) = sample.outer.position() {
+            sample.display = Some(position.display());
+        }
         if sample == *self {
             return Ok(sample);
         }
@@ -698,11 +710,15 @@ impl WindowState {
 pub enum WindowCommand {
     /// Set the title.
     SetTitle(String),
-    /// Move the window's outer top-left corner to a global position in
-    /// logical pixels.
-    SetPosition(Point<f64>),
-    /// Resize the window's inner (content) area, in logical pixels.
-    SetSize(Size<f64>),
+    /// Move the window's outer top-left corner to a point of a display, in
+    /// that display's logical pixels from its top-left corner
+    /// ([`WindowPosition`]). The window lands there whichever display it is
+    /// on when it is asked; a display the window's host no longer has is
+    /// refused with [`ApplyError::DisplayGone`].
+    SetPosition(WindowPosition),
+    /// Resize the window's inner (content) area, in logical pixels. A size
+    /// that encloses no area is refused at admission.
+    SetSize(WindowExtent),
     /// Set the inner-size limits.
     SetConstraints(SizeConstraints),
     /// Allow or forbid user resizing.
@@ -763,22 +779,22 @@ impl WindowCommand {
     /// Refuse a command whose numbers cannot describe a window, before any
     /// operating system call.
     ///
-    /// The command's numbers are read through the same types a snapshot
-    /// holds ([`WindowGeometry`], [`WindowExtent`], [`SizeConstraints`]), so
-    /// a command is refused for exactly the numbers no window has, and the
-    /// refusal carries them.
+    /// The command carries the types a snapshot holds ([`WindowPosition`],
+    /// [`WindowExtent`], [`SizeConstraints`]), so a number that is not finite
+    /// cannot be asked for at all; what is checked here is what those types
+    /// do not say, and the refusal carries the numbers.
     ///
     /// # Errors
-    /// [`AdmissionError::InvalidGeometry`] for a position or size that is
-    /// not finite, a size, a limit or a resize step that encloses no area, or constraints
-    /// whose minimum exceeds their maximum in either dimension.
+    /// [`AdmissionError::InvalidGeometry`] for a size, a limit or a resize
+    /// step that encloses no area, or constraints whose minimum exceeds their
+    /// maximum in either dimension.
     pub fn validate(&self) -> Result<(), AdmissionError> {
         match self {
-            Self::SetPosition(at) => crate::window_geometry::finite_position(*at).map(drop),
-            Self::SetSize(size) => asked_size(*size).map(drop),
+            Self::SetSize(size) => size.area().map(drop),
             Self::SetConstraints(constraints) => constraints.asked().map(drop),
             Self::SetResizeIncrements(step) => step.map_or(Ok(()), |step| step.area().map(drop)),
-            Self::SetTitle(_)
+            Self::SetPosition(_)
+            | Self::SetTitle(_)
             | Self::SetResizable(_)
             | Self::SetFrame(_)
             | Self::SetMode(_)
@@ -856,17 +872,6 @@ impl WindowCommand {
             outcome => Ok(outcome?),
         }
     }
-}
-
-/// `size` as a content size a window can be asked for, by a command
-/// ([`WindowCommand::SetSize`]) or an opening ([`WindowOptions::geometry`](crate::WindowOptions::geometry)):
-/// finite, not negative, enclosing an area.
-///
-/// # Errors
-/// [`InvalidGeometry::Extent`] for a side that is NaN, infinite or negative,
-/// [`InvalidGeometry::Empty`] for a zero side.
-pub(crate) fn asked_size(size: Size<f64>) -> Result<WindowExtent, InvalidGeometry> {
-    WindowExtent::try_new(size).and_then(WindowExtent::area)
 }
 
 /// A [`WindowCommand`] that [`WindowCommand::admit`] checked: its numbers
@@ -977,6 +982,13 @@ pub enum ApplyError {
         /// The command, given back to be admitted again.
         command: WindowCommand,
     },
+    /// The command names a display the window's host no longer has (a
+    /// [`SetPosition`](WindowCommand::SetPosition) on a monitor unplugged
+    /// since the position was read): there is no such place to put the
+    /// window. Read the window's display snapshot again and ask for a
+    /// position on a display it holds.
+    #[error("the display {} the command names is gone", .0.get())]
+    DisplayGone(DisplayId),
     /// The window system refused or failed the request.
     #[error("the window system did not carry out the command: {0}")]
     Platform(PlatformFailure),

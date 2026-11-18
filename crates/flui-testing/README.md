@@ -1,8 +1,8 @@
 # flui-testing
 
 **Test support for FLUI**: a headless host that pumps the product frame
-transaction, the widget test harness built on it, a deterministic substrate
-driver, virtual-clock gesture replay, and accessibility queries.
+transaction, the widget test harness built on it, virtual-clock gesture
+replay, and accessibility queries.
 
 `HeadlessHost` hosts a `UiRuntime` the way a runner does, over a headless
 window and frame sink, and drives every frame through `UiRuntime::pump` on a
@@ -37,14 +37,8 @@ Implemented:
   layers and semantics, `harness::mount`/`Harness` for element-tree probes
   and the IME session (`mount_with_ime`), `SignalProbe` for event-callback
   writes. Every frame is the UI runtime's.
-- **The substrate driver** (`HeadlessBinding::pump_frame`) — a non-singleton
-  frame driver over raw owners, for the `flui-view`, scheduler, animation and
-  interaction suites and for configurations a UI runtime cannot express (no
-  post-frame lanes, no root `MediaQuery` or `VsyncScope`). It moves onto the
-  pump in a later change (ADR-0083 §4).
-- **The canonical mount bootstrap** (`bootstrap::mount_root`) — the one way to
-  get from a root `View` to mounted, rooted, laid-out owners on the substrate
-  driver.
+- **Independent cadences** — two presentations that need their own clocks
+  are two hosts, each pumped on its own `ManualClock` (ADR-0083 §4).
 - **Deterministic input replay** (`replay`) — gestures scripted as data with
   explicit virtual-time offsets, replayed by advancing the clock, so a
   long press is held and a fling is sampled the way the script says.

@@ -263,21 +263,21 @@ impl ErrorObject {
 
     /// The same error, with `retry`.
     #[must_use]
-    pub fn with_retry(mut self, retry: Retry) -> Self {
+    pub fn retry(mut self, retry: Retry) -> Self {
         self.retry = retry;
         self
     }
 
     /// The same error, with `effect`.
     #[must_use]
-    pub fn with_effect(mut self, effect: Effect) -> Self {
+    pub fn effect(mut self, effect: Effect) -> Self {
         self.effect = Some(effect);
         self
     }
 
     /// The same error, naming `handle` of `kind`.
     #[must_use]
-    pub fn with_handle(mut self, kind: HandleKind, handle: impl Into<String>) -> Self {
+    pub fn handle(mut self, kind: HandleKind, handle: impl Into<String>) -> Self {
         self.kind = Some(kind);
         self.handle = Some(handle.into());
         self

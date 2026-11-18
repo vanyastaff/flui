@@ -104,7 +104,7 @@ flui-scheduler = { workspace = true }
 # the `Listener` dispatch test.
 flui-interaction = { workspace = true, features = ["testing"] }
 # The headless harness the integration tests drive (`tests/common/mod.rs`
-# re-exports `flui_testing::widgets`), and `pump_frame` to poll deadline-driven
+# re-exports `flui_testing::widgets`), whose frames poll deadline-driven
 # gestures. `flui-testing` depends on this crate, so this is a dev-only cycle
 # (ADR-0083 §4): the integration tests link one copy of the library; the
 # unit-test build compiles a second, and only `log_capture` crosses into it,

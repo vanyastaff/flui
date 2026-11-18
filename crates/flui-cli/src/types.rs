@@ -164,6 +164,69 @@ impl From<ProjectName> for String {
 }
 
 // ============================================================================
+// DisplayName
+// ============================================================================
+
+/// The name an application is shown by (`flui.toml`'s `[app] display_name`):
+/// the Apple bundles' `CFBundleDisplayName`, the Linux desktop entry's
+/// `Name`, the Android launcher label and the web page's title. Free text of
+/// 1 to [`DisplayName::MAX_CHARS`] characters, none a control character or
+/// one an XML file cannot carry; each writer escapes it for its format.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub(crate) struct DisplayName(String);
+
+impl DisplayName {
+    /// The most characters a display name holds: more than any launcher or
+    /// title bar shows whole.
+    pub(crate) const MAX_CHARS: usize = 64;
+
+    /// Check `name` as a display name.
+    ///
+    /// # Errors
+    ///
+    /// [`CliError::InvalidConfig`] naming the rule `name` breaks.
+    pub(crate) fn try_new(name: impl Into<String>) -> CliResult<Self> {
+        let name = name.into();
+        if (1..=Self::MAX_CHARS).contains(&name.chars().count())
+            && crate::build::util::xml::is_xml_name_text(&name)
+        {
+            Ok(Self(name))
+        } else {
+            Err(CliError::InvalidConfig {
+                file: "flui.toml".to_owned(),
+                reason: format!(
+                    "`[app] display_name = \"{}\"`: a display name is 1 to {} characters, with no \
+                     control character and no U+FFFE or U+FFFF",
+                    name.escape_debug(),
+                    Self::MAX_CHARS
+                ),
+            })
+        }
+    }
+
+    /// The name as written.
+    #[must_use]
+    pub(crate) fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl TryFrom<String> for DisplayName {
+    type Error = CliError;
+
+    fn try_from(name: String) -> Result<Self, Self::Error> {
+        Self::try_new(name)
+    }
+}
+
+impl From<DisplayName> for String {
+    fn from(name: DisplayName) -> Self {
+        name.0
+    }
+}
+
+// ============================================================================
 // OrganizationId
 // ============================================================================
 

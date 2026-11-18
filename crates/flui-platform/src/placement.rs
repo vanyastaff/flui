@@ -1,14 +1,15 @@
 //! Where a window was, remembered across runs and fitted to the displays of the
 //! next run (ADR-0237 decision 6).
 //!
-//! A [`WindowPlacement`] names its display by [`DisplayInfo::persistent_key`],
+//! A [`WindowPlacement`] names its display by [`DisplayDescription::persistent_key`](crate::DisplayDescription::persistent_key),
 //! never by a [`DisplayId`] (an id means nothing in another run), and measures
 //! the window from the origin of the display's usable area in that display's
-//! logical pixels, so a mixed-scale desktop does not skew it.
+//! logical pixels, so a mixed-scale desktop does not skew it and a window
+//! reopens below a panel along the display's top, not under it.
 //! [`resolve`](WindowPlacement::resolve) is a pure function of the placement,
 //! the current displays and what the window can do; whatever it returns lies
-//! wholly on a live display and is still expressed relative to that display:
-//! the backend turns it into pixels through the display's own scale.
+//! wholly on a live display, as a [`WindowPosition`] on that display: the
+//! backend turns it into pixels through the display's own scale.
 //!
 //! # Encoding
 //!
@@ -33,11 +34,11 @@
 
 use std::fmt::Write as _;
 
-use flui_foundation::geometry::{Point, Size};
+use flui_foundation::geometry::{DevicePixelRatio, Point, Size};
 
 use crate::{
-    DisplayId, DisplayInfo, DisplaySnapshot, WindowCapabilities, WindowCommand, WindowMode,
-    WindowState,
+    DisplayId, DisplaySnapshot, InvalidGeometry, WindowCapabilities, WindowCommand, WindowExtent,
+    WindowMode, WindowPosition, WindowState,
 };
 
 const VERSION_LINE: &str = "flui-window-placement/1";
@@ -47,7 +48,7 @@ const END_LINE: &str = "end";
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub struct WindowPlacement {
-    /// The display's [`persistent_key`](DisplayInfo::persistent_key), or `None`
+    /// The display's [`persistent_key`](crate::DisplayDescription::persistent_key), or `None`
     /// when the window was on a display with none: the next run then uses its
     /// primary display.
     pub display: Option<String>,
@@ -55,16 +56,48 @@ pub struct WindowPlacement {
     /// origin of the display's usable area in that display's logical pixels;
     /// `None` when the operating system reported no position, and the window is
     /// then not positioned when it is restored.
-    pub offset: Option<Point<f64>>,
-    /// The size of the window's content area in normal mode, in logical pixels.
-    pub size: Size<f64>,
+    pub offset: Option<PlacementOffset>,
+    /// The size of the window's content area in normal mode, in logical
+    /// pixels; one that encloses no area is never written or read, and
+    /// [`resolve`](Self::resolve) refuses one.
+    pub size: WindowExtent,
     /// The mode the window was in.
     pub mode: WindowMode,
     /// The display's scale factor when this was captured.
-    pub scale: f64,
+    pub scale: DevicePixelRatio,
     /// Whether a window that was minimized was maximized before: it comes back
     /// maximized, not normal.
     pub maximized_before_minimize: bool,
+}
+
+/// Where a remembered window's outer top-left is, from the origin of its
+/// display's usable area, in that display's logical pixels: finite by
+/// construction, so a placement never holds a place that could not be
+/// restored.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PlacementOffset(Point<f64>);
+
+// Both coordinates are finite, never NaN, so equality is total.
+impl Eq for PlacementOffset {}
+
+impl PlacementOffset {
+    /// The offset `at` from the usable area's origin.
+    ///
+    /// # Errors
+    /// [`InvalidGeometry::Position`] when a coordinate is NaN or infinite.
+    pub fn try_new(at: Point<f64>) -> Result<Self, InvalidGeometry> {
+        if at.x.is_finite() && at.y.is_finite() {
+            Ok(Self(at))
+        } else {
+            Err(InvalidGeometry::Position { x: at.x, y: at.y })
+        }
+    }
+
+    /// The offset, in logical pixels of its display.
+    #[must_use]
+    pub const fn get(self) -> Point<f64> {
+        self.0
+    }
 }
 
 /// What [`WindowPlacement::resolve`] decided for the window of the next run.
@@ -75,18 +108,31 @@ pub struct WindowPlacement {
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub struct ResolvedPlacement {
-    /// The display the window opens on.
+    /// The display the window opens on, whose scale its frame is measured at;
+    /// the display [`position`](Self::position) names, when there is one.
     pub display: DisplayId,
-    /// The window's outer top-left, from the origin of that display's usable
-    /// area in that display's logical pixels; `None` when the window cannot be
-    /// placed ([`places_at_open`](crate::WindowCapabilities::places_at_open) is
-    /// `false`) or the placement carried no position.
-    pub offset_in_display: Option<Point<f64>>,
-    /// The content size in that display's logical pixels. The window's outer
-    /// size, with its frame, fits the display's usable area.
-    pub size: Size<f64>,
+    /// The window's outer top-left on [`display`](Self::display), finite.
+    at: Option<Point<f64>>,
+    /// The content size in that display's logical pixels, enclosing an area.
+    /// The window's outer size, with its frame, fits the display's usable
+    /// area.
+    pub size: WindowExtent,
     /// The mode to open in; never [`WindowMode::Minimized`].
     pub mode: WindowMode,
+}
+
+impl ResolvedPlacement {
+    /// The window's outer top-left on [`display`](Self::display), inside its
+    /// usable area; `None` when the window cannot be placed
+    /// ([`places_at_open`](crate::WindowCapabilities::places_at_open) is
+    /// `false`) or the placement carried no position.
+    #[must_use]
+    pub fn position(&self) -> Option<WindowPosition> {
+        self.at.map(|at| {
+            WindowPosition::try_new(self.display, at)
+                .expect("BUG: a resolved position is built from finite numbers")
+        })
+    }
 }
 
 /// Why bytes are not a [`WindowPlacement`].
@@ -112,10 +158,10 @@ impl WindowPlacement {
     #[must_use]
     pub const fn new(
         display: Option<String>,
-        offset: Option<Point<f64>>,
-        size: Size<f64>,
+        offset: Option<PlacementOffset>,
+        size: WindowExtent,
         mode: WindowMode,
-        scale: f64,
+        scale: DevicePixelRatio,
     ) -> Self {
         Self {
             display,
@@ -142,9 +188,18 @@ impl WindowPlacement {
     /// opening a window with it does not grow the window by its frame; for a
     /// window not in normal mode the frame is taken from the current one.
     ///
-    /// `None` when the window has no usable size, or a number the state reports
-    /// is not finite (its display's scale, or the position): a placement is
-    /// never remembered from a value that could not be restored.
+    /// The display is the one the normal bounds' position names, or, for a
+    /// window whose window system reports no position, the display the window
+    /// is on; the offset is the position's, moved from that display's corner
+    /// to its usable area's.
+    ///
+    /// `None` when the window has no usable size, when its position names a
+    /// display `displays` does not hold (a monitor the snapshot has not caught
+    /// up with), or when it has no position though its host
+    /// [observes positions](crate::WindowCapabilities::observes_position) (a
+    /// sample that could not place it): a placement is never remembered from
+    /// a value that could not be restored, and the one remembered before
+    /// stays.
     #[must_use]
     pub fn from_state(
         state: &WindowState,
@@ -158,40 +213,41 @@ impl WindowPlacement {
         };
         // A rectangle with no area is no place a window was: a window whose
         // window system has reported none yet has nothing to remember.
-        if normal.size().width <= 0.0 || normal.size().height <= 0.0 {
-            return None;
-        }
-        let frame_width = (state.outer.size().width - state.content_size.width()).max(0.0);
-        let frame_height = (state.outer.size().height - state.content_size.height()).max(0.0);
+        let normal_size = normal.extent().area().ok()?;
         let size = if state.mode == WindowMode::Normal {
-            state.content_size.get()
+            state.content_size
         } else {
-            Size::new(
-                (normal.size().width - frame_width).max(1.0),
-                (normal.size().height - frame_height).max(1.0),
-            )
+            let frame_width = (state.outer.size().width - state.content_size.width()).max(0.0);
+            let frame_height = (state.outer.size().height - state.content_size.height()).max(0.0);
+            // Each side is a finite extent less a finite frame, held at one.
+            WindowExtent::try_new(Size::new(
+                (normal_size.width() - frame_width).max(1.0),
+                (normal_size.height() - frame_height).max(1.0),
+            ))
+            .ok()?
         };
-        if !positive_finite(size.width) || !positive_finite(size.height) {
-            return None;
-        }
-        let display = state
-            .display
-            .and_then(|id| displays.get(id))
-            .or_else(|| displays.primary())
-            .and_then(|display| usable(display).map(|usable| (display, usable)));
-        let (key, scale, offset) = match display {
-            Some((display, usable)) => (
-                display.persistent_key.clone(),
-                display.scale_factor.get(),
-                normal
-                    .position()
-                    .map(|at| Point::new(at.x - usable.origin.x, at.y - usable.origin.y)),
-            ),
-            None => (None, 1.0, normal.position()),
+        let size = size.area().ok()?;
+        let (display, offset) = match normal.position() {
+            Some(position) => {
+                let display = displays.get(position.display())?;
+                let usable = display.bounds.usable();
+                let at = position.at();
+                // A finite position less a finite corner can still round past
+                // the largest number; such a place is not remembered.
+                let offset =
+                    PlacementOffset::try_new(Point::new(at.x - usable.min.x, at.y - usable.min.y))
+                        .ok()?;
+                (Some(display), Some(offset))
+            }
+            // A host that reports where its windows are and reported nowhere
+            // has lost the place, not given it up: an empty offset would
+            // overwrite the place remembered before.
+            None if state.capabilities.observes_position().is_available() => return None,
+            None => (state.display.and_then(|id| displays.get(id)), None),
         };
-        if offset.is_some_and(|at| !at.x.is_finite() || !at.y.is_finite()) {
-            return None;
-        }
+        let (key, scale) = display.map_or((None, DevicePixelRatio::ONE), |display| {
+            (display.persistent_key.clone(), display.scale_factor)
+        });
         Some(
             Self::new(key, offset, size, state.mode, scale)
                 .with_maximized_before_minimize(maximized_before_minimize),
@@ -210,15 +266,16 @@ impl WindowPlacement {
             text.push('\n');
         }
         if let Some(offset) = self.offset {
-            let _ = writeln!(text, "offset={},{}", offset.x, offset.y);
+            let at = offset.get();
+            let _ = writeln!(text, "offset={},{}", at.x, at.y);
         }
         let _ = writeln!(
             text,
             "size={},{}\nmode={}\nscale={}\nmaximized_before_minimize={}\n{END_LINE}",
-            self.size.width,
-            self.size.height,
+            self.size.width(),
+            self.size.height(),
             mode_name(self.mode),
-            self.scale,
+            self.scale.get(),
             u8::from(self.maximized_before_minimize),
         );
         text.into_bytes()
@@ -231,8 +288,9 @@ impl WindowPlacement {
     /// [`PlacementError::UnsupportedVersion`] for another version of the format
     /// (or bytes that are not a placement at all), and
     /// [`PlacementError::Malformed`] for a field the format does not allow: a
-    /// number that is not finite, a size or scale that is not positive, an
-    /// unknown mode, a field given twice.
+    /// number that is not finite, a size that encloses no area, a scale no
+    /// display has ([`DevicePixelRatio`]'s range), an unknown mode, a field
+    /// given twice.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, PlacementError> {
         let text = std::str::from_utf8(bytes).map_err(|_| PlacementError::UnsupportedVersion)?;
         let mut lines = text.lines();
@@ -282,16 +340,21 @@ impl WindowPlacement {
         }
         let size = fields.size.0.ok_or(PlacementError::Truncated)?;
         let scale = fields.scale.0.ok_or(PlacementError::Truncated)?;
-        if !positive_finite(size.0) || !positive_finite(size.1) {
-            return Err(PlacementError::Malformed { field: "size" });
-        }
-        if !positive_finite(scale) {
-            return Err(PlacementError::Malformed { field: "scale" });
-        }
+        let size = WindowExtent::try_new(Size::new(size.0, size.1))
+            .and_then(WindowExtent::area)
+            .map_err(|_| PlacementError::Malformed { field: "size" })?;
+        let scale =
+            DevicePixelRatio::try_new(scale).ok_or(PlacementError::Malformed { field: "scale" })?;
+        let offset = fields
+            .offset
+            .0
+            .map(|at| PlacementOffset::try_new(Point::new(at.0, at.1)))
+            .transpose()
+            .map_err(|_| PlacementError::Malformed { field: "offset" })?;
         Ok(Self::new(
             fields.display.0,
-            fields.offset.0.map(|at| Point::new(at.0, at.1)),
-            Size::new(size.0, size.1),
+            offset,
+            size,
             fields.mode.0.ok_or(PlacementError::Truncated)?,
             scale,
         )
@@ -307,23 +370,25 @@ impl WindowPlacement {
     /// the outer size, so a window never hangs past the work area by its frame.
     ///
     /// - The display is the one with this placement's
-    ///   [`persistent_key`](DisplayInfo::persistent_key); with no such display,
-    ///   or no key, the primary display, else the first. A display with a scale
-    ///   that is not finite and positive, or with no usable area, is not a
-    ///   candidate. On a display other than the remembered one the window keeps
-    ///   its physical size, so the logical size is rescaled by the two scale
-    ///   factors.
+    ///   [`persistent_key`](crate::DisplayDescription::persistent_key); with no such display,
+    ///   or no key, the primary display, else the first. A display whose
+    ///   usable area is less than a logical pixel either way is not a
+    ///   candidate. On a display other than the remembered one the window
+    ///   keeps its physical size, so the logical size is rescaled by the two
+    ///   scale factors.
     /// - The outer size is cut to the display's usable area, and the window is
-    ///   shifted so that it lies wholly on it.
+    ///   shifted so that it lies wholly on it: its position is inside the
+    ///   usable area, measured from the display's corner as every
+    ///   [`WindowPosition`] is.
     /// - A minimized window opens maximized if it was maximized before, else
     ///   normal. A mode the window cannot enter (`capabilities`) becomes
     ///   normal.
     /// - Without [`places_at_open`](crate::WindowCapabilities::places_at_open) the
     ///   position is not applied: size and mode still are.
     ///
-    /// `None` when the placement describes no window (a size or scale that is
-    /// not finite and positive) or no display can hold one: the window then
-    /// opens from its configuration.
+    /// `None` when the placement describes no window (a size with no area, a
+    /// frame that is not finite) or no display can hold one: the
+    /// window then opens from its configuration.
     #[must_use]
     pub fn resolve(
         &self,
@@ -331,15 +396,8 @@ impl WindowPlacement {
         capabilities: &WindowCapabilities,
         frame: Size<f64>,
     ) -> Option<ResolvedPlacement> {
-        if !positive_finite(self.size.width)
-            || !positive_finite(self.size.height)
-            || !positive_finite(self.scale)
-            || !frame.width.is_finite()
-            || !frame.height.is_finite()
-            || self
-                .offset
-                .is_some_and(|at| !at.x.is_finite() || !at.y.is_finite())
-        {
+        let size = self.size.area().ok()?.get();
+        if !frame.width.is_finite() || !frame.height.is_finite() {
             return None;
         }
         let frame = Size::new(frame.width.max(0.0), frame.height.max(0.0));
@@ -354,77 +412,57 @@ impl WindowPlacement {
             WindowMode::Normal
         };
         let candidates = || {
-            displays
-                .displays()
-                .iter()
-                .filter_map(|display| usable(display).map(|usable| (display, usable)))
+            displays.displays().iter().filter(|display| {
+                let usable = display.bounds.usable();
+                usable.width() >= 1.0 && usable.height() >= 1.0
+            })
         };
         let keyed = self.display.as_deref().and_then(|key| {
-            candidates().find(|(display, _)| display.persistent_key.as_deref() == Some(key))
+            candidates().find(|display| display.persistent_key.as_deref() == Some(key))
         });
         let remembered = keyed.is_some();
-        let (display, area) = keyed
-            .or_else(|| candidates().find(|(display, _)| display.is_primary))
+        let display = keyed
+            .or_else(|| candidates().find(|display| display.is_primary))
             .or_else(|| candidates().next())?;
+        let area = display.bounds.usable();
+        // Two ratios between 1/32 and 32, so the quotient is at most 1024. A
+        // large extent times it can still overflow to infinity; the `min`
+        // with the usable area below is what bounds the outer size, and every
+        // side that leaves this function is finite.
         let carry = if remembered {
             1.0
         } else {
-            self.scale / display.scale_factor.get()
+            self.scale.get() / display.scale_factor.get()
         };
         let outer = Size::new(
-            (self.size.width * carry + frame.width).min(area.size.width),
-            (self.size.height * carry + frame.height).min(area.size.height),
+            (size.width * carry + frame.width).min(area.width()),
+            (size.height * carry + frame.height).min(area.height()),
         );
-        let size = Size::new(
+        let size = WindowExtent::try_new(Size::new(
             (outer.width - frame.width).max(1.0),
             (outer.height - frame.height).max(1.0),
-        );
-        let offset_in_display = if capabilities.places_at_open().is_available() {
-            self.offset.map(|at| {
+        ))
+        .ok()?;
+        let at = if capabilities.places_at_open().is_available() {
+            // Each coordinate is a finite offset held between zero and a
+            // finite room, plus a finite corner: a point of the usable area.
+            let place = |offset: f64, room: f64, corner: f64| corner + offset.min(room).max(0.0);
+            self.offset.map(PlacementOffset::get).map(|at| {
                 Point::new(
-                    at.x.min(area.size.width - outer.width).max(0.0),
-                    at.y.min(area.size.height - outer.height).max(0.0),
+                    place(at.x, area.width() - outer.width, area.min.x),
+                    place(at.y, area.height() - outer.height, area.min.y),
                 )
             })
         } else {
             None
         };
-        let resolved = ResolvedPlacement {
+        Some(ResolvedPlacement {
             display: display.id,
-            offset_in_display,
+            at,
             size,
             mode,
-        };
-        let sound = positive_finite(resolved.size.width)
-            && positive_finite(resolved.size.height)
-            && resolved
-                .offset_in_display
-                .is_none_or(|at| at.x.is_finite() && at.y.is_finite());
-        sound.then_some(resolved)
+        })
     }
-}
-
-/// A display's usable area in its own logical pixels: where it starts in the
-/// global logical space and how large it is. `None` for a display whose usable
-/// area is empty.
-struct Usable {
-    origin: Point<f64>,
-    size: Size<f64>,
-}
-
-fn usable(display: &DisplayInfo) -> Option<Usable> {
-    let ratio = display.scale_factor;
-    let bounds = display.usable_bounds;
-    let logical = |device: i32| ratio.to_logical(f64::from(device));
-    let size = Size::new(logical(bounds.size.width), logical(bounds.size.height));
-    (size.width >= 1.0 && size.height >= 1.0).then(|| Usable {
-        origin: Point::new(logical(bounds.origin.x), logical(bounds.origin.y)),
-        size,
-    })
-}
-
-fn positive_finite(value: f64) -> bool {
-    value.is_finite() && value > 0.0
 }
 
 /// Each field of the format at most once.

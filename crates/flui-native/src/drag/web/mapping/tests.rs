@@ -122,6 +122,39 @@ fn a_hover_offers_the_types_flui_announces_then_the_files() {
     assert_eq!(format_of("Files"), None);
 }
 
+/// Another page names any number of types and files, of any length: a hover
+/// is read from the first `MAX_OFFERED_TYPES` of each, an over-long type
+/// among them left out, a file keeping its index in the drag's files.
+fn a_hover_offers_no_more_types_than_every_host_reads() {
+    use crate::drag::offers::{MAX_OFFERED_TYPES, MAX_TYPE_LEN};
+
+    let long = format!("application/{}", "x".repeat(MAX_TYPE_LEN));
+    let types: Vec<String> = std::iter::once(long.clone())
+        .chain((0..10_000).map(|n| format!("application/x-{n}")))
+        .collect();
+    let files: Vec<String> = std::iter::once(long)
+        .chain((0..10_000).map(|_| "image/png".to_owned()))
+        .collect();
+    let offer = offered(
+        types.iter().map(String::as_str),
+        files.iter().map(String::as_str),
+    );
+    let (data, files): (Vec<_>, Vec<_>) = offer
+        .iter()
+        .partition(|(source, _)| matches!(source, DomSource::Data(_)));
+    assert_eq!(data.len(), MAX_OFFERED_TYPES - 1);
+    assert_eq!(files.len(), MAX_OFFERED_TYPES - 1);
+    assert_eq!(
+        files[0].0,
+        DomSource::File(1),
+        "the over-long file is left out"
+    );
+    assert_eq!(
+        files.last().map(|(source, _)| source.clone()),
+        Some(DomSource::File(MAX_OFFERED_TYPES - 1))
+    );
+}
+
 fn payloads_travel_as_the_strings_the_browser_stores() {
     let list = "# comment\r\nhttps://a.example/\r\n\r\nfile:///tmp/x\r\n";
     let uris = payload_of(&TransferFormat::UriList, list.to_owned());
@@ -267,6 +300,10 @@ fn html_drag_drop_table() {
             (
                 "a_hover_offers_the_types_flui_announces_then_the_files",
                 a_hover_offers_the_types_flui_announces_then_the_files,
+            ),
+            (
+                "a_hover_offers_no_more_types_than_every_host_reads",
+                a_hover_offers_no_more_types_than_every_host_reads,
             ),
             (
                 "payloads_travel_as_the_strings_the_browser_stores",

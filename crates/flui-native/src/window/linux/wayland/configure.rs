@@ -913,7 +913,15 @@ mod tests {
         );
         for (command, reason) in [
             (
-                WindowCommand::SetPosition(flui_foundation::geometry::Point::new(1.0, 1.0)),
+                WindowCommand::SetPosition(
+                    flui_platform::WindowPosition::try_new(
+                        flui_platform::DisplayRegistry::new()
+                            .mint(&flui_platform::DisplayKey::Injected(1))
+                            .expect("an id"),
+                        flui_foundation::geometry::Point::new(1.0, 1.0),
+                    )
+                    .expect("a finite point"),
+                ),
                 flui_platform::UnsupportedReason::NotOnThisPlatform,
             ),
             (
@@ -980,13 +988,15 @@ mod tests {
     #[test]
     fn a_tiled_window_takes_no_size() {
         let tiled = ToplevelStates::decode(&array(&[TILED_LEFT, ACTIVATED]));
-        let refused = WindowCommand::SetSize(Size::new(640.0, 480.0))
-            .admit(
-                &capabilities(None, None, None, tiled, Activation::Missing, false)
-                    .publish()
-                    .expect("the process has publications left"),
-            )
-            .expect_err("the tiling holds the size");
+        let refused = WindowCommand::SetSize(
+            flui_platform::WindowExtent::try_new(Size::new(640.0, 480.0)).expect("an extent"),
+        )
+        .admit(
+            &capabilities(None, None, None, tiled, Activation::Missing, false)
+                .publish()
+                .expect("the process has publications left"),
+        )
+        .expect_err("the tiling holds the size");
         assert_eq!(
             refused.unsupported().map(|unsupported| unsupported.reason),
             Some(flui_platform::UnsupportedReason::NotOnThisDevice)

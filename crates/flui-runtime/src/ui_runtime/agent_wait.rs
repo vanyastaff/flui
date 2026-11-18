@@ -13,7 +13,8 @@ use std::time::Duration;
 
 use flui_foundation::panic::FirstPanic;
 use flui_protocol::{
-    Condition, UnsettledCause, UnsettledReason, WaitOutcome, WaitParams, WindowId,
+    tree::WindowId, wait::Condition, wait::UnsettledCause, wait::UnsettledReason,
+    wait::WaitOutcome, wait::WaitParams,
 };
 use flui_semantics::{EventSet, Placement, WaitFacts, counts_frames};
 use web_time::Instant;
@@ -41,7 +42,7 @@ pub(crate) struct PendingWait {
 
 impl PendingWait {
     /// The window emitted an event of `kind`; the wait sees it at its next evaluation.
-    pub(crate) fn note_event(&mut self, kind: flui_protocol::EventKind) {
+    pub(crate) fn note_event(&mut self, kind: flui_protocol::events::EventKind) {
         self.events.insert(kind);
     }
 

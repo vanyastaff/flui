@@ -2,7 +2,7 @@
 //!
 //! A process marker is a label of the process that produced a change rather
 //! than a statement of what the code does: a cycle, phase letter, wave, slice
-//! or PR label, a spec task id, a tracker id. The rule is about prose, so the
+//! or PR label, a spec task or requirement id, a tracker id. The rule is about prose, so the
 //! scan reads prose and nothing else ([`lex`]): the comment, doc and string
 //! tokens of Rust ([`tokens`]), the text events of a Markdown parser, and TOML,
 //! YAML and WGSL files whole. It never reads code structure, so a type or path

@@ -14,6 +14,10 @@
   snapshot with its revision, the command and capability triad, owner-turn application and
   `WindowHandle` (decision 4), placement, and the notices and the session-end hold themselves
   stay; the payload-free state notification stays as a handler method instead of a registration.
+- **Superseded-by:** [ADR-0364](ADR-0364-a-window-position-names-its-display-and-commands-carry-checked-geometry.md), decision
+  2's global position only: a position is a point of the display it names, in that display's
+  logical pixels; and decision 6's options naming a display apart from their position: the
+  position names it. The placement record and its encoding stand.
 - **Related:** [ADR-0222](ADR-0222-window-appearance-is-a-presentation-observation.md) (the
   payload-free observation shape this follows),
   [ADR-0236](ADR-0236-display-snapshot-and-refresh-period.md) (display snapshot and ids; this ADR
@@ -81,7 +85,7 @@ Web ignored page freeze and GPU context loss.
 6. **Placement is FLUI's own value.** `WindowPlacement` stores a persistent display key, the normal
    geometry relative to that display's usable area in its logical pixels, and the mode, in a
    versioned encoding. Resolution against the current display snapshot is a pure function that
-   always yields a window wholly on a live display. `DisplayInfo` gains `persistent_key`, a string
+   always yields a window wholly on a live display. `DisplayDescription` gains `persistent_key`, a string
    that survives reboots (the monitor device path on Windows, not the LUID), compared only for
    equality. OS autosave facilities are not used, so behaviour is the same everywhere.
 7. **System notices are a separate stream.** The platform reports `SystemNotice` (the same events without a session end, which has its own hook); `HostNotice` (session ending, cancelled, ended; sleep;

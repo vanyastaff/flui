@@ -30,7 +30,8 @@
 //! use std::sync::Arc;
 //!
 //! use flui_devtools::{FrameTimingLayer, Profiler};
-//! use flui_log::{InstallPolicy, LogBridgePolicy, LogConfig};
+//! use flui_log::config::LogConfig;
+//! use flui_log::ownership::{InstallPolicy, LogBridgePolicy, install_subscriber};
 //! use tracing_subscriber::layer::SubscriberExt;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -40,7 +41,7 @@
 //! let subscriber = LogConfig::default()
 //!     .subscriber()?
 //!     .with(FrameTimingLayer::new(Arc::clone(&profiler)));
-//! flui_log::install_subscriber(subscriber, InstallPolicy::Auto, LogBridgePolicy::Auto)?;
+//! install_subscriber(subscriber, InstallPolicy::Auto, LogBridgePolicy::Auto)?;
 //! // ...run the app; `flui-app` inherits an installed subscriber...
 //! if let Some(frame) = profiler.frame_stats() {
 //!     println!("last frame: {:.2} ms", frame.total_time_ms());

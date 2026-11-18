@@ -16,9 +16,15 @@ use flui_platform::WindowId;
 use flui_platform::{Cursor, CursorError};
 use flui_platform::{Unsupported, UnsupportedReason};
 use flui_platform::{WindowCapabilities, WindowFrame, WindowMode, WindowOptions};
+use flui_platform::{WindowExtent, WindowPosition};
 use flui_view::{WindowClosed, WindowHandle};
 
 use super::*;
+
+/// A window extent of this size.
+fn extent(width: f64, height: f64) -> WindowExtent {
+    WindowExtent::try_new(Size::new(width, height)).expect("a finite extent")
+}
 
 fn address(n: usize) -> PresentationAddress {
     PresentationAddress {
@@ -105,9 +111,7 @@ fn commands_wait_for_the_next_turn_and_apply_in_order() {
     let rig = rig(&window, 1);
     let before = window.state();
     rig.handle.set_title("A").expect("accepted");
-    rig.handle
-        .set_size(Size::new(640.0, 480.0))
-        .expect("accepted");
+    rig.handle.set_size(extent(640.0, 480.0)).expect("accepted");
     rig.handle.set_title("B").expect("accepted");
     assert_eq!(window.state(), before, "nothing is applied inline");
     assert_eq!(rig.wakes.get(), 3, "each command asks the owner for a turn");
@@ -134,21 +138,30 @@ fn a_refused_command_is_never_queued() {
     );
     let all = headless_window(WindowCapabilities::ALL);
     let rig_all = rig(&all, 3);
+    // Numbers that are no extent and no position cannot reach a command.
     assert_eq!(
-        rig_all.handle.set_size(Size::new(f64::NAN, 10.0)),
-        Err(SubmitError::Admission(AdmissionError::InvalidGeometry(
-            flui_platform::InvalidGeometry::Extent {
-                width: f64::NAN,
-                height: 10.0
-            }
-        )))
+        WindowExtent::try_new(Size::new(f64::NAN, 10.0)),
+        Err(flui_platform::InvalidGeometry::Extent {
+            width: f64::NAN,
+            height: 10.0
+        })
     );
     assert_eq!(
-        rig_all.handle.set_position(Point::new(f64::INFINITY, 0.0)),
+        WindowPosition::try_new(
+            all.state().display.expect("a window on a display"),
+            Point::new(f64::INFINITY, 0.0)
+        ),
+        Err(flui_platform::InvalidGeometry::Position {
+            x: f64::INFINITY,
+            y: 0.0
+        })
+    );
+    assert_eq!(
+        rig_all.handle.set_size(extent(0.0, 10.0)),
         Err(SubmitError::Admission(AdmissionError::InvalidGeometry(
-            flui_platform::InvalidGeometry::Position {
-                x: f64::INFINITY,
-                y: 0.0
+            flui_platform::InvalidGeometry::Empty {
+                width: 0.0,
+                height: 10.0
             }
         )))
     );
@@ -209,9 +222,7 @@ fn a_command_superseded_in_the_queue_is_admitted_again() {
     rig.handle
         .set_mode(WindowMode::Maximized)
         .expect("accepted while the window maximizes");
-    rig.handle
-        .set_size(Size::new(300.0, 200.0))
-        .expect("accepted");
+    rig.handle.set_size(extent(300.0, 200.0)).expect("accepted");
 
     let mut revised = WindowCapabilities::ALL.into_parts();
     revised.maximizes = flui_platform::WindowCapability::NOT_ON_THIS_PLATFORM;
@@ -399,7 +410,7 @@ impl PlatformWindow for RecordingWindow {
     fn text_input(&self) -> Option<Arc<dyn flui_platform::PlatformTextInput>> {
         None
     }
-    fn haptics(&self) -> Option<Arc<dyn flui_platform::PlatformHaptics>> {
+    fn haptics(&self) -> Option<Arc<dyn flui_platform::haptics::PlatformHaptics>> {
         None
     }
     fn system_chrome(&self) -> Option<Arc<dyn flui_platform::PlatformSystemChrome>> {

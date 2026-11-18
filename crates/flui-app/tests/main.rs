@@ -155,10 +155,6 @@ fn native_linux() {
                 "native_linux::an_app_whose_window_is_never_drawn_still_quits",
                 native_linux::an_app_whose_window_is_never_drawn_still_quits as fn(),
             ),
-            (
-                "native_linux::a_raster_thread_presents_one_frame_per_frame_callback",
-                native_linux::a_raster_thread_presents_one_frame_per_frame_callback as fn(),
-            ),
         ],
     );
 }

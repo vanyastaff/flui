@@ -63,11 +63,12 @@ use std::sync::{Arc, Weak};
 use std::task::Waker;
 use std::time::Duration;
 
-use flui_protocol::RecordRow;
 use flui_protocol::input_recording::Header;
 use flui_protocol::method::{Addressed, WindowMethod};
+use flui_protocol::record::RecordRow;
 use flui_protocol::{
-    ErrorCode, ErrorObject, Event, EventFilter, HandleKind, RecordParams, Retry, WindowId,
+    error::ErrorCode, error::ErrorObject, error::HandleKind, error::Retry, events::Event,
+    events::EventFilter, record::RecordParams, tree::WindowId,
 };
 
 use crate::__runtime::{AgentPort, EventSource, LeaseId, RecordSource, WakeSlot, WindowCall};
@@ -223,7 +224,7 @@ fn owner_gone() -> ErrorObject {
 /// the subscription.
 ///
 /// A subscription holds a bounded queue: when events outrun the reader, the ones that do not fit
-/// are counted and the next event that fits is preceded by a [`GapEvent`](flui_protocol::GapEvent)
+/// are counted and the next event that fits is preceded by a [`GapEvent`](flui_protocol::events::GapEvent)
 /// naming how many were missed. The stream ends with a `window` event saying the window closed.
 ///
 /// Never wait on it on the owner thread, or inside a [`DevAgentHook`] method: the owner fills it
@@ -590,8 +591,8 @@ impl fmt::Debug for InputLease {
 /// What every call on a closed window answers.
 fn window_gone(window: WindowId) -> ErrorObject {
     ErrorObject::new(ErrorCode::Gone, "the window has closed")
-        .with_retry(Retry::Never)
-        .with_handle(HandleKind::Window, window.to_string())
+        .retry(Retry::Never)
+        .handle(HandleKind::Window, window.to_string())
 }
 
 impl fmt::Debug for AgentWindow {
@@ -608,7 +609,7 @@ mod tests {
     use std::sync::Arc;
 
     use flui_protocol::method::{SemanticsAct, SemanticsLocate, SemanticsRead};
-    use flui_protocol::{LocateParams, Locator, ReadParams, Tree};
+    use flui_protocol::{locator::LocateParams, locator::Locator, tree::ReadParams, tree::Tree};
 
     use super::*;
 
@@ -778,12 +779,13 @@ mod tests {
     #[test]
     fn a_window_call_shows_only_its_method_and_opens_only_as_it() {
         const VALUE: &str = "correct horse battery staple";
-        let element = flui_protocol::ElementRef::new(
+        let element = flui_protocol::tree::ElementRef::new(
             WindowId::from_u64(3).expect("non-zero"),
-            flui_protocol::ElementId::from_u64(7).expect("non-zero"),
+            flui_protocol::tree::ElementId::from_u64(7).expect("non-zero"),
         );
-        let (call, _answer) =
-            WindowCall::new::<SemanticsAct>(flui_protocol::ActParams::set_value(element, VALUE));
+        let (call, _answer) = WindowCall::new::<SemanticsAct>(
+            flui_protocol::act::ActParams::set_value(element, VALUE),
+        );
         let shown = format!("{call:?}");
         assert!(shown.contains("semantics.act"), "{shown}");
         assert!(!shown.contains(VALUE), "a value reached Debug: {shown}");

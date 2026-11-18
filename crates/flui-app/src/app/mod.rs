@@ -14,6 +14,7 @@
 pub mod __entry;
 pub(crate) mod agent;
 pub(crate) mod capability;
+pub(crate) mod clipboard_expiry;
 pub(crate) mod close_request;
 mod config;
 pub(crate) mod dev_agent;

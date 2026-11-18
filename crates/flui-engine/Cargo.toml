@@ -162,6 +162,12 @@ image = { workspace = true }
 # (`crates/flui-painting/tests/compile_fail.rs`).
 trybuild = { workspace = true }
 
+# The in-memory `Storage` the pipeline cache's tests save to and load from
+# (ADR-0243): a dev-only edge up the tiers to the kit, as flui-scheduler's.
+# Checkout-only: versionless, so Cargo drops it from the published manifest.
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+flui-testing = { path = "../flui-testing" }
+
 # Executing wasm32 tests for the frame-timing helper (issue #1045). Pinned
 # exactly like flui-foundation / flui-app: 0.3.77 pairs with the locked
 # wasm-bindgen 0.2.127; an unpinned `"0.3"` would bump the workspace lock.
@@ -198,6 +204,10 @@ harness = false
 name = "offscreen_resource_cache"
 harness = false
 required-features = ["testing"]
+
+[[bench]]
+name = "first_frame"
+harness = false
 
 [lints]
 workspace = true

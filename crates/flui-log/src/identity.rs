@@ -1,8 +1,7 @@
 //! Application identity used by the native log sinks and the storage host.
 //!
-//! Two different things are called "the app name" by the platforms, and
-//! conflating them is how the historical backend produced identifiers that
-//! looked official and were not:
+//! Two different things are called "the app name" by the platforms, and they
+//! are kept apart here:
 //!
 //! * a **display name** — free-form, human-facing, used as the logcat tag when
 //!   an event carries no usable target;
@@ -12,13 +11,12 @@
 //!   after ([`AppId`], whose grammar `flui-foundation` holds for every
 //!   consumer).
 //!
-//! A display name cannot be turned into an identifier. The historical code
-//! built `com.{display_name}.app`, which produced entries such as
-//! `com.My Game.app` (not a legal identifier) and, worse, could collide with a
-//! reverse-DNS name owned by somebody else. FLUI therefore keeps them as
-//! separate fields: the identifier is supplied by the application or it is
-//! absent, and absence resolves to one fixed, obviously-unclaimed subsystem and
-//! to no default data directory rather than to a guess.
+//! A display name cannot be turned into an identifier: a derived
+//! `com.{display_name}.app` is not a legal identifier for a name with spaces
+//! (`com.My Game.app`) and can collide with a reverse-DNS name somebody else
+//! owns. So the identifier is supplied by the application or it is absent, and
+//! absence resolves to one fixed, obviously-unclaimed subsystem and to no
+//! default data directory rather than to a guess.
 
 use thiserror::Error;
 

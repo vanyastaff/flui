@@ -900,7 +900,7 @@ pub(crate) fn focus_gain_attaches_an_ime_client_and_routes_preedit_to_the_contro
 //
 // `CursorAreaLoop`'s `PostFrameHandle::schedule` call
 // addresses the harness's lane directly (a `Weak` pointer, minted once
-// by `install_build_capabilities`) — it does not need `enter_owner_scope`
+// by the UI runtime when it builds the presentation) — it does not need `enter_owner_scope`
 // active to succeed, only the lane and its scheduler to still be alive.
 // These tests still wrap focusing/blurring in `harness.
 // enter_owner_scope(...)` for parity with production's `ui_runtime.enter`

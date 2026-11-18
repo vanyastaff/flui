@@ -14,7 +14,7 @@
 //! preference differently.
 //!
 //! The format is versioned by [`FORMAT_VERSION`], apart from
-//! [`PROTOCOL_VERSION`](crate::PROTOCOL_VERSION).
+//! [`PROTOCOL_VERSION`](crate::version::PROTOCOL_VERSION).
 //!
 //! With the `serde` feature its types read and write the recording; without it they are the
 //! plain data the driver agent's `record` event carries.
@@ -402,8 +402,14 @@ pub enum PointerKind {
 /// The pointer an event belongs to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-pub struct PointerInfo {
+// The schema keeps the definition name it published as `PointerInfo`: renaming a definition is a
+// break, and the bytes on the wire are the same.
+#[cfg_attr(
+    feature = "schemars",
+    derive(schemars::JsonSchema),
+    schemars(rename = "PointerInfo")
+)]
+pub struct PointerSource {
     /// The pointer's id.
     pub id: u64,
     /// The device that produced it, when known.
@@ -483,7 +489,7 @@ pub struct Sample {
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct ButtonEvent {
     /// The pointer the event belongs to.
-    pub pointer: PointerInfo,
+    pub pointer: PointerSource,
     /// The button that changed, by number.
     pub button: u8,
     /// Every button held after the change, by number.
@@ -510,7 +516,7 @@ pub struct ButtonEvent {
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct Signal {
     /// The pointer the event belongs to.
-    pub pointer: PointerInfo,
+    pub pointer: PointerSource,
     /// The event time, in nanoseconds.
     pub t: u64,
     /// The pointer's position as x, y, when known.
@@ -638,7 +644,7 @@ pub enum ScrollPhase {
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct Scroll {
     /// The pointer the event belongs to.
-    pub pointer: PointerInfo,
+    pub pointer: PointerSource,
     /// The event time, in nanoseconds.
     pub t: u64,
     /// The x coordinate, in logical pixels.
@@ -744,7 +750,7 @@ pub enum TouchpadHoldPhase {
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct TouchpadHold {
     /// The pointer the event belongs to.
-    pub pointer: PointerInfo,
+    pub pointer: PointerSource,
     /// The event time, in nanoseconds.
     pub t: u64,
     /// The x coordinate, in logical pixels.
@@ -795,7 +801,7 @@ pub enum TouchpadSwipePhase {
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct TouchpadSwipe {
     /// The pointer the event belongs to.
-    pub pointer: PointerInfo,
+    pub pointer: PointerSource,
     /// The event time, in nanoseconds.
     pub t: u64,
     /// The x coordinate where the pointer rests, in logical pixels.
@@ -820,7 +826,7 @@ pub struct TouchpadSwipe {
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct SmartZoom {
     /// The pointer the event belongs to.
-    pub pointer: PointerInfo,
+    pub pointer: PointerSource,
     /// The event time, in nanoseconds.
     pub t: u64,
     /// The x coordinate, in logical pixels.
@@ -841,7 +847,7 @@ pub struct SmartZoom {
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct RawMotion {
     /// The pointer the event belongs to.
-    pub pointer: PointerInfo,
+    pub pointer: PointerSource,
     /// The event time, in nanoseconds.
     pub t: u64,
     /// Where the locked pointer rests, in logical pixels, when the platform says.
@@ -864,7 +870,7 @@ pub struct RawMotion {
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct PanZoom {
     /// The pointer the event belongs to.
-    pub pointer: PointerInfo,
+    pub pointer: PointerSource,
     /// The event time, in nanoseconds.
     pub t: u64,
     /// The x coordinate, in logical pixels.
@@ -919,7 +925,7 @@ pub enum PointerEvent {
     #[cfg_attr(feature = "serde", serde(rename = "move"))]
     Move {
         /// The pointer that moved.
-        pointer: PointerInfo,
+        pointer: PointerSource,
         /// Every button held, by number.
         buttons: Vec<u8>,
         /// The held modifiers, by name.
@@ -947,7 +953,7 @@ pub enum PointerEvent {
     #[cfg_attr(feature = "serde", serde(rename = "cancel"))]
     Cancel {
         /// The pointer the event belongs to.
-        pointer: PointerInfo,
+        pointer: PointerSource,
         /// The event time, in nanoseconds.
         t: u64,
         /// Why the pointer was cancelled.

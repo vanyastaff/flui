@@ -1,4 +1,5 @@
 //! Native library delivery without a consumer Xcode project.
+use crate::build::app_version::PackageNumbers;
 use crate::build::error::{BuildError, BuildResult};
 use crate::build::{BuildArtifacts, BuilderContext, FinalArtifacts, Platform};
 use crate::declarations::{Build, Declarations, Selection};
@@ -468,23 +469,18 @@ pub(crate) async fn package_application(
         return Err(invalid("an application requires exactly one iOS target"));
     }
     let triple = targets[0].clone();
-    let mut bundle = if let Some(bundle) = &ctx.bundle {
+    let bundle = if let Some(bundle) = &ctx.bundle {
         bundle.clone()
     } else {
         let package = artifacts.package.as_ref().ok_or_else(|| {
             invalid("application bundle metadata or Cargo package metadata is required")
         })?;
-        let mut bundle = crate::build::AppBundle::new(
+        crate::build::AppBundle::new(
             &package.name,
             crate::app_id::AppId::unconfigured(&package.name).apple_bundle_id(),
-        );
-        bundle.version.clone_from(&package.version);
-        bundle
+        )
     };
-    let version = crate::build::app_version::AppVersion::try_new(&bundle.version)
-        .map_err(|error| invalid(format!("invalid application version: {error}")))?;
-    let numeric = version.apple_bundle_version();
-    bundle.version = version.to_string();
+    let numbers = bundle.package_numbers(artifacts.package.as_ref(), ctx.profile)?;
     validate_bundle(&bundle)?;
     let executable = executable.canonicalize()?;
     if !executable.is_file() {
@@ -520,6 +516,7 @@ pub(crate) async fn package_application(
             Build::at(&app_dir).selecting(Selection::of_built(built.as_ref())),
             &[triple.as_str()],
         )?;
+        crate::build::apple_opening::warn_about_types_only_a_linked_crate_declares(&declarations);
         let filename = format!("{}.app", bundle.name);
         let destination = output.join(&filename);
         no_symlink_destination(&destination)?;
@@ -555,7 +552,7 @@ pub(crate) async fn package_application(
         let staged = work.path().join(&filename);
         fs::create_dir(&staged)?;
         fs::copy(&executable, staged.join("flui_app"))?;
-        let plist = application_info_plist(&bundle, &numeric, &minimum, platform, &declarations);
+        let plist = application_info_plist(&bundle, &numbers, &minimum, platform, &declarations);
         let info = staged.join("Info.plist");
         fs::write(
             &info,
@@ -708,12 +705,12 @@ fn privacy_manifest(
 /// and file types, from the crates' declarations.
 fn application_info_plist(
     bundle: &crate::build::AppBundle,
-    numeric: &str,
+    numbers: &PackageNumbers,
     minimum: &str,
     platform: &str,
     declarations: &Declarations,
 ) -> serde_json::Value {
-    let mut plist = application_base_plist(bundle, numeric, minimum, platform);
+    let mut plist = application_base_plist(bundle, numbers, minimum, platform);
     if let serde_json::Value::Object(keys) = &mut plist {
         keys.extend(crate::build::apple_opening::info_plist_keys(
             &bundle.identifier,
@@ -726,15 +723,17 @@ fn application_info_plist(
 
 fn application_base_plist(
     bundle: &crate::build::AppBundle,
-    numeric: &str,
+    numbers: &PackageNumbers,
     minimum: &str,
     platform: &str,
 ) -> serde_json::Value {
     serde_json::json!({
         "CFBundlePackageType":"APPL", "CFBundleExecutable":"flui_app",
-        "CFBundleName":bundle.name, "CFBundleDisplayName":bundle.name,
-        "CFBundleIdentifier":bundle.identifier, "CFBundleVersion":numeric,
-        "CFBundleShortVersionString":numeric, "FLUIVersion":bundle.version,
+        "CFBundleName":bundle.name, "CFBundleDisplayName":bundle.shown_name(),
+        "CFBundleIdentifier":bundle.identifier,
+        "CFBundleVersion":numbers.apple_bundle_version,
+        "CFBundleShortVersionString":numbers.apple_short_version,
+        "FLUIVersion":numbers.as_written,
         "MinimumOSVersion":minimum, "LSRequiresIPhoneOS":true,
         "CFBundleSupportedPlatforms":[if platform == "IOS" {"iPhoneOS"} else {"iPhoneSimulator"}],
         "UIDeviceFamily":[1,2], "UILaunchScreen":{},
@@ -754,6 +753,7 @@ fn application_base_plist(
 }
 fn validate_bundle(bundle: &crate::build::AppBundle) -> BuildResult<()> {
     if bundle.name.is_empty()
+        || !crate::build::util::xml::is_xml_name_text(&bundle.name)
         || bundle.name.contains(['/', '\\'])
         || !matches!(
             Path::new(&bundle.name)
@@ -879,7 +879,8 @@ mod tests {
             "schema = 3\nurl-schemes = [\"notes\"]\n[[file-types]]\nextension = \"note\"\n\
              mime = \"application/x-notes-note\"\nname = \"Note\"\n",
         );
-        let plist = application_info_plist(&bundle, "1.0.0", "15.0", "IOS", &declarations);
+        let numbers = numbers_of(&bundle, "1.0.0");
+        let plist = application_info_plist(&bundle, &numbers, "15.0", "IOS", &declarations);
         assert_eq!(
             plist["CFBundleURLTypes"][0]["CFBundleURLSchemes"],
             serde_json::json!(["notes"])
@@ -890,17 +891,52 @@ mod tests {
         );
         assert_eq!(plist["CFBundleIdentifier"], "com.example.notes");
         let plain =
-            application_info_plist(&bundle, "1.0.0", "15.0", "IOS", &Declarations::default());
+            application_info_plist(&bundle, &numbers, "15.0", "IOS", &Declarations::default());
         assert!(plain.get("CFBundleURLTypes").is_none(), "{plain}");
     }
 
+    /// The numbers `bundle` states for a release build of a package at
+    /// `version`.
+    fn numbers_of(bundle: &crate::build::AppBundle, version: &str) -> PackageNumbers {
+        let package = crate::build::BuiltPackage {
+            name: "notes".to_owned(),
+            version: version.to_owned(),
+            links_dev_dependencies: false,
+        };
+        bundle
+            .package_numbers(Some(&package), crate::build::Profile::Release)
+            .expect("the numbers of a release")
+    }
+
+    /// The bundle states the declared build number as `CFBundleVersion` and
+    /// the display name as `CFBundleDisplayName`, as the macOS bundle does.
+    fn info_plist_states_the_build_number_and_the_display_name() {
+        let mut bundle = crate::build::AppBundle::new("notes", "com.example.notes".to_owned());
+        bundle.display_name =
+            Some(crate::types::DisplayName::try_new("My Notes").expect("a display name"));
+        bundle.build =
+            Some(crate::build::app_version::BuildNumber::try_new(17).expect("a build number"));
+        let numbers = numbers_of(&bundle, "1.4.0-beta.2");
+        let plist =
+            application_info_plist(&bundle, &numbers, "15.0", "IOS", &Declarations::default());
+        for (key, expected) in [
+            ("CFBundleVersion", "17"),
+            ("CFBundleShortVersionString", "1.4.0"),
+            ("FLUIVersion", "1.4.0-beta.2"),
+            ("CFBundleName", "notes"),
+            ("CFBundleDisplayName", "My Notes"),
+        ] {
+            assert_eq!(plist[key], expected, "{key}");
+        }
+    }
+
     fn info_plist_lifts_the_phone_frame_duration_cap_and_reads_the_pointer() {
-        let mut bundle = crate::build::AppBundle::new("Demo", "dev.flui.demo".to_owned());
-        bundle.version = "1.2.3".into();
+        let bundle = crate::build::AppBundle::new("Demo", "dev.flui.demo".to_owned());
+        let numbers = numbers_of(&bundle, "1.2.3");
         for platform in ["IOS", "IOSSIMULATOR"] {
             let plist = application_info_plist(
                 &bundle,
-                "1.2.3",
+                &numbers,
                 "15.0",
                 platform,
                 &Declarations::default(),
@@ -1047,6 +1083,10 @@ mod tests {
             (
                 "info plist lifts the phone frame duration cap and reads the pointer",
                 info_plist_lifts_the_phone_frame_duration_cap_and_reads_the_pointer,
+            ),
+            (
+                "info plist states the build number and the display name",
+                info_plist_states_the_build_number_and_the_display_name,
             ),
             (
                 "publication rolls back and retains backup when rollback fails",

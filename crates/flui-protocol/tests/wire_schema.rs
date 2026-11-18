@@ -12,9 +12,11 @@ use std::path::{Path, PathBuf};
 
 use flui_protocol::version::BREAKING;
 use flui_protocol::{
-    ActionRequest, ErrorCode, ErrorObject, Event, Greeting, Hello, HelloReply, METHODS,
-    MethodEffect, MotionRequest, MotionState, Node, PROTOCOL_VERSION, ProtocolVersion, ReadQuery,
-    Request, RequestId, Retry, ServedBy, ServerLine, Tier, Tree,
+    act::ActionRequest, envelope::Greeting, envelope::Request, envelope::RequestId,
+    envelope::ServerLine, error::ErrorCode, error::ErrorObject, error::Retry, events::Event,
+    method::METHODS, method::MethodEffect, method::ServedBy, method::Tier, motion::MotionRequest,
+    motion::MotionState, session::Hello, session::HelloReply, tree::Node, tree::ReadQuery,
+    tree::Tree, version::PROTOCOL_VERSION, version::ProtocolVersion,
 };
 use serde_json::Value;
 
@@ -449,6 +451,7 @@ fn every_published_schema_is_additive_to_the_next() {
         let broke = BREAKING.iter().find(|change| change.version == *newer);
         let renamed = broke.map_or(&[][..], |change| change.renamed);
         let removed = broke.map_or(&[][..], |change| change.removed);
+        let required = broke.map_or(&[][..], |change| change.required);
         let violations = without_removed(
             additivity_violations(
                 &read_schema(older_path),
@@ -458,7 +461,14 @@ fn every_published_schema_is_additive_to_the_next() {
                 &open_unions(),
             ),
             removed,
-        );
+        )
+        .into_iter()
+        .filter(|violation| {
+            violation
+                .strip_prefix("field made required: ")
+                .is_none_or(|path| !required.contains(&path))
+        })
+        .collect::<Vec<String>>();
         assert!(
             violations.is_empty(),
             "protocol {newer} is not additive to {older}; list what it renamed or removed in \
@@ -761,7 +771,8 @@ fn the_additivity_check_refuses_a_removed_field_a_respelled_name_and_a_new_requi
 #[test]
 fn an_inspect_snapshot_keeps_its_wire_spelling() {
     use flui_protocol::{
-        InspectField, InspectLevel, InspectNode, InspectUnit, InspectValue, LogicalRect,
+        geometry::LogicalRect, inspect::InspectField, inspect::InspectLevel, inspect::InspectNode,
+        inspect::InspectUnit, inspect::InspectValue,
     };
 
     let mut padding = InspectField::new(

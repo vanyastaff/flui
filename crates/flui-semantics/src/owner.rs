@@ -10,7 +10,7 @@ use std::{
 
 use flui_foundation::SemanticsId;
 use flui_foundation::panic::FirstPanic;
-use flui_protocol::TreeRevision;
+use flui_protocol::tree::TreeRevision;
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 use thiserror::Error;
@@ -764,7 +764,7 @@ impl SemanticsOwner {
             #[cfg(any(test, feature = "testing"))]
             examined_last_flush: 0,
             diagnostics: std::collections::VecDeque::new(),
-            revision: TreeRevision::default(),
+            revision: TreeRevision::ZERO,
             #[cfg(debug_assertions)]
             reported_clashes: Vec::new(),
             announcements: None,
@@ -793,7 +793,7 @@ impl SemanticsOwner {
             #[cfg(any(test, feature = "testing"))]
             examined_last_flush: 0,
             diagnostics: std::collections::VecDeque::new(),
-            revision: TreeRevision::default(),
+            revision: TreeRevision::ZERO,
             #[cfg(debug_assertions)]
             reported_clashes: Vec::new(),
             announcements: None,
@@ -816,7 +816,7 @@ impl SemanticsOwner {
             #[cfg(any(test, feature = "testing"))]
             examined_last_flush: 0,
             diagnostics: std::collections::VecDeque::new(),
-            revision: TreeRevision::default(),
+            revision: TreeRevision::ZERO,
             #[cfg(debug_assertions)]
             reported_clashes: Vec::new(),
             announcements: None,
@@ -1845,8 +1845,8 @@ impl SemanticsOwner {
     #[must_use]
     pub fn announcement_journal(
         &self,
-        params: &flui_protocol::AnnouncementsParams,
-    ) -> flui_protocol::AnnouncementJournal {
+        params: &flui_protocol::events::AnnouncementsParams,
+    ) -> flui_protocol::events::AnnouncementJournal {
         self.announcements
             .as_ref()
             .map_or_default(|announcements| announcements.journal(params.since, params.max_entries))
@@ -1854,7 +1854,7 @@ impl SemanticsOwner {
 
     /// The revision the publication in progress makes current.
     fn next_revision(&self) -> TreeRevision {
-        TreeRevision(self.revision.0.saturating_add(1))
+        self.revision.next()
     }
 
     /// Publishes the complete rooted tree and resets the mirror to it.
@@ -1890,7 +1890,7 @@ impl SemanticsOwner {
         self.commit_announcements(announced.as_ref(), self.next_revision());
 
         let published = update.nodes.len();
-        self.revision = TreeRevision(self.revision.0.saturating_add(1));
+        self.revision = self.next_revision();
         let mut mirror = PublishedState::mirror_of(update);
         mirror.record_offers(&self.tree);
         self.published = Some(mirror);
@@ -2252,7 +2252,7 @@ impl SemanticsOwner {
         }
         // Delivered: a panic above leaves the messages queued for the retry.
         if let (Some(announcements), Some(announced)) = (&self.announcements, &announced) {
-            announcements.commit(announced, TreeRevision(self.revision.0.saturating_add(1)));
+            announcements.commit(announced, self.revision.next());
         }
 
         #[cfg(debug_assertions)]
@@ -2278,7 +2278,7 @@ impl SemanticsOwner {
         if identifiers_changed {
             self.check_identifier_clashes();
         }
-        self.revision = TreeRevision(self.revision.0.saturating_add(1));
+        self.revision = self.next_revision();
         Some(update.nodes.len())
     }
 

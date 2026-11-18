@@ -1,19 +1,13 @@
-error[E0432]: unresolved import `flui::platform::haptics::HapticPattern`
- --> tests/ui/unstable_input/haptic_patterns_need_unstable_input.rs:3:5
-  |
-3 | use flui::platform::haptics::HapticPattern;
-  |     ^^^^^^^^^^^^^^^^^^^^^^^^^-------------
-  |                              |
-  |                              no `HapticPattern` in `platform::haptics`
-
-error[E0603]: module `haptics` is private
+error[E0432]: unresolved import `flui::platform::haptics`
  --> tests/ui/unstable_input/haptic_patterns_need_unstable_input.rs:3:21
   |
 3 | use flui::platform::haptics::HapticPattern;
-  |                     ^^^^^^^ private module
+  |                     ^^^^^^^ could not find `haptics` in `platform`
   |
-note: the module `haptics` is defined here
+note: found an item that was configured out
  --> src/lib.rs
   |
-  |     mod haptics {}
-  |     ^^^^^^^^^^^
+  |     #[cfg(feature = "unstable-input")]
+  |           -------------------------- the item is gated behind the `unstable-input` feature
+  |     pub mod haptics {
+  |             ^^^^^^^

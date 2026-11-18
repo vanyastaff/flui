@@ -12,21 +12,25 @@ use web_time::Instant;
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct LoopTurn {
     /// The turn has a frame to deliver: a redraw request or a due deadline,
-    /// while resumed.
+    /// while running.
     pub(crate) should_render: bool,
     /// The turn has a frame to deliver at the choreographer's next frame,
     /// whose callback is posted and wakes the looper (ADR-0269).
     pub(crate) awaiting_vsync: bool,
-    /// The Activity is resumed, so a frame can be delivered at all.
-    pub(crate) resumed: bool,
+    /// The Activity is on screen, paused or not (ADR-0366), so a frame can be
+    /// delivered at all.
+    pub(crate) running: bool,
     /// The earliest wall-clock deadline the wake hook reported.
     pub(crate) wake_deadline: Option<Instant>,
     /// When preferences, scroll factors and insets are read next; `None` while
     /// their changes are reported instead.
     pub(crate) next_preference_sample: Option<Instant>,
     /// When the oldest request for a result the Java main thread has not
-    /// taken is due to end, resumed or not.
+    /// taken is due to end, running or not.
     pub(crate) hand_off_deadline: Option<Instant>,
+    /// When the earliest intent still waiting for its documents is due to
+    /// refuse the ones not opened, running or not.
+    pub(crate) open_deadline: Option<Instant>,
 }
 
 /// The longest wait `ALooper_pollOnce` takes: its timeout is `i32` milliseconds,
@@ -44,24 +48,24 @@ const LOOPER_MAX_WAIT: Duration = Duration::from_millis(i32::MAX as u64);
 /// - a turn waiting for the choreographer's next frame blocks until it is
 ///   woken, or until a deadline or preference sample still ahead: a deadline
 ///   already behind is the frame it waits for;
-/// - a resumed turn blocks until the next deadline or preference sample, and
+/// - a running turn blocks until the next deadline or preference sample, and
 ///   with neither until it is woken;
-/// - a paused turn blocks until a deadline that is still ahead, and with none
+/// - a stopped turn blocks until a deadline that is still ahead, and with none
 ///   until it is woken. A deadline already behind was offered to the owner
 ///   once and is left waiting for a frame, which nothing delivers before the
-///   Activity resumes; preferences are read again on `Resume`.
+///   Activity starts again; preferences are read again on `Start`.
 pub(crate) fn poll_timeout(turn: LoopTurn, now: Instant) -> Option<Duration> {
     if turn.should_render {
         return Some(Duration::ZERO);
     }
     let until = |deadline: Instant| deadline.saturating_duration_since(now).min(LOOPER_MAX_WAIT);
-    let deadline = if turn.resumed && !turn.awaiting_vsync {
+    let deadline = if turn.running && !turn.awaiting_vsync {
         turn.wake_deadline
     } else {
         turn.wake_deadline.filter(|deadline| *deadline > now)
     };
-    let sample = turn.next_preference_sample.filter(|_| turn.resumed);
-    [deadline, sample, turn.hand_off_deadline]
+    let sample = turn.next_preference_sample.filter(|_| turn.running);
+    [deadline, sample, turn.hand_off_deadline, turn.open_deadline]
         .into_iter()
         .flatten()
         .min()
@@ -73,7 +77,7 @@ pub(crate) fn poll_timeout(turn: LoopTurn, now: Instant) -> Option<Duration> {
 /// The offer wakes the owner signal, and that wake also wakes the looper. Until
 /// a frame clears the deadline it stays behind, so offering it on every turn
 /// would wake the looper on every turn: a busy loop while the turn waits for
-/// the choreographer's next frame or for the Activity to resume.
+/// the choreographer's next frame or for the Activity to start again.
 #[derive(Debug, Default)]
 pub(crate) struct DueDeadline {
     offered: Option<Instant>,
@@ -93,23 +97,24 @@ impl DueDeadline {
 mod tests {
     use super::*;
 
-    /// A paused Activity cannot deliver a frame, so the loop blocks: no timer
+    /// A stopped Activity cannot deliver a frame, so the loop blocks: no timer
     /// of its own, no past deadline turning the poll into a busy loop, and only
     /// a deadline still ahead (a timer the owner serves without a frame) bounds
-    /// the wait. A resumed loop whose changes are reported blocks the same way,
+    /// the wait. A running loop whose changes are reported blocks the same way,
     /// and so does one waiting for the choreographer's next frame, whose
     /// callback wakes it.
     #[test]
-    fn a_paused_loop_blocks_until_it_is_woken() {
+    fn a_stopped_loop_blocks_until_it_is_woken() {
         let now = Instant::now();
         let ms = Duration::from_millis;
-        let turn = |should_render, resumed, wake_deadline| LoopTurn {
+        let turn = |should_render, running, wake_deadline| LoopTurn {
             awaiting_vsync: false,
             should_render,
-            resumed,
+            running,
             wake_deadline,
             next_preference_sample: Some(now + ms(500)),
             hand_off_deadline: None,
+            open_deadline: None,
         };
         let awaiting = |wake_deadline| LoopTurn {
             awaiting_vsync: true,
@@ -118,10 +123,11 @@ mod tests {
         let reported = |wake_deadline| LoopTurn {
             awaiting_vsync: false,
             should_render: false,
-            resumed: true,
+            running: true,
             wake_deadline,
             next_preference_sample: None,
             hand_off_deadline: None,
+            open_deadline: None,
         };
         for (case, turn, expected) in [
             (
@@ -129,7 +135,7 @@ mod tests {
                 turn(true, true, None),
                 Some(Duration::ZERO),
             ),
-            ("resumed and idle", turn(false, true, None), Some(ms(500))),
+            ("running and idle", turn(false, true, None), Some(ms(500))),
             (
                 "waiting for the next frame, its deadline behind",
                 awaiting(now.checked_sub(ms(40))),
@@ -141,28 +147,28 @@ mod tests {
                 Some(ms(3)),
             ),
             (
-                "resumed and idle, with changes reported",
+                "running and idle, with changes reported",
                 reported(None),
                 None,
             ),
             (
-                "resumed, with changes reported, a timer ahead",
+                "running, with changes reported, a timer ahead",
                 reported(Some(now + ms(250))),
                 Some(ms(250)),
             ),
             (
-                "resumed, a deadline before the next sample",
+                "running, a deadline before the next sample",
                 turn(false, true, Some(now + ms(3))),
                 Some(ms(3)),
             ),
             (
-                "resumed, a deadline after the next sample",
+                "running, a deadline after the next sample",
                 turn(false, true, Some(now + ms(5_000))),
                 Some(ms(500)),
             ),
-            ("paused and idle", turn(false, false, None), None),
+            ("stopped and idle", turn(false, false, None), None),
             (
-                "paused, a request for a result due to end",
+                "stopped, a request for a result due to end",
                 LoopTurn {
                     hand_off_deadline: Some(now + ms(700)),
                     ..turn(false, false, None)
@@ -170,22 +176,30 @@ mod tests {
                 Some(ms(700)),
             ),
             (
-                "paused, a deadline that needs a frame is already behind",
+                "stopped, an intent's documents due to be refused",
+                LoopTurn {
+                    open_deadline: Some(now + ms(900)),
+                    ..turn(false, false, None)
+                },
+                Some(ms(900)),
+            ),
+            (
+                "stopped, a deadline that needs a frame is already behind",
                 turn(false, false, now.checked_sub(ms(40))),
                 None,
             ),
             (
-                "paused, a deadline exactly due",
+                "stopped, a deadline exactly due",
                 turn(false, false, Some(now)),
                 None,
             ),
             (
-                "paused, a timer still ahead",
+                "stopped, a timer still ahead",
                 turn(false, false, Some(now + ms(250))),
                 Some(ms(250)),
             ),
             (
-                "paused, a timer further ahead than the looper can wait",
+                "stopped, a timer further ahead than the looper can wait",
                 turn(false, false, Some(now + Duration::from_hours(30 * 24))),
                 Some(LOOPER_MAX_WAIT),
             ),

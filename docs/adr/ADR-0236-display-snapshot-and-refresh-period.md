@@ -12,6 +12,9 @@
   window's display is a field of the window state snapshot and "your display may have changed"
   arrives through the window handler's state-changed obligation, not through `display_id()` and a
   callback. The snapshot, its keys and the refresh period stand.
+- **Superseded-by:** [ADR-0364](ADR-0364-a-window-position-names-its-display-and-commands-carry-checked-geometry.md), decision 1's
+  bounds only: a display carries its extent and usable area in its own logical pixels and its
+  place in the window system's desktop as an opaque origin.
 - **Amends:** [ADR-0058](ADR-0058-the-platform-paces-production-not-a-sleep.md) decision 2 only: where
   the fallback period comes from. The fallback deadline, its 0.95 factor and the rest of the
   decision are unchanged.
@@ -67,7 +70,7 @@ resume. No backend delivered a display change.
    JS screen object on the Web. An object compared only while it is retained, never by address or
    label, so a freed address or a duplicate name cannot alias another display.
    A persistent cross-restart identity is not added here: it belongs with window placement restore,
-   and `DisplayInfo` is `#[non_exhaustive]` so it can gain one without breaking the contract.
+   and `DisplayDescription` is `#[non_exhaustive]` so it can gain one without breaking the contract.
 4. **Delivery follows ADR-0172.** Each native source registers its observers before sampling the
    seed. A change commits a new snapshot (its revision never wraps) before anyone is notified;
    invalidations from foreign threads wake the owner and never run application code there; a

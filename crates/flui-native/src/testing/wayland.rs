@@ -2,7 +2,13 @@
 //! that made the platform where a test stands in for `Platform::run`, and what
 //! the compositor said of a window, read apart from the window's snapshot.
 
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
+
+use flui_platform::capability::{
+    Completion, CompletionSource, OwnerJob, OwnerPoster, OwnerScope, PendingCompletions,
+    PortalParent,
+};
 
 use crate::error::PlatformError;
 use crate::host::Host;
@@ -65,15 +71,64 @@ pub fn fullscreen_on<H: Host<Loop = WaylandLoop>>(
         .is_some_and(|proxy| window.fullscreen_on(&proxy))
 }
 
-/// The identifier an XDG Desktop Portal parents its dialog to for `window`
-/// (`wayland:<handle>`, from its `xdg-foreign` export); `None` for a window of
-/// another host, one the compositor did not export, and a closed one.
-#[must_use]
-pub fn portal_parent(window: &dyn HostWindow) -> Option<String> {
-    let window = window.as_any().downcast_ref::<WaylandWindow>()?;
-    window
-        .portal_parent()
-        .map(|parent| parent.as_str().to_owned())
+/// One portal request's ask for a window's parent
+/// ([`PlatformWindow::portal_parent`](flui_platform::PlatformWindow::portal_parent)),
+/// answered on an owner of the test's own: the answer is taken with
+/// [`Self::answer`] once the platform's loop has run long enough for the
+/// compositor to name the export.
+pub struct PortalParentRequest {
+    completion: Completion<PortalParent>,
+    pending: PendingCompletions,
+    posted: Arc<Mutex<Vec<OwnerJob>>>,
+}
+
+impl std::fmt::Debug for PortalParentRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PortalParentRequest")
+            .field("completion", &self.completion)
+            .finish_non_exhaustive()
+    }
+}
+
+impl PortalParentRequest {
+    /// Ask `window` for its portal parent.
+    #[must_use]
+    pub fn ask(window: &dyn HostWindow) -> Self {
+        let pending = PendingCompletions::new();
+        let posted = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&posted);
+        let poster = OwnerPoster::new(move |job| {
+            sink.lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(job);
+            Ok(())
+        });
+        let (completion, answer) = CompletionSource::new(poster, pending.clone()).pending();
+        window.portal_parent(answer);
+        Self {
+            completion,
+            pending,
+            posted,
+        }
+    }
+
+    /// The parent, once the window answered: the request holds it (and with
+    /// it a Wayland window's export) until it is dropped. `None` before the
+    /// answer, and after it was taken.
+    pub fn answer(&mut self) -> Option<PortalParent> {
+        let jobs = std::mem::take(
+            &mut *self
+                .posted
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        );
+        for job in jobs {
+            job.run(&OwnerScope::new(&self.pending));
+        }
+        self.completion
+            .poll()
+            .map(|outcome| outcome.expect("BUG: a window answers its portal parent"))
+    }
 }
 
 /// Whether `window` last told its accessibility bridge it is the window the

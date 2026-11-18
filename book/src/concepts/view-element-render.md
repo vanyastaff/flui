@@ -1,66 +1,87 @@
 # View, Element, RenderObject
 
-FLUI's pipeline is four trees, each built from the last, with a fifth, the `Semantics` tree
-(`flui-semantics`), built alongside for accessibility:
+Flutter counterpart: `Widget`, `Element`, `RenderObject`, `Layer`.
+
+FLUI's pipeline is four trees, each built from the last, with a fifth, the semantics tree, built
+alongside for accessibility:
 
 ```text
-View (config)  →  Element (lifecycle)  →  RenderObject (layout/paint)  →  Layer (per frame)
+View (config)  →  Element (lifecycle)  →  RenderObject (layout/paint)  →  Layer (compositing)
 ```
 
 ## `View`
 
-```rust,ignore
-pub trait View: Downcast + DynClone + 'static { /* ... */ }
+A view is an immutable, cheap-to-clone description of a piece of UI. An application writes two
+kinds:
+
+- a `StatelessView`, whose `build(&self, ctx)` returns the views it is made of;
+- a `StatefulView` with its `ViewState`: `create_state(&self, ctx)` makes the state once, when the
+  view is first mounted, and the state's `build` runs again whenever something it read changes.
+
+```rust
+use flui::prelude::*;
+
+#[derive(Clone, StatelessView)]
+struct Greeting {
+    name: String,
+}
+
+impl StatelessView for Greeting {
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+        Text::new(format!("Hello, {}!", self.name))
+    }
+}
+
+#[derive(Clone, StatefulView)]
+struct Counter;
+
+struct CounterState {
+    count: Signal<u32>,
+}
+
+impl StatefulView for Counter {
+    type State = CounterState;
+
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> CounterState {
+        CounterState { count: ctx.signal(0) }
+    }
+}
+
+impl ViewState<Counter> for CounterState {
+    fn build(&self, _view: &Counter, ctx: &dyn BuildContext) -> impl IntoView {
+        let count = self.count;
+        Column::new((
+            Greeting { name: "FLUI".to_owned() },
+            Text::new(count.get(ctx).to_string()),
+            RawButton::new(Text::new("Increment"))
+                .on_pressed(move |ctx| count.update(ctx, |n| *n += 1)),
+        ))
+    }
+}
 ```
-
-*(`crates/flui-view/src/view/view.rs`)* — an immutable, cheap-to-clone description of a piece of
-UI. Two flavors:
-
-- `StatelessView` (`crates/flui-view/src/view/stateless.rs`) — `fn build(&self, ctx: &dyn
-  BuildContext) -> impl IntoView`, no persistent state.
-- `StatefulView` + `ViewState<V>` (`crates/flui-view/src/view/stateful.rs`) —
-  `create_state(&self, ctx)` produces, at the first build, a `ViewState` that owns mutable data
-  and rebuilds independently of its parent.
-
-Both are usually written via `#[derive(StatelessView)]` / the `StatefulView`+`ViewState` pair
-rather than by hand — see `examples/counter.rs` for the shape.
 
 ## `Element`
 
-```rust,ignore
-pub struct Element<V, A, B> { /* ... */ }
-```
-
-*(`crates/flui-view/src/element/unified.rs`)* — the mutable, long-lived counterpart to a `View`: it
-holds the `View` it was built from, its position in the tree, and its
-[lifecycle state](lifecycle.md). Rebuilding the tree reconciles new `View`s against existing
-`Element`s by [key](keys.md) and type, reusing an `Element` (and the `State`/`RenderObject` it
-owns) wherever the reconciliation matches: elements are the retained half, views the ephemeral
-half.
+An element is the mutable, long-lived counterpart of a view: it holds the view it was built from,
+its position in the tree, and its [lifecycle state](lifecycle.md). Rebuilding the tree reconciles
+new views against existing elements by [key](keys.md) and type, and reuses an element, with the
+state and render object it owns, wherever they match. Elements are the retained half, views the
+ephemeral half. An application never names an element type; it reaches its element through the
+`ctx` its hooks receive.
 
 ## `RenderObject`
 
-```rust,ignore
-pub trait RenderObject<P: Protocol>: Inspect + Downcast + 'static { /* ... */ }
-```
+A render object performs layout, paint and hit testing. Two protocols ship: the box protocol
+(`RenderBox`, most widgets) and the sliver protocol (`RenderSliver`, scrollable and virtualized
+content). See [Layout: constraints down, sizes up](layout.md) for the box protocol.
 
-*(`crates/flui-rendering/src/traits/render_object.rs`)* — performs layout and paint. Two concrete
-sub-traits cover the two layout protocols FLUI ships: `RenderBox` (box protocol — most widgets) and
-`RenderSliver` (sliver protocol — scrollable/virtualized content), in
-`crates/flui-rendering/src/traits/{render_box,render_sliver}.rs`. See
-[Layout: constraints down, sizes up](layout.md) for the protocol itself.
-
-An `Element` owns at most one `RenderObject`; `StatelessView`/`StatefulView` that only compose
-other views don't need one at all — only the leaf render-backed widgets do. See "Add a render
-object" in the [Extending FLUI table](https://github.com/vanyastaff/flui/blob/main/docs/extending.md) for the checklist to implement a new one.
+An element owns at most one render object. Views that only compose other views, like both views
+above, have none; only the leaf render-backed widgets do. See "Add a render object" in
+[Extending FLUI](https://github.com/vanyastaff/flui/blob/main/docs/extending.md) for the checklist
+to implement a new one.
 
 ## `Layer`
 
-```rust,ignore
-pub enum Layer { /* Canvas, Picture, Texture, PlatformView, ... */ }
-```
-
-*(`crates/flui-layer/src/layer/mod.rs`)* — the compositing tree that paint builds fresh each frame,
-consumed by `flui-engine`'s compositor. Unlike `View` and `RenderObject`, `Layer` is a closed
-`enum` rather than a trait — FLUI's layer set is a known, fixed vocabulary rather than an
-extensible hierarchy (see the crate's own `ARCHITECTURE.md` for the reasoning).
+Paint records into layers: a closed set of kinds (pictures, clips, transforms, opacity, textures,
+platform views) that `flui-engine` composites and rasterizes. A layer is a value of one enum rather
+than an open trait hierarchy; `crates/flui-layer/ARCHITECTURE.md` has the reasoning.

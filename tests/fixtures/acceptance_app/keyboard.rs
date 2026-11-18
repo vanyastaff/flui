@@ -9,7 +9,7 @@ use std::cell::Cell;
 use std::future::ready;
 use std::rc::Rc;
 
-use flui::platform::keyboard::NamedKey;
+use flui::interaction::NamedKey;
 
 use crate::app::{AcceptanceApp, Faults, Loader};
 use crate::testing::AppRun;

@@ -19,8 +19,9 @@
 //! a readable timeline ([`Display`](std::fmt::Display)) and writes as a
 //! recording ([`PointerScript::write_recording`]).
 //! [`HeadlessHost::run_script`](crate::HeadlessHost::run_script) delivers it to a
-//! UI runtime, frames included; [`HeadlessBinding::replay`] drives the raw
-//! owners, pumping a frame before each event.
+//! UI runtime, a frame step as a frame;
+//! [`LaidOut::replay`](crate::widgets::LaidOut::replay) pumps a frame of the
+//! UI runtime before each event.
 //!
 //! ```
 //! use std::time::Duration;
@@ -53,18 +54,16 @@ use flui_interaction::events::{
     PointerKind, make_cancel_event_for_id, make_down_event_for_id, make_move_event_for_id,
     make_up_event_for_id,
 };
-use flui_interaction::{HitTestResult, PointerEvent, PointerId};
+use flui_interaction::{PointerEvent, PointerId};
 use flui_platform::pointer::{
     CancelReason, DeviceId, PanZoomEvent, PanZoomPhase, PanZoomTransform, PenTool, PointerButton,
-    PointerButtons, PointerCancel, PointerInfo, PointerMove, PointerPosition, PointerPress,
-    PointerRelease, PointerRole, PointerSample, Pressure, ScrollDelta, ScrollEvent, ScrollPhase,
+    PointerButtons, PointerCancel, PointerMove, PointerPosition, PointerPress, PointerRelease,
+    PointerRole, PointerSample, PointerSource, Pressure, ScrollDelta, ScrollEvent, ScrollPhase,
     ScrollPrecision, ScrollUnit, SmartZoomEvent, SwipeOffset, TouchpadHoldEvent, TouchpadHoldPhase,
     TouchpadSwipeEvent, TouchpadSwipePhase,
 };
 use flui_platform::{EventTime, PlatformInput, WindowId};
 use flui_runtime::HostInput;
-
-use crate::HeadlessBinding;
 
 /// Which pointer phase a scripted event carries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -167,7 +166,8 @@ impl ScriptedPointer {
     #[must_use]
     pub fn to_event_at(self, base: EventTime) -> PointerEvent {
         let time = base + self.at;
-        let mut info = PointerInfo::new(self.pointer, self.device).with_role(PointerRole::Primary);
+        let mut info =
+            PointerSource::new(self.pointer, self.device).with_role(PointerRole::Primary);
         if let Some(hardware) = self.hardware {
             info = info.with_device(hardware);
         }
@@ -375,7 +375,7 @@ impl ScriptStep {
             }
             Self::Scroll(step) => {
                 let mut event = ScrollEvent::new(
-                    PointerInfo::new(step.pointer, step.device).with_role(PointerRole::Primary),
+                    PointerSource::new(step.pointer, step.device).with_role(PointerRole::Primary),
                     base + step.at,
                     position(step.position),
                     ScrollDelta::try_new(step.unit, step.delta.dx, step.delta.dy)
@@ -398,7 +398,7 @@ impl ScriptStep {
                 };
                 HostInput::Platform(PlatformInput::Pointer(PointerEvent::PanZoom(
                     PanZoomEvent::new(
-                        PointerInfo::new(step.pointer, PointerKind::Trackpad)
+                        PointerSource::new(step.pointer, PointerKind::Trackpad)
                             .with_role(PointerRole::Primary),
                         base + step.at,
                         position(step.position),
@@ -408,7 +408,7 @@ impl ScriptStep {
             }
             Self::SmartZoom(step) => HostInput::Platform(PlatformInput::Pointer(
                 PointerEvent::SmartZoom(SmartZoomEvent::new(
-                    PointerInfo::new(step.pointer, PointerKind::Trackpad)
+                    PointerSource::new(step.pointer, PointerKind::Trackpad)
                         .with_role(PointerRole::Primary),
                     base + step.at,
                     position(step.position),
@@ -416,7 +416,7 @@ impl ScriptStep {
             )),
             Self::TouchpadHold(step) => HostInput::Platform(PlatformInput::Pointer(
                 PointerEvent::TouchpadHold(TouchpadHoldEvent::new(
-                    PointerInfo::new(step.pointer, PointerKind::Trackpad)
+                    PointerSource::new(step.pointer, PointerKind::Trackpad)
                         .with_role(PointerRole::Primary),
                     base + step.at,
                     position(step.position),
@@ -434,7 +434,7 @@ impl ScriptStep {
                 };
                 HostInput::Platform(PlatformInput::Pointer(PointerEvent::TouchpadSwipe(
                     TouchpadSwipeEvent::new(
-                        PointerInfo::new(step.pointer, PointerKind::Trackpad)
+                        PointerSource::new(step.pointer, PointerKind::Trackpad)
                             .with_role(PointerRole::Primary),
                         base + step.at,
                         position(step.position),
@@ -1539,87 +1539,3 @@ into_script!(
     TrackpadScript,
     VirtualScript
 );
-
-impl HeadlessBinding {
-    /// Replay `script` against this binding's own tree.
-    ///
-    /// See [`replay_with`](Self::replay_with) for the mechanics — this is that
-    /// method over [`hit_test`](Self::hit_test).
-    pub fn replay(&mut self, script: &PointerScript) {
-        self.replay_with(script, Self::hit_test);
-    }
-
-    /// [`replay`](Self::replay) with a caller-supplied hit-test source, for a
-    /// harness that hit-tests through its own view of the render tree.
-    ///
-    /// For each step, in order, a frame is pumped by the gap since the
-    /// previous step, so virtual time genuinely passes — deadlines fire,
-    /// controllers tick, and the tree rebuilds — then the step's event is
-    /// dispatched through the same `GestureBinding` pipeline production
-    /// routes through, stamped with the binding's virtual time. A frame step
-    /// pumps only. The frame *after* the last event is left to the caller.
-    ///
-    /// # Panics
-    ///
-    /// If pointer resampling is enabled on this binding: its sampling window
-    /// is not on the script's virtual time.
-    pub fn replay_with(
-        &mut self,
-        script: &PointerScript,
-        mut hit_test: impl FnMut(&Self, Offset<f64>, PointerKind) -> HitTestResult,
-    ) {
-        assert!(
-            !self.gestures().is_resampling_enabled(),
-            "replay requires pointer resampling to be disabled: the resampler's \
-             sampling window is not on the script's virtual time",
-        );
-        let base = EventTime::from_nanos(
-            u64::try_from(self.clock().elapsed().as_nanos())
-                .expect("BUG: a headless test's virtual time fits the event timeline"),
-        );
-        let mut previous = Duration::ZERO;
-        for step in script.steps() {
-            self.pump_frame(step.at().saturating_sub(previous));
-            previous = step.at();
-            let HostInput::Platform(PlatformInput::Pointer(event)) = step.to_input(base) else {
-                continue;
-            };
-            let binding: &Self = self;
-            let kind = flui_interaction::PointerEventExt::pointer_kind(&event)
-                .unwrap_or(PointerKind::Unknown);
-            binding.dispatch_pointer(&event, |position| hit_test(binding, position, kind));
-        }
-    }
-
-    /// Replay one scripted event: a frame by `event.at`, then the event,
-    /// stamped with the binding's virtual time.
-    pub fn replay_event(&mut self, event: ScriptedPointer) {
-        self.pump_frame(event.at);
-        let base = EventTime::from_nanos(
-            u64::try_from(self.clock().elapsed().as_nanos())
-                .expect("BUG: a headless test's virtual time fits the event timeline"),
-        );
-        let event = ScriptedPointer {
-            at: Duration::ZERO,
-            ..event
-        }
-        .to_event_at(base);
-        let binding: &Self = self;
-        let kind =
-            flui_interaction::PointerEventExt::pointer_kind(&event).unwrap_or(PointerKind::Unknown);
-        binding.dispatch_pointer(&event, |position| binding.hit_test(position, kind));
-    }
-
-    /// Hit-test `position` against this binding's bound render tree for a
-    /// pointer of `kind`.
-    ///
-    /// An empty result on a gesture-only binding: there is no tree to hit.
-    #[must_use]
-    pub fn hit_test(&self, position: Offset<f64>, kind: PointerKind) -> HitTestResult {
-        let mut result = HitTestResult::new();
-        if let Some(pipeline_owner) = self.pipeline_owner() {
-            pipeline_owner.with(|owner| owner.hit_test(position, kind, &mut result));
-        }
-        result
-    }
-}

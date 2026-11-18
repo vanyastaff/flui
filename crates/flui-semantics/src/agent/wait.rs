@@ -1,4 +1,4 @@
-//! Evaluating a wait condition over the published tree (R18).
+//! Evaluating a wait condition over the published tree.
 //!
 //! A condition names elements, frames, settledness or events. The tree part is evaluated here,
 //! against the revision the owner last published; the runtime supplies what the tree cannot
@@ -6,7 +6,8 @@
 //! every frame without a borrow outliving the call.
 
 use flui_protocol::{
-    Condition, EventKind, Expectation, LocateParams, Locator, Matches, Node, Observation,
+    events::EventKind, locator::LocateParams, locator::Locator, locator::Matches, tree::Node,
+    wait::Condition, wait::Expectation, wait::Observation,
 };
 
 use super::Placement;

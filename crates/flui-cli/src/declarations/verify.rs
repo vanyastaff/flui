@@ -332,12 +332,19 @@ impl Manifest {
                         file_type.extension(),
                         file_type.mime()
                     ),
-                    line: format!(
-                        "a UTExportedTypeDeclarations or UTImportedTypeDeclarations type whose \
-                         public.filename-extension is {}, listed in a CFBundleDocumentTypes \
-                         entry's LSItemContentTypes",
-                        file_type.extension()
-                    ),
+                    line: match file_type.apple_system_type() {
+                        Some(system) => format!(
+                            "{system}, the type the system declares for .{}, in a \
+                             CFBundleDocumentTypes entry's LSItemContentTypes",
+                            file_type.extension()
+                        ),
+                        None => format!(
+                            "a UTExportedTypeDeclarations or UTImportedTypeDeclarations type \
+                             whose public.filename-extension is {}, listed in a \
+                             CFBundleDocumentTypes entry's LSItemContentTypes",
+                            file_type.extension()
+                        ),
+                    },
                     crates: crates(declared),
                 });
             }
@@ -400,8 +407,9 @@ fn android_opens(root: roxmltree::Node<'_, '_>) -> Opens {
 /// What an `Info.plist`'s top-level `<dict>` opens: the schemes of its
 /// `CFBundleURLTypes`, and the extensions of the types its
 /// `CFBundleDocumentTypes` list in `LSItemContentTypes`, declared in its
-/// `UTExportedTypeDeclarations` or `UTImportedTypeDeclarations`, or named in
-/// a document type's `CFBundleTypeExtensions`.
+/// `UTExportedTypeDeclarations` or `UTImportedTypeDeclarations` or declared
+/// by the system itself (`public.png`), or named in a document type's
+/// `CFBundleTypeExtensions`.
 fn apple_info_opens(top: roxmltree::Node<'_, '_>) -> Result<Opens, String> {
     let mut opens = Opens::default();
     for url_type in array_dicts(top, "CFBundleURLTypes")? {
@@ -441,6 +449,11 @@ fn apple_info_opens(top: roxmltree::Node<'_, '_>) -> Result<Opens, String> {
                         .map(|extension| extension.to_ascii_lowercase()),
                 );
             }
+            opens.file_types.extend(
+                super::opening::apple_system_type_extensions(&content_type)
+                    .iter()
+                    .map(|extension| (*extension).to_owned()),
+            );
         }
         opens.file_types.extend(
             strings(document, "CFBundleTypeExtensions")?

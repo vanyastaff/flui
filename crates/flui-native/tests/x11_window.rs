@@ -567,9 +567,10 @@ mod cases {
             handler: Rc<dyn flui_platform::WindowHandler>,
         ) -> Self {
             Self::open_with_options(
-                WindowOptions::default()
-                    .title(title)
-                    .size(Size::new(400.0, 300.0)),
+                WindowOptions::default().title(title).size(
+                    flui_platform::WindowExtent::try_new(Size::new(400.0, 300.0))
+                        .expect("an extent"),
+                ),
                 handler,
             )
         }
@@ -873,11 +874,20 @@ mod cases {
             panic!("openbox frames a decorated window: {extents:?}");
         };
         assert!(left + right + top + bottom > 0, "a frame: {extents:?}");
+        // A point of the display the window is on, which Xvfb lays out at
+        // the root's origin at scale one.
+        let asked = flui_platform::WindowPosition::try_new(
+            fixture
+                .window
+                .state()
+                .display
+                .expect("an X11 window on a listed output names it"),
+            flui_foundation::geometry::Point::new(120.0, 90.0),
+        )
+        .expect("a finite point");
         fixture
             .window
-            .admit_and_apply(WindowCommand::SetPosition(
-                flui_foundation::geometry::Point::new(120.0, 90.0),
-            ))
+            .admit_and_apply(WindowCommand::SetPosition(asked))
             .expect("a window moves");
         fixture.settle();
         let content = fixture
@@ -893,10 +903,7 @@ mod cases {
             "the frame is where the window was asked to go"
         );
         let state = fixture.window.state();
-        assert_eq!(
-            state.outer.position(),
-            Some(flui_foundation::geometry::Point::new(120.0, 90.0))
-        );
+        assert_eq!(state.outer.position(), Some(asked));
         assert_eq!(
             state.outer.size(),
             Size::new(400.0 + as_f64(left + right), 300.0 + as_f64(top + bottom)),
@@ -920,7 +927,9 @@ mod cases {
         let connection = platform.display_connection();
         let window = platform
             .open_window(
-                WindowOptions::default().size(Size::new(64.0, 64.0)),
+                WindowOptions::default().size(
+                    flui_platform::WindowExtent::try_new(Size::new(64.0, 64.0)).expect("an extent"),
+                ),
                 RecordingWindowHandler::new(),
             )
             .expect("an X11 window opens");
@@ -967,7 +976,10 @@ mod cases {
         let window = platform
             .open_window(
                 WindowOptions::default()
-                    .size(Size::new(320.0, 240.0))
+                    .size(
+                        flui_platform::WindowExtent::try_new(Size::new(320.0, 240.0))
+                            .expect("an extent"),
+                    )
                     .mode(WindowMode::Maximized)
                     .reveal(WindowReveal::AtOpen),
                 RecordingWindowHandler::new(),
@@ -2292,9 +2304,10 @@ mod cases {
         let shown = fixture
             .platform
             .open_window(
-                WindowOptions::default()
-                    .title("shown")
-                    .size(Size::new(300.0, 200.0)),
+                WindowOptions::default().title("shown").size(
+                    flui_platform::WindowExtent::try_new(Size::new(300.0, 200.0))
+                        .expect("an extent"),
+                ),
                 Rc::clone(&handler) as Rc<dyn WindowHandler>,
             )
             .expect("an X11 window opens");

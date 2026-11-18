@@ -97,11 +97,11 @@
 //! use flui_interaction::{GestureBinding, HitTestResult};
 //! use flui_foundation::geometry::Point;
 //! use flui_platform::{EventTime, pointer::{PointerButton, PointerButtons,
-//!     PointerEvent, PointerId, PointerInfo, PointerKind, PointerPosition,
+//!     PointerEvent, PointerId, PointerSource, PointerKind, PointerPosition,
 //!     PointerPress, PointerSample}};
 //!
 //! let binding = GestureBinding::new();
-//! let pointer = PointerInfo::new(PointerId::try_from(1_u64)?, PointerKind::Touch);
+//! let pointer = PointerSource::new(PointerId::try_from(1_u64)?, PointerKind::Touch);
 //! let sample = PointerSample::new(EventTime::from_nanos(1),
 //!     PointerPosition::try_new(Point::new(12.0, 24.0))?);
 //! let event = PointerEvent::Down(PointerPress::new(pointer, PointerButton::PRIMARY,
@@ -150,7 +150,8 @@ use self::{
     scroll_sequences::{ScrollAdmission, ScrollSequences},
 };
 use crate::events::{
-    CancelReason, DeviceId, PointerCancel, PointerEvent, PointerEventExt, PointerInfo, PointerKind,
+    CancelReason, DeviceId, PointerCancel, PointerEvent, PointerEventExt, PointerKind,
+    PointerSource,
 };
 use crate::{
     close::{CloseMode, ClosePanic, CloseTombstone},
@@ -181,8 +182,8 @@ enum SignalSource {
     Pointer(PointerId),
 }
 
-impl From<PointerInfo> for SignalSource {
-    fn from(pointer: PointerInfo) -> Self {
+impl From<PointerSource> for SignalSource {
+    fn from(pointer: PointerSource) -> Self {
         pointer
             .device
             .map_or(Self::Pointer(pointer.id), Self::Device)
@@ -306,7 +307,7 @@ pub struct InvalidSamplingWindow;
 /// # Ownership
 ///
 /// A UI runtime owns one `GestureBinding`. Prefer accessing the binding through
-/// the active `HeadlessBinding` / `UiRuntime`; process-global gesture ownership is
+/// the active `UiRuntime`; process-global gesture ownership is
 /// intentionally not part of ADR-0027.
 ///
 /// # Event Coalescing
@@ -381,7 +382,7 @@ impl GestureBinding {
     /// Create a new GestureBinding with default settings.
     ///
     /// `GestureBinding` is owner-local; prefer using the binding owned by the
-    /// active UI runtime (`HeadlessBinding`/`UiRuntime`) over a process global.
+    /// active UI runtime over a process global.
     pub fn new() -> Self {
         Self::with_settings_and_clock(
             GestureSettings::default(),
@@ -397,7 +398,7 @@ impl GestureBinding {
     /// Create against an explicit monotonic clock.
     ///
     /// This is the canonical constructor for deterministic runtimes such as
-    /// `HeadlessBinding`: the binding, its arena, and every recognizer deadline
+    /// a headless host's UI runtime: the binding, its arena, and every recognizer deadline
     /// observe the same clock instead of a test harness owning a second arena.
     pub fn with_clock(clock: std::sync::Arc<dyn MonotonicClock>) -> Self {
         Self::with_settings_and_clock(GestureSettings::default(), clock)
@@ -1601,7 +1602,7 @@ impl GestureBinding {
             if let PointerEvent::DeviceRemoved(device) = event {
                 // A removed device hovers nothing at the next frame.
                 let dropped = self.drop_queued_hovers(|_, queued| {
-                    crate::events::pointer_info(queued).and_then(|info| info.device)
+                    crate::events::pointer_source(queued).and_then(|info| info.device)
                         == Some(device.device)
                 });
                 RoutePanic::preserve_first(&mut first_panic, dropped, "removed-device hover moves");
@@ -1674,7 +1675,7 @@ impl GestureBinding {
                 | PointerEvent::Up(_)
                 | PointerEvent::Cancel(_)
                 | PointerEvent::ButtonChange(_)
-        ) && let Some(pointer) = crate::events::pointer_info(event)
+        ) && let Some(pointer) = crate::events::pointer_source(event)
             && !self
                 .contacts
                 .observe(pointer, crate::events::event_time(event))
@@ -1971,7 +1972,7 @@ impl GestureBinding {
                     // added/removed-class event dispatches with no hit path,
                     // router only).
                     let result = match event.position().or_else(|| {
-                        crate::events::pointer_info(event)
+                        crate::events::pointer_source(event)
                             .and_then(|info| self.mouse_tracker.source_position_on(surface, info))
                     }) {
                         Some(position) => hit_test_fn(position),
@@ -2493,7 +2494,7 @@ impl GestureBinding {
     /// claim's `owner`.
     fn cancel_claimed(
         &self,
-        pointer: PointerInfo,
+        pointer: PointerSource,
         time: flui_platform::EventTime,
         token: ResolvedRouteToken,
         owner: crate::pointer::PointerTarget,

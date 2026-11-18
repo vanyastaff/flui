@@ -40,8 +40,8 @@ use flui_platform::pointer::{
     ButtonChange, CancelReason, ContactSize, DeviceId, HoverDistance, MotionAcceleration,
     MotionDelta, PanZoomEvent, PanZoomPhase, PanZoomTransform, PenOrientation, PenTool,
     PointerButton, PointerButtonEvent, PointerButtons, PointerCancel, PointerDeviceChange,
-    PointerEvent, PointerId, PointerInfo, PointerKind, PointerMove, PointerPosition, PointerRole,
-    PointerSample, PointerSignal, Pressure, RawMotion, ScrollDelta, ScrollEvent, ScrollInversion,
+    PointerEvent, PointerId, PointerKind, PointerMove, PointerPosition, PointerRole, PointerSample,
+    PointerSignal, PointerSource, Pressure, RawMotion, ScrollDelta, ScrollEvent, ScrollInversion,
     ScrollPhase, ScrollPrecision, ScrollUnit, SmartZoomEvent, SwipeOffset, TangentialPressure,
     TouchpadHoldEvent, TouchpadHoldPhase, TouchpadSwipeEvent, TouchpadSwipePhase, Twist,
 };
@@ -471,8 +471,8 @@ impl Convert<rec::PointerKind> for PointerKind {
     }
 }
 
-impl TryConvert<&PointerInfo> for rec::PointerInfo {
-    fn try_convert(info: &PointerInfo) -> Result<Self> {
+impl TryConvert<&PointerSource> for rec::PointerSource {
+    fn try_convert(info: &PointerSource) -> Result<Self> {
         Ok(Self {
             id: info.id.get().get(),
             device: info.device.map(|device| device.get().get()),
@@ -482,8 +482,8 @@ impl TryConvert<&PointerInfo> for rec::PointerInfo {
     }
 }
 
-impl TryConvert<rec::PointerInfo> for PointerInfo {
-    fn try_convert(info: rec::PointerInfo) -> Result<Self> {
+impl TryConvert<rec::PointerSource> for PointerSource {
+    fn try_convert(info: rec::PointerSource) -> Result<Self> {
         let mut pointer =
             Self::new(pointer_id(info.id)?, info.kind.convert_into()).with_role(if info.primary {
                 PointerRole::Primary
