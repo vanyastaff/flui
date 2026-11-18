@@ -1,7 +1,8 @@
 //! Callback delivery and capture retirement without guarded user code.
 
+use crate::containment::keep_first;
 use crate::{
-    containment::RoutePanic,
+    containment::{FirstPanic, caught},
     gesture::arena::{GestureArena, GestureArenaEntry, SweepModel},
 };
 use std::rc::Rc;
@@ -9,21 +10,21 @@ use std::rc::Rc;
 /// Destroy a withdrawn callback under containment: a panic of its destructor
 /// is the first failure, or is discarded behind one already caught
 /// (ADR-0281 §3).
-pub(crate) fn retire_callback<T: ?Sized>(callback: Option<Rc<T>>, first: &mut Option<RoutePanic>) {
-    let candidate = RoutePanic::capture(|| drop(callback));
-    RoutePanic::preserve_first(first, candidate, "recognizer callback retirement");
+pub(crate) fn retire_callback<T: ?Sized>(callback: Option<Rc<T>>, first: &mut FirstPanic) {
+    let candidate = caught(|| drop(callback));
+    keep_first(first, candidate, "recognizer callback retirement");
 }
 
 /// Callbacks belonging to one committed transition.
 pub(crate) struct CallbackSequence {
-    first: Option<RoutePanic>,
+    first: FirstPanic,
     incoming_failure: bool,
 }
 
 impl CallbackSequence {
     pub(crate) fn new() -> Self {
         Self {
-            first: None,
+            first: FirstPanic::new(),
             incoming_failure: std::thread::panicking(),
         }
     }
@@ -33,8 +34,8 @@ impl CallbackSequence {
         if !self.incoming_failure
             && let Some(callback) = callback.as_ref()
         {
-            let candidate = RoutePanic::capture(|| invoke(callback.as_ref()));
-            RoutePanic::preserve_first(&mut self.first, candidate, "recognizer callback");
+            let candidate = caught(|| invoke(callback.as_ref()));
+            keep_first(&mut self.first, candidate, "recognizer callback");
         }
         retire_callback(callback, &mut self.first);
     }
@@ -48,13 +49,11 @@ impl CallbackSequence {
 
 /// Raise the first failure, or discard it when the thread is already
 /// unwinding: raising a second panic there would abort.
-pub(crate) fn finish_containment(first: Option<RoutePanic>, incoming_failure: bool) {
-    if let Some(panic) = first {
-        if incoming_failure {
-            panic.discard();
-        } else {
-            panic.resume();
-        }
+pub(crate) fn finish_containment(first: FirstPanic, incoming_failure: bool) {
+    if incoming_failure {
+        drop(first);
+    } else {
+        first.resume();
     }
 }
 
@@ -82,12 +81,12 @@ pub(crate) fn invoke_callback<T: ?Sized>(
     invoke: impl FnOnce(&T),
 ) {
     let incoming_failure = std::thread::panicking();
-    let mut first = RoutePanic::capture(before);
-    if first.is_none()
+    let mut first = caught(before);
+    if !first.is_held()
         && !incoming_failure
         && let Some(callback) = callback.as_ref()
     {
-        first = RoutePanic::capture(|| invoke(callback.as_ref()));
+        first = caught(|| invoke(callback.as_ref()));
     }
     retire_callback(callback, &mut first);
     finish_containment(first, incoming_failure);

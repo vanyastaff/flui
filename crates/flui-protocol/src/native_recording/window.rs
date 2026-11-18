@@ -501,7 +501,7 @@ fn is_zero_insets(insets: &[f64; 4]) -> bool {
 }
 
 /// Where the soft keyboard rests over a window, and how the inset it covers
-/// gets there (ADR-0372). The name is the published schema's, from before a
+/// gets there (ADR-0373). The name is the published schema's, from before a
 /// keyboard could float, and a schema's names are not respelled;
 /// `flui_platform::SoftKeyboard` is the value it records.
 #[derive(Debug, Clone, Copy, PartialEq)]

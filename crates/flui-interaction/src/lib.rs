@@ -5,15 +5,18 @@
 //! no GPU or host edge: everything here runs headless, which is how its tests
 //! drive it.
 //!
-//! - [`GestureBinding`] takes a presentation's pointer stream, hit-tests each
-//!   new contact through an [`InteractionLane`](pointer::InteractionLane) and
-//!   delivers the sequence along that route.
-//! - [`FocusManager`] owns a presentation's focus tree: [`FocusNode`]s attached
-//!   under [`FocusScopeNode`]s, with traversal order from a
-//!   [`FocusTraversalPolicy`](focus::FocusTraversalPolicy).
-//! - The [`gesture`] recognizers compete in a [`GestureArena`](gesture::GestureArena),
-//!   which grants each pointer to one winner; a recognizer outside this crate
-//!   implements the same traits as the built-in ones.
+//! - The [gesture binding](binding::GestureBinding) takes a presentation's
+//!   pointer stream, hit-tests each new contact through an
+//!   [interaction lane](pointer::InteractionLane) and delivers the sequence
+//!   along that route.
+//! - The [focus manager](focus::FocusManager) owns a presentation's focus
+//!   tree: [focus nodes](focus::FocusNode) attached under
+//!   [scopes](focus::FocusScopeNode), with traversal order from a
+//!   [traversal policy](focus::FocusTraversalPolicy).
+//! - The [`gesture`] recognizers compete in a
+//!   [gesture arena](gesture::GestureArena), which grants each pointer to one
+//!   winner; a recognizer outside this crate implements the same traits as the
+//!   built-in ones.
 //!
 //! Handlers and recognizers live on the owner thread behind `Rc`; what render
 //! storage keeps of a route is data-only identity, resolved back to the
@@ -83,7 +86,7 @@
 //!    [`focus`] - Keyboard focus and traversal; [`text_input`] - IME and clipboard
 //! 3. [`gesture`] - The arena, the recognizers, their settings and details, and
 //!    velocity estimation; [`drag`] - Drag-and-drop sessions
-//! 4. [`binding`] - [`GestureBinding`], which composes them for one presentation
+//! 4. [`binding`] - the [gesture binding](binding::GestureBinding), which composes them for one presentation
 //! 5. [`haptics`] - A presentation's haptics, on the binding's clock and dispatch
 //! 6. `testing` - Synthetic event builders (requires `testing` feature). Gesture
 //!    scripting and replay live in `flui-testing`, which owns the virtual clock.

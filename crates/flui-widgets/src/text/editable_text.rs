@@ -317,9 +317,9 @@ pub(super) fn source_offset_for_masked_offset(
 /// **Suppression contract**: the key handler skips `Key::Character`
 /// insertion only while [`TextEditingController::is_composing`] is `true` —
 /// suppressing unconditionally after focus gain would silently kill plain
-/// (non-IME) typing for the rest of the session, since winit only sends
-/// `Key::Character` for keys it did **not** already route through
-/// composition. See [`flui_platform::ImeEvent`]'s doc for the full contract.
+/// (non-IME) typing for the rest of the session, since a host sends
+/// `Key::Character` for keys outside composition and routes the keys
+/// composition consumes as `Preedit` and `Commit`. See [`flui_platform::ImeEvent`]'s doc for the full contract.
 ///
 /// # IME cursor-area tracking
 ///
@@ -2573,8 +2573,8 @@ fn build_key_handler(
             Key::Character(character_string) => {
                 // Suppression contract (`ImeEvent`'s doc): suppress
                 // `Key::Character` insertion ONLY while a composition is
-                // active. Winit withholds `KeyboardInput` during
-                // composition and immediately after a commit, so this path
+                // active. A host routes the keys composition consumes
+                // as `Preedit` and `Commit`, so this path
                 // exists mainly for backends/tests that dispatch a
                 // character key mid-preedit anyway — without the guard it
                 // would double-insert alongside the IME's own commit.

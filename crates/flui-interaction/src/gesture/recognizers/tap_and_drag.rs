@@ -38,6 +38,7 @@
 //!     .build();
 //! ```
 
+use crate::containment::keep_first;
 use flui_platform::input_capabilities::PointerKindSet;
 use std::{
     cell::RefCell,
@@ -57,7 +58,7 @@ use super::{
 };
 use crate::gesture::observer::GestureContest;
 use crate::{
-    containment::RoutePanic,
+    containment::{FirstPanic, caught},
     events::{PointerEvent, PointerEventExt, PointerKind},
     gesture::arena::{
         GestureArenaEntry, GestureArenaMember, GestureDisposition, MotionRole, SweepModel,
@@ -522,25 +523,19 @@ impl TapAndDragGestureRecognizer {
         let contact_id = self.contact.current().map(|contact| contact.id);
         let self_driven = self.arena.sweep_model() == SweepModel::SelfDriven;
         let mut first = match step {
-            ArenaStep::None => None,
-            ArenaStep::Claim(entry, displacement) => {
-                RoutePanic::capture(|| entry.claim_motion(displacement))
-            }
+            ArenaStep::None => FirstPanic::new(),
+            ArenaStep::Claim(entry, displacement) => caught(|| entry.claim_motion(displacement)),
             ArenaStep::Withdraw(entry) => {
-                let mut first = RoutePanic::capture(|| {
+                let mut first = caught(|| {
                     entry.resolve(GestureDisposition::Rejected);
                 });
                 // A failing withdrawal still leaves the contest ended.
                 if self_driven {
-                    RoutePanic::preserve_first(
-                        &mut first,
-                        RoutePanic::capture(|| entry.sweep()),
-                        "tap and drag sweep",
-                    );
+                    keep_first(&mut first, caught(|| entry.sweep()), "tap and drag sweep");
                 }
                 first
             }
-            ArenaStep::Sweep(entry) => RoutePanic::capture(|| {
+            ArenaStep::Sweep(entry) => caught(|| {
                 if self_driven {
                     entry.sweep();
                 }
@@ -556,18 +551,18 @@ impl TapAndDragGestureRecognizer {
             if contact_id.is_some_and(|id| !self.contact.is_current(id)) {
                 break;
             }
-            RoutePanic::preserve_first(
+            keep_first(
                 &mut first,
-                RoutePanic::capture(|| self.deliver(notice)),
+                caught(|| self.deliver(notice)),
                 "tap and drag callback",
             );
         }
         if self.gesture_state.borrow().phase == Phase::Ready
             && contact_id.is_some_and(|id| self.contact.is_current(id))
         {
-            RoutePanic::preserve_first(
+            keep_first(
                 &mut first,
-                RoutePanic::capture(|| {
+                caught(|| {
                     self.contact.finish(ContactEnd::Contending);
                 }),
                 "tap and drag completion",
@@ -925,12 +920,12 @@ impl GestureRecognizer for TapAndDragGestureRecognizer {
         }
         let mut notices = Notices::new();
         self.gesture_state.borrow_mut().abandon(&mut notices);
-        let mut first = RoutePanic::capture(|| {
+        let mut first = caught(|| {
             self.contact.cancel();
         });
-        RoutePanic::preserve_first(
+        keep_first(
             &mut first,
-            RoutePanic::capture(|| self.finish(ArenaStep::None, notices)),
+            caught(|| self.finish(ArenaStep::None, notices)),
             "tap and drag cancel",
         );
         finish_containment(first, std::thread::panicking());

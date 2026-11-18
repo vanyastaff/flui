@@ -6,6 +6,7 @@
 //! contest by the swipe's pointer, so the recognizers its `Start` reached
 //! compete for it as they would for a contact.
 
+use crate::containment::keep_first;
 use std::cell::RefCell;
 
 use flui_foundation::geometry::Offset;
@@ -14,7 +15,7 @@ use smallvec::SmallVec;
 
 use super::{GestureBinding, pointer_sequences::MAX_SIMULTANEOUS_POINTERS};
 use crate::{
-    containment::RoutePanic,
+    containment::{FirstPanic, caught},
     events::{PointerEvent, PointerEventExt as _},
     gesture::{ContestCancel, arena::GestureArena},
     ids::{InputSurface, PointerId},
@@ -137,7 +138,7 @@ impl GestureBinding {
     {
         let pointer = swipe.pointer().id;
         let arena = self.arena.arena();
-        let mut first_panic = None;
+        let mut first_panic = FirstPanic::new();
         match swipe.phase {
             TouchpadSwipePhase::Start => {
                 let position = event
@@ -151,9 +152,9 @@ impl GestureBinding {
                     self.cancel_touchpad_swipe(earlier, &mut first_panic);
                 }
                 let delivered = self.dispatch_ephemeral(event, &path);
-                RoutePanic::preserve_first(&mut first_panic, delivered, "touchpad swipe start");
-                let closed = RoutePanic::capture(|| arena.close(pointer));
-                RoutePanic::preserve_first(&mut first_panic, closed, "touchpad swipe arena close");
+                keep_first(&mut first_panic, delivered, "touchpad swipe start");
+                let closed = caught(|| arena.close(pointer));
+                keep_first(&mut first_panic, closed, "touchpad swipe arena close");
             }
             TouchpadSwipePhase::Update(_) => {
                 if let Some(path) = self.touchpad_swipes.follow(surface, *swipe) {
@@ -170,7 +171,7 @@ impl GestureBinding {
                 // settled here.
                 let contest = self.arena.detach(pointer);
                 first_panic = self.dispatch_ephemeral(event, &open.path);
-                let settled = RoutePanic::capture(|| {
+                let settled = caught(|| {
                     if swipe.phase == TouchpadSwipePhase::End {
                         arena.sweep_detached(contest);
                     } else {
@@ -180,33 +181,27 @@ impl GestureBinding {
                         );
                     }
                 });
-                RoutePanic::preserve_first(&mut first_panic, settled, "touchpad swipe arena end");
-                let dropped = RoutePanic::capture(|| drop(open));
-                RoutePanic::preserve_first(&mut first_panic, dropped, "touchpad swipe path");
+                keep_first(&mut first_panic, settled, "touchpad swipe arena end");
+                let dropped = caught(|| drop(open));
+                keep_first(&mut first_panic, dropped, "touchpad swipe path");
             }
         }
-        if let Some(panic) = first_panic {
-            panic.resume();
-        }
+        first_panic.resume();
     }
 
     /// End a swipe the binding closed before its platform did: its path hears
     /// a `Cancelled`, and its contest is abandoned without a winner.
-    pub(super) fn cancel_touchpad_swipe(
-        &self,
-        open: OpenSwipe,
-        first_panic: &mut Option<RoutePanic>,
-    ) {
+    pub(super) fn cancel_touchpad_swipe(&self, open: OpenSwipe, first_panic: &mut FirstPanic) {
         let mut cancel = open.last;
         cancel.phase = TouchpadSwipePhase::Cancelled;
         let contest = self.arena.detach(open.pointer());
         let delivered = self.dispatch_ephemeral(&PointerEvent::TouchpadSwipe(cancel), &open.path);
-        RoutePanic::preserve_first(first_panic, delivered, "touchpad swipe cancel");
-        let abandoned = RoutePanic::capture(|| {
+        keep_first(first_panic, delivered, "touchpad swipe cancel");
+        let abandoned = caught(|| {
             GestureArena::abandon_detached(contest, ContestCancel::Abandoned);
         });
-        RoutePanic::preserve_first(first_panic, abandoned, "touchpad swipe arena abandon");
-        let dropped = RoutePanic::capture(|| drop(open));
-        RoutePanic::preserve_first(first_panic, dropped, "touchpad swipe path");
+        keep_first(first_panic, abandoned, "touchpad swipe arena abandon");
+        let dropped = caught(|| drop(open));
+        keep_first(first_panic, dropped, "touchpad swipe path");
     }
 }

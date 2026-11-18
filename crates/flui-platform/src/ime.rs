@@ -61,8 +61,8 @@
 /// A text-input client must suppress `Key::Character` insertion **only**
 /// while a composition is in progress (a non-empty preedit is active — see
 /// the empty-`Preedit`-is-cancellation note above for the case this excludes)
-/// — winit itself already withholds `KeyboardInput` events during
-/// composition and immediately after a commit, so a client that suppressed
+/// — the keys composition consumes arrive as `Preedit` and `Commit`, not as
+/// typing, so a client that suppressed
 /// *all* typing after [`ImeEvent::Enabled`] would silently kill plain
 /// (non-IME) keyboard input for the rest of the session. [`ImeEvent::Disabled`]
 /// delivered mid-composition strips the in-progress composing slice from the

@@ -323,6 +323,9 @@ pub struct GpuContext {
     /// Flush submissions of texture writes a frame did not submit.
     #[cfg(test)]
     texture_flushes: Cell<usize>,
+    /// Frames whose texture uploads wrote to the queue.
+    #[cfg(test)]
+    texture_writes: usize,
     /// How many of the next offscreen frames panic after their recording.
     #[cfg(test)]
     panics_ahead: u32,
@@ -574,6 +577,8 @@ impl GpuContext {
             loss_wake: None,
             #[cfg(test)]
             texture_flushes: Cell::new(0),
+            #[cfg(test)]
+            texture_writes: 0,
             #[cfg(test)]
             builds: ContextBuilds {
                 devices: 1,
@@ -935,7 +940,12 @@ impl GpuContext {
             let _flushed = caught.contain(|| self.flush_texture_writes());
             caught.resume();
         }
-        wrote.unwrap_or(true)
+        let wrote = wrote.unwrap_or(true);
+        #[cfg(test)]
+        {
+            self.texture_writes += usize::from(wrote);
+        }
+        wrote
     }
 
     /// Run the frame setup that follows [`Self::prepare_textures`] (taking
@@ -1134,6 +1144,21 @@ impl GpuContext {
             // Released, or not sized yet: nothing to present into.
             return Ok(PresentDisposition::NotShown);
         };
+        // The frame's submission scope opens inside the window's frame
+        // protocol, after the uploads below: a frame with images to upload
+        // that the ledger refuses (a GPU that retires nothing) is refused
+        // here, before it writes, as the offscreen path refuses it at its
+        // scope. Writes made for a refused frame could not be flushed either,
+        // since the flush is refused by the same ledger, so each one would
+        // hold more staging memory. A frame with nothing to upload keeps the
+        // verdict its frame protocol gives (a skip, a surface not shown).
+        if self
+            .textures
+            .get(&slot)
+            .is_some_and(|kept| kept.would_write(&self.domain))
+        {
+            self.domain.admits_frame()?;
+        }
         // Uploads run before the painter and the blit are taken, and the
         // painter is taken only once it is built and retargeted, so a panic
         // in either step (a tracing subscriber is not ours) costs neither.
@@ -1240,6 +1265,22 @@ impl GpuContext {
     #[cfg(all(test, not(target_arch = "wasm32")))]
     pub(crate) fn join_warmup(&mut self) {
         self.warmup = None;
+    }
+
+    /// Put this context on a fresh domain over the same device whose ledger
+    /// admits at most `submissions` unretired submissions: zero refuses every
+    /// frame and every flush, as a GPU that retires nothing does.
+    #[cfg(all(test, feature = "testing"))]
+    pub(crate) fn limit_submissions(&mut self, submissions: usize) {
+        let limits = crate::device_domain::PreparedIrLimits {
+            submissions,
+            ..crate::device_domain::PreparedIrLimits::default()
+        };
+        self.domain = DeviceDomain::with_limits(
+            Arc::clone(self.domain.device()),
+            Arc::clone(self.domain.queue()),
+            limits,
+        );
     }
 
     /// Make the next offscreen frame panic after its recording, before its
@@ -2918,6 +2959,153 @@ mod tests {
             "the failed frame left the painter for the next one"
         );
         assert_eq!(context.builds().pipeline_sets, 1);
+    }
+
+    /// A frame the submission ledger refuses writes no texture image, on a
+    /// window slot as on an offscreen one: a flush of those writes would be
+    /// refused by the same ledger, so each refused frame of a streaming
+    /// texture would hold one more batch of staging memory.
+    ///
+    /// Red-check: drop the `admits_frame` check from
+    /// `GpuContext::draw_window` and the window row counts a write and a
+    /// refused flush on every frame.
+    #[cfg(feature = "testing")]
+    #[test]
+    fn a_frame_the_ledger_refuses_writes_no_texture_image() {
+        use std::sync::Arc;
+
+        use flui_layer::{Layer, TextureLayer, TextureRegistry};
+        use flui_painting::paint::Image;
+
+        use crate::raster_executor::RasterBackend;
+        use crate::{testing::ScriptedAcquire, window_slot::WindowSlot};
+
+        for window in [true, false] {
+            let (mut context, factory) = noop_context();
+            context.limit_submissions(0);
+            let (_executor, sender) = RasterExecutor::new(
+                crate::testing::ScriptedSlots::new(),
+                std::rc::Rc::new(flui_foundation::SystemClock),
+                || {},
+            );
+            let slot = sender.mint_slot().expect("a slot id is left");
+            if window {
+                let surface = factory
+                    .create(Arc::new(crate::testing::FakeWindow::new(7)))
+                    .expect("the no-op backend makes a surface for any window");
+                let window = WindowSlot::configured_without_capabilities(
+                    surface,
+                    (8, 8),
+                    ScriptedAcquire::Timeout,
+                );
+                context
+                    .insert(slot, super::SurfaceSlot::Window(Box::new(window)))
+                    .expect("the slot's index is free");
+            } else {
+                context
+                    .attach(
+                        slot,
+                        SlotTarget::Offscreen {
+                            size: DeviceSize::new(8, 8),
+                            format: wgpu::TextureFormat::Rgba8Unorm,
+                        },
+                        SlotConfig::new(),
+                    )
+                    .expect("an offscreen slot attaches");
+            }
+            let registry = TextureRegistry::new(Arc::new(|| {}));
+            let texture = registry.register().expect("an id is left");
+            let tree = LayerTree::new(Layer::from(TextureLayer::new(
+                texture.id(),
+                Rect::from_xywh(0.0, 0.0, 8.0, 8.0),
+            )));
+            let scene = Scene::new(tree);
+            for shade in [10, 20, 30] {
+                texture.submit_frame(Image::from_rgba8(2, 2, [shade, 0, 0, 255].repeat(4)));
+                context
+                    .apply_slot_textures(slot, registry.take_updates())
+                    .expect("the update applies");
+                let refused = if window {
+                    context
+                        .render_window(
+                            slot,
+                            drawn_frame(),
+                            &scene,
+                            DamageRegion::Full(flui_layer::FullReason::FirstFrame),
+                        )
+                        .map(|_| ())
+                } else {
+                    context.render_slot(
+                        slot,
+                        scene.content(),
+                        crate::recording_cache::CacheReads::On,
+                    )
+                };
+                assert_eq!(
+                    (context.texture_writes, context.texture_flushes.get()),
+                    (0, 0),
+                    "window {window}: a refused frame writes nothing to flush"
+                );
+                assert!(
+                    refused.is_err(),
+                    "window {window}: the ledger refuses the frame"
+                );
+            }
+        }
+    }
+
+    /// A window frame with no image to upload keeps the verdict its frame
+    /// protocol gives while the ledger refuses frames: an idle window is not
+    /// turned into a failed frame that owes a full redraw.
+    ///
+    /// Red-check: ask `admits_frame` for every window frame in
+    /// `GpuContext::draw_window` and the frame answers the ledger's refusal
+    /// instead of `NotShown`.
+    #[cfg(feature = "testing")]
+    #[test]
+    fn a_window_frame_with_nothing_to_upload_keeps_its_verdict_under_a_refusing_ledger() {
+        use std::sync::Arc;
+
+        use crate::{testing::ScriptedAcquire, window_slot::WindowSlot};
+
+        let verdict = |refusing: bool| {
+            let (mut context, factory) = noop_context();
+            if refusing {
+                context.limit_submissions(0);
+            }
+            let surface = factory
+                .create(Arc::new(crate::testing::FakeWindow::new(7)))
+                .expect("the no-op backend makes a surface for any window");
+            let window = WindowSlot::configured_without_capabilities(
+                surface,
+                (8, 8),
+                ScriptedAcquire::Timeout,
+            );
+            let (_executor, sender) = RasterExecutor::new(
+                crate::testing::ScriptedSlots::new(),
+                std::rc::Rc::new(flui_foundation::SystemClock),
+                || {},
+            );
+            let slot = sender.mint_slot().expect("a slot id is left");
+            context
+                .insert(slot, super::SurfaceSlot::Window(Box::new(window)))
+                .expect("the slot's index is free");
+            let scene = Scene::new(square_and_glyph());
+            format!(
+                "{:?}",
+                context.render_window(
+                    slot,
+                    drawn_frame(),
+                    &scene,
+                    DamageRegion::Full(flui_layer::FullReason::FirstFrame)
+                )
+            )
+        };
+        assert_eq!(
+            verdict(true),
+            verdict(false),
+            "the refusing ledger leaves the frame's own answer (the acquire's timeout)"
+        );
     }
 
     /// A window surface still lost after a reconfigure is dropped, not made

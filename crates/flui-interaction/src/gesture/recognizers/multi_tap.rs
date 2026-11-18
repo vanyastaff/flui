@@ -8,9 +8,10 @@ use super::{
     },
     recognizer::{GestureRecognizer, measured_travel},
 };
+use crate::containment::keep_first;
 use crate::gesture::observer::GestureContest;
 use crate::{
-    containment::RoutePanic,
+    containment::{FirstPanic, caught},
     events::{PointerEvent, PointerEventExt, PointerKind},
     gesture::arena::{
         GestureArena, GestureArenaEntry, GestureArenaMember, GestureDeadlineRegistration,
@@ -250,12 +251,12 @@ impl MultiTapGestureRecognizer {
         &self,
         sequence: &MultiTapSequence,
         disposition: GestureDisposition,
-        first: &mut Option<RoutePanic>,
+        first: &mut FirstPanic,
     ) {
         for contact in sequence.contacts.values() {
-            RoutePanic::preserve_first(
+            keep_first(
                 first,
-                RoutePanic::capture(|| {
+                caught(|| {
                     if disposition.is_accepted() {
                         contact.entry.resolve(GestureDisposition::Accepted);
                     } else {
@@ -264,24 +265,24 @@ impl MultiTapGestureRecognizer {
                 }),
                 "multi tap arena completion",
             );
-            RoutePanic::preserve_first(
+            keep_first(
                 first,
-                RoutePanic::capture(|| contact.entry.release()),
+                caught(|| contact.entry.release()),
                 "multi tap hold release",
             );
         }
     }
     fn complete(&self, sequence: MultiTapSequence) {
         let details = Self::details(&sequence);
-        let mut first = None;
+        let mut first = FirstPanic::new();
         self.retire_entries(&sequence, GestureDisposition::Accepted, &mut first);
         let mut notices = CallbackSequence::new();
         notices.call(self.callbacks.on_multi_tap.clone(), |callback| {
             callback(details);
         });
-        RoutePanic::preserve_first(
+        keep_first(
             &mut first,
-            RoutePanic::capture(|| notices.finish()),
+            caught(|| notices.finish()),
             "multi tap completion callback",
         );
         finish_containment(first, std::thread::panicking());
@@ -291,15 +292,15 @@ impl MultiTapGestureRecognizer {
         if let Some(registration) = &sequence.deadline_registration {
             registration.withdraw();
         }
-        let mut first = None;
+        let mut first = FirstPanic::new();
         self.retire_entries(&sequence, GestureDisposition::Rejected, &mut first);
         let mut notices = CallbackSequence::new();
         notices.call(self.callbacks.on_multi_tap_cancel.clone(), |callback| {
             callback(details);
         });
-        RoutePanic::preserve_first(
+        keep_first(
             &mut first,
-            RoutePanic::capture(|| notices.finish()),
+            caught(|| notices.finish()),
             "multi tap cancellation callback",
         );
         finish_containment(first, std::thread::panicking());

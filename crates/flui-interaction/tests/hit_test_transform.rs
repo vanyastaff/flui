@@ -279,9 +279,7 @@ fn sample_delivery(
         let failure = handle
             .invoke_pointer_route(route, &event)
             .expect("invoke route");
-        if let Some(failure) = failure {
-            failure.resume();
-        }
+        failure.resume();
         assert_eq!(deliveries.get(), usize::from(expected.is_some()));
         handle.release_route(route).expect("release route");
     });
