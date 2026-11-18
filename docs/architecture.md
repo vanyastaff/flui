@@ -87,7 +87,7 @@ View Tree        ──build──▶   Element Tree   ──layout──▶   R
 | Layout | `PipelineOwner<Layout>` | `Constraints` | `Size` per `RenderBox` | Single-pass O(n) where possible (constraints down, sizes up) |
 | Paint | `PipelineOwner<PaintPhase>` | `RenderBox` tree | `DisplayList` → layers | Recording is in `flui-painting`; GPU submission in `flui-engine` |
 
-The pipeline is **on-demand**. The platform event loop waits (`ControlFlow::Wait`, or `WaitUntil` for a scheduled deadline), and a frame runs only when something asks for one: a dirty tree (`mark_needs_layout`, `mark_needs_paint`), or a scheduled frame callback (a ticker, a transient callback, an async completion), which `UpdateScheduler::schedule_frame_callback` turns into a frame request even when no tree is dirty. A render loop that polls every frame is not an accepted design.
+The pipeline is **on-demand**. The platform event loop waits (`ControlFlow::Wait`, or `WaitUntil` for a scheduled deadline), and a frame runs only when something asks for one: a dirty tree (`mark_needs_layout`, `mark_needs_paint`), or work that waits for a frame (a running animation, a woken async task, an `end_of_frame` waiter), which asks the scheduler for a frame even when no tree is dirty. A render loop that polls every frame is not an accepted design.
 
 ### Threading & ownership model
 
@@ -121,7 +121,7 @@ impl RenderBox for RenderPadding {
 Slab-based storage uses 0-based indices internally. Every public ID has a niche (a `NonZero*` payload), so `Option<Id>` costs no extra space, but only the plain slab-backed IDs are the slot plus one. There are three shapes:
 
 - **Plain IDs** (`flui_foundation::id`) wrap a `NonZeroUsize` and address slab storage (`ViewId`, `LayerId`, `SemanticsId`): the slot plus one, so insert `slab_index + 1`, look up `id.get() - 1`.
-- **Minted IDs** (`flui_foundation::sequence`) have no slot behind them (`ListenerId`, `FrameCallbackId`, `TaskId`, `InputSequenceId`): an opaque `NonZeroU64`, 64-bit on every target, whose only constructor is the `IdMint` family (`IdMint` owner-local, `AtomicIdMint` where two threads mint one domain). No value is built from a number, an id is never issued twice, and an exhausted mint refuses, typed (`IdExhausted`), forever.
+- **Minted IDs** (`flui_foundation::sequence`) have no slot behind them (`ListenerId`, `FrameCallbackId`, `PressId`, `InputSequenceId`): an opaque `NonZeroU64`, 64-bit on every target, whose only constructor is the `IdMint` family (`IdMint` owner-local, `AtomicIdMint` where two threads mint one domain). No value is built from a number, an id is never issued twice, and an exhausted mint refuses, typed (`IdExhausted`), forever.
 - **Generational IDs** (`flui_foundation::id`: `ElementId`, `RenderId`, `UiRuntimeId`, …) pack the slab index with a 31-bit `Generation` into a `NonZeroU64` whose top bit is reserved for a domain tag (a synthetic semantics identity sets it; ADR-0320), so an id held across a slot's reuse fails the generation check instead of addressing the new occupant. They have no `get()`; the owning tree's accessors use `.index()` (0-based) and `.generation()`. A slot never returns to circulation under a generation an id has carried: `RenderTree` and the signal arena retire a slot whose generations are exhausted, and `ElementTree` refuses that removal with a panic before any teardown.
 
 ```rust

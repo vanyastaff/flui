@@ -56,20 +56,18 @@ impl fmt::Display for FrameId {
     }
 }
 
-/// UpdateScheduler phase - which part of the frame lifecycle is executing
+/// Which part of the frame lifecycle the scheduler is in.
 ///
-/// The phases execute in order:
+/// The phases run in order:
 ///
 /// ```text
-/// Idle → TransientCallbacks → MidFrameMicrotasks → PersistentCallbacks → PostFrameCallbacks → Idle
+/// Idle → Frame → PostFrame → Idle
 /// ```
 ///
-/// - **TransientCallbacks**: Animation tickers fire here (one-time frame
-///   callbacks)
-/// - **MidFrameMicrotasks**: Microtask queue flushes between animations and
-///   rendering
-/// - **PersistentCallbacks**: Rendering pipeline runs here (build/layout/paint)
-/// - **PostFrameCallbacks**: Cleanup and post-frame work
+/// - **Frame**: the frame's async tasks are polled once, then the driver's
+///   pipeline (build, layout, paint) runs.
+/// - **PostFrame**: post-frame callbacks observe the committed frame and
+///   `end_of_frame` waiters resolve.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[repr(u8)]
@@ -79,21 +77,11 @@ pub enum SchedulerPhase {
     #[default]
     Idle = 0,
 
-    /// Transient callbacks are being executed.
-    /// Animation tickers fire during this phase.
-    TransientCallbacks = 1,
+    /// A frame is open: its async tasks are polled, then the pipeline runs.
+    Frame = 1,
 
-    /// Microtasks scheduled during TransientCallbacks are being executed.
-    /// Allows async work triggered by animations to complete.
-    MidFrameMicrotasks = 2,
-
-    /// Persistent callbacks are being executed.
-    /// The rendering pipeline (build/layout/paint) runs during this phase.
-    PersistentCallbacks = 3,
-
-    /// Post-frame callbacks are being executed.
-    /// Cleanup and one-time post-frame work happens here.
-    PostFrameCallbacks = 4,
+    /// The frame's pipeline has run; post-frame callbacks are being executed.
+    PostFrame = 2,
 }
 
 impl SchedulerPhase {
@@ -103,40 +91,31 @@ impl SchedulerPhase {
     pub(crate) const fn try_from_u8(value: u8) -> Option<Self> {
         match value {
             0 => Some(Self::Idle),
-            1 => Some(Self::TransientCallbacks),
-            2 => Some(Self::MidFrameMicrotasks),
-            3 => Some(Self::PersistentCallbacks),
-            4 => Some(Self::PostFrameCallbacks),
+            1 => Some(Self::Frame),
+            2 => Some(Self::PostFrame),
             _ => None,
         }
     }
 
     /// All phases in execution order
-    pub const ALL: [SchedulerPhase; 5] = [
+    pub const ALL: [SchedulerPhase; 3] = [
         SchedulerPhase::Idle,
-        SchedulerPhase::TransientCallbacks,
-        SchedulerPhase::MidFrameMicrotasks,
-        SchedulerPhase::PersistentCallbacks,
-        SchedulerPhase::PostFrameCallbacks,
+        SchedulerPhase::Frame,
+        SchedulerPhase::PostFrame,
     ];
 
     /// Whether the phase machine may step from `self` to `next`: the order a
-    /// frame runs its phases in, the microtask flush being optional.
+    /// frame runs its phases in.
     pub(crate) const fn can_transition_to(self, next: Self) -> bool {
         matches!(
             (self, next),
-            (Self::Idle, Self::TransientCallbacks)
-                | (
-                    Self::TransientCallbacks,
-                    Self::MidFrameMicrotasks | Self::PersistentCallbacks
-                )
-                | (Self::MidFrameMicrotasks, Self::PersistentCallbacks)
-                | (Self::PersistentCallbacks, Self::PostFrameCallbacks)
-                | (Self::PostFrameCallbacks, Self::Idle)
+            (Self::Idle, Self::Frame)
+                | (Self::Frame, Self::PostFrame)
+                | (Self::PostFrame, Self::Idle)
         )
     }
 
-    /// Check if currently in a frame (not idle)
+    /// Whether a frame is open (not idle).
     #[inline]
     pub const fn is_in_frame(self) -> bool {
         !matches!(self, Self::Idle)
@@ -147,10 +126,8 @@ impl fmt::Display for SchedulerPhase {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Idle => write!(f, "Idle"),
-            Self::TransientCallbacks => write!(f, "TransientCallbacks"),
-            Self::MidFrameMicrotasks => write!(f, "MidFrameMicrotasks"),
-            Self::PersistentCallbacks => write!(f, "PersistentCallbacks"),
-            Self::PostFrameCallbacks => write!(f, "PostFrameCallbacks"),
+            Self::Frame => write!(f, "Frame"),
+            Self::PostFrame => write!(f, "PostFrame"),
         }
     }
 }
@@ -324,7 +301,7 @@ pub type LifecycleStateCallback = Rc<dyn Fn(AppLifecycleState)>;
 
 /// Frame phase - which part of the render pipeline is executing
 ///
-/// This is used within the PersistentCallbacks scheduler phase to track
+/// This is used within the [`SchedulerPhase::Frame`] scheduler phase to track
 /// rendering pipeline progress.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
@@ -400,23 +377,8 @@ impl FrameTiming {
     }
 }
 
-/// Transient frame callback - executed during TransientCallbacks phase.
-///
-/// These are one-time callbacks that fire during the animation phase.
-/// Animation tickers use this to receive the vsync timestamp.
-/// Receives the vsync timestamp for synchronized timing.
-pub type OneShotFrameCallback = Box<dyn FnOnce(Instant)>;
-
-/// Recurring frame callback (runs every frame)
-///
-/// These run during the PersistentCallbacks phase every frame.
-/// The rendering pipeline (build/layout/paint) registers here.
-/// Uses Arc for cheap cloning - recurring callbacks are cloned before execution
-/// to avoid holding locks during callback invocation.
-pub type RecurringFrameCallback = Rc<dyn Fn(&FrameTiming)>;
-
 /// Post-frame callback - executed after frame completes
 ///
-/// These run during the PostFrameCallbacks phase, after rendering is complete.
+/// These run during the [`SchedulerPhase::PostFrame`] phase, after rendering is complete.
 /// Use for cleanup, analytics, or scheduling the next frame.
 pub type PostFrameCallback = Box<dyn FnOnce(&FrameTiming)>;

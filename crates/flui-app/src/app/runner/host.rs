@@ -2011,8 +2011,7 @@ pub(super) fn desktop_secondary_wake_deadline(
 /// (c) **Runtime backstop.** `debug_assert!`s that the installed UI runtime's own
 ///     scheduler (`AppRuntime::installed_ui_runtime_phase`) is not inside the
 ///     frame transaction. "Not inside a frame phase" per the ADR means
-///     `TransientCallbacks`/`MidFrameMicrotasks`/`PersistentCallbacks` are
-///     forbidden; `Idle` and `PostFrameCallbacks` are allowed (legitimate
+///     `Frame` is forbidden; `Idle` and `PostFrame` are allowed (legitimate
 ///     ADR-0021-style post-frame work); `None` (truly no UI runtime installed,
 ///     and none currently dispatched — see `OwnerHost::phase`)
 ///     holds vacuously. `installed_ui_runtime_phase` reads through to the
@@ -2045,14 +2044,7 @@ pub(crate) fn with_owner_platform<R>(
         // flight here, so the asserted property holds trivially.
         let phase = APP_RUNTIME.with(|slot| slot.borrow().installed_ui_runtime_phase());
         debug_assert!(
-            !matches!(
-                phase,
-                Some(
-                    flui_scheduler::SchedulerPhase::TransientCallbacks
-                        | flui_scheduler::SchedulerPhase::MidFrameMicrotasks
-                        | flui_scheduler::SchedulerPhase::PersistentCallbacks
-                )
-            ),
+            phase != Some(flui_scheduler::SchedulerPhase::Frame),
             "BUG: with_owner_platform called while the installed ui_runtime's scheduler is inside \
              the frame transaction (phase {phase:?}) -- owner_platform must \
              not be acquired from build/layout/paint (ADR-0039 §6)"

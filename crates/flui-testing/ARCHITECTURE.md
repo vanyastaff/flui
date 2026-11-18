@@ -258,10 +258,9 @@ post-frame callbacks registered in `init_state` run at its
 end.
 
 Two behaviors follow from the UI runtime, not from the harness. The UI runtime's
-`Vsync` registry ticks in the persistent phase with the pipeline, not among
-the transient callbacks (recorded in `flui-runtime`'s `ARCHITECTURE.md`,
-"`Vsync` ticks in the persistent phase, not among the transient
-callbacks"); a caller's own registry passed to `lay_out_animated` is ticked
+`Vsync` registry ticks with the pipeline, after the frame's tasks
+(recorded in `flui-runtime`'s `ARCHITECTURE.md`,
+"`Vsync` ticks with the pipeline, after the frame's tasks"); a caller's own registry passed to `lay_out_animated` is ticked
 in the same phase at the same time. And the UI runtime coalesces pointer moves
 until the next frame; the harness flushes the queue after each event, through
 the same dispatch code the frame would run, so a test observes a move

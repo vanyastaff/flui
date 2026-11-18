@@ -18,8 +18,8 @@
 #![cfg(target_arch = "wasm32")]
 
 use flui_foundation::{
-    AtomicIdMint, FrameCallbackId, IdMint, ListenerId, ManualClock, MonotonicClock, SystemClock,
-    TaskId,
+    AtomicIdMint, FrameCallbackId, IdMint, ListenerId, ManualClock, MonotonicClock, PressId,
+    SystemClock,
 };
 use std::time::Duration;
 use wasm_bindgen_test::wasm_bindgen_test;
@@ -74,6 +74,6 @@ fn minted_listener_and_scheduler_ids_do_not_stop_at_the_pointer_width() {
     );
     let callbacks = IdMint::<FrameCallbackId>::starting_after(past_u32);
     assert_eq!(callbacks.next().map(FrameCallbackId::get), Ok(past_u32 + 1));
-    let tasks = AtomicIdMint::<TaskId>::starting_after(past_u32);
-    assert_eq!(tasks.next().map(TaskId::get), Ok(past_u32 + 1));
+    let presses = AtomicIdMint::<PressId>::starting_after(past_u32);
+    assert_eq!(presses.next().map(PressId::get), Ok(past_u32 + 1));
 }

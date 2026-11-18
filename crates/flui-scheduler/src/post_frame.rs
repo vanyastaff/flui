@@ -97,14 +97,6 @@ pub(crate) struct PostFrameQueue {
 }
 
 impl PostFrameQueue {
-    pub(crate) fn contains(&self, id: CallbackId) -> bool {
-        self.queue
-            .borrow()
-            .iter()
-            .chain(self.active.borrow().iter())
-            .any(|entry| entry.id == id)
-    }
-
     fn new() -> Rc<Self> {
         Rc::new(Self {
             queue: RefCell::new(Vec::new()),
@@ -330,8 +322,8 @@ impl OwnerFrame {
     /// Poll every task whose waker fired since the last poll; returns the
     /// number polled.
     ///
-    /// The frame's mid-frame slot calls it from
-    /// the internal begin-frame step; a background turn calls it after
+    /// The internal begin-frame step calls it before the pipeline runs;
+    /// a background turn calls it after
     /// consuming old demand and preparing runtime policy. Never from
     /// build, layout or paint. Tasks are polled in ascending id order; a task
     /// that completes or is cancelled is removed; a task woken during this
@@ -343,13 +335,6 @@ impl OwnerFrame {
     /// Propagates a task's poll panic after removing that task and keeping
     /// every unreached sibling indexed for the next poll.
     pub(crate) fn poll_ready(&self) -> usize {
-        debug_assert!(
-            self.scheduler.upgrade().is_none_or(
-                |scheduler| scheduler.phase() != crate::SchedulerPhase::PersistentCallbacks
-            ),
-            "BUG: owner-local tasks must not be polled during build/layout/paint; the \
-             poll belongs between the transient and persistent callbacks"
-        );
         self.tasks.poll_ready()
     }
 
@@ -1151,12 +1136,7 @@ mod tests {
             .expect("lane alive");
         assert!(
             catch_unwind(AssertUnwindSafe(|| owner
-                .drive_frame(
-                    crate::Instant::now(),
-                    crate::IdleDeadline::far_future(crate::Instant::now()),
-                    || {},
-                    || {}
-                )
+                .drive_frame(crate::Instant::now(), || {}, || {})
                 .expect("live owner frame")))
             .is_err()
         );
@@ -1168,12 +1148,7 @@ mod tests {
             .schedule(move |_| callback.set(true))
             .expect("gate remains usable");
         owner
-            .drive_frame(
-                crate::Instant::now(),
-                crate::IdleDeadline::far_future(crate::Instant::now()),
-                || {},
-                || {},
-            )
+            .drive_frame(crate::Instant::now(), || {}, || {})
             .expect("live owner frame");
         assert!(fired.get());
     }
@@ -1213,12 +1188,7 @@ mod tests {
         let (panicked, _) = flui_testing::log_capture::capture(|| {
             catch_unwind(AssertUnwindSafe(|| {
                 owner
-                    .drive_frame(
-                        crate::Instant::now(),
-                        crate::IdleDeadline::far_future(crate::Instant::now()),
-                        || {},
-                        || {},
-                    )
+                    .drive_frame(crate::Instant::now(), || {}, || {})
                     .expect("live owner frame");
             }))
         });
@@ -1230,12 +1200,7 @@ mod tests {
         );
         let (_retry_frame, _) = flui_testing::log_capture::capture(|| {
             owner
-                .drive_frame(
-                    crate::Instant::now(),
-                    crate::IdleDeadline::far_future(crate::Instant::now()),
-                    || {},
-                    || {},
-                )
+                .drive_frame(crate::Instant::now(), || {}, || {})
                 .expect("live owner frame");
         });
         assert_eq!(
@@ -1291,12 +1256,7 @@ mod tests {
         assert!(!ran.get(), "a retired callback never runs");
         assert_eq!(handle.schedule(|_| {}), Err(PostFrameScheduleError::Closed));
         assert_eq!(
-            owner.drive_frame(
-                crate::Instant::now(),
-                crate::IdleDeadline::far_future(crate::Instant::now()),
-                || {},
-                || {}
-            ),
+            owner.drive_frame(crate::Instant::now(), || {}, || {}),
             Err(crate::ExecutionError::Retired)
         );
         assert!(

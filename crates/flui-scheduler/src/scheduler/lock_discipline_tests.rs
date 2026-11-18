@@ -1,63 +1,28 @@
-//! Scheduler lock-discipline tests (issue #1058).
+//! Scheduler lock discipline: every callback family runs with no scheduler
+//! storage borrowed or locked, so a callback can call back into the
+//! scheduler, including the read-only `current_frame()` accessor.
 //!
-//! Split out of `scheduler.rs`'s inline `tests` module: `scheduler.rs` is a
-//! ~3.6k-line file with a ~1.4k-line inline test module, and this family --
-//! the lock-discipline oracle (`assert_no_scheduler_lock_held`) plus every
-//! test built on it -- is one cohesive slice nothing else in the crate
-//! uses. Declared as a child module (`#[cfg(test)] mod
-//! lock_discipline_tests;` in `scheduler.rs`), so it still sees every
-//! private field and type `scheduler.rs` defines (`SchedulerInner`,
-//! `FrameState`, `CallbackState`, `BindingState`, and
-//! `UpdateScheduler::inner` itself) exactly as the inline module did.
+//! A child module of `scheduler`, so the oracle sees the private state
+//! structs (`SchedulerInner`, `FrameState`, `CallbackState`, `BindingState`,
+//! `WakeShared`) it destructures.
 
 use super::*;
 
-// =========================================================================
-// Lock discipline (#1058) -- every callback family must run with NO
-// scheduler storage lock held, so a callback can safely call back into the
-// scheduler, including the read-only `current_frame()` accessor the
-// retired legacy `schedule_frame` callback loop could not tolerate (its
-// `if let Some(timing) = self.inner.frame.current_frame.lock().as_ref()
-// { callback(timing); }` kept the guard alive across the call).
-// =========================================================================
-
-/// Try-locks every mutex a scheduler callback could legally observe from
+/// Probes every `RefCell` and `Mutex` a scheduler callback could observe from
 /// inside its own invocation and asserts each one is free. Every callback
-/// family drains, clones, or snapshots its queue before invoking user code
-/// -- see `handle_begin_frame`, `handle_draw_frame`, `end_frame_impl`,
-/// `flush_microtasks`,
-/// `handle_app_lifecycle_state_change`, `report_timings`, and
-/// `request_frame_impl`. This is the oracle proving that discipline holds
-/// at the actual call site, not just in the source.
+/// family drains, clones or snapshots its queue before it runs user code (see
+/// `end_frame`, `dispatch_post_frame_callbacks`,
+/// `handle_app_lifecycle_state_change` and `request_frame_impl`); this oracle
+/// checks that at the call site.
 ///
-/// Exhaustive by construction: `FrameState`, `CallbackState`, and
-/// `BindingState` are destructured below with no trailing `..`, so a field
-/// added to any of them is a compile error here until this oracle
-/// explicitly classifies it -- a `Mutex` gets a `try_lock` assertion;
-/// anything else (an atomic, an id generator, a sharded-`RwLock`
-/// `DashMap`) is bound `_` deliberately, so the classification decision is
-/// visible, not silently skipped. `TaskQueue` holds its own mutex behind a
-/// field private to its module, so it is probed through its own
-/// `#[cfg(test)] is_unlocked()` instead of a field destructure here. The
-/// async tasks are not scheduler storage: they live in the owner's
-/// `OwnerFrame`, whose `AsyncDriver::is_unlocked` probe serves the owner's
-/// own reentrancy tests.
-///
-/// `callbacks.cancelled` and the `OwnerFrame`'s owner-local queues are
-/// not probed here. Neither is a `Mutex`, but each is still a real
-/// reentrancy hazard with its own different failure mode, not a lesser
-/// one: `DashMap` (6.2.1) is a SHARDED `RwLock`, not lock-free --
-/// `contains_key`/`get`/`get_mut` release their shard's lock immediately
-/// when a key is absent, but a `Ref`/`RefMut`/`Entry` held alive across a
-/// reentrant call into the SAME shard deadlocks exactly like the `Mutex`
-/// family above (`entry()` holds its shard write-locked for its entire
-/// life, vacant or occupied, regardless of whether the caller binds the
-/// payload to a name); a reentrant `RefCell` borrow panics rather than
-/// deadlocking, a third failure mode again. DashMap 6.2.1 has no
-/// all-shards "is anything locked" API to assert here, and a lane is never
-/// a field of `SchedulerInner` for this destructure to see in the first
-/// place -- each `OwnerFrame::try_new` call hands the caller its
-/// own, held separately from the scheduler's own storage.
+/// Exhaustive by construction: the state structs are destructured with no
+/// trailing `..`, so a field added to any of them fails to compile here until
+/// it is classified: a `RefCell` or `Mutex` gets an assertion, anything else
+/// (an atomic, an id mint) is bound `_`, so the decision is visible. The async
+/// tasks and the post-frame entries live in the owner's `OwnerFrame`, not in
+/// scheduler storage; the post-frame lane is probed through its own
+/// `is_unlocked`, and `AsyncDriver::is_unlocked` serves the owner's own
+/// re-entrancy tests.
 fn assert_no_scheduler_lock_held(scheduler: &UpdateScheduler) {
     // Destructured without `..` on purpose: a `Mutex` added directly to
     // `SchedulerInner` (beside the owned sub-objects) must fail to compile
@@ -68,7 +33,6 @@ fn assert_no_scheduler_lock_held(scheduler: &UpdateScheduler) {
         frame,
         callbacks,
         binding,
-        task_queue,
         owner_frame_claimed: _,
         execution_release,
         execution_failure,
@@ -94,7 +58,6 @@ fn assert_no_scheduler_lock_held(scheduler: &UpdateScheduler) {
         clock: _,
         display_period: _,
         frame_count: _,
-        idle_deadline,
         completion_waiters,
         frame_thread,
     } = frame;
@@ -121,10 +84,6 @@ fn assert_no_scheduler_lock_held(scheduler: &UpdateScheduler) {
         "frame_thread is locked during a callback"
     );
     assert!(
-        idle_deadline.try_borrow_mut().is_ok(),
-        "idle_deadline is locked during a callback"
-    );
-    assert!(
         completion_waiters.try_borrow_mut().is_ok(),
         "completion_waiters is locked during a callback"
     );
@@ -135,22 +94,10 @@ fn assert_no_scheduler_lock_held(scheduler: &UpdateScheduler) {
     );
 
     let CallbackState {
-        transient,
-        cancelled: _,
         id_mint: _,
-        persistent,
         post_frame,
-        microtasks,
         lifecycle_listeners,
     } = callbacks;
-    assert!(
-        transient.try_borrow_mut().is_ok(),
-        "transient is locked during a callback"
-    );
-    assert!(
-        persistent.try_borrow_mut().is_ok(),
-        "persistent is locked during a callback"
-    );
     assert!(
         post_frame.try_borrow_mut().is_ok(),
         "post_frame is locked during a callback"
@@ -162,10 +109,6 @@ fn assert_no_scheduler_lock_held(scheduler: &UpdateScheduler) {
         );
     }
     assert!(
-        microtasks.try_borrow_mut().is_ok(),
-        "microtasks is locked during a callback"
-    );
-    assert!(
         lifecycle_listeners.try_borrow_mut().is_ok(),
         "lifecycle_listeners is locked during a callback"
     );
@@ -173,45 +116,24 @@ fn assert_no_scheduler_lock_held(scheduler: &UpdateScheduler) {
     let BindingState {
         lifecycle_state: _,
         lifecycle_delivery: _,
-        timings_callbacks,
-        pending_timings,
-        last_timings_report,
     } = binding;
-    assert!(
-        timings_callbacks.try_borrow_mut().is_ok(),
-        "timings_callbacks is locked during a callback"
-    );
-    assert!(
-        pending_timings.try_borrow_mut().is_ok(),
-        "pending_timings is locked during a callback"
-    );
-    assert!(
-        last_timings_report.try_borrow_mut().is_ok(),
-        "last_timings_report is locked during a callback"
-    );
     assert!(
         on_frame_scheduled.try_lock().is_some(),
         "on_frame_scheduled is locked during a callback"
     );
-
-    assert!(
-        task_queue.is_unlocked(),
-        "TaskQueue's lock is locked during a callback"
-    );
 }
 
-/// Also pins that `current_frame()` observes THIS frame's own timing from
-/// inside a transient callback, not merely that it is unlocked --
-/// `handle_begin_frame` sets `current_frame` before running the transient
-/// loop, so the id it returns must match what the callback reads back.
-fn transient_callback_runs_with_no_scheduler_lock_held() {
+/// Also pins that the callback receives THIS frame's own timing, not merely
+/// that it runs unlocked: the id it is handed must match the one the
+/// pipeline read from `current_frame()`.
+fn post_frame_callback_runs_with_no_scheduler_lock_held() {
     let scheduler = UpdateScheduler::new();
     let probe = scheduler.clone();
-    let observed: Arc<Mutex<Option<FrameTiming>>> = Arc::new(Mutex::new(None));
-    let observed_for_callback = Arc::clone(&observed);
-    scheduler.schedule_frame_callback(Box::new(move |_vsync_time| {
+    let observed: Rc<Cell<Option<FrameId>>> = Rc::new(Cell::new(None));
+    let observed_for_callback = Rc::clone(&observed);
+    scheduler.add_post_frame_callback(Box::new(move |timing| {
         assert_no_scheduler_lock_held(&probe);
-        let _prev = std::mem::replace(&mut *observed_for_callback.lock(), probe.current_frame());
+        observed_for_callback.set(Some(timing.id));
     }));
 
     let owner =
@@ -220,7 +142,6 @@ fn transient_callback_runs_with_no_scheduler_lock_held() {
     let frame_id = owner
         .drive_frame(
             now,
-            super::IdleDeadline::far_future(now),
             || {},
             || {
                 scheduler
@@ -232,10 +153,9 @@ fn transient_callback_runs_with_no_scheduler_lock_held() {
         .expect("live owner frame");
 
     assert_eq!(
-        observed.lock().map(|timing| timing.id),
+        observed.get(),
         Some(frame_id),
-        "current_frame() must observe THIS frame's own timing from inside a \
-         transient callback, not merely be unlocked"
+        "the post-frame callback must receive THIS frame's own timing"
     );
 }
 
@@ -279,12 +199,7 @@ fn completion_waker_runs_with_no_scheduler_lock_held() {
 
     crate::OwnerFrame::try_new(&scheduler)
         .expect("the scheduler has no live owner frame")
-        .drive_frame(
-            crate::Instant::now(),
-            crate::IdleDeadline::far_future(crate::Instant::now()),
-            || {},
-            || {},
-        )
+        .drive_frame(crate::Instant::now(), || {}, || {})
         .expect("live owner frame");
 
     assert!(
@@ -299,8 +214,8 @@ fn callbacks_run_with_no_scheduler_lock_held() {
         "callbacks_run_with_no_scheduler_lock_held",
         &[
             (
-                "transient_callback_runs_with_no_scheduler_lock_held",
-                transient_callback_runs_with_no_scheduler_lock_held as fn(),
+                "post_frame_callback_runs_with_no_scheduler_lock_held",
+                post_frame_callback_runs_with_no_scheduler_lock_held as fn(),
             ),
             (
                 "completion_waker_runs_with_no_scheduler_lock_held",

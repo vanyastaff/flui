@@ -9,7 +9,7 @@ use std::time::Instant;
 
 use flui_foundation::testing::CountingWaker;
 use flui_scheduler::__runtime::DriveFrame as _;
-use flui_scheduler::{FrameCompletionFuture, FrameOutcome, IdleDeadline, UpdateScheduler};
+use flui_scheduler::{FrameCompletionFuture, FrameOutcome, UpdateScheduler};
 
 /// Counts its drop and, when armed, panics from it. A waker holds at most one
 /// armed capture: a second destructor panicking while the first unwinds
@@ -60,12 +60,7 @@ fn assert_next_frame(scheduler: &UpdateScheduler) {
     let mut next = scheduler.end_of_frame();
     flui_scheduler::OwnerFrame::try_new(scheduler)
         .expect("the scheduler has no live owner frame")
-        .drive_frame(
-            flui_scheduler::Instant::now(),
-            flui_scheduler::IdleDeadline::far_future(flui_scheduler::Instant::now()),
-            || {},
-            || {},
-        )
+        .drive_frame(flui_scheduler::Instant::now(), || {}, || {})
         .expect("live owner frame");
     assert!(matches!(
         Pin::new(&mut next).poll(&mut Context::from_waker(Waker::noop())),
@@ -157,22 +152,12 @@ fn delivery(case: &str) {
         } else if pipeline {
             flui_scheduler::OwnerFrame::try_new(scheduler)
                 .expect("the scheduler has no live owner frame")
-                .drive_frame(
-                    Instant::now(),
-                    IdleDeadline::far_future(Instant::now()),
-                    || {},
-                    || panic!("pipeline primary"),
-                )
+                .drive_frame(Instant::now(), || {}, || panic!("pipeline primary"))
                 .expect("live owner frame");
         } else {
             flui_scheduler::OwnerFrame::try_new(scheduler)
                 .expect("the scheduler has no live owner frame")
-                .drive_frame(
-                    flui_scheduler::Instant::now(),
-                    flui_scheduler::IdleDeadline::far_future(flui_scheduler::Instant::now()),
-                    || {},
-                    || {},
-                )
+                .drive_frame(flui_scheduler::Instant::now(), || {}, || {})
                 .expect("live owner frame");
         }
     };

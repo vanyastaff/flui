@@ -353,7 +353,7 @@ impl StatelessView for MetricsReader {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
         assert_eq!(
             self.owner.phase(),
-            Ok(Some(flui_scheduler::SchedulerPhase::PersistentCallbacks))
+            Ok(Some(flui_scheduler::SchedulerPhase::Frame))
         );
         assert_eq!(
             self.owner.next_wake(),
@@ -368,10 +368,7 @@ impl StatelessView for MetricsReader {
             .owner
             .runtime_status(ids[0])
             .expect("active runtime status");
-        assert_eq!(
-            status.phase,
-            flui_scheduler::SchedulerPhase::PersistentCallbacks
-        );
+        assert_eq!(status.phase, flui_scheduler::SchedulerPhase::Frame);
         let media = flui_view::environment::MediaQuery::of(ctx);
         self.contrast.borrow_mut().push(media.high_contrast);
         self.text_scale.borrow_mut().push(media.text_sizing.clone());
@@ -2707,7 +2704,7 @@ fn native_geometry_controls_admission_and_retries_without_a_frame() {
     )
     .expect("runtime");
     let driver = runtime.owner_frame().async_driver();
-    let mut scheduler = runtime.scheduler().clone();
+    let scheduler = runtime.scheduler().clone();
     let taps = Rc::new(Cell::new(0));
     let output = taps.clone();
     let holds = Rc::new(Cell::new(0));
@@ -3101,7 +3098,7 @@ fn native_geometry_controls_admission_and_retries_without_a_frame() {
     let sibling_turn = owner
         .runtime_dispatcher(sibling_address.ui_runtime_id)
         .expect("sibling background authority");
-    scheduler.set_frames_enabled(false);
+    scheduler.handle_app_lifecycle_state_change(flui_scheduler::AppLifecycleState::Hidden);
     let frames_before = scheduler.frame_count();
     let submissions_before = effects.sink.borrow().submitted;
     let retry_deadline = || {
