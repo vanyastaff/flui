@@ -13214,7 +13214,7 @@ pub trait flui::platform::capability::ActivityBridge: 'static
 fn flui::platform::capability::ActivityBridge::bind(&self, mint: flui::platform::capability::ResultMint)
 fn flui::platform::capability::ActivityBridge::launch_for_result(&self, completions: &flui::platform::capability::CompletionSource, capability: &flui::platform::capability::CapabilityId, key: flui::platform::capability::RequestKey, intent: &mut dyn FnMut(flui::platform::capability::IntentFrame) -> bool) -> Result<flui::platform::capability::ResultRequest, flui::platform::capability::ResultRefused>
 fn flui::platform::capability::ActivityBridge::lend(&self, f: &mut dyn FnMut(flui::platform::capability::JniFrame)) -> bool
-fn flui::platform::capability::ActivityBridge::post(&self, work: flui::platform::capability::MainThreadWork, refused: flui::platform::capability::MainThreadRefusal)
+fn flui::platform::capability::ActivityBridge::post(&self, work: flui::platform::capability::PostedWork)
 fn flui::platform::capability::ActivityBridge::reattach(&self, completions: &flui::platform::capability::CompletionSource, capability: &flui::platform::capability::CapabilityId, key: flui::platform::capability::RequestKey) -> Result<flui::platform::capability::ResultRequest, flui::platform::capability::ResultRefused>
 fn flui::platform::capability::ActivityBridge::take_data(&self, capability: &flui::platform::capability::CapabilityId, data: flui::platform::capability::ResultIntent, f: &mut dyn FnMut(flui::platform::capability::JniFrame)) -> Result<(), flui::platform::capability::DataRefused>
 pub struct flui::platform::capability::ActivityResult { .. }
@@ -13300,7 +13300,6 @@ pub const fn flui::platform::capability::JniFrame::new(vm: core::ptr::non_null::
 pub const fn flui::platform::capability::JniFrame::object(&self) -> *mut core::ffi::c_void
 pub const fn flui::platform::capability::JniFrame::vm(&self) -> *mut core::ffi::c_void
 pub const flui::platform::capability::MAX_POSTED_WORK: usize = 16
-pub type flui::platform::capability::MainThreadRefusal = Box<dyn FnOnce(flui::platform::capability::MainThreadRefused) + Send>
 #[non_exhaustive] pub enum flui::platform::capability::MainThreadRefused
 impl Clone for flui::platform::capability::MainThreadRefused
 impl Copy for flui::platform::capability::MainThreadRefused
@@ -13314,7 +13313,6 @@ impl core::marker::StructuralPartialEq for flui::platform::capability::MainThrea
 variant flui::platform::capability::MainThreadRefused::ActivityEnded // at 0
 variant flui::platform::capability::MainThreadRefused::HandOffFailed // at 2
 variant flui::platform::capability::MainThreadRefused::TooMuchPosted // at 1
-pub type flui::platform::capability::MainThreadWork = Box<dyn FnOnce(flui::platform::capability::JniFrame) + Send>
 pub struct flui::platform::capability::OwnerJob(_)
 impl core::fmt::Debug for flui::platform::capability::OwnerJob
 pub fn flui::platform::capability::OwnerJob::run(self, scope: &flui::platform::capability::OwnerScope<'_>)
@@ -13355,6 +13353,11 @@ pub fn flui::platform::capability::PortalParent::is_none(&self) -> bool
 pub fn flui::platform::capability::PortalParent::none() -> Self
 pub fn flui::platform::capability::PortalParent::wayland(handle: &str, export: impl core::any::Any + Send) -> Self
 pub fn flui::platform::capability::PortalParent::x11(xid: core::num::nonzero::NonZeroU32) -> Self
+pub struct flui::platform::capability::PostedWork { .. }
+impl Drop for flui::platform::capability::PostedWork
+impl core::fmt::Debug for flui::platform::capability::PostedWork
+pub fn flui::platform::capability::PostedWork::refuse(self, reason: flui::platform::capability::MainThreadRefused)
+pub fn flui::platform::capability::PostedWork::run(self, frame: flui::platform::capability::JniFrame)
 #[non_exhaustive] pub struct flui::platform::capability::ProviderContext<'a> { .. }
 impl core::fmt::Debug for flui::platform::capability::ProviderContext<'_>
 pub fn flui::platform::capability::ProviderContext::activity(&self) -> Option<flui::platform::capability::Activity> // impl<'a> flui::platform::capability::ProviderContext<'a>
