@@ -609,6 +609,10 @@ fn recording_contract() {
                 "a_destructor_that_panics_during_clear_leaves_the_list_empty",
                 recording::a_destructor_that_panics_during_clear_leaves_the_list_empty,
             ),
+            (
+                "a_balanced_recording_is_silent_at_the_default_filter",
+                recording::a_balanced_recording_is_silent_at_the_default_filter,
+            ),
         ],
     );
 }

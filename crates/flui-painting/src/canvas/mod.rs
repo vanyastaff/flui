@@ -151,10 +151,6 @@ impl Canvas {
     /// Consumes the canvas. On unrestored save() calls, fires
     /// `debug_assert!` (caught during tests) and `tracing::warn!`
     /// (release-build observability); release builds finalise silently.
-    #[tracing::instrument(skip(self), fields(
-        commands = self.display_list.len(),
-        save_depth = self.save_stack.len(),
-    ))]
     pub fn finish(self) -> DisplayList {
         self.report_finished();
         self.display_list
@@ -168,10 +164,6 @@ impl Canvas {
     /// next recording drawing with an equal paint shares its allocation. A
     /// paint with a shader is let go, since a shader can hold a caller's
     /// image whose last drop must not wait for a later recording.
-    #[tracing::instrument(skip(self), fields(
-        commands = self.display_list.len(),
-        save_depth = self.save_stack.len(),
-    ))]
     #[must_use = "the recording is returned; dropping it discards what was drawn"]
     pub fn take_recording(&mut self) -> DisplayList {
         self.report_finished();
@@ -232,7 +224,7 @@ impl Canvas {
             );
         }
 
-        tracing::debug!(
+        tracing::trace!(
             commands = self.display_list.len(),
             bounds = ?self.display_list.bounds(),
             "Canvas finalized"

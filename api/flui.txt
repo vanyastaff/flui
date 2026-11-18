@@ -9686,68 +9686,8 @@ pub fn flui::painting::TextSizing::resolve_with(&self, request: flui::foundation
 pub mod flui::painting::paint
 reexport flui::painting::paint::Alignment => flui::painting::Alignment
 reexport flui::painting::paint::BlendMode => flui::painting::BlendMode
-#[non_exhaustive] pub enum flui::painting::paint::BlurMode
-impl Clone for flui::painting::paint::BlurMode
-impl Copy for flui::painting::paint::BlurMode
-impl Default for flui::painting::paint::BlurMode
-impl Eq for flui::painting::paint::BlurMode
-impl PartialEq for flui::painting::paint::BlurMode
-impl core::fmt::Debug for flui::painting::paint::BlurMode
-impl core::hash::Hash for flui::painting::paint::BlurMode
-impl core::marker::StructuralPartialEq for flui::painting::paint::BlurMode
-impl serde_core::ser::Serialize for flui::painting::paint::BlurMode
-impl<'de> serde_core::de::Deserialize<'de> for flui::painting::paint::BlurMode
-variant flui::painting::paint::BlurMode::Backdrop // at 1
-variant flui::painting::paint::BlurMode::Content // at 0
-#[non_exhaustive] pub enum flui::painting::paint::BlurQuality
-impl Clone for flui::painting::paint::BlurQuality
-impl Copy for flui::painting::paint::BlurQuality
-impl Default for flui::painting::paint::BlurQuality
-impl Eq for flui::painting::paint::BlurQuality
-impl PartialEq for flui::painting::paint::BlurQuality
-impl core::fmt::Debug for flui::painting::paint::BlurQuality
-impl core::hash::Hash for flui::painting::paint::BlurQuality
-impl core::marker::StructuralPartialEq for flui::painting::paint::BlurQuality
-impl serde_core::ser::Serialize for flui::painting::paint::BlurQuality
-impl<'de> serde_core::de::Deserialize<'de> for flui::painting::paint::BlurQuality
-variant flui::painting::paint::BlurQuality::High // at 2
-variant flui::painting::paint::BlurQuality::Low // at 0
-variant flui::painting::paint::BlurQuality::Medium // at 1
-pub enum flui::painting::paint::BlurStyle
-impl Clone for flui::painting::paint::BlurStyle
-impl Copy for flui::painting::paint::BlurStyle
-impl Default for flui::painting::paint::BlurStyle
-impl Eq for flui::painting::paint::BlurStyle
-impl PartialEq for flui::painting::paint::BlurStyle
-impl core::fmt::Debug for flui::painting::paint::BlurStyle
-impl core::hash::Hash for flui::painting::paint::BlurStyle
-impl core::marker::StructuralPartialEq for flui::painting::paint::BlurStyle
-impl serde_core::ser::Serialize for flui::painting::paint::BlurStyle
-impl<'de> serde_core::de::Deserialize<'de> for flui::painting::paint::BlurStyle
-variant flui::painting::paint::BlurStyle::Inner // at 3
-variant flui::painting::paint::BlurStyle::Normal // at 0
-variant flui::painting::paint::BlurStyle::Outer // at 2
-variant flui::painting::paint::BlurStyle::Solid // at 1
 reexport flui::painting::paint::BoxFit => flui::painting::BoxFit
 reexport flui::painting::paint::Clip => flui::prelude::Clip
-#[non_exhaustive] pub enum flui::painting::paint::ClipBehavior
-impl Clone for flui::painting::paint::ClipBehavior
-impl Copy for flui::painting::paint::ClipBehavior
-impl Default for flui::painting::paint::ClipBehavior
-impl Eq for flui::painting::paint::ClipBehavior
-impl From<flui::painting::paint::ClipBehavior> for flui::prelude::Clip
-impl PartialEq for flui::painting::paint::ClipBehavior
-impl core::fmt::Debug for flui::painting::paint::ClipBehavior
-impl core::marker::StructuralPartialEq for flui::painting::paint::ClipBehavior
-impl serde_core::ser::Serialize for flui::painting::paint::ClipBehavior
-impl<'de> serde_core::de::Deserialize<'de> for flui::painting::paint::ClipBehavior
-pub const fn flui::painting::paint::ClipBehavior::clips(self) -> bool
-pub const fn flui::painting::paint::ClipBehavior::is_anti_aliased(self) -> bool
-pub const fn flui::painting::paint::ClipBehavior::to_clip(self) -> flui::prelude::Clip
-variant flui::painting::paint::ClipBehavior::AntiAlias // at 2
-variant flui::painting::paint::ClipBehavior::AntiAliasWithSaveLayer // at 3
-variant flui::painting::paint::ClipBehavior::HardEdge // at 1
-variant flui::painting::paint::ClipBehavior::None // at 0
 pub enum flui::painting::paint::ClipOp
 impl Clone for flui::painting::paint::ClipOp
 impl Copy for flui::painting::paint::ClipOp
@@ -9898,23 +9838,6 @@ pub fn flui::painting::paint::Image::size(&self) -> flui::geometry::Size<f64>
 pub fn flui::painting::paint::Image::solid_color(width: u32, height: u32, color: flui::prelude::Color) -> Self
 pub fn flui::painting::paint::Image::transparent(width: u32, height: u32) -> Self
 pub fn flui::painting::paint::Image::try_from_rgba8(width: u32, height: u32, data: Vec<u8>) -> Result<Self, flui::painting::paint::ImageDataError>
-pub struct flui::painting::paint::ImageConfiguration
-field flui::painting::paint::ImageConfiguration::device_pixel_ratio: Option<f64> // at 1
-field flui::painting::paint::ImageConfiguration::platform: Option<String> // at 2
-field flui::painting::paint::ImageConfiguration::size: Option<flui::geometry::Size<f64>> // at 0
-impl Clone for flui::painting::paint::ImageConfiguration
-impl Default for flui::painting::paint::ImageConfiguration
-impl PartialEq for flui::painting::paint::ImageConfiguration
-impl core::fmt::Debug for flui::painting::paint::ImageConfiguration
-impl core::marker::StructuralPartialEq for flui::painting::paint::ImageConfiguration
-impl serde_core::ser::Serialize for flui::painting::paint::ImageConfiguration
-impl<'de> serde_core::de::Deserialize<'de> for flui::painting::paint::ImageConfiguration
-pub const fn flui::painting::paint::ImageConfiguration::effective_device_pixel_ratio(&self) -> f64
-pub const fn flui::painting::paint::ImageConfiguration::new() -> Self
-pub const fn flui::painting::paint::ImageConfiguration::with_device_pixel_ratio(self, ratio: f64) -> Self
-pub const fn flui::painting::paint::ImageConfiguration::with_size(self, size: flui::geometry::Size<f64>) -> Self
-pub fn flui::painting::paint::ImageConfiguration::physical_size(&self) -> Option<flui::geometry::Size<f64>>
-pub fn flui::painting::paint::ImageConfiguration::with_platform(self, platform: String) -> Self
 #[non_exhaustive] pub enum flui::painting::paint::ImageDataError
 impl Clone for flui::painting::paint::ImageDataError
 impl Eq for flui::painting::paint::ImageDataError
@@ -10016,24 +9939,6 @@ variant flui::painting::paint::InvalidImageTransform::NonFinite // at 0
 variant flui::painting::paint::InvalidImageTransform::Singular // at 1
 pub const flui::painting::paint::MAX_DECODED_IMAGE_BYTES: u64
 pub const flui::painting::paint::MAX_ENCODED_IMAGE_BYTES: u64
-pub struct flui::painting::paint::MaskFilter
-field flui::painting::paint::MaskFilter::sigma: f64 // at 1
-field flui::painting::paint::MaskFilter::style: flui::painting::paint::BlurStyle // at 0
-impl Clone for flui::painting::paint::MaskFilter
-impl Copy for flui::painting::paint::MaskFilter
-impl PartialEq for flui::painting::paint::MaskFilter
-impl core::fmt::Debug for flui::painting::paint::MaskFilter
-impl core::marker::StructuralPartialEq for flui::painting::paint::MaskFilter
-impl serde_core::ser::Serialize for flui::painting::paint::MaskFilter
-impl<'de> serde_core::de::Deserialize<'de> for flui::painting::paint::MaskFilter
-pub const fn flui::painting::paint::MaskFilter::affects_exterior(&self) -> bool
-pub const fn flui::painting::paint::MaskFilter::affects_interior(&self) -> bool
-pub const fn flui::painting::paint::MaskFilter::blur(style: flui::painting::paint::BlurStyle, sigma: f64) -> Self
-pub const fn flui::painting::paint::MaskFilter::blur_radius(&self) -> f64
-pub const fn flui::painting::paint::MaskFilter::inner(sigma: f64) -> Self
-pub const fn flui::painting::paint::MaskFilter::normal(sigma: f64) -> Self
-pub const fn flui::painting::paint::MaskFilter::outer(sigma: f64) -> Self
-pub const fn flui::painting::paint::MaskFilter::solid(sigma: f64) -> Self
 pub struct flui::painting::paint::Morph { .. }
 impl Clone for flui::painting::paint::Morph
 impl PartialEq for flui::painting::paint::Morph
@@ -10044,13 +9949,6 @@ pub fn flui::painting::paint::Morph::path(&self, t: f64) -> Option<flui::paintin
 reexport flui::painting::paint::Paint => flui::painting::Paint
 reexport flui::painting::paint::PaintBuilder => flui::painting::PaintBuilder
 reexport flui::painting::paint::PaintStyle => flui::painting::PaintStyle
-pub enum flui::painting::paint::PaintingStyle
-impl Default for flui::painting::paint::PaintingStyle
-impl core::fmt::Debug for flui::painting::paint::PaintingStyle
-impl serde_core::ser::Serialize for flui::painting::paint::PaintingStyle
-impl<'de> serde_core::de::Deserialize<'de> for flui::painting::paint::PaintingStyle
-variant flui::painting::paint::PaintingStyle::Fill // at 0
-variant flui::painting::paint::PaintingStyle::Stroke // at 1
 pub struct flui::painting::paint::Path { .. }
 impl Clone for flui::painting::paint::Path
 impl Default for flui::painting::paint::Path
@@ -10118,28 +10016,6 @@ impl serde_core::ser::Serialize for flui::painting::paint::PathFillType
 impl<'de> serde_core::de::Deserialize<'de> for flui::painting::paint::PathFillType
 variant flui::painting::paint::PathFillType::EvenOdd // at 1
 variant flui::painting::paint::PathFillType::NonZero // at 0
-pub enum flui::painting::paint::PathOperation
-impl core::fmt::Debug for flui::painting::paint::PathOperation
-impl serde_core::ser::Serialize for flui::painting::paint::PathOperation
-impl<'de> serde_core::de::Deserialize<'de> for flui::painting::paint::PathOperation
-variant flui::painting::paint::PathOperation::Difference // at 0
-variant flui::painting::paint::PathOperation::Intersect // at 2
-variant flui::painting::paint::PathOperation::ReverseDifference // at 4
-variant flui::painting::paint::PathOperation::Union // at 1
-variant flui::painting::paint::PathOperation::Xor // at 3
-#[non_exhaustive] pub enum flui::painting::paint::PathPaintMode
-impl Clone for flui::painting::paint::PathPaintMode
-impl Copy for flui::painting::paint::PathPaintMode
-impl Eq for flui::painting::paint::PathPaintMode
-impl PartialEq for flui::painting::paint::PathPaintMode
-impl core::fmt::Debug for flui::painting::paint::PathPaintMode
-impl core::hash::Hash for flui::painting::paint::PathPaintMode
-impl core::marker::StructuralPartialEq for flui::painting::paint::PathPaintMode
-impl serde_core::ser::Serialize for flui::painting::paint::PathPaintMode
-impl<'de> serde_core::de::Deserialize<'de> for flui::painting::paint::PathPaintMode
-variant flui::painting::paint::PathPaintMode::Fill // at 0
-variant flui::painting::paint::PathPaintMode::FillAndStroke // at 2
-variant flui::painting::paint::PathPaintMode::Stroke // at 1
 reexport flui::painting::paint::PointMode => flui::painting::PointMode
 pub struct flui::painting::paint::RoundedPolygon { .. }
 impl Clone for flui::painting::paint::RoundedPolygon
@@ -10174,27 +10050,6 @@ variant flui::painting::paint::ShapeError::TooFewVertices { count: usize } // at
 variant flui::painting::paint::ShapeError::ZeroArea // at 3
 reexport flui::painting::paint::StrokeCap => flui::painting::StrokeCap
 reexport flui::painting::paint::StrokeJoin => flui::painting::StrokeJoin
-pub struct flui::painting::paint::StrokeOptions
-field flui::painting::paint::StrokeOptions::cap: flui::painting::StrokeCap // at 1
-field flui::painting::paint::StrokeOptions::dash_offset: f64 // at 5
-field flui::painting::paint::StrokeOptions::dash_pattern: Option<alloc::rcs::arc::Arc<Vec<f64>>> // at 4
-field flui::painting::paint::StrokeOptions::join: flui::painting::StrokeJoin // at 2
-field flui::painting::paint::StrokeOptions::miter_limit: f64 // at 3
-field flui::painting::paint::StrokeOptions::width: f64 // at 0
-impl Clone for flui::painting::paint::StrokeOptions
-impl Default for flui::painting::paint::StrokeOptions
-impl PartialEq for flui::painting::paint::StrokeOptions
-impl core::fmt::Debug for flui::painting::paint::StrokeOptions
-impl core::marker::StructuralPartialEq for flui::painting::paint::StrokeOptions
-impl serde_core::ser::Serialize for flui::painting::paint::StrokeOptions
-impl<'de> serde_core::de::Deserialize<'de> for flui::painting::paint::StrokeOptions
-pub fn flui::painting::paint::StrokeOptions::cap(self, cap: flui::painting::StrokeCap) -> Self
-pub fn flui::painting::paint::StrokeOptions::dash_offset(self, offset: f64) -> Self
-pub fn flui::painting::paint::StrokeOptions::dash_pattern(self, pattern: Vec<f64>) -> Self
-pub fn flui::painting::paint::StrokeOptions::join(self, join: flui::painting::StrokeJoin) -> Self
-pub fn flui::painting::paint::StrokeOptions::miter_limit(self, miter_limit: f64) -> Self
-pub fn flui::painting::paint::StrokeOptions::new() -> Self
-pub fn flui::painting::paint::StrokeOptions::width(self, width: f64) -> Self
 pub struct flui::painting::paint::TextureId(_)
 impl Clone for flui::painting::paint::TextureId
 impl Copy for flui::painting::paint::TextureId
@@ -10225,50 +10080,32 @@ variant flui::painting::paint::TileMode::Clamp // at 0
 variant flui::painting::paint::TileMode::Decal // at 3
 variant flui::painting::paint::TileMode::Mirror // at 2
 variant flui::painting::paint::TileMode::Repeat // at 1
-pub enum flui::painting::paint::VertexMode
-impl Default for flui::painting::paint::VertexMode
-impl core::fmt::Debug for flui::painting::paint::VertexMode
-impl serde_core::ser::Serialize for flui::painting::paint::VertexMode
-impl<'de> serde_core::de::Deserialize<'de> for flui::painting::paint::VertexMode
-variant flui::painting::paint::VertexMode::TriangleFan // at 2
-variant flui::painting::paint::VertexMode::TriangleStrip // at 1
-variant flui::painting::paint::VertexMode::Triangles // at 0
 pub mod flui::painting::paint::blend_mode
 reexport flui::painting::paint::blend_mode::BlendMode => flui::painting::BlendMode
 reexport flui::painting::paint::blend_mode::CoverageClass => flui::painting::paint::CoverageClass
 pub mod flui::painting::paint::canvas
-reexport flui::painting::paint::canvas::BlurStyle => flui::painting::paint::BlurStyle
 reexport flui::painting::paint::canvas::FilterQuality => flui::painting::paint::FilterQuality
-reexport flui::painting::paint::canvas::PaintingStyle => flui::painting::paint::PaintingStyle
 reexport flui::painting::paint::canvas::PathFillType => flui::painting::paint::PathFillType
-reexport flui::painting::paint::canvas::PathOperation => flui::painting::paint::PathOperation
 reexport flui::painting::paint::canvas::PointMode => flui::painting::PointMode
 reexport flui::painting::paint::canvas::StrokeCap => flui::painting::StrokeCap
 reexport flui::painting::paint::canvas::StrokeJoin => flui::painting::StrokeJoin
 reexport flui::painting::paint::canvas::TextureId => flui::painting::paint::TextureId
 reexport flui::painting::paint::canvas::TileMode => flui::painting::paint::TileMode
-reexport flui::painting::paint::canvas::VertexMode => flui::painting::paint::VertexMode
 pub mod flui::painting::paint::clipping
 reexport flui::painting::paint::clipping::Clip => flui::prelude::Clip
-reexport flui::painting::paint::clipping::ClipBehavior => flui::painting::paint::ClipBehavior
 reexport flui::painting::paint::clipping::ClipOp => flui::painting::paint::ClipOp
 pub mod flui::painting::paint::effects
-reexport flui::painting::paint::effects::BlurMode => flui::painting::paint::BlurMode
-reexport flui::painting::paint::effects::BlurQuality => flui::painting::paint::BlurQuality
 reexport flui::painting::paint::effects::ColorAdjustment => flui::painting::paint::ColorAdjustment
 reexport flui::painting::paint::effects::ColorMatrix => flui::painting::paint::ColorMatrix
 reexport flui::painting::paint::effects::ImageFilter => flui::painting::paint::ImageFilter
 reexport flui::painting::paint::effects::ImageSampling => flui::painting::paint::ImageSampling
 reexport flui::painting::paint::effects::ImageTransform => flui::painting::paint::ImageTransform
 reexport flui::painting::paint::effects::InvalidImageTransform => flui::painting::paint::InvalidImageTransform
-reexport flui::painting::paint::effects::PathPaintMode => flui::painting::paint::PathPaintMode
-reexport flui::painting::paint::effects::StrokeOptions => flui::painting::paint::StrokeOptions
 pub mod flui::painting::paint::image
 reexport flui::painting::paint::image::BoxFit => flui::painting::BoxFit
 reexport flui::painting::paint::image::ColorFilter => flui::painting::paint::ColorFilter
 reexport flui::painting::paint::image::FittedSizes => flui::painting::FittedSizes
 reexport flui::painting::paint::image::Image => flui::painting::paint::Image
-reexport flui::painting::paint::image::ImageConfiguration => flui::painting::paint::ImageConfiguration
 reexport flui::painting::paint::image::ImageDataError => flui::painting::paint::ImageDataError
 reexport flui::painting::paint::image::ImageRepeat => flui::prelude::ImageRepeat
 reexport flui::painting::paint::image::MAX_ENCODED_IMAGE_BYTES => flui::painting::paint::MAX_ENCODED_IMAGE_BYTES
@@ -10277,7 +10114,6 @@ reexport flui::painting::paint::path::Path => flui::painting::paint::Path
 reexport flui::painting::paint::path::PathCommand => flui::painting::paint::PathCommand
 pub mod flui::painting::paint::shader
 reexport flui::painting::paint::shader::ImageShader => flui::painting::paint::ImageShader
-reexport flui::painting::paint::shader::MaskFilter => flui::painting::paint::MaskFilter
 reexport flui::painting::paint::shader::Shader => flui::painting::Shader
 pub mod flui::painting::paint::shapes
 reexport flui::painting::paint::shapes::CornerRounding => flui::painting::paint::CornerRounding
@@ -15770,7 +15606,6 @@ impl Clone for flui::prelude::Clip
 impl Copy for flui::prelude::Clip
 impl Default for flui::prelude::Clip
 impl Eq for flui::prelude::Clip
-impl From<flui::painting::paint::ClipBehavior> for flui::prelude::Clip
 impl PartialEq for flui::prelude::Clip
 impl core::fmt::Debug for flui::prelude::Clip
 impl core::marker::StructuralPartialEq for flui::prelude::Clip

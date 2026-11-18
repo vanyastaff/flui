@@ -1,15 +1,9 @@
 //! Shader types for painting.
 
-use crate::{
-    paint::{BlurStyle, TileMode},
-    styling::Color,
-};
+use crate::{paint::TileMode, styling::Color};
 use flui_foundation::geometry::Offset;
 
 /// A shader (or gradient) to use when filling a shape.
-///
-/// This is a placeholder type that will be
-/// implemented more fully when we have actual rendering capabilities.
 ///
 /// # Examples
 ///
@@ -340,88 +334,5 @@ impl ImageShader {
             Some(quality) => quality,
             None => crate::paint::FilterQuality::Low,
         }
-    }
-}
-
-/// A mask filter to apply to a shape or image.
-///
-/// # Examples
-///
-/// ```
-/// use flui_painting::paint::{BlurStyle, MaskFilter};
-///
-/// let filter = MaskFilter::blur(BlurStyle::Normal, 5.0);
-/// assert_eq!(filter.sigma, 5.0);
-/// ```
-#[derive(Debug, Clone, Copy, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct MaskFilter {
-    /// The style of blur to apply.
-    pub style: BlurStyle,
-
-    /// The standard deviation of the Gaussian blur.
-    ///
-    /// This is the blur radius in logical pixels.
-    pub sigma: f64,
-}
-
-impl MaskFilter {
-    /// Creates a new blur mask filter.
-    #[inline]
-    #[must_use]
-    pub const fn blur(style: BlurStyle, sigma: f64) -> Self {
-        Self { style, sigma }
-    }
-
-    /// Creates a normal blur with the given sigma.
-    #[inline]
-    #[must_use]
-    pub const fn normal(sigma: f64) -> Self {
-        Self::blur(BlurStyle::Normal, sigma)
-    }
-
-    /// Creates a solid blur with the given sigma.
-    #[inline]
-    #[must_use]
-    pub const fn solid(sigma: f64) -> Self {
-        Self::blur(BlurStyle::Solid, sigma)
-    }
-
-    /// Creates an outer blur with the given sigma.
-    #[inline]
-    #[must_use]
-    pub const fn outer(sigma: f64) -> Self {
-        Self::blur(BlurStyle::Outer, sigma)
-    }
-
-    /// Creates an inner blur with the given sigma.
-    #[inline]
-    #[must_use]
-    pub const fn inner(sigma: f64) -> Self {
-        Self::blur(BlurStyle::Inner, sigma)
-    }
-
-    /// Returns the blur radius (approximately 2 * sigma).
-    #[inline]
-    #[must_use]
-    pub const fn blur_radius(&self) -> f64 {
-        self.sigma * 2.0
-    }
-
-    /// Returns true if this filter affects the interior of shapes.
-    #[inline]
-    #[must_use]
-    pub const fn affects_interior(&self) -> bool {
-        matches!(self.style, BlurStyle::Normal | BlurStyle::Inner)
-    }
-
-    /// Returns true if this filter affects the exterior of shapes.
-    #[inline]
-    #[must_use]
-    pub const fn affects_exterior(&self) -> bool {
-        matches!(
-            self.style,
-            BlurStyle::Normal | BlurStyle::Outer | BlurStyle::Solid
-        )
     }
 }

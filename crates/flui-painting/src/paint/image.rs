@@ -176,7 +176,7 @@ impl Image {
     #[inline]
     #[must_use]
     pub fn size(&self) -> Size<f64> {
-        Size::new((self.width as f64), (self.height as f64))
+        Size::new(f64::from(self.width), f64::from(self.height))
     }
 
     /// Returns a reference to the pixel data.
@@ -332,96 +332,7 @@ pub enum ImageRepeat {
     NoRepeat,
 }
 
-/// Configuration information for an image.
-///
-/// # Examples
-///
-/// ```
-/// use flui_foundation::geometry::Size;
-/// use flui_painting::paint::ImageConfiguration;
-///
-/// let config = ImageConfiguration::new()
-///     .with_size(Size::new(100.0, 100.0))
-///     .with_device_pixel_ratio(2.0);
-/// ```
-#[derive(Debug, Clone, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct ImageConfiguration {
-    /// The size at which the image will be rendered.
-    pub size: Option<Size<f64>>,
-
-    /// The device pixel ratio where the image will be shown.
-    pub device_pixel_ratio: Option<f64>,
-
-    /// The platform the image is being rendered on.
-    pub platform: Option<String>,
-}
-
-impl ImageConfiguration {
-    /// Creates a new empty image configuration.
-    #[inline]
-    #[must_use]
-    pub const fn new() -> Self {
-        Self {
-            size: None,
-            device_pixel_ratio: None,
-            platform: None,
-        }
-    }
-
-    /// Creates a configuration with the given size.
-    #[inline]
-    #[must_use]
-    pub const fn with_size(mut self, size: Size<f64>) -> Self {
-        self.size = Some(size);
-        self
-    }
-
-    /// Creates a configuration with the given device pixel ratio.
-    #[inline]
-    #[must_use]
-    pub const fn with_device_pixel_ratio(mut self, ratio: f64) -> Self {
-        self.device_pixel_ratio = Some(ratio);
-        self
-    }
-
-    /// Creates a configuration with the given platform.
-    #[inline]
-    #[must_use]
-    pub fn with_platform(mut self, platform: String) -> Self {
-        self.platform = Some(platform);
-        self
-    }
-
-    /// Returns the effective device pixel ratio (defaults to 1.0).
-    #[inline]
-    #[must_use]
-    pub const fn effective_device_pixel_ratio(&self) -> f64 {
-        match self.device_pixel_ratio {
-            Some(ratio) => ratio,
-            None => 1.0,
-        }
-    }
-
-    /// Returns the logical size in physical pixels.
-    #[inline]
-    #[must_use]
-    pub fn physical_size(&self) -> Option<Size<f64>> {
-        self.size.map(|s| {
-            let ratio = self.effective_device_pixel_ratio();
-            Size::new((s.width * ratio), (s.height * ratio))
-        })
-    }
-}
-
-impl Default for ImageConfiguration {
-    #[inline]
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-/// A color filter to apply to an image.
+/// A color filter applied to an image or a layer.
 ///
 /// # Examples
 ///
@@ -430,18 +341,6 @@ impl Default for ImageConfiguration {
 ///
 /// let filter = ColorFilter::mode(Color::RED, BlendMode::Multiply);
 /// ```
-/// A color filter to apply to an image or layer.
-///
-/// ## Copy semantics
-///
-/// `ColorFilter` is `Copy`: all variants are plain-old-data.  `Matrix`
-/// wraps `ColorMatrix` (a `[f32; 20]` value) which also derives `Copy`.
-///
-/// ## Stability
-///
-/// `#[non_exhaustive]` is set because future variants (`Shader`, `Compose`)
-/// may be added without a semver-major bump.  Match with a wildcard arm:
-/// `_ => { /* handle unknown */ }`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]

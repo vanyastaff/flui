@@ -31,37 +31,6 @@ pub enum TileMode {
     Decal,
 }
 
-/// Styles for blur effects in a mask filter.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Default)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[expect(
-    clippy::exhaustive_enums,
-    reason = "a blur is normal, solid, outer or inner"
-)]
-pub enum BlurStyle {
-    /// Blur inside and outside the shape.
-    ///
-    /// This is the typical Gaussian blur applied across the shape's edge.
-    #[default]
-    Normal,
-
-    /// Draw solid inside the shape, blur outside.
-    ///
-    /// The interior of the shape is drawn opaque, while the exterior is
-    /// blurred.
-    Solid,
-
-    /// Draw nothing inside the shape, blur outside.
-    ///
-    /// Only the blur outside the shape is visible.
-    Outer,
-
-    /// Blur inside the shape, draw nothing outside.
-    ///
-    /// Only the blur inside the shape is visible.
-    Inner,
-}
-
 /// Quality levels for sampling images and scaled textures.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -88,54 +57,6 @@ pub enum FilterQuality {
     ///
     /// Slowest, but highest quality. Use for high-quality image rendering.
     High,
-}
-
-/// Whether to paint a shape's interior, or its outline.
-#[derive(Debug, Default)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[expect(clippy::exhaustive_enums, reason = "a shape is filled or stroked")]
-pub enum PaintingStyle {
-    /// Fill the interior of the shape with the paint's color.
-    #[default]
-    Fill,
-
-    /// Stroke the outline of the shape with the paint's color.
-    Stroke,
-}
-
-/// Boolean operations for combining two paths.
-#[derive(Debug)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[expect(
-    clippy::exhaustive_enums,
-    reason = "a path combines with another by one of the five boolean operations"
-)]
-pub enum PathOperation {
-    /// Subtract the second path from the first path.
-    ///
-    /// Results in the area of the first path that is not covered by the second.
-    Difference,
-
-    /// Create a path that includes the areas covered by either path.
-    ///
-    /// This is equivalent to a boolean OR operation.
-    Union,
-
-    /// Create a path that includes only the areas covered by both paths.
-    ///
-    /// This is equivalent to a boolean AND operation.
-    Intersect,
-
-    /// Create a path that includes the areas covered by either path, but not
-    /// both.
-    ///
-    /// This is equivalent to a boolean XOR operation.
-    Xor,
-
-    /// Subtract the first path from the second path.
-    ///
-    /// Results in the area of the second path that is not covered by the first.
-    ReverseDifference,
 }
 
 /// Fill rules that determine which regions of a path are inside it.
@@ -195,31 +116,6 @@ pub enum StrokeJoin {
 
     /// Join line segments with a beveled corner.
     Bevel,
-}
-
-/// How a list of vertices is interpreted when drawing a triangle mesh.
-#[derive(Debug, Default)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[expect(
-    clippy::exhaustive_enums,
-    reason = "vertices draw as triangles, a strip or a fan"
-)]
-pub enum VertexMode {
-    /// Draw each sequence of three vertices as a separate triangle.
-    ///
-    /// Vertices 0, 1, 2 form a triangle, then 3, 4, 5, etc.
-    #[default]
-    Triangles,
-
-    /// Draw each sliding window of three vertices as a triangle.
-    ///
-    /// Vertices 0, 1, 2 form a triangle, then 1, 2, 3, then 2, 3, 4, etc.
-    TriangleStrip,
-
-    /// Draw all vertices as a single triangle fan.
-    ///
-    /// The first vertex is shared by all triangles.
-    TriangleFan,
 }
 
 /// An opaque identifier for a texture registered with the rendering engine.
