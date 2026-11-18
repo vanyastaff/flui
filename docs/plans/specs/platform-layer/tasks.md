@@ -6054,19 +6054,35 @@ GPU-память простаивающего или невидимого окн
   строки LY76, R6.6 и D16 исправлены. Заглушка и хост семантики стоят в слоте `flui-semantics`,
   последнем после canvas: `the_tree_reaches_the_dom_once_the_placeholder_is_activated` читает
   заглушку, а после активации — хост в этом слоте.
-- [ ] **LY85** (не закрыта: профили и записи на `main`; настоящее окно X11 общую таблицу не
-  проходит, записей касания, пера и щипка нет, прогона на рабочем столе нет) — фундаменты #1930
-  и #1931, ввод #1936 и #1937. Через `assert_backend_conforms` идут декодеры обоих хостов
-  (`x11_decoder_conforms`, `wayland_decoders_conform`) и настоящее окно Wayland под Weston
-  (`wayland_window_conforms`, его зовут `the_wayland_window_input_conforms` и
-  `the_wayland_window_conforms`). Настоящее окно X11 идёт через
-  `window_conformance::assert_conforms` (`the_x11_window_conforms`), а не через общую таблицу
-  ввода. Записи: `wayland_weston_mouse_wheel.jsonl` и `x11_xtest_mouse_and_wheel.jsonl`
-  (`wayland_recordings_decode_to_their_host_input`, `x11_recordings_decode_to_their_host_input`).
-  `docs/platform-parity.md` и `docs/gaps.md` описывают оба хоста по прогонам на Weston 13, sway
-  1.9 и Xvfb с openbox. Остаётся: окно X11 в `assert_backend_conforms`; записи касания, пера,
-  щипка и плавной прокрутки (на Xvfb и Weston таких устройств нет); прогон в сессии рабочего
-  стола.
+- [x] **LY85** (закрыта: оба хоста идут через общую таблицу; прогоны с устройствами и в сессии
+  рабочего стола записаны в `platform-parity.toml`) — фундаменты #1930 и #1931, ввод #1936 и
+  #1937, окно X11 в таблице — ветка `native/x11-window-conformance`. Через
+  `assert_backend_conforms` идут декодеры обоих хостов (`x11_decoder_conforms`,
+  `wayland_decoders_conform`) и настоящее окно Wayland под Weston (`wayland_window_conforms`, его
+  зовёт `the_wayland_window_input_conforms`). Настоящее окно X11 под openbox на Xvfb идёт через
+  ту же таблицу (`run_backend_conformance`) в харнессе `x11_window`:
+  `the_x11_window_input_conforms` (`tests/x11_backend_conformance.rs`) исполняет каждый шаг,
+  который сервер умеет произвести, через XTest и отдаёт таблице то, что услышал обработчик окна:
+  мышь — контакты; устройство с именем — мастер-указатель, который сервер добавляет и объявляет
+  (XTest двигает его через client pointer); отмена платформы — фокус, который забирает другое окно
+  теста; клавиши меню и Shift+F10 — XTest. Строки, которые окно не держит, перечислены в
+  `NOT_HELD` с тем, что строка отвечает, и причиной; каждая другая строка обязана держаться, а
+  запись, которая перестала совпадать, валит тест. Не держатся: касание (на Xvfb нет устройства с
+  touch-классом, XTest касаний не шлёт), перо (у устройств XTest только x и y, драйвера планшета
+  Xvfb не грузит), щипок и жесты тачпада (события XInput 2.4 шлёт только драйвер тачпада),
+  интервалы и перенос 32-битного времени (XTest не несёт метки, сервер ставит свою), позиция не
+  конечная (сервер шлёт фиксированную точку), счётчик высокого разрешения (его у X нет), фазы
+  прокрутки (их у XInput 2 нет), строки старта перетаскивания в начале (XDND стартует при выходе
+  из окна) и строки IME (на сервере харнесса нет IBus, Fcitx5 и XIM); каждую из них держит
+  декодер (`native x11`). С подменой отмены на отпускание кнопки тест падает на
+  `no_backend_cancels_a_contact_as_claimed`. Записи: `wayland_weston_mouse_wheel.jsonl` и
+  `x11_xtest_mouse_and_wheel.jsonl` (`wayland_recordings_decode_to_their_host_input`,
+  `x11_recordings_decode_to_their_host_input`); записей касания, пера и щипка на X11 под Xvfb не
+  сделать по тем же причинам. Прогоны с сенсорным экраном, планшетом и тачпадом в сессии GNOME и
+  KDE — заметки строк `touch`, `pen-and-stylus`, `trackpad-pinch-and-rotate` и строка качества
+  «Recorded native input…» в `platform-parity.toml`. Прогон (WSL Ubuntu 24.04, Xvfb с openbox,
+  `FLUI_HEADLESS=1 WAYLAND_DISPLAY='' xvfb-run … cargo nextest run -p flui-native --all-features`):
+  `the_x11_window_input_conforms` зелёный.
 - [x] **LY86** — #1930 (`ace0a3b2e`) и #1931 (`c8401e35b`) добавили шаги CI, #2258 перевёл
   `flui-app` на нативные хосты, #2276 удалил winit. Job `test` (`.github/workflows/ci.yml`)
   ставит Xvfb, openbox, Weston и sway, поднимает headless Weston с `FLUI_REQUIRE_WAYLAND=1` и
