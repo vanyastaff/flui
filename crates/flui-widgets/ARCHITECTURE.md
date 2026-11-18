@@ -2853,7 +2853,7 @@ capability. Microsoft documents smaller-than-120 wheel messages for finer
 resolution in [WM_MOUSEWHEEL](https://learn.microsoft.com/en-us/windows/win32/inputdev/wm-mousewheel).
 The native adapter marks observed nonzero fractional wheel units `Precise`;
 integral and zero packets remain `Unknown`. Known backend classification can
-produce `Notched`, including Winit's `LineDelta`. The platform contract row
+produce `Notched`, including the line-step wheel deltas a host reports. The platform contract row
 `fractional_native_wheel_packets_preserve_observed_precision_and_source` drives
 actual queued messages through an owned hidden HWND, preserving source metadata
 and signed units with fractional packets and an integral unknown control.

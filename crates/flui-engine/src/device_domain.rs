@@ -213,16 +213,25 @@ impl Ledger {
         Ok(RetirementPermit(Arc::clone(self)))
     }
 
-    fn begin_frame(self: &Arc<Self>) -> Result<FrameSubmissionScope, DomainError> {
-        let mut state = self.state();
+    /// Why a frame could not begin now, or `None` when one could.
+    fn frame_refusal(&self, state: &LedgerState) -> Option<DomainError> {
         if state.lifecycle != Lifecycle::Open {
-            return Err(DomainError::Unavailable);
+            return Some(DomainError::Unavailable);
         }
         if state.frame.is_some() {
-            return Err(DomainError::FrameAlreadyActive);
+            return Some(DomainError::FrameAlreadyActive);
         }
-        if state.submissions >= self.limits.submissions {
-            return Err(DomainError::SubmissionBudget);
+        (state.submissions >= self.limits.submissions).then_some(DomainError::SubmissionBudget)
+    }
+
+    fn admits_frame(&self) -> Result<(), DomainError> {
+        self.frame_refusal(&self.state()).map_or(Ok(()), Err)
+    }
+
+    fn begin_frame(self: &Arc<Self>) -> Result<FrameSubmissionScope, DomainError> {
+        let mut state = self.state();
+        if let Some(refusal) = self.frame_refusal(&state) {
+            return Err(refusal);
         }
         let id = state
             .next_frame
@@ -477,6 +486,18 @@ impl DeviceDomain {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         self.ledger.begin_frame()
+    }
+
+    /// Whether [`Self::begin_frame_scope`] would open a frame now, without
+    /// opening one: for a frame whose scope opens later, inside a step that
+    /// must not run on a frame the ledger refuses.
+    pub(crate) fn admits_frame(&self) -> Result<(), DomainError> {
+        self.poll()?;
+        let _gate = self
+            .submit_gate
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.ledger.admits_frame()
     }
 
     pub(crate) fn reserve(&self, cost: PreparedCost) -> Result<Arc<PreparedPermit>, DomainError> {
