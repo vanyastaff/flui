@@ -6366,30 +6366,43 @@ maximized before, reads normal, maximizes the window again and only then leaves 
 Wayland compositor may answer `set_maximized` or `unset_fullscreen` in several configures (Weston
 restores the maximized mode a window had before fullscreen), and AppKit animates a full-screen
 transition and puts the frame the window had before back only after `windowDidExitFullScreen:`.
-So a host that asks its window system for a mode tells the window's state cell
-(`WindowStateCell::expect_mode`): until the wait ends, a read in another mode publishes the mode
-the snapshot has and the rectangle it returns to, with every other fact (the geometry, the metrics
-the renderer draws at, the focus) as read. The snapshot holds the last settled mode; it never names
-a transition. A read in the mode asked publishes it, and the window then waits only `MODE_SETTLE`
+So a host tells the window's state cell of every mode request it carries out
+(`WindowStateCell::expect_mode`), one for the mode the window is in too: each request replaces the
+wait of the one before, whose answers may still be coming. Until the wait ends, a read in another
+of the normal, maximized and fullscreen modes publishes the mode the snapshot has, with every other
+fact (the geometry, the metrics the renderer draws at, the focus) as read. A minimized read, or a
+read of a window published minimized, is published as read, so a window shown again is drawn at
+once. Every snapshot of the change names, as its `normal_geometry`, the rectangle the window
+returned to as the change began (the published one, or the outer rectangle of a window that was
+normal), a snapshot in normal mode too, so a normal-mode step at a fullscreen size is never taken
+for the place the window returns to (`WindowPlacement::from_state` takes `normal_geometry`
+whenever a snapshot names one). The snapshot holds the last settled mode; it never names a
+transition. A read in the mode asked publishes it, and the window then waits only `MODE_SETTLE`
 more against a step the window system had still to take; past `MODE_ANSWER_LIMIT` (AppKit: its
-animation limit, then that long after the transition's end) the window publishes what it reads, so
-a change the window system refused or the user overtook is published then. Each host reads the
+animation limit, then `MODE_ANSWER_LIMIT` after the transition's end) the window publishes what it
+reads, so a change the window system refused or the user overtook is published then. Each host reads the
 window again when the wait ends with nothing heard: the X11 loop wakes for it and has the window
 read itself (`LoopWindows::mode_deadline`), the Wayland loop wakes for it (`LoopWindow::mode_due`)
 and every turn reads its windows, AppKit schedules a read on the owner lane. X11 records the
 rectangle a window returns to only from a read in the mode its change asked for, so a normal-mode
 step on the way to maximized is no place it returns to; and a command acts on the mode the server
-said, not the one the snapshot holds. Wayland waits for no minimize, which no compositor reports.
+said, not the one the snapshot holds. A Wayland minimize, which no compositor reports, ends the
+wait instead.
 AppKit waits for the transition the user starts too (the green button, the system's full-screen
 shortcut): the user's request through the system's own chrome, carried out and reported, as a
 window manager's maximize button is on Linux, landing in full screen or, as it leaves, in the
 zoomed state or normal mode the window entered from (`ModeSequence::fullscreen_transition`). Tests:
-`a_fullscreen_window_changes_mode_in_one_step` and
-`a_mode_change_another_client_overtakes_is_published_when_the_wait_ends` (X11 under openbox),
+`a_fullscreen_window_changes_mode_in_one_step`,
+`a_mode_change_another_client_overtakes_is_published_when_the_wait_ends` and
+`a_command_during_a_mode_wait_acts_on_the_mode_the_server_says` (X11 under openbox),
 `a_mode_the_compositor_reaches_in_two_configures_is_published_once` and
 `a_mode_the_compositor_does_not_carry_out_is_published_when_the_wait_ends` (Wayland, scripted
-compositor), `a_mode_change_in_flight_publishes_its_steps_in_the_mode_the_window_left` (the cell),
-`a_fullscreen_transition_lands_where_it_heads_or_where_it_came_from` (AppKit's model).
+compositor), `a_mode_change_in_flight_publishes_its_steps_in_the_mode_the_window_left` and
+`a_mode_wait_settles_waits_longer_and_ends` (the cell),
+`a_fullscreen_transition_lands_where_it_heads_or_where_it_came_from` (AppKit's model),
+`from_state_remembers_the_normal_bounds_relative_to_the_usable_area` (the placement). A window
+manager or compositor slower than these waits still publishes its steps
+([gaps](../../docs/gaps.md#a-window-system-slower-than-the-mode-wait-publishes-its-steps)).
 
 `WINDOWPLACEMENT` rectangles are workspace coordinates; a task bar on the top or left edge
 moves the work area, so they are converted with the monitor's work-area offset.

@@ -1255,9 +1255,7 @@ impl X11Window {
         }
         let states = self.atoms.states;
         let current = self.mode_now();
-        if current != mode {
-            self.expect_mode(mode);
-        }
+        self.expect_mode(mode);
         let minimized = current == WindowMode::Minimized;
         match mode {
             WindowMode::Minimized => self.send_to_root(ClientMessageEvent::new(

@@ -28,7 +28,7 @@ mod native_recording;
 
 #[cfg(target_os = "linux")]
 mod cases {
-    use std::cell::RefCell;
+    use std::cell::{Cell, RefCell};
     use std::process::{Child, Command, Stdio};
     use std::rc::Rc;
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -44,7 +44,7 @@ mod cases {
     };
     use flui_platform::{
         CloseDecision, CursorGrab, PlatformWindow, WindowCommand, WindowHandler, WindowMode,
-        WindowOptions, WindowReveal,
+        WindowOptions, WindowPlacement, WindowReveal,
     };
     use flui_testing::window_commands::AdmitAndApply as _;
     use flui_testing::window_conformance::{self, Readback, WindowFixture};
@@ -170,6 +170,10 @@ mod cases {
         (
             "a_mode_change_another_client_overtakes_is_published_when_the_wait_ends",
             a_mode_change_another_client_overtakes_is_published_when_the_wait_ends,
+        ),
+        (
+            "a_command_during_a_mode_wait_acts_on_the_mode_the_server_says",
+            a_command_during_a_mode_wait_acts_on_the_mode_the_server_says,
         ),
         (
             "a_window_minimized_as_it_hears_its_show_stays_minimized",
@@ -2227,67 +2231,83 @@ mod cases {
 
     /// A `SetMode` the window manager carries out in several answers changes
     /// the published mode once, from the mode the window left to the mode
-    /// asked, and the window comes back to the place it had before: a window
-    /// leaving fullscreen for maximized returns to the normal rectangle it
-    /// was maximized from, one leaving it for normal to that rectangle. The
-    /// window manager answers each `_NET_WM_STATE` request as a property
-    /// change of its own, and openbox passes through normal mode on its way.
+    /// asked, and no snapshot on the way is remembered as another place than
+    /// the one the window had before: a window leaving fullscreen for
+    /// maximized returns to the normal rectangle it was maximized from, one
+    /// leaving it for normal comes back to that rectangle. A newer request
+    /// replaces the wait of an older one the window manager is still
+    /// answering, also one for the mode the window is in. The window manager
+    /// answers each `_NET_WM_STATE` request as a property change of its own,
+    /// and openbox passes through normal mode on its way.
     fn a_fullscreen_window_changes_mode_in_one_step() {
         use WindowMode::{Fullscreen, Maximized, Normal};
-        // (the mode the window enters fullscreen from, the mode it leaves
-        // fullscreen for, the mode no snapshot between may show)
-        let table = [
-            (Maximized, Maximized, Normal),
-            (Normal, Maximized, Normal),
-            (Maximized, Normal, Maximized),
+        // (the mode the window enters fullscreen from, the modes asked out of
+        // fullscreen with no turn between, the modes no snapshot between may
+        // show)
+        let table: [(_, &[_], &[_]); 4] = [
+            (Maximized, &[Maximized], &[Normal]),
+            (Normal, &[Maximized], &[Normal]),
+            (Maximized, &[Normal], &[Maximized]),
+            (Normal, &[Maximized, Fullscreen], &[Normal, Maximized]),
         ];
-        for (from, to, between) in table {
+        for (from, asked, between) in table {
             let handler = RecordingWindowHandler::new();
             let mut fixture = X11Fixture::open_with("one step", Rc::clone(&handler));
-            let opened = fixture.window.state().outer;
-            let enter = |fixture: &mut X11Fixture, mode| {
+            let displays = fixture.platform.display_snapshot().expect("the displays");
+            let opened = fixture.window.state();
+            let placed = |state: &flui_platform::WindowState| {
+                WindowPlacement::from_state(state, &displays, false)
+                    .map(|placement| (placement.display, placement.offset))
+            };
+            let opened_place = placed(&opened);
+            let request = |fixture: &X11Fixture, mode| {
                 fixture
                     .window
                     .admit_and_apply(WindowCommand::SetMode(mode))
                     .expect("openbox takes every mode");
-                fixture.settle();
-                assert_eq!(fixture.window.state().mode, mode, "{from:?} to {to:?}");
             };
             if from == Maximized {
-                enter(&mut fixture, Maximized);
+                request(&fixture, Maximized);
+                fixture.settle();
             }
-            enter(&mut fixture, Fullscreen);
+            request(&fixture, Fullscreen);
+            fixture.settle();
+            assert_eq!(fixture.window.state().mode, Fullscreen);
             let seen = Rc::new(RefCell::new(Vec::new()));
             let log = Rc::clone(&seen);
             let window = Rc::downgrade(&fixture.window);
             handler.react_to_state_change(move || {
                 if let Some(window) = window.upgrade() {
-                    log.borrow_mut().push(window.state().mode);
+                    log.borrow_mut().push(window.state());
                 }
             });
-            enter(&mut fixture, to);
+            for &mode in asked {
+                request(&fixture, mode);
+            }
+            fixture.settle();
             let seen = seen.borrow().clone();
+            let case = format!("{from:?} then {asked:?}");
+            let modes: Vec<WindowMode> = seen.iter().map(|state| state.mode).collect();
             assert!(
-                !seen.contains(&between),
-                "{from:?} to {to:?} read {between:?} on the way: {seen:?}"
+                !modes.iter().any(|mode| between.contains(mode)),
+                "{case} read {between:?} on the way: {modes:?}"
             );
-            let state = fixture.window.state();
-            let returns = match to {
-                Normal => state.outer,
-                _ => state.normal_geometry.expect("a maximized window's normal"),
-            };
-            assert_eq!(returns, opened, "{from:?} to {to:?}: {state:?}");
+            for state in &seen {
+                let returns = state.normal_geometry.unwrap_or(state.outer);
+                assert_eq!(returns, opened.outer, "{case}: {state:?}");
+                assert_eq!(placed(state), opened_place, "{case}: {state:?}");
+            }
+            let last = *asked.last().expect("a request");
+            assert_eq!(fixture.window.state().mode, last, "{case}");
         }
     }
 
-    /// A mode change the window manager ends elsewhere is published once the
-    /// window stops waiting for it, with no event of the server's to wake
-    /// the window then: another client asks for out of fullscreen and maximized
-    /// right after the window asked for fullscreen, so the window
-    /// manager ends in a mode neither the snapshot nor the command named.
-    fn a_mode_change_another_client_overtakes_is_published_when_the_wait_ends() {
-        let fixture = X11Fixture::open("overtaken");
-        assert_eq!(fixture.window.state().mode, WindowMode::Normal);
+    /// Another client asks for out of fullscreen and maximized right after
+    /// the window asked for fullscreen, so the window manager ends in a mode
+    /// neither the snapshot nor the command named; the window waits for
+    /// fullscreen, and returns the fixture once the window manager's state
+    /// says maximized, before the loop has read it.
+    fn overtake_a_fullscreen_request(fixture: &X11Fixture) {
         let server = &fixture.server;
         let net_wm_state = atom(server, "_NET_WM_STATE");
         let [horizontal, vertical, fullscreen] = [
@@ -2317,10 +2337,67 @@ mod cases {
             names.contains(&"_NET_WM_STATE_MAXIMIZED_HORZ".to_owned())
                 && !names.contains(&"_NET_WM_STATE_FULLSCREEN".to_owned())
         });
-        // Every event of the change is read well before the wait ends; the
-        // turns after it hear nothing new.
-        run_for(&fixture.platform, Duration::from_millis(1_500)).expect("the loop turns");
+    }
+
+    /// A mode change the window manager ends elsewhere is published once the
+    /// window stops waiting for it, with no event of the server's to wake the
+    /// loop then: one stretch of the loop three times the wait publishes the
+    /// window manager's mode well before its end, which only the loop waking
+    /// for the wait's end and reading the window then explains.
+    fn a_mode_change_another_client_overtakes_is_published_when_the_wait_ends() {
+        let handler = RecordingWindowHandler::new();
+        let fixture = X11Fixture::open_with("overtaken", Rc::clone(&handler));
+        assert_eq!(fixture.window.state().mode, WindowMode::Normal);
+        let maximized_at = Rc::new(Cell::new(None));
+        let at = Rc::clone(&maximized_at);
+        let window = Rc::downgrade(&fixture.window);
+        handler.react_to_state_change(move || {
+            if let Some(window) = window.upgrade()
+                && window.state().mode == WindowMode::Maximized
+                && at.get().is_none()
+            {
+                at.set(Some(Instant::now()));
+            }
+        });
+        let asked = Instant::now();
+        overtake_a_fullscreen_request(&fixture);
+        run_for(&fixture.platform, Duration::from_secs(3)).expect("the loop turns");
         assert_eq!(fixture.window.state().mode, WindowMode::Maximized);
+        let published = maximized_at
+            .get()
+            .expect("the handler heard the maximized window")
+            .duration_since(asked);
+        assert!(
+            published < Duration::from_millis(2_000),
+            "published {published:?} after the request"
+        );
+    }
+
+    /// A command acts on the mode the server says, not on the mode a
+    /// snapshot keeps while the window waits for a mode change: a resize
+    /// asked while the snapshot still says normal of a window the window
+    /// manager maximized takes the window out of maximized first, and the
+    /// window ends normal at the size asked.
+    fn a_command_during_a_mode_wait_acts_on_the_mode_the_server_says() {
+        let mut fixture = X11Fixture::open("resized while waiting");
+        overtake_a_fullscreen_request(&fixture);
+        run_for(&fixture.platform, Duration::from_millis(100)).expect("the loop turns");
+        assert_eq!(
+            fixture.window.state().mode,
+            WindowMode::Normal,
+            "the snapshot still waits for fullscreen"
+        );
+        let size = Size::new(500.0, 400.0);
+        fixture
+            .window
+            .admit_and_apply(WindowCommand::SetSize(
+                flui_platform::WindowExtent::try_new(size).expect("an extent"),
+            ))
+            .expect("a window takes a size");
+        fixture.settle();
+        let state = fixture.window.state();
+        assert_eq!(state.mode, WindowMode::Normal, "{state:?}");
+        assert_eq!(state.content_size.get(), size, "{state:?}");
     }
 
     /// A command acts on the window as it is, not as its last snapshot had

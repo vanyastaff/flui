@@ -1383,11 +1383,14 @@ mod toplevel {
         /// several configures (Weston restores a maximized mode on the way out
         /// of fullscreen): the snapshot keeps the mode the window left until a
         /// configure says `mode`, or for [`MODE_ANSWER_LIMIT`]
-        /// (`WindowStateCell::expect_mode`). A window already in `mode` waits
-        /// for nothing.
+        /// (`WindowStateCell::expect_mode`). Every mode request calls it, one
+        /// for the mode the window is in too, so a newer request replaces the
+        /// wait of an older one whose configures may still be coming. A
+        /// minimize, which no compositor reports, ends the wait.
         fn expect_mode(&self, mode: WindowMode) {
-            let states = self.applied.borrow().sizing.states();
-            if crate::window::state::mode_of(states.mode_flags()) != mode {
+            if mode == WindowMode::Minimized {
+                self.state.end_mode_wait();
+            } else {
                 self.state
                     .expect_mode(mode, Instant::now() + MODE_ANSWER_LIMIT);
             }
@@ -1899,11 +1902,7 @@ mod toplevel {
                     self.leave_compositor_modes();
                 }
                 WindowCommand::SetMode(mode) => {
-                    // The compositor never says a window is minimized: there
-                    // is no answer to wait for.
-                    if mode != WindowMode::Minimized {
-                        self.expect_mode(mode);
-                    }
+                    self.expect_mode(mode);
                     let fullscreen = {
                         let mut applied = self.applied.borrow_mut();
                         applied.leaving_maximized = false;

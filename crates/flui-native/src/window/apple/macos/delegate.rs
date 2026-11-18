@@ -582,8 +582,10 @@ impl MacOSWindow {
     /// AppKit puts back and the held mode's step.
     fn handle_transition_ended(self: &Rc<Self>) {
         self.state.lock().sequence.step_ended();
-        if let Some(asked) = self.snapshot.mode_in_flight(std::time::Instant::now()) {
-            self.wait_out_mode(asked, MODE_ANSWER_LIMIT);
+        if self.snapshot.mode_deadline().is_some() {
+            self.snapshot
+                .wait_longer(std::time::Instant::now() + MODE_ANSWER_LIMIT);
+            self.read_again_after(MODE_ANSWER_LIMIT);
         }
         // A window that left full screen, or failed to enter it, stands at
         // its own level again; one still full screen stays at the normal one.

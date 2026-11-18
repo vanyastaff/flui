@@ -182,11 +182,13 @@ impl WindowPlacement {
 
     /// Where `state`'s window is, as a placement.
     ///
-    /// The bounds are the window's normal ones: a maximized, fullscreen or
-    /// minimized window is remembered by the rectangle it returns to
-    /// ([`WindowState::normal_geometry`]). The size is the content area's, so
-    /// opening a window with it does not grow the window by its frame; for a
-    /// window not in normal mode the frame is taken from the current one.
+    /// The bounds are the window's normal ones: a window whose snapshot names
+    /// the rectangle it returns to ([`WindowState::normal_geometry`]: a
+    /// maximized, fullscreen or minimized window, or one a mode change is
+    /// carrying out in steps) is remembered by it, any other by its outer
+    /// rectangle. The size is the content area's, so opening a window with it
+    /// does not grow the window by its frame; for a window remembered by the
+    /// rectangle it returns to, the frame is taken from the current one.
     ///
     /// The display is the one the normal bounds' position names, or, for a
     /// window whose window system reports no position, the display the window
@@ -206,15 +208,17 @@ impl WindowPlacement {
         displays: &DisplaySnapshot,
         maximized_before_minimize: bool,
     ) -> Option<Self> {
-        let normal = if state.mode == WindowMode::Normal {
-            state.outer
-        } else {
-            state.normal_geometry.unwrap_or(state.outer)
+        // The rectangle the window returns to, whenever the snapshot names
+        // one: a snapshot of a mode change on its way names it in normal mode
+        // too, while its outer rectangle is a step of the change's.
+        let (normal, own) = match state.normal_geometry {
+            Some(normal) => (normal, false),
+            None => (state.outer, true),
         };
         // A rectangle with no area is no place a window was: a window whose
         // window system has reported none yet has nothing to remember.
         let normal_size = normal.extent().area().ok()?;
-        let size = if state.mode == WindowMode::Normal {
+        let size = if own {
             state.content_size
         } else {
             let frame_width = (state.outer.size().width - state.content_size.width()).max(0.0);

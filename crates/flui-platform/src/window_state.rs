@@ -370,7 +370,11 @@ pub struct WindowState {
     pub mode: WindowMode,
     /// The rectangle the window returns to from a maximized or fullscreen
     /// mode, when the OS reports it. Its position names the display it lies
-    /// on, which need not be the one the window is on now.
+    /// on, which need not be the one the window is on now. While a
+    /// [`WindowCommand::SetMode`] is carried out in steps (see
+    /// [`mode`](Self::mode)), every snapshot names the rectangle the window
+    /// returned to as the change began, a snapshot in normal mode too, whose
+    /// outer rectangle is then a step of the change's.
     pub normal_geometry: Option<WindowGeometry>,
     /// Whether the window is shown: opened visible or shown since, and not
     /// hidden since ([`WindowCommand::Show`], [`WindowCommand::Hide`]). It is

@@ -199,6 +199,14 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 - **A window asked for larger than the work area opens past it on Win32 and X11:** Win32 fits only a restored placement to the monitor's work area, and X11 leaves it to the window manager. The Wayland host holds the size a window opens at within the compositor's `configure_bounds` (`wayland_scripted::a_window_opens_within_the_compositors_bounds`, against the test's own compositor; a run under mutter or KWin is a row of the parity table). AppKit is not audited for it.
 - **No close request on the Web and Android:** neither host ever asks a window handler's `close_requested` (a page's unload and an Activity's finish are not requests the application can refuse), so an application's close veto never runs there.
 
+### A window system slower than the mode wait publishes its steps
+
+> **Environments:** desktop · **Who it hurts:** Apps and placement records that read each snapshot of a window changing mode · **Parity:** [Windows](platform-parity.md#windows)
+
+- A `SetMode` the window system carries out in steps is published once on X11, Wayland and AppKit: the snapshot keeps the mode the window left while the window system answers (`WindowStateCell::expect_mode`, crates/flui-native/ARCHITECTURE.md). The wait is bounded: it ends `MODE_SETTLE` (250 ms) after a read finds the mode asked, and at most `MODE_ANSWER_LIMIT` (1 s) after the request on X11 and Wayland; on AppKit at most the animation limit (3 s) while the transition animates, then 1 s after its end.
+- A window manager or compositor whose next step comes more than 250 ms after the window first reads the mode asked, or which takes longer than the wait overall (an animated maximize or fullscreen under mutter or KWin is the likely case), still publishes the mode in between. Only openbox on Xvfb and the test's own compositor have run.
+- **Missing:** a run under mutter, KWin and Weston measuring how long each takes between its steps, and an end of the wait the window system states (a configure serial, `_NET_WM_SYNC_REQUEST`) where one exists.
+
 ### No custom title bar, popups or owned windows
 
 > **Environments:** desktop · **Who it hurts:** Apps with modern chrome; every menu and dropdown · **Parity:** [Windows](platform-parity.md#windows)

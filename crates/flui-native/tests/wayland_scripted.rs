@@ -1025,29 +1025,39 @@ mod cases {
     /// the configure between, normal on the way to maximized or the
     /// maximized mode a compositor restores on the way to normal, is
     /// acknowledged and drawn at its size, and no snapshot names its mode.
-    /// Back in normal mode the window has the size it had before.
+    /// Back in normal mode the window has the size it had before. A newer
+    /// request replaces the wait of an older one the compositor is still
+    /// answering, also one for the mode the window is in.
     fn a_mode_the_compositor_reaches_in_two_configures_is_published_once() {
         use flui_platform::{WindowCommand, WindowMode};
         let normal = || Configure::default().state(ToplevelState::Activated);
         let maximized = || normal().size(1920, 1040).state(ToplevelState::Maximized);
         let fullscreen = || normal().size(1920, 1080).state(ToplevelState::Fullscreen);
-        // (the configures that take the window to fullscreen, the mode asked
-        // out of it, the configures that answer, the mode between)
-        let table: [(&[Configure], WindowMode, [Configure; 2], WindowMode); 2] = [
+        // (the configures that take the window to fullscreen, the modes asked
+        // out of it with no turn between, the configures that answer, the mode
+        // between)
+        let table: [(&[Configure], &[WindowMode], [Configure; 2], WindowMode); 3] = [
             (
                 &[fullscreen()],
-                WindowMode::Maximized,
+                &[WindowMode::Maximized],
                 [normal(), maximized()],
                 WindowMode::Normal,
             ),
             (
                 &[maximized(), fullscreen()],
-                WindowMode::Normal,
+                &[WindowMode::Normal],
                 [maximized(), normal()],
                 WindowMode::Maximized,
             ),
+            (
+                &[fullscreen()],
+                &[WindowMode::Maximized, WindowMode::Fullscreen],
+                [maximized(), fullscreen()],
+                WindowMode::Maximized,
+            ),
         ];
-        for (into, asked, answers, between) in table {
+        for (into, requests, answers, between) in table {
+            let asked = *requests.last().expect("a request");
             let session = Session::open(Offer::default(), WindowOptions::default().title("modes"));
             session.turn_until("the window's first frame", |session| {
                 session.compositor.heard().frames > 0
@@ -1065,10 +1075,12 @@ mod cases {
                     log.borrow_mut().push(window.state().mode);
                 }
             });
-            session
-                .window
-                .admit_and_apply(WindowCommand::SetMode(asked))
-                .expect("the compositor takes every mode");
+            for &mode in requests {
+                session
+                    .window
+                    .admit_and_apply(WindowCommand::SetMode(mode))
+                    .expect("the compositor takes every mode");
+            }
             for configure in answers {
                 session.configure(configure);
             }

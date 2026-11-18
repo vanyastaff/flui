@@ -2666,12 +2666,20 @@ impl MacOSWindow {
     /// transition that lands there: the snapshot keeps the mode the window
     /// left until a read finds `asked`, for at most `limit`
     /// (`WindowStateCell::expect_mode`), and the window is read again once
-    /// that passes, so a step AppKit refused is published then.
+    /// that passes, so a step AppKit refused is published then. Every mode
+    /// command calls it, one for the mode the window is in too, so a newer
+    /// command replaces the wait of an older one.
     fn wait_out_mode(&self, asked: WindowMode, limit: std::time::Duration) {
         self.snapshot
             .expect_mode(asked, std::time::Instant::now() + limit);
+        self.read_again_after(limit);
+    }
+
+    /// Read the window again on the owner lane once `delay` has passed: a
+    /// wait for a mode change ends with nothing from AppKit to say so.
+    fn read_again_after(&self, delay: std::time::Duration) {
         let window = Arc::clone(&self.redraw().window);
-        crate::owner::apple::macos::exec_after_on_owner(self.owner, limit, move || {
+        crate::owner::apple::macos::exec_after_on_owner(self.owner, delay, move || {
             if let Some(window) = window.upgrade() {
                 window.publish_state();
             }
@@ -2695,7 +2703,7 @@ impl MacOSWindow {
         if heading.is_some() {
             self.read_again_when_the_step_gives_up();
             self.wait_out_mode(mode, ANIMATION_LIMIT);
-        } else if !steps.is_empty() {
+        } else {
             self.wait_out_mode(mode, MODE_ANSWER_LIMIT);
         }
         if !steps.is_empty() {
