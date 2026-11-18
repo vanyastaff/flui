@@ -1,4 +1,4 @@
-# ADR-0382: CI runs the standard tools directly, and xtask does not wrap them
+# ADR-0383: CI runs the standard tools directly, and xtask does not wrap them
 
 - **Status:** Accepted (2026-11-18)
 - **Date:** 2026-11-18
