@@ -897,40 +897,55 @@ version (`pipeline/owner/paint/kept_chunks.rs`):
   paint only on a dirty root and on the boundaries it lays out, so an inline
   node that laid out (a paragraph whose text changed, a box that grew) says so
   through that bit, set where the arena lays a node out past its cache and
-  taken by the paint that reads it;
+  taken by the paint that reads it. A paint clears the marks, so a render
+  object its parent paints twice owes paint on the second paint when it owed
+  it on the first (`Ordinals::owed_paint`);
 - its recording inputs are the ones the kept chunk was recorded from, bit for
   bit: the node's origin in the boundary and the paint anchor it read. The
   device pixel ratio needs no entry, since a change of it drops every record
   before the pass. A moved node, or one whose anchor moved, records again;
-- the chunk holds runs of one paint of its owner, the first of that paint in
-  the content to seal a chunk. A chunk is matched to the previous one by owner
-  and ordinal, which name the same run only within one paint, so a chunk that
-  joined runs of two paints, or one of a later paint of the owner, is
-  recorded with no inputs and is neither kept nor kept over;
+- the chunk holds runs of one paint of its owner, and that paint is the
+  owner's first in the content to seal a chunk. A chunk is matched to the
+  previous one by owner and ordinal, which name the same run only within one
+  paint, so a chunk that joined runs of two paints, or one of a later paint of
+  the owner, is recorded with no inputs and is neither kept nor kept over;
 - the previous content can be trusted: a pass after one that failed or
   unwound (`PipelineOwner::unrecorded_paint`) keeps nothing, since that pass
   cleared the flags of the nodes it painted without committing their output,
   and neither does a record the residue scan marked stale.
 
-The mark that makes a node owe paint walks up to its boundary, so a node found
-clean has a clean subtree and paints, for the same inputs, what it painted
-before. A kept chunk sits in the new content under the same owner and ordinal
-and version, so the scene's damage pairs it with itself and the engine's
-recording cache replays it.
+**Why that is enough.** A chunk holds only its owner's own runs: the commands
+its paint records between the entries of its children and of its effects.
+Those depend on the owner's state, its layout, its origin and its anchor: a
+change of state marks it, a layout sets its bit, and the other two are
+compared. Where its runs are cut into chunks depends on which children add
+entries between them, and a child that starts or stops adding one is marked:
+the mark walks up through the owner to the boundary, unless it meets a node
+marked already, whose own mark walked the same way. Effects are entries of
+their own, so a composited-layer update, which marks no ancestor, changes no
+chunk. A kept chunk sits in the new content under the same owner, ordinal and
+version, so the scene's damage pairs it with itself and the engine's recording
+cache replays it.
+
+**A missing mark is visible.** A render object that changes what it paints
+without marking itself keeps its old recording even when its boundary
+repaints for another reason.
 
 **Where the lists live.** A record keeps its chunks' sources (entry, owner,
-ordinal, inputs) as `RecordedChunks`: zero or one inline, more in a shared
-`Rc<Vec<_>>` (the owner is `!Send`). The pass reads them through that handle, seals the new list
-into the staged patch and lets go of the old one when the content ends;
-`scene_applied` writes the new list into the room of the replaced one, or of
-one a removed record left (`SpareChunkLists`). Lookups scan forward from a
-cursor and, after the first miss, use an index in the pass's scratch, so a
-reordered content costs one pass over its list.
+ordinal, inputs) as `RecordedChunks`: zero or one inline, more in an
+`Rc<Vec<_>>` (the owner is `!Send`) shared with the pass that repaints the
+content. The pass reads them through that handle, seals the new list into the
+staged patch and lets go of the old one when the content ends; `scene_applied`
+writes the new list into the room of the replaced one, or of one a removed
+record left (`SpareChunkLists`). Lookups scan forward from a cursor and, after
+the first miss, use an index in the pass's scratch, so a reordered content
+costs one pass over its list.
 
 `boundary_contents::a_repaint_keeps_the_chunks_of_the_render_objects_that_owe_no_paint`,
 `a_chunk_that_moved_in_its_boundary_is_a_new_recording`,
-`the_pass_after_a_failed_one_keeps_no_chunk` and
-`a_chunk_holding_two_paints_of_its_render_object_is_a_new_recording`
+`the_pass_after_a_failed_one_keeps_no_chunk`,
+`a_chunk_holding_two_paints_of_its_render_object_is_a_new_recording` and
+`a_render_object_painted_twice_owes_paint_on_both_paints`
 (`tests/boundary_contents.rs`) pin the rule; flui-engine's
 `a_repainted_boundary_replays_the_chunks_that_did_not_change` pins the replay
 and its pixels on lavapipe.

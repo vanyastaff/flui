@@ -3,11 +3,16 @@
 //! A repaint reruns every render object's paint in the content, but a chunk
 //! keeps its [`ContentVersion`](flui_layer::ContentVersion) while its render
 //! object owes no paint work and its recording inputs are unchanged, so the
-//! engine's recording cache, keyed by that version, replays it. The rule is
-//! the one a clean repaint boundary already lives by: every change to what a
-//! render object paints marks it, and the mark walks up through each
-//! ancestor to its boundary, so a node found unmarked has an unmarked
-//! subtree and paints, for the same inputs, what it painted before.
+//! engine's recording cache, keyed by that version, replays it. A chunk holds
+//! only its owner's own runs: the commands its paint records between the
+//! entries of its children and its effects. Those depend on the owner's
+//! state, its layout, its origin and its anchor: a change of state marks it,
+//! a layout sets its `LAID_OUT_SINCE_PAINT`, and the other two are compared.
+//! Where its runs are cut into chunks depends on which children add entries
+//! between them, and a child that starts or stops adding one is marked: its
+//! mark walks up through the owner to the boundary, unless it meets a node
+//! marked already, whose own mark walked the same way. Effects are entries
+//! of their own, so a composited-layer update changes no chunk.
 //!
 //! The inputs are the node's origin in the boundary and the paint anchor it
 //! reads, compared bit for bit; the device pixel ratio is the third, and a
@@ -16,7 +21,9 @@
 //! ordinal, which name the same run only when both chunks are runs of one
 //! paint of their owner, its first that sealed a chunk in the content: a
 //! chunk holding runs of two paints, or of a paint after the owner's first,
-//! is recorded as one that cannot be kept.
+//! is recorded as one that cannot be kept. A paint of a render object owes
+//! paint when an earlier paint of it in the content did, since that paint
+//! cleared the marks.
 //!
 //! The lists cost no allocation once a content has been painted twice: a
 //! pass seals the new list into its staged patch while it reads the previous

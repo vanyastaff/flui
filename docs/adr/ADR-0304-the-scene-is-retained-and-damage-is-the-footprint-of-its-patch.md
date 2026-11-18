@@ -173,11 +173,19 @@ its child node, so attaching, detaching or moving a boundary between parents is 
 of the parents' content, which their paint already produces. Bounds that are not finite are
 `Bounds::Unbounded`.
 
-A chunk keeps its `ContentVersion` while its render object owes no paint work (it is absent from
-the paint queue, ADR-0062) and its recording inputs, the device pixel ratio, its origin in the
-boundary and the paint anchor it reads, are unchanged; otherwise it gets the next one. A
-composited-layer update republishes the boundary's content with the new effect and the same
-chunks. `seq` comes from the scene owner's
+A chunk of a repainted boundary keeps its `ContentVersion` when its render object owes no paint
+work and its recording inputs are unchanged; otherwise it gets the next one. The render object
+owes paint when its own flags say so (`NEEDS_PAINT`, `NEEDS_COMPOSITED_LAYER_UPDATE`), when it
+laid out since its last paint (`LAID_OUT_SINCE_PAINT`, since layout marks paint only on a dirty
+root and on a boundary), or when an earlier paint of it in the same content owed paint. The
+inputs are its origin in the boundary and the paint anchor it reads, compared bit for bit; a
+change of the device pixel ratio drops every record first. A chunk keeps its version only when
+it holds the runs of one paint of its owner, and that paint is the owner's first in the content
+to seal a chunk; no chunk keeps its version in the pass after one that failed or unwound, which
+cleared marks without committing what it painted. A render object that changes what it paints
+without marking itself keeps its old recording when its boundary repaints for another reason, so
+a missing mark shows on screen. A composited-layer update republishes the boundary's content
+with the new effect and the same chunks. `seq` comes from the scene owner's
 `IdMint<NonZeroU64>` (`crates/flui-foundation/src/sequence.rs:118-186`), which never wraps, and
 `SceneVersionId` draws from the same mint. `Lineage(NonZeroU64)` comes from a non-`pub`
 `static AtomicIdMint<NonZeroU64>`, because every UI thread builds scene owners; it never wraps,
