@@ -784,9 +784,8 @@ fn ci_stage(runner: Runner) -> anyhow::Result<()> {
     // nextest executes no doctests; flui-native's need neither
     // `--all-features` nor a display server, so it is not carved
     // out. `flui/testing` compiles the book's chapters that run through
-    // Tester; the catalogs are the narrowed run's, kept in step by hand
-    // (`FACADE_CATALOGS`), so the theme chapter and the facade's
-    // Material-gated half compile too (src/book.rs)
+    // Tester, and the catalogs `flui/material` and `flui/cupertino` compile
+    // the theme chapter and the facade's Material-gated half (src/book.rs)
     runner.run(&Cmd::cargo([
         "test",
         "--workspace",
@@ -826,7 +825,7 @@ pub(crate) struct ChecksArgs {
 /// `cargo xtask checks`: run the source checks that need no workspace build (the CI `checks` job).
 ///
 /// `cargo fmt --check`, typos, taplo, and this crate's own checks in-process:
-/// `docs-links` (lychee), `toolchain`, `unmounted-tests`, `adr-numbers`, `paths-filter`,
+/// `docs-links` (lychee), `toolchain`, `unmounted-tests`, `adr-numbers`,
 /// `changelog --check` and the generated files against their sources
 /// (`font-assets --package-list` and the rest). All of them run; exit 1 if any failed.
 pub(crate) fn checks(args: &ChecksArgs) -> anyhow::Result<ExitCode> {
@@ -1149,7 +1148,7 @@ pub(crate) fn deps_tools() -> impl Iterator<Item = (&'static str, &'static str)>
 /// its advisories; an unused or misplaced dependency is cargo's own
 /// `unused_dependencies` lint in every build. Every step runs; exit 1 if any failed. CI's `deps` job runs
 /// `--only policy` and `--only advisories` as two steps, the second blocking
-/// only in the `wide` and `full` lanes; advisories.yml runs it daily on main.
+/// on main and reporting on a pull request; advisories.yml runs it daily on main.
 pub(crate) fn deps(args: &DepsArgs) -> anyhow::Result<ExitCode> {
     done(deps::run(args.run.runner(), args.only, args.strict))
 }

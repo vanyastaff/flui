@@ -27,9 +27,9 @@ pub enum DeviceHealth {
         /// Consecutive failed rebuilds.
         attempts: u32,
     },
-    /// The rebuild was given up after `attempts` consecutive failures. No
-    /// rebuild runs until the owner sends
-    /// [`RasterCommand::RetryDevice`](super::RasterCommand::RetryDevice).
+    /// The rebuild was given up after `attempts` consecutive failures. The
+    /// device stays lost until the owner probes again and sends the device
+    /// in a [`RasterCommand::RetryDevice`](super::RasterCommand::RetryDevice).
     GivenUp {
         /// Consecutive failed rebuilds when the rebuild was given up.
         attempts: u32,
@@ -161,20 +161,6 @@ impl DeviceRebuilds {
     pub(crate) fn recovered(&mut self) {
         *self = Self::default();
     }
-
-    /// The owner asked again after the rebuild was given up: the next turn
-    /// rebuilds at once. Nothing changes while the device renders or a
-    /// rebuild is still paced.
-    pub(crate) fn retry(&mut self) -> bool {
-        if !self.given_up {
-            return false;
-        }
-        *self = Self {
-            lost: true,
-            ..Self::default()
-        };
-        true
-    }
 }
 
 #[cfg(test)]
@@ -232,11 +218,11 @@ mod tests {
         );
         assert!(!rebuilds.due(now + REBUILD_CAP * 100));
 
-        assert!(rebuilds.retry(), "the owner asks again");
-        assert_eq!(rebuilds.health(), DeviceHealth::Rebuilding { attempts: 0 });
-        assert!(rebuilds.due(now), "the asked-for rebuild runs at once");
         rebuilds.recovered();
-        assert_eq!(rebuilds.health(), DeviceHealth::Healthy);
-        assert!(!rebuilds.retry(), "a healthy device has nothing to retry");
+        assert_eq!(
+            rebuilds.health(),
+            DeviceHealth::Healthy,
+            "a device adopted after the give-up ends the streak"
+        );
     }
 }

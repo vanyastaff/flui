@@ -21,7 +21,6 @@ mod tasks;
 mod adr_numbers;
 mod android_dex;
 mod bench;
-mod change_scope;
 mod changelog;
 mod doc_strict;
 mod docs_links;
@@ -94,14 +93,6 @@ enum Command {
     Fuzz(tasks::FuzzArgs),
     /// Remove the nested-cargo test caches under the target directory.
     CleanNested(tasks::CleanNestedArgs),
-    /// Print the lane and the packages a change touches (CI's `plan`).
-    Affected(change_scope::AffectedArgs),
-    /// List the expectations a change edits; with `--body`, fail on each the body leaves unnamed (ADR-0331).
-    Expectations(change_scope::ExpectationsArgs),
-    /// Check that no include_str! target is classified as docs-only.
-    PathsFilter(change_scope::PathsFilterArgs),
-    /// The `ci` aggregator job: every job is gated and exactly the planned ones skipped.
-    CiVerify(change_scope::CiVerifyArgs),
     /// Check that every declared MSRV matches rust-toolchain.toml.
     Toolchain(toolchain::ToolchainArgs),
     /// Check that every `tests/*.rs` file of an `autotests = false` crate is compiled.
@@ -171,10 +162,6 @@ fn main() -> ExitCode {
         Command::Miri(args) => tasks::miri(&args),
         Command::Fuzz(args) => tasks::fuzz(&args),
         Command::CleanNested(args) => tasks::clean_nested(&args),
-        Command::Affected(args) => change_scope::affected(&args),
-        Command::Expectations(args) => change_scope::expectations(&args),
-        Command::PathsFilter(args) => change_scope::paths_filter(&args),
-        Command::CiVerify(args) => change_scope::ci_verify(&args),
         Command::Toolchain(args) => toolchain::toolchain(&args),
         Command::UnmountedTests(args) => unmounted_tests::unmounted_tests(&args),
         Command::AdrNumbers(args) => adr_numbers::adr_numbers(&args),

@@ -14,16 +14,6 @@
 
 ## Context
 
-Implementation note: this document records the text-run and announcement
-contracts. Its earlier implementation status was too broad: the node model
-still derived all accessible identities from render objects. ADR-0223 adds a
-presentation-owned synthetic identity source for authored regions; it does not
-establish completion of the text-run consumer path below. The announcer (§4) is
-implemented: `Announcements` and `Announcer` in flui-semantics, kept by the pipeline and handed
-to widgets through `LifecycleContext::announcer`; flui-semantics ARCHITECTURE.md records its rules.
-The text-run model and its publication are implemented (`TextContent`, `TextRun`, identities
-from the pipeline, the owner decoding run positions); a field that lays out its text declares it.
-
 Two kinds of published nodes have no render object: the runs of a text field's text, which a
 screen reader needs to read by character, word and line and to follow the selection, and the
 nodes that carry announcements, since AccessKit 0.25 has no announcement API. An
@@ -75,9 +65,11 @@ an index that is never reused).
    generation), or the request is refused before conversion; a position inside a split cluster
    snaps to the cluster's boundary.
 4. **Announcer.** The owner keeps two synthetic nodes, polite and assertive live regions of role
-   `Label`, as the last children of the window root. `SemanticsOwner::announce(message,
-   urgency)` writes the message to the matching node's value, which is what every adapter
-   reacts to. An accepted message is queued before the presentation is asked for a frame, and stays
+   `Label`, as the last children of the window root. The pipeline keeps one `Announcements`
+   queue per presentation and hands each widget an `Announcer` from it
+   (`LifecycleContext::announcer`); `Announcer::announce(message, urgency)` is the only way to
+   speak, and the owner writes each message to the matching node's value, which is what every
+   adapter reacts to. An accepted message is queued before the presentation is asked for a frame, and stays
    queued until a frame publishes it, so an idle presentation still speaks; messages within one frame are coalesced, and a repeated message alternates an
    invisible separator so the adapter sees a change. Declarative live regions remain the primary
    mechanism. UI Automation notifications (`UiaRaiseNotificationEvent`, what Chromium maps

@@ -115,6 +115,15 @@ impl fmt::Debug for SurfaceFactory {
 }
 
 impl SurfaceFactory {
+    /// Whether `other` is a clone of this factory, so its surfaces are made
+    /// on the same instance: what a test of an owner that replaces its
+    /// factory checks.
+    #[cfg(feature = "testing")]
+    #[must_use]
+    pub fn is_clone_of(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.parts, &other.parts)
+    }
+
     pub(crate) fn new(instance: wgpu::Instance, display: Arc<dyn DisplayConnection>) -> Self {
         Self {
             parts: Rc::new(FactoryParts { instance, display }),

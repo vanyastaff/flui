@@ -68,6 +68,9 @@ pub enum SlotCall {
     Reclaim(MemoryPressureLevel),
     /// `rebuild_device`.
     RebuildDevice,
+    /// `adopt_device`; answered from the same script as `rebuild_device`,
+    /// where a failure is ignored, since adoption cannot fail.
+    AdoptDevice,
 }
 
 /// The texture ids one `apply_textures` call on a [`ScriptedSlots`] backend
@@ -105,6 +108,10 @@ struct Script {
     device_lost: bool,
     lose_in_next_render: bool,
     no_inline_rebuild: bool,
+    /// How many of the owner's next probes answer no device.
+    refused_probes: u32,
+    /// The owner's probes run so far.
+    probes: usize,
     /// The clock each rebuild advances, and by how much.
     rebuild_takes: Option<(ManualClock, Duration)>,
     /// What the next render waits on before it answers.
@@ -249,6 +256,32 @@ impl ScriptedSlots {
         self.script.lock().lose_in_next_render = true;
     }
 
+    /// Make the owner's next probe for a retried device answer no device,
+    /// as when every backend's adapter is still gone after a driver reset. A
+    /// host over these slots asks [`Self::probe`] before it probes.
+    pub fn refuse_next_probe(&self) {
+        self.script.lock().refused_probes += 1;
+    }
+
+    /// Count a probe the owner runs for a retried device, and answer
+    /// whether it finds a device.
+    #[must_use]
+    pub fn probe(&self) -> bool {
+        let mut script = self.script.lock();
+        script.probes += 1;
+        if script.refused_probes > 0 {
+            script.refused_probes -= 1;
+            return false;
+        }
+        true
+    }
+
+    /// The owner's probes for a retried device run so far.
+    #[must_use]
+    pub fn probes(&self) -> usize {
+        self.script.lock().probes
+    }
+
     /// Answer that no device rebuild can succeed where the executor runs, as
     /// the web's context does.
     pub fn cannot_rebuild_inline(&self) {
@@ -334,7 +367,7 @@ impl ScriptedSlots {
             SlotCall::Release(_) | SlotCall::DisplayColor(..) | SlotCall::Latency(..) => None,
             SlotCall::Detach(_) => script.detaches.pop_front(),
             SlotCall::Reclaim(_) => script.reclaims.pop_front(),
-            SlotCall::RebuildDevice => script.rebuilds.pop_front(),
+            SlotCall::RebuildDevice | SlotCall::AdoptDevice => script.rebuilds.pop_front(),
         }
     }
 
@@ -519,6 +552,18 @@ impl RasterBackend for ScriptedSlots {
         }
     }
 
+    fn adopt_device(&mut self, device: crate::ProbedDevice) -> Vec<(SlotId, EngineError)> {
+        drop(device);
+        // A scripted panic unwinds before the device is in place: the
+        // adoption the owner's retry must answer leaves the device lost.
+        if let Some(ScriptedAnswer::Panic) = self.answer(SlotCall::AdoptDevice) {
+            panic!("scripted device adoption panic");
+        }
+        let mut script = self.script.lock();
+        script.device_lost = false;
+        std::mem::take(&mut script.rebuild_refusals)
+    }
+
     fn rebuilds_inline(&self) -> bool {
         !self.script.lock().no_inline_rebuild
     }
@@ -535,6 +580,38 @@ pub fn noop_surface_factory(
     display: std::sync::Arc<dyn flui_platform::DisplayConnection>,
 ) -> crate::SurfaceFactory {
     crate::SurfaceFactory::new(noop_instance(&display), display)
+}
+
+/// What [`GpuContext::probe`](crate::GpuContext::probe) answers, made on
+/// wgpu's no-op backend over `display`: a device a test's retry hands the
+/// executor, and the factory its windows' next surfaces are made with,
+/// without a GPU. The first surface is `None`.
+///
+/// # Panics
+/// Only if the no-op backend gives no adapter or device, which it always gives.
+#[must_use]
+#[cfg(not(target_arch = "wasm32"))]
+pub fn noop_probe(
+    display: std::sync::Arc<dyn flui_platform::DisplayConnection>,
+) -> crate::GpuProbe {
+    let instance = noop_instance(&display);
+    let adapter =
+        pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
+            .expect("the no-op backend has an adapter");
+    let (device, queue) =
+        pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
+            .expect("the no-op backend gives a device");
+    crate::GpuProbe {
+        factory: crate::SurfaceFactory::new(instance.clone(), display),
+        device: crate::ProbedDevice {
+            instance,
+            adapter,
+            device,
+            queue,
+            recipe: crate::gpu_context::DeviceRecipe::Offscreen(wgpu::Features::empty()),
+        },
+        first: None,
+    }
 }
 
 /// An instance of wgpu's no-op backend alone, on `display`.

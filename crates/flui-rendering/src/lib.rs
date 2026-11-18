@@ -169,7 +169,7 @@ pub mod prelude {
         RenderUpdateImpact,
         binding::{
             RendererBinding, ViewHitTest, debug_dump_layer_tree, debug_dump_pipeline_owner_tree,
-            debug_dump_render_tree, debug_dump_semantics_tree,
+            debug_dump_render_tree,
         },
         parent_data::{
             BoxParentData, ContainerBoxParentData, FlexFit, FlexParentData, ParentData,

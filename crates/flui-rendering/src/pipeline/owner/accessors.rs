@@ -2011,9 +2011,8 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     /// [`Self::set_semantics_update_callback`] — the composition root's wire
     /// to the platform accessibility bridge (flui-semantics ARCHITECTURE.md, semantics assembly). With none installed
     /// the owner falls back to the documented no-op placeholder: it still
-    /// assembles a tree (inspectable via [`Self::semantics_owner`], the
-    /// render harness, or `debug_dump_semantics_tree`) but publishes
-    /// nowhere.
+    /// assembles a tree, inspectable via [`Self::semantics_owner`] or the render
+    /// harness, but publishes nowhere.
     pub fn set_semantics_enabled(&mut self, enabled: bool) {
         let was_enabled = self
             .semantics_enabled
@@ -2361,8 +2360,8 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
 /// after — the swap is live) enabling semantics. Without one — the render
 /// harness, `flui-testing`, a headless embedder — swallowing updates here is
 /// an explicit, documented placeholder (not a silent gap): the assembled
-/// tree is still inspectable via [`PipelineOwner::semantics_owner`], the
-/// harness, or `debug_dump_semantics_tree`.
+/// tree is still inspectable via [`PipelineOwner::semantics_owner`] or the
+/// harness.
 ///
 /// The callback receives an already-translated `accesskit::TreeUpdate`, so a
 /// real bridge forwards it to the platform capability without touching

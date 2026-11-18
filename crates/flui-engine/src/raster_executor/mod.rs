@@ -54,7 +54,7 @@ pub use command::{
 };
 pub use device_health::DeviceHealth;
 pub use inbox::{SlotFailure, SlotPhase, SlotRecord};
-pub use sender::RasterSender;
+pub use sender::{DeviceRetries, RasterSender};
 pub(crate) use slot::SlotMint;
 pub use slot::{SlotDomain, SlotId};
 use surface::SurfaceEvent;
@@ -309,6 +309,7 @@ impl<B: RasterBackend> RasterExecutor<B> {
             return outcome;
         }
         let mut first = FirstPanic::new();
+        let mut adopted = false;
         if let Some(level) = self.shared.take_trim() {
             first.contain(|| self.backend.reclaim(level));
         }
@@ -345,14 +346,15 @@ impl<B: RasterBackend> RasterExecutor<B> {
                     self.detach(slot, &inbox, &mut first);
                     0
                 }
-                Lifecycle::RetryDevice => {
-                    self.rebuilds.retry();
+                Lifecycle::RetryDevice(device) => {
+                    adopted |= self.adopt_device(device, &mut first);
                     0
                 }
             };
         }
-        let mut device_moved =
+        let recovered =
             self.shared.health() != ExecutorHealth::Died && self.recover_device(&mut first);
+        let mut device_moved = adopted || recovered;
         for index in 0..self.slots.len() {
             // An executor that died while a render held a slot renders nothing
             // more once that render returns: the owner gave its windows up, and
@@ -407,7 +409,11 @@ impl<B: RasterBackend> RasterExecutor<B> {
                     first.contain(move || drop(target));
                     inbox
                 }
-                Lifecycle::Release { .. } | Lifecycle::RetryDevice => continue,
+                Lifecycle::Release { .. } => continue,
+                Lifecycle::RetryDevice(device) => {
+                    first.contain(move || drop(device));
+                    continue;
+                }
                 Lifecycle::Restore { surface, .. } => {
                     first.contain(move || drop(surface));
                     continue;
@@ -490,6 +496,55 @@ impl<B: RasterBackend> RasterExecutor<B> {
         retire(frame, extra, first);
         report(Report::Refused { slot, cause }, first);
         settled
+    }
+
+    /// Adopt `device`, the owner's probe's answer to a retry (ADR-0305 §8);
+    /// answers `true`, which wakes the owner: the retry is served and every
+    /// window wants a surface, whether or not the adoption returned.
+    ///
+    /// Every device sent is adopted, in the order sent, whatever the health
+    /// it meets: the owner makes its windows' surfaces with the factory of
+    /// the last device it sent, so the context's instance has to be that
+    /// device's. The owner sends one only for a device it read given up and
+    /// with no retry of its own still unserved (ADR-0267), which the
+    /// device's record counts ([`DeviceRetries`]).
+    ///
+    /// Adopting drops every window's surface, made on the instance the
+    /// device's replaces, so each window slot asks its owner for another;
+    /// an adoption that panics part way asks the same, since what surfaces
+    /// it left are not the ones the owner's factory now makes. Its device
+    /// stays lost and the retry is counted unadopted: a streak given up
+    /// stays given up, and the owner tells the application so, and any
+    /// other is rebuilt on the backoff.
+    fn adopt_device(&mut self, device: crate::ProbedDevice, first: &mut FirstPanic) -> bool {
+        let adopted = first.contain(|| self.backend.adopt_device(device));
+        let was_adopted = adopted.is_some();
+        for slot in self.slots.iter().flatten().filter(|slot| slot.window) {
+            let mut state = slot.inbox.lock();
+            // A restore already on its way was made with the probe's factory
+            // and replaces the dropped surface.
+            state.surface = state.surface.on(SurfaceEvent::SurfaceDropped);
+        }
+        if let Some(refused) = adopted {
+            self.rebuilds.recovered();
+            // Restamped before the health says the device renders, as after
+            // a rebuild, so no owner stamps a frame for the old device after
+            // reading it.
+            self.after_rebuild(refused, first);
+        }
+        let now = self.now(first);
+        let _published = self.publish_device(None, now, first);
+        // Counted after the health is published, which an owner reading the
+        // count first then reads (`RasterSender::device_retries`).
+        {
+            let mut record = self.shared.device();
+            record.retries.served += 1;
+            record.retries.unadopted += u64::from(!was_adopted);
+        }
+        if was_adopted {
+            report(Report::DeviceRebuilt, first);
+        }
+        true
     }
 
     /// See whether the device is lost, rebuild it when its backoff allows,
@@ -1199,7 +1254,7 @@ fn report(report: Report, first: &mut FirstPanic) {
         Report::RebuildFailed(FailedRebuild::GivenUp, health) => tracing::error!(
             ?health,
             "raster executor: GPU device rebuild given up; the slots render again once the \
-             owner sends RetryDevice"
+             owner adopts a probed device with RetryDevice"
         ),
         Report::DeviceRebuilt => tracing::warn!("raster executor: GPU device rebuilt"),
     });
