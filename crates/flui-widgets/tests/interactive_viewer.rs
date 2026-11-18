@@ -7,9 +7,9 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use flui_animation::Vsync;
+use flui_foundation::TextDirection;
 use flui_foundation::geometry::{EdgeInsets, Matrix4, Offset, Point};
 use flui_painting::styling::Color;
-use flui_painting::typography::TextDirection;
 use flui_platform::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, NamedKey};
 use flui_platform::pointer::{
     DeviceId, PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerEvent, PointerId, PointerKind,

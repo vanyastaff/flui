@@ -13,7 +13,7 @@ use flui_animation::ProxyAnimation;
 use flui_foundation::Single;
 use flui_foundation::geometry::{Offset, Point, Rect, Size};
 use flui_painting::styling::BoxDecoration;
-use flui_painting::{DecorationPaintOptions, box_decoration_hit_test, paint_box_decoration};
+use flui_painting::styling::DecorationPaintOptions;
 use flui_rendering::{
     RenderUpdateImpact,
     context::{BoxHitTestContext, BoxLayoutContext, PaintContext},
@@ -67,12 +67,7 @@ impl RenderAnimatedDecoratedBox {
 
     fn paint_decoration(ctx: &mut PaintContext<'_, Single>, decoration: &BoxDecoration) {
         let rect = Rect::from_origin_size(Point::ZERO, ctx.size());
-        paint_box_decoration(
-            ctx.canvas(),
-            rect,
-            decoration,
-            DecorationPaintOptions::default(),
-        );
+        decoration.paint(ctx.canvas(), rect, DecorationPaintOptions::default());
     }
 }
 
@@ -144,9 +139,8 @@ impl RenderBox for RenderAnimatedDecoratedBox {
         if self.has_child && ctx.hit_test_child_at_offset(0, Offset::ZERO) {
             return true;
         }
-        box_decoration_hit_test(
+        self.decoration().hit_test(
             Rect::from_origin_size(Point::ZERO, ctx.own_size()),
-            &self.decoration(),
             *ctx.position(),
         )
     }

@@ -14,7 +14,7 @@ use std::hint::black_box;
 
 use criterion::{BatchSize, Criterion, Throughput, criterion_group, criterion_main};
 use flui_foundation::geometry::{Point, RRect, Rect};
-use flui_painting::{Canvas, DisplayList, Paint};
+use flui_painting::{Canvas, DisplayList, paint::Paint};
 use flui_painting::{paint::Path, styling::Color};
 
 /// Ops recorded by one `record_scene` call.

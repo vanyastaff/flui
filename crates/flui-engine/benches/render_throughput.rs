@@ -34,7 +34,7 @@ use flui_engine::PathCache;
 use flui_engine::WgpuPainter;
 use flui_foundation::geometry::Offset;
 use flui_foundation::geometry::Rect;
-use flui_painting::Paint;
+use flui_painting::paint::Paint;
 use flui_painting::{paint::Shader, styling::Color};
 
 // ---------------------------------------------------------------------------
@@ -200,7 +200,7 @@ fn render_throughput(c: &mut Criterion) {
                 min_width: 0.0,
                 text_align: flui_painting::typography::TextAlign::Start,
                 line_height: None,
-                direction: flui_painting::typography::TextDirection::Ltr,
+                direction: flui_foundation::TextDirection::Ltr,
                 max_lines: None,
                 ellipsis: None,
             })
@@ -300,7 +300,7 @@ fn alloc_micro(c: &mut Criterion) {
 /// reconstruction and the recording budget. No GPU encoding is timed.
 fn warm_path_recording(c: &mut Criterion) {
     use flui_foundation::geometry::Point;
-    use flui_painting::paint::path::Path;
+    use flui_painting::paint::Path;
 
     let Some((device, queue)) = try_create_gpu() else {
         return;

@@ -10,10 +10,10 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Duration;
 
+use flui_foundation::TextDirection;
 use flui_foundation::geometry::{Axis, Offset};
 use flui_interaction::GestureProfiles;
 use flui_painting::styling::Color;
-use flui_painting::typography::TextDirection;
 use flui_platform::TargetPlatform;
 use flui_platform::keyboard::NamedKey;
 use flui_testing::a11y::{Action, Role};
@@ -1282,7 +1282,7 @@ pub(crate) fn the_revealed_menu_control_names_its_target() {
 /// the row behind it cannot hide it: under an app's white text (a dark row),
 /// black dots on the glyph's white, not dots in a colour the row chose.
 pub(crate) fn the_revealed_menu_control_draws_its_glyph_on_its_own_surface() {
-    use flui_painting::display_list::DrawOp;
+    use flui_painting::DrawOp;
     use flui_painting::typography::TextStyle;
     use flui_widgets::DefaultTextStyle;
 

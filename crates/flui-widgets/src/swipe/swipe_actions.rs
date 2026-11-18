@@ -6,9 +6,9 @@ use std::fmt;
 use std::rc::Rc;
 
 use flui_animation::MotionPolicy;
+use flui_foundation::TextDirection;
 use flui_foundation::geometry::Axis;
 use flui_objects::{CrossAxisAlignment, StackFit};
-use flui_painting::typography::TextDirection;
 use flui_view::prelude::*;
 use flui_view::{BoxedView, WriterSource};
 

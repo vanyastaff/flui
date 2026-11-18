@@ -19,7 +19,7 @@
 use flui_animation::ProxyAnimation;
 use flui_foundation::Leaf;
 use flui_foundation::geometry::{Point, RRect, Rect, Size};
-use flui_painting::Paint;
+use flui_painting::paint::Paint;
 use flui_painting::styling::Color;
 use flui_rendering::{
     RenderUpdateImpact,

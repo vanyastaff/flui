@@ -120,7 +120,7 @@ pub enum StrokeJoin {
 
 /// An opaque identifier for a texture registered with the rendering engine.
 ///
-/// The raw value `0` is reserved as the null identifier (see `is_null`).
+/// A texture registry issues it: flui-layer's `TextureRegistry`, from 1 up.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TextureId(u64);
@@ -138,27 +138,6 @@ impl TextureId {
     #[inline]
     pub const fn get(self) -> u64 {
         self.0
-    }
-
-    /// Returns `true` if this is the null identifier (raw value `0`).
-    #[must_use]
-    #[inline]
-    pub const fn is_null(self) -> bool {
-        self.0 == 0
-    }
-}
-
-impl From<u64> for TextureId {
-    #[inline]
-    fn from(id: u64) -> Self {
-        Self::new(id)
-    }
-}
-
-impl From<TextureId> for u64 {
-    #[inline]
-    fn from(id: TextureId) -> Self {
-        id.get()
     }
 }
 

@@ -14,6 +14,7 @@ mod fallback_rescan;
 
 use std::sync::atomic::Ordering;
 
+use std::borrow::Cow;
 use std::cell::{Cell, OnceCell, RefCell};
 use std::collections::HashSet;
 use std::rc::Rc;
@@ -124,7 +125,7 @@ struct FontRegistrations {
     /// Fonts accepted before this thread resolved its services, registered
     /// on the collection when it is built. On a thread that never builds a
     /// UI runtime they stay here, and no collection gains them.
-    pending: Vec<Vec<u8>>,
+    pending: Vec<Cow<'static, [u8]>>,
 }
 
 fn font_digest(font_bytes: &[u8]) -> FontDigest {
@@ -714,7 +715,7 @@ impl AppRuntime {
         for font_bytes in pending {
             // Checked when it was accepted; a refusal now would be the two
             // sides disagreeing with the check, and refuses on both.
-            if let Err(error) = services.fonts.register_font(&font_bytes) {
+            if let Err(error) = services.fonts.register_font(font_bytes) {
                 tracing::warn!(%error, "a font registered before the first ui_runtime was refused");
             }
         }
@@ -821,16 +822,19 @@ impl AppRuntime {
     /// [`FontRegistrationError::AlreadyRegistered`] for bytes registered
     /// before, [`FontRegistrationError::Font`] for bytes with no face; either
     /// way nothing changes.
-    pub(super) fn register_font(&self, font_bytes: &[u8]) -> Result<(), FontRegistrationError> {
-        let digest = font_digest(font_bytes);
+    pub(super) fn register_font(
+        &self,
+        font_bytes: Cow<'static, [u8]>,
+    ) -> Result<(), FontRegistrationError> {
+        let digest = font_digest(&font_bytes);
         if self.fonts.borrow().digests.contains(&digest) {
             return Err(FontRegistrationError::AlreadyRegistered);
         }
         if let Some(services) = self.services.get() {
             services.fonts.register_font(font_bytes)?;
         } else {
-            FontCollection::check_font(font_bytes)?;
-            self.fonts.borrow_mut().pending.push(font_bytes.to_vec());
+            FontCollection::check_font(&font_bytes)?;
+            self.fonts.borrow_mut().pending.push(font_bytes);
         }
         self.fonts.borrow_mut().digests.insert(digest);
         Ok(())

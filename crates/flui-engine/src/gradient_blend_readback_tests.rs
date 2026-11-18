@@ -16,7 +16,7 @@
 
 use flui_foundation::geometry::{Offset, RRect, Rect};
 use flui_layer::SceneBuilder;
-use flui_painting::{BlendMode, Canvas, Paint};
+use flui_painting::{Canvas, paint::BlendMode, paint::Paint};
 use flui_painting::{
     paint::{Shader, TileMode},
     styling::Color,
@@ -609,9 +609,9 @@ fn centre_of((column, row): (u32, u32)) -> (f64, f64) {
 
 /// A triangle filling most of the surface; [`TRIANGLE_SAMPLES`] lie inside it
 /// and [`TRIANGLE_OUTSIDE`] outside it.
-fn triangle() -> flui_painting::paint::path::Path {
+fn triangle() -> flui_painting::paint::Path {
     use flui_foundation::geometry::Point;
-    flui_painting::paint::path::Path::polygon(&[
+    flui_painting::paint::Path::polygon(&[
         Point::new(2.0, 62.0),
         Point::new(62.0, 62.0),
         Point::new(32.0, 2.0),
@@ -623,8 +623,8 @@ const TRIANGLE_OUTSIDE: (u32, u32) = (4, 8);
 /// The upper half of a circle about the surface centre, radius 24, as an
 /// open arc. Stroked 8 wide, [`ARC_SAMPLES`] lie on the stroke and the circle
 /// centre lies off it.
-fn upper_arc() -> flui_painting::paint::path::Path {
-    flui_painting::paint::path::Path::arc(
+fn upper_arc() -> flui_painting::paint::Path {
+    flui_painting::paint::Path::arc(
         Rect::from_xywh(8.0, 8.0, 48.0, 48.0),
         std::f64::consts::PI,
         std::f64::consts::PI,
@@ -773,7 +773,7 @@ fn path_shader_respects_clips() {
     );
 
     let masked = render(&renderer, |canvas| {
-        let mut diamond = flui_painting::paint::path::Path::new();
+        let mut diamond = flui_painting::paint::Path::new();
         for (index, (x, y)) in [(32.0, 30.0), (46.0, 44.0), (32.0, 58.0), (18.0, 44.0)]
             .into_iter()
             .enumerate()

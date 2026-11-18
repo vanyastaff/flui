@@ -36,13 +36,11 @@
 
 use std::collections::HashMap;
 
+use flui_foundation::TextDirection;
 use flui_foundation::Variable;
 use flui_foundation::geometry::{Offset, Rect, Size};
-use flui_painting::{DecorationPaintOptions, paint_box_decoration, paint_table_border};
-use flui_painting::{
-    styling::{BoxDecoration, TableBorder},
-    typography::TextDirection,
-};
+use flui_painting::styling::DecorationPaintOptions;
+use flui_painting::styling::{BoxDecoration, TableBorder};
 use flui_rendering::parent_data::TableCellVerticalAlignment;
 
 use crate::TableColumnWidth;
@@ -1085,12 +1083,7 @@ impl RenderBox for RenderTable {
                     self.table_width,
                     self.row_tops[y + 1],
                 );
-                paint_box_decoration(
-                    ctx.canvas(),
-                    rect,
-                    decoration,
-                    DecorationPaintOptions::default(),
-                );
+                decoration.paint(ctx.canvas(), rect, DecorationPaintOptions::default());
             }
         }
 
@@ -1116,7 +1109,7 @@ impl RenderBox for RenderTable {
             // depends on the reading direction, so slicing here would be wrong
             // under `Rtl` (see `interior_column_lefts`).
             let interior_columns: &[f64] = &self.interior_column_lefts;
-            paint_table_border(ctx.canvas(), rect, interior_rows, interior_columns, border);
+            border.paint(ctx.canvas(), rect, interior_rows, interior_columns);
         }
     }
 

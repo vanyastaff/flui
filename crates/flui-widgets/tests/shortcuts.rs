@@ -166,11 +166,11 @@ pub(crate) mod tab_tests {
     use std::cell::Cell;
     use std::rc::{Rc, Weak};
 
+    use flui_foundation::TextDirection;
     use flui_interaction::focus::{
         FocusAttachment, FocusDetachOutcome, FocusNode, FocusScopeNode, FocusTraversalPolicy,
         ReadingOrderPolicy,
     };
-    use flui_painting::typography::TextDirection;
     use flui_platform::{
         EventTime,
         keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, Modifiers, NamedKey},

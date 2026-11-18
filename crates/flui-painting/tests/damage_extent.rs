@@ -5,7 +5,7 @@
 
 use flui_foundation::geometry::{Matrix4, Rect};
 use flui_painting::styling::Color;
-use flui_painting::{Canvas, DisplayList, DrawOp, Paint};
+use flui_painting::{Canvas, DisplayList, DrawOp, paint::Paint};
 
 /// The rect covering a bounded damage extent in the list's own space.
 fn bounded(list: &DisplayList) -> Rect<f64> {
@@ -63,10 +63,11 @@ pub(crate) fn a_color_fill_makes_the_extent_unbounded() {
 /// drawn by a `SwashRasterizer`), not a restatement of how the extent is
 /// computed.
 pub(crate) fn paragraph_extent_covers_every_rasterized_glyph() {
+    use flui_foundation::TextDirection;
     use flui_foundation::geometry::Offset;
     use flui_painting::glyphs::SwashRasterizer;
-    use flui_painting::typography::{FontStyle, FontWeight, TextDirection, TextSpan, TextStyle};
-    use flui_painting::{FontCollection, GlyphRasterizer, TextPainter};
+    use flui_painting::typography::{FontStyle, FontWeight, TextSpan, TextStyle};
+    use flui_painting::{FontCollection, TextPainter, glyphs::GlyphRasterizer};
 
     let bundled = FontCollection::new();
     let scan = flui_painting::HostFonts::scan();
@@ -472,7 +473,7 @@ pub(crate) fn transparent_black_predicates() {
     // An image filter answers as the colour matrix it applies, through a
     // composition too; a blur or a morphology keeps transparent transparent.
     use flui_painting::paint::ImageFilter;
-    use flui_painting::paint::effects::{ColorAdjustment, ColorMatrix};
+    use flui_painting::paint::{ColorAdjustment, ColorMatrix};
     let visible = ColorMatrix::new(offset);
     let mut colour_only = ColorMatrix::identity();
     colour_only.values[4] = 1.0;

@@ -15,7 +15,7 @@ use flui_layer::{
 };
 use flui_painting::paint::{BlendMode, Clip, ColorFilter, ImageFilter, Path};
 use flui_painting::styling::Color;
-use flui_painting::{Canvas, Paint};
+use flui_painting::{Canvas, paint::Paint};
 
 /// Builds a clip layer of one kind around `rect`.
 type MakeClip = fn(Rect, Clip) -> Layer;

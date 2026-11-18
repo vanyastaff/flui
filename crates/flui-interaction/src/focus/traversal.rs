@@ -6,8 +6,8 @@ use super::{
     TraversalDirection, TraversalEdgeBehavior,
 };
 use crate::ids::FocusNodeId;
+use flui_foundation::TextDirection;
 use flui_foundation::geometry::Rect;
-use flui_painting::typography::TextDirection;
 use std::{
     cmp::Ordering,
     rc::{Rc, Weak},

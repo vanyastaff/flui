@@ -13,21 +13,20 @@
 
 use std::sync::Arc;
 
-use crate::typography::{InlineSpan, TextAlign, TextDirection};
+use crate::typography::{InlineSpan, TextAlign, TextBaseline};
+use flui_foundation::TextDirection;
 use flui_foundation::geometry::Size;
 
 use crate::display_list::ShapedParagraph;
 use crate::parley_text::ParagraphLayout;
 
-pub mod baseline;
 mod decor;
 mod decoration;
-pub mod measure;
+mod measure;
 mod measurement;
-pub mod paint;
+mod paint;
 mod sizing;
 
-pub use baseline::TextBaseline;
 pub use measurement::TextMeasurement;
 pub use sizing::{
     RetiredTextSizingCohort, TextMeasurementError, TextPreparationPending, TextResolvedSize,

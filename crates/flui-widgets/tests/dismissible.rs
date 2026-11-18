@@ -370,12 +370,19 @@ pub(crate) fn dismissible_slides_without_rebuilding_per_frame() {
             Color::rgb(80, 90, 100)
         };
         let scene = laid.layer_tree().expect("dragged card scene");
-        assert!(scene.iter().any(|(_, node)| {
-            if let flui_rendering::layer::Layer::Picture(picture) = node.layer() {
-                picture.picture().iter().any(|command| matches!(&command.op,
-                    flui_painting::display_list::DrawOp::Rect { paint, .. } if paint.color == expected))
-            } else { false }
-        }), "crossing the origin selects the other background");
+        assert!(
+            scene.iter().any(|(_, node)| {
+                if let flui_rendering::layer::Layer::Picture(picture) = node.layer() {
+                    picture.picture().iter().any(|command| {
+                        matches!(&command.op,
+                    flui_painting::DrawOp::Rect { paint, .. } if paint.color == expected)
+                    })
+                } else {
+                    false
+                }
+            }),
+            "crossing the origin selects the other background"
+        );
         let (x, y) = at(sign * (80.0 - 176.0));
         laid.dispatch_pointer_move_after(x, y, STEP);
         laid.pump_for(Duration::ZERO);
@@ -646,7 +653,7 @@ fn painted_card_axis(laid: &crate::common::LaidOut, vertical: bool) -> f64 {
             continue;
         };
         for command in picture.picture() {
-            if let flui_painting::display_list::DrawOp::Rect { rect, .. } = &command.op {
+            if let flui_painting::DrawOp::Rect { rect, .. } = &command.op {
                 let (x, y) = command.transform.transform_point(rect.left(), rect.top());
                 let mut point = flui_foundation::geometry::Point::new(x, y);
                 let mut parent = node.parent();
@@ -881,7 +888,7 @@ fn exercise_collapse_registry(migrate: bool, fail_wake: bool) {
         .draw_ops()
         .into_iter()
         .find_map(|command| {
-            if let flui_painting::display_list::DrawOp::Rect { rect, paint } = command.op
+            if let flui_painting::DrawOp::Rect { rect, paint } = command.op
                 && paint.color == color
             {
                 Some(rect)
@@ -897,7 +904,7 @@ fn exercise_collapse_registry(migrate: bool, fail_wake: bool) {
             laid.draw_ops()
                 .into_iter()
                 .find_map(|command| {
-                    if let flui_painting::display_list::DrawOp::Rect { rect, paint } = command.op
+                    if let flui_painting::DrawOp::Rect { rect, paint } = command.op
                         && paint.color == color
                     {
                         Some(rect.height())
@@ -1113,7 +1120,7 @@ pub(crate) fn resize_delivery_keeps_accepted_ticks_before_completion() {
 /// and a touch going down in the window's system-gesture strip leaves the
 /// card to the operating system's edge swipe.
 pub(crate) fn a_dismissible_goes_out_only_where_its_direction_and_threshold_allow() {
-    use flui_painting::typography::TextDirection;
+    use flui_foundation::TextDirection;
     use flui_widgets::Directionality;
     let card = |dismissed: &Rc<std::cell::RefCell<Vec<DismissSide>>>| {
         let dismissed = Rc::clone(dismissed);

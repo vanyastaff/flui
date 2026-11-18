@@ -10,7 +10,7 @@
 use std::f64::consts::{FRAC_PI_4, TAU};
 
 use flui_foundation::geometry::{Point, Rect};
-use flui_painting::paint::shapes::material_shapes;
+use flui_painting::paint::material_shapes;
 use flui_painting::paint::{CornerRounding, Morph, Path, PathCommand, RoundedPolygon, ShapeError};
 
 fn close(actual: f64, expected: f64, tolerance: f64, what: &str) {

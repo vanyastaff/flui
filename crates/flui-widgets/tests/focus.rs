@@ -25,8 +25,8 @@ fn traversal_field(node: &Rc<FocusNode>, x: f64, y: f64) -> BoxedView {
 }
 
 pub(crate) fn traversal_groups_order_blocks_without_creating_focus_scopes() {
+    use flui_foundation::TextDirection;
     use flui_interaction::{FocusTraversalPolicy, ReadingOrderPolicy, TraversalEdgeBehavior};
-    use flui_painting::typography::TextDirection;
     use flui_widgets::interaction::FocusTraversalGroup;
     #[derive(Debug)]
     struct Reverse;
@@ -75,10 +75,10 @@ pub(crate) fn traversal_groups_order_blocks_without_creating_focus_scopes() {
 }
 
 pub(crate) fn nested_scope_edges_visit_the_containing_group_and_reuse_policy_order() {
+    use flui_foundation::TextDirection;
     use flui_interaction::{
         FocusTraversalPolicy, KeyEventResult, ReadingOrderPolicy, TraversalEdgeBehavior,
     };
-    use flui_painting::typography::TextDirection;
     use flui_widgets::interaction::FocusTraversalGroup;
     use std::cell::Cell;
     #[derive(Debug)]
@@ -654,7 +654,7 @@ pub(crate) fn tab_traversal_follows_geometry_not_attach_order() {
 }
 
 fn reading_order_tree(
-    direction: flui_painting::typography::TextDirection,
+    direction: flui_foundation::TextDirection,
     scope: &Rc<FocusScopeNode>,
     nodes: &[Rc<FocusNode>],
     geometry: &[(f64, f64, f64, f64)],
@@ -701,7 +701,7 @@ fn tab_event(backward: bool) -> flui_platform::keyboard::KeyEvent {
 }
 
 fn assert_widget_reading_order(
-    direction: flui_painting::typography::TextDirection,
+    direction: flui_foundation::TextDirection,
     geometry: &[(f64, f64, f64, f64)],
     expected: &[usize],
 ) {
@@ -746,7 +746,7 @@ fn assert_widget_reading_order(
 
 pub(crate) fn tab_groups_vertically_overlapping_widgets_into_one_reading_row() {
     assert_widget_reading_order(
-        flui_painting::typography::TextDirection::Ltr,
+        flui_foundation::TextDirection::Ltr,
         &[
             (0.0, 1.0, 10.0, 10.0),
             (30.0, 0.0, 10.0, 10.0),
@@ -758,7 +758,7 @@ pub(crate) fn tab_groups_vertically_overlapping_widgets_into_one_reading_row() {
 
 pub(crate) fn tab_reads_an_rtl_scope_from_its_inherited_directionality() {
     assert_widget_reading_order(
-        flui_painting::typography::TextDirection::Rtl,
+        flui_foundation::TextDirection::Rtl,
         &[
             (0.0, 0.0, 10.0, 10.0),
             (30.0, 0.0, 10.0, 10.0),
@@ -770,7 +770,7 @@ pub(crate) fn tab_reads_an_rtl_scope_from_its_inherited_directionality() {
 
 pub(crate) fn a_tall_widget_cannot_bridge_disjoint_reading_rows() {
     assert_widget_reading_order(
-        flui_painting::typography::TextDirection::Ltr,
+        flui_foundation::TextDirection::Ltr,
         &[
             (30.0, 0.0, 10.0, 30.0),
             (0.0, 1.0, 10.0, 9.0),
@@ -781,7 +781,7 @@ pub(crate) fn a_tall_widget_cannot_bridge_disjoint_reading_rows() {
 }
 
 pub(crate) fn spatial_tab_preserves_geometric_ties_and_row_boundaries() {
-    use flui_painting::typography::TextDirection::{Ltr, Rtl};
+    use flui_foundation::TextDirection::{Ltr, Rtl};
     for (case, direction, geometry, expected) in [
         (
             "fractional vertical intersection",
@@ -853,7 +853,7 @@ pub(crate) fn spatial_tab_preserves_geometric_ties_and_row_boundaries() {
 }
 
 pub(crate) fn a_directionality_update_changes_tab_order_without_replacing_focus_nodes() {
-    use flui_painting::typography::TextDirection::{Ltr, Rtl};
+    use flui_foundation::TextDirection::{Ltr, Rtl};
     let scope = FocusScopeNode::with_debug_label("changing-direction-tab-scope");
     let nodes = [
         FocusNode::with_debug_label("left"),

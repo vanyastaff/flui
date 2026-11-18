@@ -1,7 +1,8 @@
 //! Decoration types for styling
 
 // Re-export painting types that are commonly used with decorations
-pub use crate::paint::{BlendMode, BoxFit, ColorFilter, ImageRepeat};
+use crate::BoxFit;
+use crate::paint::{ColorFilter, ImageRepeat};
 use crate::{
     Alignment, BoxShape,
     paint::Image,

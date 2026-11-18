@@ -8,7 +8,7 @@
 //! Both halves are crate plumbing: the layer walk is the only production
 //! caller, and `Backend` is the only production implementor.
 
-use flui_painting::{BlendMode, Paint, PointMode};
+use flui_painting::{paint::BlendMode, paint::Paint, paint::PointMode};
 use std::sync::Arc;
 
 use flui_foundation::geometry::{Matrix4, Offset, Point, RRect, RSuperellipse, Rect};
@@ -151,7 +151,7 @@ pub(crate) trait CommandRenderer {
         &mut self,
         image: &Image,
         dst: Rect<f64>,
-        repeat: flui_painting::paint::image::ImageRepeat,
+        repeat: flui_painting::paint::ImageRepeat,
         paint: Option<&Paint>,
         transform: &Matrix4,
     );
@@ -171,7 +171,7 @@ pub(crate) trait CommandRenderer {
         &mut self,
         image: &Image,
         dst: Rect<f64>,
-        filter: flui_painting::paint::image::ColorFilter,
+        filter: flui_painting::paint::ColorFilter,
         paint: Option<&Paint>,
         transform: &Matrix4,
     );

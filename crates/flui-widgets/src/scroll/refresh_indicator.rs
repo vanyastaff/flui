@@ -55,11 +55,11 @@ use std::rc::{Rc, Weak};
 use std::time::Duration;
 
 use flui_animation::{Animation, AnimationController, DrivenController, Vsync};
+use flui_foundation::TextDirection;
 use flui_foundation::geometry::{Axis, Vec2};
 use flui_foundation::panic::PanicRecovery;
 use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback};
 use flui_interaction::InputSequenceId;
-use flui_painting::typography::TextDirection;
 #[cfg(test)]
 use flui_platform::TargetPlatform;
 use flui_platform::keyboard::NamedKey;

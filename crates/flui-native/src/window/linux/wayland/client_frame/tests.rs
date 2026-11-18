@@ -1,5 +1,5 @@
 use flui_foundation::geometry::{DevicePixelRatio, Size};
-use flui_painting::text_layout::FontCollection;
+use flui_painting::FontCollection;
 
 use super::title::TitleText;
 use super::*;

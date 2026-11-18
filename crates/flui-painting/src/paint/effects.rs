@@ -55,7 +55,7 @@ pub enum ColorAdjustment {
 /// # Examples
 ///
 /// ```rust,ignore
-/// use flui_painting::paint::effects::ColorMatrix;
+/// use flui_painting::paint::ColorMatrix;
 ///
 /// // Identity matrix (no change)
 /// let identity = ColorMatrix::identity();
@@ -393,7 +393,7 @@ impl ColorAdjustment {
 /// # Examples
 ///
 /// ```rust,ignore
-/// use flui_painting::paint::effects::{ImageFilter, ColorAdjustment};
+/// use flui_painting::paint::{ImageFilter, ColorAdjustment};
 ///
 /// // Blur filter
 /// let blur = ImageFilter::Blur {

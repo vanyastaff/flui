@@ -15,7 +15,9 @@ use std::sync::Arc;
 use flui_painting::glyphs::{
     FaceKey, FontRegistry, GlyphKey, SubpixelBin, SwashRasterizer, Synthesis,
 };
-use flui_painting::{GlyphContent, GlyphImage, GlyphImageError, GlyphRasterizer};
+use flui_painting::{
+    glyphs::GlyphContent, glyphs::GlyphImage, glyphs::GlyphImageError, glyphs::GlyphRasterizer,
+};
 use parley::fontique::{Blob, Collection, CollectionOptions, SourceCache};
 use parley::layout::PositionedLayoutItem;
 use parley::style::{FontFamily, FontFamilyName, StyleProperty};
@@ -601,8 +603,11 @@ pub(crate) fn subpixel_split_is_total_across_the_float_domain() {
 fn placement_paragraph(
     style: flui_painting::typography::TextStyle,
 ) -> (Arc<flui_painting::ShapedParagraph>, f64) {
-    use flui_painting::typography::{TextDirection, TextSpan};
-    use flui_painting::{Canvas, DrawOp, FontCollection, TextBaseline, TextContext, TextPainter};
+    use flui_foundation::TextDirection;
+    use flui_painting::typography::TextSpan;
+    use flui_painting::{
+        Canvas, DrawOp, FontCollection, TextContext, TextPainter, typography::TextBaseline,
+    };
     let mut context = TextContext::new(&FontCollection::new());
     let mut painter = TextPainter::new()
         .with_text(TextSpan::styled("AA", style))

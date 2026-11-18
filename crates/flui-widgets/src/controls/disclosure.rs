@@ -4,12 +4,12 @@ use std::any::Any;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
+use flui_foundation::TextDirection;
 use flui_foundation::geometry::{Point, Size};
 use flui_interaction::focus::FocusNode;
 use flui_objects::{CrossAxisAlignment, MainAxisSize};
 use flui_painting::styling::Color;
-use flui_painting::typography::TextDirection;
-use flui_painting::{Canvas, Paint};
+use flui_painting::{Canvas, paint::Paint};
 use flui_rendering::delegates::CustomPainter;
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_view::prelude::*;
