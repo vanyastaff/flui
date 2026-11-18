@@ -1311,8 +1311,8 @@ impl X11Drag {
             .ok()?;
         let scale = target.scale.get();
         Some(Point::new(
-            f64::from(reply.dst_x) / scale,
-            f64::from(reply.dst_y) / scale,
+            scale.to_logical(f64::from(reply.dst_x)),
+            scale.to_logical(f64::from(reply.dst_y)),
         ))
     }
 

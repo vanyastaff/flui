@@ -4,7 +4,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use flui_foundation::geometry::{DevicePixelRatio, Size};
+use flui_foundation::geometry::Size;
 use flui_platform::{
     GestureParts, HourCycle, InvalidPreference, Locale, MeasurementSystem, MotionPreference,
     NativeMouseGeometry, NativeTouchGeometry, NumberingSystem, PreferenceParts, RegionOverride,
@@ -13,7 +13,7 @@ use flui_platform::{
 };
 use flui_protocol::native_recording as wire;
 
-use super::{DtoError, DtoResult, duration_nanos, invalid, unread};
+use super::{DtoError, DtoResult, duration_nanos, invalid, ratio, unread};
 
 /// `values` in the schema, through [`PreferenceParts`]: a field added there
 /// fails to compile here until it is mirrored.
@@ -123,10 +123,6 @@ pub(super) fn preferences_to_wire(values: SystemPreferences) -> DtoResult<wire::
             .transpose()?,
         wheel_horizontal_characters: horizontal_characters,
     })
-}
-
-fn pixel_ratio(value: f64) -> DtoResult<DevicePixelRatio> {
-    DevicePixelRatio::try_new(value).ok_or_else(|| invalid(format!("pixel ratio {value}")))
 }
 
 /// `parts` in the schema, each format as its Unicode value; none when no
@@ -297,7 +293,7 @@ pub(super) fn preferences_from_wire(wire: wire::Preferences) -> DtoResult<System
                     NativeMouseGeometry::try_new(
                         Size::new(area_w, area_h),
                         Size::new(drag_w, drag_h),
-                        pixel_ratio(geometry.pixel_ratio)?,
+                        ratio(geometry.pixel_ratio)?,
                     )
                     .map_err(rejected)
                 })
@@ -310,7 +306,7 @@ pub(super) fn preferences_from_wire(wire: wire::Preferences) -> DtoResult<System
                         geometry.double_tap_slop,
                         geometry.min_fling,
                         geometry.max_fling,
-                        pixel_ratio(geometry.pixel_ratio)?,
+                        ratio(geometry.pixel_ratio)?,
                     )
                     .map_err(rejected)
                 })

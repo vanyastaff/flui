@@ -33,7 +33,7 @@ fn collection_consumer(
     )));
     let delivered = Arc::clone(&consumer);
     laid.pipeline_owner().with_mut(|owner| {
-        owner.set_semantics_update_callback(Arc::new(move |packet| {
+        owner.set_semantics_update_callback(Rc::new(move |packet| {
             delivered
                 .lock()
                 .expect("consumer lock")
@@ -1121,7 +1121,7 @@ pub(crate) fn a_covered_retained_form_stays_absent_after_a_late_controller_updat
     ));
     let sink = Arc::clone(&delivered);
     laid.pipeline_owner().with_mut(|owner| {
-        owner.set_semantics_update_callback(Arc::new(move |update| {
+        owner.set_semantics_update_callback(Rc::new(move |update| {
             let ids: std::collections::HashSet<_> =
                 update.nodes.iter().map(|(id, _)| *id).collect();
             assert_eq!(
@@ -2226,7 +2226,7 @@ pub(crate) fn published_bounds_are_physical_and_follow_the_scale_factor() {
         owner.set_device_pixel_ratio(
             flui_foundation::geometry::DevicePixelRatio::try_new(1.5).expect("a ratio in range"),
         );
-        owner.set_semantics_update_callback(Arc::new(move |update| {
+        owner.set_semantics_update_callback(Rc::new(move |update| {
             let mut mirror = sink.lock().expect("publication mirror lock");
             let Some(current) = mirror.as_ref() else {
                 *mirror = Some(flui_testing::A11yTree::new(update.clone()));

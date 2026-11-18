@@ -184,10 +184,7 @@ impl DocumentState {
         // live, writable local, and `ClientToScreen` only writes through the
         // pointer it is given.
         let _ = unsafe { ClientToScreen(self.window.hwnd(), &raw mut origin) };
-        (
-            DevicePixelRatio::try_new(services.scale()).unwrap_or_default(),
-            DevicePoint::new(origin.x, origin.y),
-        )
+        (services.scale(), DevicePoint::new(origin.x, origin.y))
     }
 
     /// Run one granted lock: open the session slot, hand TSF the lock and

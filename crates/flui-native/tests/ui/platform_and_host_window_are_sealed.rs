@@ -46,6 +46,10 @@ impl Platform for OutsidePlatform {
         unreachable!("the impl never compiles")
     }
 
+    fn preferences_delivered(&self, _: &SystemPreferences) {
+        unreachable!("the impl never compiles")
+    }
+
     fn display_snapshot(&self) -> Result<DisplaySnapshot, PlatformError> {
         unreachable!("the impl never compiles")
     }

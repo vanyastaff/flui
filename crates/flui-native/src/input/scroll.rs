@@ -177,7 +177,7 @@ mod mapping {
             axis,
             distance: distance as i16,
             position: (10.0, 10.0),
-            scale: 1.0,
+            scale: flui_foundation::geometry::DevicePixelRatio::ONE,
             time: EventTime::from_nanos(1),
             modifiers: Modifiers::NONE,
         };

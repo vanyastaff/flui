@@ -1105,7 +1105,7 @@ impl FieldHandles {
                     && self.vsync.borrow().is_some() =>
             {
                 controller.set_duration(timeout);
-                let _ = controller.forward_from(Some(0.0));
+                let _ = controller.forward_from(0.0);
             }
             _ => {
                 let _ = controller.stop();

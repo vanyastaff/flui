@@ -1,6 +1,7 @@
 //! A text field's runs and selection, read the way assistive technology reads
 //! them (ADR-0204, semantics-model R12 and R14).
 
+use std::rc::Rc;
 use std::sync::Arc;
 
 use accesskit::{Action, ActionData, ActionRequest, NodeId, TextPosition, TextSelection, TreeId};
@@ -62,7 +63,7 @@ fn fields(
     let received: Arc<Mutex<Vec<TreeUpdate>>> = Arc::default();
     let sink = Arc::clone(&received);
     let mut fixture = Fixture::new();
-    fixture.owner = flui_semantics::SemanticsOwner::new(Arc::new(move |update: &TreeUpdate| {
+    fixture.owner = flui_semantics::SemanticsOwner::new(Rc::new(move |update: &TreeUpdate| {
         sink.lock().push(update.clone());
     }));
     fixture

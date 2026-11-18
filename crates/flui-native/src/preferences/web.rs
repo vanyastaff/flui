@@ -221,6 +221,10 @@ mod browser {
         fn sample(&self) -> Result<SystemPreferences, PlatformError> {
             self.sampler.sample()
         }
+
+        /// The browser's queries answer every read; nothing waits for a
+        /// delivery.
+        fn delivered(&self, _: &SystemPreferences) {}
     }
 
     impl std::fmt::Debug for WebPreferences {

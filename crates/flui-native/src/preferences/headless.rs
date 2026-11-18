@@ -46,6 +46,10 @@ impl host::Preferences<HeadlessLoop> for HeadlessPreferences {
             None => Ok(preferences.values.clone()),
         }
     }
+
+    /// The values a test sets are read in full each time; nothing waits for
+    /// a delivery.
+    fn delivered(_: &HeadlessLoop, _: &flui_platform::SystemPreferences) {}
 }
 
 /// The headless platform's system preferences after `run` has consumed it:

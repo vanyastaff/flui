@@ -10,6 +10,7 @@ use crate::input::android::motion::{
     native_device, native_sensors, needs_device_query, pen_angles, pointer_kind, touch_exploration,
 };
 use crate::input::assembly::{NativeCancel, PenAngles};
+use flui_foundation::geometry::DevicePixelRatio;
 use flui_platform::EventTime;
 use flui_platform::PlatformInput;
 use flui_platform::keyboard::Modifiers;
@@ -22,7 +23,10 @@ use web_time::Instant;
 /// `InputDevice.SOURCE_STYLUS`.
 const SOURCE_STYLUS: u32 = 0x0000_4002;
 /// Physical pixels per logical pixel.
-const SCALE: f64 = 2.0;
+const SCALE: DevicePixelRatio = match DevicePixelRatio::try_new(2.0) {
+    Some(ratio) => ratio,
+    None => panic!("BUG: 2 is a ratio a screen can have"),
+};
 
 /// A device whose motion ranges report every sensor axis.
 fn sensing(source: u32) -> DeviceDiscovery {

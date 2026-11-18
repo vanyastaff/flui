@@ -1609,7 +1609,7 @@ impl IOSWindow {
             ReportedFacts {
                 metrics: flui_foundation::geometry::WindowMetrics::from_logical(
                     metrics.size,
-                    metrics.scale.get(),
+                    metrics.scale,
                 )
                 .ok(),
                 brightness: if self.dark.get() {

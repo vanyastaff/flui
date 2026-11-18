@@ -346,6 +346,14 @@ pub trait Platform: sealed::Sealed + 'static {
     /// observation that a setting has been disabled.
     fn preferences(&self) -> Result<flui_platform::SystemPreferences, PlatformError>;
 
+    /// The application delivered `values`, which [`preferences`](Self::preferences)
+    /// returned, to its runtimes. Call on the owner thread once the delivery
+    /// is accepted. A host that counts a change as delivered only then (macOS,
+    /// Android) reads a change it handed out and never heard confirmed again
+    /// in the next owner turn; the rest ignore the call. A confirmation of a
+    /// read older than one already confirmed is ignored.
+    fn preferences_delivered(&self, values: &flui_platform::SystemPreferences);
+
     // ==================== Display Management ====================
 
     /// Sample every display (monitor) the platform knows right now.
@@ -689,6 +697,10 @@ impl<H: Host> Platform for HostPlatform<H> {
                 read.as_ref(),
             ));
         read
+    }
+
+    fn preferences_delivered(&self, values: &SystemPreferences) {
+        H::Preferences::delivered(&self.owner, values);
     }
 
     fn display_snapshot(&self) -> Result<DisplaySnapshot, PlatformError> {

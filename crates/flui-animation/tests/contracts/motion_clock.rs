@@ -303,7 +303,7 @@ fn settle_simulation(source: impl flui_animation::Simulation + 'static, expected
 }
 
 fn reduced_friction_reaches_its_analytic_rest() {
-    use flui_animation::simulation::{FrictionSimulation, Tolerance};
+    use flui_animation::{FrictionSimulation, Tolerance};
     settle_simulation(
         FrictionSimulation::try_new(0.135, 5.0, 300.0, Tolerance::DEFAULT).expect("friction"),
         5.0 - 300.0 / 0.135_f64.ln(),
@@ -311,7 +311,7 @@ fn reduced_friction_reaches_its_analytic_rest() {
 }
 
 fn reduced_spring_reaches_its_exact_endpoint() {
-    use flui_animation::simulation::{SpringDescription, SpringSimulation, Tolerance};
+    use flui_animation::{SpringDescription, SpringSimulation, Tolerance};
     settle_simulation(
         SpringSimulation::try_new(
             SpringDescription::try_new(1.0, 100.0, 20.0).expect("spring description"),
@@ -363,7 +363,7 @@ fn reduced_non_finite_simulation_keeps_the_published_value() {
 }
 
 fn fling_settlement_reaches_its_declared_bound() {
-    use flui_animation::simulation::SpringDescription;
+    use flui_animation::SpringDescription;
     use flui_animation::{AnimationStatus, MotionOverride, Vsync};
     use std::{cell::Cell, rc::Rc};
 
@@ -390,7 +390,7 @@ fn fling_settlement_reaches_its_declared_bound() {
             let spring = SpringDescription::with_damping_ratio(1.0, 1e-12, 1.0)
                 .expect("a finite slow spring");
             let run = controller
-                .fling_with(velocity, Some(spring))
+                .fling_with(velocity, spring)
                 .expect("a finite bound-directed fling");
             let mut clock = MotionClock::new();
             if mode == "reduced motion" {
@@ -489,7 +489,7 @@ fn reduced_settle_retires_simulation_sources_after_delivery() {
             assert_eq!(self.controller.value(), 0.25);
             *self.restarted.borrow_mut() = Some(
                 self.controller
-                    .forward_from(Some(0.0))
+                    .forward_from(0.0)
                     .expect("restart from Drop"),
             );
             assert!(!self.panic_on_drop, "simulation retirement panic");
@@ -722,8 +722,7 @@ fn reduced_settle_preserves_peer_delivery_and_reentrant_runs() {
             if status == AnimationStatus::ForwardSettled {
                 count.set(count.get() + 1);
                 if count.get() == 1 {
-                    *restart.borrow_mut() =
-                        Some(source.forward_from(Some(0.0)).expect("reentrant run"));
+                    *restart.borrow_mut() = Some(source.forward_from(0.0).expect("reentrant run"));
                     assert!(!panic_first, "first settle callback panic");
                 }
             }
@@ -1105,7 +1104,7 @@ fn tiny_scale_saturates_and_completes_once() {
         assert_eq!(delivered.get(), 1);
         owner
             .controller()
-            .forward_from(Some(0.0))
+            .forward_from(0.0)
             .expect("next finite run after saturation");
         registry.tick_all(&clock.frame(ms(3)));
         assert_eq!(
@@ -1372,7 +1371,7 @@ fn controller_rate_spring() {
 
 fn rate_change_mid_run_keeps_value_continuous(kind: &str) {
     use flui_animation::curves;
-    use flui_animation::simulation::{SpringDescription, SpringSimulation, Tolerance};
+    use flui_animation::{SpringDescription, SpringSimulation, Tolerance};
 
     let controller = AnimationController::builder(Duration::from_secs(1)).build();
     let run = match kind {

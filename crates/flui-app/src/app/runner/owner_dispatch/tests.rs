@@ -2591,7 +2591,7 @@ fn resize_reaches_the_surface_in_the_pixels_the_platform_reported() {
     let (primary, _clear_guard) = install_ui_runtime_a_with_driver(Some(driver));
     let reported = flui_foundation::geometry::WindowMetrics::try_new(
         flui_foundation::geometry::DeviceSize::new(115, 201),
-        1.75,
+        flui_foundation::geometry::DevicePixelRatio::try_new(1.75).expect("a ratio in range"),
     )
     .expect("valid window metrics");
     dispatch_platform_ui_runtime(primary, RuntimeTask::Event(RuntimeEvent::Resized(reported)))
@@ -3389,7 +3389,7 @@ fn owner_dispatch_matrix() {
 fn window_metrics(width: f64, height: f64, scale: f64) -> flui_foundation::geometry::WindowMetrics {
     flui_foundation::geometry::WindowMetrics::from_logical(
         flui_foundation::geometry::Size::new(width, height),
-        scale,
+        flui_foundation::geometry::DevicePixelRatio::try_new(scale).expect("a ratio in range"),
     )
     .expect("valid window metrics")
 }

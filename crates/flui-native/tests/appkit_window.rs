@@ -238,7 +238,10 @@ mod cases {
                 .then(|| {
                     WindowMetrics::from_logical(
                         Size::new(content.size.width, content.size.height),
-                        ns_window.backingScaleFactor(),
+                        flui_foundation::geometry::DevicePixelRatio::try_new(
+                            ns_window.backingScaleFactor(),
+                        )
+                        .expect("AppKit's backing scale is a ratio a screen has"),
                     )
                     .ok()
                 })

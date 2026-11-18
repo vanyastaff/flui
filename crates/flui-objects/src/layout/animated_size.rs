@@ -211,9 +211,10 @@ impl SizeMotion {
     /// A resting zero size moved by `motion`, registered with `vsync` when
     /// one is given. Without a registry, admitted motion settles at once.
     pub fn new(motion: MotionSpec, vsync: Option<&Vsync>) -> Self {
-        let owner =
-            AnimatedValue::with_debug_label("AnimatedSize", Size::ZERO, motion.clone(), vsync)
-                .expect("BUG: a zero size is finite");
+        let owner = AnimatedValue::builder(Size::ZERO, motion.clone())
+            .debug_label("AnimatedSize")
+            .build_on(vsync)
+            .expect("BUG: a zero size is finite");
         let view = owner.animation();
         Self {
             shared: Rc::new(SharedSize {

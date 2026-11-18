@@ -104,6 +104,9 @@ impl SystemPreferenceSource for PreferenceSource {
     fn sample(&self) -> Result<SystemPreferences, PlatformError> {
         Ok(self.observation.lock().accepted.clone())
     }
+
+    /// The portal's worker accepts what it reads and wakes the owner for it.
+    fn delivered(&self, _: &SystemPreferences) {}
 }
 
 /// The native Linux loops start the portal's watch as they run, and their

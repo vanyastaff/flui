@@ -68,6 +68,7 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
     // Shape errors above are reported before the runtime path is needed, so
     // they do not depend on the consumer's manifest.
     let runtime = crate::runtime_path::Runtime::Animation.resolve(input.ident.span())?;
+    let geometry = crate::runtime_path::Runtime::Geometry.resolve(input.ident.span())?;
     let name = &input.ident;
     let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
     // The locals and parameters of the generated methods.
@@ -111,7 +112,7 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
             )
         });
         lerps.push(quote_spanned! {ty.span()=>
-            #member: <#ty as #runtime::Lerp>::lerp_to(&#this.#member, &#other.#member, #t)
+            #member: <#ty as #geometry::Lerp>::lerp_to(&#this.#member, &#other.#member, #t)
         });
         width = end;
     }
@@ -141,7 +142,7 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
         }
 
         #[automatically_derived]
-        impl #impl_generics #runtime::Lerp for #name #ty_generics #where_clause {
+        impl #impl_generics #geometry::Lerp for #name #ty_generics #where_clause {
             #[inline]
             fn lerp_to(&self, #other: &Self, #t: f64) -> Self {
                 if #t == 0.0 { return ::core::clone::Clone::clone(self); }

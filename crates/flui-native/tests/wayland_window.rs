@@ -168,7 +168,8 @@ impl WindowFixture for WaylandFixture {
             .then(|| {
                 WindowMetrics::from_logical(
                     Size::new(f64::from(width), f64::from(height) - header),
-                    self.scale(),
+                    flui_foundation::geometry::DevicePixelRatio::try_new(self.scale())
+                        .expect("the compositor's scale is a ratio a screen has"),
                 )
                 .ok()
             })

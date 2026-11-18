@@ -639,7 +639,7 @@ impl MeasurementPass<'_> {
             let reverse_curve = curve_hero
                 .reverse_curve()
                 .unwrap_or_else(|| SharedCurve::new(curve.flipped()));
-            curved.with_reverse_curve(reverse_curve)
+            curved.reverse_curve(reverse_curve)
         };
         let animation: std::rc::Rc<dyn Animation<f64>> = std::rc::Rc::new(curved);
 

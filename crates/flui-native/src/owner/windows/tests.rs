@@ -505,10 +505,10 @@ fn a_window_opens_at_one_dpi_its_hooks_share() {
     let read_by_a_hook = scale.clone();
     assert_eq!(
         scale.rescale(super::WindowDpi::try_new(192).expect("a DPI in range")),
-        1.5
+        flui_foundation::geometry::DevicePixelRatio::try_new(1.5).expect("a ratio in range")
     );
     assert_eq!(
-        read_by_a_hook.scale(),
+        read_by_a_hook.ratio().get(),
         2.0,
         "a hook reads the window's new scale"
     );

@@ -740,6 +740,15 @@ trait depends on `flui-platform` instead.
   from the base ratio, so a display's bounds and scale agree
   (`a_scale_no_screen_has_reads_as_the_base_ratio`). A ratio an application
   hands the runtime is refused typed (`UiRuntimeError::PixelRatio`).
+  A pointer reading carries its window's ratio in that type
+  (`NativeReading::scale`, and a wheel's and a touchpad frame's), so the
+  assembly never meets a scale no screen has; a native recording holds the
+  number, and its codec refuses one no screen has on read, as it does a
+  display's scale factor, a window's metrics and the system's mouse and touch
+  geometry (`CodecError::Ratio`,
+  `a_ratio_no_screen_has_is_refused_where_a_recording_holds_it`). The input
+  recording refuses the same rows with `RecordingError::Ratio`, and a
+  `WindowMetrics` is built from a `DevicePixelRatio`, never from a number.
   `display::source::mapping` reads one table of cadences through the
   Android sample, the Windows rule, the Wayland and RandR models, the
   display link and the estimator; the macOS source hands CoreGraphics' rate
@@ -1811,9 +1820,9 @@ available; both SDK-tools packaging and generated Gradle configuration enforce i
 The owner accepts a reply only while its window remains live and the sampled
 physical size matches the current native window; a reply taken at an older size
 is asked for once more. The window asks on every resize, configuration change,
-new native window, `Start` and inset change `FluiView` reports from
-`onApplyWindowInsets`; every 500 ms while on screen only until the view is in the
-window. From API 30 the insets are the
+new native window, the loop's first turn, `Start` and inset change `FluiView`
+reports from `onApplyWindowInsets`, which the system also calls as the view
+enters the window; nothing asks on a timer (ADR-0378). From API 30 the insets are the
 visible bars (`getInsets`), so hidden bars reserve no space; below it the stable
 insets are the only reading without keyboard occlusion. One query may be
 outstanding; a request while it is out asks once more after its reply settles,
@@ -2870,27 +2879,51 @@ registers in `onAttachedToWindow` and then reports once, so a change made before
 observation began is read too, and unregisters when detached and in `detach`,
 which clears its handle first. A view that never reaches the window, or that the
 native side detaches because it could not keep it, leaves nothing that could call
-a freed handle. Until the view is in the window, or if it never gets there, the
-host reads every 500ms while the Activity is on screen, so no change is lost. The long-press
-timeout is read from its secure setting, since `ViewConfiguration`'s copy can
-still be old when the observer fires. A failed read owes a retry at its deadline,
-which bounds the loop's wait like the cadence does, so errors preserve the
-accepted observation and the next refresh attempt.
-AppKit registers its observers before its first native getter. A cold source has
-no accepted observation; an initial query error cannot abort platform bootstrap,
-publish a fabricated default, or discard its retry. The shared production read
-path's `cold_native_observation_recovers_without_forged_defaults` covers failed
-initial observation, deferred retry, first successful publication and recovery
-without a stale-success response. This portable seam does not execute AppKit's
-native constructor or its notification observers.
-Successful recovery requests owner delivery even when the comparison value is
-unchanged: a prior failed consumer read must not strand the accepted observation.
-Healthy unchanged observations remain quiet.
-Failed or unwinding native reads restore a 500ms admission deadline; unrelated
-owner wakes cannot repeat the getter early. Reentrant reads return
-`PreferencesDeferred` before native work, and foreign calls do not affect that
-admission. `bounded_native_read_admission` exercises this portable production
-guard through failure, competing admission and recovery after unwind.
+a freed handle. Nothing samples in its place: the loop reads on its own only on
+its first turn, after `Start` and at a due retry (`poll::LoopReads`), and an
+installation that fails or stops short reaches the owner once as
+`ViewEvent::Installed` with its `ViewMissing`, which the loop logs. The
+long-press timeout is read from its secure setting, since `ViewConfiguration`'s
+copy can still be old when the observer fires.
+
+The Android and AppKit sources are one model, `preferences::read::NoticedPreferences`
+(ADR-0378), over what each system supplies (`SystemReads`: the read, the clock,
+and `Retrying`, a timer while the application is active on AppKit, the loop's
+deadline on Android). The application's turn reads the source on every wake; the
+source asks the system only when a notice came since its latest answer or a
+retry is due, and otherwise returns that answer. The Android loop decides which
+notices read in `poll::LoopReads::hear` (`ConfigChanged` and a view report read
+at once, `Start` at the next turn; `ConfigChanged` and `Start` tell the source
+first, and `JavaView::settings_changed` tells it as the view reports, before the
+owner wakes); each AppKit observer runs `notice_handler`, which notices and
+wakes the owner. A value counts as accepted only when the application confirms
+its delivery (`Platform::preferences_delivered`, which `refresh_preferences_with`
+calls after `update_preferences` succeeds; required on every host position and
+source, an explicit no-op where nothing waits), and only for the latest read's
+answer: a re-entrant delivery's older confirmation is ignored. A change read inside the
+application's turn (`OwnerSignal::in_application_turn`, not the owner-work part
+of a turn) is owed to that turn (`owe_delivery`): delivered, it costs nothing
+more; dropped, the turn's end wakes the owner once more, and a second drop of the
+same value waits for a notice. A change read anywhere else wakes the owner. One
+notice is therefore one owner turn. A failed or panicking read (the panic is
+contained in the source and its payload discarded) is retried on `Retries`, 0.5
+to 16 s apart six times, then waits for the next notice. A cold source has
+delivered nothing; an initial query error cannot abort platform bootstrap or
+publish a fabricated default. The model's tests drive it through `SystemReads`
+with the owner signal and its turn in virtual time
+(`an_idle_source_never_wakes_the_owner`, `one_change_notice_is_one_owner_turn`,
+`application_turns_ask_the_system_only_after_a_notice`,
+`a_change_a_turn_drops_is_read_again_once`,
+`a_confirmation_of_an_older_read_is_ignored`,
+`failed_reads_back_off_and_stop_until_the_next_notice`); AppKit's getters and
+observers themselves run only on a Mac.
+A failed or panicking read leaves the admission's next retry deadline
+(`READ_RETRIES`); unrelated owner wakes cannot repeat the getter early, and a
+read before the deadline or after the retries ran out returns
+`PreferencesDeferred` before native work. A read off the owner thread is refused
+before the admission and changes nothing. `bounded_native_read_admission`
+exercises the admission through failure, competing admission and recovery after
+unwind.
 
 Android API26 public horizontal/vertical scroll factors normalize fractional
 axis values to logical pixel deltas exactly once. API21–25 resolve the public
@@ -5435,7 +5468,11 @@ contact cancel. Replaying the rows through the same calls reproduces the
 backend's `PlatformInput` on any host, so Linux CI exercises Win32 QPC
 stamping, AppKit and UIKit uptime clocks, Android history batches and DOM
 predictions. The format is the `HostInput` recording's framing (JSON Lines, a
-major version, unknown fields skipped, an unknown variant a typed error); its
+major version, unknown fields skipped, an unknown variant a typed error). A
+writer writes `FORMAT_VERSION`; a reader reads every version from
+`OLDEST_READABLE_VERSION` on whose fields and shapes are the current ones, and
+refuses a row, not the recording, whose value the current version bounds
+tighter (version 4 bounds every ratio to the range a screen can have). Its
 schema is `flui-protocol`'s `native_recording`, which a reader such as the
 driver reads without this crate, and its codec is `journal::codec`
 (`journal/`, a crate-level module, since it names the input feature's model
@@ -6375,8 +6412,8 @@ other thread leaks that data instead of freeing what a late call could reach.
 The loop has no timer of its own (ADR-0249): every producer wakes the looper
 (`request_redraw` on the request that sets its flag, `OwnerSignal`, the Java
 view's queue, the inset reply, this callback), and `poll_timeout` blocks until
-the next wake deadline or 500 ms preference sample while the Activity is on
-screen, and while stopped until a deadline still ahead or a wake (ADR-0366). A
+the next wake deadline or preference read (`LoopReads`: the first turn, `Start`,
+a due retry) while the Activity is on screen, and while stopped until a deadline still ahead or a wake (ADR-0366). A
 deadline already behind while stopped waits for a frame, so it does not cut the
 wait to zero.
 
@@ -6409,9 +6446,9 @@ the window's `frame_rate_hint` capability is `Unavailable` and the hint answers
 **Alternatives considered:**
 - `DisplayManager.DisplayListener` — it needs a Java object implementing the
   interface, which a `NativeActivity` app without Java code does not have.
-- Polling `Display.getRefreshRate` — the 500 ms preference poll is a bound on
-  configuration getters with no notification, and a display read would cost a
-  second round trip each time for a value the choreographer announces.
+- Polling `Display.getRefreshRate` — the loop polls nothing (ADR-0249, ADR-0378),
+  and a display read on a timer would cost a round trip each time for a value
+  the choreographer announces.
 - Linking `android_get_device_api_level` or the API 30 functions directly — the
   binary does not load on an older system.
 

@@ -1,26 +1,35 @@
-//! `WindowMetrics`: a drawable area is at least a pixel in each extent at a finite, positive
-//! ratio, and the device size a platform reports comes back unchanged.
+//! `WindowMetrics`: a drawable area is at least a pixel in each extent at a ratio a screen
+//! can have, and the device size a platform reports comes back unchanged.
 
 use flui_foundation::geometry::{
     DevicePixelRatio, DeviceSize, InvalidMetrics, Size, WindowMetrics, device_extent,
 };
 
+/// A ratio a screen can have.
+fn ratio(ratio: f64) -> DevicePixelRatio {
+    DevicePixelRatio::try_new(ratio).expect("a ratio in range")
+}
+
 fn physical_size_survives_a_fractional_scale() {
     // 115 / 1.75 = 65.714…; truncating the logical size back to pixels gave 114.
-    let metrics = WindowMetrics::try_new(DeviceSize::new(115, 201), 1.75).expect("valid metrics");
+    let metrics =
+        WindowMetrics::try_new(DeviceSize::new(115, 201), ratio(1.75)).expect("valid metrics");
     assert_eq!(metrics.physical(), DeviceSize::new(115, 201));
-    let rebuilt = WindowMetrics::from_logical(metrics.logical(), 1.75).expect("valid metrics");
+    let rebuilt =
+        WindowMetrics::from_logical(metrics.logical(), ratio(1.75)).expect("valid metrics");
     assert_eq!(rebuilt.physical(), DeviceSize::new(115, 201));
 }
 
 fn logical_size_is_the_device_size_over_the_ratio() {
-    let metrics = WindowMetrics::try_new(DeviceSize::new(300, 150), 1.5).expect("valid metrics");
+    let metrics =
+        WindowMetrics::try_new(DeviceSize::new(300, 150), ratio(1.5)).expect("valid metrics");
     assert_eq!(metrics.logical(), Size::new(200.0, 100.0));
     assert!((metrics.scale().get() - 1.5).abs() < f64::EPSILON);
 }
 
 fn from_logical_rounds_each_extent_to_the_nearest_pixel() {
-    let metrics = WindowMetrics::from_logical(Size::new(100.4, 100.6), 1.0).expect("valid metrics");
+    let metrics =
+        WindowMetrics::from_logical(Size::new(100.4, 100.6), ratio(1.0)).expect("valid metrics");
     assert_eq!(metrics.physical(), DeviceSize::new(100, 101));
 }
 
@@ -32,10 +41,10 @@ type Row = (
 
 fn a_report_that_is_not_a_drawable_area_names_its_cause() {
     let size = DeviceSize::new;
-    let rows: [Row; 13] = [
+    let rows: [Row; 8] = [
         (
             "zero width",
-            WindowMetrics::try_new(size(0, 10), 1.0),
+            WindowMetrics::try_new(size(0, 10), ratio(1.0)),
             |e| {
                 matches!(
                     e,
@@ -48,62 +57,37 @@ fn a_report_that_is_not_a_drawable_area_names_its_cause() {
         ),
         (
             "zero height",
-            WindowMetrics::try_new(size(10, 0), 1.0),
+            WindowMetrics::try_new(size(10, 0), ratio(1.0)),
             |e| matches!(e, InvalidMetrics::EmptyExtent { .. }),
         ),
         (
             "negative width",
-            WindowMetrics::try_new(size(-1, 10), 1.0),
+            WindowMetrics::try_new(size(-1, 10), ratio(1.0)),
             |e| matches!(e, InvalidMetrics::EmptyExtent { width: -1, .. }),
         ),
         (
-            "zero scale",
-            WindowMetrics::try_new(size(10, 10), 0.0),
-            |e| matches!(e, InvalidMetrics::InvalidScale(_)),
-        ),
-        (
-            "negative scale",
-            WindowMetrics::try_new(size(10, 10), -2.0),
-            |e| matches!(e, InvalidMetrics::InvalidScale(_)),
-        ),
-        (
-            "nan scale",
-            WindowMetrics::try_new(size(10, 10), f64::NAN),
-            |e| matches!(e, InvalidMetrics::InvalidScale(_)),
-        ),
-        (
             "nan logical",
-            WindowMetrics::from_logical(Size::new(f64::NAN, 10.0), 1.0),
+            WindowMetrics::from_logical(Size::new(f64::NAN, 10.0), ratio(1.0)),
             |e| matches!(e, InvalidMetrics::NonFiniteSize { .. }),
         ),
         (
             "infinite logical",
-            WindowMetrics::from_logical(Size::new(10.0, f64::INFINITY), 1.0),
+            WindowMetrics::from_logical(Size::new(10.0, f64::INFINITY), ratio(1.0)),
             |e| matches!(e, InvalidMetrics::NonFiniteSize { .. }),
         ),
         (
             "logical below a pixel",
-            WindowMetrics::from_logical(Size::new(0.4, 10.0), 1.0),
+            WindowMetrics::from_logical(Size::new(0.4, 10.0), ratio(1.0)),
             |e| matches!(e, InvalidMetrics::EmptyExtent { width: 0, .. }),
         ),
         (
             "logical beyond device pixels",
-            WindowMetrics::from_logical(Size::new(3.0e9, 10.0), 1.0),
+            WindowMetrics::from_logical(Size::new(3.0e9, 10.0), ratio(1.0)),
             |e| matches!(e, InvalidMetrics::Overflow { .. }),
         ),
         (
-            "a scale below the smallest a screen has",
-            WindowMetrics::try_new(size(1, 1), f64::from_bits(1)),
-            |e| matches!(e, InvalidMetrics::InvalidScale(_)),
-        ),
-        (
-            "a scale past the largest a screen has",
-            WindowMetrics::try_new(size(1, 1), 1.0e6),
-            |e| matches!(e, InvalidMetrics::InvalidScale(_)),
-        ),
-        (
             "scale beyond device pixels",
-            WindowMetrics::from_logical(Size::new(1.0e9, 10.0), 32.0),
+            WindowMetrics::from_logical(Size::new(1.0e9, 10.0), ratio(32.0)),
             |e| matches!(e, InvalidMetrics::Overflow { .. }),
         ),
     ];
@@ -146,7 +130,6 @@ fn a_ratio_is_held_to_the_range_a_screen_can_have() {
 }
 
 fn a_surface_side_is_snapped_to_whole_device_pixels() {
-    let ratio = |ratio: f64| DevicePixelRatio::try_new(ratio).expect("a ratio in range");
     // (case, logical, ratio, device)
     for (case, logical, scale, device) in [
         ("whole", 800.0, 1.0, Some(800)),

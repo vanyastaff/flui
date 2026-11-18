@@ -1351,7 +1351,7 @@ fn an_oscillating_fling_spring_is_refused() {
     refuses(
         "AnimationController::fling_with",
         "underdamped_fling_spring",
-        || assert!(owner.controller().fling_with(1.0, Some(spring)).is_err()),
+        || assert!(owner.controller().fling_with(1.0, spring).is_err()),
     );
 }
 
@@ -1366,7 +1366,7 @@ fn an_unrepresentable_fling_is_refused() {
     owner.controller().tick_at(Duration::from_millis(100));
     let spring = SpringDescription::with_damping_ratio(1.0, 1e308, 1.0).expect("spring");
     refuses("AnimationController::fling_with", "simulation", || {
-        assert!(owner.controller().fling_with(1.0, Some(spring)).is_err());
+        assert!(owner.controller().fling_with(1.0, spring).is_err());
     });
 }
 
@@ -1954,7 +1954,7 @@ fn never_settles_reports(scenario: impl FnOnce()) -> Vec<String> {
 struct Endless;
 
 #[cfg(any(debug_assertions, feature = "diagnostics"))]
-impl flui_animation::simulation::Simulation for Endless {
+impl flui_animation::Simulation for Endless {
     fn x(&self, time: f64) -> f64 {
         (time * 0.01).sin() * 0.5 + 0.5
     }

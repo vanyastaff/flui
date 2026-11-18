@@ -10,6 +10,7 @@
 //! `harness_merge_semantics_collapses_descendant_boundaries` in
 //! `flui-objects/tests/render_object_harness.rs`.
 
+use std::rc::Rc;
 use std::sync::Arc;
 
 use flui_foundation::RenderId;
@@ -79,7 +80,7 @@ pub(crate) fn a_panicking_semantics_callback_leaves_the_phase() {
     }
     let mut owner =
         flui_rendering::PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
-    owner.set_semantics_update_callback(Arc::new(|_: &flui_semantics::TreeUpdate| {}));
+    owner.set_semantics_update_callback(Rc::new(|_: &flui_semantics::TreeUpdate| {}));
     owner.set_root_render_object(Box::new(Panicking));
     owner.set_root_constraints(Some(constraints()));
     owner.set_semantics_enabled(true);
@@ -165,13 +166,11 @@ pub(crate) fn a_failing_semantics_lifecycle_hook_keeps_the_transition() {
         let sink = Arc::clone(&published);
         let mut owner =
             flui_rendering::PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
-        owner.set_semantics_update_callback(Arc::new(
-            move |update: &flui_semantics::TreeUpdate| {
-                sink.lock()
-                    .expect("the list is not poisoned")
-                    .push(update.nodes.len());
-            },
-        ));
+        owner.set_semantics_update_callback(Rc::new(move |update: &flui_semantics::TreeUpdate| {
+            sink.lock()
+                .expect("the list is not poisoned")
+                .push(update.nodes.len());
+        }));
         owner.set_root_render_object(Box::new(ActionLeaf(Arc::clone(teardown))));
         owner.set_root_constraints(Some(constraints()));
         let (owner, frame) = scene.run_frame(owner);

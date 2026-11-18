@@ -12,17 +12,17 @@
 //! The two rule modules make no JNI call, so every host checks them.
 
 #[cfg(target_os = "android")]
-pub(crate) use configuration::AndroidPreferences;
+pub(crate) use configuration::activity_preferences;
 
 #[cfg(target_os = "android")]
 mod configuration {
     //! Activity-context observations through public Android configuration APIs.
     //!
-    //! The host reads them again on `ConfigChanged`, on `Resume` and when
-    //! `FluiView` reports a changed setting or contrast level, even without a user
-    //! surface.
+    //! The host reads them again on `ConfigChanged`, after `Start` and when
+    //! `FluiView` reports a changed setting or contrast level, even without a
+    //! user surface (ADR-0378).
 
-    use std::sync::{Arc, Weak};
+    use std::sync::Arc;
     use std::time::Duration;
 
     use android_activity::AndroidApp;
@@ -41,8 +41,11 @@ mod configuration {
     use crate::owner::android::ActivityPreferences;
     use crate::owner::android::activity::with_activity;
     use crate::owner::signal::OwnerSignal;
-    use crate::owner::sources::SystemPreferenceSource;
-    use crate::preferences::{locales, read::ReadAdmission, regional};
+    use crate::preferences::{
+        locales,
+        read::{NoticedPreferences, Retrying, SystemReads},
+        regional,
+    };
     use crate::version::gate::android::{AndroidApi, LocaleList, SystemContrast, TextWeight};
     use flui_platform::{
         GestureGeometry, GesturePreferences, NativeTouchGeometry, PreferenceQueryError,
@@ -50,66 +53,71 @@ mod configuration {
     };
 
     /// The Android host's preference source: the Activity's configuration and
-    /// settings, read under one admission so a read that failed is retried at a
-    /// bounded pace and a change is delivered once.
-    pub(crate) struct AndroidPreferences {
-        app: AndroidApp,
+    /// settings, read through the model the AppKit host shares, so a change is
+    /// delivered once and a read that failed is retried on a bounded schedule.
+    pub(crate) type AndroidPreferences = NoticedPreferences<ActivityReads>;
+
+    /// A source reading `app`'s Activity at `api`, which wakes the owner
+    /// behind `signal` when a read outside its turn owes the application a
+    /// delivery.
+    pub(crate) fn activity_preferences(
+        app: &AndroidApp,
         api: AndroidApi,
-        admission: ReadAdmission,
-        signal: Weak<OwnerSignal>,
-    }
-
-    impl std::fmt::Debug for AndroidPreferences {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            f.debug_struct("AndroidPreferences").finish_non_exhaustive()
-        }
-    }
-
-    impl AndroidPreferences {
-        /// A source reading `app`'s Activity at `api`, which wakes the owner behind
-        /// `signal` when a read owes the application a delivery.
-        pub(crate) fn new(app: &AndroidApp, api: AndroidApi, signal: &Arc<OwnerSignal>) -> Self {
-            Self {
+        signal: &Arc<OwnerSignal>,
+    ) -> AndroidPreferences {
+        NoticedPreferences::new(
+            ActivityReads {
                 app: app.clone(),
                 api,
-                admission: ReadAdmission::default(),
-                signal: Arc::downgrade(signal),
-            }
-        }
+            },
+            signal,
+        )
     }
 
-    /// The loop calls it on the owner thread, which it checked.
-    impl SystemPreferenceSource for AndroidPreferences {
-        fn sample(&self) -> Result<SystemPreferences, PlatformError> {
-            let (current, needs_delivery) =
-                self.admission
-                    .read_observation(web_time::Instant::now(), || {
-                        sample(&self.app, self.api).map_err(|error| PlatformError::Preferences {
-                            message: error.to_string(),
-                        })
-                    })?;
-            if needs_delivery && let Some(signal) = self.signal.upgrade() {
-                let _ = signal.wake();
-            }
-            Ok(current)
+    /// The Activity's side of the source: its configuration and settings
+    /// through JNI. The loop calls it on the owner thread, which it checked.
+    pub(crate) struct ActivityReads {
+        app: AndroidApp,
+        api: AndroidApi,
+    }
+
+    impl SystemReads for ActivityReads {
+        fn read(&self) -> Result<SystemPreferences, PlatformError> {
+            sample(&self.app, self.api).map_err(|error| PlatformError::Preferences {
+                message: error.to_string(),
+            })
+        }
+
+        fn now(&self) -> web_time::Instant {
+            web_time::Instant::now()
+        }
+
+        /// The loop blocks no longer than the source's retry deadline and
+        /// gates its own reads on the Activity running.
+        fn retrying(&self) -> Retrying<'_> {
+            Retrying::AtLoopDeadline
         }
     }
 
     impl ActivityPreferences for AndroidPreferences {
         fn retry_deadline(&self) -> Option<web_time::Instant> {
-            self.admission.retry_deadline()
+            NoticedPreferences::retry_deadline(self)
+        }
+
+        fn notice(&self) {
+            NoticedPreferences::notice(self);
         }
 
         fn night_mode(&self) -> Result<bool, PreferenceQueryError> {
-            night_mode(&self.app)
+            night_mode(&self.system().app)
         }
 
         fn pixel_ratio(&self) -> Result<DevicePixelRatio, PreferenceQueryError> {
-            pixel_ratio(&self.app)
+            pixel_ratio(&self.system().app)
         }
 
         fn gesture_geometry(&self) -> Result<GestureGeometry, PreferenceQueryError> {
-            geometry(&self.app)
+            geometry(&self.system().app)
         }
     }
 

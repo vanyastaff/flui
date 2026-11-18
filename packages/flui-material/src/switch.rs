@@ -273,13 +273,10 @@ impl StatefulView for Switch {
         } else {
             WidgetStates::NONE
         };
-        let position = AnimatedValue::with_debug_label(
-            "Switch",
-            switch_position(self.value),
-            self.motion.clone(),
-            None,
-        )
-        .expect("BUG: a switch position is 0 or 1, always finite");
+        let position = AnimatedValue::builder(switch_position(self.value), self.motion.clone())
+            .debug_label("Switch")
+            .build_on(None)
+            .expect("BUG: a switch position is 0 or 1, always finite");
         // `Disabled` is seeded from the switch the well is given: the well's
         // node writes the same value, and this build reads it first
         // (ADR-0322 §3).

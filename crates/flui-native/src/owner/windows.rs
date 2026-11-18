@@ -437,7 +437,7 @@ pub(crate) trait DropTarget {
 
     /// The scale the target reports positions at.
     #[cfg(test)]
-    fn scale(&self) -> f64;
+    fn scale(&self) -> flui_foundation::geometry::DevicePixelRatio;
 }
 
 /// The drag position: the transport the host's [`WindowsHost::drag`] made,
@@ -1688,6 +1688,12 @@ impl host::Preferences<WindowsLoop> for WindowsLoop {
             })?
             .preferences
             .sample()
+    }
+
+    fn delivered(owner: &WindowsLoop, values: &flui_platform::SystemPreferences) {
+        if let Ok(shares) = owner.owner_control.shares("confirm a preference delivery") {
+            shares.preferences.delivered(values);
+        }
     }
 }
 

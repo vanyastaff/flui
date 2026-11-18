@@ -14,6 +14,7 @@
 //! cursor. The association is the process's, not the window's, so the window
 //! attaches the mouse again whenever it lets the lock go.
 
+use flui_foundation::geometry::DevicePixelRatio;
 use flui_platform::{Cursor, CursorError, CursorIcon, CursorImage, PlatformFailure};
 use objc2::AnyThread;
 use objc2::rc::Retained;
@@ -33,7 +34,7 @@ pub(crate) enum NativeCursor {
         /// The image it was made of, to know it again.
         image: CursorImage,
         /// The backing scale it was measured at, in points.
-        scale: f64,
+        scale: DevicePixelRatio,
         /// The `NSCursor`.
         cursor: Retained<NSCursor>,
     },
@@ -45,7 +46,7 @@ impl NativeCursor {
 
     /// Whether this is the cursor `cursor` asks for at `scale`: what a
     /// repeated request keeps, so an image is made into a cursor once.
-    pub(crate) fn shows(&self, cursor: &Cursor, scale: f64) -> bool {
+    pub(crate) fn shows(&self, cursor: &Cursor, scale: DevicePixelRatio) -> bool {
         match (self, cursor) {
             (Self::Icon(shown), Cursor::Icon(asked)) => shown == asked,
             (Self::Hidden(_), Cursor::Hidden) => true,
@@ -56,7 +57,7 @@ impl NativeCursor {
                     ..
                 },
                 Cursor::Image(asked),
-            ) => image == asked && made_at.to_bits() == scale.to_bits(),
+            ) => image == asked && *made_at == scale,
             _ => false,
         }
     }
@@ -66,7 +67,7 @@ impl NativeCursor {
     ///
     /// # Errors
     /// [`CursorError::Platform`] when AppKit makes no cursor of the image.
-    pub(crate) fn of(cursor: &Cursor, scale: f64) -> Result<Self, CursorError> {
+    pub(crate) fn of(cursor: &Cursor, scale: DevicePixelRatio) -> Result<Self, CursorError> {
         Ok(match cursor {
             Cursor::Icon(icon) => Self::Icon(*icon),
             Cursor::Hidden => Self::Hidden(blank_cursor().map_err(CursorError::Platform)?),
@@ -81,15 +82,13 @@ impl NativeCursor {
     /// This cursor made again at `scale`: an image is measured in points at
     /// the window's backing scale. `None` when nothing depends on the scale
     /// or it is the one it was made at. Main thread only.
-    pub(crate) fn rescaled(&self, scale: f64) -> Option<Result<Self, CursorError>> {
+    pub(crate) fn rescaled(&self, scale: DevicePixelRatio) -> Option<Result<Self, CursorError>> {
         match self {
             Self::Image {
                 image,
                 scale: made_at,
                 ..
-            } if made_at.to_bits() != scale.to_bits() => {
-                Some(Self::of(&Cursor::Image(image.clone()), scale))
-            }
+            } if *made_at != scale => Some(Self::of(&Cursor::Image(image.clone()), scale)),
             Self::Icon(_) | Self::Hidden(_) | Self::Image { .. } => None,
         }
     }
@@ -170,25 +169,23 @@ fn system_cursor(icon: CursorIcon) -> Retained<NSCursor> {
 pub(crate) fn blank_cursor() -> Result<Retained<NSCursor>, PlatformFailure> {
     let blank = CursorImage::try_new(1, 1, (0, 0), vec![0; 4])
         .expect("BUG: one transparent pixel with its hotspot on it is a cursor image");
-    image_cursor(&blank, 1.0)
+    image_cursor(&blank, DevicePixelRatio::ONE)
 }
 
 /// An `NSCursor` of `image`: its pixels in a bitmap representation, in an
 /// image measured in points at the backing `scale`, with the hotspot measured
-/// likewise. A scale that is no positive number measures one point per pixel.
+/// likewise.
 ///
 /// The bitmap representation's initializer is the one step AppKit may refuse
 /// (`nullable` in `NSBitmapImageRep.h`), and its buffer the one pointer it may
 /// leave null; both are errors. `-[NSImage initWithSize:]` and
 /// `-[NSCursor initWithImage:hotSpot:]` are declared `nonnull`.
-fn image_cursor(image: &CursorImage, scale: f64) -> Result<Retained<NSCursor>, PlatformFailure> {
+fn image_cursor(
+    image: &CursorImage,
+    scale: DevicePixelRatio,
+) -> Result<Retained<NSCursor>, PlatformFailure> {
     let failed = |what: &str| PlatformFailure::Failed {
         message: format!("AppKit made no {what} of the cursor image"),
-    };
-    let scale = if scale.is_finite() && scale > 0.0 {
-        scale
-    } else {
-        1.0
     };
     let (width, height) = (image.width(), image.height());
     // At most 128 pixels a side (`CursorImage::MAX_SIDE`), so every count
@@ -197,9 +194,15 @@ fn image_cursor(image: &CursorImage, scale: f64) -> Result<Retained<NSCursor>, P
         isize::try_from(count).expect("BUG: a cursor image's counts are at most 512")
     };
     let row = usize::from(width) * 4;
-    let points = NSSize::new(f64::from(width) / scale, f64::from(height) / scale);
+    let points = NSSize::new(
+        scale.to_logical(f64::from(width)),
+        scale.to_logical(f64::from(height)),
+    );
     let (x, y) = image.hotspot();
-    let hotspot = NSPoint::new(f64::from(x) / scale, f64::from(y) / scale);
+    let hotspot = NSPoint::new(
+        scale.to_logical(f64::from(x)),
+        scale.to_logical(f64::from(y)),
+    );
     // SAFETY: the planes pointer is null, so the representation allocates its
     // own buffer; `NSDeviceRGBColorSpace` is an AppKit constant, read on the
     // main thread where AppKit is loaded.
