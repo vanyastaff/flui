@@ -6079,22 +6079,19 @@ GPU-память простаивающего или невидимого окн
   сольётся. Строка и граф говорят то же. Что часть тестов `wayland_window` под Weston
   выходит рано, потому что он не даёт `xdg-decoration`, `wp_fractional_scale_v1` и `xdg-foreign`,
   — находка LY106.
-- [ ] **LY87** (не закрыта: код и зависимости удалены; остаются пропуск в `deny.toml` и тест
-  строки `rg winit`) — #2276 (`053507d53`). Удалены файлы `winit` в фичах, `hosts/winit.rs`, фича
+- [x] **LY87** — #2276 (`053507d53`) удалил файлы `winit` в фичах, `hosts/winit.rs`, фичу
   `winit-backend`, `WinitPlatform`, зависимости `winit`, `arboard`, `ui-events-winit` и прямой
-  `crossbeam-channel`, профиль conformance и запись winit; `deny.toml` запрещает крейт. `zbus` и
-  `futures-util` остались: ими пользуются нативные хосты. Тексты, говорившие о winit как о части
-  графа или запасном хосте, исправлены в LY113: `README.md`, `GLOSSARY.md`,
-  `crates/flui-platform/Cargo.toml`, корневой `Cargo.toml` (заметка о
-  `wildcard_enum_match_arm`), `tests/fixtures/acceptance_app/ime.rs`. **Остаётся.** (1)
-  `deny.toml` игнорирует RUSTSEC-2026-0192 (`ttf-parser` через `sctk-adwaita ← winit`), а
-  `ttf-parser` в `Cargo.lock` больше нет. (2) Тест строки, пустой `rg winit` вне архивных корней
-  и ADR, не выполняется. Часть находок законна: запрет в `deny.toml`, списки `forbid` у `reach`
-  в корневом `Cargo.toml`, фикстуры и тесты xtask, prior art в комментариях и документах (ADR,
-  `ARCHITECTURE.md`, `crates/flui-platform/src/ime.rs`). О winit как об источнике событий всё ещё
-  говорят комментарии `crates/flui-widgets/src/text/editable_text.rs` (контракт подавления
-  `Key::Character`, два места) и `crates/flui-widgets/ARCHITECTURE.md` («Winit's `LineDelta`»).
-  Строке нужно либо их исправить, либо сузить тест до упоминаний winit как зависимости.
+  `crossbeam-channel`, профиль conformance и запись winit; `deny.toml` запрещает крейт, а `zbus`
+  и `futures-util` остались, потому что ими пользуются нативные хосты. Тексты, говорившие о winit
+  как о части графа или запасном хосте, исправлены в LY113; контракт подавления `Key::Character`
+  в `crates/flui-widgets/src/text/editable_text.rs` (два места) и
+  `crates/flui-platform/src/ime.rs` и строка о шаге колеса в `crates/flui-widgets/ARCHITECTURE.md`
+  больше не называют winit источником событий. Пропуск RUSTSEC-2026-0192 в `deny.toml` ушёл
+  вместе с `ttf-parser`. Доказательство: `rg -i winit` по `crates/`, `packages/`, `examples/`,
+  `docs/` (кроме `docs/plans` и `CHANGELOG.md`) и `src/` находит 304 строки вместо 308, и каждая
+  из них — запрет в `deny.toml` и списках `forbid`, пример в тесте xtask, ссылка на тикет winit,
+  сравнение с другим фреймворком (prior art в ADR, `ARCHITECTURE.md` и комментариях) или история
+  в ADR; ни одна не называет winit хостом или источником событий FLUI.
 - [ ] **LY89** (не закрыта: уведомления вместо опроса на `main`; счётчика пробуждений в
   виртуальном времени и прогона на Mac нет) — macOS #1843 (`7211538ea`), Android #1847
   (`9f03db7da`), переезд в `preferences/` #1863, региональные форматы #2129. macOS слушает
@@ -8142,7 +8139,7 @@ GPU-память простаивающего или невидимого окн
   `a_forced_brightness_or_a_light_accent_keeps_the_theme_legible` (акцент при любой яркости —
   падает). Android всё ещё роняет всё чтение целиком — `docs/gaps.md`.
 - [x] **Краевые случаи диалогов `flui-system`** (строки в таблице нет: сверка файловых диалогов
-  и message box с rfd, `PolyMeilex/rfd`) — ветка `system/dialog-edge-cases`, решение — ADR-0372.
+  и message box с rfd, `PolyMeilex/rfd`) — ветка `system/dialog-edge-cases`, решение — ADR-0374.
   Построено. Фильтр: `FileFilter::all_files` (свой вид `Kind::EveryFile`, а не строка `*`; запрос
   с ним принимает любой выбор, шаблон, добавленный к нему, — `MalformedRequest::PatternOnAllFiles`)
   и точное имя `with_file_name` (`Makefile`, `.env`; без учёта регистра ASCII,
@@ -9356,7 +9353,7 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
   `cargo +nightly check` для `aarch64-linux-android` и `wasm32-unknown-unknown` (с тестами),
   clippy и тесты доступности на Linux. Должно на устройстве Android (заметка строки паритета):
   TalkBack выключить и включить, считая работу семантики в кадрах.
-- [x] **LY138** — ветка `native/ios-tracking-frames-keyboard-2`, решение — ADR-0372 (заменяет
+- [x] **LY138** — ветка `native/ios-tracking-frames-keyboard-2`, решение — ADR-0373 (заменяет
   `KeyboardInset` из §1 ADR-0277, применение из §3, клетку iOS из §4 и цель `move_keyboard` из
   §5). Проверено на `main` @ `eacf2a10d` чтением: оба правила в коде подтвердились (link только в
   `NSDefaultRunLoopMode`; `occlusion` давала вставку от верха любой рамки, нулевой кадр читался

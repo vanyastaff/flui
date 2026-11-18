@@ -18,7 +18,7 @@ use flui_view::{BoxedView, RebuildHandle};
 pub(crate) struct MediaQuerySource {
     data: RefCell<MediaQueryData>,
     /// The frame of the keyboard floating over the window, published beside
-    /// the media query and not in it (ADR-0372): a nested `MediaQuery` copies
+    /// the media query and not in it (ADR-0373): a nested `MediaQuery` copies
     /// its data, and this is the window's alone.
     floating_keyboard: Cell<Option<Rect>>,
     rebuild: RefCell<Option<(u64, RebuildHandle)>>,

@@ -5278,6 +5278,7 @@ fn assert_saved_route_entry_retirement() {
             handle
                 .invoke_pointer_route(token, &event)
                 .expect("dispatch")
+                .held()
                 .is_none()
         );
         assert_eq!(delivered.get(), 1, "the lane serves the next route");
@@ -6278,7 +6279,7 @@ fn hover_batch_stops_after_owner_close() {
     let tracker = MouseTracker::new();
     regions.lane.enter(|| {
         let panic = tracker.dispatch_hover(&hover_move(), &regions.result);
-        assert!(panic.is_none());
+        assert!(!panic.is_held());
     });
     assert_eq!(
         regions.calls.get(),

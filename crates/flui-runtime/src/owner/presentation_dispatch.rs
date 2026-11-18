@@ -288,7 +288,7 @@ impl PendingWindowState {
         first.contain(|| {
             if let Some(source) = runtime.media_query_for(id) {
                 // A floating keyboard's frame is where it comes to rest,
-                // published at once and beside the media data (ADR-0372).
+                // published at once and beside the media data (ADR-0373).
                 // Both are committed before the one wake of the root.
                 let floated = self.insets.and_then(|insets| {
                     source.commit_floating_keyboard(insets.keyboard().floating_frame())
