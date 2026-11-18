@@ -68,7 +68,7 @@ pub fn shape(recording: &NativeRecording) -> Vec<String> {
                 }
             }
             Row::Viewport { frame, .. } | Row::ViewportAbandoned { frame } => {
-                frame.scale = DevicePixelRatio::ONE
+                frame.scale = DevicePixelRatio::ONE;
             }
             Row::Wheel(reading) => reading.scale = DevicePixelRatio::ONE,
             // A scroll step is in logical pixels already, from its contact's

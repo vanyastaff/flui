@@ -1,7 +1,7 @@
 # Платформенный слой — задачи
 
 - **Статус:** редакция 3 утверждена: ADR-0151, 0152, 0153, 0154, 0254 и 0255 приняты 2026-10-21.
-  Из 134 задач серии 114 закрыты и 20 открыты (сверено с `main` @ `4db9c6981`); записи — в разделе
+  Из 134 задач серии 116 закрыты и 18 открыты (сверено с `main` @ `ce1fb55ac`); записи — в разделе
   «Ход исполнения». Прогоны на устройствах, которых ждут закрытые задачи, — строки
   `crates/flui-native/platform-parity.toml`. Открытые задачи и код, которого они ждут:
   - LY61 — удалить сервисы `Platform`, `PathPromptOptions`, `Task` и `TaskLabel`, когда LY67 даст
@@ -9,7 +9,6 @@
   - LY63 — `locale|layoutDirection` в `configChanges` шаблона, его теста и проверки манифеста;
   - LY67 — провайдеры `flui-system` на Android (в работе);
   - LY69 — `selectionRectsForRange:` и `UITextInteraction` на iOS;
-  - LY71 — golden `Info.plist` и ориентации iPad;
   - LY85 — настоящее окно X11 через `assert_backend_conforms`;
   - LY89 — тест в виртуальном времени «простой без пробуждений» на источниках macOS и Android;
   - LY93 — доступ песочницы у выбранных файлов и `data_dirs` (не начата);
@@ -21,7 +20,6 @@
     ядра за фичей;
   - LY102 — модули `flui-platform` по областям (не начата, после LY100);
   - LY107 — насос AppKit и цикл Android на `WakeDeadline`;
-  - LY112 — масштаб записи ввода `NativeReading::scale` как `DevicePixelRatio`;
   - LY121 — захват указателя на iOS и Android, образ и скрытый курсор из виджета;
   - LY139 — пометка первого клика с регионом, запись истечения буфера macOS и жизненный цикл окна
     iOS без замков, курсор macOS на типизированных вызовах;
@@ -6967,7 +6965,7 @@ GPU-память простаивающего или невидимого окн
   делался (`docs/gaps.md`, «Pointer and keyboard gaps»). Windows, X11, Android и iOS флага
   направления не дают — `Unknown` (там же).
 
-- [ ] **LY112** (открыта: масштаб записи ввода) — ветка `platform/one-rule-once` на `main`.
+- [x] **LY112** — ветки `platform/one-rule-once` и `native/reading-scale-checked`.
   Построено: режим окна Wayland решает `mode_of` (столбец Wayland в
   `every_window_system_decides_the_mode_alike`); детенты колеса Wayland и Win32 — один
   `DetentSteps`, валюаторы X11 — `decode::valuator_detents` (столбцы X11 и Wayland в
@@ -6978,13 +6976,33 @@ GPU-память простаивающего или невидимого окн
   (`a_logical_side_becomes_a_device_extent_every_host_can_draw`,
   `a_surface_side_is_snapped_to_whole_device_pixels`); масштаб от контракта вниз —
   `DevicePixelRatio` (`DisplayDescription::scale_factor`), число ОС читается одним правилом
-  `display::scale` (`ScaleStreak`; `a_ratio_is_held_to_the_range_a_screen_can_have`). Зум
-  DirectManipulation и отношения боксов хоста Web — не масштаб дисплея или окна и сохраняют свою
-  проверку. Остаётся код: масштаб записи ввода `NativeReading::scale` (проверка `DecodeFault::Scale`
-  в `input::assembly`) становится `DevicePixelRatio`, который кодек нативной записи проверяет при
-  чтении, как масштаб дисплея
-  ([gaps](../../../gaps.md#window-control-has-run-only-on-windows-an-x11-test-server-and-the-appkit-conformance-kit),
-  «Scales still checked by hand»).
+  `display::scale` (`ScaleStreak`; `a_ratio_is_held_to_the_range_a_screen_can_have`,
+  `a_dpi_no_screen_has_is_refused_and_the_window_keeps_its_scale`). Масштаб записи ввода —
+  `DevicePixelRatio`: `NativeReading::scale`, `WheelReading::scale` и `TouchpadFrame::scale`
+  несут масштаб окна, который хост уже проверил (Win32 — `WindowScale::ratio`, X11 —
+  `WindowScale` на `DevicePixelRatio`, Android — `AndroidWindow::scale`, AppKit, UIKit, DOM и
+  Wayland — `at_logical`), так что `DecodeFault::Scale` и ручные проверки в
+  `input::assembly` удалены: сборка не встречает масштаба, которого нет у экрана. Кодек нативной
+  записи проверяет каждое отношение пикселей при чтении одной функцией `ratio` и отказывает
+  типизированным `CodecError::Ratio` со строкой: масштаб чтения, колеса, кадра тачпада, масштаб
+  дисплея, отношение окна и системы
+  (`a_ratio_no_screen_has_is_refused_where_a_recording_holds_it`: 0, −2, 1/64 и 64 в каждом из
+  четырёх видов строк; без проверки при чтении тест красный — запись читается). Формат записи —
+  версия 4 (`FORMAT_VERSION`): читатель версии 4 отказывает отношениям, которые версия 3
+  принимала. Тем же типом — курсор-образ AppKit (`NativeCursor`) и шаг колеса Web (`WheelStep`),
+  где масштаб проверялся вручную второй раз. Зум DirectManipulation (`ContentTransform`) и
+  отношения боксов хоста Web (`window::web`, `accessibility::web::dom`) — не отношение пикселей
+  экрана и не ограничены его диапазоном (зум жеста, CSS-трансформ, ноль у схлопнутого бокса) и
+  сохраняют свою проверку ([gaps](../../../gaps.md#window-control-has-run-only-on-windows-an-x11-test-server-and-the-appkit-conformance-kit),
+  «Scales still checked by hand»). Строки, которые тип делает невозможными («zero scale» в
+  `an_undecodable_reading_cancels_its_contact_as_invalid_input`, нулевой и NaN-масштаб в
+  `invalid_native_sensor_is_refused`), сняты; отказ перенесён в кодек.
+  Проверки: Windows — clippy `-p flui-native -p flui-protocol -p flui-cli --all-targets --all-features
+  -D warnings`, nextest тех же крейтов; WSL Ubuntu 24.04 — clippy `-p flui-native --all-targets`
+  (`--all-features`, по умолчанию, `--no-default-features`, `--features x11`), nextest `-p flui-native`
+  под `xvfb-run` (1139 из 1139); `cargo +nightly check` для `aarch64-apple-darwin`,
+  `aarch64-linux-android` и `wasm32-unknown-unknown` (`--lib --tests`) и `aarch64-apple-ios`
+  (`--lib`). Не запущено: clippy и тесты на macOS, iOS, Android и в браузере — на CI.
 - [x] **LY123** — ветка `native/win32-post-debts`. Находки проверены на `main` прогоном на
   Windows: очередь потока, заполненная до квоты (`FullQueue`, тестовая опора рядом с
   `OwnerQueue`), отказывает каждому post окна, и старый код терял кадр скрытого окна, доставку с

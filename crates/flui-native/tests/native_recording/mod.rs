@@ -904,6 +904,9 @@ fn a_native_recording_outside_its_format_is_refused() {
 /// wheel's, a touchpad viewport's and a display's scale factor. JSON has no
 /// spelling for a non-finite number, so the parser refuses those first.
 fn a_ratio_no_screen_has_is_refused_where_a_recording_holds_it() {
+    /// A row of one kind holding a ratio.
+    type RowAt = fn(f64) -> String;
+
     let reading = |scale: f64| {
         format!(
             r#"{{"row":"reading","reading":{{"contact":1,"kind":"touch","action":"move","time":{{"epoch_ns":5}},"position":[1.0,2.0],"scale":{scale:?}}}}}"#
@@ -927,11 +930,11 @@ fn a_ratio_no_screen_has_is_refused_where_a_recording_holds_it() {
             r#"{{"row":"displays","read":{{"observed":{{"revision":1,"displays":[{{"label":1,"name":"Panel","origin":[0,0],"extent":[100.0,100.0],"usable":[0.0,0.0,100.0,100.0],"scale_factor":{scale:?},"color":{{"absent":"not_yet_on_this_host"}}}}]}}}}}}"#
         )
     };
-    let rows: [(&str, &str, &dyn Fn(f64) -> String); 4] = [
-        ("reading", registry, &reading),
-        ("wheel", registry, &wheel),
-        ("viewport", registry, &viewport),
-        ("display", platform, &display),
+    let rows: [(&str, &str, RowAt); 4] = [
+        ("reading", registry, reading),
+        ("wheel", registry, wheel),
+        ("viewport", registry, viewport),
+        ("display", platform, display),
     ];
     for (case, header, row) in rows {
         let text = format!("{header}\n{}\n", row(2.0));
