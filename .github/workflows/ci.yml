@@ -973,7 +973,10 @@ jobs:
         run: >-
           cargo xtask perf --size --check
           --previous target/size-step/measurement.toml
+          --parent "$PARENT"
           --record target/size-step/measurement.toml
+        env:
+          PARENT: ${{ github.event.before }}
 
       # Only a file this commit wrote is saved under its key: a run that failed
       # before it measured still holds the parent's file.

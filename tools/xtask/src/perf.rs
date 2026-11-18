@@ -88,6 +88,10 @@ pub(crate) struct PerfArgs {
     /// compares nothing.
     #[arg(long, requires = "size", conflicts_with_all = ["bless", "graph"])]
     previous: Option<PathBuf>,
+    /// With `--previous`: the commit its measurement has to be of (the
+    /// push's parent); a measurement of another commit is not compared.
+    #[arg(long, requires = "previous")]
+    parent: Option<String>,
     /// With `--size`: write this run's byte sizes and commit to this file, for
     /// the next push's `--previous`. Written before the comparison, so a
     /// failing push still records what it measured.
@@ -225,6 +229,7 @@ pub(crate) fn perf(args: &PerfArgs) -> anyhow::Result<ExitCode> {
         };
         let step = size::StepFiles {
             previous: args.previous.as_deref(),
+            parent: args.parent.as_deref(),
             record: args.record.as_deref(),
         };
         return size::run(&root, mode, measure, step);

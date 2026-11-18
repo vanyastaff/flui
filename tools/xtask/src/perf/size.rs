@@ -88,6 +88,7 @@ pub(crate) fn changed_input(files: &[String]) -> Option<&str> {
             || *f == "rust-toolchain.toml"
             || f.starts_with(".cargo/")
             || *f == BASELINE
+            || *f == "tools/xtask/src/perf.rs"
             || f.starts_with("tools/xtask/src/perf/size")
             || f.starts_with("crates/flui-cli/src/templates/")
     })
@@ -113,9 +114,6 @@ pub(super) fn run(
     measure: Measure,
     step: StepFiles<'_>,
 ) -> anyhow::Result<ExitCode> {
-    // Read before this run records: CI hands one file to both options, so
-    // the previous commit's measurement is replaced by this one's.
-    let previous = step.previous.and_then(read_previous);
     let mut counters = BTreeMap::new();
     for (name, triple) in GRAPH_TARGETS {
         counters.insert(format!("crates_{name}"), graph_packages(root, triple)?);
@@ -155,9 +153,7 @@ pub(super) fn run(
         bytes: byte_counters(current.get(SCENARIO)),
         baseline: byte_counters(baseline.get(SCENARIO)),
     });
-    if let (Some(record), Some(measured)) = (step.record, &measured) {
-        measured.write(record)?;
-    }
+    let previous = exchange(step, measured.as_ref())?;
     if measure == Measure::Graph {
         // The byte counters are not measured; leaving them in would report
         // each one missing.
@@ -175,9 +171,7 @@ pub(super) fn run(
     }
     if let Some(measured) = &measured {
         if step.previous.is_some() && previous.is_none() {
-            println!(
-                "perf --size: no measurement of the previous commit; the step is not compared"
-            );
+            note("no measurement of the previous commit; the step is not compared");
         }
         let base_bytes = byte_counters(baseline.get(SCENARIO));
         write_job_summary(&step::summary(&base_bytes, previous.as_ref(), measured))?;
@@ -248,6 +242,44 @@ fn byte_counters(counters: Option<&BTreeMap<String, u64>>) -> BTreeMap<String, u
         .collect()
 }
 
+/// The previous commit's measurement, read before this run's is recorded: CI
+/// hands one file to `--previous` and `--record`, so this order is what keeps
+/// the parent's sizes from being replaced by this commit's own. A measurement
+/// of another commit than `parent` (a force push, a stale file) is not
+/// compared.
+fn exchange(
+    step: StepFiles<'_>,
+    measured: Option<&step::Measurement>,
+) -> anyhow::Result<Option<step::Measurement>> {
+    let previous = step
+        .previous
+        .and_then(read_previous)
+        .filter(|previous| match step.parent {
+            Some(parent) if previous.commit != parent => {
+                note(&format!(
+                    "the previous measurement is of {}, not of the parent {parent}; \
+                     the step is not compared",
+                    previous.commit
+                ));
+                false
+            }
+            _ => true,
+        });
+    if let (Some(record), Some(measured)) = (step.record, measured) {
+        measured.write(record)?;
+    }
+    Ok(previous)
+}
+
+/// Prints a reason the step was not compared; under GitHub Actions as a
+/// warning annotation, so a step that keeps switching itself off shows on
+/// every run instead of passing in silence.
+fn note(message: &str) {
+    let warning = std::env::var_os("GITHUB_ACTIONS").is_some_and(|value| value == "true");
+    let prefix = if warning { "::warning::" } else { "" };
+    println!("{prefix}perf --size: {message}");
+}
+
 /// The previous commit's measurement, or `None` when there is none or it
 /// does not parse (a file an older `xtask` wrote): either way the step is not
 /// compared, and the baseline still is.
@@ -255,17 +287,18 @@ fn read_previous(path: &Path) -> Option<step::Measurement> {
     match step::Measurement::read(path) {
         Ok(previous) => previous,
         Err(error) => {
-            println!("perf --size: {error:#}; the step is not compared");
+            note(&format!("{error:#}; the step is not compared"));
             None
         }
     }
 }
 
-/// The files of the step comparison: the previous push's measurement to
-/// compare against, and where this run's goes. Either may be absent.
+/// The step comparison's inputs: the previous commit's measurement, the
+/// commit it has to be of, and where this run's goes. Each may be absent.
 #[derive(Debug, Clone, Copy, Default)]
 pub(super) struct StepFiles<'a> {
     pub(super) previous: Option<&'a Path>,
+    pub(super) parent: Option<&'a str>,
     pub(super) record: Option<&'a Path>,
 }
 
@@ -704,6 +737,30 @@ mod tests {
             assert_eq!(verdict.findings, Vec::new(), "{case}: the baseline holds");
             assert_eq!(verdict.failing(), failing, "{case}");
         }
+    }
+
+    #[test]
+    fn one_file_hands_over_the_parent_before_it_records_this_commit() {
+        let dir = std::env::temp_dir().join(format!("xtask-size-exchange-{}", std::process::id()));
+        let path = dir.join("measurement.toml");
+        measured("parent", 1000, 1000)
+            .write(&path)
+            .expect("written");
+        let this = measured("child", 1100, 1000);
+        let files = |parent| StepFiles {
+            previous: Some(path.as_path()),
+            parent,
+            record: Some(path.as_path()),
+        };
+        let previous = exchange(files(Some("parent")), Some(&this)).expect("exchanged");
+        let recorded = step::Measurement::read(&path).expect("read");
+        assert_eq!(previous, Some(measured("parent", 1000, 1000)));
+        assert_eq!(recorded, Some(this.clone()));
+        // A file left over from another commit (a stale restore, a force
+        // push) is not the parent's measurement: nothing is compared.
+        let again = exchange(files(Some("parent")), Some(&this)).expect("exchanged");
+        std::fs::remove_dir_all(&dir).expect("removed");
+        assert_eq!(again, None);
     }
 
     #[test]

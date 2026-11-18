@@ -794,12 +794,13 @@ sizes with the commit before it (`--previous`, from a cache entry each push
 saves under its commit with `--record`): one push may grow a binary by 0.5%,
 and a push past that fails with both commits and the delta, for its author to
 make the binary smaller or justify the growth in a follow-up pull request. A
-push that restates the baseline has justified it already, so a blessed counter
-is not compared; a push whose parent has no measurement (its run was cancelled
-or skipped) is compared with the baseline alone, and a push that lands several
-merges at once compares them as one. The job summary lists each size at the
-baseline, the previous commit and this one, which a later `--bless` cites to
-say whose merges it restates.
+push that restates the baseline names under `## Expectations` why each counter
+it moves grew, so a restated counter is not compared. A push whose parent has
+no measurement (its run was cancelled or skipped, or a force push replaced it)
+is compared with the baseline alone, with a warning on the run, and a push
+that lands several merges at once compares them as one. The job summary lists
+each size at the baseline, the previous commit and this one, which a later
+`--bless` cites to say whose merges it restates.
 
 ```bash
 cargo xtask perf --size --graph --check   # the package counts alone, no build (the `deps` job, every PR)
