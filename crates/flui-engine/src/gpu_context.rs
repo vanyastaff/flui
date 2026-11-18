@@ -1100,12 +1100,20 @@ impl GpuContext {
             return Ok(PresentDisposition::NotShown);
         };
         // The frame's submission scope opens inside the window's frame
-        // protocol, after the uploads below: a frame the ledger refuses (a
-        // GPU that retires nothing) is refused here, before it writes, as the
-        // offscreen path refuses it at its scope. Writes made for a refused
-        // frame could not be flushed either, since the flush is refused by
-        // the same ledger, so each one would hold more staging memory.
-        self.domain.admits_frame()?;
+        // protocol, after the uploads below: a frame with images to upload
+        // that the ledger refuses (a GPU that retires nothing) is refused
+        // here, before it writes, as the offscreen path refuses it at its
+        // scope. Writes made for a refused frame could not be flushed either,
+        // since the flush is refused by the same ledger, so each one would
+        // hold more staging memory. A frame with nothing to upload keeps the
+        // verdict its frame protocol gives (a skip, a surface not shown).
+        if self
+            .textures
+            .get(&slot)
+            .is_some_and(|kept| kept.would_write(&self.domain))
+        {
+            self.domain.admits_frame()?;
+        }
         // Uploads run before the painter and the blit are taken, and the
         // painter is taken only once it is built and retargeted, so a panic
         // in either step (a tracing subscriber is not ours) costs neither.
@@ -2848,17 +2856,71 @@ mod tests {
                 } else {
                     context.render_slot(slot, scene.content())
                 };
+                assert_eq!(
+                    (context.texture_writes, context.texture_flushes.get()),
+                    (0, 0),
+                    "window {window}: a refused frame writes nothing to flush"
+                );
                 assert!(
                     refused.is_err(),
                     "window {window}: the ledger refuses the frame"
                 );
             }
-            assert_eq!(
-                (context.texture_writes, context.texture_flushes.get()),
-                (0, 0),
-                "window {window}: a refused frame writes nothing to flush"
-            );
         }
+    }
+
+    /// A window frame with no image to upload keeps the verdict its frame
+    /// protocol gives while the ledger refuses frames: an idle window is not
+    /// turned into a failed frame that owes a full redraw.
+    ///
+    /// Red-check: ask `admits_frame` for every window frame in
+    /// `GpuContext::draw_window` and the frame answers the ledger's refusal
+    /// instead of `NotShown`.
+    #[cfg(feature = "testing")]
+    #[test]
+    fn a_window_frame_with_nothing_to_upload_keeps_its_verdict_under_a_refusing_ledger() {
+        use std::sync::Arc;
+
+        use crate::{testing::ScriptedAcquire, window_slot::WindowSlot};
+
+        let verdict = |refusing: bool| {
+            let (mut context, factory) = noop_context();
+            if refusing {
+                context.limit_submissions(0);
+            }
+            let surface = factory
+                .create(Arc::new(crate::testing::FakeWindow::new(7)))
+                .expect("the no-op backend makes a surface for any window");
+            let window = WindowSlot::configured_without_capabilities(
+                surface,
+                (8, 8),
+                ScriptedAcquire::Timeout,
+            );
+            let (_executor, sender) = RasterExecutor::new(
+                crate::testing::ScriptedSlots::new(),
+                std::rc::Rc::new(flui_foundation::SystemClock),
+                || {},
+            );
+            let slot = sender.mint_slot().expect("a slot id is left");
+            context
+                .insert(slot, super::SurfaceSlot::Window(Box::new(window)))
+                .expect("the slot's index is free");
+            let scene = Scene::new(square_and_glyph());
+            format!(
+                "{:?}",
+                context.render_window(
+                    slot,
+                    drawn_frame(),
+                    &scene,
+                    DamageRegion::Full(flui_layer::FullReason::FirstFrame)
+                )
+            )
+        };
+        assert_eq!(
+            verdict(true),
+            verdict(false),
+            "the refusing ledger leaves the frame's own answer (the acquire's timeout)"
+        );
     }
 
     /// A window surface still lost after a reconfigure is dropped, not made
