@@ -460,7 +460,7 @@ impl PlatformAccessibility for AndroidAccessibility {
         self.shared.set_action_listener(listener);
     }
 
-    fn assistive_focus_support(&self) -> flui_semantics::AssistiveFocusSupport {
+    fn assistive_focus_support(&self) -> flui_semantics::platform::AssistiveFocusSupport {
         Self::ASSISTIVE_FOCUS
     }
 
@@ -496,8 +496,8 @@ impl AndroidAccessibility {
     /// The published `accesskit_android` tracks TalkBack's cursor but tells
     /// the application nothing of it
     /// ([docs/gaps.md, "Accessibility bridge fidelity"](https://github.com/vanyastaff/flui/blob/main/docs/gaps.md#accessibility-bridge-fidelity-properties-and-announcements)).
-    pub(crate) const ASSISTIVE_FOCUS: flui_semantics::AssistiveFocusSupport =
-        flui_semantics::AssistiveFocusSupport::Unreported;
+    pub(crate) const ASSISTIVE_FOCUS: flui_semantics::platform::AssistiveFocusSupport =
+        flui_semantics::platform::AssistiveFocusSupport::Unreported;
 
     /// A route change is a window state change TalkBack reads; a run on a
     /// device has not checked it yet.

@@ -4,11 +4,12 @@
 use std::sync::Arc;
 
 use accesskit::{Action, ActionData, ActionRequest, NodeId, TextPosition, TextSelection, TreeId};
+use flui_foundation::TextDirection;
 use flui_foundation::geometry::Rect;
 use flui_semantics::{
     ActionCall, ActionDecodeError, MAX_RUN_CHARACTERS, SemanticsDiagnostic,
-    SemanticsIdentitySource, SemanticsRegionId, SemanticsRole, TextContent, TextDirection, TextRun,
-    TextRunError, TextRunParts, TextRunPosition, TextRunSelection, TreeUpdate,
+    SemanticsIdentitySource, SemanticsRegionId, SemanticsRole, TextContent, TextRun, TextRunError,
+    TextRunParts, TextRunPosition, TextRunSelection, TreeUpdate,
 };
 use parking_lot::Mutex;
 
