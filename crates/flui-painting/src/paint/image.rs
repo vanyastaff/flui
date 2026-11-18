@@ -31,8 +31,9 @@ pub struct Image {
     /// The height of the image in pixels.
     height: u32,
 
-    /// The image data (RGBA8 format).
-    /// Wrapped in Arc for cheap cloning.
+    /// The RGBA8 pixels, shared by every clone. `Arc<Vec<u8>>` rather than
+    /// `Arc<[u8]>`: it takes the decoder's buffer as it is, where
+    /// `Arc<[u8]>::from(Vec)` would copy every pixel into a new allocation.
     data: Arc<Vec<u8>>,
 }
 

@@ -66,7 +66,7 @@ its text out again on its next frame:
 
 ```rust
 let bytes = std::fs::read("assets/fonts/MyFont.ttf")?;
-flui::register_font(&bytes)?; // FontRegistrationError if no face parses
+flui::register_font(bytes)?; // FontRegistrationError if no face parses
 ```
 
 Below the app, `FontCollection::register_font` is the same door for a collection a caller built

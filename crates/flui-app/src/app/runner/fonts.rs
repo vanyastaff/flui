@@ -8,6 +8,8 @@
 //! the runtime hosts is told so on an owner turn ([`announce_font_change`]):
 //! its next frame lays out again the text measured before the change.
 
+use std::borrow::Cow;
+
 use flui_painting::RegisterFontError;
 
 use super::host::APP_RUNTIME;
@@ -61,7 +63,10 @@ pub enum FontRegistrationError {
 ///   registered before; nothing changes.
 /// - [`FontRegistrationError::RuntimeBusy`] if the runtime is borrowed on
 ///   this thread; nothing is added.
-pub fn register_font(font_bytes: &[u8]) -> Result<(), FontRegistrationError> {
+pub fn register_font(
+    font_bytes: impl Into<Cow<'static, [u8]>>,
+) -> Result<(), FontRegistrationError> {
+    let font_bytes: Cow<'static, [u8]> = font_bytes.into();
     APP_RUNTIME.with(|slot| {
         let runtime = slot
             .try_borrow()

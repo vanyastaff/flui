@@ -27,6 +27,7 @@
 //! registered, and the first registered family that can set Latin text
 //! becomes every generic family ([`FontCollection::register_font`]).
 
+use std::borrow::Cow;
 use std::fmt;
 #[cfg(any(test, feature = "testing"))]
 use std::sync::atomic::AtomicBool;
@@ -204,19 +205,25 @@ impl FontCollection {
     ///
     /// [`RegisterFontError`] if the collection finds no face in the bytes:
     /// nothing is added and the generation does not move.
-    #[tracing::instrument(skip_all, fields(bytes = font_bytes.len()))]
-    pub fn register_font(&self, font_bytes: &[u8]) -> Result<(), RegisterFontError> {
+    #[tracing::instrument(skip_all)]
+    pub fn register_font(
+        &self,
+        font_bytes: impl Into<Cow<'static, [u8]>>,
+    ) -> Result<(), RegisterFontError> {
         // Checked before fontique sees the bytes: its registration bumps the
         // shared version even when it finds no face, which would make every
         // context deep-copy the collection for nothing. The scratch
         // collection takes no shared lock and bumps no version; the shared
-        // registration below reads the same bytes the same way.
-        let blob = parley::fontique::Blob::new(Arc::new(font_bytes.to_vec()));
+        // registration below reads the same bytes the same way. The bytes
+        // are moved into the blob, never copied: a font is megabytes.
+        let font_bytes: Cow<'static, [u8]> = font_bytes.into();
+        let blob = parley::fontique::Blob::new(Arc::new(font_bytes));
+        let font_bytes = blob.data();
         if ::swash::FontRef::from_index(font_bytes, 0).is_none() || !measures_a_family(&blob) {
             return Err(RegisterFontError);
         }
         let mut collection = self.0.collection.clone();
-        let families = collection.register_fonts(blob, None);
+        let families = collection.register_fonts(blob.clone(), None);
         if families.is_empty() {
             return Err(RegisterFontError);
         }
@@ -1423,7 +1430,7 @@ mod tests {
             let bytes = probe_without_cmap();
 
             assert!(FontCollection::check_font(&bytes).is_err());
-            assert!(fonts.register_font(&bytes).is_err());
+            assert!(fonts.register_font(bytes).is_err());
 
             assert!(!fonts.holds(PROBE));
             assert_eq!(fonts.generation(), before);
