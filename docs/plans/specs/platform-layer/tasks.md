@@ -15,8 +15,7 @@
   - LY93 — доступ песочницы у выбранных файлов и `data_dirs` (не начата);
   - LY96 и LY99 — заблокированы спекой flui-driver (`os`-lane);
   - LY97 — заблокирована: `--record` драйвера ждёт FD6 спеки flui-driver;
-  - LY98 — `journal::codec` вне release-сборки и граница `flui record --native`; чтение записи
-    драйвером заблокировано (FD6);
+  - LY98 — заблокирована: чтение записи драйвером ждёт FD6 спеки flui-driver;
   - LY100 — `flui-app[driver]` включает `scripted`, один двойник окна вместо шестнадцати, двойники
     ядра за фичей;
   - LY102 — модули `flui-platform` по областям (не начата, после LY100);
@@ -4980,8 +4979,8 @@ GPU-память простаивающего или невидимого окн
   хост, ему передавать свою (записано в gaps, запись 10). Mac, iPhone, Android-устройство,
   браузер не затронуты; `cross-typecheck` — в CI.
 
-- [ ] **LY98** (открыта: codec вне release-сборки и граница `flui record`; чтение драйвером
-  заблокировано спекой flui-driver) — схема записи — `flui-protocol::native_recording` (за фичей
+- [ ] **LY98** (код на `main`; открыта одним: чтение записи драйвером заблокировано спекой
+  flui-driver) — схема записи — `flui-protocol::native_recording` (за фичей
   `serde`); журнал — `crates/flui-native/src/journal/` (`capture`, `recorder`, `codec`, `lines`)
   под фичей `native-capture` (ADR-0151 §10 и §16); golden-записи читаются схемой без ядра и
   пишутся байт в байт (`native_recordings_write_back_byte_for_byte`,
@@ -4991,14 +4990,42 @@ GPU-память простаивающего или невидимого окн
   (`a_native_recording_begins_each_stream_with_its_setup_and_streams_its_lines`,
   `a_loop_nobody_serves_ends_its_native_journal_so_no_line_reaches_it`,
   `the_hello_lists_the_native_layer_only_when_the_loop_journals`,
-  `a_native_recording_writes_each_stream_with_the_devices_its_rows_read`). Остаётся код: (1)
-  `flui-app` включает `native-capture` в каждой сборке (`crates/flui-app/Cargo.toml:91`), так что
-  `journal::codec` с `flui-protocol`, `serde` и `serde_json` собирается и в release
-  (`crates/flui-native/src/journal/mod.rs:29`), вопреки ADR-0151 §16
-  ([gaps](../../../gaps.md#accepted-adr-sections-not-built-yet)); (2) `flui record --native`
-  (`crates/flui-cli/src/agent/record/native.rs`) пишет без границы байтов и строк, и
-  `NativeRecording::read` отвергает длинную запись целиком; граница — во `flui-protocol`, общая для
-  обоих писателей ([gaps](../../../gaps.md#quality-bar-partials-with-no-entry)). Заблокировано:
+  `a_native_recording_writes_each_stream_with_the_devices_its_rows_read`). **Codec вне release**
+  (ветка `native/capture-out-of-release`): `flui-app` включает `native-capture` в каждой сборке
+  (Cargo не привязывает фичу к профилю), поэтому `journal::codec`, `order`, `store` и
+  `CurrentHost::backend` собираются только при `all(debug_assertions, feature = "native-capture")`
+  или с `testing`, как захват, строки и рекордер; раннеры (настольный, Android, iOS) зовут
+  `native_journal::begin` под `cfg(native_journal)`. Доказательство: `cargo heli check -p flui-app
+  --release` проходит, а проба в раннере, называющая `flui_native::journal::codec::Backend`, в
+  release не собирается (`E0433: cannot find codec in journal`); в CI то же доказывает
+  release-сборка счётчика в задании `size`. **Граница записи:** границы и их счёт — во
+  `flui-protocol`, `native_recording::Budget` (`admit_row` писателя, `read_line` читателя) и
+  типизированная `Overrun` (`LineBytes`, `HeaderBytes`, `Rows`, `RecordingBytes`; у полных —
+  `cut_reason`), `Budget::for_header` проверяет заголовок писателя до записи; `CutBudget` ядра
+  удалён, рекордер, `NativeRecording::write` и `read` считают тем же `Budget`. `write` сначала
+  проверяет заголовок, отвечает на слишком длинный заголовок или строку `CodecError::LineTooLong`,
+  ничего не записав, запись в границах пишет целиком (место под `cut` не держит: при отказе строки
+  снимает строки с конца, пока `cut` не поместится). Строку длиннее строки записи рекордер хранит
+  как `Row::Gap { rows: 1 }` (считается как строка; пишется строкой `gap`, читается обратно,
+  replay останавливается на ней `ReplayError::Gap`). `flui record --native` держит `Budget` на
+  поток с заголовка (слишком длинный заголовок файла не открывает, `header_too_long` в индексе),
+  принимает строку вместе с ростом заголовка на её устройства, первую строку за
+  `MAX_ROWS`/`MAX_RECORDING_BYTES` заменяет строкой `cut` и дальше не пишет (индекс:
+  `cut: {bound, dropped}`), строку, которую файл не держит, заменяет `gap`; счёт один: строка потока
+  считается один раз (записана, потеряна или отброшена на `cut`), строка `gap` — не строка.
+  Тесты (в скобках — с откатом): `the_writer_refuses_a_line_no_reader_takes_and_writes_what_fits_whole`
+  (без проверки заголовка заголовок записан; с местом под `cut` у каждой строки запись в
+  границах обрезана), `a_live_row_past_the_line_bound_is_held_as_a_gap` (рекордер хранит строки по
+  мегабайту, `write` отвергает запись), `what_a_writer_admits_with_its_cut_a_reader_takes` (без
+  места под `cut` читатель отвергает строку 16385); в `tests/cli_record.rs` (Linux):
+  `a_native_stream_past_the_byte_bound_ends_at_a_cut_and_counts_each_row_once` (`gap` на границе
+  посчитан и потерянным, и отброшенным), `a_native_file_counts_the_header_its_rows_declare` (без
+  счёта роста заголовка файл больше границы), `a_native_stream_past_the_row_bound_ends_at_a_cut`,
+  `a_native_line_past_the_line_bound_is_not_written`; во `flui-protocol` ещё
+  `a_writer_admits_a_row_only_while_the_recording_and_its_cut_fit`,
+  `a_reader_refuses_the_line_past_either_bound`, `an_overrun_names_its_limit_and_its_cut`; перенос
+  счёта держат прежние `native_recording_contracts` (`a_native_recording_past_its_bounds_is_refused`,
+  `a_recording_past_its_bound_is_written_cut`). Заблокировано:
   чтение записи крейтом `flui-driver` без ребра к ядру ждёт FD6 спеки
   [flui-driver](../flui-driver/tasks.md); сегодня запись читает `flui record` через
   `flui-protocol`. Захват на Windows, macOS, iOS и Android не прогонялся — строка качества parity

@@ -778,7 +778,7 @@ impl CurrentHost {
     }
 
     /// The backend this host journals as, in a native recording's header (ADR-0215 §4).
-    #[cfg(any(feature = "native-capture", feature = "testing"))]
+    #[cfg(any(all(debug_assertions, feature = "native-capture"), feature = "testing"))]
     #[must_use]
     pub const fn backend(self) -> journal::codec::Backend {
         use journal::codec::Backend;

@@ -871,6 +871,88 @@ fn a_recording_past_its_bound_is_written_cut() {
     }
 }
 
+/// The writer refuses, with nothing written, a line no reader takes: a row or
+/// a header longer than a line may be. A recording within the bounds is
+/// written whole however close it comes to them, even where the rows before a
+/// short last one leave less room than a `cut` row would take; a `gap` row is
+/// written as the format's gap line, which reads back and stops a replay.
+fn the_writer_refuses_a_line_no_reader_takes_and_writes_what_fits_whole() {
+    use flui_native::journal::codec::{Backend, Header, ReplayError, Stream};
+    use flui_protocol::native_recording::{MAX_LINE_BYTES, MAX_RECORDING_BYTES};
+
+    let ime = |text: String| Row::Ime {
+        event: ImeEvent::Commit(text),
+        redacted: false,
+    };
+    let recording = |header: Header, rows: Vec<Row>| NativeRecording { header, rows };
+    let window = || Header::for_stream(Backend::Headless, Stream::Window);
+    let write = |recording: &NativeRecording| {
+        let mut written = Vec::new();
+        let result = recording.write(&mut written);
+        (result, written)
+    };
+
+    let (result, written) = write(&recording(
+        window(),
+        vec![ime("a".to_owned()), ime("x".repeat(MAX_LINE_BYTES))],
+    ));
+    assert!(
+        matches!(result, Err(CodecError::LineTooLong { line: 3, limit }) if limit == MAX_LINE_BYTES),
+        "{result:?}"
+    );
+    assert!(written.is_empty(), "nothing is written");
+
+    let mut long_header = window();
+    long_header.provenance = Some("x".repeat(MAX_LINE_BYTES));
+    let (result, written) = write(&recording(long_header, Vec::new()));
+    assert!(
+        matches!(result, Err(CodecError::LineTooLong { line: 1, .. })),
+        "{result:?}"
+    );
+    assert!(written.is_empty(), "nothing is written");
+
+    // Rows that bring the recording to 10 bytes under its bound, the last one
+    // shorter than a `cut` row's room.
+    let header = write(&recording(window(), Vec::new())).1.len();
+    let empty = write(&recording(window(), vec![ime(String::new())]))
+        .1
+        .len()
+        - header;
+    let full_text = MAX_LINE_BYTES - 128;
+    let full = empty + full_text;
+    let target = MAX_RECORDING_BYTES - 10;
+    let fulls = (target - header - 2 * empty) / full;
+    let filler = target - header - 2 * empty - fulls * full;
+    let mut rows = vec![ime("x".repeat(full_text)); fulls];
+    rows.push(ime("x".repeat(filler)));
+    rows.push(ime(String::new()));
+    let count = rows.len();
+    let (result, written) = write(&recording(window(), rows));
+    result.expect("a recording within the bounds writes");
+    assert_eq!(written.len(), target, "written whole");
+    let read = NativeRecording::read(written.as_slice()).expect("and its reader reads it");
+    assert_eq!(read.rows.len(), count, "no row was cut");
+    assert_eq!(read.rows.last(), Some(&ime(String::new())));
+
+    let gapped = recording(window(), vec![ime("a".to_owned()), Row::Gap { rows: 1 }]);
+    let (result, written) = write(&gapped);
+    result.expect("a gap writes");
+    assert!(
+        written.ends_with(b"{\"gap\":{\"rows\":1}}\n"),
+        "{}",
+        String::from_utf8_lossy(&written)
+    );
+    let read = NativeRecording::read(written.as_slice()).expect("a gap reads");
+    assert_eq!(read.rows, gapped.rows);
+    let owner = run_keeping_owner(Box::new(HeadlessPlatform::new()), &AppLog::new());
+    let (window_handle, _handler) = headless_window(&owner);
+    assert_eq!(
+        read.replay_into(&mut WindowTarget::new(window_handle)),
+        Err(ReplayError::Gap { line: 3, rows: 1 }),
+        "a replay stops at the gap"
+    );
+}
+
 /// A platform stream replays on the headless host: after each row the
 /// application reads what the recorded read returned, a failure included,
 /// with every preference field the full observation carries and each display
@@ -1459,10 +1541,14 @@ fn a_store_focus_keeps_every_field_of_its_status() {
 }
 
 /// The cases of the streams beside a registry's.
-pub(super) const CASES: [(&str, fn()); 15] = [
+pub(super) const CASES: [(&str, fn()); 16] = [
     (
         "a_store_focus_keeps_every_field_of_its_status",
         a_store_focus_keeps_every_field_of_its_status,
+    ),
+    (
+        "the_writer_refuses_a_line_no_reader_takes_and_writes_what_fits_whole",
+        the_writer_refuses_a_line_no_reader_takes_and_writes_what_fits_whole,
     ),
     (
         "close_rows_out_of_order_are_refused",
@@ -3007,12 +3093,55 @@ fn a_live_recording_past_its_bound_holds_one_cut_and_nothing_after() {
     assert_eq!(read.rows, recording.rows, "written as it was held");
 }
 
+/// A live recording keeps no row longer than a line may be: each is replaced
+/// by a `gap` of one row, counted against the bounds like any row, so what
+/// the recorder holds stays small and always writes, and its replay stops at
+/// the first gap.
+#[cfg(all(debug_assertions, feature = "native-capture"))]
+fn a_live_row_past_the_line_bound_is_held_as_a_gap() {
+    use flui_native::journal::codec::{Backend, ReplayError, Stream};
+    use flui_native::journal::recorder::{Privacy, Recorder};
+    use flui_protocol::native_recording::MAX_LINE_BYTES;
+
+    let recorder = Recorder::with_privacy(Backend::Headless, Privacy::KeepText);
+    let owner = run_keeping_owner(Box::new(HeadlessPlatform::new()), &AppLog::new());
+    let (window, _handler) = headless_window(&owner);
+    let too_long = "x".repeat(MAX_LINE_BYTES);
+    for _ in 0..3 {
+        window.inject_event(PlatformInput::Ime(ImeEvent::Commit(too_long.clone())));
+    }
+    window.inject_event(PlatformInput::Ime(ImeEvent::Commit("after".to_owned())));
+
+    let recordings = recorder.finish();
+    let recording = only(&recordings, Stream::Window);
+    let names: Vec<&str> = recording.rows.iter().map(Row::name).collect();
+    assert_eq!(
+        names,
+        ["gap", "gap", "gap", "ime"],
+        "no row past the line bound is held"
+    );
+    let mut written = Vec::new();
+    recording
+        .write(&mut written)
+        .expect("what the recorder holds writes");
+    let read = NativeRecording::read(written.as_slice()).expect("and its reader reads it");
+    assert_eq!(read.rows, recording.rows, "written as it was held");
+    assert_eq!(
+        read.replay_into(&mut WindowTarget::new(window)),
+        Err(ReplayError::Gap { line: 2, rows: 1 })
+    );
+}
+
 /// The capture cases of the streams beside a registry's.
 #[cfg(all(debug_assertions, feature = "native-capture"))]
-pub(super) const CAPTURE_CASES: [(&str, fn()); 11] = [
+pub(super) const CAPTURE_CASES: [(&str, fn()); 12] = [
     (
         "a_live_recording_past_its_bound_holds_one_cut_and_nothing_after",
         a_live_recording_past_its_bound_holds_one_cut_and_nothing_after,
+    ),
+    (
+        "a_live_row_past_the_line_bound_is_held_as_a_gap",
+        a_live_row_past_the_line_bound_is_held_as_a_gap,
     ),
     (
         "the_host_is_told_of_a_focus_when_the_store_status_panics",

@@ -1,5 +1,6 @@
-//! The order and the bounds of a native recording's rows: the order its reader checks from
-//! the rows alone, how much of a line it reads, and where its writer cuts it (ADR-0215 §4).
+//! The order of a native recording's rows and how much of a line is read: the order its reader
+//! checks from the rows alone, and the bounded read of one line (ADR-0215 §4). The bounds on the
+//! whole recording, which its writers count too, are `flui_protocol::native_recording::Budget`.
 
 use std::io::{BufRead, Read};
 
@@ -140,49 +141,6 @@ impl RowOrder {
             }
             _ => {}
         }
-        Ok(())
-    }
-}
-
-/// How many bytes a writer keeps free for the [`wire::Row::Cut`] line it may
-/// end a recording with: the longest such line and its newline, with room.
-const CUT_LINE_ROOM: usize = 64;
-
-/// The bytes and rows a recording has taken so far, against the bounds its
-/// reader holds it to: every row while they all fit, otherwise the rows that
-/// fit with room after the last for the `cut` row that replaces the next. The
-/// in-process recorder keeps one as rows arrive and `NativeRecording::write`
-/// one as it writes, under the same rule.
-#[derive(Debug, Clone, Copy)]
-pub(super) struct CutBudget {
-    bytes: usize,
-    rows: usize,
-}
-
-impl CutBudget {
-    /// A recording whose header takes `header` bytes.
-    pub(super) const fn after_header(header: usize) -> Self {
-        Self {
-            bytes: header,
-            rows: 0,
-        }
-    }
-
-    /// Take a row of `line` bytes, or say why the recording is cut in its
-    /// place. `follows` says whether another row may come after it, which
-    /// needs room for the cut that could replace that one.
-    pub(super) fn admit(&mut self, line: usize, follows: bool) -> Result<(), wire::CutReason> {
-        // The rows this one makes, and the cut a row after it would need.
-        if self.rows + 1 + usize::from(follows) > wire::MAX_ROWS {
-            return Err(wire::CutReason::Rows);
-        }
-        let room = if follows { CUT_LINE_ROOM } else { 0 };
-        let bytes = self.bytes.saturating_add(line);
-        if bytes.saturating_add(room) > wire::MAX_RECORDING_BYTES {
-            return Err(wire::CutReason::Bytes);
-        }
-        self.bytes = bytes;
-        self.rows += 1;
         Ok(())
     }
 }
