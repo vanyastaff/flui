@@ -1226,7 +1226,9 @@ fn a_second_window_repaints_while_the_modal_loop_rests() {
 /// turn: work accepted from another thread reaches the drag loop's pacing,
 /// which otherwise sleeps. Red-check: leave the cross-thread requests without
 /// waking the pacing, and the window draws nothing and the turn never runs
-/// while the loop rests.
+/// while the loop rests. It proves this where no input reaches the loop (the
+/// run's own test desktop); where input reached it early (a desktop that takes
+/// input) it says it cannot verify, whatever `FLUI_REQUIRE_INPUT_DESKTOP` says.
 fn work_from_another_thread_reaches_a_resting_drag_loop() {
     let transport = OleTransfer::new();
     let platform = platform_over(&transport);
@@ -1308,7 +1310,9 @@ fn work_from_another_thread_reaches_a_resting_drag_loop() {
     assert_eq!(ended.get(), Some(OsDragEnd::Cancelled));
     // Input that reached the loop before the release ran FLUI's drop target,
     // whose COM entry asks the pacing again: frames and turns it brought are
-    // no proof that work from another thread reached the resting loop.
+    // no proof that work from another thread reached the resting loop. Two
+    // such asks bring at most two turns and about two frames each, short of
+    // the 3 turns and 10 frames asserted below.
     if early.get() > 2 {
         eprintln!(
             "CANNOT_VERIFY a resting drag loop: input reached it {} times before the case \
