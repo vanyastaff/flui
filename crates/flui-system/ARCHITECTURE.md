@@ -270,13 +270,16 @@ a relative path the system's contract excludes is `MalformedAnswer`.
   closing it and is shown again if the browser closes it anyway. `showModal` makes the rest of
   the document inert, so the box is modal to the page, every canvas window of it, where the
   contract says modal to its window, and two windows' boxes stack. The box is named by its title
-  (its message when it has none) and described by its message (`aria-labelledby`,
-  `aria-describedby`, ids made of the window's id), and styled through each element's style
-  object, which a content security policy without `'unsafe-inline'` styles leaves in force.
-- **Sharing** is `navigator.share` (a title, text and a link of the web) while the page handles a
-  gesture. A browser without the API is refused at acquisition with `NotOnThisDevice`, as the
-  badge is; a share of files, or of a link off the web, answers `NotOnThisPlatform` (a page has no
-  files at paths, and the API takes `http` and `https` links only) before the browser is asked. A
+  (its message when it has none) and described by its message: through ARIA element reflection
+  (`ariaLabelledByElements`, `ariaDescribedByElements`) where the browser has it, otherwise by
+  `aria-labelledby` and `aria-describedby` over ids the document counts, since two UI runtimes
+  of one page mint the same window ids. It is styled through each element's style object, which
+  a content security policy without `'unsafe-inline'` styles leaves in force.
+- **Sharing** is `navigator.share` (a title, text and a link) while the page handles a gesture. A
+  browser without the API is refused at acquisition with `NotOnThisDevice`, as the badge is; a
+  share of files, or of a link other than `http` or `https`, answers `NotOnThisPlatform` (a page
+  has no files at paths, and FLUI shares only the links a share target can open) before the
+  browser is asked. A
   refusal while the browser itself said the gesture was there is the frame lacking the
   `web-share` permissions policy, which only its embedder grants (`NotDeclared`); without that
   word it is `Unavailable`. A share while one is still showing has no busy answer in the contract

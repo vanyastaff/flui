@@ -486,10 +486,16 @@ impl FileDialogs {
                         write_file(&completions, path.to_path_buf(), contents, location, caller);
                     }
                     // The backend wrote the contents itself (a browser).
-                    None => drop(caller.resolve(Ok(Some(location)))),
+                    None => {
+                        // A retired owner has nobody left to answer.
+                        let _ = caller.resolve(Ok(Some(location)));
+                    }
                 },
                 // A retired owner has nobody left to answer.
-                Ok(unwritten) => drop(caller.resolve(unwritten)),
+                Ok(unwritten) => {
+                    // A retired owner has nobody left to answer.
+                    let _ = caller.resolve(unwritten);
+                }
                 // The backend dropped its answer: so does the handle.
                 Err(_) => drop(caller),
             }
@@ -515,8 +521,14 @@ fn write_file(
             return;
         };
         match outcome {
-            Ok(Ok(())) => drop(caller.resolve(Ok(Some(location)))),
-            Ok(Err(error)) => drop(caller.resolve(Err(error))),
+            Ok(Ok(())) => {
+                // A retired owner has nobody left to answer.
+                let _ = caller.resolve(Ok(Some(location)));
+            }
+            Ok(Err(error)) => {
+                // A retired owner has nobody left to answer.
+                let _ = caller.resolve(Err(error));
+            }
             Err(_) => drop(caller),
         }
     });

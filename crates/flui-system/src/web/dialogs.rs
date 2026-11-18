@@ -247,9 +247,15 @@ impl WebDialogs {
         hold: &OpenHold,
     ) {
         match rules::picker_rejection(thrown, self.page.is_activated()) {
-            PickerEnd::Cancelled => drop(answer.resolve(Ok(None))),
+            PickerEnd::Cancelled => {
+                // A retired owner has nobody left to answer.
+                let _ = answer.resolve(Ok(None));
+            }
             PickerEnd::FallBack => self.show_input(request, answer, hold),
-            PickerEnd::Refused(error) => drop(answer.resolve(Err(error))),
+            PickerEnd::Refused(error) => {
+                // A retired owner has nobody left to answer.
+                let _ = answer.resolve(Err(error));
+            }
         }
     }
 
@@ -290,12 +296,18 @@ impl WebDialogs {
                 Err(rejection) => exception(&rejection),
             };
             match rules::picker_rejection(rejection, page.is_activated()) {
-                PickerEnd::Cancelled => drop(answer.resolve(Ok(None))),
+                PickerEnd::Cancelled => {
+                    // A retired owner has nobody left to answer.
+                    let _ = answer.resolve(Ok(None));
+                }
                 PickerEnd::FallBack => {
                     let shown = InputPicker::show(&page, &picker, &request, answer, focus_grace_ms);
                     *input.borrow_mut() = shown;
                 }
-                PickerEnd::Refused(error) => drop(answer.resolve(Err(error))),
+                PickerEnd::Refused(error) => {
+                    // A retired owner has nobody left to answer.
+                    let _ = answer.resolve(Err(error));
+                }
             }
         });
     }

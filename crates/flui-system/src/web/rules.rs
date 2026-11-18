@@ -275,9 +275,10 @@ pub(crate) fn launch_route(scheme: &str) -> LaunchRoute {
 /// What the page's frame lacks when the browser refuses a share made while
 /// it said the page handled a gesture: the Web Share permissions policy,
 /// which a cross-origin frame has only when its embedder grants it.
-pub(crate) const SHARE_POLICY: &str = "the `web-share` permissions policy (`allow=\"web-share\"`)";
+pub(crate) const SHARE_POLICY: &str = "the `web-share` permissions policy, which the page's embedder grants its frame (`allow=\"web-share\"`)";
 
-/// Whether the Web Share API takes a link of `scheme`: one of the web.
+/// Whether FLUI shares a link of `scheme` on the web: `http` and `https`,
+/// the links a share target can open.
 pub(crate) fn is_shareable_link(scheme: &str) -> bool {
     scheme.eq_ignore_ascii_case("https") || scheme.eq_ignore_ascii_case("http")
 }

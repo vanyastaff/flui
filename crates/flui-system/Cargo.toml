@@ -120,13 +120,15 @@ tempfile = { workspace = true }
 # The web providers' tests, in a browser (`web::tests`).
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 wasm-bindgen-test = { workspace = true }
-# What a test sets an input's files with, and dispatches events by.
+# What a test sets an input's files with, dispatches events by, and gives
+# its page a content security policy with.
 web-sys = { version = "0.3", features = [
     "DataTransfer",
     "DataTransferItem",
     "DataTransferItemList",
     "DomImplementation",
     "EventInit",
+    "HtmlHeadElement",
     "NodeList",
 ] }
 

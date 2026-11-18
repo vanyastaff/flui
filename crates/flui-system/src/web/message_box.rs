@@ -24,11 +24,13 @@ use std::rc::{Rc, Weak};
 
 use flui_platform::capability::{Resolver, WindowRef};
 use flui_platform::{Unsupported, UnsupportedReason};
+use js_sys::{Array, Reflect};
 use wasm_bindgen::JsCast as _;
+use wasm_bindgen::JsValue;
 use wasm_bindgen::closure::Closure;
-use web_sys::{Element, Event, HtmlDialogElement, HtmlElement};
+use web_sys::{Document, Element, Event, HtmlDialogElement, HtmlElement};
 
-use super::page::{Page, exception};
+use super::page::{Page, exception, set};
 use super::rules;
 use crate::dialog::{
     DialogError, DialogHold, MessageBoxBackend, MessageBoxCapability, MessageBoxRequest,
@@ -72,11 +74,11 @@ impl WebMessageBoxes {
 impl MessageBoxBackend for WebMessageBoxes {
     fn show(
         &self,
-        window: &WindowRef,
+        _: &WindowRef,
         request: MessageBoxRequest,
         answer: Resolver<MessageBoxResult>,
     ) -> DialogHold {
-        match ShownBox::show(&self.page, window, &request, answer) {
+        match ShownBox::show(&self.page, &request, answer) {
             Ok(shown) => DialogHold::new(BoxHold(shown)),
             Err((answer, error)) => {
                 // A retired owner has nobody left to answer.
@@ -108,18 +110,17 @@ struct BoxListeners {
 type NotShown = (Resolver<MessageBoxResult>, DialogError);
 
 /// The browser's failure `thrown` as a dialog's.
-fn failed(thrown: &wasm_bindgen::JsValue) -> DialogError {
+fn failed(thrown: &JsValue) -> DialogError {
     DialogError::Failed(exception(thrown).into())
 }
 
 impl ShownBox {
     fn show(
         page: &Page,
-        window: &WindowRef,
         request: &MessageBoxRequest,
         answer: Resolver<MessageBoxResult>,
     ) -> Result<Rc<Self>, NotShown> {
-        let dialog = match build(page, window, request) {
+        let dialog = match build(page, request) {
             Ok(dialog) => dialog,
             Err(error) => return Err((answer, error)),
         };
@@ -234,23 +235,52 @@ fn style(element: &Element, declarations: &[(&str, &str)]) {
     }
 }
 
-/// The `<dialog>` for `request` in `window`: its title, its message and a
-/// form of its buttons, the first of which takes focus. Its title and
-/// message carry ids made of the window's id, which shows one box at a
-/// time, so the dialog names and describes itself by them.
-fn build(
-    page: &Page,
-    window: &WindowRef,
-    request: &MessageBoxRequest,
-) -> Result<HtmlDialogElement, DialogError> {
+/// The document's expando that counts the message boxes it has named by
+/// ids, so two boxes of one document, of two UI runtimes whose window ids
+/// coincide included, never share an id.
+const BOX_COUNT: &str = "__fluiMessageBoxes";
+
+/// Name `dialog` by `name` and describe it by `description`, its own
+/// elements: through ARIA element reflection (`ariaLabelledByElements`,
+/// `ariaDescribedByElements`) where the browser has it, which needs no id;
+/// otherwise by ids the document counts ([`BOX_COUNT`]).
+fn name_box(document: &Document, dialog: &Element, name: &Element, description: &Element) {
+    let reflects =
+        Reflect::has(dialog, &JsValue::from_str("ariaLabelledByElements")).unwrap_or(false);
+    if reflects {
+        set(dialog, "ariaLabelledByElements", &Array::of1(name));
+        set(dialog, "ariaDescribedByElements", &Array::of1(description));
+        return;
+    }
+    let count = Reflect::get(document, &JsValue::from_str(BOX_COUNT))
+        .ok()
+        .and_then(|count| count.as_f64())
+        .unwrap_or(0.0)
+        + 1.0;
+    set(document, BOX_COUNT, &JsValue::from_f64(count));
+    let ids = format!("flui-message-box-{count}");
+    let (name_id, description_id) = (format!("{ids}-name"), format!("{ids}-description"));
+    if name == description {
+        description.set_id(&description_id);
+        let _ = dialog.set_attribute("aria-labelledby", &description_id);
+    } else {
+        name.set_id(&name_id);
+        description.set_id(&description_id);
+        let _ = dialog.set_attribute("aria-labelledby", &name_id);
+    }
+    let _ = dialog.set_attribute("aria-describedby", &description_id);
+}
+
+/// The `<dialog>` for `request`: its title, its message and a form of its
+/// buttons, the first of which takes focus. It is named by its title (its
+/// message when it has none) and described by its message.
+fn build(page: &Page, request: &MessageBoxRequest) -> Result<HtmlDialogElement, DialogError> {
     let document = page.document();
     let element = |tag: &str| {
         document
             .create_element(tag)
             .map_err(|thrown| failed(&thrown))
     };
-    let ids = format!("flui-message-box-{}", window.id().get());
-    let (title_id, message_id) = (format!("{ids}-title"), format!("{ids}-message"));
     let dialog = element("dialog")?.unchecked_into::<HtmlDialogElement>();
     let role = match request.level {
         MessageLevel::Info => "dialog",
@@ -259,22 +289,26 @@ fn build(
     let _ = dialog.set_attribute("role", role);
     let _ = dialog.set_attribute("data-level", level_name(request.level));
     style(&dialog, &BOX_STYLE);
-    let mut name = &message_id;
-    if let Some(title) = &request.title {
-        let heading = element("h2")?;
-        heading.set_id(&title_id);
-        heading.set_text_content(Some(title));
-        style(&heading, &TITLE_STYLE);
-        let _ = dialog.append_child(&heading);
-        name = &title_id;
-    }
-    let _ = dialog.set_attribute("aria-labelledby", name);
-    let _ = dialog.set_attribute("aria-describedby", &message_id);
+    let heading = match &request.title {
+        Some(title) => {
+            let heading = element("h2")?;
+            heading.set_text_content(Some(title));
+            style(&heading, &TITLE_STYLE);
+            let _ = dialog.append_child(&heading);
+            Some(heading)
+        }
+        None => None,
+    };
     let message = element("p")?;
-    message.set_id(&message_id);
     message.set_text_content(Some(&request.message));
     style(&message, &MESSAGE_STYLE);
     let _ = dialog.append_child(&message);
+    name_box(
+        document,
+        &dialog,
+        heading.as_ref().unwrap_or(&message),
+        &message,
+    );
     let form = element("form")?;
     let _ = form.set_attribute("method", "dialog");
     style(&form, &BUTTONS_STYLE);

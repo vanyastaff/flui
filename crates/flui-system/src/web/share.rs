@@ -3,8 +3,8 @@
 //! Browsers that have it (on phones, and some desktops) show it only in a
 //! secure context and while the page handles a user's gesture; a browser
 //! without it has no share sheet, and the handle is refused when it is
-//! acquired. A page has no files at paths to share, and shares a link of the
-//! web only (`http`, `https`).
+//! acquired. A page has no files at paths to share, and FLUI shares only
+//! `http` and `https` links from it, the links a share target can open.
 
 use std::rc::Rc;
 
@@ -60,7 +60,7 @@ impl ShareBackend for WebShare {
             .as_ref()
             .is_some_and(|uri| !rules::is_shareable_link(uri.scheme()))
         {
-            // The Web Share API takes a link of the web only.
+            // FLUI shares `http` and `https` links from a page.
             Some(unsupported(UnsupportedReason::NotOnThisPlatform))
         } else if !self.page.is_activated() {
             Some(unsupported(UnsupportedReason::Unavailable))
@@ -86,7 +86,10 @@ impl ShareBackend for WebShare {
             set(&data, "url", &JsValue::from_str(uri.as_str()));
         }
         match call_promise(&self.share, &self.navigator, &data) {
-            Err(thrown) => drop(answer.resolve(rules::share_rejection(thrown, saw_activation))),
+            Err(thrown) => {
+                // A retired owner has nobody left to answer.
+                let _ = answer.resolve(rules::share_rejection(thrown, saw_activation));
+            }
             Ok(promise) => wasm_bindgen_futures::spawn_local(async move {
                 let result = match JsFuture::from(promise).await {
                     Ok(_) => Ok(()),

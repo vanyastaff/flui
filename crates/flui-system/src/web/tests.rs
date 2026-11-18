@@ -1152,8 +1152,62 @@ fn the_box(window: &CanvasWindow) -> HtmlDialogElement {
         .unchecked_into::<HtmlDialogElement>()
 }
 
+/// The text of the element `dialog`'s `relation` names (`labelledBy`,
+/// `describedBy`), read through ARIA element reflection where the browser
+/// has it, through the id its attribute holds otherwise; `None` when it
+/// names nothing in the box.
+fn aria_text(dialog: &HtmlDialogElement, relation: &str) -> Option<String> {
+    let reflected = Reflect::get(
+        dialog,
+        &JsValue::from_str(&format!("aria{relation}Elements")),
+    )
+    .ok()
+    .and_then(|elements| elements.dyn_into::<Array>().ok())
+    .and_then(|elements| elements.get(0).dyn_into::<Element>().ok());
+    let element = reflected.or_else(|| {
+        let attribute = format!("aria-{}", relation.to_ascii_lowercase());
+        let id = dialog.get_attribute(&attribute)?;
+        dialog.query_selector(&format!("#{id}")).ok().flatten()
+    })?;
+    dialog
+        .contains(Some(&element))
+        .then(|| element.text_content())
+        .flatten()
+}
+
+/// Make the test page refuse inline styles (a content security policy
+/// without `'unsafe-inline'`) for the rest of the run, and check that it
+/// does: a `style` attribute set afterwards changes nothing.
+fn refuse_inline_styles() {
+    thread_local! {
+        static REFUSED: Cell<bool> = const { Cell::new(false) };
+    }
+    let document = the_view().document().expect("the page's document");
+    if !REFUSED.with(|refused| refused.replace(true)) {
+        let policy = document.create_element("meta").expect("a meta element");
+        let _ = policy.set_attribute("http-equiv", "Content-Security-Policy");
+        let _ = policy.set_attribute("content", "style-src 'self'");
+        document
+            .head()
+            .expect("the page has a head")
+            .append_child(&policy)
+            .expect("the policy goes in the head");
+    }
+    let probe = document
+        .create_element("p")
+        .expect("a probe")
+        .unchecked_into::<web_sys::HtmlElement>();
+    let _ = probe.set_attribute("style", "white-space: pre-wrap");
+    assert_eq!(
+        probe.style().get_property_value("white-space").as_deref(),
+        Ok(""),
+        "the page refuses inline style attributes"
+    );
+}
+
 #[wasm_bindgen_test]
 async fn a_message_box_is_a_modal_dialog_answering_the_button_pressed() {
+    refuse_inline_styles();
     let owner = TestOwner::new();
     let window = CanvasWindow::new(&owner);
     let answered = land(
@@ -1167,18 +1221,12 @@ async fn a_message_box_is_a_modal_dialog_answering_the_button_pressed() {
     let dialog = the_box(&window);
     assert!(dialog.open(), "the box is shown");
     assert_eq!(dialog.get_attribute("role").as_deref(), Some("alertdialog"));
-    let named_by = |attribute: &str| {
-        dialog
-            .get_attribute(attribute)
-            .and_then(|id| dialog.query_selector(&format!("#{id}")).ok().flatten())
-            .and_then(|element| element.text_content())
-    };
     assert_eq!(
-        named_by("aria-labelledby").as_deref(),
+        aria_text(&dialog, "LabelledBy").as_deref(),
         Some("Unsaved changes")
     );
     assert_eq!(
-        named_by("aria-describedby").as_deref(),
+        aria_text(&dialog, "DescribedBy").as_deref(),
         Some("Save the changes?\nThey are lost otherwise.")
     );
     let message = dialog
@@ -1190,7 +1238,7 @@ async fn a_message_box_is_a_modal_dialog_answering_the_button_pressed() {
     assert_eq!(
         message.style().get_property_value("white-space").as_deref(),
         Ok("pre-wrap"),
-        "the message keeps its line breaks through its style object"
+        "the message keeps its line breaks where inline styles are refused"
     );
     let labels: Vec<String> = (0..3)
         .filter_map(|at| {
@@ -1217,15 +1265,87 @@ async fn a_message_box_is_a_modal_dialog_answering_the_button_pressed() {
 }
 
 #[wasm_bindgen_test]
-async fn a_box_with_no_title_is_named_by_its_message() {
+fn a_box_with_no_title_is_named_by_its_message() {
     let owner = TestOwner::new();
     let window = CanvasWindow::new(&owner);
     let shown = message_boxes(&owner, &window).show(MessageBoxRequest::new("Saved."));
     let dialog = the_box(&window);
-    let labelled_by = dialog.get_attribute("aria-labelledby");
-    assert!(labelled_by.is_some(), "the box has a name");
-    assert_eq!(labelled_by, dialog.get_attribute("aria-describedby"));
+    assert_eq!(aria_text(&dialog, "LabelledBy").as_deref(), Some("Saved."));
+    assert_eq!(aria_text(&dialog, "DescribedBy").as_deref(), Some("Saved."));
     drop(shown);
+}
+
+#[wasm_bindgen_test]
+fn two_runtimes_boxes_each_name_their_own() {
+    // Two UI runtimes of one page each mint their first window id.
+    let (first_owner, second_owner) = (TestOwner::new(), TestOwner::new());
+    let (first, second) = (
+        CanvasWindow::new(&first_owner),
+        CanvasWindow::new(&second_owner),
+    );
+    assert_eq!(first.window.id(), second.window.id());
+    let shown = [
+        message_boxes(&first_owner, &first).show(MessageBoxRequest::new("one").title("First")),
+        message_boxes(&second_owner, &second).show(MessageBoxRequest::new("two").title("Second")),
+    ];
+    assert_eq!(
+        aria_text(&the_box(&first), "LabelledBy").as_deref(),
+        Some("First")
+    );
+    assert_eq!(
+        aria_text(&the_box(&second), "LabelledBy").as_deref(),
+        Some("Second")
+    );
+    drop(shown);
+}
+
+/// `HTMLDialogElement.prototype.showModal` replaced by one that throws an
+/// `InvalidStateError`, until the guard drops.
+fn throwing_show_modal() -> Replaced {
+    let view: JsValue = the_view().into();
+    let prototype = Reflect::get(&view, &"HTMLDialogElement".into())
+        .and_then(|dialog| Reflect::get(&dialog, &"prototype".into()))
+        .expect("the page has dialogs");
+    let throwing =
+        js_sys::Function::new_no_args("throw new DOMException('refused', 'InvalidStateError');");
+    Replaced::new(&prototype, "showModal", &throwing)
+}
+
+#[wasm_bindgen_test]
+async fn a_box_the_browser_will_not_show_answers_its_failure_once() {
+    let owner = TestOwner::new();
+    let window = CanvasWindow::new(&owner);
+    let refused = {
+        let _throwing = throwing_show_modal();
+        land(message_boxes(&owner, &window).show(MessageBoxRequest::new("Saved.")))
+    };
+    owner.until_landed(&refused).await;
+    assert_eq!(
+        *refused.borrow(),
+        Some(Ok(Err(DialogError::Failed(
+            flui_platform::SystemFailure::Browser(flui_platform::BrowserException::InvalidState)
+        ))))
+    );
+    assert!(window.find("dialog").is_none(), "no box was left behind");
+
+    // A Yes or No box closed by the browser is shown again; if the browser
+    // will not, the box answers that failure, once.
+    let answered = land(
+        message_boxes(&owner, &window)
+            .show(MessageBoxRequest::new("Replace it?").buttons(MessageButtons::YesNo)),
+    );
+    let dialog = the_box(&window);
+    let throwing = throwing_show_modal();
+    dialog.close();
+    owner.until_landed(&answered).await;
+    drop(throwing);
+    assert_eq!(
+        *answered.borrow(),
+        Some(Ok(Err(DialogError::Failed(
+            flui_platform::SystemFailure::Browser(flui_platform::BrowserException::InvalidState)
+        ))))
+    );
+    assert!(window.find("dialog").is_none(), "the box left the page");
 }
 
 #[wasm_bindgen_test]
@@ -1306,10 +1426,18 @@ struct ShareStandIn {
 
 impl ShareStandIn {
     fn install(answers: Vec<Option<&'static str>>) -> Self {
+        Self::consuming(answers, &Rc::new(Cell::new(true)))
+    }
+
+    /// A stand-in that, as a browser does, spends the page's gesture
+    /// (`activation`) when it is called.
+    fn consuming(answers: Vec<Option<&'static str>>, activation: &Rc<Cell<bool>>) -> Self {
         let shared: Rc<RefCell<Vec<(Option<String>, Option<String>)>>> = Rc::default();
         let seen = Rc::clone(&shared);
         let answers = RefCell::new(answers);
+        let activation = Rc::clone(activation);
         let share = Closure::<dyn FnMut(JsValue) -> JsValue>::new(move |data: JsValue| {
+            activation.set(false);
             let read = |name: &str| {
                 Reflect::get(&data, &JsValue::from_str(name))
                     .ok()
@@ -1347,20 +1475,34 @@ fn share(owner: &TestOwner, window: &CanvasWindow, active: bool) -> Share {
 async fn a_share_reaches_the_web_share_api_and_a_dismissed_sheet_is_not_reported() {
     let owner = TestOwner::new();
     let window = CanvasWindow::new(&owner);
-    let browser = ShareStandIn::install(vec![Some("NotAllowedError"), Some("AbortError"), None]);
-    let share = share(&owner, &window, true);
+    // The browser spends the gesture when it is asked, so the provider must
+    // read whether it was there at the call, not when the answer comes.
+    let active = Rc::new(Cell::new(true));
+    let browser = ShareStandIn::consuming(
+        vec![Some("NotAllowedError"), Some("AbortError"), None],
+        &active,
+    );
+    let share = Share::try_new(
+        WebShare::try_new(window.page_with(&active)).expect("the page has a share sheet"),
+        &owner.ctx(&window.window),
+    )
+    .expect("a window has a share sheet");
     let request = || {
         ShareRequest::new()
             .text("Look")
             .uri(ExternalUri::try_new("https://example.org/", &[Scheme::HTTPS]).expect("a link"))
     };
 
-    let done = landed(share.share(request()));
-    owner.until_landed(&done).await;
-    let dismissed = landed(share.share(request()));
-    owner.until_landed(&dismissed).await;
-    let refused = landed(share.share(request()));
-    owner.until_landed(&refused).await;
+    let mut answers = Vec::new();
+    for _ in 0..3 {
+        // Each share from a gesture of its own.
+        active.set(true);
+        let answer = landed(share.share(request()));
+        owner.until_landed(&answer).await;
+        answers.push(answer);
+    }
+    let [done, dismissed, refused] = <[Slot<crate::share::ShareResult>; 3]>::try_from(answers)
+        .unwrap_or_else(|_| unreachable!("three shares were made"));
 
     assert_eq!(*done.borrow(), Some(Ok(Ok(()))));
     assert_eq!(*dismissed.borrow(), Some(Ok(Ok(()))));
