@@ -22,7 +22,7 @@
   [ADR-0371](ADR-0371-before-the-first-release-no-xtask-gate-holds-a-rule-about-the-sources.md)
   for the `xtask workspace`, `xtask reach` and `xtask globals` gates only (§12, Confirmation): the
   rule stands and its reader confirms it.
-- **Superseded-by:** [ADR-0373](ADR-0373-non-rust-code-on-android-and-apple-is-a-leaf-by-rule.md)
+- **Superseded-by:** [ADR-0375](ADR-0375-non-rust-code-on-android-and-apple-is-a-leaf-by-rule.md)
   for decision 5 items 2 and 3 only (Java that uses only framework APIs, a manifest component
   included, ships as the crate's checked-in dex declared with its components; a Gradle library
   module is for Java that needs a library outside the platform or resources); item 1 and the

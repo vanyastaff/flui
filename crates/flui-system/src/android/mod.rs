@@ -3,7 +3,7 @@
 //! lends.
 //!
 //! Android's own classes are called from Rust; the crate ships Java only as
-//! the leaf ADR-0373 allows (`android/java`, `dev.flui.system`), as a
+//! the leaf ADR-0375 allows (`android/java`, `dev.flui.system`), as a
 //! checked-in dex its declarations name:
 //!
 //! - `FluiDocuments`, the content provider a view or a share hands a file

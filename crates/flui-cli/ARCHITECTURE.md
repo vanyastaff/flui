@@ -202,7 +202,7 @@ scaffolded script have goldens (`the_generated_manifest_matches_its_golden`,
 
 A content provider a crate ships (`android.providers`, schema 4: a class and an authority suffix,
 checked in `declarations/provider.rs`) becomes a `<provider>` after `FluiActivity`, unexported and
-granting URI permissions, under the authority `<application id>.<suffix>` (ADR-0373 §4): the
+granting URI permissions, under the authority `<application id>.<suffix>` (ADR-0375 §4): the
 packager without Gradle writes `flui.toml`'s id, the package it links, and a Gradle build
 `${applicationId}`, which Gradle replaces with the variant's id, an `applicationIdSuffix`
 included; the provider serves under the authority Android attaches it with. One suffix with two

@@ -470,7 +470,7 @@ compiled and tested on every host (`android::*::tests`), and the dialogs' whole 
 a stand-in Activity and picker (`testing::android`); the JNI calls are the module's Android-only
 `java` module, checked by CI's Android type-check. The owed device runs are in the parity rows.
 
-**Java only as a leaf (ADR-0373).** Android's own classes (`Intent`, `ContentResolver`,
+**Java only as a leaf (ADR-0375).** Android's own classes (`Intent`, `ContentResolver`,
 `AlertDialog.Builder`, `Environment`) are called from Rust. The crate ships two classes
 (`android/java`, `dev.flui.system`), each forced by the platform:
 
@@ -503,7 +503,7 @@ Threads:
   first provider of a UI runtime reads the VM, the class loader and the application's content
   resolver in a frame the Activity lends, and keeps them with the runtime.
 - **Starting an activity and the message box run on Java's main thread**, each work the host runs
-  there for the provider (`Activity::on_main_thread`, ADR-0373 §6) inside its panic boundary. Work
+  there for the provider (`Activity::on_main_thread`, ADR-0375 §6) inside its panic boundary. Work
   the host refuses (the Activity ended, `MAX_POSTED_WORK` pieces wait, the main thread did not take
   it within the host's limit, or it panicked) answers a launch or a share `Unavailable`, and a
   message box `NotShown`.

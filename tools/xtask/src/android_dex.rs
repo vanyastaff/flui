@@ -1,5 +1,5 @@
 //! `cargo xtask android-dex`: the dex of each workspace crate that declares
-//! Java classes (ADR-0373 §2), such as the Android backend's
+//! Java classes (ADR-0375 §2), such as the Android backend's
 //! (`flui-native`: `FluiActivity`, `FluiHost`, `FluiView`) and `flui-system`'s
 //! (`FluiCallback`, `FluiDocuments`).
 //!

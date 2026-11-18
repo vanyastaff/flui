@@ -5846,7 +5846,7 @@ GPU-память простаивающего или невидимого окн
   «Android» в `crates/flui-system/ARCHITECTURE.md`. Классы Android зовутся из Rust через JNI
   (`jni` 0.22 по сырым указателям, которые хост одалживает на вызов; своего `static` `JavaVM`
   нет: VM, загрузчик классов и `ContentResolver` приложения первый провайдер runtime
-  читает в кадре Activity и держит в `runtime_local`). Java — только лист по ADR-0373:
+  читает в кадре Activity и держит в `runtime_local`). Java — только лист по ADR-0375:
   `FluiDocuments` — content provider, компонент, который Android создаёт по имени из манифеста;
   `FluiCallback` — единственный обработчик `java.lang.reflect.Proxy` для интерфейсов-слушателей
   (три слушателя диалога), вызов приходит в один нативный метод с именем метода, дескриптор
@@ -5915,7 +5915,7 @@ GPU-память простаивающего или невидимого окн
   доставляется приложению) — `docs/gaps.md`. Прогоны — строки parity «Open a URL», «Open a file,
   reveal it in the file manager», «Open, save and folder dialogs», «Message box», «Share», «User
   folders», «OS name, version and architecture».
-  После независимого чтения: правило о не-Rust коде — ADR-0373 (Java только для подкласса,
+  После независимого чтения: правило о не-Rust коде — ADR-0375 (Java только для подкласса,
   переопределения или компонента манифеста; checked-in dex крейта с его компонентами; одна
   проверка digest по списку из манифестов; authority от id приложения; типизированные привязки
   JNI — направление, запись в `docs/gaps.md`), заменяет ADR-0154 решение 5 п. 2–3 и ADR-0255
