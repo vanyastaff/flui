@@ -471,7 +471,7 @@ impl Convert<rec::PointerKind> for PointerKind {
     }
 }
 
-impl TryConvert<&PointerSource> for rec::PointerInfo {
+impl TryConvert<&PointerSource> for rec::PointerSource {
     fn try_convert(info: &PointerSource) -> Result<Self> {
         Ok(Self {
             id: info.id.get().get(),
@@ -482,8 +482,8 @@ impl TryConvert<&PointerSource> for rec::PointerInfo {
     }
 }
 
-impl TryConvert<rec::PointerInfo> for PointerSource {
-    fn try_convert(info: rec::PointerInfo) -> Result<Self> {
+impl TryConvert<rec::PointerSource> for PointerSource {
+    fn try_convert(info: rec::PointerSource) -> Result<Self> {
         let mut pointer =
             Self::new(pointer_id(info.id)?, info.kind.convert_into()).with_role(if info.primary {
                 PointerRole::Primary

@@ -23,8 +23,9 @@ use flui_foundation::inspect::{
 
 use flui_foundation::panic::FirstPanic;
 use flui_protocol::{
-    InspectField, InspectLevel, InspectNode, InspectParams, InspectReading, InspectUnit,
-    InspectValue, LogicalRect, NonFinite,
+    geometry::LogicalRect, inspect::InspectField, inspect::InspectLevel, inspect::InspectNode,
+    inspect::InspectParams, inspect::InspectReading, inspect::InspectUnit, inspect::InspectValue,
+    inspect::NonFinite,
 };
 
 use super::UiRuntime;

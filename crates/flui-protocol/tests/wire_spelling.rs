@@ -8,13 +8,17 @@ use std::fmt::Debug;
 
 use flui_protocol::method::{MethodEffect, ServedBy, Tier};
 use flui_protocol::{
-    ActOutcome, ActParams, ActionName, Actionability, ActionabilityCheck, AuditReport, AuditRule,
-    CaptureMeta, CaptureSource, ChangedField, ClientRole, Condition, DeviceClass, Direction,
-    EffectKind, EffectUnit, ElementRef, ErrorCode, ErrorObject, Event, EventKind, FramePhase,
-    HandleKind, Hello, InputKind, InputParams, InputPath, Isolation, Journal, LocateParams,
-    Locator, Matches, PerfExpectParams, PerfReport, PointerButton, PointerDevice, PressKeysParams,
-    ProtocolVersion, Role, ScrollUnit, Snapshot, SwipeParams, TapParams, Target, TextMatch,
-    UnsettledReason, Verdict, WaitOutcome, WaitParams,
+    act::ActOutcome, act::ActParams, act::Actionability, act::ActionabilityCheck, act::EffectKind,
+    act::EffectUnit, audit::AuditReport, audit::AuditRule, capture::CaptureSource,
+    capture::Screenshot, error::ErrorCode, error::ErrorObject, error::HandleKind, events::Event,
+    events::EventKind, input::DeviceClass, input::Direction, input::InputKind, input::InputParams,
+    input::InputPath, input::Journal, input::PointerButton, input::PointerDevice,
+    input::PressKeysParams, input::ScrollUnit, input::SwipeParams, input::TapParams,
+    locator::LocateParams, locator::Locator, locator::Matches, locator::Target, locator::TextMatch,
+    perf::FramePhase, perf::PerfExpectParams, perf::PerfReport, session::ClientRole,
+    session::Hello, session::Isolation, snapshot::ChangedField, snapshot::Snapshot,
+    tree::ElementRef, verdict::Verdict, version::ProtocolVersion, wait::Condition,
+    wait::UnsettledReason, wait::WaitOutcome, wait::WaitParams, wire::ActionName, wire::Role,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -381,7 +385,7 @@ fn events_are_named_with_their_params() {
 
 #[test]
 fn captures_perf_and_audits_report_what_they_measured() {
-    let capture: CaptureMeta = round_trips(json!({
+    let capture: Screenshot = round_trips(json!({
         "source": "rendered",
         "width": 720,
         "height": 96,

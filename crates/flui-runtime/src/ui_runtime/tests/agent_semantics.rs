@@ -8,8 +8,9 @@ use std::sync::atomic::AtomicU32;
 
 use flui_protocol::method;
 use flui_protocol::{
-    ActParams, ActionName, EffectKind, ElementId, ElementRef, ErrorCode, ErrorObject, HandleKind,
-    ReadParams, ReadQuery, Retry, Tree, outline,
+    act::ActParams, act::EffectKind, error::ErrorCode, error::ErrorObject, error::HandleKind,
+    error::Retry, tree::ElementId, tree::ElementRef, tree::ReadParams, tree::ReadQuery, tree::Tree,
+    tree::outline, wire::ActionName,
 };
 use flui_semantics::{
     AccessibilityNodeId, SemanticsAction, SemanticsConfiguration, SemanticsNode, SemanticsOwner,
@@ -142,8 +143,8 @@ pub(super) fn read(ui_runtime: &UiRuntime, window: &AgentWindow) -> Tree {
     answer(ui_runtime, reply).expect("the committed tree reads")
 }
 
-pub(super) fn find(tree: &Tree, name: &str) -> flui_protocol::Node {
-    fn walk(nodes: &[flui_protocol::Node], name: &str) -> Option<flui_protocol::Node> {
+pub(super) fn find(tree: &Tree, name: &str) -> flui_protocol::tree::Node {
+    fn walk(nodes: &[flui_protocol::tree::Node], name: &str) -> Option<flui_protocol::tree::Node> {
         nodes.iter().find_map(|node| {
             (node.name.as_deref() == Some(name))
                 .then(|| node.clone())
@@ -198,7 +199,7 @@ fn an_agent_reads_a_widget_tree_as_wire_nodes_that_round_trip_through_json() {
         )
     );
     assert_eq!(
-        root.window.map(flui_protocol::WindowId::get),
+        root.window.map(flui_protocol::tree::WindowId::get),
         Some(window_number)
     );
     assert_eq!(button.rect, None, "no screen rect is claimed in process");
@@ -372,14 +373,14 @@ fn an_action_on_a_node_that_left_the_tree_is_gone_not_retargeted() {
 
     // A read scoped to either handle answers as an action on it does.
     let scoped_gone = window
-        .call::<method::SemanticsRead>(read_params(&window, ReadQuery::new().with_root(button)))
+        .call::<method::SemanticsRead>(read_params(&window, ReadQuery::new().root(button)))
         .expect("the inbox has room");
     assert_eq!(
         answer(&ui_runtime, scoped_gone).map_err(|e| e.code),
         Err(ErrorCode::Gone)
     );
     let scoped_unknown = window
-        .call::<method::SemanticsRead>(read_params(&window, ReadQuery::new().with_root(never)))
+        .call::<method::SemanticsRead>(read_params(&window, ReadQuery::new().root(never)))
         .expect("the inbox has room");
     assert_eq!(
         answer(&ui_runtime, scoped_unknown).map_err(|e| e.code),

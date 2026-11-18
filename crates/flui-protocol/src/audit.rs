@@ -140,7 +140,7 @@ impl AuditReport {
     /// The report, with `rule` not run for `reason`: a report with nothing found becomes
     /// `cannot_verify`.
     #[must_use]
-    pub fn with_not_checked(mut self, rule: AuditRule, reason: impl Into<String>) -> Self {
+    pub fn not_checked(mut self, rule: AuditRule, reason: impl Into<String>) -> Self {
         self.not_checked.push(NotChecked {
             rule,
             reason: reason.into(),

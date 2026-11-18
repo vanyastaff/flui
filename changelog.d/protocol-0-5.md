@@ -10,7 +10,7 @@
   - the input path and policy, the per-device `ActionSequence` in BiDi's `performActions` shape,
     the gestures and the input journal;
   - `Condition` and `WaitOutcome` with unsettled causes, and `SnapshotDelta`;
-  - `Event`, `CaptureMeta`, `PerfReport` with budgets, `AuditReport` and `Verdict`;
+  - `Event`, `Screenshot`, `PerfReport` with budgets, `AuditReport` and `Verdict`;
   - `Hello` and `ErrorObject`.
 
   Four error codes are new: `ambiguous`, `not_actionable`, `stale` and `version`. `Node` gains

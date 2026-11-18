@@ -22,7 +22,9 @@ use std::time::{Duration, Instant};
 use flui_foundation::PresentationId;
 use flui_foundation::panic::FirstPanic;
 use flui_protocol::input_recording::{self as rec, Row};
-use flui_protocol::{RecordLayer, RecordParams, RecordRow, native_recording};
+use flui_protocol::{
+    native_recording, record::RecordLayer, record::RecordParams, record::RecordRow,
+};
 use flui_scheduler::ClockSource;
 use flui_view::__runtime::{RecordSource, Reply, WakeSlot};
 use flui_view::dev_agent::AgentRecording;

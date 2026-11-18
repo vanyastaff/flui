@@ -23396,9 +23396,9 @@ impl core::marker::StructuralPartialEq for flui::testing::Tree
 impl schemars::JsonSchema for flui::testing::Tree
 impl serde_core::ser::Serialize for flui::testing::Tree
 impl<'de> serde_core::de::Deserialize<'de> for flui::testing::Tree
+pub fn flui::testing::Tree::diagnostics(self, diagnostics: Vec<flui_protocol::tree::TreeDiagnostic>) -> Self
 pub fn flui::testing::Tree::new(roots: Vec<flui::testing::Node>, truncated: bool) -> Self
-pub fn flui::testing::Tree::with_diagnostics(self, diagnostics: Vec<flui_protocol::tree::TreeDiagnostic>) -> Self
-pub fn flui::testing::Tree::with_revision(self, revision: flui_protocol::tree::TreeRevision) -> Self
+pub fn flui::testing::Tree::revision(self, revision: flui_protocol::tree::TreeRevision) -> Self
 pub struct flui::testing::WriteHold { .. }
 impl Drop for flui::testing::WriteHold
 impl core::fmt::Debug for flui::testing::WriteHold
@@ -31329,7 +31329,7 @@ impl serde_core::ser::Serialize for flui_protocol::act::Effect
 impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::act::Effect
 pub const fn flui_protocol::act::Effect::new(kind: flui_protocol::act::EffectKind) -> Self
 pub const fn flui_protocol::act::Effect::partial(sent: u32, total: u32, unit: flui_protocol::act::EffectUnit) -> Self
-pub fn flui_protocol::act::Effect::with_detail(self, detail: impl Into<String>) -> Self
+pub fn flui_protocol::act::Effect::detail(self, detail: impl Into<String>) -> Self
 #[non_exhaustive] pub enum flui_protocol::act::EffectKind
 impl Clone for flui_protocol::act::EffectKind
 impl Copy for flui_protocol::act::EffectKind
@@ -31424,12 +31424,12 @@ impl schemars::JsonSchema for flui_protocol::error::ErrorObject
 impl serde_core::ser::Serialize for flui_protocol::error::ErrorObject
 impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::error::ErrorObject
 pub fn flui_protocol::error::ErrorObject::ambiguous(message: impl Into<String>, candidates: Vec<String>) -> Self
+pub fn flui_protocol::error::ErrorObject::effect(self, effect: flui_protocol::act::Effect) -> Self
+pub fn flui_protocol::error::ErrorObject::handle(self, kind: flui_protocol::error::HandleKind, handle: impl Into<String>) -> Self
 pub fn flui_protocol::error::ErrorObject::new(code: flui_protocol::error::ErrorCode, message: impl Into<String>) -> Self
 pub fn flui_protocol::error::ErrorObject::not_actionable(message: impl Into<String>, failed: flui_protocol::act::ActionabilityCheck, covered_by: Option<String>) -> Self
+pub fn flui_protocol::error::ErrorObject::retry(self, retry: flui_protocol::error::Retry) -> Self
 pub fn flui_protocol::error::ErrorObject::version(app: flui_protocol::version::ProtocolVersion, client: flui_protocol::version::ProtocolVersion) -> Self
-pub fn flui_protocol::error::ErrorObject::with_effect(self, effect: flui_protocol::act::Effect) -> Self
-pub fn flui_protocol::error::ErrorObject::with_handle(self, kind: flui_protocol::error::HandleKind, handle: impl Into<String>) -> Self
-pub fn flui_protocol::error::ErrorObject::with_retry(self, retry: flui_protocol::error::Retry) -> Self
 #[non_exhaustive] pub enum flui_protocol::error::HandleKind
 impl Clone for flui_protocol::error::HandleKind
 impl Copy for flui_protocol::error::HandleKind
@@ -31778,7 +31778,7 @@ field flui_protocol::input_recording::ButtonEvent::button: u8 // at 1
 field flui_protocol::input_recording::ButtonEvent::buttons: Vec<u8> // at 2
 field flui_protocol::input_recording::ButtonEvent::click_count: Option<u8> // at 4
 field flui_protocol::input_recording::ButtonEvent::modifiers: Vec<String> // at 3
-field flui_protocol::input_recording::ButtonEvent::pointer: flui_protocol::input_recording::PointerInfo // at 0
+field flui_protocol::input_recording::ButtonEvent::pointer: flui_protocol::input_recording::PointerSource // at 0
 field flui_protocol::input_recording::ButtonEvent::sample: flui_protocol::input_recording::Sample // at 5
 impl Clone for flui_protocol::input_recording::ButtonEvent
 impl PartialEq for flui_protocol::input_recording::ButtonEvent
@@ -32099,7 +32099,7 @@ variant flui_protocol::input_recording::Outcome::Unhandled // at 1
 pub struct flui_protocol::input_recording::PanZoom
 field flui_protocol::input_recording::PanZoom::modifiers: Vec<String> // at 5
 field flui_protocol::input_recording::PanZoom::phase: flui_protocol::input_recording::PanZoomPhase // at 4
-field flui_protocol::input_recording::PanZoom::pointer: flui_protocol::input_recording::PointerInfo // at 0
+field flui_protocol::input_recording::PanZoom::pointer: flui_protocol::input_recording::PointerSource // at 0
 field flui_protocol::input_recording::PanZoom::t: u64 // at 1
 field flui_protocol::input_recording::PanZoom::x: f64 // at 2
 field flui_protocol::input_recording::PanZoom::y: f64 // at 3
@@ -32146,13 +32146,13 @@ impl serde_core::ser::Serialize for flui_protocol::input_recording::PointerEvent
 impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::input_recording::PointerEvent
 variant flui_protocol::input_recording::PointerEvent::ButtonPressed(flui_protocol::input_recording::ButtonEvent) // at 1
 variant flui_protocol::input_recording::PointerEvent::ButtonReleased(flui_protocol::input_recording::ButtonEvent) // at 2
-variant flui_protocol::input_recording::PointerEvent::Cancel { pointer: flui_protocol::input_recording::PointerInfo, t: u64, reason: flui_protocol::input_recording::CancelReason } // at 5
+variant flui_protocol::input_recording::PointerEvent::Cancel { pointer: flui_protocol::input_recording::PointerSource, t: u64, reason: flui_protocol::input_recording::CancelReason } // at 5
 variant flui_protocol::input_recording::PointerEvent::DeviceAdded(flui_protocol::input_recording::DeviceChange) // at 14
 variant flui_protocol::input_recording::PointerEvent::DeviceRemoved(flui_protocol::input_recording::DeviceChange) // at 15
 variant flui_protocol::input_recording::PointerEvent::Down(flui_protocol::input_recording::ButtonEvent) // at 0
 variant flui_protocol::input_recording::PointerEvent::Enter(flui_protocol::input_recording::Signal) // at 6
 variant flui_protocol::input_recording::PointerEvent::Leave(flui_protocol::input_recording::Signal) // at 7
-variant flui_protocol::input_recording::PointerEvent::Move { pointer: flui_protocol::input_recording::PointerInfo, buttons: Vec<u8>, modifiers: Vec<String>, current: flui_protocol::input_recording::Sample, coalesced: Vec<flui_protocol::input_recording::Sample>, predicted: Vec<flui_protocol::input_recording::Sample> } // at 4
+variant flui_protocol::input_recording::PointerEvent::Move { pointer: flui_protocol::input_recording::PointerSource, buttons: Vec<u8>, modifiers: Vec<String>, current: flui_protocol::input_recording::Sample, coalesced: Vec<flui_protocol::input_recording::Sample>, predicted: Vec<flui_protocol::input_recording::Sample> } // at 4
 variant flui_protocol::input_recording::PointerEvent::PanZoom(flui_protocol::input_recording::PanZoom) // at 10
 variant flui_protocol::input_recording::PointerEvent::RawMotion(flui_protocol::input_recording::RawMotion) // at 13
 variant flui_protocol::input_recording::PointerEvent::Scroll(flui_protocol::input_recording::Scroll) // at 8
@@ -32160,20 +32160,6 @@ variant flui_protocol::input_recording::PointerEvent::SmartZoom(flui_protocol::i
 variant flui_protocol::input_recording::PointerEvent::TouchpadHold(flui_protocol::input_recording::TouchpadHold) // at 9
 variant flui_protocol::input_recording::PointerEvent::TouchpadSwipe(flui_protocol::input_recording::TouchpadSwipe) // at 11
 variant flui_protocol::input_recording::PointerEvent::Up(flui_protocol::input_recording::ButtonEvent) // at 3
-pub struct flui_protocol::input_recording::PointerInfo
-field flui_protocol::input_recording::PointerInfo::device: Option<u64> // at 1
-field flui_protocol::input_recording::PointerInfo::id: u64 // at 0
-field flui_protocol::input_recording::PointerInfo::kind: flui_protocol::input_recording::PointerKind // at 2
-field flui_protocol::input_recording::PointerInfo::primary: bool // at 3
-impl Clone for flui_protocol::input_recording::PointerInfo
-impl Copy for flui_protocol::input_recording::PointerInfo
-impl Eq for flui_protocol::input_recording::PointerInfo
-impl PartialEq for flui_protocol::input_recording::PointerInfo
-impl core::fmt::Debug for flui_protocol::input_recording::PointerInfo
-impl core::marker::StructuralPartialEq for flui_protocol::input_recording::PointerInfo
-impl schemars::JsonSchema for flui_protocol::input_recording::PointerInfo
-impl serde_core::ser::Serialize for flui_protocol::input_recording::PointerInfo
-impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::input_recording::PointerInfo
 pub enum flui_protocol::input_recording::PointerKind
 impl Clone for flui_protocol::input_recording::PointerKind
 impl Copy for flui_protocol::input_recording::PointerKind
@@ -32191,6 +32177,20 @@ variant flui_protocol::input_recording::PointerKind::Touch // at 1
 variant flui_protocol::input_recording::PointerKind::Trackpad // at 4
 variant flui_protocol::input_recording::PointerKind::Unknown // at 6
 variant flui_protocol::input_recording::PointerKind::Virtual // at 5
+pub struct flui_protocol::input_recording::PointerSource
+field flui_protocol::input_recording::PointerSource::device: Option<u64> // at 1
+field flui_protocol::input_recording::PointerSource::id: u64 // at 0
+field flui_protocol::input_recording::PointerSource::kind: flui_protocol::input_recording::PointerKind // at 2
+field flui_protocol::input_recording::PointerSource::primary: bool // at 3
+impl Clone for flui_protocol::input_recording::PointerSource
+impl Copy for flui_protocol::input_recording::PointerSource
+impl Eq for flui_protocol::input_recording::PointerSource
+impl PartialEq for flui_protocol::input_recording::PointerSource
+impl core::fmt::Debug for flui_protocol::input_recording::PointerSource
+impl core::marker::StructuralPartialEq for flui_protocol::input_recording::PointerSource
+impl schemars::JsonSchema for flui_protocol::input_recording::PointerSource
+impl serde_core::ser::Serialize for flui_protocol::input_recording::PointerSource
+impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::input_recording::PointerSource
 pub struct flui_protocol::input_recording::Preferences
 field flui_protocol::input_recording::Preferences::revision: u64 // at 0
 field flui_protocol::input_recording::Preferences::values: flui_protocol::native_recording::preferences::Preferences // at 1
@@ -32216,7 +32216,7 @@ pub struct flui_protocol::input_recording::RawMotion
 field flui_protocol::input_recording::RawMotion::at: Option<[f64; 2]> // at 2
 field flui_protocol::input_recording::RawMotion::dx: f64 // at 3
 field flui_protocol::input_recording::RawMotion::dy: f64 // at 4
-field flui_protocol::input_recording::RawMotion::pointer: flui_protocol::input_recording::PointerInfo // at 0
+field flui_protocol::input_recording::RawMotion::pointer: flui_protocol::input_recording::PointerSource // at 0
 field flui_protocol::input_recording::RawMotion::t: u64 // at 1
 field flui_protocol::input_recording::RawMotion::unaccelerated: bool // at 5
 impl Clone for flui_protocol::input_recording::RawMotion
@@ -32290,7 +32290,7 @@ field flui_protocol::input_recording::Scroll::dy: f64 // at 6
 field flui_protocol::input_recording::Scroll::inversion: Option<flui_protocol::input_recording::ScrollInversion> // at 9
 field flui_protocol::input_recording::Scroll::modifiers: Vec<String> // at 10
 field flui_protocol::input_recording::Scroll::phase: Option<flui_protocol::input_recording::ScrollPhase> // at 8
-field flui_protocol::input_recording::Scroll::pointer: flui_protocol::input_recording::PointerInfo // at 0
+field flui_protocol::input_recording::Scroll::pointer: flui_protocol::input_recording::PointerSource // at 0
 field flui_protocol::input_recording::Scroll::precision: flui_protocol::input_recording::ScrollPrecision // at 7
 field flui_protocol::input_recording::Scroll::t: u64 // at 1
 field flui_protocol::input_recording::Scroll::unit: flui_protocol::input_recording::ScrollUnit // at 4
@@ -32388,7 +32388,7 @@ impl schemars::JsonSchema for flui_protocol::input_recording::ShownFrameId
 impl serde_core::ser::Serialize for flui_protocol::input_recording::ShownFrameId
 impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::input_recording::ShownFrameId
 pub struct flui_protocol::input_recording::Signal
-field flui_protocol::input_recording::Signal::pointer: flui_protocol::input_recording::PointerInfo // at 0
+field flui_protocol::input_recording::Signal::pointer: flui_protocol::input_recording::PointerSource // at 0
 field flui_protocol::input_recording::Signal::position: Option<[f64; 2]> // at 2
 field flui_protocol::input_recording::Signal::t: u64 // at 1
 impl Clone for flui_protocol::input_recording::Signal
@@ -32400,7 +32400,7 @@ impl serde_core::ser::Serialize for flui_protocol::input_recording::Signal
 impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::input_recording::Signal
 pub struct flui_protocol::input_recording::SmartZoom
 field flui_protocol::input_recording::SmartZoom::modifiers: Vec<String> // at 4
-field flui_protocol::input_recording::SmartZoom::pointer: flui_protocol::input_recording::PointerInfo // at 0
+field flui_protocol::input_recording::SmartZoom::pointer: flui_protocol::input_recording::PointerSource // at 0
 field flui_protocol::input_recording::SmartZoom::t: u64 // at 1
 field flui_protocol::input_recording::SmartZoom::x: f64 // at 2
 field flui_protocol::input_recording::SmartZoom::y: f64 // at 3
@@ -32438,7 +32438,7 @@ impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::input_recording::T
 pub struct flui_protocol::input_recording::TouchpadHold
 field flui_protocol::input_recording::TouchpadHold::modifiers: Vec<String> // at 5
 field flui_protocol::input_recording::TouchpadHold::phase: flui_protocol::input_recording::TouchpadHoldPhase // at 4
-field flui_protocol::input_recording::TouchpadHold::pointer: flui_protocol::input_recording::PointerInfo // at 0
+field flui_protocol::input_recording::TouchpadHold::pointer: flui_protocol::input_recording::PointerSource // at 0
 field flui_protocol::input_recording::TouchpadHold::t: u64 // at 1
 field flui_protocol::input_recording::TouchpadHold::x: f64 // at 2
 field flui_protocol::input_recording::TouchpadHold::y: f64 // at 3
@@ -32466,7 +32466,7 @@ pub struct flui_protocol::input_recording::TouchpadSwipe
 field flui_protocol::input_recording::TouchpadSwipe::fingers: u8 // at 4
 field flui_protocol::input_recording::TouchpadSwipe::modifiers: Vec<String> // at 6
 field flui_protocol::input_recording::TouchpadSwipe::phase: flui_protocol::input_recording::TouchpadSwipePhase // at 5
-field flui_protocol::input_recording::TouchpadSwipe::pointer: flui_protocol::input_recording::PointerInfo // at 0
+field flui_protocol::input_recording::TouchpadSwipe::pointer: flui_protocol::input_recording::PointerSource // at 0
 field flui_protocol::input_recording::TouchpadSwipe::t: u64 // at 1
 field flui_protocol::input_recording::TouchpadSwipe::x: f64 // at 2
 field flui_protocol::input_recording::TouchpadSwipe::y: f64 // at 3
@@ -34290,10 +34290,10 @@ impl core::marker::StructuralPartialEq for flui_protocol::tree::ReadQuery
 impl schemars::JsonSchema for flui_protocol::tree::ReadQuery
 impl serde_core::ser::Serialize for flui_protocol::tree::ReadQuery
 impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::tree::ReadQuery
+pub fn flui_protocol::tree::ReadQuery::max_depth(self, depth: usize) -> Self
+pub fn flui_protocol::tree::ReadQuery::max_nodes(self, nodes: usize) -> Self
 pub fn flui_protocol::tree::ReadQuery::new() -> Self
-pub fn flui_protocol::tree::ReadQuery::with_max_depth(self, depth: usize) -> Self
-pub fn flui_protocol::tree::ReadQuery::with_max_nodes(self, nodes: usize) -> Self
-pub fn flui_protocol::tree::ReadQuery::with_root(self, root: flui_protocol::tree::ElementId) -> Self
+pub fn flui_protocol::tree::ReadQuery::root(self, root: flui_protocol::tree::ElementId) -> Self
 pub struct flui_protocol::tree::Rect
 field flui_protocol::tree::Rect::height: u32 // at 3
 field flui_protocol::tree::Rect::width: u32 // at 2

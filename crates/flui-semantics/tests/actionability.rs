@@ -3,7 +3,10 @@
 //! and the render-to-semantics mapping behind the last.
 
 use flui_foundation::RenderId;
-use flui_protocol::{Actionability, ActionabilityCheck, ElementRef, LogicalPoint, LogicalRect};
+use flui_protocol::{
+    act::Actionability, act::ActionabilityCheck, geometry::LogicalPoint, geometry::LogicalRect,
+    tree::ElementRef,
+};
 use flui_semantics::SemanticsRole;
 
 use crate::fixture::{Fixture, element, element_of, placement, render_id};
@@ -318,7 +321,7 @@ fn a_hidden_element_is_attached_and_an_absent_one_is_not() {
 fn an_element_of_another_window_is_not_attached() {
     let f = window();
     let other = ElementRef::new(
-        flui_protocol::WindowId::from_u64(2).expect("non-zero"),
+        flui_protocol::tree::WindowId::from_u64(2).expect("non-zero"),
         element(2).element,
     );
     assert!(!facts(&f, other, None, &ids(&[2])).attached);
@@ -362,7 +365,7 @@ fn a_handle_from_before_a_replacement_is_not_attached() {
 #[test]
 fn a_reader_stops_past_a_scroll_views_edge_and_an_agent_reads_every_row() {
     use accesskit_consumer::common_filter;
-    use flui_protocol::{LocateParams, Locator, ReadQuery};
+    use flui_protocol::{locator::LocateParams, locator::Locator, tree::ReadQuery};
 
     let f = window();
     let update = f
@@ -384,10 +387,7 @@ fn a_reader_stops_past_a_scroll_views_edge_and_an_agent_reads_every_row() {
 
     let agent: Vec<Option<String>> = f
         .owner
-        .read_wire(
-            &ReadQuery::new().with_root(element(13).element),
-            placement(),
-        )
+        .read_wire(&ReadQuery::new().root(element(13).element), placement())
         .expect("the tree reads")
         .roots[0]
         .children

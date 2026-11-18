@@ -3,7 +3,7 @@
 //! description changed, matched by element id, with bounds left out unless
 //! asked and a cap on what is reported.
 
-use flui_protocol::{ChangedField, ElementId, SnapshotDelta};
+use flui_protocol::{snapshot::ChangedField, snapshot::SnapshotDelta, tree::ElementId};
 use flui_semantics::{SemanticsRole, Toggled, TreeSnapshot};
 
 use crate::fixture::{Fixture, element, element_of, placement, render_id};

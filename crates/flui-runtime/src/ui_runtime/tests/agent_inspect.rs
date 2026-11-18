@@ -6,8 +6,8 @@ use flui_foundation::PresentationId;
 use flui_foundation::inspect::{Link, NodeRef};
 use flui_protocol::method;
 use flui_protocol::{
-    ErrorCode, ErrorObject, HandleKind, InspectLevel, InspectNode, InspectParams, InspectReading,
-    Retry, WindowId,
+    error::ErrorCode, error::ErrorObject, error::HandleKind, error::Retry, inspect::InspectLevel,
+    inspect::InspectNode, inspect::InspectParams, inspect::InspectReading, tree::WindowId,
 };
 use flui_view::dev_agent::{AgentAnswer, AgentWindow};
 
@@ -182,13 +182,13 @@ fn a_reference_to_another_window_is_unknown_and_never_read_here() {
         let error = inspect(&ui_runtime, &window, InspectTarget::Render, params)
             .expect_err("a reference to another window");
         assert_eq!(error.code, ErrorCode::UnknownHandle, "{other:?}");
-        let named = flui_protocol::WindowId::from_u64(other.as_u64())
+        let named = flui_protocol::tree::WindowId::from_u64(other.as_u64())
             .expect("a presentation id is non-zero")
             .to_string();
         assert_eq!(
             (error.kind, error.handle.as_deref()),
             (
-                Some(flui_protocol::HandleKind::Window),
+                Some(flui_protocol::error::HandleKind::Window),
                 Some(named.as_str())
             ),
             "the error names the window the reference names: {other:?}"
@@ -501,13 +501,13 @@ fn a_layer_read_names_a_layer_and_this_window_before_it_waits() {
         .expect("another window answers at once")
         .expect_err("another window");
     assert_eq!(error.code, ErrorCode::UnknownHandle);
-    let named = flui_protocol::WindowId::from_u64(elsewhere.as_u64())
+    let named = flui_protocol::tree::WindowId::from_u64(elsewhere.as_u64())
         .expect("a presentation id is non-zero")
         .to_string();
     assert_eq!(
         (error.kind, error.handle.as_deref()),
         (
-            Some(flui_protocol::HandleKind::Window),
+            Some(flui_protocol::error::HandleKind::Window),
             Some(named.as_str())
         )
     );
@@ -654,7 +654,7 @@ fn with_panicking_subscriber<R>(needles: &'static [&'static str], run: impl FnOn
 fn a_reply_that_panics_while_a_window_closes_does_not_strand_its_layer_read() {
     use std::panic::{AssertUnwindSafe, catch_unwind};
 
-    use flui_protocol::{Condition, Locator, WaitParams};
+    use flui_protocol::{locator::Locator, wait::Condition, wait::WaitParams};
 
     let mut ui_runtime = UiRuntime::for_test();
     let second = ui_runtime.install_second_presentation_for_test();
@@ -777,7 +777,7 @@ fn an_unbounded_or_invalid_number_is_a_typed_value_that_survives_json() {
     use crate::ui_runtime::agent_inspect::value_to_wire;
     use flui_foundation::geometry::Size;
     use flui_foundation::inspect::OwnedValue;
-    use flui_protocol::{InspectValue, NonFinite};
+    use flui_protocol::{inspect::InspectValue, inspect::NonFinite};
 
     let wire = |value: OwnedValue| {
         let wire = value_to_wire(&value);

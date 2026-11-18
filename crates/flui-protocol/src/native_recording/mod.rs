@@ -16,7 +16,7 @@
 //!
 //! `flui-native` writes and replays these records; this module only declares them, so a
 //! reader such as the driver reads a recording without the core. The format is versioned by
-//! [`FORMAT_VERSION`], apart from [`PROTOCOL_VERSION`](crate::PROTOCOL_VERSION).
+//! [`FORMAT_VERSION`], apart from [`PROTOCOL_VERSION`](crate::version::PROTOCOL_VERSION).
 //!
 //! With the `serde` feature its types read and write the recording; without it they are plain
 //! data, which the input recording's preference rows share.
