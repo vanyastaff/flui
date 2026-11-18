@@ -427,6 +427,13 @@ impl RenderNode {
         with_entry!(self, entry => entry.state().needs_composited_layer_update())
     }
 
+    /// Clears the `LAID_OUT_SINCE_PAINT` flag and answers whether it was
+    /// set: whether the node laid out since the paint walk last reached it.
+    #[inline]
+    pub fn take_laid_out_since_paint(&self) -> bool {
+        with_entry!(self, entry => entry.state().flags().take_laid_out_since_paint())
+    }
+
     /// Sets the `NEEDS_COMPOSITING` flag on this node's state —
     /// flag-only, no propagation. Additive
     /// helper; not used by the queue-scan dedup path (see

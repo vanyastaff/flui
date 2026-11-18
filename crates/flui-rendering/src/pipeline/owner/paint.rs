@@ -26,6 +26,10 @@ use crate::{
 
 use super::{PipelineOwner, counters::PaintCounts, rebind_phase, subtree_arena::ensure_stack};
 
+mod kept_chunks;
+
+use kept_chunks::{ChunkSource, PreviousChunks, RecordingInputs};
+
 // ============================================================================
 // Paint phase: run_paint + helpers
 // ============================================================================
@@ -187,6 +191,13 @@ impl PipelineOwner<PaintPhase> {
         // Deepest first, the order ADR-0304 §8 paints owed boundaries in.
         self.scheduler.sort_paint_deep_first();
 
+        // A pass that failed or unwound cleared the flags of the nodes it
+        // painted and committed none of their output, so until a pass commits,
+        // a node found unmarked may still differ from its records and no chunk
+        // keeps its recording (ADR-0304 §2).
+        let keep_chunks = !self.unrecorded_paint;
+        self.unrecorded_paint = true;
+
         // The pass's working collections, back in the owner once it commits;
         // a pass that fails or unwinds leaves the next one fresh ones.
         let mut scratch = self.paint_scratch.take().unwrap_or_default();
@@ -236,7 +247,7 @@ impl PipelineOwner<PaintPhase> {
                 layer_updates,
                 frame_dirty,
             };
-            let mut composer = FragmentComposer::new(writer, work);
+            let mut composer = FragmentComposer::new(writer, work, keep_chunks);
             let painted = self.paint_owed(&mut composer, root_id, root_is_boundary, &inputs);
             match painted {
                 Ok(()) => {
@@ -334,6 +345,7 @@ impl PipelineOwner<PaintPhase> {
              paint must not change geometry"
         );
 
+        self.unrecorded_paint = false;
         Ok(())
     }
 
@@ -390,7 +402,11 @@ impl PipelineOwner<PaintPhase> {
         root_is_boundary: bool,
         inputs: &PaintInputs<'_>,
     ) -> crate::error::RenderResult<()> {
-        composer.begin_boundary(None);
+        let previous = self
+            .scene_frame
+            .as_ref()
+            .and_then(|frame| composer.previous_chunks(&frame.content, frame.chunks.as_ref()));
+        composer.begin_boundary(None, previous);
         let root_layer =
             if self.device_pixel_ratio == flui_foundation::geometry::DevicePixelRatio::ONE {
                 Layer::Offset(OffsetLayer::zero())
@@ -736,6 +752,15 @@ impl PipelineOwner<PaintPhase> {
         // walk's lost-boundary branch.
         render_node.set_was_repaint_boundary(is_repaint_boundary);
 
+        // Read before the flags clear: a node that owes no paint work may
+        // keep the recordings of the chunks it paints again (ADR-0304 §2).
+        // Layout marks paint on its dirty root alone, so a node that laid out
+        // owes paint too; taken here, on every node reached, so the flag
+        // speaks of the layouts since this paint.
+        let laid_out = render_node.take_laid_out_since_paint();
+        let owes_paint =
+            laid_out || render_node.needs_paint() || render_node.needs_composited_layer_update();
+
         // Clear BEFORE paint so the post-paint check catches a paint
         // body that marks its own node dirty (paint-must-not-redirty).
         render_node.clear_needs_paint();
@@ -823,17 +848,21 @@ impl PipelineOwner<PaintPhase> {
             anchor
         };
         let debug_name = render_node.debug_name();
+        let visit = composer.begin_visit(
+            node_id,
+            !owes_paint,
+            RecordingInputs {
+                origin,
+                anchor: anchor.map(|frame| frame.at(origin)),
+            },
+        );
         // The node records after its ancestors' unreplayed operations in the
         // pass's one recorder, and its children record after its own, so a
         // node that paints only its child allocates nothing. Its runs record
         // into the recorder's one canvas, which keeps the paints the nodes
         // before it interned.
         let recorder = &mut composer.work.recorder.0;
-        recorder.begin(
-            origin,
-            self.device_pixel_ratio.get(),
-            anchor.map(|frame| frame.at(origin)),
-        );
+        recorder.begin(origin, self.device_pixel_ratio.get(), visit.inputs.anchor);
         let own_effects = &mut composer.work.own_effects;
         debug_assert!(
             own_effects.is_empty(),
@@ -898,7 +927,7 @@ impl PipelineOwner<PaintPhase> {
             };
             let op = std::mem::replace(slot, FragmentOp::Pop);
             match op {
-                FragmentOp::Run(list) => composer.append_run(node_id, list),
+                FragmentOp::Run(list) => composer.append_run(&visit, list),
                 FragmentOp::Push(scope) => {
                     // Follower hit-testing: capture the RenderId -> LayerId
                     // correlation as a near-free byproduct of pushing a
@@ -1198,7 +1227,13 @@ impl PipelineOwner<PaintPhase> {
                 return Ok(fresh);
             }
         }
-        composer.begin_boundary(Some(id));
+        // A stale record's paint was owed and never made: the residue scan
+        // cleared the boundary's flag, so its chunks cannot be told apart
+        // from clean ones and none is kept.
+        let previous = committed
+            .filter(|record| !record.stale)
+            .and_then(|record| composer.previous_chunks(&record.content, record.chunks.as_ref()));
+        composer.begin_boundary(Some(id), previous);
         let painted = self.paint_subtree(composer, id, Offset::ZERO, region_anchor, inputs);
         let build = composer.end_boundary();
         painted?;
@@ -1237,6 +1272,10 @@ pub(super) struct BoundaryRecord {
     followers: SmallVec<[(RenderId, EntryIndex, Offset); 1]>,
     /// The boundaries the content slots.
     children: SmallVec<[(RenderId, SceneNodeId); 4]>,
+    /// The content's chunks, for the next repaint to keep the unchanged
+    /// ones of; `None` when it has none. A composited-layer update shares
+    /// the content's stream, so they describe its patched content too.
+    chunks: Option<Arc<[ChunkSource]>>,
     /// Dropped by the residue scan: a paint was owed and never made, so the
     /// next frame that reaches the boundary repaints it into the same node.
     stale: bool,
@@ -1325,6 +1364,10 @@ pub(super) struct FrameRecord {
     root_is_boundary: bool,
     followers: SmallVec<[(RenderId, EntryIndex, Offset); 1]>,
     children: SmallVec<[(RenderId, SceneNodeId); 4]>,
+    /// The content published at `node`, and its chunks, as a boundary's
+    /// record holds them.
+    content: Arc<BoundaryContent>,
+    chunks: Option<Arc<[ChunkSource]>>,
 }
 
 impl FrameRecord {
@@ -1643,31 +1686,44 @@ struct BoundaryBuild {
     serial: u64,
     builder: ContentBuilder,
     open: DisplayList,
-    /// The render object whose runs `open` holds, `None` while it is empty: a
-    /// chunk holds one render object's output (ADR-0304 §2), so a run of
-    /// another seals it first.
-    open_owner: Option<RenderId>,
+    /// The paint whose runs `open` holds, `None` while it is empty: a chunk
+    /// holds one render object's output (ADR-0304 §2), so a run of another
+    /// seals it first.
+    open_run: Option<OpenRun>,
     effect_slots: Vec<(RenderId, EffectSlots)>,
     followers: SmallVec<[(RenderId, EntryIndex, Offset); 1]>,
     children: SmallVec<[(RenderId, SceneNodeId); 4]>,
+    /// What the boundary published before, when its chunks may be kept.
+    previous: Option<PreviousChunks>,
+    /// The chunks sealed so far, in paint order.
+    chunks: Vec<ChunkSource>,
 }
 
 impl BoundaryBuild {
-    fn new(boundary: Option<RenderId>, serial: u64) -> Self {
+    fn new(boundary: Option<RenderId>, serial: u64, previous: Option<PreviousChunks>) -> Self {
         Self {
             boundary,
             serial,
             builder: BoundaryContent::builder(),
             open: DisplayList::new(),
-            open_owner: None,
+            open_run: None,
             effect_slots: Vec::new(),
             followers: SmallVec::new(),
             children: SmallVec::new(),
+            previous,
+            chunks: Vec::new(),
         }
     }
 
+    /// The chunks sealed, for the record; `None` when there are none.
+    fn take_chunks(&mut self) -> Option<Arc<[ChunkSource]>> {
+        (!self.chunks.is_empty())
+            .then(|| Arc::<[ChunkSource]>::from(std::mem::take(&mut self.chunks)))
+    }
+
     /// The record of the content built, published at `node`.
-    fn into_record(self, node: SceneNodeId, placed: Placed) -> BoundaryRecord {
+    fn into_record(mut self, node: SceneNodeId, placed: Placed) -> BoundaryRecord {
+        let chunks = self.take_chunks();
         BoundaryRecord {
             node,
             content: Arc::new(self.builder.finish()),
@@ -1676,9 +1732,43 @@ impl BoundaryBuild {
                 .then(|| self.effect_slots.into_boxed_slice()),
             followers: self.followers,
             children: self.children,
+            chunks,
             stale: false,
         }
     }
+}
+
+/// One paint of a render object in a content: what its chunks may be kept
+/// by (ADR-0304 §2).
+#[derive(Clone, Copy, Debug)]
+struct PaintVisit {
+    /// Which paint of the pass it is.
+    id: u64,
+    owner: RenderId,
+    /// Whether the render object owed no paint work.
+    clean: bool,
+    inputs: RecordingInputs,
+}
+
+/// The paint whose runs a content's open chunk holds.
+#[derive(Clone, Copy, Debug)]
+struct OpenRun {
+    owner: RenderId,
+    visit: u64,
+    clean: bool,
+    /// `None` once a run of another paint of the owner joined it: the chunk
+    /// then matches no previous one.
+    inputs: Option<RecordingInputs>,
+}
+
+/// How far a render object's entries in one content have counted.
+#[derive(Clone, Copy, Debug, Default)]
+struct Ordinals {
+    effects: u32,
+    chunks: u32,
+    /// The paint that sealed its first chunk: a chunk of another paint has
+    /// an ordinal that is not its place in its own paint.
+    first_chunk_visit: u64,
 }
 
 /// The collections a paint pass fills and empties, kept by the owner across
@@ -1855,7 +1945,7 @@ struct ComposerScratch {
     child_paint_orders: Vec<(RenderId, Option<ChildPaintOrder>)>,
     consumed_updates: Vec<RenderId>,
     visited: FxHashSet<RenderId>,
-    ordinals: FxHashMap<(u64, RenderId), (u32, u32)>,
+    ordinals: FxHashMap<(u64, RenderId), Ordinals>,
     effect_owner: FxHashMap<(u64, RenderId), usize>,
     layer_patches: Vec<(EntryIndex, Layer)>,
     republished: FxHashSet<SceneNodeId>,
@@ -1956,10 +2046,19 @@ struct FragmentComposer<'w, 'o, 's> {
     /// Nodes painted and layers created or kept this pass, folded into the
     /// owner's `PipelineCounters` by `run_paint` on the commit path only.
     counts: PaintCounts,
+    /// Whether a chunk whose render object owes no paint work may keep its
+    /// recording: false on a pass after one that did not commit.
+    keep_chunks: bool,
+    /// The id the next paint of a render object takes.
+    next_visit: u64,
 }
 
 impl<'w, 'o, 's> FragmentComposer<'w, 'o, 's> {
-    fn new(writer: &'w mut SceneWriter<'o>, work: &'s mut ComposerScratch) -> Self {
+    fn new(
+        writer: &'w mut SceneWriter<'o>,
+        work: &'s mut ComposerScratch,
+        keep_chunks: bool,
+    ) -> Self {
         work.clear();
         let staged = StagedScene {
             records: std::mem::take(&mut work.records),
@@ -1975,11 +2074,38 @@ impl<'w, 'o, 's> FragmentComposer<'w, 'o, 's> {
             staged,
             exhausted: false,
             counts: PaintCounts::default(),
+            keep_chunks,
+            next_visit: 1,
         }
     }
 
     fn note_painted(&mut self) {
         self.counts.nodes_painted += 1;
+    }
+
+    /// Starts `owner`'s paint into the innermost content.
+    fn begin_visit(&mut self, owner: RenderId, clean: bool, inputs: RecordingInputs) -> PaintVisit {
+        let id = self.next_visit;
+        self.next_visit = id
+            .checked_add(1)
+            .expect("BUG: a pass paints fewer than 2^64 render objects");
+        PaintVisit {
+            id,
+            owner,
+            clean,
+            inputs,
+        }
+    }
+
+    /// What a repaint of a content may keep of `content`, published before
+    /// with `chunks`; `None` when this pass keeps nothing.
+    fn previous_chunks(
+        &self,
+        content: &Arc<BoundaryContent>,
+        chunks: Option<&Arc<[ChunkSource]>>,
+    ) -> Option<PreviousChunks> {
+        let chunks = chunks.filter(|_| self.keep_chunks)?;
+        Some(PreviousChunks::new(Arc::clone(content), Arc::clone(chunks)))
     }
 
     fn build(&mut self) -> &mut BoundaryBuild {
@@ -1994,12 +2120,14 @@ impl<'w, 'o, 's> FragmentComposer<'w, 'o, 's> {
         self.work.builds.last().and_then(|build| build.boundary)
     }
 
-    fn begin_boundary(&mut self, boundary: Option<RenderId>) {
+    fn begin_boundary(&mut self, boundary: Option<RenderId>, previous: Option<PreviousChunks>) {
         let serial = self.next_serial;
         self.next_serial = serial
             .checked_add(1)
             .expect("BUG: a pass begins fewer than 2^64 contents");
-        self.work.builds.push(BoundaryBuild::new(boundary, serial));
+        self.work
+            .builds
+            .push(BoundaryBuild::new(boundary, serial, previous));
     }
 
     /// Ends the innermost content, its open run sealed.
@@ -2077,58 +2205,102 @@ impl<'w, 'o, 's> FragmentComposer<'w, 'o, 's> {
         self.work.slotted.insert(node);
     }
 
-    /// Merges a sealed run of `owner`'s paint while keeping its canvas clips
+    /// Merges a sealed run of `visit`'s paint while keeping its canvas clips
     /// local to that run; a run of another render object seals the open
     /// chunk first.
-    fn append_run(&mut self, owner: RenderId, run: DisplayList) {
+    fn append_run(&mut self, visit: &PaintVisit, run: DisplayList) {
         // An empty run draws nothing, so it seals nothing; it is still
         // appended for the refusal counts it carries.
-        if !run.is_empty() && self.build().open_owner != Some(owner) {
-            self.seal_picture();
-            self.build().open_owner = Some(owner);
+        if !run.is_empty() {
+            match &mut self.build().open_run {
+                Some(open) if open.owner == visit.owner => {
+                    // Runs of two paints of one render object in one chunk:
+                    // its ordinal names no single paint's run.
+                    if open.visit != visit.id {
+                        open.inputs = None;
+                        open.clean &= visit.clean;
+                    }
+                }
+                _ => {
+                    self.seal_picture();
+                    self.build().open_run = Some(OpenRun {
+                        owner: visit.owner,
+                        visit: visit.id,
+                        clean: visit.clean,
+                        inputs: Some(visit.inputs),
+                    });
+                }
+            }
         }
         self.build().open.append_isolated(run);
     }
 
+    /// Seals the open run into a chunk: the one the boundary published
+    /// before, when its render object owes no paint work and recorded it
+    /// from the same inputs (ADR-0304 §2), else a new recording.
     fn seal_picture(&mut self) {
         let Some(build) = self.work.builds.last_mut() else {
             return;
         };
-        let owner = build.open_owner.take();
+        let open = build.open_run.take();
         if build.open.is_empty() {
             return;
         }
         let mut list = std::mem::take(&mut build.open);
-        let Some(owner) = owner else {
+        let Some(open) = open else {
             debug_assert!(
                 false,
                 "BUG: a non-empty run has the render object that painted it"
             );
             return;
         };
-        let Ok(version) = self.writer.next_content_version() else {
-            // The patch cannot be applied either; its refusal renews the
-            // lineage and the next frame repaints in full.
-            self.exhausted = true;
-            return;
-        };
-        let build = self
-            .work
-            .builds
-            .last_mut()
-            .expect("BUG: the content sealed is still open");
-        let ordinal = &mut self
+        let ordinals = self
             .work
             .ordinals
-            .entry((build.serial, owner))
-            .or_default()
-            .1;
-        // Written into a chunk the scene owner reclaimed when it holds one,
-        // whose emptied buffer the canvas records the next run into.
-        let chunk = self.writer.chunk(owner, *ordinal, version, &mut list);
-        *ordinal += 1;
-        build.builder.chunk(chunk);
-        self.counts.layers_produced += 1;
+            .entry((build.serial, open.owner))
+            .or_default();
+        let ordinal = ordinals.chunks;
+        if ordinal == 0 {
+            ordinals.first_chunk_visit = open.visit;
+        }
+        // A chunk of a later paint of its owner has an ordinal that is not
+        // its place in its paint, so it neither keeps nor is kept.
+        let inputs = open
+            .inputs
+            .filter(|_| ordinals.first_chunk_visit == open.visit);
+        let lineage = self.writer.current().id().lineage();
+        let kept = match (&mut build.previous, &inputs) {
+            (Some(previous), Some(inputs)) if open.clean => {
+                previous.kept(open.owner, ordinal, inputs, lineage)
+            }
+            _ => None,
+        };
+        let chunk = if let Some(chunk) = kept {
+            // The run just recorded is the kept chunk's commands again: its
+            // buffer goes back to the canvas.
+            list.clear();
+            self.counts.layers_reused += 1;
+            chunk
+        } else {
+            let Ok(version) = self.writer.next_content_version() else {
+                // The patch cannot be applied either; its refusal renews the
+                // lineage and the next frame repaints in full.
+                self.exhausted = true;
+                return;
+            };
+            self.counts.layers_produced += 1;
+            // Written into a chunk the scene owner reclaimed when it holds
+            // one, whose emptied buffer the canvas records the next run into.
+            self.writer.chunk(open.owner, ordinal, version, &mut list)
+        };
+        ordinals.chunks += 1;
+        let entry = build.builder.chunk(chunk);
+        build.chunks.push(ChunkSource {
+            entry,
+            owner: open.owner,
+            ordinal,
+            inputs,
+        });
         self.work.recorder.0.record_into(list);
     }
 
@@ -2145,7 +2317,7 @@ impl<'w, 'o, 's> FragmentComposer<'w, 'o, 's> {
             .ordinals
             .entry((build.serial, owner))
             .or_default()
-            .0;
+            .effects;
         let index = build.builder.push_effect(layer, owner, *ordinal);
         *ordinal += 1;
         self.counts.layers_produced += 1;
@@ -2203,19 +2375,23 @@ impl<'w, 'o, 's> FragmentComposer<'w, 'o, 's> {
         root: RenderId,
         root_is_boundary: bool,
     ) {
-        let build = self.end_boundary();
+        let mut build = self.end_boundary();
         let lineage = self.writer.current().id().lineage();
         let node = match &owner.scene_frame {
             Some(frame) if frame.node.lineage() == lineage => frame.node,
             _ => self.mint_node(),
         };
-        self.publish(node, Arc::new(build.builder.finish()));
+        let chunks = build.take_chunks();
+        let content = Arc::new(build.builder.finish());
+        self.publish(node, Arc::clone(&content));
         self.staged.frame = Some(FrameRecord {
             node,
             root,
             root_is_boundary,
             followers: build.followers,
             children: build.children,
+            content,
+            chunks,
         });
     }
 

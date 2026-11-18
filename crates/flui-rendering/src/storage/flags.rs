@@ -140,7 +140,10 @@ bitflags! {
     /// Bit 9: NEEDS_PAINT_PROPAGATION
     /// Bit 10: WAS_REPAINT_BOUNDARY
     /// Bit 11: NEEDS_COMPOSITING_BITS_UPDATE
-    /// Bits 12-31: Reserved for future use
+    /// Bit 12: GEOMETRY_DEGRADED
+    /// Bit 13: NEEDS_COMPOSITED_LAYER_UPDATE
+    /// Bit 14: LAID_OUT_SINCE_PAINT
+    /// Bits 15-31: Reserved for future use
     /// ```
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
     pub struct RenderFlags: u32 {
@@ -276,6 +279,16 @@ bitflags! {
         /// `Scheduler::mark_needs_composited_layer_update`, which refuses to
         /// set this on a node already needing paint.
         const NEEDS_COMPOSITED_LAYER_UPDATE = 1 << 13;
+
+        /// The node laid out since its last paint.
+        ///
+        /// Layout marks paint on its dirty root and on each repaint boundary
+        /// it lays out, not on every node, so a node inside a boundary can
+        /// change what it paints with [`Self::NEEDS_PAINT`] clear. Set by the
+        /// layout walk on every node it lays out rather than serves from its
+        /// cache, and taken by the paint walk on every node it reaches: a
+        /// node carrying it records its chunks again (ADR-0304 §2).
+        const LAID_OUT_SINCE_PAINT = 1 << 14;
     }
 }
 
@@ -740,6 +753,19 @@ impl AtomicRenderFlags {
     #[inline]
     pub fn needs_composited_layer_update(&self) -> bool {
         self.contains(RenderFlags::NEEDS_COMPOSITED_LAYER_UPDATE)
+    }
+
+    /// Records that the render object laid out since its last paint.
+    #[inline]
+    pub fn mark_laid_out_since_paint(&self) {
+        self.set(RenderFlags::LAID_OUT_SINCE_PAINT);
+    }
+
+    /// Clears the laid-out-since-paint flag and answers whether it was set.
+    #[inline]
+    pub fn take_laid_out_since_paint(&self) -> bool {
+        let bit = RenderFlags::LAID_OUT_SINCE_PAINT.bits();
+        self.bits.fetch_and(!bit, Ordering::AcqRel) & bit != 0
     }
 
     /// Marks the render object as needing compositing update.

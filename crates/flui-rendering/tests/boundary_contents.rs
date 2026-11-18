@@ -249,7 +249,30 @@ fn a_boundary_holding_a_follower_keeps_its_content() {
 /// A producer that republished clean boundaries would damage them too.
 #[test]
 fn pipeline_frames_diff_to_the_changed_boundary_rect() {
-    let (owner, _root, a, b) = two_boundaries();
+    // `two_boundaries` with its leaves labelled: a boundary marked with
+    // nothing changed keeps its chunk, so each frame recolours a leaf.
+    let (owner, registry) = mount(
+        box_node(RenderRepaintBoundary::new()).child(
+            box_node(RenderFlex::row())
+                .child(
+                    box_node(RenderRepaintBoundary::new())
+                        .label("a")
+                        .child(leaf().label("a_leaf")),
+                )
+                .child(
+                    box_node(RenderRepaintBoundary::new())
+                        .label("b")
+                        .child(leaf().label("b_leaf")),
+                ),
+        ),
+    );
+    let get = |name| registry.get(name).expect("labelled");
+    let (a, b) = (get("a"), get("b"));
+    let recolour = |owner: &mut PipelineOwner<Idle>, leaf: RenderId| {
+        update_render_object::<RenderColoredBox, _>(owner, leaf, |leaf| {
+            leaf.set_color([0.0, 0.0, 1.0, 1.0])
+        });
+    };
     let surface = (800, 600);
 
     let mut scene = SceneHost::new();
@@ -279,7 +302,7 @@ fn pipeline_frames_diff_to_the_changed_boundary_rect() {
         ))
     };
 
-    owner.mark_needs_paint(b);
+    recolour(&mut owner, get("b_leaf"));
     let mut owner = frame(&mut scene, owner);
     assert_eq!(
         scene.owner_mut().patch_damage(),
@@ -287,7 +310,7 @@ fn pipeline_frames_diff_to_the_changed_boundary_rect() {
     );
 
     // The next frame damages only `a`.
-    owner.mark_needs_paint(a);
+    recolour(&mut owner, get("a_leaf"));
     let owner = frame(&mut scene, owner);
     assert_eq!(
         scene.owner_mut().patch_damage(),
@@ -598,4 +621,153 @@ fn a_parent_painting_its_child_again_drops_the_order_that_left_it_out() {
     owner.mark_needs_paint(parent);
     owner = frame(&mut scene, owner);
     assert!(presents(&owner), "the child painted again is presented");
+}
+
+/// The version the one chunk `owner` painted into `content` was recorded as.
+fn chunk_version(content: &BoundaryContent, owner: RenderId) -> flui_layer::ContentVersion {
+    let mut versions = content.entries().iter().filter_map(|entry| match entry {
+        flui_layer::Entry::Chunk { chunk, .. } if chunk.owner() == owner => Some(chunk.version()),
+        _ => None,
+    });
+    let version = versions.next().expect("the render object painted a chunk");
+    assert!(
+        versions.next().is_none(),
+        "the render object painted one chunk"
+    );
+    version
+}
+
+/// Root boundary → row → leaves "a", "b" and "c", each 10×10, painted into
+/// the root's content.
+fn three_leaves() -> (PipelineOwner<Idle>, RenderId, [RenderId; 3]) {
+    let (owner, registry) = mount(
+        box_node(RenderRepaintBoundary::new()).label("root").child(
+            box_node(RenderFlex::row())
+                .child(leaf().label("a"))
+                .child(leaf().label("b"))
+                .child(leaf().label("c")),
+        ),
+    );
+    let get = |name| registry.get(name).expect("labelled");
+    (owner, get("root"), [get("a"), get("b"), get("c")])
+}
+
+/// A boundary repainted for one of its render objects keeps the recordings
+/// of the chunks whose render objects owe no paint work, so the raster side
+/// replays them, and records the changed one again (ADR-0304 §2).
+///
+/// Red-check: mint a version for every chunk sealed.
+#[test]
+fn a_repaint_keeps_the_chunks_of_the_render_objects_that_owe_no_paint() {
+    let (owner, root, [a, b, c]) = three_leaves();
+    let mut scene = SceneHost::new();
+    let mut owner = frame(&mut scene, owner);
+    let before = content(&scene, &owner, root);
+
+    update_render_object::<RenderColoredBox, _>(&mut owner, b, |leaf| {
+        leaf.set_color([0.0, 0.0, 1.0, 1.0])
+    });
+    let owner = frame(&mut scene, owner);
+    let after = content(&scene, &owner, root);
+
+    assert!(
+        !Arc::ptr_eq(&before, &after),
+        "precondition: the boundary repainted"
+    );
+    for clean in [a, c] {
+        assert_eq!(
+            chunk_version(&before, clean),
+            chunk_version(&after, clean),
+            "a render object that owes no paint keeps its chunk's version"
+        );
+    }
+    assert_ne!(
+        chunk_version(&before, b),
+        chunk_version(&after, b),
+        "the recoloured render object's chunk is a new recording"
+    );
+    // "b" is the second 10×10 leaf of a row at the frame's origin.
+    let surface = (800, 600);
+    assert_eq!(
+        scene.owner_mut().patch_damage(),
+        DamageRegion::Region(Region::new(
+            DamageRect::try_covering(
+                flui_foundation::geometry::Rect::from_xywh(10.0, 0.0, 10.0, 10.0),
+                surface,
+            )
+            .expect("finite")
+            .expect("on the surface"),
+        )),
+        "only the recoloured chunk is damaged"
+    );
+}
+
+/// A render object that owes no paint but moved in its boundary records its
+/// chunk again: its origin is a recording input (ADR-0304 §2).
+///
+/// Red-check: keep a clean render object's chunk whatever its origin.
+#[test]
+fn a_chunk_that_moved_in_its_boundary_is_a_new_recording() {
+    let (owner, root, [a, b, c]) = three_leaves();
+    let mut scene = SceneHost::new();
+    let mut owner = frame(&mut scene, owner);
+    let before = content(&scene, &owner, root);
+
+    // "a" widens, so the row moves "b" and "c" without laying them out.
+    update_render_object::<RenderColoredBox, _>(&mut owner, a, |leaf| {
+        leaf.set_preferred_size(Size::new(20.0, 10.0))
+    });
+    let owner = frame(&mut scene, owner);
+    let after = content(&scene, &owner, root);
+
+    for moved in [a, b, c] {
+        assert_ne!(
+            chunk_version(&before, moved),
+            chunk_version(&after, moved),
+            "a chunk recorded at another origin is a new recording"
+        );
+    }
+}
+
+/// A paint pass that fails after painting a changed render object clears its
+/// flag and commits nothing, so the retry finds it unmarked beside a record
+/// of its old output: the retry keeps no recording on the strength of a flag,
+/// and the changed chunk is a new one.
+///
+/// Red-check: trust the flags on the pass after one that failed.
+#[test]
+fn the_pass_after_a_failed_one_keeps_no_chunk() {
+    let armed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let (owner, registry) = mount(
+        box_node(RenderRepaintBoundary::new()).label("root").child(
+            box_node(RenderFlex::row())
+                .child(leaf().label("a"))
+                .child(box_node(PanicsWhenArmed(Arc::clone(&armed))).label("panics")),
+        ),
+    );
+    let root = registry.get("root").expect("labelled");
+    let a = registry.get("a").expect("labelled");
+    let panics = registry.get("panics").expect("labelled");
+    let mut scene = SceneHost::new();
+    let mut owner = frame(&mut scene, owner);
+    let before = chunk_version(&content(&scene, &owner, root), a);
+
+    update_render_object::<RenderColoredBox, _>(&mut owner, a, |leaf| {
+        leaf.set_color([0.0, 0.0, 1.0, 1.0])
+    });
+    armed.store(true, std::sync::atomic::Ordering::Relaxed);
+    owner.mark_needs_paint(panics);
+    let (mut owner, failed) = scene.run_frame(owner);
+    assert!(
+        failed.is_err(),
+        "precondition: the pass fails after painting \"a\""
+    );
+
+    armed.store(false, std::sync::atomic::Ordering::Relaxed);
+    owner = frame(&mut scene, owner);
+    assert_ne!(
+        chunk_version(&content(&scene, &owner, root), a),
+        before,
+        "the recoloured chunk is a new recording"
+    );
 }
