@@ -19,9 +19,10 @@ use std::hint::black_box;
 use std::rc::Rc;
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+use flui_foundation::geometry::Offset;
 use flui_interaction::events::{PointerKind, make_down_event, make_move_event};
-use flui_interaction::{
-    HitTestEntry, InteractionDispatchHandle, InteractionLane, Offset, PointerTarget, RenderId,
+use flui_interaction::pointer::{
+    HitTestEntry, InteractionDispatchHandle, InteractionLane, PointerTarget, RenderId,
 };
 
 fn register_targets(
@@ -115,7 +116,7 @@ fn bench_direct_hit_test_dispatch(c: &mut Criterion) {
         lane.enter(|| {
             let (deliveries, targets) = register_targets(&handle, target_count);
             let path = path_for(&targets);
-            let mut result = flui_interaction::HitTestResult::new();
+            let mut result = flui_interaction::pointer::HitTestResult::new();
             for entry in path {
                 result.add(entry);
             }

@@ -131,7 +131,7 @@ pub mod prelude {
     // Arity system
     // Re-export RenderId from flui_foundation
     pub use flui_foundation::{RenderId, SemanticsId};
-    pub use flui_interaction::{HitTestBehavior, HitTestEntry, HitTestResult};
+    pub use flui_interaction::pointer::{HitTestBehavior, HitTestEntry, HitTestResult};
     // Re-export commonly used value types
     pub use flui_foundation::geometry::{Offset, Point, RRect, Rect, Size};
 

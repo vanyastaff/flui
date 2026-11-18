@@ -2053,7 +2053,7 @@ progress, not any cluster-vs-word segmentation for that script.
 ### 20. `GestureDetector` composes AROUND `Listener`, not inside it, for double-tap word selection
 
 **Rule:** Design stance ("Look around before settling") — reuse tested framework machinery
-(`flui_interaction::DoubleTapGestureRecognizer` via
+(`flui_interaction::gesture::DoubleTapGestureRecognizer` via
 `flui_widgets::GestureDetector`) rather than hand-rolling tap-count/slop/
 timeout tracking a second time inside `EditableText`'s own pointer
 handlers.

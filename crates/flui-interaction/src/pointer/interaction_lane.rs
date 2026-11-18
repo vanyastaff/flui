@@ -8,9 +8,9 @@
 
 use crate::containment::keep_first;
 use flui_foundation::{AtomicIdMint, IdExhausted, IdMint};
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::any::Any;
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
 use std::fmt;
 use std::num::NonZeroU64;
 use std::rc::{Rc, Weak};
@@ -493,7 +493,10 @@ impl<'a> PanZoomDispatch<'a> {
     /// Associate exact-generation cleanup with this binding-owned native Start.
     /// Synthetic dispatches have no admission authority and return false.
     pub fn on_retirement(self, retire: impl Fn() + 'static) -> bool {
-        if !matches!(self.global.phase, crate::PanZoomPhase::Start) {
+        if !matches!(
+            self.global.phase,
+            flui_platform::pointer::PanZoomPhase::Start
+        ) {
             return false;
         }
         let Some(admission) = self.admission else {
@@ -508,8 +511,10 @@ impl<'a> PanZoomDispatch<'a> {
         current: impl Fn() -> bool + 'static,
         retire: impl Fn() + 'static,
     ) {
-        if matches!(self.global.phase, crate::PanZoomPhase::Start)
-            && let Some(admission) = self.admission
+        if matches!(
+            self.global.phase,
+            flui_platform::pointer::PanZoomPhase::Start
+        ) && let Some(admission) = self.admission
         {
             (admission.stage)(PanZoomRetirement(Rc::new(retire), Some(Rc::new(current))));
         }
@@ -523,8 +528,10 @@ impl<'a> PanZoomDispatch<'a> {
 
     /// Commit this recognized Update's delivery owner before publishing callbacks.
     pub fn claim(self) {
-        if matches!(self.global.phase, crate::PanZoomPhase::Update(_))
-            && let Some(admission) = self.admission
+        if matches!(
+            self.global.phase,
+            flui_platform::pointer::PanZoomPhase::Update(_)
+        ) && let Some(admission) = self.admission
         {
             (admission.claim)();
         }
@@ -927,25 +934,25 @@ type ScrollAxisDeclaration = (flui_foundation::geometry::Axis, Rc<dyn Fn() -> bo
 
 struct LocalLaneInner {
     owner: std::sync::Arc<DispatchOwner>,
-    target_owners: RefCell<HashMap<TargetId, std::sync::Arc<DispatchOwner>>>,
+    target_owners: RefCell<FxHashMap<TargetId, std::sync::Arc<DispatchOwner>>>,
     ticket: LaneTicket,
     target_ids: MonotonicIdSource,
     route_ids: MonotonicIdSource,
-    targets: RefCell<HashMap<TargetId, Rc<HandlerCell>>>,
-    mouse_targets: RefCell<HashMap<TargetId, Rc<MouseRegionCell>>>,
-    scroll_targets: RefCell<HashMap<TargetId, Rc<ScrollCell>>>,
-    pan_zoom_targets: RefCell<HashMap<TargetId, Rc<PanZoomCell>>>,
-    smart_zoom_targets: RefCell<HashMap<TargetId, Rc<SmartZoomCell>>>,
-    path_clip_targets: RefCell<HashMap<TargetId, Rc<PathClipCell>>>,
-    shader_mask_targets: RefCell<HashMap<TargetId, Rc<ShaderMaskCell>>>,
-    payload_targets: RefCell<HashMap<TargetId, Rc<dyn Any>>>,
+    targets: RefCell<FxHashMap<TargetId, Rc<HandlerCell>>>,
+    mouse_targets: RefCell<FxHashMap<TargetId, Rc<MouseRegionCell>>>,
+    scroll_targets: RefCell<FxHashMap<TargetId, Rc<ScrollCell>>>,
+    pan_zoom_targets: RefCell<FxHashMap<TargetId, Rc<PanZoomCell>>>,
+    smart_zoom_targets: RefCell<FxHashMap<TargetId, Rc<SmartZoomCell>>>,
+    path_clip_targets: RefCell<FxHashMap<TargetId, Rc<PathClipCell>>>,
+    shader_mask_targets: RefCell<FxHashMap<TargetId, Rc<ShaderMaskCell>>>,
+    payload_targets: RefCell<FxHashMap<TargetId, Rc<dyn Any>>>,
     /// Pointer targets that declared they feed a drag-family recognizer
     /// (ADR-0251 §2).
-    scroll_contact_feeds: RefCell<std::collections::HashSet<TargetId>>,
+    scroll_contact_feeds: RefCell<FxHashSet<TargetId>>,
     /// The axis each scroll target scrolls along, for targets that take part in
     /// a scroll-fed contact as a competitor (ADR-0251 §2).
-    scroll_target_axes: RefCell<HashMap<TargetId, ScrollAxisDeclaration>>,
-    routes: RefCell<HashMap<RouteId, Rc<ResolvedHitRoute>>>,
+    scroll_target_axes: RefCell<FxHashMap<TargetId, ScrollAxisDeclaration>>,
+    routes: RefCell<FxHashMap<RouteId, Rc<ResolvedHitRoute>>>,
 }
 
 impl LocalLaneInner {
@@ -958,8 +965,8 @@ impl LocalLaneInner {
 }
 
 thread_local! {
-    static LOCAL_LANES: RefCell<HashMap<LaneId, Weak<LocalLaneInner>>> =
-        RefCell::new(HashMap::new());
+    static LOCAL_LANES: RefCell<FxHashMap<LaneId, Weak<LocalLaneInner>>> =
+        RefCell::new(FxHashMap::default());
     #[cfg_attr(
         target_os = "android",
         allow(
@@ -973,8 +980,7 @@ thread_local! {
 /// Owner-affine storage for local interaction handlers and resolved routes.
 ///
 /// This runtime-composition type is public only for sibling FLUI crates. It is
-/// structurally `!Send + !Sync` through its `Rc` storage and is not exported by
-/// the interaction prelude.
+/// structurally `!Send + !Sync` through its `Rc` storage.
 #[doc(hidden)]
 pub struct InteractionLane {
     inner: Rc<LocalLaneInner>,
@@ -991,24 +997,24 @@ impl InteractionLane {
         let lane_id = try_mint_lane_id(&NEXT_LANE_ID)?;
         let inner = Rc::new(LocalLaneInner {
             owner: std::sync::Arc::new(DispatchOwner::default()),
-            target_owners: RefCell::new(HashMap::new()),
+            target_owners: RefCell::new(FxHashMap::default()),
             ticket: LaneTicket {
                 lane_id,
                 owner: thread::current().id(),
             },
             target_ids: MonotonicIdSource::new(),
             route_ids: MonotonicIdSource::new(),
-            targets: RefCell::new(HashMap::new()),
-            mouse_targets: RefCell::new(HashMap::new()),
-            scroll_targets: RefCell::new(HashMap::new()),
-            pan_zoom_targets: RefCell::new(HashMap::new()),
-            smart_zoom_targets: RefCell::new(HashMap::new()),
-            path_clip_targets: RefCell::new(HashMap::new()),
-            shader_mask_targets: RefCell::new(HashMap::new()),
-            payload_targets: RefCell::new(HashMap::new()),
-            scroll_contact_feeds: RefCell::new(std::collections::HashSet::new()),
-            scroll_target_axes: RefCell::new(HashMap::new()),
-            routes: RefCell::new(HashMap::new()),
+            targets: RefCell::new(FxHashMap::default()),
+            mouse_targets: RefCell::new(FxHashMap::default()),
+            scroll_targets: RefCell::new(FxHashMap::default()),
+            pan_zoom_targets: RefCell::new(FxHashMap::default()),
+            smart_zoom_targets: RefCell::new(FxHashMap::default()),
+            path_clip_targets: RefCell::new(FxHashMap::default()),
+            shader_mask_targets: RefCell::new(FxHashMap::default()),
+            payload_targets: RefCell::new(FxHashMap::default()),
+            scroll_contact_feeds: RefCell::new(FxHashSet::default()),
+            scroll_target_axes: RefCell::new(FxHashMap::default()),
+            routes: RefCell::new(FxHashMap::default()),
         });
         LOCAL_LANES.with(|registry| {
             registry.borrow_mut().insert(lane_id, Rc::downgrade(&inner));
@@ -1179,7 +1185,7 @@ impl Drop for InteractionLane {
     }
 }
 
-fn ordered_lane_values<K: Ord + Copy, V>(values: HashMap<K, V>) -> impl Iterator<Item = V> {
+fn ordered_lane_values<K: Ord + Copy, V>(values: FxHashMap<K, V>) -> impl Iterator<Item = V> {
     let mut values: Vec<_> = values.into_iter().collect();
     values.sort_unstable_by_key(|(id, _)| *id);
     values.into_iter().map(|(_, value)| value)
@@ -2746,7 +2752,7 @@ impl InteractionDispatchHandle {
 }
 
 fn take_targets<T: ?Sized>(
-    targets: &RefCell<HashMap<TargetId, Rc<T>>>,
+    targets: &RefCell<FxHashMap<TargetId, Rc<T>>>,
     ids: &[TargetId],
 ) -> Vec<Rc<T>> {
     let mut targets = targets.borrow_mut();

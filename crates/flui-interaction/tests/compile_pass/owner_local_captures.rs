@@ -4,9 +4,7 @@
 use flui_interaction::gesture::GestureContest;
 use std::{cell::Cell, rc::Rc};
 
-use flui_interaction::{
-    GestureArenaMember, GestureBinding, PointerId, PointerRouteHandler, TapGestureRecognizer,
-};
+use flui_interaction::{gesture::{GestureArenaMember, TapGestureRecognizer}, binding::GestureBinding, ids::PointerId, pointer::PointerRouteHandler};
 
 struct CountingMember(Rc<Cell<u32>>);
 

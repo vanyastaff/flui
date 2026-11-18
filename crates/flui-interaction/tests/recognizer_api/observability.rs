@@ -8,10 +8,12 @@ use std::{
 
 use flui_foundation::geometry::Offset;
 use flui_interaction::{
-    GestureRecognizer, LongPressGestureRecognizer, MultiDragAxis, MultiDragGestureRecognizer,
-    PointerId, TapAndDragGestureRecognizer, TapGestureRecognizer,
     events::{PointerKind, make_down_event_for_id, make_move_event_for_id, make_up_event_for_id},
-    gesture::GestureArena,
+    gesture::{
+        GestureArena, GestureRecognizer, LongPressGestureRecognizer, MultiDragAxis,
+        MultiDragGestureRecognizer, TapAndDragGestureRecognizer, TapGestureRecognizer,
+    },
+    ids::PointerId,
     pointer::PointerDispatch,
 };
 

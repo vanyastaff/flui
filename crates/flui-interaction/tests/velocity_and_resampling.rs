@@ -15,8 +15,13 @@ use flui_interaction::events::{
 use flui_interaction::gesture::{GestureValues, VelocityEstimator, VelocityTracker};
 use flui_interaction::pointer::{PointerEventResampler, SamplingClock};
 use flui_interaction::{
-    DEFAULT_MAX_FLING_VELOCITY, GestureBinding, GestureSettings, GestureSettingsError,
-    HitTestResult, PointerId, PointerRouteHandler, Velocity, VelocityEstimate,
+    binding::GestureBinding,
+    gesture::{
+        DEFAULT_MAX_FLING_VELOCITY, GestureSettings, GestureSettingsError, Velocity,
+        VelocityEstimate,
+    },
+    ids::PointerId,
+    pointer::{HitTestResult, PointerRouteHandler},
 };
 use proptest::prelude::*;
 use web_time::Instant;
@@ -1137,7 +1142,7 @@ fn binding_terminal_withdrawal_cancels_prepared_contact_output() {
     use flui_foundation::MonotonicClock;
     for before_input in [false, true] {
         for cancel in [false, true] {
-            let lane = flui_interaction::InteractionLane::try_new().expect("lane");
+            let lane = flui_interaction::pointer::InteractionLane::try_new().expect("lane");
             let clock = std::sync::Arc::new(flui_foundation::ManualClock::new());
             let binding = Rc::new(GestureBinding::with_clock(clock.clone()));
             binding.set_resampling_enabled(true).expect("mode");
@@ -1249,7 +1254,7 @@ fn binding_reentry_orders_motion_before_observing_input() {
         ButtonChange, PointerButton, PointerButtons, PointerPress, PointerSample,
     };
     for button_edge in [false, true] {
-        let lane = flui_interaction::InteractionLane::try_new().expect("lane");
+        let lane = flui_interaction::pointer::InteractionLane::try_new().expect("lane");
         let clock = std::sync::Arc::new(flui_foundation::ManualClock::new());
         let binding = Rc::new(GestureBinding::with_clock(clock.clone()));
         binding.set_resampling_enabled(true).expect("mode");
@@ -1643,7 +1648,7 @@ proptest! {
 
 fn pinch_scale_is_finite_and_positive() {
     use flui_interaction::events::{PanZoomEvent, PanZoomPhase, PanZoomTransform};
-    use flui_interaction::{EventPropagation, HitTestEntry, pointer::InteractionLane};
+    use flui_interaction::pointer::{EventPropagation, HitTestEntry, InteractionLane};
 
     // The old upstream pinch fractions NaN/-1/-3/inf imply these invalid
     // cumulative scales. Checked transport refuses them before routing.

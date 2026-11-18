@@ -63,8 +63,8 @@ const SIDE: f64 = 300.0;
 /// How wide the alternatives' two controls are: the touch minimum target
 /// each.
 fn controls_width() -> f64 {
-    2.0 * flui_interaction::GestureSettingsProvider::default()
-        .min_target_for(flui_interaction::PointerKind::Touch)
+    2.0 * flui_interaction::gesture::GestureSettingsProvider::default()
+        .min_target_for(flui_platform::pointer::PointerKind::Touch)
 }
 
 /// Alternatives for a drag under test whose alternatives are not what the

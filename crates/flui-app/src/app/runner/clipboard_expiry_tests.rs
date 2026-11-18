@@ -8,7 +8,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use flui_foundation::{ManualClock, MonotonicClock};
-use flui_interaction::{ClipboardCapability, ClipboardHandle};
+use flui_interaction::text_input::{ClipboardCapability, ClipboardHandle};
 use flui_platform::{ClipboardExpiry, ClipboardWrite, SystemNotice};
 use flui_runtime::capability::HostCapabilities;
 

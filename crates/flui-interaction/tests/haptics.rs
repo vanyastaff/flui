@@ -8,12 +8,16 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
+use flui_foundation::ManualClock;
 use flui_foundation::panic::RecoveryScope;
 use flui_interaction::haptics::{
     FALLBACK_REFRESH_PERIOD, HapticsHost, HapticsHostBuilder, MAILBOX_CAPACITY,
     haptic_frame_deadline,
 };
-use flui_interaction::{GestureBinding, HapticObserver, HapticsHandle, ManualClock};
+use flui_interaction::{
+    binding::GestureBinding,
+    haptics::{HapticObserver, HapticsHandle},
+};
 
 /// A registration an observer can reach from its own call.
 type Registration = Rc<std::cell::OnceCell<HapticObserver>>;

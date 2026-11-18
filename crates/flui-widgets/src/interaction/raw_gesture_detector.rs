@@ -11,9 +11,13 @@ use flui_foundation::geometry::Axis;
 use flui_foundation::panic::FirstPanic;
 use flui_interaction::pointer::{EventPropagation, PanZoomDispatch, SmartZoomDispatch};
 use flui_interaction::{
-    GestureArena, GestureRecognizer, GestureSettingsProvider, PointerDispatch, PointerEvent,
-    PointerEventExt, PointerKind, RecognizerSet, cancel_all,
+    events::{PointerEvent, PointerEventExt},
+    gesture::{
+        GestureArena, GestureRecognizer, GestureSettingsProvider, RecognizerSet, cancel_all,
+    },
+    pointer::PointerDispatch,
 };
+use flui_platform::pointer::PointerKind;
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_view::WriterSource;
 use flui_view::prelude::*;
