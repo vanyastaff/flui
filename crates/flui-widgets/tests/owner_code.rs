@@ -248,6 +248,11 @@ fn the_owner_edit_reaches_the_platform_first(
             }
         })
         .expect("post-frame handle installed");
+    // A post-frame callback asks for no frame; the frame it runs in is asked for.
+    harness
+        .post_frame_handle()
+        .schedule_frame()
+        .expect("post-frame handle installed");
     assert_eq!(raised(|| harness.tick()).as_deref(), Some(failure));
     field.set_observer(None);
     assert_eq!(

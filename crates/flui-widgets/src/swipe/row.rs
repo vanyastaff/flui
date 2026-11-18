@@ -256,12 +256,16 @@ impl OutWatch {
                 Rc::clone(&alive),
                 Rc::clone(&act),
             );
-            let scheduled = post_frame.schedule(move |_| {
-                pending.set(false);
-                if alive.get() && !controller.is_moving() && controller.current() == stop {
-                    act(stop);
-                }
-            });
+            // A rest reached by a jump runs no frame of its own, so the one
+            // the action waits for is asked for.
+            let scheduled = post_frame
+                .schedule(move |_| {
+                    pending.set(false);
+                    if alive.get() && !controller.is_moving() && controller.current() == stop {
+                        act(stop);
+                    }
+                })
+                .and_then(|()| post_frame.schedule_frame());
             if let Err(error) = scheduled {
                 tracing::warn!(?error, "a swiped row's post-frame lane is closed");
             }

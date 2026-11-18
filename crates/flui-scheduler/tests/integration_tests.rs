@@ -6,7 +6,7 @@ use std::sync::{
 };
 
 use flui_scheduler::__runtime::DriveFrame as _;
-use flui_scheduler::scheduler::UpdateScheduler;
+use flui_scheduler::UpdateScheduler;
 
 /// The pipeline runs in every frame; a post-frame callback runs once, after
 /// the pipeline of the frame it was registered for.

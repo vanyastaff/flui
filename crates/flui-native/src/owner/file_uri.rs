@@ -13,6 +13,10 @@ use flui_platform::{Launch, OpenTarget, Opened, OpenedFile};
 pub(crate) enum PathConvention {
     /// `file:///C:/dir/name` is `C:\dir\name`, and `file://server/share/name`
     /// is `\\server\share\name`.
+    #[cfg_attr(
+        all(target_os = "android", not(test)),
+        expect(dead_code, reason = "an Android intent names only Android paths")
+    )]
     Windows,
     /// `file:///dir/name` is `/dir/name`; a URI naming another host names no
     /// file here.
@@ -24,9 +28,7 @@ pub(crate) enum PathConvention {
     x11_host,
     wayland_host,
     target_os = "macos",
-    target_os = "ios",
-    target_os = "android",
-    test
+    target_os = "ios"
 ))]
 impl PathConvention {
     /// The convention of the host this is built for.

@@ -344,6 +344,12 @@ fn a_second_display_timer_retires_the_first() {
     harness.tick();
     registry.tick_all(&clock.frame(Duration::from_millis(1200)));
     registry.tick_all(&clock.frame(Duration::from_millis(1450)));
+    // The registry is ticked by hand, outside a frame, so the frame the
+    // closing callback runs after is asked for, as a ticked frame would run.
+    harness
+        .post_frame_handle()
+        .schedule_frame()
+        .expect("the messenger's presentation is alive");
     harness.tick();
     assert_eq!(&*closed.borrow(), &[SnackBarClosedReason::Timeout]);
     registry.tick_all(&clock.frame(Duration::from_secs(3)));

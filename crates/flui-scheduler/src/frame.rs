@@ -167,7 +167,7 @@ impl fmt::Display for SchedulerPhase {
 /// ## Example
 ///
 /// ```rust
-/// use flui_scheduler::frame::AppLifecycleState;
+/// use flui_scheduler::AppLifecycleState;
 ///
 /// let state = AppLifecycleState::Resumed;
 ///
@@ -245,20 +245,6 @@ impl AppLifecycleState {
             Self::Hidden => 2,
             Self::Paused => 1,
             Self::Detached => 0,
-        }
-    }
-
-    /// The state behind a discriminant the scheduler stored in an atomic;
-    /// `None` for a byte no variant has.
-    #[inline]
-    pub(crate) const fn try_from_u8(value: u8) -> Option<Self> {
-        match value {
-            0 => Some(Self::Resumed),
-            1 => Some(Self::Inactive),
-            2 => Some(Self::Hidden),
-            3 => Some(Self::Paused),
-            4 => Some(Self::Detached),
-            _ => None,
         }
     }
 
