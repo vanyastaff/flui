@@ -97,21 +97,24 @@ impl ActivityStanding {
     const FOREGROUND: u8 = 1 << 1;
     const FOCUSED: u8 = 1 << 2;
 
-    /// Whether the loop delivers the window's frames and input and samples
-    /// its preferences: while the Activity is on screen, paused or not.
+    /// What a loop turn does for the window: everything while the Activity is
+    /// on screen, paused or not; nothing but answering its input while it is
+    /// stopped. The loop asks this once a turn and the window reads its
+    /// execution state from it, so this is the one gate both follow.
     #[must_use]
-    pub(crate) const fn runs(self) -> bool {
-        self.visible
-    }
-
-    /// The window's execution state: running while it is on screen, suspended
-    /// from `onStop` to `onStart`, whatever the focus and the native window.
-    #[must_use]
-    pub(crate) const fn execution(self) -> WindowExecutionState {
-        if self.runs() {
-            WindowExecutionState::Running
+    pub(crate) const fn gate(self) -> TurnGate {
+        if self.visible {
+            TurnGate {
+                frames: true,
+                input: InputDelivery::Dispatch,
+                execution: WindowExecutionState::Running,
+            }
         } else {
-            WindowExecutionState::Suspended
+            TurnGate {
+                frames: false,
+                input: InputDelivery::AnswerUnhandled,
+                execution: WindowExecutionState::Suspended,
+            }
         }
     }
 
@@ -154,6 +157,32 @@ impl ActivityStanding {
             focused: bits & Self::FOCUSED != 0,
         }
     }
+}
+
+/// What one turn of the Android loop does for its window
+/// ([`ActivityStanding::gate`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct TurnGate {
+    /// Frames are delivered, a redraw or a due deadline keeps the poll from
+    /// blocking, and the preference cadence runs.
+    pub(crate) frames: bool,
+    /// What the events of the native input queue get.
+    pub(crate) input: InputDelivery,
+    /// The window's execution state. `Running` is also what lets the
+    /// application's owner jobs run, since flui-app asks the window for an
+    /// owner turn only then.
+    pub(crate) execution: WindowExecutionState,
+}
+
+/// What the loop does with the events of the native input queue.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum InputDelivery {
+    /// Translated and dispatched to the window.
+    Dispatch,
+    /// Each answered as unhandled, so the system hears back about the cancel
+    /// it sends for a window it took away instead of reporting the
+    /// application not responding.
+    AnswerUnhandled,
 }
 
 /// What one callback asks the backend to deliver.

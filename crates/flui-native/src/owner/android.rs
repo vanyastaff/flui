@@ -64,8 +64,10 @@ pub(crate) mod poll;
 pub(crate) mod result_bridge;
 #[cfg(any(target_os = "android", all(test, not(target_arch = "wasm32"))))]
 pub(crate) mod view_install;
-// The decision `FluiActivity` applies, as data; its test holds the Java side
-// to it.
+// The decisions `FluiActivity` applies, as data; their tests hold the Java
+// side to them.
+#[cfg(test)]
+pub(crate) mod admission;
 #[cfg(test)]
 pub(crate) mod window_setup;
 

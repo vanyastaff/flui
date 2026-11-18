@@ -991,7 +991,9 @@ impl std::fmt::Debug for AndroidStart {
 /// second line behind the APK's `minSdk` (ADR-0244 §3);
 /// [`PlatformError::HostProtocol`] and [`PlatformError::Init`] when the APK's
 /// Java classes come from another FLUI version, are missing, or the manifest
-/// names another Activity than `dev.flui.platform.FluiActivity` (ADR-0255).
+/// names another Activity than `dev.flui.platform.FluiActivity` (ADR-0255);
+/// [`PlatformError::SecondActivity`] over an instance that does not run FLUI,
+/// which [`android_hands_over`] tells before anything starts (ADR-0366).
 #[cfg(target_os = "android")]
 pub fn android_platform(app: android_activity::AndroidApp) -> Result<AndroidStart, PlatformError> {
     let platform = HostPlatform::<hosts::android::Android>::try_new(app)?;
@@ -1000,6 +1002,20 @@ pub fn android_platform(app: android_activity::AndroidApp) -> Result<AndroidStar
         platform: Box::new(platform),
         activity,
     })
+}
+
+/// Whether the Activity the system handed `android_main` is an instance that
+/// does not run FLUI (ADR-0366): a process runs one platform, in a task of
+/// its own application, and any other `FluiActivity` instance forwards what
+/// it was opened with there and finishes. An entry that asks this first
+/// starts none of the application for such an instance, so its `android_main`
+/// returns at once and its destruction waits for nothing. `false` where the
+/// APK's classes cannot be read or are another version's: [`android_platform`]
+/// then refuses the start and says why.
+#[cfg(target_os = "android")]
+#[must_use]
+pub fn android_hands_over(app: &android_activity::AndroidApp) -> bool {
+    owner::android::java_host::hands_over(app)
 }
 
 #[cfg(test)]

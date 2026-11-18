@@ -5746,11 +5746,14 @@ then frees it, both on the Java main thread, the only thread that calls the view
 2): `onTrimMemory`, at most one entry per trim level; each intent `onCreate` and `onNewIntent`
 receive, at most `MAX_OPENED_ITEMS`; and each answer `onActivityResult` brings to a request for a
 result (below). The queues are Java statics: they buffer what arrives before `android_main` runs
-or between two platforms of one process. A process runs one platform (ADR-0366): the queues belong
-to the Activity `FluiHost.created` made their owner in `onCreate`, before the library starts, and
-a second instance created while a live owner is not finishing hands its intent to the owner as an
-intent to the running Activity, brings the owner's task to the front and finishes, its platform
-refused with `PlatformError::SecondActivity` by `java_host::check`. `java_host::HostQueue`
+or between two platforms of one process. A process runs one platform, in a task of its own
+application (ADR-0366 §2): `FluiHost.admit` decides in `onCreate`, before the library starts, which
+instance owns the queues, and any other one starts the Activity again in the application's own task
+with what it received, granting it the shared URIs, or, already forwarded beside a live owner,
+queues it for the owner, and finishes. `owner::android::admission` is that decision as data, held
+to the Java side by its test. Such an instance runs none of the application: `android_hands_over`
+tells the entry first, and `java_host::check` refuses it with `PlatformError::SecondActivity`.
+`java_host::HostQueue`
 registers `nativeWake` and binds its wake handle (a `Box<Arc<Inbox>>`) on the Java main thread
 when the platform starts, and an entry queued before wakes it at once; each later entry wakes the
 owner, which takes the inbox's flag and only then drains the queue through JNI, each loop turn,
@@ -6264,5 +6267,6 @@ panics.
 
 **Verified by:** `android_lifecycle_mapping*`, `a_paused_activity_that_stays_visible_keeps_running`
 and `app_delivery_contracts` on the host, and `the_host_queue_is_read_as_the_java_classes_lay_it_out`
-and `only_the_activity_that_owns_the_queues_binds_and_reads_them`; the `MainEvent` match
+and `only_the_activity_that_owns_the_queues_binds_and_reads_them`, and `owner::android::admission`'s
+tests; the `MainEvent` match
 and the queue's JNI run only on a device.

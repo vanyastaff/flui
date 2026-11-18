@@ -457,7 +457,10 @@ impl ActivityWindow for AndroidWindow {
 
     /// Consume a redraw only when the same loop turn can deliver its frame.
     fn take_deliverable_redraw_request(&self) -> bool {
-        take_deliverable_redraw_request(&self.redraw_requested, self.activity.standing().runs())
+        take_deliverable_redraw_request(
+            &self.redraw_requested,
+            self.activity.standing().gate().frames,
+        )
     }
 }
 
@@ -556,7 +559,7 @@ fn sample_state(
             insets: kept.insets,
             // Running while on screen, paused or not, and focused while in
             // the foreground with the input focus (ADR-0366).
-            execution: standing.execution(),
+            execution: standing.gate().execution,
             occluded: !standing.visible,
             hovered: kept.hovered,
             focus: standing.focus(),

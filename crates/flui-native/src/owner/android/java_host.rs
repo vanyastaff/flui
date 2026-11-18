@@ -17,9 +17,10 @@
 //! `FluiActivity` forwards its callbacks into a queue in `FluiHost`, which
 //! buffers until a platform binds its wake handle (an entry can arrive before
 //! `android_main` runs). A process runs one platform (ADR-0366): only the
-//! Activity that owns the queues binds and drains them, and one created while
-//! another runs FLUI is refused here ([`PlatformError::SecondActivity`]) after
-//! handing its intent over. Once bound, each entry wakes the owner (ADR-0249),
+//! Activity that owns the queues binds and drains them, and any other instance,
+//! which forwards its intent to the application's own task and finishes, is
+//! refused here ([`PlatformError::SecondActivity`]). Once bound, each entry
+//! wakes the owner (ADR-0249),
 //! which drains the queue on its own thread and reads each entry as a
 //! [`HostEntry`]; an intent the Activity receives waits in a second queue, as
 //! the record [`ReceivedIntent`](super::intent::ReceivedIntent) reads, and
@@ -64,8 +65,8 @@ pub(crate) struct Found {
 /// [`PlatformError::HostProtocol`] when the classes state another protocol,
 /// [`PlatformError::Init`] when the APK has none of FLUI's classes or its
 /// Activity is not a `FluiActivity`, and [`PlatformError::SecondActivity`]
-/// when another Activity of the process runs FLUI (ADR-0366): this one hands
-/// its intent to that one and finishes.
+/// when the Activity does not own `FluiHost`'s queues (ADR-0366): it forwards
+/// what it was opened with to the one that runs FLUI and finishes.
 pub(crate) fn check(found: &Found) -> Result<(), PlatformError> {
     let Some(packaged) = found.protocol else {
         return Err(PlatformError::Init {
@@ -114,16 +115,20 @@ pub(crate) fn verify(app: &android_activity::AndroidApp) -> Result<(), PlatformE
             "reading FLUI's Java classes through the Activity's class loader: {error}"
         ),
     })?;
-    let checked = check(&found);
-    if let Err(PlatformError::SecondActivity) = &checked {
-        tracing::warn!(
-            target: "flui_native::android",
-            activity = %found.activity,
-            "a second instance of the Activity was created while another runs FLUI; it handed \
-             its intent to the running one and finishes without starting a platform"
-        );
-    }
-    checked
+    check(&found)
+}
+
+/// Whether the Activity is an instance that does not run FLUI: it forwards or
+/// hands over what it was opened with and finishes (ADR-0366), so the
+/// application's entry starts nothing for it. `false` where the classes
+/// cannot be read or are not this library's: [`verify`] then refuses the start
+/// and says why.
+#[cfg(target_os = "android")]
+pub(crate) fn hands_over(app: &android_activity::AndroidApp) -> bool {
+    crate::owner::android::activity::with_activity(app, |env, activity| {
+        env.with_local_frame(16, |env| read(env, activity))
+    })
+    .is_ok_and(|found| matches!(check(&found), Err(PlatformError::SecondActivity)))
 }
 
 #[cfg(target_os = "android")]
@@ -963,47 +968,21 @@ mod tests {
         );
     }
 
-    /// A process runs one FLUI platform (ADR-0366): `FluiActivity` asks
-    /// `FluiHost` whether it owns the queues before `NativeActivity` starts
-    /// the library, and a second instance hands its intent to the running one
-    /// and finishes; only the owner binds a wake handle and reads the queues,
-    /// so an older platform still winding down takes nothing that arrived for
-    /// a newer one.
+    /// Only the Activity that owns `FluiHost`'s queues (`owner::android::admission`
+    /// decides which, ADR-0366) binds a wake handle and reads them, so an
+    /// older platform still winding down takes nothing that arrived for a
+    /// newer one, and a new owner forgets the old handle.
     #[test]
     fn only_the_activity_that_owns_the_queues_binds_and_reads_them() {
-        let activity = java_source(ACTIVITY_CLASS);
-        let created = activity
-            .find("boolean owner = FluiHost.created(this);")
-            .unwrap_or_else(|| panic!("the ownership is asked in onCreate:\n{activity}"));
-        let started = activity
-            .find("super.onCreate(savedInstanceState);")
-            .expect("onCreate starts NativeActivity");
-        assert!(created < started, "asked before the library starts");
-        for handed_over in [
-            "if (!owner) {",
-            "FluiHost.opened(intent, false);\n            }\n            FluiHost.showOwner(this);\n            finish();\n            return;",
-        ] {
-            assert!(
-                activity.contains(handed_over),
-                "{handed_over:?} in\n{activity}"
-            );
-        }
-
         let host = java_source(HOST_CLASS);
         for stated in [
-            // A live owner that is not finishing keeps the queues; a newer
-            // owner forgets the old wake handle.
-            "if (owner != null && owner != activity && !owner.isFinishing()) {\n                return false;",
             "if (owner != activity) {\n                wakeHandle = 0;\n            }\n            owner = activity;",
             "static boolean owns(Activity activity)",
-            // Only the owner binds and reads.
             "static boolean bind(Activity activity, long handle)",
             "static int[] peekEntries(Activity activity)",
             "static String[][] peekOpened(Activity activity)",
             "static Object[] peekAnswers(Activity activity, int max)",
             "int count = owner == activity ? Math.min(Math.max(max, 0), ANSWERS.size()) : 0;",
-            // A destroyed owner gives the queues up.
-            "if (owner == activity) {\n                owner = null;\n            }",
         ] {
             assert!(host.contains(stated), "{stated:?} in FluiHost");
         }

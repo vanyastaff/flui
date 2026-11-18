@@ -1,6 +1,5 @@
 ---
 source: crates/flui-cli/src/build/android_manifest.rs
-assertion_line: 345
 expression: "render(&FACTS, &framework_declarations(&[\"http\"]))"
 ---
 <?xml version="1.0" encoding="UTF-8"?>
@@ -16,7 +15,8 @@ expression: "render(&FACTS, &framework_declarations(&[\"http\"]))"
          `enableOnBackInvokedCallback`: from Android 13, back is predictive
          back and reaches no key handler, as targetSdk 36 makes it anyway. FLUI
          registers no back callback yet, so the system takes every back: it
-         finishes the Activity with its back-to-home animation. -->
+         moves the task to the background with its back-to-home animation
+         (below Android 12 it finishes the Activity). -->
     <application
         android:label="R&amp;D &lt;Notes&gt;"
         android:hasCode="true"
@@ -30,8 +30,8 @@ expression: "render(&FACTS, &framework_declarations(&[\"http\"]))"
              the locale yet. `fontWeightAdjustment` needs an API 31 or later
              platform to link. `singleTop`: a new intent reaches the running
              Activity at the top of its task; one that starts the Activity in
-             another task hands its intent to the running one, since a process
-             runs one FLUI platform. -->
+             another application's task is forwarded to the application's own
+             task, since a process runs one FLUI platform there. -->
         <activity
             android:name="dev.flui.platform.FluiActivity"
             android:exported="true"

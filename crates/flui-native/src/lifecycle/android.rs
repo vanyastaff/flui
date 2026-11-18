@@ -147,7 +147,7 @@ pub(crate) mod rule {
         use super::{ActivityLifecycle, MemoryPressureLevel, pressure_for_trim_level};
         use crate::owner::android::activity_callbacks::{
             ActivityEvent::{self, *},
-            ActivitySignal, ActivityStanding, Reaction,
+            ActivitySignal, ActivityStanding, InputDelivery, Reaction,
         };
         use flui_platform::WindowExecutionState::{Running, Suspended};
         use flui_platform::WindowFocus;
@@ -224,65 +224,101 @@ pub(crate) mod rule {
             // A paused Activity another one does not cover (split screen below
             // API 29, a translucent or dialog Activity on top, picture in
             // picture) keeps drawing, taking input and serving its owner, as
-            // an inactive window; only `onStop` suspends it.
-            let up = [Start, Resume, GainedFocus];
-            for (case, events, execution, focus) in [
-                ("launched", &up[..], Running, WindowFocus::Focused),
+            // an inactive window; only `onStop` suspends it, and a stopped
+            // Activity still answers its input queue. Columns: frames, owner
+            // jobs (the window runs), input, execution state, focus.
+            use InputDelivery::{AnswerUnhandled, Dispatch};
+            use WindowFocus::{Focused, Inactive};
+            for (case, events, frames, jobs, input, execution, focus) in [
+                (
+                    "launched",
+                    &[Start, Resume, GainedFocus][..],
+                    true,
+                    true,
+                    Dispatch,
+                    Running,
+                    Focused,
+                ),
                 (
                     "a dialog takes the focus",
                     &[Start, Resume, GainedFocus, LostFocus][..],
+                    true,
+                    true,
+                    Dispatch,
                     Running,
-                    WindowFocus::Inactive,
+                    Inactive,
                 ),
                 (
                     "paused under a translucent Activity",
                     &[Start, Resume, GainedFocus, Pause, LostFocus][..],
+                    true,
+                    true,
+                    Dispatch,
                     Running,
-                    WindowFocus::Inactive,
+                    Inactive,
                 ),
                 (
                     "paused before its focus report comes",
                     &[Start, Resume, GainedFocus, Pause][..],
+                    true,
+                    true,
+                    Dispatch,
                     Running,
-                    WindowFocus::Inactive,
+                    Inactive,
                 ),
                 (
                     "picture in picture",
                     &[Start, Resume, GainedFocus, Pause, LostFocus, SaveState][..],
+                    true,
+                    true,
+                    Dispatch,
                     Running,
-                    WindowFocus::Inactive,
+                    Inactive,
                 ),
                 (
                     "stopped",
                     &[Start, Resume, GainedFocus, Pause, LostFocus, Stop][..],
+                    false,
+                    false,
+                    AnswerUnhandled,
                     Suspended,
-                    WindowFocus::Inactive,
+                    Inactive,
                 ),
                 (
                     "started again",
                     &[Start, Resume, Pause, Stop, Start][..],
+                    true,
+                    true,
+                    Dispatch,
                     Running,
-                    WindowFocus::Inactive,
+                    Inactive,
                 ),
                 (
                     "before any callback",
                     &[][..],
+                    false,
+                    false,
+                    AnswerUnhandled,
                     Suspended,
-                    WindowFocus::Inactive,
+                    Inactive,
                 ),
             ] {
                 let standing = standing_after(events);
-                assert_eq!(standing.execution(), execution, "{case}");
-                assert_eq!(standing.runs(), execution == Running, "{case}");
-                assert_eq!(standing.focus(), focus, "{case}");
+                let gate = standing.gate();
+                assert_eq!(gate.frames, frames, "{case}: frames");
+                assert_eq!(gate.execution == Running, jobs, "{case}: owner jobs");
+                assert_eq!(gate.input, input, "{case}: input");
+                assert_eq!(gate.execution, execution, "{case}: execution");
+                assert_eq!(standing.focus(), focus, "{case}: focus");
                 assert_eq!(
                     ActivityStanding::from_bits(standing.to_bits()),
                     standing,
                     "{case}: the shared byte holds every fact"
                 );
             }
-            assert!(!ActivityStanding::RETIRED.runs());
-            assert_eq!(ActivityStanding::RETIRED.focus(), WindowFocus::Inactive);
+            let retired = ActivityStanding::RETIRED;
+            assert!(!retired.gate().frames);
+            assert_eq!(retired.focus(), Inactive);
         }
 
         #[test]

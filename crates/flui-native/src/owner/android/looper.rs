@@ -81,6 +81,7 @@ use crate::{
     owner::android::activity_callbacks::ActivitySignal,
     owner::android::activity_callbacks::ActivityStanding,
     owner::android::activity_callbacks::ActivityTarget,
+    owner::android::activity_callbacks::InputDelivery,
     owner::android::activity_callbacks::Reaction,
     owner::android::frame_clock::{FrameClock, FrameStamp},
     owner::android::ndk::{FrameCallbacks, SymbolSource},
@@ -627,14 +628,12 @@ impl AndroidLoop {
     /// Drains all buffered input events via `input_events_iter()`, has the
     /// input the table made ([`AndroidHost::input`]) read each, and
     /// dispatches what it means through the window's callbacks. Every event
-    /// is answered: with no window, or while the Activity is off screen
-    /// (`running` false), each is drained as unhandled, so the system hears
-    /// back about the cancel it sends for a window it took away instead of
-    /// reporting the application not responding; the contacts were ended at
-    /// `Pause`.
-    fn process_input_events(&self, running: bool) {
+    /// is answered: with no window, or as `delivery` says while the Activity
+    /// is off screen ([`InputDelivery::AnswerUnhandled`]), each is drained as
+    /// unhandled; the contacts were ended at `Pause` and `Stop`.
+    fn process_input_events(&self, delivery: InputDelivery) {
         let window = self.window.borrow().clone();
-        let Some(window) = window.filter(|_| running) else {
+        let Some(window) = window.filter(|_| delivery == InputDelivery::Dispatch) else {
             if let Ok(mut iter) = self.app.input_events_iter() {
                 while iter.next(|_event| InputStatus::Unhandled) {}
             }
@@ -821,7 +820,9 @@ impl host::Loop for AndroidLoop {
             if let Some(window) = window.as_ref() {
                 window.settle_insets();
             }
-            if self.activity.standing().runs() && self.sample_due(next_preference_sample, now) {
+            if self.activity.standing().gate().frames
+                && self.sample_due(next_preference_sample, now)
+            {
                 // Taken before the read: a view that becomes ready during it
                 // reports once it observes, and only a view that was ready
                 // already ends the cadence.
@@ -887,7 +888,7 @@ impl host::Loop for AndroidLoop {
                 .borrow()
                 .as_ref()
                 .is_some_and(|w| w.has_redraw_request());
-            let running = self.activity.standing().runs();
+            let running = self.activity.standing().gate().frames;
             let mut should_call_ready = false;
             let ((), redraw_after_poll) =
                 RedrawPoll::new(deadline_due, redraw_requested).poll(running, |should_render| {
@@ -1165,8 +1166,9 @@ impl host::Loop for AndroidLoop {
             }
             self.deliver_view_events();
             self.deliver_host_entries();
-            let running = self.activity.standing().runs();
-            self.process_input_events(running);
+            let gate = self.activity.standing().gate();
+            self.process_input_events(gate.input);
+            let running = gate.frames;
 
             // Consume the redraw only after polling confirms this turn can
             // deliver it. A queued Stop therefore preserves the request for

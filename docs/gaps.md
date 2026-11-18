@@ -51,7 +51,7 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 
 > **Environments:** Android, iOS, Web · **Who it hurts:** Every multi-screen mobile or web app · **Parity:** [Input](platform-parity.md#input)
 
-- Android: FLUI registers no `OnBackInvokedCallback` (ADR-0255 decision 3 registers one while the router can pop, and nothing publishes that yet). With `enableOnBackInvokedCallback`, which the generated manifest declares and targetSdk 36 implies, Android 13 and later deliver neither `onBackPressed` nor `KEYCODE_BACK`, so every back finishes the Activity with the system's back-to-home animation and a Router page never pops on it. Below Android 13 the Back key reaches the application as `GoBack`, and one it leaves unhandled finishes the Activity.
+- Android: FLUI registers no `OnBackInvokedCallback` (ADR-0255 decision 3 registers one while the router can pop, and nothing publishes that yet). With `enableOnBackInvokedCallback`, which the generated manifest declares and targetSdk 36 implies, Android 13 and later deliver neither `onBackPressed` nor `KEYCODE_BACK`, so every back is the system's and a Router page never pops on it: from Android 12 the system moves the task to the background, since `FluiActivity` is the root launcher Activity, with its back-to-home animation; below 12 it finishes the Activity. Below Android 13 the Back key reaches the application as `GoBack` first, and the system takes one the application leaves unhandled.
 - iOS has no system back: a Router page under `CupertinoApp`, or under `MaterialApp` on an Apple platform, pops on the edge swipe its page transition carries, which headless tests drive and no iOS device has run.
 - The Web needs History or Navigation API routing.
 
@@ -749,6 +749,14 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 - The Win32 loop and its modal loops, the X11, Wayland and UIKit loops arm and take the application's wake deadline through `WakeDeadline::{arm, take_due}` (`crates/flui-native/src/owner/wake_deadline.rs`): an instant delivered once is armed again only after a frame ran. The AppKit pump (`owner/apple/macos/wake_pump.rs`, `TickPlan`) asks for a frame at a due instant and looks again every `FOLLOW_UP` with no frame count, and the Android loop (`owner/android/poll.rs`, `DueDeadline`, with `owner/redraw_poll.rs`) offers a past instant once but keeps polling with no timeout while it stays due and the Activity is on screen.
 - Neither host counts its frames: their windows build their `WindowDelivery` without the loop's `FrameCount`, so moving them to the rule means wiring the count through the AppKit and Android windows, which this host cannot compile, and a run on a Mac and an Android device.
 - The entry closes when both loops drive their deadline through `WakeDeadline`, `TickPlan` and `DueDeadline` are gone, and a run on each device shows a declined frame does not keep the loop awake.
+
+### A stopped Android Activity runs no owner jobs
+
+> **Environments:** Android · **Who it hurts:** Applications whose work must run while a full-screen activity covers FLUI: a request's ticket dropped while the picker it started is showing, a completion's closure, a timer · **Parity:** [App lifecycle](platform-parity.md#app-lifecycle) (Activity results for capability providers)
+
+- A paused Activity that stays on screen runs its owner jobs, frames and input (ADR-0366 §1). A stopped one runs none of the application's: the UI runtime's posted owner jobs and commands run in turns the window's redraw drives (`AppRuntime::owner_turn_window_poke` asks the window for one and declines while the window is not `Running`), and a stopped Activity draws no frame. A full-screen activity started for a result (a file or ringtone picker) stops FLUI, so a provider's code that would drop the ticket while the picker shows runs only when the user returns. The loop's own turn still runs: it drains `FluiHost`'s queue and routes answers, and the result bridge's sweep ends a request whose ticket was dropped before the Activity stopped and asks Java to cancel its activity.
+- Seen in a device run on a Galaxy S21 (Android 15, 2026-11-16); dropping the ticket right after the launch, before the Activity stopped, cancelled the picker.
+- The entry closes when a stopped Activity serves owner turns that carry no frame (posted jobs, completions, wakes) and only drawing waits for `onStart`, with a device run of a ticket dropped while a full-screen started activity is on top.
 
 ### An Android formatter loses keys typed faster than it answers
 

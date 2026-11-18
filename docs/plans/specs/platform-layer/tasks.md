@@ -8551,6 +8551,30 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
   «Activity results for capability providers»): кадры в split screen ниже API 29, в PiP и под
   полупрозрачной Activity, касание через Home без ANR, share из чужого приложения при работающем
   FLUI; у закреплённого toolchain 1.100.0 нет цели Android, а `rustup` не запускается.
+  Независимое чтение, исправлено одним кругом: экземпляр, не владеющий очередями, больше не
+  ставит intent в очередь — он пересылает его в собственную задачу приложения
+  (`FluiHost.forwarded`: компонент Activity, `NEW_TASK | GRANT_READ_URI_PERMISSION`, без
+  `MULTIPLE_TASK`/`NEW_DOCUMENT`/`CLEAR_TASK`/`LAUNCHED_FROM_HISTORY`, метка — токен процесса),
+  так что грант документа доходит до работающего экземпляра; экземпляр не в корне своей задачи
+  (share в задаче отправителя) владельцем не становится, и владелец всегда живёт там, куда его
+  выводит лаунчер; пересланный рядом с живым владельцем передаёт через очередь
+  (`FluiHost.admit`, таблица — модель `owner::android::admission`, тесты
+  `one_instance_owns_the_queues_and_lives_in_its_applications_task` — перенос `owner = null` из
+  `destroyed` в `stopped` даёт `Own` вместо `Forward`; `a_forwarded_start_keeps_the_grant_and_lands_in_the_applications_task`;
+  `fluihost_applies_this_model` — тот же перенос в Java падает); `restore` — только у владельца;
+  точка входа `#[flui::main]` спрашивает `flui_native::android_hands_over` до `entry()` и
+  возвращается с одной строкой `info` (повторное предупреждение в `verify` снято); затвор цикла —
+  одна чистая функция `ActivityStanding::gate` (`TurnGate`: кадры, ввод `InputDelivery`, состояние
+  исполнения), которую зовут цикл и окно, таблица `a_paused_activity_that_stays_visible_keeps_running`
+  с колонками кадров, заданий владельца, ввода и исполнения (ввод остановленной как `Dispatch` —
+  падает); запись gaps восстановлена для остановленной Activity («A stopped Android Activity runs
+  no owner jobs»); back с Android 12 уводит задачу в фон, а не завершает Activity (манифест,
+  changelog, gaps, parity); устаревшие тексты в `flui-app` (`runner/android.rs`,
+  `raster_host.rs`), `flui-platform` (`window_handler.rs`), `flui-testing` (`host.rs`), iOS-хосте
+  и ADR-0035/ADR-0063 (`Superseded-by`) исправлены; `# Errors` у `android_platform` и
+  `HostPlatform::try_new` называют `SecondActivity`; из снимка манифеста убран `assertion_line`.
+  Dex пересобран и воспроизводится (`android-dex --rebuild`). Должно на устройстве (строка «Deep
+  links»): share при работающем и неработающем FLUI, чтение документа и кнопка лаунчера после.
 
 ## Чего нет в этой серии
 
