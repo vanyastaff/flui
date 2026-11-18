@@ -23,6 +23,7 @@
 
 mod background;
 mod dialogs;
+mod grants;
 mod launcher;
 mod launcher_entry;
 mod request;
@@ -42,6 +43,7 @@ use flui_platform::{SystemFailure, Unsupported, UnsupportedReason};
 
 use crate::autostart::{Autostart, AutostartCapability};
 use crate::dialog::{FileDialogCapability, FileDialogs};
+use crate::grant::{GrantCapability, Grants};
 use crate::shortcuts::{GlobalShortcutCapability, GlobalShortcuts};
 use crate::taskbar::{TaskbarCapability, TaskbarEntry};
 use crate::user_dirs::{UserDirCapability, UserDirs};
@@ -642,9 +644,18 @@ pub(crate) fn register(
         let feed = std::sync::Arc::clone(&ctx.runtime_local::<EntryFeedSlot>().0);
         LauncherEntry::try_new(portal, app_id, feed).map(|entry| TaskbarEntry::new(entry, ctx))
     });
-    let dirs = configure;
+    let dirs = configure.clone();
     registrar.provide::<UserDirCapability>(move |ctx: &ProviderContext<'_>| {
         Ok::<_, Unsupported>(UserDirs::new(XdgUserDirs::new(dirs(ctx)), ctx))
+    });
+    let grants = configure;
+    registrar.provide::<GrantCapability>(move |ctx: &ProviderContext<'_>| {
+        let sandbox = crate::sandbox::flatpak(&|name| std::env::var_os(name));
+        Ok::<_, Unsupported>(Grants::new(
+            grants::PortalGrants::new(grants(ctx)),
+            sandbox,
+            ctx,
+        ))
     });
     // No portal shows a message box or a share sheet, and the jump list is
     // Windows': refused for good, never faked.

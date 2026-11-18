@@ -18,6 +18,8 @@ use flui_system::autostart::{
     AutostartCapability, AutostartError, AutostartRequest, AutostartState,
 };
 use flui_system::dialog::{DialogError, FileDialogCapability, OpenRequest, OpenResult};
+use flui_system::grant::{Grant, GrantCapability, GrantError, GrantKind};
+use flui_system::sandbox::Sandbox;
 use flui_system::shortcuts::{
     BoundShortcut, GlobalShortcutCapability, Shortcut, ShortcutError, ShortcutEvent, ShortcutId,
     Trigger,
@@ -27,7 +29,7 @@ use flui_system::user_dirs::{UserDir, UserDirCapability};
 use flui_testing::{HeadlessHost, HeadlessWindow};
 use zbus::{MatchRule, MessageStream, OwnedVariant, Variant};
 
-use crate::portal::{Call, PrivateBus, Results, StandIn, pump_until, settle};
+use crate::portal::{Call, PrivateBus, Results, StandIn, pump_until, settle, uris};
 use crate::{acquire, acquire_in, acquire_on, acquire_twice_on, outcome_slot, turn};
 
 /// A host whose window plays a Wayland window exported as `handle`, its
@@ -653,6 +655,52 @@ fn the_home_folder_is_the_one_the_process_names() {
     let dirs = dirs.expect("user folders are provided");
     let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
     assert_eq!(settle(&mut host, dirs.locate(UserDir::Home)), Ok(Ok(home)));
+}
+
+/// A pick that keeps its access carries its path as the grant, which the
+/// next run resolves to the file while it is there and answers `Missing`
+/// once it is gone; outside a Flatpak the process has no sandbox.
+#[test]
+fn a_picks_path_is_its_grant_and_resolves_while_the_file_is_there() {
+    let folder = tempfile::tempdir().expect("a scratch folder");
+    let document = folder.path().join("notes.txt");
+    std::fs::write(&document, b"notes").expect("the file is written");
+    let uri = format!("file://{}", document.display());
+
+    let portal = StandIn::serve();
+    let (mut host, dialogs) = acquire::<FileDialogCapability>(&portal.plugin());
+    let dialogs = dialogs.expect("the portal provides dialogs on Linux");
+    portal.answer(0, uris(&[&uri]));
+    let picks: OpenResult =
+        settle(&mut host, dialogs.open(OpenRequest::files().keep_access())).expect("not abandoned");
+    let picks = picks
+        .expect("the portal answered")
+        .expect("the user picked");
+    let kept = picks
+        .first()
+        .grant()
+        .expect("the pick kept its access")
+        .to_bytes();
+    drop(host);
+
+    let (mut host, grants) = acquire::<GrantCapability>(&portal.plugin());
+    let grants = grants.expect("the portal provides grants on Linux");
+    if std::env::var_os("FLATPAK_ID").is_none() {
+        assert_eq!(grants.sandbox(), &Sandbox::unconfined());
+    }
+    let grant = Grant::try_from_bytes(&kept).expect("the bytes the application kept");
+    assert_eq!(grant.kind(), GrantKind::UnixPath);
+    let access = settle(&mut host, grants.resolve(&grant, 1024))
+        .expect("not abandoned")
+        .expect("the file is there");
+    assert_eq!(access.file().path(), Some(document.as_path()));
+    std::fs::remove_file(&document).expect("the file is removed");
+    assert_eq!(
+        settle(&mut host, grants.resolve(&grant, 1024))
+            .expect("not abandoned")
+            .err(),
+        Some(GrantError::Missing)
+    );
 }
 
 /// A UI runtime that ends takes its portal with it, and the portal closes

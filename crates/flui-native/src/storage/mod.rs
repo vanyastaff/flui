@@ -30,6 +30,8 @@ use std::path::PathBuf;
 use flui_platform::AppDataDir;
 
 #[cfg(not(target_arch = "wasm32"))]
+mod container;
+#[cfg(not(target_arch = "wasm32"))]
 mod file_store;
 #[cfg(not(target_arch = "wasm32"))]
 mod os_error;
@@ -75,22 +77,35 @@ pub struct DataDirs {
 }
 
 /// The current user's data directories for the application `app`:
-/// `<data dir>/<app>` and `<local data dir>/<app>`.
+/// `<data dir>/<app>` and `<local data dir>/<app>`, in the process's
+/// container when it runs in one.
 ///
 /// The base directories are the platform's own (`%APPDATA%` and
 /// `%LOCALAPPDATA%` on Windows, including a redirected or synced folder;
 /// `~/Library/Application Support` on macOS and inside the iOS app container;
-/// `$XDG_DATA_HOME` on Linux, where both are the same directory). `None` when
-/// the platform reports none. On wasm32 both roots are `app`, the prefix of
-/// the page store's keys.
+/// `$XDG_DATA_HOME` on Linux, where both are the same directory). A
+/// sandboxed process is answered its container's, never a folder its
+/// sandbox keeps it from opening: a Flatpak's `~/.var/app/<id>/data`, the
+/// macOS App Sandbox's `~/Library/Containers/<id>/Data/Library/Application
+/// Support`, and a packaged Windows application's
+/// `%LOCALAPPDATA%\Packages\<family name>\RoamingState` and `LocalState`.
+/// `None` when the platform reports none. On wasm32 both roots are `app`,
+/// the prefix of the page store's keys.
 #[must_use]
 pub fn data_dirs(app: &AppDataDir) -> Option<DataDirs> {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        Some(DataDirs {
-            roaming: dirs::data_dir()?.join(app.as_str()),
-            local: dirs::data_local_dir()?.join(app.as_str()),
-        })
+        let base = container::BaseDirs {
+            data: dirs::data_dir(),
+            local: dirs::data_local_dir(),
+            home: dirs::home_dir(),
+        };
+        container::data_dirs_in(
+            &container::Container::of_process(),
+            app.as_str(),
+            &|name| std::env::var_os(name),
+            &base,
+        )
     }
     #[cfg(target_arch = "wasm32")]
     {

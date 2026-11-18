@@ -47,6 +47,7 @@ mod appkit {
     use objc2_app_kit::{NSView, NSWindow};
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
+    use crate::apple::bookmark::AppleGrants;
     use crate::apple::main_thread;
     use crate::apple::os::AppleOs;
     use crate::apple::queue::WorkQueue;
@@ -54,6 +55,7 @@ mod appkit {
     use crate::apple::version::{OnMacOS, RunningVersion};
     use crate::autostart::{Autostart, AutostartCapability};
     use crate::dialog::{FileDialogCapability, FileDialogs, MessageBoxCapability, MessageBoxes};
+    use crate::grant::{GrantCapability, Grants};
     use crate::os::{Os, OsCapability};
     use crate::share::{Share, ShareCapability};
     use crate::shortcuts::{GlobalShortcutCapability, GlobalShortcuts};
@@ -91,6 +93,7 @@ mod appkit {
                 super::dialogs::MacDialogs::new(
                     mtm,
                     ctx.runtime_local::<RunningVersion<OnMacOS>>().0,
+                    ctx.runtime_local::<WorkQueue>(),
                 ),
                 ctx,
             )
@@ -148,6 +151,13 @@ mod appkit {
         registrar.provide::<OsCapability>(|ctx: &ProviderContext<'_>| {
             let version = ctx.runtime_local::<RunningVersion<OnMacOS>>().0;
             Ok::<_, Unsupported>(Os::new(AppleOs::new("macOS", version.components()), ctx))
+        });
+        registrar.provide::<GrantCapability>(|ctx: &ProviderContext<'_>| {
+            Ok::<_, Unsupported>(Grants::new(
+                AppleGrants::new(ctx.runtime_local::<WorkQueue>()),
+                crate::sandbox::mac_app_sandbox(&|name| std::env::var_os(name)),
+                ctx,
+            ))
         });
     }
 }

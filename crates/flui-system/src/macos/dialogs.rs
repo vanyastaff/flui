@@ -43,12 +43,13 @@
 //! user-selected-file entitlement, the panel service failing): the request
 //! then answers `Unavailable`.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use flui_platform::{SystemFailure, UnsupportedReason};
 
 use crate::apple::content_types::unsupported;
 use crate::dialog::{DialogError, OpenResult, PickedFile, Picks, SaveLocation, SaveResult};
+use crate::grant::Grant;
 
 /// One item the user picked, as the panel names it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -106,6 +107,20 @@ pub(super) fn open_answer(response: isize, picks: impl FnOnce() -> Vec<PanelPick
     })
 }
 
+/// `picks`, each at a path carrying the grant `grant` makes of it: a bookmark
+/// on macOS, made off the main thread. A pick it makes none for (a process
+/// without the bookmark entitlement) is handed over without one.
+pub(super) fn with_grants(picks: Picks, grant: impl Fn(&Path) -> Option<Grant>) -> Picks {
+    let granted = picks
+        .into_iter()
+        .map(|pick| match pick.path().and_then(&grant) {
+            Some(made) => pick.granted(made),
+            None => pick,
+        })
+        .collect::<Vec<PickedFile>>();
+    Picks::try_new(granted).expect("BUG: as many picks as the answer held, one at least")
+}
+
 /// What a save panel that ended with `response` answers: the file, and no
 /// selected filter, which a panel without a filter menu has none of.
 pub(super) fn save_answer(response: isize, pick: impl FnOnce() -> Option<PanelPick>) -> SaveResult {
@@ -138,11 +153,13 @@ mod appkit {
     use objc2_foundation::{NSArray, NSNumber, NSString, NSURL, NSURLBookmarkResolutionOptions};
 
     use super::super::appkit::ns_window;
-    use super::{ABORTED, PanelPick, open_answer, save_answer};
+    use super::{ABORTED, PanelPick, open_answer, save_answer, with_grants};
+    use crate::apple::bookmark::bookmark;
     use crate::apple::content_types::{
         ContentFilter, HasContentTypes, Judged, NameRule, content_filter, unsupported, ut_type,
     };
     use crate::apple::modal::Pending;
+    use crate::apple::queue::WorkQueue;
     use crate::apple::version::MacOSVersion;
     use crate::apple::{file_url, url_path};
     use crate::dialog::{
@@ -337,18 +354,30 @@ mod appkit {
         mtm: MainThreadMarker,
         content_types: Option<HasContentTypes>,
         panels: Panels,
+        /// Where an open that keeps access makes its picks' bookmarks.
+        queue: Rc<WorkQueue>,
     }
 
     impl MacDialogs {
-        pub(crate) fn new(mtm: MainThreadMarker, version: MacOSVersion) -> Self {
-            Self::with_panels(mtm, version, APPKIT_PANELS)
+        pub(crate) fn new(
+            mtm: MainThreadMarker,
+            version: MacOSVersion,
+            queue: Rc<WorkQueue>,
+        ) -> Self {
+            Self::with_panels(mtm, version, APPKIT_PANELS, queue)
         }
 
-        fn with_panels(mtm: MainThreadMarker, version: MacOSVersion, panels: Panels) -> Self {
+        fn with_panels(
+            mtm: MainThreadMarker,
+            version: MacOSVersion,
+            panels: Panels,
+            queue: Rc<WorkQueue>,
+        ) -> Self {
             Self {
                 mtm,
                 content_types: HasContentTypes::on(version),
                 panels,
+                queue,
             }
         }
 
@@ -508,13 +537,15 @@ mod appkit {
             let pending = Pending::new(answer);
             let handler_pending = pending.clone();
             let answered = Weak::from_retained(&panel);
+            let keep_access = request.keep_access;
+            let queue = Rc::clone(&self.queue);
             let handler = RcBlock::new(move |response: NSModalResponse| {
                 os_entry(
                     "NSOpenPanel completion handler",
                     response,
                     AfterPanic::Answer(|_| ()),
                     || {
-                        handler_pending.answer(|| {
+                        let read = || {
                             open_answer(response, || {
                                 answered.load().map_or_else(Vec::new, |panel| {
                                     panel
@@ -524,7 +555,29 @@ mod appkit {
                                         .collect::<Vec<PanelPick>>()
                                 })
                             })
-                        });
+                        };
+                        if !keep_access {
+                            handler_pending.answer(read);
+                            return;
+                        }
+                        let Some(answer) = handler_pending.take() else {
+                            return;
+                        };
+                        match read() {
+                            // The bookmarks read the file system: off the
+                            // main thread, and a queue with no place answers
+                            // the picks without them.
+                            Ok(Some(picks)) => {
+                                let unkept = Ok(Some(picks.clone()));
+                                queue.run(answer, unkept, move || {
+                                    Ok(Some(with_grants(picks, |path| {
+                                        file_url(path, folders).and_then(|url| bookmark(&url))
+                                    })))
+                                });
+                            }
+                            // The owner retiring first leaves nothing waiting.
+                            other => drop(answer.resolve(other)),
+                        }
                     },
                 );
             });
@@ -653,7 +706,7 @@ mod appkit {
             let owner = TestOwner::new();
             let (window, _closer) = window();
             let dialogs = FileDialogs::try_new(
-                MacDialogs::with_panels(mtm, MacOSVersion::new(14, 0, 0), NO_PANELS),
+                MacDialogs::with_panels(mtm, MacOSVersion::new(14, 0, 0), NO_PANELS, Rc::default()),
                 &owner.ctx(Some(window)),
             )
             .expect("a window has dialogs");
@@ -689,8 +742,9 @@ mod appkit {
 mod tests {
     use flui_platform::{SystemFailure, Unsupported, UnsupportedReason};
 
-    use super::{ABORTED, PanelPick, open_answer, save_answer};
+    use super::{ABORTED, PanelPick, open_answer, save_answer, with_grants};
     use crate::dialog::{DialogError, FileDialogCapability};
+    use crate::grant::{Grant, GrantKind};
 
     #[test]
     fn an_ended_panel_answers_its_picks_a_cancel_or_why_it_could_not() {
@@ -744,5 +798,33 @@ mod tests {
             Err(DialogError::Failed(SystemFailure::MalformedAnswer))
         );
         assert_eq!(save_answer(0, || None), Ok(None));
+    }
+
+    #[test]
+    fn each_pick_carries_the_bookmark_made_of_it_or_none() {
+        let kept = std::env::temp_dir().join("kept.pdf");
+        let unkept = std::env::temp_dir().join("unkept.pdf");
+        let picks = open_answer(1, || {
+            vec![
+                PanelPick::Path(kept.clone()),
+                PanelPick::Path(unkept.clone()),
+            ]
+        })
+        .expect("accepted")
+        .expect("two picks");
+        let bookmarked = with_grants(picks, |path| {
+            (path == kept).then(|| {
+                Grant::try_new(GrantKind::AppleBookmark, &b"bookmark"[..]).expect("a payload")
+            })
+        });
+        let grants = bookmarked
+            .iter()
+            .map(|pick| pick.grant().map(Grant::payload))
+            .collect::<Vec<Option<&[u8]>>>();
+        assert_eq!(
+            grants,
+            [Some(&b"bookmark"[..]), None],
+            "a pick Foundation made no bookmark of is handed over without one"
+        );
     }
 }

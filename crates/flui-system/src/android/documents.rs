@@ -335,18 +335,30 @@ pub(crate) trait PickedDocuments: Send + 'static {
 
     /// Delete document `index`, which a save created and did not write.
     fn discard(&mut self, index: usize);
+
+    /// Persist the application's read permission to document `index`, so
+    /// that it outlasts the process: its URI, or `None` when its provider
+    /// offers no persistable permission.
+    fn keep(&mut self, index: usize) -> Option<String>;
+
+    /// Whether the application holds a persisted read permission to
+    /// document `index`.
+    fn is_kept(&mut self, index: usize) -> bool;
 }
 
 /// The answer of an open dialog whose picker answered `documents`: each is
 /// described, the picks are held to `filters` and to `max_bytes` as
 /// declared, and only then read, the bytes counted again, until `let_go` is
-/// set.
+/// set. A request that `keep_access` has each pick carry its URI as a
+/// grant, its permission persisted once every pick was read, so that an
+/// answer refused midway persists nothing.
 pub(crate) fn read_picks(
     documents: &mut impl PickedDocuments,
     filters: &[FileFilter],
     multiple: bool,
     max_bytes: u64,
     let_go: &LetGo,
+    keep_access: bool,
 ) -> OpenResult {
     let malformed = || DialogError::Failed(SystemFailure::MalformedAnswer);
     let count = documents.len();
@@ -384,6 +396,18 @@ pub(crate) fn read_picks(
             PickedFile::try_from_contents(name, Arc::<[u8]>::from(contents))
                 .ok_or_else(malformed)?,
         );
+    }
+    if keep_access {
+        picks = picks
+            .into_iter()
+            .enumerate()
+            .map(
+                |(index, pick)| match documents.keep(index).and_then(super::grants::grant_of) {
+                    Some(grant) => pick.granted(grant),
+                    None => pick,
+                },
+            )
+            .collect();
     }
     Ok(Picks::try_new(picks))
 }
@@ -630,13 +654,23 @@ impl<P: DocumentPicker> FileDialogBackend for AndroidDialogs<P> {
             }),
             multiple,
         };
-        let (filters, max_bytes) = (request.filters, request.max_bytes);
+        let (filters, max_bytes, keep_access) =
+            (request.filters, request.max_bytes, request.keep_access);
         self.ask(
             OPEN_KEY,
             &intent,
             AfterAnswer::StopsWithCaller,
             answer,
-            move |documents, let_go| read_picks(documents, &filters, multiple, max_bytes, let_go),
+            move |documents, let_go| {
+                read_picks(
+                    documents,
+                    &filters,
+                    multiple,
+                    max_bytes,
+                    let_go,
+                    keep_access,
+                )
+            },
         )
     }
 

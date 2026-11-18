@@ -4,7 +4,9 @@
 //! No portal names them: the file is read on a blocking pool thread, never on
 //! the owner's or the portal's. Inside Flatpak the application's `XDG_CONFIG_HOME` is its
 //! own, which a sandbox without access to the host's file leaves to the
-//! defaults; the parity source records that run as owed.
+//! defaults; the parity source records that run as owed. A folder that is
+//! not there for the process (one a Flatpak's manifest does not expose, one
+//! the file names and the user never made) answers none.
 
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
@@ -38,10 +40,24 @@ impl UserDirBackend for XdgUserDirs {
             return;
         }
         self.portal.spawn(move |_| async move {
-            let located = zruntime::unblock(move || locate(dir, &Environment::of_process())).await;
+            let located = zruntime::unblock(move || {
+                locate(dir, &Environment::of_process())
+                    .map(|folder| folder.filter(|folder| is_there(folder)))
+            })
+            .await;
             let _ = answer.resolve(located);
         });
     }
+}
+
+/// Whether `folder` is a folder the process reaches. A Flatpak sees the
+/// user's folders only as its manifest's `filesystems` expose them, which
+/// the sandbox shows by mounting them and nothing else tells: a folder it
+/// is not given is not there, and the layer names no folder the process
+/// cannot open. Outside a sandbox the same holds for a folder the user's
+/// file names but never made.
+fn is_there(folder: &Path) -> bool {
+    std::fs::metadata(folder).is_ok_and(|metadata| metadata.is_dir())
 }
 
 /// What the lookup reads from the process: its home and its configuration
@@ -169,7 +185,7 @@ fn folder(value: &str, home: &Path) -> Option<PathBuf> {
 mod tests {
     use std::path::{Path, PathBuf};
 
-    use super::{Environment, locate, named};
+    use super::{Environment, is_there, locate, named};
     use crate::user_dirs::UserDir;
 
     #[test]
@@ -223,5 +239,18 @@ mod tests {
             Ok(Some(PathBuf::from("/home/ann")))
         );
         let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn a_folder_the_process_does_not_reach_is_not_there() {
+        let directory = tempfile::tempdir().expect("a scratch folder");
+        let file = directory.path().join("a file");
+        std::fs::write(&file, b"").expect("the file is written");
+        assert!(is_there(directory.path()));
+        assert!(!is_there(&file), "a file is no folder");
+        assert!(
+            !is_there(&directory.path().join("Documents")),
+            "a folder a sandbox does not mount, or nobody made"
+        );
     }
 }

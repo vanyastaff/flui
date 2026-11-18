@@ -85,6 +85,8 @@ objc2-foundation = { workspace = true, features = [
     "std",
     "block2",
     "NSArray",
+    # A pick's bookmark, the grant that outlasts the process.
+    "NSData",
     "NSDictionary",
     "NSEnumerator",
     "NSError",
@@ -153,6 +155,8 @@ objc2-foundation = { workspace = true, features = [
     "std",
     "block2",
     "NSArray",
+    # A pick's bookmark, the grant that outlasts the process.
+    "NSData",
     "NSDictionary",
     "NSEnumerator",
     "NSError",

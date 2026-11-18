@@ -7,6 +7,8 @@ use std::sync::Arc;
 
 use flui_platform::data_transfer::TransferLimits;
 
+use crate::grant::Grant;
+
 /// The longest title, button label or message a dialog shows, in bytes.
 ///
 /// Checked with the rest of a request, before the system is asked, so one
@@ -607,6 +609,9 @@ pub struct OpenRequest {
     /// the folder's files rather than its path (a browser), as
     /// [`max_entries`](Self::max_entries) sets it.
     pub max_entries: usize,
+    /// Whether each pick carries access that outlasts the process
+    /// ([`keep_access`](Self::keep_access)).
+    pub keep_access: bool,
 }
 
 impl OpenRequest {
@@ -638,6 +643,7 @@ impl OpenRequest {
             accept_label: None,
             show_hidden: false,
             max_entries: Self::DEFAULT_MAX_ENTRIES,
+            keep_access: false,
         }
     }
 
@@ -736,6 +742,36 @@ impl OpenRequest {
     #[must_use]
     pub fn max_entries(mut self, max_entries: usize) -> Self {
         self.max_entries = max_entries;
+        self
+    }
+
+    /// Hand each pick over with a [`Grant`]: access the application stores
+    /// and, after a restart, resolves through
+    /// [`Grants::resolve`](crate::grant::Grants::resolve)
+    /// ([`PickedFile::grant`]).
+    ///
+    /// What the grant is, each system's own form of it:
+    ///
+    /// - macOS: a security-scoped bookmark of the pick, made off the main
+    ///   thread once the user accepted, which outlasts an App Sandbox's
+    ///   access to the pick (that lasts for the process alone).
+    /// - iOS: a bookmark made while the picker's access is held, as the
+    ///   document is read.
+    /// - Android: the content URI, whose read permission is persisted once
+    ///   the picks were read; Android keeps a bounded number of them per
+    ///   application and drops the oldest past it.
+    /// - Linux: the path, which a Flatpak's document portal keeps for the
+    ///   application across its runs.
+    /// - Windows: the path, which a desktop process opens again, packaged
+    ///   or not.
+    ///
+    /// A pick the system could not grant lasting access to (a bookmark that
+    /// could not be made, a provider that offers no persistable permission)
+    /// is handed over without one. A browser keeps nothing a page could
+    /// store as bytes, so a web pick never carries a grant.
+    #[must_use]
+    pub fn keep_access(mut self) -> Self {
+        self.keep_access = true;
         self
     }
 
@@ -1187,6 +1223,7 @@ impl FolderListing<Arc<[u8]>> {
                     .map(|(path, contents)| FolderFile::new(path, contents))
                     .collect::<Arc<[FolderFile]>>(),
             },
+            grant: None,
         }
     }
 }
@@ -1199,14 +1236,14 @@ impl FolderListing<Arc<[u8]>> {
 /// and iOS a document the application may reach only while it holds the
 /// access the picker granted; both are carried as the file's name and its
 /// contents ([`contents`](Self::contents)), and a browser's folder as its
-/// name and the files under it ([`files`](Self::files)). A later backend can
-/// carry the access a sandbox grants with a pick (a security-scoped
-/// bookmark, a document portal entry, a content URI) the same way, without
-/// changing what callers receive.
+/// name and the files under it ([`files`](Self::files)). A pick of a
+/// request that [keeps access](OpenRequest::keep_access) carries the
+/// system's lasting grant to it ([`grant`](Self::grant)).
 #[derive(Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct PickedFile {
     place: Place,
+    grant: Option<Grant>,
 }
 
 /// Where a pick is: what the system answered for it.
@@ -1276,6 +1313,7 @@ impl PickedFile {
         let nul = path.as_os_str().as_encoded_bytes().contains(&0);
         (path.is_absolute() && !nul).then_some(Self {
             place: Place::Path(path),
+            grant: None,
         })
     }
 
@@ -1288,6 +1326,7 @@ impl PickedFile {
         let name: String = name.into();
         is_file_name(&name).then_some(Self {
             place: Place::Contents { name, contents },
+            grant: None,
         })
     }
 
@@ -1313,7 +1352,26 @@ impl PickedFile {
         let name: String = name.into();
         is_file_name(&name).then_some(Self {
             place: Place::Download { name },
+            grant: None,
         })
+    }
+
+    /// The same pick carrying `grant`, the system's lasting access to it, as
+    /// a backend hands a pick of a request that
+    /// [keeps access](OpenRequest::keep_access) over.
+    #[must_use]
+    pub fn granted(mut self, grant: Grant) -> Self {
+        self.grant = Some(grant);
+        self
+    }
+
+    /// The system's lasting access to it, which the application stores and
+    /// resolves after a restart ([`Grants::resolve`](crate::grant::Grants::resolve));
+    /// `None` unless the request [kept access](OpenRequest::keep_access) and
+    /// the system granted it.
+    #[must_use]
+    pub fn grant(&self) -> Option<&Grant> {
+        self.grant.as_ref()
     }
 
     /// What it is, as the system answered it.
@@ -1422,26 +1480,24 @@ impl fmt::Debug for FolderFile {
 }
 
 impl fmt::Debug for PickedFile {
-    /// The path or the name, and a handed-over file's length or a folder's
-    /// count of files: what they hold is the user's.
+    /// The path or the name, a handed-over file's length or a folder's
+    /// count of files, and its grant's kind: what they hold is the user's.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut debug = f.debug_struct("PickedFile");
         match &self.place {
-            Place::Path(path) => f.debug_struct("PickedFile").field("path", path).finish(),
-            Place::Contents { name, contents } => f
-                .debug_struct("PickedFile")
-                .field("name", name)
-                .field("len", &contents.len())
-                .finish(),
-            Place::Folder { name, files } => f
-                .debug_struct("PickedFile")
-                .field("folder", name)
-                .field("files", &files.len())
-                .finish(),
-            Place::Download { name } => f
-                .debug_struct("PickedFile")
-                .field("download", name)
-                .finish(),
+            Place::Path(path) => debug.field("path", path),
+            Place::Contents { name, contents } => {
+                debug.field("name", name).field("len", &contents.len())
+            }
+            Place::Folder { name, files } => {
+                debug.field("folder", name).field("files", &files.len())
+            }
+            Place::Download { name } => debug.field("download", name),
+        };
+        if let Some(grant) = &self.grant {
+            debug.field("grant", &grant.kind());
         }
+        debug.finish()
     }
 }
 

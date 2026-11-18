@@ -300,6 +300,11 @@ pub(crate) struct Document {
     pub(crate) contents: Vec<u8>,
     /// What a write to it answers instead of writing.
     pub(crate) write_error: Option<DialogError>,
+    /// What a read of it answers instead of reading.
+    pub(crate) read_error: Option<DialogError>,
+    /// Whether its provider offers a persistable permission, and the
+    /// application holds it once kept.
+    pub(crate) persisted: bool,
 }
 
 impl Document {
@@ -314,6 +319,8 @@ impl Document {
             },
             contents: contents.to_vec(),
             write_error: None,
+            read_error: None,
+            persisted: false,
         }
     }
 }
@@ -330,6 +337,8 @@ pub(crate) enum Step {
     Wrote(usize, Vec<u8>),
     /// It deleted document `0`.
     Discarded(usize),
+    /// It persisted the read permission of document `0`.
+    Kept(usize),
     /// The owner interrupted it.
     Interrupted,
 }
@@ -390,7 +399,21 @@ impl PickedDocuments for DocumentsStandIn {
             // A dropped sender lets the read go on as well.
             let _ = reads.recv();
         }
+        if let Some(error) = self.documents[index].read_error {
+            return Err(error);
+        }
         read_bounded(self.documents[index].contents.as_slice(), at_most, let_go)
+    }
+
+    fn keep(&mut self, index: usize) -> Option<String> {
+        self.documents[index].persisted.then(|| {
+            self.steps.push(Step::Kept(index));
+            format!("content://stand-in/document/{index}")
+        })
+    }
+
+    fn is_kept(&mut self, index: usize) -> bool {
+        self.documents[index].persisted
     }
 
     fn write(&mut self, index: usize, contents: &[u8]) -> Result<(), DialogError> {

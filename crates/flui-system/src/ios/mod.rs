@@ -55,12 +55,14 @@ mod uikit {
     use flui_platform::launch::{Launcher, LauncherCapability};
     use objc2_ui_kit::UIDevice;
 
+    use crate::apple::bookmark::AppleGrants;
     use crate::apple::main_thread;
     use crate::apple::os::AppleOs;
     use crate::apple::queue::WorkQueue;
     use crate::apple::user_dirs::AppleUserDirs;
     use crate::apple::version::{OnIOS, RunningVersion};
     use crate::dialog::{FileDialogCapability, FileDialogs, MessageBoxCapability, MessageBoxes};
+    use crate::grant::{GrantCapability, Grants};
     use crate::os::{Os, OsCapability};
     use crate::share::{Share, ShareCapability};
     use crate::user_dirs::{UserDirCapability, UserDirs};
@@ -102,6 +104,13 @@ mod uikit {
         registrar.provide::<UserDirCapability>(|ctx: &ProviderContext<'_>| {
             Ok::<_, Unsupported>(UserDirs::new(
                 AppleUserDirs::new(ctx.runtime_local::<WorkQueue>()),
+                ctx,
+            ))
+        });
+        registrar.provide::<GrantCapability>(|ctx: &ProviderContext<'_>| {
+            Ok::<_, Unsupported>(Grants::new(
+                AppleGrants::new(ctx.runtime_local::<WorkQueue>()),
+                crate::sandbox::ios_app(&|name| std::env::var_os(name)),
                 ctx,
             ))
         });

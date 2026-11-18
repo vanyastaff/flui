@@ -27,6 +27,7 @@
 mod autostart;
 #[expect(unsafe_code, reason = "the common item dialogs are COM objects")]
 mod dialogs;
+mod grants;
 #[expect(unsafe_code, reason = "the jump list is a COM object")]
 mod jump_list;
 #[expect(unsafe_code, reason = "the shell's launch, reveal and trash calls")]
@@ -64,8 +65,10 @@ use windows::Win32::Foundation::HWND;
 
 use crate::autostart::{Autostart, AutostartCapability};
 use crate::dialog::{FileDialogCapability, FileDialogs, MessageBoxCapability, MessageBoxes};
+use crate::grant::{GrantCapability, Grants};
 use crate::jump_list::{JumpList, JumpListCapability};
 use crate::os::{Os, OsCapability};
+use crate::sandbox::Sandbox;
 use crate::share::{Share, ShareCapability};
 use crate::shortcuts::{GlobalShortcutCapability, GlobalShortcuts};
 use crate::taskbar::{TaskbarCapability, TaskbarEntry};
@@ -179,6 +182,13 @@ pub(crate) fn register(registrar: &mut CapabilityRegistrar) {
     });
     registrar.provide::<OsCapability>(|ctx: &ProviderContext<'_>| {
         Ok::<_, Unsupported>(Os::new(os::WindowsOs, ctx))
+    });
+    registrar.provide::<GrantCapability>(|ctx: &ProviderContext<'_>| {
+        Ok::<_, Unsupported>(Grants::new(
+            grants::WindowsGrants::new(ctx.runtime_local::<ShellThreads>()),
+            Sandbox::unconfined(),
+            ctx,
+        ))
     });
 }
 

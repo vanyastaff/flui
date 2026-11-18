@@ -41,6 +41,7 @@ use flui_system::dialog::{
     DialogError, FileDialogCapability, MalformedRequest, MessageBoxCapability, MessageBoxRequest,
     OpenRequest, SaveRequest,
 };
+use flui_system::grant::{Grant, GrantCapability, GrantError, GrantKind};
 use flui_system::jump_list::{
     JumpList, JumpListCapability, JumpListError, JumpListTask, MalformedTask,
 };
@@ -192,6 +193,7 @@ fn each_service_is_provided_or_refused_for_a_lasting_reason(subject: Subject) {
             "system information",
             bench.handle::<OsCapability>().is_some(),
         ),
+        ("grants", bench.handle::<GrantCapability>().is_some()),
     ];
     if matches!(subject, Subject::Scripted) || cfg!(windows) {
         assert!(
@@ -379,13 +381,35 @@ fn the_os_names_itself_and_the_users_home(subject: Subject) {
     assert!(path.is_absolute() && path.is_dir(), "{}", path.display());
 }
 
+/// A grant another kind of system made is refused without asking the system,
+/// at an owner turn: no host the table runs on keeps Android's content URIs.
+fn a_foreign_grant_is_refused_without_asking_the_system(subject: Subject) {
+    let mut bench = Bench::new(subject);
+    let Some(grants) = bench.handle::<GrantCapability>() else {
+        return;
+    };
+    let foreign = Grant::try_new(GrantKind::ContentUri, &b"content://media/1"[..])
+        .expect("a payload a grant holds");
+    let resolved = land(grants.resolve(&foreign, 1024));
+    assert!(resolved.borrow().is_none(), "never inside the call");
+    turn(&mut bench.host);
+    let refusal = resolved
+        .borrow_mut()
+        .take()
+        .expect("settled at the turn")
+        .expect("not abandoned")
+        .expect_err("a foreign grant reaches nothing");
+    assert_eq!(refusal, GrantError::Foreign);
+    bench.verify();
+}
+
 /// A row of the table: its name and what it checks of a subject.
 type Row = (&'static str, fn(Subject));
 
 /// The table: each row, run against each subject.
 #[test]
 fn every_provider_keeps_the_system_services_contract() {
-    let rows: [Row; 6] = [
+    let rows: [Row; 7] = [
         (
             "each_service_is_provided_or_refused_for_a_lasting_reason",
             each_service_is_provided_or_refused_for_a_lasting_reason,
@@ -409,6 +433,10 @@ fn every_provider_keeps_the_system_services_contract() {
         (
             "the_os_names_itself_and_the_users_home",
             the_os_names_itself_and_the_users_home,
+        ),
+        (
+            "a_foreign_grant_is_refused_without_asking_the_system",
+            a_foreign_grant_is_refused_without_asking_the_system,
         ),
     ];
     for subject in [Subject::Scripted, Subject::Platform] {
