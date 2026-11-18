@@ -9356,6 +9356,67 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
   `cargo +nightly check` для `aarch64-linux-android` и `wasm32-unknown-unknown` (с тестами),
   clippy и тесты доступности на Linux. Должно на устройстве Android (заметка строки паритета):
   TalkBack выключить и включить, считая работу семантики в кадрах.
+- [x] **LY138** — ветка `native/ios-tracking-frames-keyboard-2`, решение — ADR-0372 (заменяет
+  `KeyboardInset` из §1 ADR-0277, применение из §3, клетку iOS из §4 и цель `move_keyboard` из
+  §5). Проверено на `main` @ `eacf2a10d` чтением: оба правила в коде подтвердились (link только в
+  `NSDefaultRunLoopMode`; `occlusion` давала вставку от верха любой рамки, нулевой кадр читался
+  как скрытие, наблюдателя скрытия не было). Что UIKit шлёт такие кадры — по
+  `KeyboardInsetManager.swift` Flutter 3.50.0 и документации Apple; на устройстве не прогнано.
+  Построено. `CADisplayLink` добавлен в `NSRunLoopCommonModes`: кадры идут и в
+  `UITrackingRunLoopMode` (правило — в `crates/flui-native/ARCHITECTURE.md`, «UIKit scene
+  attachments»). `KeyboardInset` переименован в `SoftKeyboard` (все пользователи перенесены;
+  запись протокола сохраняет имя опубликованной схемы) и держит `KeyboardPlacement` (`Hidden`,
+  `Docked { inset }`, `Floating { frame }`) и движение вставки; пристыкованная без вставки —
+  `Hidden`, плавающая рамка без площади — `InvalidInsets::EmptyFrame`. `view_insets` несёт только
+  пристыкованную; рамку плавающей элемент корня окна публикует как предоставленное значение
+  `FloatingKeyboard` (ADR-0322 §5) только пока клавиатура плавает, а читает её
+  `MediaQuery::floating_keyboard_of`: размер `MediaQueryData` не изменился, вложенный `MediaQuery`
+  ничего лишнего не копирует, а корень без плавающей клавиатуры не добавляет слоя в inherited
+  scope (наследуемый вид над каждым корнем удлинял цепочку слоёв, и свёртка в таблицы поднимала
+  байты строк perf `flui-material` — 28948 против 28108 у `list_tile_over_text`). Правило размещения одно для
+  хостов с рамкой (`window::keyboard::placement`): вне вида или без площади — скрытая, низ рамки
+  на полточки и больше выше пола — плавающая (разность двух низов в единицах платформы, до
+  масштабирования, без округлений), иначе пристыкованная; пол на iOS — низ вида, на Web — низ
+  layout viewport (меньшее из `clientHeight` корня и `innerHeight`) или низ холста, если он
+  выше. iOS наблюдает четыре уведомления, включая `UIKeyboardDidChangeFrameNotification`, и
+  держит одно (`keyboard::Note`: `Hide(Change)` или `At { notice, end, change }`); правило —
+  `Heard::kept`: скрытие — всегда; уведомление без кадра и нулевой кадр изменения (клавиатуру
+  тащат) оставляют прежнее; показ или законченное изменение с кадром, который оставило изменение
+  или показ, — тоже (одно движение на один переход); первое законченное изменение после скрытия
+  сохраняет движение скрытия и говорит, где клавиатура легла (плавающая рамка — `Floating`,
+  иначе скрыта); любой другой кадр — клавиатура там; показ с нулевым кадром (панель сокращений,
+  брошенная плавающей, край взят из Flutter) — без вставки. Android публикует `Docked` из
+  `Type.ime()`, как и раньше; headless задаёт любое размещение
+  (`HeadlessHost::move_keyboard(window, placement, …)`, `HeadlessWindow::with_insets`). Протокол
+  0.27, аддитивно: у клавиатуры записи необязательная рамка `floating` — четыре края, как рамка
+  хранится, так что запись читается обратно до бита; читатель отказывает плавающей клавиатуре со
+  вставкой. Тесты, в скобках результат с откатом: в `window::keyboard` (модель, на всех хостах)
+  `a_frame_names_where_the_keyboard_rests` (без ветки плавающей — пристыкованная вставка 544,
+  падает), `a_docked_keyboard_a_fraction_off_its_floor_is_docked` (сравнение округлённых низов —
+  холст в масштабе 0,3, низ 115,49999999999999 при поле 115,5, и вид 844,5 с низом рамки 844,2
+  читаются плавающими, падает), `the_notifications_heard_name_where_the_keyboard_rests` (без
+  `DidChangeFrame` перетащенная, отстыкованная и стащенная с дока клавиатура остаются там, откуда
+  их тащили, или скрыты — падает; нулевой кадр, заменяющий стоящее, — `Hidden` вместо 336;
+  скрытие как изменение кадра — вставка) и `a_later_notice_of_one_move_starts_no_second_motion`;
+  строка `a_floating_keyboard_has_no_inset` в `window_insets` (`flui-platform`);
+  `a_floating_keyboard_reaches_the_media_query_as_a_frame` и
+  `a_window_opened_under_a_floating_keyboard_reads_its_frame` и
+  `a_widget_reading_only_the_floating_keyboard_hears_it_come_and_go` (`flui-testing`; без записи
+  рамки при применении, без чтения её при открытии окна и без публикации из корня — падают);
+  `keyboard_placements_keep_their_wire_values_and_replay` (журнал `flui-native`; углы, ширина и
+  высота которых не складываются обратно, — запись ширины вместо правого края падает) и
+  `a_floating_keyboard_recorded_with_an_inset_is_refused` (запись ввода; без отказа — падает); в
+  wasm32 строки `web_window_has_the_virtual_keyboard_overlay_its_page` о плавающем
+  прямоугольнике (локально не запускались: в WSL нет раннера, их гонит main). `flui-material`
+  `perf_list_tile_over_text` и `perf_navigation_bar_alone` проходят на прежних базовых линиях.
+  Прогнано: на Windows clippy `--all-targets -D warnings` и nextest затронутых крейтов,
+  `xtask checks`; в WSL тесты на Linux, включая строки perf `flui-material`, и `cargo +nightly
+  check --all-targets` `flui-native` для `aarch64-apple-ios`. Должно на
+  iOS Simulator (заметки строк «Refresh rate and frame pacing» и «Soft-keyboard insets» в
+  `platform-parity.toml`): тики link при отслеживании UIKit; пристыкованная, плавающая,
+  перетаскиваемая и скрытая клавиатура на iPad, брошенная панель сокращений, скрытие с кадром на
+  экране. Не построено и записано в `docs/gaps.md`: плавающая клавиатура, перекрывающая низ
+  короткого окна Stage Manager, читается пристыкованной (нужны границы экрана).
 
 - [x] **LY149** — ветка `native/macos-pacing-and-notch`. Проверено на `main` @ `88ea4d03a`
   чтением и тестами модели; на Mac не запускалось ничего, и это сказано у каждой находки.

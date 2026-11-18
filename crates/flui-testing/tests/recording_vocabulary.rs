@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use flui_foundation::DataTransferId;
 use flui_foundation::geometry::{
-    DevicePixelRatio, DeviceSize, EdgeInsets, Offset, Point, Size, WindowMetrics,
+    DevicePixelRatio, DeviceSize, EdgeInsets, Offset, Point, Rect, Size, WindowMetrics,
 };
 use flui_interaction::GestureDisposition;
 use flui_platform::Availability;
@@ -32,11 +32,11 @@ use flui_platform::pointer::{
 };
 use flui_platform::{
     Brightness, DragDropEvent, EventTime, GesturePreferences, HourCycle, ImeEvent, InsetCurve,
-    InsetMotion, KeyboardInset, Locale, MeasurementSystem, MotionPreference, NativeMouseGeometry,
-    NativeTouchGeometry, NumberingSystem, PlatformInput, RegionOverride, RegionalFormats,
-    ScrollBarPreferences, ScrollBarVisibility, ScrollTrackClick, SrgbColor, SystemPreferences,
-    TextWeightPreference, Weekday, WheelPreferences, WheelStep, WindowExecutionState, WindowId,
-    WindowInsets,
+    InsetMotion, KeyboardPlacement, Locale, MeasurementSystem, MotionPreference,
+    NativeMouseGeometry, NativeTouchGeometry, NumberingSystem, PlatformInput, RegionOverride,
+    RegionalFormats, ScrollBarPreferences, ScrollBarVisibility, ScrollTrackClick, SoftKeyboard,
+    SrgbColor, SystemPreferences, TextWeightPreference, Weekday, WheelPreferences, WheelStep,
+    WindowExecutionState, WindowId, WindowInsets,
 };
 use flui_runtime::owner::{InputOutcome, WindowObservation};
 use flui_runtime::{
@@ -446,24 +446,38 @@ fn sample(enumeration: &str, variant: &str) -> Option<Vec<InputRecord>> {
         ("WindowObservation", "Snapshot") => one(execution(WindowExecutionState::Running)),
         ("WindowObservation", "Hover") => one(window(WindowObservation::Hover(true))),
         ("WindowObservation", "Moved") => one(window(WindowObservation::Moved)),
-        ("WindowObservation", "Insets") => one(window(WindowObservation::Insets(
-            WindowInsets::try_new(
-                EdgeInsets::new(44.0, 0.0, 34.0, 0.5),
-                KeyboardInset::try_moving(
-                    EdgeInsets::new(0.0, 0.0, 336.0, 0.0),
-                    InsetMotion::try_new(
-                        EdgeInsets::ZERO,
-                        EventTime::from_nanos(1_000_000),
-                        Duration::from_millis(250),
-                        InsetCurve::SystemKeyboard,
+        ("WindowObservation", "Insets") => Some(vec![
+            window(WindowObservation::Insets(
+                WindowInsets::try_new(
+                    EdgeInsets::new(44.0, 0.0, 34.0, 0.5),
+                    SoftKeyboard::try_moving(
+                        KeyboardPlacement::Docked {
+                            inset: EdgeInsets::new(0.0, 0.0, 336.0, 0.0),
+                        },
+                        InsetMotion::try_new(
+                            EdgeInsets::ZERO,
+                            EventTime::from_nanos(1_000_000),
+                            Duration::from_millis(250),
+                            InsetCurve::SystemKeyboard,
+                        )
+                        .expect("a valid motion"),
                     )
-                    .expect("a valid motion"),
+                    .expect("a valid keyboard"),
+                    EdgeInsets::new(0.0, 16.0, 20.0, 16.0),
                 )
-                .expect("a valid keyboard"),
-                EdgeInsets::new(0.0, 16.0, 20.0, 16.0),
-            )
-            .expect("valid insets"),
-        ))),
+                .expect("valid insets"),
+            )),
+            // A floating keyboard keeps its frame and names no inset.
+            window(WindowObservation::Insets(
+                WindowInsets::ZERO.with_keyboard(
+                    SoftKeyboard::try_at_rest(KeyboardPlacement::Floating {
+                        // Corners that the frame's width and height do not add back to.
+                        frame: Rect::from_ltrb(220.1, 24.9, 493.8, 105.8),
+                    })
+                    .expect("a valid keyboard"),
+                ),
+            )),
+        ]),
         ("WindowObservation", "Brightness") => {
             one(window(WindowObservation::Brightness(Brightness::Dark)))
         }
@@ -968,6 +982,39 @@ fn every_vocabulary_variant_round_trips_through_the_recording_dto() {
         "variants the DTO changed:\n{}",
         changed.join("\n")
     );
+}
+
+/// A recorded floating keyboard names no inset, since it covers no edge: a
+/// row that names both is refused, not read as either.
+#[test]
+fn a_floating_keyboard_recorded_with_an_inset_is_refused() {
+    let floating = window(WindowObservation::Insets(
+        WindowInsets::ZERO.with_keyboard(
+            SoftKeyboard::try_at_rest(KeyboardPlacement::Floating {
+                frame: Rect::from_ltrb(40.0, 300.0, 360.0, 560.0),
+            })
+            .expect("a valid keyboard"),
+        ),
+    ));
+    let mut writer =
+        RecordingWriter::try_new(Vec::new(), &RecordingHeader::new(RecordingClock::Monotonic))
+            .expect("header");
+    writer.write(&floating).expect("row");
+    let written = String::from_utf8(writer.finish().expect("flush")).expect("JSON Lines are UTF-8");
+    let read = |recording: &str| {
+        RecordingReader::try_new(recording.as_bytes())
+            .expect("header")
+            .map(|row| row.map(|row| row.record))
+            .collect::<Result<Vec<InputRecord>, _>>()
+    };
+    assert_eq!(
+        format!("{:?}", read(&written).expect("the row reads back")),
+        format!("{:?}", [floating])
+    );
+    let at_rest = r#""target":[0.0,0.0,0.0,0.0],"floating""#;
+    assert!(written.contains(at_rest), "{written}");
+    let contradictory = written.replacen(at_rest, r#""target":[0.0,0.0,336.0,0.0],"floating""#, 1);
+    assert!(read(&contradictory).is_err());
 }
 
 /// The JSON a preferences row is written as, field for field: the row's schema

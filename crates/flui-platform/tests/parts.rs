@@ -9,13 +9,13 @@ use flui_foundation::geometry::{
 };
 use flui_platform::{
     AppTitleBar, Availability, Brightness, CapabilityAbsence, ColorGamut, DisplayColor,
-    DisplayDescription, DisplayKey, DisplayRegistry, GesturePreferences, HourCycle, KeyboardInset,
-    Locale, MeasurementSystem, MotionPreference, NumberingSystem, RegionOverride, RegionalFormats,
-    ScrollBarPreferences, ScrollBarVisibility, ScrollTrackClick, SizeConstraints, SrgbColor,
-    SystemPreferences, TextWeightPreference, Weekday, WheelPreferences, WheelStep,
-    WindowCapabilities, WindowCapability, WindowCommand, WindowExecutionState, WindowExtent,
-    WindowFocus, WindowFrame, WindowGeometry, WindowInsets, WindowMaterial, WindowMode,
-    WindowPosition, WindowState,
+    DisplayDescription, DisplayKey, DisplayRegistry, GesturePreferences, HourCycle,
+    KeyboardPlacement, Locale, MeasurementSystem, MotionPreference, NumberingSystem,
+    RegionOverride, RegionalFormats, ScrollBarPreferences, ScrollBarVisibility, ScrollTrackClick,
+    SizeConstraints, SoftKeyboard, SrgbColor, SystemPreferences, TextWeightPreference, Weekday,
+    WheelPreferences, WheelStep, WindowCapabilities, WindowCapability, WindowCommand,
+    WindowExecutionState, WindowExtent, WindowFocus, WindowFrame, WindowGeometry, WindowInsets,
+    WindowMaterial, WindowMode, WindowPosition, WindowState,
 };
 
 fn preferences_round_trip_through_their_parts() {
@@ -135,8 +135,10 @@ fn a_window_state_round_trips_through_its_parts() {
     .with_insets(
         WindowInsets::try_new(
             EdgeInsets::new(24.0, 0.0, 34.0, 0.0),
-            KeyboardInset::try_at_rest(EdgeInsets::new(0.0, 0.0, 300.0, 0.0))
-                .expect("a finite keyboard inset"),
+            SoftKeyboard::try_at_rest(KeyboardPlacement::Docked {
+                inset: EdgeInsets::new(0.0, 0.0, 300.0, 0.0),
+            })
+            .expect("a finite keyboard inset"),
             EdgeInsets::new(0.0, 16.0, 20.0, 16.0),
         )
         .expect("finite insets"),

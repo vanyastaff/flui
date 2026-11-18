@@ -7,7 +7,7 @@
 
 use std::time::Duration;
 
-use flui_foundation::geometry::EdgeInsets;
+use flui_foundation::geometry::{EdgeInsets, Rect};
 
 use crate::EventTime;
 
@@ -16,7 +16,7 @@ use crate::EventTime;
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct WindowInsets {
     safe_area: EdgeInsets,
-    keyboard: KeyboardInset,
+    keyboard: SoftKeyboard,
     system_gestures: EdgeInsets,
 }
 
@@ -24,7 +24,7 @@ impl WindowInsets {
     /// No inset on any edge, the keyboard hidden.
     pub const ZERO: Self = Self {
         safe_area: EdgeInsets::ZERO,
-        keyboard: KeyboardInset::HIDDEN,
+        keyboard: SoftKeyboard::HIDDEN,
         system_gestures: EdgeInsets::ZERO,
     };
 
@@ -35,7 +35,7 @@ impl WindowInsets {
     /// is not finite or is negative.
     pub fn try_new(
         safe_area: EdgeInsets,
-        keyboard: KeyboardInset,
+        keyboard: SoftKeyboard,
         system_gestures: EdgeInsets,
     ) -> Result<Self, InvalidInsets> {
         check_edges(safe_area)?;
@@ -58,7 +58,7 @@ impl WindowInsets {
 
     /// These insets with `keyboard` in place of theirs.
     #[must_use]
-    pub const fn with_keyboard(mut self, keyboard: KeyboardInset) -> Self {
+    pub const fn with_keyboard(mut self, keyboard: SoftKeyboard) -> Self {
         self.keyboard = keyboard;
         self
     }
@@ -86,7 +86,7 @@ impl WindowInsets {
     /// The soft keyboard, and any input-method panel docked with it, where it
     /// covers the content.
     #[must_use]
-    pub const fn keyboard(&self) -> KeyboardInset {
+    pub const fn keyboard(&self) -> SoftKeyboard {
         self.keyboard
     }
 
@@ -105,57 +105,147 @@ impl Default for WindowInsets {
     }
 }
 
-/// The soft keyboard's occlusion: where it ends up, and how it gets there.
+/// Where the soft keyboard rests over the window's content (ADR-0372), in
+/// logical pixels relative to the content area. The host tells the three
+/// apart; the layout decides what each means for it.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct KeyboardInset {
-    target: EdgeInsets,
+#[non_exhaustive]
+pub enum KeyboardPlacement {
+    /// No keyboard over the content: none shown, one off screen, or one
+    /// beside the window (an iPad's Split View).
+    Hidden,
+    /// Docked to the window's edges, covering `inset` of the content: the
+    /// layout makes room above it.
+    Docked {
+        /// The edges the keyboard covers, each finite and not negative.
+        inset: EdgeInsets,
+    },
+    /// Floating over the content at `frame`: an iPad's floating, undocked or
+    /// split keyboard, whose bottom lies above the window's. It covers no
+    /// edge, so it is not part of [`SoftKeyboard::target`]; a layout that
+    /// keeps something in view (a focused field, a toolbar) moves it out from
+    /// under the frame itself.
+    Floating {
+        /// The keyboard's frame in the content's coordinates: finite, with a
+        /// positive width and height.
+        frame: Rect<f64>,
+    },
+}
+
+impl KeyboardPlacement {
+    /// The edges this placement covers: the docked inset, none otherwise.
+    const fn covered(&self) -> EdgeInsets {
+        match self {
+            Self::Docked { inset } => *inset,
+            Self::Hidden | Self::Floating { .. } => EdgeInsets::ZERO,
+        }
+    }
+
+    /// This placement as [`SoftKeyboard`] holds it: a docked keyboard that
+    /// covers no edge is [`Hidden`](Self::Hidden), so one placement has one
+    /// spelling.
+    fn checked(self) -> Result<Self, InvalidInsets> {
+        match self {
+            Self::Hidden => Ok(Self::Hidden),
+            Self::Docked { inset } => {
+                check_edges(inset)?;
+                Ok(if inset == EdgeInsets::ZERO {
+                    Self::Hidden
+                } else {
+                    self
+                })
+            }
+            Self::Floating { frame } => {
+                let sides = [frame.left(), frame.top(), frame.right(), frame.bottom()];
+                if !sides.iter().all(|side| side.is_finite()) {
+                    return Err(InvalidInsets::NonFinite);
+                }
+                if frame.width() <= 0.0 || frame.height() <= 0.0 {
+                    return Err(InvalidInsets::EmptyFrame);
+                }
+                Ok(self)
+            }
+        }
+    }
+}
+
+/// The soft keyboard over the content: where it comes to rest, and how the
+/// inset it covers moves there.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SoftKeyboard {
+    placement: KeyboardPlacement,
     motion: Option<InsetMotion>,
 }
 
-impl KeyboardInset {
+impl SoftKeyboard {
     /// The keyboard hidden and at rest.
     pub const HIDDEN: Self = Self {
-        target: EdgeInsets::ZERO,
+        placement: KeyboardPlacement::Hidden,
         motion: None,
     };
 
-    /// The keyboard at rest, covering `target`.
+    /// The keyboard at rest at `placement`.
+    ///
+    /// A docked placement that covers no edge is taken as
+    /// [`Hidden`](KeyboardPlacement::Hidden).
     ///
     /// # Errors
-    /// [`InvalidInsets`] when an edge of `target` is not finite or is negative.
-    pub fn try_at_rest(target: EdgeInsets) -> Result<Self, InvalidInsets> {
-        check_edges(target)?;
+    /// [`InvalidInsets`] when a docked inset has an edge that is not finite or
+    /// is negative, or a floating frame is not finite or has no area.
+    pub fn try_at_rest(placement: KeyboardPlacement) -> Result<Self, InvalidInsets> {
         Ok(Self {
-            target,
+            placement: placement.checked()?,
             motion: None,
         })
     }
 
-    /// The keyboard moving to `target` along `motion`.
+    /// The keyboard moving to `placement`, its inset along `motion`: toward
+    /// the docked inset, or toward none for a keyboard that hides or comes
+    /// to float.
     ///
     /// # Errors
-    /// [`InvalidInsets`] when an edge of `target` is not finite or is negative.
-    pub fn try_moving(target: EdgeInsets, motion: InsetMotion) -> Result<Self, InvalidInsets> {
-        check_edges(target)?;
+    /// As [`try_at_rest`](Self::try_at_rest).
+    pub fn try_moving(
+        placement: KeyboardPlacement,
+        motion: InsetMotion,
+    ) -> Result<Self, InvalidInsets> {
         Ok(Self {
-            target,
+            placement: placement.checked()?,
             motion: Some(motion),
         })
     }
 
-    /// This keyboard with its motion ended: at rest at its target.
+    /// This keyboard with its motion ended: at rest at its placement.
     #[must_use]
     pub const fn settled(self) -> Self {
         Self {
-            target: self.target,
+            placement: self.placement,
             motion: None,
         }
     }
 
-    /// The occlusion once any motion ends.
+    /// Where the keyboard comes to rest.
+    #[must_use]
+    pub const fn placement(&self) -> KeyboardPlacement {
+        self.placement
+    }
+
+    /// The inset once any motion ends: the docked keyboard's, none for one
+    /// hidden or floating.
     #[must_use]
     pub const fn target(&self) -> EdgeInsets {
-        self.target
+        self.placement.covered()
+    }
+
+    /// The frame of a keyboard that floats, in the content's coordinates;
+    /// `None` for one docked or hidden. It is where the keyboard comes to
+    /// rest: the motion moves the inset, not the frame.
+    #[must_use]
+    pub const fn floating_frame(&self) -> Option<Rect<f64>> {
+        match self.placement {
+            KeyboardPlacement::Floating { frame } => Some(frame),
+            KeyboardPlacement::Hidden | KeyboardPlacement::Docked { .. } => None,
+        }
     }
 
     /// The motion toward [`target`](Self::target); `None` at rest.
@@ -176,15 +266,16 @@ impl KeyboardInset {
     /// from its end on.
     #[must_use]
     pub fn at(&self, time: EventTime) -> EdgeInsets {
+        let target = self.target();
         let Some(motion) = self.motion else {
-            return self.target;
+            return target;
         };
         if time <= motion.start {
             return motion.from;
         }
         let elapsed = time.saturating_duration_since(motion.start);
         if elapsed >= motion.duration {
-            return self.target;
+            return target;
         }
         let t = elapsed.as_secs_f64() / motion.duration.as_secs_f64();
         let progress = motion.curve.progress(t);
@@ -196,15 +287,15 @@ impl KeyboardInset {
             if edge.is_finite() { edge.max(0.0) } else { to }
         };
         EdgeInsets::new(
-            lerp(motion.from.top, self.target.top),
-            lerp(motion.from.right, self.target.right),
-            lerp(motion.from.bottom, self.target.bottom),
-            lerp(motion.from.left, self.target.left),
+            lerp(motion.from.top, target.top),
+            lerp(motion.from.right, target.right),
+            lerp(motion.from.bottom, target.bottom),
+            lerp(motion.from.left, target.left),
         )
     }
 }
 
-impl Default for KeyboardInset {
+impl Default for SoftKeyboard {
     fn default() -> Self {
         Self::HIDDEN
     }
@@ -401,6 +492,9 @@ pub enum InvalidInsets {
     /// `0..=1`.
     #[error("a keyboard motion's curve is not a valid cubic Bézier")]
     InvalidCurve,
+    /// A floating keyboard's frame has no width or no height.
+    #[error("a floating keyboard's frame has no area")]
+    EmptyFrame,
 }
 
 fn check_edges(edges: EdgeInsets) -> Result<(), InvalidInsets> {
