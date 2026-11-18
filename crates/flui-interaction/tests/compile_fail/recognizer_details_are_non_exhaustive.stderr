@@ -1,85 +1,85 @@
 error[E0639]: cannot create non-exhaustive struct using struct expression
-  --> tests/compile_fail/recognizer_details_are_non_exhaustive.rs:9:13
+  --> tests/compile_fail/recognizer_details_are_non_exhaustive.rs:6:13
    |
- 9 |       let _ = DragDownDetails {
+ 6 |       let _ = DragDownDetails {
    |  _____________^
-10 | |         global_position: Offset::ZERO,
-11 | |         local_position: Offset::ZERO,
-12 | |         kind: PointerKind::Touch,
-13 | |     };
+ 7 | |         global_position: Offset::ZERO,
+ 8 | |         local_position: Offset::ZERO,
+ 9 | |         kind: PointerKind::Touch,
+10 | |     };
    | |_____^
 
 error[E0639]: cannot create non-exhaustive struct using struct expression
-  --> tests/compile_fail/recognizer_details_are_non_exhaustive.rs:14:13
+  --> tests/compile_fail/recognizer_details_are_non_exhaustive.rs:11:13
    |
-14 |       let _ = DragStartDetails {
+11 |       let _ = DragStartDetails {
    |  _____________^
-15 | |         global_position: Offset::ZERO,
-16 | |         local_position: Offset::ZERO,
-17 | |         kind: PointerKind::Touch,
+12 | |         global_position: Offset::ZERO,
+13 | |         local_position: Offset::ZERO,
+14 | |         kind: PointerKind::Touch,
 ...  |
-20 | |         device: None,
-21 | |     };
+17 | |         device: None,
+18 | |     };
    | |_____^
 
 error[E0639]: cannot create non-exhaustive struct using struct expression
-  --> tests/compile_fail/recognizer_details_are_non_exhaustive.rs:22:13
+  --> tests/compile_fail/recognizer_details_are_non_exhaustive.rs:19:13
    |
-22 |       let _ = DragUpdateDetails {
+19 |       let _ = DragUpdateDetails {
    |  _____________^
-23 | |         global_position: Offset::ZERO,
-24 | |         local_position: Offset::ZERO,
-25 | |         delta: Offset::ZERO,
+20 | |         global_position: Offset::ZERO,
+21 | |         local_position: Offset::ZERO,
+22 | |         delta: Offset::ZERO,
 ...  |
-28 | |         kind: PointerKind::Touch,
-29 | |     };
+25 | |         kind: PointerKind::Touch,
+26 | |     };
    | |_____^
 
 error[E0639]: cannot create non-exhaustive struct using struct expression
-  --> tests/compile_fail/recognizer_details_are_non_exhaustive.rs:30:13
+  --> tests/compile_fail/recognizer_details_are_non_exhaustive.rs:27:13
    |
-30 |       let _ = DragEndDetails {
+27 |       let _ = DragEndDetails {
    |  _____________^
-31 | |         reason: GestureEndReason::Completed,
-32 | |         velocity: Velocity::ZERO,
-33 | |         global_velocity: Velocity::ZERO,
+28 | |         reason: GestureEndReason::Completed,
+29 | |         velocity: Velocity::ZERO,
+30 | |         global_velocity: Velocity::ZERO,
 ...  |
-36 | |         primary_velocity: 0.0,
-37 | |     };
+33 | |         primary_velocity: 0.0,
+34 | |     };
    | |_____^
 
 error[E0639]: cannot create non-exhaustive struct using struct expression
-  --> tests/compile_fail/recognizer_details_are_non_exhaustive.rs:38:13
+  --> tests/compile_fail/recognizer_details_are_non_exhaustive.rs:35:13
    |
-38 |       let _ = ScaleStartDetails {
+35 |       let _ = ScaleStartDetails {
    |  _____________^
-39 | |         focal_point: Offset::ZERO,
-40 | |         local_focal_point: Offset::ZERO,
-41 | |         pointer_count: 2,
-42 | |     };
+36 | |         focal_point: Offset::ZERO,
+37 | |         local_focal_point: Offset::ZERO,
+38 | |         pointer_count: 2,
+39 | |     };
    | |_____^
 
 error[E0639]: cannot create non-exhaustive struct using struct expression
-  --> tests/compile_fail/recognizer_details_are_non_exhaustive.rs:43:13
+  --> tests/compile_fail/recognizer_details_are_non_exhaustive.rs:40:13
    |
-43 |       let _ = ScaleUpdateDetails {
+40 |       let _ = ScaleUpdateDetails {
    |  _____________^
-44 | |         focal_point: Offset::ZERO,
-45 | |         local_focal_point: Offset::ZERO,
-46 | |         scale: 1.0,
+41 | |         focal_point: Offset::ZERO,
+42 | |         local_focal_point: Offset::ZERO,
+43 | |         scale: 1.0,
 ...  |
-50 | |         pointer_count: 2,
-51 | |     };
+47 | |         pointer_count: 2,
+48 | |     };
    | |_____^
 
 error[E0639]: cannot create non-exhaustive struct using struct expression
-  --> tests/compile_fail/recognizer_details_are_non_exhaustive.rs:52:13
+  --> tests/compile_fail/recognizer_details_are_non_exhaustive.rs:49:13
    |
-52 |       let _ = ScaleEndDetails {
+49 |       let _ = ScaleEndDetails {
    |  _____________^
-53 | |         focal_point: Offset::ZERO,
-54 | |         scale: 1.0,
-55 | |         rotation: 0.0,
-56 | |         velocity: 0.0,
-57 | |     };
+50 | |         focal_point: Offset::ZERO,
+51 | |         scale: 1.0,
+52 | |         rotation: 0.0,
+53 | |         velocity: 0.0,
+54 | |     };
    | |_____^

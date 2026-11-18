@@ -9,14 +9,18 @@ use std::{
 };
 
 use flui_foundation::geometry::Offset;
+use flui_foundation::{ManualClock, MonotonicClock};
 use flui_interaction::{
-    CancelOutcome, GestureArena, GestureArenaMember, GestureRecognizer, GestureSettings,
-    LongPressEndDetails, LongPressGestureRecognizer, LongPressMoveUpdateDetails, ManualClock,
-    MonotonicClock, MultiTapGestureRecognizer, PointerId,
     events::{
         PointerButton, PointerEvent, PointerKind, PointerMove, PointerPosition, PointerSample,
         make_down_event_for_id_with_button, make_up_event_for_id,
     },
+    gesture::{
+        CancelOutcome, GestureArena, GestureArenaMember, GestureRecognizer, GestureSettings,
+        LongPressEndDetails, LongPressGestureRecognizer, LongPressMoveUpdateDetails,
+        MultiTapGestureRecognizer,
+    },
+    ids::PointerId,
     pointer::PointerDispatch,
 };
 
@@ -383,7 +387,7 @@ fn next_multi_tap_after_a_callback_panic() {
     let callback_taps = Rc::clone(&taps);
     let recognizer = MultiTapGestureRecognizer::builder(
         GestureArena::new(),
-        flui_interaction::MultiTapCount::TWO,
+        flui_interaction::gesture::MultiTapCount::TWO,
     )
     .on_multi_tap(move |_| {
         callback_taps.set(callback_taps.get() + 1);
@@ -414,12 +418,14 @@ fn incomplete_multi_tap_times_out_on_the_owner_frame() {
     let arena = GestureArena::with_clock(Arc::new(clock.clone()));
     let cancellations = Rc::new(Cell::new(0));
     let callback_cancellations = Rc::clone(&cancellations);
-    let recognizer =
-        MultiTapGestureRecognizer::builder(arena.clone(), flui_interaction::MultiTapCount::TWO)
-            .on_multi_tap_cancel(move |_| {
-                callback_cancellations.set(callback_cancellations.get() + 1);
-            })
-            .build();
+    let recognizer = MultiTapGestureRecognizer::builder(
+        arena.clone(),
+        flui_interaction::gesture::MultiTapCount::TWO,
+    )
+    .on_multi_tap_cancel(move |_| {
+        callback_cancellations.set(callback_cancellations.get() + 1);
+    })
+    .build();
     recognizer.add_pointer(PointerDispatch::at_root(&down(51)));
     assert!(arena.has_pending_deadlines());
     clock.advance(Duration::from_millis(101));
@@ -440,7 +446,7 @@ fn multi_tap_center_stays_finite_at_admitted_coordinate_extremes() {
         let captured = Rc::clone(&details);
         let recognizer = MultiTapGestureRecognizer::builder(
             GestureArena::new(),
-            flui_interaction::MultiTapCount::TWO,
+            flui_interaction::gesture::MultiTapCount::TWO,
         )
         .on_multi_tap(move |tap| *captured.borrow_mut() = Some(tap))
         .build();
@@ -617,11 +623,13 @@ fn multi_tap_needs_its_contacts_down_together() {
         let arena = GestureArena::binding_driven(Arc::new(clock.clone()));
         let (taps, cancels) = (Rc::new(Cell::new(0)), Rc::new(Cell::new(0)));
         let (t, c) = (Rc::clone(&taps), Rc::clone(&cancels));
-        let recognizer =
-            MultiTapGestureRecognizer::builder(arena.clone(), flui_interaction::MultiTapCount::TWO)
-                .on_multi_tap(move |_| t.set(t.get() + 1))
-                .on_multi_tap_cancel(move |_| c.set(c.get() + 1))
-                .build();
+        let recognizer = MultiTapGestureRecognizer::builder(
+            arena.clone(),
+            flui_interaction::gesture::MultiTapCount::TWO,
+        )
+        .on_multi_tap(move |_| t.set(t.get() + 1))
+        .on_multi_tap_cancel(move |_| c.set(c.get() + 1))
+        .build();
         for &(contact, lifts, elapsed) in script {
             clock.advance(Duration::from_millis(elapsed));
             let at = Offset::new(100.0 * contact as f64, 0.0);

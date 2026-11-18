@@ -54,7 +54,8 @@ fn shown() -> (HeadlessHost, HeadlessDevAgent, AgentWindow, Seen) {
     let seen: Seen = Arc::default();
     let log = |name: &'static str| {
         let seen = Arc::clone(&seen);
-        move |_: &mut flui_view::EventContext<'_>, _: flui_interaction::PointerDispatch<'_>| {
+        move |_: &mut flui_view::EventContext<'_>,
+              _: flui_interaction::pointer::PointerDispatch<'_>| {
             seen.lock().push(name);
         }
     };

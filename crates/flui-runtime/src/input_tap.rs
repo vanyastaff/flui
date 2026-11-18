@@ -30,7 +30,7 @@ use std::sync::Arc;
 
 use flui_foundation::panic::payload_text;
 use flui_foundation::{IdExhausted, IdMint, InputSequenceId};
-use flui_interaction::PointerEvent;
+use flui_interaction::events::PointerEvent;
 use flui_platform::PlatformInput;
 
 use crate::HostInput;

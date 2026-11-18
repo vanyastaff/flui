@@ -137,6 +137,7 @@ pub mod platform {
         pub use flui_platform::capability::IntentFrame;
         pub use flui_platform::capability::InvalidResultKey;
         pub use flui_platform::capability::JniFrame;
+        pub use flui_platform::capability::MainThreadRefused;
         pub use flui_platform::capability::OwnerPoster;
         pub use flui_platform::capability::OwnerRetired;
         pub use flui_platform::capability::Plugin;
@@ -200,69 +201,69 @@ pub mod platform {
 /// `SwipeGestureRecognizer` is the built-in a package's edge or fling gesture
 /// composes with.
 pub mod interaction {
-    pub use flui_interaction::ArenaMembership;
-    pub use flui_interaction::AxisLock;
-    pub use flui_interaction::BeginContactError;
-    pub use flui_interaction::CancelOutcome;
-    pub use flui_interaction::ClipboardBackend;
-    pub use flui_interaction::ClipboardCapability;
-    pub use flui_interaction::ClipboardHandle;
-    pub use flui_interaction::ContactEnd;
-    pub use flui_interaction::ContactId;
-    pub use flui_interaction::ContactSnapshot;
-    pub use flui_interaction::DragDownDetails;
-    pub use flui_interaction::GestureArena;
-    pub use flui_interaction::GestureArenaEntry;
-    pub use flui_interaction::GestureArenaMember;
-    pub use flui_interaction::GestureDisposition;
-    pub use flui_interaction::GestureEndReason;
-    pub use flui_interaction::GestureObservation;
-    pub use flui_interaction::GestureObserver;
-    pub use flui_interaction::GestureProfiles;
-    pub use flui_interaction::GestureRecognizer;
-    pub use flui_interaction::GestureSettings;
-    pub use flui_interaction::GestureSettingsProvider;
-    #[cfg(feature = "unstable-input")]
-    pub use flui_interaction::HapticObserver;
-    #[cfg(feature = "unstable-input")]
-    pub use flui_interaction::HapticsHandle;
-    pub use flui_interaction::ObserverHandle;
-    pub use flui_interaction::PhysicalEdge;
-    pub use flui_interaction::PointerDispatch;
-    pub use flui_interaction::PointerEvent;
-    pub use flui_interaction::PointerEventExt;
-    pub use flui_interaction::PointerId;
-    pub use flui_interaction::PointerKind;
-    pub use flui_interaction::PointerKindSet;
-    pub use flui_interaction::PrimaryClaim;
-    pub use flui_interaction::PrimaryClaimId;
-    pub use flui_interaction::PrimaryClaims;
-    pub use flui_interaction::PrimaryContact;
-    pub use flui_interaction::PrimarySelectionBackend;
-    pub use flui_interaction::PrimarySelectionCapability;
-    pub use flui_interaction::PrimarySelectionHandle;
-    pub use flui_interaction::SelectionText;
-    pub use flui_interaction::SwipeDetails;
-    pub use flui_interaction::SwipeGestureRecognizer;
-    pub use flui_interaction::SwipeStart;
-    pub use flui_interaction::TransformLock;
-    pub use flui_interaction::cancel_all;
+    pub use flui_interaction::events::PointerEvent;
+    pub use flui_interaction::events::PointerEventExt;
     pub use flui_interaction::focus::FocusNode;
     pub use flui_interaction::focus::FocusNodeChangeCallback;
+    pub use flui_interaction::gesture::ArenaMembership;
+    pub use flui_interaction::gesture::AxisLock;
+    pub use flui_interaction::gesture::BeginContactError;
+    pub use flui_interaction::gesture::CancelOutcome;
     pub use flui_interaction::gesture::CompositionBranch;
     pub use flui_interaction::gesture::CompositionError;
     pub use flui_interaction::gesture::CompositionKind;
+    pub use flui_interaction::gesture::ContactEnd;
+    pub use flui_interaction::gesture::ContactId;
+    pub use flui_interaction::gesture::ContactSnapshot;
     pub use flui_interaction::gesture::ContestCancel;
+    pub use flui_interaction::gesture::DragDownDetails;
+    pub use flui_interaction::gesture::GestureArena;
+    pub use flui_interaction::gesture::GestureArenaEntry;
+    pub use flui_interaction::gesture::GestureArenaMember;
     pub use flui_interaction::gesture::GestureBranches;
     pub use flui_interaction::gesture::GestureComposition;
     pub use flui_interaction::gesture::GestureContest;
+    pub use flui_interaction::gesture::GestureDisposition;
+    pub use flui_interaction::gesture::GestureEndReason;
+    pub use flui_interaction::gesture::GestureObservation;
+    pub use flui_interaction::gesture::GestureObserver;
+    pub use flui_interaction::gesture::GestureProfiles;
+    pub use flui_interaction::gesture::GestureRecognizer;
+    pub use flui_interaction::gesture::GestureSettings;
+    pub use flui_interaction::gesture::GestureSettingsProvider;
     pub use flui_interaction::gesture::MotionRole;
     pub use flui_interaction::gesture::ObservedComposition;
     pub use flui_interaction::gesture::ObservedMember;
+    pub use flui_interaction::gesture::ObserverHandle;
     pub use flui_interaction::gesture::PanClaim;
+    pub use flui_interaction::gesture::PhysicalEdge;
+    pub use flui_interaction::gesture::PrimaryContact;
     pub use flui_interaction::gesture::RejectionReason;
     pub use flui_interaction::gesture::SequencedBranch;
+    pub use flui_interaction::gesture::SwipeDetails;
+    pub use flui_interaction::gesture::SwipeGestureRecognizer;
+    pub use flui_interaction::gesture::SwipeStart;
+    pub use flui_interaction::gesture::TransformLock;
+    pub use flui_interaction::gesture::cancel_all;
+    #[cfg(feature = "unstable-input")]
+    pub use flui_interaction::haptics::HapticObserver;
+    #[cfg(feature = "unstable-input")]
+    pub use flui_interaction::haptics::HapticsHandle;
+    pub use flui_interaction::ids::PointerId;
+    pub use flui_interaction::pointer::PointerDispatch;
+    pub use flui_interaction::text_input::ClipboardBackend;
+    pub use flui_interaction::text_input::ClipboardCapability;
+    pub use flui_interaction::text_input::ClipboardHandle;
+    pub use flui_interaction::text_input::PrimaryClaim;
+    pub use flui_interaction::text_input::PrimaryClaimId;
+    pub use flui_interaction::text_input::PrimaryClaims;
+    pub use flui_interaction::text_input::PrimarySelectionBackend;
+    pub use flui_interaction::text_input::PrimarySelectionCapability;
+    pub use flui_interaction::text_input::PrimarySelectionHandle;
+    pub use flui_interaction::text_input::SelectionText;
     pub use flui_platform::EventTime;
+    pub use flui_platform::input_capabilities::PointerKindSet;
+    pub use flui_platform::pointer::PointerKind;
 
     /// Drag-and-drop (ADR-0211): what a source widget starts through the
     /// presentation's `DragAndDrop` and what a receiver answers, the surface

@@ -9,7 +9,7 @@ use super::{
     command::{SlotConfig, SlotTarget},
 };
 use crate::{
-    FrameLatency, UnconfiguredSurface,
+    FrameLatency, ProbedDevice, UnconfiguredSurface,
     error::{EngineError, EngineResult},
     raster::PresentDisposition,
 };
@@ -138,6 +138,17 @@ pub trait RasterBackend {
     /// No device could be made; the device stays lost.
     fn rebuild_device(&mut self) -> EngineResult<Vec<(SlotId, EngineError)>>;
 
+    /// Adopt `device`, which the owner's probe answered in an instance of
+    /// its own, in place of a device whose rebuilds were given up, and
+    /// configure each slot on it as [`rebuild_device`](Self::rebuild_device)
+    /// does (ADR-0305 §8). Every window slot's surface was made on the
+    /// instance this replaces and is dropped: the owner sends each window
+    /// another, made with the probe's factory, in a
+    /// [`RasterCommand::Restore`](super::RasterCommand::Restore).
+    ///
+    /// Answers the slots the new device cannot serve otherwise, each with why.
+    fn adopt_device(&mut self, device: ProbedDevice) -> Vec<(SlotId, EngineError)>;
+
     /// Whether [`rebuild_device`](Self::rebuild_device) can succeed where the
     /// executor runs. One that cannot (the web, whose device request is a
     /// future the owner spawns) is given up at the first due attempt instead
@@ -213,6 +224,10 @@ impl<B: RasterBackend + ?Sized> RasterBackend for Box<B> {
 
     fn rebuild_device(&mut self) -> EngineResult<Vec<(SlotId, EngineError)>> {
         (**self).rebuild_device()
+    }
+
+    fn adopt_device(&mut self, device: ProbedDevice) -> Vec<(SlotId, EngineError)> {
+        (**self).adopt_device(device)
     }
 
     fn rebuilds_inline(&self) -> bool {

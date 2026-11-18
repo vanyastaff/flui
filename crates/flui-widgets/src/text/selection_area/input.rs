@@ -13,12 +13,16 @@ use std::rc::{Rc, Weak};
 use flui_foundation::geometry::{Matrix4, Offset, Rect};
 use flui_foundation::panic::FirstPanic;
 use flui_interaction::{
-    GestureRecognizer, KeyEventResult, LongPressGestureRecognizer, PointerKindSet,
-    TapAndDragGestureRecognizer, TapGestureRecognizer,
+    focus::KeyEventResult,
+    gesture::{
+        GestureRecognizer, LongPressGestureRecognizer, TapAndDragGestureRecognizer,
+        TapGestureRecognizer,
+    },
 };
 use flui_objects::RenderParagraph;
 use flui_painting::text_boundaries;
 use flui_painting::typography::{LineMetrics, TextAffinity, TextPosition};
+use flui_platform::input_capabilities::PointerKindSet;
 use flui_platform::keyboard::{Key, KeyEvent, KeyState, Modifiers, NamedKey};
 use flui_rendering::hit_testing::{HitTestBehavior, PointerEvent};
 use flui_rendering::semantics::{DocumentPosition, DocumentSelection};

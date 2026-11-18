@@ -9,7 +9,7 @@ use std::{
 };
 
 use flui_foundation::{ElementId, RenderId};
-use flui_interaction::FocusManager;
+use flui_interaction::focus::FocusManager;
 
 use super::build_context::{BuildContext, LifecycleContext};
 use crate::{
@@ -73,7 +73,7 @@ pub(crate) struct BuildCapabilities {
     pub(crate) flush_registry: Option<crate::flush_registry::FlushRegistry>,
     /// The UI runtime's fresh-hit-test capability, narrowed from its interaction
     /// dispatch handle.
-    pub(crate) hit_test_handle: Option<flui_interaction::HitTestHandle>,
+    pub(crate) hit_test_handle: Option<flui_interaction::pointer::HitTestHandle>,
     /// The render tree this element is mounted in, cloned from its own
     /// `ElementCore` — see `make_build_ctx` for why not from the tree node.
     pub(crate) pipeline_owner: Option<flui_rendering::pipeline::PipelineCell>,
@@ -410,7 +410,7 @@ impl LifecycleContext for LiveBuildContext<'_> {
     fn post_frame_handle(&self) -> Option<flui_scheduler::PostFrameHandle> {
         self.capabilities.post_frame_handle.clone()
     }
-    fn text_input_handle(&self) -> Option<flui_interaction::TextInputHandle> {
+    fn text_input_handle(&self) -> Option<flui_interaction::text_input::TextInputHandle> {
         self.capabilities.presentation.text_input.clone()
     }
     fn capability_erased(
@@ -424,10 +424,12 @@ impl LifecycleContext for LiveBuildContext<'_> {
     fn announcer(&self) -> Option<flui_rendering::semantics::Announcer> {
         self.capabilities.presentation.announcer.clone()
     }
-    fn assistive_focus_support(&self) -> flui_rendering::semantics::AssistiveFocusSupport {
+    fn assistive_focus_support(
+        &self,
+    ) -> flui_rendering::semantics::platform::AssistiveFocusSupport {
         self.capabilities.presentation.assistive_focus
     }
-    fn haptics(&self) -> Option<flui_interaction::HapticsHandle> {
+    fn haptics(&self) -> Option<flui_interaction::haptics::HapticsHandle> {
         let handle = self.capabilities.presentation.haptics.clone()?;
         Some(crate::haptics_mode::scoped(self, handle))
     }
@@ -449,7 +451,7 @@ impl LifecycleContext for LiveBuildContext<'_> {
     ) -> Option<crate::flush_registry::FlushRegistry> {
         self.capabilities.flush_registry.clone()
     }
-    fn hit_test_handle(&self) -> Option<flui_interaction::HitTestHandle> {
+    fn hit_test_handle(&self) -> Option<flui_interaction::pointer::HitTestHandle> {
         self.capabilities.hit_test_handle.clone()
     }
     fn keep_alive_lease(&self) -> crate::owner::KeepAliveLease {

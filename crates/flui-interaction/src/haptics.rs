@@ -628,7 +628,7 @@ impl HapticsHost {
     /// [`deadline_factor`](HapticsHostBuilder::deadline_factor) and
     /// [`refresh_period`](HapticsHostBuilder::refresh_period) say otherwise.
     pub fn builder(
-        binding: &crate::GestureBinding,
+        binding: &crate::binding::GestureBinding,
         actuator: impl Fn() -> Option<Arc<dyn PlatformHaptics>> + 'static,
     ) -> HapticsHostBuilder {
         HapticsHostBuilder {

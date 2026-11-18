@@ -1,8 +1,5 @@
 use flui_interaction::gesture::GestureContest;
-use flui_interaction::{
-    CancelOutcome, GestureArenaMember, GestureRecognizer, MultiDragHandle,
-    pointer::PointerDispatch,
-};
+use flui_interaction::{gesture::{CancelOutcome, GestureArenaMember, GestureRecognizer, MultiDragHandle}, pointer::PointerDispatch};
 
 struct ExternalRecognizer;
 

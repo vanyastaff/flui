@@ -502,7 +502,7 @@ pub(crate) fn plain_wheel_pans_the_viewer_then_leaves_its_edge_to_the_list() {
             .child(SizedBox::new(300.0, 1000.0).child(viewer)),
         tight(300.0, 300.0),
     );
-    let idle = flui_interaction::GestureSettings::default().contactless_latch_idle();
+    let idle = flui_interaction::gesture::GestureSettings::default().contactless_latch_idle();
     laid.dispatch_pointer_event(&wheel(40.0, Modifiers::NONE));
     assert_eq!(
         transform.value().translation_component().1,

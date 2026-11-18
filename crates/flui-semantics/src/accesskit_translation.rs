@@ -30,7 +30,6 @@ use crate::attributes::{RareAttributes, SemanticsAttributes};
 use crate::collection::{Collection, SetSize, SortDirection};
 use crate::identity::AccessibilityNodeId;
 use crate::node::SemanticsNode;
-use crate::properties::AttributedString;
 use crate::relation::{SemanticsAnchor, SemanticsRelation};
 use crate::role::{LiveSetting, SemanticsRole};
 use crate::states::{AutoComplete, Current, HasPopup, Invalid, States, Toggled};
@@ -721,21 +720,10 @@ pub(crate) fn to_node(data: &PublishView<'_>) -> Node {
         // Resolved against the anchor index by `to_published_node`.
         anchors: _,
         relations: _,
-        // Framework-side: merge bookkeeping and traversal order, never
-        // published as properties.
-        tags: _,
+        // Framework-side: traversal order, never published as a property.
         sort_key: _,
-        hint_overrides: _,
-        scroll_index: _,
         // Published with the `CustomAction` bit below.
         custom_actions,
-        // Unpublished: AccessKit has no adjacent-value, platform-view or
-        // text-length property.
-        increased_value: _,
-        decreased_value: _,
-        platform_view_id: _,
-        max_value_length: _,
-        current_value_length: _,
         // Resolved against the runs beneath the node by `publish_view`.
         document_selection: _,
         // Resolved against the enclosing text's runs by `publish_view`.
@@ -831,8 +819,8 @@ pub(crate) fn to_node(data: &PublishView<'_>) -> Node {
     }
     if let Some(direction) = data.attrs.text_direction {
         node.set_text_direction(match direction {
-            crate::properties::TextDirection::Ltr => TextDirection::LeftToRight,
-            crate::properties::TextDirection::Rtl => TextDirection::RightToLeft,
+            flui_foundation::TextDirection::Ltr => TextDirection::LeftToRight,
+            flui_foundation::TextDirection::Rtl => TextDirection::RightToLeft,
         });
     }
 
@@ -967,8 +955,8 @@ pub(crate) fn text_run_nodes(attrs: &SemanticsAttributes) -> Vec<(NodeId, Node)>
             node.set_character_widths(run.character_widths());
             node.set_word_starts(run.word_starts());
             node.set_text_direction(match run.direction() {
-                crate::properties::TextDirection::Ltr => TextDirection::LeftToRight,
-                crate::properties::TextDirection::Rtl => TextDirection::RightToLeft,
+                flui_foundation::TextDirection::Ltr => TextDirection::LeftToRight,
+                flui_foundation::TextDirection::Rtl => TextDirection::RightToLeft,
             });
             let rect = run.rect();
             node.set_bounds(Rect {
@@ -1060,7 +1048,7 @@ impl AnchorTarget {
     /// `node` as a relation target, published under `identity`.
     pub(crate) fn of(node: &SemanticsNode, identity: AccessibilityNodeId) -> Self {
         let attrs = node.config().attributes();
-        let label = attrs.label.as_ref().map(AttributedString::as_str);
+        let label = attrs.label.as_deref();
         // A node with no role and a label publishes as static text, named by
         // its value (`to_node`).
         let static_text =

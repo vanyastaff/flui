@@ -1,6 +1,6 @@
 use std::num::NonZeroU32;
 
-use flui_interaction::{GestureBinding, HapticsHost};
+use flui_interaction::{binding::GestureBinding, haptics::HapticsHost};
 
 fn main() {
     let binding = GestureBinding::new();

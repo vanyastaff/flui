@@ -8,7 +8,7 @@
 //! node whose slot was reused is a different id: it is `gone` and a new one
 //! `appeared`, never a change.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 use flui_protocol::{
     snapshot::ChangedField, snapshot::NodeChange, snapshot::SnapshotDelta, tree::ElementId,
@@ -29,7 +29,7 @@ pub struct TreeSnapshot {
     revision: TreeRevision,
     /// The nodes without children, in tree order.
     nodes: Vec<Node>,
-    by_id: HashMap<ElementId, usize>,
+    by_id: FxHashMap<ElementId, usize>,
     /// The read stopped at the node budget.
     truncated: bool,
 }

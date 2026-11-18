@@ -299,6 +299,7 @@ pub(crate) mod gamma;
 /// (ADR-0244 §1).
 mod gpu_backend;
 mod gpu_context;
+mod gpu_probe;
 /// Windowless GPU capture: rasterize a `LayerTree` to an offscreen texture and
 /// read the pixels back (golden-image / screenshot tooling).
 pub mod headless;
@@ -354,6 +355,8 @@ mod pipeline_warmup;
 mod pixel_shift;
 mod portable_coverage;
 mod profiler;
+/// Values in the order of their last use, for least-recently-used eviction.
+mod recency;
 mod recording_budget;
 /// A chunk's IR kept past its frame and replayed for an unchanged chunk drawn
 /// under the same transform and ambient state (ADR-0304 §9).
@@ -390,6 +393,8 @@ mod surface_factory;
 mod surface_lease;
 mod surface_pacing;
 mod surface_present;
+/// A hash map that counts, in tests, the entries each access touches.
+mod tallied_map;
 mod tessellator;
 pub(crate) mod texture_cache;
 mod texture_pool;
@@ -508,15 +513,16 @@ pub use raster::PresentDisposition;
 #[cfg(not(target_arch = "wasm32"))]
 pub use raster_executor::ExecutorHandle;
 pub use raster_executor::{
-    DETACH_DEADLINE, DeviceHealth, ExecutorFailure, ExecutorHealth, RasterBackend, RasterCommand,
-    RasterExecutor, RasterPlacement, RasterSendError, RasterSender, RasterVerdict, SendReceipt,
-    SlotChange, SlotConfig, SlotFailure, SlotId, SlotPhase, SlotRecord, SlotSettlement, SlotSize,
-    SlotSurface, SlotTarget, SlotVisibility, SurfaceHold, TurnOutcome,
+    DETACH_DEADLINE, DeviceHealth, DeviceRetries, ExecutorFailure, ExecutorHealth, RasterBackend,
+    RasterCommand, RasterExecutor, RasterPlacement, RasterSendError, RasterSender, RasterVerdict,
+    SendReceipt, SlotChange, SlotConfig, SlotFailure, SlotId, SlotPhase, SlotRecord,
+    SlotSettlement, SlotSize, SlotSurface, SlotTarget, SlotVisibility, SurfaceHold, TurnOutcome,
 };
 // Windowless capture (golden-image / screenshot tooling).
 pub use headless::HeadlessRenderer;
 // The one GPU context every slot renders through (ADR-0305 §1).
 pub use gpu_context::{GpuBootstrap, GpuContext};
+pub use gpu_probe::{GpuProbe, ProbedDevice};
 pub use painter::WgpuPainter;
 pub use surface_factory::{SurfaceFactory, UnconfiguredSurface};
 // Renderer (the one externally-consumed wgpu/* type)

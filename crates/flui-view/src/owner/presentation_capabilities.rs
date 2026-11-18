@@ -22,7 +22,7 @@ pub struct PresentationCapabilities {
     /// The presentation's IME/text-input attach-detach capability, minted by
     /// its `TextInputOwner`. Absent on a headless tree, which has nothing
     /// to deliver IME events to.
-    pub text_input: Option<flui_interaction::TextInputHandle>,
+    pub text_input: Option<flui_interaction::text_input::TextInputHandle>,
     /// Where this presentation's widgets acquire platform capabilities: the
     /// UI runtime's providers, asked with this presentation's window
     /// (ADR-0152). Absent on a bare owner, which answers `NotRegistered`.
@@ -32,10 +32,10 @@ pub struct PresentationCapabilities {
     pub announcer: Option<flui_rendering::semantics::Announcer>,
     /// Whether the presentation's accessibility adapter says where the
     /// assistive technology's cursor is. `Unreported` on a headless tree.
-    pub assistive_focus: flui_rendering::semantics::AssistiveFocusSupport,
+    pub assistive_focus: flui_rendering::semantics::platform::AssistiveFocusSupport,
     /// The presentation's haptics host. Widgets acquire it through
     /// `LifecycleContext::haptics`, which applies the enclosing `HapticsMode`.
-    pub haptics: Option<flui_interaction::HapticsHandle>,
+    pub haptics: Option<flui_interaction::haptics::HapticsHandle>,
     /// The presentation's drag-and-drop over its runtime's drag sessions.
     pub drag_and_drop: Option<flui_interaction::drag::DragAndDrop>,
     /// The presentation's external-texture registry.

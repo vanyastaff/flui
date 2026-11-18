@@ -3,7 +3,7 @@ use std::{cell::RefCell, panic::resume_unwind, rc::Rc, sync::Arc, time::Duration
 use flui_foundation::{
     MonotonicClock, PresentationId, geometry::DevicePixelRatio, panic::FirstPanic,
 };
-use flui_interaction::GestureProfiles;
+use flui_interaction::gesture::GestureProfiles;
 use flui_platform::{
     DisplayId, GestureGeometry, GesturePreferences, PreferenceQueryError, SystemPreferences,
 };
@@ -564,13 +564,14 @@ impl UiRuntime {
 #[cfg(test)]
 pub(crate) fn checked_geometry_refusal_acknowledges_the_query_and_keeps_safe_admission() {
     use flui_foundation::geometry::Offset;
-    use flui_interaction::GestureSettings;
-    use flui_interaction::{
-        GestureArena, GestureRecognizer, TapGestureRecognizer, pointer::PointerDispatch,
-    };
+    use flui_interaction::gesture::GestureSettings;
     use flui_interaction::{
         events::{PointerEventExt, PointerKind},
         testing::input::{pointer_down, pointer_move, pointer_up},
+    };
+    use flui_interaction::{
+        gesture::{GestureArena, GestureRecognizer, TapGestureRecognizer},
+        pointer::PointerDispatch,
     };
     use flui_platform::Distance;
     use std::cell::Cell;

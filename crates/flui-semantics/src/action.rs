@@ -234,7 +234,7 @@ pub type AssistiveFocusHandler = Rc<dyn Fn(bool)>;
 ///
 /// The target uses the same stable [`AccessibilityNodeId`] exported in a
 /// published [`TreeUpdate`](crate::TreeUpdate), never the rebuild-local
-/// [`SemanticsId`](crate::SemanticsId). The presentation/ui_runtime target is
+/// [`SemanticsId`](flui_foundation::SemanticsId). The presentation/ui_runtime target is
 /// structural: an adapter receives the command capability for the
 /// presentation whose tree it exposes, so a raw process-global view ID is
 /// neither stored here nor resolved through a singleton.

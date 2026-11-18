@@ -15,8 +15,13 @@ use flui_interaction::events::{
     make_up_event_for_id,
 };
 use flui_interaction::{
-    ContactlessSource, EventPropagation, GestureArenaMember, GestureBinding, HitTestEntry,
-    HitTestResult, InputSurface, InteractionLane, PointerId, PointerRouteHandler, RenderId,
+    binding::{ContactlessSource, GestureBinding},
+    gesture::GestureArenaMember,
+    ids::{InputSurface, PointerId},
+    pointer::{
+        EventPropagation, HitTestEntry, HitTestResult, InteractionLane, PointerRouteHandler,
+        RenderId,
+    },
 };
 use flui_platform::pointer::ScrollPhase;
 use static_assertions::{assert_impl_all, assert_not_impl_any};
@@ -437,7 +442,7 @@ fn claiming_route(
     binding: &GestureBinding,
     after: impl Fn(&PointerEvent) + 'static,
 ) -> (HitTestResult, Heard, Box<dyn std::any::Any>) {
-    use flui_interaction::{DragAxis, DragGestureRecognizer, RecognizerSet};
+    use flui_interaction::gesture::{DragAxis, DragGestureRecognizer, RecognizerSet};
     let winner =
         DragGestureRecognizer::builder(binding.arena().clone(), DragAxis::Horizontal).build();
     let loser = DragGestureRecognizer::builder(binding.arena().clone(), DragAxis::Vertical).build();
@@ -567,15 +572,16 @@ fn a_contact_claimed_and_ended_in_a_nested_dispatch_cancels_its_rival() {
 /// waiting on a contest nobody will close.
 #[test]
 fn a_down_whose_hit_test_panics_still_closes_the_arena() {
-    use flui_interaction::GestureRecognizer as _;
+    use flui_interaction::gesture::GestureRecognizer as _;
 
     let lane = InteractionLane::try_new().expect("lane");
     let binding = GestureBinding::new();
     let contact = pointer(1);
     // A tap that reports taps joins the contact's arena.
-    let recognizer = flui_interaction::TapGestureRecognizer::builder(binding.arena().clone())
-        .on_tap(|_| {})
-        .build();
+    let recognizer =
+        flui_interaction::gesture::TapGestureRecognizer::builder(binding.arena().clone())
+            .on_tap(|_| {})
+            .build();
     let down =
         make_down_event_for_id(contact, Offset::new(4.0, 7.0), PointerKind::Touch).expect("down");
     recognizer.add_pointer(flui_interaction::pointer::PointerDispatch::at_root(&down));

@@ -120,13 +120,21 @@ trait depends on `flui-platform` instead.
   The Android host has no public platform name: it starts over the Activity
   the system hands only to `android_main`, through `android_platform(app)`.
 - **No public path names an OS type (ADR-0151 §8).** The crate's public API,
-  hidden items included, names from outside the workspace only the crates of
-  the `allow` list in `[package.metadata.flui.api-closure]` (the cursor, the
-  callback lock, the raw handles, the pointer assembly's buffers and the web's
-  `Instant`), on every target it builds a host for: `cargo xtask api-closure`
-  documents it for Linux, Windows and macOS with every feature and for iOS,
-  Android and wasm32. A list of what may be named fails closed: an OS binding
-  a dependency brings is a finding without anyone listing it. The windows a
+  hidden items included, names from outside the workspace only `cursor_icon`
+  (the contract's cursor), `parking_lot` (the lock the window's callback
+  setters hand out), `raw_window_handle`, `smallvec` (the pointer assembly's
+  inline buffers, hidden, for `tests/`) and `web_time` (the web's `Instant`),
+  on every target it builds a host for: Linux, Windows and macOS with every
+  feature, iOS, Android and wasm32 with their defaults. Beyond those crates:
+  every implementor of `flui-semantics`'
+  `PlatformAccessibility` (the windows' accessibility bridges) names AccessKit,
+  whose tree its methods take;
+  `android_platform` and `android_hands_over` (ADR-0366) take the system's
+  `android_activity` Activity; and
+  `NativeExecutor::from_tokio` borrows the application's `tokio` runtime
+  (ADR-0327 §3). No program checks the list before the first release
+  (ADR-0375): an OS binding a dependency brings is a finding of the reader.
+  The windows a
   host builds are crate-private: the platform hands out `Rc<dyn HostWindow>`,
   a raw window or display handle leaves through the window's `SurfaceTarget`,
   the host's `DisplayConnection` (`OwnerPlatform::display_connection`, from
@@ -4927,8 +4935,15 @@ held against `x11_xtest_mouse_and_wheel.jsonl`),
 `xtest_keys_reach_the_focused_window`,
 `losing_the_focus_ends_a_dead_key_and_releases_held_keys`,
 `a_window_follows_its_focus_when_a_handler_panics_at_its_loss` and
-`a_window_shows_the_cursor_it_asks_for`; the harness runs the X11 rows of the
-native recording contracts beside them. Tests of the window: the pure
+`a_window_shows_the_cursor_it_asks_for`, and the real window through the
+backend conformance table (`the_x11_window_input_conforms`, in
+`tests/x11_backend_conformance.rs`): XTest's pointer for the contact rows, a
+master pointer the server adds for the named device, the focus taken away for
+the platform's cancel and XTest's keys for the menu keys, with each row XTest
+cannot drive (touch, pen, pinch, a step's own stamp, a position that is not
+finite) and each row of an input method listed there with what it reports and
+why; the harness runs the X11 rows of the native recording contracts beside
+them. Tests of the window: the pure
 modules' tables
 (`what_the_window_manager_supports_is_what_a_window_honours`,
 `logical_numbers_become_x11_numbers_only_when_they_fit`,
@@ -5414,9 +5429,10 @@ major version, unknown fields skipped, an unknown variant a typed error); its
 schema is `flui-protocol`'s `native_recording`, which a reader such as the
 driver reads without this crate, and its codec is `journal::codec`
 (`journal/`, a crate-level module, since it names the input feature's model
-and the Win32 touchpad assembler its replay drives), built only with
-`native-capture` or `testing`, so serde never enters the
-backend graph. The header declares every device label its rows read, with the
+and the Win32 touchpad assembler its replay drives), built only in a debug
+build with `native-capture`, or with `testing`, so serde never enters the
+backend graph and a release build compiles no journal, though `flui-app`
+turns the feature on in every build (ADR-0151 §16). The header declares every device label its rows read, with the
 kinds they read it as, and the reader refuses a row that names another.
 
 Recordings are captured in debug builds with the `native-capture` feature:
@@ -5578,19 +5594,29 @@ order no delivery writes (a second close, a request after the close, `closing`
 with nothing granted, a request after a grant, a cause that contradicts the
 requests). The in-process writers never write what their reader refuses, and
 the recorder never holds more: `Recorder` counts each row's bytes and the rows
-as they arrive, under the rule `NativeRecording::write` applies (`CutBudget`),
+as they arrive, under the rule `NativeRecording::write` applies
+(`flui_protocol::native_recording::Budget`, which the reader counts its lines
+with too),
 replaces the first row past either bound with a `cut` row naming why and keeps
 nothing its source reports after it, so a recording holds at most `MAX_ROWS`
-rows and `MAX_RECORDING_BYTES` of lines however long the capture runs.
-`NativeRecording::write` writes a recording that fits whole, and otherwise ends
-it at the last row that fits with room for a `cut` row, encoding nothing past
-it, so a value the format does not mirror past the cut does not fail the write;
-a header that grew after the recorder's first row (a device it declares) can
-move that cut a few rows earlier. A line sink drops what a source reports after
-its cut. `flui record --native` in `flui-cli` writes
-lines as they come and applies neither bound (`docs/gaps.md`). A replay of a cut
-recording replays every row before the cut and returns `Replayed::Cut` with its
-line and reason, never plain success. When a window's store journal cannot be
+rows and `MAX_RECORDING_BYTES` of lines however long the capture runs; a row
+longer than a line may be is held as a `Row::Gap` of one row, counted like any
+row, so what the recorder holds always writes. A live writer never knows
+whether another row comes, so it keeps room for a cut after every row.
+`NativeRecording::write` holds every row: it checks its header first, refuses a
+header or a row longer than a line with `CodecError::LineTooLong` and nothing
+written, writes a recording within the bounds whole, and otherwise takes back
+rows from the first one past a bound until a `cut` row fits, encoding nothing
+past it, so a value the format does not mirror past the cut does not fail the
+write. A `Row::Gap` is written as the format's `gap` line, read back as one,
+and stops a replay with `ReplayError::Gap`. A line sink drops what a source
+reports after its cut. `flui record --native` in `flui-cli`, which writes a
+live stream's lines as they come, keeps the same `Budget`: a header longer than
+a line opens no file, each row is admitted with the bytes its header grows by
+to declare the row's devices, a row the file cannot hold on its own becomes a
+`gap`, and the first line past a full bound becomes a `cut` that ends the file.
+A replay of a cut recording replays every row before the cut and returns
+`Replayed::Cut` with its line and reason, never plain success. When a window's store journal cannot be
 kept (no owner slot left), its stream is cut (`store_journal`) instead of a host
 keying stores on its own. `StoreLock::replay_on` replays a lock under a
 synchronous lock of the recorded kind, restoring the found document first, and
@@ -5606,6 +5632,8 @@ lock kind and protected emptiness are checked before any call is built
 `a_store_lock_the_recording_joined_after_is_refused`,
 `close_rows_out_of_order_are_refused`, `a_recording_past_its_bound_is_written_cut`,
 `a_live_recording_past_its_bound_holds_one_cut_and_nothing_after`,
+`the_writer_refuses_a_line_no_reader_takes_and_writes_what_fits_whole`,
+`a_live_row_past_the_line_bound_is_held_as_a_gap`,
 `captured_store_locks_replay_to_the_document_they_left`,
 `a_protected_store_journals_nothing_of_its_content`,
 `a_protected_store_journals_one_row_whatever_was_typed`,

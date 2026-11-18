@@ -6,7 +6,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Duration;
 
-use flui_interaction::{HapticObserver, HapticsHandle};
+use flui_interaction::haptics::{HapticObserver, HapticsHandle};
 use flui_platform::haptics::{
     HapticOutcome, HapticPattern, HapticRequest, HapticTicket, HapticTiming,
 };

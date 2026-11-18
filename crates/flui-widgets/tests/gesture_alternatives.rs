@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use flui_foundation::TextDirection;
 use flui_foundation::geometry::{Axis, Offset};
-use flui_interaction::GestureProfiles;
+use flui_interaction::gesture::GestureProfiles;
 use flui_painting::styling::Color;
 use flui_platform::TargetPlatform;
 use flui_platform::keyboard::NamedKey;
@@ -349,7 +349,7 @@ fn menu_buttons(request: &MenuRequest, menu: &SharedSignal<Option<MenuRequest>>)
             let (item, menu) = (item.clone(), menu.clone());
             RawButton::new(
                 Semantics::new()
-                    .label(item.label().to_owned())
+                    .label(item.label())
                     .child(SizedBox::new(120.0, 30.0)),
             )
             .on_pressed(move |ctx| {
@@ -775,7 +775,7 @@ pub(crate) fn every_preset_opens_the_menu_by_its_pointer_trigger() {
                 .build()
         } else {
             let hold = GestureProfiles::preset(platform)
-                .for_kind(flui_interaction::PointerKind::Touch)
+                .for_kind(flui_platform::pointer::PointerKind::Touch)
                 .long_press_timeout()
                 + Duration::from_millis(50);
             TouchScript::new("long press")
@@ -1469,7 +1469,7 @@ impl ViewState<PageButtons> for PageButtonsState {
             let pager = view.pager.clone();
             RawButton::new(
                 Semantics::new()
-                    .label(label.to_owned())
+                    .label(label)
                     .anchor(anchor.clone())
                     .child(SizedBox::new(48.0, 48.0)),
             )

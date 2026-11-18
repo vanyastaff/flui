@@ -47,13 +47,17 @@ UI state.
 
 ```rust
 use std::{cell::Cell, rc::Rc};
+use flui_foundation::RenderId;
 use flui_foundation::geometry::Point;
+use flui_interaction::binding::GestureBinding;
+use flui_interaction::events::PointerEvent;
+use flui_interaction::gesture::{RecognizerSet, TapGestureRecognizer};
+use flui_interaction::ids::PointerId;
+use flui_interaction::pointer::{HitTestEntry, HitTestResult, InteractionLane};
 use flui_platform::EventTime;
-use flui_interaction::{
-    GestureBinding, HitTestEntry, HitTestResult, InteractionLane, PointerButton,
-    PointerButtons, PointerEvent,
-    PointerId, PointerSource, PointerKind, PointerPosition, PointerPress,
-    PointerRelease, PointerSample, RecognizerSet, RenderId, TapGestureRecognizer,
+use flui_platform::pointer::{
+    PointerButton, PointerButtons, PointerKind, PointerPosition, PointerPress, PointerRelease,
+    PointerSample, PointerSource,
 };
 
 let lane = InteractionLane::try_new()?;
@@ -133,7 +137,7 @@ filters apply only to Down; already admitted contacts still receive their
 terminal events. Keep strong recognizer ownership beside the attachment:
 
 ```rust
-use flui_interaction::{GestureArena, RecognizerSet, TapGestureRecognizer};
+use flui_interaction::gesture::{GestureArena, RecognizerSet, TapGestureRecognizer};
 
 let tap = TapGestureRecognizer::builder(GestureArena::new()).build();
 let mut attachments = RecognizerSet::default();
@@ -153,7 +157,7 @@ One presentation owns one manager. Retain the attachment while the node is
 mounted:
 
 ```rust
-use flui_interaction::{FocusManager, FocusNode};
+use flui_interaction::focus::{FocusManager, FocusNode};
 
 let manager = FocusManager::new();
 let node = FocusNode::new();
@@ -174,7 +178,7 @@ keep the manager alive. Presentation-wide handlers can instead use the explicit
 
 ```rust
 use std::rc::Rc;
-use flui_interaction::{FocusManager, KeyEventResult};
+use flui_interaction::focus::{FocusManager, KeyEventResult};
 
 let manager = FocusManager::new();
 let shortcut = manager.register_global_key_handler(Rc::new(|_event| {
@@ -205,7 +209,7 @@ at admission, so the meaning of a gesture does not change midway through it.
 
 ```rust
 use std::time::Duration;
-use flui_interaction::{GestureArena, GestureSettings, TapGestureRecognizer};
+use flui_interaction::gesture::{GestureArena, GestureSettings, TapGestureRecognizer};
 
 let settings = GestureSettings::default()
     .with_double_tap_timeout(Duration::from_millis(300))

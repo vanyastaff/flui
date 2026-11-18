@@ -31,9 +31,11 @@ use std::any::Any;
 use std::num::{NonZeroU32, NonZeroUsize};
 use std::rc::Rc;
 
-use flui_foundation::ChangeNotifier;
 use flui_foundation::geometry::{Axis, Offset};
-use flui_interaction::{InteractionDispatchError, LocalPayloadTarget, resolve_local_payload};
+use flui_foundation::{ChangeNotifier, TextDirection};
+use flui_interaction::pointer::{
+    InteractionDispatchError, LocalPayloadTarget, resolve_local_payload,
+};
 use flui_objects::{
     GatedCustomAction, RenderExcludeSemantics, RenderIndexedSemantics, RenderMergeSemantics,
     RenderSemanticsAnnotations, RenderSliverSemanticsAnnotations, SemanticsActionRoute,
@@ -44,7 +46,7 @@ use flui_rendering::{
         ActionCall, AutoComplete, CellPosition, Current, HasPopup, HeadingLevel, Invalid,
         LiveSetting, Reveal, ScrollUnit, SemanticsAction, SemanticsActionHandler, SemanticsAnchor,
         SemanticsConfiguration, SemanticsRelation, SemanticsRole, SetSize, SortDirection,
-        TableShape, TextDirection, Toggled,
+        TableShape, Toggled,
     },
 };
 use flui_view::{
@@ -345,7 +347,7 @@ impl Semantics {
 
     /// Set the accessible label.
     #[must_use]
-    pub fn label(mut self, label: impl Into<flui_rendering::semantics::AttributedString>) -> Self {
+    pub fn label(mut self, label: impl AsRef<str>) -> Self {
         self.configuration.set_label(label);
         self
     }
@@ -381,14 +383,14 @@ impl Semantics {
 
     /// Set the accessible value.
     #[must_use]
-    pub fn value(mut self, value: impl Into<flui_rendering::semantics::AttributedString>) -> Self {
+    pub fn value(mut self, value: impl AsRef<str>) -> Self {
         self.configuration.set_value(value);
         self
     }
 
     /// Set the accessible hint.
     #[must_use]
-    pub fn hint(mut self, hint: impl Into<flui_rendering::semantics::AttributedString>) -> Self {
+    pub fn hint(mut self, hint: impl AsRef<str>) -> Self {
         self.configuration.set_hint(hint);
         self
     }
@@ -1564,7 +1566,7 @@ impl SliverSemantics {
     }
     /// Supplies the accessible label.
     #[must_use]
-    pub fn label(mut self, label: impl Into<flui_rendering::semantics::AttributedString>) -> Self {
+    pub fn label(mut self, label: impl AsRef<str>) -> Self {
         self.configuration.set_label(label);
         self
     }

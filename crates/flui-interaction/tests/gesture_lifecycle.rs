@@ -19,6 +19,7 @@ use std::{
     time::Duration,
 };
 
+use flui_foundation::ManualClock;
 use flui_foundation::geometry::Offset;
 use flui_interaction::events::{
     PointerButton, PointerEvent, PointerKind, make_down_event_for_id_with_button,
@@ -29,11 +30,16 @@ use flui_interaction::gesture::{
 };
 use flui_interaction::pointer::PointerDispatch;
 use flui_interaction::{
-    DoubleTapGestureRecognizer, DragAxis, DragGestureRecognizer, GestureBinding, GestureEndReason,
-    GestureRecognizer, HitTestResult, InteractionLane, LongPressGestureRecognizer, ManualClock,
-    MultiDragAxis, MultiDragEndDetails, MultiDragGestureRecognizer, MultiDragHandle,
-    MultiDragUpdateDetails, MultiTapGestureRecognizer, PointerId, ScaleGestureRecognizer,
-    TapAndDragGestureRecognizer, TapGestureRecognizer,
+    binding::GestureBinding,
+    gesture::{
+        DoubleTapGestureRecognizer, DragAxis, DragGestureRecognizer, GestureEndReason,
+        GestureRecognizer, LongPressGestureRecognizer, MultiDragAxis, MultiDragEndDetails,
+        MultiDragGestureRecognizer, MultiDragHandle, MultiDragUpdateDetails,
+        MultiTapGestureRecognizer, ScaleGestureRecognizer, TapAndDragGestureRecognizer,
+        TapGestureRecognizer,
+    },
+    ids::PointerId,
+    pointer::{HitTestResult, InteractionLane},
 };
 use proptest::prelude::*;
 
@@ -614,11 +620,15 @@ fn verdict_by_pointer_cannot_pick_a_tap_sequence() {
     let last = Rc::clone(&joined);
     let _observer = lane
         .arena
-        .observe(move |observation: &flui_interaction::GestureObservation| {
-            if let flui_interaction::GestureObservation::Joined { contest, .. } = observation {
-                last.set(Some(*contest));
-            }
-        })
+        .observe(
+            move |observation: &flui_interaction::gesture::GestureObservation| {
+                if let flui_interaction::gesture::GestureObservation::Joined { contest, .. } =
+                    observation
+                {
+                    last.set(Some(*contest));
+                }
+            },
+        )
         .expect("observer identity");
     let taps = counter();
     let doubles = counter();
@@ -735,9 +745,11 @@ fn a_held_earlier_contest_cannot_end_the_next_contact() {
     let holder = FirstContestHolder::join(&lane);
     let swipes = counter();
     let s = Rc::clone(&swipes);
-    let swipe = flui_interaction::SwipeGestureRecognizer::builder(
+    let swipe = flui_interaction::gesture::SwipeGestureRecognizer::builder(
         lane.arena.clone(),
-        flui_interaction::SwipeStart::Anywhere(flui_foundation::geometry::Axis::Horizontal),
+        flui_interaction::gesture::SwipeStart::Anywhere(
+            flui_foundation::geometry::Axis::Horizontal,
+        ),
     )
     .on_swipe(move |_| s.set(s.get() + 1))
     .build();
@@ -768,9 +780,10 @@ fn a_held_earlier_contest_cannot_end_the_next_contact() {
     let holder = FirstContestHolder::join(&lane);
     let starts = counter();
     let s = Rc::clone(&starts);
-    let force_press = flui_interaction::ForcePressGestureRecognizer::builder(lane.arena.clone())
-        .on_start(move |_| s.set(s.get() + 1))
-        .build();
+    let force_press =
+        flui_interaction::gesture::ForcePressGestureRecognizer::builder(lane.arena.clone())
+            .on_start(move |_| s.set(s.get() + 1))
+            .build();
     lane.join(&force_press);
     begin(
         &lane,
@@ -839,7 +852,7 @@ fn panicking_multi_tap_callback_leaves_the_next_pair_working() {
     let t = Rc::clone(&taps);
     let recognizer = MultiTapGestureRecognizer::builder(
         GestureArena::new(),
-        flui_interaction::MultiTapCount::TWO,
+        flui_interaction::gesture::MultiTapCount::TWO,
     )
     .on_multi_tap(move |_| {
         t.set(t.get() + 1);
@@ -1253,7 +1266,7 @@ fn tap_and_drag_release_uses_terminal_event_time() {
 }
 
 fn selected_velocity_cases(family: &str) {
-    use flui_interaction::{GestureSettings, gesture::VelocityEstimator};
+    use flui_interaction::gesture::{GestureSettings, VelocityEstimator};
 
     for (estimator, expected) in [
         (VelocityEstimator::LeastSquares, 500.0),

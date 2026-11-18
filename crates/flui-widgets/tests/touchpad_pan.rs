@@ -141,7 +141,8 @@ mod swipes {
     use std::time::Duration;
 
     use flui_foundation::geometry::{Axis, Offset};
-    use flui_interaction::{PhysicalEdge, PointerKind, SwipeGestureRecognizer, SwipeStart};
+    use flui_interaction::gesture::{PhysicalEdge, SwipeGestureRecognizer, SwipeStart};
+    use flui_platform::pointer::PointerKind;
     use flui_view::environment::GestureArenaScope;
     use flui_view::prelude::*;
     use flui_widgets::prelude::HitTestBehavior;
@@ -237,7 +238,8 @@ mod swipes {
 /// which starts where the cursor rests, not from an edge.
 pub(crate) fn a_touchpad_swipe_is_a_gesture_and_no_scroll() {
     use flui_foundation::geometry::{Axis, Offset};
-    use flui_interaction::{PhysicalEdge, PointerKind, SwipeStart};
+    use flui_interaction::gesture::{PhysicalEdge, SwipeStart};
+    use flui_platform::pointer::PointerKind;
 
     let anywhere = SwipeStart::Anywhere(Axis::Horizontal);
     let from_left = SwipeStart::FromEdge(PhysicalEdge::Left);

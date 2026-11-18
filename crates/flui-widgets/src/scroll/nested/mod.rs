@@ -38,10 +38,10 @@
 //!   deepest participant that consumes a non-zero part of the sequence's
 //!   first non-zero delta (the
 //!   leaf included; a leaf at its edge does not latch). Under the default
-//!   [`RemainderHandoff::NextSequence`](flui_interaction::RemainderHandoff)
+//!   [`RemainderHandoff::NextSequence`](flui_interaction::gesture::RemainderHandoff)
 //!   the remainder goes nowhere else for the rest of the sequence; an
 //!   ancestor moves on the next one. A preset that says
-//!   [`AtEdgeWithinSequence`](flui_interaction::RemainderHandoff::AtEdgeWithinSequence)
+//!   [`AtEdgeWithinSequence`](flui_interaction::gesture::RemainderHandoff::AtEdgeWithinSequence)
 //!   re-latches to the nearest consuming ancestor once the latched
 //!   participant consumes nothing at its edge, never back.
 //!   [`pre_scroll`](NestedScrollConnection::pre_scroll) is offered regardless
@@ -73,8 +73,9 @@ mod source;
 
 use std::rc::Rc;
 
+use flui_foundation::InputSequenceId;
 use flui_foundation::geometry::{Point, Vec2};
-use flui_interaction::{InputSequenceId, Velocity};
+use flui_interaction::gesture::Velocity;
 use flui_platform::pointer::{DeviceId, PointerKind};
 use flui_view::prelude::StatefulView;
 use flui_view::{BoxedView, BuildContext, IntoView, LifecycleContext, ViewExt, ViewState};

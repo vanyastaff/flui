@@ -14,10 +14,11 @@ use smallvec::SmallVec;
 use super::{PublishView, to_node};
 use crate::attributes::{RareAttributes, SemanticsAttributes};
 use crate::identity::AccessibilityNodeId;
-use crate::properties::{HeadingLevel, TextDirection};
+use crate::properties::HeadingLevel;
 use crate::role::{LiveSetting, SemanticsRole};
 use crate::states::{AutoComplete, Current, HasPopup, Invalid, States, Toggled};
 use crate::{CellPosition, NumericRange, SemanticsAction, SetSize, SortDirection, TableShape};
+use flui_foundation::TextDirection;
 use flui_foundation::geometry::Axis;
 
 /// The window root every row's node hangs under.
@@ -197,18 +198,8 @@ fn every_published_attribute_reads_through_the_consumer() {
         // `a_labelled_by_target_names_its_source_through_the_consumer`.
         anchors: _,
         relations: _,
-        // Framework-side: merge bookkeeping and traversal order.
-        tags: _,
+        // Framework-side: traversal order, never published as a property.
         sort_key: _,
-        hint_overrides: _,
-        scroll_index: _,
-        // Unpublished: AccessKit has no adjacent-value, platform-view or
-        // text-length property.
-        increased_value: _,
-        decreased_value: _,
-        platform_view_id: _,
-        max_value_length: _,
-        current_value_length: _,
         // Published as the text selection of a document, in the runs of the
         // texts beneath it; read through the consumer by the widget rows of
         // ADR-0214.

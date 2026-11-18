@@ -5,6 +5,7 @@ use std::num::{NonZeroU32, NonZeroUsize};
 use std::rc::Rc;
 use std::sync::Arc;
 
+use flui_foundation::TextDirection;
 use flui_foundation::geometry::{Axis, AxisDirection};
 
 use rustc_hash::FxHashMap;
@@ -15,10 +16,7 @@ use crate::{
     action::{AssistiveFocusHandler, CustomActionId, SemanticsAction, SemanticsActionHandler},
     attributes::{RareAttributes, SemanticsAttributes},
     collection::{CellPosition, SetSize, SortDirection, TableShape},
-    properties::{
-        AttributedString, HeadingLevel, SemanticsHintOverrides, SemanticsSortKey, SemanticsTag,
-        TextDirection, UNBLOCKED_USER_ACTIONS_MASK, concat_attributed_string,
-    },
+    properties::{HeadingLevel, SemanticsSortKey, UNBLOCKED_USER_ACTIONS_MASK, join_strings},
     relation::{SemanticsAnchor, SemanticsRelation},
     role::{LiveSetting, SemanticsRole},
     states::{AutoComplete, Current, HasPopup, Invalid, States, Toggled},
@@ -763,27 +761,27 @@ impl SemanticsConfiguration {
     // ========================================================================
 
     /// Sets the label.
-    pub fn set_label(&mut self, label: impl Into<AttributedString>) {
-        self.attributes.label = Some(label.into());
+    pub fn set_label(&mut self, label: impl AsRef<str>) {
+        self.attributes.label = Some(SmolStr::new(label));
         self.mark_annotated();
     }
 
     /// Returns the label.
     #[inline]
-    pub fn label(&self) -> Option<&AttributedString> {
-        self.attributes.label.as_ref()
+    pub fn label(&self) -> Option<&str> {
+        self.attributes.label.as_deref()
     }
 
     /// Sets the value.
-    pub fn set_value(&mut self, value: impl Into<AttributedString>) {
-        self.attributes.value = Some(value.into());
+    pub fn set_value(&mut self, value: impl AsRef<str>) {
+        self.attributes.value = Some(SmolStr::new(value));
         self.mark_annotated();
     }
 
     /// Returns the value.
     #[inline]
-    pub fn value(&self) -> Option<&AttributedString> {
-        self.attributes.value.as_ref()
+    pub fn value(&self) -> Option<&str> {
+        self.attributes.value.as_deref()
     }
 
     /// Publishes a validated numeric range. A node without a role becomes a
@@ -803,45 +801,21 @@ impl SemanticsConfiguration {
         self.attributes.rare().numeric_range
     }
 
-    /// Sets the increased value.
-    pub fn set_increased_value(&mut self, value: impl Into<AttributedString>) {
-        self.attributes.rare_mut().increased_value = Some(value.into());
-        self.mark_annotated();
-    }
-
-    /// Returns the increased value.
-    #[inline]
-    pub fn increased_value(&self) -> Option<&AttributedString> {
-        self.attributes.rare().increased_value.as_ref()
-    }
-
-    /// Sets the decreased value.
-    pub fn set_decreased_value(&mut self, value: impl Into<AttributedString>) {
-        self.attributes.rare_mut().decreased_value = Some(value.into());
-        self.mark_annotated();
-    }
-
-    /// Returns the decreased value.
-    #[inline]
-    pub fn decreased_value(&self) -> Option<&AttributedString> {
-        self.attributes.rare().decreased_value.as_ref()
-    }
-
     /// Sets the hint.
-    pub fn set_hint(&mut self, hint: impl Into<AttributedString>) {
-        self.attributes.hint = Some(hint.into());
+    pub fn set_hint(&mut self, hint: impl AsRef<str>) {
+        self.attributes.hint = Some(SmolStr::new(hint));
         self.mark_annotated();
     }
 
     /// Returns the hint.
     #[inline]
-    pub fn hint(&self) -> Option<&AttributedString> {
-        self.attributes.hint.as_ref()
+    pub fn hint(&self) -> Option<&str> {
+        self.attributes.hint.as_deref()
     }
 
     /// Sets the tooltip.
-    pub fn set_tooltip(&mut self, tooltip: impl Into<SmolStr>) {
-        self.attributes.rare_mut().tooltip = Some(tooltip.into());
+    pub fn set_tooltip(&mut self, tooltip: impl AsRef<str>) {
+        self.attributes.rare_mut().tooltip = Some(SmolStr::new(tooltip));
         self.mark_annotated();
     }
 
@@ -853,8 +827,8 @@ impl SemanticsConfiguration {
 
     /// Sets what an empty text field shows in place of a value, which
     /// assistive technology reads while the field is empty.
-    pub fn set_placeholder(&mut self, placeholder: impl Into<SmolStr>) {
-        self.attributes.rare_mut().placeholder = Some(placeholder.into());
+    pub fn set_placeholder(&mut self, placeholder: impl AsRef<str>) {
+        self.attributes.rare_mut().placeholder = Some(SmolStr::new(placeholder));
         self.mark_annotated();
     }
 
@@ -867,8 +841,8 @@ impl SemanticsConfiguration {
     /// Sets the keys that activate or focus this node, in the
     /// `aria-keyshortcuts` grammar: chords separated by spaces, keys of a
     /// chord by `+` (`"Control+S"`, `"Alt+Shift+N Control+N"`).
-    pub fn set_keyboard_shortcut(&mut self, shortcut: impl Into<SmolStr>) {
-        self.attributes.rare_mut().keyboard_shortcut = Some(shortcut.into());
+    pub fn set_keyboard_shortcut(&mut self, shortcut: impl AsRef<str>) {
+        self.attributes.rare_mut().keyboard_shortcut = Some(SmolStr::new(shortcut));
         self.mark_annotated();
     }
 
@@ -880,8 +854,8 @@ impl SemanticsConfiguration {
 
     /// Sets the language of this node's text as a BCP 47 tag (`"en-US"`),
     /// which a screen reader speaks it in.
-    pub fn set_language(&mut self, language: impl Into<SmolStr>) {
-        self.attributes.rare_mut().language = Some(language.into());
+    pub fn set_language(&mut self, language: impl AsRef<str>) {
+        self.attributes.rare_mut().language = Some(SmolStr::new(language));
         self.mark_annotated();
     }
 
@@ -892,8 +866,8 @@ impl SemanticsConfiguration {
     }
 
     /// Sets the address a link leads to, or an image was loaded from.
-    pub fn set_url(&mut self, url: impl Into<SmolStr>) {
-        self.attributes.rare_mut().url = Some(url.into());
+    pub fn set_url(&mut self, url: impl AsRef<str>) {
+        self.attributes.rare_mut().url = Some(SmolStr::new(url));
         self.mark_annotated();
     }
 
@@ -906,8 +880,8 @@ impl SemanticsConfiguration {
     /// Sets the words a screen reader says for this node's role in place of
     /// the role's own name (`aria-roledescription`), such as "slide" for a
     /// group in a carousel. The role still decides how the node behaves.
-    pub fn set_role_description(&mut self, description: impl Into<SmolStr>) {
-        self.attributes.rare_mut().role_description = Some(description.into());
+    pub fn set_role_description(&mut self, description: impl AsRef<str>) {
+        self.attributes.rare_mut().role_description = Some(SmolStr::new(description));
         self.mark_annotated();
     }
 
@@ -1086,11 +1060,14 @@ impl SemanticsConfiguration {
     /// with this id.
     pub fn add_custom_action(
         &mut self,
-        label: impl Into<SmolStr>,
+        label: impl AsRef<str>,
         handler: SemanticsActionHandler,
     ) -> CustomActionId {
         let id = CustomActionId::at(self.custom_handlers().len());
-        self.attributes.rare_mut().custom_actions.push(label.into());
+        self.attributes
+            .rare_mut()
+            .custom_actions
+            .push(SmolStr::new(label));
         self.rare_mut().custom_handlers.push((id, handler));
         self.mark_annotated();
         id
@@ -1104,10 +1081,13 @@ impl SemanticsConfiguration {
     pub fn add_custom_action_as(
         &mut self,
         own_id: CustomActionId,
-        label: impl Into<SmolStr>,
+        label: impl AsRef<str>,
         handler: SemanticsActionHandler,
     ) {
-        self.attributes.rare_mut().custom_actions.push(label.into());
+        self.attributes
+            .rare_mut()
+            .custom_actions
+            .push(SmolStr::new(label));
         self.rare_mut().custom_handlers.push((own_id, handler));
         self.mark_annotated();
     }
@@ -1167,28 +1147,6 @@ impl SemanticsConfiguration {
     }
 
     // ========================================================================
-    // Tags
-    // ========================================================================
-
-    /// Adds a tag.
-    pub fn add_tag(&mut self, tag: SemanticsTag) {
-        if !self.attributes.rare().tags.contains(&tag) {
-            self.attributes.rare_mut().tags.push(tag);
-        }
-    }
-
-    /// Returns the tags.
-    #[inline]
-    pub fn tags(&self) -> &[SemanticsTag] {
-        &self.attributes.rare().tags
-    }
-
-    /// Returns whether a tag is present.
-    pub fn has_tag(&self, tag: &SemanticsTag) -> bool {
-        self.attributes.rare().tags.iter().any(|t| t == tag)
-    }
-
-    // ========================================================================
     // Sort Key
     // ========================================================================
 
@@ -1202,22 +1160,6 @@ impl SemanticsConfiguration {
     #[inline]
     pub fn sort_key(&self) -> Option<&SemanticsSortKey> {
         self.attributes.rare().sort_key.as_ref()
-    }
-
-    // ========================================================================
-    // Hint Overrides
-    // ========================================================================
-
-    /// Sets hint overrides.
-    pub fn set_hint_overrides(&mut self, overrides: SemanticsHintOverrides) {
-        self.attributes.rare_mut().hint_overrides = Some(overrides);
-        self.mark_annotated();
-    }
-
-    /// Returns hint overrides.
-    #[inline]
-    pub fn hint_overrides(&self) -> Option<&SemanticsHintOverrides> {
-        self.attributes.rare().hint_overrides.as_ref()
     }
 
     // ========================================================================
@@ -1278,18 +1220,6 @@ impl SemanticsConfiguration {
     #[inline]
     pub fn scroll_extent_min(&self) -> Option<f64> {
         self.attributes.rare().scroll_extent_min
-    }
-
-    /// Sets the scroll index.
-    pub fn set_scroll_index(&mut self, index: i32) {
-        self.attributes.rare_mut().scroll_index = Some(index);
-        self.mark_annotated();
-    }
-
-    /// Returns the scroll index.
-    #[inline]
-    pub fn scroll_index(&self) -> Option<i32> {
-        self.attributes.rare().scroll_index
     }
 
     // ========================================================================
@@ -1462,48 +1392,8 @@ impl SemanticsConfiguration {
     }
 
     // ========================================================================
-    // Platform View
-    // ========================================================================
-
-    /// Sets the platform view ID.
-    pub fn set_platform_view_id(&mut self, id: i32) {
-        self.attributes.rare_mut().platform_view_id = Some(id);
-        self.mark_annotated();
-    }
-
-    /// Returns the platform view ID.
-    #[inline]
-    pub fn platform_view_id(&self) -> Option<i32> {
-        self.attributes.rare().platform_view_id
-    }
-
-    // ========================================================================
     // Text Field Properties
     // ========================================================================
-
-    /// Sets the maximum value length.
-    pub fn set_max_value_length(&mut self, length: i32) {
-        self.attributes.rare_mut().max_value_length = Some(length);
-        self.mark_annotated();
-    }
-
-    /// Returns the maximum value length.
-    #[inline]
-    pub fn max_value_length(&self) -> Option<i32> {
-        self.attributes.rare().max_value_length
-    }
-
-    /// Sets the current value length.
-    pub fn set_current_value_length(&mut self, length: i32) {
-        self.attributes.rare_mut().current_value_length = Some(length);
-        self.mark_annotated();
-    }
-
-    /// Returns the current value length.
-    #[inline]
-    pub fn current_value_length(&self) -> Option<i32> {
-        self.attributes.rare().current_value_length
-    }
 
     /// Declares the field's text as runs, with its selection: published as
     /// the field's `TextRun` children once the pipeline has given the runs
@@ -1745,8 +1635,6 @@ impl SemanticsConfiguration {
         } = &self.attributes;
         let RareAttributes {
             numeric_range,
-            increased_value: _,
-            decreased_value: _,
             tooltip: _,
             placeholder: _,
             keyboard_shortcut: _,
@@ -1754,17 +1642,11 @@ impl SemanticsConfiguration {
             url: _,
             role_description: _,
             custom_actions: _,
-            tags: _,
             sort_key: _,
-            hint_overrides: _,
             scroll_position,
             scroll_axis_direction,
             scroll_extent_max,
             scroll_extent_min,
-            scroll_index,
-            platform_view_id,
-            max_value_length,
-            current_value_length,
             document_selection,
             hosted_runs,
             anchors: _,
@@ -1773,21 +1655,17 @@ impl SemanticsConfiguration {
         let theirs = &other.attributes;
         let their_rare = theirs.rare();
         let both = |a: bool, b: bool| a && b;
-        let non_empty = |value: &Option<AttributedString>| {
-            value.as_ref().is_some_and(|v| !v.as_str().is_empty())
-        };
+        let non_empty = |value: &Option<SmolStr>| value.as_ref().is_some_and(|v| !v.is_empty());
 
         // A scroll group is one scrollable's metrics: two of them never combine.
         let scrolls = scroll_position.is_some()
             || scroll_axis_direction.is_some()
             || scroll_extent_max.is_some()
-            || scroll_extent_min.is_some()
-            || scroll_index.is_some();
+            || scroll_extent_min.is_some();
         let their_scrolls = their_rare.scroll_position.is_some()
             || their_rare.scroll_axis_direction.is_some()
             || their_rare.scroll_extent_max.is_some()
-            || their_rare.scroll_extent_min.is_some()
-            || their_rare.scroll_index.is_some();
+            || their_rare.scroll_extent_min.is_some();
 
         !(states.conflicts(&theirs.states)
             || both(scrolls, their_scrolls)
@@ -1800,15 +1678,6 @@ impl SemanticsConfiguration {
             )
             || both(non_empty(value), non_empty(&theirs.value))
             || both(numeric_range.is_some(), their_rare.numeric_range.is_some())
-            || both(
-                platform_view_id.is_some(),
-                their_rare.platform_view_id.is_some(),
-            )
-            // A text group is one field's lengths.
-            || both(
-                max_value_length.is_some() || current_value_length.is_some(),
-                their_rare.max_value_length.is_some() || their_rare.current_value_length.is_some(),
-            )
             // Runs describe one field's layout.
             || both(text.is_some(), theirs.text.is_some())
             // Hosted runs are one region's share of one text.
@@ -1843,8 +1712,8 @@ impl SemanticsConfiguration {
     ///   with its own handler; a contributor that blocks user actions adds
     ///   none.
     /// - **Assistive-focus handlers** — the contributor's follow the receiver's.
-    /// - **Tags, anchors, relations** — union.
-    /// - **Label / hint** — concatenate, text-direction aware.
+    /// - **Anchors, relations** — union.
+    /// - **Label / hint** — joined with a space.
     /// - **Identifier** — never absorbed: the receiver keeps its own (ADR-0240).
     /// - **Everything else** — first wins: the receiver keeps what it has.
     ///
@@ -1912,22 +1781,15 @@ impl SemanticsConfiguration {
         mine.states.merge(states);
         mine.role = more_specific_role(mine.role, *role);
 
-        // ----- label and hint (concatenate, text-direction aware) -----
-        let mine_dir = mine.text_direction.unwrap_or(TextDirection::Ltr);
-        let theirs_dir = text_direction.unwrap_or(TextDirection::Ltr);
-        let concat =
-            |target: &mut Option<AttributedString>, source: &Option<AttributedString>| match (
-                target.as_ref(),
-                source,
-            ) {
-                (_, None) => {}
-                (None, Some(source)) => *target = Some(source.clone()),
-                (Some(existing), Some(source)) => {
-                    *target = Some(concat_attributed_string(
-                        existing, mine_dir, source, theirs_dir,
-                    ));
-                }
-            };
+        // ----- label and hint (joined with a space) -----
+        let concat = |target: &mut Option<SmolStr>, source: &Option<SmolStr>| match (
+            target.as_ref(),
+            source,
+        ) {
+            (_, None) => {}
+            (None, Some(source)) => *target = Some(source.clone()),
+            (Some(existing), Some(source)) => *target = Some(join_strings(existing, source)),
+        };
         concat(&mut mine.label, label);
         concat(&mut mine.hint, hint);
 
@@ -1964,8 +1826,6 @@ impl SemanticsConfiguration {
         if let Some(theirs) = other.attributes.rare_declared() {
             let RareAttributes {
                 numeric_range,
-                increased_value,
-                decreased_value,
                 tooltip,
                 placeholder,
                 keyboard_shortcut,
@@ -1974,28 +1834,17 @@ impl SemanticsConfiguration {
                 role_description,
                 // Appended above, with their handlers.
                 custom_actions: _,
-                tags,
                 sort_key,
-                hint_overrides,
                 scroll_position,
                 scroll_axis_direction,
                 scroll_extent_max,
                 scroll_extent_min,
-                scroll_index,
-                platform_view_id,
-                max_value_length,
-                current_value_length,
                 document_selection,
                 hosted_runs,
                 anchors,
                 relations,
             } = theirs;
             let mine = mine.rare_mut();
-            for tag in tags {
-                if !mine.tags.contains(tag) {
-                    mine.tags.push(tag.clone());
-                }
-            }
             for anchor in anchors {
                 if !mine.anchors.contains(anchor) {
                     mine.anchors.push(anchor.clone());
@@ -2013,17 +1862,13 @@ impl SemanticsConfiguration {
                 && mine.scroll_position.is_none()
                 && mine.scroll_extent_max.is_none()
                 && mine.scroll_extent_min.is_none()
-                && mine.scroll_index.is_none()
             {
                 mine.scroll_axis_direction = *scroll_axis_direction;
                 mine.scroll_position = *scroll_position;
                 mine.scroll_extent_max = *scroll_extent_max;
                 mine.scroll_extent_min = *scroll_extent_min;
-                mine.scroll_index = *scroll_index;
             }
             keep(&mut mine.numeric_range, numeric_range.as_ref());
-            keep(&mut mine.increased_value, increased_value.as_ref());
-            keep(&mut mine.decreased_value, decreased_value.as_ref());
             keep(&mut mine.tooltip, tooltip.as_ref());
             keep(&mut mine.placeholder, placeholder.as_ref());
             keep(&mut mine.keyboard_shortcut, keyboard_shortcut.as_ref());
@@ -2031,13 +1876,6 @@ impl SemanticsConfiguration {
             keep(&mut mine.url, url.as_ref());
             keep(&mut mine.role_description, role_description.as_ref());
             keep(&mut mine.sort_key, sort_key.as_ref());
-            keep(&mut mine.hint_overrides, hint_overrides.as_ref());
-            keep(&mut mine.platform_view_id, platform_view_id.as_ref());
-            // A text group is copied whole, never mixed from two fields.
-            if mine.max_value_length.is_none() && mine.current_value_length.is_none() {
-                mine.max_value_length = *max_value_length;
-                mine.current_value_length = *current_value_length;
-            }
             keep(&mut mine.document_selection, document_selection.as_ref());
             keep(&mut mine.hosted_runs, hosted_runs.as_ref());
         }
@@ -2217,21 +2055,11 @@ mod tests {
         scroll_b.set_scroll_extent_max(100.0);
         assert_compatibility_is_symmetric(&scroll_a, &scroll_b, false);
         assert_compatibility_is_symmetric(&scroll_a, &label_a, true);
-        let mut index_a = SemanticsConfiguration::new();
-        index_a.set_scroll_index(2);
-        let mut index_b = SemanticsConfiguration::new();
-        index_b.set_scroll_index(5);
-        assert_compatibility_is_symmetric(&index_a, &index_b, false);
         let mut entry_a = SemanticsConfiguration::new();
         entry_a.set_position_in_set(0);
         let mut entry_b = SemanticsConfiguration::new();
         entry_b.set_position_in_set(1);
         assert_compatibility_is_symmetric(&entry_a, &entry_b, false);
-        let mut limit = SemanticsConfiguration::new();
-        limit.set_max_value_length(10);
-        let mut length = SemanticsConfiguration::new();
-        length.set_current_value_length(3);
-        assert_compatibility_is_symmetric(&limit, &length, false);
 
         let mut value_a = SemanticsConfiguration::new();
         value_a.set_value("first");
@@ -2241,18 +2069,6 @@ mod tests {
         empty_value.set_value("");
         assert_compatibility_is_symmetric(&value_a, &value_b, false);
         assert_compatibility_is_symmetric(&value_a, &empty_value, true);
-
-        for set_competing_field in [
-            SemanticsConfiguration::set_platform_view_id as fn(&mut SemanticsConfiguration, i32),
-            SemanticsConfiguration::set_max_value_length,
-            SemanticsConfiguration::set_current_value_length,
-        ] {
-            let mut left = SemanticsConfiguration::new();
-            set_competing_field(&mut left, 1);
-            let mut right = SemanticsConfiguration::new();
-            set_competing_field(&mut right, 2);
-            assert_compatibility_is_symmetric(&left, &right, false);
-        }
 
         let mut dialog = SemanticsConfiguration::new();
         dialog.set_role(SemanticsRole::Dialog);
@@ -2522,54 +2338,6 @@ mod tests {
         );
     }
 
-    /// The text group merges like the scroll group: one field's lengths,
-    /// never mixed from two.
-    #[test]
-    fn a_forced_merge_keeps_one_text_group() {
-        type Setter = fn(&mut SemanticsConfiguration, i32);
-        type Getter = fn(&SemanticsConfiguration) -> Option<i32>;
-        type Field = (Setter, Getter);
-        let groups: &[(&str, Field, Field)] = &[(
-            "text",
-            (
-                SemanticsConfiguration::set_current_value_length,
-                SemanticsConfiguration::current_value_length,
-            ),
-            (
-                SemanticsConfiguration::set_max_value_length,
-                SemanticsConfiguration::max_value_length,
-            ),
-        )];
-        for &(group, (set_first, first), (set_second, second)) in groups {
-            let mut receiver = SemanticsConfiguration::new();
-            set_first(&mut receiver, 1);
-            let mut contributor = SemanticsConfiguration::new();
-            set_first(&mut contributor, 7);
-            set_second(&mut contributor, 9);
-            assert!(
-                !receiver.shares_a_node_with(&contributor, false),
-                "two {group} groups form separate nodes"
-            );
-
-            let mut kept = receiver.clone();
-            kept.absorb(&contributor);
-            assert_eq!(
-                (first(&kept), second(&kept)),
-                (Some(1), None),
-                "the receiver's {group} group is not mixed with the contributor's"
-            );
-
-            let mut taken = SemanticsConfiguration::new();
-            taken.set_label("receiver");
-            taken.absorb(&contributor);
-            assert_eq!(
-                (first(&taken), second(&taken)),
-                (Some(7), Some(9)),
-                "a receiver without a {group} group takes the contributor's whole"
-            );
-        }
-    }
-
     /// A forced merge takes each state by its type's rule: `Mixed` over `On`
     /// over `Off`, and a yes/no state as the receiver declares it, or as the
     /// contributor does when the receiver declares nothing.
@@ -2770,7 +2538,7 @@ mod tests {
                     merged.absorb(&beneath);
                     assert_eq!(merged.role(), receiver, "{receiver} over {contributor}");
                     assert_eq!(
-                        merged.label().map(AttributedString::as_str),
+                        merged.label(),
                         Some("node beneath"),
                         "{receiver} over {contributor}"
                     );

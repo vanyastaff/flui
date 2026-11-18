@@ -35,13 +35,12 @@
 
 use std::num::NonZeroUsize;
 
-use flui_foundation::RenderId;
 use flui_foundation::arena::{FrameArena, FrameVec};
 use flui_foundation::geometry::{Matrix4, Point, Rect, Size};
+use flui_foundation::{RenderId, TextDirection};
 use flui_semantics::{
     AccessibilityNodeId, SemanticsCollectionOrigin, SemanticsConfiguration, SemanticsIndexOrigin,
     SemanticsNode, SemanticsOwner, SemanticsRegions, SemanticsTree, SetSize, TableShape,
-    TextDirection,
 };
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -1704,7 +1703,7 @@ fn append_region_fragments<'f>(
         if region
             .config
             .sort_key()
-            .is_some_and(|key| !key.order.is_finite())
+            .is_some_and(|key| !key.order().is_finite())
         {
             regions.invalid_sort_key = Some(host);
         }
@@ -1853,11 +1852,11 @@ fn by_sort_key(
     b: Option<&flui_semantics::SemanticsSortKey>,
 ) -> std::cmp::Ordering {
     match (a, b) {
-        (Some(a), Some(b)) => a.name.cmp(&b.name).then_with(|| {
-            if a.order == b.order {
+        (Some(a), Some(b)) => a.name().cmp(&b.name()).then_with(|| {
+            if a.order() == b.order() {
                 std::cmp::Ordering::Equal
             } else {
-                a.order.total_cmp(&b.order)
+                a.order().total_cmp(&b.order())
             }
         }),
         (Some(_), None) => std::cmp::Ordering::Less,
@@ -2682,7 +2681,10 @@ fn describe_semantics_configuration(
         }
     }
     regions.callbacks.retain(&config);
-    if config.sort_key().is_some_and(|key| !key.order.is_finite()) {
+    if config
+        .sort_key()
+        .is_some_and(|key| !key.order().is_finite())
+    {
         regions.invalid_sort_key = Some(id);
     }
     config

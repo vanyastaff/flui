@@ -11,12 +11,12 @@ use std::task::{Context, Poll, Waker};
 
 use flui_foundation::geometry::{Offset, Point};
 use flui_foundation::{PresentationAddress, PresentationId};
-use flui_interaction::LocalPayloadTarget;
 use flui_interaction::drag::{
     AllowedActions, DragFetch, DragHandle, DragItem, DragOutcome, DragPoint, DragScope,
     DragSession, DragStage, DragStart, DragView, DropReceiver, DropReceiverSlot, MoveOutcome,
     ProcessNonce,
 };
+use flui_interaction::pointer::LocalPayloadTarget;
 use flui_native::{
     HeadlessDragAndDrop, HeadlessHostWindow, HeadlessPlatform, HostWindow, Platform,
 };

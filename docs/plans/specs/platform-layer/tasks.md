@@ -1,8 +1,9 @@
 # Платформенный слой — задачи
 
 - **Статус:** редакция 3 утверждена: ADR-0151, 0152, 0153, 0154, 0254 и 0255 приняты 2026-10-21.
-  Из 134 задач серии 114 закрыты и 20 открыты (сверено с `main` @ `4db9c6981`); записи — в разделе
-  «Ход исполнения». Прогоны на устройствах, которых ждут закрытые задачи, — строки
+  Из 134 задач серии 115 закрыты и 19 открыты (сверено с `main` @ `4db9c6981` и закрытием
+  LY85); записи — в разделе «Ход исполнения». Прогоны на устройствах, которых ждут закрытые
+  задачи, — строки
   `crates/flui-native/platform-parity.toml`. Открытые задачи и код, которого они ждут:
   - LY61 — удалить сервисы `Platform`, `PathPromptOptions`, `Task` и `TaskLabel`, когда LY67 даст
     провайдеры Android;
@@ -10,13 +11,11 @@
   - LY67 — провайдеры `flui-system` на Android (в работе);
   - LY69 — `selectionRectsForRange:` и `UITextInteraction` на iOS;
   - LY71 — golden `Info.plist` и ориентации iPad;
-  - LY85 — настоящее окно X11 через `assert_backend_conforms`;
   - LY89 — тест в виртуальном времени «простой без пробуждений» на источниках macOS и Android;
   - LY93 — доступ песочницы у выбранных файлов и `data_dirs` (не начата);
   - LY96 и LY99 — заблокированы спекой flui-driver (`os`-lane);
   - LY97 — заблокирована: `--record` драйвера ждёт FD6 спеки flui-driver;
-  - LY98 — `journal::codec` вне release-сборки и граница `flui record --native`; чтение записи
-    драйвером заблокировано (FD6);
+  - LY98 — заблокирована: чтение записи драйвером ждёт FD6 спеки flui-driver;
   - LY100 — `flui-app[driver]` включает `scripted`, один двойник окна вместо шестнадцати, двойники
     ядра за фичей;
   - LY102 — модули `flui-platform` по областям (не начата, после LY100);
@@ -3508,22 +3507,33 @@ GPU-память простаивающего или невидимого окн
   фоне, запись до `android_main`, образ API 23–25, ввод с dex из APK) записаны в
   `platform-parity.toml` («Memory pressure», «Activity results for capability providers», «IME
   composition»).
-- [ ] **LY63** (открыта: смена языка) — `targetSdk` закреплён в `platform-support.toml`
-  (`android.target-sdk`); путь Gradle и правила R8 `dev.flui.**`
-  (`a_minified_release_keeps_what_the_crates_rules_keep`); golden манифеста и `build.gradle.kts`
-  (`the_generated_manifest_matches_its_golden`, `the_scaffolded_gradle_script_matches_its_golden`);
-  `windowSoftInputMode` — ADR-0340 §3. Шаблон объявляет
-  `orientation|screenSize|smallestScreenSize|screenLayout|density|uiMode|fontScale|fontWeightAdjustment|keyboard|keyboardHidden|navigation`
-  (`the_android_activity_handles_the_configuration_changes_the_host_follows`); тема, `font_scale`,
-  `font_weight_adjustment`, плотность и поворот прогнаны на Galaxy S21 одним `android_main`.
-  Причин не объявлять `locale` больше нет: хост читает языки заново на `ConfigChanged`
-  (`crates/flui-native/src/preferences/android.rs`), а порядок резервных шрифтов следует за сменой
-  языка (`crates/flui-app/src/app/runtime/fallback_rescan.rs`, ADR-0271 §4). Остаётся код:
-  `locale|layoutDirection` в `configChanges` шаблона
-  (`crates/flui-cli/templates/android/AndroidManifest.xml:34`), в `HANDLED_CONFIG_CHANGES` с его
-  комментарием (`crates/flui-cli/tests/cli_platform.rs:61`) и в проверке манифеста
-  (`crates/flui-cli/src/build/android_manifest.rs:384`). Прогон смены языка на устройстве —
-  строка parity «Configuration changes reach the running app».
+- [x] **LY63** (`windowSoftInputMode` решён, ADR-0340 §3; `configChanges` —
+  #1845, `targetSdk` — #2231, правила R8 и golden — #2287), часть `configChanges` — ветка
+  `android/config-changes`. Шаблон `flui create`
+  объявляет все изменения, которые хост читает на `ConfigChanged`:
+  `orientation|screenSize|smallestScreenSize|screenLayout|density|uiMode|fontScale|fontWeightAdjustment|locale|layoutDirection|keyboard|keyboardHidden|navigation`
+  (тест `the_android_activity_handles_the_configuration_changes_the_host_follows`). `locale` и
+  `layoutDirection` объявлены: `ConfigChanged` перечитывает настройки, языки приходят из
+  `Configuration.getLocales` (`preferences/android.rs`, `language_tags`), резервные шрифты
+  следуют первому языку (`flui-app`, `fallback_rescan.rs`); направление письма платформа не
+  публикует, оно выводится из локали (`docs/gaps.md`, «Locale edge»). Прогон на устройстве
+  (смена языка, Activity жива) — долг в `platform-parity.toml` («Configuration changes reach
+  the running app»). Упаковщик без
+  Gradle отказывает `android.jar` ниже `targetSdk` (не ниже API 31 из-за флага `fontWeightAdjustment`). Ночной режим хост
+  читает из Java `Configuration.uiMode`: нативный `AConfiguration` android-activity после
+  изменения на месте остаётся прежним. Прогон на Galaxy S21 (Android 15, проба `flui create
+  --local`): тема в обе стороны, `font_scale` 1.3, `font_weight_adjustment` 300, `wm density`
+  480, поворот — один `android_main`, значения в `MediaQuery`. `targetSdk` закреплён в `platform-support.toml` (`android.target-sdk = 36`; упаковщик без Gradle и `flui.targetSdk` в `gradle.properties`, 2026-11-03). Путь Gradle сделан в LY62
+  (исходники крейтов через `flui.javaSources`), список `configChanges` в генерируемом манифесте
+  `FluiActivity` — там же. Правила R8 (2026-11-03, ветка `claude/project-thread-op0kt3`): ключ
+  `android.proguard` схемы 2, `flui-native` объявляет `android/proguard-rules.pro`
+  (`-keep class dev.flui.** { *; }`), Gradle получает `flui.proguardFiles` в release, скрипт без
+  чтения свойства отклоняется (`a_minified_release_keeps_what_the_crates_rules_keep`); `flui create`
+  кладёт свой `app/proguard-rules.pro`. Golden: `the_generated_manifest_matches_its_golden`,
+  `the_scaffolded_gradle_script_matches_its_golden` (insta). `windowSoftInputMode` решён в ветке
+  `native/android-activity-results` (ADR-0340 §3): `adjustResize` на всех уровнях с окном от края
+  до края, ставит `FluiActivity.onCreate` (таблица — `owner::android::window_setup`), счёт `WindowResized` — прогон
+  в parity «Soft-keyboard insets».
 - [x] **LY46** — ветка `platform/surface-target`, от `main` @ `136947eff` (LY43, LY44), слит `main`
   @ `e617f109a` (#1923, #1924, #1925). **Контракт.** `PlatformWindow` без `Send + Sync`; окна
   отдаются как `Rc<dyn HostWindow>`/`Rc<dyn PlatformWindow>`, слабые ссылки — `std::rc::Weak`.
@@ -4969,8 +4979,8 @@ GPU-память простаивающего или невидимого окн
   хост, ему передавать свою (записано в gaps, запись 10). Mac, iPhone, Android-устройство,
   браузер не затронуты; `cross-typecheck` — в CI.
 
-- [ ] **LY98** (открыта: codec вне release-сборки и граница `flui record`; чтение драйвером
-  заблокировано спекой flui-driver) — схема записи — `flui-protocol::native_recording` (за фичей
+- [ ] **LY98** (код на `main`; открыта одним: чтение записи драйвером заблокировано спекой
+  flui-driver) — схема записи — `flui-protocol::native_recording` (за фичей
   `serde`); журнал — `crates/flui-native/src/journal/` (`capture`, `recorder`, `codec`, `lines`)
   под фичей `native-capture` (ADR-0151 §10 и §16); golden-записи читаются схемой без ядра и
   пишутся байт в байт (`native_recordings_write_back_byte_for_byte`,
@@ -4980,14 +4990,42 @@ GPU-память простаивающего или невидимого окн
   (`a_native_recording_begins_each_stream_with_its_setup_and_streams_its_lines`,
   `a_loop_nobody_serves_ends_its_native_journal_so_no_line_reaches_it`,
   `the_hello_lists_the_native_layer_only_when_the_loop_journals`,
-  `a_native_recording_writes_each_stream_with_the_devices_its_rows_read`). Остаётся код: (1)
-  `flui-app` включает `native-capture` в каждой сборке (`crates/flui-app/Cargo.toml:91`), так что
-  `journal::codec` с `flui-protocol`, `serde` и `serde_json` собирается и в release
-  (`crates/flui-native/src/journal/mod.rs:29`), вопреки ADR-0151 §16
-  ([gaps](../../../gaps.md#accepted-adr-sections-not-built-yet)); (2) `flui record --native`
-  (`crates/flui-cli/src/agent/record/native.rs`) пишет без границы байтов и строк, и
-  `NativeRecording::read` отвергает длинную запись целиком; граница — во `flui-protocol`, общая для
-  обоих писателей ([gaps](../../../gaps.md#quality-bar-partials-with-no-entry)). Заблокировано:
+  `a_native_recording_writes_each_stream_with_the_devices_its_rows_read`). **Codec вне release**
+  (ветка `native/capture-out-of-release`): `flui-app` включает `native-capture` в каждой сборке
+  (Cargo не привязывает фичу к профилю), поэтому `journal::codec`, `order`, `store` и
+  `CurrentHost::backend` собираются только при `all(debug_assertions, feature = "native-capture")`
+  или с `testing`, как захват, строки и рекордер; раннеры (настольный, Android, iOS) зовут
+  `native_journal::begin` под `cfg(native_journal)`. Доказательство: `cargo heli check -p flui-app
+  --release` проходит, а проба в раннере, называющая `flui_native::journal::codec::Backend`, в
+  release не собирается (`E0433: cannot find codec in journal`); в CI то же доказывает
+  release-сборка счётчика в задании `size`. **Граница записи:** границы и их счёт — во
+  `flui-protocol`, `native_recording::Budget` (`admit_row` писателя, `read_line` читателя) и
+  типизированная `Overrun` (`LineBytes`, `HeaderBytes`, `Rows`, `RecordingBytes`; у полных —
+  `cut_reason`), `Budget::for_header` проверяет заголовок писателя до записи; `CutBudget` ядра
+  удалён, рекордер, `NativeRecording::write` и `read` считают тем же `Budget`. `write` сначала
+  проверяет заголовок, отвечает на слишком длинный заголовок или строку `CodecError::LineTooLong`,
+  ничего не записав, запись в границах пишет целиком (место под `cut` не держит: при отказе строки
+  снимает строки с конца, пока `cut` не поместится). Строку длиннее строки записи рекордер хранит
+  как `Row::Gap { rows: 1 }` (считается как строка; пишется строкой `gap`, читается обратно,
+  replay останавливается на ней `ReplayError::Gap`). `flui record --native` держит `Budget` на
+  поток с заголовка (слишком длинный заголовок файла не открывает, `header_too_long` в индексе),
+  принимает строку вместе с ростом заголовка на её устройства, первую строку за
+  `MAX_ROWS`/`MAX_RECORDING_BYTES` заменяет строкой `cut` и дальше не пишет (индекс:
+  `cut: {bound, dropped}`), строку, которую файл не держит, заменяет `gap`; счёт один: строка потока
+  считается один раз (записана, потеряна или отброшена на `cut`), строка `gap` — не строка.
+  Тесты (в скобках — с откатом): `the_writer_refuses_a_line_no_reader_takes_and_writes_what_fits_whole`
+  (без проверки заголовка заголовок записан; с местом под `cut` у каждой строки запись в
+  границах обрезана), `a_live_row_past_the_line_bound_is_held_as_a_gap` (рекордер хранит строки по
+  мегабайту, `write` отвергает запись), `what_a_writer_admits_with_its_cut_a_reader_takes` (без
+  места под `cut` читатель отвергает строку 16385); в `tests/cli_record.rs` (Linux):
+  `a_native_stream_past_the_byte_bound_ends_at_a_cut_and_counts_each_row_once` (`gap` на границе
+  посчитан и потерянным, и отброшенным), `a_native_file_counts_the_header_its_rows_declare` (без
+  счёта роста заголовка файл больше границы), `a_native_stream_past_the_row_bound_ends_at_a_cut`,
+  `a_native_line_past_the_line_bound_is_not_written`; во `flui-protocol` ещё
+  `a_writer_admits_a_row_only_while_the_recording_and_its_cut_fit`,
+  `a_reader_refuses_the_line_past_either_bound`, `an_overrun_names_its_limit_and_its_cut`; перенос
+  счёта держат прежние `native_recording_contracts` (`a_native_recording_past_its_bounds_is_refused`,
+  `a_recording_past_its_bound_is_written_cut`). Заблокировано:
   чтение записи крейтом `flui-driver` без ребра к ядру ждёт FD6 спеки
   [flui-driver](../flui-driver/tasks.md); сегодня запись читает `flui record` через
   `flui-protocol`. Захват на Windows, macOS, iOS и Android не прогонялся — строка качества parity
@@ -5724,6 +5762,126 @@ GPU-память простаивающего или невидимого окн
   (`crates/flui-native/src/task.rs`); фикстуры trybuild
   `tests/ui/{platform_and_host_window_are_sealed,host_table_names_every_position}.rs` и чтение
   `app_path` в `tests/launch_values.rs`.
+- [x] **LY67** (закрыта веткой `system/android-providers-2`: провайдеры Android лаунчера, файловых
+  диалогов, message box, share, папок пользователя и сведений о системе; прогоны на Galaxy S21 и
+  эмуляторе — заметки строк parity) — модуль `crates/flui-system/src/android/`, правила — раздел
+  «Android» в `crates/flui-system/ARCHITECTURE.md`. Классы Android зовутся из Rust через JNI
+  (`jni` 0.22 по сырым указателям, которые хост одалживает на вызов; своего `static` `JavaVM`
+  нет: VM, загрузчик классов и `ContentResolver` приложения первый провайдер runtime
+  читает в кадре Activity и держит в `runtime_local`). Java — только лист по ADR-0377:
+  `FluiDocuments` — content provider, компонент, который Android создаёт по имени из манифеста;
+  `FluiCallback` — единственный обработчик `java.lang.reflect.Proxy` для интерфейсов-слушателей
+  (три слушателя диалога), вызов приходит в один нативный метод с именем метода, дескриптор
+  возвращает фантомная ссылка после сборки объекта. Dex крейта (`android/classes.dex`, запись,
+  правила R8) объявлен в `[package.metadata.flui.declares]`; `cargo xtask android-dex` держит dex
+  каждого крейта, который его объявляет (список — из `cargo metadata`), workflow `Android dex`
+  собирает то, что называет `--list`; классы читают только лаунчер, share и message box,
+  `FluiCallback.PROTOCOL` сверяется до привязки, APK без классов, с другим протоколом или без
+  `<provider>` в манифесте — `NotDeclared` у этих трёх. Новый ключ объявлений
+  `android.providers` (схема 4, ADR-0307): класс и суффикс authority под id приложения,
+  `flui build` пишет `<provider>` в манифест (не экспортирован, `grantUriPermissions`).
+  Оба нативных метода — один вызов `owner::android::native_call::jni_native` крейта (граница
+  паники для входа JNI, ADR-0151 §16). Файловые диалоги — `ACTION_OPEN_DOCUMENT` и
+  `ACTION_CREATE_DOCUMENT` через `Activity::launch_for_result` под ключом на вид; удержание
+  диалога — `ResultTicket` (сброс кончает пикер, ADR-0344, и отменяет чтение через
+  `CancellationSignal`), `ActivityEnded` отвечает `WindowClosed`, ответ прежней Activity забирает
+  первый диалог следующего runtime (`reattach` под каждым ключом): `Intent` открытия отпускается,
+  пустой документ сохранения удаляется. Выбор — имя и содержимое (`PickedForm::Contents`), читается
+  по content URI на рабочей нити: сначала описываются все документы, выбор сверяется с фильтрами
+  (имя и тип провайдера), заявленные размеры — с `OpenRequest::max_bytes`, и только потом чтение,
+  со счётом байтов; правила общие с Web (`dialog::handed_over`: `admit_picks`, `admit_declared`,
+  `admit_read`, `named_after_first_filter`; `web::rules` зовёт их). Пикер фильтрует только по MIME:
+  расширение без типа у `MimeTypeMap` расширяет пикер до всех документов, выбор всё равно сверяется
+  (ADR-0360 §4). Сохранение пишет содержимое запроса в выбранный документ; тип документа — по
+  расширению предложенного имени, иначе первого фильтра, так что провайдер Android сам добавляет
+  расширение к имени, набранному без него. Диалог папок — `NotYetOnThisHost`, сохранение без
+  содержимого — `NotOnThisPlatform`. Лаунчер: URI — `ACTION_VIEW` под `CATEGORY_BROWSABLE` без
+  гранта; файл открывается на рабочей нити (`O_NONBLOCK | O_NOCTTY`), судится то, что держит
+  дескриптор, и итоговое имя (`/proc/self/fd`): только обычный файл, который не запускается и не
+  ставит пакет (`.apk`), и уходит он content URI `FluiDocuments` со случайным токеном и грантом
+  чтения одной activity, никогда `file:` (ADR-0360 §2); reveal, trash и папка —
+  `NotOnThisPlatform`. Share — `ACTION_SEND`/`ACTION_SEND_MULTIPLE` через chooser, текст и ссылка
+  в `EXTRA_TEXT`, файлы — теми же content URI, грант в `ClipData`. Message box — `AlertDialog` на
+  главном потоке Java, отвечает один раз (кнопка, уход пользователя, не показан), Yes/No не
+  закрывается, удержание снимает ответ и закрывает окно. Папки пользователя —
+  `Environment.getExternalStoragePublicDirectory`, сведения о системе — системные свойства.
+  Автозапуск, глобальные сочетания, значок лаунчера и jump list — `NotOnThisPlatform`. Контракт
+  служб не менялся.
+  Тесты (каждый падает без своего правила, проверено изъятием правила):
+  `the_picks_are_held_to_the_filters_and_the_limit_before_any_is_read` (без сверки заявленных
+  размеров и без лишнего байта в чтении), `a_dialog_let_go_finishes_its_picker_and_stops_the_read_of_its_answer`
+  (без сброса билета и без прерывания), `a_save_completes_once_the_user_chose_whoever_still_waits`,
+  `an_earlier_activitys_answers_are_claimed_once_and_hold_nothing`,
+  `a_filter_becomes_the_types_android_maps_it_to_or_every_document`,
+  `a_save_proposes_a_name_and_a_type_after_the_first_filter`,
+  `a_save_writes_the_document_the_user_chose_and_deletes_one_it_could_not_write`,
+  `only_a_regular_file_that_neither_runs_nor_installs_is_a_document`,
+  `a_box_answers_its_button_what_leaving_means_or_nobody`,
+  `the_text_and_the_link_travel_together_the_link_on_its_own_line`,
+  `a_runtime_runs_a_bounded_number_of_workers_and_refuses_the_next`,
+  `the_java_classes_state_what_the_library_and_the_manifest_name`; ещё
+  `an_open_dialog_answers_the_documents_the_picker_named_as_their_contents`,
+  `a_request_the_activity_refuses_or_ends_answers_the_dialog_its_reason`,
+  `a_launch_judges_the_file_it_opened_by_its_final_name` (настоящие файлы и ссылки, Linux),
+  `several_files_are_typed_by_what_their_types_have_in_common`,
+  `a_listeners_call_is_a_button_the_user_leaving_or_the_box_going`; в `flui-cli` —
+  `a_provider_names_a_java_class_and_an_authority_suffix`, `a_provider_is_joined_by_its_authority`,
+  `a_provider_authority_has_one_class`, `the_application_declares_the_providers_its_crates_ship`.
+  Запущено: `flui-system` на Windows (nextest) и в WSL (Linux), проверка типов
+  `aarch64-linux-android` на nightly в WSL (только `--lib`: dev-зависимостям нужен clang NDK);
+  каждое имя и сигнатура JNI сверены с `android.jar` платформы 35 через `javap`; dex собран
+  локально теми же JDK и build-tools, что в записи. Не запущено: ничего на устройстве и эмуляторе;
+  clippy для Android — только CI (`cross-typecheck`, на `main` и по ручному запуску `ci.yml`
+  на ветке). Чего не достаёт до контракта (выбор без
+  доступа, переживающего диалог; диалог папок; фильтр только по MIME; ответ прежней Activity не
+  доставляется приложению) — `docs/gaps.md`. Прогоны — строки parity «Open a URL», «Open a file,
+  reveal it in the file manager», «Open, save and folder dialogs», «Message box», «Share», «User
+  folders», «OS name, version and architecture».
+  После независимого чтения: правило о не-Rust коде — ADR-0377 (Java только для подкласса,
+  переопределения или компонента манифеста; checked-in dex крейта с его компонентами; одна
+  проверка digest по списку из манифестов; authority от id приложения; типизированные привязки
+  JNI — направление, запись в `docs/gaps.md`), заменяет ADR-0154 решение 5 п. 2–3 и ADR-0255
+  решение 21 там, где расходится. Работа для главного потока Java идёт через хост
+  (`Activity::on_main_thread`, `ActivityBridge::post`, отказ `MainThreadRefused`: Activity
+  кончилась, больше `MAX_POSTED_WORK`, главный поток не взял за `HAND_OFF_LIMIT` или паника);
+  собственного `Runnable` у крейта нет. Share открывает файлы тем же `android::opened`, что
+  лаунчер (без блокировки, без терминала, `fstat`, итоговое имя), и называет файл итоговым
+  именем; Gradle пишет authority как `${applicationId}.<suffix>`, Java берёт свою из
+  `attachInfo`; `FluiDocuments` не вытесняет живое предложение: держит не больше `MAX_OFFERED`,
+  каждое `OFFER_LIFETIME_MS`, лишнее — `IllegalStateException` → `Unavailable`; чтение выбора —
+  кусками `READ_CHUNK` с проверкой отпускания между ними; `describe` снимает исключение после
+  каждой колонки; папки пользователя не требуют dex. После слияния с `main` (ADR-0374, метки и
+  кнопка по умолчанию message box): фильтр всех файлов или фильтр по имени файла показывает
+  пикеру все документы; message box Android показывает подробность под сообщением, метки кнопок
+  запроса и отдаёт фокус кнопке ответа по умолчанию
+  (`a_box_shows_its_detail_its_labels_and_focuses_its_default`); правила выбора без пути — один
+  модуль `dialog::handed_over` для Web, iOS и Android. Тесты (в скобках — с откатом):
+  `a_dialog_let_go_before_its_answer_is_read_reads_nothing` (без проверки отпускания до запуска
+  рабочей нити — документ описывается), `a_read_stops_between_chunks_once_its_dialog_is_let_go`
+  (без проверки между кусками — читается весь документ),
+  `a_share_opens_each_file_and_names_it_by_where_it_ends` (с именем по ссылке — уходит
+  `notes.pdf`; без `O_NONBLOCK` — тест висит на FIFO), `work_for_the_main_thread_answers_through_the_host`,
+  `the_trees_are_what_the_crates_declare`, случай Gradle в
+  `the_application_declares_the_providers_its_crates_ship`. Dex `flui-system` пересобран
+  `cargo xtask android-dex --write` записанными JDK 21.0.12 и build-tools 35.0.0 (dex `flui-native`
+  воспроизвёлся байт в байт). Не запущено: Java на устройстве (фантомная ссылка, `attachInfo`,
+  срок предложений) и clippy для Android — CI.
+  После второго чтения: предложение `FluiDocuments` служит любому числу открытий до срока
+  `OFFER_LIFETIME_MS` (отказ от chooser Android не сообщает) или отзыва (`withdraw`) всех
+  предложений старта, который не состоялся (сборка `Intent` бросила, Android отказал);
+  переполнение — своя ошибка (`TOO_MANY_OFFERED`, `EMFILE`), различаемая только по вызову
+  `offer`; отказанное закрытие message box повторяется, когда приходит отказ, пока не пройдёт
+  или Activity не кончится, а хост отвечает `TooMuchPosted` только когда в очереди освободилось
+  место или настал её срок (без вращения ходов владельца); файл, потерявший имя между открытием и чтением имени, —
+  `Held::Unlinked` (по уже сделанному `fstat`); `ActivityBridge::post` принимает `PostedWork`,
+  который кончается ровно раз (`run`, `refuse`, отказ при сбросе); очередь работы хоста —
+  модель `owner::android::posted_work` с тестами на любом хосте; поток освобождения
+  `FluiCallback` перезапускается; запись ADR — ADR-0377. Тесты:
+  `a_full_provider_is_its_own_failure_and_only_a_started_share_keeps_its_offers`,
+  `a_refused_dismissal_is_tried_again_until_it_lands_or_the_activity_ends`,
+  `a_file_unlinked_after_its_open_is_held_as_unlinked`,
+  `the_queue_holds_its_capacity_of_waiting_work_and_defers_the_rest`,
+  `only_work_still_waiting_is_taken_back_at_its_deadline_or_the_end`.
 - [x] **LY65** (закрыта: мост на `main`; идентификатор ждёт выпуска AccessKit, прогоны TalkBack —
   в parity) — `accessibility/android.rs` держит низкоуровневый `accesskit_android::Adapter`;
   делегат и поставщик узлов — в `FluiView`; hover идёт через `Adapter::on_hover_event`; первый
@@ -5947,18 +6105,42 @@ GPU-память простаивающего или невидимого окн
   строки LY76, R6.6 и D16 исправлены. Заглушка и хост семантики стоят в слоте `flui-semantics`,
   последнем после canvas: `the_tree_reaches_the_dom_once_the_placeholder_is_activated` читает
   заглушку, а после активации — хост в этом слоте.
-- [ ] **LY85** (открыта: окно X11 в общей таблице) — через `assert_backend_conforms` идут
-  декодеры обоих хостов (`x11_decoder_conforms`, `wayland_decoders_conform`) и настоящее окно
-  Wayland под Weston (`wayland_window_conforms`, его зовёт `the_wayland_window_input_conforms`);
-  записи `wayland_weston_mouse_wheel.jsonl` и `x11_xtest_mouse_and_wheel.jsonl`
-  (`wayland_recordings_decode_to_their_host_input`, `x11_recordings_decode_to_their_host_input`);
-  `docs/platform-parity.md` и `docs/gaps.md` описывают оба хоста по прогонам на Weston, sway и
-  Xvfb. Остаётся код: настоящее окно X11 через `assert_backend_conforms` по образцу
-  `wayland_window_conforms` (`crates/flui-native/tests/backend_conformance.rs:1837`); сейчас
-  `the_x11_window_conforms` (`crates/flui-native/tests/x11_window.rs:931`) идёт только через
-  `window_conformance::assert_conforms`. Записи касания, пера, щипка и плавной прокрутки с
-  устройств и прогон в сессии рабочего стола — строка качества parity «Recorded native input…» и
-  заметки строк `touch`, `pen-and-stylus`, `trackpad-pinch-and-rotate`.
+- [x] **LY85** (закрыта: оба хоста идут через общую таблицу; прогоны с устройствами и в сессии
+  рабочего стола записаны в `platform-parity.toml`) — фундаменты #1930 и #1931, ввод #1936 и
+  #1937, окно X11 в таблице #2806. Через
+  `assert_backend_conforms` идут декодеры обоих хостов (`x11_decoder_conforms`,
+  `wayland_decoders_conform`) и настоящее окно Wayland под Weston (`wayland_window_conforms`, его
+  зовёт `the_wayland_window_input_conforms`). Настоящее окно X11 под openbox на Xvfb идёт через
+  ту же таблицу (`run_backend_conformance`) в харнессе `x11_window`:
+  `the_x11_window_input_conforms` (`tests/x11_backend_conformance.rs`) исполняет каждый шаг,
+  который сервер умеет произвести, через XTest и отдаёт таблице то, что услышал обработчик окна:
+  мышь — контакты; устройство с именем — мастер-указатель, который сервер добавляет и объявляет
+  (XTest двигает его через client pointer); отмена платформы — фокус, который забирает другое окно
+  теста; клавиши меню и Shift+F10 — XTest. Строки, которые окно не исполняет, перечислены в
+  `UNEXERCISED` с тем, что строка отвечает (её текст «не применима», вид провала `FailureKind`
+  таблицы или «держится без ввода»), и причиной; каждая другая строка обязана держаться на вводе,
+  который окно доставило, а запись, которая перестала совпадать, валит тест. Держатся без ввода
+  `event_times_never_go_back` (сервер ставит метки по порядку, метка назад до окна не доходит) и
+  `precise_scroll_is_delivered_as_claimed` (окно не заявляет точной прокрутки и чтения для неё не
+  имеет), три строки перетаскивания и четыре строки хаптики (они читают только источник
+  перетаскивания и актуатор окна, ввода не берут); такую запись тест не может найти устаревшей.
+  Исполняют ввод окна четыре строки: контакт мыши, устройство с именем, отмена и клавиши меню.
+  Не держатся: касание (на Xvfb нет устройства с
+  touch-классом, XTest касаний не шлёт), перо (у устройств XTest только x и y, драйвера планшета
+  Xvfb не грузит), щипок и жесты тачпада (события XInput 2.4 шлёт только драйвер тачпада),
+  интервалы и перенос 32-битного времени (XTest не несёт метки, сервер ставит свою), позиция не
+  конечная (сервер шлёт фиксированную точку), счётчик высокого разрешения (его у X нет), фазы
+  прокрутки (их у XInput 2 нет), строки старта перетаскивания в начале (XDND стартует при выходе
+  из окна) и строки IME (на сервере харнесса нет IBus, Fcitx5 и XIM); каждую из них держит
+  декодер (`native x11`). С подменой отмены на отпускание кнопки тест падает на
+  `no_backend_cancels_a_contact_as_claimed`. Записи: `wayland_weston_mouse_wheel.jsonl` и
+  `x11_xtest_mouse_and_wheel.jsonl` (`wayland_recordings_decode_to_their_host_input`,
+  `x11_recordings_decode_to_their_host_input`); записей касания, пера и щипка на X11 под Xvfb не
+  сделать по тем же причинам. Прогоны с сенсорным экраном, планшетом и тачпадом в сессии GNOME и
+  KDE — заметки строк `touch`, `pen-and-stylus`, `trackpad-pinch-and-rotate` и строка качества
+  «Recorded native input…» в `platform-parity.toml`. Прогон (WSL Ubuntu 24.04, Xvfb с openbox,
+  `FLUI_HEADLESS=1 WAYLAND_DISPLAY='' xvfb-run … cargo nextest run -p flui-native --all-features`):
+  `the_x11_window_input_conforms` зелёный.
 - [x] **LY86** — #1930 (`ace0a3b2e`) и #1931 (`c8401e35b`) добавили шаги CI, #2258 перевёл
   `flui-app` на нативные хосты, #2276 удалил winit. Job `test` (`.github/workflows/ci.yml`)
   ставит Xvfb, openbox, Weston и sway, поднимает headless Weston с `FLUI_REQUIRE_WAYLAND=1` и
@@ -5966,9 +6148,9 @@ GPU-память простаивающего или невидимого окн
   (`platform_suite_linux_filtered`) и набор Wayland (`wayland_suite_linux`); ночной прогон —
   `nightly-platforms.yml`. Job `test` зелёный на `main` @ `46786da8e` (прогон 43701971256,
   2026-11-15). LY86 зависит от хостов (LY79, LY80, LY81, LY83, LY84), а не от LY85: job гонит
-  нативные хосты вместо winit, а полнота conformance-таблицы на них — работа LY85, чей строимый
-  остаток (настоящее окно X11 в `assert_backend_conforms`) тот же job будет гонять, когда он
-  сольётся. Строка и граф говорят то же. Что часть тестов `wayland_window` под Weston
+  нативные хосты вместо winit, а полнота conformance-таблицы на них — работа LY85, чьё настоящее
+  окно X11 в таблице (`the_x11_window_input_conforms`, харнесс `x11_window`) гоняет тот же job.
+  Строка и граф говорят то же. Что часть тестов `wayland_window` под Weston
   выходит рано, потому что он не даёт `xdg-decoration`, `wp_fractional_scale_v1` и `xdg-foreign`,
   — находка LY106.
 - [x] **LY87** — #2276 (`053507d53`) удалил файлы `winit` в фичах, `hosts/winit.rs`, фичу
@@ -6666,8 +6848,7 @@ GPU-память простаивающего или невидимого окн
   Дальше: тесты маршрутизатора держат свой владелец (очередь заданий, `turn`, `retire`) и время
   через `Instant`; сценарный примитив `flui_platform::capability::scripted` (`Scenario`,
   `ManualClock`) может их заменить отдельным изменением.
-  LY63 не закрыта: `locale|layoutDirection` в `configChanges` и доставка смены языка хостом
-  остаются (запись LY63). Прогоны на устройстве записаны в `platform-parity.toml`: «Activity
+  Прогоны на устройстве записаны в `platform-parity.toml`: «Activity
   results for capability providers» (выбор через SAF, старт при остановленной Activity, два
   запроса, ответ после «Don't keep activities» и после `am kill`, ответ до `android_main`),
   «Memory pressure», «Soft-keyboard insets» (счёт `WindowResized`), «IME composition» (ввод с dex из

@@ -78,11 +78,20 @@ pub enum RasterCommand {
     },
     /// Give back GPU memory the next frames can rebuild, before the next frame.
     Trim(MemoryPressureLevel),
-    /// Rebuild the context's lost device again after its rebuild was given
-    /// up ([`DeviceHealth::GivenUp`](super::DeviceHealth::GivenUp)); nothing
-    /// changes while the device renders or a rebuild is still paced
-    /// (ADR-0267).
-    RetryDevice,
+    /// Adopt `device` in place of the context's device. The owner sends it
+    /// after the rebuild was given up
+    /// ([`DeviceHealth::GivenUp`](super::DeviceHealth::GivenUp)), having run
+    /// ADR-0244's probe again in fresh instances
+    /// ([`GpuContext::probe`](crate::GpuContext::probe)), since the backend
+    /// whose rebuilds exhausted the backoff may be the cause (ADR-0305 §8).
+    /// The executor adopts every device sent, in order, so its instance is
+    /// the one the owner's newest factory makes surfaces on. Every window's
+    /// surface is dropped, and the owner makes each another with the
+    /// probe's factory.
+    RetryDevice {
+        /// The device the probe answered.
+        device: crate::ProbedDevice,
+    },
 }
 
 impl RasterCommand {
@@ -96,7 +105,7 @@ impl RasterCommand {
             | Self::Detach { slot }
             | Self::Frame { slot, .. }
             | Self::Configure { slot, .. } => Some(*slot),
-            Self::Trim(_) | Self::RetryDevice => None,
+            Self::Trim(_) | Self::RetryDevice { .. } => None,
         }
     }
 }

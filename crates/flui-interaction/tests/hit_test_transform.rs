@@ -3,7 +3,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use flui_foundation::RenderId;
 use flui_foundation::geometry::{Matrix4, Offset};
-use flui_interaction::{HitTestEntry, HitTestResult};
+use flui_interaction::pointer::{HitTestEntry, HitTestResult};
 
 fn local_point(result: &HitTestResult, index: usize, global: (f64, f64)) -> (f64, f64) {
     result.path()[index]
@@ -188,7 +188,7 @@ fn sample_delivery(
     coarse_timestamp: bool,
 ) {
     use flui_foundation::geometry::Point;
-    use flui_interaction::InteractionLane;
+    use flui_interaction::pointer::InteractionLane;
     use flui_platform::{
         EventTime,
         pointer::{

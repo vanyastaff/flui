@@ -27,7 +27,7 @@ fn button(label: &str, width: f64, tap: impl Fn() + 'static) -> BoxedView {
     Semantics::new()
         .container(true)
         .role(SemanticsRole::Button)
-        .label(label.to_owned())
+        .label(label)
         .child(
             GestureDetector::new()
                 .behavior(HitTestBehavior::Opaque)

@@ -131,7 +131,7 @@ pub mod prelude {
     // Arity system
     // Re-export RenderId from flui_foundation
     pub use flui_foundation::{RenderId, SemanticsId};
-    pub use flui_interaction::{HitTestBehavior, HitTestEntry, HitTestResult};
+    pub use flui_interaction::pointer::{HitTestBehavior, HitTestEntry, HitTestResult};
     // Re-export commonly used value types
     pub use flui_foundation::geometry::{Offset, Point, RRect, Rect, Size};
 
@@ -169,7 +169,7 @@ pub mod prelude {
         RenderUpdateImpact,
         binding::{
             RendererBinding, ViewHitTest, debug_dump_layer_tree, debug_dump_pipeline_owner_tree,
-            debug_dump_render_tree, debug_dump_semantics_tree,
+            debug_dump_render_tree,
         },
         parent_data::{
             BoxParentData, ContainerBoxParentData, FlexFit, FlexParentData, ParentData,

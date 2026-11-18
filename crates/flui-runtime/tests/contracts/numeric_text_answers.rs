@@ -36,9 +36,9 @@ impl FrameSink for Sink {
 struct FailingQuery(Rc<Cell<usize>>);
 
 impl GestureArenaMember for FailingQuery {
-    fn accept_gesture(&self, _: flui_interaction::GestureContest) {}
+    fn accept_gesture(&self, _: flui_interaction::gesture::GestureContest) {}
 
-    fn reject_gesture(&self, _: flui_interaction::GestureContest) {}
+    fn reject_gesture(&self, _: flui_interaction::gesture::GestureContest) {}
 
     fn deadline(&self) -> Option<flui_platform::EventTime> {
         self.0.set(self.0.get() + 1);
@@ -119,7 +119,7 @@ fn abandoned_numeric_answers_are_released(reject_sampling: bool) {
         let calls = Rc::new(Cell::new(0));
         let member = Rc::new(FailingQuery(Rc::clone(&calls)));
         let entry = runtime.gestures().arena().add(
-            flui_interaction::PointerId::new(NonZeroU64::new(99).expect("contact identity")),
+            flui_interaction::ids::PointerId::new(NonZeroU64::new(99).expect("contact identity")),
             &member,
         );
         clock.advance(Duration::from_millis(20));

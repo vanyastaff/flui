@@ -9,8 +9,8 @@ use anyhow::bail;
 
 use super::exec::{Cmd, Runner, installed, parsed};
 use crate::{
-    adr_numbers, android_dex, change_scope, changelog, docs_links, fonts, icon_import,
-    key_vocabulary, platform_floor, recording_vocabulary, toolchain, unmounted_tests,
+    adr_numbers, android_dex, changelog, docs_links, fonts, icon_import, key_vocabulary,
+    platform_floor, recording_vocabulary, toolchain, unmounted_tests,
 };
 
 /// A formatter or linter that is a binary of its own, not a cargo step.
@@ -103,7 +103,7 @@ type InProcess = fn(&[&str]) -> anyhow::Result<ExitCode>;
 /// `--self-test` is not here: it is a test of this crate
 /// (`every_self_test_reports_exactly_its_planted_findings`), so
 /// `cargo test -p xtask` runs it (ADR-0303 §4).
-fn in_process(strict: bool) -> [(&'static str, InProcess); 12] {
+fn in_process(strict: bool) -> [(&'static str, InProcess); 11] {
     [
         (
             if strict {
@@ -119,9 +119,6 @@ fn in_process(strict: bool) -> [(&'static str, InProcess); 12] {
         }),
         ("adr-numbers", |args| {
             adr_numbers::adr_numbers(&parsed(args)?)
-        }),
-        ("paths-filter", |args| {
-            change_scope::paths_filter(&parsed(args)?)
         }),
         // `--package-list`: Cargo's file selection for flui-painting, listed
         // offline, no archive built
@@ -157,26 +154,17 @@ mod tests {
     use clap::{CommandFactory as _, Parser as _};
 
     use super::*;
-    use crate::{perf, public_api, send_positions};
+    use crate::perf;
 
     /// Every gate's self-test: the gate run over its planted violations,
     /// failing unless exactly the planted findings come back (ADR-0078 §4).
-    const SELF_TESTS: [(&str, InProcess); 5] = [
-        ("send-positions", |args| {
-            send_positions::send_positions(&parsed(args)?)
-        }),
-        ("public-api", |args| public_api::public_api(&parsed(args)?)),
+    const SELF_TESTS: [(&str, InProcess); 3] = [
         ("key-vocabulary", |args| {
             key_vocabulary::key_vocabulary(&parsed(args)?)
         }),
         ("perf", |args| perf::perf(&parsed(args)?)),
         ("changelog", |args| changelog::changelog(&parsed(args)?)),
     ];
-
-    /// The self-tests that need more than this crate: `api-closure` reads the
-    /// nightly rustdoc JSON of the workspace, so CI's `api-contracts` job
-    /// runs it beside the gate.
-    const SELF_TESTS_ELSEWHERE: [&str; 1] = ["api-closure"];
 
     fn every_self_test_reports_exactly_its_planted_findings() {
         for (command, self_test) in SELF_TESTS {
@@ -204,7 +192,6 @@ mod tests {
         let listed: BTreeSet<String> = SELF_TESTS
             .iter()
             .map(|(command, _)| *command)
-            .chain(SELF_TESTS_ELSEWHERE)
             .map(str::to_owned)
             .collect();
         assert_eq!(with_flag, listed);
@@ -230,7 +217,6 @@ mod tests {
                 "toolchain",
                 "unmounted-tests",
                 "adr-numbers",
-                "paths-filter",
                 "font-assets --package-list",
                 "icon-import material",
                 "key-vocabulary",

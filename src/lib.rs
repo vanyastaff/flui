@@ -371,12 +371,12 @@ pub mod platform {
         pub use flui_platform::capability::{
             Abandoned, Activity, ActivityBridge, ActivityResult, Capability, CapabilityId,
             CapabilityProvider, CapabilityRegistrar, Completion, CompletionSource, DataRefused,
-            HostBridge, IntentFrame, InvalidResultKey, JniFrame, OwnerJob, OwnerPoster,
-            OwnerRetired, OwnerScope, PendingCompletions, Plugin, PortalParent, ProviderContext,
-            RegisteredProvider, RequestKey, Resolver, ResultCode, ResultIntent, ResultIntentHold,
-            ResultKey, ResultMint, ResultOutcome, ResultRefused, ResultRequest, ResultTicket,
-            ResultTicketHold, ResultToken, RuntimeLocals, WindowCloseWatch, WindowLifetime,
-            WindowRef,
+            HostBridge, IntentFrame, InvalidResultKey, JniFrame, MAX_POSTED_WORK,
+            MainThreadRefused, OwnerJob, OwnerPoster, OwnerRetired, OwnerScope, PendingCompletions,
+            Plugin, PortalParent, PostedWork, ProviderContext, RegisteredProvider, RequestKey,
+            Resolver, ResultCode, ResultIntent, ResultIntentHold, ResultKey, ResultMint,
+            ResultOutcome, ResultRefused, ResultRequest, ResultTicket, ResultTicketHold,
+            ResultToken, RuntimeLocals, WindowCloseWatch, WindowLifetime, WindowRef,
         };
         /// Scripted capability scenarios for tests; with the `testing` feature.
         #[cfg(feature = "testing")]

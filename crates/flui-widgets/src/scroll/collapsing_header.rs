@@ -1,4 +1,4 @@
-﻿//! [`CollapsingHeader`] â€” a header above scrolling content that the
+//! [`CollapsingHeader`] â€” a header above scrolling content that the
 //! content's own scroll collapses and expands, as a participant of the
 //! nested scroll channel (ADR-0209).
 //!
@@ -27,9 +27,9 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use flui_animation::{Animation, AnimationController, DrivenController};
+use flui_foundation::InputSequenceId;
 use flui_foundation::geometry::{Rect, Vec2};
 use flui_foundation::{ChangeNotifier, Listenable};
-use flui_interaction::InputSequenceId;
 use flui_interaction::focus::FocusNode;
 use flui_painting::Alignment;
 use flui_rendering::pipeline::WeakPipelineCell;
@@ -653,7 +653,7 @@ fn header_box(
         .include_semantics(false);
     let mut semantics = Semantics::new().container(true).role(SemanticsRole::Banner);
     if let Some(label) = label {
-        semantics = semantics.label(label.to_owned());
+        semantics = semantics.label(label);
     }
     if extents.range() > 0.0 {
         // Assistive technology moves the header the way a scroll would: up

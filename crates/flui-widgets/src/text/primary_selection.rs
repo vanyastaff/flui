@@ -4,7 +4,7 @@
 
 use std::cell::{Cell, RefCell};
 
-use flui_interaction::{
+use flui_interaction::text_input::{
     PrimaryClaim, PrimarySelectionCapability, PrimarySelectionHandle, SelectionText,
 };
 use flui_platform::ClipboardRead;

@@ -1,6 +1,9 @@
 use super::*;
 
-use flui_interaction::{FocusManager, FocusNode, TextInputError, TextInputHandle};
+use flui_interaction::{
+    focus::{FocusManager, FocusNode},
+    text_input::{TextInputError, TextInputHandle},
+};
 use flui_platform::{PlatformTextInput, text_store::TextStore};
 
 fn close_frame_reports(ui_runtime: &UiRuntime) -> Arc<parking_lot::Mutex<Vec<String>>> {
@@ -372,11 +375,11 @@ fn run_custom_key_child(fail: bool) {
     assert_eq!(ui_runtime.global_key_scope.claim_count(), 2);
 }
 
-impl flui_interaction::GestureArenaMember for CloseArenaMember {
-    fn accept_gesture(&self, _: flui_interaction::GestureContest) {
+impl flui_interaction::gesture::GestureArenaMember for CloseArenaMember {
+    fn accept_gesture(&self, _: flui_interaction::gesture::GestureContest) {
         self.calls.set(self.calls.get() + 1);
     }
-    fn reject_gesture(&self, _: flui_interaction::GestureContest) {
+    fn reject_gesture(&self, _: flui_interaction::gesture::GestureContest) {
         let _ = (&self.captures.first, &self.captures.second);
         self.calls.set(self.calls.get() + 1);
         CLOSE_REENTRY.with(|hook| {
@@ -594,8 +597,8 @@ impl flui_semantics::platform::PlatformAccessibility for OwnershipBridge {
         self.delegate.set_action_listener(listener);
     }
 
-    fn assistive_focus_support(&self) -> flui_semantics::AssistiveFocusSupport {
-        flui_semantics::AssistiveFocusSupport::Unreported
+    fn assistive_focus_support(&self) -> flui_semantics::platform::AssistiveFocusSupport {
+        flui_semantics::platform::AssistiveFocusSupport::Unreported
     }
 }
 
@@ -725,7 +728,7 @@ impl Drop for WithdrawalProbe {
 }
 
 fn run_scoped_routes_child(fail_cursor: bool) {
-    use flui_interaction::{HitTestEntry, HitTestResult, InteractionDispatchError};
+    use flui_interaction::pointer::{HitTestEntry, HitTestResult, InteractionDispatchError};
     let mut ui_runtime = UiRuntime::for_test();
     let a = ui_runtime.presentation_id();
     let b = ui_runtime.install_second_presentation_for_test();
@@ -867,7 +870,7 @@ fn run_scoped_routes_child(fail_cursor: bool) {
             .expect("empty route release");
         if !fail_cursor {
             struct RejectDuringUnwind {
-                handle: flui_interaction::InteractionDispatchHandle,
+                handle: flui_interaction::pointer::InteractionDispatchHandle,
                 drops: Arc<AtomicUsize>,
             }
             impl Drop for RejectDuringUnwind {
@@ -1071,7 +1074,7 @@ pub(crate) fn run_presentation_close_child(kind: &str) {
     };
     let _token = input
         .attach(
-            flui_interaction::TextInputClient::new(store).on_session_start(move || {
+            flui_interaction::text_input::TextInputClient::new(store).on_session_start(move || {
                 let _ = (&bundle.first, &bundle.second);
             }),
         )
@@ -1118,7 +1121,7 @@ pub(crate) fn run_presentation_close_child(kind: &str) {
             captures,
         });
         let entry = arena.add(
-            flui_interaction::PointerId::new(std::num::NonZeroU64::MIN),
+            flui_interaction::ids::PointerId::new(std::num::NonZeroU64::MIN),
             &member,
         );
         let captures = DropCompetition {
@@ -1222,8 +1225,8 @@ pub(crate) fn run_presentation_close_child(kind: &str) {
                 };
                 let store: Rc<dyn TextStore> =
                     flui_interaction::testing::InMemoryTextStore::new("rejected");
-                let client =
-                    flui_interaction::TextInputClient::new(store).on_session_start(move || {
+                let client = flui_interaction::text_input::TextInputClient::new(store)
+                    .on_session_start(move || {
                         let _ = (&bundle.first, &bundle.second);
                     });
                 assert_eq!(target_input.attach(client), Err(TextInputError::Closed));
@@ -1239,7 +1242,7 @@ pub(crate) fn run_presentation_close_child(kind: &str) {
                 };
                 target_focus.add_global_key_handler(Rc::new(move |_| {
                     let _ = (&bundle.first, &bundle.second);
-                    flui_interaction::KeyEventResult::Ignored
+                    flui_interaction::focus::KeyEventResult::Ignored
                 }));
             }));
         });
@@ -1282,7 +1285,7 @@ pub(crate) fn run_presentation_close_child(kind: &str) {
             captures,
         });
         let entry = ui_runtime.gestures().arena().add(
-            flui_interaction::PointerId::new(std::num::NonZeroU64::MIN),
+            flui_interaction::ids::PointerId::new(std::num::NonZeroU64::MIN),
             &member,
         );
         ui_runtime
@@ -1374,7 +1377,7 @@ pub(crate) fn run_presentation_close_child(kind: &str) {
         if let Some((arena, entry)) = saved_arena {
             assert!(arena.is_empty());
             assert!(entry.member().is_none());
-            entry.resolve(flui_interaction::GestureDisposition::Accepted);
+            entry.resolve(flui_interaction::gesture::GestureDisposition::Accepted);
             assert_eq!(
                 arena_calls.get(),
                 0,
@@ -1393,7 +1396,7 @@ pub(crate) fn run_presentation_close_child(kind: &str) {
                 },
             };
             let rejected = arena.add(
-                flui_interaction::PointerId::new(std::num::NonZeroU64::MIN),
+                flui_interaction::ids::PointerId::new(std::num::NonZeroU64::MIN),
                 &Rc::new(CloseArenaMember {
                     calls: Rc::clone(&arena_calls),
                     captures,

@@ -29,13 +29,15 @@ use flui_animation::{
     Animation, AnimationStatus, ConstantAnimation, ProxyAnimation, SharedCurve, StatusObserver,
     StatusSubscription,
 };
+use flui_foundation::InputSequenceId;
 use flui_foundation::TextDirection;
 use flui_foundation::geometry::{Axis, Offset, Vec2};
 use flui_foundation::panic::PanicRecovery;
 use flui_foundation::{ChangeNotifier, Listenable, ListenerObserver, Subscription};
-use flui_interaction::{HapticsHandle, InputSequenceId, PointerKindSet};
+use flui_interaction::haptics::HapticsHandle;
 use flui_platform::HapticFeedback;
 use flui_platform::haptics::{HapticRequest, HapticTiming};
+use flui_platform::input_capabilities::PointerKindSet;
 use flui_rendering::constraints::AxisDirection;
 use flui_rendering::pipeline::WeakPipelineCell;
 use flui_view::element::ElementKind;
@@ -1047,7 +1049,7 @@ impl<K: Copy + Eq + 'static> AnchoredDragState<K> {
         let anchors = controller.anchors();
         let semantics = match assistive {
             Assistive::Named { label, describe } => Semantics::new()
-                .label(label.to_string())
+                .label(label)
                 .value(describe(controller.current())),
             Assistive::Unnamed | Assistive::Withheld => Semantics::new(),
         };

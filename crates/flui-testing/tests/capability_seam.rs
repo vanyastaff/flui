@@ -9,7 +9,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
-use flui_interaction::{
+use flui_interaction::text_input::{
     ClipboardBackend, ClipboardCapability, ClipboardHandle, PrimaryClaim,
     PrimarySelectionCapability, PrimarySelectionHandle,
 };
@@ -1126,6 +1126,10 @@ impl flui_platform::capability::ActivityBridge for EndedActivity {
 
     fn lend(&self, _f: &mut dyn FnMut(flui_platform::capability::JniFrame)) -> bool {
         false
+    }
+
+    fn post(&self, work: flui_platform::capability::PostedWork) {
+        work.refuse(flui_platform::capability::MainThreadRefused::ActivityEnded);
     }
 }
 
