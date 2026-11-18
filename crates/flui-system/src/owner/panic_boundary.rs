@@ -3,7 +3,7 @@
 //! delegate, an Objective-C block or method, a Grand Central Dispatch work
 //! item, a Carbon event handler. A panic unwinding out of an
 //! `extern "system"` or `extern "C"` frame aborts the process, and out of an
-//! `extern "C-unwind"` one it unwinds through AppKit's or libdispatch's
+//! `extern "C-unwind"` one it unwinds through AppKit's, UIKit's or libdispatch's
 //! frames; contained here, it is logged and the OS gets the entry's answer
 //! after a panic. `cargo xtask panic-boundary` holds every entry of the
 //! crate to one call of [`os_entry`], and every Objective-C class's ivars to
@@ -85,11 +85,11 @@ fn payload_text(payload: &(dyn Any + Send)) -> &str {
 /// panic-boundary` holds every class of the crate to this type.
 ///
 /// Read through `Deref`; never moved, since objc2 keeps the ivars pinned.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 #[derive(Debug)]
 pub(crate) struct ContainedIvars<T>(std::mem::ManuallyDrop<T>);
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 impl<T> ContainedIvars<T> {
     /// `ivars`, for `set_ivars`.
     pub(crate) const fn new(ivars: T) -> Self {
@@ -97,7 +97,7 @@ impl<T> ContainedIvars<T> {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 impl<T> std::ops::Deref for ContainedIvars<T> {
     type Target = T;
 
@@ -106,7 +106,7 @@ impl<T> std::ops::Deref for ContainedIvars<T> {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 #[expect(
     unsafe_code,
     reason = "the ivars are destroyed in place, once, inside the boundary"

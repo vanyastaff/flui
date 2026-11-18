@@ -15,7 +15,7 @@
 //! only then is that final path handed on. A path is handed to Foundation
 //! as the file system's bytes, so a name that is not UTF-8 names its file.
 //! Every request runs as a work item off the main thread
-//! (`queue::WorkQueue`), since each touches the file system or asks Launch
+//! (`apple::queue::WorkQueue`), since each touches the file system or asks Launch
 //! Services, which may wait on a volume; a volume that stops answering
 //! holds the request's place until it does.
 
@@ -23,7 +23,7 @@ use std::path::Path;
 
 use flui_platform::launch::{LaunchError, runs_when_opened};
 
-use super::{ErrorCode, errno, failure};
+use crate::apple::{ErrorCode, errno, failure};
 
 /// What the file an open opened is, as its descriptor and Launch Services
 /// say. Only a regular file or a folder is ever opened.
@@ -154,10 +154,10 @@ mod appkit {
     use objc2_app_kit::NSWorkspace;
     use objc2_foundation::{NSArray, NSFileManager, NSNumber, NSString, NSURL};
 
-    use super::super::ErrorCode;
-    use super::super::appkit::{PATH_MAX, error_code, file_url};
-    use super::super::queue::WorkQueue;
     use super::{OpenedKind, OpenedType, judge, open_for_judging, path_error};
+    use crate::apple::ErrorCode;
+    use crate::apple::queue::WorkQueue;
+    use crate::apple::{PATH_MAX, error_code, file_url};
 
     /// What a request answers when the runtime has no place for it, or when
     /// Launch Services declined a handler it has.
@@ -305,8 +305,8 @@ mod tests {
     use flui_platform::SystemFailure;
     use flui_platform::launch::LaunchError;
 
-    use super::super::{ErrorCode, errno};
     use super::{OpenedKind, judge, path_error};
+    use crate::apple::{ErrorCode, errno};
 
     /// A named pipe a writer waits on, named like a document, is refused
     /// without being opened: an open, even a non-blocking one, would let

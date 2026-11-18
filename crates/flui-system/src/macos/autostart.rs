@@ -8,11 +8,11 @@
 //! again. Registering asks nobody (the system posts its own notice), so a
 //! request's reason is not shown. Below macOS 13 the service is not there
 //! and every request answers `NotOnThisDevice`. Each request runs off the
-//! main thread (`queue::WorkQueue`), since the service waits on its daemon.
+//! main thread (`apple::queue::WorkQueue`), since the service waits on its daemon.
 
 use flui_platform::{Unsupported, UnsupportedReason};
 
-use super::{ErrorCode, failure};
+use crate::apple::{ErrorCode, failure};
 use crate::autostart::{
     AutostartCapability, AutostartError, AutostartRequest, AutostartResult, AutostartState,
 };
@@ -103,7 +103,8 @@ pub(super) fn answer(item: &dyn LoginItem, request: &AutostartRequest) -> Autost
 /// `NotOnThisDevice`.
 pub(super) enum LoginItems {}
 
-impl super::version::Gate for LoginItems {
+impl crate::apple::version::Gate for LoginItems {
+    type System = crate::apple::version::OnMacOS;
     const SINCE: (u32, u32, u32) = (13, 0, 0);
 }
 
@@ -122,10 +123,10 @@ mod appkit {
     use flui_platform::capability::Resolver;
     use objc2_service_management::{SMAppService, SMAppServiceStatus};
 
-    use super::super::appkit::error_code;
-    use super::super::queue::WorkQueue;
-    use super::super::version::{MacOSVersion, Since};
     use super::{ItemStatus, LoginItem, LoginItems, answer, unsupported};
+    use crate::apple::error_code;
+    use crate::apple::queue::WorkQueue;
+    use crate::apple::version::{MacOSVersion, Since};
     use crate::autostart::{AutostartBackend, AutostartRequest, AutostartResult};
 
     /// The application's own login item; made only with the proof that the
@@ -192,8 +193,8 @@ mod tests {
 
     use flui_platform::{SystemFailure, Unsupported, UnsupportedReason};
 
-    use super::super::ErrorCode;
     use super::{ItemStatus, LoginItem, answer};
+    use crate::apple::ErrorCode;
     use crate::autostart::{AutostartCapability, AutostartError, AutostartRequest, AutostartState};
 
     /// A login item that moves as ServiceManagement's does: registering
@@ -240,8 +241,8 @@ mod tests {
 
     #[test]
     fn the_login_item_is_there_from_macos_13_on() {
-        use super::super::version::MacOSVersion;
         use super::LoginItems;
+        use crate::apple::version::MacOSVersion;
 
         assert!(MacOSVersion::new(12, 7, 6).since::<LoginItems>().is_none());
         assert!(MacOSVersion::new(13, 0, 0).since::<LoginItems>().is_some());

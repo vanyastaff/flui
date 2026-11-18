@@ -1,28 +1,25 @@
 //! The file dialogs as `NSOpenPanel` and `NSSavePanel` sheets on the
 //! acquiring widget's window.
 //!
-//! A filter becomes what the panel allows (ADR-0360 §3, §4). From macOS 11
-//! that is its allowed content types: an extension the type macOS derives
-//! from its last part (`UTType typeWithFilenameExtension:`), a MIME type its
-//! type, and `image/*`, `audio/*`, `video/*`, `text/*` and `font/*` the
-//! family's type (`public.image`, …); another `type/*` names no family macOS
-//! has and is refused with `NotOnThisPlatform` rather than widened. Below
-//! macOS 11, on an Intel Mac, it is the allowed file types, the extensions'
-//! last parts, and a filter with a MIME type answers `NotOnThisDevice`.
+//! A filter becomes what the panel allows (ADR-0360 §3, §4), as
+//! `apple::content_types` maps it. From macOS 11 that is its allowed
+//! content types; below macOS 11, on an Intel Mac, it is the allowed file
+//! types, the extensions' last parts, and a filter with a MIME type answers
+//! `NotOnThisDevice`.
 //!
 //! macOS admits a file whose type conforms to an allowed one (`.swift` under
 //! `txt`, `.docx` under `zip`) and derives a type from the last part of a
 //! name, while the contract matches names exactly. So an open panel with a
 //! filter checks each item itself through its delegate
 //! (`panel:shouldEnableURL:`), which enables a folder to browse or a file
-//! the contract's rule admits ([`judge_item`]): by its name first, which
-//! reads nothing, then by its type against the MIME patterns. The item
-//! judged is the one the panel answers, an alias's or a link's target, and
-//! that target is what a pick hands out, so the delegate and the handle,
-//! which holds every pick's name to the filters on every host
-//! (`FileDialogs::open`), judge one file. The handle cannot tell a type, so
-//! under a MIME pattern a pick whose name no extension admits and whose
-//! type no pattern does is refused here, with the handle's own
+//! the contract's rule admits (`apple::content_types::judge_item`): by its
+//! name first, which reads nothing, then by its type against the MIME
+//! patterns. The item judged is the one the panel answers, an alias's or a
+//! link's target, and that target is what a pick hands out, so the delegate
+//! and the handle, which holds every pick's name to the filters on every
+//! host (`FileDialogs::open`), judge one file. The handle cannot tell a
+//! type, so under a MIME pattern a pick whose name no extension admits and
+//! whose type no pattern does is refused here, with the handle's own
 //! `NotInFilter`; a pick whose type cannot be read is not refused for that.
 //! A save panel appends the first allowed type's extension to a typed name
 //! without one, which for a several-part extension is its last part; its
@@ -37,141 +34,10 @@
 
 use std::path::PathBuf;
 
-use flui_platform::{SystemFailure, Unsupported, UnsupportedReason};
+use flui_platform::{SystemFailure, UnsupportedReason};
 
-use crate::dialog::{
-    DialogError, FileDialogCapability, FileFilter, OpenResult, PickedFile, Picks, SaveLocation,
-    SaveResult, name_ends_in,
-};
-
-/// What a filter pattern asks the panel to allow.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) enum ContentType {
-    /// The type of files whose name ends in `.` and this, the last part of
-    /// an extension.
-    Extension(String),
-    /// The type of this MIME type.
-    Mime(String),
-    /// The system type of this identifier: a MIME type family.
-    Identifier(&'static str),
-}
-
-/// What a request's filters ask of a panel.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct PanelFilter {
-    /// The content types the panel allows, each once.
-    pub(super) types: Vec<ContentType>,
-    /// Every extension of the request, for the name check.
-    pub(super) extensions: Vec<String>,
-}
-
-impl PanelFilter {
-    /// The file types a panel without content types allows: the
-    /// extensions' last parts, or `None` when a MIME pattern needs a type.
-    pub(super) fn file_types(&self) -> Option<Vec<String>> {
-        self.types
-            .iter()
-            .map(|content_type| match content_type {
-                ContentType::Extension(extension) => Some(extension.clone()),
-                ContentType::Mime(_) | ContentType::Identifier(_) => None,
-            })
-            .collect::<Option<Vec<String>>>()
-    }
-}
-
-/// The refusal of a request the panel cannot show, for `reason`.
-fn unsupported(reason: UnsupportedReason) -> DialogError {
-    DialogError::Unsupported(Unsupported::of::<FileDialogCapability>(reason))
-}
-
-/// The content type a MIME type pattern is: the type itself, or a family
-/// macOS has a type for.
-fn mime_content_type(mime_type: &str) -> Result<ContentType, DialogError> {
-    match mime_type.split_once('/') {
-        Some((family, "*")) => {
-            let identifier = match family {
-                "image" => "public.image",
-                "audio" => "public.audio",
-                "video" => "public.movie",
-                "text" => "public.text",
-                "font" => "public.font",
-                _ => return Err(unsupported(UnsupportedReason::NotOnThisPlatform)),
-            };
-            Ok(ContentType::Identifier(identifier))
-        }
-        _ => Ok(ContentType::Mime(mime_type.to_owned())),
-    }
-}
-
-/// What `filters` ask of a panel; `None` when there are none, and the
-/// panel allows every file.
-pub(super) fn panel_filter(filters: &[FileFilter]) -> Result<Option<PanelFilter>, DialogError> {
-    if filters.is_empty() {
-        return Ok(None);
-    }
-    let mut filter = PanelFilter {
-        types: Vec::new(),
-        extensions: Vec::new(),
-    };
-    let allow = |content_type: ContentType, types: &mut Vec<ContentType>| {
-        if !types.contains(&content_type) {
-            types.push(content_type);
-        }
-    };
-    for requested in filters {
-        for extension in requested.extensions() {
-            let (_, last) = extension.rsplit_once('.').unwrap_or(("", extension));
-            allow(ContentType::Extension(last.to_owned()), &mut filter.types);
-            if !filter.extensions.contains(extension) {
-                filter.extensions.push(extension.clone());
-            }
-        }
-        for mime_type in requested.mime_types() {
-            allow(mime_content_type(mime_type)?, &mut filter.types);
-        }
-    }
-    Ok(Some(filter))
-}
-
-/// Whether a file named `name` is one `extensions` name: the contract's
-/// rule for a name (ADR-0360 §3), the one the handle checks a pick by.
-pub(super) fn name_matches(name: &[u8], extensions: &[String]) -> bool {
-    extensions
-        .iter()
-        .any(|extension| name_ends_in(name, extension))
-}
-
-/// What the contract's rule makes of one item of an open panel.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Judged {
-    /// Its name ends in one of the extensions, or its type is one of the
-    /// MIME patterns'.
-    Admitted,
-    /// Neither, and its type was read.
-    Refused,
-    /// Its name does not admit it, and its type could not be read.
-    Unread,
-}
-
-/// Judge an item named `name` (`None` for one with no name, a root) by the
-/// request's `extensions`, and by its type only when its name does not
-/// admit it: `conforms` reads whether its type is one of the MIME patterns',
-/// `None` when the file system does not say. A name that admits the item
-/// reads nothing, so a file that cannot be read is never refused for it.
-pub(super) fn judge_item(
-    name: Option<&[u8]>,
-    extensions: &[String],
-    conforms: impl FnOnce() -> Option<bool>,
-) -> Judged {
-    if name.is_some_and(|name| name_matches(name, extensions)) {
-        return Judged::Admitted;
-    }
-    match conforms() {
-        Some(true) => Judged::Admitted,
-        Some(false) => Judged::Refused,
-        None => Judged::Unread,
-    }
-}
+use crate::apple::content_types::unsupported;
+use crate::dialog::{DialogError, OpenResult, PickedFile, Picks, SaveLocation, SaveResult};
 
 /// One item the user picked, as the panel names it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -238,26 +104,11 @@ pub(super) fn save_answer(response: isize, pick: impl FnOnce() -> Option<PanelPi
     })
 }
 
-/// `UTType` and the panels' content types, macOS 11: below it a filter is
-/// the panel's allowed file types, and one with a MIME type answers
-/// `NotOnThisDevice`. On arm64 the floor is 11, and the types are always
-/// there.
-#[cfg(not(target_arch = "aarch64"))]
-pub(super) enum ContentTypes {}
-
-#[cfg(not(target_arch = "aarch64"))]
-impl super::version::Gate for ContentTypes {
-    const SINCE: (u32, u32, u32) = (11, 0, 0);
-}
-
 #[cfg(target_os = "macos")]
 pub(crate) use appkit::MacDialogs;
 
 #[cfg(target_os = "macos")]
-#[expect(
-    unsafe_code,
-    reason = "UTType through the runtime, the panel's delegate"
-)]
+#[expect(unsafe_code, reason = "the panel's content types and its delegate")]
 mod appkit {
     use block2::RcBlock;
     use flui_platform::UnsupportedReason;
@@ -265,7 +116,7 @@ mod appkit {
     use std::rc::Rc;
 
     use objc2::rc::{Retained, Weak};
-    use objc2::runtime::{AnyClass, AnyObject, NSObject, NSObjectProtocol, ProtocolObject};
+    use objc2::runtime::{AnyObject, NSObject, NSObjectProtocol, ProtocolObject};
     use objc2::{
         DefinedClass, MainThreadMarker, MainThreadOnly, Message as _, define_class, msg_send,
     };
@@ -274,68 +125,19 @@ mod appkit {
     };
     use objc2_foundation::{NSArray, NSNumber, NSString, NSURL, NSURLBookmarkResolutionOptions};
 
-    use super::super::appkit::{file_url, ns_window, url_path};
-    use super::super::sheet::Pending;
-    use super::super::version::MacOSVersion;
-    use super::{
-        ABORTED, ContentType, Judged, PanelFilter, PanelPick, judge_item, open_answer,
-        panel_filter, save_answer, unsupported,
+    use super::super::appkit::ns_window;
+    use super::{ABORTED, PanelPick, open_answer, save_answer};
+    use crate::apple::content_types::{
+        ContentFilter, HasContentTypes, Judged, NameRule, content_filter, unsupported, ut_type,
     };
+    use crate::apple::modal::Pending;
+    use crate::apple::version::MacOSVersion;
+    use crate::apple::{file_url, url_path};
     use crate::dialog::{
         DialogError, DialogHold, FileDialogBackend, OpenRequest, OpenResult, SaveRequest,
         SaveResult,
     };
     use crate::owner::panic_boundary::{AfterPanic, ContainedIvars, os_entry};
-
-    /// Evidence that this macOS has `UTType` and the panels' content types.
-    #[derive(Clone, Copy)]
-    struct HasContentTypes;
-
-    #[cfg(target_arch = "aarch64")]
-    #[expect(
-        clippy::unnecessary_wraps,
-        reason = "the x86_64 build of the same function answers None below macOS 11"
-    )]
-    fn content_types(_version: MacOSVersion) -> Option<HasContentTypes> {
-        Some(HasContentTypes)
-    }
-
-    #[cfg(not(target_arch = "aarch64"))]
-    fn content_types(version: MacOSVersion) -> Option<HasContentTypes> {
-        version
-            .since::<super::ContentTypes>()
-            .map(|_| HasContentTypes)
-    }
-
-    /// The `UTType` `content_type` names, looked up at run time: the class
-    /// is in UniformTypeIdentifiers, which AppKit loads from macOS 11 on.
-    fn ut_type(_: HasContentTypes, content_type: &ContentType) -> Option<Retained<AnyObject>> {
-        let class = AnyClass::get(c"UTType")?;
-        // SAFETY: each is a class method of `UTType` taking an `NSString`
-        // and returning a nullable, autoreleased `UTType`.
-        unsafe {
-            match content_type {
-                ContentType::Extension(extension) => msg_send![
-                    class,
-                    typeWithFilenameExtension: &*NSString::from_str(extension)
-                ],
-                ContentType::Mime(mime_type) => {
-                    msg_send![class, typeWithMIMEType: &*NSString::from_str(mime_type)]
-                }
-                ContentType::Identifier(identifier) => {
-                    msg_send![class, typeWithIdentifier: &*NSString::from_str(identifier)]
-                }
-            }
-        }
-    }
-
-    /// The contract's rule for an open panel's items: the request's
-    /// extensions, matched by name, and the types of its MIME patterns
-    /// (none below macOS 11, where such a request is refused).
-    struct NameRule {
-        extensions: Vec<String>,
-        mime_types: Vec<Retained<AnyObject>>,
-    }
 
     /// The item the panel answers for `url`: the target of an alias or a
     /// link, resolved without asking the user or mounting a volume, and
@@ -396,56 +198,26 @@ mod appkit {
         }
     }
 
-    impl NameRule {
-        /// What the rule makes of `item`, with its kind as far as it had
-        /// to be read: `None` for an item its name admitted, or whose kind
-        /// the file system does not say.
-        fn judge(&self, item: &NSURL) -> (Judged, Option<ItemKind>) {
-            use std::os::unix::ffi::OsStrExt as _;
+    /// What `rule` makes of `item`, with its kind as far as it had to be
+    /// read: `None` for an item its name admitted, or whose kind the file
+    /// system does not say.
+    fn judge(rule: &NameRule, item: &NSURL) -> (Judged, Option<ItemKind>) {
+        let mut kind = None;
+        let judged = rule.judge(item, || {
+            let read = ItemKind::read(item)?;
+            let conforms = rule.conforms(read.type_identifier.as_deref());
+            kind = Some(read);
+            Some(conforms)
+        });
+        (judged, kind)
+    }
 
-            let path = url_path(item);
-            let name = path
-                .as_deref()
-                .and_then(std::path::Path::file_name)
-                .map(std::ffi::OsStr::as_bytes);
-            let mut kind = None;
-            let judged = judge_item(name, &self.extensions, || {
-                let read = ItemKind::read(item)?;
-                let conforms = self.conforms(read.type_identifier.as_deref());
-                kind = Some(read);
-                Some(conforms)
-            });
-            (judged, kind)
-        }
-
-        /// Whether a file of the type `identifier` is one of the rule's
-        /// MIME types.
-        fn conforms(&self, identifier: Option<&NSString>) -> bool {
-            if self.mime_types.is_empty() {
-                return false;
-            }
-            let (Some(identifier), Some(class)) = (identifier, AnyClass::get(c"UTType")) else {
-                return false;
-            };
-            // SAFETY: a class method of `UTType` taking an `NSString`.
-            let file_type: Option<Retained<AnyObject>> =
-                unsafe { msg_send![class, typeWithIdentifier: identifier] };
-            file_type.is_some_and(|file_type| {
-                self.mime_types.iter().any(|allowed| {
-                    // SAFETY: `conformsToType:` takes a `UTType` and answers
-                    // a `BOOL`; both are `UTType`s.
-                    unsafe { msg_send![&*file_type, conformsToType: &**allowed] }
-                })
-            })
-        }
-
-        /// Whether the panel shows `url` enabled: a file the rule admits,
-        /// or a folder to browse. An item whose name does not admit it and
-        /// whose kind cannot be read is not shown as one to choose.
-        fn enables(&self, url: &NSURL) -> bool {
-            let (judged, kind) = self.judge(&answered_item(url));
-            judged == Judged::Admitted || kind.is_some_and(|kind| kind.browsable)
-        }
+    /// Whether the panel shows `url` enabled under `rule`: a file the rule
+    /// admits, or a folder to browse. An item whose name does not admit it
+    /// and whose kind cannot be read is not shown as one to choose.
+    fn rule_enables(rule: &NameRule, url: &NSURL) -> bool {
+        let (judged, kind) = judge(rule, &answered_item(url));
+        judged == Judged::Admitted || kind.is_some_and(|kind| kind.browsable)
     }
 
     define_class!(
@@ -480,7 +252,7 @@ mod appkit {
                 (),
                 // A pick is checked again when the panel answers.
                 AfterPanic::Answer(|()| false),
-                || self.ivars().enables(url),
+                || rule_enables(self.ivars(), url),
             )
         }
     }
@@ -518,7 +290,7 @@ mod appkit {
         pub(crate) fn new(mtm: MainThreadMarker, version: MacOSVersion) -> Self {
             Self {
                 mtm,
-                content_types: content_types(version),
+                content_types: HasContentTypes::on(version),
             }
         }
 
@@ -526,7 +298,7 @@ mod appkit {
         /// extensions' last parts as file types below it. A type the system
         /// does not know, or a MIME pattern below macOS 11, refuses the
         /// request.
-        fn allow(&self, panel: &NSSavePanel, filter: &PanelFilter) -> Result<(), DialogError> {
+        fn allow(&self, panel: &NSSavePanel, filter: &ContentFilter) -> Result<(), DialogError> {
             let refused = || unsupported(UnsupportedReason::NotOnThisDevice);
             let Some(proof) = self.content_types else {
                 let names = filter.file_types().ok_or_else(refused)?;
@@ -554,23 +326,6 @@ mod appkit {
                 let () = msg_send![panel, setAllowedContentTypes: &*types];
             }
             Ok(())
-        }
-
-        /// The contract's rule an open panel's delegate and its picks are
-        /// held to.
-        fn name_rule(&self, filter: &PanelFilter) -> Rc<NameRule> {
-            let mime_types = self.content_types.map_or_else(Vec::new, |proof| {
-                filter
-                    .types
-                    .iter()
-                    .filter(|content_type| !matches!(content_type, ContentType::Extension(_)))
-                    .filter_map(|content_type| ut_type(proof, content_type))
-                    .collect::<Vec<Retained<AnyObject>>>()
-            });
-            Rc::new(NameRule {
-                extensions: filter.extensions.clone(),
-                mime_types,
-            })
         }
     }
 
@@ -608,7 +363,7 @@ mod appkit {
         let Some(path) = url_path(&item) else {
             return PanelPick::NotAFile;
         };
-        if !rule.mime_types.is_empty() && rule.judge(&item).0 == Judged::Refused {
+        if rule.judges_types() && judge(rule, &item).0 == Judged::Refused {
             PanelPick::NotInFilter
         } else {
             PanelPick::Path(path)
@@ -648,10 +403,10 @@ mod appkit {
             panel.setCanCreateDirectories(folders);
             panel.setAllowsMultipleSelection(request.is_multiple());
             let mut rule = None;
-            let filtered = panel_filter(&request.filters).and_then(|filter| match filter {
+            let filtered = content_filter(&request.filters).and_then(|filter| match filter {
                 Some(filter) => {
                     self.allow(&panel, &filter)?;
-                    rule = Some(self.name_rule(&filter));
+                    rule = Some(Rc::new(NameRule::new(self.content_types, &filter)));
                     Ok(())
                 }
                 None => Ok(()),
@@ -720,7 +475,7 @@ mod appkit {
             if let Some(name) = &request.suggested_name {
                 panel.setNameFieldStringValue(&NSString::from_str(name));
             }
-            let filtered = panel_filter(&request.filters).and_then(|filter| match filter {
+            let filtered = content_filter(&request.filters).and_then(|filter| match filter {
                 Some(filter) => self.allow(&panel, &filter),
                 None => Ok(()),
             });
@@ -763,135 +518,8 @@ mod appkit {
 mod tests {
     use flui_platform::{SystemFailure, Unsupported, UnsupportedReason};
 
-    use super::{
-        ABORTED, ContentType, Judged, PanelPick, judge_item, name_matches, open_answer,
-        panel_filter, save_answer,
-    };
-    use crate::dialog::{DialogError, FileDialogCapability, FileFilter};
-
-    fn extensions(list: &[&str]) -> Vec<String> {
-        list.iter()
-            .map(|extension| (*extension).to_owned())
-            .collect()
-    }
-
-    #[test]
-    fn a_filter_allows_each_type_once_and_a_several_part_extension_by_its_last_part() {
-        let filters = [
-            FileFilter::new("Archives")
-                .with_extension("tar.gz")
-                .with_extension("zip"),
-            FileFilter::new("Images")
-                .with_extension("PNG")
-                .with_extension("zip")
-                .with_mime_type("image/*")
-                .with_mime_type("image/webp"),
-        ];
-        let filter = panel_filter(&filters)
-            .expect("every pattern maps")
-            .expect("filters were given");
-        assert_eq!(
-            filter.types,
-            [
-                ContentType::Extension("gz".to_owned()),
-                ContentType::Extension("zip".to_owned()),
-                ContentType::Extension("png".to_owned()),
-                ContentType::Identifier("public.image"),
-                ContentType::Mime("image/webp".to_owned()),
-            ]
-        );
-        assert_eq!(filter.extensions, extensions(&["tar.gz", "zip", "png"]));
-        assert_eq!(filter.file_types(), None, "a MIME pattern needs a type");
-
-        let plain = panel_filter(&[FileFilter::new("Archives").with_extension("tar.gz")])
-            .expect("maps")
-            .expect("given");
-        assert_eq!(
-            plain.file_types(),
-            Some(extensions(&["gz"])),
-            "below macOS 11 a panel allows the last part, and the delegate checks the name"
-        );
-        assert_eq!(panel_filter(&[]), Ok(None), "no filter allows every file");
-    }
-
-    #[test]
-    fn a_mime_family_macos_has_no_type_for_is_refused_rather_than_widened() {
-        for family in ["image/*", "audio/*", "video/*", "text/*", "font/*"] {
-            assert!(
-                panel_filter(&[FileFilter::new("F").with_mime_type(family)]).is_ok(),
-                "{family}"
-            );
-        }
-        assert_eq!(
-            panel_filter(&[FileFilter::new("Models").with_mime_type("model/*")]),
-            Err(DialogError::Unsupported(Unsupported::of::<
-                FileDialogCapability,
-            >(
-                UnsupportedReason::NotOnThisPlatform
-            )))
-        );
-    }
-
-    #[test]
-    fn a_name_matches_as_the_contract_says() {
-        let rule = extensions(&["tar.gz", "png", "txt", "zip"]);
-        let cases: [(&[u8], bool); 13] = [
-            (b"backup.tar.gz", true),
-            (b"BACKUP.TAR.GZ", true),
-            (b"photo.Png", true),
-            (b"notes.gz", false),
-            (b"tar.gz", false),
-            // A name is longer than its extension and the dot before it.
-            (b".png", false),
-            (b"png", false),
-            (b"photo.png.txt", true),
-            ("é.png".as_bytes(), true),
-            // A name that is not UTF-8 still ends in its extension.
-            (b"\xff\xfe.png", true),
-            // Types that conform to an allowed one are not its names.
-            (b"main.swift", false),
-            (b"photo.jpeg", false),
-            (b"letter.docx", false),
-        ];
-        for (name, matches) in cases {
-            assert_eq!(
-                name_matches(name, &rule),
-                matches,
-                "{}",
-                String::from_utf8_lossy(name)
-            );
-        }
-    }
-
-    #[test]
-    fn an_items_name_admits_it_before_anything_of_it_is_read() {
-        let rule = extensions(&["png", "tar.gz"]);
-        assert_eq!(
-            judge_item(Some(b"photo.PNG"), &rule, || panic!(
-                "a name that admits its file reads nothing of it"
-            )),
-            Judged::Admitted
-        );
-        /// An item's name, what its type's read answers, and the verdict.
-        type Case<'a> = (Option<&'a [u8]>, Option<bool>, Judged);
-        let cases: [Case<'_>; 5] = [
-            // A file whose type is one of the MIME patterns'.
-            (Some(b"scan"), Some(true), Judged::Admitted),
-            (Some(b"main.swift"), Some(false), Judged::Refused),
-            // A file gone since it was listed, a volume that stopped
-            // answering: not read, so not refused.
-            (Some(b"scan"), None, Judged::Unread),
-            (Some(b"notes.gz"), None, Judged::Unread),
-            (None, Some(false), Judged::Refused),
-        ];
-        for (name, conforms, judged) in cases {
-            assert_eq!(
-                judge_item(name, &rule, || conforms),
-                judged,
-                "{name:?} {conforms:?}"
-            );
-        }
-    }
+    use super::{ABORTED, PanelPick, open_answer, save_answer};
+    use crate::dialog::{DialogError, FileDialogCapability};
 
     #[test]
     fn an_ended_panel_answers_its_picks_a_cancel_or_why_it_could_not() {
@@ -945,23 +573,5 @@ mod tests {
             Err(DialogError::Failed(SystemFailure::MalformedAnswer))
         );
         assert_eq!(save_answer(0, || None), Ok(None));
-    }
-
-    #[cfg(not(target_arch = "aarch64"))]
-    #[test]
-    fn content_types_are_there_from_macos_11_on() {
-        use super::super::version::MacOSVersion;
-        use super::ContentTypes;
-
-        assert!(
-            MacOSVersion::new(10, 15, 7)
-                .since::<ContentTypes>()
-                .is_none()
-        );
-        assert!(
-            MacOSVersion::new(11, 0, 0)
-                .since::<ContentTypes>()
-                .is_some()
-        );
     }
 }

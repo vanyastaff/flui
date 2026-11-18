@@ -122,7 +122,8 @@ objc2-app-kit = { workspace = true, features = [
 ] }
 # No `UTType` binding crate: it links UniformTypeIdentifiers, which macOS
 # 10.13 to 10.15 do not have, so a binary linking it would not start there.
-# The class is looked up at run time, behind its gate (`macos::version`).
+# The class is looked up at run time, behind its gate
+# (`apple::content_types`).
 objc2-service-management = { workspace = true, features = [
     "std",
     "objc2",
@@ -135,6 +136,58 @@ dispatch2 = { workspace = true }
 libc = { workspace = true }
 raw-window-handle = { workspace = true }
 # A panic an AppKit callback or a dispatched block contains is logged.
+tracing = { workspace = true }
+
+# The iOS providers: UIKit's document picker, alert and share sheet and
+# `UIApplication`'s `openURL:` on the main thread, a picked document read
+# through Foundation's file coordinator under its security-scoped access, and
+# the application's folders through the file manager (ADR-0154 §1). Work that
+# touches the file system runs on a Grand Central Dispatch queue.
+[target.'cfg(target_os = "ios")'.dependencies]
+objc2 = { workspace = true }
+# A popover's anchor: the `CGRect` UIKit takes.
+objc2-core-foundation = { workspace = true, features = ["std", "CFCGTypes"] }
+objc2-foundation = { workspace = true, features = [
+    "std",
+    "block2",
+    "NSArray",
+    "NSDictionary",
+    "NSEnumerator",
+    "NSError",
+    "NSFileCoordinator",
+    "NSFileManager",
+    "NSObject",
+    "NSPathUtilities",
+    "NSProcessInfo",
+    "NSString",
+    "NSURL",
+] }
+# No `UTType` binding crate: it links UniformTypeIdentifiers, which iOS 13
+# does not have, so a binary linking it would not start there. The class is
+# looked up at run time, behind its gate (`apple::content_types`).
+objc2-ui-kit = { workspace = true, features = [
+    "std",
+    "block2",
+    "objc2-core-foundation",
+    "UIActivity",
+    "UIActivityViewController",
+    "UIAlertController",
+    "UIApplication",
+    "UIDevice",
+    "UIDocumentPickerViewController",
+    "UIPopoverPresentationController",
+    "UIPopoverSupport",
+    "UIPresentationController",
+    "UIResponder",
+    "UIView",
+    "UIViewController",
+    "UIWindow",
+] }
+block2 = { workspace = true }
+dispatch2 = { workspace = true }
+libc = { workspace = true }
+raw-window-handle = { workspace = true }
+# A panic a UIKit callback or a dispatched block contains is logged.
 tracing = { workspace = true }
 
 # The web providers: the browser's pickers, `<dialog>`, `window.open`, the
