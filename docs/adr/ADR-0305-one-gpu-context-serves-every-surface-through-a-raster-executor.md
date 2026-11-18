@@ -530,10 +530,13 @@ executor and slot.
 - `Detach` and `Release` complete before the native window is destroyed or its surface given
   back. Inline they complete within the call. Threaded, the owner waits for the slot's record with
   a deadline (`DETACH_DEADLINE`, two seconds, above wgpu's one-second acquire timeout), with no
-  borrow of the host or a runtime held. On Win32 the wait services sent messages only
-  (`MsgWaitForMultipleObjectsEx` with `QS_SENDMESSAGE`): a present can send a message to the
-  window's thread, and a message thread that waits on the render thread without serving it
-  deadlocks (Microsoft's DXGI guidance, below).
+  borrow of the host or a runtime held; it waits the same way for an attach's answer and the
+  thread's stop. It waits through the platform's `flui_platform::OwnerWait` where the platform
+  has one (`Platform::owner_wait`), which the thread notifies after each turn and once it
+  stopped, and on a condition variable otherwise. On Win32 that wait serves sent messages only
+  (`MsgWaitForMultipleObjectsEx` with `QS_SENDMESSAGE`, then `PeekMessageW` with
+  `PM_QS_SENDMESSAGE`): a present can send a message to the window's thread, and a message thread
+  that waits on the render thread without serving it deadlocks (Microsoft's DXGI guidance, below).
 - On a timeout the window is quarantined, not closed, and the executor is marked `Died`. A raster
   thread wedged past the deadline holds the context, so every window stops drawing, not one: the
   owner asks every open window for a frame, and each window's wake settles the frames its slot
@@ -635,9 +638,8 @@ impl<B: RasterBackend + Send + 'static> RasterExecutor<B> {
   Confirmation records. X11 stays inline until a run on a real X server meets the budget: Xvfb
   has no vsync, so its pacing could not be judged, and an unmapped window's `Fifo` present may
   block (`docs/gaps.md`), which on the one raster thread would hold every window's frames.
-  Windows and macOS stay inline until a run on each meets the budget, Windows also until the
-  owner's wait services sent messages (§9); the headless host and every run of
-  `flui_app::testing` stay inline. No switch chooses the placement.
+  Windows and macOS stay inline until a run on each meets the budget; the headless host and
+  every run of `flui_app::testing` stay inline. No switch chooses the placement.
 - `render_lent` serves the hot-reload plugin's scene, lent by reference for the length of one
   call (`ScenePlugin::try_render_frame` in `crates/flui-app/src/app/hot_reload.rs`, through
   `RasterHost::render_lent` on Android).

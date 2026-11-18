@@ -1124,10 +1124,18 @@ impl RasterHost {
                 // A settlement, a device's health or a failure wakes every
                 // attached window; each window's wake drains its own slot.
                 let woken = redraws.clone();
+                // The owner waits for the thread's answers (an attach, a
+                // detach, the stop) through its platform's wait, which on
+                // Win32 serves the messages the thread's DXGI calls send to
+                // the windows meanwhile (ADR-0305 §9).
+                let owner_wait =
+                    super::host::with_owner_platform(flui_native::OwnerPlatform::owner_wait)
+                        .flatten();
                 let (handle, sender) = RasterExecutor::spawn(
                     backend,
                     Arc::new(flui_foundation::SystemClock),
                     move || woken.wake(),
+                    owner_wait,
                 )
                 .map_err(EngineError::surface_creation)?;
                 let handle = Rc::new(handle);

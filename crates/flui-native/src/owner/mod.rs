@@ -313,6 +313,13 @@ impl OwnerPlatform {
         self.platform.display_connection()
     }
 
+    /// How this thread waits for a raster thread of the application
+    /// (ADR-0305 §9). See [`Platform::owner_wait`].
+    #[must_use]
+    pub fn owner_wait(&self) -> Option<Arc<dyn flui_platform::OwnerWait>> {
+        self.platform.owner_wait()
+    }
+
     /// Open a window whose deliveries go to `handler` (ADR-0254 §4). `Ready`
     /// is guaranteed inside `on_ready`; afterwards the backend may defer
     /// through its owner lane (where one exists), returning `Pending`.
