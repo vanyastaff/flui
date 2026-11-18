@@ -35,13 +35,12 @@
 
 use std::num::NonZeroUsize;
 
-use flui_foundation::RenderId;
 use flui_foundation::arena::{FrameArena, FrameVec};
 use flui_foundation::geometry::{Matrix4, Point, Rect, Size};
+use flui_foundation::{RenderId, TextDirection};
 use flui_semantics::{
     AccessibilityNodeId, SemanticsCollectionOrigin, SemanticsConfiguration, SemanticsIndexOrigin,
     SemanticsNode, SemanticsOwner, SemanticsRegions, SemanticsTree, SetSize, TableShape,
-    TextDirection,
 };
 use rustc_hash::{FxHashMap, FxHashSet};
 

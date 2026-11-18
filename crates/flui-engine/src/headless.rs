@@ -134,6 +134,20 @@ impl HeadlessRenderer {
         self.context().max_texture_dimension()
     }
 
+    /// Detaches the renderer's slot, as a closed window's is: the next
+    /// capture attaches a new one.
+    #[cfg(test)]
+    pub(crate) fn detach_slot(&self) {
+        let mut capture = self
+            .capture
+            .try_borrow_mut()
+            .expect("BUG: a test detaches between captures");
+        let Capture { context, slot } = &mut *capture;
+        if let Some(slot) = slot.take() {
+            assert!(context.detach(slot), "the slot was attached");
+        }
+    }
+
     /// The context the captures render through, outside any capture.
     #[cfg(test)]
     pub(crate) fn context(&self) -> std::cell::RefMut<'_, GpuContext> {
@@ -273,6 +287,7 @@ impl HeadlessRenderer {
             last_plan: None,
             last_ir: None,
             keep_ir: false,
+            lineage: crate::recording_cache::DrawnLineages::new(),
         })
     }
 }
@@ -465,6 +480,9 @@ pub(crate) struct RetainedCapture {
     last_ir: Option<Vec<u8>>,
     /// Whether a frame keeps its IR in `last_ir`.
     keep_ir: bool,
+    /// The lineage of the version the capture last drew, as a `Renderer`
+    /// keeps it.
+    lineage: crate::recording_cache::DrawnLineages<()>,
 }
 
 #[cfg(test)]
@@ -644,6 +662,17 @@ impl RetainedCapture {
         self.last_plan
     }
 
+    /// How many recordings the painter's cache keeps, and the entries its
+    /// evictions looked at since the last call.
+    pub(crate) fn recording_cache_work(&mut self) -> (usize, u64) {
+        self.painter.recording_cache_work()
+    }
+
+    /// Holds the painter's recording cache to `budget` bytes.
+    pub(crate) fn set_recording_cache_budget(&mut self, budget: usize) {
+        self.painter.set_recording_cache_budget(budget);
+    }
+
     /// Renders `scene` the way `Renderer::render_scene` does: a frame no
     /// damage producer accounted for.
     ///
@@ -794,8 +823,13 @@ impl RetainedCapture {
         use crate::damage::FramePlan;
         use crate::raster::PresentDisposition;
 
-        self.frame.include_backdrop_dependencies(scene, self.size);
-        let plan = self.frame.plan(self.intermediate_required);
+        let plan = self.frame.plan_scene(
+            &mut self.painter,
+            &mut self.lineage,
+            scene,
+            self.size,
+            self.intermediate_required,
+        );
         self.last_plan = Some(plan);
         if plan == FramePlan::Skip {
             return Ok(PresentDisposition::NoDamage);

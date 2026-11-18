@@ -355,6 +355,8 @@ mod pipeline_warmup;
 mod pixel_shift;
 mod portable_coverage;
 mod profiler;
+/// Values in the order of their last use, for least-recently-used eviction.
+mod recency;
 mod recording_budget;
 /// A chunk's IR kept past its frame and replayed for an unchanged chunk drawn
 /// under the same transform and ambient state (ADR-0304 §9).
@@ -391,6 +393,8 @@ mod surface_factory;
 mod surface_lease;
 mod surface_pacing;
 mod surface_present;
+/// A hash map that counts, in tests, the entries each access touches.
+mod tallied_map;
 mod tessellator;
 pub(crate) mod texture_cache;
 mod texture_pool;

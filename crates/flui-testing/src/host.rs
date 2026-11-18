@@ -757,8 +757,8 @@ impl PlatformAccessibility for HeadlessAccessibility {
 
     /// A test plays the screen reader, so the cursor is reported: through
     /// [`HeadlessHost::move_assistive_focus`].
-    fn assistive_focus_support(&self) -> flui_semantics::AssistiveFocusSupport {
-        flui_semantics::AssistiveFocusSupport::Reported
+    fn assistive_focus_support(&self) -> flui_semantics::platform::AssistiveFocusSupport {
+        flui_semantics::platform::AssistiveFocusSupport::Reported
     }
 
     fn set_assistive_focus_listener(&self, listener: AssistiveFocusListener) {

@@ -53,6 +53,10 @@ have them:
 - The message box, the share sheet and the jump list came with their Windows provider. No portal
   has a message box or a share sheet, and the jump list is Windows', so the Linux provider refuses
   the three with `NotOnThisPlatform`.
+- A provider that hands a pick over without a path (the browser, iOS, Android) reads it itself, by the
+  one set of rules in `dialog::handed_over`: the picks are held to the filters by name and type,
+  their declared sizes to the request's `max_bytes` before a byte is read, and the bytes read are
+  counted again.
 - A message box names its default button and may label its buttons and carry a detail
   (`MessageBoxRequest`). The handle refuses a default or a label for a button the box does not
   offer, a blank label, and two buttons labelled alike. A box without a title shows none on any
@@ -456,13 +460,134 @@ container's, and the folders a container does not hold none. The system's name i
   on the last one.
 - The system information has no Linux provider yet and answers `NotYetOnThisHost`.
 
+## Android (`android`)
+
+The `android` module provides the launcher, the file dialogs, the message box, the share sheet, the
+user's folders and the system information; autostart, global shortcuts, the launcher entry and the
+jump list answer `NotOnThisPlatform`, since an Android application has none of them, as do reveal,
+trash and opening a folder. Each provider's rules are functions of its file over plain values,
+compiled and tested on every host (`android::*::tests`), and the dialogs' whole path runs there over
+a stand-in Activity and picker (`testing::android`); the JNI calls are the module's Android-only
+`java` module, checked by CI's Android type-check. The owed device runs are in the parity rows.
+
+**Java only as a leaf (ADR-0377).** Android's own classes (`Intent`, `ContentResolver`,
+`AlertDialog.Builder`, `Environment`) are called from Rust. The crate ships two classes
+(`android/java`, `dev.flui.system`), each forced by the platform:
+
+- `FluiDocuments` is a content provider, a component the manifest must name and Android
+  instantiates by that name. It serves under the authority Android attached it with
+  (`attachInfo`), never one it computes.
+- `FluiCallback` is the one handler of every `java.lang.reflect.Proxy` the crate makes for a
+  listener interface (a dialog's three listeners): JNI defines no class, and a handler is an
+  object of a Java type. A call reaches the native `called` with the method's name; once the
+  object is collected, a phantom reference hands its handle to `released` from a daemon thread of
+  the class (a `Cleaner` does that from API 33, above the floor).
+
+Their dex is checked in (`android/classes.dex`, held to the sources by `cargo xtask android-dex`)
+and declared with the sources, the R8 rules and the provider in `[package.metadata.flui.declares]`
+(ADR-0307), so `flui build` packs it beside the core host's and writes the `<provider>` element;
+no user's build runs `javac`. Only the providers that call the classes read them, once per runtime:
+the launcher and the share sheet (`FluiDocuments`) and the message box (`FluiCallback`). The
+library reads `FluiCallback.PROTOCOL` before it binds anything, and an APK without the classes,
+with another protocol, or whose manifest declares no `FluiDocuments`, refuses those three with
+`NotDeclared`; the file dialogs, the user's folders and the system information call Android's
+classes alone and work without them. No compiler checks the names and signatures the JNI calls
+spell: they were read against the platform's `android.jar` (typed bindings are the direction,
+[`docs/gaps.md`](../../docs/gaps.md#jni-calls-are-hand-written-signature-strings)).
+
+Threads:
+
+- **The owner thread is not Java's main thread.** The providers reach Android through the Activity
+  the host lends (`ProviderContext::activity`, ADR-0154 §9): a runtime whose host offers none (the
+  headless host) is refused with `NotYetOnThisHost`. The library keeps no `JavaVM` of its own: the
+  first provider of a UI runtime reads the VM, the class loader and the application's content
+  resolver in a frame the Activity lends, and keeps them with the runtime.
+- **Starting an activity and the message box run on Java's main thread**, each work the host runs
+  there for the provider (`Activity::on_main_thread`, ADR-0377 §6) inside its panic boundary. Work
+  the host refuses (the Activity ended, `MAX_POSTED_WORK` pieces wait, or the main thread did not
+  take it within the host's limit) answers a launch or a share `Unavailable`, and a message box
+  `NotShown`. A dropped box's dismissal is owed: refused, it is tried again when the refusal
+  arrives, until it lands or the Activity ends (`dismiss_until_landed`), and the refusal is logged
+  once. The host answers `TooMuchPosted` only once a place has freed and `HandOffFailed` at its
+  deadline, so the retry never spins the owner.
+- **Whatever reads a content provider or the file system runs on a thread of its own**
+  (`android::workers`), at most `Workers::MAX_IN_FLIGHT` per runtime; a request past that answers
+  `Unavailable`, and a worker gives its place back on every exit. A provider answers when it will
+  and may ignore a cancellation, so a worker can stay inside a call.
+
+Both native methods are one call of `owner::android::native_call::jni_native`, the crate's adapter
+of the same contract as `flui-native`'s: the body runs inside the panic boundary, and no Java
+exception is left pending when the method returns.
+
+**File dialogs** are the Storage Access Framework's pickers, started through
+`Activity::launch_for_result` under a key per kind. The picker filters by MIME type alone: a
+filter's MIME types pass as they are and each extension as the type `MimeTypeMap` maps its last part
+to; an extension with no type, or more types than `MAX_INTENT_TYPES`, shows every document, and the
+picks are held to the filters all the same (ADR-0360 §4). A pick is a content URI, so it is handed
+over as its name and contents (below). A save carries its contents and is written through the URI
+the user chose (`wt`, or `w` where the provider cannot truncate); the document is typed by the
+proposed name's extension, else by the first filter's, so Android's own provider adds that
+extension to a name the user types without it, and a type with no extension leaves the name as
+typed. A document that could not be written is deleted. A folder dialog answers `NotYetOnThisHost`
+and a save without contents `NotOnThisPlatform`; the picker shows no title, accept label or
+starting folder. The dialog's hold is the request's `ResultTicket`: dropping it before the answer
+finishes the picker (ADR-0344); dropping it after the answer arrived and before its owner turn
+leaves the answer unread; dropping it while a worker reads cancels the provider's calls that take
+the `CancellationSignal` (a query, an open) and stops the worker before its next document and
+between two `READ_CHUNK`-sized reads, though a read the provider holds blocked inside one chunk
+keeps the worker's place until the provider writes or closes. A save the user has answered
+completes whoever still waits. When Android replaces the Activity the request ends
+`ActivityEnded`, answered as the window closing; the answer that comes later is claimed by the next
+runtime's first dialogs (`Activity::reattach` under each key), so the host holds nothing: an open's
+answer is let go and the empty document of a save deleted.
+
+**Launching.** A URI is `ACTION_VIEW` as written under `CATEGORY_BROWSABLE`, with no grant: only an
+activity that declares itself reachable from a link takes it. A document never leaves as a path or
+a `file:` URI: it is opened on a worker without blocking and without taking a terminal, what the
+descriptor holds is judged (a regular file whose final name, read from `/proc/self/fd`, neither
+`runs_when_opened` nor installs a package), and the open file is handed to `FluiDocuments`, which
+serves it under `content://<authority>/<random token>/<name>` (the authority the manifest gave it,
+`<application id>.flui.documents`) to the one activity the intent's read grant reaches (ADR-0360
+§2). The provider is not exported, serves only what was offered, and reopens the file through the
+descriptor it holds (never the path). An offer is opened and queried as often as its grantee
+asks (the share sheet opens an image for its thumbnail before the chosen application does)
+until its start does not happen (the `Intent` failed to build, or Android refused the start),
+when the library withdraws every offer the start made (`FluiDocuments.withdraw`,
+`StartAnswer::keeps_offers`), or `FluiDocuments.OFFER_LIFETIME_MS` passes, which is also what
+ends the offers of a share whose chooser the user dismissed, since Android reports no
+dismissal; a grantee that opened it keeps its own descriptor after that. At most
+`FluiDocuments.MAX_OFFERED` are served at once; one more is refused rather than replacing an
+offer whose grant may be in use, classified from `offer` alone, and answers the launch or the
+share `Failed(Os(EMFILE))` (`TOO_MANY_OFFERED`). A file unlinked between its open and the read of
+its final name is refused by the `fstat` already made (`Held::Unlinked`), not judged by the
+`(deleted)` name the kernel gives it.
+
+**Sharing** is `ACTION_SEND`, or `ACTION_SEND_MULTIPLE` for several files, through the chooser: the
+text and the link travel as `EXTRA_TEXT`, the link on its own line, the title is the chooser's and
+the subject. Each file is opened on a worker as a launch's document is (`android::opened`: without
+blocking, without taking a terminal, judged by what the descriptor holds) and shared only when it
+is a regular file, under its final name (`share::open_shared`), so a link named `notes.pdf` that
+leads to `secret.db` goes out as `secret.db`; unlike a launch, any name is shared, since a share
+hands over contents. The intent's clip carries the grant to the target the user picks.
+
+**The message box** is an `AlertDialog` whose listeners are one proxy; it answers once, with the
+first of a button, the user leaving (a back press or a touch outside, which answers what closing
+means for the buttons; a Yes or No box cannot be left) or a box that could not be shown. The hold
+takes the caller's answer away and dismisses the box, or keeps one not yet shown from showing. The
+buttons are labelled in English: Android's `yes` and `no` strings read "OK" and "Cancel".
+
+**The user's folders** are `Environment`'s public directories (Documents, Download, Music, Pictures,
+Movies), which it names without reading storage; Android has no home folder, desktop, templates or
+public share. **The system information** is the system properties' release and ABI.
+
 ## Picks and saves without a path
 
 - A pick is a `PickedFile`, not a path, because not every system answers one; `PickedFile::form`
   says which it is (`PickedForm`). A desktop dialog answers where the file is (`Path`); a browser
-  answers a file a page may read but never a path, and iOS a document the application may reach
-  only while it holds the access its picker granted, so there a pick carries its name and
-  contents (`Contents`), read when the dialog answers; a save handed to the browser as a download
+  answers a file a page may read but never a path, iOS a document the application may reach only
+  while it holds the access its picker granted, and Android's picker a content URI, so there a
+  pick carries its name and contents (`Contents`), read when the dialog answers (the checks such a
+  host makes are one set of rules, `dialog::handed_over`); a save handed to the browser as a download
   is `Download`, whose place and fate the browser does not report (it may be cancelled, blocked or
   renamed), so it carries the name it was offered under and no contents. Reading is bounded by the
   request (`OpenRequest::max_bytes`, by default `TransferLimits`' default, a drop's bound): the
@@ -495,18 +620,19 @@ container's, and the folders a container does not hold none. The system's name i
   target has another name, a type that only conforms to an allowed one, a browser's input that
   offers every file beside them). The handle cannot tell a file's type, so it checks a request
   whose filters name extensions and file names only, and a backend that mapped a MIME pattern
-  judges the pick by its type (`FileFilter::matches` with the browser's type on the web, type
-  conformance on macOS and iOS). An iOS pick is judged before it is read, so one the filters do
-  not mean is never read. A request that offers a filter of every file admits every pick
-  (ADR-0374 §3).
+  judges the pick by its type (`FileFilter::matches` with the browser's type on the web and the
+  provider's on Android, type conformance on macOS and iOS). An iOS or Android pick is judged
+  before it is read, so one the filters do not mean is never read. A request that offers a filter
+  of every file admits every pick (ADR-0374 §3).
 - A save may carry the contents it writes (`SaveRequest::contents`), the one way to save where
   the system hands over no file to write later (a page, iOS). The handle writes them to a path the
   user chose on a thread of its own (`dialog::write`) and answers once they are written (a failed write
   answers the system's code); a backend that hands over no path writes them itself and answers the
   file it wrote. Once the user has chosen, the write completes even if the caller let the dialog
-  go, on every host. A save without contents answers where to save, and on the web and iOS, which
-  have no path to answer, is refused with `NotOnThisPlatform`. Access to a pick that outlasts the process
-  (a security-scoped bookmark on macOS and iOS) is not built: [`docs/gaps.md`](../../docs/gaps.md).
+  go, on every host. A save without contents answers where to save, and on the web, iOS and
+  Android, which have no path to answer, is refused with `NotOnThisPlatform`. Access to a pick
+  that outlasts the process (a security-scoped bookmark on macOS and iOS, a persisted URI grant on
+  Android) is not built: [`docs/gaps.md`](../../docs/gaps.md).
 - The contents replace the chosen file whole or not at all: they go into a new file beside it,
   synced, which takes its name, so a failed write leaves the chosen file as it was. A chosen link
   is written through: the new file is made beside the file the link leads to and takes that
@@ -646,5 +772,12 @@ container's, and the folders a container does not hold none. The system's name i
   provider's rules as a model, with the system's answers
   as inputs and `testing::owner::TestOwner`'s turns; the AppKit calls compile only for macOS, the
   UIKit calls only for iOS.
+- `android::*::tests` (every host): each Android provider's rules, and in `android::documents::tests`
+  the file dialogs from a request to its answer over the kit's stand-in Activity and picker
+  (`testing::android`): the Activity's refusals, a dialog let go, a save that completes, an earlier
+  Activity's answers claimed. `a_launch_judges_the_file_it_opened_by_its_final_name` opens real
+  files and links on Linux, and `the_java_classes_state_what_the_library_and_the_manifest_name`
+  holds the Java sources to the constants the library and the manifest state. The JNI calls
+  compile only for Android.
 - `web::rules::tests` on every host, and `web::tests` in headless Chrome (CI's `wasm-check` job
   runs `cargo test -p flui-system --lib --target wasm32-unknown-unknown`).

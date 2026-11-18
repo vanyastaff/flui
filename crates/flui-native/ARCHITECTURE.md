@@ -5429,9 +5429,10 @@ major version, unknown fields skipped, an unknown variant a typed error); its
 schema is `flui-protocol`'s `native_recording`, which a reader such as the
 driver reads without this crate, and its codec is `journal::codec`
 (`journal/`, a crate-level module, since it names the input feature's model
-and the Win32 touchpad assembler its replay drives), built only with
-`native-capture` or `testing`, so serde never enters the
-backend graph. The header declares every device label its rows read, with the
+and the Win32 touchpad assembler its replay drives), built only in a debug
+build with `native-capture`, or with `testing`, so serde never enters the
+backend graph and a release build compiles no journal, though `flui-app`
+turns the feature on in every build (ADR-0151 §16). The header declares every device label its rows read, with the
 kinds they read it as, and the reader refuses a row that names another.
 
 Recordings are captured in debug builds with the `native-capture` feature:
@@ -5593,19 +5594,29 @@ order no delivery writes (a second close, a request after the close, `closing`
 with nothing granted, a request after a grant, a cause that contradicts the
 requests). The in-process writers never write what their reader refuses, and
 the recorder never holds more: `Recorder` counts each row's bytes and the rows
-as they arrive, under the rule `NativeRecording::write` applies (`CutBudget`),
+as they arrive, under the rule `NativeRecording::write` applies
+(`flui_protocol::native_recording::Budget`, which the reader counts its lines
+with too),
 replaces the first row past either bound with a `cut` row naming why and keeps
 nothing its source reports after it, so a recording holds at most `MAX_ROWS`
-rows and `MAX_RECORDING_BYTES` of lines however long the capture runs.
-`NativeRecording::write` writes a recording that fits whole, and otherwise ends
-it at the last row that fits with room for a `cut` row, encoding nothing past
-it, so a value the format does not mirror past the cut does not fail the write;
-a header that grew after the recorder's first row (a device it declares) can
-move that cut a few rows earlier. A line sink drops what a source reports after
-its cut. `flui record --native` in `flui-cli` writes
-lines as they come and applies neither bound (`docs/gaps.md`). A replay of a cut
-recording replays every row before the cut and returns `Replayed::Cut` with its
-line and reason, never plain success. When a window's store journal cannot be
+rows and `MAX_RECORDING_BYTES` of lines however long the capture runs; a row
+longer than a line may be is held as a `Row::Gap` of one row, counted like any
+row, so what the recorder holds always writes. A live writer never knows
+whether another row comes, so it keeps room for a cut after every row.
+`NativeRecording::write` holds every row: it checks its header first, refuses a
+header or a row longer than a line with `CodecError::LineTooLong` and nothing
+written, writes a recording within the bounds whole, and otherwise takes back
+rows from the first one past a bound until a `cut` row fits, encoding nothing
+past it, so a value the format does not mirror past the cut does not fail the
+write. A `Row::Gap` is written as the format's `gap` line, read back as one,
+and stops a replay with `ReplayError::Gap`. A line sink drops what a source
+reports after its cut. `flui record --native` in `flui-cli`, which writes a
+live stream's lines as they come, keeps the same `Budget`: a header longer than
+a line opens no file, each row is admitted with the bytes its header grows by
+to declare the row's devices, a row the file cannot hold on its own becomes a
+`gap`, and the first line past a full bound becomes a `cut` that ends the file.
+A replay of a cut recording replays every row before the cut and returns
+`Replayed::Cut` with its line and reason, never plain success. When a window's store journal cannot be
 kept (no owner slot left), its stream is cut (`store_journal`) instead of a host
 keying stores on its own. `StoreLock::replay_on` replays a lock under a
 synchronous lock of the recorded kind, restoring the found document first, and
@@ -5621,6 +5632,8 @@ lock kind and protected emptiness are checked before any call is built
 `a_store_lock_the_recording_joined_after_is_refused`,
 `close_rows_out_of_order_are_refused`, `a_recording_past_its_bound_is_written_cut`,
 `a_live_recording_past_its_bound_holds_one_cut_and_nothing_after`,
+`the_writer_refuses_a_line_no_reader_takes_and_writes_what_fits_whole`,
+`a_live_row_past_the_line_bound_is_held_as_a_gap`,
 `captured_store_locks_replay_to_the_document_they_left`,
 `a_protected_store_journals_nothing_of_its_content`,
 `a_protected_store_journals_one_row_whatever_was_typed`,

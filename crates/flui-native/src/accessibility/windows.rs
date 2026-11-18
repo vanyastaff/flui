@@ -250,7 +250,7 @@ impl PlatformAccessibility for WindowsAccessibility {
         self.shared.set_action_listener(listener);
     }
 
-    fn assistive_focus_support(&self) -> flui_semantics::AssistiveFocusSupport {
+    fn assistive_focus_support(&self) -> flui_semantics::platform::AssistiveFocusSupport {
         Self::ASSISTIVE_FOCUS
     }
 
@@ -262,8 +262,8 @@ impl PlatformAccessibility for WindowsAccessibility {
 impl WindowsAccessibility {
     /// UI Automation tells an application nothing of the screen reader's cursor
     /// ([docs/gaps.md, "Accessibility bridge fidelity"](https://github.com/vanyastaff/flui/blob/main/docs/gaps.md#accessibility-bridge-fidelity-properties-and-announcements)).
-    pub(crate) const ASSISTIVE_FOCUS: flui_semantics::AssistiveFocusSupport =
-        flui_semantics::AssistiveFocusSupport::Unreported;
+    pub(crate) const ASSISTIVE_FOCUS: flui_semantics::platform::AssistiveFocusSupport =
+        flui_semantics::platform::AssistiveFocusSupport::Unreported;
 
     /// UI Automation has no notice of a new screen an application raises, so a route
     /// change is spoken as an announcement.

@@ -203,7 +203,8 @@ where
 {
     use flui_native::{IOSPlatform, Platform};
     // Before the platform, whose registries report only to a capture already installed.
-    super::begin_native_journal(flui_native::journal::codec::Backend::UiKit);
+    #[cfg(native_journal)]
+    super::native_journal::begin(flui_native::journal::codec::Backend::UiKit);
     let platform = IOSPlatform::try_new().map_err(|error| {
         tracing::error!(%error, "iOS initialization failed");
         LaunchError::from_platform(error)

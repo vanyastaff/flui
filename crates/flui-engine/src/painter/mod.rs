@@ -954,6 +954,31 @@ impl WgpuPainter {
         self.recording_cache.advance_epoch();
     }
 
+    /// Drops the kept recordings of `lineage`'s content, which no target
+    /// draws any more ([`DrawnLineages`]).
+    ///
+    /// [`DrawnLineages`]: crate::recording_cache::DrawnLineages
+    pub(crate) fn drop_recordings_of(&mut self, lineage: flui_layer::Lineage) {
+        self.recording_cache.drop_lineage(lineage);
+    }
+
+    /// How many recordings the cache keeps, and the entries its evictions
+    /// and lineage drops looked at since the last call.
+    #[cfg(test)]
+    pub(crate) fn recording_cache_work(&mut self) -> (usize, u64) {
+        (
+            self.recording_cache.len(),
+            self.recording_cache.take_visits(),
+        )
+    }
+
+    /// Holds the recording cache to `budget` bytes from now on, the
+    /// recordings it keeps already among them.
+    #[cfg(test)]
+    pub(crate) fn set_recording_cache_budget(&mut self, budget: usize) {
+        self.recording_cache.set_budget(budget);
+    }
+
     /// How many kept recordings left the cache since the last call and the
     /// bytes it holds, for the counters of a submitted frame.
     pub(crate) fn take_recording_cache_counts(&mut self) -> (u64, u64) {
