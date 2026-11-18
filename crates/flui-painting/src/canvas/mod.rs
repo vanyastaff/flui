@@ -5,11 +5,11 @@
 //! transform baked in, clips are scoped by `save`/`restore`, and nothing is
 //! rasterised here — `flui-engine` replays the list.
 //!
-//! - [`state`]     — save/restore/save_layer.
-//! - [`transform`] — translate/scale/rotate/skew/transform.
-//! - [`clipping`]  — clip_rect/clip_rrect/clip_rsuperellipse/clip_path.
-//! - [`drawing`]   — the `draw_*` methods, one per `DrawOp` variant.
-//! - [`scoped`]    — `with_*` helpers that pair a `save` with its `restore`.
+//! - `state`     — save/restore/save_layer.
+//! - `transform` — translate/scale/rotate/skew/transform.
+//! - `clipping`  — clip_rect/clip_rrect/clip_rsuperellipse/clip_path.
+//! - `drawing`   — the `draw_*` methods, one per `DrawOp` variant.
+//! - `scoped`    — `with_*` helpers that pair a `save` with its `restore`.
 
 use std::sync::Arc;
 
