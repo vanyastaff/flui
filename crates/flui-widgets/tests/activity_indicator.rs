@@ -9,7 +9,7 @@ use std::f64::consts::{FRAC_PI_2, TAU};
 use std::time::Duration;
 
 use flui_animation::Vsync;
-use flui_painting::display_list::DrawOp;
+use flui_painting::DrawOp;
 use flui_rendering::layer::Layer;
 use flui_testing::a11y::Role;
 use flui_view::environment::VsyncScope;

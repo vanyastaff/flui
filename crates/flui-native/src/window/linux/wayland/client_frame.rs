@@ -1499,11 +1499,12 @@ pub(crate) mod title {
     //! it over a font collection, swash rasterizes its glyphs, as the
     //! renderer's own text is drawn.
 
+    use flui_foundation::TextDirection;
     use flui_painting::glyphs::SwashRasterizer;
     use flui_painting::parley_text::ParagraphSpec;
-    use flui_painting::text_layout::{FontCollection, TextContext};
-    use flui_painting::typography::{FontWeight, TextAlign, TextDirection, TextStyle};
-    use flui_painting::{GlyphContent, GlyphRasterizer};
+    use flui_painting::typography::{FontWeight, TextAlign, TextStyle};
+    use flui_painting::{FontCollection, TextContext};
+    use flui_painting::{glyphs::GlyphContent, glyphs::GlyphRasterizer};
 
     use super::{BufferScale, MAX_SURFACE_EXTENT, TITLE_SIZE, TitleMask, device_extent};
 
@@ -1582,7 +1583,7 @@ pub(crate) mod title {
                 let Ok(key) = self.rasterizer.fonts_mut().prepare_run(&run) else {
                     continue;
                 };
-                for glyph in run.placed_glyphs(key, (0.0, 0.0), scale_f32) {
+                for glyph in run.placed_glyphs(key, (0.0, 0.0), (0.0, 0.0), scale_f32) {
                     let Some(image) = self.rasterizer.rasterize(glyph.key) else {
                         continue;
                     };
@@ -1662,7 +1663,7 @@ pub(crate) mod surfaces {
 
     use cursor_icon::CursorIcon;
     use flui_foundation::geometry::DevicePixelRatio;
-    use flui_painting::text_layout::FontCollection;
+    use flui_painting::FontCollection;
     use flui_platform::input_regions::InputRegion;
     use wayland_client::protocol::wl_buffer::{self, WlBuffer};
     use wayland_client::protocol::wl_compositor::WlCompositor;

@@ -5,7 +5,7 @@
 //! VSync → BeginFrame → Build → Layout → Paint → EndFrame → Present
 //! ```
 
-use std::{fmt, num::NonZeroU64, rc::Rc};
+use std::{fmt, num::NonZeroU64};
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
@@ -167,7 +167,7 @@ impl fmt::Display for SchedulerPhase {
 /// ## Example
 ///
 /// ```rust
-/// use flui_scheduler::frame::AppLifecycleState;
+/// use flui_scheduler::AppLifecycleState;
 ///
 /// let state = AppLifecycleState::Resumed;
 ///
@@ -248,20 +248,6 @@ impl AppLifecycleState {
         }
     }
 
-    /// The state behind a discriminant the scheduler stored in an atomic;
-    /// `None` for a byte no variant has.
-    #[inline]
-    pub(crate) const fn try_from_u8(value: u8) -> Option<Self> {
-        match value {
-            0 => Some(Self::Resumed),
-            1 => Some(Self::Inactive),
-            2 => Some(Self::Hidden),
-            3 => Some(Self::Paused),
-            4 => Some(Self::Detached),
-            _ => None,
-        }
-    }
-
     /// All states in typical lifecycle order
     pub const ALL: [AppLifecycleState; 5] = [
         AppLifecycleState::Detached,
@@ -295,9 +281,6 @@ impl fmt::Display for AppLifecycleState {
         }
     }
 }
-
-/// Listener for application lifecycle state changes, invoked on the UI owner.
-pub type LifecycleStateCallback = Rc<dyn Fn(AppLifecycleState)>;
 
 /// Frame phase - which part of the render pipeline is executing
 ///

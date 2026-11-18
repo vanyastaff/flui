@@ -1,51 +1,29 @@
-//! Event routing, interaction handling, and gesture recognition for FLUI
+//! Input for one FLUI presentation: pointer routing, keyboard focus, text
+//! input, gesture recognition, drag and drop and haptics.
 //!
-//! This crate provides the complete event handling and gesture infrastructure
-//! for FLUI:
+//! The crate sits below the element tree and above `flui-platform`, and has
+//! no GPU or host edge: everything here runs headless, which is how its tests
+//! drive it.
 //!
-//! - **GestureBinding**: Routes presentation-owned pointer streams via hit testing
-//! - **HitTest**: Determines which UI elements are under cursor/touch
-//! - **FocusManager**: Manages keyboard focus for one presentation
-//! - **FocusScope**: Groups focusable elements for keyboard navigation
-//! - **FocusTraversalPolicy**: Determines Tab/Shift+Tab navigation order
-//! - **GestureRecognizers**: High-level gesture detection (Tap, Drag, Scale,
-//!   etc.)
-//! - **GestureArena**: Resolves conflicts between competing gesture recognizers
+//! - [`GestureBinding`] takes a presentation's pointer stream, hit-tests each
+//!   new contact through an [`InteractionLane`](pointer::InteractionLane) and
+//!   delivers the sequence along that route.
+//! - [`FocusManager`] owns a presentation's focus tree: [`FocusNode`]s attached
+//!   under [`FocusScopeNode`]s, with traversal order from a
+//!   [`FocusTraversalPolicy`](focus::FocusTraversalPolicy).
+//! - The [`gesture`] recognizers compete in a [`GestureArena`](gesture::GestureArena),
+//!   which grants each pointer to one winner; a recognizer outside this crate
+//!   implements the same traits as the built-in ones.
 //!
-//! # Type System Features
-//!
-//! This crate makes extensive use of Rust's advanced type system:
-//!
-//! - **Open gesture traits**: external recognizers implement the same
-//!   dyn-compatible arbitration and event-delivery contracts as built-ins
-//! - **Canonical pointer id**: [`PointerId`] is re-exported from the
-//!   `flui-platform` crate (`NonZeroU64`-backed). [`FocusNodeId`] is a
-//!   crate-local `NonZeroU64` newtype that prevents
-//!   mixing up different ID types at compile time
-//! - **Niche optimization**: `Option<FocusNodeId>` is the same size as
-//!   `FocusNodeId`
-//! - **Extension traits**: Add methods to `PointerEvent` without modifying the
-//!   type
-//! - **RAII guards**: Transform stack management with automatic cleanup
-//!
-//! # Architecture
+//! Handlers and recognizers live on the owner thread behind `Rc`; what render
+//! storage keeps of a route is data-only identity, resolved back to the
+//! handlers when a sequence is delivered (ADR-0027).
 //!
 //! ```text
-//! Platform (Win32, AppKit, etc.)
-//!     ↓
-//! PointerEvent/KeyEvent
-//!     ↓
-//! GestureBinding (pointers) / FocusManager (keyboard)
-//!     ├─ Hit Testing → InteractionLane route
-//!     └─ RecognizerSet attachments
-//!         ↓
-//! Owner-local handlers (render storage keeps data-only route identities)
-//!     ↓
-//! GestureRecognizers (gesture recognition)
-//!     ├─ GestureArena (conflict resolution)
-//!     └─ Individual Recognizers (Tap, Drag, Scale, etc.)
-//!         ↓
-//! User code (Signal::update, callbacks, etc.)
+//! platform input (PointerEvent, KeyEvent)
+//!   ├─ GestureBinding ── hit test ── InteractionLane route ── handlers
+//!   │                                      └─ recognizers ── GestureArena
+//!   └─ FocusManager ── focused path ── key handlers
 //! ```
 //!
 //! # Example: Construct a recogniser and register a tap callback
@@ -97,9 +75,7 @@
 //!
 //! # Modules
 //!
-//! The modules form layers (ADR-0217); a module names only modules below it,
-//! which `cargo xtask module-dag` checks against the manifest's
-//! `[package.metadata.flui.modules]`:
+//! The modules form layers (ADR-0217); a module names only modules below it:
 //!
 //! 0. [`events`] - The owned input vocabulary; [`ids`] - Type-safe identifiers
 //! 1. Close policy and panic containment (private)
@@ -111,14 +87,6 @@
 //! 5. [`haptics`] - A presentation's haptics, on the binding's clock and dispatch
 //! 6. `testing` - Synthetic event builders (requires `testing` feature). Gesture
 //!    scripting and replay live in `flui-testing`, which owns the virtual clock.
-//!
-//! # Separation from Rendering
-//!
-//! This crate is deliberately separate from `flui_engine` (rendering):
-//! - ✅ Can test event logic without GPU
-//! - ✅ Can use rendering without event handling (headless)
-//! - ✅ Clear separation of concerns (SOLID principles)
-//! - ✅ Smaller compile times and dependencies
 
 #![cfg_attr(
     test,
@@ -189,9 +157,7 @@ pub use text_input::{
     PrimaryClaims, PrimarySelectionBackend, PrimarySelectionCapability, PrimarySelectionHandle,
     SelectionText,
 };
-// The monotonic clock primitive now lives in `flui-foundation`; re-exported here
-// because the gesture arena's public API takes a `MonotonicClock` (and tests /
-// the headless binding construct `ManualClock`/`SystemClock` against the arena).
+// The gesture arena's public API takes a `MonotonicClock` from `flui-foundation`.
 pub use flui_foundation::{ManualClock, MonotonicClock, SystemClock};
 // ============================================================================
 // Re-exports: Owned input contracts
@@ -248,12 +214,6 @@ pub use gesture::{
 };
 pub use gesture::{Velocity, VelocityEstimate, VelocityTracker};
 pub use pointer::PointerEventResampler;
-// Re-exports for the drag axis sub-recognisers (vertical, horizontal, pan).
-// Aliased to `DragGestureRecognizer` so a recogniser's axis is fixed at the
-// type level.
-pub use gesture::{
-    HorizontalDragGestureRecognizer, PanGestureRecognizer, VerticalDragGestureRecognizer,
-};
 // ============================================================================
 // Re-exports: Event Routing
 // ============================================================================

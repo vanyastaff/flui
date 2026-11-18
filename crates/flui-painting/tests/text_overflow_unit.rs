@@ -7,14 +7,15 @@
 //! agree, an ellipsis shaped into the last kept line — and baselines come
 //! from the shaped lines.
 
+use flui_foundation::TextDirection;
 use flui_painting::ShapedParagraph;
-use flui_painting::text_painter::TextPainter;
-use flui_painting::typography::{TextDirection, TextSpan};
+use flui_painting::TextPainter;
+use flui_painting::typography::TextSpan;
 
 /// The rightmost device column any glyph of `paragraph` inks at scale 1 from
 /// the origin, drawn by the rasterizer the engine uses.
 fn rasterized_ink_right(paragraph: &ShapedParagraph) -> f64 {
-    use flui_painting::GlyphRasterizer;
+    use flui_painting::glyphs::GlyphRasterizer;
     use flui_painting::glyphs::SwashRasterizer;
 
     let mut rasterizer = SwashRasterizer::new();
@@ -24,7 +25,7 @@ fn rasterized_ink_right(paragraph: &ShapedParagraph) -> f64 {
             .fonts_mut()
             .prepare_run(&run)
             .expect("a shaped face registers");
-        for glyph in run.placed_glyphs(key, (0.0, 0.0), 1.0) {
+        for glyph in run.placed_glyphs(key, (0.0, 0.0), (0.0, 0.0), 1.0) {
             if let Some(image) = rasterizer.rasterize(glyph.key)
                 && image.width() > 0
             {
@@ -178,7 +179,7 @@ pub(crate) fn a_recolour_paints_what_a_fresh_layout_paints() {
                     .fonts_mut()
                     .prepare_run(&run)
                     .expect("a shaped face registers");
-                run.placed_glyphs(key, (0.0, 0.0), 1.0)
+                run.placed_glyphs(key, (0.0, 0.0), (0.0, 0.0), 1.0)
                     .collect::<Vec<PlacedGlyph>>()
             })
             .collect::<Vec<PlacedGlyph>>();
@@ -381,8 +382,8 @@ pub(crate) fn every_style_and_span_field_is_classified_by_what_the_shaped_paragr
     use flui_foundation::geometry::Offset;
     use flui_painting::styling::{Color, Shadow};
     use flui_painting::typography::{
-        FontFeature, FontStyle, FontVariation, FontWeight, InlineSpan, TextDecoration, TextLink,
-        TextStyle,
+        FontFeature, FontStyle, FontVariation, FontWeight, InlineSpan, OpenTypeTag, TextDecoration,
+        TextLink, TextStyle,
     };
     use flui_painting::{Canvas, DrawOp, Invalidation, TextContext};
 
@@ -466,8 +467,8 @@ pub(crate) fn every_style_and_span_field_is_classified_by_what_the_shaped_paragr
         height: Some(2.0),
         font_family: Some("monospace".to_owned()),
         font_family_fallback: vec!["serif".to_owned()],
-        font_features: vec![FontFeature::enable("smcp")],
-        font_variations: vec![FontVariation::new("wght", 700.0)],
+        font_features: vec![FontFeature::enable(OpenTypeTag::new(*b"smcp"))],
+        font_variations: vec![FontVariation::new(OpenTypeTag::new(*b"wght"), 700.0)],
         shadows: Some(vec![Shadow::new(Color::BLACK, Offset::new(1.0, 1.0), 2.0)]),
         decoration: Some(TextDecoration::UNDERLINE),
     };

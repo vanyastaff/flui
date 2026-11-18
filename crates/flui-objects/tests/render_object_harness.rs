@@ -136,6 +136,7 @@ use flui_animation::curve::SharedCurve;
 use flui_animation::{
     Animation, AnimationController, MotionClock, MotionSpec, ProxyAnimation, Vsync, curves,
 };
+use flui_foundation::TextDirection;
 use flui_foundation::geometry::Axis;
 use flui_foundation::geometry::{EdgeInsets, Matrix4, Offset, Point, Rect, RelativeRect, Size};
 use flui_foundation::inspect::{Fields, Inspect, OwnedValue, Rgba, Variant};
@@ -144,11 +145,11 @@ use flui_interaction::pointer::{MouseTracker, PointerMotionKind};
 use flui_objects::TableColumnWidth;
 use flui_objects::*;
 use flui_painting::{Alignment, BoxFit, BoxShape, ImagePlacement};
-use flui_painting::{Canvas, Paint};
+use flui_painting::{Canvas, paint::Paint};
 use flui_painting::{
     paint::{Clip, ImageFilter, Path, Shader},
     styling::{BorderSide, BorderStyle, BoxDecoration, Color, TableBorder},
-    typography::{TextDirection, TextSpan},
+    typography::TextSpan,
 };
 use flui_rendering::constraints::AxisDirection;
 use flui_rendering::parent_data::TableCellVerticalAlignment;
@@ -454,9 +455,11 @@ impl RemovalNotifier {
         })
     }
 
-    fn withdraw(&self, id: flui_foundation::ListenerId) {
+    fn withdraw(&self, subscription: Option<flui_foundation::Subscription>) {
         assert!(!self.before.replace(false), "{} removal", self.name);
-        self.source.remove_listener(id);
+        if let Some(subscription) = subscription {
+            subscription.detach();
+        }
         assert!(!self.fail.replace(false), "{} removal", self.name);
     }
 }
@@ -467,7 +470,7 @@ impl flui_foundation::Listenable for RemovalNotifier {
         // anything; the caller holds the closure and never gets a
         // subscription.
         assert!(!self.fail_add.replace(false), "{} registration", self.name);
-        let id = self.source.add_listener(listener);
+        let inner = Cell::new(Some(self.source.listen(listener)));
         // The removals run the source's own machinery; the subscription
         // carries it the way ADR-0180's status guard does.
         let state = Rc::clone(&self.state);
@@ -475,14 +478,14 @@ impl flui_foundation::Listenable for RemovalNotifier {
             RemovalNotifier {
                 state: Rc::clone(&state),
             }
-            .withdraw(id);
+            .withdraw(inner.take());
         })
     }
     fn listen_with_recovery(
         &self,
         relay: flui_foundation::ListenerObserver,
     ) -> flui_foundation::Subscription {
-        let id = self.source.add_with_recovery(relay);
+        let inner = Cell::new(Some(self.source.listen_with_recovery(relay)));
         // The removals run the source's own machinery; the subscription
         // carries it the way ADR-0180's status guard does.
         let state = Rc::clone(&self.state);
@@ -490,7 +493,7 @@ impl flui_foundation::Listenable for RemovalNotifier {
             RemovalNotifier {
                 state: Rc::clone(&state),
             }
-            .withdraw(id);
+            .withdraw(inner.take());
         })
     }
 }
@@ -5981,7 +5984,7 @@ fn held<T: Clone + 'static>(value: T) -> ProxyAnimation<T> {
 /// Every rounded rectangle painted in the frame, in paint order, with the
 /// `from`/`to` points of its linear gradient (`None` for a flat fill).
 fn rrect_fills(run: &FrameRun) -> Vec<(Color, Option<(Offset, Offset)>)> {
-    use flui_painting::display_list::DrawOp;
+    use flui_painting::DrawOp;
     use flui_rendering::layer::Layer;
     let tree = run.layer_tree().expect("a painted frame");
     let mut fills = Vec::new();
@@ -6093,7 +6096,7 @@ fn harness_skeleton_sizes_by_width_factor_and_clamps_corners() {
                     .picture()
                     .iter()
                     .find_map(|command| match &command.op {
-                        flui_painting::display_list::DrawOp::RRect { rrect, .. } => Some(*rrect),
+                        flui_painting::DrawOp::RRect { rrect, .. } => Some(*rrect),
                         _ => None,
                     }),
                 _ => None,

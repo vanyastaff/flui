@@ -12,8 +12,8 @@
 
 use std::hash::{DefaultHasher, Hash, Hasher};
 
-use flui_painting::paint::path::{Path, PathCommand};
-use flui_painting::{PaintStyle, StrokeCap, StrokeJoin};
+use flui_painting::paint::{Path, PathCommand};
+use flui_painting::{paint::PaintStyle, paint::StrokeCap, paint::StrokeJoin};
 
 /// Number of idle frames before a cached entry is evicted.
 const EVICTION_THRESHOLD: u64 = 120;

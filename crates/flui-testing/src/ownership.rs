@@ -714,10 +714,10 @@ fn row_moved(laid: &LaidOut) -> bool {
         })
         .find_map(|(node, picture)| {
             let command = picture.picture().iter().find(|command| {
-                matches!(&command.op, flui_painting::display_list::DrawOp::Rect { paint, .. }
+                matches!(&command.op, flui_painting::DrawOp::Rect { paint, .. }
                     if paint.color == ROW)
             })?;
-            let flui_painting::display_list::DrawOp::Rect { rect, .. } = &command.op else {
+            let flui_painting::DrawOp::Rect { rect, .. } = &command.op else {
                 return None;
             };
             let (x, y) = command.transform.transform_point(rect.left(), rect.top());

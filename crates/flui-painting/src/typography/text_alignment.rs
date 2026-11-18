@@ -1,5 +1,7 @@
 //! Text alignment types.
 
+use flui_foundation::TextDirection;
+
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 /// How text is aligned horizontally within its container.
@@ -40,27 +42,6 @@ impl TextAlign {
             _ => *self,
         }
     }
-
-    /// Returns `true` if this alignment depends on the text direction (`Start` or `End`).
-    #[must_use]
-    #[inline]
-    pub const fn is_direction_dependent(&self) -> bool {
-        matches!(self, Self::Start | Self::End)
-    }
-
-    /// Returns the horizontal alignment factor: 0.0 (left), 0.5 (center), or 1.0 (right).
-    ///
-    /// `Start` maps to 0.0 and `End` to 1.0 without direction resolution;
-    /// call `resolve` first for RTL-aware alignment.
-    #[must_use]
-    #[inline]
-    pub const fn horizontal_factor(&self) -> f64 {
-        match self {
-            Self::Left | Self::Justify | Self::Start => 0.0,
-            Self::Center => 0.5,
-            Self::Right | Self::End => 1.0,
-        }
-    }
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Default)]
@@ -76,26 +57,6 @@ pub enum TextAlignVertical {
     /// Align text to the bottom.
     Bottom,
 }
-
-impl TextAlignVertical {
-    /// Returns the vertical alignment factor: 0.0 (top), 0.5 (center), or 1.0 (bottom).
-    #[must_use]
-    #[inline]
-    pub const fn vertical_factor(&self) -> f64 {
-        match self {
-            Self::Top => 0.0,
-            Self::Center => 0.5,
-            Self::Bottom => 1.0,
-        }
-    }
-}
-
-// Re-export TextBaseline from layout module (canonical source)
-pub use crate::TextBaseline;
-
-// Text flow direction lives in `flui_foundation::TextDirection`; the
-// painting path re-exports it so `flui_painting::TextDirection` keeps working.
-pub use flui_foundation::TextDirection;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]

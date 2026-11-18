@@ -36,7 +36,7 @@ pub use ext::{
     MacOSWindowLevel, TabJoinError,
 };
 
-use std::cell::{OnceCell, RefCell};
+use std::cell::{Cell, OnceCell, RefCell};
 use std::mem::ManuallyDrop;
 use std::rc::Rc;
 use std::sync::{
@@ -62,10 +62,14 @@ use flui_platform::{
 
 use crate::window::apple::geometry::{
     frame::{
-        cocoa_frame, cocoa_frame_keeping_top, cocoa_top_left_point, constraints_of_content_limits,
-        content_limits_of_constraints, desktop_point, position_on, top_left_of_frame,
+        ScreenSafeArea, cocoa_frame, cocoa_frame_keeping_top, cocoa_top_left_point,
+        constraints_of_content_limits, content_limits_of_constraints, desktop_point, position_on,
+        safe_area_on_screen, top_left_of_frame,
     },
-    mode::{ANIMATION_LIMIT, FixedSize, ModeSequence, ModeStep, WindowFlags, capabilities_of},
+    mode::{
+        ANIMATION_LIMIT, FixedSize, ModeSequence, ModeStep, WaitEndRead, WindowFlags,
+        capabilities_of,
+    },
     title_bar::{ControlsLayout, FrameStyle},
 };
 use crate::window::capabilities::{
@@ -92,7 +96,8 @@ use crate::{
     owner::slot::{OwnerCell, OwnerWeak},
     owner::window_delivery::{Retirement, WindowDelivery},
     window::state::{
-        ReportedFacts, Sample, SampledGeometry, WindowStateCell, mode_of, reported_frame,
+        MODE_ANSWER_LIMIT, ReportedFacts, Sample, SampledGeometry, WindowStateCell, mode_of,
+        reported_frame,
     },
 };
 use flui_platform::{
@@ -193,11 +198,28 @@ pub struct MacOSWindow {
     /// The published window state (ADR-0237). Seeded from the creation
     /// options; the first read replaces it with what AppKit reports.
     snapshot: Arc<WindowStateCell>,
+
+    /// The read the window owes when the snapshot's wait for a mode change
+    /// ends (`read_when_the_mode_wait_ends`).
+    wait_end_read: Cell<WaitEndRead>,
 }
 
 // Owner-local (ADR-0254 §5): the window's state is a `RefCell` because no
 // other thread can hold the window.
 static_assertions::assert_not_impl_any!(MacOSWindow: Send, Sync);
+
+/// Follows the snapshot's wait for a mode change to its end as a read of the
+/// window ends (`MacOSWindow::read_when_the_mode_wait_ends`), whether the
+/// read returned or unwound: a read that publishes runs the handler's
+/// `state_changed`, and one that panics there still leaves the end of the
+/// wait read.
+struct ModeWaitFollowed<'a>(&'a MacOSWindow);
+
+impl Drop for ModeWaitFollowed<'_> {
+    fn drop(&mut self) {
+        self.0.read_when_the_mode_wait_ends();
+    }
+}
 
 /// What a window keeps of itself between AppKit's notifications.
 struct MacOSWindowState {
@@ -705,6 +727,8 @@ impl MacOSWindow {
             owner_is_main,
         };
         ns_window.setContentView(Some(&content_view));
+        // The scale the window's metrics, and so its drawables, are sized by.
+        content_view::set_layer_contents_scale(&content_view, scale);
 
         // Made once the content view is installed: the bridge subclasses
         // it for VoiceOver, on the main thread, and the window's teardown
@@ -756,6 +780,7 @@ impl MacOSWindow {
                     .with_resizable(options.resizable)
                     .with_frame(options.frame),
             )),
+            wait_end_read: Cell::new(WaitEndRead::default()),
         });
 
         let redraw = Arc::new(MacOSRedraw {
@@ -1474,6 +1499,17 @@ fn level_of(level: objc2_app_kit::NSWindowLevel) -> WindowLevel {
     }
 }
 
+/// The bands of `screen` its camera housing takes (`safeAreaInsets`), in
+/// points in from each edge; all zero on a screen that has none. The proof
+/// says the running AppKit answers the message.
+fn unsafe_edges_of(
+    screen: &NSScreen,
+    _: crate::version::gate::Since<ScreenSafeArea>,
+) -> flui_foundation::geometry::EdgeInsets {
+    let insets = screen.safeAreaInsets();
+    flui_foundation::geometry::EdgeInsets::new(insets.top, insets.right, insets.bottom, insets.left)
+}
+
 impl PlatformWindow for MacOSWindow {
     fn id(&self) -> WindowId {
         self.id
@@ -1550,13 +1586,15 @@ impl PlatformWindow for MacOSWindow {
         let command = command.against(&self.snapshot.published_capabilities())?;
         match command {
             WindowCommand::SetTitle(title) => self.set_native_title(&title),
-            WindowCommand::SetPosition(at) => self.set_native_position(at)?,
-            WindowCommand::SetSize(size) => self.set_content_size(size.get()),
-            WindowCommand::SetConstraints(constraints) => self.set_native_constraints(constraints),
-            WindowCommand::SetResizable(on) => {
-                self.set_style_bit(NSWindowStyleMask::Resizable, on)?;
+            WindowCommand::SetPosition(at) => self.reframe(|| self.set_native_position(at))?,
+            WindowCommand::SetSize(size) => self.reframe(|| self.set_content_size(size.get())),
+            WindowCommand::SetConstraints(constraints) => {
+                self.reframe(|| self.set_native_constraints(constraints));
             }
-            WindowCommand::SetFrame(frame) => self.set_frame(frame)?,
+            WindowCommand::SetResizable(on) => {
+                self.reframe(|| self.set_style_bit(NSWindowStyleMask::Resizable, on))?;
+            }
+            WindowCommand::SetFrame(frame) => self.reframe(|| self.set_frame(frame))?,
             WindowCommand::SetMode(mode) => self.change_mode(mode)?,
             WindowCommand::Show => self.show_window()?,
             // A hidden window holds no pointer.
@@ -2050,6 +2088,7 @@ impl MacOSWindow {
     /// invalidated it. A revision the read publishes is announced at the
     /// owner's turn, never from the read.
     fn current_state(&self) -> WindowState {
+        let _followed = ModeWaitFollowed(self);
         self.snapshot.read(&self.delivery, || self.sample_state())
     }
 
@@ -2057,14 +2096,51 @@ impl MacOSWindow {
     /// window again, and raise `WindowHandler::state_changed` when that
     /// produced a new revision.
     fn publish_state(&self) {
+        let _followed = ModeWaitFollowed(self);
         self.snapshot
             .publish_report(&self.delivery, || self.sample_state());
     }
 
     /// Read the window again for its state publisher, announcing nothing.
     fn read_state(&self) -> crate::owner::window_delivery::Publication {
+        let _followed = ModeWaitFollowed(self);
         self.snapshot
             .refresh(&self.delivery, || self.sample_state())
+    }
+
+    /// Have the window read again at the instant the snapshot's wait for a
+    /// mode change ends (`WindowStateCell::mode_deadline`), which nothing
+    /// from AppKit marks: a step AppKit refused, and a step published under
+    /// the mode the window left, are published as read then. Called wherever
+    /// that instant may have moved: after a mode request, and after every
+    /// read ([`ModeWaitFollowed`]), since one that finds the mode asked
+    /// shortens the wait and one made at a transition's end finds it
+    /// lengthened. One timer is live at a time ([`WaitEndRead`]), and it
+    /// holds the window weakly.
+    fn read_when_the_mode_wait_ends(&self) {
+        let end = self.snapshot.mode_deadline();
+        let mut read = self.wait_end_read.get();
+        let delay = read.follow(end, std::time::Instant::now());
+        self.wait_end_read.set(read);
+        let (Some(end), Some(delay)) = (end, delay) else {
+            return;
+        };
+        let window = Arc::clone(&self.redraw().window);
+        crate::owner::apple::macos::exec_after_on_owner(
+            crate::owner::apple::macos::owner_queue(),
+            delay,
+            move || {
+                let Some(window) = window.upgrade() else {
+                    return;
+                };
+                let mut read = window.wait_end_read.get();
+                let live = read.fired(end);
+                window.wait_end_read.set(read);
+                if live {
+                    window.publish_state();
+                }
+            },
+        );
     }
 
     /// The window as AppKit reports it now; rectangles that describe no
@@ -2121,6 +2197,7 @@ impl MacOSWindow {
                 heading,
                 appkit_window_capabilities(self.presentation),
             );
+            let insets = self.insets_of_content(content);
             Sample::read(geometry, |state| {
                 let state = state
                     .with_mode(mode)
@@ -2143,9 +2220,8 @@ impl MacOSWindow {
                     )
                     .ok(),
                     brightness: appearance,
-                    // A desktop window has no safe area and AppKit never
-                    // suspends one.
-                    insets: flui_platform::WindowInsets::ZERO,
+                    insets,
+                    // AppKit never suspends a window.
                     execution: flui_platform::WindowExecutionState::Running,
                     // Covered or on another space.
                     occluded: !occlusion_visible,
@@ -2168,6 +2244,38 @@ impl MacOSWindow {
                 .onto(state)
             })
         }
+    }
+
+    /// The insets of a window whose content AppKit reports at `content`: the
+    /// part of it under the camera housing of the screen it is on
+    /// ([`safe_area_on_screen`]), which is its whole safe area; a Mac has no
+    /// soft keyboard and no gesture edges.
+    ///
+    /// Read from the screen at every sample, with the content rectangle it is
+    /// measured against: the window is sampled when it is resized or moved,
+    /// changes screen or backing scale, and ends a full-screen transition,
+    /// which are the changes that move it under the housing or out from under
+    /// it. No inset before macOS 12, which reports none, nor for a window on
+    /// no screen.
+    fn insets_of_content(&self, content: NSRect) -> flui_platform::WindowInsets {
+        let Some(reports_safe_area) = self
+            .displays
+            .get()
+            .and_then(|displays| displays.version().since::<ScreenSafeArea>())
+        else {
+            return flui_platform::WindowInsets::ZERO;
+        };
+        let Some(screen) = self.ns_window.screen() else {
+            return flui_platform::WindowInsets::ZERO;
+        };
+        let safe_area = safe_area_on_screen(
+            crate::owner::apple::macos::bounds_of(content),
+            crate::owner::apple::macos::bounds_of(screen.frame()),
+            unsafe_edges_of(&screen, reports_safe_area),
+        );
+        flui_platform::WindowInsets::ZERO
+            .try_with_safe_area(safe_area)
+            .expect("BUG: `safe_area_on_screen` answers lengths that are finite and not negative")
     }
 
     /// What AppKit says about the window's mode, as flags.
@@ -2508,6 +2616,35 @@ impl MacOSWindow {
         );
     }
 
+    /// The window asked AppKit for `asked`, or AppKit started a transition
+    /// that lands there (full screen, a zoom): the snapshot keeps the mode
+    /// the window left until a read finds `asked`, for at most `limit`
+    /// (`WindowStateCell::expect_mode`), and the window is read again when
+    /// the wait ends, so a step AppKit refused is published then. Every
+    /// request that changes a mode calls it, one for the mode the window is
+    /// in too, so a newer request replaces the wait of an older one.
+    fn wait_out_mode(&self, asked: WindowMode, limit: std::time::Duration) {
+        self.snapshot
+            .expect_mode(asked, std::time::Instant::now() + limit);
+        self.read_when_the_mode_wait_ends();
+    }
+
+    /// Carry out `command`, one that gives the window a frame of its own (a
+    /// position, a size, limits, a style). AppKit reads zoomed off the
+    /// frame, so such a command can take the window out of its zoom, and
+    /// AppKit carries it out at once: a command that left the window in
+    /// another mode than it found it ends the wait of a mode request before
+    /// it, since the window is where this command put it and nothing more is
+    /// to come.
+    fn reframe<T>(&self, command: impl FnOnce() -> T) -> T {
+        let found_in = mode_of(self.read_flags().mode_flags());
+        let outcome = command();
+        if mode_of(self.read_flags().mode_flags()) != found_in {
+            self.snapshot.end_mode_wait();
+        }
+        outcome
+    }
+
     fn change_mode(&self, mode: WindowMode) -> Result<(), ApplyError> {
         let flags = self.read_flags();
         if !flags.resizable && matches!(mode, WindowMode::Maximized | WindowMode::Fullscreen) {
@@ -2523,6 +2660,9 @@ impl MacOSWindow {
         };
         if heading.is_some() {
             self.read_again_when_the_step_gives_up();
+            self.wait_out_mode(mode, ANIMATION_LIMIT);
+        } else {
+            self.wait_out_mode(mode, MODE_ANSWER_LIMIT);
         }
         if !steps.is_empty() {
             self.record_normal();

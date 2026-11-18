@@ -124,6 +124,10 @@ fn harness_frames_are_text_store_transactions() {
             ));
         })
         .expect("the ui_runtime's post-frame lane is alive");
+    // A post-frame callback asks for no frame; the test asks for the one it runs after.
+    laid.post_frame_handle()
+        .schedule_frame()
+        .expect("the ui_runtime's presentation is alive");
     laid.tick();
 
     assert_eq!(
@@ -179,6 +183,10 @@ fn a_grant_queued_before_an_unwind_runs_at_the_next_pumps_anchor() {
             panic!("post-frame callback panicked");
         })
         .expect("the ui_runtime's post-frame lane is alive");
+    // A post-frame callback asks for no frame; the test asks for the one it runs after.
+    laid.post_frame_handle()
+        .schedule_frame()
+        .expect("the ui_runtime's presentation is alive");
 
     let raised = catch_unwind(AssertUnwindSafe(|| laid.tick()))
         .expect_err("the post-frame panic unwinds out of the pump");

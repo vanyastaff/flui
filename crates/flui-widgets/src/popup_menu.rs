@@ -14,13 +14,14 @@ use std::fmt;
 use std::rc::Rc;
 use std::time::Duration;
 
+use flui_foundation::TextDirection;
 use flui_foundation::geometry::{Offset, Point, Rect, Size};
 use flui_interaction::PointerKind;
 use flui_interaction::focus::FocusNode;
 use flui_objects::{MainAxisSize, SubtreeAnchor};
 use flui_painting::AlignmentDirectional;
 use flui_painting::styling::Color;
-use flui_painting::typography::{TextDirection, TextStyle};
+use flui_painting::typography::TextStyle;
 use flui_platform::keyboard::NamedKey;
 use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::delegates::SingleChildLayoutDelegate;
@@ -354,7 +355,7 @@ fn menu_row(
     let content = ConstrainedBox::new(BoxConstraints::new(0.0, f64::INFINITY, side, f64::INFINITY))
         .child(
             Padding::symmetric(12.0, 8.0).child(
-                Align::new(AlignmentDirectional::CENTER_START.resolve(direction.is_ltr())).child(
+                Align::new(AlignmentDirectional::CENTER_START.resolve(direction)).child(
                     ExcludeSemantics::new().child(
                         Text::new(label.to_owned())
                         .direction(direction)
@@ -561,7 +562,7 @@ fn toolbar_button(
                     ))
                     .child(
                         Padding::symmetric(12.0, 8.0).child(
-                            Align::new(AlignmentDirectional::CENTER.resolve(direction.is_ltr()))
+                            Align::new(AlignmentDirectional::CENTER.resolve(direction))
                                 .width_factor(1.0)
                                 .height_factor(1.0)
                                 .child(

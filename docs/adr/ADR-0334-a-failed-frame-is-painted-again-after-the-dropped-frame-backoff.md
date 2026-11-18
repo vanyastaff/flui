@@ -84,8 +84,8 @@ and spends none on a window the host knows is refused.
   refused window costs none.
 - Bad, because a failure that is permanent and that the host cannot name (a detached slot) is
   retried once per second until the presentation goes. The cost is one paint, and the frame
-  driver's wait keeps the host asleep in between, except while a post-frame callback of the
-  presentation waits: the commit anchor re-arms its completion demand at every owner turn of the
+  driver's wait keeps the host asleep in between, except while the presentation has completion
+  demand (a callback its dropped frame left waiting): the commit anchor re-arms it at every owner turn of the
   wait ([gaps](../gaps.md#the-web-never-wakes-when-a-dropped-frames-backoff-ends)).
 - Bad, because a refused window holds its pointer input until it changes, as before this record.
   A renderer whose panic would not repeat leaves its window on the last frame until then, since

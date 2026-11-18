@@ -37,8 +37,8 @@ use std::sync::Arc;
 
 use etagere::{AllocId, BucketedAtlasAllocator, size2};
 use flui_painting::glyphs::SwashRasterizer;
-use flui_painting::{GlyphContent, GlyphImage, GlyphRasterizer};
-use rustc_hash::FxHashMap;
+use flui_painting::{glyphs::GlyphContent, glyphs::GlyphImage, glyphs::GlyphRasterizer};
+use rustc_hash::{FxHashMap, FxHashSet};
 
 /// Where a glyph's bitmap sits in the atlas, and how it hangs off its origin.
 #[derive(Debug, Clone, Copy)]
@@ -298,6 +298,37 @@ pub(crate) struct GlyphAtlas<R: GlyphRasterizer> {
     frame: u64,
     /// Whether a glyph was dropped this frame because a page could not grow.
     reported_full: bool,
+    /// Whether a slot was freed (evicted, dropped by a grow, reset) since
+    /// [`Self::take_slots_lost`] last read it: a key placed again after that
+    /// may sit at other texels than an instance recorded before it holds.
+    slots_lost: bool,
+    /// The keys [`Self::slot`] placed since [`Self::log_slots`] began a log,
+    /// and whether one could not be placed.
+    slot_log: SlotLog<R::Key>,
+    /// Whether placements answer as a full page does ([`Self::hold_full`]).
+    #[cfg(test)]
+    held_full: bool,
+}
+
+/// The glyphs a recording placed, kept while a log is open.
+struct SlotLog<K> {
+    /// Whether [`GlyphAtlas::slot`] logs.
+    active: bool,
+    keys: FxHashSet<K>,
+    /// Whether a glyph missed while the log was open because its page was
+    /// full: one the rasterizer cannot draw, or larger than the device
+    /// allows, misses the same way every frame and does not count.
+    dropped: bool,
+}
+
+impl<K> Default for SlotLog<K> {
+    fn default() -> Self {
+        Self {
+            active: false,
+            keys: FxHashSet::default(),
+            dropped: false,
+        }
+    }
 }
 
 impl<R: GlyphRasterizer> GlyphAtlas<R> {
@@ -329,6 +360,10 @@ impl<R: GlyphRasterizer> GlyphAtlas<R> {
             bind_group,
             frame: 0,
             reported_full: false,
+            slots_lost: false,
+            slot_log: SlotLog::default(),
+            #[cfg(test)]
+            held_full: false,
         }
     }
 
@@ -354,6 +389,15 @@ impl<R: GlyphRasterizer> GlyphAtlas<R> {
     /// frame (reported once per frame). The glyph is skipped and nothing is
     /// cached, so its next use asks again.
     pub(crate) fn slot(&mut self, key: R::Key) -> Option<GlyphSlot> {
+        let slot = self.place(key);
+        if slot.is_some() && self.slot_log.active {
+            self.slot_log.keys.insert(key);
+        }
+        slot
+    }
+
+    /// [`Self::slot`] without the log.
+    fn place(&mut self, key: R::Key) -> Option<GlyphSlot> {
         let frame = self.frame;
         if let Some(entry) = self.entries.get_mut(&key) {
             entry.last_used = frame;
@@ -431,20 +475,29 @@ impl<R: GlyphRasterizer> GlyphAtlas<R> {
         );
         let frame = self.frame;
         loop {
+            #[cfg(test)]
+            if self.held_full {
+                break;
+            }
             let page = page_mut(&mut self.mask, &mut self.color, color_page);
             if let Some(allocation) = page.packer.allocate(wanted) {
                 return Some(allocation);
             }
             if page.evict_unused(&mut self.entries, frame) > 0 {
+                self.slots_lost = true;
                 continue;
             }
-            if page.grow(
+            let placed = self.entries.len();
+            let grew = page.grow(
                 &mut self.entries,
                 frame,
                 &self.device,
                 &self.queue,
                 &mut self.rasterizer,
-            ) {
+            );
+            // A grow drops the glyphs that cannot reproduce their bitmap.
+            self.slots_lost |= self.entries.len() != placed;
+            if grew {
                 self.bind_group = create_bind_group(
                     &self.device,
                     &self.layout,
@@ -454,17 +507,28 @@ impl<R: GlyphRasterizer> GlyphAtlas<R> {
                 );
                 continue;
             }
-            if !self.reported_full {
-                self.reported_full = true;
-                let page = page_mut(&mut self.mask, &mut self.color, color_page);
-                tracing::warn!(
-                    page = page.label(),
-                    size = page.size,
-                    "glyph atlas page is full at the device's texture limit; glyphs are being dropped this frame"
-                );
-            }
-            return None;
+            break;
         }
+        if !self.reported_full {
+            self.reported_full = true;
+            let page = page_mut(&mut self.mask, &mut self.color, color_page);
+            tracing::warn!(
+                page = page.label(),
+                size = page.size,
+                "glyph atlas page is full at the device's texture limit; glyphs are being dropped this frame"
+            );
+        }
+        // Room could free up once slots go unused: what was drawn without
+        // this glyph is not to be kept.
+        self.slot_log.dropped |= self.slot_log.active;
+        None
+    }
+
+    /// Answers every later placement that needs room as a full page at the
+    /// device limit does, until `full` is `false` again.
+    #[cfg(test)]
+    pub(crate) fn hold_full(&mut self, full: bool) {
+        self.held_full = full;
     }
 
     /// Once per presented frame, after its submit: slots the next frame does
@@ -495,6 +559,43 @@ impl<R: GlyphRasterizer> GlyphAtlas<R> {
             &self.sampler,
         );
         self.reported_full = false;
+        self.slots_lost = true;
+    }
+
+    /// Whether a slot was freed since the last call, which clears it.
+    pub(crate) fn take_slots_lost(&mut self) -> bool {
+        std::mem::take(&mut self.slots_lost)
+    }
+
+    /// Starts a log of the keys [`Self::slot`] places, dropping any earlier
+    /// one.
+    pub(crate) fn log_slots(&mut self) {
+        self.slot_log.keys.clear();
+        self.slot_log.dropped = false;
+        self.slot_log.active = true;
+    }
+
+    /// The distinct keys placed since [`Self::log_slots`], ending the log;
+    /// `None` when a glyph asked for in that time missed because its page was
+    /// full, so
+    /// what was drawn without it is not to be kept.
+    pub(crate) fn take_slot_log(&mut self) -> Option<Vec<R::Key>> {
+        let log = &mut self.slot_log;
+        let active = std::mem::take(&mut log.active);
+        (active && !log.dropped).then(|| log.keys.drain().collect::<Vec<R::Key>>())
+    }
+
+    /// Marks every key of `keys` used this frame, as drawing them does, so no
+    /// later allocation this frame evicts them. `false` when one of them is no
+    /// longer placed: nothing recorded against it can be drawn.
+    pub(crate) fn retain(&mut self, keys: &[R::Key]) -> bool {
+        let frame = self.frame;
+        keys.iter().all(|key| {
+            self.entries.get_mut(key).is_some_and(|entry| {
+                entry.last_used = frame;
+                true
+            })
+        })
     }
 
     /// How many glyphs the atlas holds, both pages, empty glyphs included.
@@ -545,7 +646,7 @@ mod rasterizer_tests {
     use std::sync::Arc;
 
     use flui_painting::glyphs::{FaceKey, GlyphKey, SubpixelBin, SwashRasterizer};
-    use flui_painting::{GlyphContent, GlyphImage, GlyphRasterizer};
+    use flui_painting::{glyphs::GlyphContent, glyphs::GlyphImage, glyphs::GlyphRasterizer};
 
     use super::GlyphAtlas;
 
@@ -621,6 +722,93 @@ mod rasterizer_tests {
         let after = atlas.slot(key(40, 18.0)).expect("placed again");
         assert_eq!(after.size, before.size, "the rasterizer kept its face");
         assert_eq!(atlas.len(), 1);
+    }
+
+    /// A log names each placed glyph once. A glyph that misses because its
+    /// page is full, which room freed later could place, leaves no log, so
+    /// what was drawn without it is not kept to replay; one that misses the
+    /// same way every frame (the rasterizer has no bitmap for it, or it is
+    /// wider than the device allows) leaves the log as it is.
+    #[test]
+    fn a_glyph_the_atlas_cannot_place_leaves_no_slot_log() {
+        /// Key 0 is wider than the device, key 1 has no bitmap, keys from
+        /// 10 on are `big` texels square, the others one texel.
+        struct Sized {
+            wide: u32,
+            big: u32,
+        }
+        impl GlyphRasterizer for Sized {
+            type Key = u32;
+
+            fn rasterize(&mut self, key: u32) -> Option<GlyphImage> {
+                let [width, height] = match key {
+                    0 => [self.wide, 1],
+                    1 => return None,
+                    10.. => [self.big, self.big],
+                    _ => [1, 1],
+                };
+                Some(
+                    GlyphImage::try_new(
+                        0,
+                        1,
+                        width,
+                        height,
+                        GlyphContent::Mask,
+                        vec![255; (width * height) as usize],
+                    )
+                    .expect("a mask bitmap has valid bytes"),
+                )
+            }
+        }
+        // A small device limit, so a page fills at a few glyphs.
+        let instance =
+            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle().with_env());
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            apply_limit_buckets: false,
+            ..Default::default()
+        }))
+        .expect("GPU adapter for the glyph atlas");
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            required_limits: wgpu::Limits {
+                max_texture_dimension_2d: 512,
+                ..Default::default()
+            },
+            ..Default::default()
+        }))
+        .expect("a device of a 512-texel limit");
+        let mut atlas = atlas_on(
+            Arc::new(device),
+            Arc::new(queue),
+            Sized {
+                wide: 513,
+                big: 200,
+            },
+        );
+
+        atlas.log_slots();
+        atlas.slot(2).expect("a one-texel glyph is placed");
+        atlas.slot(2).expect("a one-texel glyph is placed");
+        atlas.slot(3).expect("a one-texel glyph is placed");
+        let mut keys = atlas.take_slot_log().expect("every glyph was placed");
+        keys.sort_unstable();
+        assert_eq!(keys, [2, 3], "each placed glyph once");
+
+        for (row, key) in [("wider than the device", 0), ("no bitmap", 1)] {
+            atlas.log_slots();
+            atlas.slot(2).expect("a one-texel glyph is placed");
+            assert!(atlas.slot(key).is_none(), "{row}: precondition: not placed");
+            assert_eq!(
+                atlas.take_slot_log(),
+                Some(vec![2]),
+                "{row}: a miss that repeats every frame keeps the log"
+            );
+        }
+
+        atlas.log_slots();
+        let full = (10..30).find(|&key| atlas.slot(key).is_none());
+        assert!(full.is_some(), "precondition: big glyphs fill the page");
+        assert_eq!(atlas.take_slot_log(), None, "a full page leaves no log");
+        assert_eq!(atlas.take_slot_log(), None, "the log ended");
     }
 
     // The public painter always owns SwashRasterizer. This private seam models

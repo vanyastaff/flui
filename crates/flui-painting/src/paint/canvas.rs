@@ -31,37 +31,6 @@ pub enum TileMode {
     Decal,
 }
 
-/// Styles for blur effects in a mask filter.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Default)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[expect(
-    clippy::exhaustive_enums,
-    reason = "a blur is normal, solid, outer or inner"
-)]
-pub enum BlurStyle {
-    /// Blur inside and outside the shape.
-    ///
-    /// This is the typical Gaussian blur applied across the shape's edge.
-    #[default]
-    Normal,
-
-    /// Draw solid inside the shape, blur outside.
-    ///
-    /// The interior of the shape is drawn opaque, while the exterior is
-    /// blurred.
-    Solid,
-
-    /// Draw nothing inside the shape, blur outside.
-    ///
-    /// Only the blur outside the shape is visible.
-    Outer,
-
-    /// Blur inside the shape, draw nothing outside.
-    ///
-    /// Only the blur inside the shape is visible.
-    Inner,
-}
-
 /// Quality levels for sampling images and scaled textures.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -88,54 +57,6 @@ pub enum FilterQuality {
     ///
     /// Slowest, but highest quality. Use for high-quality image rendering.
     High,
-}
-
-/// Whether to paint a shape's interior, or its outline.
-#[derive(Debug, Default)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[expect(clippy::exhaustive_enums, reason = "a shape is filled or stroked")]
-pub enum PaintingStyle {
-    /// Fill the interior of the shape with the paint's color.
-    #[default]
-    Fill,
-
-    /// Stroke the outline of the shape with the paint's color.
-    Stroke,
-}
-
-/// Boolean operations for combining two paths.
-#[derive(Debug)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[expect(
-    clippy::exhaustive_enums,
-    reason = "a path combines with another by one of the five boolean operations"
-)]
-pub enum PathOperation {
-    /// Subtract the second path from the first path.
-    ///
-    /// Results in the area of the first path that is not covered by the second.
-    Difference,
-
-    /// Create a path that includes the areas covered by either path.
-    ///
-    /// This is equivalent to a boolean OR operation.
-    Union,
-
-    /// Create a path that includes only the areas covered by both paths.
-    ///
-    /// This is equivalent to a boolean AND operation.
-    Intersect,
-
-    /// Create a path that includes the areas covered by either path, but not
-    /// both.
-    ///
-    /// This is equivalent to a boolean XOR operation.
-    Xor,
-
-    /// Subtract the first path from the second path.
-    ///
-    /// Results in the area of the second path that is not covered by the first.
-    ReverseDifference,
 }
 
 /// Fill rules that determine which regions of a path are inside it.
@@ -197,34 +118,9 @@ pub enum StrokeJoin {
     Bevel,
 }
 
-/// How a list of vertices is interpreted when drawing a triangle mesh.
-#[derive(Debug, Default)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[expect(
-    clippy::exhaustive_enums,
-    reason = "vertices draw as triangles, a strip or a fan"
-)]
-pub enum VertexMode {
-    /// Draw each sequence of three vertices as a separate triangle.
-    ///
-    /// Vertices 0, 1, 2 form a triangle, then 3, 4, 5, etc.
-    #[default]
-    Triangles,
-
-    /// Draw each sliding window of three vertices as a triangle.
-    ///
-    /// Vertices 0, 1, 2 form a triangle, then 1, 2, 3, then 2, 3, 4, etc.
-    TriangleStrip,
-
-    /// Draw all vertices as a single triangle fan.
-    ///
-    /// The first vertex is shared by all triangles.
-    TriangleFan,
-}
-
 /// An opaque identifier for a texture registered with the rendering engine.
 ///
-/// The raw value `0` is reserved as the null identifier (see `is_null`).
+/// A texture registry issues it: flui-layer's `TextureRegistry`, from 1 up.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TextureId(u64);
@@ -242,27 +138,6 @@ impl TextureId {
     #[inline]
     pub const fn get(self) -> u64 {
         self.0
-    }
-
-    /// Returns `true` if this is the null identifier (raw value `0`).
-    #[must_use]
-    #[inline]
-    pub const fn is_null(self) -> bool {
-        self.0 == 0
-    }
-}
-
-impl From<u64> for TextureId {
-    #[inline]
-    fn from(id: u64) -> Self {
-        Self::new(id)
-    }
-}
-
-impl From<TextureId> for u64 {
-    #[inline]
-    fn from(id: TextureId) -> Self {
-        id.get()
     }
 }
 
@@ -289,39 +164,4 @@ pub enum PointMode {
     /// All points are connected sequentially, and the last point is
     /// connected back to the first point to close the polygon.
     Polygon,
-}
-
-impl PointMode {
-    /// Returns `true` if this is `PointMode::Points`.
-    #[must_use]
-    #[inline]
-    pub const fn is_points(&self) -> bool {
-        matches!(self, PointMode::Points)
-    }
-
-    /// Returns `true` if this is `PointMode::Lines`.
-    #[must_use]
-    #[inline]
-    pub const fn is_lines(&self) -> bool {
-        matches!(self, PointMode::Lines)
-    }
-
-    /// Returns `true` if this is `PointMode::Polygon`.
-    #[must_use]
-    #[inline]
-    pub const fn is_polygon(&self) -> bool {
-        matches!(self, PointMode::Polygon)
-    }
-
-    /// Returns the minimum number of points needed to draw anything in this
-    /// mode (1 for points, 2 for lines, 3 for a polygon).
-    #[must_use]
-    #[inline]
-    pub const fn min_points(&self) -> usize {
-        match self {
-            PointMode::Points => 1,
-            PointMode::Lines => 2,
-            PointMode::Polygon => 3,
-        }
-    }
 }

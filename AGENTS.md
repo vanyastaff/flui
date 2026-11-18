@@ -14,7 +14,8 @@ What the code doesn't tell you about FLUI, an open-source declarative UI framewo
   a behaviour test, and the defects their trackers record for it: code written from a reference
   repeats the reference's known bugs unless they were on the checklist.
 - **Rules are types:** the compiler first, a clippy lint next, then a tool CI already runs or a
-  test of the owning crate; an `xtask` gate is the last rung, admitted by its ADR (ADR-0303). An
+  test of the owning crate (ADR-0303). Before the first release no program holds a rule none of
+  those states: it is written down and read for before a merge (ADR-0371). An
   exception is `#[expect(lint, reason = "…")]` at the site. A mistake made twice gets its rung
   or, where none fits, its row in "Current forms": patching each instance leaves the next
   change to repeat it.
@@ -30,7 +31,7 @@ The reader is a contributor who opens one file without the conversation that pro
 - **A module is one concept behind a small surface**, its invariant held by a type (a newtype,
   an RAII guard, a typestate) so that the wrong call does not compile. A new concept gets a
   module beside the file it grew out of: a file several features edit is where parallel changes
-  collide, long before `xtask file-length` stops it at 3000 production lines.
+  collide, long before it reaches the 3000 production lines a source file may have.
 - **A name says what the thing is or does**, in the term its field already uses (the Rust API
   Guidelines, W3C, the platform SDKs), and a new one does not repeat its module path. `util`,
   `helpers`, `common`, `kit`, `Data`, `Info` and `Wrapper` name a bag, not a thing.
@@ -42,21 +43,39 @@ The reader is a contributor who opens one file without the conversation that pro
 
 ## Recurring defects
 
-Each has shipped more than once:
+Each has shipped more than once, and reviews keep finding them; the most frequent come first:
 
-- user code (callbacks, wakers, observers, `Drop`) re-entering with guards or borrows still held;
-- cleanup after a caught panic that loses captures or the first failure (`thread::panicking()`
-  is false after a catch);
+- a document that states what the code does not do: an ADR, a field doc, a comment or a
+  changelog line written for one round of a change and left when the next round changed the
+  code, or a count, citation or rule copied without being checked against the source;
+- a regression test that passes with the fix reverted, or that never reaches the path it names;
+  the test a review fix adds is the usual case;
 - accepted work dropped when a hook is missing, replaced or panics, or an older wake clearing a
-  newer obligation;
-- identity compared by label instead of typed ID, stale generations, ID counters that wrap;
-- overflow in intermediate arithmetic, non-finite geometry published;
-- regression tests that pass with the fix reverted;
-- workspace-wide changes that skip features, examples, shaders or tooling;
+  newer obligation; and the reverse, a wake or deadline reported where nothing serves it, so a
+  loop spins or a retry never ends;
 - a replacement that leaves the replaced form alive: a better primitive, API or rule lands, the
   old one keeps its callers and the documents that teach it, and the next change copies the old
   one (panic containment, frame demand, navigation and crate ordering each have two or three live
-  generations on `main`).
+  generations on `main`);
+- a copy of state that misses its source: a mirror, cache or snapshot not refreshed on one
+  operation or exit, one failed read that drops the whole snapshot, a cache key missing an input;
+- state spread over several flags or records (a mark, a retry, a refusal, a base) whose rules
+  disagree for some order of events: each review round finds the next order, and the cure is one
+  owner for that state, not one more rule;
+- a rule held by one host or caller instead of at the seam, or written twice so the copies
+  disagree, headless included;
+- untrusted input checked by a deny-list, after it is decoded or copied, or before the thing it
+  names is opened; a queue, cache or walk without a bound;
+- a check that covers only the forms its author wrote (the first refusal, one syntax, the
+  obvious case), so a later or unusual form passes, or one that refuses a valid input;
+- cleanup after a caught panic that loses captures or the first failure (`thread::panicking()`
+  is false after a catch);
+- identity compared by label instead of typed ID, stale generations, ID counters that wrap, a
+  mark or failure attributed to the wrong frame, window or owner;
+- workspace-wide changes that skip features, examples, shaders, tooling or a target the author
+  did not build;
+- user code (callbacks, wakers, observers, `Drop`) re-entering with guards or borrows still held;
+- overflow or lost precision in intermediate arithmetic, non-finite geometry published.
 
 ## Current forms
 
@@ -70,7 +89,7 @@ and edits its row.
 | An owner changes its state, then runs code it does not own | `flui_foundation::panic::commit` / `commit_into` and `Outbox` (ADR-0287) | calling the listener, waker or `Drop` with the borrow or guard still held |
 | Keep the first of several caught panics and resume it after cleanup | `FirstPanic`; a payload nobody resumes goes to `discard_payload` (ADR-0281) | a crate-local first-failure fold, `PanicRecovery` outside `flui-foundation`, retaining or `mem::forget`ting a payload |
 | State only the owner thread touches | `Rc` with `Cell`/`RefCell`; a re-entry that finds it busy gets a typed outcome (ADR-0323 §1) | `Arc<Mutex<_>>`, atomics, `try_lock` as a re-entrancy detector, `Send + Sync` on a callback that never leaves the thread |
-| A list of listeners | `Notifier<Arg>`, `ChangeNotifier`; a listener's owned handle is a `Subscription` from its channel's `listen` | a hand-rolled `Vec` of callbacks guarded by a `notifying: bool` |
+| A list of listeners | `Notifier<Arg>`, `ChangeNotifier`; a listener's owned handle is a `Subscription` from its channel's `listen` or `subscribe` | a hand-rolled `Vec` of callbacks guarded by a `notifying: bool` |
 | A hash table keyed by ids or fingerprints the process mints | `rustc_hash::FxHashMap`/`FxHashSet`; a per-frame set over tree ids is `flui_foundation::SlotSet`/`SlotIndex`; a crate holds it with `#![warn(clippy::disallowed_types)]` ([gaps](docs/gaps.md#hash-tables-outside-the-view-painting-and-engine-crates-still-use-siphash)) | std `HashMap`/`HashSet` with its SipHash seed; a table keyed by values an application or its content supplies (view-key hashes, authored sizes, font names and paths) keeps std with `#[expect(clippy::disallowed_types, reason = "…")]` |
 | A new identity | `IdMint<I>` and `IdExhausted` (`flui_foundation::sequence`), its `AtomicIdMint` where two threads mint one id domain, or a generational key whose slot generations `GenSlots` carries (ADR-0313) | `wrapping_add`, a `pub` integer field, an ID derived from an OS handle or pointer |
 | A state's signals and capability handles | created in `StatefulView::create_state(&self, ctx)`, so the state is born bound | an `Option` field that `init_state` fills with `Some(ctx.…)` |
@@ -140,8 +159,9 @@ conversation:
 - **A sweep starts with one.** A workspace-wide change is carried through one crate first, with
   its features, examples, shaders and tooling and its checks green, and then repeated across
   the rest.
-- Commits are `area: what changed`. Pull-request CI executes Linux and wasm32 only; Windows,
-  macOS, the iOS Simulator and an Android emulator run nightly on main
+- Commits are `area: what changed`. On a pull request `ci.yml` compiles and executes Linux only
+  (ADR-0370): main checks wasm32 and type-checks the Windows, macOS, iOS and Android backends,
+  and Windows, macOS, the iOS Simulator and an Android emulator run nightly on main
   (`nightly-platforms.yml`), so native and GPU changes are run locally before the PR. A red
   `main` is fixed forward within the hour or reverted.
 - A job only main runs has a narrow form, which a pull request runs when its diff reaches what the
@@ -156,7 +176,8 @@ conversation:
   source that runs for every node of a frame (the element tree and its owners, render storage,
   the pipeline owner's passes, the layer crate, the semantics model), and
   `test-without-agent` runs when the diff reaches flui-app's agent module or its build script.
-  A new main-only job that a pull request can break gets such a row.
+  A new main-only job that a pull request can break gets such a row; the jobs ADR-0370 §2 moves
+  to main run there without one.
 - No process markers (`Cycle N`, `PR #NNN review`, `Phase B`, slice labels) in code or docs.
   Archival roots are exempt (`docs/plans`). That root holds the live specs, and their task IDs
   are what a spec tracks.
@@ -195,22 +216,42 @@ host change needs `cargo heli nextest run -p flui-native` by hand.
 | No bare `unwrap()` in production: `expect("BUG: <invariant>")`, `thiserror` in libraries, `anyhow` in apps ([`docs/PANIC-POLICY.md`](docs/PANIC-POLICY.md)) | clippy |
 | A public enum is `#[non_exhaustive]` unless its closure is a decision, stated by `#[expect(clippy::exhaustive_enums, reason = "…")]` on it | clippy `exhaustive_enums` (ADR-0329) |
 | A caught panic payload nobody resumes goes to `discard_payload`; `mem::forget` is a deliberate leak with its reason at the call | clippy `mem_forget` |
-| Dependencies point down the tiers; an exception names the ADR that removes it | `xtask workspace`, `xtask reach` (ADR-0081) |
-| A crate that orders its modules in `[package.metadata.flui.modules]` imports only down that order; an exception names the ADR that removes it | `xtask module-dag` (ADR-0081 §5) |
-| A Rust source file has at most 3000 production lines; an entry that excuses a longer one carries its exact count and the ADR that removes it | `xtask file-length` (ADR-0081 §5) |
 | A Stable crate's public API names upstream types only as ADR-0089 §2 allows | `xtask api-closure` (CI `api-contracts` job, nightly rustdoc JSON; lane `full` only: `main` and the merge queue, not a pull request) |
 | Every item the facade reaches is in `api/flui.txt`, so a pull request that changes the facade's API carries the diff (`--write` restates it) | `xtask public-api` (CI `public-api` job, nightly rustdoc JSON; ADR-0324) |
 | A pull request that edits an expectation (the API snapshot, a `*.stderr`, a `*.snap`, a protocol schema, a perf baseline, an allowlist, a test, a `deny.toml` or `typos.toml` value) names each path and its reason under `## Expectations` in its body | `xtask expectations --body` (`expectations.yml`, on every pull request and every edit of its body; ADR-0331) |
 | `docs/platform-parity.md` is the render of `crates/flui-native/platform-parity.toml` (`FLUI_OVERWRITE=1` restates it), and a row of a position a host fills with `Absent` claims no support there | flui-native's `parity_document_matches_its_source` and `absent_positions_claim_no_support` (ADR-0303 §2) |
-| Every `static`/`thread_local!` outside tests has a `globals` entry (an ADR that removes it, or an ADR-0097 grant) | `xtask globals` |
-| Every OS entry into `flui-native` (an `extern` fn, an Objective-C or COM method, an AccessKit handler, a closure handed to the OS) is a constant or one call of `owner::panic_boundary::os_entry`, or of an adapter of its file that is (ADR-0151 §16) | `xtask panic-boundary` |
-| A value crosses a thread because the compiler proves it may: every `unsafe impl Send`/`Sync` is listed and the list only shrinks; `send_wrapper`-style crates are banned; every `Send`/`Sync` position an author wrote in the facade's API is listed under ADR-0323 §3 | `xtask send-impls`, `deny.toml`, `xtask send-positions` (CI `api-contracts` job, nightly rustdoc JSON) |
-| Test support is named `testing`; a hand-written `pump`/`advance`/`tick` or a `Mock*`/`Fake*`/`Scripted*`/`Recording*`/`Probe*` type in test code is in a kit or counted in the allowlist (ADR-0243) | `xtask testing` |
-| A constructor that can fail is `try_new`: every `new` returning `Result` or `Option` is listed and the list only shrinks | `xtask try-new` |
-| A context is bound as `ctx`, never `cx`, whatever its kind | `xtask context-names` (ADR-0325) |
-| A description type's builder method (a view, `Application`, a `…Config/Options/Settings/Request/Builder/Params/Spec`) has the bare name, never `with_`; the list of the ones left only shrinks | `xtask builder-names` (ADR-0325) |
-| A production `expect` or `panic!` names its invariant (`BUG: `) or its `try_` twin; the per-file counts of the ones that do not only go down | `xtask panic-messages` |
+| Every `tests/*.rs` file of a crate that sets `autotests = false` is a test target or a module of one: a file that is neither never compiles | `xtask unmounted-tests` (in `xtask checks`; ADR-0371 §3) |
+| No two records in `docs/adr/` share a number | `xtask adr-numbers` (in `xtask checks`; ADR-0371 §3) |
+| A value crosses a thread because the compiler proves it may: `send_wrapper`-style crates are banned; every `Send`/`Sync` position an author wrote in the facade's API is listed under ADR-0323 §3 | `deny.toml`, `xtask send-positions` (CI `api-contracts` job, nightly rustdoc JSON) |
 | User code runs through `flui_foundation::panic` (`commit`, `FirstPanic`) and an OS entry through `os_entry`: `std::panic::catch_unwind` is a disallowed method, and a site that still catches by hand carries `#[expect(clippy::disallowed_methods, reason = "ADR-0287: …")]` on its statement or function (ADR-0303 §6) | clippy (`disallowed-methods`) |
+
+### Rules a reader holds
+
+No program checks these before the first release (ADR-0371). The author follows them and the
+reader of "Before a merge" looks for a change that breaks one:
+
+- Dependencies point down the tiers. A manifest's `[package.metadata.flui]` states the crate's
+  `tier`, `order`, `reach-forbid` and `allowed-dependents`, and an exception names the ADR that
+  removes it (ADR-0081).
+- A crate's top-level modules import in one direction (ADR-0081 §5; ADR-0151 §10 for the core
+  host), and a Rust source file has at most 3000 production lines.
+- No process-global state: a `static` or `thread_local!` outside tests is immutable data, a
+  private ID counter, or granted by ADR-0097; one an ADR is to remove is debt with its bullet in
+  `docs/gaps.md`.
+- Every OS entry into `flui-native` (an `extern` fn, an Objective-C or COM method, an AccessKit
+  handler, a closure handed to the OS) is a constant or one call of
+  `owner::panic_boundary::os_entry`, or of an adapter of its file that is (ADR-0151 §16).
+- No new `unsafe impl Send` or `Sync` (ADR-0136 §3).
+- A WGSL derivative (`dpdx`, `dpdy`, `fwidth`, an implicit-LOD `textureSample`) is taken in
+  uniform control flow, before the first branch on a per-fragment value; a branch on a uniform
+  value above one carries a `// wgsl-uniformity: uniform` comment saying why. Native naga
+  accepts a shader that breaks this and Tint, in every browser, refuses it.
+- Test support is named `testing`; a hand-written `pump`/`advance`/`tick` or a
+  `Mock*`/`Fake*`/`Scripted*`/`Recording*`/`Probe*` type in test code lives in a kit (ADR-0243).
+- A constructor that can fail is `try_new`, a context is bound as `ctx`, never `cx`, and a
+  description type's builder method has the bare name, never `with_` (ADR-0325).
+- A production `expect` or `panic!` names its invariant (`BUG: `) or its `try_` twin
+  ([`docs/PANIC-POLICY.md`](docs/PANIC-POLICY.md)).
 
 ## ADR Policy
 
@@ -361,6 +402,6 @@ would be embarrassed by, with the better shape. What this repository keeps getti
 - a document that records a change by appending to a record instead of rewriting its rule, or a
   reversal that leaves other records teaching the old rule.
 
-Not a finding: a native or GPU path not yet run on its platform. PR CI runs Linux and wasm32 only;
+Not a finding: a native or GPU path not yet run on its platform. On a PR `ci.yml` runs Linux only;
 the PR body names the platforms the change still needs a run on, and the owner runs them from a
 device list.

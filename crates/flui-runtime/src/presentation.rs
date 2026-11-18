@@ -394,7 +394,7 @@ pub struct PresentationState {
     /// The soft keyboard's occlusion as the window last reported it: sampled
     /// at each frame's vsync into `MediaQueryData::view_insets` while it moves
     /// (ADR-0277 §3).
-    pub(super) keyboard: Cell<flui_platform::KeyboardInset>,
+    pub(super) keyboard: Cell<flui_platform::SoftKeyboard>,
     /// The system-bar overlay style its frames ask for, delivered on change.
     pub(crate) overlay_style: crate::overlay_style::OverlayStyleCoalescer,
     /// The retained scene its frames patch and its sink draws (ADR-0304 §8).
@@ -964,7 +964,7 @@ impl PresentationState {
         // Reentrancy-safe: the callback fires while the CALLER holds the
         // pipeline cell checked out, and the scheduler's `ensure_visual_update`
         // only touches `Send + Sync` runtime-level state (its own atomic phase
-        // and, briefly, the `frame_thread`/`on_frame_scheduled` slots — none of
+        // and owner thread, and, briefly, the `on_frame_scheduled` slot — none of
         // which is held across a call back into the pipeline) — never this
         // presentation's own `widgets` / `renderer` / gesture state.
         //

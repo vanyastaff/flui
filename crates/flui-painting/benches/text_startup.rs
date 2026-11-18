@@ -21,8 +21,9 @@ use std::hint::black_box;
 use std::sync::atomic::{AtomicIsize, Ordering};
 
 use criterion::{BatchSize, Criterion};
+use flui_foundation::TextDirection;
 use flui_painting::testing::feed_with_host;
-use flui_painting::typography::{TextDirection, TextSpan};
+use flui_painting::typography::TextSpan;
 use flui_painting::{FontCollection, HostFonts, TextContext, TextPainter};
 
 /// The system allocator, counting the bytes it holds out.

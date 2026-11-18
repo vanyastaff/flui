@@ -17,8 +17,8 @@ PointerDispatch<'_>)`, `handle_event(&self, PointerDispatch<'_>)` and
 `Rc<dyn GestureRecognizer>` and upcast to the arena-member trait.
 
 Built-in recognizers: `TapGestureRecognizer`, `DoubleTapGestureRecognizer`,
-`LongPressGestureRecognizer`, `DragGestureRecognizer` (plus the
-`vertical_drag`, `horizontal_drag` and `pan` constructors in `drag_variants`),
+`LongPressGestureRecognizer`, `DragGestureRecognizer` (its `DragAxis` given to
+`DragGestureRecognizer::builder`),
 `ScaleGestureRecognizer`, `ForcePressGestureRecognizer`,
 `MultiTapGestureRecognizer`, `MultiDragGestureRecognizer` and
 `TapAndDragGestureRecognizer`.

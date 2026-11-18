@@ -4,7 +4,7 @@
 //! acceleration.
 
 use flui_foundation::geometry::{Matrix4, Offset, Point, RRect, Rect};
-use flui_painting::{BlendMode, Paint, PointMode};
+use flui_painting::{paint::BlendMode, paint::Paint, paint::PointMode};
 use flui_painting::{
     paint::{Image, Path},
     styling::Color,
@@ -223,7 +223,7 @@ impl Drop for LayerDispatcher<'_> {
 /// `None` is **not** handled here: it means "do not clip at all", and mapping
 /// it to any rounding would clip. It is filtered by [`clip_is_disabled`] before
 /// this is consulted. A render object choosing `Clip::None` pushes no clip
-/// LAYER, which is what made this look unreachable — but `Canvas::clip_rect_ext`
+/// LAYER, which is what made this look unreachable — but `Canvas::clip_rect_with`
 /// and its siblings emit a `DrawCommand` unconditionally, so the canvas path
 /// reaches it with any mode the caller passes.
 ///
@@ -265,8 +265,8 @@ const fn clip_opens_a_layer(behavior: flui_painting::paint::Clip) -> bool {
 /// Whether a clip command asks for no clipping at all.
 ///
 /// `Clip::None` reaching a clip call is not a contradiction: the layer path
-/// never emits one, but `Canvas::clip_rect_ext` / `clip_rrect_ext` /
-/// `clip_rsuperellipse_ext` push their command whatever mode they are given.
+/// never emits one, but `Canvas::clip_rect_with` / `clip_rrect_with` /
+/// `clip_rsuperellipse_with` push their command whatever mode they are given.
 /// Honouring it means applying NO clip — the alternative, treating it as the
 /// cheapest clip, clips content the caller asked to leave alone.
 const fn clip_is_disabled(behavior: flui_painting::paint::Clip) -> bool {
@@ -856,7 +856,7 @@ impl LayerStateStack for LayerDispatcher<'_> {
                 // Exact f32 comparison is correct: `ColorMatrix::identity()` is
                 // built from bit-exact 0.0/1.0 literals, so a transitive equality
                 // check correctly skips the GPU pass without ULP slop.
-                let identity = flui_painting::paint::effects::ColorMatrix::identity();
+                let identity = flui_painting::paint::ColorMatrix::identity();
                 if m.values == identity.values {
                     self.painter.save_layer(None, &Paint::fill(Color::WHITE));
                     tracing::trace!("push_color_filter: identity matrix — no-op layer");
@@ -920,8 +920,8 @@ impl LayerStateStack for LayerDispatcher<'_> {
         self.painter.restore_layer();
     }
 
-    fn push_image_filter(&mut self, filter: &flui_painting::paint::effects::ImageFilter) {
-        use flui_painting::paint::effects::ImageFilter;
+    fn push_image_filter(&mut self, filter: &flui_painting::paint::ImageFilter) {
+        use flui_painting::paint::ImageFilter;
 
         self.flush_active_transform();
         if let Err(error) = validate_image_filter_parameters(filter) {
@@ -1078,11 +1078,11 @@ impl LayerStateStack for LayerDispatcher<'_> {
 /// The inner `match` is exhaustive: adding a new `ImageFilter` variant forces
 /// a compile error here, ensuring the flatten stays up-to-date.
 pub(crate) fn flatten_compose(
-    filters: &[flui_painting::paint::effects::ImageFilter],
+    filters: &[flui_painting::paint::ImageFilter],
     matrix: &[f64; 16],
     out: &mut SmallVec<[ImageFilterPass; 4]>,
 ) -> Result<(), crate::command_ir::RecordError> {
-    use flui_painting::paint::effects::ImageFilter;
+    use flui_painting::paint::ImageFilter;
     for filter in filters {
         match filter {
             ImageFilter::Blur { sigma_x, sigma_y } => {
@@ -1156,10 +1156,10 @@ fn transform_pass(
 }
 /// Reject nonfinite and lossy-to-zero parameters before narrowing to GPU values.
 fn validate_image_filter_parameters(
-    filter: &flui_painting::paint::effects::ImageFilter,
+    filter: &flui_painting::paint::ImageFilter,
 ) -> Result<(), crate::error::GeometryError> {
     use crate::error::GeometryError;
-    use flui_painting::paint::effects::ImageFilter;
+    use flui_painting::paint::ImageFilter;
     let validate = |value: f64| {
         if !value.is_finite() {
             return Err(GeometryError::NonFinite {

@@ -1,6 +1,7 @@
 //! Text metrics types.
 
 use super::TextAffinity;
+use flui_foundation::TextDirection;
 use flui_foundation::geometry::Rect;
 
 /// Position within text with directional affinity.
@@ -201,14 +202,14 @@ pub struct TextBox {
     /// Bounding rectangle.
     pub rect: Rect<f64>,
     /// Text direction for this box.
-    pub direction: super::TextDirection,
+    pub direction: TextDirection,
 }
 
 impl TextBox {
     /// Creates a new text box.
     #[must_use]
     #[inline]
-    pub const fn new(rect: Rect<f64>, direction: super::TextDirection) -> Self {
+    pub const fn new(rect: Rect<f64>, direction: TextDirection) -> Self {
         Self { rect, direction }
     }
 
@@ -244,7 +245,7 @@ impl TextBox {
     /// Returns the text direction.
     #[must_use]
     #[inline]
-    pub const fn direction(&self) -> super::TextDirection {
+    pub const fn direction(&self) -> TextDirection {
         self.direction
     }
 
@@ -451,13 +452,6 @@ impl LineMetrics {
         self.left + self.width
     }
 
-    /// Returns true if the line ends with a hard break.
-    #[must_use]
-    #[inline]
-    pub const fn has_hard_break(&self) -> bool {
-        self.hard_break
-    }
-
     /// Returns the ascent value.
     #[must_use]
     #[inline]
@@ -470,13 +464,6 @@ impl LineMetrics {
     #[inline]
     pub const fn descent(&self) -> f64 {
         self.descent
-    }
-
-    /// Returns the total height (ascent + descent).
-    #[must_use]
-    #[inline]
-    pub fn total_height(&self) -> f64 {
-        self.ascent + self.descent
     }
 }
 
@@ -499,7 +486,7 @@ pub struct TextCharacter {
 #[non_exhaustive]
 pub struct TextLineRun {
     /// The direction its characters are laid out in.
-    pub direction: super::TextDirection,
+    pub direction: TextDirection,
     /// Its characters, in logical order; never empty.
     pub characters: Vec<TextCharacter>,
 }

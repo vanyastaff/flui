@@ -4,7 +4,7 @@ use criterion::{BatchSize, Criterion};
 use flui_engine::{WgpuPainter, wgpu};
 use flui_foundation::geometry::{RRect, Rect};
 use flui_painting::{
-    Paint,
+    paint::Paint,
     paint::{Clip, Path},
     styling::Color,
 };

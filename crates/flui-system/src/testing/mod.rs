@@ -12,12 +12,16 @@
 //! failure, and its completion ends `ProviderDropped`, never with a success
 //! nobody wrote.
 
+#[cfg(test)]
+pub(crate) mod owner;
 #[cfg(all(test, windows))]
 #[expect(
     unsafe_code,
     reason = "a raw window handle naming a window no test reaches, a message pump"
 )]
 pub(crate) mod win32;
+#[cfg(all(test, any(windows, target_os = "macos")))]
+pub(crate) mod window;
 
 use std::{cell::Cell, cell::RefCell, fmt, rc::Rc};
 

@@ -3,44 +3,6 @@
 //! This module provides types for blur effects and color filters,
 //! similar to CSS filter and backdrop-filter properties.
 
-use std::sync::Arc;
-
-use super::canvas::{StrokeCap, StrokeJoin};
-
-/// Blur quality/algorithm level.
-///
-/// Controls the quality and performance trade-off for blur rendering.
-/// Higher quality produces smoother blur but requires more computation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[non_exhaustive]
-pub enum BlurQuality {
-    /// Fast box blur approximation (single pass)
-    Low,
-
-    /// Multi-pass box blur (approximates gaussian, 3 passes)
-    #[default]
-    Medium,
-
-    /// High-quality gaussian blur (5+ passes)
-    High,
-}
-
-/// Blur mode determines how blur is applied.
-///
-/// Similar to CSS filter vs backdrop-filter distinction.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[non_exhaustive]
-pub enum BlurMode {
-    /// Blur the content itself (like CSS filter: blur())
-    #[default]
-    Content,
-
-    /// Blur the backdrop behind the content (like CSS backdrop-filter: blur())
-    Backdrop,
-}
-
 /// Color adjustment types for image and content manipulation.
 ///
 /// Similar to CSS filter functions and SVG color matrix filters.
@@ -93,7 +55,7 @@ pub enum ColorAdjustment {
 /// # Examples
 ///
 /// ```rust,ignore
-/// use flui_painting::paint::effects::ColorMatrix;
+/// use flui_painting::paint::ColorMatrix;
 ///
 /// // Identity matrix (no change)
 /// let identity = ColorMatrix::identity();
@@ -423,119 +385,6 @@ impl ColorAdjustment {
     }
 }
 
-/// Path stroke options for rendering vector paths.
-///
-/// Similar to HTML Canvas stroke properties and SVG stroke attributes.
-#[derive(Debug, Clone, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct StrokeOptions {
-    /// Stroke width in pixels
-    pub width: f64,
-
-    /// Line cap style
-    pub cap: StrokeCap,
-
-    /// Line join style
-    pub join: StrokeJoin,
-
-    /// Miter limit for miter joins (only used when join is Miter)
-    pub miter_limit: f64,
-
-    /// Optional dash pattern (alternating dash/gap lengths)
-    pub dash_pattern: Option<Arc<Vec<f64>>>,
-
-    /// Offset into the dash pattern
-    pub dash_offset: f64,
-}
-
-impl Default for StrokeOptions {
-    #[inline]
-    fn default() -> Self {
-        Self {
-            width: 1.0,
-            cap: StrokeCap::Butt,
-            join: StrokeJoin::Miter,
-            miter_limit: 4.0,
-            dash_pattern: None,
-            dash_offset: 0.0,
-        }
-    }
-}
-
-impl StrokeOptions {
-    /// Create new stroke options with default values.
-    #[inline]
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Set stroke width.
-    #[inline]
-    #[must_use]
-    pub fn width(mut self, width: f64) -> Self {
-        self.width = width;
-        self
-    }
-
-    /// Set line cap style.
-    #[inline]
-    #[must_use]
-    pub fn cap(mut self, cap: StrokeCap) -> Self {
-        self.cap = cap;
-        self
-    }
-
-    /// Set line join style.
-    #[inline]
-    #[must_use]
-    pub fn join(mut self, join: StrokeJoin) -> Self {
-        self.join = join;
-        self
-    }
-
-    /// Set miter limit.
-    #[inline]
-    #[must_use]
-    pub fn miter_limit(mut self, miter_limit: f64) -> Self {
-        self.miter_limit = miter_limit;
-        self
-    }
-
-    /// Set dash pattern.
-    #[inline]
-    #[must_use]
-    pub fn dash_pattern(mut self, pattern: Vec<f64>) -> Self {
-        self.dash_pattern = Some(Arc::new(pattern));
-        self
-    }
-
-    /// Set dash offset.
-    #[inline]
-    #[must_use]
-    pub fn dash_offset(mut self, offset: f64) -> Self {
-        self.dash_offset = offset;
-        self
-    }
-}
-
-/// Path rendering mode.
-///
-/// Determines how a path is rendered (filled, stroked, or both).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[non_exhaustive]
-pub enum PathPaintMode {
-    /// Fill the path interior
-    Fill,
-
-    /// Stroke the path outline
-    Stroke,
-
-    /// Both fill and stroke (fill first, then stroke)
-    FillAndStroke,
-}
-
 /// Image filter for backdrop and content effects.
 ///
 /// Combines blur and color filters into a single enum for use with
@@ -544,7 +393,7 @@ pub enum PathPaintMode {
 /// # Examples
 ///
 /// ```rust,ignore
-/// use flui_painting::paint::effects::{ImageFilter, ColorAdjustment};
+/// use flui_painting::paint::{ImageFilter, ColorAdjustment};
 ///
 /// // Blur filter
 /// let blur = ImageFilter::Blur {
@@ -760,28 +609,6 @@ impl ImageFilter {
     #[must_use]
     pub fn color_adjust(adjustment: ColorAdjustment) -> Self {
         Self::ColorAdjust(adjustment)
-    }
-
-    /// Create an overflow indicator filter (debug mode only).
-    ///
-    /// # Arguments
-    ///
-    /// * `overflow_h` - Horizontal overflow in pixels (0.0 if none)
-    /// * `overflow_v` - Vertical overflow in pixels (0.0 if none)
-    /// * `container_size` - Size of the container
-    #[cfg(debug_assertions)]
-    #[inline]
-    #[must_use]
-    pub fn overflow_indicator(
-        overflow_h: f64,
-        overflow_v: f64,
-        container_size: flui_foundation::geometry::Size<f64>,
-    ) -> Self {
-        Self::OverflowIndicator {
-            overflow_h,
-            overflow_v,
-            container_size,
-        }
     }
 }
 

@@ -6,13 +6,13 @@
 //! owner-local cells synchronously, and releases cached routes at the end of the
 //! pointer sequence.
 
+use flui_foundation::{AtomicIdMint, IdExhausted, IdMint};
 use std::any::Any;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::fmt;
 use std::num::NonZeroU64;
 use std::rc::{Rc, Weak};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread::{self, ThreadId};
 
 use flui_foundation::geometry::Matrix4;
@@ -26,7 +26,7 @@ use crate::events::{
     PanZoomEvent, PointerEvent, PointerEventExt, PointerSource, ScrollEvent, SmartZoomEvent,
 };
 
-static NEXT_LANE_ID: AtomicU64 = AtomicU64::new(1);
+static NEXT_LANE_ID: AtomicIdMint<NonZeroU64> = AtomicIdMint::new();
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 struct LaneId(NonZeroU64);
@@ -294,31 +294,26 @@ impl RouteResolution {
     }
 }
 
-struct MonotonicIdSource {
-    next: Cell<u64>,
-}
+/// One lane-local id domain, refusing with the lane's error once spent.
+struct MonotonicIdSource(IdMint<NonZeroU64>);
 
 impl MonotonicIdSource {
     const fn new() -> Self {
-        Self { next: Cell::new(1) }
+        Self(IdMint::new())
     }
 
     fn try_next(&self) -> Result<NonZeroU64, InteractionDispatchError> {
-        let current = self.next.get();
-        let id = NonZeroU64::new(current).ok_or(InteractionDispatchError::IdentifierExhausted)?;
-        self.next.set(current.checked_add(1).unwrap_or(0));
-        Ok(id)
+        self.0
+            .next()
+            .map_err(|IdExhausted| InteractionDispatchError::IdentifierExhausted)
     }
 }
 
-fn try_mint_lane_id(source: &AtomicU64) -> Result<LaneId, InteractionDispatchError> {
-    let current = source
-        .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
-            (current != 0).then(|| current.checked_add(1).unwrap_or(0))
-        })
-        .map_err(|_| InteractionDispatchError::IdentifierExhausted)?;
-    let non_zero = NonZeroU64::new(current).ok_or(InteractionDispatchError::IdentifierExhausted)?;
-    Ok(LaneId(non_zero))
+fn try_mint_lane_id(source: &AtomicIdMint<NonZeroU64>) -> Result<LaneId, InteractionDispatchError> {
+    source
+        .next()
+        .map(LaneId)
+        .map_err(|IdExhausted| InteractionDispatchError::IdentifierExhausted)
 }
 
 /// One pointer event as delivered to one hit-test target, in both of the
@@ -968,7 +963,7 @@ thread_local! {
         target_os = "android",
         allow(
             clippy::missing_const_for_thread_local,
-            reason = "Rust 1.99's OS TLS macro can erase this explicit const initializer on cross hosts"
+            reason = "Android's OS-TLS `thread_local!` expansion can erase this explicit const initializer"
         )
     )]
     static ACTIVE_LANES: RefCell<Vec<LaneTicket>> = const { RefCell::new(Vec::new()) };

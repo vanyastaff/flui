@@ -1,8 +1,9 @@
 //! The text pipeline end to end: a styled span measured by `TextPainter`
 //! records a paragraph on the canvas.
 
+use flui_foundation::TextDirection;
 use flui_foundation::geometry::Offset;
-use flui_painting::typography::{FontWeight, TextDirection, TextSpan, TextStyle};
+use flui_painting::typography::{FontWeight, TextSpan, TextStyle};
 use flui_painting::{Canvas, TextPainter};
 
 fn invalid_font_size_does_not_unwind(font_size: f64, scale: f64) {
@@ -112,7 +113,7 @@ pub(crate) fn exact_profiles_reach_every_measurement_and_painted_run() {
         TextScaleProfile as Profile, TextSize, TextSizeRequest, TextSizingIntent,
     };
     use flui_painting::styling::Color;
-    use flui_painting::{DrawOp, TextBaseline, TextMeasurement, TextSizing};
+    use flui_painting::{DrawOp, TextMeasurement, TextSizing, typography::TextBaseline};
     let request = |size, profile| TextSizeRequest {
         size: TextSize::try_new(size).expect("authored size"),
         profile,
@@ -231,7 +232,7 @@ pub(crate) fn exact_profiles_reach_every_measurement_and_painted_run() {
         .map(|run| {
             let key = registry.prepare_run(&run).expect("painted face");
             let glyph = run
-                .placed_glyphs(key, (0.0, 0.0), 1.0)
+                .placed_glyphs(key, (0.0, 0.0), (0.0, 0.0), 1.0)
                 .next()
                 .expect("painted glyph");
             (glyph.key.size(), glyph.color)
@@ -429,7 +430,7 @@ pub(crate) fn captured_answers_reach_retained_clones_without_reshaping_old_geome
         .runs()
         .map(|run| {
             let key = registry.prepare_run(&run).expect("actual glyph run");
-            run.placed_glyphs(key, (0.0, 0.0), 1.0)
+            run.placed_glyphs(key, (0.0, 0.0), (0.0, 0.0), 1.0)
                 .next()
                 .expect("actual painted glyph")
                 .key

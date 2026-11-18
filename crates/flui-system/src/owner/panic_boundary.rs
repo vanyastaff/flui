@@ -1,10 +1,13 @@
 //! The one boundary every OS entry into the crate goes through
 //! (ADR-0151 §16): a window procedure, an enumeration callback, a WinRT
-//! delegate. A panic unwinding out of an `extern "system"` frame aborts the
-//! process; contained here, it is logged and the OS gets the entry's answer
-//! after a panic. `cargo xtask panic-boundary` holds every entry of the
-//! crate to one call of [`os_entry`], as it holds `flui-native`'s to that
-//! crate's boundary of the same name and contract.
+//! delegate, an Objective-C block or method, a Grand Central Dispatch work
+//! item, a Carbon event handler. A panic unwinding out of an
+//! `extern "system"` or `extern "C"` frame aborts the process, and out of an
+//! `extern "C-unwind"` one it unwinds through AppKit's, UIKit's or libdispatch's
+//! frames; contained here, it is logged and the OS gets the entry's answer
+//! after a panic. Every entry of the crate is one call of [`os_entry`], and
+//! every Objective-C class's ivars are `ContainedIvars`, as in `flui-native`,
+//! whose boundary has the same name and contract.
 
 use std::any::Any;
 use std::fmt;
@@ -72,6 +75,50 @@ fn payload_text(payload: &(dyn Any + Send)) -> &str {
         .copied()
         .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
         .unwrap_or("a panic payload with no text")
+}
+
+/// The ivars of an Objective-C class the crate declares: objc2's generated
+/// `dealloc` destroys a class's ivars in place, on whatever thread and under
+/// whatever frames the last release comes from, so a class keeps them here
+/// and they are destroyed by one call of [`os_entry`]. `cargo xtask
+/// panic-boundary` holds every class of the crate to this type.
+///
+/// Read through `Deref`; never moved, since objc2 keeps the ivars pinned.
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+#[derive(Debug)]
+pub(crate) struct ContainedIvars<T>(std::mem::ManuallyDrop<T>);
+
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+impl<T> ContainedIvars<T> {
+    /// `ivars`, for `set_ivars`.
+    pub(crate) const fn new(ivars: T) -> Self {
+        Self(std::mem::ManuallyDrop::new(ivars))
+    }
+}
+
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+impl<T> std::ops::Deref for ContainedIvars<T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        &self.0
+    }
+}
+
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+#[expect(
+    unsafe_code,
+    reason = "the ivars are destroyed in place, once, inside the boundary"
+)]
+impl<T> Drop for ContainedIvars<T> {
+    fn drop(&mut self) {
+        os_entry("dealloc", (), AfterPanic::Answer(|()| ()), || {
+            // SAFETY: the value is initialized from `new` on, this is the
+            // only place that destroys it, and `drop` runs once: nothing
+            // reads it afterwards.
+            unsafe { std::mem::ManuallyDrop::drop(&mut self.0) }
+        });
+    }
 }
 
 /// Destroy a caught payload under containment, each panic its destructor

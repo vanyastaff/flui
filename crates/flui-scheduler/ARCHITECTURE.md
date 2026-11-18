@@ -96,13 +96,18 @@ presentation, a failed frame's backoff).
 
 `PresentationScopeFactory` is the weak assembly capability. It can mint scopes
 only for the original live owner; a scoped widget handle cannot mint siblings.
-Successor registration commits completion demand before requesting a host wake,
-outside queue guards. A failed or cleared wake cannot erase that accepted debt.
+Registering a callback, scoped or unscoped, asks for no frame (ADR-0367): it
+runs after the next frame that completes its segment, so a callback that
+re-registers itself costs nothing while no frame runs. A registration made while
+a retained segment waits to resume (suspended or servicing) is the exception: it
+asks for the successor it joins, which the resume does not complete. A caller
+that needs a frame asks with `PostFrameHandle::schedule_frame`, which outside a running
+segment commits completion demand before requesting a host wake, outside queue
+guards. A failed or cleared wake cannot erase that accepted request.
 The runtime admits a completion-only segment only for an eligible presentation
 with previously coherent geometry and no pending tree work or retained segment;
 it does not manufacture a widget rebuild or dirty layout. The runtime re-arms
-remaining eligible demand after its host wake clear. Unscoped registration keeps
-its previous host-frame behavior and does not automatically request a frame.
+remaining eligible demand after its host wake clear.
 
 Cancellation withdraws geometry and retains the current epoch for a replacement
 to resume. It cannot silently begin a fresh epoch and discard accepted completion
@@ -144,7 +149,7 @@ sibling recovery through the public close and frame-drive APIs.
 `closing_a_scope_retires_its_active_tail_without_losing_siblings` pin these
 owner operations through scheduled callbacks and actual host frame drives.
 `reentrant_partial_geometry_blocks_an_already_selected_tail` pins the invocation
-boundary recheck; `successor_completion_demand_survives_wake_failure_and_host_clearing`
+boundary recheck; `a_requested_completion_survives_wake_failure_and_host_clearing`
 pins retained wake debt, clean completion admission and weak factory lifetime.
 `DemandKind::Completion` carries this accepted work through the presentation's
 ordinary `FrameClock` coalescing, visibility and capacity gates independently of
@@ -174,7 +179,7 @@ tail survival, registration FIFO, and consumption of the failed entry.
 `OwnerFrame` and `PresentationFrameScope` are the scheduler's only `Drop` implementations that
 resume a failure. Each retires its post-frame callbacks and tasks first, under its own catch, so
 the queues its fields still reference are empty when the failure unwinds through the drop glue:
-no application capture is destroyed inside that unwind (#1165). During an unwind already running,
+no application capture is destroyed inside that unwind. During an unwind already running,
 the failure goes to `discard_payload` instead of being raised, since resuming it from a destructor
 would abort (ADR-0281 §2).
 
@@ -203,14 +208,12 @@ lane, no microtask queue and no priority task queue, so nothing before the
 pipeline needs a re-entry cap or a run budget.
 
 **The frame's post-frame callbacks do not run** for an aborted frame —
-see the private abort cleanup. **Completion
-waiters are woken with the aborted frame's outcome** — an aborted frame is a
-frame that finished, badly, and `end_of_frame()` must not hang forever
-because of it. It resolves `Ok(FrameOutcome::Aborted { timing })`, distinct
-from a successful frame's `Ok(FrameOutcome::Completed { timing })`: see this
-file's own `end_of_frame` resolves an outcome, and a dropped scheduler
-resolves `Err(SchedulerClosed)` entry below for the full contract and why
-issue #1162 shaped it this way.
+see the private abort cleanup. **Completion waiters are woken with the
+aborted frame's outcome:** an aborted frame finished, badly, and
+`end_of_frame()` must not hang because of it. It resolves
+`Ok(FrameOutcome::Aborted { timing })`, distinct from a successful frame's
+`Ok(FrameOutcome::Completed { timing })`; see "`end_of_frame` resolves an
+outcome, and a dropped scheduler resolves `Err(SchedulerClosed)`" below.
 
 **The `frame_scheduled` contract for a catcher:** `handle_begin_frame`
 cleared `frame_scheduled` before the frame's tasks were polled. Abort cleanup
@@ -224,74 +227,51 @@ this does not loop). A caller that catches the
 resumed panic and wants another frame calls `request_frame()` itself. See the
 contract of the frame drive (`__runtime::DriveFrame::drive_frame`).
 
-**The async zombie-slot fix (`AsyncDriver::poll_ready`):** a panic inside
-`future.poll` used to leave that task's slot in `Inner::tasks` holding
-`future: None` forever — nothing else on the normal path ever revisits a
-slot that is not `ready` and was never explicitly cancelled, so
-`pending_task_count` counted a task that could neither be polled again nor
-be cancelled by a caller whose `TaskToken` had already been dropped or was
-never checked. Fixed with a small `Drop`-based guard, armed only for the
-duration of the `poll` call and disarmed immediately on a normal return:
-on unwind it removes the slot. Taking the map lock in that `Drop` is safe
-specifically because `poll_ready` never holds it across a poll, and the
-removed `Task` already has `future: None` — dropping it runs no user code.
-**Superseded:** issue #1056's ready-index rewrite deleted this guard;
-`PumpGuard`'s `in_flight` arm (see "`AsyncDriver` indexes ready tasks
-instead of scanning every resident one" below) does this same slot-removal
-half, plus what this guard never had to do — restore the unreached tail of
-the pump's own ready batch.
+**A task whose poll panics leaves no slot behind.** `PumpGuard`'s
+`in_flight` arm (see "`AsyncDriver` indexes ready tasks instead of scanning
+every resident one" below) removes that task's slot, so
+`pending_task_count` never counts a task that can be neither polled again
+nor cancelled by a caller whose `TaskToken` is gone, and it restores the
+unreached tail of the pump's ready batch. Removing the slot runs no user
+code: the future was taken out of it for the poll.
 
-**`notify_frame_completion` no longer holds a waiter's lock across
-`wake()`:** the previous implementation locked `notifier.state` and called
-`waker.wake()` while still holding that guard. A waker whose `wake()`
-immediately re-polls the SAME `FrameCompletionFuture` — an inline-polling
-executor, not merely one that schedules a later poll — locks that identical
+**`notify_frame_completion` wakes no waiter under its lock.** A waker whose
+`wake()` re-polls the same `FrameCompletionFuture` inline locks that
 `Arc<Mutex<FrameCompletionState>>` from inside `poll()`; held across the
 call, that self-relock on the non-reentrant `parking_lot::Mutex` never
-returns. The waker is now taken out from under the lock and called only
-after it is released. A waker that panics is caught and traced
-(`tracing::error!` with `payload_text`) rather than aborting the
-notification loop — every OTHER waiter still gets its `completed` value set
-and its own waker called — and the first such panic is re-raised only once
-every waiter has been notified, matching `end_frame_impl`'s own
-catch-then-resume shape for a panicking post-frame callback.
+returns. The waker is taken out from under the lock and called after it is
+released. A waker that panics is caught and traced (`tracing::error!` with
+`payload_text`) without stopping the loop: every other waiter still gets
+its `completed` value and its own wake, and the first panic is raised once
+every waiter has been notified, the same catch-then-resume shape
+`end_frame_impl` gives a panicking post-frame callback.
 
-**Scope:** FLUI does not isolate per callback (see
-`docs/PANIC-POLICY.md` and the doc note this crate already carries on the
-topic) — a panic here still poisons and propagates the
-whole frame. What this closes is narrower and Rust-specific: the
-scheduler's OWN bookkeeping must never be left half-closed by an unwind it
-did not choose to isolate.
+**Scope:** FLUI does not isolate per callback (see `docs/PANIC-POLICY.md`):
+a panic here still propagates out of the whole frame. What the scheduler
+guarantees is narrower: its own bookkeeping is never left half-closed by an
+unwind it did not choose to isolate.
 
 **A secondary panic during recovery never displaces the original one.**
-Two distinct sites can themselves panic while THIS issue's own recovery
-runs, both discovered by review after the first pass shipped:
+Two sites can panic while recovery runs:
 
-- The frame drive (`__runtime::DriveFrame::drive_frame`) catches failure and calls `abort_frame_impl`, which calls
-  `notify_frame_completion` — and a panicking waker there is a second panic
-  on top of the pipeline's (or a task poll's)
-  own. Abort cleanup runs inside its own `catch_unwind`; a
-  secondary panic is traced at `error` level and the ORIGINAL payload is
-  what `resume_unwind`s, always — measured before the fix: the escaped
-  panic was the waker's, not the frame's, silently losing whichever failure
-  the frame was actually reporting.
-- The successful `end_frame` path inside the frame drive calls
-  `notify_frame_completion` OUTSIDE the post-frame callback's own
-  `catch_unwind`, so a panicking waker there used to escape straight past
-  the phase reset at the end of that function, leaving the scheduler stuck
-  at `PostFrame` with `current_vsync_time` still set — the exact
-  class of bug this issue exists to close, just reachable from the success
-  path instead of the failure one. `notify_frame_completion` is now caught
-  there too, and folded into the SAME `callback_result`-or-`notify_result`
-  check that already ran the phase reset for a panicking post-frame
-  callback: whichever of the two panicked, the phase still closes before
-  either one resumes (the post-frame callback's payload wins if both did,
-  since it panicked earlier in this frame's own order).
+- The frame drive (`__runtime::DriveFrame::drive_frame`) catches a failure
+  and calls `abort_frame_impl`, which calls `notify_frame_completion`; a
+  panicking waker there is a second panic on top of the pipeline's (or a
+  task poll's). Abort cleanup runs inside its own catch; the secondary panic
+  is traced at `error` level and the original payload is the one resumed.
+- The successful `end_frame` path calls `notify_frame_completion` after the
+  post-frame callbacks. A panicking waker there would escape past the phase
+  reset and leave the scheduler at `PostFrame` with `current_vsync_time`
+  set, so it is caught too and folded into the same
+  `callback_result`-or-`notify_result` check that runs the phase reset:
+  whichever of the two panicked, the phase closes before either resumes,
+  and the post-frame callback's payload wins if both did, since it panicked
+  first.
 
-The general rule, in both places: **the panic that caused THIS frame to
-need recovery is never displaced by a panic the recovery itself raises
-while running.** A secondary panic is contained, logged, and never allowed
-to become the one the caller observes.
+The general rule, in both places: **the panic that caused this frame to
+need recovery is never displaced by a panic the recovery itself raises.** A
+secondary panic is contained, logged, and never becomes the one the caller
+observes.
 
 **Alternatives considered:**
 
@@ -321,9 +301,11 @@ accessor such as `current_frame()`.
 of them fails to compile there until it is classified, and probes every
 `RefCell` and `Mutex` a callback could observe. It runs from inside a
 post-frame callback and a frame-completion waker
-(`callbacks_run_with_no_scheduler_lock_held`). A removed lifecycle listener is
-located under the borrow (`position` + `remove`) and dropped only after the
-borrow ends, since its captures may re-enter the scheduler from `Drop`.
+(`callbacks_run_with_no_scheduler_lock_held`). Lifecycle listeners are a
+`Notifier`, held by the `Subscription` that `listen_lifecycle_state` returns:
+the notifier lends no borrow of its list to a listener it runs, and a detached
+listener drops after its borrow ends, since its captures may re-enter the
+scheduler from `Drop`.
 **Unasserted** for the lifecycle-listener and wake-hook families: no test runs
 the oracle from inside them.
 
@@ -345,7 +327,8 @@ no wildcard arm:
   frame when anything is still dirty.
 
 A caller on any other thread always requests, since a lost cross-thread wake
-is worse than a surplus frame (see `frame_thread`'s own doc). Animation
+is worse than a surplus frame; the owner thread is fixed when the scheduler is
+created, since `UpdateScheduler` is not `Send`. Animation
 continuation demand is committed by the presentation frame path and routed
 through its wake capability, independent of this phase gate.
 
@@ -368,30 +351,25 @@ lifecycle (an owner that resumed, a test driving frames).
 ### Pipeline visual updates route through `ensure_visual_update`'s phase gate
 
 **Mapping decision** (ADR-0027 leapfrog zone: runtime/scheduling topology
-is a sanctioned divergence point): the pipeline carrier no longer bypasses
+is a sanctioned divergence point): the pipeline carrier goes through
 `UpdateScheduler`. `PipelineOwner::request_visual_update`
-(`flui-rendering/src/pipeline/owner/accessors.rs`) still delivers the
+(`flui-rendering/src/pipeline/owner/accessors.rs`) delivers the
 pipeline's visual-update wake (`flui-rendering/src/pipeline/notifier.rs`,
-an owned snapshot run with no notifier guard held), which still invokes the
+an owned snapshot run with no notifier guard held), which invokes the
 closure a presentation registers via `owner.set_on_need_visual_update`
-(`flui-runtime/src/presentation.rs`) — but that closure no longer calls
-the UI runtime's shared `visual_wake()` and no longer pokes
-`window.request_redraw()` unconditionally. It now captures a
-`WeakUpdateScheduler` (as `RenderingBinding` holds its scheduler)
-and calls `scheduler.ensure_visual_update()`; only when that
-returns `true` (phase gate passed AND frames enabled) does it poke
-`window.request_redraw()`.
+(`flui-runtime/src/presentation.rs`). That closure captures a
+`WeakUpdateScheduler` (as `RenderingBinding` holds its scheduler) and calls
+`scheduler.ensure_visual_update()`; only when that returns `true` (phase
+gate passed and frames enabled) does it poke `window.request_redraw()`. It
+neither calls the UI runtime's shared `visual_wake()` nor pokes the window
+unconditionally.
 
-The UI runtime's `wake` was already registered as the scheduler's
+The UI runtime's `wake` is registered as the scheduler's
 `on_frame_scheduled` hook (`ui_runtime/`), so the `frame_scheduled`
-false→true edge fires the platform wake exactly as before — routing the
-pipeline carrier through `ensure_visual_update` makes the scheduler's
-`frame_scheduled` flag the single carrier, and the presentation closure
-keeps only the per-window `request_redraw()` poke. The runner's
-`wake_action` (`flui-app/src/app/runner/frame_pacing.rs`) still ORs its
-two parameters, but `UI runtime.needs_redraw()` (the old pipeline carrier) is
-no longer set by this closure; the scheduler's `frame_scheduled` flag is
-now the one latch both a pipeline mark and every other demand source flip.
+false→true edge fires the platform wake. The scheduler's `frame_scheduled`
+flag is the single carrier, the one latch both a pipeline mark and every
+other demand source flip; the presentation closure keeps only the
+per-window `request_redraw()` poke.
 
 **Why the bool is not the `frame_scheduled` false→true edge:**
 `ensure_visual_update` returns `true` iff the phase gate passed AND frames
@@ -405,17 +383,16 @@ that presentation, so a hundred state changes before a frame make one
 platform request rather than a hundred (on Win32 a hidden window posts a
 message per request).
 
-**Re-entrancy re-proven, not assumed:** the closure fires while the caller
-holds the pipeline cell checked out, and now reaches
-`ensure_visual_update`, which locks `frame_thread` (mid-frame arm) and, via
+**Re-entrancy:** the closure fires while the caller
+holds the pipeline cell checked out, and reaches
+`ensure_visual_update`, which compares the calling thread with the
+scheduler's fixed owner thread (mid-frame arm) and, via
 `request_frame_impl`, clones-and-drops `on_frame_scheduled` outside its
 lock. Deadlock would require a reverse path — a scheduler lock held across
-a call back into the pipeline — and none exists: `handle_begin_frame`
-stores `frame_thread` under a temporary statement-scoped guard released
-before the pipeline runs, and `drive_frame_impl` runs the lane closure
-with no scheduler lock held. A mid-frame pipeline mark therefore locks a
-free `frame_thread`, reads `Some(current)`, returns `false`, and pokes
-nothing.
+a call back into the pipeline — and none exists: `drive_frame_impl` runs the
+pipeline with no scheduler lock held. A mid-frame pipeline mark
+therefore finds the owner thread, records a late visual update, returns
+`false`, and pokes nothing.
 
 ### `end_of_frame` registers before it demands, and the live registry is the memo
 
@@ -498,13 +475,11 @@ That predicate has two halves, and only the first belongs to the registry:
   and one leg of it is a public method any embedder may call. The live scan
   reads only the vec it already holds.
 
-  `is_empty()` is O(1) and the live scan is not, which is a real cost and was
-  a real defect: the first version walked the whole vec on every registration,
-  so a run of tombstones in front of one live entry was re-walked per push
-  (measured: 14,641 probes for 121 registrations, under the registry mutex).
-  The registry now carries a cursor that retires the tombstones it walks past,
-  which makes the scan amortized O(1) and brought the same 121 registrations to
-  241 probes. **Unasserted:** no test pins this.
+  `is_empty()` is O(1) and the live scan is not. The registry carries a
+  cursor that retires the tombstones it walks past, which makes the scan
+  amortized O(1): 121 registrations behind a run of tombstones take 241
+  probes, against 14,641 for a scan from the front each time, all under the
+  registry mutex. **Unasserted:** no test pins this.
 - Gating the demand on `phase() == Idle`. Rejected: it goes silent in the post-drain window, where
   `notify_frame_completion` has already emptied the registry but the phase is
   still `PostFrame`, so a waiter registered from a completion waker
@@ -514,11 +489,9 @@ That predicate has two halves, and only the first belongs to the registry:
   later than the drain it is meant to pair with, so the flag is still set
   during the post-drain window. Deleting the flag removes the clear point
   rather than moving it.
-- Adopting an `event-listener` event, as the former ticker backend did.
-  Rejected on a structural
-  reason this crate has paid for once: `Event::notify` calls `task.wake()`
-  inside the closure holding its own internal list mutex, which is the shape
-  issue #1057 removed from `notify_frame_completion`.
+- Adopting an `event-listener` event. Rejected: `Event::notify` calls
+  `task.wake()` inside the closure holding its own internal list mutex, the
+  wake-under-lock shape `notify_frame_completion` refuses.
   `notify_frame_completion_still_wakes_a_later_waiter_when_an_earlier_waker_panics`
   pins one half of the contract it breaks. The other half, an inline-polling
   waker finding free the lock its own future's `poll` takes: **Unasserted:** no
@@ -544,12 +517,12 @@ is the same standing demand an animation ticker creates, and it is what asking
 for a frame every frame means rather than a runaway; the point is that "one
 surplus frame" describes a burst, not a repeating caller.
 
-**Closed by issue #1162, previously recorded here as an open gap:** a
-`FrameCompletionFuture` whose scheduler was dropped while it was pending used
-to never resolve, because only a frame resolved it and only the scheduler ran
-frames, and `Output` being a bare `FrameTiming` left no sentinel to resolve
-with. See the `end_of_frame` resolves an outcome, and a dropped scheduler
-resolves `Err(SchedulerClosed)` entry below for how. Frame demand and wake delivery are separate facts: a panicking or absent
+**A pending `FrameCompletionFuture` outlives its scheduler:** dropping the
+scheduler resolves it `Err(SchedulerClosed)`, so a waiter never hangs on a
+scheduler that will run no more frames; see "`end_of_frame` resolves an
+outcome, and a dropped scheduler resolves `Err(SchedulerClosed)`" below.
+
+Frame demand and wake delivery are separate facts: a panicking or absent
 `on_frame_scheduled` hook leaves delivery debt. A later identical `request_frame`
 or a hook installation retries it. Task wakers likewise retry an unpaid wake even
 when their task is already indexed as ready. Consuming a demand and clearing its
@@ -588,14 +561,12 @@ and every waiter still registered when the scheduler's last strong handle
 drops resolves `Err(SchedulerClosed)`. Polling again after `Ready` repeats the
 same value rather than hanging.
 
-**Conflict:** the two gaps the entries above named as open — "a caller cannot
-tell an aborted frame apart from a successful one" and "a
-`FrameCompletionFuture` whose scheduler is dropped never resolves" — both
-trace to the same root cause: `Output` carried no room for anything but a
-successful frame's timing.
+**Why:** an `Output` with room for nothing but a successful frame's timing
+can neither tell an aborted frame from a successful one nor resolve a
+future whose scheduler was dropped.
 
-**Choice, and why `Result<FrameOutcome, SchedulerClosed>` rather than the
-issue's own flat three-variant enum**
+**Choice, and why `Result<FrameOutcome, SchedulerClosed>` rather than a
+flat three-variant enum**
 (`Completed`/`Aborted`/`SchedulerClosed` in one type): `SchedulerClosed` is
 categorically different from the other two — it is "this future will never
 be resolved by a frame at all," not "a frame resolved it, badly." Splitting
@@ -617,18 +588,15 @@ matchable as `Completed(..)`; the struct shape is the one form that is both
 sealed for construction and open for matching. `SchedulerClosed` is a plain
 unit struct, not `#[non_exhaustive]`.
 
-**Fused for free, not by a new mechanism:** `poll` used to `take()` the
-resolved timing, so a second poll after `Ready` found `None` again and hung
-forever — a real "polling it again after it resolved is a silent hang" trap,
-named on the future's own doc before this issue. `Result<FrameOutcome,
-SchedulerClosed>` is `Copy` (both arms are), so `poll` now peeks the stored
-value by copy instead, and a second poll simply repeats it. No extra fusing mechanism is needed.
+**Fused by `Copy`:** `Result<FrameOutcome, SchedulerClosed>` is `Copy`
+(both arms are), so `poll` copies the stored value instead of taking it,
+and a poll after `Ready` repeats it rather than finding nothing and
+hanging. No fusing mechanism is needed.
 
 **Teardown mechanism:** `impl Drop for SchedulerInner` drains the completion
-registry with `Mutex::get_mut` — no lock, sound because `Drop::drop` runs
-only once the `Arc`'s strong count reaches zero, and `Arc`'s own
-release/acquire ordering means the destructor observes every prior mutation
-through any dropped clone. Every drained entry's `completed` is unconditionally
+registry with `RefCell::get_mut`, which takes no borrow: `Drop::drop` holds
+the only reference once the `Rc`'s strong count reaches zero. Every drained
+entry's `completed` is unconditionally
 written `Some(Err(SchedulerClosed))` with no `is_none()` guard: `drain()`
 performs `mem::take`, so an entry reaching this loop was, by construction,
 never reached by `notify_frame_completion` first (a delivered completion
@@ -662,7 +630,7 @@ any other `Arc`. A task on an external executor that owns a clone does not
 hang — dropping the executor drops the task, the clone, then the scheduler.
 A task on the UI runtime's own `OwnerFrame` that captured a clone holds the
 scheduler until the UI runtime retires the owner frame at teardown; the owner
-frame is not part of the scheduler, so that is no longer a self-cycle.
+frame is not part of the scheduler, so that is not a self-cycle.
 
 **Ordering: background demand consumption needs `SeqCst`, not
 `Acquire`/`Release`.** A live `end_of_frame`
@@ -699,19 +667,18 @@ successful or otherwise, and no teardown sentinel. FLUI's per-UI runtime
 answer for that case.
 
 **Alternatives considered:** a flat `enum FrameCompletionOutcome { Completed,
-Aborted, SchedulerClosed }` (the issue's own sketch) — rejected above for
+Aborted, SchedulerClosed }` — rejected above for
 conflating a frame outcome with "no frame will ever resolve this," which the
 `Result` split keeps separate and composable. A sentinel `FrameTiming` value
 (e.g. all-zero) for the closed case — rejected: it is indistinguishable from
-a real frame's timing by construction, exactly the "cannot tell them apart"
-defect this issue exists to close, just moved to a new field instead of
-solved.
+a real frame's timing by construction, the same "cannot tell them apart"
+defect moved to a new field.
 
 ### The UI runtime owns its async tasks: `OwnerFrame` holds them, `AsyncDriver` is `Weak`
 
 **Rule:** a UI runtime's async tasks and owner-local post-frame callbacks live in
-its `OwnerFrame` (ADR-0136 §2), of which the UI runtime (`UiRuntime`) and the
-headless binding are the only strong owners. Futures are not `Send`: they
+its `OwnerFrame` (ADR-0136 §2), of which the UI runtime (`UiRuntime`) is the
+only strong owner. Futures are not `Send`: they
 are created, polled and dropped on the owner thread. Widgets reach the tasks
 through `AsyncDriver`, a `Weak` handle, so a leaked handle keeps nothing alive
 and spawning through a dead one drops the future at once and returns a
@@ -760,18 +727,10 @@ never reached; and a genuinely-ready-but-stale index entry (a cancelled or
 already-processed id, or a self-wake landing on a task that then panics)
 self-heals within one pump rather than needing to be scrubbed eagerly.
 
-**Conflict:** issue #1056 found `poll_ready` filtering `inner.tasks`'s entire
-`BTreeMap` on every pump to find the (possibly zero) ready ids — an O(N) scan
-that measured 0.77–0.91 ms at N=100,000 with R=0, spent before a single future
-runs. (That figure is the issue's own reproducer: an external scratch crate
-built under cargo's default release profile, no LTO, 16 codegen units. The
-208.18 µs "before" and 22.93 ns "after" in the table below are a different
-measurement — this workspace's own `cargo bench`, under `[profile.release]`'s
-`lto = "thin"`, `codegen-units = 1`, on the same CPU — so the two "before"
-numbers are not directly comparable; the table's own before/after pair is,
-since both sides share that one methodology.) Readiness was recorded per task
-(an `AtomicBool`) but never indexed independently of storage, so discovering
-it meant re-deriving it from every task, every time.
+**Why an index:** readiness recorded only per task (an `AtomicBool`) has to
+be re-derived from every resident task on each pump, a filter over the whole
+task map that costs about 0.2 ms at N=100,000 with R=0 before a single future
+runs.
 
 **Choice:** the owner-local `TaskStore` keeps `tasks: RefCell<BTreeMap<AsyncTaskId,
 Task>>` beside an index of ready ids, `ready: Mutex<Vec<AsyncTaskId>>`, in the
@@ -785,8 +744,8 @@ cross-thread wake racing an eager spawn's admission and the spawn itself can
 each push the same id — a real race, not a hypothetical one).
 
 **`PumpGuard` owns one pump's whole drained batch, not just the id being
-polled.** The naive fix — take a future out of its slot, poll it with no lock
-held (unchanged discipline), reinsert on the outcome — loses every unreached
+polled.** Taking a future out of its slot, polling it with no lock held and
+reinserting it on the outcome would, alone, lose every unreached
 sibling to a mid-pump panic: the ids after the panicking one were already
 removed from `store.ready` by the initial drain and are gone if nothing
 restores them. `PumpGuard` holds the pump's `remaining` ids and a `cursor`
@@ -866,28 +825,26 @@ test pins this.
 a gate. CI's `clippy`/`feature-matrix` jobs pass `--all-targets`/`--benches`,
 so this file is type-checked and lint-checked on every PR, and the `test`
 job's `cargo xtask build-all-targets` links it; what CI never does is run
-it. Local measurement, `main` (`f2f1c4d9`) vs. this change, on a
-13th Gen Intel Core i9-13900K (32 threads) running `rustc 1.98.1 (48a229cea
-2026-09-01)`:
+it. Measured under `[profile.release]` on a 13th Gen Intel Core i9-13900K,
+against a full scan of the task map:
 
-| Group | N/R | `main` (before) | this branch (after) |
+| Group | N/R | full scan | ready index |
 |---|---:|---:|---:|
 | `empty_pump` | 0 | 9.84 ns | 20.63 ns |
-| `empty_pump` | 100,000 | 208.18 µs | 22.93 ns (**~9,080× faster**) |
+| `empty_pump` | 100,000 | 208.18 µs | 22.93 ns |
 | `ready_heavy` | 1,000 | 124.95 µs | 122.92 µs |
 | `ready_heavy` | 10,000 | 1.5846 ms | 1.3314 ms |
 
-`ready_heavy` (R=N, every resident task genuinely polled) is essentially
-unchanged, as expected: it was never the O(N)-scan problem this issue fixes,
-so there is no O(N)-vs-O(R) gap for it to close.
+`ready_heavy` (R=N, every resident task polled) costs the same either way:
+with every task ready there is no O(N)-versus-O(R) gap to close.
 
 ### Identity exhaustion refuses reuse
 
 Every id this scheduler hands out comes from the foundation `IdMint` family;
 the crate keeps no counter of its own. Callback ids come from the scheduler's
-owner-local `IdMint<CallbackId>` and an async task's id from its `TaskStore`'s
+owner-local `IdMint<FrameCallbackId>` and an async task's id from its `TaskStore`'s
 owner-local `IdMint`, because both are minted only on the owner thread.
-`CallbackId` is opaque, so no caller builds one from a number, and the async
+`FrameCallbackId` is opaque, so no caller builds one from a number, and the async
 task id is a private type of its own domain. A minted id is never issued again;
 once the id space is exhausted, every later issue refuses, typed
 (`IdExhausted`), and stays refused

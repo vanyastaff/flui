@@ -1,13 +1,14 @@
 //! The engine rasterises the paragraph it is handed and never shapes one
 //! itself (ADR-0065).
 
+use flui_foundation::TextDirection;
 use flui_foundation::geometry::Offset;
 use flui_layer::SceneBuilder;
 use flui_painting::FontCollection;
 use flui_painting::{Canvas, TextPainter};
 use flui_painting::{
     styling::Color,
-    typography::{TextDirection, TextSpan, TextStyle},
+    typography::{TextSpan, TextStyle},
 };
 
 const SIDE: u32 = 96;
@@ -521,8 +522,8 @@ fn crlf_puts_b_on_line_two(renderer: &crate::headless::HeadlessRenderer) {
 fn a_2x_baseline_row(renderer: &crate::headless::HeadlessRenderer) {
     let fonts = FontCollection::new();
     let painter = laid_out(&fonts, "H", black(33.0), TextDirection::Ltr, f64::INFINITY);
-    let baseline =
-        painter.compute_distance_to_actual_baseline(flui_painting::TextBaseline::Alphabetic);
+    let baseline = painter
+        .compute_distance_to_actual_baseline(flui_painting::typography::TextBaseline::Alphabetic);
     let pixels = read_back(renderer, &painter, 2.0);
     let ink = ink_in(&pixels, 0.0..f64::from(WIDE.1), everywhere(), inked);
     let bottom = ink.iter().map(|(_, y)| *y).max().expect("the H is inked");
@@ -551,7 +552,7 @@ fn selection_highlights_the_second_line(renderer: &crate::headless::HeadlessRend
     assert_eq!(boxes.len(), 1, "one box for `cd`: {boxes:?}");
     let highlight = boxes[0].rect;
     let mut canvas = Canvas::new();
-    let blue = flui_painting::Paint::fill(Color::rgba(0, 0, 255, 255));
+    let blue = flui_painting::paint::Paint::fill(Color::rgba(0, 0, 255, 255));
     canvas.draw_rect(highlight.translate_offset(ORIGIN), &blue);
     painter.paint(&mut canvas, ORIGIN);
     let mut builder = SceneBuilder::new();

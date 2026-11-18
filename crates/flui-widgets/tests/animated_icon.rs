@@ -6,11 +6,11 @@ use std::time::Duration;
 
 use crate::common::{LaidOut, lay_out, lay_out_animated, loose};
 use flui_animation::{AnimationController, ConstantAnimation, Cubic, MotionOverride, Vsync};
+use flui_foundation::TextDirection;
 use flui_foundation::geometry::Point;
-use flui_painting::display_list::DrawOp;
+use flui_painting::DrawOp;
 use flui_painting::paint::PathCommand;
 use flui_painting::styling::Color;
-use flui_painting::typography::TextDirection;
 use flui_testing::a11y::Role;
 use flui_view::environment::VsyncScope;
 use flui_widgets::{

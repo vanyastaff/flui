@@ -22,12 +22,104 @@ pub(crate) mod frame {
     //! desktop ([`DisplayDescription::origin`]), so a position on it is the desktop
     //! point less the corner, with no scale between them.
 
-    use flui_foundation::geometry::{Bounds, Point, Size};
+    use flui_foundation::geometry::{Bounds, EdgeInsets, Point, Size};
     use flui_platform::{DisplayDescription, SizeConstraints, WindowExtent, WindowPosition};
+
+    use crate::version::gate::{Gate, apple::MacOSVersion};
 
     /// Any content limit at or beyond this counts as AppKit's "no limit"
     /// (`contentMaxSize` defaults to `CGFLOAT_MAX`, or `FLT_MAX` on older systems).
     const UNLIMITED_FROM: f64 = 1.0e30;
+
+    /// `NSScreen.safeAreaInsets` (macOS 12): the bands of a screen its camera
+    /// housing takes. Before it a screen reports none, and a window has no
+    /// safe area.
+    #[derive(Debug, Clone, Copy)]
+    pub(crate) struct ScreenSafeArea;
+
+    impl Gate for ScreenSafeArea {
+        type Version = MacOSVersion;
+        const SINCE: u64 = MacOSVersion::new(12, 0, 0).rank();
+    }
+
+    /// The safe area of a window whose content AppKit reports at `content`,
+    /// on the screen whose frame is `screen` and whose `safeAreaInsets` are
+    /// `unsafe_edges`, both rectangles in AppKit's desktop: on each edge, how
+    /// much of the content lies in that edge's unsafe band of the screen, in
+    /// the content's logical pixels, which are points.
+    ///
+    /// A window that covers its screen, as a full-screen window does where
+    /// the system does not keep it below the camera housing, has the
+    /// screen's insets; one that lies clear of the bands, as a window under
+    /// the menu bar does, has none. An inset is never more than its band:
+    /// the part of a window past the screen's edge is on another screen or
+    /// on none, and the housing covers none of it. Numbers that are not
+    /// finite, a content or a screen with no area and a negative inset give
+    /// no inset.
+    pub(crate) fn safe_area_on_screen(
+        content: Bounds<f64>,
+        screen: Bounds<f64>,
+        unsafe_edges: EdgeInsets,
+    ) -> EdgeInsets {
+        // AppKit measures up from the bottom; the bands are measured in from
+        // each edge, so the content's sides are taken from the screen's
+        // top-left corner.
+        let top_of = |rect: Bounds<f64>| rect.origin.y + rect.size.height;
+        let left = content.origin.x - screen.origin.x;
+        let top = top_of(screen) - top_of(content);
+        let (right, bottom) = (left + content.size.width, top + content.size.height);
+        let (width, height) = (screen.size.width, screen.size.height);
+        if ![left, top, right, bottom, width, height]
+            .into_iter()
+            .all(f64::is_finite)
+            || right <= left
+            || bottom <= top
+            || width <= 0.0
+            || height <= 0.0
+        {
+            return EdgeInsets::ZERO;
+        }
+        // The length the spans `from..to` and `band_from..band_to` share.
+        let shared = |from: f64, to: f64, band_from: f64, band_to: f64| {
+            (to.min(band_to) - from.max(band_from)).max(0.0)
+        };
+        // How far a band reaches in from its edge of a screen `side` long.
+        let band = |inset: f64, side: f64| {
+            if inset.is_finite() && inset > 0.0 {
+                inset.min(side)
+            } else {
+                0.0
+            }
+        };
+        // A band lies over the content only where the content is on the
+        // screen along the band's edge.
+        let reaches_across = shared(left, right, 0.0, width) > 0.0;
+        let reaches_down = shared(top, bottom, 0.0, height) > 0.0;
+        let covered = |on_screen: bool, length: f64| if on_screen { length } else { 0.0 };
+        EdgeInsets::new(
+            covered(
+                reaches_across,
+                shared(top, bottom, 0.0, band(unsafe_edges.top, height)),
+            ),
+            covered(
+                reaches_down,
+                shared(left, right, width - band(unsafe_edges.right, width), width),
+            ),
+            covered(
+                reaches_across,
+                shared(
+                    top,
+                    bottom,
+                    height - band(unsafe_edges.bottom, height),
+                    height,
+                ),
+            ),
+            covered(
+                reaches_down,
+                shared(left, right, 0.0, band(unsafe_edges.left, width)),
+            ),
+        )
+    }
 
     /// The outer top-left of a window whose frame AppKit reports as `frame`, as
     /// a point of AppKit's flipped desktop: points from the primary screen's
@@ -374,6 +466,128 @@ pub(crate) mod frame {
                 );
             }
         }
+
+        /// Each row: the screen's frame, its `safeAreaInsets` (stand-ins for
+        /// a panel with a camera housing), the window's content rectangle,
+        /// and the safe area the window has.
+        #[test]
+        fn a_window_under_the_camera_housing_has_its_band_as_a_safe_area() {
+            let panel = frame(0.0, 0.0, 1512.0, 982.0);
+            let housing = EdgeInsets::new(32.0, 0.0, 0.0, 0.0);
+            let top = |inset: f64| EdgeInsets::new(inset, 0.0, 0.0, 0.0);
+            let beside = frame(-1512.0, 300.0, 1512.0, 982.0);
+            let rows = [
+                (
+                    "a window that covers the screen has the screen's inset",
+                    panel,
+                    housing,
+                    panel,
+                    top(32.0),
+                ),
+                (
+                    "a full-screen window the system keeps below the housing has none",
+                    panel,
+                    housing,
+                    frame(0.0, 0.0, 1512.0, 950.0),
+                    EdgeInsets::ZERO,
+                ),
+                (
+                    "a window partly under the band has the part over it",
+                    panel,
+                    housing,
+                    frame(100.0, 400.0, 800.0, 570.0),
+                    top(20.0),
+                ),
+                (
+                    "a window under the menu bar has none",
+                    panel,
+                    housing,
+                    frame(100.0, 100.0, 800.0, 500.0),
+                    EdgeInsets::ZERO,
+                ),
+                (
+                    "a window that reaches past the screen's top has the band and no more",
+                    panel,
+                    housing,
+                    frame(100.0, 400.0, 800.0, 882.0),
+                    top(32.0),
+                ),
+                (
+                    "a window wholly above the screen's top has none",
+                    panel,
+                    housing,
+                    frame(100.0, 982.0, 800.0, 500.0),
+                    EdgeInsets::ZERO,
+                ),
+                (
+                    "a window beside the screen has none of its top band",
+                    panel,
+                    housing,
+                    frame(1512.0, 482.0, 800.0, 500.0),
+                    EdgeInsets::ZERO,
+                ),
+                (
+                    "a band taller than the screen is the screen and no more",
+                    panel,
+                    top(5000.0),
+                    frame(0.0, -200.0, 1512.0, 1400.0),
+                    top(982.0),
+                ),
+                (
+                    "a negative inset is none",
+                    panel,
+                    top(-32.0),
+                    panel,
+                    EdgeInsets::ZERO,
+                ),
+                (
+                    "a screen with no housing gives none",
+                    panel,
+                    EdgeInsets::ZERO,
+                    panel,
+                    EdgeInsets::ZERO,
+                ),
+                (
+                    "a screen beside the primary is measured from its own corner",
+                    beside,
+                    EdgeInsets::new(32.0, 0.0, 0.0, 10.0),
+                    frame(-1508.0, 300.0, 1000.0, 982.0),
+                    EdgeInsets::new(32.0, 0.0, 0.0, 6.0),
+                ),
+                (
+                    "a content rectangle that is no number has none",
+                    panel,
+                    housing,
+                    frame(0.0, f64::NAN, 1512.0, 982.0),
+                    EdgeInsets::ZERO,
+                ),
+                (
+                    "an inset that is no number is none",
+                    panel,
+                    top(f64::INFINITY),
+                    panel,
+                    EdgeInsets::ZERO,
+                ),
+            ];
+            for (name, screen, unsafe_edges, content, expected) in rows {
+                assert_eq!(
+                    safe_area_on_screen(content, screen, unsafe_edges),
+                    expected,
+                    "{name}"
+                );
+            }
+        }
+
+        #[test]
+        fn screen_safe_area_gate_table() {
+            let failures = crate::version::gate::testing::row::<ScreenSafeArea>(
+                "ScreenSafeArea",
+                MacOSVersion::new(11, 99, 99),
+                MacOSVersion::new(12, 0, 0),
+                MacOSVersion::UNKNOWN,
+            );
+            assert!(failures.is_empty(), "{failures:#?}");
+        }
     }
 }
 
@@ -630,6 +844,9 @@ pub(crate) mod mode {
         heading: Option<WindowMode>,
         /// The mode a window that opened hidden enters when it is first shown.
         when_shown: Option<WindowMode>,
+        /// The mode the window last entered full screen from, zoomed or
+        /// normal, which AppKit puts back as it leaves full screen.
+        fullscreen_from: Option<WindowMode>,
     }
 
     impl ModeSequence {
@@ -700,6 +917,39 @@ pub(crate) mod mode {
             self.animating_since = Some(now);
         }
 
+        /// AppKit starts a full-screen transition at `now`, `entering` it or
+        /// leaving it (`windowWillEnterFullScreen:`,
+        /// `windowWillExitFullScreen:`), for a window with `flags`: the step
+        /// starts, and the answer is the mode the transition lands in, which
+        /// the window's snapshot waits for. A transition a command sent lands
+        /// where the command heads. One the user started (the green button,
+        /// the system's full-screen shortcut) lands in full screen
+        /// as it enters, and as it leaves, in the mode the window entered full
+        /// screen from, zoomed or normal, which AppKit puts back.
+        pub(crate) fn fullscreen_transition(
+            &mut self,
+            now: Instant,
+            entering: bool,
+            flags: WindowFlags,
+        ) -> WindowMode {
+            self.expire(now);
+            let heading = self.heading(now);
+            self.step_started(now);
+            if entering {
+                // The frame is still the one the window had before.
+                self.fullscreen_from = Some(if flags.is_maximized() {
+                    WindowMode::Maximized
+                } else {
+                    WindowMode::Normal
+                });
+            }
+            match heading {
+                Some(target) => target,
+                None if entering => WindowMode::Fullscreen,
+                None => self.fullscreen_from.unwrap_or(WindowMode::Normal),
+            }
+        }
+
         /// The step that was animating is over, or failed: the window's flags
         /// say its mode again.
         pub(crate) fn step_ended(&mut self) {
@@ -752,6 +1002,46 @@ pub(crate) mod mode {
             self.when_shown.take()
         }
     }
+
+    /// The read a window owes at the instant its wait for a mode change ends
+    /// (`WindowStateCell::mode_deadline`), which nothing from AppKit marks.
+    ///
+    /// The end moves: a newer mode request replaces the wait, a read that
+    /// finds the mode asked shortens it, a transition's end lengthens it.
+    /// One timer is live at a time, the one armed for the end the wait has
+    /// now; a timer armed for an end the wait no longer has reads nothing
+    /// when it fires, so a window never reads once per request.
+    #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+    pub(crate) struct WaitEndRead {
+        /// The end of the wait the live timer was armed for.
+        armed_for: Option<Instant>,
+    }
+
+    impl WaitEndRead {
+        /// The wait ends at `end` now, or there is none. Answers how long
+        /// after `now` a timer for that end fires, when one is to be armed:
+        /// `None` when the live timer already serves `end`, or nothing is
+        /// waited for.
+        pub(crate) fn follow(&mut self, end: Option<Instant>, now: Instant) -> Option<Duration> {
+            if self.armed_for == end {
+                return None;
+            }
+            self.armed_for = end;
+            end.map(|end| end.saturating_duration_since(now))
+        }
+
+        /// A timer armed for `end` fired: whether it is the live one, whose
+        /// read the window makes now. After it no timer is live, so the read
+        /// arms the next if the wait goes on.
+        pub(crate) fn fired(&mut self, end: Instant) -> bool {
+            let live = self.armed_for == Some(end);
+            if live {
+                self.armed_for = None;
+            }
+            live
+        }
+    }
+
     #[cfg(test)]
     mod tests {
         use WindowMode::{Fullscreen, Maximized, Minimized, Normal};
@@ -954,6 +1244,85 @@ pub(crate) mod mode {
                 sequence.command(start + ANIMATION_LIMIT, flags("R"), Maximized),
                 [ModeStep::Zoom]
             );
+        }
+
+        /// A full-screen transition lands where the command that sent it
+        /// heads; one the user started lands in full screen, and back in the
+        /// zoomed state or normal mode the window entered it from.
+        #[test]
+        fn a_fullscreen_transition_lands_where_it_heads_or_where_it_came_from() {
+            let start = Instant::now();
+            // (the case, the command before, the flags as the transition
+            // enters, as it leaves, where entering and leaving land)
+            let table = [
+                ("the user's, from normal", None, "R", (Fullscreen, Normal)),
+                (
+                    "the user's, from zoomed",
+                    None,
+                    "ZR",
+                    (Fullscreen, Maximized),
+                ),
+                (
+                    "a command's to full screen",
+                    Some(Fullscreen),
+                    "R",
+                    (Fullscreen, Normal),
+                ),
+            ];
+            for (case, command, entering_flags, (enters, leaves)) in table {
+                let mut sequence = ModeSequence::default();
+                if let Some(mode) = command {
+                    sequence.command(start, flags(entering_flags), mode);
+                }
+                let entered = sequence.fullscreen_transition(start, true, flags(entering_flags));
+                assert_eq!(entered, enters, "{case}: entering");
+                sequence.step_ended();
+                let left = sequence.fullscreen_transition(at(start, 1), false, flags("FR"));
+                assert_eq!(left, leaves, "{case}: leaving");
+            }
+            // A command out of full screen heads where it asked, whatever
+            // the window came from.
+            let mut sequence = ModeSequence::default();
+            sequence.fullscreen_transition(start, true, flags("ZR"));
+            sequence.step_ended();
+            assert_eq!(
+                sequence.command(at(start, 1), flags("FR"), Normal),
+                [ModeStep::ExitFullscreen]
+            );
+            assert_eq!(
+                sequence.fullscreen_transition(at(start, 1), false, flags("FR")),
+                Normal
+            );
+        }
+
+        /// One timer reads the window at the end of its wait: the end a
+        /// timer already serves arms no second, an end that moved arms
+        /// another and the timer of the end before reads nothing, and the
+        /// timer that reads leaves none live.
+        #[test]
+        fn one_timer_reads_a_window_at_the_end_of_its_wait() {
+            let now = Instant::now();
+            let (animation, settled) = (at(now, 3), at(now, 1));
+            let mut read = WaitEndRead::default();
+            assert_eq!(read.follow(None, now), None, "nothing is waited for");
+            assert_eq!(
+                read.follow(Some(animation), now),
+                Some(Duration::from_secs(3))
+            );
+            assert_eq!(read.follow(Some(animation), now), None, "its timer is live");
+            // A read found the mode asked: the wait ends sooner.
+            assert_eq!(
+                read.follow(Some(settled), now),
+                Some(Duration::from_secs(1))
+            );
+            assert!(!read.fired(animation), "an end the wait no longer has");
+            assert!(read.fired(settled));
+            assert!(!read.fired(settled), "a timer reads once");
+            // The timer's read left the wait standing: another is armed, at
+            // once for an end already past.
+            assert_eq!(read.follow(Some(settled), at(now, 2)), Some(Duration::ZERO));
+            assert_eq!(read.follow(None, at(now, 2)), None, "the wait ended");
+            assert!(!read.fired(settled), "a wait that ended reads nothing");
         }
 
         #[test]

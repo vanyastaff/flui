@@ -109,7 +109,7 @@ pub fn mounted_text_roles_paint_distinct_numeric_sizing_answers() {
                 let key = registry
                     .prepare_run(&run)
                     .expect("real Cupertino fallback face");
-                for glyph in run.placed_glyphs(key, (0.0, 0.0), 1.0) {
+                for glyph in run.placed_glyphs(key, (0.0, 0.0), (0.0, 0.0), 1.0) {
                     assert_ne!(glyph.key.glyph_id(), 0, "role glyph must exist");
                     assert_eq!(
                         f64::from(glyph.key.size()),

@@ -522,8 +522,12 @@ impl FocusManager {
             self.modality.set(InputModality::Keyboard);
         }
         if cause == FocusCause::Traversal {
-            self.traversal_transitions
-                .set(self.traversal_transitions.get().wrapping_add(1));
+            self.traversal_transitions.set(
+                self.traversal_transitions
+                    .get()
+                    .checked_add(1)
+                    .expect("BUG: fewer than 2^64 traversal transitions per manager"),
+            );
         }
         let previous = std::mem::replace(&mut *self.primary_focus.borrow_mut(), node.clone());
 
@@ -1748,7 +1752,7 @@ mod tests {
     }
 
     impl crate::focus::FocusTraversalPolicy for ClosingPolicy {
-        fn order(&self, _: &mut [Rc<FocusNode>], _: flui_painting::typography::TextDirection) {
+        fn order(&self, _: &mut [Rc<FocusNode>], _: flui_foundation::TextDirection) {
             let _ = &self.0;
         }
     }
@@ -1996,7 +2000,7 @@ mod tests {
     }
 
     impl<T> crate::focus::FocusTraversalPolicy for RejectedPolicy<T> {
-        fn order(&self, _: &mut [Rc<FocusNode>], _: flui_painting::typography::TextDirection) {
+        fn order(&self, _: &mut [Rc<FocusNode>], _: flui_foundation::TextDirection) {
             panic!("closed scope accepted policy")
         }
     }

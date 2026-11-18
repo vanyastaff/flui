@@ -41,19 +41,21 @@ use std::{
     rc::Rc,
     sync::{
         Arc, Weak,
-        atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU8, Ordering},
     },
     task::{Context, Poll, Waker},
 };
 
 use flui_foundation::IdMint;
+use flui_foundation::panic::FirstPanic;
 use parking_lot::Mutex;
 use web_time::{Duration, Instant};
 
+use flui_foundation::{FrameCallbackId, Notifier, Subscription};
+
 use crate::{
-    frame::{AppLifecycleState, FrameId, FrameTiming, LifecycleStateCallback, SchedulerPhase},
+    frame::{AppLifecycleState, FrameId, FrameTiming, SchedulerPhase},
     frame_clock::ClockSource,
-    id::CallbackId,
 };
 
 pub(crate) mod execution;
@@ -65,12 +67,6 @@ mod teardown;
 /// The display period a scheduler labels frames with until the runtime sets
 /// the real one: 60 Hz, the refresh most displays run at.
 const DEFAULT_DISPLAY_PERIOD: Duration = Duration::from_nanos(16_666_667);
-
-/// Lifecycle state listener with ID for removal
-struct LifecycleListener {
-    id: CallbackId,
-    callback: LifecycleStateCallback,
-}
 
 /// How a frame that an [`end_of_frame`](UpdateScheduler::end_of_frame) waiter
 /// was pending for finished.
@@ -98,7 +94,7 @@ struct LifecycleListener {
 ///
 /// This type tells a caller of the end-of-frame future whether the frame
 /// aborted. See this crate's
-/// `ARCHITECTURE.md` `## Mapping decisions` entry for #1162.
+/// `ARCHITECTURE.md` `## Mapping decisions` entry on aborted frames.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy)]
 pub enum FrameOutcome {
@@ -316,7 +312,7 @@ impl Future for FrameCompletionFuture {
         // innermost-scope-first, so the guard goes before this binding
         // does. Hoisting `let mut state` to function scope in a later
         // refactor silently reverses that order and runs `Waker::drop`
-        // under the lock -- issue #1057's hang, reintroduced by a change
+        // under the lock, a self-relock that never returns, by a change
         // that looks like tidying.
         let fresh_waker = ctx.waker().clone();
 
@@ -516,7 +512,7 @@ impl FrameCompletionRegistry {
         // but a `tracing` call added there with a panicking subscriber
         // could), the next lock would find a partially-retained vec behind
         // a stale cursor pointing at LIVE entries. That silently skips a
-        // live waiter and reproduces this issue's hang, from a site neither
+        // live waiter and hangs its `end_of_frame` future, from a site neither
         // guarded path touches. Zero is unconditionally a valid cursor, so
         // writing it first costs nothing and closes that ordering.
         self.first_possibly_live = 0;
@@ -612,44 +608,22 @@ struct FrameState {
     /// nothing here is gated by it.
     display_period: Cell<Duration>,
     /// Frame counter
-    frame_count: AtomicU64,
+    frame_count: Cell<u64>,
     /// Pending frame completion futures. See
     /// [`FrameCompletionRegistry`] for the lock order this field imposes on
     /// everything that touches it.
     completion_waiters: RefCell<FrameCompletionRegistry>,
-    /// The thread driving the currently-open (or most recently opened)
-    /// frame, recorded by the internal frame-begin step at the
-    /// same point it clears `frame_scheduled`, and load-bearing on the
-    /// ORDER of that store relative to the phase transition: see
-    /// `handle_begin_frame`'s own comment at the store site for why it
-    /// must happen before the phase leaves `Idle`.
-    ///
-    /// `None` only until the first `handle_begin_frame` call; from then on
-    /// it always names the most recently opened frame's driver and is
-    /// never cleared back to `None`. That is sound because it is read only
-    /// from [`ensure_visual_update`](UpdateScheduler::ensure_visual_update),
-    /// and only while `phase()` reports a in-frame phase, which itself
-    /// implies a frame is currently in flight on the thread this field
-    /// names — so a value left over from a PREVIOUS frame is never read as
-    /// if it were the current one, even though the field itself is never
-    /// reset between frames.
-    ///
-    /// Shared with the thread-safe [`FrameWaker`]. Its visual-update gate
-    /// suppresses in-frame demand only on the thread driving that frame;
-    /// another thread must request a frame regardless of the current phase.
-    /// The owning [`UpdateScheduler`] itself remains on the UI thread.
-    frame_thread: Arc<Mutex<Option<std::thread::ThreadId>>>,
 }
 
 /// Callback registration state
 struct CallbackState {
     /// Callback identities: the minted `FrameCallbackId`s, owner-local like
     /// the rest of this state. Sticky refusal — no id is ever issued twice.
-    id_mint: IdMint<CallbackId>,
+    id_mint: IdMint<FrameCallbackId>,
     /// Post-frame callbacks (after frame completes)
     post_frame: RefCell<crate::post_frame::PostFrameStorage>,
-    /// Lifecycle state change listeners
-    lifecycle_listeners: RefCell<Vec<LifecycleListener>>,
+    /// Lifecycle state change listeners, each held by its `Subscription`
+    lifecycle_listeners: Notifier<AppLifecycleState>,
 }
 
 impl CallbackState {
@@ -659,7 +633,7 @@ impl CallbackState {
     /// one schedule are never reused; a refusal here names a breached
     /// invariant, not a caller error — a schedule minting every 64-bit id
     /// is unreachable.
-    fn mint_id(&self) -> CallbackId {
+    fn mint_id(&self) -> FrameCallbackId {
         self.id_mint
             .next()
             .expect("BUG: callback identity space exhausted")
@@ -669,7 +643,7 @@ impl CallbackState {
 /// Application lifecycle state.
 struct BindingState {
     /// Application lifecycle state
-    lifecycle_state: AtomicU8,
+    lifecycle_state: Cell<AppLifecycleState>,
     lifecycle_delivery: observer_delivery::LifecycleDelivery,
 }
 
@@ -677,7 +651,11 @@ struct BindingState {
 struct WakeShared {
     scheduler_phase: AtomicU8,
     frames_enabled: AtomicBool,
-    frame_thread: Arc<Mutex<Option<std::thread::ThreadId>>>,
+    /// The thread that created the scheduler. `UpdateScheduler` is not
+    /// `Send`, so every frame it runs is driven on this thread; a
+    /// [`FrameWaker`] compares against it to tell the frame's own driver
+    /// from a worker.
+    owner_thread: std::thread::ThreadId,
     frame_scheduled: AtomicBool,
     wake_delivery: crate::wake_delivery::WakeDelivery,
     on_frame_scheduled: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
@@ -704,7 +682,7 @@ struct SchedulerInner {
     /// Set while an [OwnerFrame](crate::OwnerFrame) for this scheduler
     /// lives: a scheduler has at most one, so the owner a frame drive polls is
     /// the only one tasks can be admitted to.
-    owner_frame_claimed: AtomicBool,
+    owner_frame_claimed: Cell<bool>,
     /// Terminal execution release reports contained cleanup failure to the
     /// caller that still owns its produced output. Ordinary turns use no sink.
     execution_release: RefCell<Option<teardown::ExecutionRelease>>,
@@ -864,8 +842,7 @@ fn ensure_visual_update_impl(wake: &WakeShared) -> bool {
     match phase {
         SchedulerPhase::Idle | SchedulerPhase::PostFrame => {}
         SchedulerPhase::Frame => {
-            let frame_thread = *wake.frame_thread.lock();
-            if frame_thread == Some(std::thread::current().id()) {
+            if wake.owner_thread == std::thread::current().id() {
                 // The pipeline may already have consumed what this request
                 // is for; the frame's driver decides once it has run.
                 wake.late_visual_update.store(true, Ordering::Release);
@@ -886,21 +863,17 @@ impl UpdateScheduler {
     /// in the presentation-owned `FrameClock`; see the ownership rule in
     /// ADR-0044). The display period the runtime hands it through
     /// [`Self::set_display_period`] only labels the `frame` span.
-    /// `OwnerFrame::drive_frame`'s `deadline` parameter is the only thing
-    /// that bounds work, and it bounds Idle priority tasks alone: Animation
-    /// and Build tasks always run.
     pub fn new() -> Self {
         SchedulerBuilder::new().build()
     }
 
     /// [`SchedulerBuilder::build`]'s constructor seam.
     fn with_parts(clock: ClockSource) -> Self {
-        let frame_thread = Arc::new(Mutex::new(None));
         let inner = Rc::new(SchedulerInner {
             wake: Arc::new(WakeShared {
                 scheduler_phase: AtomicU8::new(SchedulerPhase::Idle as u8),
                 frames_enabled: AtomicBool::new(true),
-                frame_thread: Arc::clone(&frame_thread),
+                owner_thread: std::thread::current().id(),
                 frame_scheduled: AtomicBool::new(false),
                 wake_delivery: crate::wake_delivery::WakeDelivery::default(),
                 on_frame_scheduled: Mutex::new(None),
@@ -913,20 +886,19 @@ impl UpdateScheduler {
                 next_frame_id: Cell::new(Some(FrameId::FIRST)),
                 clock,
                 display_period: Cell::new(DEFAULT_DISPLAY_PERIOD),
-                frame_count: AtomicU64::new(0),
+                frame_count: Cell::new(0),
                 completion_waiters: RefCell::new(FrameCompletionRegistry::new()),
-                frame_thread,
             },
             callbacks: CallbackState {
                 id_mint: IdMint::new(),
                 post_frame: RefCell::new(crate::post_frame::PostFrameStorage::new()),
-                lifecycle_listeners: RefCell::new(Vec::new()),
+                lifecycle_listeners: Notifier::new(),
             },
             binding: BindingState {
-                lifecycle_state: AtomicU8::new(AppLifecycleState::Resumed as u8),
+                lifecycle_state: Cell::new(AppLifecycleState::Resumed),
                 lifecycle_delivery: observer_delivery::LifecycleDelivery::default(),
             },
-            owner_frame_claimed: AtomicBool::new(false),
+            owner_frame_claimed: Cell::new(false),
             execution_release: RefCell::new(None),
             execution_failure: RefCell::new(None),
             execution_owner: RefCell::new(std::rc::Weak::new()),
@@ -981,7 +953,7 @@ impl UpdateScheduler {
 
     pub(crate) fn with_post_frame_registration<R>(
         &self,
-        callback: impl FnOnce(CallbackId) -> R,
+        callback: impl FnOnce(FrameCallbackId) -> R,
     ) -> R {
         callback(self.inner.callbacks.mint_id())
     }
@@ -1032,20 +1004,12 @@ impl UpdateScheduler {
                 .frame_scheduled
                 .store(false, Ordering::Release);
         });
-        // Recorded at the same point `frame_scheduled` clears: this thread
-        // is now the one driving the frame `ensure_visual_update`'s
-        // same-thread arms trust (see `frame_thread`'s own doc). This store
-        // MUST happen before the phase transition below takes it out of
-        // `Idle` -- a foreign thread that observes a in-frame phase
-        // (`Acquire` on `scheduler_phase`) and then locks `frame_thread`
-        // must already observe THIS frame's driver, never a stale one from
-        // whatever frame preceded it. Reordered, a thread that drove the
-        // PREVIOUS frame could read the new in-frame phase together with
-        // its own (now stale) id still in `frame_thread`, mistake itself
-        // for the current driver, and drop a cross-thread wake for the
-        // frame actually in flight.
-        *self.inner.frame.frame_thread.lock() = Some(std::thread::current().id());
-        self.inner.frame.frame_count.fetch_add(1, Ordering::Relaxed);
+        // The frame id above refuses past 2^64 frames, so the count, which
+        // grows with it, cannot overflow.
+        self.inner
+            .frame
+            .frame_count
+            .set(self.inner.frame.frame_count.get() + 1);
 
         self.set_scheduler_phase(SchedulerPhase::Frame);
 
@@ -1073,7 +1037,7 @@ impl UpdateScheduler {
     ///
     /// Each callback runs **exactly once** — the queue is drained, not iterated.
     ///
-    /// Drains eligible entries in `CallbackId` registration order. An incomplete
+    /// Drains eligible entries in `FrameCallbackId` registration order. An incomplete
     /// presentation does not block completed siblings or runtime callbacks.
     /// Registrations
     /// through [`crate::PostFrameHandle::schedule`] share this same queue. An `owner`
@@ -1106,59 +1070,37 @@ impl UpdateScheduler {
             // made for a DIFFERENT scheduler must not be drained here: its
             // callbacks would get this frame's `FrameTiming`, be removed
             // before their own scheduler's frame ever runs, and its
-            // `CallbackId`s — meaningless in this scheduler's sequence —
+            // `FrameCallbackId`s — meaningless in this scheduler's sequence —
             // would corrupt the sort below. On a mismatch the take traces the
             // error and the owner-local queue is left untouched.
-            let callback_result = self.dispatch_post_frame_callbacks(owner, &timing);
-            if callback_result.is_err() {
+            // The post-frame callbacks' panic comes first in the frame's own
+            // order, so it is the one a caller observes when both panicked.
+            let mut first = FirstPanic::new();
+            if let Err(payload) = self.dispatch_post_frame_callbacks(owner, &timing) {
                 owner.record_execution_failure();
+                first.record(payload);
             }
 
-            // Notify frame completion futures. Caught here, alongside
-            // `callback_result`, rather than left to propagate bare: a
-            // panicking waker is otherwise the exact class of bug issue
-            // #1057 exists to close, just on the CLEAN path this time --
-            // without this, it would escape straight past the phase reset
-            // below and leave the scheduler stuck at `PostFrame`
-            // with `current_vsync_time` still set, reachable through
-            // `drive_frame`'s `Ok` arm rather than its `Err` one.
-            #[expect(
-                clippy::disallowed_methods,
-                reason = "ADR-0287: frame-completion wakers run contained before the phase reset"
-            )]
-            let notify_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            // Frame-completion wakers run contained: a panicking waker would
+            // otherwise escape past the phase reset below and leave the
+            // scheduler at `PostFrame` with `current_vsync_time` still set.
+            // `notify_frame_completion` traces its own panic, so one
+            // discarded behind the callbacks' is not lost.
+            let _notified = first.contain(|| {
                 self.notify_frame_completion(
                     FrameOutcome::Completed { timing },
                     Some(&owner.execution_failure_signal()),
                 );
-            }));
+            });
 
-            if callback_result.is_err() || notify_result.is_err() {
+            if first.is_held() {
                 self.inner
                     .wake
                     .scheduler_phase
                     .store(SchedulerPhase::Idle as u8, Ordering::Release);
                 *self.inner.frame.current_vsync_time.borrow_mut() = None;
             }
-            // The post-frame callback's panic happened first in this frame's
-            // own order, so it is what a caller observes when both panicked;
-            // `notify_frame_completion` already traced its own panic via
-            // `tracing::error!` above, so a discarded notify payload here is
-            // not silently lost, only not the one that propagates. Matching
-            // on both `Result`s (rather than `Option::or`-ing their errors
-            // together) is what routes the DISCARDED side through
-            // `discard_payload` instead of an uncontained `drop` --
-            // the payload can itself be a type whose own `Drop` panics.
-            match (callback_result, notify_result) {
-                (Ok(()), Ok(())) => {}
-                (Err(payload), Ok(())) | (Ok(()), Err(payload)) => {
-                    std::panic::resume_unwind(payload);
-                }
-                (Err(callback_payload), Err(notify_payload)) => {
-                    flui_foundation::panic::discard_payload(notify_payload);
-                    std::panic::resume_unwind(callback_payload);
-                }
-            }
+            first.resume();
         }
 
         // Return to idle
@@ -1300,7 +1242,7 @@ impl UpdateScheduler {
     /// without draining the completion registry, so a naive clear here
     /// would revoke that demand with the waiter still queued, and nothing
     /// short of a frames-enabled edge re-issuing a demand it never recorded
-    /// as lost would ever wake it again (issue #1162). Reachable, but not
+    /// as lost would ever wake it again. Reachable, but not
     /// off a runner's own decide-then-pump order: every `flui-app` runner
     /// calls this method only from `wake_action`'s `PumpBackground` arm, chosen
     /// iff `!frames_enabled` at that same read, with this call following
@@ -1430,7 +1372,7 @@ impl UpdateScheduler {
 
     /// Get total frame count
     pub fn frame_count(&self) -> u64 {
-        self.inner.frame.frame_count.load(Ordering::Relaxed)
+        self.inner.frame.frame_count.get()
     }
 
     /// Label frames with `period`, the refresh period of the display being
@@ -1458,8 +1400,7 @@ impl UpdateScheduler {
     ///
     /// Returns the current state of the application as seen by the platform.
     pub fn lifecycle_state(&self) -> AppLifecycleState {
-        AppLifecycleState::try_from_u8(self.inner.binding.lifecycle_state.load(Ordering::Acquire))
-            .unwrap_or(AppLifecycleState::Detached)
+        self.inner.binding.lifecycle_state.get()
     }
 
     /// Handle a lifecycle state change from the platform
@@ -1496,14 +1437,7 @@ impl UpdateScheduler {
     /// ```
     #[tracing::instrument(skip(self))]
     pub fn handle_app_lifecycle_state_change(&self, new_state: AppLifecycleState) {
-        // Atomically swap state and get old value
-        let old_state = AppLifecycleState::try_from_u8(
-            self.inner
-                .binding
-                .lifecycle_state
-                .swap(new_state as u8, Ordering::AcqRel),
-        )
-        .unwrap_or(AppLifecycleState::Detached);
+        let old_state = self.inner.binding.lifecycle_state.replace(new_state);
 
         // Auto-toggle frames_enabled. Resumed/Inactive keep rendering active
         // (Inactive means visible-but-unfocused — split screen, modal — still
@@ -1538,57 +1472,34 @@ impl UpdateScheduler {
         }
     }
 
-    /// Add a lifecycle state change listener
+    /// Hear every lifecycle state the scheduler commits, in order, for as
+    /// long as the returned [`Subscription`] is held.
     ///
-    /// Returns a `CallbackId` that can be used to remove the listener.
+    /// A change that walks several states (ADR-0345) reaches the listener
+    /// once per state. A listener's panic does not stop the others; the first
+    /// is raised once every listener has heard the state.
     ///
     /// # Example
     ///
     /// ```rust
-    /// use std::rc::Rc;
-    ///
     /// use flui_scheduler::{AppLifecycleState, UpdateScheduler};
     ///
     /// let scheduler = UpdateScheduler::new();
-    ///
-    /// let id = scheduler.add_lifecycle_state_listener(Rc::new(|state| {
-    ///     println!("App lifecycle changed to: {}", state);
-    /// }));
-    ///
-    /// // Later, remove the listener
-    /// scheduler.remove_lifecycle_state_listener(id);
+    /// let subscription = scheduler.listen_lifecycle_state(|state| {
+    ///     println!("App lifecycle changed to: {state}");
+    /// });
+    /// scheduler.handle_app_lifecycle_state_change(AppLifecycleState::Inactive);
+    /// // Dropping the subscription detaches the listener.
+    /// drop(subscription);
     /// ```
-    pub fn add_lifecycle_state_listener(&self, callback: LifecycleStateCallback) -> CallbackId {
-        let id = self.inner.callbacks.mint_id();
+    pub fn listen_lifecycle_state(
+        &self,
+        listener: impl Fn(AppLifecycleState) + 'static,
+    ) -> Subscription {
         self.inner
             .callbacks
             .lifecycle_listeners
-            .borrow_mut()
-            .push(LifecycleListener { id, callback });
-        id
-    }
-
-    /// Remove a lifecycle state change listener by ID
-    ///
-    /// Returns `true` if the listener was found and removed.
-    pub fn remove_lifecycle_state_listener(&self, id: CallbackId) -> bool {
-        // Retire the removed listener only after the storage borrow ends:
-        // its captures may reenter this scheduler during Drop.
-        // `position` + `remove` finds the single
-        // matching entry (ids are unique) with no allocation and no full-Vec
-        // move on the common no-match path, and the removed value is
-        // dropped only after the guard falls.
-        let removed = {
-            let mut listeners = self.inner.callbacks.lifecycle_listeners.borrow_mut();
-            listeners
-                .iter()
-                .position(|listener| listener.id == id)
-                .map(|index| listeners.remove(index))
-        };
-
-        let found = removed.is_some();
-        execution::retire_with_execution_custody(&self.inner.execution_failure, removed);
-        found
+            .subscribe(Rc::new(move |state: &AppLifecycleState| listener(*state)))
     }
 
     // =========================================================================
@@ -1705,7 +1616,7 @@ impl UpdateScheduler {
     /// later poll — calls `FrameCompletionFuture::poll`, which locks that
     /// identical `Arc<Mutex<FrameCompletionState>>`; held across the
     /// `wake()` call, that self-relock on the non-reentrant
-    /// `parking_lot::Mutex` never returns (issue #1057).
+    /// `parking_lot::Mutex` never returns.
     ///
     /// A waker that panics is caught and traced rather than aborting the
     /// loop: every OTHER waiter still gets its `completed` value set and
@@ -1760,7 +1671,7 @@ impl UpdateScheduler {
             // so this can wake a waker whose task is already gone. Waking
             // after completion is explicitly permitted by `Waker`'s own
             // contract. Do not "fix" it by holding the guard across the
-            // wake; that is issue #1057's deadlock.
+            // wake; that self-relock deadlocks.
             delivery.wake(waker);
         }
         delivery.finish(true);
@@ -1789,7 +1700,7 @@ impl UpdateScheduler {
     /// while frames are enabled; a call from `PostFrame` requests the NEXT
     /// frame, since this frame's pipeline has already run by that phase.
     /// [`SchedulerPhase::Frame`] is a no-op **only for the thread already
-    /// driving this frame** (see `frame_thread`'s own doc): the request is
+    /// driving this frame** (the scheduler's owner thread): the request is
     /// recorded for [`take_late_visual_update`](Self::take_late_visual_update)
     /// instead, because the pipeline in that phase may already have consumed
     /// what it was for, and the frame's driver decides once the pipeline has
@@ -1878,7 +1789,7 @@ impl Default for SchedulerBuilder {
 }
 
 // The lock-discipline / reentrant-registration / lock-then-drop test family
-// (issue #1058) lives in its own file: it is one cohesive slice built on a
+// lives in its own file: it is one cohesive slice built on a
 // single shared oracle that nothing else in this file uses, and together
 // with that oracle it outgrew this file's already-large inline test module.
 // A sibling module rather than a nested one, so its tests sit beside `tests`
@@ -1888,12 +1799,13 @@ mod lock_discipline_tests;
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::AtomicU64;
 
     // =========================================================================
     // Async Driver Integration
     // =========================================================================
 
-    /// #1162: a live `end_of_frame` waiter whose demand survives a
+    /// A live `end_of_frame` waiter whose demand survives a
     /// disable->enable edge with `frame_scheduled` already latched `true`
     /// must not be silently dropped by a LATER `PumpBackground` cycle that clears
     /// that same latch. The disable->enable edge itself fires no NEW wake
@@ -2027,7 +1939,7 @@ mod tests {
 
     /// A waker that panics must not starve waiters registered after it: the
     /// panic is caught, logged, and re-raised only once every waiter has
-    /// been notified (issue #1057).
+    /// been notified.
     fn notify_frame_completion_still_wakes_a_later_waiter_when_an_earlier_waker_panics() {
         use flui_foundation::testing::{CountingWaker, panicking_waker};
         let scheduler = UpdateScheduler::new();
@@ -2073,7 +1985,7 @@ mod tests {
         );
     }
 
-    // ── SchedulerInner teardown (#1162) ─────────────────────────────────────
+    // ── SchedulerInner teardown ─────────────────────────────────────────────
 
     /// A pending `end_of_frame()` waiter must not hang forever just because
     /// the scheduler that would have resolved it is gone: dropping the last

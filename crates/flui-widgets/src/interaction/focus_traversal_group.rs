@@ -2,11 +2,11 @@
 
 use super::Focus;
 use crate::localization::Directionality;
+use flui_foundation::TextDirection;
 use flui_interaction::{
     FocusNode, FocusNodeRegistration, FocusTraversalPolicy, ReadingOrderPolicy,
     TraversalEdgeBehavior,
 };
-use flui_painting::typography::TextDirection;
 use flui_view::prelude::*;
 use std::rc::Rc;
 

@@ -10,11 +10,12 @@ use std::fmt;
 use std::sync::OnceLock;
 
 use super::caret::PlacedLine;
-use crate::display_list::paragraph::{RunData, SpanDescription};
 use crate::display_list::{FontBlob, FontFace, ShapedGlyph, ShapedParagraph};
+use crate::display_list::{RunData, SpanDescription};
 use crate::glyphs::{FaceKey, Synthesis, fake_bold_width};
 use crate::styling::Color;
-use crate::typography::{FontStyle, TextAlign, TextDirection, TextStyle};
+use crate::typography::{FontStyle, OpenTypeTag, TextAlign, TextStyle};
+use flui_foundation::TextDirection;
 use flui_foundation::geometry::{Rect, Size};
 use parley::fontique::Collection;
 use parley::layout::PositionedLayoutItem;
@@ -1489,15 +1490,16 @@ fn adjusted_weight(
     }
     let variations = style
         .filter(|style| {
-            style.font_variations.iter().any(|variation| {
-                Tag::parse(&variation.axis).is_some() && (variation.value as f32).is_finite()
-            })
+            style
+                .font_variations
+                .iter()
+                .any(|variation| (variation.value as f32).is_finite())
         })
         .or(default);
     let axis = variations.and_then(|style| {
         style.font_variations.iter().rev().find_map(|variation| {
             let value = variation.value as f32;
-            (variation.axis == "wght" && value.is_finite()).then_some(f64::from(value))
+            (variation.axis == OpenTypeTag::WEIGHT && value.is_finite()).then_some(f64::from(value))
         })
     });
     let authored = axis.unwrap_or_else(|| {
@@ -1550,12 +1552,7 @@ fn properties(
     let features: Vec<_> = style
         .font_features
         .iter()
-        .filter_map(|feature| {
-            Some(FontFeature::new(
-                Tag::parse(&feature.feature)?,
-                u16::try_from(feature.value).ok()?,
-            ))
-        })
+        .map(|feature| FontFeature::new(Tag::from_bytes(feature.tag.to_bytes()), feature.value))
         .collect();
     if !features.is_empty() {
         properties.push(StyleProperty::FontFeatures(FontFeatures::List(Cow::Owned(
@@ -1567,14 +1564,15 @@ fn properties(
         .iter()
         .filter_map(|variation| {
             let value = variation.value as f32;
-            let value = if variation.axis == "wght" && value.is_finite() {
+            let value = if variation.axis == OpenTypeTag::WEIGHT && value.is_finite() {
                 adjusted.unwrap_or(value)
             } else {
                 value
             };
-            value
-                .is_finite()
-                .then_some(FontVariation::new(Tag::parse(&variation.axis)?, value))
+            value.is_finite().then_some(FontVariation::new(
+                Tag::from_bytes(variation.axis.to_bytes()),
+                value,
+            ))
         })
         .collect();
     if !variations.is_empty() {
@@ -1592,7 +1590,8 @@ fn properties(
 
 #[cfg(test)]
 mod tests {
-    use crate::typography::{TextDirection, TextStyle};
+    use crate::typography::TextStyle;
+    use flui_foundation::TextDirection;
 
     use super::{ParagraphLayout, ParagraphSpec};
     use crate::text_layout::{FontCollection, TextContext};

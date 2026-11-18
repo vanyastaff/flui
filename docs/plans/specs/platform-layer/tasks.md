@@ -2093,8 +2093,9 @@ GPU-память простаивающего или невидимого окн
   (`outside_band`, доля опубликованного; первое — всегда), `departs` спрашивает без публикации,
   `forget`; публиковать в обход полосы нечем. Ушли `display::android::sample::refresh_period` (вызов
   на месте), модуль `display::apple::period` (`core_graphics_refresh_period`),
-  `refresh_period_for_screen` (macOS читает `refresh_rate_of_screen -> Option<f64>` и отдаёт её
-  `from_hz`), `refresh_period` Wayland (вызов на месте) и
+  `refresh_period_for_screen` (macOS читает частоту режима, `mode_hertz -> Option<f64>`, и правило
+  `display::apple::screen_cadence::refresh_period` отдаёт её `from_hz`), `refresh_period` Wayland
+  (вызов на месте) и
   `display::windows::sample::{rational_refresh_period, frequency_period}` — их место заняло одно
   правило Windows, `display_period(target_rate, mode_frequency)` (рациональная частота пути, иначе
   `dmDisplayFrequency`, читаемая только тогда; её 0 и 1 — «по умолчанию оборудования»). Ссылка
@@ -2179,7 +2180,7 @@ GPU-память простаивающего или невидимого окн
   `module-dag`: исключений 33, новых нет (`window::apple::ios` → `display::apple` остаётся: окно iOS
   называет `LinkPeriod` и `change_screen`); `globals` — 56, без изменений. Документы: ARCHITECTURE.md
   ядра называет одно правило каждой пары, конструкторы контракта и что читает каждая таблица; раздел
-  периода macOS — `refresh_rate_of_screen` и `RefreshPeriod::from_hz`.
+  периода macOS — `display::apple::screen_cadence::refresh_period` и `RefreshPeriod::from_hz`.
   Проверки после ревью и слияния (Windows): `cargo fmt`; clippy `-D warnings` `-p flui-native -p
   flui-app --all-targets` с `winit-backend` и без, `-p flui-platform --all-targets`; nextest
   `-p flui-native -p flui-app -p flui-platform` — 349 (2 пропущены), `-p flui-native -p flui-app` с
@@ -5558,6 +5559,89 @@ GPU-память простаивающего или невидимого окн
   iOS, Android, wasm не компилировались здесь. Удаление `Platform::prompt_for_*`, `open_url`,
   `reveal_path`, `open_path` из ядра — LY61 (ждёт провайдеров остальных ОС), записано в
   `docs/gaps.md`.
+- [x] **LY58** (закрыта веткой `system/macos-providers`: провайдеры macOS всех служб, кроме
+  jump list; прогоны на Mac — заметки строк parity). `crates/flui-system/src/macos/` на objc2:
+  файловые диалоги — листы `NSOpenPanel`/`NSSavePanel` на окне виджета, message box — лист
+  `NSAlert`, share — поповер `NSSharingServicePicker`; ответ листа и удержание делят резолвер
+  (`apple::modal::Pending`), сброшенное удержание (вызывающий ушёл, окно закрылось, runtime
+  отставлен) закрывает лист `endSheet:returnCode:`, и обработчик никому не отвечает (ADR-0344).
+  Фильтры (ADR-0360 §3, §4): расширение — `UTType` его последней части, MIME — его тип, семейство
+  (`image/*`, `audio/*`, `video/*`, `text/*`, `font/*`) — системный тип, иное семейство —
+  `NotOnThisPlatform`; делегат открывающей панели (`panel:shouldEnableURL:`) держит каждый
+  элемент правилом контракта: сначала имя (ничего не читая), затем тип против MIME-шаблонов, и
+  судит то, что панель ответит, — цель псевдонима или ссылки, она же и выдаётся; меню фильтров
+  нет, сохранение не сообщает выбранный фильтр. Имя каждого выбора сверяет с фильтрами сама ручка
+  на всех ОС (`FileDialogs::open`: фильтры только из расширений, имя не оканчивается ни одним —
+  весь ответ `DialogError::NotInFilter`); тип ручке неизвестен, поэтому при MIME-шаблоне судит
+  провайдер: на macOS выбор, не прошедший ни по имени, ни по прочитанному типу, — тот же
+  `NotInFilter`, а непрочитанный тип отказом не служит. Лаунчер — `NSWorkspace` вне главного
+  потока (очередь GCD, не больше `WorkQueue::MAX_IN_FLIGHT` на runtime): путь сначала
+  осматривается (`stat`), открывается только обычный файл или папка (канал, устройство и сокет
+  отклоняются неоткрытыми), без блокировки и без управляющего терминала
+  (`O_NONBLOCK | O_NOCTTY | O_CLOEXEC`), дескриптор осматривается снова (`fstat`), итоговый путь
+  (`F_GETPATH`) судится полом имён, битом исполнения и `NSURLIsApplicationKey`, затем `openURL:`
+  по нему; reveal — `activateFileViewerSelectingURLs:`, trash — `trashItemAtURL:`. Автозапуск —
+  `SMAppService.mainAppService` (macOS 13; ниже — `NotOnThisDevice`), выключение пользователем
+  (`requiresApproval`) не перезаписывается: включение отвечает `Disabled`. Глобальные сочетания
+  — Carbon `RegisterEventHotKey`, исключительная регистрация, нажатие и отпускание; буква или
+  цифра — клавиша основного блока (не цифровой), которая печатает её на текущей раскладке при
+  Shift и Command сочетания (`UCKeyTranslate`), иначе её место ANSI; runtime слушает
+  `kTISNotifySelectedKeyboardInputSourceChanged` и переносит каждое сочетание, чья клавиша
+  сменилась (сначала все снимаются, потом регистрируются: две могут поменяться местами),
+  привязка слышит `Changed`, когда сочетание выпало на занятый аккорд или вернулось; номер
+  уникален в процессе, не переиспользуется, а исчерпание завершает привязку `Exhausted`. Запись
+  лаунчера — плитка Dock (значок и полоса, неопределённый прогресс не показывается). Папки —
+  `URLsForDirectory:inDomains:`, сведения об ОС — `NSProcessInfo` и Rosetta. Ворота версий —
+  `apple::version` той же формы, что в `flui-native` (до него ёмкостный крейт не дотягивается),
+  пол — `apple/floor.rs` от `cargo xtask platform-floor`; класс выше пола ищется во время
+  выполнения (`UTType`, `SMAppService`). Контракт: `SystemFailure::Framework(i64)` — код
+  `NSError` вне POSIX или `OSStatus`. Каждый блок, задача GCD, метод класса и обработчик Carbon —
+  через `owner::panic_boundary::os_entry`, ivars класса — `ContainedIvars`; `xtask
+  panic-boundary` зелёный. Тесты-модели на всех ОС (`macos::*::tests` и, для общего с iOS, `apple::*::tests`):
+  `only_a_document_or_a_plain_folder_is_handed_on`,
+  `a_file_system_error_is_named_where_the_contract_names_it`,
+  `a_filter_allows_each_type_once_and_a_several_part_extension_by_its_last_part`,
+  `a_mime_family_the_systems_have_no_type_for_is_refused_rather_than_widened`,
+  `a_name_matches_as_the_contract_says`,
+  `an_ended_panel_answers_its_picks_a_cancel_or_why_it_could_not`,
+  `the_first_of_the_answer_and_the_dismissal_takes_the_caller`,
+  `each_button_answers_its_answer_and_no_other_response_is_one`,
+  `enabling_registers_once_and_the_users_switch_off_stands`,
+  `disabling_unregisters_what_is_registered_and_nothing_else`,
+  `a_refusal_and_a_failure_are_named_and_an_unbundled_application_has_no_item`,
+  `a_shortcut_is_bound_to_its_preferred_chord_or_left_out_and_a_number_is_never_reused`,
+  `a_trigger_is_its_key_code_and_flags_and_is_shown_as_macos_writes_it`,
+  `the_tile_shows_the_count_and_a_known_extent_and_says_so`,
+  `each_folder_is_the_one_foundation_keeps_and_templates_none`,
+  `the_system_is_its_name_at_its_version_on_the_machines_processor`,
+  `a_runtime_holds_a_bounded_number_of_places_and_each_comes_back_when_dropped`,
+  `a_pipe_or_a_device_named_like_a_document_is_refused_without_being_opened` (Linux),
+  `an_items_name_admits_it_before_anything_of_it_is_read`,
+  `a_letter_or_digit_is_the_main_block_key_that_types_it_under_the_chords_shift_and_command`,
+  `a_layout_switch_moves_each_shortcut_to_the_key_that_types_it_now`,
+  `a_process_out_of_hot_key_numbers_binds_nothing_more`,
+  `two_runtimes_never_take_each_others_hot_keys`,
+  `a_number_names_one_hot_key_in_the_process_and_survives_carbon_unchanged`, через публичный API
+  `a_pick_whose_name_ends_in_no_extension_of_the_filters_refuses_the_whole_answer`, ворота
+  `the_login_item_is_there_from_macos_13_on`, `content_types_are_there_from_macos_11_on`,
+  `a_gate_opens_from_its_version_on_and_never_for_an_unknown_one`. Проверено: модели на Windows и
+  Linux (WSL), проверка типов `aarch64-apple-darwin`, `aarch64-apple-ios`, `aarch64-linux-android`
+  и `wasm32-unknown-unknown` на nightly в WSL; clippy для macOS — только CI. С откатом своей
+  правки красные: открытие до осмотра пути —
+  `a_pipe_or_a_device_named_like_a_document_is_refused_without_being_opened` (писатель канала
+  пропущен); поиск по всем кодам клавиш или без модификаторов сочетания —
+  `a_letter_or_digit_is_the_main_block_key_…` (`⌘1` на AZERTY — клавиша цифрового блока; `⌘S` на
+  Dvorak – QWERTY ⌘ — место Dvorak); перенос без действия или в один проход —
+  `a_layout_switch_moves_each_shortcut_…` (`⌘A` выпадает, пока `⌘Q` держит её новую клавишу);
+  счётчик с переполнением — `a_process_out_of_hot_key_numbers_binds_nothing_more`; чтение типа
+  до имени — `an_items_name_admits_it_before_anything_of_it_is_read`; без сверки в ручке —
+  `a_pick_whose_name_ends_in_no_extension_of_the_filters_refuses_the_whole_answer`. Не
+  запускалось: ни одна панель, лист, запуск, сочетание, смена раскладки, вход в систему, плитка
+  Dock на Mac; цель `x86_64-apple-darwin` (ворота `UTType`) не проверялась здесь. Чего macOS не
+  достаёт до контракта (английские подписи кнопок, суффикс многочастного расширения при
+  сохранении, плитка Dock процесса при двух runtime, сочетания двух runtime при смене раскладки,
+  стоящий том держит место запроса) — `docs/gaps.md`; там же: лаунчер Linux открывает любой узел
+  до суждения.
 - [x] **LY59** (закрыта веткой `system/linux-portals`: порталы, родитель окна и поправка
   ADR-0152 построены; прогоны на рабочем столе записаны в parity) — #2158 (`bb618a7f7`), zbus на
   своём runtime #2155, `PortalParent` окна Wayland #1934. `crates/flui-system/src/portal/`
@@ -5606,8 +5690,8 @@ GPU-память простаивающего или невидимого окн
   порталов GNOME и KDE (внутри и вне Flatpak), док KDE/Dash to Dock для сигнала — в строках parity
   «Open a URL», «Open, save and folder dialogs», «Taskbar and Dock progress, badge», «Global
   shortcuts», «Launch at login», «User folders».
-- [ ] **LY60** (не закрыта: все службы сделаны веткой `system/web-providers` (#2765), остаётся
-  диалог папок; прогоны в Chrome, Firefox и Safari — заметки строк parity) — модуль
+- [x] **LY60** (закрыта: службы — веткой `system/web-providers` (#2765), диалог папок — веткой
+  `system/web-folder-dialog-2`; прогоны в Chrome, Firefox и Safari — заметки строк parity) — модуль
   `crates/flui-system/src/web/`, правила — раздел «The web providers» в
   `crates/flui-system/ARCHITECTURE.md`. Страница достаётся через окно виджета: канвас, на который
   указывает `WebCanvasWindowHandle` его `WindowRef` (`web::page::Page`), не через глобальные
@@ -5625,7 +5709,7 @@ GPU-память простаивающего или невидимого окн
   Сохранение несёт содержимое (`SaveRequest::contents`): `showSaveFilePicker` пишет его после
   выбора пользователя и после сброса диалога; без пикера, без жеста или при отказе браузера —
   загрузка, ответ `PickedForm::Download` (где и записана ли, браузер не говорит). Страница не
-  закрывает пикер браузера: `PagePicker` держит её занятой (`Busy`), пока пикер не кончится, и
+  закрывает пикер браузера: страница занята (`Busy`), пока пикер не кончится, и
   после сброса диалога. Запуск `http(s)`: пустой новый контекст (`null` — заблокирован,
   `Unavailable`), `opener` обрезан, страница открыта ссылкой этого контекста с `rel=noreferrer`;
   прочие разрешённые схемы — ссылкой самой страницы (без выгрузки), `ftp`/`ws`/`wss` —
@@ -5667,7 +5751,7 @@ GPU-память простаивающего или невидимого окн
   `cargo +nightly check -p flui-system --lib --tests --target wasm32-unknown-unknown` в WSL:
   раннера wasm-bindgen-test нет): выбор с содержимым, сверка с фильтрами, отмена, конец по фокусу
   и по `pagehide`, `TooLarge`, страница занята после сброса диалога, один пикер на страницу,
-  отказ вне жеста и для папок, передача ввода на место отказанного пикера и `Unavailable` при
+  отказ вне жеста, передача ввода на место отказанного пикера и `Unavailable` при
   истёкшем жесте, загрузка на месте отказанного пикера сохранения, запись выбранного файла после
   сброса, загрузка вне жеста (`PickedForm::Download`), сохранение без содержимого, запуск через
   пустой контекст без `opener` и с `rel=noreferrer`, заблокированное окно, ссылка `mailto:`
@@ -5678,8 +5762,76 @@ GPU-память простаивающего или невидимого окн
   служба выдана или отказана по долгой причине, окно не-канвас — `NoWindow`, отказ шва на ходу
   владельца, искажённый запрос без браузера, закрытое окно); сама таблица `tests/conformance.rs`
   идёт на headless-хосте, чьи окна — не канвасы, а обвязка ждёт потоки, поэтому на wasm32 не
-  запускается. Остаётся: диалог папок (`NotYetOnThisHost`: браузер может отдать папку, но выбор не
-  несёт её дерево), записан в `docs/gaps.md`.
+  запускается. **Диалог папок.** Контракт не мог честно нести папку страницы (у выбора были путь,
+  имя с содержимым и загрузка), поэтому он расширен для всех хостов: `PickedForm::Folder` — имя
+  папки и её файлы на любой глубине (`FolderFile`: место и содержимое), в порядке путей,
+  прочитанные к ответу диалога; место файла — `FolderPath`, имена от папки до файла, одно правило
+  на всех хостах (не пустое, не `.` и не `..`, без `/`, `\` и NUL), это не путь хоста: имена,
+  которые Windows читает по-своему (`NUL`, `C:`, точка в конце), приложение перекладывает само;
+  `PickedFile::try_from_folder`, `PickedFile::files`; `OpenRequest::max_entries`
+  (`DEFAULT_MAX_ENTRIES`) и `DialogError::TooManyEntries`, байты файлов папки вместе ограничивает
+  `max_bytes`. Ручка держит ответ любого провайдера: `MalformedAnswer` на выбор формы, которой у
+  запроса быть не может (папка страницы — файловому диалогу или сохранению, файл страницы —
+  диалогу папок, загрузка — открытию), `TooManyEntries` на папку с числом файлов больше
+  `max_entries`, `TooLarge` на переданное содержимое больше `max_bytes`; путь принимается как
+  прежде, так что провайдеры Windows, Linux и macOS не менялись. На странице: `showDirectoryPicker`
+  (режим чтения), где он есть, его ручка обходится по `values()` каждой папки; иначе
+  `<input type=file webkitdirectory>`, и он же — на месте пикера, отказанного `SecurityError`, пока
+  жест длится; папку и место каждого файла называют `webkitRelativePath`. Папка перечисляется и
+  проверяется один раз, до чтения (`FolderListing`: имя, нет двух файлов на одном месте, порядок
+  путей), и каждый файл идёт рядом со своим местом от обхода до выбора; обход считает записи по
+  мере встречи и не идёт дальше границы, файлы ввода считаются по длине списка, до обращения к
+  первому, объявленные размеры сверяются до первого байта. Правила открытия те же: вне жеста —
+  `Unavailable` до обращения к браузеру, диалог кончается с окном (ADR-0344), и поздний выбор никто
+  не читает. Пикер — один на страницу, а не на runtime: отметка лежит на документе
+  (`web::dialogs::ShownPicker`), так что второй runtime страницы получает `Busy`. Ввод кончается
+  по `change`, `cancel` и `pagehide`; граница после возврата фокуса действует только там, где
+  движок `cancel` не шлёт, а узнаётся это по `Headers.prototype.getSetCookie` (Chromium 113,
+  Firefox 112, Safari 17: метод появился не раньше события), поэтому папку, которую браузер
+  долго перечисляет или просит подтвердить, ввод отменой не отвечает. Браузер без обоих API —
+  `NotOnThisDevice` раньше вопроса о жесте; тот же ответ — вводу, который принял атрибут, но
+  показал выбор файлов (Chrome для Android до 132, Safari на iOS до 18.4) или не сказал, где файлы
+  папки (Firefox для Android 141): пути всех файлов пусты. Ответ — одна папка, что бы ни разрешал
+  запрос. Тесты: `web::rules::tests` на каждом хосте
+  (`a_folder_input_names_one_folder_and_where_each_file_is_under_it`, строки `admit_entries` в
+  `the_picks_are_refused_past_the_limit_before_they_are_read`); через публичный API
+  (`tests/dialogs.rs`): `a_pick_of_a_form_the_request_cannot_have_is_a_malformed_answer`,
+  `a_folder_handed_over_without_a_path_carries_its_name_and_its_files_where_they_are`,
+  `a_path_under_a_folder_is_its_names_and_none_climbs_out`,
+  `what_a_system_hands_over_is_held_to_the_requests_bounds_on_every_host`; DOM (`web::tests`):
+  `a_directory_picker_answers_the_folder_with_its_files_where_they_are`,
+  `a_folder_input_answers_the_folder_its_files_name`,
+  `a_folder_past_the_requests_bounds_is_refused_before_it_is_read`,
+  `a_refused_directory_picker_hands_over_to_the_folder_input_while_the_gesture_lasts`,
+  `a_dismissed_directory_picker_answers_a_cancel`,
+  `a_dropped_folder_dialog_keeps_the_page_busy_until_its_picker_settles`,
+  `a_folder_dialog_ends_with_its_window_and_its_late_pick_is_read_by_nobody`,
+  `a_browser_with_no_folder_chooser_refuses_a_folder_dialog_for_good`,
+  `an_input_on_an_engine_that_fires_cancel_is_not_timed_after_the_focus`,
+  `a_page_shows_one_picker_whichever_runtime_asks`, и строки папки в тестах ввода (отмена, фокус,
+  `pagehide`, сброшенный диалог, один пикер на страницу, вне жеста). Строки байтов
+  (`picks_past_the_requests_bound_are_refused_before_they_are_read` и тест границ папки) идут на
+  подставных файлах, чей объявленный размер не равен прочитанному, и следят, какие файлы читались.
+  Без своей правки красные: без проверки формы, счёта файлов или суммы байтов в ручке — тесты
+  формы и границ на скриптованном провайдере; без порядка путей — тест папки; без ответа
+  `NotOnThisDevice` на пустые пути — тест правил и тест браузера без выбора папок; без счёта
+  записей в обходе — `TooManyEntries` не приходит; без спуска в подпапки — нет вложенных файлов;
+  без сверки объявленных размеров — строки «объявлено больше границы» (файлы прочитаны и
+  отвечены); без счёта прочитанного — строки «файл вырос»; со сбором списка ввода до счёта —
+  места списка тронуты (`["0", "1"]`); с границей фокуса на всех движках — ввод отвечает отменой;
+  без отметки на документе — второй runtime открывает свой ввод; без `webkitdirectory` — оба
+  теста ввода; без проверки «никто не ждёт» — поздний выбор обходится и читается; без раннего
+  отказа — вне жеста приходит `Unavailable`; с выключенным диалогом папок — тесты папки и общие
+  тесты ввода. DOM-набор CI запускает только на `main` (`wasm-check`, ADR-0370), поэтому до
+  слияния он прогнан здесь: тестовый wasm собран в WSL (nightly), `wasm-bindgen-test-runner` той
+  же версии отдал страницу, её открыла панель браузера (Chromium): 38 из 42 зелёные, четыре
+  красных — тесты message box, которые этот PR не трогает и которым панель не выдаёт кадров
+  анимации (за шесть секунд в ней не пришёл ни один `requestAnimationFrame`, а `close` у
+  `<dialog>` Chromium доставляет с кадром). В настоящем пикере и в Firefox, Safari не запускалось:
+  заметка строки parity «Open, save and folder dialogs». Не сделано и записано в `docs/gaps.md`:
+  ленивого доступа к большой папке и записи в неё нет (папка читается целиком); на движке без
+  `cancel` (Chromium до 113, Safari до 16.4), а также в Firefox до 112 и Safari до 17, которые от
+  него не отличить, поздний выбор ввода остаётся отменой.
 - [ ] **LY61** (не закрыта: исполнитель ушёл, сервисы остаются на `Platform`) — #2300
   (`dacf540dc`) удалил `Platform::background_executor`, `PlatformExecutor` и его реализации в
   хостах; #2487 (`89adcc532`) удалил `BackgroundExecutor`: хост ведёт своё IO на runtime, который
@@ -5737,6 +5889,101 @@ GPU-память простаивающего или невидимого окн
   и кривую; строка переписана под это. Остаётся прогон на Simulator или устройстве: его называет
   примечание строки «Soft-keyboard insets» `crates/flui-native/platform-parity.toml` (iOS
   «type-checked, no device run»).
+- [x] **LY73** (закрыта веткой `system/ios-providers-2`: провайдеры iOS для ссылок, файловых
+  диалогов, message box, share, папок и сведений об ОС; прогоны на Simulator и устройстве —
+  заметки строк parity). `crates/flui-system/src/ios/` на objc2 и UIKit; общее с macOS
+  (Foundation, GCD, типы содержимого) вынесено в `crates/flui-system/src/apple/` и собирается для
+  обеих систем: ворота версий (`apple::version`, свой тип версии и свой пол у каждой системы,
+  пол — `apple/floor.rs` от `cargo xtask platform-floor`), очередь работ вне главного потока
+  (`apple::queue`), ответ вызывающему, пока лист или контроллер показан (`apple::modal`), типы
+  содержимого и правило контракта для выбора (`apple::content_types`), состав share
+  (`apple::share`), папки и сведения об ОС. Показ (`ios::presenter`): от корневого контроллера
+  окна виджета по цепочке `presentedViewController` до последнего; запрос, заставший контроллер
+  цепочки уходящим (диалог, запрошенный в ответе другого), ждёт конца его перехода
+  (`transitionCoordinator`) и смотрит цепочку снова, не больше `MAX_DISMISSALS_AWAITED` раз, иначе
+  `Busy`; после `presentViewController:` проверяется, что UIKit взял контроллер, иначе ответ
+  сразу; поповер (share на iPad) привязан к середине вида без стрелки, а якорь и делегат
+  презентации ставятся только после того, как UIKit взял контроллер (презентация, созданная для
+  непоказанного контроллера, держит его навсегда); контроллер закрывается через того, кто его
+  показал (иначе UIKit снимает только то, что над ним: лист share над пикером); исключение
+  Objective-C при создании, показе или закрытии контроллера ловится (`guarded`,
+  `objc2::exception::catch`), пишется в журнал с именем и причиной и отвечает
+  `SystemFailure::MalformedAnswer`, а не роняет процесс. Конец диалога
+  (ADR-0344): UIKit никому не сообщает, когда контроллер закрыл чужой код, поэтому
+  обработчики, а с ними резолвер вызывающего, держит сам контроллер (действия алерта; делегат
+  пикера — связанным объектом, оба свойства делегата слабые), удержание хранит только слабые
+  ссылки (`WeakPending`): сброшенное удержание закрывает контроллер и забирает резолвер,
+  а контроллер, освобождённый без ответа, роняет резолвер, и окно не остаётся занятым навсегда.
+  Открытие — `UIDocumentPickerViewController` на месте: фильтры как на macOS с iOS 14 (`UTType`
+  ищется во время выполнения, тип из деклараций приложения находится по расширению, ADR-0361),
+  на iOS 13 открытие с фильтрами — `NotOnThisDevice`; каждый выбор до чтения судится правилом
+  контракта (имя — правилом самих фильтров запроса, `FileFilter::names`, затем тип против
+  MIME-шаблонов), отказ — `NotInFilter`; затем объявленные системой размеры всех выборов
+  (`NSURLFileSizeKey`, иначе `NSURLTotalFileAllocatedSizeKey`) складываются против
+  `OpenRequest::max_bytes` до любого координированного чтения, которое и скачивает файл из
+  облака (`TooLarge` без скачивания); чтение — под security-scoped доступом (начат до суждения,
+  снят после чтения), через `NSFileCoordinator`, вне главного потока, снова в пределах
+  `max_bytes` (размер открытого файла проверяется до чтения, читается не больше него, одна
+  копия); выбор отдаётся именем и содержимым, не путём (доступ кончается с чтением); диалог папки
+  — `NotYetOnThisHost`. Сохранение — экспорт: содержимое пишется во временную папку под именем
+  запроса, пикер переносит файл, папка удаляется при любом конце, включая отказ UIKit показать
+  пикер (`keep_while_shown`); без содержимого — `NotOnThisPlatform`. Свайп, закрывающий пикер, —
+  отмена (делегат пикера и делегат его презентации, первый забирает вызывающего). Message box —
+  `UIAlertController` в стиле alert: кнопка по умолчанию — preferred, кнопка «закрыть» (OK в
+  одиночку или Cancel) — стиль cancel. Share — `UIActivityViewController`, закрывается с окном.
+  Ссылка — `UIApplication openURL:options:completionHandler:`, `false` — `NoHandler`. Открыть
+  путь, reveal, trash, автозапуск, глобальные сочетания, jump list — `NotOnThisPlatform`; запись
+  лаунчера — `NotYetOnThisHost`: её форма на iOS — счётчик на значке, которому нужно
+  разрешение на уведомления (в parity строка iOS — «missing», не «na»). Контракт не менялся;
+  общие правила имени файла сохранения и предела чтения переехали из `web::rules` в `dialog`
+  (`save_file_name`, `admit_read`); общий ход share (проверка файлов вне главного потока, затем
+  показ) — одна функция `apple::share::share_checked` для macOS и iOS, код ошибки файловой
+  системы — одна `apple::io_code`. Каждый блок, метод делегата и задача GCD — через `os_entry`,
+  ivars делегата — `ContainedIvars`, а то, что блок держит от вызывающего, он забирает в своём
+  теле, чтобы оно уничтожалось внутри границы. Тесты-модели на всех ОС (`ios::*::tests`,
+  `apple::*::tests`):
+  `a_presentation_starts_from_the_last_controller_of_the_chain`,
+  `a_request_made_while_a_controller_leaves_waits_for_it_and_presents_then`,
+  `a_chain_that_does_not_settle_answers_busy_and_never_waits_for_good`,
+  `a_dismissal_goes_through_the_presenter_so_the_controller_itself_leaves`,
+  `the_picks_declared_sizes_are_refused_past_the_bound_before_any_is_read`,
+  `a_save_whose_picker_uikit_does_not_take_removes_its_file_at_once`,
+  `a_popover_is_anchored_at_a_finite_point_in_the_middle_of_the_view`,
+  `a_controller_uikit_cannot_show_answers_a_typed_refusal`,
+  `a_controller_that_goes_away_unanswered_ends_its_callers_completion`,
+  `a_pick_that_settles_later_keeps_a_cancel_and_a_dismissal_from_answering`,
+  `the_picks_are_read_within_the_requests_bound_and_refused_past_it`,
+  `a_document_is_read_to_the_size_it_declared_and_no_further`,
+  `one_pick_the_filters_do_not_mean_refuses_them_all`, `a_pick_is_its_name_and_contents`,
+  `a_folder_is_not_picked_and_a_save_carries_what_it_exports`,
+  `an_export_is_written_to_a_folder_of_its_own_and_a_failed_one_leaves_none`,
+  `an_export_answers_the_file_it_wrote_by_the_name_it_was_placed_under`,
+  `each_button_is_an_action_and_only_what_closing_means_is_the_cancel_one`,
+  `a_link_opens_where_an_application_takes_it_and_a_path_has_no_verb`,
+  `the_system_is_its_name_at_its_version_on_the_machines_processor`, ворота
+  `content_types_are_there_from_ios_14_on`, `the_export_initializer_is_there_from_ios_14_on`,
+  `a_gate_opens_from_its_version_on_and_never_for_an_unknown_one`. Проверено: модели на Windows
+  (`cargo heli nextest run -p flui-system`), сборка библиотеки `aarch64-apple-ios` и
+  `aarch64-apple-darwin` и проверка типов тестов `wasm32-unknown-unknown` на nightly в WSL; ворота
+  на полу iOS (`SINCE` 13.0) не собираются (`cargo +nightly build --lib`: ошибка константы в
+  `Version::since`); clippy для iOS и macOS — только `cross-typecheck` на `main` (ADR-0370). С откатом своей правки красные: слабое
+  удержание заменено сильным — `a_controller_that_goes_away_unanswered_…`; ответ `Busy` вместо
+  ожидания уходящего контроллера — `a_request_made_while_a_controller_leaves_…`; ожидание без
+  предела — `a_chain_that_does_not_settle_…`; закрытие уже уходящего контроллера —
+  `a_dismissal_goes_through_the_presenter_…`; сумма размеров не проверяется —
+  `the_picks_declared_sizes_are_refused_past_the_bound_…`; файл экспорта оставлен делегату при
+  отказе — `a_save_whose_picker_uikit_does_not_take_…`; без проверки конечности —
+  `a_popover_is_anchored_at_a_finite_point_…`; без проверки размера до чтения —
+  `the_picks_are_read_within_the_requests_bound_…`; счёт по объявленному размеру вместо
+  прочитанного — `a_document_is_read_to_the_size_it_declared_…`; непрочитанный тип как отказ —
+  `one_pick_the_filters_do_not_mean_refuses_them_all`; папка не убрана после неудачной записи —
+  `an_export_is_written_to_a_folder_of_its_own_…`; OK в стиле default —
+  `each_button_is_an_action_…`. Не запускалось: ни один пикер, алерт, лист share и ни одна
+  ссылка на Simulator или устройстве; что должно быть прогнано, стоит в заметках строк «Open a
+  URL», «Open, save and folder dialogs», «Message box», «Share», «User folders» и «OS name,
+  version and architecture» `crates/flui-native/platform-parity.toml`. Чего iOS не достаёт до
+  контракта (выбор без пути и без доступа после чтения — закладки security-scoped это LY93,
+  диалог папки, английские подписи, фильтры на iOS 13, значок) — `docs/gaps.md`.
 - [x] **LY74** (закрыта: код и тесты в ветке `native/web-dom-root`; прогон в мобильном браузере
   записан в `platform-parity.toml`) — inset клавиатуры #2121 (`8b154b514`). Окно Web кладёт в
   страницу то, чем владеет, через `window::web::root::PageRoot`: на странице без своего canvas —
@@ -7167,7 +7414,7 @@ GPU-память простаивающего или невидимого окн
   все. Cut, Copy и извлечённый текст на устройстве не запускались — строка
   `ime-composition-and-candidate-placement` паритета; потеря клавиш форматтером при быстрой печати —
   `docs/gaps.md`. Проверки и непрогнанное — в теле PR.
-- [ ] **LY124** — ветка `native/fullscreen-policy`. Обе находки подтверждены на `main` @
+- [x] **LY124** — ветки `native/fullscreen-policy` (Win32, PR #2680) и `native/fullscreen-policy-unix-apple`. Обе находки подтверждены на `main` @
   `e166cabd3` запуском на Windows: F11, которое обработчик пропустил, переводило окно в
   полноэкранный режим; `SetMode(Maximized)` полноэкранного окна, развёрнутого до этого,
   публиковало `[Fullscreen, Normal, Normal, Maximized]`. Переключатель, терявший «развёрнуто»,
@@ -7197,12 +7444,67 @@ GPU-память простаивающего или невидимого окн
   дисплеев); документы говорят правило как есть — ни один хост не переключает полноэкранный
   режим своим решением, смена системой (зелёная кнопка macOS, Escape браузера) сообщается и не
   оспаривается; устаревшие фрагменты changelog о F11 переписаны.
-  Остаётся строимое, поэтому строка открыта: X11, Wayland и AppKit исполняют выход несколькими
-  ответами системы окон и публикуют режим между (openbox на Xvfb в WSL: `Normal` трижды до
-  `Maximized`, и при развороте до снятия полноэкранного). Нужно: хост держит режим снимка, пока
-  запрошенная им смена режима в пути, с ограничением по времени и ходом владельца по его
-  истечении; записано в `docs/gaps.md` («Leaving fullscreen publishes a mode in between on
-  AppKit, X11 and Wayland»). Проверки и непрогнанное — в теле PR #2680.
+  X11, Wayland и AppKit (подтверждено на `main` @ `7b596b26b`: openbox на Xvfb в WSL публиковал
+  `[Normal, Normal, Normal, Maximized]` для `SetMode(Maximized)` полноэкранного окна, развёрнутого
+  до этого; скриптовый композитор — `[Normal, Maximized]`). Ни у одного из них нет клавиши
+  полноэкранного режима (у AppKit нет и главного меню). Построено одно правило в ячейке
+  состояния: `WindowStateCell::expect_mode`, который хост вызывает на каждую свою просьбу,
+  меняющую режим или выводящую из него, и на режим, в котором окно уже есть: новая просьба
+  заменяет ожидание прежней. Просьбы: `SetMode`, `SetSize` развёрнутого или полноэкранного окна
+  (X11 `resize`, Wayland `leave_compositor_modes`), переключатель разворота и кнопки заголовка
+  или рамки, которые окно рисует само, на AppKit — каждый zoom и полноэкранный переход
+  (`windowShouldZoom:toFrame:`, `windowWill{Enter,Exit}FullScreen:`). Просьба, на которую никто
+  не отвечает, ожидание кончает (`end_mode_wait`): свёртывание Wayland, режим, который
+  неотображённое окно X11 пишет в свои свойства, рамка, которую AppKit сразу даёт zoom-окну.
+  Чтение в запрошенном режиме публикуется как прочитано; чтение в другом из обычного,
+  развёрнутого и полноэкранного — шаг: снимок держит свой режим и называет прямоугольник
+  возврата, бывший в начале смены. Так же его называет обычное чтение окна, идущего в обычный
+  режим из другого (`ModeChange::was_elsewhere`): первый обычный шаг openbox из полноэкранного
+  ещё во весь экран, а `WindowPlacement::from_state` берёт `normal_geometry`, когда снимок его
+  называет. Окно, спрошенное о режиме, в котором оно стоит, нигде больше не было: его чтения
+  идут как прочитаны, просьба не публикует ревизии, а передвинутое тем временем окно
+  запоминается там, где оно есть. Исключение, оставленное открытым: свёрнутое чтение и чтение
+  окна, опубликованного свёрнутым, публикуются как прочитаны, поэтому свёрнутое окно, которое
+  просят развернуть или сделать полноэкранным, публикует режимы по пути (openbox: обычный,
+  затем запрошенный) — держать «свёрнуто» над окном на экране нельзя, а запрошенного режима
+  оно ещё не достигло. Найдя запрошенный режим, окно ждёт ещё `MODE_SETTLE` против шага,
+  который система окон не успела сделать, всего не дольше `MODE_ANSWER_LIMIT` (AppKit — предел
+  анимации, затем `MODE_ANSWER_LIMIT` после конца перехода, если ожидание к нему не истекло).
+  Конец ожидания без событий: X11 будит цикл и помечает окно (`LoopWindows::mode_deadline`),
+  Wayland будит цикл (`LoopWindow::mode_due`), окно AppKit держит один таймер на полосе
+  владельца, взведённый на текущий конец ожидания (`WaitEndRead`). X11 не запоминает
+  прямоугольник возврата из шага на пути к другому режиму, а команда действует по режиму
+  сервера, не снимка (`mode_now`). AppKit ждёт и переход, начатый пользователем (зелёная кнопка,
+  системное сочетание): это просьба пользователя через системный хром, исполняется и
+  сообщается, как кнопка разворота у менеджера окон Linux
+  (`ModeSequence::fullscreen_transition`). Тесты, в скобках результат с откатом правила:
+  `a_fullscreen_window_changes_mode_in_one_step` (X11, openbox, таблица из четырёх, с местом
+  размещения каждого снимка; без `expect_mode` — `[Normal, Normal, Normal, Maximized]`, с
+  пропуском просьбы о текущем режиме — `Maximized` пять раз между двумя `Fullscreen`, без
+  прямоугольника возврата у обычного чтения на пути в обычный режим — снимок `Normal`
+  1280×1024 как место окна),
+  `a_mode_change_another_client_overtakes_is_published_when_the_wait_ends` (X11; без
+  пробуждения цикла к концу ожидания — опубликовано через 3,01 с),
+  `a_command_during_a_mode_wait_acts_on_the_mode_the_server_says` (X11; с режимом снимка в
+  `mode_now` окно остаётся развёрнутым 1280×1024),
+  `a_request_for_the_mode_the_window_is_in_publishes_nothing` (X11; с прямоугольником возврата у
+  каждого чтения — две ревизии, 5 → 7),
+  `a_mode_the_compositor_reaches_in_two_configures_is_published_once` (Wayland, таблица из пяти;
+  без `expect_mode` — `[Normal, Maximized]`, с пропуском просьбы о текущем режиме —
+  `[Maximized, Maximized]`, без `expect_mode` в `SetSize` — `[Maximized, Normal]`, а после
+  `SetMode(Maximized)` в том же ходе — `[Maximized, Maximized]`),
+  `a_mode_the_compositor_does_not_carry_out_is_published_when_the_wait_ends` (Wayland; без
+  `mode_due` снимок остаётся `Fullscreen`), модельные
+  `a_mode_change_in_flight_publishes_its_steps_in_the_mode_the_window_left` (ячейка, таблица из
+  одиннадцати; строка о свёрнутом окне закрепляет исключение, прочие красные без своего правила)
+  и `a_mode_wait_settles_waits_longer_and_ends` (ячейка; истёкшее ожидание, продлённое концом
+  перехода, — красная), `a_fullscreen_transition_lands_where_it_heads_or_where_it_came_from` и
+  `one_timer_reads_a_window_at_the_end_of_its_wait` (модели AppKit),
+  `from_state_remembers_the_normal_bounds_relative_to_the_usable_area` (размещение; со старым
+  `from_state` — красная). Прогон на Mac и под настольными менеджером окон и композитором — в
+  строке `fullscreen` `crates/flui-native/platform-parity.toml`; система окон медленнее
+  ожидания и режимы по пути из свёрнутого — в `docs/gaps.md` («A window system slower than the
+  mode wait publishes its steps»). Проверки и непрогнанное — в теле PR.
 
 - [x] **LY133** — ветка `native/quit-contract`, решение — ADR-0350 (заменяет первое предложение
   §4 ADR-0259). Обе находки подтверждены на `main` @ `ac3b1ee58`: `LoopControl::terminate_requested`
@@ -7839,6 +8141,61 @@ GPU-память простаивающего или невидимого окн
   (перепутанные `Always`/`WhenScrolling` в разборе — падают),
   `a_forced_brightness_or_a_light_accent_keeps_the_theme_legible` (акцент при любой яркости —
   падает). Android всё ещё роняет всё чтение целиком — `docs/gaps.md`.
+- [x] **Краевые случаи диалогов `flui-system`** (строки в таблице нет: сверка файловых диалогов
+  и message box с rfd, `PolyMeilex/rfd`) — ветка `system/dialog-edge-cases`, решение — ADR-0372.
+  Построено. Фильтр: `FileFilter::all_files` (свой вид `Kind::EveryFile`, а не строка `*`; запрос
+  с ним принимает любой выбор, шаблон, добавленный к нему, — `MalformedRequest::PatternOnAllFiles`)
+  и точное имя `with_file_name` (`Makefile`, `.env`; без учёта регистра ASCII,
+  `MalformedRequest::FileName`); Windows — `*.*` и имя как шаблон, портал — `*` и глоб имени в
+  трёх написаниях, macOS и iOS (общий `apple::content_types`) — без типов, имя проверяет правило
+  контракта, web — собственный пункт «все файлы» у пикера (`excludeAcceptAllOption: false`) и
+  пустой `accept` у input. Windows: `\\?\C:\…` и `\\?\UNC\…` приводятся к обычному виду общим
+  `win32::verbatim` (лаунчер берёт его же, `held_name`); папки, которой нет (удалена, диск
+  отключён, шара не отвечает), диалог не получает и открывается где решит система, как на прочих
+  хостах; папка, которую оболочка не разбирает по иной причине, — `Failed(Os)`; окно без
+  Win32-дескриптора — `NoWindow`. Портал: имя без расширения дополняется расширением выбранного
+  фильтра, кроме случаев, когда файл с таким именем уже есть или файл лежит в папке document
+  portal (выдан под своим именем); скрытое имя (`.env`) не дополняется нигде, как на Windows.
+  Message box: без заголовка — пустой заголовок на всех хостах, `default_button`, `detail`,
+  `button_label`; macOS, iOS и web показывают всё, Windows показывает деталь и кнопку по умолчанию,
+  а запрос с подписями отклоняет `NotYetOnThisHost` (`MessageBoxW` подписать кнопку не умеет).
+  Скрытые файлы: `show_hidden` (`FOS_FORCESHOWHIDDEN`, `showsHiddenFiles`; у портала, iOS и
+  браузера опции нет). macOS: панель делает источник панелей до поиска окна; nil — `Unavailable`.
+  Запись содержимого (`dialog::write`): через ссылку — в её файл, новый файл создаётся сразу с
+  режимом заменяемого; запись на месте — только где ФС отказывает по устройству (папка без
+  соседнего имени, `EXDEV`, `EBUSY`, `EPERM` липкой папки), любой другой отказ переименования
+  (файл открыт без `FILE_SHARE_DELETE`, файл только для чтения) отвечает кодом системы, файл цел.
+  Тесты, в скобках результат с откатом:
+  `a_pick_whose_name_ends_in_no_extension_of_the_filters_refuses_the_whole_answer` и
+  `a_filter_means_a_files_name_or_its_type_ignoring_ascii_case` (новые строки),
+  `a_malformed_request_is_refused_without_showing_a_dialog` (строки `PatternOnAllFiles`),
+  `a_typed_name_without_an_extension_is_completed_by_the_selected_filters_first`,
+  `a_message_box_carries_its_detail_its_default_button_and_its_labels_to_the_system`;
+  Windows 11 через nextest: `a_save_over_a_file_held_open_fails_and_leaves_it_whole` (файл
+  опустошён и переписан на месте), `a_folder_that_is_gone_is_left_out_and_one_the_shell_cannot_name_fails`
+  (настоящая оболочка, диалог не показан; без правки — `Failed(Os)`),
+  `a_box_whose_request_labels_a_button_is_refused_and_shows_nothing` (box показан с системными
+  подписями), `a_verbatim_folder_is_named_to_the_dialog_in_the_form_the_shell_reads`,
+  `a_box_shows_its_title_or_none_its_detail_below_its_message_and_its_default_button`,
+  `the_default_button_is_named_by_its_place_among_the_buttons`,
+  `a_window_that_is_no_win32_window_is_refused_and_shows_no_dialog` и `…_no_box`,
+  `a_link_on_a_local_drive_that_leads_off_it_is_refused_where_it_led` (шара после `held_name`
+  остаётся шарой); WSL: `a_saves_new_file_is_never_more_readable_than_the_file_it_replaces`,
+  `a_save_to_a_symlink_updates_its_target`, `a_save_keeps_the_mode_of_the_file_it_replaces`,
+  `a_save_where_no_file_can_be_made_beside_the_chosen_one_writes_into_it`,
+  `a_portal_save_without_an_extension_is_named_after_the_selected_filter` (строки `.env` и
+  document portal), `a_path_in_the_document_portals_folder_is_known_by_its_mounts`; модели на
+  всех хостах: `a_filter_of_every_file_frees_the_dialog_and_a_named_file_leaves_it_to_the_rule`,
+  `every_file_and_a_named_file_keep_the_browsers_entry_of_every_file`,
+  `an_alert_shows_the_detail_below_the_message_and_each_buttons_label`,
+  `return_presses_the_default_button_and_escape_the_one_that_cancels_under_any_label`; macOS CI:
+  `a_panel_appkit_does_not_make_answers_unavailable_and_frees_the_window`; headless Chrome CI:
+  `a_box_shows_its_detail_its_labels_and_focuses_its_default_button`. Не прогнаны: ни один
+  настоящий диалог, панель, пикер или alert; вызовы AppKit и UIKit — только проверка типов. Долги
+  в `docs/gaps.md` и в заметках строк «Open, save and folder dialogs» и «Message box»: фокус
+  клавиатуры после закрытия диалога, пустая панель macOS после отмены, смена расширения при смене
+  фильтра на Windows, запись в папку Flatpak document portal, через точку монтирования и в липкой
+  папке, пункт «все файлы» пикера рядом с типами запроса.
 
 ## Отступление от порядка, решённое владельцем
 
@@ -8999,6 +9356,140 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
   `cargo +nightly check` для `aarch64-linux-android` и `wasm32-unknown-unknown` (с тестами),
   clippy и тесты доступности на Linux. Должно на устройстве Android (заметка строки паритета):
   TalkBack выключить и включить, считая работу семантики в кадрах.
+- [x] **LY138** — ветка `native/ios-tracking-frames-keyboard-2`, решение — ADR-0372 (заменяет
+  `KeyboardInset` из §1 ADR-0277, применение из §3, клетку iOS из §4 и цель `move_keyboard` из
+  §5). Проверено на `main` @ `eacf2a10d` чтением: оба правила в коде подтвердились (link только в
+  `NSDefaultRunLoopMode`; `occlusion` давала вставку от верха любой рамки, нулевой кадр читался
+  как скрытие, наблюдателя скрытия не было). Что UIKit шлёт такие кадры — по
+  `KeyboardInsetManager.swift` Flutter 3.50.0 и документации Apple; на устройстве не прогнано.
+  Построено. `CADisplayLink` добавлен в `NSRunLoopCommonModes`: кадры идут и в
+  `UITrackingRunLoopMode` (правило — в `crates/flui-native/ARCHITECTURE.md`, «UIKit scene
+  attachments»). `KeyboardInset` переименован в `SoftKeyboard` (все пользователи перенесены;
+  запись протокола сохраняет имя опубликованной схемы) и держит `KeyboardPlacement` (`Hidden`,
+  `Docked { inset }`, `Floating { frame }`) и движение вставки; пристыкованная без вставки —
+  `Hidden`, плавающая рамка без площади — `InvalidInsets::EmptyFrame`. `view_insets` несёт только
+  пристыкованную; рамку плавающей элемент корня окна публикует как предоставленное значение
+  `FloatingKeyboard` (ADR-0322 §5) только пока клавиатура плавает, а читает её
+  `MediaQuery::floating_keyboard_of`: размер `MediaQueryData` не изменился, вложенный `MediaQuery`
+  ничего лишнего не копирует, а корень без плавающей клавиатуры не добавляет слоя в inherited
+  scope (наследуемый вид над каждым корнем удлинял цепочку слоёв, и свёртка в таблицы поднимала
+  байты строк perf `flui-material` — 28948 против 28108 у `list_tile_over_text`). Правило размещения одно для
+  хостов с рамкой (`window::keyboard::placement`): вне вида или без площади — скрытая, низ рамки
+  на полточки и больше выше пола — плавающая (разность двух низов в единицах платформы, до
+  масштабирования, без округлений), иначе пристыкованная; пол на iOS — низ вида, на Web — низ
+  layout viewport (меньшее из `clientHeight` корня и `innerHeight`) или низ холста, если он
+  выше. iOS наблюдает четыре уведомления, включая `UIKeyboardDidChangeFrameNotification`, и
+  держит одно (`keyboard::Note`: `Hide(Change)` или `At { notice, end, change }`); правило —
+  `Heard::kept`: скрытие — всегда; уведомление без кадра и нулевой кадр изменения (клавиатуру
+  тащат) оставляют прежнее; показ или законченное изменение с кадром, который оставило изменение
+  или показ, — тоже (одно движение на один переход); первое законченное изменение после скрытия
+  сохраняет движение скрытия и говорит, где клавиатура легла (плавающая рамка — `Floating`,
+  иначе скрыта); любой другой кадр — клавиатура там; показ с нулевым кадром (панель сокращений,
+  брошенная плавающей, край взят из Flutter) — без вставки. Android публикует `Docked` из
+  `Type.ime()`, как и раньше; headless задаёт любое размещение
+  (`HeadlessHost::move_keyboard(window, placement, …)`, `HeadlessWindow::with_insets`). Протокол
+  0.27, аддитивно: у клавиатуры записи необязательная рамка `floating` — четыре края, как рамка
+  хранится, так что запись читается обратно до бита; читатель отказывает плавающей клавиатуре со
+  вставкой. Тесты, в скобках результат с откатом: в `window::keyboard` (модель, на всех хостах)
+  `a_frame_names_where_the_keyboard_rests` (без ветки плавающей — пристыкованная вставка 544,
+  падает), `a_docked_keyboard_a_fraction_off_its_floor_is_docked` (сравнение округлённых низов —
+  холст в масштабе 0,3, низ 115,49999999999999 при поле 115,5, и вид 844,5 с низом рамки 844,2
+  читаются плавающими, падает), `the_notifications_heard_name_where_the_keyboard_rests` (без
+  `DidChangeFrame` перетащенная, отстыкованная и стащенная с дока клавиатура остаются там, откуда
+  их тащили, или скрыты — падает; нулевой кадр, заменяющий стоящее, — `Hidden` вместо 336;
+  скрытие как изменение кадра — вставка) и `a_later_notice_of_one_move_starts_no_second_motion`;
+  строка `a_floating_keyboard_has_no_inset` в `window_insets` (`flui-platform`);
+  `a_floating_keyboard_reaches_the_media_query_as_a_frame` и
+  `a_window_opened_under_a_floating_keyboard_reads_its_frame` и
+  `a_widget_reading_only_the_floating_keyboard_hears_it_come_and_go` (`flui-testing`; без записи
+  рамки при применении, без чтения её при открытии окна и без публикации из корня — падают);
+  `keyboard_placements_keep_their_wire_values_and_replay` (журнал `flui-native`; углы, ширина и
+  высота которых не складываются обратно, — запись ширины вместо правого края падает) и
+  `a_floating_keyboard_recorded_with_an_inset_is_refused` (запись ввода; без отказа — падает); в
+  wasm32 строки `web_window_has_the_virtual_keyboard_overlay_its_page` о плавающем
+  прямоугольнике (локально не запускались: в WSL нет раннера, их гонит main). `flui-material`
+  `perf_list_tile_over_text` и `perf_navigation_bar_alone` проходят на прежних базовых линиях.
+  Прогнано: на Windows clippy `--all-targets -D warnings` и nextest затронутых крейтов,
+  `xtask checks`; в WSL тесты на Linux, включая строки perf `flui-material`, и `cargo +nightly
+  check --all-targets` `flui-native` для `aarch64-apple-ios`. Должно на
+  iOS Simulator (заметки строк «Refresh rate and frame pacing» и «Soft-keyboard insets» в
+  `platform-parity.toml`): тики link при отслеживании UIKit; пристыкованная, плавающая,
+  перетаскиваемая и скрытая клавиатура на iPad, брошенная панель сокращений, скрытие с кадром на
+  экране. Не построено и записано в `docs/gaps.md`: плавающая клавиатура, перекрывающая низ
+  короткого окна Stage Manager, читается пристыкованной (нужны границы экрана).
+
+- [x] **LY149** — ветка `native/macos-pacing-and-notch`. Проверено на `main` @ `88ea4d03a`
+  чтением и тестами модели; на Mac не запускалось ничего, и это сказано у каждой находки.
+  Подтверждено кодом: период экрана был частотой текущего режима и больше ничем
+  (`refresh_rate_of_screen`), 0 Гц `RefreshPeriod::from_hz` отвергал, так что у такого дисплея
+  периода не было; `sample_state` окна публиковал `WindowInsets::ZERO`; ни слою, ни виду не
+  задавалось, как лежит несовпавшее содержимое. Не подтверждено и не опровергнуто (нужен Mac):
+  что панель ProMotion в Low Power Mode обновляется на 60 Гц при режиме и display link на 120
+  (взято из исходника Rune, `crates/rune/src/platform/display_link.rs`, ветка `dev`); что
+  несовпавший drawable при живом resize был виден растянутым. Решения (ADR их не решают; правила
+  записаны в `crates/flui-native/ARCHITECTURE.md`, таблица §4 ADR-0277 говорит, что публикует
+  macOS). Период: чистое правило `display::apple::screen_cadence::refresh_period` — частота
+  режима, где она называет темп; иначе номинальный период `CVDisplayLink` этого дисплея
+  (`CVTime` идёт в `RefreshPeriod::from_ratio`, link создаётся ради одного вопроса и
+  освобождается незапущенным, три функции CoreVideo объявлены рядом с ColorSync, без нового
+  крейта); встроенная панель (`CGDisplayIsBuiltin`) при Low Power Mode — не короче периода
+  60 Гц, внешний монитор не трогается. `isLowPowerModeEnabled` и уведомление — macOS 12, за
+  гейтом `ProcessPowerState`; имя уведомления ищется через `dlsym`, а не линкуется: бинарник со
+  ссылкой на константу macOS 12 не загрузился бы на 11. Наблюдатели дисплеев —
+  `DisplayObservers` из двух `Observation` (параметры экранов и состояние питания), своя копия
+  наблюдателя с блоком удалена; смена режима питания помечает снимок устаревшим и будит
+  владельца, новая ревизия выходит, когда период изменился. Вырез: чистое правило
+  `window::apple::geometry::frame::safe_area_on_screen` пересекает полосу
+  `NSScreen.safeAreaInsets` (macOS 12, гейт `ScreenSafeArea`) с прямоугольником содержимого:
+  вставка — длина, общая у содержимого и полосы, не больше самой полосы; публикуется та же
+  величина снимка, что у iOS (`WindowInsets::safe_area`), новой формы нет. Режим окна не
+  спрашивается: окно, закрывающее весь экран, получает верхнюю вставку экрана; окно, которое
+  система держит ниже выреза (так, по описаниям, AppKit ставит свой полноэкранный режим), и окно
+  под строкой меню — ноль. Строка требовала «у полноэкранного окна верхняя вставка из
+  `safeAreaInsets.top`»; вставка по режиму удвоила бы отступ там, где система уже опустила окно,
+  поэтому публикуется перекрытие. Экран читается при каждом чтении окна (resize, перемещение,
+  смена экрана и масштаба, конец полноэкранного перехода), а не кэшируется: вставка — функция
+  прямоугольника, который читается тем же чтением. Gravity: `layerContentsPlacement = TopLeft` у
+  вида, а не `contentsGravity` у слоя: у layer-backed вида гравитацией слоя владеет AppKit и
+  выставляет её из placement (так же делает `QNSView` в Qt; Rune задаёт gravity подслою, который
+  wgpu создаёт под видом winit). Глазами не оценено. Тесты, в скобках результат с откатом:
+  `a_macos_screen_paces_at_its_mode_its_link_or_the_low_power_rate` (без `max` с периодом 60 Гц —
+  строка «ProMotion под Low Power» даёт 8,33 мс вместо 16,67; без запасного пути — строка «0 Гц»
+  даёт `None` вместо 16,683 мс), `a_mode_with_a_rate_asks_no_display_link`,
+  `process_power_state_gate_table`, `screen_safe_area_gate_table`,
+  `a_window_under_the_camera_housing_has_its_band_as_a_safe_area` (с отсчётом от нижнего края
+  экрана вместо верхнего — окно ниже выреза получает 32 вместо 0); у
+  `every_display_source_reads_a_cadence_alike` появилась колонка macOS, и
+  `macos_shim_keeps_the_period_it_reports_today` идёт через то же правило. Прогнано: тесты
+  модели в WSL (Linux) и на Windows через nextest; в WSL `cargo +nightly check -p flui-native
+  --target aarch64-apple-darwin --all-targets --locked` и `build --lib` той же цели (проверка
+  порогов гейтов) без предупреждений; clippy `--all-targets -D warnings` `flui-native` на
+  Windows. Должно на Mac (заметки строк «Refresh rate and frame pacing», «Safe area», «Live resize
+  without jitter» и «Power-aware pacing» в `platform-parity.toml`, записи `docs/gaps.md`):
+  ProMotion с включением и выключением Low Power Mode (период в снимке и очередь drawable),
+  панель с режимом 0 Гц, Mac с вырезом в полноэкранном режиме и с окном без рамки на весь экран,
+  живой resize глазами. Не построено и записано в `docs/gaps.md`: `auxiliaryTopLeftArea` и
+  `auxiliaryTopRightArea` (полосы рядом с вырезом), тепловое состояние и пауза фоновой работы.
+  После независимого чтения: вставка шла через правило Web (`window::safe_area::within`), и окно,
+  верх которого выше верха экрана (монитор над панелью, окно ещё называет панель своим экраном),
+  получало полосу плюс всё, что выше экрана (332 при полосе 32); у macOS теперь своё правило —
+  общая длина, не больше полосы, часть за краем экрана не считается, а правило Web осталось как
+  было (холст за краем viewport прокручен и не виден); строки таблицы «выше», «через» и «ниже»
+  верха экрана (с прежним правилом строка «через» даёт 332 вместо 32).
+  Содержимое, которое не растягивается, раскладывается по `contentsScale` слоя, а его никто не
+  задавал (wgpu не трогает масштаб корневого слоя вида): окно задаёт его масштабом, которым
+  меряет свои метрики, при создании и при каждой смене backing scale
+  (`content_view::set_layer_contents_scale`); gravity оставлен, потому что с этим масштабом кадр
+  по построению занимает вид, а откат вернул бы растяжение, ради которого строка и написана;
+  прогон на Retina записан в строке «Live resize without jitter». Имя уведомления о питании,
+  не найденное на macOS 12 и новее, теперь типизированная ошибка и одно предупреждение, а не
+  молчание; что тогда происходит, сказано в `docs/gaps.md`. `try_with_safe_area` в окне —
+  `expect("BUG: …")`: правило отдаёт конечные неотрицательные длины. Новый тест модели
+  `a_power_mode_change_is_a_new_display_revision_only_where_the_period_changed` ведёт то, что
+  делает наблюдатель (пометить источник устаревшим), до ревизии снимка: у встроенной панели
+  новая ревизия с периодом 60 Гц, у внешнего монитора ревизия прежняя, без пометки источник не
+  перечитывается. Без теста остались регистрация наблюдателей, `insets` в `sample_state` и
+  `contentsScale`: им нужен `NSWindow`, которого в тестах крейта нет.
 
 ## Чего нет в этой серии
 

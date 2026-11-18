@@ -8,7 +8,9 @@ use flui_foundation::geometry::{Matrix4, Offset, Point, RRect, Rect};
 use flui_painting::glyphs::Synthesis;
 use flui_painting::paint::Path;
 use flui_painting::styling::Color;
-use flui_painting::{Canvas, DisplayList, DrawCommand, DrawOp, NonFiniteOps, Paint, PayloadId};
+use flui_painting::{
+    Canvas, DisplayList, DrawCommand, DrawOp, NonFiniteOps, PayloadId, paint::Paint,
+};
 
 pub(crate) fn save_restore_tracks_the_save_count() {
     let mut canvas = Canvas::new();
@@ -152,7 +154,7 @@ pub(crate) fn interning_shares_arc_for_identical_paints() {
 /// paint holds a shader.
 pub(crate) fn a_taken_recording_shares_its_plain_paints_with_the_next() {
     use flui_foundation::geometry::{Matrix4, Offset};
-    use flui_painting::Shader;
+    use flui_painting::paint::Shader;
     use flui_painting::paint::TileMode;
 
     let plain = Paint::fill(Color::RED);
@@ -285,7 +287,7 @@ fn non_finite_rows() -> Vec<(&'static str, Record, Refusal)> {
         ColorFilter, ColorMatrix, DashPattern, FilterQuality, Image, ImageRepeat, Path, TextureId,
         TileMode,
     };
-    use flui_painting::{BlendMode, PointMode, Shader};
+    use flui_painting::{paint::BlendMode, paint::PointMode, paint::Shader};
 
     const NAN: f64 = f64::NAN;
     let fill = || Paint::fill(Color::RED);
@@ -520,8 +522,9 @@ fn non_finite_rows() -> Vec<(&'static str, Record, Refusal)> {
 
 /// A laid-out paragraph to record, from the bundled faces.
 fn shaped_paragraph() -> Arc<flui_painting::ShapedParagraph> {
+    use flui_foundation::TextDirection;
     use flui_foundation::geometry::Offset;
-    use flui_painting::typography::{TextDirection, TextSpan};
+    use flui_painting::typography::TextSpan;
     use flui_painting::{FontCollection, TextContext, TextPainter};
 
     let fonts = FontCollection::new();
@@ -1253,4 +1256,69 @@ pub(crate) fn a_fingerprint_reads_what_the_commands_draw() {
     for (what, before, after) in changed {
         assert_ne!(before, after, "a change of {what} reads apart");
     }
+}
+
+/// Counts the spans and events a subscriber at the default `info` filter
+/// would hear.
+struct InfoCounter {
+    spans: std::sync::atomic::AtomicU64,
+    events: std::sync::atomic::AtomicU64,
+}
+
+impl tracing::Subscriber for InfoCounter {
+    fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
+        *metadata.level() <= tracing::Level::INFO
+    }
+
+    fn new_span(&self, _span: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        let count = self
+            .spans
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        tracing::span::Id::from_u64(count + 1)
+    }
+
+    fn record(&self, _span: &tracing::span::Id, _values: &tracing::span::Record<'_>) {}
+
+    fn record_follows_from(&self, _span: &tracing::span::Id, _follows: &tracing::span::Id) {}
+
+    fn event(&self, _event: &tracing::Event<'_>) {
+        self.events
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    fn enter(&self, _span: &tracing::span::Id) {}
+
+    fn exit(&self, _span: &tracing::span::Id) {}
+}
+
+/// A recording runs on every repaint of every frame: under the default
+/// `info` filter it opens no span and reports nothing while it is balanced
+/// and finite.
+pub(crate) fn a_balanced_recording_is_silent_at_the_default_filter() {
+    let counter = Arc::new(InfoCounter {
+        spans: std::sync::atomic::AtomicU64::new(0),
+        events: std::sync::atomic::AtomicU64::new(0),
+    });
+    tracing::subscriber::with_default(Arc::clone(&counter), || {
+        // Interest cached by an earlier dispatcher would hide this one.
+        tracing::callsite::rebuild_interest_cache();
+        let paint = Paint::fill(Color::RED);
+        let mut canvas = Canvas::new();
+        canvas.save_layer(None, &paint);
+        canvas.draw_rect(Rect::from_ltrb(0.0, 0.0, 10.0, 10.0), &paint);
+        canvas.restore();
+        let _taken = canvas.take_recording();
+        canvas.draw_rect(Rect::from_ltrb(0.0, 0.0, 10.0, 10.0), &paint);
+        let _finished = canvas.finish();
+    });
+    assert_eq!(
+        counter.spans.load(std::sync::atomic::Ordering::Relaxed),
+        0,
+        "recording opened a span at the default filter"
+    );
+    assert_eq!(
+        counter.events.load(std::sync::atomic::Ordering::Relaxed),
+        0,
+        "a balanced, finite recording reported an event at the default filter"
+    );
 }

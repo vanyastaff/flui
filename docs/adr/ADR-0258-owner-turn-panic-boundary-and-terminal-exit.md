@@ -7,6 +7,9 @@
   has not destroyed and a later or opaque terminal payload, and §5 retains a user `Drop` during an
   unwind: payloads go to `discard_payload` (the terminal slot keeps an opaque payload's text),
   values are destroyed under containment, and a destructor that panics during an unwind aborts.
+  [ADR-0371](ADR-0371-before-the-first-release-no-xtask-gate-holds-a-rule-about-the-sources.md)
+  for the `xtask panic-boundary` gate only (Confirmation): the rule stands and its reader confirms
+  it.
 - **Supersedes:** [ADR-0035](ADR-0035-lifecycle-consolidation-and-frames-enabled.md)
   §5, its sentence "the first panic resumes after restoration and notification" only (a quit
   observer's panic is contained by §1 here and resumes only when §2 classifies it terminal); and the

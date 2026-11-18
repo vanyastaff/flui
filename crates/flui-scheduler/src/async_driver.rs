@@ -41,7 +41,7 @@
 //!
 //! # Readiness index
 //!
-//! Readiness discovery is separate from task ownership (issue #1056): the
+//! Readiness discovery is separate from task ownership: the
 //! store keeps `tasks` (every live task, keyed by id, owner-local) beside
 //! `ready` (the ids due a poll, in wake-arrival order, in the cross-thread
 //! half), so a pump on an idle driver touches neither a dormant task's slot
@@ -477,7 +477,7 @@ impl TaskStore {
             };
 
             // Armed for the poll only: if `future.poll` panics, `PumpGuard`
-            // removes this slot on unwind (issue #1057).
+            // removes this slot on unwind.
             guard.in_flight = Some(id);
 
             let mut ctx = Context::from_waker(&waker);
@@ -1013,37 +1013,25 @@ fn refuse(
     failure_slot: Option<&RefCell<Option<Weak<crate::wake_delivery::FailureSignal>>>>,
 ) -> TaskToken {
     let token = TaskToken::refused();
-    let released = if let Some(slot) = failure_slot {
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: a refused future's retirement runs contained; the payload is handed back"
-        )]
-        catch_unwind(AssertUnwindSafe(|| {
+    let mut released = FirstPanic::new();
+    if let Some(slot) = failure_slot {
+        let _retired = released.contain(|| {
             crate::scheduler::execution::retire_with_execution_custody(slot, future);
-        }))
-    } else {
-        release_opaque(future)
-    };
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "ADR-0287: the refusal diagnostic runs tracing subscribers, contained"
-    )]
-    let diagnostic = catch_unwind(|| {
+        });
+    } else if let Err(payload) = release_opaque(future) {
+        released.record(payload);
+    }
+    // The diagnostic runs tracing subscribers; a panic from one is discarded
+    // with its collector.
+    let mut diagnostic = FirstPanic::new();
+    let _traced = diagnostic.contain(|| {
         tracing::warn!(
             "AsyncDriver: the ui_runtime that owned this driver is gone; dropping the spawned future"
         );
     });
-    if let Err(payload) = diagnostic {
-        flui_foundation::panic::discard_payload(payload);
-    }
-    if let Err(payload) = released {
-        if std::thread::panicking() {
-            // The incoming unwind stays the failure that propagates.
-            flui_foundation::panic::discard_payload(payload);
-        } else {
-            resume_unwind(payload);
-        }
-    }
+    drop(diagnostic);
+    // An unwind already in progress stays the failure that propagates.
+    released.resume();
     token
 }
 
@@ -1250,8 +1238,7 @@ mod tests {
         }
     }
 
-    /// A panic inside `future.poll` must not leave a zombie slot behind
-    /// (issue #1057).
+    /// A panic inside `future.poll` must not leave a zombie slot behind.
     fn async_driver_poll_panic_does_not_leave_a_zombie_slot() {
         let (_scheduler, frame) = owner_frame();
         let driver = frame.async_driver();

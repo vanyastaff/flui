@@ -3,7 +3,8 @@
 
 use std::sync::Arc;
 
-use crate::typography::{InlineSpan, TextDirection, TextStyle};
+use crate::typography::{InlineSpan, TextStyle};
+use flui_foundation::TextDirection;
 use flui_foundation::geometry::Size;
 
 use super::{LayoutMetrics, TextBaseline, TextLayoutCache, TextPainter};

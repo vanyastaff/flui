@@ -349,9 +349,15 @@ pub(crate) mod pipeline_set;
 mod pipeline_store;
 #[cfg(not(target_arch = "wasm32"))]
 mod pipeline_warmup;
+/// Whole-pixel moves of recorded IR, which let a chunk moved by whole device
+/// pixels replay its recording (ADR-0304 §9).
+mod pixel_shift;
 mod portable_coverage;
 mod profiler;
 mod recording_budget;
+/// A chunk's IR kept past its frame and replayed for an unchanged chunk drawn
+/// under the same transform and ambient state (ADR-0304 §9).
+mod recording_cache;
 /// Frame render-target descriptor: `view` + optional back-reference `texture`
 /// for dst-read blend passes.  Frame-scoped borrow, never stored in IR types.
 pub(crate) mod render_target;

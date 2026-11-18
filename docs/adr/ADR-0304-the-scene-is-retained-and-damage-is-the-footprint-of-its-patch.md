@@ -12,6 +12,9 @@
   tree with its eviction of boundaries holding a follower);
   [ADR-0068](ADR-0068-frame-disposition-replaces-the-presented-bit.md) §3's repaint half only
   (`mark_needs_full_repaint_for` as a `NotShown` retry's work; the wake half stands)
+- **Superseded-by:** [ADR-0371](ADR-0371-before-the-first-release-no-xtask-gate-holds-a-rule-about-the-sources.md)
+  for the `xtask globals` and `xtask send-impls` gates only (Confirmation): the rule stands and its
+  reader confirms it.
 - **Amends:** [ADR-0006](ADR-0006-c-ir-record-replay-seam.md) §1 and §6 (a chunk's IR outlives the
   frame under a recording key; replay determinism becomes load-bearing and gains its test);
   [ADR-0276](ADR-0276-a-follower-takes-its-leaders-full-transform-and-may-hide-with-its-clips.md)
@@ -513,12 +516,15 @@ struct RecordingKey {
 and of the fractional part of its translation; the integer part is applied at replay, so a chunk
 moved by whole pixels replays without recording. `AmbientKey` is whatever the IR bakes from outside
 the chunk, in the chunk's own pixel frame, which today is each batch's scissor and SDF clip
-(`crates/flui-engine/src/command_ir.rs:479-498`, `:560-572`): a chunk scrolled under a fixed clip
-misses until the representation applies that state at replay, which ADR-0306 decides. A chunk
-under a projective transform is not cached. `ResourceEpoch` advances on a glyph-atlas reset or
-eviction, device recovery, a font-source switch and a surface-format change. An entry is inserted only after its recording completed; eviction is
-least recently rastered first under a byte budget (a hypothesis), and a presentation's entries go
-when its slot detaches. Counters: `recording_cache_bytes`, `recording_cache_hits`,
+(`crates/flui-engine/src/command_ir.rs:479-498`, `:560-572`) and the size of the target a fill of
+the whole target covers: a chunk scrolled under a fixed clip misses until the representation
+applies that state at replay, which ADR-0306 decides. A chunk under a projective transform is not
+cached. `ResourceEpoch` advances when texels a recording names move: a glyph-atlas or image-atlas
+reset or eviction, device recovery and a font-source switch. No kept recording reads the surface
+format (a backdrop, which does, is a draw item and is never kept), so a format change keeps them.
+An entry is inserted only after its recording completed and placed every glyph it asked for;
+eviction is least recently rastered first under a byte budget (a hypothesis), and a presentation's
+entries go when its slot detaches. Counters: `recording_cache_bytes`, `recording_cache_hits`,
 `recording_cache_evictions`. A chunk has one parent entry, so it never straddles an effect scope,
 and the renderer's straddle self-heal (`crates/flui-engine/src/renderer.rs:2654-2675`) becomes a
 debug assertion that the producer kept that rule.

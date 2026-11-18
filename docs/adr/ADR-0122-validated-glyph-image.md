@@ -23,7 +23,7 @@ one image's byte-layout invariant does not prove same-key determinism.
 
 ## Decision
 
-`flui_painting::GlyphImage` is an immutable owned bitmap. Its `left`, `top`,
+`flui_painting::glyphs::GlyphImage` is an immutable owned bitmap. Its `left`, `top`,
 `width`, `height`, `content` and `data` fields are private. Construction uses
 `GlyphImage::try_new(left, top, width, height, content, data)`, returning
 `Result<GlyphImage, GlyphImageError>`. It takes ownership of the supplied

@@ -7,6 +7,8 @@
   added), and the session-handle spelling of elements across windows. The rest of ADR-0080 stays:
   its vocabulary, typed replies widened with an error branch, outline as the default reading,
   `effect`, `retry` and `readback_failed`.
+- **Superseded-by:** [ADR-0371](ADR-0371-before-the-first-release-no-xtask-gate-holds-a-rule-about-the-sources.md)
+  for the `xtask workspace` gate only (Decision): the rule stands and its reader confirms it.
 - **Settles:** the still-Proposed items of [ADR-0095](ADR-0095-agent-protocol-schema-crate.md)
   §1 (finder criteria, handle kinds, `effect` as a schema type, event shapes), §3 (`flui mcp` and
   the handle table across windows) and §5 (one finder shared by tests and agents). §4's projection

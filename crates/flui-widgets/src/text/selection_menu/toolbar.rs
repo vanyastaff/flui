@@ -93,8 +93,14 @@ pub(crate) fn toolbar(
     }
     let chosen: Rc<dyn Fn()> = Rc::new(move || {
         let hide = Rc::clone(&hide);
-        if let Some(post_frame) = &post_frame {
-            let _ = post_frame.schedule(move |_timing: &FrameTiming| hide());
+        if let Some(post_frame) = &post_frame
+            && post_frame
+                .schedule(move |_timing: &FrameTiming| hide())
+                .is_ok()
+        {
+            // A chosen item need not change the tree, so the frame the
+            // menu hides after is asked for.
+            let _ = post_frame.schedule_frame();
         }
     });
     let items = offered

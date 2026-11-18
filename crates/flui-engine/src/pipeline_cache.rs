@@ -13,7 +13,7 @@
 use rustc_hash::FxHashMap;
 
 use flui_painting::paint::CoverageClass;
-use flui_painting::{BlendMode, Paint};
+use flui_painting::{paint::BlendMode, paint::Paint};
 use wgpu::RenderPipeline;
 
 /// Pipeline key identifying a specific pipeline variant

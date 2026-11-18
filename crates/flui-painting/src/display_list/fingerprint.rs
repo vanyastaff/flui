@@ -16,7 +16,7 @@ use flui_foundation::geometry::{Matrix4, Offset, Point, RRect, RSuperellipse, Ra
 use super::command::DrawOp;
 use super::payload::{ImageRegionPlacement, NestedRRects, StoredPayload};
 use super::{DisplayList, ShapedParagraph};
-use crate::paint::image::ColorFilter;
+use crate::paint::ColorFilter;
 use crate::paint::{DashPattern, Image, ImageShader, Paint, Shader};
 use crate::styling::Color;
 

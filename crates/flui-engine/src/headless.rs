@@ -200,7 +200,7 @@ impl HeadlessRenderer {
                 context.attach_offscreen(id, size, CAPTURE_FORMAT)?;
                 *slot.insert(id)
             };
-            context.render_slot(slot, content)?;
+            context.render_slot(slot, content, crate::recording_cache::CacheReads::On)?;
             context.read_slot(slot)
         })();
         // A capture is synchronous, so it returns once its work has retired,
@@ -271,6 +271,8 @@ impl HeadlessRenderer {
             fail_after_begin: false,
             panic_after_record: false,
             last_plan: None,
+            last_ir: None,
+            keep_ir: false,
         })
     }
 }
@@ -459,6 +461,10 @@ pub(crate) struct RetainedCapture {
     /// it is submitted, and the flag clears itself.
     panic_after_record: bool,
     last_plan: Option<crate::damage::FramePlan>,
+    /// The IR the last frame that recorded content recorded.
+    last_ir: Option<Vec<u8>>,
+    /// Whether a frame keeps its IR in `last_ir`.
+    keep_ir: bool,
 }
 
 #[cfg(test)]
@@ -599,9 +605,38 @@ impl RetainedCapture {
         self.intermediate_required = true;
     }
 
+    /// Reclaims the painter's caches at `level`, between frames, as the
+    /// windowed renderer does under memory pressure.
+    pub(crate) fn reclaim(&mut self, level: flui_foundation::memory::MemoryPressureLevel) {
+        self.painter.reclaim(level);
+    }
+
+    /// Makes every later glyph placement that needs room miss as a full
+    /// glyph atlas does, until `full` is `false`.
+    pub(crate) fn hold_glyph_atlas_full(&mut self, full: bool) {
+        self.painter.hold_glyph_atlas_full(full);
+    }
+
+    /// Marks the painter's image atlas full, so the frame boundary resets it
+    /// once an entry goes a frame unused.
+    pub(crate) fn mark_image_atlas_full(&mut self) {
+        self.painter.mark_image_atlas_full();
+    }
+
     /// How many faces the capture's glyph rasterizer has registered.
     pub(crate) fn glyph_face_count(&mut self) -> usize {
         self.painter.glyph_face_count()
+    }
+
+    /// Keeps the IR each later frame records, for [`Self::last_ir`].
+    pub(crate) fn keep_recorded_ir(&mut self) {
+        self.keep_ir = true;
+    }
+
+    /// The IR the last frame recorded before its replay, as bytes; `None`
+    /// before a frame recorded with [`Self::keep_recorded_ir`] on.
+    pub(crate) fn last_ir(&self) -> Option<&[u8]> {
+        self.last_ir.as_deref()
     }
 
     /// The plan the last frame ran.
@@ -659,6 +694,8 @@ struct CaptureFrame<'a> {
     scene: &'a flui_layer::Scene,
     fail: &'a mut bool,
     panic: &'a mut bool,
+    /// The IR the frame recorded, read before it is replayed.
+    ir: Option<&'a mut Option<Vec<u8>>>,
 }
 
 #[cfg(test)]
@@ -690,12 +727,17 @@ impl crate::frame_protocol::FrameSteps for CaptureFrame<'_> {
         texture: &wgpu::Texture,
         _retained: bool,
         partial: Option<&crate::damage::RegionPlan>,
+        reads: crate::recording_cache::CacheReads,
         encoder: &mut wgpu::CommandEncoder,
     ) -> EngineResult<crate::frame_protocol::RecordedContent> {
         if std::mem::take(self.fail) {
             return Err(EngineError::Timeout);
         }
-        let recorded = crate::Renderer::record_frame_content(self.painter, self.scene, partial)?;
+        let recorded =
+            crate::Renderer::record_frame_content(self.painter, self.scene, partial, reads)?;
+        if let Some(ir) = self.ir.as_deref_mut() {
+            *ir = Some(self.painter.recorded_ir());
+        }
         assert!(
             !std::mem::take(self.panic),
             "injected panic after the frame was recorded"
@@ -730,6 +772,14 @@ impl crate::frame_protocol::FrameSteps for CaptureFrame<'_> {
             .map(|_| ())
     }
 
+    fn recording_cache_counts(&mut self) -> (u64, u64) {
+        self.painter.take_recording_cache_counts()
+    }
+
+    fn unwound(&mut self) {
+        self.painter.drop_recordings();
+    }
+
     fn finish(&mut self) {
         self.painter.finish_frame();
     }
@@ -756,6 +806,7 @@ impl RetainedCapture {
             scene,
             fail: &mut self.fail_after_begin,
             panic: &mut self.panic_after_record,
+            ir: self.keep_ir.then_some(&mut self.last_ir),
         };
         self.frame.run(
             plan,
@@ -799,11 +850,7 @@ impl RetainedCapture {
     /// Owes `damage`, as a window slot applies a publication's damage:
     /// a region rect by rect.
     pub(crate) fn apply_damage(&mut self, damage: flui_layer::DamageRegion) {
-        match damage {
-            flui_layer::DamageRegion::Region(region) => self.frame.mark_region(&region),
-            flui_layer::DamageRegion::Unchanged => {}
-            flui_layer::DamageRegion::Full(_) => self.frame.mark_full_repaint(),
-        }
+        self.frame.apply_damage(damage);
     }
 
     /// Plans every later partial frame rect by rect, as production does not
@@ -958,7 +1005,7 @@ mod twin_readback_tests {
     fn repeated_capture_resizes_and_recovers_after_invalid_geometry() {
         use flui_foundation::geometry::Rect;
         use flui_layer::{Layer, LayerNode, PictureLayer};
-        use flui_painting::{Canvas, Paint, styling::Color};
+        use flui_painting::{Canvas, paint::Paint, styling::Color};
 
         let Some(renderer) = crate::test_support::renderer_or_skip() else {
             return;
@@ -1056,7 +1103,7 @@ mod twin_readback_tests {
         let mut canvas = flui_painting::Canvas::new();
         canvas.draw_rect(
             Rect::from_xywh(0.0, 0.0, span, span),
-            &flui_painting::Paint::fill(flui_painting::styling::Color::WHITE),
+            &flui_painting::paint::Paint::fill(flui_painting::styling::Color::WHITE),
         );
         let mut tree = LayerTree::new(Layer::from(PictureLayer::new(canvas.finish())));
         for _ in 0..3 {

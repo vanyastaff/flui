@@ -1,5 +1,5 @@
 //! Per-presentation frame telemetry: a fixed-capacity ring of
-//! [`FrameSnapshot`]s carrying input→present attribution (issue #556).
+//! [`FrameSnapshot`]s carrying input→present attribution.
 //!
 //! This extends [`FrameClock`](crate::frame_clock::FrameClock)'s existing
 //! "frame timestamps" responsibility (see that type's own module doc's
@@ -20,7 +20,7 @@
 //! are therefore both index-and-assign operations with no allocation of
 //! their own — proven by a dedicated counting-allocator integration test
 //! (`crates/flui-scheduler/tests/frame_telemetry_allocation.rs`), the same
-//! pattern `flui-engine`'s raster-backpressure accounting path used to prove
+//! pattern `flui-engine`'s raster-backpressure accounting uses to prove
 //! the same claim about itself. Only the PULL side
 //! ([`FrameClock::frames_since`](crate::frame_clock::FrameClock::frames_since))
 //! allocates — a `Vec` built on the *consumer's* call, never on the frame

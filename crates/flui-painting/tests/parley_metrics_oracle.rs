@@ -16,11 +16,13 @@
 //! measure the lines and height they paint, and hard breaks lay out the lines
 //! Parley gives them.
 
+use flui_foundation::TextDirection;
 use flui_foundation::geometry::Offset;
 use flui_painting::glyphs::FontRegistry;
-use flui_painting::typography::{FontWeight, TextDirection, TextSpan, TextStyle};
+use flui_painting::typography::{FontWeight, TextSpan, TextStyle};
 use flui_painting::{
-    Canvas, DrawOp, FontCollection, ShapedParagraph, TextBaseline, TextContext, TextPainter,
+    Canvas, DrawOp, FontCollection, ShapedParagraph, TextContext, TextPainter,
+    typography::TextBaseline,
 };
 
 const SCALES: [f32; 4] = [1.0, 1.25, 1.5, 2.0];
@@ -68,7 +70,7 @@ fn first_baseline_row(paragraph: &ShapedParagraph, scale: f32) -> i32 {
     let mut fonts = FontRegistry::new();
     let run = paragraph.runs().next().expect("the text shapes a run");
     let key = fonts.prepare_run(&run).expect("a shaped face registers");
-    run.placed_glyphs(key, (0.0, 0.0), scale)
+    run.placed_glyphs(key, (0.0, 0.0), (0.0, 0.0), scale)
         .next()
         .expect("the run has a glyph")
         .y

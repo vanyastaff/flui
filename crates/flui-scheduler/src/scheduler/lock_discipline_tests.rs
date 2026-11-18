@@ -59,12 +59,11 @@ fn assert_no_scheduler_lock_held(scheduler: &UpdateScheduler) {
         display_period: _,
         frame_count: _,
         completion_waiters,
-        frame_thread,
     } = frame;
     let WakeShared {
         scheduler_phase: _,
         frames_enabled: _,
-        frame_thread: _,
+        owner_thread: _,
         frame_scheduled: _,
         wake_delivery,
         on_frame_scheduled,
@@ -80,10 +79,6 @@ fn assert_no_scheduler_lock_held(scheduler: &UpdateScheduler) {
         "current_vsync_time is locked during a callback"
     );
     assert!(
-        frame_thread.try_lock().is_some(),
-        "frame_thread is locked during a callback"
-    );
-    assert!(
         completion_waiters.try_borrow_mut().is_ok(),
         "completion_waiters is locked during a callback"
     );
@@ -96,7 +91,8 @@ fn assert_no_scheduler_lock_held(scheduler: &UpdateScheduler) {
     let CallbackState {
         id_mint: _,
         post_frame,
-        lifecycle_listeners,
+        // A `Notifier` lends no borrow of its list to a listener it runs.
+        lifecycle_listeners: _,
     } = callbacks;
     assert!(
         post_frame.try_borrow_mut().is_ok(),
@@ -108,10 +104,6 @@ fn assert_no_scheduler_lock_held(scheduler: &UpdateScheduler) {
             "post-frame lane state is borrowed during a callback"
         );
     }
-    assert!(
-        lifecycle_listeners.try_borrow_mut().is_ok(),
-        "lifecycle_listeners is locked during a callback"
-    );
 
     let BindingState {
         lifecycle_state: _,

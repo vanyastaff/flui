@@ -6,7 +6,7 @@
 use smallvec::{SmallVec, smallvec};
 
 use flui_foundation::geometry::Rect;
-use flui_painting::Paint;
+use flui_painting::paint::Paint;
 
 use super::WgpuPainter;
 use crate::command_ir::{
@@ -676,7 +676,7 @@ impl WgpuPainter {
     pub(crate) fn end_shader_mask(
         &mut self,
         shader: &flui_painting::paint::Shader,
-        blend: flui_painting::BlendMode,
+        blend: flui_painting::paint::BlendMode,
     ) -> crate::EngineResult<()> {
         use flui_painting::paint::Shader;
         let result = (|| {

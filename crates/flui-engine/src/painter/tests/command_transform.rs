@@ -3,7 +3,7 @@
 //! only for a command under another entry.
 
 use super::*;
-use flui_painting::{Canvas, Paint, styling::Color};
+use flui_painting::{Canvas, paint::Paint, styling::Color};
 
 #[test]
 fn commands_under_one_entry_reuse_the_installed_transform_by_address() {

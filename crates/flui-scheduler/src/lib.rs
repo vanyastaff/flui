@@ -24,9 +24,9 @@
 //!
 //! ### Frame telemetry
 //! What a frame cost and when it reached the display is measured in
-//! [`std::time::Duration`] and recorded per frame as a
-//! [`frame_telemetry::FrameSnapshot`]; [`frame_histogram`]
-//! summarizes a run of them.
+//! [`std::time::Duration`] and recorded per frame as a [`FrameSnapshot`];
+//! [`frame_pace`] and the latency histograms ([`LatencyHistogram`]) summarize
+//! a run of them.
 //!
 //! ## Example Usage
 //!
@@ -86,29 +86,30 @@
 // stricter missing-docs bar.
 #![deny(missing_docs)]
 
-// Core modules
-pub mod frame;
+// Each public item has one path: the crate root. The modules are private, so
+// a name never has a second spelling through its module.
+mod async_driver;
+mod completion_wake;
+mod frame;
+mod frame_clock;
+mod frame_histogram;
+mod frame_telemetry;
+mod post_frame;
+mod scheduler;
+mod timer;
+mod wake_delivery;
+
 // The composition-root frame-drive seam (ADR-0081 §4).
 #[doc(hidden)]
 pub mod __runtime;
-pub mod frame_clock;
-pub mod frame_histogram;
-pub mod frame_telemetry;
-pub mod scheduler;
 
-// Type-safe primitives
-pub mod async_driver;
-pub mod id;
-pub mod timer;
+#[cfg(test)]
+mod table_test;
 
-// Re-exports - Core types
 pub use async_driver::{AsyncDriver, BoxedTask, TaskToken};
-/// [`FrameSnapshot::address`]'s type and the two ids it pairs — re-exported
-/// so a consumer of this crate's frame telemetry (e.g. `flui-devtools`'
-/// `timeline` feature) can name them without an extra, redundant direct
-/// dependency on `flui-foundation` just to construct/match one of this
-/// crate's own public field types.
-pub use flui_foundation::{PresentationAddress, PresentationId, UiRuntimeId};
+pub use frame::{
+    AppLifecycleState, FrameId, FramePhase, FrameTiming, PostFrameCallback, SchedulerPhase,
+};
 pub use frame_clock::{
     ClockSource, DemandKind, DemandMask, FrameClock, FrameTimes, FramesInFlight, PollDecision,
     SkipReason,
@@ -126,29 +127,15 @@ pub use post_frame::{
     PresentationFrameError, PresentationFrameScope, PresentationScopeFactory,
 };
 pub use scheduler::execution::ExecutionError;
-pub use timer::{Sleep, TimerHandle};
-mod post_frame;
-
-mod completion_wake;
-mod wake_delivery;
-
-#[cfg(test)]
-mod table_test;
-
-pub use frame::{
-    AppLifecycleState, FrameId, FramePhase, FrameTiming, LifecycleStateCallback, PostFrameCallback,
-    SchedulerPhase,
-};
-/// The instant type the frame clock is stamped with. `std::time::Instant` on
-/// native, a `performance.now()` shim on wasm32 — re-exported so a binding can
-/// name the frame drive's timestamp without depending on `web_time`.
-pub use web_time::Instant;
-// Re-exports - ID types (opaque foundation identities)
-pub use id::CallbackId;
 pub use scheduler::{
     FrameCompletionFuture, FrameOutcome, FrameWaker, SchedulerBuilder, SchedulerClosed,
     UpdateScheduler, WeakUpdateScheduler,
 };
+pub use timer::{Sleep, TimerHandle};
+/// The instant type the frame clock is stamped with. `std::time::Instant` on
+/// native, a `performance.now()` shim on wasm32 — re-exported so a binding can
+/// name the frame drive's timestamp without depending on `web_time`.
+pub use web_time::Instant;
 
 // Keep standalone prose examples inside the existing workspace doctest gate.
 // Context-dependent fragments in these files are explicitly `rust,ignore`.

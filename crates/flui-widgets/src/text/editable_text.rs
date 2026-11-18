@@ -9,6 +9,7 @@ use std::{
 };
 
 use flui_foundation::Listenable;
+use flui_foundation::TextDirection;
 use flui_foundation::geometry::{Bounds, Offset, Point, Rect};
 use flui_foundation::panic::FirstPanic;
 use flui_interaction::PointerDispatch;
@@ -24,7 +25,7 @@ use flui_interaction::{
 use flui_objects::RenderEditable;
 use flui_painting::{
     styling::Color,
-    typography::{TextDirection, TextSpan, TextStyle},
+    typography::{TextSpan, TextStyle},
 };
 use flui_platform::TargetPlatform;
 use flui_platform::keyboard::{ImeComposition, Key, KeyPress, KeyState, Modifiers, NamedKey};
@@ -1873,7 +1874,7 @@ impl ViewState<EditableText> for EditableTextState {
                         alive,
                         last_sent,
                     }
-                    .schedule();
+                    .start();
                 } else {
                     tracing::warn!(
                         "IME cursor-area tracking not started: no post-frame handle \

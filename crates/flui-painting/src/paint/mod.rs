@@ -1,42 +1,30 @@
-//! Painting types for Flui.
-//!
-//! This module contains low-level painting primitives used for rendering,
-//! including blend modes, image handling, clipping, canvas primitives, and
-//! shaders.
+//! The paint vocabulary: how a canvas command fills, strokes, blends, clips
+//! and samples (`Paint`, `Shader`, `BlendMode`, `Path`, `Image`, filters).
 
-#![expect(unused)] // Painting API for future implementation
-
-pub mod blend_mode;
-pub mod canvas;
-pub mod clipping;
-pub mod effects;
-pub mod image;
+mod blend_mode;
+mod canvas;
+mod clipping;
+mod effects;
+mod image;
 #[cfg(feature = "decode")]
 mod image_decode;
-pub mod path;
-pub mod shader;
-pub mod shapes;
-pub mod style;
+mod path;
+mod shader;
+mod shapes;
+mod style;
 
-// Re-exports for convenience
-pub use crate::Alignment;
 pub use blend_mode::{BlendMode, CoverageClass};
 pub use canvas::{
-    BlurStyle, FilterQuality, PaintingStyle, PathFillType, PathOperation, PointMode, StrokeCap,
-    StrokeJoin, TextureId, TileMode, VertexMode,
+    FilterQuality, PathFillType, PointMode, StrokeCap, StrokeJoin, TextureId, TileMode,
 };
-pub use clipping::{Clip, ClipBehavior, ClipOp};
+pub use clipping::{Clip, ClipOp};
 pub use effects::{
-    BlurMode, BlurQuality, ColorAdjustment, ColorMatrix, ImageFilter, ImageSampling,
-    ImageTransform, InvalidImageTransform, PathPaintMode, StrokeOptions,
+    ColorAdjustment, ColorMatrix, ImageFilter, ImageSampling, ImageTransform, InvalidImageTransform,
 };
-pub use image::{
-    BoxFit, ColorFilter, FittedSizes, Image, ImageConfiguration, ImageDataError, ImageRepeat,
-    MAX_ENCODED_IMAGE_BYTES,
-};
+pub use image::{ColorFilter, Image, ImageDataError, ImageRepeat, MAX_ENCODED_IMAGE_BYTES};
 #[cfg(feature = "decode")]
 pub use image_decode::{ImageDecodeError, MAX_DECODED_IMAGE_BYTES};
 pub use path::{Path, PathCommand};
-pub use shader::{ImageShader, MaskFilter, Shader};
-pub use shapes::{CornerRounding, Morph, RoundedPolygon, ShapeError};
+pub use shader::{ImageShader, Shader};
+pub use shapes::{CornerRounding, Morph, RoundedPolygon, ShapeError, material_shapes};
 pub use style::{DashPattern, Paint, PaintBuilder, PaintStyle};

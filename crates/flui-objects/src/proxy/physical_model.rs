@@ -36,7 +36,7 @@ use std::fmt;
 use flui_foundation::Single;
 use flui_foundation::geometry::{Offset, Point, RRect, Rect, Size};
 use flui_painting::BoxShape;
-use flui_painting::{Canvas, Paint};
+use flui_painting::{Canvas, paint::Paint};
 use flui_painting::{
     paint::{Clip, Path},
     styling::{BorderRadius, BorderRadiusExt, Color},

@@ -59,7 +59,7 @@ oversized radii against the same public path commands without a shape hint.
 | Entry points | `renderer.rs`, `gpu_context.rs`, `surface_factory.rs`, `window_slot.rs`, `surface_present.rs`, `headless.rs` | `Renderer` (a window's device, queue, surface, recovery); `GpuContext` (one instance, device and painter shared by every slot, ADR-0305 §1; each slot's external textures kept apart, since each presentation mints its own `TextureId`s, uploaded only when the slot draws (a frame that wrote and submitted nothing flushes the writes, since `write_texture` holds staging memory until a submission), lent to the painter for the slot's frame and uploaded again on a rebuilt device; `bootstrap` probes the backends over the host's `DisplayConnection` and the first window, and the raster executor's backend); `SurfaceFactory` (the owner thread's `!Send` maker of `UnconfiguredSurface`s on the context's instance, which refuses a target on another display before wgpu sees it, §2); `WindowSlot` (a window's surface, configuration, frame protocol and recovery inside the context; it attaches unconfigured and its first size configures it, and a surface still lost after a reconfigure is dropped for the owner to replace through the factory and `Restore`, never made again by the executor); the acquire and present path a `Renderer` and a window slot share; `HeadlessRenderer` (a context with one offscreen slot, rasterising a tree to RGBA8 bytes) |
 | Window ownership | `window_target.rs`, `surface_lease.rs`, `adapter.rs` | The owned `'static` handle source a surface is created over; the lease that pins surface-before-target drop order; adapter/device acquisition policy |
 | Frame walk | `layer_walk.rs`, `layer_render.rs`, `layer_dispatcher.rs`, `layer_offscreen.rs`, `layer_compositor.rs` | Iterative layer traversal; per-variant lowering of `Layer`; `DrawCommand` → painter routing; offscreen layer rendering and compositing; save/restore layer state |
-| Recording | `painter/`, `batches/`, `command_ir.rs`, `state_stack.rs` | `WgpuPainter` (per-frame coordinator), `DrawBatcher` (per-primitive record methods), the Command IR they write, the transform/clip stacks |
+| Recording | `painter/`, `batches/`, `command_ir.rs`, `state_stack.rs`, `recording_cache.rs` | `WgpuPainter` (per-frame coordinator), `DrawBatcher` (per-primitive record methods), the Command IR they write, the transform/clip stacks, the recordings of unchanged chunks kept across frames |
 | Replay | `replay/`, `pipeline_cache.rs`, `pipeline_set.rs`, `instancing.rs`, `vertex.rs`, `shaders/` | Command IR → wgpu encoding; pipeline caching keyed by blend/coverage state; instance layouts; WGSL |
 | Offscreen effects | `effects_pipeline.rs`, `blur/`, `mode/`, `gamma/`, `color_matrix/`, `morphology/`, `advanced_blend/`, `ssaa.rs` | Ordered shader masks and backdrop filters, colour filters, dst-read blends and supersampled path AA over pooled textures |
 | Presentation blit | `offscreen/` | Cached intermediate-to-surface copy, independent of layer effects |
@@ -180,6 +180,45 @@ It excludes allocator slack, `DrawItem` container metadata, Lyon output, caches,
 image decoding and separate painters. `DeviceDomain` separately admits the
 listed prepared GPU payloads and retains submission charges until callbacks.
 Neither quota is a whole-process memory or physical VRAM limit.
+
+`RecordingCache` (`recording_cache.rs`, ADR-0304 §9) keeps the recording of a
+chunk that stayed one fragment of the open segment: no external texture, no
+draw item, layer or clip of its own, every glyph it asked for placed, recorded
+Ok under a finite affine transform whose translation is below 2^23.
+`RecordingKey` holds the chunk's `ContentVersion`, the transform's bits
+(`RasterKey`: the linear part and the fraction of the translation, so a chunk
+moved by a fraction of a pixel records again), what the IR bakes from outside
+the chunk (`AmbientKey`: the scissor relative to the chunk's `PixelOrigin` or
+`Covers`, the inherited opacity, and the target's size, which a fill of the
+whole target records) and the painter's `ResourceEpoch`. The whole pixels of
+the translation are the `PixelOrigin` a recording keeps: a chunk moved by whole
+device pixels hits when the fraction of its translation keeps its bits, as a
+translation on a dyadic grid (whole or quarter pixels) does at every magnitude
+below 2^23; a non-dyadic fraction can round to other bits as the translation
+crosses a power of two, and that move records again. The splice adds the
+difference to every device position the recording holds (`pixel_shift.rs`, one
+exhaustive destructure per instance type and for tessellated vertices). Text
+on the device grid is placed from the translation's whole pixels and, apart,
+an offset of its fraction plus the linear part's image of the paragraph's
+position (`ShapedRun::placed_glyphs`), so a replay places the glyphs a fresh
+recording at the new origin does while the paragraph is drawn under the
+chunk's own translation; under a translation pushed inside the chunk, which
+is composed at the device magnitude, a glyph at a rounding boundary can land a
+bin or a row away. A scissor that cuts the chunk
+moves with it only when its clip does, so a chunk moved under a fixed clip that
+cuts it records again. A recording holds no clip chain or scissor: the splice
+gives it the entry's clip and scissor, rebases every arena offset onto the
+segment as it stands, runs the merge rules on its first element only, and
+charges the frame's `RecordingBudget`. Whatever moves texels a recording
+names (a glyph slot evicted or dropped, a glyph-atlas reset, a font-source
+switch, an image evicted, the image atlas reset, a reclaim) advances the epoch,
+which drops every entry, as a raster panic does (ADR-0304 §10). The target
+format is not among them: no recording names a pipeline. A hit marks its glyphs
+used for the frame (`GlyphAtlas::retain`), and a glyph gone since is a miss.
+Entries over 64 MiB, or past two per chunk, are evicted least recently
+rastered first; a `Full(DamageOff)` frame, a window's or an offscreen slot's,
+does not read the cache; evictions are counted until a submitted frame reports
+them, and bytes by the capacity a recording holds.
 
 The Scene IR remains GPU-free and names logical `TextureId`s. At engine lowering,
 an external draw captures an immutable allocation lease: view, validated
@@ -305,8 +344,8 @@ by default, not part of the public API, and the same name and meaning as
 flui-layer's and flui-rendering's `testing`. `cargo xtask gpu-test` sets
 `FLUI_REQUIRE_GPU=1` for both the engine and facade readback suites, so
 missing adapter/device initialization fails instead of silently skipping, and
-`--backend` pins `WGPU_BACKEND`, which every test instance here reads. Pull-request CI runs
-the suites on Mesa's lavapipe (Vulkan) and llvmpipe (GL); the nightly platform runs
+`--backend` pins `WGPU_BACKEND`, which every test instance here reads. CI runs
+the suites on Mesa's lavapipe (Vulkan) and, on main, llvmpipe (GL); the nightly platform runs
 run them on Metal (`macos-latest`) and on D3D12 through WARP (`windows-latest`); hardware
 drivers stay local runs.
 

@@ -2,6 +2,9 @@
 
 - **Status:** Accepted (2026-09-26)
 - **Date:** 2026-09-25
+- **Superseded-by:** [ADR-0371](ADR-0371-before-the-first-release-no-xtask-gate-holds-a-rule-about-the-sources.md)
+  for the `xtask globals` gate only (§1, §3, Verification): the rule stands and its reader
+  confirms it.
 - **Revised:** 2026-10-11 — completed clock/font-global removal is distinguished from the remaining proposed removals.
 - **Revised:** 2026-10-19 — the decoded-image cache moved into the asset registry.
 - **Revised:** 2026-10-21 — the error view builder moved into UI runtime configuration.
@@ -49,7 +52,7 @@ re-checked:
 | `POLLING_PENDING_WINDOWS`, `PENDING_SECONDARY_WINDOW_OPENS`, `PENDING_SECONDARY_WINDOW_COMPLETIONS` | `crates/flui-app/src/app/runner/secondary_window.rs:453-471` | `thread_local!` queues beside the host cell |
 | `REQUEST_REBUILD` | `packages/flui-hot-reload/src/dispatch.rs:24` | `static LazyLock<Mutex<…>>` hook slot |
 | `REGISTRY_STACK`, `TEST_REGISTRY` | `crates/flui-view/src/key/registry.rs:198-212` | `thread_local!`, `ManuallyDrop` for a hot-reload cdylib |
-| `LOCAL_LANES`, `ACTIVE_LANES` | `crates/flui-interaction/src/pointer/interaction_lane.rs:739-741` | `thread_local!` lane registries |
+| `LOCAL_LANES`, `ACTIVE_LANES` | `crates/flui-interaction/src/pointer/interaction_lane.rs` | `thread_local!` lane registries |
 
 Beside them sit monotonic ID counters (`UNIQUE_KEYS`, `crates/flui-foundation/src/key.rs`;
 `NEXT_GRAPH_ID`, `crates/flui-view/src/reactive/mod.rs:72`; `NEXT_INCARNATION`,

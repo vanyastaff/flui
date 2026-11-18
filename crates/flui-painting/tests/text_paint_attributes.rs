@@ -3,9 +3,10 @@
 
 use std::sync::Arc;
 
+use flui_foundation::TextDirection;
 use flui_foundation::geometry::{Offset, Rect};
 use flui_painting::styling::{Color, Shadow};
-use flui_painting::typography::{TextDirection, TextSpan, TextStyle};
+use flui_painting::typography::{TextSpan, TextStyle};
 use flui_painting::{
     BlurSigma, Canvas, DamageExtent, DisplayList, DrawOp, FontCollection, Invalidation,
     ShapedParagraph, TextContext, TextPainter,

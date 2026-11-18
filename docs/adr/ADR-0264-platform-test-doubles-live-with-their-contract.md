@@ -6,6 +6,8 @@
   "test doubles leave the contract" clause: `InMemoryTextStore` and the scripted halves of
   `FakeHaptics` and `InMemoryClipboard` in `flui-testing`) and §6 only (its last sentence, which
   points there)
+- **Superseded-by:** [ADR-0371](ADR-0371-before-the-first-release-no-xtask-gate-holds-a-rule-about-the-sources.md)
+  for the `xtask testing` gate only (Confirmation): the rule stands and its reader confirms it.
 - **Related:** [ADR-0243](ADR-0243-one-testing-kit-per-layer.md) D2 and D4 (one kit per layer,
   doubles with the contract), [ADR-0081](ADR-0081-workspace-tiers-and-reach-facts.md) (the gates that
   decide which crate can hold a double), [ADR-0210](ADR-0210-two-tier-haptics.md) (the haptics

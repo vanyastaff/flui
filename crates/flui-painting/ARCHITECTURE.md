@@ -28,8 +28,8 @@ Design decisions are recorded under [Mapping decisions](#mapping-decisions).
 | Paint values | `paint/{style,path,shader,effects,image,clipping,blend_mode,canvas}.rs` | `Paint`, `Path` (with its shape hint), shaders, filters, images, clip and blend modes: the vocabulary the recorder records. `BlendMode::coverage_class` is the one classification coverage, compositing and damage route on; it and every blend predicate derived from it, `ColorFilter::modifies_transparent_black` and `Color::blend` name every mode with no wildcard arm |
 | Style values | `styling/*.rs`, `lerp_impls.rs` | `Color` (straight-alpha sRGB; `lerp` in premultiplied Oklab), borders, radii, decorations, gradients, shadows |
 | Text values | `typography/*.rs` | `TextStyle`, spans, alignment, decoration (`TextDecoration`, `DecorationThickness`), metrics |
-| Layout-facing values | `alignment.rs`, `box_fit.rs`, `text_painter/baseline.rs` | `Alignment` and its directional form, `BoxFit`/`BoxShape`/`FittedSizes`, `TextBaseline` |
-| Decorations | `decoration.rs`, `table_border.rs` | `paint_box_decoration` / `box_decoration_hit_test`, `paint_table_border` |
+| Layout-facing values | `alignment.rs`, `box_fit.rs`, `typography/text_baseline.rs` | `Alignment` and its directional form, `BoxFit`/`BoxShape`/`FittedSizes` at the root; `TextBaseline` in `typography` |
+| Decorations | `styling/box_decoration_paint.rs`, `styling/table_border_paint.rs` | `BoxDecoration::paint` / `BoxDecoration::hit_test`, `TableBorder::paint`: a decoration value records itself |
 | Test support | `testing/mod.rs` | `record`, the collection and host-scan queries tests read, and `EVERY_BLEND_MODE`, a list a compile-time match keeps complete (`testing` feature) |
 
 ---
@@ -219,10 +219,23 @@ The raster side is `glyphs` (ADR-0092 §5). What crosses to the engine is the
 `ShapedParagraph`; the engine's atlas registers each run's face in its
 `FontRegistry` (`FontRegistry::prepare_run`, which also interns the run's
 variation coordinates) and places the run's glyphs with
-`ShapedRun::placed_glyphs(key, origin, scale)`: `PlacedGlyph { key: GlyphKey,
-x, y, color }` in device pixels, the pen split into a whole column and a
-quarter-pixel bin, the baseline row `round(baseline × scale)`, as cosmic-text
-placed glyphs. The atlas draws through the `GlyphRasterizer` trait: a key type
+`ShapedRun::placed_glyphs(key, whole, offset, scale)`: `PlacedGlyph { key:
+GlyphKey, x, y, color }` in device pixels, the paragraph's top-left being
+`whole + offset`. `whole` is whole pixels, which only move the glyphs;
+`offset` is split in `f64` into whole pixels and a fraction narrowed to `f32`.
+The pen, that fraction plus `x × scale`, is floored into a whole column and
+binned to a quarter pixel with one rule for every sign, and the row is
+`round(baseline × scale)` plus the floored vertical offset, each plus both
+whole parts. A glyph's column, row and bin thus depend on the bits of `offset`
+alone: a caller that moves the paragraph by changing `whole` and keeping
+`offset` places every glyph as many pixels away with the same key, on either
+side of 0 and at any magnitude (`placed_glyphs_move_with_whole_pixels`). The
+engine passes a translation's whole pixels as `whole` for that reason; folding
+them into `offset` rounds the fraction at the translation's magnitude. A glyph
+whose pen alone is outside the `i32` range is omitted
+(`placed_glyphs_omit_a_pen_the_split_would_saturate`). For a non-negative
+position these are the rules cosmic-text placed glyphs with; cosmic-text
+truncated, which placed a glyph differently on each side of 0. The atlas draws through the `GlyphRasterizer` trait: a key type
 plus `rasterize(&mut self, key)`, deterministic per key, with `None` for a key
 the rasterizer cannot draw (the atlas does not place it and asks again next
 use). `SwashRasterizer` implements it with `GlyphKey`: blob id and face index,
@@ -238,7 +251,7 @@ Icons), against bitmaps recorded from cosmic-text before it was removed
 (`tests/support/raster_recorded.rs`), on vendored faces only so the result
 does not depend on the host. Complex scripts
 and colour emoji have no vendored face and are not compared there. The key has
-no vertical bin because the placement truncates a glyph's row before binning,
+no vertical bin because the placement floors a glyph's row before binning,
 so its vertical bin is always zero. A registry holds every blob a key names,
 so a key stays valid after fontique's source cache drops the file
 (`a_held_blob_keeps_its_keys_across_a_prune`, `src/text_layout/context.rs`).
@@ -273,7 +286,7 @@ preparation debt and their `TextPainter` remain owner-local. `Canvas` and
 `TextPainter` are mutated through `&mut self` by one owner.
 The crate takes no lock of its own: its `clippy.toml` disallows `Mutex` and
 `RwLock`, with no `#[expect]`ed site, and it declares no process-global font
-state (`cargo xtask globals`).
+state.
 
 The Parley path takes no FLUI lock. A `TextContext` is `Send` and used
 through `&mut` by the UI runtime that owns it (flui-rendering lends it to one
@@ -362,8 +375,8 @@ than maintained as a second ABI.
 
 `BoxFit::apply` returns source and destination sizes. Comparing those sizes
 cannot determine clipping: a contained image can scale up while showing the
-whole source. The unused `FittedSizes::will_clip` query is removed; `scale_factor`
-and `needs_scaling` retain their scalar and size-comparison contracts.
+whole source, so `FittedSizes` answers no clipping query; `scale_factor` keeps
+its scalar contract.
 
 ### 3. No `DisplayList` mutation, no analysis layer, no trait pair
 
@@ -390,7 +403,7 @@ for a caller that wants to check.
 
 ### 6. The zero-area background guard sits on the FILL, not on a caller
 
-**Choice:** `paint_box_decoration` records no background — colour or gradient — when either
+**Choice:** `BoxDecoration::paint` records no background — colour or gradient — when either
 dimension of its rect is exactly zero. Border, shadow and image passes stay outside the guard.
 
 **Why on the fill, not the class:** `ColoredBox` realizes as a `RenderDecoratedBox` with a
@@ -416,7 +429,7 @@ rasterizes nothing either way — and one fewer display-list command.
 
 ### 7. `anti_alias` is a paint OPTION, not a `BoxDecoration` field
 
-**Choice:** `paint_box_decoration` takes a `DecorationPaintOptions` alongside the decoration, and
+**Choice:** `BoxDecoration::paint` takes a `DecorationPaintOptions`, and
 `RenderDecoratedBox` owns the flag. `BoxDecoration` is untouched.
 
 **Why:** a decoration DESCRIBES an appearance and is `serde`-serializable here, while
@@ -445,8 +458,8 @@ reason: it used to write the whole vector, which dropped the paint's bit, and di
 - `BoxDecoration::anti_alias` — rejected per the above. It is additive (`#[non_exhaustive]`) and
   would have avoided the signature change, which is exactly why it was tempting.
 - A bare `bool` fourth parameter — rejected for boolean blindness at the call site:
-  `paint_box_decoration(c, r, d, false)` does not say false what.
-- A second `paint_box_decoration_aliased` entry point — rejected; two names for one operation, and
+  `decoration.paint(c, r, false)` does not say false what.
+- A second `BoxDecoration::paint_aliased` entry point — rejected; two names for one operation, and
   it does not extend to the next option.
 
 **Unasserted:** no test pins this.
@@ -999,7 +1012,7 @@ specified zero result. Actual `ShapedRun::placed_glyphs` instead omits non-finit
 or unrepresentable device coordinates, so saturation never moves a glyph onto a
 visible edge. The exact `i32::MAX` bound is checked in `f64`, since converting
 that bound to `f32` rounds it up to the inadmissible coordinate 2^31.
-Baseline rounding and vertical-offset truncation are preserved, then added in
+Baseline rounding, the origin's whole row and the floored vertical offset are added in
 `f64` before checking the final row: large cancelling terms may still place a
 glyph at a valid device row. Bitmap-bearing arithmetic remains the engine's
 responsibility. Public rows `subpixel_split_is_total_across_the_float_domain`,
@@ -1251,9 +1264,9 @@ glyphs and their measured advances.
 `font_variations_select_the_painted_run_instance` selects opposite sides of the
 generated `wght` axis and reads the painted run's normalized coordinates; that
 fixture has no outline deltas, so the test makes no width or rasterization claim.
-`invalid_font_features_do_not_replace_valid_settings` and
-`invalid_font_variations_do_not_replace_valid_settings` cover admission alongside
-valid settings.
+`an_invalid_open_type_tag_is_refused_when_built` pins that a tag the shaper would refuse is
+refused when the author builds it, and `invalid_font_variations_do_not_replace_valid_settings`
+that a non-finite axis value leaves the valid settings in place.
 
 ## Open items
 

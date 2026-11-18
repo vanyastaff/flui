@@ -15,8 +15,8 @@ use flui_platform::{PlatformWindow, SystemFailure};
 use flui_sdk::view::CloseReason;
 use flui_system::dialog::{
     Dialog, DialogError, DialogHold, FileDialogBackend, FileDialogCapability, FileDialogs,
-    FileFilter, MAX_TEXT_LEN, MalformedRequest, OpenRequest, OpenResult, PickedFile, PickedForm,
-    Picks, SaveLocation, SaveRequest, SaveResult,
+    FileFilter, FolderFile, FolderPath, MAX_TEXT_LEN, MalformedRequest, OpenRequest, OpenResult,
+    PickedFile, PickedForm, Picks, SaveLocation, SaveRequest, SaveResult,
 };
 use flui_system::testing::{DialogRequest, ScriptedFileDialogs, ScriptedLauncher, ScriptedSystem};
 use flui_testing::{HeadlessHost, HeadlessWindow};
@@ -192,6 +192,142 @@ fn several_picks_for_a_single_pick_request_are_a_malformed_answer() {
     assert_eq!(*one.borrow(), Some(Ok(Ok(Some(picks(&["a"]))))));
 }
 
+/// A folder a system handed over without a path, holding one file.
+fn handed_folder() -> PickedFile {
+    let notes = folder_file("notes.txt", b"words");
+    PickedFile::try_from_folder("Project", vec![notes]).expect("a folder")
+}
+
+#[test]
+fn a_pick_of_a_form_the_request_cannot_have_is_a_malformed_answer() {
+    let (dialogs, plugin) = scripted();
+    let (mut host, handle) = acquire::<FileDialogCapability>(&plugin);
+    let handle = handle.expect("the scripted plugin provides dialogs");
+    let handed_file = || {
+        PickedFile::try_from_contents("notes.txt", Arc::from(&b"words"[..])).expect("a file name")
+    };
+    let download = || PickedFile::try_download("notes.txt").expect("a file name");
+
+    let opens: [(OpenRequest, PickedFile, bool); 8] = [
+        (OpenRequest::files(), file("notes.txt"), true),
+        (OpenRequest::files(), handed_file(), true),
+        (OpenRequest::files(), handed_folder(), false),
+        (OpenRequest::files(), download(), false),
+        // Whether a path names a file or a folder is the file system's to say.
+        (OpenRequest::folders(), file("Project"), true),
+        (OpenRequest::folders(), handed_folder(), true),
+        (OpenRequest::folders(), handed_file(), false),
+        (OpenRequest::folders(), download(), false),
+    ];
+    for (request, pick, admitted) in opens {
+        let picked = Picks::try_new(vec![pick]).expect("one pick");
+        dialogs.answer_next_open(Ok(Some(picked.clone())));
+        let shown = format!("{request:?} answered {picked:?}");
+        let answered = land(handle.open(request));
+        turn(&mut host);
+        turn(&mut host);
+        let expected = if admitted {
+            Ok(Some(picked))
+        } else {
+            Err(DialogError::Failed(SystemFailure::MalformedAnswer))
+        };
+        assert_eq!(*answered.borrow(), Some(Ok(expected)), "{shown}");
+    }
+
+    // A save writes a file: a download is its answer, a folder is not.
+    for (pick, admitted) in [(download(), true), (handed_folder(), false)] {
+        let location = SaveLocation::new(pick, None);
+        dialogs.answer_next_save(Ok(Some(location.clone())));
+        let answered = land(handle.save(SaveRequest::new()));
+        turn(&mut host);
+        turn(&mut host);
+        let expected = if admitted {
+            Ok(Some(location))
+        } else {
+            Err(DialogError::Failed(SystemFailure::MalformedAnswer))
+        };
+        assert_eq!(*answered.borrow(), Some(Ok(expected)));
+    }
+}
+
+#[test]
+fn a_pick_whose_name_ends_in_no_extension_of_the_filters_refuses_the_whole_answer() {
+    let (dialogs, plugin) = scripted();
+    let (mut host, handle) = acquire::<FileDialogCapability>(&plugin);
+    let handle = handle.expect("the scripted plugin provides dialogs");
+    let by_name = || {
+        vec![
+            FileFilter::new("Text").with_extension("txt"),
+            FileFilter::new("Archives").with_extension("tar.gz"),
+        ]
+    };
+    let by_name_or_type = || {
+        vec![
+            FileFilter::new("Text")
+                .with_extension("txt")
+                .with_mime_type("text/*"),
+        ]
+    };
+    // "All files" offered beside a specific filter, as an application does
+    // so the user can reach a file the filter does not name.
+    let with_all_files = || {
+        vec![
+            FileFilter::new("Text").with_extension("txt"),
+            FileFilter::all_files("All files"),
+        ]
+    };
+    let by_file_name = || {
+        vec![
+            FileFilter::new("Build files")
+                .with_file_name("Makefile")
+                .with_file_name(".env")
+                .with_extension("mk"),
+        ]
+    };
+    let cases: [(Vec<FileFilter>, &[&str], bool); 19] = [
+        // Whichever filter was selected, the request offered every file.
+        (with_all_files(), &["README"], true),
+        (with_all_files(), &["notes.txt", "run.command"], true),
+        // A name with no extension to match by, matched whole.
+        (by_file_name(), &["Makefile"], true),
+        (by_file_name(), &["makefile", "MAKEFILE", "rules.mk"], true),
+        // A dot and a word: a hidden file's name, which no extension names.
+        (by_file_name(), &[".env"], true),
+        (by_file_name(), &["Makefile.txt"], false),
+        (by_file_name(), &["GNUMakefile"], false),
+        (by_file_name(), &["prod.env"], false),
+        (by_file_name(), &["Makefile", "notes.txt"], false),
+        (by_name(), &[".txt"], false),
+        (by_name(), &["notes.txt"], true),
+        (by_name(), &["NOTES.TXT", "backup.Tar.Gz"], true),
+        // A type that conforms to an allowed one is not one of its names.
+        (by_name(), &["main.swift"], false),
+        // A dialog that matched the last part of `tar.gz` only.
+        (by_name(), &["notes.gz"], false),
+        (by_name(), &["notes.txt", "run.command"], false),
+        (by_name(), &["txt"], false),
+        // A file's type is its system's to tell: the backend judged it.
+        (by_name_or_type(), &["main.swift"], true),
+        (Vec::new(), &["anything"], true),
+        (by_name(), &["notes.txt.zip"], false),
+    ];
+    for (filters, names, admitted) in cases {
+        let picked = picks(names);
+        dialogs.answer_next_open(Ok(Some(picked.clone())));
+        let mut request = OpenRequest::files().allow_multiple();
+        request.filters = filters;
+        let answered = land(handle.open(request));
+        turn(&mut host);
+        turn(&mut host);
+        let expected = if admitted {
+            Ok(Some(picked))
+        } else {
+            Err(DialogError::NotInFilter)
+        };
+        assert_eq!(*answered.borrow(), Some(Ok(expected)), "{names:?}");
+    }
+}
+
 #[test]
 fn a_window_shows_one_dialog_at_a_time() {
     let (dialogs, plugin) = scripted();
@@ -354,6 +490,68 @@ fn a_filter_keeps_each_pattern_once_as_the_dialog_compares_it() {
         FileFilter::new("Images").with_extension("png"),
         "two spellings of one extension are one filter"
     );
+
+    let build = FileFilter::new("Build files")
+        .with_file_name("Makefile")
+        .with_file_name("makefile")
+        .with_file_name(".env");
+    assert_eq!(
+        build.file_names(),
+        ["Makefile", ".env"],
+        "a file name is kept as written, and once whatever its case"
+    );
+    assert!(!build.is_all_files());
+
+    let every = FileFilter::all_files("All files")
+        .with_extension("png")
+        .with_file_name("Makefile")
+        .with_mime_type("image/*");
+    assert!(every.is_all_files());
+    assert!(
+        every.extensions().is_empty()
+            && every.file_names().is_empty()
+            && every.mime_types().is_empty(),
+        "a filter of every file holds no pattern"
+    );
+    assert_ne!(
+        every,
+        FileFilter::all_files("All files"),
+        "that it was given patterns is kept, and a request offering it is refused for them"
+    );
+    assert_ne!(
+        FileFilter::all_files("Files"),
+        FileFilter::new("Files"),
+        "every file is not the filter nothing was added to"
+    );
+}
+
+#[test]
+fn a_request_carries_its_wish_for_hidden_files_to_the_dialog() {
+    let (dialogs, plugin) = scripted();
+    let (mut host, handle) = acquire::<FileDialogCapability>(&plugin);
+    let handle = handle.expect("the scripted plugin provides dialogs");
+    assert!(!OpenRequest::files().show_hidden);
+    assert!(!SaveRequest::new().show_hidden);
+
+    dialogs.answer_next_open(Ok(None));
+    let opened = land(handle.open(OpenRequest::folders().show_hidden()));
+    turn(&mut host);
+    dialogs.answer_next_save(Ok(None));
+    let saved = land(handle.save(SaveRequest::new().show_hidden()));
+    turn(&mut host);
+    assert_eq!(*opened.borrow(), Some(Ok(Ok(None))));
+    assert_eq!(*saved.borrow(), Some(Ok(Ok(None))));
+
+    let shown = dialogs
+        .requests()
+        .iter()
+        .map(|asked| match asked {
+            DialogRequest::Open { request, .. } => request.show_hidden,
+            DialogRequest::Save { request, .. } => request.show_hidden,
+            other => panic!("an open or a save dialog: {other:?}"),
+        })
+        .collect::<Vec<bool>>();
+    assert_eq!(shown, [true, true], "each dialog was asked to show them");
 }
 
 #[test]
@@ -383,6 +581,22 @@ fn a_malformed_request_is_refused_without_showing_a_dialog() {
         (
             OpenRequest::files().filter(FileFilter::new("Nothing")),
             MalformedRequest::EmptyFilter,
+        ),
+        // A pattern given to a filter of every file would be dropped
+        // unseen: the filter would not mean what its author wrote.
+        (
+            OpenRequest::files().filter(FileFilter::all_files("All files").with_extension("png")),
+            MalformedRequest::PatternOnAllFiles,
+        ),
+        (
+            OpenRequest::files()
+                .filter(FileFilter::all_files("All files").with_file_name("Makefile")),
+            MalformedRequest::PatternOnAllFiles,
+        ),
+        (
+            OpenRequest::files()
+                .filter(FileFilter::all_files("All files").with_mime_type("image/*")),
+            MalformedRequest::PatternOnAllFiles,
         ),
         (
             OpenRequest::files().filter(
@@ -439,6 +653,60 @@ fn a_malformed_request_is_refused_without_showing_a_dialog() {
         (
             OpenRequest::files().filter(FileFilter::new("Long").with_extension(too_long.as_str())),
             MalformedRequest::Extension,
+        ),
+        // A file name is matched whole, so it holds no wildcard, separator
+        // or space, is not a folder's own name, and ends in no dot, which
+        // Windows drops.
+        (
+            OpenRequest::files().filter(FileFilter::new("Glob").with_file_name("Make*")),
+            MalformedRequest::FileName,
+        ),
+        (
+            OpenRequest::files().filter(FileFilter::new("Path").with_file_name("src/Makefile")),
+            MalformedRequest::FileName,
+        ),
+        (
+            OpenRequest::files().filter(FileFilter::new("List").with_file_name("a;b")),
+            MalformedRequest::FileName,
+        ),
+        (
+            OpenRequest::files().filter(FileFilter::new("Space").with_file_name("READ ME")),
+            MalformedRequest::FileName,
+        ),
+        (
+            OpenRequest::files().filter(FileFilter::new("None").with_file_name("")),
+            MalformedRequest::FileName,
+        ),
+        (
+            OpenRequest::files().filter(FileFilter::new("Here").with_file_name(".")),
+            MalformedRequest::FileName,
+        ),
+        (
+            OpenRequest::files().filter(FileFilter::new("Up").with_file_name("..")),
+            MalformedRequest::FileName,
+        ),
+        (
+            OpenRequest::files().filter(FileFilter::new("Dot").with_file_name("notes.")),
+            MalformedRequest::FileName,
+        ),
+        (
+            OpenRequest::files().filter(FileFilter::new("Long").with_file_name(too_long.as_str())),
+            MalformedRequest::FileName,
+        ),
+        (
+            OpenRequest::files().filter((0..FileFilter::MAX_PATTERNS).fold(
+                FileFilter::new("Many").with_file_name("Makefile"),
+                |filter, index| filter.with_extension(format!("e{index}")),
+            )),
+            MalformedRequest::TooManyPatterns,
+        ),
+        (
+            OpenRequest::files().filter(FileFilter::all_files(" ")),
+            MalformedRequest::FilterName,
+        ),
+        (
+            OpenRequest::folders().filter(FileFilter::all_files("All files")),
+            MalformedRequest::FiltersOnFolders,
         ),
         (
             OpenRequest::files().filter(FileFilter::new("Mime").with_mime_type("image")),
@@ -554,6 +822,26 @@ fn a_malformed_request_is_refused_without_showing_a_dialog() {
     );
     turn(&mut host);
     assert_eq!(*wide.borrow(), Some(Ok(Ok(None))));
+
+    // A filter of every file needs no pattern, and a file name may start
+    // with a dot, hold several and be as long as a pattern may be.
+    dialogs.answer_next_open(Ok(None));
+    let named = land(
+        handle.open(
+            OpenRequest::files()
+                .filter(FileFilter::all_files("All files"))
+                .filter(
+                    FileFilter::new("Named")
+                        .with_file_name("Makefile")
+                        .with_file_name(".env.local")
+                        .with_file_name("CMakeLists.txt")
+                        .with_file_name("my_file-2+")
+                        .with_file_name(longest.as_str()),
+                ),
+        ),
+    );
+    turn(&mut host);
+    assert_eq!(*named.borrow(), Some(Ok(Ok(None))));
 
     // Each bound is taken at its limit.
     let at_limits = (1..FileFilter::MAX_PER_REQUEST).fold(
@@ -895,6 +1183,224 @@ fn a_pick_says_whether_it_is_at_a_path_handed_over_or_a_download_of_unknown_fate
     assert_eq!(PickedFile::try_download("a/b"), None);
 }
 
+/// The file at `path` under a handed-over folder, holding `contents`.
+fn folder_file(path: &str, contents: &'static [u8]) -> FolderFile {
+    FolderFile::new(
+        FolderPath::try_new(path).expect("a path under a folder"),
+        Arc::from(contents),
+    )
+}
+
+#[test]
+fn a_folder_handed_over_without_a_path_carries_its_name_and_its_files_where_they_are() {
+    // In no order, as a browser lists a folder.
+    let folder = PickedFile::try_from_folder(
+        "Project",
+        vec![
+            folder_file("src/main.rs", b"fn main() {}"),
+            folder_file("src.txt", b"beside the folder"),
+            folder_file("README.md", b"private words"),
+            folder_file("src/lib.rs", b""),
+        ],
+    )
+    .expect("a folder");
+
+    assert_eq!(folder.path(), None, "a browser hands over no path");
+    assert_eq!(folder.contents(), None, "a folder's files hold theirs");
+    assert_eq!(folder.file_name(), Some(OsStr::new("Project")));
+    let files = folder.files().expect("a folder has files");
+    assert_eq!(
+        folder.form(),
+        PickedForm::Folder {
+            name: "Project",
+            files
+        }
+    );
+    let read: Vec<(&str, &[u8])> = files
+        .iter()
+        .map(|file| (file.path().as_str(), file.contents()))
+        .collect();
+    assert_eq!(
+        read,
+        [
+            ("README.md", &b"private words"[..]),
+            ("src/lib.rs", &b""[..]),
+            ("src/main.rs", &b"fn main() {}"[..]),
+            ("src.txt", &b"beside the folder"[..]),
+        ],
+        "name by name from the folder down, whatever order they were listed in: \
+         a folder's files come before the file named after it"
+    );
+    let shown = format!("{folder:?} {files:?}");
+    assert!(
+        shown.contains("Project") && shown.contains("README.md") && !shown.contains("private"),
+        "a folder shows its name and its files' paths, never what they hold: {shown}"
+    );
+
+    for name in ["", ".", "..", "a/b", "a\\b", "a\0b"] {
+        assert_eq!(
+            PickedFile::try_from_folder(name, Vec::new()),
+            None,
+            "{name:?} names no folder"
+        );
+    }
+    assert_eq!(
+        PickedFile::try_from_folder(
+            "Project",
+            vec![folder_file("a.txt", b"1"), folder_file("a.txt", b"2")]
+        ),
+        None,
+        "two files at one path"
+    );
+    assert_eq!(
+        PickedFile::try_from_folder("Empty", Vec::new())
+            .expect("a folder")
+            .files(),
+        Some(&[][..]),
+        "a folder may hold no file"
+    );
+    assert_eq!(
+        file("Project").files(),
+        None,
+        "a folder at a path is read by its application"
+    );
+}
+
+#[test]
+fn a_path_under_a_folder_is_its_names_and_none_climbs_out() {
+    let path = FolderPath::try_new("src/web/mod.rs").expect("a path");
+    assert_eq!(path.as_str(), "src/web/mod.rs");
+    assert_eq!(
+        path.components().collect::<Vec<&str>>(),
+        ["src", "web", "mod.rs"]
+    );
+    assert_eq!(path.file_name(), "mod.rs");
+
+    // As a walk builds it: an entry of the folder, then entries under it.
+    let walked = FolderPath::try_from_name("src")
+        .and_then(|folder| folder.try_child("web"))
+        .and_then(|folder| folder.try_child("mod.rs"));
+    assert_eq!(walked, Some(path));
+    assert_eq!(
+        FolderPath::try_from_name("README.md").map(|path| path.file_name().to_owned()),
+        Some("README.md".to_owned())
+    );
+
+    // The same rule on every host: no empty name, none that stays or climbs,
+    // no separator of any host, no NUL.
+    for path in [
+        "", "/a", "a/", "a//b", ".", "a/./b", "..", "a/../b", "a\\b", "a\0b",
+    ] {
+        assert_eq!(FolderPath::try_new(path), None, "{path:?} is not a path");
+    }
+    let folder = FolderPath::try_from_name("src").expect("a name");
+    for name in ["", ".", "..", "a/b", "a\\b", "a\0b"] {
+        assert_eq!(FolderPath::try_from_name(name), None, "{name:?}");
+        assert_eq!(folder.try_child(name), None, "{name:?}");
+    }
+    // A folder holds what its file system allows, and a name is kept as it
+    // is on every host, whatever one of them would read into it.
+    for path in [
+        " ",
+        "docs/Icon\r",
+        ".git/config",
+        "NUL",
+        "C:",
+        "a.",
+        "aux.c",
+    ] {
+        assert_eq!(
+            FolderPath::try_new(path).as_ref().map(FolderPath::as_str),
+            Some(path),
+            "{path:?} is a path under a folder"
+        );
+    }
+}
+
+#[test]
+fn what_a_system_hands_over_is_held_to_the_requests_bounds_on_every_host() {
+    let (dialogs, plugin) = scripted();
+    let (mut host, handle) = acquire::<FileDialogCapability>(&plugin);
+    let handle = handle.expect("the scripted plugin provides dialogs");
+    let three_files = || {
+        PickedFile::try_from_folder(
+            "Project",
+            vec![
+                folder_file("a.txt", b"12"),
+                folder_file("src/b.txt", b"345"),
+                folder_file("src/c.txt", b"6789"),
+            ],
+        )
+        .expect("a folder")
+    };
+    let handed = |name: &str, contents: &'static [u8]| {
+        PickedFile::try_from_contents(name, Arc::from(contents)).expect("a file name")
+    };
+
+    let cases: [(OpenRequest, Vec<PickedFile>, Result<(), DialogError>); 8] = [
+        (
+            OpenRequest::folders().max_entries(2),
+            vec![three_files()],
+            Err(DialogError::TooManyEntries { limit: 2 }),
+        ),
+        (
+            OpenRequest::folders().max_entries(3),
+            vec![three_files()],
+            Ok(()),
+        ),
+        (
+            OpenRequest::folders().max_bytes(8),
+            vec![three_files()],
+            Err(DialogError::TooLarge {
+                actual: 9,
+                limit: 8,
+            }),
+        ),
+        (
+            OpenRequest::folders().max_bytes(9),
+            vec![three_files()],
+            Ok(()),
+        ),
+        (
+            OpenRequest::files().allow_multiple().max_bytes(8),
+            vec![handed("a.txt", b"12345"), handed("b.txt", b"6789")],
+            Err(DialogError::TooLarge {
+                actual: 9,
+                limit: 8,
+            }),
+        ),
+        (
+            OpenRequest::files().allow_multiple().max_bytes(9),
+            vec![handed("a.txt", b"12345"), handed("b.txt", b"6789")],
+            Ok(()),
+        ),
+        // A pick at a path is read by its application: nothing bounds it.
+        (
+            OpenRequest::folders().max_entries(0).max_bytes(0),
+            vec![file("Project")],
+            Ok(()),
+        ),
+        (
+            OpenRequest::folders().max_entries(0).max_bytes(0),
+            vec![PickedFile::try_from_folder("Empty", Vec::new()).expect("a folder")],
+            Ok(()),
+        ),
+    ];
+    for (request, picks, admitted) in cases {
+        let picked = Picks::try_new(picks).expect("the case names a pick");
+        dialogs.answer_next_open(Ok(Some(picked.clone())));
+        let shown = format!("{request:?} answered {picked:?}");
+        let answered = land(handle.open(request));
+        turn(&mut host);
+        turn(&mut host);
+        assert_eq!(
+            *answered.borrow(),
+            Some(Ok(admitted.map(|()| Some(picked)))),
+            "{shown}"
+        );
+    }
+}
+
 #[test]
 fn a_filter_means_a_files_name_or_its_type_ignoring_ascii_case() {
     let images = FileFilter::new("Images")
@@ -921,6 +1427,37 @@ fn a_filter_means_a_files_name_or_its_type_ignoring_ascii_case() {
             matches,
             "{name:?} of {mime_type:?}"
         );
+    }
+
+    let build = FileFilter::new("Build files")
+        .with_file_name("Makefile")
+        .with_file_name(".env");
+    let named: [(&str, Option<&str>, bool); 8] = [
+        ("Makefile", None, true),
+        ("MAKEFILE", None, true),
+        (".env", None, true),
+        (".ENV", Some("text/plain"), true),
+        ("Makefile.txt", None, false),
+        ("aMakefile", None, false),
+        ("env", None, false),
+        ("Makefil", Some("text/x-makefile"), false),
+    ];
+    for (name, mime_type, matches) in named {
+        assert_eq!(
+            build.matches(name, mime_type),
+            matches,
+            "{name:?} of {mime_type:?}"
+        );
+    }
+
+    let every = FileFilter::all_files("All files");
+    for (name, mime_type) in [
+        ("README", None),
+        (".hidden", None),
+        ("run.exe", Some("application/x-msdownload")),
+        ("", None),
+    ] {
+        assert!(every.matches(name, mime_type), "{name:?} of {mime_type:?}");
     }
 }
 
@@ -958,4 +1495,235 @@ fn a_save_replaces_the_chosen_file_whole_and_leaves_nothing_beside_it() {
         .collect();
     names.sort();
     assert_eq!(names, ["notes.txt", "old"], "no temporary file is left");
+}
+
+/// Save `contents` through a scripted dialog whose user chose `chosen`, and
+/// answer what the save answered once the write ended.
+#[cfg(any(unix, windows))]
+fn save_to(chosen: &std::path::Path, contents: &[u8]) -> SaveResult {
+    let (dialogs, plugin) = scripted();
+    let (mut host, handle) = acquire::<FileDialogCapability>(&plugin);
+    let handle = handle.expect("the scripted plugin provides dialogs");
+    dialogs.answer_next_save(Ok(Some(SaveLocation::new(
+        PickedFile::try_new(chosen).expect("an absolute path"),
+        None,
+    ))));
+    let answered = land(handle.save(SaveRequest::new().contents(contents.to_vec())));
+    turn_until_landed(&mut host, &answered);
+    let outcome = answered.borrow_mut().take();
+    outcome
+        .expect("the loop above saw it land")
+        .expect("the host is not retired")
+}
+
+/// The names in `folder`, sorted.
+#[cfg(any(unix, windows))]
+fn names_in(folder: &std::path::Path) -> Vec<std::ffi::OsString> {
+    let mut names: Vec<std::ffi::OsString> = std::fs::read_dir(folder)
+        .expect("the folder")
+        .map(|entry| entry.expect("an entry").file_name())
+        .collect();
+    names.sort();
+    names
+}
+
+#[test]
+#[cfg(unix)]
+fn a_save_to_a_symlink_updates_its_target() {
+    let folder = tempfile::tempdir().expect("a test folder");
+    let elsewhere = folder.path().join("elsewhere");
+    std::fs::create_dir(&elsewhere).expect("a folder for the target");
+    let target = elsewhere.join("notes.txt");
+    std::fs::write(&target, b"old").expect("the linked file");
+    // Relative, as a link beside its target's folder is written.
+    let link = folder.path().join("link.txt");
+    std::os::unix::fs::symlink("elsewhere/notes.txt", &link).expect("a link");
+
+    let saved = save_to(&link, b"new");
+
+    assert!(matches!(saved, Ok(Some(_))), "{saved:?}");
+    assert_eq!(std::fs::read(&target).expect("the target"), b"new");
+    assert!(
+        std::fs::symlink_metadata(&link)
+            .expect("the link")
+            .file_type()
+            .is_symlink(),
+        "the link the user chose is still a link, not a file in its place"
+    );
+    assert_eq!(names_in(folder.path()), ["elsewhere", "link.txt"]);
+    assert_eq!(
+        names_in(&elsewhere),
+        ["notes.txt"],
+        "no temporary file is left"
+    );
+
+    // A link whose file is not there yet names where it is made.
+    let dangling = folder.path().join("later.txt");
+    std::os::unix::fs::symlink(elsewhere.join("made.txt"), &dangling).expect("a link");
+    let saved = save_to(&dangling, b"made");
+    assert!(matches!(saved, Ok(Some(_))), "{saved:?}");
+    assert_eq!(
+        std::fs::read(elsewhere.join("made.txt")).expect("the file"),
+        b"made"
+    );
+    assert!(
+        std::fs::symlink_metadata(&dangling)
+            .expect("the link")
+            .file_type()
+            .is_symlink()
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn a_save_keeps_the_mode_of_the_file_it_replaces() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let folder = tempfile::tempdir().expect("a test folder");
+    let mode_of = |path: &std::path::Path| {
+        std::fs::metadata(path)
+            .expect("the file")
+            .permissions()
+            .mode()
+            & 0o7777
+    };
+    // Two modes, so at most one is what a new file gets by default.
+    for mode in [0o600, 0o664] {
+        let target = folder.path().join(format!("notes-{mode:o}.txt"));
+        std::fs::write(&target, b"old").expect("a file to replace");
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(mode)).expect("its mode");
+        // A second name for the old file: the save replaced it, so the mode
+        // is the new file's, given to it, not the old file's kept by a
+        // write in place.
+        let old = folder.path().join(format!("old-{mode:o}"));
+        std::fs::hard_link(&target, &old).expect("a hard link");
+
+        let saved = save_to(&target, b"new");
+
+        assert!(matches!(saved, Ok(Some(_))), "{saved:?}");
+        assert_eq!(std::fs::read(&target).expect("the file"), b"new");
+        assert_eq!(std::fs::read(&old).expect("the old file"), b"old");
+        assert_eq!(mode_of(&target), mode, "{mode:o}");
+    }
+}
+
+/// A name within the file system's limit whose sibling's name is past it:
+/// no new file can be made beside it, whoever runs the test.
+#[test]
+#[cfg(unix)]
+fn a_save_where_no_file_can_be_made_beside_the_chosen_one_writes_into_it() {
+    let folder = tempfile::tempdir().expect("a test folder");
+    let target = folder.path().join("n".repeat(250));
+    std::fs::write(&target, b"the old, longer contents").expect("a file of that name");
+    // A second name for the file: one written into changes under it.
+    let same = folder.path().join("same");
+    std::fs::hard_link(&target, &same).expect("a hard link");
+
+    let saved = save_to(&target, b"new");
+
+    assert!(matches!(saved, Ok(Some(_))), "{saved:?}");
+    assert_eq!(std::fs::read(&target).expect("the file"), b"new");
+    assert_eq!(
+        std::fs::read(&same).expect("the same file"),
+        b"new",
+        "the chosen file itself was written, cut to the new length"
+    );
+    assert_eq!(names_in(folder.path()).len(), 2, "nothing else was made");
+}
+
+/// A file another process holds open without letting it be deleted (what a
+/// program keeping a document open does on Windows) cannot be replaced: the
+/// save answers the system's failure and the file keeps every byte, where
+/// writing into it would empty it first.
+#[test]
+#[cfg(windows)]
+fn a_save_over_a_file_held_open_fails_and_leaves_it_whole() {
+    use std::os::windows::fs::OpenOptionsExt as _;
+
+    /// `FILE_SHARE_READ | FILE_SHARE_WRITE`: no `FILE_SHARE_DELETE`.
+    const SHARE_READ_WRITE: u32 = 0x1 | 0x2;
+
+    let folder = tempfile::tempdir().expect("a test folder");
+    let target = folder.path().join("notes.txt");
+    std::fs::write(&target, b"the old, longer contents").expect("a file to replace");
+    let held = std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(SHARE_READ_WRITE)
+        .open(&target)
+        .expect("the file held open");
+
+    let saved = save_to(&target, b"new");
+
+    assert!(
+        matches!(saved, Err(DialogError::Failed(SystemFailure::Os(_)))),
+        "{saved:?}"
+    );
+    drop(held);
+    assert_eq!(
+        std::fs::read(&target).expect("the file"),
+        b"the old, longer contents",
+        "the file was neither replaced nor written into"
+    );
+    assert_eq!(
+        names_in(folder.path()),
+        ["notes.txt"],
+        "the new file beside it was removed"
+    );
+}
+
+/// The new file a save writes beside the chosen one is never readable by
+/// more users than the file it replaces, at any moment of the write: it is
+/// made with that file's mode, not given it once the contents are in.
+#[test]
+#[cfg(unix)]
+fn a_saves_new_file_is_never_more_readable_than_the_file_it_replaces() {
+    use std::os::unix::fs::PermissionsExt as _;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let folder = tempfile::tempdir().expect("a test folder");
+    let target = folder.path().join("secret.txt");
+    std::fs::write(&target, b"old").expect("a file to replace");
+    std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600)).expect("its mode");
+
+    // Large enough that the write and its sync outlast many reads of the
+    // folder.
+    let contents = vec![b'x'; 256 << 20];
+    let done = Arc::new(AtomicBool::new(false));
+    let watching = Arc::clone(&done);
+    let watched = folder.path().to_path_buf();
+    let watcher = std::thread::spawn(move || {
+        let mut modes = Vec::new();
+        while !watching.load(Ordering::Acquire) {
+            let Ok(entries) = std::fs::read_dir(&watched) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let name = entry.file_name();
+                if name.to_string_lossy().ends_with(".flui-save")
+                    && let Ok(metadata) = entry.metadata()
+                {
+                    modes.push(metadata.permissions().mode() & 0o7777);
+                }
+            }
+        }
+        modes
+    });
+
+    let saved = save_to(&target, &contents);
+    done.store(true, Ordering::Release);
+    let modes = watcher.join().expect("the watcher ran to its end");
+
+    assert!(matches!(saved, Ok(Some(_))), "{saved:?}");
+    assert!(
+        !modes.is_empty(),
+        "the new file was seen while the contents were written"
+    );
+    assert!(
+        modes.iter().all(|mode| mode & !0o600 == 0),
+        "the new file was readable beyond its owner: {:?}",
+        modes
+            .iter()
+            .map(|mode| format!("{mode:o}"))
+            .collect::<Vec<String>>()
+    );
 }

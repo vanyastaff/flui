@@ -247,7 +247,8 @@ objc2-app-kit = { workspace = true, features = [
 dispatch2.workspace = true
 # CoreGraphics, for the display properties Cocoa does not expose: the refresh
 # rate of the display's *current* mode (`CGDisplayModeGetRefreshRate`), which
-# is what `PlatformWindow::refresh_period` needs, and the cursor warp and mouse
+# is what `PlatformWindow::refresh_period` needs, whether a display is the
+# machine's own panel (`CGDisplayIsBuiltin`), and the cursor warp and mouse
 # association of a locked pointer. NSScreen has no current-mode rate — its
 # `maximumFramesPerSecond` is the hardware *maximum* (it over-reports on a
 # ProMotion panel running a 60 Hz mode) and is macOS 12+, above this crate's
@@ -950,70 +951,7 @@ reach-forbid = [
 # program against a capability trait depend on `flui-platform` instead.
 # Examples and tools are applications and are exempt from this list.
 allowed-dependents = ["flui-app"]
-# Process-global state, checked by `cargo xtask globals` (ADR-0097).
-globals = [
-    { item = "owner::windows::WindowIdentity::source::NEXT", grant = "ADR-0097", class = "counter", reason = "Windows backend identities, advanced by try_update with permanent exhaustion refusal before native acquisition" },
-    { item = "input::android::AndroidInput::motion::FIRST_MOTION_SEEN", grant = "ADR-0097", class = "diagnostic", reason = "logs the first motion event at a higher level; no behavior reads it" },
-    { item = "owner::slot::LAST_SLOT_KEY", grant = "ADR-0097", class = "counter", reason = "owner-slot keys, advanced by `try_update` so exhaustion refuses the slot instead of reissuing a key" },
-    { item = "owner::slot::OWNER_VALUES", exit = "ADR-0082", reason = "owner-thread storage of the shared backends' non-Send input callbacks until each backend's owner context holds them, as Win32's does" },
-    { item = "window::headless::HEADLESS_WINDOW_IDS", grant = "ADR-0097", class = "process", reason = "the simulated window server's id space, which the process has once as a real one does: the windows of independent headless platforms meet in one application registry and never share an id; exhaustion refuses the open" },
-    { item = "owner::apple::ios::DELEGATE_STATE", grant = "ADR-0097", class = "trampoline", reason = "UIKit delegate methods reach the platform through it; they carry no user-data pointer" },
-    { item = "owner::web::PAGE_LOOPS", grant = "ADR-0097", class = "trampoline", reason = "the owner signal's Send + Sync wake hook reaches the page's loops through it; the hook may not hold a loop, which is neither Send nor Sync" },
-    { item = "owner::apple::macos::display_pass::IN_DISPLAY_PASS", grant = "ADR-0097", class = "process", reason = "marks AppKit's display pass (the view's `updateLayer`) on the main thread, which the process has once" },
-    { item = "owner::apple::macos::owner_lane::ON_OWNER_QUEUE", grant = "ADR-0097", class = "process", reason = "marks a block running on the owner GCD queue, which the process has once" },
-    { item = "owner::apple::macos::wake_pump::base::BASE", grant = "ADR-0097", class = "immutable", reason = "the wake pump's time base, set once and read for the process's life" },
-    { item = "clipboard::windows::ClipboardThread::get::THREAD", grant = "ADR-0097", class = "process", reason = "the thread, with its message-only window, that opens the system clipboard for every read and write of the process (ADR-0337), started once per process" },
-    { item = "owner::windows::control::REGISTERED", grant = "ADR-0097", class = "process", reason = "the registered Win32 owner-control window class, which Windows holds once per process" },
-    { item = "owner::windows::WINDOW_CLASS", grant = "ADR-0097", class = "process", reason = "Windows' registration of FLUI's window class with the host whose hooks its procedure dispatches to: Windows holds the class, and the procedure it was registered with, once per process, so a second host is refused" },
-    { item = "owner::windows::CLASS_ON_THREAD", grant = "ADR-0097", class = "trampoline", reason = "the Win32 window procedure is called with a window's handle and no pointer of FLUI's: it reads here the hooks of FLUI's window class on its thread, each of which keeps its own state of a window, keyed by the window's identity" },
-    { item = "journal::capture::INSTALLED", grant = "ADR-0097", class = "diagnostic", reason = "debug-build `native-capture` journal of pointer registry calls; it only observes" },
-]
 
-[package.metadata.flui.modules]
-# Import directions between the core host's modules (ADR-0151 §10), checked by
-# `cargo xtask module-dag`: nothing names `hosts`, which names everything; the
-# owner thread, the OS versions, the storage position's vocabulary, the hosts'
-# display connections and the transfer objects the clipboard and drag share (the
-# seats' data devices) name no feature. Every other top-level module is
-# `crate-level`, and one with no role
-# is a finding (`table_test` is built for tests only and needs none; the root,
-# `lib.rs`, is no module).
-features = [
-    "display",
-    "text",
-    "preferences",
-    "lifecycle",
-    "clipboard",
-    "drag",
-    "accessibility",
-    "haptics",
-    "window",
-    "input",
-    "fonts",
-    "http",
-]
-platforms = ["windows", "apple", "android", "web", "linux", "headless"]
-groups = { apple = ["macos", "ios"], linux = ["wayland", "x11"] }
-base = ["owner", "version", "storage", "transfer", "display_connection"]
-hosts = "hosts"
-crate-level = [
-    "host",
-    "platform",
-    "host_window",
-    "error",
-    "executor",
-    "task",
-    "os",
-    "testing",
-    "journal",
-    "process",
-    "page_export",
-    "associations",
-]
-# No platform file names another feature's: a window's text input,
-# accessibility, actuator and chrome come from the host table, a feature keeps
-# its own state of a window, and the owner hands a window the facts it reads.
-exceptions = []
 [package.metadata.flui.api-closure]
 # The only upstream crates a public path may name: the raw handles
 # (ADR-0089 §2), the contract's cursor, the lock the window's callback setters
@@ -1028,6 +966,9 @@ traits = [{ trait = "flui_semantics::platform::PlatformAccessibility", crate = "
 # `#[flui::main]` hands it to the run.
 entries = [
     { item = "flui_native::android_platform", crate = "android_activity" },
+    # ADR-0366: before the run starts, the root asks whether this Activity
+    # instance hands over to the one already running FLUI.
+    { item = "flui_native::android_hands_over", crate = "android_activity" },
     # ADR-0327 §3: the application lends the host its IO runtime.
     { item = "flui_native::executor::NativeExecutor::from_tokio", crate = "tokio" },
 ]

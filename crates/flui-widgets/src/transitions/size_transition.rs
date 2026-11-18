@@ -5,10 +5,10 @@ use flui_view::LifecycleContext;
 use std::rc::Rc;
 
 use flui_animation::Animation;
+use flui_foundation::TextDirection;
 use flui_foundation::geometry::Axis;
 use flui_objects::AlignMotion;
 use flui_painting::AlignmentDirectional;
-use flui_painting::typography::TextDirection;
 use flui_view::prelude::{BuildContext, StatefulView};
 use flui_view::{Child, IntoView, ViewState};
 
@@ -112,7 +112,7 @@ pub struct SizeTransitionState {
 
 impl ViewState<SizeTransition> for SizeTransitionState {
     fn build(&self, view: &SizeTransition, ctx: &dyn BuildContext) -> impl IntoView {
-        let ltr = Directionality::maybe_of(ctx).unwrap_or(TextDirection::Ltr) == TextDirection::Ltr;
+        let direction = Directionality::maybe_of(ctx).unwrap_or(TextDirection::Ltr);
         let (alignment, width_factor, height_factor) = match view.axis {
             Axis::Vertical => (
                 AlignmentDirectional::new(-1.0, view.axis_alignment),
@@ -130,7 +130,7 @@ impl ViewState<SizeTransition> for SizeTransitionState {
                 axis: view.axis,
                 factor: self.size_factor.proxy(),
             },
-            alignment: alignment.resolve(ltr),
+            alignment: alignment.resolve(direction),
             width_factor,
             height_factor,
             child: view.child.clone(),

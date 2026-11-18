@@ -4,6 +4,8 @@
 - **Date:** 2026-10-31
 - **Superseded-by:** [ADR-0280](ADR-0280-http-is-a-capability-of-the-host.md) §5 (the reactor
   check), and §1 only for the shape of what a load is given.
+  [ADR-0371](ADR-0371-before-the-first-release-no-xtask-gate-holds-a-rule-about-the-sources.md)
+  for the `xtask workspace` gate only (Confirmation): the rule stands and its reader confirms it.
 - **Amended-by:** [ADR-0272](ADR-0272-widgets-run-background-work-through-a-capability.md)
   "Amendment (2026-11-02): a caller waits for room on a lane", §3 only for a refused
   `spawn_compute`: a `Saturated` one waits for room, and only `Unavailable` decodes where the load

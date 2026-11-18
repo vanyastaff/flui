@@ -39,15 +39,16 @@ use std::ops::Range;
 mod runs;
 
 use flui_foundation::Leaf;
+use flui_foundation::TextDirection;
 use flui_foundation::geometry::{Matrix4, Offset, Point, Rect, Size};
 use flui_foundation::inspect::{Fields, Inspect, Unit};
 use flui_painting::paint::Clip;
-use flui_painting::{Invalidation, Paint, TextBaseline as PainterBaseline, TextPainter};
+use flui_painting::{
+    Invalidation, TextPainter, paint::Paint, typography::TextBaseline as PainterBaseline,
+};
 use flui_painting::{
     styling::Color,
-    typography::{
-        InlineSpan, TextAffinity, TextAlign, TextDecoration, TextDirection, TextPosition,
-    },
+    typography::{InlineSpan, TextAffinity, TextAlign, TextDecoration, TextPosition},
 };
 
 use flui_rendering::{

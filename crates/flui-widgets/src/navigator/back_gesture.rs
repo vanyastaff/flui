@@ -35,11 +35,11 @@ use std::time::Duration;
 
 use flui_animation::{Animation, AnimationController, curves};
 use flui_foundation::Listenable;
-use flui_interaction::gesture::horizontal_drag;
+use flui_foundation::TextDirection;
+use flui_interaction::gesture::DragAxis;
 use flui_interaction::{
     DragEndDetails, DragGestureRecognizer, DragStartDetails, DragUpdateDetails, GestureRecognizer,
 };
-use flui_painting::typography::TextDirection;
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_view::environment::GesturePolicy;
 use flui_view::prelude::*;
@@ -411,11 +411,13 @@ impl BackGestureRuntime {
         match navigator.post_frame_handle() {
             Some(post_frame) => {
                 let deferred = navigator.clone();
-                let schedule_result = post_frame.schedule(move |_timing| {
-                    if deferred.is_mounted() {
-                        deferred.did_stop_user_gesture();
-                    }
-                });
+                let schedule_result = post_frame
+                    .schedule(move |_timing| {
+                        if deferred.is_mounted() {
+                            deferred.did_stop_user_gesture();
+                        }
+                    })
+                    .and_then(|()| post_frame.schedule_frame());
                 if schedule_result.is_err() && navigator.is_mounted() {
                     // No owner-local post-frame lane available — report now
                     // rather than leak the gesture count forever.
@@ -644,7 +646,7 @@ impl BackGestureDetectorState {
         let update_runtime = Rc::clone(&self.runtime);
         let end_runtime = Rc::clone(&self.runtime);
         let cancel_runtime = Rc::clone(&self.runtime);
-        horizontal_drag(policy.arena().clone())
+        DragGestureRecognizer::builder(policy.arena().clone(), DragAxis::Horizontal)
             .settings(policy.settings().clone())
             .on_start(move |details| start_runtime.on_drag_start(details))
             .on_update(move |details| update_runtime.on_drag_update(details))

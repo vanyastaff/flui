@@ -7,6 +7,9 @@
   [ADR-0136](ADR-0136-owner-local-ui-surfaces.md) §3 (the two gates and the kinds of value that
   cross); [ADR-0266](ADR-0266-one-owner-thread-ui-runtimes-isolate.md) §4 (where parallel work
   leaves the owner thread)
+- **Superseded-by:** [ADR-0371](ADR-0371-before-the-first-release-no-xtask-gate-holds-a-rule-about-the-sources.md)
+  for the `xtask send-impls` gate only (§3, Confirmation): the rule stands and its reader confirms
+  it.
 - **Related:** [ADR-0266](ADR-0266-one-owner-thread-ui-runtimes-isolate.md) §1, §2 and §5 (one
   owner thread per process, which this record builds on), [ADR-0136](ADR-0136-owner-local-ui-surfaces.md)
   §2 (owner-local tasks and `Weak` handles), [ADR-0091](ADR-0091-one-owner-thread-isolated-realms-raster-thread.md)
@@ -175,7 +178,7 @@ positions keeps all of them unless a marker is named.
 | `flui_app::app::direct::run_direct` | `impl FnMut(&mut SceneBuilder, f64, f64) + 'static` |
 | `flui_app::app::config::AppConfig::memory_reclaim` | `impl ReclaimMemory + 'static`, held as `Rc`: a receiver is reclaimed on the owner thread |
 | `flui_hot_reload::pipeline::PluginPipeline::mount` | `V: View + StatelessView + Clone + 'static` |
-| `flui_painting::typography::text_spans::InlineSpan::as_trait` | `&dyn InlineSpanTrait` |
+| `flui_painting::typography::InlineSpan::as_trait` and `InlineSpanTrait` | deleted: `InlineSpan` is a closed enum, and its methods match its variants |
 
 The verdict of a row rests on where the item's contract says it is called. The change that removes
 a bound is its proof: the workspace compiles without it, or the compiler names the thread the

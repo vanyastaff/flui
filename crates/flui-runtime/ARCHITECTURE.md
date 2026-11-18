@@ -74,7 +74,9 @@ host.
 - **Completion belongs to a presentation.** Assembly installs that
   presentation's weak post-frame handle before mounting elements. An incomplete
   segment retains its callbacks; only a completed segment makes them eligible.
-  Retained handles scheduled between segments create completion demand, which
+  A callback scheduled between segments asks for no frame (ADR-0367); a
+  caller that needs one asks with `PostFrameHandle::schedule_frame`, whose
+  completion demand
   wakes a clean presentation without rebuilding its widget tree or submitting
   another scene. Withdrawal closes admission before retiring callback captures.
   `native_text_preparation_does_not_complete_the_presentation` and
@@ -178,8 +180,7 @@ host.
   names none of `flui-native`, `winit`, `android-activity`, `ndk`,
   `windows`, `objc2-app-kit`, `objc2-ui-kit`, `wgpu`, `flui-engine` or
   `flui-app`: tier K's forbid set in the root
-  `[workspace.metadata.flui.reach]`, checked by `cargo xtask reach` over
-  every root build. A seam that needs a
+  `[workspace.metadata.flui.reach]`, over every root build. A seam that needs a
   host type (the frame sink, the platform window) crosses as a trait this
   crate defines or one from `flui-platform`; a window's accessibility
   bridge is `flui_semantics::platform::PlatformAccessibility` (ADR-0082 §2,
@@ -258,7 +259,17 @@ host.
   batch. `resize_and_surface_restore_reach_the_product_frame` reads the new ratio
   from a mounted consumer. The headless host's `set_scale_factor` sends the same
   observation. The pipeline holds its ratio as a `DevicePixelRatio`, so no reader
-  checks it again.
+  checks it again. The source also holds the frame of a keyboard floating over
+  the window (ADR-0372), which its root wrapper's element publishes as a
+  provided `FloatingKeyboard` while one floats, and not as a field of
+  `MediaQueryData`: a `MediaQuery` a widget nests copies the data, and the
+  frame is the window's alone. While none floats the root publishes nothing,
+  so it adds no layer to any node's inherited scope (the control baselines
+  hold this). An insets observation commits the media data and the frame,
+  then wakes the root once
+  (`a_floating_keyboard_reaches_the_media_query_as_a_frame`,
+  `a_window_opened_under_a_floating_keyboard_reads_its_frame`,
+  `a_widget_reading_only_the_floating_keyboard_hears_it_come_and_go`).
 - **Every entry composes every presentation.** `UiRuntime::enter` activates a
   `GlobalKey` registry composite over all the UI runtime's presentations for the
   whole dynamic extent of the call, closing included. A binding whose own
@@ -313,8 +324,8 @@ host.
   `tier-kind = "internal"`: nothing here is an embedder API (ADR-0027 §9)
   except the `execution` host-injection seam below.
   `allowed-dependents = ["flui-app", "flui-testing"]` makes the application
-  host and the headless test driver the only crates allowed a normal edge,
-  checked by `cargo xtask workspace`. That rule is what keeps ADR-0047's
+  host and the headless test driver the only crates allowed a normal edge.
+  That rule is what keeps ADR-0047's
   invariant true now that `ExecutionServices` is `pub`: only a host crate, one
   of the runtime's `allowed-dependents`, constructs the services, and no other
   workspace crate reaches the pools. `flui-testing` is the host of its own

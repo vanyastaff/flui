@@ -239,7 +239,7 @@ pub(crate) fn begin_partial(
     );
     painter.draw_rect(
         covering,
-        &flui_painting::Paint::fill(crate::frame_protocol::BACKGROUND),
+        &flui_painting::paint::Paint::fill(crate::frame_protocol::BACKGROUND),
     );
     redrawn
 }

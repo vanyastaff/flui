@@ -503,14 +503,13 @@ fn a_siblings_failure_in_a_new_windows_snapshot_is_the_siblings() {
 
     // The primary is hidden, so the new window moves the application from
     // Hidden through Inactive; the application's listener fails there.
+    let listening = RefCell::new(None);
     let installed = install_beside(|runtime| {
         runtime.synchronize_window_snapshot(runtime.presentation_id(), Running, false, false);
         assert_eq!(runtime.scheduler().lifecycle_state(), Hidden);
-        runtime
-            .scheduler()
-            .add_lifecycle_state_listener(Rc::new(|state| {
-                assert_ne!(state, Inactive, "the application's listener fails");
-            }));
+        *listening.borrow_mut() = Some(runtime.scheduler().listen_lifecycle_state(|state| {
+            assert_ne!(state, Inactive, "the application's listener fails");
+        }));
     });
     assert_eq!(
         installed.outcomes,

@@ -7,9 +7,9 @@
 use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
 
+use flui_foundation::TextDirection;
 use flui_foundation::geometry::Offset;
 use flui_foundation::panic::FirstPanic;
-use flui_painting::typography::TextDirection;
 use flui_scheduler::{FrameTiming, PostFrameHandle};
 use flui_view::prelude::*;
 

@@ -1,10 +1,13 @@
 //! A single icon glyph and its square share one admitted logical size.
 
+use flui_foundation::TextDirection;
 use flui_foundation::geometry::{Offset, Size};
 use flui_foundation::inspect::{Fields, Inspect, Unit, Untyped, Value};
 use flui_foundation::{Leaf, TextScaleProfile, TextSize, TextSizeRequest, TextSizingIntent};
-use flui_painting::typography::{InlineSpan, TextDirection, TextSpan, TextStyle};
-use flui_painting::{TextBaseline as PainterBaseline, TextPainter, TextResolvedSize, TextSizing};
+use flui_painting::typography::{InlineSpan, TextSpan, TextStyle};
+use flui_painting::{
+    TextPainter, TextResolvedSize, TextSizing, typography::TextBaseline as PainterBaseline,
+};
 use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::context::{
     BoxDryBaselineContext, BoxDryLayoutContext, BoxIntrinsicsContext, BoxLayoutContext,

@@ -7,10 +7,11 @@
 //! - RTL and bidirectional text
 //! - Line metrics
 
+use flui_foundation::TextDirection;
 use flui_painting::TextPainter;
 use flui_painting::{
     styling::Color,
-    typography::{InlineSpan, TextDirection, TextSpan, TextStyle},
+    typography::{InlineSpan, TextSpan, TextStyle},
 };
 
 /// A text context over a fresh collection, lent to each measurement.

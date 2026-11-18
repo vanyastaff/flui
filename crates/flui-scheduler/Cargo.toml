@@ -99,5 +99,3 @@ workspace = true
 tier = "S"
 tier-kind = "internal"
 order = 2
-# Process-global state, checked by `cargo xtask globals` (ADR-0097).
-globals = []

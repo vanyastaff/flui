@@ -50,18 +50,15 @@ trait depends on `flui-platform` instead.
   scene events) is named at the crate root, except one OS's window
   extensions, which are named in that OS's module of `os` (`os::windows`,
   `os::macos`), the modules the facade publishes as `flui::native::<os>`.
-  `[package.metadata.flui.modules]` gives the roles `cargo xtask module-dag`
-  checks: the features listed above; `owner`, `version`, `storage`, `transfer` and
-  `display_connection` as `base`, which
-  names no feature; `hosts`, which nothing names; and the crate-level modules
-  (`crate-level`: `host`, `platform`, `host_window`, `error`, `executor`,
-  `task`, `os`, `testing`, `journal`, `process`, `page_export`,
-  `associations`). A top-level module with none of these roles is a finding, so a
-  directory the layout does not name cannot come back unchecked
-  (`table_test`, built for tests only, needs none). A platform file names its
-  model, a base and other features' models; every other edge is a
-  named, dated exception whose `reason` says what removes it, and none is
-  left. No window file names another
+  The modules have roles: the features listed above; `owner`, `version`,
+  `storage`, `transfer` and `display_connection` as the base, which names no
+  feature; `hosts`, which nothing names; and the crate-level modules (`host`,
+  `platform`, `host_window`, `error`, `executor`, `task`, `os`, `testing`,
+  `journal`, `process`, `page_export`, `associations`). A top-level module
+  takes one of these roles, so a directory the layout does not name cannot
+  come back (`table_test`, built for tests only, needs none). A platform file
+  names its model, a base and other features' models, and no other edge exists.
+  No window file names another
   feature's: a window's text input, accessibility bridge, actuator and
   chrome reach it through the host table; a feature keeps its own state of a
   window, keyed by the window's identity and set up and dropped by its own
@@ -223,9 +220,8 @@ trait depends on `flui-platform` instead.
   (`LifecycleHooks`),
   `owner::sources` what a loop keeps of a feature's source
   (`SystemPreferenceSource`), and `owner::watch` an observation a feature
-  started for a loop. `owner` is a `base` of
-  `[package.metadata.flui.modules]`, so `cargo xtask module-dag` refuses an
-  import from it into a feature's directory. Its public items are named at the
+  started for a loop. `owner` is a base: it names no feature, so no import runs
+  from it into a feature's directory. Its public items are named at the
   crate root only. Its tests name no feature or host either: they run over
   stand-ins of the owner's own (`owner::windows::testing::QuietHost<C>`, a
   Win32 host with the window hooks `C` gives, none by default;
@@ -517,12 +513,11 @@ trait depends on `flui-platform` instead.
   `web.rs` (the pure `ime`, `input`), `linux/{text_input, input_context, wayland, x11}.rs` (the
   pure `text_input` client of `zwp_text_input_v3` over a wire trait, the pure
   `input_context` key hold and D-Bus input-method values, the Wayland
-  objects and the X11 daemon's wire and bus task) and `headless.rs`. `cargo
-  xtask module-dag` lists each feature directory in `features`: a platform
+  objects and the X11 daemon's wire and bus task) and `headless.rs`. Each
+  feature directory is a feature: a platform
   module names its model, `owner/`, `version/` and other features' models,
-  never another platform's module; `owner/` and `version/` name no feature's
-  item; each edge into another feature's platform file is a named exception
-  that goes when the feature keeps its own per-window state. The
+  never another platform's module or another feature's platform file;
+  `owner/` and `version/` name no feature's item. The
   pure halves are built for their target and for tests on every host; which
   key belongs to the input method is the input feature's
   (`input::android::keys`, `input::web::keys`), and a window's text input
@@ -583,8 +578,7 @@ trait depends on `flui-platform` instead.
   around a position) is the model's, tested on every host.
 - **Clipboard, drag and drop, accessibility and haptics are feature
   directories (ADR-0151 §10).** Each holds its model beside one file per
-  platform, and `[package.metadata.flui.modules]` lists the four as
-  `features`: `cargo xtask module-dag` holds a platform file to its own model,
+  platform, and the four are features: a platform file names only its own model,
   `owner/`, `version/` and other features' models. The models are
   `clipboard::patience` (the schedule on which the Win32 clipboard tries
   again to open a clipboard another process holds), `drag::offers` (the offer table every data-transfer source mints its
@@ -1162,19 +1156,13 @@ trait depends on `flui-platform` instead.
   `owner::panic_boundary::ContainedIvars<…>`, whose destructor is one call of
   `os_entry`: what a view or a delegate owns is destroyed inside the
   boundary, a destructor's panic is logged, and the super `dealloc` still
-  runs. The gate holds each class's `#[ivars = …]` to that type and a class's
-  own `Drop` to the entry rule. A GCD work
+  runs. Each class's `#[ivars = …]` is that type and a class's own `Drop`
+  follows the entry rule. A GCD work
   item's body is a `move` closure, so its captures drop inside the boundary; a
   block's or delegate's captures live as long as the OS keeps it and are
-  values whose destructor runs no user code. `cargo xtask panic-boundary`
-  finds every entry and holds it to that shape, with no allowlist. It reads
-  functions and constructors of OS crates by their path, but methods by name,
-  since a receiver's type is out of its reach: a new OS method that takes a
-  closure is added to its GCD list (`exec_async`, `exec_sync`, `exec_after`,
-  `after`, `barrier_*`, names the crate keeps for GCD) or its looper list
-  (the ndk's `add_fd_with_callback`, whose trampoline aborts on a panic), and
-  a constructor a glob import hides to its list of callback types. `wasm_bindgen` closures are
-  out of its scope because wasm32 aborts on panic,
+  values whose destructor runs no user code. Every OS entry is a constant or
+  one call of `os_entry`. `wasm_bindgen` closures are
+  out of that rule because wasm32 aborts on panic,
   android-activity's procedures contain their own, and `flui-hot-reload`'s
   plugin ABI is outside this crate. Tests: `owner::panic_boundary::tests` (the
   first failure is logged before the answer, with the entry's arguments, and a
@@ -1578,7 +1566,7 @@ trait depends on `flui-platform` instead.
   gate at or below the floor fails to compile, so raising a floor turns the
   gates it makes dead into errors, and an unreadable version unlocks nothing.
   Clippy refuses `objc2::available!` and `AndroidApp::sdk_version`. `version`
-  is a `base` of `module-dag`: it names no feature, in its tests too. Each
+  is a base: it names no feature, in its tests too. Each
   module that declares markers checks them, at the version before `SINCE`, at
   `SINCE` and at an unknown version: `os_version_gate_table` the markers of
   `version::gate`, `ndk_gate_table` the NDK functions' (`owner::android::ndk`)
@@ -1877,7 +1865,7 @@ unsafe that the canvas lies under. The text-input host's padding is those
 `window::safe_area::within` intersects them with the canvas's box in the
 layout viewport (the window's `innerWidth`×`innerHeight`, which quirks mode
 does not change) and scales them into the window's logical pixels, as the
-keyboard's occlusion is. The bands are zero unless the page covers the display
+keyboard's inset and floating frame are. The bands are zero unless the page covers the display
 (`viewport-fit=cover`, which the page `flui build` writes asks for). They are
 read once and kept (`HostSlots::unsafe_edges`), since reading them is a style
 recalculation every state sample would pay, and read again after a window
@@ -3214,7 +3202,7 @@ posts a window makes to itself, the surface target, the pacer of a modal loop.
   during an unwind. The owner hooks the delivery holds weakly are declared
   before the teardown guard, so they outlive it.
 
-Tests (pull-request CI only type-checks Win32; the nightly `windows-latest` run executes them): the owner-affinity refusal order is pinned
+Tests (CI only type-checks Win32, on main; the nightly `windows-latest` run executes them): the owner-affinity refusal order is pinned
 by `refusal_precedence_is_gone_then_foreign_thread_then_class_then_slot`
 (`owner/hwnd_affinity.rs`), and the callback panic and re-entrancy rules by
 `tests/window_callback_unwind.rs` and `tests/handler_reentry.rs`.
@@ -3641,7 +3629,21 @@ wgpu draws into directly and whose drawables report when they were shown, and
 a `drawRect:` view's bitmap would cover the drawable after every pass. Such a
 view draws through `updateLayer` (`wantsUpdateLayer`), with the redraw policy
 set to `DuringViewResize`, the one a `drawRect:` view has: a view that makes
-its own backing layer is otherwise never redrawn. AppKit's own backing layers
+its own backing layer is otherwise never redrawn. Its contents placement is
+`TopLeft` (`layerContentsPlacement`, which AppKit maps to the backing layer's
+`contentsGravity`, a property it owns on a layer-backed view): a drawable that
+is not the layer's size, as a frame not drawn in time for a step of a live
+resize is, keeps its own size at the view's top-left corner, where the default
+placement stretches it to the layer until the next frame. Contents that are not
+stretched are laid out by the layer's `contentsScale`, which the default
+placement made irrelevant: the window sets it to the scale its metrics, and so
+its drawables, are sized by, when it is made and at every change of its backing
+scale (`content_view::set_layer_contents_scale`), since wgpu leaves the scale
+of a view's own layer alone. Qt's `QNSView` answers the same placement for its
+Metal layer and sets its scale on a backing-properties change; Rune sets the
+gravity on the sublayer wgpu makes under winit's view. Type-checked only: no
+resize was looked at by eye, and no frame on a Retina display, where a wrong
+contents scale would show at twice the size. AppKit's own backing layers
 hand their `display` to the view; `CAMetalLayer`'s does nothing, and the view
 answers no `displayLayer:`, so `FluiMetalLayer::display` calls the view's
 `updateLayer` itself. The in-pass `setNeedsDisplay:` measurement below was
@@ -3759,23 +3761,35 @@ measurement window with the deferral branch removed. Both runs' marker lines
 (§4 of its `plan.md`) and the raw run logs are kept with the
 [pacing evidence](https://github.com/vanyastaff/flui/tree/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/.rust-studio/specs/macos-native-vsync-pacing-evidence).
 
-### macOS reports its display period as the current mode's rate, in the display snapshot
+### macOS reports the period its display paces at, in the display snapshot
 
 **Rule:** a backend that can tell an embedder the display's refresh period should
-report the rate of the mode that display is *in* — not a capability of the panel
+report the cadence that display is *running* — not a capability of the panel
 and not a generic default. The value is a floor for pacing ("never produce faster
 than this", the display snapshot's `refresh_period`), so a rate that is too high paces
 against a cadence the display is not running, and a rate that cannot be
 determined must be reported as unknown rather than guessed at.
 
-**Choice:** `Platform::display_snapshot` carries, for every `NSScreen`, a period
-from `CGDisplayModeGetRefreshRate` over the display's *current* mode
-(`display/apple/macos.rs::refresh_rate_of_screen`, made a period by
-`RefreshPeriod::from_hz`), reached from the
-screen via `NSScreenNumber` — the same display id `display.rs` reads for its
-bounds. A rate of 0 is `None`: CoreGraphics reports 0 for modes it cannot
-describe and some displays do, and a 0 turned into a period is infinite. The
-window names its display in its state snapshot, **cached** in
+**Choice:** `Platform::display_snapshot` carries, for every `NSScreen`, the
+period `display::apple::screen_cadence::refresh_period` decides from three
+reports, each reached from the screen via `NSScreenNumber`:
+
+- the rate of the display's *current* mode (`CGDisplayModeGetRefreshRate`),
+  made a period by `RefreshPeriod::from_hz`, where it names a cadence;
+- where it does not (CoreGraphics reports 0 for a mode it cannot describe, which
+  some built-in panels are in, and a 0 turned into a period is infinite), the
+  nominal period of a `CVDisplayLink` on that display
+  (`CVDisplayLinkGetNominalOutputVideoRefreshPeriod`, a `CVTime` handed to
+  `RefreshPeriod::from_ratio`), from a link made for the question and released
+  unstarted; `None` when that is indefinite too;
+- Low Power Mode (`NSProcessInfo.isLowPowerModeEnabled`, macOS 12, behind the
+  `ProcessPowerState` gate): while it is on, the built-in panel
+  (`CGDisplayIsBuiltin`) has the period of 60 Hz when its own is shorter. A
+  ProMotion panel refreshes at 60 Hz there while its mode and its display link
+  still say 120, and frames produced at 120 queue behind it. An external
+  monitor is not held.
+
+The window names its display in its state snapshot, **cached** in
 `MacOSWindowState` beside `scale_factor`: re-read in the handler that already
 updates the scale (`handle_backing_properties_changed`, reached from
 `handle_screen_changed`), which then publishes the window's state, and seeded when
@@ -3786,9 +3800,8 @@ this diverges from the winit implementation it otherwise mirrors: winit queries
 the monitor per call, but here every snapshot reads the display, so it is read
 from AppKit only where it can change, and a change invalidates the snapshot. The
 window binds the registry before it is shown (`UnshownWindow::show`), so its
-first snapshot, published from `windowDidBecomeKey:`, names its display. The screen key is the
-`CGDirectDisplayID` (a label, stable while the display stays attached), a stopgap
-the display-UUID source replaces.
+first snapshot, published from `windowDidBecomeKey:`, names its display. A screen
+is keyed by the UUID of its display (`CGDisplayCreateUUIDFromDisplayID`).
 
 **Alternatives considered:**
 - `NSScreen.maximumFramesPerSecond` — rejected twice over. It is macOS 12+, above
@@ -3797,47 +3810,118 @@ the display-UUID source replaces.
   ProMotion display running a 60 Hz mode — exactly the too-high rate the rule
   above forbids. winit does not use it.
 - Querying per call, the way winit does — rejected here for lane safety, above.
-- A `CVDisplayLink` fallback for displays whose mode reports 0 (winit has one) —
-  **deferred, not dropped**: it needs a `core-video` dependency, and CVDisplayLink
-  is this backend's intended produce signal anyway (ADR-0044), so it belongs with
-  that tick source rather than ahead of it. Until then `None` is honest and
-  observable: `flui-app`'s runner logs `reported=false` and paces against its
-  documented default.
+- The `objc2-core-video` bindings for the display link — not taken: the three
+  functions the fallback calls are declared beside `CGDisplayCreateUUIDFromDisplayID`
+  in `display/apple/macos.rs`, and the crate would add a second CoreGraphics
+  binding family (`objc2-core-graphics`) next to `core-graphics`.
+- Linking `NSProcessInfoPowerStateDidChangeNotification` — not taken: the
+  constant is macOS 12's, and a binary that names it would not load on the
+  releases below it. Its address is looked up by name
+  (`power_state_notification`), as `fonts/apple.rs` looks up a CoreText
+  function.
+- Measuring the cadence from a running display link, as the iOS host does —
+  not taken: Rune reads a ProMotion panel's link at 120 Hz under Low Power Mode,
+  so a measurement would not find the 60 Hz either.
 
 **Market lineage:** winit 0.30.13's macOS `MonitorHandle::refresh_rate_millihertz`
 (`src/platform_impl/macos/monitor.rs:260`) reads `CGDisplayCopyDisplayMode` →
 `CGDisplayModeGetRefreshRate`, returns it when it is `> 0.0`, and only then falls
-back to `CVDisplayLinkGetNominalOutputVideoRefreshPeriod`. That is the source
-read here and the reason for the `> 0` guard. Read at the version pinned in this
-workspace's `Cargo.lock`, not recalled.
+back to `CVDisplayLinkGetNominalOutputVideoRefreshPeriod`. That is the order
+taken here. Read at the version pinned in this workspace's `Cargo.lock`, not
+recalled. The Low Power Mode rule is Rune's
+([`display_link.rs`](https://github.com/anomalyco/rune/blob/dev/crates/rune/src/platform/display_link.rs),
+branch `dev`, read 2026-11-18):
+`CGDisplayIsBuiltin` and `isLowPowerModeEnabled`, and the link's period held at
+1/60 s. Rune reads the flag at each change of display; this host also reads it
+again when Foundation posts the power-state notification.
 
 **Trade-off:** the cached display follows the window across screens and backing
 changes. A mode change that leaves the window where it is (a user switching
-refresh rate in System Settings) is observed too: `ScreenObserver`
+refresh rate in System Settings) is observed too: `DisplayObservers`
 (`display/apple/macos.rs`) marks the snapshot stale on
-`NSApplicationDidChangeScreenParametersNotification` and wakes the owner, and the
-host derives every window's display again on that wake. What stays open is a
-display whose current mode reports 0 Hz, which some built-in panels do: its period
-is unknown and the host paces at its 60 Hz default, because the
-`CVDisplayLinkGetNominalOutputVideoRefreshPeriod` fallback winit takes is not
-written ([Most implemented rows never ran on their environment](../../docs/gaps.md#most-implemented-rows-never-ran-on-their-environment)). Neither a live refresh switch nor
-such a panel ran: the display this was measured on has one fixed mode.
+`NSApplicationDidChangeScreenParametersNotification`, and from macOS 12 on
+Foundation's power-state notification, and wakes the owner; the next sample
+publishes a new revision when a period changed, and each window pushes the
+period of its display to its layer's presentation reports at its next frame
+request (`sync_layer_refresh`). A display whose mode reports 0 Hz makes a display
+link at every sample that follows an invalidation, not at every wake. None of
+this ran on a Mac: not a live refresh switch, not a 0 Hz panel, not Low Power
+Mode on a ProMotion panel
+([Most implemented rows never ran on their environment](../../docs/gaps.md#most-implemented-rows-never-ran-on-their-environment),
+[Power-aware pacing and throttling](../../docs/gaps.md#power-aware-pacing-and-throttling)).
+The display the rate was measured on has one fixed mode.
 
-**Replacement coverage:** the arithmetic is free-standing and AppKit-free
-(`RefreshPeriod::from_hz`, the contract's constructor the macOS source hands
-CoreGraphics' rate to), pinned by `refresh_value_classification_table`
-(non-cadence inputs — zero, negative, NaN, ±infinity — are unknown rather
-than an infinite or panicking period) and by
-`macos_shim_keeps_the_period_it_reports_today`, which holds the common panel
-rates to the value this backend reported before the snapshot. The read
-itself is FFI, so `every_display_source_reads_a_cadence_alike` has no macOS
-column. The live path is
+**Replacement coverage:** the rule is free-standing and AppKit-free.
+`a_macos_screen_paces_at_its_mode_its_link_or_the_low_power_rate` holds its
+table: a 120 Hz built-in panel under Low Power Mode paces at 60 Hz, an external
+one and a slower one keep their periods, a 0 Hz mode takes the link's nominal
+period, and an indefinite, zero or negative one is no period;
+`a_mode_with_a_rate_asks_no_display_link` holds that a link is made only for a
+mode that names no cadence. The macOS column of
+`every_display_source_reads_a_cadence_alike` holds the mode's rate to the same
+period every other source reads (non-cadence inputs — zero, negative, NaN,
+±infinity — are unknown rather than an infinite or panicking period), and
+`macos_shim_keeps_the_period_it_reports_today` holds the common panel rates to
+the value this backend reported before the snapshot. The reads themselves are
+FFI. The live path is
 pinned behaviourally by the same manual run that pins the frame pump,
 which reported the refresh period from
 the real backend on the real display: measured 2026-09-17 as `period_us=10000
 hz=100.0`, matching the independent AppKit probe's `CGDisplayModeGetRefreshRate`
 of 100.000 Hz on the same panel. Like every macOS-gated test here, these run
 locally only — CI has no macOS test job and `cross-typecheck` is lint-only.
+
+### A macOS window's safe area is what its screen's camera housing covers of it
+
+**Rule:** the safe area of the window snapshot (`WindowInsets::safe_area`,
+ADR-0277) is measured against the window's content, so a host publishes how
+much of that content an unsafe band covers, not the band's size.
+
+**Choice:** a screen reports the band its camera housing takes as
+`NSScreen.safeAreaInsets` (macOS 12, behind the `ScreenSafeArea` gate; below it
+a window has no safe area). At every sample the window reads its screen's frame
+and insets with its content rectangle, and
+`window::apple::geometry::frame::safe_area_on_screen` answers, for each edge,
+the length the content and that edge's band share. A window that covers its
+screen has the screen's top inset; a window the system keeps below the housing,
+and any window under the menu bar, has none. An inset is never more than its
+band, and the part of a window past the screen's edge counts for nothing: a
+window dragged up onto a monitor arranged above the panel still names the panel
+as its screen until AppKit says it changed, and what lies beyond the panel's top
+is on the other monitor, not under the housing. That is where the rule departs
+from the Web host's (`window::safe_area::within`), whose canvas past the
+viewport's edge is scrolled out of sight and counts as covered.
+The mode is not consulted: a borderless window laid over the whole screen is
+under the housing as much as a full-screen one is. The screen is read at the
+sample and not cached beside the window's display: the inset is a function of
+the content rectangle, which the same sample reads, and a window is sampled
+when it is resized or moved, changes screen or backing scale, and ends a
+full-screen transition.
+
+**Alternatives considered:**
+- An inset by mode (a full-screen window gets the screen's top inset) — not
+  taken: where the system keeps a full-screen window below the housing it
+  would pad the window a second time, and it would miss a borderless window
+  laid over the screen.
+- `NSView.safeAreaInsets` (macOS 11), the view-level value the iOS host reads —
+  not taken: on a window whose content fills the frame it counts the title bar
+  as unsafe, which is where an application draws its own
+  (`WindowFrame`'s application title bar).
+
+**Trade-off:** `auxiliaryTopLeftArea` and `auxiliaryTopRightArea`, the strips
+beside the housing a title bar may still use, are not read: the whole band is
+unsafe. A change of the screen's insets that comes with no resize, move, screen
+change or transition of the window is not seen until the next of those.
+Nothing ran on a Mac with a housing, and whether AppKit's full screen puts a
+window under the band there or below it was not observed
+([Mobile system UI](../../docs/gaps.md#mobile-system-ui)).
+
+**Replacement coverage:**
+`a_window_under_the_camera_housing_has_its_band_as_a_safe_area` holds the
+overlap against stand-in insets, with a window above, across and below the
+screen's top edge, and `screen_safe_area_gate_table` the version floor. The
+AppKit reads, and the sample that publishes the inset, are type-checked only:
+no test here makes an `NSWindow`.
 
 ### AppKit's input method is a route for a `keyDown:`, not a second producer of one
 
@@ -4103,7 +4187,7 @@ window or UI runtime frame. It is not a generic closure executor.
 A live macOS run needs a GUI session. External counters assert owner affinity, nonrecursive delivery, shutdown capture
 release and rejected work after quit. On Windows, a turn through the real
 message loop runs on the owner and is released there. **Unasserted:** no test
-pins this. Pull-request CI only type-checks Win32. UIKit, Android and the web register
+pins this. CI only type-checks Win32, on main. UIKit, Android and the web register
 the same way over their loop's slot; proxy window creation support is separate from wake/quit support.
 
 ### Reveal without changing window mode
@@ -4225,6 +4309,29 @@ consumer before UIKit connections. A stable logical view backs a session; native
 windows/controllers and display links belong to individual attachments. A
 reversible disconnect retains the logical owner but denies new raw handles.
 Terminal close fences callbacks and retires the attachment before disposal.
+
+An attachment's display link is added to the main run loop in
+`NSRunLoopCommonModes`. The run loop `UIApplicationMain` drives leaves its
+default mode for `UITrackingRunLoopMode` while UIKit tracks a touch (a native
+scroll view or control, an edit menu, an interactive keyboard dismissal), and
+a link in the default mode alone would deliver no frame until
+the tracking ends; the owner's wakes already run there, since the GCD main
+queue is served in the common modes.
+
+The view observes `UIKeyboardWillChangeFrameNotification`,
+`UIKeyboardDidChangeFrameNotification`, `UIKeyboardWillShowNotification` and
+`UIKeyboardWillHideNotification` and keeps one note of them
+(`window::keyboard::Note`): the frame the keyboard goes to, in screen
+coordinates, or that it left its dock and where it then came to rest. Each
+metrics sample converts that frame into the view as it lies then and publishes
+the keyboard's placement (ADR-0372). What a notification makes of the note
+standing is `Heard::kept`'s rule and which placement a frame names is
+`window::keyboard::placement`'s, both pure and tested on every host
+(`the_notifications_heard_name_where_the_keyboard_rests`,
+`a_frame_names_where_the_keyboard_rests`). The finished frame change is
+observed because it alone says where a keyboard the user dragged or undocked
+ended up: UIKit sends its zero frame while the drag lasts and announces an
+undocking as a hide.
 
 `MainThreadBound` protects native storage. Final worker drops enqueue retirement
 on main rather than synchronously waiting for it. Plain cached metrics remain
@@ -4995,7 +5102,7 @@ at once, the host's once a background scan added them, which wakes the loop.
 The engine does not draw it, though that was the first shape asked for:
 
 - the host cannot reach the engine: the host's manifest forbids the name in
-  every root build (`reach-forbid`, checked by `cargo xtask reach`), and the
+  every root build (`reach-forbid`), and the
   engine's device and raster thread are the composition root's
   (ADR-0091); a `wgpu::Instance` the host made apart from its surface is a
   defect of its own;
@@ -5949,9 +6056,8 @@ host.
 
 Every closure the host sends to Android's Java main thread goes through
 `owner::android::main_thread::post` (or `run`, for a step whose only report is its failure, which
-calls `post`), which runs it inside `os_entry` and reports each exit but success; `cargo xtask
-panic-boundary` refuses the identifier `run_on_java_main_thread` anywhere else in a build, the
-tokens of macro calls and `macro_rules!` bodies included. android-activity would only log a posted
+calls `post`), which runs it inside `os_entry` and reports each exit but success; the identifier `run_on_java_main_thread` appears nowhere else in a
+build, the tokens of macro calls and `macro_rules!` bodies included. android-activity would only log a posted
 closure's panic and lose what it owed; under `post`, a work's report settles it (the insets query
 answers none), and every capture of the work, the report's included, is destroyed inside the
 boundary on every exit, since the last reference to a host object may be one of them
@@ -5962,8 +6068,7 @@ refused, or that stopped short after Java took the handle, asks the window for t
 (`FluiView.handle()`), detaches it and frees the handle, and keeps the handle when the window cannot
 be read; a `detach` that fails keeps it too
 (`every_exit_of_the_installation_frees_only_handles_no_view_names`). Every native method of
-FluiView's classes is one call of `owner::android::native_call::jni_native`, which `cargo xtask
-panic-boundary` holds them to: Java receives the method's answer, or its "nothing" (`false`, `0`,
+FluiView's classes is one call of `owner::android::native_call::jni_native`: Java receives the method's answer, or its "nothing" (`false`, `0`,
 `null`, no value) after a failed JNI call or a panic, and never a pending exception, which
 `ClearsPending` describes to the log and clears on every exit
 (`a_native_method_answers_and_leaves_no_exception_pending_on_any_exit`): each caller is a
@@ -6379,8 +6484,83 @@ placed the window (ADR-0343 §2) and no placement is written as the user's. Test
 `a_fullscreen_window_maximized_again_never_reads_normal`,
 `a_minimized_fullscreen_window_leaves_in_one_step` (Win32 window commands table),
 `a_rectangle_comes_back_inside_a_monitor_that_is_there` (the fitting rule),
-`leaving_fullscreen_returns_to_the_state_it_left_in_one_step` (headless window state table). X11,
-Wayland and AppKit still publish a mode in between ([gaps](../../docs/gaps.md#leaving-fullscreen-publishes-a-mode-in-between-on-appkit-x11-and-wayland)).
+`leaving_fullscreen_returns_to_the_state_it_left_in_one_step` (headless window state table).
+
+**A mode change the window system answers in steps is published once.** X11's window manager
+answers each `_NET_WM_STATE` request with a property change of its own (openbox, leaving
+fullscreen for maximized, reads normal three times on the way; leaving it for normal on a window
+maximized before, reads normal at the screen's size, maximizes the window again and only then
+leaves maximized), a Wayland compositor may answer `set_maximized` or `unset_fullscreen` in
+several configures (Weston restores the maximized mode a window had before fullscreen), and
+AppKit animates a full-screen transition and a zoom, and puts the frame the window had before
+full screen back only after `windowDidExitFullScreen:`.
+
+So a host tells the window's state cell of every request it makes that changes or leaves a mode
+(`WindowStateCell::expect_mode`), one for the mode the window is in too: each request replaces
+the wait of the one before, whose answers may still be coming. The requests are `SetMode`, a
+`SetSize` of a maximized or fullscreen window (X11 `resize`, Wayland `leave_compositor_modes`),
+the maximize toggle and the buttons of a title bar or frame the window draws itself, and on
+AppKit every zoom and full-screen transition, the user's included (`windowShouldZoom:toFrame:`,
+`windowWill{Enter,Exit}FullScreen:`). A request nothing answers ends the wait instead
+(`end_mode_wait`): a Wayland minimize, which no compositor reports, a mode an unmapped X11 window
+writes into its own properties, and a frame AppKit gives a zoomed window at once (a size, a
+position, limits, a style).
+
+Until the wait ends, a read is published by its mode:
+
+- **In the mode asked:** as read. From the first such read the window waits only `MODE_SETTLE`
+  more, against a step the window system had still to take.
+- **In another of normal, maximized and fullscreen:** it is a step. The snapshot keeps the mode
+  it has and names, as its `normal_geometry`, the rectangle the window returned to as the change
+  began (the published one, or the outer rectangle of a window that was normal); every other
+  fact (the geometry, the metrics the renderer draws at, the focus) is as read.
+- **Minimized, or of a window published minimized:** as read. A window shown again is drawn at
+  once and no snapshot says minimized of a window on screen, so a window asked out of minimized
+  into maximized or fullscreen publishes the modes it passes through (openbox: normal, then
+  maximized). This is the one case where a step's mode is published.
+
+A snapshot in normal mode names no rectangle of its own, and `WindowPlacement::from_state` takes
+its outer rectangle for the window's place. So a normal read of a window on its way into normal
+mode from elsewhere (its snapshot was in another mode as the change began, a request before this
+one was still being answered, or a read since found another mode) names the rectangle the change
+began with too, until the wait ends: openbox's first normal read out of fullscreen is still
+screen-sized. A window asked for the mode it is settled in was nowhere else, so its reads are
+published as read: the request publishes no revision, and a window the user moves meanwhile is
+remembered where it is. A window moved within `MODE_SETTLE` of arriving in normal mode from
+another mode names the old rectangle until the wait ends, and its own from then on.
+
+The snapshot holds the last settled mode; it never names a transition. Past `MODE_ANSWER_LIMIT`
+(AppKit: its animation limit while a step animates, then `MODE_ANSWER_LIMIT` after the
+transition's end, for a wait that had not ended before it) the window publishes what it reads, so
+a change the window system refused or the user overtook is published then. Each host reads the
+window again when the wait ends with nothing heard: the X11 loop wakes for it and has the window
+read itself (`LoopWindows::mode_deadline`), the Wayland loop wakes for it (`LoopWindow::mode_due`)
+and every turn reads its windows, and an AppKit window keeps one timer on the owner lane armed
+for the instant the wait ends now (`WaitEndRead`), armed again when a request, a read or a
+transition's end moves that instant. X11 records the rectangle a window returns to only from a
+read in the mode its change asked for, so a normal-mode step on the way to maximized is no place
+it returns to; and a command acts on the mode the server said (`mode_now`), not the one the
+snapshot holds.
+
+AppKit's full-screen transition the user starts (the green button, the system's shortcut) is the
+user's request through the system's own chrome, carried out and reported, as a window manager's
+maximize button is on Linux; it lands in full screen or, as it leaves, in the zoomed state or
+normal mode the window entered from (`ModeSequence::fullscreen_transition`).
+
+Tests: `a_fullscreen_window_changes_mode_in_one_step`,
+`a_mode_change_another_client_overtakes_is_published_when_the_wait_ends`,
+`a_command_during_a_mode_wait_acts_on_the_mode_the_server_says` and
+`a_request_for_the_mode_the_window_is_in_publishes_nothing` (X11 under openbox),
+`a_mode_the_compositor_reaches_in_two_configures_is_published_once` and
+`a_mode_the_compositor_does_not_carry_out_is_published_when_the_wait_ends` (Wayland, scripted
+compositor), `a_mode_change_in_flight_publishes_its_steps_in_the_mode_the_window_left` and
+`a_mode_wait_settles_waits_longer_and_ends` (the cell),
+`a_fullscreen_transition_lands_where_it_heads_or_where_it_came_from` and
+`one_timer_reads_a_window_at_the_end_of_its_wait` (AppKit's models),
+`from_state_remembers_the_normal_bounds_relative_to_the_usable_area` (the placement). What is
+left open, a window system slower than these waits and the modes published on the way out of
+minimized, is in
+[gaps](../../docs/gaps.md#a-window-system-slower-than-the-mode-wait-publishes-its-steps).
 
 `WINDOWPLACEMENT` rectangles are workspace coordinates; a task bar on the top or left edge
 moves the work area, so they are converted with the monitor's work-area offset.

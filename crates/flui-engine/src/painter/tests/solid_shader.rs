@@ -2,7 +2,8 @@
 use super::*;
 use flui_foundation::geometry::{Matrix4, Point, RRect};
 use flui_painting::{
-    Canvas, Paint,
+    Canvas,
+    paint::Paint,
     paint::{Clip, Shader},
     styling::Color,
 };
@@ -64,7 +65,7 @@ fn record(
             canvas.save();
             canvas.transform(matrix);
             if scoped {
-                canvas.clip_rect_ext(
+                canvas.clip_rect_with(
                     clip,
                     flui_painting::paint::ClipOp::Intersect,
                     Clip::HardEdge,

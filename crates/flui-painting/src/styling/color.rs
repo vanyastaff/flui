@@ -883,16 +883,6 @@ impl Color {
         Color::lerp(color1, color2, f64::from(local_t))
     }
 
-    /// Blends each color over the given background.
-    #[must_use]
-    #[inline]
-    pub fn blend_over_batch(colors: &[Color], background: Color) -> Vec<Color> {
-        colors
-            .iter()
-            .map(|color| color.blend_over(background))
-            .collect()
-    }
-
     /// Composites `self` (the **source**) over `dst` (the **destination**)
     /// using `mode`, returning the straight-alpha result.
     ///
@@ -1062,7 +1052,7 @@ impl Color {
 ///
 /// # Examples
 /// ```
-/// use flui_painting::styling::color::srgb_to_linear;
+/// use flui_painting::styling::srgb_to_linear;
 /// assert!((srgb_to_linear(0.0) - 0.0).abs() < 1e-6);
 /// assert!((srgb_to_linear(1.0) - 1.0).abs() < 1e-6);
 /// ```
@@ -1086,7 +1076,7 @@ pub fn srgb_to_linear(c: f32) -> f32 {
 ///
 /// # Examples
 /// ```
-/// use flui_painting::styling::color::linear_to_srgb;
+/// use flui_painting::styling::linear_to_srgb;
 /// assert!((linear_to_srgb(0.0) - 0.0).abs() < 1e-6);
 /// assert!((linear_to_srgb(1.0) - 1.0).abs() < 1e-6);
 /// ```

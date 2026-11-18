@@ -841,8 +841,10 @@ fn window_facts_arrive_only_in_the_snapshot() {
         .try_with_safe_area(EdgeInsets::new(24.0, 0.0, 48.0, 0.0))
         .expect("a finite safe area")
         .with_keyboard(
-            flui_platform::KeyboardInset::try_at_rest(EdgeInsets::new(0.0, 0.0, 300.0, 0.0))
-                .expect("a finite keyboard"),
+            flui_platform::SoftKeyboard::try_at_rest(flui_platform::KeyboardPlacement::Docked {
+                inset: EdgeInsets::new(0.0, 0.0, 300.0, 0.0),
+            })
+            .expect("a finite keyboard"),
         );
     type Report = Box<dyn Fn(&HeadlessHostWindow)>;
     type Holds = Box<dyn Fn(&WindowState) -> bool>;

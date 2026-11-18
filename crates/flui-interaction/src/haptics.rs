@@ -418,7 +418,10 @@ impl State {
                 retire_outside_delivery(Some(observer));
                 return;
             };
-            slot.generation = slot.generation.wrapping_add(1);
+            slot.generation = slot
+                .generation
+                .checked_add(1)
+                .expect("BUG: fewer than 2^64 replacements per observer");
             slot.failed_passes = 0;
             slot.observer.replace(observer)
         };

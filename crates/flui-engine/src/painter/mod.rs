@@ -99,6 +99,31 @@ pub struct WgpuPainter {
 
     /// Ordered list of completed draw items (segments and offscreen textures)
     draw_order: Vec<DrawItem>,
+
+    /// The chunks' recordings kept past their frame. Beside the glyph atlas
+    /// and the image cache whose texels they name: a new painter (device
+    /// recovery, a torn painter replaced) starts with none.
+    recording_cache: crate::recording_cache::RecordingCache,
+}
+
+/// What [`WgpuPainter::begin_chunk`] did with a chunk.
+pub(crate) enum ChunkStart {
+    /// Its kept recording was spliced into the segment: nothing to record.
+    Replayed,
+    /// Its commands are to be recorded; with an entry, the recording is kept
+    /// once [`WgpuPainter::end_chunk`] finds it complete.
+    Record(Option<ChunkEntry>),
+}
+
+/// A chunk being recorded for the cache: its key and where its recording
+/// began.
+pub(crate) struct ChunkEntry {
+    key: crate::recording_cache::RecordingKey,
+    mark: crate::recording_cache::SegmentMark,
+    items: usize,
+    layer_depth: usize,
+    clip: crate::state_stack::ResolvedClip,
+    origin: crate::pixel_shift::PixelOrigin,
 }
 
 // GPU rendering routinely converts between numeric types for pixel coordinates,
@@ -290,6 +315,7 @@ impl WgpuPainter {
             region_pass: 0,
             current_segment: DrawSegment::new(),
             draw_order: Vec::new(),
+            recording_cache: crate::recording_cache::RecordingCache::new(),
         }
     }
 
@@ -303,6 +329,9 @@ impl WgpuPainter {
             &self.pipelines.current().glyph_atlas_bind_group_layout,
             source.rasterizer(),
         );
+        // A new atlas packs from its first texel: a kept recording names
+        // texels of the old one.
+        self.recording_cache.advance_epoch();
     }
 
     /// Draw the next frames into targets of `format`.
@@ -318,6 +347,9 @@ impl WgpuPainter {
         }
         self.pipelines.select(&self.device, format);
         self.surface_format = format;
+        // A kept recording names no pipeline and no format-dependent value
+        // (a chunk that draws a backdrop is a draw item and is not kept), so
+        // the recordings stay.
     }
 
     /// The painter's pipeline library, for a painter built after this one
@@ -350,9 +382,26 @@ impl WgpuPainter {
             self.resources.buffer_pool_mut().evict_over_budget(0);
             self.glyph_atlas.reset();
         }
+        // Images and, at Critical, glyphs are placed anew: no kept recording
+        // names their texels any more, and the memory goes with them.
+        self.recording_cache.advance_epoch();
     }
 
     // ===== Accessors =====
+
+    /// Makes every later glyph placement that needs room miss as a full
+    /// page at the device limit does, until `full` is `false`.
+    #[cfg(test)]
+    pub(crate) fn hold_glyph_atlas_full(&mut self, full: bool) {
+        self.glyph_atlas.hold_full(full);
+    }
+
+    /// Marks the shared image atlas full, as a failed packing does, so the
+    /// frame boundary resets it once an entry of it goes a frame unused.
+    #[cfg(test)]
+    pub(crate) fn mark_image_atlas_full(&mut self) {
+        self.resources.texture_cache_mut().mark_atlas_full();
+    }
 
     /// How many faces the glyph rasterizer has registered: one per distinct
     /// face the paragraphs it rasterized named.
@@ -404,6 +453,8 @@ impl WgpuPainter {
         self.state.reset();
         self.compositor.reset();
         self.suppressed_layer_depth = 0;
+        // A chunk whose recording unwound left its glyph log open.
+        drop(self.glyph_atlas.take_slot_log());
 
         // A contained replay panic can bypass a nested attachment restore.
         self.replay.update_viewport(self.size.0, self.size.1);
@@ -666,6 +717,9 @@ impl WgpuPainter {
 
         let maint = self.resources.texture_cache_mut().end_frame_maintenance();
         if maint.evicted > 0 || maint.atlas_reset {
+            // A kept recording may name an evicted image or its old atlas
+            // rectangle.
+            self.recording_cache.advance_epoch();
             tracing::debug!(
                 evicted = maint.evicted,
                 atlas_reset = maint.atlas_reset,
@@ -673,6 +727,8 @@ impl WgpuPainter {
                 "Texture cache maintenance"
             );
         }
+        self.sync_resource_epoch();
+        self.recording_cache.end_frame();
     }
 
     /// Returns the current viewport size as `(width, height)`.
@@ -774,6 +830,152 @@ impl WgpuPainter {
             &mut self.current_segment,
             &mut self.draw_order,
         );
+    }
+}
+
+// ===== Recording cache =====
+impl WgpuPainter {
+    /// Advances the resource epoch when the glyph atlas freed a slot since
+    /// the last look: a key placed again may sit at other texels.
+    fn sync_resource_epoch(&mut self) {
+        if self.glyph_atlas.take_slots_lost() {
+            self.recording_cache.advance_epoch();
+        }
+    }
+
+    /// Opens `chunk` at the current state: splices its kept recording when
+    /// one matches and `reads` allows it, and otherwise answers that its
+    /// commands are to be recorded, with the entry [`Self::end_chunk`] keeps
+    /// the recording under when the chunk can be kept at all: no external
+    /// texture, a finite planar transform in range, a scissor its key can
+    /// hold, and a live resource epoch.
+    pub(crate) fn begin_chunk(
+        &mut self,
+        chunk: &flui_layer::Chunk,
+        reads: crate::recording_cache::CacheReads,
+    ) -> ChunkStart {
+        use crate::recording_cache::{AmbientKey, CacheReads, RasterKey, RecordingKey};
+        if reads == CacheReads::Off
+            || !chunk.textures().is_empty()
+            || self.suppressed_layer_depth != 0
+        {
+            return ChunkStart::Record(None);
+        }
+        self.sync_resource_epoch();
+        let ctm = self.state.current_transform_matrix();
+        let scissor = self.state.current_scissor();
+        let (Some(epoch), Some((raster, origin)), Some(ambient)) = (
+            self.recording_cache.epoch(),
+            RasterKey::of(&ctm),
+            AmbientKey::of(
+                scissor,
+                &ctm,
+                chunk.bounds(),
+                self.compositor.current_opacity(),
+                self.size,
+            ),
+        ) else {
+            return ChunkStart::Record(None);
+        };
+        let key = RecordingKey {
+            content: chunk.version(),
+            raster,
+            ambient,
+            epoch,
+        };
+        if let Some(recording) = self.recording_cache.get(&key) {
+            // Its glyphs stay placed for the rest of the frame, as drawing
+            // them would keep them; one evicted since means a miss.
+            if self.glyph_atlas.retain(recording.glyph_keys()) {
+                let chain = self.state.clip_chain();
+                self.current_segment.splice(
+                    recording,
+                    &crate::recording_cache::SpliceAmbient {
+                        scissor,
+                        clip: self.state.active_clip(),
+                        chain: &chain,
+                        origin,
+                    },
+                );
+                return ChunkStart::Replayed;
+            }
+            self.recording_cache.remove(&key);
+        }
+        let _ = self.state.take_clip_opened();
+        self.glyph_atlas.log_slots();
+        ChunkStart::Record(Some(ChunkEntry {
+            key,
+            mark: self.current_segment.mark(),
+            items: self.draw_order.len(),
+            layer_depth: self.compositor.depth(),
+            clip: self.state.active_clip(),
+            origin,
+        }))
+    }
+
+    /// Closes the chunk `entry` opened once its commands are recorded, and
+    /// keeps the recording when it completed and stayed one fragment of the
+    /// segment: no clip of its own, no draw item or layer, no refusal, every
+    /// glyph it asked for placed, and the resources it names unchanged since
+    /// it began.
+    pub(crate) fn end_chunk(&mut self, entry: ChunkEntry) {
+        let glyph_keys = self.glyph_atlas.take_slot_log();
+        let clip_opened = self.state.take_clip_opened();
+        let Some(glyph_keys) = glyph_keys else {
+            return;
+        };
+        if clip_opened
+            || self.draw_order.len() != entry.items
+            || self.compositor.depth() != entry.layer_depth
+            || self.current_segment.recording_result().is_err()
+        {
+            return;
+        }
+        self.sync_resource_epoch();
+        if self.recording_cache.epoch() != Some(entry.key.epoch) {
+            return;
+        }
+        if let Some(recording) =
+            self.current_segment
+                .capture_since(&entry.mark, entry.clip, entry.origin, glyph_keys)
+        {
+            self.recording_cache.insert(entry.key, recording);
+        }
+    }
+
+    /// Evicts kept recordings over the cache's budget, least recently
+    /// rastered first.
+    pub(crate) fn settle_recording_cache(&mut self) {
+        self.recording_cache.settle();
+    }
+
+    /// Drops every kept recording, as a raster panic does (ADR-0304 §10).
+    pub(crate) fn drop_recordings(&mut self) {
+        self.recording_cache.advance_epoch();
+    }
+
+    /// How many kept recordings left the cache since the last call and the
+    /// bytes it holds, for the counters of a submitted frame.
+    pub(crate) fn take_recording_cache_counts(&mut self) -> (u64, u64) {
+        self.recording_cache.take_counts()
+    }
+
+    /// The IR recorded so far this frame, as bytes a test compares.
+    #[cfg(test)]
+    pub(crate) fn recorded_ir(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        for item in &self.draw_order {
+            match item {
+                DrawItem::Segment(segment) => segment.ir_bytes(&mut out),
+                DrawItem::Backdrop(_)
+                | DrawItem::OpacityLayer(_)
+                | DrawItem::AdvancedShape(_)
+                | DrawItem::SsaaPath(_)
+                | DrawItem::Filter(_) => out.extend_from_slice(b"<item>"),
+            }
+        }
+        self.current_segment.ir_bytes(&mut out);
+        out
     }
 }
 

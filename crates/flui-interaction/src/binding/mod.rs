@@ -1214,30 +1214,6 @@ impl GestureBinding {
         self.contacts.contains(pointer_id)
     }
 
-    /// Cancel every binding-owned state slot for a pointer.
-    ///
-    /// This is the abnormal-sequence counterpart to receiving Up/Cancel: it
-    /// releases the retained hit route, discards queued/resampled movement,
-    /// and rejects the unresolved arena without selecting a winner.
-    pub fn cancel_pointer_sequence(&self, pointer_id: PointerId) {
-        self.dispatch(|| {
-            let mut first = self.drain_capture_losses(Some(pointer_id));
-            let Some(guard) = self.contacts.try_retire(pointer_id) else {
-                if let Some(failure) = first {
-                    failure.resume();
-                }
-                return;
-            };
-            let detached = self.detach_pointer_sequence(pointer_id);
-            let panic = Self::abandon_detached_sequence(detached);
-            drop(guard);
-            RoutePanic::preserve_first(&mut first, panic, "explicit pointer cancellation");
-            if let Some(panic) = first {
-                panic.resume();
-            }
-        });
-    }
-
     /// Cancel every binding-owned state slot for all active pointers.
     pub fn cancel_all_pointer_sequences(&self) {
         self.dispatch(|| {
@@ -1475,21 +1451,6 @@ impl GestureBinding {
     // ========================================================================
     // Arena Management
     // ========================================================================
-
-    /// Manually close the arena for a pointer.
-    ///
-    /// Normally called automatically on pointer down.
-    pub fn close_arena(&self, pointer_id: PointerId) {
-        self.dispatch(|| self.arena.arena().close(pointer_id));
-    }
-
-    /// Manually sweep the arena for a pointer.
-    ///
-    /// Normally called automatically on pointer up. Cancelled recognizers
-    /// reject themselves instead of asking the binding to force a winner.
-    pub fn sweep_arena(&self, pointer_id: PointerId) {
-        self.dispatch(|| self.arena.arena().sweep(pointer_id));
-    }
 
     /// Resolve lone arena members queued during the preceding event/frame
     /// transaction.
