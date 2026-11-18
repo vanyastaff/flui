@@ -1067,7 +1067,7 @@ impl GpuContext {
     }
 
     /// What the last offscreen frame's walk and recording did.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "testing"))]
     pub(crate) fn slot_counters(&self) -> crate::frame_protocol::RasterCounters {
         self.slot_counters
     }
