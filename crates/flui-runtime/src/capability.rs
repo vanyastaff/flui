@@ -460,18 +460,10 @@ pub(crate) struct PresentationCapabilities {
 
 impl CapabilitySource for PresentationCapabilities {
     fn acquire(&self, capability: TypeId, name: &'static str) -> Result<Box<dyn Any>, Unsupported> {
-        let window = self.window.upgrade().map(|window| {
-            let scale = window
-                .state()
-                .metrics
-                .map_or(1.0, |metrics| metrics.scale().get());
-            WindowRef::new(
-                window.id(),
-                scale,
-                window.surface_target(),
-                self.lifetime.clone(),
-            )
-        });
+        let window = self
+            .window
+            .upgrade()
+            .map(|window| WindowRef::new(&window, self.lifetime.clone()));
         acquire_with(
             &self.registry,
             &self.completions,

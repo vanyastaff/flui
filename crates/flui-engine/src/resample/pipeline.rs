@@ -34,7 +34,11 @@ pub(crate) struct ResamplePipeline {
 
 impl ResamplePipeline {
     /// Build the pipeline for `surface_format`.
-    pub(crate) fn new(device: &wgpu::Device, surface_format: wgpu::TextureFormat) -> Self {
+    pub(crate) fn new(
+        gpu: crate::pipeline_device::PipelineDevice<'_>,
+        surface_format: wgpu::TextureFormat,
+    ) -> Self {
+        let device = gpu.device();
         let bind_group_layout = resample::WgpuBindGroup0::get_bind_group_layout(device);
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Resample Pipeline Layout"),
@@ -83,7 +87,7 @@ impl ResamplePipeline {
                 alpha_to_coverage_enabled: false,
             },
             multiview_mask: None,
-            cache: None,
+            cache: gpu.cache(),
         });
         Self { pipeline }
     }

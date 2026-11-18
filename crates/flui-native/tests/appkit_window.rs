@@ -647,7 +647,9 @@ mod cases {
         ] {
             fixture
                 .window
-                .admit_and_apply(WindowCommand::SetSize(asked))
+                .admit_and_apply(WindowCommand::SetSize(
+                    flui_platform::WindowExtent::try_new(asked).expect("an extent"),
+                ))
                 .unwrap_or_else(|refusal| panic!("SetSize({asked:?}) was refused: {refusal:?}"));
             fixture.settle();
             assert_eq!(

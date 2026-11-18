@@ -51,7 +51,7 @@ use std::num::NonZeroU64;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use flui_foundation::geometry::{Bounds, DevicePixelRatio};
+use flui_foundation::geometry::{Bounds, DevicePixelRatio, Rect};
 use flui_foundation::{IdExhausted, IdMint, UniqueKey};
 
 use crate::unsupported::{CapabilityAbsence, Unsupported};
@@ -318,6 +318,198 @@ impl TryFrom<Duration> for RefreshPeriod {
     }
 }
 
+/// Where a display's top-left corner sits in the window system's desktop, in
+/// the unit that window system lays its desktop out in: device pixels on
+/// Windows, X11 and Android, points on macOS and iOS, the compositor's logical
+/// units on Wayland, CSS pixels on the web.
+///
+/// It says how the displays of one snapshot are arranged (which one is left of
+/// or above another) and nothing more: the unit differs from host to host, so
+/// an origin is never a logical position and no arithmetic mixes it with one.
+/// Where a window is, and the bounds a consumer fits a window into, are
+/// measured on the display itself ([`WindowPosition`](crate::WindowPosition),
+/// [`DisplayBounds`]).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub struct DesktopOrigin {
+    x: i32,
+    y: i32,
+}
+
+impl DesktopOrigin {
+    /// The origin `(x, y)` in the window system's desktop units.
+    #[must_use]
+    pub const fn new(x: i32, y: i32) -> Self {
+        Self { x, y }
+    }
+
+    /// The origin, in the window system's desktop units.
+    #[must_use]
+    pub const fn get(self) -> flui_foundation::geometry::Point<i32> {
+        flui_foundation::geometry::Point::new(self.x, self.y)
+    }
+}
+
+/// Why numbers describe no display's bounds.
+///
+/// Two errors are equal when they carry the same numbers bit for bit, so an
+/// error read from a NaN equals itself.
+#[derive(Debug, Clone, Copy, thiserror::Error)]
+#[error(
+    "display bounds {}x{} with usable area ({}, {})-({}, {}) describe no display",
+    extent.width,
+    extent.height,
+    usable.min.x,
+    usable.min.y,
+    usable.max.x,
+    usable.max.y
+)]
+pub struct InvalidDisplayBounds {
+    /// The extent asked for.
+    pub extent: flui_foundation::geometry::Size<f64>,
+    /// The usable area asked for.
+    pub usable: Rect<f64>,
+}
+
+impl PartialEq for InvalidDisplayBounds {
+    fn eq(&self, other: &Self) -> bool {
+        let bits = |bounds: &Self| {
+            [
+                bounds.extent.width,
+                bounds.extent.height,
+                bounds.usable.min.x,
+                bounds.usable.min.y,
+                bounds.usable.max.x,
+                bounds.usable.max.y,
+            ]
+            .map(f64::to_bits)
+        };
+        bits(self) == bits(other)
+    }
+}
+
+impl Eq for InvalidDisplayBounds {}
+
+/// How large a display is and which part of it windows may use, in that
+/// display's own logical pixels, measured from its top-left corner: the space a
+/// [`WindowPosition`](crate::WindowPosition) on it is measured in.
+///
+/// The extent is finite and encloses an area; the usable area is finite and
+/// lies inside it. A display of a mixed-scale desktop is measured in its own
+/// logical pixels, so fitting a window to it needs no other display's scale.
+///
+/// ```
+/// use flui_foundation::geometry::{Bounds, DevicePixelRatio, Point, Rect, Size};
+/// use flui_platform::{DesktopOrigin, DisplayBounds};
+///
+/// // A 2560x1440 monitor at 1.25, right of the primary one, with a 60-pixel
+/// // taskbar along its bottom.
+/// let ratio = DevicePixelRatio::try_new(1.25).expect("a ratio");
+/// let (origin, bounds) = DisplayBounds::from_device(
+///     Bounds::new(Point::new(1920, 0), Size::new(2560, 1440)),
+///     Bounds::new(Point::new(1920, 0), Size::new(2560, 1380)),
+///     ratio,
+/// )?;
+/// assert_eq!(origin, DesktopOrigin::new(1920, 0));
+/// assert_eq!(bounds.extent(), Size::new(2048.0, 1152.0));
+/// assert_eq!(bounds.usable(), Rect::from_ltrb(0.0, 0.0, 2048.0, 1104.0));
+/// # Ok::<(), flui_platform::InvalidDisplayBounds>(())
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DisplayBounds {
+    extent: flui_foundation::geometry::Size<f64>,
+    usable: Rect<f64>,
+}
+
+// Every number is finite, never NaN, so equality is total.
+impl Eq for DisplayBounds {}
+
+impl DisplayBounds {
+    /// A display `extent` large whose windows may use `usable`.
+    ///
+    /// # Errors
+    /// [`InvalidDisplayBounds`] when a number is not finite, a side of the
+    /// extent is not positive, or the usable area is inverted or reaches past
+    /// the extent.
+    pub fn try_new(
+        extent: flui_foundation::geometry::Size<f64>,
+        usable: Rect<f64>,
+    ) -> Result<Self, InvalidDisplayBounds> {
+        let positive = |side: f64| side.is_finite() && side > 0.0;
+        let inside = |low: f64, high: f64, side: f64| {
+            low.is_finite() && high.is_finite() && 0.0 <= low && low <= high && high <= side
+        };
+        if positive(extent.width)
+            && positive(extent.height)
+            && inside(usable.min.x, usable.max.x, extent.width)
+            && inside(usable.min.y, usable.max.y, extent.height)
+        {
+            Ok(Self { extent, usable })
+        } else {
+            Err(InvalidDisplayBounds { extent, usable })
+        }
+    }
+
+    /// A display `extent` large whose windows may use all of it.
+    ///
+    /// # Errors
+    /// [`InvalidDisplayBounds`] when a side is not finite and positive.
+    pub fn whole(
+        extent: flui_foundation::geometry::Size<f64>,
+    ) -> Result<Self, InvalidDisplayBounds> {
+        Self::try_new(
+            extent,
+            Rect::from_ltrb(0.0, 0.0, extent.width, extent.height),
+        )
+    }
+
+    /// The bounds of a display a window system lays out in device pixels
+    /// (Windows, X11, Android): its rectangle `display` and its usable area
+    /// `usable` in the desktop's device pixels, over its `scale`. Answers the
+    /// display's [`DesktopOrigin`] beside them.
+    ///
+    /// # Errors
+    /// [`InvalidDisplayBounds`] when the display has no area or the usable
+    /// area reaches past it: a host intersects a work area that spans
+    /// displays with each display first.
+    pub fn from_device(
+        display: Bounds<i32>,
+        usable: Bounds<i32>,
+        scale: DevicePixelRatio,
+    ) -> Result<(DesktopOrigin, Self), InvalidDisplayBounds> {
+        // Every difference of two `i32`s is exact in `f64`, and a ratio of at
+        // least 1/32 keeps the quotient finite.
+        let logical = |device: i64| scale.to_logical(device as f64);
+        let from = |edge: i32, origin: i32| logical(i64::from(edge) - i64::from(origin));
+        let end = |origin: i32, side: i32| i64::from(origin) + i64::from(side);
+        let (x, y) = (display.origin.x, display.origin.y);
+        let extent = flui_foundation::geometry::Size::new(
+            logical(i64::from(display.size.width)),
+            logical(i64::from(display.size.height)),
+        );
+        let area = Rect::from_ltrb(
+            from(usable.origin.x, x),
+            from(usable.origin.y, y),
+            logical(end(usable.origin.x, usable.size.width) - i64::from(x)),
+            logical(end(usable.origin.y, usable.size.height) - i64::from(y)),
+        );
+        Ok((DesktopOrigin::new(x, y), Self::try_new(extent, area)?))
+    }
+
+    /// The display's extent, in its logical pixels.
+    #[must_use]
+    pub const fn extent(self) -> flui_foundation::geometry::Size<f64> {
+        self.extent
+    }
+
+    /// The part windows may use without being covered by the system's own
+    /// bars (a taskbar, a dock, a panel), from the display's top-left corner,
+    /// in its logical pixels.
+    #[must_use]
+    pub const fn usable(self) -> Rect<f64> {
+        self.usable
+    }
+}
+
 /// One display as the operating system describes it right now.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
@@ -327,12 +519,12 @@ pub struct DisplayDescription {
     /// The display's name, such as "Built-in Display". A label, never an
     /// identity.
     pub name: String,
-    /// Bounds in global screen coordinates, in device pixels. A Wayland
-    /// compositor has no global device-pixel space, so there they are in its
-    /// logical coordinate space.
-    pub bounds: Bounds<i32>,
-    /// The area windows can occupy without being covered by system chrome.
-    pub usable_bounds: Bounds<i32>,
+    /// Where the display sits among the others, in the window system's own
+    /// desktop units: an arrangement, never a logical position.
+    pub origin: DesktopOrigin,
+    /// The display's extent and its usable area, in its logical pixels from
+    /// its top-left corner.
+    pub bounds: DisplayBounds,
     /// Device pixels per logical pixel: finite and positive by its type, so
     /// a host checks the number its operating system reports once, where it
     /// builds the display.
@@ -356,7 +548,7 @@ pub struct DisplayDescription {
 }
 
 impl DisplayDescription {
-    /// A display with its bounds as usable area, an unknown refresh period, not
+    /// A display at `origin` with these bounds, an unknown refresh period, not
     /// primary, and a colour the host has not read
     /// ([`CapabilityAbsence::NOT_YET_ON_THIS_HOST`]). Refine it with the `with_*`
     /// methods.
@@ -364,20 +556,41 @@ impl DisplayDescription {
     pub fn new(
         id: DisplayId,
         name: impl Into<String>,
-        bounds: Bounds<i32>,
+        origin: DesktopOrigin,
+        bounds: DisplayBounds,
         scale_factor: DevicePixelRatio,
     ) -> Self {
         Self {
             id,
             name: name.into(),
+            origin,
             bounds,
-            usable_bounds: bounds,
             scale_factor,
             refresh_period: None,
             is_primary: false,
             persistent_key: None,
             color: Err(CapabilityAbsence::NOT_YET_ON_THIS_HOST),
         }
+    }
+
+    /// A display a window system lays out in device pixels (Windows, X11,
+    /// Android): its rectangle `display` and its usable area `usable` in the
+    /// desktop's device pixels, over its `scale`
+    /// ([`DisplayBounds::from_device`]), with the rest as [`new`](Self::new)
+    /// leaves it.
+    ///
+    /// # Errors
+    /// [`InvalidDisplayBounds`] when the display has no area or the usable
+    /// area reaches past it.
+    pub fn from_device(
+        id: DisplayId,
+        name: impl Into<String>,
+        display: Bounds<i32>,
+        usable: Bounds<i32>,
+        scale_factor: DevicePixelRatio,
+    ) -> Result<Self, InvalidDisplayBounds> {
+        let (origin, bounds) = DisplayBounds::from_device(display, usable, scale_factor)?;
+        Ok(Self::new(id, name, origin, bounds, scale_factor))
     }
 
     /// Record the display's colour as the operating system reports it, or why
@@ -416,13 +629,6 @@ impl DisplayDescription {
     #[must_use]
     pub fn with_persistent_key(mut self, key: impl Into<String>) -> Self {
         self.persistent_key = Some(key.into());
-        self
-    }
-
-    /// Set the usable area.
-    #[must_use]
-    pub fn with_usable_bounds(mut self, usable_bounds: Bounds<i32>) -> Self {
-        self.usable_bounds = usable_bounds;
         self
     }
 
@@ -813,7 +1019,15 @@ mod tests {
         };
         let registry = DisplayRegistry::new();
         let id = registry.mint(&DisplayKey::Injected(1)).expect("id");
-        let display = DisplayDescription::new(id, "d", Bounds::default(), DevicePixelRatio::ONE);
+        let bounds =
+            DisplayBounds::whole(flui_foundation::geometry::Size::new(1.0, 1.0)).expect("an area");
+        let display = DisplayDescription::new(
+            id,
+            "d",
+            DesktopOrigin::default(),
+            bounds,
+            DevicePixelRatio::ONE,
+        );
         assert_eq!(
             at_last.successor(vec![display]),
             Err(DisplayRevisionExhausted),
@@ -841,10 +1055,10 @@ mod tests {
 pub struct DisplayParts {
     /// [`DisplayDescription::name`].
     pub name: String,
+    /// [`DisplayDescription::origin`].
+    pub origin: DesktopOrigin,
     /// [`DisplayDescription::bounds`].
-    pub bounds: Bounds<i32>,
-    /// [`DisplayDescription::usable_bounds`].
-    pub usable_bounds: Bounds<i32>,
+    pub bounds: DisplayBounds,
     /// [`DisplayDescription::scale_factor`].
     pub scale_factor: DevicePixelRatio,
     /// [`DisplayDescription::refresh_period`].
@@ -865,8 +1079,8 @@ impl DisplayDescription {
         let Self {
             id,
             name,
+            origin,
             bounds,
-            usable_bounds,
             scale_factor,
             refresh_period,
             is_primary,
@@ -877,8 +1091,8 @@ impl DisplayDescription {
             id,
             DisplayParts {
                 name,
+                origin,
                 bounds,
-                usable_bounds,
                 scale_factor,
                 refresh_period,
                 is_primary,
@@ -896,8 +1110,8 @@ impl DisplayParts {
     pub fn into_description(self, id: DisplayId) -> DisplayDescription {
         let Self {
             name,
+            origin,
             bounds,
-            usable_bounds,
             scale_factor,
             refresh_period,
             is_primary,
@@ -907,8 +1121,8 @@ impl DisplayParts {
         DisplayDescription {
             id,
             name,
+            origin,
             bounds,
-            usable_bounds,
             scale_factor,
             refresh_period,
             is_primary,

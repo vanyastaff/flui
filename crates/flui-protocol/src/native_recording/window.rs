@@ -261,17 +261,29 @@ impl Availability {
     }
 }
 
-/// A window rectangle in logical pixels.
+/// Where a window's outer top-left corner is: a point of one display, in that display's logical
+/// pixels from its top-left corner.
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct WindowPosition {
+    /// The display, by label, as a `platform` recording of the same session writes it.
+    pub display: u64,
+    /// The point: x, y.
+    pub at: [f64; 2],
+}
+
+/// A window rectangle: its position on a display, and its size in logical pixels.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct WindowGeometry {
-    /// The top-left corner in global coordinates, where the OS reports one.
+    /// The outer top-left corner, where the OS reports one.
     #[cfg_attr(
         feature = "serde",
         serde(default, skip_serializing_if = "Option::is_none")
     )]
-    pub position: Option<[f64; 2]>,
+    pub position: Option<WindowPosition>,
     /// Width and height.
     pub size: [f64; 2],
 }

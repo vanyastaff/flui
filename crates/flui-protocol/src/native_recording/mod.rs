@@ -49,11 +49,12 @@ pub use text_store::{
 pub use window::{
     Appearance, Availability, Capabilities, Capability, CloseAnswer, CloseCause, CursorGrab,
     Execution, InsetCurve, InsetMotion, KeyboardInset, SizeConstraints, SystemControls,
-    WindowFrame, WindowGeometry, WindowLevel, WindowMetrics, WindowMode, WindowState,
+    WindowFrame, WindowGeometry, WindowLevel, WindowMetrics, WindowMode, WindowPosition,
+    WindowState,
 };
 
 /// The native recording format's major version.
-pub const FORMAT_VERSION: u32 = 2;
+pub const FORMAT_VERSION: u32 = 3;
 
 /// The header field that names the format and its major version.
 pub const VERSION_KEY: &str = "flui_native_recording";

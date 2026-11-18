@@ -3,14 +3,47 @@
 //!
 //! A [`WindowState`](crate::WindowState) describes what the window system
 //! reports, and a report can be numbers no window has: a size divided by a
-//! scale of zero, a rectangle a compositor sent as NaN. [`WindowExtent`] and
-//! [`WindowGeometry`] cannot hold such numbers, so a snapshot cannot either:
-//! a host that reads them builds the value with `try_new`, and the report it
-//! cannot build one from is not a state change. A snapshot with a NaN in it
-//! would also never equal itself, so every read of the window would publish
-//! a new revision.
+//! scale of zero, a rectangle a compositor sent as NaN. [`WindowExtent`],
+//! [`WindowPosition`] and [`WindowGeometry`] cannot hold such numbers, so a
+//! snapshot cannot either: a host that reads them builds the value with
+//! `try_new`, and the report it cannot build one from is not a state change.
+//! A snapshot with a NaN in it would also never equal itself, so every read
+//! of the window would publish a new revision. The commands and the options
+//! that ask a window for a size or a place carry the same types, so a number
+//! no snapshot could hold is not a number a window can be asked for either.
+//!
+//! # Where a window is
+//!
+//! A position is always measured on one display, named by its
+//! [`DisplayId`], in that display's logical pixels, from that display's
+//! top-left corner ([`WindowPosition`], ADR-0364). There is no global logical
+//! space: on a desktop of mixed scales, logical pixels of one display are not
+//! logical pixels of another, so a position that names no display has no
+//! fixed meaning.
+//!
+//! - A snapshot's outer position is measured on the display the window is
+//!   on ([`WindowState::display`](crate::WindowState::display)): the one that
+//!   holds the largest part of it. A window that spans displays, or hangs
+//!   past the edge of its own, has coordinates outside that display's
+//!   extent, negative ones included; they stay in that display's logical
+//!   pixels.
+//! - A display left of or above the primary one moves no window's
+//!   coordinates: a position starts at its own display's corner, wherever
+//!   the window system put that display in its desktop.
+//! - A host that is not told where its windows are (a Wayland toplevel, a
+//!   phone, a page's canvas) publishes no position and takes none
+//!   ([`WindowCapabilities::observes_position`](crate::WindowCapabilities::observes_position),
+//!   [`places_at_open`](crate::WindowCapabilities::places_at_open)).
+//! - A position whose display has left the display snapshot is still the
+//!   position it was: a window opened at one is placed by the window system,
+//!   and a command that asks for one is refused with
+//!   [`ApplyError::DisplayGone`](crate::ApplyError::DisplayGone). A
+//!   snapshot keeps naming the display its window was on until the window
+//!   system reports where the window went.
 
 use flui_foundation::geometry::{Point, Size};
+
+use crate::DisplayId;
 
 /// Why numbers describe no window.
 ///
@@ -136,8 +169,10 @@ impl WindowExtent {
     ///
     /// # Errors
     /// [`InvalidGeometry::Extent`] when a side is NaN, infinite or negative.
-    pub fn try_new(size: Size<f64>) -> Result<Self, InvalidGeometry> {
-        let valid = |side: f64| side.is_finite() && side >= 0.0;
+    pub const fn try_new(size: Size<f64>) -> Result<Self, InvalidGeometry> {
+        const fn valid(side: f64) -> bool {
+            side.is_finite() && side >= 0.0
+        }
         if valid(size.width) && valid(size.height) {
             Ok(Self(size))
         } else {
@@ -153,7 +188,7 @@ impl WindowExtent {
     ///
     /// # Errors
     /// [`InvalidGeometry::Empty`] when a side is zero.
-    pub(crate) fn area(self) -> Result<Self, InvalidGeometry> {
+    pub(crate) const fn area(self) -> Result<Self, InvalidGeometry> {
         if self.0.width > 0.0 && self.0.height > 0.0 {
             Ok(self)
         } else {
@@ -210,37 +245,84 @@ impl PartialEq<WindowExtent> for Size<f64> {
     }
 }
 
-/// A window rectangle in logical pixels: a finite position, where the window
-/// system reports one, and a [`WindowExtent`].
+/// Where a window's outer top-left corner is: a finite point in the logical
+/// pixels of one display, measured from that display's top-left corner (the
+/// module's "Where a window is" says what that means across displays).
+///
+/// The one shape of a window's place: what a snapshot publishes
+/// ([`WindowGeometry::position`]), what
+/// [`WindowCommand::SetPosition`](crate::WindowCommand::SetPosition) asks for
+/// and what [`WindowOptions::position`](crate::WindowOptions::position) opens
+/// at. A host converts it through that display's own scale and origin, never
+/// through the window's, so the same position lands on the same spot of the
+/// same display whichever display the window is on when it is asked.
+///
+/// ```
+/// use flui_foundation::geometry::Point;
+/// use flui_platform::{DisplayKey, DisplayRegistry, WindowPosition};
+///
+/// let display = DisplayRegistry::new().mint(&DisplayKey::Injected(1))?;
+/// let at = WindowPosition::try_new(display, Point::new(-40.0, 12.0))?;
+/// assert_eq!((at.display(), at.at()), (display, Point::new(-40.0, 12.0)));
+/// assert!(WindowPosition::try_new(display, Point::new(f64::NAN, 0.0)).is_err());
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WindowPosition {
+    display: DisplayId,
+    at: Point<f64>,
+}
+
+// Both coordinates are finite, never NaN, so equality is total.
+impl Eq for WindowPosition {}
+
+impl WindowPosition {
+    /// The point `at` of `display`, in its logical pixels from its top-left
+    /// corner.
+    ///
+    /// # Errors
+    /// [`InvalidGeometry::Position`] when a coordinate is NaN or infinite.
+    pub const fn try_new(display: DisplayId, at: Point<f64>) -> Result<Self, InvalidGeometry> {
+        if at.x.is_finite() && at.y.is_finite() {
+            Ok(Self { display, at })
+        } else {
+            Err(InvalidGeometry::Position { x: at.x, y: at.y })
+        }
+    }
+
+    /// The display the position is measured on.
+    #[must_use]
+    pub const fn display(self) -> DisplayId {
+        self.display
+    }
+
+    /// The point, in the display's logical pixels from its top-left corner.
+    #[must_use]
+    pub const fn at(self) -> Point<f64> {
+        self.at
+    }
+}
+
+/// A window rectangle: its outer top-left corner as a [`WindowPosition`],
+/// where the window system reports one, and a [`WindowExtent`] in the logical
+/// pixels of the window.
 ///
 /// ```
 /// use flui_foundation::geometry::{Point, Size};
-/// use flui_platform::WindowGeometry;
+/// use flui_platform::{DisplayKey, DisplayRegistry, WindowGeometry, WindowPosition};
 ///
-/// let placed = WindowGeometry::try_new(Some(Point::new(-40.0, 12.0)), Size::new(800.0, 600.0))?;
-/// assert_eq!(placed.position(), Some(Point::new(-40.0, 12.0)));
+/// let display = DisplayRegistry::new().mint(&DisplayKey::Injected(1))?;
+/// let at = WindowPosition::try_new(display, Point::new(-40.0, 12.0))?;
+/// let placed = WindowGeometry::try_new(Some(at), Size::new(800.0, 600.0))?;
+/// assert_eq!(placed.position(), Some(at));
 /// assert_eq!(placed.size(), Size::new(800.0, 600.0));
-/// assert!(WindowGeometry::try_new(Some(Point::new(f64::NAN, 0.0)), Size::new(1.0, 1.0)).is_err());
-/// # Ok::<(), flui_platform::InvalidGeometry>(())
+/// assert!(WindowGeometry::try_new(None, Size::new(f64::NAN, 1.0)).is_err());
+/// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct WindowGeometry {
-    position: Option<Point<f64>>,
+    position: Option<WindowPosition>,
     extent: WindowExtent,
-}
-
-/// `at`, when both coordinates are finite: the one check of a window position,
-/// whether a window system reported it, a command asks for it or an opening
-/// does.
-///
-/// # Errors
-/// [`InvalidGeometry::Position`] when a coordinate is NaN or infinite.
-pub(crate) fn finite_position(at: Point<f64>) -> Result<Point<f64>, InvalidGeometry> {
-    if at.x.is_finite() && at.y.is_finite() {
-        Ok(at)
-    } else {
-        Err(InvalidGeometry::Position { x: at.x, y: at.y })
-    }
 }
 
 // The position and the extent are finite, never NaN, so equality is total.
@@ -254,10 +336,15 @@ impl WindowGeometry {
     /// A rectangle with this position and size.
     ///
     /// # Errors
-    /// [`InvalidGeometry::Position`] when a coordinate is NaN or infinite,
     /// [`InvalidGeometry::Extent`] when a side is NaN, infinite or negative.
-    pub fn try_new(position: Option<Point<f64>>, size: Size<f64>) -> Result<Self, InvalidGeometry> {
-        Self::unplaced(WindowExtent::try_new(size)?).at(position)
+    pub const fn try_new(
+        position: Option<WindowPosition>,
+        size: Size<f64>,
+    ) -> Result<Self, InvalidGeometry> {
+        match WindowExtent::try_new(size) {
+            Ok(extent) => Ok(Self::unplaced(extent).at(position)),
+            Err(refused) => Err(refused),
+        }
     }
 
     /// A rectangle of this extent whose position the window system does not
@@ -272,20 +359,19 @@ impl WindowGeometry {
 
     /// This rectangle at `position`; `None` for one whose position is not
     /// reported.
-    ///
-    /// # Errors
-    /// [`InvalidGeometry::Position`] when a coordinate is NaN or infinite.
-    pub fn at(self, position: Option<Point<f64>>) -> Result<Self, InvalidGeometry> {
-        Ok(Self {
-            position: position.map(finite_position).transpose()?,
+    #[must_use]
+    pub const fn at(self, position: Option<WindowPosition>) -> Self {
+        Self {
+            position,
             extent: self.extent,
-        })
+        }
     }
 
-    /// The top-left corner in global screen coordinates; `None` where the OS
-    /// reports no global position (Wayland, Android, iOS).
+    /// The outer top-left corner, on the display it is measured on; `None`
+    /// where the window system does not tell a window where it is (Wayland,
+    /// Android, iOS, a page's canvas).
     #[must_use]
-    pub const fn position(self) -> Option<Point<f64>> {
+    pub const fn position(self) -> Option<WindowPosition> {
         self.position
     }
 

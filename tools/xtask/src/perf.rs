@@ -81,6 +81,22 @@ pub(crate) struct PerfArgs {
     /// With `--size`: count the packages only and build nothing.
     #[arg(long, requires = "size", conflicts_with = "bless")]
     graph: bool,
+    /// With `--size`: the measurement `--record` wrote for the commit before
+    /// this one, read before this run records. A byte counter that grew over
+    /// it by more than one merge may add fails, naming both commits, unless
+    /// its baseline was restated in between; a missing or unreadable file
+    /// compares nothing.
+    #[arg(long, requires = "size", conflicts_with_all = ["bless", "graph"])]
+    previous: Option<PathBuf>,
+    /// With `--previous`: the commit its measurement has to be of (the
+    /// push's parent); a measurement of another commit is not compared.
+    #[arg(long, requires = "previous")]
+    parent: Option<String>,
+    /// With `--size`: write this run's byte sizes and commit to this file, for
+    /// the next push's `--previous`. Written before the comparison, so a
+    /// failing push still records what it measured.
+    #[arg(long, requires = "size", conflicts_with_all = ["bless", "graph"])]
+    record: Option<PathBuf>,
 }
 
 /// How a run treats its findings.
@@ -211,7 +227,12 @@ pub(crate) fn perf(args: &PerfArgs) -> anyhow::Result<ExitCode> {
         } else {
             size::Measure::All
         };
-        return size::run(&root, mode, measure);
+        let step = size::StepFiles {
+            previous: args.previous.as_deref(),
+            parent: args.parent.as_deref(),
+            record: args.record.as_deref(),
+        };
+        return size::run(&root, mode, measure, step);
     }
     let out = target_dir.join("perf");
     if out.exists() {

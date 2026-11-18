@@ -351,6 +351,8 @@ pub(crate) struct ClipMaskPipeline {
     // Rect-only, curves (with rectangles), general (including paths).
     // Bounded by geometry kind, never by tape contents or sample count.
     pipelines: [Option<wgpu::RenderPipeline>; 3],
+    /// The driver's pipeline cache the three pipelines are created through.
+    driver_cache: Option<wgpu::PipelineCache>,
 }
 
 fn limit(resource: &'static str, requested: usize, cap: usize) -> EngineError {
@@ -442,7 +444,8 @@ pub(crate) fn membership_work(
 }
 
 impl ClipMaskPipeline {
-    pub(crate) fn new(device: &wgpu::Device) -> Self {
+    pub(crate) fn new(gpu: crate::pipeline_device::PipelineDevice<'_>) -> Self {
+        let device = gpu.device();
         let uniform_entry = |binding| wgpu::BindGroupLayoutEntry {
             binding,
             visibility: wgpu::ShaderStages::FRAGMENT,
@@ -484,6 +487,7 @@ impl ClipMaskPipeline {
             pipeline_layout,
             shader,
             pipelines: [None, None, None],
+            driver_cache: gpu.owned_cache(),
         }
     }
 
@@ -531,7 +535,7 @@ impl ClipMaskPipeline {
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
             multiview_mask: None,
-            cache: None,
+            cache: self.driver_cache.as_ref(),
         })
     }
 

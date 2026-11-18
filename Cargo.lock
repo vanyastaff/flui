@@ -1955,6 +1955,7 @@ dependencies = [
  "flui-painting",
  "flui-platform",
  "flui-rendering",
+ "flui-testing",
  "glam",
  "image",
  "lyon",
@@ -2070,6 +2071,7 @@ version = "0.2.0-dev"
 dependencies = [
  "android_log-sys",
  "flui-foundation",
+ "flui-log",
  "thiserror 2.0.21",
  "tracing",
  "tracing-forest",

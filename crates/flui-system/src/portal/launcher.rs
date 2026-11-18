@@ -9,101 +9,121 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use flui_platform::SystemFailure;
-use flui_platform::capability::{Resolver, WindowRef};
+use flui_platform::capability::{CompletionSource, Resolver, WindowRef};
 use flui_platform::launch::{
     ExternalUri, LaunchError, LaunchResult, LauncherBackend, runs_when_opened,
 };
 use zbus::Variant;
 
-use super::request::{self, DESTINATION, PATH, Response};
-use super::{Portal, PortalError, parent_window};
+use super::request::{self, Response};
+use super::{Interface, Portal, PortalError, with_parent};
 
-const OPEN_URI: &str = "org.freedesktop.portal.OpenURI";
+/// `OpenURI` at the version each method needs: `OpenFile` came with 2,
+/// `OpenDirectory` with 3.
+const OPEN_URI: Interface = Interface::new("org.freedesktop.portal.OpenURI", 1);
+const OPEN_FILE: Interface = Interface::new("org.freedesktop.portal.OpenURI", 2);
+const OPEN_DIRECTORY: Interface = Interface::new("org.freedesktop.portal.OpenURI", 3);
+const TRASH: Interface = Interface::new("org.freedesktop.portal.Trash", 1);
 
 /// [`LauncherBackend`] over the desktop portal.
 ///
-/// Every request touches the file system on the portal's thread, never on
-/// the owner's: a file on a stalled mount delays that request alone, and
-/// its answer goes to the resolver of the request that asked.
+/// Every request touches the file system on a blocking pool thread, never
+/// on the owner's or the portal's: a file on a stalled mount delays that
+/// request alone, and its answer goes to the resolver of the request that
+/// asked.
 pub(crate) struct PortalLauncher {
     portal: Rc<Portal>,
     /// The acquiring widget's window, which the portal's application
     /// chooser is attached to; `None` for a widget in no window.
     window: Option<WindowRef>,
+    completions: CompletionSource,
 }
 
 impl PortalLauncher {
-    pub(crate) fn new(portal: Rc<Portal>, window: Option<WindowRef>) -> Self {
-        Self { portal, window }
+    pub(crate) fn new(
+        portal: Rc<Portal>,
+        window: Option<WindowRef>,
+        completions: CompletionSource,
+    ) -> Self {
+        Self {
+            portal,
+            window,
+            completions,
+        }
     }
 
-    /// The `parent_window` of a launch: the acquiring widget's window while
-    /// it is open, none once it closed (a closed window's id may name
-    /// another window by then) or for a widget in no window.
-    pub(super) fn parent(&self) -> String {
-        self.window
-            .as_ref()
-            .filter(|window| !window.lifetime().is_closed())
-            .map_or_else(String::new, parent_window)
-    }
-
-    /// Ask an `OpenURI` method that answers through a `Request`, with the
-    /// body `argument` makes on the portal's thread from the request's
-    /// token; a refusal it answers instead reaches `answer` from there.
-    fn ask_open_uri<A>(&self, method: &'static str, answer: Resolver<LaunchResult>, argument: A)
-    where
-        A: FnOnce(String) -> Result<OpenUriBody, LaunchError> + Send + 'static,
+    /// Ask the `OpenURI` method `method` of `interface`, which answers
+    /// through a `Request`, attached to the acquiring widget's window while
+    /// it is open; the body `argument` makes on the portal's thread from the
+    /// parent and the request's token, and a refusal it answers instead
+    /// reaches `answer` from there. The request holds the window's parent
+    /// until it ends.
+    fn ask_open_uri<A>(
+        &self,
+        interface: Interface,
+        method: &'static str,
+        answer: Resolver<LaunchResult>,
+        argument: A,
+    ) where
+        A: FnOnce(&str, String) -> Result<OpenUriBody, LaunchError> + Send + 'static,
     {
         if let Err(error) = self.portal.start() {
             let _ = answer.resolve(Err(launch_error(error)));
             return;
         }
-        let token = self.portal.token();
-        self.portal.spawn(move |bus| async move {
-            let body = match argument(token.clone()) {
-                Ok(body) => body,
-                Err(refusal) => {
-                    let _ = answer.resolve(Err(refusal));
-                    return;
-                }
-            };
-            let result = async {
-                let connection = bus.connection().await?;
-                let response = match body {
-                    OpenUriBody::Uri(body) => {
-                        request::call(&connection, OPEN_URI, method, &token, &body, None).await?
-                    }
-                    OpenUriBody::File(body) => {
-                        request::call(&connection, OPEN_URI, method, &token, &body, None).await?
+        let portal = Rc::clone(&self.portal);
+        with_parent(self.window.as_ref(), &self.completions, move |parent| {
+            let token = portal.token();
+            portal.spawn(move |bus| async move {
+                let named = parent.as_str().to_owned();
+                let asked = token.clone();
+                let made = zruntime::unblock(move || argument(&named, asked)).await;
+                let body = match made {
+                    Ok(body) => body,
+                    Err(refusal) => {
+                        let _ = answer.resolve(Err(refusal));
+                        return;
                     }
                 };
-                Ok::<_, PortalError>(response)
-            }
-            .await;
-            let _ = answer.resolve(match result {
-                Ok(Response::Answered(_)) => Ok(()),
-                // The user dismissed the application chooser.
-                Ok(Response::Cancelled) => Err(LaunchError::Denied),
-                Ok(Response::Ended(code)) => Err(SystemFailure::PortalResponse(code).into()),
-                // A launch is never dismissed: it has no dismissal to end it.
-                Ok(Response::Dismissed) => return,
-                Err(error) => Err(launch_error(error)),
+                let result = async {
+                    let desktop = bus.desktop().await?;
+                    match body {
+                        OpenUriBody::Uri(body) => {
+                            request::call(&desktop, interface, method, &token, &body, None).await
+                        }
+                        OpenUriBody::File(body) => {
+                            request::call(&desktop, interface, method, &token, &body, None).await
+                        }
+                    }
+                }
+                .await;
+                // The window's export lasts until the request ended.
+                drop(parent);
+                let _ = answer.resolve(match result {
+                    Ok(Response::Answered(_)) => Ok(()),
+                    // The user dismissed the application chooser.
+                    Ok(Response::Cancelled) => Err(LaunchError::Denied),
+                    Ok(Response::Ended(code)) => Err(SystemFailure::PortalResponse(code).into()),
+                    // The UI runtime retired: nobody hears the answer.
+                    Ok(Response::Dismissed) => return,
+                    Err(error) => Err(launch_error(error)),
+                });
             });
         });
     }
 
     fn ask_with_file(
         &self,
+        interface: Interface,
         method: &'static str,
         purpose: Purpose,
         path: PathBuf,
         answer: Resolver<LaunchResult>,
     ) {
-        let parent = self.parent();
-        self.ask_open_uri(method, answer, move |token| {
+        self.ask_open_uri(interface, method, answer, move |parent, token| {
             let file = open(&path, purpose)?;
             Ok(OpenUriBody::File((
-                parent,
+                parent.to_owned(),
                 zbus::OwnedFd::from(std::os::fd::OwnedFd::from(file)),
                 options(&token),
             )))
@@ -208,27 +228,34 @@ fn launch_error(error: PortalError) -> LaunchError {
 impl LauncherBackend for PortalLauncher {
     fn open_uri(&self, uri: ExternalUri, answer: Resolver<LaunchResult>) {
         let uri = uri.as_str().to_owned();
-        let parent = self.parent();
-        self.ask_open_uri("OpenURI", answer, move |token| {
-            Ok(OpenUriBody::Uri((parent, uri, options(&token))))
+        self.ask_open_uri(OPEN_URI, "OpenURI", answer, move |parent, token| {
+            Ok(OpenUriBody::Uri((parent.to_owned(), uri, options(&token))))
         });
     }
 
     fn open_path(&self, path: PathBuf, answer: Resolver<LaunchResult>) {
-        self.ask_with_file("OpenFile", Purpose::Open, path, answer);
+        self.ask_with_file(OPEN_FILE, "OpenFile", Purpose::Open, path, answer);
     }
 
     fn reveal_path(&self, path: PathBuf, answer: Resolver<LaunchResult>) {
-        self.ask_with_file("OpenDirectory", Purpose::Reveal, path, answer);
+        self.ask_with_file(
+            OPEN_DIRECTORY,
+            "OpenDirectory",
+            Purpose::Reveal,
+            path,
+            answer,
+        );
     }
 
+    /// Trashing shows nothing, so it names no window.
     fn trash_path(&self, path: PathBuf, answer: Resolver<LaunchResult>) {
         if let Err(error) = self.portal.start() {
             let _ = answer.resolve(Err(launch_error(error)));
             return;
         }
         self.portal.spawn(move |bus| async move {
-            let file = match open(&path, Purpose::Trash) {
+            let opened = zruntime::unblock(move || open(&path, Purpose::Trash)).await;
+            let file = match opened {
                 Ok(file) => zbus::OwnedFd::from(std::os::fd::OwnedFd::from(file)),
                 Err(refusal) => {
                     let _ = answer.resolve(Err(refusal));
@@ -236,12 +263,14 @@ impl LauncherBackend for PortalLauncher {
                 }
             };
             let result = async {
-                let connection = bus.connection().await?;
-                let reply = connection
+                let desktop = bus.desktop().await?;
+                desktop.require(TRASH).await?;
+                let reply = desktop
+                    .connection
                     .call_method(
-                        Some(DESTINATION),
-                        PATH,
-                        Some("org.freedesktop.portal.Trash"),
+                        Some(desktop.owner.as_str()),
+                        request::PATH,
+                        Some(TRASH.name),
                         "TrashFile",
                         &(file,),
                     )

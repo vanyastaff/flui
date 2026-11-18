@@ -35,13 +35,14 @@
 //! subscriber slot and the `log` compatibility bridge. None of them panics.
 //!
 //! ```rust,no_run
-//! use flui_log::{LogConfig, SubscriberOwnership, SubscriberPolicy};
+//! use flui_log::config::LogConfig;
+//! use flui_log::ownership::{SubscriberOwnership, SubscriberPolicy};
 //!
 //! let installation = flui_log::setup(&LogConfig::default(), SubscriberPolicy::Auto)?;
 //! if installation.ownership == SubscriberOwnership::Unchanged {
 //!     tracing::debug!("the host already owns logging; FLUI installed nothing");
 //! }
-//! # Ok::<(), flui_log::SetupError>(())
+//! # Ok::<(), flui_log::ownership::SetupError>(())
 //! ```
 //!
 //! # Composing your own stack
@@ -50,11 +51,16 @@
 //! the pieces and installs the result itself:
 //!
 //! ```rust,no_run
-//! use flui_log::{InstallPolicy, LogBridgePolicy, LogConfig, PlatformLayer, install_subscriber};
+//! use flui_log::backend::PlatformLayer;
+//! use flui_log::config::LogConfig;
+//! use flui_log::filter::FilterConfig;
+//! use flui_log::ownership::{InstallPolicy, LogBridgePolicy, install_subscriber};
 //! use tracing_subscriber::{Registry, layer::SubscriberExt as _, Layer as _};
 //!
-//! let config = LogConfig::builder().directives("info,flui_view=trace").build();
-//! let filter = config.targets()?;
+//! let config = LogConfig::builder()
+//!     .filter(FilterConfig::new("info,flui_view=trace"))
+//!     .build();
+//! let filter = config.filter().targets()?;
 //!
 //! let subscriber = Registry::default()
 //!     .with(PlatformLayer::platform_default(&config).with_filter(filter));
@@ -83,7 +89,7 @@
 //!
 //! A profiler is another layer on the same registry, filtered to the targets it reads, so it
 //! costs nothing for spans it does not admit. Tracy and Chrome's trace format are third-party
-//! layers, which a tool adds beside [`PlatformLayer`]:
+//! layers, which a tool adds beside [`PlatformLayer`](backend::PlatformLayer):
 //!
 //! ```rust,ignore
 //! use tracing_subscriber::{filter::Targets, layer::SubscriberExt as _, Layer as _, Registry};
@@ -119,7 +125,7 @@
 //! published, and a message bridged from the `log` facade — a third party's
 //! fully interpolated string — is redacted.
 //! The model is Apple's `%{public}`/`%{private}` contract, applied
-//! uniformly to both platforms; [`backend::privacy`] is the full contract,
+//! uniformly to both platforms; [`privacy`] is the full contract,
 //! including what it deliberately does not cover.
 //!
 //! # Filtering
@@ -150,26 +156,19 @@ pub mod config;
 pub mod filter;
 pub mod identity;
 pub mod ownership;
+pub mod privacy;
 // The crate's test support: deterministic `tracing` capture behind its own
 // subscriber home (ADR-0243: test support is named `testing`).
+#[cfg(feature = "testing")]
+#[cfg_attr(docsrs, doc(cfg(feature = "testing")))]
 pub mod testing;
 
 #[cfg(test)]
 mod test_support;
 
-pub use backend::privacy::{
-    EventOrigin, FieldKind, FieldPrivacy, PRIVATE_FIELD_SUFFIX, PUBLIC_FIELD_SUFFIX, REDACTED_VALUE,
-};
-pub use backend::{LogcatPriority, PlatformLayer};
-pub use config::{DesktopFormat, LogConfig, LogConfigBuilder};
-pub use filter::{DEFAULT_DIRECTIVES, DEFAULT_ENV_VAR, DirectiveError, FilterConfig, FilterError};
-pub use identity::{
-    APPLE_CATEGORY, AppIdentity, DEFAULT_DISPLAY_NAME, IdentityError, UNIDENTIFIED_APPLE_SUBSYSTEM,
-};
-pub use ownership::{
-    InstallPolicy, LogBridgePolicy, LogBridgeStatus, SetupError, SubscriberInstallation,
-    SubscriberOwnership, SubscriberPolicy, install_subscriber,
-};
+use config::LogConfig;
+use filter::FilterError;
+use ownership::{SetupError, SubscriberInstallation, SubscriberPolicy, install_subscriber};
 
 /// Build FLUI's default subscriber and apply an ownership policy to it.
 ///
@@ -244,9 +243,13 @@ pub struct ResilientSetup {
 /// programming error it is:
 ///
 /// ```rust,no_run
-/// # use flui_log::{LogConfig, SubscriberPolicy};
+/// # use flui_log::config::LogConfig;
+/// # use flui_log::filter::FilterConfig;
+/// # use flui_log::ownership::SubscriberPolicy;
 /// const DIRECTIVES: &str = "info,wgpu=warn";
-/// let config = LogConfig::builder().directives(DIRECTIVES).build();
+/// let config = LogConfig::builder()
+///     .filter(FilterConfig::new(DIRECTIVES))
+///     .build();
 ///
 /// let setup = flui_log::setup_with_env_fallback(&config, SubscriberPolicy::Auto)
 ///     .expect("BUG: the built-in directive constant must parse");
@@ -279,31 +282,13 @@ pub fn setup_with_env_fallback(
     }
 }
 
-/// Report a message straight to Android's logcat, bypassing `tracing`.
-///
-/// For exactly one situation: the logging backend itself failed to install, so
-/// a `tracing` event would go nowhere. Everything else in FLUI emits through
-/// `tracing`.
-///
-/// Android-only by design rather than by omission. There is no cross-platform
-/// "emergency channel" this could generalise to — on desktop it would be
-/// stderr, which this workspace bans in shipped code — so the function simply
-/// does not exist on other targets, and a caller has to notice that.
-#[cfg(target_os = "android")]
-pub fn report_to_logcat(identity: &AppIdentity, message: &str) {
-    // Tagged with the display name rather than a module path: this is the
-    // application talking about itself, not an event from some `flui_*` target.
-    let tag = backend::logcat::logcat_tag(identity.display_name(), identity.display_name());
-
-    backend::logcat::write_to_logcat(LogcatPriority::Error, &tag, message);
-}
-
 #[cfg(test)]
 mod resilient_setup_tests {
     //! Cases that need no process-global state; scenarios that write the
     //! subscriber slot live in `tests/`, one per process.
 
-    use super::{FilterConfig, LogConfig, SubscriberPolicy};
+    use super::{LogConfig, SubscriberPolicy};
+    use crate::filter::FilterConfig;
 
     #[test]
     fn an_invalid_configuration_is_a_caller_bug_and_stays_an_error() {
