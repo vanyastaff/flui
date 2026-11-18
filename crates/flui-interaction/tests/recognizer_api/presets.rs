@@ -4,12 +4,15 @@
 
 use std::{cell::Cell, rc::Rc, sync::Arc, time::Duration};
 
+use flui_foundation::ManualClock;
 use flui_interaction::{
-    GestureArena, GestureArenaMember as _, GestureRecognizer, GestureSettings,
-    GestureSettingsProvider, GestureSettingsSource, LongPressGestureRecognizer, ManualClock,
-    PointerId,
     events::{PointerEventExt as _, PointerKind},
-    gesture::RemainderHandoff,
+    gesture::{
+        GestureArena, GestureArenaMember as _, GestureRecognizer, GestureSettings,
+        GestureSettingsProvider, GestureSettingsSource, LongPressGestureRecognizer,
+        RemainderHandoff,
+    },
+    ids::PointerId,
     pointer::PointerDispatch,
 };
 use flui_platform::{GesturePreferences, TargetPlatform, pointer::PenTool};

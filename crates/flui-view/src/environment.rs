@@ -36,7 +36,7 @@ pub use focus_tree_root::{FocusTreeRoot, FocusTreeRootState};
 use flui_animation::{MotionPolicy, Vsync};
 use flui_foundation::geometry::{EdgeInsets, Edges, Rect, Size};
 use flui_interaction::gesture::{GestureArena, SweepModel};
-use flui_interaction::{GestureSettingsProvider, WheelPreferencesProvider};
+use flui_interaction::{gesture::GestureSettingsProvider, pointer::WheelPreferencesProvider};
 use flui_painting::TextSizing;
 use flui_painting::styling::Color;
 use flui_platform::{Brightness, Locale, RegionalFormats, ScrollBarPreferences, TargetPlatform};
@@ -616,7 +616,7 @@ impl GestureArenaScope {
 
     /// Explicitly override gesture policy, retaining inherited wheel policy.
     ///
-    /// An authored [`flui_interaction::GestureSettings`] becomes a fixed profile;
+    /// An authored [`flui_interaction::gesture::GestureSettings`] becomes a fixed profile;
     /// a presentation supplies its live provider. New admissions read the
     /// provider while active contacts retain their admitted settings. Beneath
     /// an outer scope, the outer provider's accessibility timing floors still

@@ -4,8 +4,8 @@
 
 use std::rc::Rc;
 
-use flui_interaction::FocusNode;
 use flui_interaction::events::{Code, Key, KeyPress, KeyState, NamedKey};
+use flui_interaction::focus::FocusNode;
 use flui_interaction::testing::input::KeyEventBuilder;
 use flui_view::prelude::*;
 use flui_widgets::{RawTextField, TextEditingController};

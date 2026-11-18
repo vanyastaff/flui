@@ -22,7 +22,7 @@ fn key(code: Code) -> PlatformInput {
 /// Native focus loss retains the mounted target; an absent release in host
 /// HTML creates no replay obligation when the canvas owns the next press.
 fn mounted_shortcut_recovers_after_native_focus_loss_without_replay() {
-    use flui_interaction::FocusNode;
+    use flui_interaction::focus::FocusNode;
     use flui_platform::keyboard::{Key, KeyEvent, KeyPress, KeyState, Modifiers};
     use flui_runtime::owner::WindowObservation;
     use flui_widgets::{
@@ -262,9 +262,9 @@ pub(super) fn fixture(handled: bool) -> (OwnerHost, PresentationAddress, Effects
                 "queued key"
             });
             if handled {
-                flui_interaction::KeyEventResult::Handled
+                flui_interaction::focus::KeyEventResult::Handled
             } else {
-                flui_interaction::KeyEventResult::Ignored
+                flui_interaction::focus::KeyEventResult::Ignored
             }
         }));
     let address = owner
@@ -993,7 +993,9 @@ fn a_platform_entry_while_the_runtime_is_checked_out_runs_no_owner_code() {
     let erased: Rc<dyn TextStore> = store.clone(); // the presentation holds the field's store through the erased contract.
     let _token = runtime
         .text_input_handle()
-        .attach(flui_interaction::TextInputClient::new(Rc::clone(&erased)))
+        .attach(flui_interaction::text_input::TextInputClient::new(
+            Rc::clone(&erased),
+        ))
         .expect("the headless window takes text input");
     let composing = Composition {
         range: Utf16Range::try_new(Utf16Offset::new(2), Utf16Offset::new(4)).expect("ordered"),

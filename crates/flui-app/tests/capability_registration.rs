@@ -5,7 +5,7 @@
 
 use flui_app::Application;
 use flui_app::LaunchError;
-use flui_interaction::{ClipboardBackend, ClipboardCapability, ClipboardHandle};
+use flui_interaction::text_input::{ClipboardBackend, ClipboardCapability, ClipboardHandle};
 use flui_platform::ClipboardRead;
 use flui_platform::capability::{
     Capability, CapabilityRegistrar, Plugin, ProviderContext, Resolver,

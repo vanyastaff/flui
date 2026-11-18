@@ -30,7 +30,7 @@
 //! # Example
 //!
 //! ```rust
-//! use flui_interaction::{GestureArena, TapAndDragGestureRecognizer};
+//! use flui_interaction::{gesture::{GestureArena, TapAndDragGestureRecognizer}};
 //!
 //! let recogniser = TapAndDragGestureRecognizer::builder(GestureArena::new())
 //!     .on_tap_up(|details| { let _ = details.consecutive_tap_count; })

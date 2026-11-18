@@ -27,7 +27,7 @@ use flui_foundation::Leaf;
 use flui_foundation::TextDirection;
 use flui_foundation::geometry::{Matrix4, Offset, Rect, Size};
 use flui_foundation::inspect::{FieldValue, Fields, Inspect, Payload, Seq, Untyped, Value};
-use flui_interaction::CursorIcon;
+use flui_interaction::events::CursorIcon;
 use flui_painting::styling::Color;
 use flui_painting::text_boundaries;
 use flui_painting::typography::{

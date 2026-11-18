@@ -8,8 +8,11 @@ use flui_interaction::events::{
 use flui_interaction::gesture::GestureArena;
 use flui_interaction::pointer::PointerDispatch;
 use flui_interaction::{
-    AxisLock, DragAxis, DragGestureRecognizer, GestureRecognizer, PointerId,
-    ScaleGestureRecognizer, TransformLock, gesture::ScaleStartMode,
+    gesture::{
+        AxisLock, DragAxis, DragGestureRecognizer, GestureRecognizer, ScaleGestureRecognizer,
+        ScaleStartMode, TransformLock,
+    },
+    ids::PointerId,
 };
 use flui_platform::EventTime;
 
@@ -321,12 +324,12 @@ fn axis_and_transform_locks() {
 /// swipe that `start` admits and, beside it, a vertical drag when
 /// `with_drag`: the edges the swipe reported, and whether the drag started.
 fn swipe(
-    start: flui_interaction::SwipeStart,
+    start: flui_interaction::gesture::SwipeStart,
     step: Offset<f64>,
     every: u64,
     with_drag: bool,
-) -> (Vec<flui_interaction::PhysicalEdge>, bool) {
-    use flui_interaction::SwipeGestureRecognizer;
+) -> (Vec<flui_interaction::gesture::PhysicalEdge>, bool) {
+    use flui_interaction::gesture::SwipeGestureRecognizer;
     let arena = GestureArena::new();
     let swipes = Rc::new(RefCell::new(Vec::new()));
     let s = Rc::clone(&swipes);
@@ -367,7 +370,7 @@ fn swipe(
 
 fn a_fast_release_along_the_axis_swipes_towards_its_edge() {
     use flui_foundation::geometry::Axis;
-    use flui_interaction::{PhysicalEdge, SwipeStart};
+    use flui_interaction::gesture::{PhysicalEdge, SwipeStart};
     let (right, _) = swipe(
         SwipeStart::Anywhere(Axis::Horizontal),
         Offset::new(20.0, 0.0),
@@ -386,7 +389,7 @@ fn a_fast_release_along_the_axis_swipes_towards_its_edge() {
 
 fn a_slow_release_is_no_swipe() {
     use flui_foundation::geometry::Axis;
-    use flui_interaction::SwipeStart;
+    use flui_interaction::gesture::SwipeStart;
     let (swipes, _) = swipe(
         SwipeStart::Anywhere(Axis::Horizontal),
         Offset::new(5.0, 0.0),
@@ -397,7 +400,7 @@ fn a_slow_release_is_no_swipe() {
 }
 
 fn a_swipe_from_an_edge_only_leaves_it() {
-    use flui_interaction::{PhysicalEdge, SwipeStart};
+    use flui_interaction::gesture::{PhysicalEdge, SwipeStart};
     let edge = SwipeStart::FromEdge(PhysicalEdge::Left);
     let (away, _) = swipe(edge, Offset::new(20.0, 0.0), 16, false);
     assert_eq!(away, [PhysicalEdge::Right]);
@@ -409,7 +412,7 @@ fn a_swipe_from_an_edge_only_leaves_it() {
 /// along its own axis, and the swipe keeps one moving along the swipe's.
 fn a_swipe_is_axial_in_the_arena() {
     use flui_foundation::geometry::Axis;
-    use flui_interaction::{PhysicalEdge, SwipeStart};
+    use flui_interaction::gesture::{PhysicalEdge, SwipeStart};
     let start = SwipeStart::Anywhere(Axis::Horizontal);
     assert_eq!(
         swipe(start, Offset::new(20.0, 2.0), 16, true),

@@ -5,7 +5,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use flui_interaction::{ClientToken, TextInputHandle};
+use flui_interaction::text_input::{ClientToken, TextInputHandle};
 use flui_platform::text_store::OwnerCalls;
 
 /// Commits a field's composition, keeping its text, before the field loses

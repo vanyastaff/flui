@@ -1,9 +1,9 @@
 //! Wheel and trackpad scroll latches: the first consumer of a source's
 //! sequence on a surface keeps it until the sequence ends.
 
+use rustc_hash::FxHashMap;
 use std::{
     cell::{Cell, RefCell},
-    collections::HashMap,
     rc::Rc,
 };
 
@@ -64,7 +64,7 @@ pub(super) enum ScrollAdmission {
 /// contact routes.
 #[derive(Default)]
 pub(super) struct ScrollSequences {
-    latches: RefCell<HashMap<(InputSurface, SignalSource), Rc<ScrollSequence>>>,
+    latches: RefCell<FxHashMap<(InputSurface, SignalSource), Rc<ScrollSequence>>>,
     /// Sources whose momentum packets belong to a recognizer that took the
     /// touchpad pan: the platform keeps scrolling after the fingers lift, and
     /// the recognizer already ended with its own velocity (ADR-0251 §5). A

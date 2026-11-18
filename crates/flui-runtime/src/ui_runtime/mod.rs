@@ -52,7 +52,7 @@ use flui_foundation::UiRuntimeId;
 #[cfg(test)]
 use flui_foundation::geometry::Size;
 use flui_foundation::panic::FirstPanic;
-use flui_interaction::InteractionLane;
+use flui_interaction::pointer::InteractionLane;
 #[cfg(test)]
 use flui_platform::{PlatformInput, PlatformWindow};
 #[cfg(test)]
@@ -154,7 +154,7 @@ pub(crate) use settlement::{IN_FLIGHT_FLOOR, PendingFrame};
 pub enum UiRuntimeError {
     /// The owner-local interaction lane could not be created.
     #[error("failed to create the ui_runtime interaction lane: {0}")]
-    InteractionLane(#[from] flui_interaction::InteractionDispatchError),
+    InteractionLane(#[from] flui_interaction::pointer::InteractionDispatchError),
     /// The device pixel ratio is outside the range a screen can have
     /// (`DevicePixelRatio::MIN..=MAX`).
     #[error(

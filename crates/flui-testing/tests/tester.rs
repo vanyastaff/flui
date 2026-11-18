@@ -369,7 +369,7 @@ fn a_drag_from_a_point_presses_there_and_moves_by_the_offset() {
 /// What a focused element heard: each key event as `down`/`up`/`repeat`, its
 /// key, and `^` for each of Control and Shift held.
 fn key_log() -> (Tester, Rc<std::cell::RefCell<Vec<String>>>) {
-    use flui_interaction::KeyEventResult;
+    use flui_interaction::focus::KeyEventResult;
     use flui_platform::keyboard::{Key, KeyPress, KeyState, Modifiers};
 
     let log = Rc::new(std::cell::RefCell::new(Vec::new()));
@@ -478,7 +478,7 @@ fn a_chord_with_an_unnamed_key_presses_nothing() {
 fn title_field() -> Tester {
     let field = flui_widgets::EditableText::new(
         flui_widgets::TextEditingController::with_text("Trip "),
-        flui_interaction::FocusNode::with_debug_label("title"),
+        flui_interaction::focus::FocusNode::with_debug_label("title"),
     );
     let mut t = Tester::mount(Center::new().child(SizedBox::new(300.0, 40.0).child(field)));
     t.tap(&find::role(flui_testing::Role::TextInput));
@@ -1432,7 +1432,7 @@ fn a_session_end_writes_even_when_committing_the_composition_panics() {
     let controller = flui_widgets::TextEditingController::with_text("Trip ");
     let field = flui_widgets::EditableText::new(
         controller.clone(),
-        flui_interaction::FocusNode::with_debug_label("title"),
+        flui_interaction::focus::FocusNode::with_debug_label("title"),
     );
     let mut t = Tester::mount(Column::new((book, SizedBox::new(300.0, 40.0).child(field))));
     let _ = settle(&mut t, note(&opened).load()).expect("an empty storage loads");

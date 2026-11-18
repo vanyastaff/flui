@@ -1,4 +1,4 @@
-use flui_interaction::{GestureArena, GestureSettingsProvider};
+use flui_interaction::gesture::{GestureArena, GestureSettingsProvider};
 use flui_view::{
     BoxedView, BuildContext, IntoView, LifecycleContext, StatefulView, ViewExt, ViewState,
 };

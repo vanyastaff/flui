@@ -79,7 +79,7 @@ classified; owner-side handles are owner-local; system settings became one pushe
 own crates (ADR-0154), which needs a provider that works without a window and handles that end
 their subscriptions.
 
-The one existing platform handle, `flui_interaction::ClipboardHandle`, is owner-local
+The one existing platform handle, `flui_interaction::text_input::ClipboardHandle`, is owner-local
 (`PhantomData<Rc<()>>`) and reads through a callback so it can become asynchronous (ADR-0038
 §6, superseded by ADR-0312, whose §6 keeps this handle as the clipboard's one surface); web and
 Wayland clipboards only read asynchronously. The seam must hand out that handle, not a
@@ -199,7 +199,7 @@ is keyed by the marker, not by the implementation.
 ### 2. What the seam is
 
 1. **A capability is a marker type owned by the crate that owns its handle.** The clipboard's is
-   `flui_interaction::ClipboardCapability` with `Handle = ClipboardHandle`; the handle stays
+   `flui_interaction::text_input::ClipboardCapability` with `Handle = ClipboardHandle`; the handle stays
    owner-local and `!Send`. The same rule decides where a capability's marker lives when framework
    widgets name its handle (item 10).
 2. **Providers live per UI runtime, and a handle is acquired only in a lifecycle hook.**

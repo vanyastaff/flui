@@ -6,8 +6,8 @@ use crate::common;
 use std::rc::Rc;
 
 use common::{lay_out, tight};
-use flui_interaction::KeyEventResult;
 use flui_interaction::events::{Code, Key, KeyPress, KeyState};
+use flui_interaction::focus::KeyEventResult;
 use flui_interaction::testing::input::KeyEventBuilder;
 use flui_material::{InputDecoration, TextFormField, Theme, ThemeData};
 use flui_sdk::interaction::FocusNode;

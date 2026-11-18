@@ -17,17 +17,19 @@ use flui_interaction::gesture::{
 };
 use flui_interaction::pointer::{EventPropagation, PanZoomDispatch};
 use flui_interaction::{
-    AxisLock, CancelOutcome, DoubleTapDetails, DoubleTapGestureRecognizer, DragAxis,
-    DragDownDetails, DragEndDetails, DragGestureRecognizer, DragPointerStrategy, DragStartDetails,
-    DragUpdateDetails, ForcePressDetails, ForcePressGestureRecognizer, GestureArenaMember,
-    GestureContest, GestureRecognizer, LongPressGestureRecognizer, MultiTapGestureRecognizer,
-    PointerDispatch, RecognizerSet, TapDetails, TapDownDetails, TapGestureRecognizer, TapUpDetails,
-    TransformLock, cancel_all,
-};
-use flui_interaction::{
-    PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerKindSet, PointerSource,
+    gesture::{
+        AxisLock, CancelOutcome, DoubleTapDetails, DoubleTapGestureRecognizer, DragAxis,
+        DragDownDetails, DragEndDetails, DragGestureRecognizer, DragPointerStrategy,
+        DragStartDetails, DragUpdateDetails, ForcePressDetails, ForcePressGestureRecognizer,
+        GestureArenaMember, GestureContest, GestureRecognizer, LongPressGestureRecognizer,
+        MultiTapGestureRecognizer, RecognizerSet, TapDetails, TapDownDetails, TapGestureRecognizer,
+        TapUpDetails, TransformLock, cancel_all,
+    },
+    pointer::PointerDispatch,
 };
 use flui_platform::EventTime;
+use flui_platform::input_capabilities::PointerKindSet;
+use flui_platform::pointer::{PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerSource};
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_view::prelude::*;
 
@@ -165,7 +167,7 @@ impl DragSlot {
 
     /// Called once when the drag ends, with the release velocity. An accepted
     /// drag that is cancelled ends here too, with [`DragEndDetails::reason`]
-    /// set to [`flui_interaction::GestureEndReason::Cancelled`].
+    /// set to [`flui_interaction::gesture::GestureEndReason::Cancelled`].
     pub fn on_end<F, R>(mut self, callback: F) -> Self
     where
         F: Fn(&mut EventContext<'_>, DragEndDetails) -> R + 'static,
@@ -492,7 +494,7 @@ impl PressShape {
 }
 
 /// The recognizer takes the same validated count the detector does.
-pub use flui_interaction::{MultiTapCount, MultiTapCountError};
+pub use flui_interaction::gesture::{MultiTapCount, MultiTapCountError};
 
 #[derive(Clone)]
 struct MultiTapSlot {
