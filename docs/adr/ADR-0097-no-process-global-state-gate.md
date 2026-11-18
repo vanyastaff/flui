@@ -43,7 +43,7 @@ re-checked:
 | Item | Where | Kind |
 |---|---|---|
 | `FONT_SYSTEM` | flui-painting's `text_layout/layout.rs:124` | `static OnceLock<Arc<Mutex<FontState>>>` |
-| `TIME_DILATION` | `crates/flui-scheduler/src/config.rs:43`, written at `:94` | `static AtomicU64` holding configuration |
+| `TIME_DILATION` | flui-scheduler's `config.rs:43`, written at `:94` | `static AtomicU64` holding configuration |
 | `AssetRegistry::global` | `crates/flui-assets/src/registry/mod.rs:83-90` | `static LazyLock<AssetRegistry>` behind a `pub fn` |
 | `APP_RUNTIME` | `crates/flui-app/src/app/runner/host.rs:25-47` | `thread_local!` host of every UI runtime |
 | `POLLING_PENDING_WINDOWS`, `PENDING_SECONDARY_WINDOW_OPENS`, `PENDING_SECONDARY_WINDOW_COMPLETIONS` | `crates/flui-app/src/app/runner/secondary_window.rs:453-471` | `thread_local!` queues beside the host cell |

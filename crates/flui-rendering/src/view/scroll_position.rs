@@ -1093,12 +1093,7 @@ mod tests {
 
         OwnerFrame::try_new(&scheduler)
             .expect("the scheduler has no live owner frame")
-            .drive_frame(
-                flui_scheduler::Instant::now(),
-                flui_scheduler::IdleDeadline::far_future(flui_scheduler::Instant::now()),
-                || {},
-                || {},
-            )
+            .drive_frame(flui_scheduler::Instant::now(), || {}, || {})
             .expect("live owner frame");
 
         assert_eq!(

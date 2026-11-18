@@ -31,7 +31,7 @@ refuses, typed (`IdExhausted`), forever
 `listener_and_scheduler_ids_span_the_full_64_bit_space`,
 `scheduler_and_listener_ids_are_minted_by_the_family`).
 
-The ids with no slab behind them (`ListenerId`, `FrameCallbackId`, `TaskId`,
+The ids with no slab behind them (`ListenerId`, `FrameCallbackId`, `PressId`,
 `InputSequenceId`) are opaque `NonZeroU64`s whose only
 constructor is a mint: no `Default`, no conversion from a number, so a value
 always names an issue and the never-reissue rule holds for the type, not just

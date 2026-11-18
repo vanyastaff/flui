@@ -222,12 +222,6 @@ impl UiRuntime {
         if self.has_pending_work() {
             causes.push(UnsettledCause::new(UnsettledReason::PendingWork));
         }
-        let callbacks = self.scheduler().transient_callback_count();
-        if callbacks > 0 {
-            let mut cause = UnsettledCause::new(UnsettledReason::TransientCallbacks);
-            cause.count = Some(u32::try_from(callbacks).unwrap_or(u32::MAX));
-            causes.push(cause);
-        }
         if let Some(due) = self.next_wake_excluding_agent_waits() {
             let mut cause = UnsettledCause::new(UnsettledReason::Timer);
             let remaining = due.saturating_duration_since(now);

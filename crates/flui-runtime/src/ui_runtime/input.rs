@@ -9,7 +9,7 @@ use flui_foundation::{InputSequenceId, PresentationId};
 use flui_interaction::{InputSurface, PointerEvent};
 use flui_platform::keyboard::KeyState;
 use flui_platform::pointer::{ButtonChange, PointerButton};
-use flui_platform::{DragDropEvent, EventTime, FrameRequest, PlatformInput, RefreshPeriod};
+use flui_platform::{DragDropEvent, EventTime, FrameRequest, PlatformInput};
 use flui_rendering::binding::{RendererBinding as _, ViewHitTest};
 use flui_scheduler::AppLifecycleState;
 use std::cell::Cell;
@@ -1153,15 +1153,6 @@ impl UiRuntime {
         }
         if let Some(presentation) = self.presentations.get(presentation_id) {
             presentation.frame_request.set(Some(request));
-            // The platform's report of an earlier frame shown: the
-            // presentation's frame clock keeps the newest, on its own clock.
-            if let Some(presented) = request.presented
-                && let Some(at) = self.instant_of(presented.at)
-            {
-                presentation
-                    .clock()
-                    .record_presentation(at, presented.refresh.map(RefreshPeriod::get));
-            }
         }
         if recording {
             self.record_applied(

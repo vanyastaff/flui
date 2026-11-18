@@ -147,12 +147,7 @@ impl OwnerHost {
                 continue;
             }
             let phase = entry.status().phase;
-            if matches!(
-                phase,
-                SchedulerPhase::TransientCallbacks
-                    | SchedulerPhase::MidFrameMicrotasks
-                    | SchedulerPhase::PersistentCallbacks
-            ) {
+            if phase == SchedulerPhase::Frame {
                 return Ok(Some(phase));
             }
             first.get_or_insert(phase);

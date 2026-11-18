@@ -258,7 +258,7 @@ pub use notifier::{
 pub use rebuild_reason::{RebuildReason, RebuildReasons};
 pub use sequence::{
     AtomicIdMint, DragSessionId, FrameCallbackId, IdExhausted, IdMint, InputSequenceId, ListenerId,
-    MintedId, PressId, TaskId,
+    MintedId, PressId,
 };
 pub use slot_table::{SlotIndex, SlotKey, SlotSet};
 pub use text::{

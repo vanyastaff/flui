@@ -365,7 +365,7 @@ fn waits_take_conditions_and_answer_the_last_observation() {
         "frames": 300,
         "observation": {"revision": 9, "count": 0},
         "unsettled": [
-            {"reason": "transient_callbacks", "count": 2},
+            {"reason": "pending_work"},
             {"reason": "timer", "due_in_ms": 250},
         ],
     }));

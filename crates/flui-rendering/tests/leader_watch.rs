@@ -13,7 +13,7 @@ use flui_rendering::{
     pipeline::{LeaderWatch, PipelineCell, PipelineOwner},
     testing::{SceneHost, box_node, tree, update_render_object},
 };
-use flui_scheduler::{IdleDeadline, Instant, OwnerFrame, UpdateScheduler};
+use flui_scheduler::{Instant, OwnerFrame, UpdateScheduler};
 // Lower-crate test drives a frame through the composition-root seam
 // (ADR-0081 §4) until the raw-owner suites mount under the UI runtime's
 // root scopes (ADR-0083 6b).
@@ -76,7 +76,7 @@ impl Scene {
     fn complete(&self) {
         let now = Instant::now();
         self.frame
-            .drive_frame(now, IdleDeadline::far_future(now), || {}, || {})
+            .drive_frame(now, || {}, || {})
             .expect("live owner frame");
     }
 
