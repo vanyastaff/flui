@@ -213,7 +213,7 @@ host change needs `cargo heli nextest run -p flui-native` by hand.
 ### Rules a reader holds
 
 No program checks these before the first release (ADR-0371, ADR-0375). The author follows them
-and the reader of "Before a merge" looks for a change that breaks one:
+and the readers of "Before a merge" look for a change that breaks one:
 
 - Dependencies point down the tiers. A manifest's `[package.metadata.flui]` states the crate's
   `tier`, `order`, `reach-forbid` and `allowed-dependents`, and an exception names the ADR that
@@ -320,33 +320,52 @@ with an answer you can point to in the code; the reviewers ask the same ones.
 
 The author merges a pull request once CI is green, so the author's reading is the only one a
 change is sure to get, and it is the one least able to find what is wrong: the list above is
-answered by the reasoning that wrote the code. Before the merge, a reviewer that did not write
-the change reads it to break it:
+answered by the reasoning that wrote the code. Before the merge, readers that did not write the
+change read it to break it, all at once, and a judge decides what the author must answer:
 
-- **A fresh context.** A subagent or a separate session that has seen none of the author's
-  conversation. It gets the diff against the merge base and the checkout; not the plan, not the
-  PR body, not the author's account of why the change is right.
-- **One job.** It assumes the change has a defect and looks for the input, the order of events
-  or the state that shows it, in the code around the diff as much as in the changed lines,
-  working from "Recurring defects", "Before each push" and "Review guidelines". It does not fix,
-  and it does not sum up what is good.
+- **Fresh contexts, one lens each.** Seven subagents or sessions that have seen none of the
+  author's conversation read the change in parallel, each through one lens: *records*
+  (documents, changelog, replaced forms, the expectations the diff edits, judged on the code),
+  *tests* (does each fail without its fix), *obligations* (accepted work, wakes, orders of
+  events, attribution), *unwinding* (user code, and a panic at each point and at two),
+  *boundaries* (input, identity, arithmetic), *seams* (a rule held by one host, copies of state,
+  the order of two steps, targets not built) and *rules* ("Rules a reader holds", "Code for the
+  next reader", "Current forms", "Review guidelines", "Definition of Done"). Each gets the diff
+  against the merge base and reads the reviewed head from git (`git show`, `git grep`), never a
+  working tree the author may still be editing; not the plan, not the PR body, not the author's
+  account of why the change is right. One reader
+  that covers every kind finds a kind or two per round, so a chain of single reads finds in
+  several rounds what the lenses find in one.
+- **One job.** A reader assumes the change has a defect of its kinds and looks for the input,
+  the order of events or the state that shows it, in the code around the diff as much as in the
+  changed lines. It does not fix, does not build, and does not sum up what is good.
 - **A finding is a failure scenario**, in the form [`REVIEW.md`](REVIEW.md) asks for: the state,
-  the operation, the wrong result, the `file:line`. A reviewer that finds none names the
-  scenarios it tried.
-- **The author answers each finding** under `## Review` in the PR body: fixed, with its class
-  (item 12), or refuted by the line or the test that shows the scenario cannot happen. That it
-  is unlikely is not a refutation.
-- **A fix is read again.** The review that found a defect has not seen its fix: a change pushed
-  after the review gets the same reading of its own diff.
+  the operation, the wrong result, the `file:line`. A reader that finds none names the scenarios
+  it tried.
+- **A judge merges and verifies.** One more fresh context, on the strongest model the account
+  can start, merges the findings that share a cause, opens each cited line and follows its
+  scenario, rejects only what a line or a test rules out, and ranks the rest by
+  [`REVIEW.md`](REVIEW.md). In Claude Code the workflow `review-before-merge`
+  ([`.claude/workflows/`](.claude/workflows/review-before-merge.js)) runs the readers and the
+  judge; another runtime starts the same lenses as its own subagents.
+- **The author answers each finding** the judge confirms or leaves unaccounted for, and every
+  reader's finding when no judge could be started, under `## Review` in the PR body, below the
+  line that names the head read: fixed, with its class (item 12), or refuted by the line or the
+  test that shows the scenario cannot happen. That it is unlikely is not a refutation.
+- **A fix is read again.** The readers that found a defect have not seen its fix: a change
+  pushed after the review gets the same lenses, starting from the fix (the workflow's `since`,
+  set to the head the review read).
 
 The implementer does not review and the reviewer does not implement. A pull request the `docs`
 lane takes (documentation only) skips the step; its body says so under `## Review`.
 
-The step never holds a green pull request. When no reviewer can be started (the runtime refuses
-a subagent and no second session is at hand), the author writes
-`Independent read unavailable: <reason>` under `## Review`, reads the diff once more from the
-diff alone, item by item through "Before each push", writes there the scenarios tried and what
-each showed, takes the automated review of the pull request as the second reader, and merges.
+The step never holds a green pull request. A lens that cannot be started (the runtime refuses a
+subagent, a usage limit) is named under `## Review` with its reason, the author reads the diff
+through it once more from the diff alone, and the next read gives it the whole change (the
+workflow's `unread`). When no reader can be started,
+the author writes `Independent read unavailable: <reason>` there, reads the diff item by item
+through "Before each push", writes the scenarios tried and what each showed, takes the automated
+review of the pull request as the second reader, and merges.
 
 ## Where to read next
 
@@ -355,8 +374,8 @@ tiers), `docs/platform-parity.md` and `docs/gaps.md`, [`CONTRIBUTING.md`](CONTRI
 
 ## Review guidelines
 
-Pull request reviewers (Codex, Claude Code Review, a local `/code-review`, the reader of "Before a
-merge") work from this section; [`REVIEW.md`](REVIEW.md) sets severity and scope for Claude Code
+Pull request reviewers (Codex, Claude Code Review, a local `/code-review`, the readers and the
+judge of "Before a merge") work from this section; [`REVIEW.md`](REVIEW.md) sets severity and scope for Claude Code
 Review. Report defects with a concrete failure scenario, and code an experienced Rust developer
 would be embarrassed by, with the better shape. What this repository keeps getting wrong:
 
