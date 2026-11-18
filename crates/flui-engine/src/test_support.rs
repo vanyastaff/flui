@@ -282,8 +282,8 @@ pub(crate) fn readback_pixels(
 
 /// Whether this run demands a working GPU adapter.
 ///
-/// Reads `FLUI_REQUIRE_GPU`. `cargo xtask gpu-test` sets it so adapter or
-/// device initialization failures cannot turn the local gate into successful
+/// Reads `FLUI_REQUIRE_GPU`. CI's `test` job sets it so adapter or
+/// device initialization failures cannot turn the GPU readbacks into successful
 /// skips. Direct test runs may leave it unset, as `FLUI_REQUIRE_EMOJI_FONT`
 /// does for the font-fallback fixture.
 pub(crate) fn require_gpu() -> bool {

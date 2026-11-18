@@ -364,10 +364,10 @@ check` does not.
 `testing` gates the GPU readback/oracle suites and the bench scaffolding they
 share (`OffscreenRenderer`, `PathCache` re-exports). It is off
 by default, not part of the public API, and the same name and meaning as
-flui-layer's and flui-rendering's `testing`. `cargo xtask gpu-test` sets
-`FLUI_REQUIRE_GPU=1` for both the engine and facade readback suites, so
+flui-layer's and flui-rendering's `testing`. CI's `test` job runs
+both the engine and facade readback suites with `FLUI_REQUIRE_GPU=1`, so
 missing adapter/device initialization fails instead of silently skipping, and
-`--backend` pins `WGPU_BACKEND`, which every test instance here reads. CI runs
+`WGPU_BACKEND` pins the backend, which every test instance here reads. CI runs
 the suites on Mesa's lavapipe (Vulkan) and, on main, llvmpipe (GL); the nightly platform runs
 run them on Metal (`macos-latest`) and on D3D12 through WARP (`windows-latest`); hardware
 drivers stay local runs.
