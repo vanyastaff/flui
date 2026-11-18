@@ -1620,10 +1620,14 @@ impl WindowProc {
                     DefWindowProcW(hwnd, msg, wparam, lparam)
                 }
 
-                // The monitors changed: what lies at their edges may have.
+                // The monitors changed: what lies at their edges may have,
+                // and the pointer the window holds is clipped where the
+                // displays now show its client area, or let go.
                 WM_DISPLAYCHANGE => {
                     if let Some(ctx) = ctx {
                         ctx.app_bars_may_have_changed(hwnd);
+                        ctx.hold_again(hwnd);
+                        ctx.publish_window_state(hwnd);
                     }
                     DefWindowProcW(hwnd, msg, wparam, lparam)
                 }

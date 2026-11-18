@@ -30,8 +30,8 @@ impl WindowContext {
     ///
     /// # Errors
     /// [`PlatformFailure::Failed`](flui_platform::PlatformFailure::Failed)
-    /// when Win32 refuses the clip or the raw input; the window then holds
-    /// nothing.
+    /// when no display shows the client area, or Win32 refuses the clip or
+    /// the raw input; the window then holds nothing.
     pub(crate) fn hold_pointer(
         &self,
         hwnd: HWND,
@@ -74,10 +74,11 @@ impl WindowContext {
         }
     }
 
-    /// The client area moved, resized or changed scale: clip the pointer the
-    /// window holds where the client area is now, a lock at its pixel of the
-    /// client area. A clip Win32 refuses lets the grab go, which the next
-    /// snapshot says.
+    /// The client area moved, resized or changed scale, or the displays
+    /// changed: clip the pointer the window holds where the client area is
+    /// now, a lock at its pixel of the client area a display shows. A clip no
+    /// display can show, or one Win32 refuses, lets the grab go, which the
+    /// next snapshot says.
     pub(crate) fn hold_again(&self, hwnd: HWND) {
         if let Some(held) = self.pointer_hold.get()
             && super::cursor::clip(hwnd, held).is_err()
