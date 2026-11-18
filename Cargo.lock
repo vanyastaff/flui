@@ -2416,6 +2416,9 @@ dependencies = [
  "serde",
  "thiserror 2.0.21",
  "toml",
+ "tracing",
+ "windows 0.62.2",
+ "windows-collections 0.3.2",
  "zbus 6.1.0",
  "zruntime",
 ]

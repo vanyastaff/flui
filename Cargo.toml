@@ -230,6 +230,10 @@ windows = "0.62"
 # expands to `::windows_core` paths (the Win32 text services implement
 # `ITextStoreACP`). The same 0.62 line, so no second copy.
 windows-core = "0.62"
+# The stock WinRT collections `windows` 0.62 builds on but does not re-export
+# (`IIterable` from a `Vec`): the share sheet hands its files over in one. The
+# version `windows` 0.62 itself resolves, so no second copy.
+windows-collections = "0.3"
 
 # COLLECTIONS - Used by multiple crates
 smallvec = { version = "1.13", features = ["union", "const_generics", "const_new"] }
