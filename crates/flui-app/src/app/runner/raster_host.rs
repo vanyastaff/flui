@@ -112,6 +112,7 @@ impl Default for SharedRasterHost {
 
 #[cfg(not(target_arch = "wasm32"))]
 mod bounded_wait;
+mod device_retry;
 #[cfg(not(target_arch = "wasm32"))]
 use bounded_wait::{PIPELINE_CACHE_LOAD_BOUND, wait_within};
 
@@ -1462,14 +1463,15 @@ impl RasterHost {
         SlotTurn::Clean
     }
 
-    /// Ask the executor to rebuild a device it gave up on (ADR-0267).
+    /// Give the executor a device probed in fresh instances in place of one
+    /// it gave up on (ADR-0305 §8, ADR-0267).
     pub(crate) fn retry_device(&mut self) {
         let Some(placed) = self.placed.as_mut() else {
             return;
         };
-        if let Err(error) = placed.sender.send(RasterCommand::RetryDevice) {
-            tracing::warn!(%error, "raster host: a device retry was refused");
-        }
+        let _sent = device_retry::retry_given_up(&self.factory, placed, |placed, command| {
+            placed.sender.send(command)
+        });
     }
 
     /// The first panic of `address`'s frames since the last one was taken.
@@ -1763,18 +1765,14 @@ impl RasterHost {
         slot.restore = RestorePace::default();
         let id = slot.slot;
         let restoring = if available {
-            // The device is rebuilt before the surface is made over it: a
+            // A given-up device is replaced before the surface is made: a
             // restore configured on the given-up device would be refused, and
-            // the rebuild sets up again only the surfaces already held.
-            if matches!(placed.sender.device_health(), DeviceHealth::GivenUp { .. }) {
-                match Self::send_with_room(placed, address, RasterCommand::RetryDevice, caught) {
-                    Ok(_) => {
-                        let _turned = caught.contain(|| Self::turn_for(placed, address));
-                    }
-                    Err(error) => {
-                        tracing::warn!(%error, "raster host: a device retry was refused");
-                    }
-                }
+            // the surface is made with the factory of the device's instance.
+            let retried = device_retry::retry_given_up(&self.factory, placed, |placed, command| {
+                Self::send_with_room(placed, address, command, caught)
+            });
+            if retried {
+                let _turned = caught.contain(|| Self::turn_for(placed, address));
             }
             Self::restore_surface(placed, address, Instant::now())
         } else {

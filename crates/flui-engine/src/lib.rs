@@ -299,6 +299,7 @@ pub(crate) mod gamma;
 /// (ADR-0244 §1).
 mod gpu_backend;
 mod gpu_context;
+mod gpu_probe;
 /// Windowless GPU capture: rasterize a `LayerTree` to an offscreen texture and
 /// read the pixels back (golden-image / screenshot tooling).
 pub mod headless;
@@ -517,6 +518,7 @@ pub use raster_executor::{
 pub use headless::HeadlessRenderer;
 // The one GPU context every slot renders through (ADR-0305 §1).
 pub use gpu_context::{GpuBootstrap, GpuContext};
+pub use gpu_probe::{GpuProbe, ProbedDevice};
 pub use painter::WgpuPainter;
 pub use surface_factory::{SurfaceFactory, UnconfiguredSurface};
 // Renderer (the one externally-consumed wgpu/* type)

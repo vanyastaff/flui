@@ -58,7 +58,7 @@ pub(crate) enum Lifecycle {
         slot: SlotId,
         inbox: Arc<SlotInbox>,
     },
-    RetryDevice,
+    RetryDevice(crate::ProbedDevice),
 }
 
 impl Lifecycle {
@@ -79,7 +79,7 @@ impl Lifecycle {
             Self::Release { slot } => RasterCommand::Release { slot },
             Self::Restore { slot, surface, .. } => RasterCommand::Restore { slot, surface },
             Self::Detach { slot, .. } => RasterCommand::Detach { slot },
-            Self::RetryDevice => RasterCommand::RetryDevice,
+            Self::RetryDevice(device) => RasterCommand::RetryDevice { device },
         }
     }
 }
@@ -562,9 +562,9 @@ impl RasterSender {
                 self.shared.ask_trim(level);
                 Ok(SendReceipt::Accepted)
             }
-            RasterCommand::RetryDevice => self
+            RasterCommand::RetryDevice { device } => self
                 .shared
-                .send_lifecycle(Lifecycle::RetryDevice)
+                .send_lifecycle(Lifecycle::RetryDevice(device))
                 .map(|()| SendReceipt::Accepted),
         };
         if sent.is_ok() {
@@ -1239,7 +1239,7 @@ mod speculation {
                 config: SlotConfig::new(),
             })
             .expect("the attach is accepted");
-        while shared.send_lifecycle(Lifecycle::RetryDevice).is_ok() {}
+        while shared.send_lifecycle(Lifecycle::Release { slot }).is_ok() {}
         let inbox = sender.inbox(slot).expect("the slot is held");
         let (landed_tx, landed) = std::sync::mpsc::channel();
         let raster = Arc::new(parking_lot::Mutex::new(None));

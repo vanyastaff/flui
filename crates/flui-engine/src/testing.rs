@@ -68,6 +68,9 @@ pub enum SlotCall {
     Reclaim(MemoryPressureLevel),
     /// `rebuild_device`.
     RebuildDevice,
+    /// `adopt_device`; answered from the same script as `rebuild_device`,
+    /// where a failure is ignored, since adoption cannot fail.
+    AdoptDevice,
 }
 
 /// The texture ids one `apply_textures` call on a [`ScriptedSlots`] backend
@@ -334,7 +337,7 @@ impl ScriptedSlots {
             SlotCall::Release(_) | SlotCall::DisplayColor(..) | SlotCall::Latency(..) => None,
             SlotCall::Detach(_) => script.detaches.pop_front(),
             SlotCall::Reclaim(_) => script.reclaims.pop_front(),
-            SlotCall::RebuildDevice => script.rebuilds.pop_front(),
+            SlotCall::RebuildDevice | SlotCall::AdoptDevice => script.rebuilds.pop_front(),
         }
     }
 
@@ -519,6 +522,21 @@ impl RasterBackend for ScriptedSlots {
         }
     }
 
+    fn adopt_device(&mut self, device: crate::ProbedDevice) -> Vec<(SlotId, EngineError)> {
+        drop(device);
+        let answer = self.answer(SlotCall::AdoptDevice);
+        let mut script = self.script.lock();
+        // The new device is in place before a scripted panic unwinds, as in
+        // a rebuild.
+        script.device_lost = false;
+        let refused = std::mem::take(&mut script.rebuild_refusals);
+        drop(script);
+        if let Some(ScriptedAnswer::Panic) = answer {
+            panic!("scripted device adoption panic");
+        }
+        refused
+    }
+
     fn rebuilds_inline(&self) -> bool {
         !self.script.lock().no_inline_rebuild
     }
@@ -535,6 +553,38 @@ pub fn noop_surface_factory(
     display: std::sync::Arc<dyn flui_platform::DisplayConnection>,
 ) -> crate::SurfaceFactory {
     crate::SurfaceFactory::new(noop_instance(&display), display)
+}
+
+/// What [`GpuContext::probe`](crate::GpuContext::probe) answers, made on
+/// wgpu's no-op backend over `display`: a device a test's retry hands the
+/// executor, and the factory its windows' next surfaces are made with,
+/// without a GPU. The first surface is `None`.
+///
+/// # Panics
+/// Only if the no-op backend gives no adapter or device, which it always gives.
+#[must_use]
+#[cfg(not(target_arch = "wasm32"))]
+pub fn noop_probe(
+    display: std::sync::Arc<dyn flui_platform::DisplayConnection>,
+) -> crate::GpuProbe {
+    let instance = noop_instance(&display);
+    let adapter =
+        pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
+            .expect("the no-op backend has an adapter");
+    let (device, queue) =
+        pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
+            .expect("the no-op backend gives a device");
+    crate::GpuProbe {
+        factory: crate::SurfaceFactory::new(instance.clone(), display),
+        device: crate::ProbedDevice {
+            instance,
+            adapter,
+            device,
+            queue,
+            recipe: crate::gpu_context::DeviceRecipe::Offscreen(wgpu::Features::empty()),
+        },
+        first: None,
+    }
 }
 
 /// An instance of wgpu's no-op backend alone, on `display`.

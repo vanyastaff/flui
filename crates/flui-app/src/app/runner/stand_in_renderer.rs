@@ -369,6 +369,24 @@ impl RasterBackend for StandInBackend {
             .collect::<Vec<(SlotId, EngineError)>>())
     }
 
+    /// The probed device takes the lost one's place; every window's surface
+    /// goes with the old instance, which the executor tells each window.
+    fn adopt_device(&mut self, device: flui_engine::ProbedDevice) -> Vec<(SlotId, EngineError)> {
+        drop(device);
+        let shared = &mut *self.shared.lock();
+        shared.device.lost = false;
+        let device = &shared.device;
+        shared
+            .windows
+            .iter()
+            .filter_map(|window| {
+                let slot = window.slot?;
+                let refusal = window.size.and_then(|size| device.fits(size).err())?;
+                Some((slot, refusal))
+            })
+            .collect::<Vec<(SlotId, EngineError)>>()
+    }
+
     fn rebuilds_inline(&self) -> bool {
         true
     }

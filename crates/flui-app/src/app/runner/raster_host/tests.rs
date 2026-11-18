@@ -487,15 +487,9 @@ fn a_refused_surface_is_asked_again_at_its_pace() {
     assert_eq!(hold(&host), SurfaceHold::Held);
 }
 
-/// The window's return asks a device the executor gave up on to rebuild.
-///
-/// Red-check: drop the `RetryDevice` from `set_surface` and the given-up
-/// device is not tried again: no second failure is published.
-#[test]
-fn a_window_given_back_retries_a_given_up_device() {
-    let (mut host, slots) = host();
-    let mut scene = TestScene::new(AT);
-    assert_eq!(scene.submit(&mut host), SubmitVerdict::Presented);
+/// Give the scripted device up: lost, with a backend that cannot rebuild
+/// where the executor runs.
+fn give_device_up(host: &mut RasterHost, slots: &ScriptedSlots) {
     slots.cannot_rebuild_inline();
     slots.lose_device();
     host.service(address());
@@ -505,63 +499,86 @@ fn a_window_given_back_retries_a_given_up_device() {
         DeviceHealth::GivenUp { .. }
     ));
     assert!(placed.sender.take_device_failure().is_some());
-
-    let _ = host.set_surface(address(), false);
-    host.service(address());
-    assert!(
-        host.placed
-            .as_ref()
-            .expect("placed")
-            .sender
-            .take_device_failure()
-            .is_none(),
-        "a given-up device holds"
-    );
-    let _ = host.set_surface(address(), true);
-    assert!(
-        host.placed
-            .as_ref()
-            .expect("placed")
-            .sender
-            .take_device_failure()
-            .is_some(),
-        "the window's return tried the device again"
-    );
 }
 
-/// A window given back over a given-up device the driver can rebuild again
-/// rebuilds the device before its surface is made over it: a restore
-/// configured on the lost device would be refused, and the rebuild sets up
-/// again only the surfaces already held.
+/// A window given back over a device the executor gave up on gets a device
+/// probed in fresh instances, which the executor adopts before the window's
+/// surface is made: a restore configured on the given-up device would be
+/// refused, and the surface is made with the factory of the new device's
+/// instance (ADR-0305 §8). The device is not rebuilt in place.
 ///
 /// Red-check: send the restore before the turn that serves `RetryDevice`
-/// and the backend sees the restore first.
+/// and the backend sees the restore first; drop the retry from
+/// `set_surface` and nothing adopts a device.
 #[test]
-fn a_window_given_back_rebuilds_its_device_before_its_surface() {
+fn a_window_given_back_adopts_a_probed_device_before_its_surface() {
     let (mut host, slots) = host();
     let mut scene = TestScene::new(AT);
     assert_eq!(scene.submit(&mut host), SubmitVerdict::Presented);
-    slots.cannot_rebuild_inline();
-    slots.lose_device();
-    host.service(address());
+    give_device_up(&mut host, &slots);
     let _ = host.set_surface(address(), false);
-    slots.can_rebuild_inline();
+    host.service(address());
+    let rebuilds = |calls: &[SlotCall]| {
+        calls
+            .iter()
+            .filter(|call| matches!(call, SlotCall::RebuildDevice))
+            .count()
+    };
+    let rebuilt_before = rebuilds(&slots.calls());
 
     assert!(host.set_surface(address(), true));
     let calls = slots.calls();
-    let rebuilt = calls
+    let adopted = calls
         .iter()
-        .rposition(|call| matches!(call, SlotCall::RebuildDevice))
-        .expect("the window's return rebuilt the device");
+        .rposition(|call| matches!(call, SlotCall::AdoptDevice))
+        .expect("the window's return adopted a probed device");
     let restored = calls
         .iter()
         .rposition(|call| matches!(call, SlotCall::Restore(_)))
         .expect("the window's return made its surface");
-    assert!(rebuilt < restored, "{calls:?}");
+    assert!(adopted < restored, "{calls:?}");
+    assert_eq!(rebuilds(&calls), rebuilt_before, "nothing rebuilt in place");
     assert_eq!(hold(&host), SurfaceHold::Held);
     assert_eq!(
         host.placed.as_ref().expect("placed").sender.device_health(),
         DeviceHealth::Healthy
+    );
+}
+
+/// The application's retry probes only for a device the executor gave up
+/// on: one that renders is left alone, and a given-up one is replaced by
+/// the probe's device, whose adoption asks the window for a new surface.
+///
+/// Red-check: drop the probe from `retry_device` and the given-up device
+/// is never replaced.
+#[test]
+fn a_device_retry_replaces_only_a_given_up_device() {
+    let (mut host, slots) = host();
+    let mut scene = TestScene::new(AT);
+    assert_eq!(scene.submit(&mut host), SubmitVerdict::Presented);
+    let adoptions = || {
+        slots
+            .calls()
+            .iter()
+            .filter(|call| matches!(call, SlotCall::AdoptDevice))
+            .count()
+    };
+    host.retry_device();
+    host.service(address());
+    assert_eq!(adoptions(), 0, "a device that renders is not replaced");
+
+    give_device_up(&mut host, &slots);
+    host.retry_device();
+    host.service(address());
+    assert_eq!(adoptions(), 1);
+    assert_eq!(
+        host.placed.as_ref().expect("placed").sender.device_health(),
+        DeviceHealth::Healthy
+    );
+    assert_eq!(
+        hold(&host),
+        SurfaceHold::Wanted,
+        "the old instance's surface went with the old device"
     );
 }
 

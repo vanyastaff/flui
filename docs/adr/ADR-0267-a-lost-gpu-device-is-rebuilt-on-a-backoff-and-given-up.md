@@ -122,13 +122,15 @@ impl UiRuntime {
 `AppHandle::retry_render_device` counts a request in the application's `DeviceRetry` and wakes
 every rendering window's frame. The window's next frame takes the presentation out of the given-up
 state (`UiRuntime::retry_render_device`, which marks a full repaint and asks for a frame) before its
-dirty gate, and the frame driver, seeing the runtime no longer given up, starts the streak over and
-rebuilds at once. A window whose device is healthy or still being rebuilt ignores the request. The
-wakes run without the request list's lock held.
+dirty gate, and the frame driver, seeing the runtime no longer given up, runs the backend probe in
+fresh instances and hands the executor the device it answers (ADR-0305 §8). A window whose device is
+healthy or still being rebuilt ignores the request. The wakes run without the request list's lock
+held.
 
 On Android and iOS, where the platform takes a window's surface away and gives it back, the
-window's return asks a given-up device to rebuild (`RasterHost::set_surface` sends
-`RetryDevice`): a user who leaves the application and comes back to it is the request.
+window's return replaces a given-up device the same way (`RasterHost::set_surface` sends
+`RetryDevice` with a probed device): a user who leaves the application and comes back to it is the
+request.
 
 ### Consequences
 

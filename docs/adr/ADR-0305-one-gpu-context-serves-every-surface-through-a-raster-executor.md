@@ -275,7 +275,7 @@ pub enum RasterCommand {
     Release { slot: SlotId },                          // the window's surface goes away
     Restore { slot: SlotId, surface: UnconfiguredSurface },
     Detach { slot: SlotId },
-    RetryDevice,                                       // the application asked again (ADR-0267)
+    RetryDevice { device: ProbedDevice },              // the application asked again (ADR-0267)
     Frame { slot: SlotId, snapshot: SceneSnapshot },
     Configure { slot: SlotId, change: SlotChange },
     Trim(MemoryPressureLevel),
@@ -474,10 +474,18 @@ executor runs each command under its own catch, in both placements.
   and the executor restamps every slot whenever a lost device renders again, whichever way it
   came back. A backend that cannot rebuild where the executor runs (the web, below) is given up
   at the first due attempt. After `GivenUp` the context stays given up until
-  the application sends `RetryDevice`; nothing retries on its own.
+  the application asks again; nothing retries on its own.
   That retry runs ADR-0244 decision 1's probe again in fresh instances, because the backend whose
-  rebuilds exhausted the backoff may be the cause: the factory is replaced and every slot gets a
-  new surface from the owner in a `Restore`.
+  rebuilds exhausted the backoff may be the cause. The owner runs it (`GpuContext::probe`, over
+  a window the platform still gives a surface; it blocks the owner thread and logs how long it
+  took as `gpu_probe` on the `flui.gpu` target) and sends the device it answers in
+  `RetryDevice { device: ProbedDevice }`, only for a device it read given up. The executor adopts
+  every device it is sent, in order, so its instance is the one the owner's newest factory
+  makes surfaces on. Adopting drops every window surface, since each was made on
+  the instance the device's replaces, and restamps every slot as a rebuild does; the owner's
+  factory is replaced by the probe's, and every window gets a new surface from it in a
+  `Restore`. A probe that answers no device leaves the rebuild given up for the next request
+  (`crates/flui-app/src/app/runner/raster_host/device_retry.rs`).
 - A rebuild that succeeds mints each configured slot's next surface generation, so a frame
   stamped before it is refused as after a `Restore`; a size the lost device refused is `Pending`
   again, for the new device to answer, and a size not settled keeps its barrier

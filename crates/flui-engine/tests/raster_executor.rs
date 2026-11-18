@@ -1630,6 +1630,14 @@ impl flui_engine::RasterBackend for PanicsAtAttach {
         Ok(Vec::new())
     }
 
+    fn adopt_device(
+        &mut self,
+        device: flui_engine::ProbedDevice,
+    ) -> Vec<(SlotId, flui_engine::EngineError)> {
+        drop(device);
+        Vec::new()
+    }
+
     fn rebuilds_inline(&self) -> bool {
         true
     }
@@ -2030,13 +2038,13 @@ fn a_slow_failed_rebuild_waits_its_backoff_from_when_it_ended() {
     assert_eq!(rebuilds(&rig.backend), 1, "no rebuild before the deadline");
 }
 
-/// A rebuild that keeps failing at the backoff's ceiling is given up: frames
-/// settle `DeviceLost` and no rebuild runs, however long, until the owner
-/// sends `RetryDevice`; then the device renders again (ADR-0267).
-#[test]
-fn a_given_up_rebuild_holds_until_the_owner_sends_retry_device() {
-    let mut rig = rig();
-    let at = attached(&mut rig, 1);
+/// The owner's probe answers a device for a retry, on wgpu's no-op backend.
+fn probed() -> flui_engine::ProbedDevice {
+    flui_engine::testing::noop_probe(std::sync::Arc::new(flui_engine::testing::FakeDisplay)).device
+}
+
+/// Give a slot's rebuild up after it kept failing at the backoff's ceiling.
+fn give_up(rig: &mut Rig) {
     rig.backend.lose_device();
     for _ in 0..64 {
         rig.backend
@@ -2049,6 +2057,19 @@ fn a_given_up_rebuild_holds_until_the_owner_sends_retry_device() {
         rig.clock.advance(Duration::from_secs(1));
         turns += 1;
     }
+}
+
+/// A rebuild that keeps failing at the backoff's ceiling is given up: frames
+/// settle `DeviceLost` and no rebuild runs, however long, until the owner
+/// sends `RetryDevice` with the device its probe answered in a fresh
+/// instance. The executor adopts that device instead of rebuilding on the
+/// backend whose rebuilds were given up, and the slot renders on it once
+/// restamped (ADR-0305 §8, ADR-0267).
+#[test]
+fn a_given_up_rebuild_holds_until_the_owner_sends_a_probed_device() {
+    let mut rig = rig();
+    let at = attached(&mut rig, 1);
+    give_up(&mut rig);
     let given_up = rebuilds(&rig.backend);
     assert_eq!(
         rig.sender.device_health(),
@@ -2068,21 +2089,108 @@ fn a_given_up_rebuild_holds_until_the_owner_sends_retry_device() {
 
     let _ = rig
         .sender
-        .send(RasterCommand::RetryDevice)
+        .send(RasterCommand::RetryDevice { device: probed() })
         .expect("accepted");
     let _ = rig.executor.turn();
     assert_eq!(
         rebuilds(&rig.backend),
-        given_up + 1,
-        "the asked-for rebuild runs at once"
+        given_up,
+        "adopted, not rebuilt in place"
     );
-    // The scripted failures are not spent: the asked-for rebuild failed too
-    // and is paced again, not given up.
+    assert!(
+        rig.backend.calls().contains(&SlotCall::AdoptDevice),
+        "the backend adopts the probed device"
+    );
+    assert_eq!(rig.sender.device_health(), DeviceHealth::Healthy);
+    let record = rig
+        .sender
+        .record(at.slot)
+        .expect("the owner holds the slot");
+    assert_ne!(
+        record.required_generation, at.generation,
+        "a frame stamped for the lost device is refused"
+    );
+    let adopted = Attached {
+        generation: record.required_generation,
+        ..at
+    };
+    let _ = rig.sender.send(frame(adopted, 2)).expect("accepted");
+    let _ = rig.executor.turn();
     assert_eq!(
-        rig.sender.device_health(),
-        DeviceHealth::Rebuilding { attempts: 1 }
+        verdicts(&rig.sender, at.slot),
+        [(2, RasterVerdict::Presented)]
     );
 }
+
+/// A probed device is adopted whatever health it meets: the owner makes its
+/// windows' surfaces with the factory of the last device it sent, so a second
+/// probe sent before the first was served (two windows' frames each read the
+/// device given up) is adopted too, and the context ends on that device's
+/// instance. A device that renders, or a rebuild still paced, is replaced as
+/// a given-up one is.
+///
+/// Red-check: adopt only while the rebuild is given up, and the second
+/// probe's device is dropped while the owner's factory is already its.
+#[test]
+fn every_probed_device_sent_is_adopted_in_order() {
+    for lost in [false, true] {
+        let mut rig = rig();
+        let at = attached(&mut rig, 1);
+        if lost {
+            rig.backend.lose_device();
+            rig.backend
+                .script_rebuild(ScriptedAnswer::Fail(EngineError::GpuUnavailable));
+            let _ = rig.executor.turn();
+            assert_eq!(
+                rig.sender.device_health(),
+                DeviceHealth::Rebuilding { attempts: 1 }
+            );
+        }
+        let _ = rig
+            .sender
+            .send(RasterCommand::RetryDevice { device: probed() })
+            .expect("accepted");
+        let _ = rig.executor.turn();
+        let adoptions = || {
+            rig.backend
+                .calls()
+                .iter()
+                .filter(|call| **call == SlotCall::AdoptDevice)
+                .count()
+        };
+        assert_eq!(adoptions(), 1, "lost: {lost}");
+        assert_eq!(rig.sender.device_health(), DeviceHealth::Healthy);
+        let record = rig
+            .sender
+            .record(at.slot)
+            .expect("the owner holds the slot");
+        assert_ne!(
+            record.required_generation, at.generation,
+            "an adoption restamps the slot, lost: {lost}"
+        );
+    }
+
+    let mut rig = rig();
+    let _at = attached(&mut rig, 1);
+    give_up(&mut rig);
+    for _ in 0..2 {
+        let _ = rig
+            .sender
+            .send(RasterCommand::RetryDevice { device: probed() })
+            .expect("accepted");
+    }
+    let _ = rig.executor.turn();
+    let adoptions = rig
+        .backend
+        .calls()
+        .iter()
+        .filter(|call| **call == SlotCall::AdoptDevice)
+        .count();
+    assert_eq!(adoptions, 2, "the second probe is the one the owner's factory serves");
+    assert_eq!(rig.sender.device_health(), DeviceHealth::Healthy);
+}
+
+
 /// A rebuild that panics once its new device is in place leaves the backend
 /// rendering: the slots are restamped before the turn serves them, so a frame
 /// stamped before the loss is refused, and the panic is resumed once the turn
