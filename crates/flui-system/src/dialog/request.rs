@@ -319,7 +319,7 @@ impl FileFilter {
 /// ASCII case: the one rule a name is matched by (ADR-0360 §3). `name` is a
 /// file name in the bytes its system keeps it in; an extension is ASCII, so
 /// the rule reads no character of a name that is not UTF-8.
-pub(crate) fn name_ends_in(name: &[u8], extension: &str) -> bool {
+fn name_ends_in(name: &[u8], extension: &str) -> bool {
     let extension = extension.as_bytes();
     name.len()
         .checked_sub(extension.len())
@@ -553,7 +553,10 @@ impl OpenRequest {
         self
     }
 
-    /// The folder the dialog opens in: an absolute path.
+    /// The folder the dialog opens in: an absolute path. The dialog opens
+    /// there each time it is asked to, over the folder the system remembers
+    /// from the user's last dialog; a request that sets none opens where the
+    /// system would.
     ///
     /// Windows names the folder to its dialog, so one that is gone or cannot
     /// be reached answers [`DialogError::Failed`](super::DialogError::Failed)

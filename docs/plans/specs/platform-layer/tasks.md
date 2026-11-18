@@ -7977,6 +7977,50 @@ GPU-память простаивающего или невидимого окн
   (перепутанные `Always`/`WhenScrolling` в разборе — падают),
   `a_forced_brightness_or_a_light_accent_keeps_the_theme_legible` (акцент при любой яркости —
   падает). Android всё ещё роняет всё чтение целиком — `docs/gaps.md`.
+- [x] **Краевые случаи диалогов `flui-system`** (строки в таблице нет: сверка файловых диалогов
+  и message box с rfd, `PolyMeilex/rfd`) — ветка `system/dialog-edge-cases`, решение — ADR-0371.
+  Построено. Фильтр: `FileFilter::all_files` (тип, а не строка `*`; запрос с ним принимает любой
+  выбор) и точное имя `with_file_name` (`Makefile`, `.env`; без учёта регистра ASCII,
+  `MalformedRequest::FileName`); Windows — `*.*` и имя как шаблон, портал — `*` и глоб имени в
+  трёх написаниях, macOS — панель без типов, имя проверяет делегат. Windows: `\\?\C:\…` и
+  `\\?\UNC\…` приводятся к обычному виду общим `win32::verbatim` (лаунчер берёт его же), папка,
+  которую оболочка не разбирает, отвечает `Failed(Os)`; окно без Win32-дескриптора — `NoWindow`
+  (раньше диалог и box показывались без владельца). Портал: имя без расширения дополняется
+  расширением выбранного фильтра (`FileFilter::completes`), кроме случая, когда файл с таким
+  именем уже есть: о нём диалог пользователя не спрашивал. Message box: без заголовка — пустой
+  заголовок на всех хостах (Windows показывал «Error»), `default_button`, `detail`,
+  `button_label`; Windows показывает деталь и кнопку по умолчанию, подписи оставляет системные
+  (`MessageBoxW` их не меняет), macOS показывает всё и сам ставит Return и Escape. Скрытые
+  файлы: `show_hidden` (`FOS_FORCESHOWHIDDEN`, `showsHiddenFiles`; у портала и браузера опции
+  нет). macOS: `openPanel`/`savePanel`, вернувшие nil, отвечают `Unavailable` (привязка objc2
+  объявляет их ненулевыми и паниковала бы). Запись содержимого (`dialog::write`): через ссылку —
+  в её файл, режим заменяемого файла сохраняется, где соседний файл не создать — запись на
+  месте. Тесты, в скобках результат с откатом:
+  `a_pick_whose_name_ends_in_no_extension_of_the_filters_refuses_the_whole_answer` и
+  `a_filter_means_a_files_name_or_its_type_ignoring_ascii_case` (новые строки),
+  `a_typed_name_without_an_extension_is_completed_by_the_selected_filters_first`,
+  `a_message_box_carries_its_detail_its_default_button_and_its_labels_to_the_system`;
+  Windows 11 через nextest: `a_verbatim_folder_is_named_to_the_dialog_in_the_form_the_shell_reads`
+  (папка уходит с префиксом), `a_folder_the_shell_cannot_name_fails_the_request_before_anything_is_shown`
+  (настоящая оболочка, диалог не показан; без правки — `Ok`),
+  `a_box_shows_its_title_or_none_its_detail_below_its_message_and_its_default_button` (заголовок
+  «Error»), `the_default_button_is_named_by_its_place_among_the_buttons` (всегда первая),
+  `a_window_that_is_no_win32_window_is_refused_and_shows_no_dialog` и `…_no_box`,
+  `a_verbatim_path_loses_its_prefix_only_where_the_plain_form_names_the_same_file`; WSL:
+  `a_save_to_a_symlink_updates_its_target` (ссылка заменена файлом, цель прежняя),
+  `a_save_keeps_the_mode_of_the_file_it_replaces` (режим по умолчанию),
+  `a_save_where_no_file_can_be_made_beside_the_chosen_one_writes_into_it` (отказ),
+  `a_portal_save_without_an_extension_is_named_after_the_selected_filter` (имя как набрано),
+  `a_file_name_is_its_own_glob_and_every_file_is_one_star`; модели macOS на всех хостах:
+  `a_filter_of_every_file_frees_the_panel_and_a_named_file_leaves_it_to_the_delegate`,
+  `a_panel_appkit_did_not_make_answers_unavailable_and_one_it_made_is_used`,
+  `return_presses_the_default_button_and_escape_the_one_that_cancels_under_any_label`. Не
+  прогнаны: ни один настоящий диалог, панель или alert; вызовы AppKit — только проверка типов
+  (`aarch64-apple-darwin`). Web не тронут (его каталог ведёт другой автор): деталь, кнопка по
+  умолчанию, подписи и отображение новых видов фильтра там не построены — `docs/gaps.md`.
+  Остальное в долгах там же и в заметках строк «Open, save and folder dialogs» и «Message box»:
+  фокус клавиатуры после закрытия диалога, пустая панель macOS после отмены, смена расширения
+  при смене фильтра на Windows, Escape у box, чья кнопка по умолчанию — Cancel.
 
 ## Отступление от порядка, решённое владельцем
 

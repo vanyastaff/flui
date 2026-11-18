@@ -9,10 +9,11 @@
   §4 and §5 (a host maps a filter or refuses, the first filter starts selected),
   [ADR-0344](ADR-0344-a-dialog-lasts-while-its-caller-holds-it-and-ends-with-its-window.md) §4 (an
   answer is one the request can have)
-- **Sources:** `PolyMeilex/rfd@2d35d7d07ab4d021ca92e5378ae0e6ed5fbf8d01`
-  `src/backend/win_cid/file_dialog/dialog_ffi.rs:219-221` (the `*.*` entry Windows gets when no
-  filter is given), `src/backend/xdg_desktop_portal.rs:55-59` (an extension `*` or an empty one
-  sent as the glob `*`)
+- **Sources:** `PolyMeilex/rfd@2d35d7d07a`
+  [`dialog_ffi.rs:219`](https://github.com/PolyMeilex/rfd/blob/2d35d7d07ab4d021ca92e5378ae0e6ed5fbf8d01/src/backend/win_cid/file_dialog/dialog_ffi.rs#L219)
+  (the `*.*` entry Windows gets when no filter is given) and
+  [`xdg_desktop_portal.rs:55`](https://github.com/PolyMeilex/rfd/blob/2d35d7d07ab4d021ca92e5378ae0e6ed5fbf8d01/src/backend/xdg_desktop_portal.rs#L55)
+  (an extension `*` or an empty one sent as the glob `*`)
 
 ## Context and problem statement
 
