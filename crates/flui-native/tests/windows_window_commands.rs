@@ -2983,10 +2983,19 @@ fn a_grab_is_held_while_focused_and_let_go_with_the_focus() {
         assert_eq!(cursor_clip_of(hwnd), grab, "{grab:?} held by the desktop");
     }
     // A lock keeps its pixel of the client area when the window moves and
-    // resizes, never an old screen pixel over another window.
+    // resizes, never an old screen pixel over another window. The move keeps
+    // the window on a 1024x768 display (a CI runner's): the desktop clamps a
+    // cursor clip to the screen, so a locked pixel moved off it is no pixel of
+    // the client. It is a real move, away from where the window opened.
+    let opened_at = window.state().outer.position().expect("a position").at();
+    let (x, y) = if opened_at.x < 200.0 {
+        (300.0, 250.0)
+    } else {
+        (40.0, 40.0)
+    };
     apply(
         &window,
-        WindowCommand::SetPosition(on_its_display(&window, 900.0, 700.0)),
+        WindowCommand::SetPosition(on_its_display(&window, x, y)),
     );
     settle();
     assert_eq!(
