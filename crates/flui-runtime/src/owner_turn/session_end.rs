@@ -7,10 +7,11 @@
 use std::any::Any;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
+#[cfg(not(target_arch = "wasm32"))]
 use std::time::Duration;
 
-use flui_foundation::PresentationAddress;
 use flui_foundation::panic::{FirstPanic, discard_payload, payload_text};
+use flui_foundation::{MonotonicClock, PresentationAddress};
 use flui_platform::{
     HostNotice, SessionEndAnswer, SessionEndBlock, SessionEndPhase, SessionEndRequest,
     SessionEndSupport,
@@ -22,13 +23,14 @@ use super::{CloseRequestRouter, CloseResponse};
 /// The least of the session end's budget that must be left for a step that
 /// runs application code to start, so the flush keeps time to write
 /// (ADR-0260, "the 1 s threshold").
-pub const SESSION_END_USER_CODE_THRESHOLD: Duration = Duration::from_secs(1);
+#[cfg(not(target_arch = "wasm32"))]
+const SESSION_END_USER_CODE_THRESHOLD: Duration = Duration::from_secs(1);
 
 /// How long the framework's part of a session end may take where the platform
 /// lets it end with `support`: [`SESSION_END_BUDGET`](flui_view::__runtime::SESSION_END_BUDGET),
 /// or less where the platform waits a shorter bounded time.
-#[must_use]
-pub fn session_end_budget(support: Option<SessionEndSupport>) -> Duration {
+#[cfg(not(target_arch = "wasm32"))]
+fn session_end_budget(support: Option<SessionEndSupport>) -> Duration {
     use flui_view::__runtime::SESSION_END_BUDGET;
     match support {
         Some(SessionEndSupport::Delay { max }) => max.min(SESSION_END_BUDGET),
@@ -63,6 +65,10 @@ impl NoticeDelivery {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum SessionEndStep {
+    /// A window asked at the query whether the session may end: what its
+    /// question ran past its close handler's own answer (the handler's drop,
+    /// the report of its panic).
+    Query,
     /// A subscriber of a session-end notice.
     Notice,
     /// A `Detached` observer at the session's end, or a window's close.
@@ -76,7 +82,8 @@ pub enum SessionEndStep {
 ///
 /// Each method runs on the owner thread, with no borrow of the [`SessionEnd`]
 /// held, and may run application code; the session end contains a panic
-/// that escapes [`deliver_notice`](Self::deliver_notice),
+/// that escapes a window's question at the query,
+/// [`deliver_notice`](Self::deliver_notice),
 /// [`close_for_session_end`](Self::close_for_session_end) or
 /// [`flush`](Self::flush) and hands it to [`contained`](Self::contained), so
 /// every later step still runs and the platform still gets its answer.
@@ -84,6 +91,11 @@ pub trait SessionEndHost {
     /// How the platform lets the session end; `None` while the host has no
     /// platform to ask.
     fn support(&self) -> Option<SessionEndSupport>;
+
+    /// The clock the session end's budget runs on: the operating system's on
+    /// a runner, the test's manual clock on a headless host, where a slow run
+    /// spends none of the budget and only the test moves it.
+    fn clock(&self) -> Rc<dyn MonotonicClock>;
 
     /// The router the host's presentations are registered with; `None` while
     /// the host's state cannot be read.
@@ -201,7 +213,7 @@ impl SessionEnd {
     ///
     /// A [`Query`](SessionEndPhase::Query) asks the close of every askable
     /// presentation with [`CloseReason::SessionEnd`], its close handler then
-    /// its guard ([`CloseRequestRouter::consult_session_end`]), where the
+    /// its guard ([`CloseRequestRouter::consult`]), where the
     /// platform holds the session for a block; each refusal holds a block
     /// on the query's request until its window carries its close out
     /// ([`release_refusal`](Self::release_refusal)). The query is then one
@@ -217,8 +229,9 @@ impl SessionEnd {
     ///
     /// [`Ending`](SessionEndPhase::Ending) delivers
     /// [`HostNotice::SessionEnded`] while the budget
-    /// ([`session_end_budget`]) can absorb application code
-    /// ([`SESSION_END_USER_CODE_THRESHOLD`]); where the platform ends the
+    /// ([`SESSION_END_BUDGET`](flui_view::__runtime::SESSION_END_BUDGET), or
+    /// a platform's shorter delay, on [`SessionEndHost::clock`]) leaves a
+    /// second for application code; where the platform ends the
     /// application with the session ([`Hold`](SessionEndSupport::Hold),
     /// [`Delay`](SessionEndSupport::Delay)) every runtime then hears
     /// `Detached`; what the documents published is written, then what the
@@ -271,8 +284,7 @@ impl SessionEnd {
     }
 
     /// Whether a window still refuses the session end being answered.
-    #[must_use]
-    pub fn has_refusals(&self) -> bool {
+    fn has_refusals(&self) -> bool {
         !self.book.borrow().refusals.is_empty()
     }
 
@@ -307,12 +319,19 @@ impl SessionEnd {
         if let Some(delivery) = delivery
             && !delivery.is_complete()
         {
-            tracing::warn!(
-                queued = delivery.queued,
-                refused = delivery.refused,
-                "a session end arrived while a UI runtime was busy; its subscribers hear it after \
-                 the answer and cannot hold the session"
-            );
+            // A subscriber is user code; the platform still gets its answer.
+            let mut caught = FirstPanic::new();
+            caught.contain(|| {
+                tracing::warn!(
+                    queued = delivery.queued,
+                    refused = delivery.refused,
+                    "a session end arrived while a UI runtime was busy; its subscribers hear it \
+                     after the answer and cannot hold the session"
+                );
+            });
+            if let Some(payload) = caught.into_payload() {
+                host.contained(SessionEndStep::Notice, payload);
+            }
         }
         if delivery.is_some() || self.has_refusals() {
             held
@@ -327,23 +346,37 @@ impl SessionEnd {
     /// is asked. Each refusal is published before the next window is asked:
     /// a later handler that finishes the work and closes a window that
     /// already refused releases it through that close.
-    fn refuse(&self, host: &dyn SessionEndHost, request: &SessionEndRequest) {
+    ///
+    /// A panic that escapes one window's question (its handler's drop, a
+    /// subscriber of the router's report) is no answer, so that window
+    /// refuses, as a handler's own panic does; every later window is still
+    /// asked, and the first such panic goes to [`SessionEndHost::contained`].
+    fn refuse(&self, host: &mut dyn SessionEndHost, request: &SessionEndRequest) {
         if host.support() != Some(SessionEndSupport::Hold) {
             return;
         }
         let Some(router) = host.router() else {
             return;
         };
+        let mut caught = FirstPanic::new();
         for address in host.askable_presentations() {
-            if router.consult_session_end(address) != CloseResponse::KeepOpen {
+            let answer = caught
+                .contain(|| router.consult(address, CloseReason::SessionEnd))
+                .unwrap_or(CloseResponse::KeepOpen);
+            if answer != CloseResponse::KeepOpen {
                 continue;
             }
             match request.block("a window waits for the user's decision") {
                 Ok(block) => self.book.borrow_mut().refusals.push((address, block)),
                 Err(error) => {
-                    tracing::warn!(?address, %error, "a window's refusal holds no block");
+                    caught.contain(|| {
+                        tracing::warn!(?address, %error, "a window's refusal holds no block");
+                    });
                 }
             }
+        }
+        if let Some(payload) = caught.into_payload() {
+            host.contained(SessionEndStep::Query, payload);
         }
     }
 
@@ -381,7 +414,8 @@ fn deliver_contained(
 #[cfg(not(target_arch = "wasm32"))]
 fn end(host: &mut dyn SessionEndHost) -> SessionEndAnswer {
     let support = host.support();
-    let deadline = std::time::Instant::now() + session_end_budget(support);
+    let clock = host.clock();
+    let deadline = clock.now() + session_end_budget(support);
     // A platform that only tells, or a phone leaving the screen, reports that
     // the process may be killed, not that the application is over: it may
     // come back to the same UI. Only a platform that holds or delays the
@@ -395,10 +429,8 @@ fn end(host: &mut dyn SessionEndHost) -> SessionEndAnswer {
     // Detached observer may still publish what the flush then writes. Each
     // runtime's code starts only while the margin is left, whatever the
     // runtimes before it spent.
-    let margin_left = move || {
-        deadline.saturating_duration_since(std::time::Instant::now())
-            >= SESSION_END_USER_CODE_THRESHOLD
-    };
+    let margin_left =
+        || deadline.saturating_duration_since(clock.now()) >= SESSION_END_USER_CODE_THRESHOLD;
     let _delivery = deliver_contained(host, &HostNotice::SessionEnded, &margin_left);
     if ends_application {
         let mut caught = FirstPanic::new();
@@ -422,7 +454,7 @@ fn end(host: &mut dyn SessionEndHost) -> SessionEndAnswer {
     }
     match (support, unfinished) {
         (Some(SessionEndSupport::Background { window }), Some(writes)) => {
-            host.hold_background(writes, std::time::Instant::now() + window)
+            host.hold_background(writes, clock.now() + window)
         }
         _ => SessionEndAnswer::Proceed,
     }
@@ -443,6 +475,10 @@ impl SessionEndStep {
     pub fn log(self, payload: Box<dyn Any + Send>) {
         let text = payload_text(&*payload).unwrap_or("<non-string panic payload>");
         match self {
+            Self::Query => tracing::error!(
+                panic = text,
+                "asking a window at a session-end query panicked; the window refuses"
+            ),
             Self::Notice => tracing::error!(
                 panic = text,
                 "a session-end subscriber panicked; the session end is answered regardless"

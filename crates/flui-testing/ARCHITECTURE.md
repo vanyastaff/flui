@@ -53,7 +53,10 @@ Its frame driver is `HeadlessHost`, which pumps a
   next turn after the router is asked as for the program's close (a runner's
   window queue); what the guards let through is routed by `settled_steps` and
   carried out contained, the first panic resumed after the rest; a quit asks
-  every window with `ask_quit`. What the host supplies is what a step does to
+  every window through a `QuitConsultation`, contained like the other steps,
+  which cancels the quit if a panic unwinds out of it. The session end's
+  budget runs on the host's manual clock (`SessionEndHost::clock`), so a slow
+  test spends none of it. What the host supplies is what a step does to
   its own state (`HeadlessSessionEnd` in `src/host/turn.rs`): the notice
   reaches its one runtime, `Detached` goes through
   `UiRuntime::update_host_lifecycle`, the flush runs the queued writes without
@@ -79,8 +82,10 @@ Its frame driver is `HeadlessHost`, which pumps a
   (`a_runtime_without_a_primary_selection_answers_not_registered`,
   `a_plugin_the_test_registers_answers_and_an_override_replaces_it`). The
   native-window capability names a type of `flui-app`, above this crate,
-  which registers it as a host-specific built-in: a test of a widget that
-  reaches `flui::native` runs on `flui_app::testing`.
+  which registers it as a host-specific built-in, and the registry's host
+  bridge carries no activity results: a test of a widget that reaches
+  `flui::native` or an activity result runs on `flui_app::testing`
+  ([gap](../../docs/gaps.md#the-headless-host-lacks-the-runners-host-bridge-and-its-owner-turn-rows-run-only-headless)).
 - **A phone's trip is delivered in a phone's order.** `Tester::background`
   reports focus lost, execution suspended, hidden, then the session's
   `Ending` (the session-ended notice, then the documents' write) with the

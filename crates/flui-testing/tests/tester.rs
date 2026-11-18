@@ -830,6 +830,95 @@ fn a_close_handler_the_test_registers_keeps_the_window_open() {
     assert_eq!(asked.get(), 1);
 }
 
+/// A log subscriber that fails on every event of the owner turn's steps, as
+/// a faulty one does.
+struct FailsOnOwnerTurnEvents;
+
+impl tracing::Subscriber for FailsOnOwnerTurnEvents {
+    fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+        true
+    }
+
+    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+
+    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+
+    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+
+    fn event(&self, event: &tracing::Event<'_>) {
+        if event
+            .metadata()
+            .target()
+            .starts_with("flui_runtime::owner_turn")
+        {
+            panic!("log subscriber failed");
+        }
+    }
+
+    fn enter(&self, _: &tracing::span::Id) {}
+
+    fn exit(&self, _: &tracing::span::Id) {}
+}
+
+/// A quit whose consultation a panic unwinds out of (the report of the
+/// close handler's panic reaching a log subscriber that fails) costs the
+/// turn none of its later steps: the note the handler saved before it
+/// panicked is written in that turn, the window stays open, and the next
+/// quit is asked again and goes ahead.
+///
+/// Fails against a turn that runs the consultation uncontained: the panic
+/// skips the turn's writes and the note stays unwritten.
+#[test]
+fn a_quit_whose_consultation_panics_still_lets_the_turn_write() {
+    use flui_runtime::owner_turn::{CloseRequestHandler, CloseResponse};
+
+    let panics = Rc::new(std::cell::Cell::new(true));
+    let panicking = Rc::clone(&panics);
+    let storage = flui_testing::storage::MemoryStorage::new();
+    let (view, opened) = notebook(false);
+    let saved = Rc::clone(&opened);
+    let mut t = Tester::mount_in(
+        view,
+        TestWindow::default()
+            .storage(storage.clone())
+            .close_request_handler(CloseRequestHandler::new(move |_| {
+                if panicking.get() {
+                    note(&saved)
+                        .set(Note("draft".to_owned()))
+                        .expect("a loaded note takes a value");
+                    panic!("deliberate handler panic under test");
+                }
+                CloseResponse::Close
+            })),
+    );
+    let _ = settle(&mut t, note(&opened).load()).expect("an empty storage loads");
+
+    let turn = tracing::subscriber::with_default(FailsOnOwnerTurnEvents, || {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| t.request_quit()))
+    });
+    assert!(turn.is_err(), "the subscriber's panic reaches the test");
+    assert!(
+        storage
+            .contents(&flui_platform::StorageName::from_static("note"))
+            .is_some(),
+        "the turn wrote the note past the panic"
+    );
+    assert!(!t.is_closed(), "the quit was cancelled");
+
+    // The note's save still holds the window's close as the quit is asked:
+    // the quit waits for it, and the frame after the hold's release carries
+    // the quit out.
+    panics.set(false);
+    t.request_quit();
+    t.pump();
+    assert!(
+        t.is_closed(),
+        "the next quit was asked again and went ahead"
+    );
+}
+
 #[test]
 fn the_window_losing_focus_makes_the_application_inactive() {
     use flui_view::AppLifecycleState::{Inactive, Resumed};

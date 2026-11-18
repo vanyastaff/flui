@@ -287,7 +287,7 @@ pub fn window_handle(
 ///
 /// Owner-thread only, like every other operation on a hosted UI runtime — a
 /// call from a thread that runs no FLUI loop is REFUSED with
-/// [`NoHostedRuntime`](crate::CloseRequestError::NoHostedRuntime) rather
+/// [`NoHostedRuntime`](PresentationCloseError::NoHostedRuntime) rather
 /// than silently doing nothing. That matters for the deferral case above:
 /// the work an application finishes before calling this often finishes on a
 /// worker, and the runtime that hosts the presentations is the loop
@@ -313,8 +313,9 @@ pub fn window_handle(
 ///
 /// # Errors
 ///
-/// [`CloseRequestError::NoHostedRuntime`](crate::CloseRequestError::NoHostedRuntime)
-/// when the calling thread hosts no FLUI runtime,
+/// [`PresentationCloseError::NoHostedRuntime`] when the calling thread hosts
+/// no FLUI runtime, and otherwise [`PresentationCloseError::Close`] with the
+/// window's refusal:
 /// [`CloseRequestError::UnknownPresentation`](crate::CloseRequestError::UnknownPresentation)
 /// when no presentation is registered at `address` (never installed, or
 /// already closed),
@@ -326,9 +327,7 @@ pub fn window_handle(
 /// window took the close and failed it.
 pub fn request_presentation_close(
     address: flui_foundation::PresentationAddress,
-) -> Result<(), crate::app::CloseRequestError> {
-    use crate::app::CloseRequestError;
-
+) -> Result<(), PresentationCloseError> {
     // Read whether this thread hosts a loop and its router in ONE visit,
     // then leave the thread-local: `WindowCommand::Close` fires the window's
     // own `on_close`, which re-enters `APP_RUNTIME` through
@@ -341,9 +340,38 @@ pub fn request_presentation_close(
         (state.hosts_loop, state.close_requests())
     });
     if !hosts_loop {
-        return Err(CloseRequestError::NoHostedRuntime);
+        return Err(PresentationCloseError::NoHostedRuntime);
     }
-    router.request_close(address)
+    Ok(router.request_close(address)?)
+}
+
+/// Why [`request_presentation_close`] closed no window.
+#[derive(Debug, thiserror::Error, PartialEq)]
+#[non_exhaustive]
+pub enum PresentationCloseError {
+    /// The calling thread hosts no FLUI runtime at all, so it has no
+    /// presentations to close.
+    ///
+    /// The common cause is calling from a worker thread after finishing
+    /// the work a [`CloseResponse::KeepOpen`](crate::CloseResponse::KeepOpen)
+    /// answer deferred. Marshal back to the thread that ran the handler and
+    /// call from there.
+    ///
+    /// Reported instead of
+    /// [`CloseRequestError::UnknownPresentation`](crate::CloseRequestError::UnknownPresentation)
+    /// because the two are genuinely different failures and a caller can act
+    /// on the difference. It is thread-scoped rather than process-scoped on
+    /// purpose: a process may host several event loops on several threads
+    /// (`AppRuntime` is thread-local by design), so "the owner thread" is not
+    /// a process-wide fact this call could consult.
+    #[error(
+        "this thread hosts no FLUI runtime; request the close from the thread that runs the \
+         presentation's event loop"
+    )]
+    NoHostedRuntime,
+    /// This thread's loop asked the window, which refused the close.
+    #[error(transparent)]
+    Close(#[from] crate::app::CloseRequestError),
 }
 
 /// Run `root` in a main window with the default configuration and the

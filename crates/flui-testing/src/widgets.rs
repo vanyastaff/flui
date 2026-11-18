@@ -620,7 +620,10 @@ impl LaidOut {
     /// the session-ended notice, then the presentation hears `Detached`, what
     /// the documents published is written, and the window closes past every
     /// hold ([`CloseReason::SessionEnd`](flui_view::CloseReason::SessionEnd)
-    /// can no longer be refused once the session is ending).
+    /// can no longer be refused once the session is ending). On `wasm32`,
+    /// where the session's end is the browser's `pagehide`, the notice is
+    /// all: nothing hears `Detached`, nothing is written and the window
+    /// stays open.
     ///
     /// # Panics
     ///

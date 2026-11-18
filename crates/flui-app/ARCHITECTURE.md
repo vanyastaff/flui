@@ -416,7 +416,7 @@ the dispatch layer moves there too.
   neither `Send` nor `Sync` (`flui-runtime`'s `close_request_matrix`, where
   the router lives with the other owner-turn steps, asserts it), and a thread
   that runs no loop finds no runtime of its own, so a close it asks for is
-  answered `NoHostedRuntime`
+  answered `PresentationCloseError::NoHostedRuntime`
   (`a_close_from_a_thread_without_a_loop_is_refused`). A table is borrowed
   only inside its owner's methods (the router's publication holds the router,
   not a borrow of its table), and code the owner does not own (a handler, a

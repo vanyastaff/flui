@@ -335,20 +335,17 @@ pub(super) fn drive_native_text_sizing() {
     });
 }
 
-/// Whether this platform's window system asks the application before a
-/// window closes (ADR-0260): a desktop's does; Android's, iOS's and the web's
-/// never do.
-const WINDOWS_ASK_TO_CLOSE: bool = !cfg!(any(
-    target_os = "android",
-    target_os = "ios",
-    target_arch = "wasm32"
-));
-
 /// Every close the installed platform lets the application refuse
-/// ([`close_vetoes`](flui_runtime::owner_turn::close_vetoes)).
+/// ([`close_vetoes`](flui_runtime::owner_turn::close_vetoes)), on the
+/// platform this runner was built for.
 fn close_vetoes() -> Vec<flui_view::CloseReason> {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the runner refuses the closes of the platform it was built for"
+    )]
+    let platform = flui_platform::TargetPlatform::current();
     flui_runtime::owner_turn::close_vetoes(
-        WINDOWS_ASK_TO_CLOSE,
+        platform,
         with_owner_platform(flui_native::OwnerPlatform::session_end_support),
     )
 }
@@ -506,6 +503,11 @@ struct RunnerSessionEnd;
 impl flui_runtime::owner_turn::SessionEndHost for RunnerSessionEnd {
     fn support(&self) -> Option<flui_platform::SessionEndSupport> {
         session_end_platform(flui_native::OwnerPlatform::session_end_support)
+    }
+
+    /// The operating system's: the platform ends the session on it.
+    fn clock(&self) -> Rc<dyn flui_foundation::MonotonicClock> {
+        Rc::new(flui_foundation::SystemClock)
     }
 
     fn router(&self) -> Option<Rc<flui_runtime::owner_turn::CloseRequestRouter>> {

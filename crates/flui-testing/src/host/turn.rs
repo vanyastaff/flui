@@ -10,8 +10,8 @@ use flui_foundation::panic::FirstPanic;
 use flui_foundation::{PresentationAddress, PresentationId};
 use flui_platform::{HostNotice, SessionEndAnswer, SessionEndPhase, SessionEndSupport};
 use flui_runtime::owner_turn::{
-    CloseRequestRouter, CloseResponse, NoticeDelivery, QuitVerdict, SessionEndHost, SessionEndStep,
-    SettledStep, ask_quit, settled_steps,
+    CloseRequestRouter, CloseResponse, NoticeDelivery, QuitConsultation, QuitVerdict,
+    SessionEndHost, SessionEndStep, SettledStep, settled_steps,
 };
 use flui_runtime::ui_runtime::UiRuntime;
 use flui_view::__runtime::{FlushWrite, WritesInFlight};
@@ -89,6 +89,16 @@ impl HeadlessHost {
     ///   they end ([`session_end_releases`](Self::session_end_releases)), and
     ///   a later trip's session end replaces it.
     ///
+    /// The budget of `Ending` runs on the host's [`clock`](Self::clock),
+    /// which only the test moves: a step starts while a second of it is
+    /// left, so a test whose subscriber advances the clock past it sees what
+    /// a runner does when its budget is spent (no `Detached`, and the host
+    /// left as it is, not retired).
+    ///
+    /// On `wasm32` the session's end is the browser's `pagehide`, as a
+    /// runner answers it there: `Ending` delivers the notice alone, and
+    /// nothing hears `Detached`, is written or closes.
+    ///
     /// # Panics
     ///
     /// With the first panic of a notice subscriber, a `Detached` observer,
@@ -156,14 +166,20 @@ impl HeadlessHost {
                 }
                 SettledStep::QuitDeclined(address) => {
                     let verdict = self.quit.declined(address);
+                    // A subscriber is user code: its panic costs no step.
                     if verdict == QuitVerdict::Abandoned {
-                        tracing::info!(?address, "a window stayed open; deferred quit cancelled");
+                        first.contain(|| {
+                            tracing::info!(
+                                ?address,
+                                "a window stayed open; deferred quit cancelled"
+                            );
+                        });
                     }
                 }
                 _ => {}
             }
         }
-        self.consult_quit();
+        first.contain(|| self.consult_quit());
         if std::mem::take(&mut self.quit_owed) {
             self.quit_into(&mut first);
         }
@@ -201,7 +217,7 @@ impl HeadlessHost {
     /// Ask for the application to quit, as `AppHandle::request_quit` does and
     /// as AppKit's Dock Quit reaches a runner (ADR-0350 §1): the next turn
     /// asks every open window, in the order they opened, as for the program's
-    /// close ([`ask_quit`]). A window that refuses with a record defers the
+    /// close ([`QuitConsultation`]). A window that refuses with a record defers the
     /// quit until its close comes due; one that refuses without one, or keeps
     /// itself open, cancels it; when no window holds it, every window closes
     /// past every hold, what the documents published is written and the host
@@ -214,8 +230,14 @@ impl HeadlessHost {
 
     /// The quit a turn finds asked or deferred: a window it waits on that is
     /// gone consents, and an asked quit asks every open window. A quit no
-    /// window holds is owed to the turn.
+    /// window holds is owed to the turn; one whose consultation a panic
+    /// unwinds out of is cancelled ([`QuitConsultation`]).
     fn consult_quit(&mut self) {
+        // Most turns have no quit: they collect no windows, so a steady
+        // frame allocates nothing.
+        if !self.quit.is_pending() {
+            return;
+        }
         let open: Vec<PresentationAddress> = self
             .presentation_ids()
             .into_iter()
@@ -227,11 +249,13 @@ impl HeadlessHost {
             return;
         }
         let router: Rc<CloseRequestRouter> = Rc::clone(&self.close_requests);
-        let verdict = self.quit.finish_consult(ask_quit(&router, open));
+        let quit = &mut self.quit;
+        let verdict =
+            QuitConsultation::new(|answer| quit.finish_consult(answer)).ask(&router, open);
+        self.follow_quit(verdict);
         if verdict == QuitVerdict::Abandoned {
             tracing::info!("a window refused the quit without recording it; quit cancelled");
         }
-        self.follow_quit(verdict);
     }
 
     /// A quit no window holds is owed to the turn, which carries it out.
@@ -273,6 +297,11 @@ struct HeadlessSessionEnd<'a> {
 impl SessionEndHost for HeadlessSessionEnd<'_> {
     fn support(&self) -> Option<SessionEndSupport> {
         Some(self.host.session_end_support())
+    }
+
+    /// The test's: only the test spends the budget.
+    fn clock(&self) -> Rc<dyn flui_foundation::MonotonicClock> {
+        Rc::new(self.host.clock.clone())
     }
 
     fn router(&self) -> Option<Rc<CloseRequestRouter>> {

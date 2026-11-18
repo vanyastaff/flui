@@ -1270,7 +1270,7 @@ impl HeadlessHost {
             host = host.with_flush_registry(flush.registry());
         }
         let close_vetoes = flui_runtime::owner_turn::close_vetoes(
-            windows_ask_to_close(platform),
+            platform,
             Some(session_end_support_of(platform)),
         );
         host = host.with_close_vetoes(&close_vetoes);
@@ -1300,6 +1300,7 @@ impl HeadlessHost {
         let close_requests = Rc::new(CloseRequestRouter::new());
         register_close_requests(
             &close_requests,
+            &close_vetoes,
             &ui_runtime,
             ui_runtime.presentation_id(),
             &window,
@@ -1902,9 +1903,10 @@ impl HeadlessHost {
     /// clicks its close button (or as the program or the session asks). Where
     /// the window's platform lets the application refuse that close
     /// ([`close_vetoes`](flui_runtime::owner_turn::close_vetoes)), it is put
-    /// to the window's close guard and then its close-request handler
-    /// ([`HeadlessWindow::with_close_request_handler`]), as a runner's window
-    /// asks ([`CloseRequestRouter::consult`]): a close either refuses is
+    /// to the window's close guard and its close-request handler
+    /// ([`HeadlessWindow::with_close_request_handler`]) in the order a
+    /// runner's window asks them ([`CloseRequestRouter::consult`]: the guard
+    /// first, the handler first at the session's end): a close either refuses is
     /// recorded, nothing is torn down, and the pump after the last hold is
     /// released carries it out. `true` when the window closed now; `false`
     /// when it was refused or the window is already gone.
@@ -1999,6 +2001,7 @@ impl HeadlessHost {
         install_window_control(self.ui_runtime(), id, &window, &self.close_asks);
         register_close_requests(
             &self.close_requests,
+            &self.close_vetoes,
             self.ui_runtime(),
             id,
             &window,
@@ -3016,10 +3019,12 @@ fn install_window_control(
 }
 
 /// Register `presentation`, drawn in `window`, with `router`: its close guard
-/// and, where its platform asks before a window closes, the application's
-/// `handler`, as a runner registers each window it opens.
+/// and, where its platform asks before a window closes (`close_vetoes` holds
+/// the user's close), the application's `handler`, as a runner registers
+/// each window it opens.
 fn register_close_requests(
     router: &CloseRequestRouter,
+    close_vetoes: &[CloseReason],
     ui_runtime: &UiRuntime,
     presentation: PresentationId,
     window: &Rc<HeadlessWindow>,
@@ -3031,7 +3036,7 @@ fn register_close_requests(
     };
     // A phone's window system never asks, so a runner there registers no
     // handler: nothing would ever ask it.
-    let handler = handler.filter(|_| windows_ask_to_close(window.platform));
+    let handler = handler.filter(|_| close_vetoes.contains(&CloseReason::User));
     let native = Rc::clone(window) as Rc<dyn PlatformWindow>;
     let mut prepared = PreparedCloseRequest::new(address, &native, handler);
     if let Some(guard) = ui_runtime.close_guard_of(presentation) {
@@ -3041,15 +3046,6 @@ fn register_close_requests(
         .publication(&prepared)
         .expect("BUG: a presentation the host just installed has no registration");
     publication.publish(prepared);
-}
-
-/// Whether `platform`'s window system asks the application before a window
-/// closes: a desktop's does, a phone's never does.
-fn windows_ask_to_close(platform: flui_platform::TargetPlatform) -> bool {
-    !matches!(
-        platform,
-        flui_platform::TargetPlatform::Android | flui_platform::TargetPlatform::iOS
-    )
 }
 
 /// How `platform` lets the session end, as its host reports it: `Background`

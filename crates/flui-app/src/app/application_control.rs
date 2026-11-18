@@ -590,6 +590,12 @@ impl Ingress {
         }
     }
 
+    /// Whether a quit is asked, being asked or deferred
+    /// ([`QuitRequest::is_pending`]).
+    pub(crate) fn is_quit_pending(&self) -> bool {
+        self.state.lock().quit.is_pending()
+    }
+
     /// Start the owner's consultation of a quit the application asked for:
     /// `true` when one is asked and nothing has fenced the application yet.
     pub(crate) fn begin_quit_consult(&self) -> bool {
@@ -600,7 +606,7 @@ impl Ingress {
     /// End the consultation [`begin_quit_consult`](Self::begin_quit_consult)
     /// started with what the presentations answered
     /// ([`QuitRequest::finish_consult`]).
-    pub(crate) fn finish_quit_consult(&self, answer: QuitAnswer) {
+    pub(crate) fn finish_quit_consult(&self, answer: QuitAnswer) -> QuitVerdict {
         let mut state = self.state.lock();
         let verdict = state.quit.finish_consult(answer);
         self.follow_quit(state, verdict);
@@ -608,6 +614,7 @@ impl Ingress {
         if verdict == QuitVerdict::Abandoned {
             tracing::info!("a presentation refused the quit without recording it; quit cancelled");
         }
+        verdict
     }
 
     /// The presentation at `address` gave the deferred quit its consent: its

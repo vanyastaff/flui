@@ -80,7 +80,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use flui_foundation::PresentationAddress;
-use flui_foundation::panic::payload_text;
+use flui_foundation::panic::{FirstPanic, discard_payload, payload_text};
 use flui_platform::PlatformWindow;
 
 use flui_platform::CommandRefusal;
@@ -181,8 +181,25 @@ impl CloseRequestHandler {
         Self(Rc::new(handler))
     }
 
-    fn call(&self, request: &CloseRequest) -> CloseResponse {
-        (self.0)(request)
+    /// The handler's answer to `request`; `None` when it panicked, which is
+    /// contained and reported: a panic is no answer, and closing on a wrong
+    /// one destroys data.
+    fn answer(&self, request: &CloseRequest) -> Option<CloseResponse> {
+        let mut caught = FirstPanic::new();
+        let answered = caught.contain(|| (self.0)(request));
+        if let Some(payload) = caught.into_payload() {
+            tracing::error!(
+                address = ?request.address,
+                reason = ?request.reason,
+                panic = payload_text(&*payload).unwrap_or("<non-string panic payload>"),
+                "close-request handler panicked; keeping the window open (a panicking handler \
+                 cannot be read as consent to discard unsaved work)"
+            );
+            // Kept, not dropped: a payload whose destructor panics must not
+            // overturn the refusal on its way out.
+            discard_payload(payload);
+        }
+        answered
     }
 }
 
@@ -211,24 +228,6 @@ pub enum CloseRequestError {
         /// The address that was asked for.
         address: PresentationAddress,
     },
-    /// The calling thread hosts no FLUI runtime at all, so it has no
-    /// presentations to close.
-    ///
-    /// The common cause is calling from a worker thread after finishing
-    /// the work a [`CloseResponse::KeepOpen`] answer deferred. Marshal
-    /// back to the thread that ran the handler and call from there.
-    ///
-    /// Reported instead of [`Self::UnknownPresentation`] because the two
-    /// are genuinely different failures and a caller can act on the
-    /// difference. It is thread-scoped rather than process-scoped on
-    /// purpose: a process may host several event loops on several threads
-    /// (`AppRuntime` is thread-local by design), so "the owner thread" is
-    /// not a process-wide fact this call could consult.
-    #[error(
-        "this thread hosts no FLUI runtime; request the close from the thread that runs the \
-         presentation's event loop"
-    )]
-    NoHostedRuntime,
     /// The window does not close: its window system lets the application
     /// close none of its windows (Android's one window, whose `closes`
     /// capability is `Absent`).
@@ -437,93 +436,54 @@ impl CloseRequestRouter {
     /// An unregistered address answers [`CloseResponse::Close`], matching
     /// the platform seam's own "no callback means close is allowed".
     ///
-    /// `reason` is why the close was asked for. The presentation's close
-    /// guard is asked first, with it; a close the guard refuses is kept open
-    /// without asking the handler. Otherwise the handler reads it as
-    /// [`CloseRequest::reason`], and its [`CloseResponse::KeepOpen`] records
-    /// the close on the guard. A handler that panics keeps the window open
-    /// and records nothing: a panic is no answer to wait on.
+    /// `reason` is why the close was asked for, and it sets the order, here
+    /// for every host and caller:
+    ///
+    /// - For the user's and the program's close the presentation's close
+    ///   guard is asked first; a close the guard refuses is kept open without
+    ///   asking the handler. Otherwise the handler reads the reason as
+    ///   [`CloseRequest::reason`], and its [`CloseResponse::KeepOpen`]
+    ///   records the close on the guard.
+    /// - At the session's end ([`CloseReason::SessionEnd`], ADR-0260 §1) the
+    ///   handler is asked first, so it can still start the save or put up the
+    ///   decision, and its `KeepOpen` records the close on the guard; then
+    ///   the guard, where a hold for work never refuses a session end and a
+    ///   hold for a decision does.
+    ///
+    /// A handler that panics keeps the window open and records nothing: a
+    /// panic is no answer to wait on. The panic is contained and reported; a
+    /// panic that escapes past it (the report's subscriber, the drop of a
+    /// handler that closed its own window) unwinds to the caller.
     pub fn consult(&self, address: PresentationAddress, reason: CloseReason) -> CloseResponse {
         let Some((handler, guard)) = self.answerers(address) else {
             return CloseResponse::Close;
         };
+        let request = CloseRequest { address, reason };
+        let refused_by_guard = |guard: &Option<flui_view::__runtime::CloseGuardSource>| {
+            guard.as_ref().is_some_and(|guard| guard.refuses(reason))
+        };
 
-        // The guard comes first: a close its holds refuse is recorded there
-        // and carried out once the last hold is released, without asking the
-        // handler again.
-        if guard.as_ref().is_some_and(|guard| guard.refuses(reason)) {
+        // The guard comes first, except at a session end: a close its holds
+        // refuse is recorded there and carried out once the last hold is
+        // released, without asking the handler again.
+        if reason != CloseReason::SessionEnd && refused_by_guard(&guard) {
             return CloseResponse::KeepOpen;
         }
-        let Some(handler) = handler else {
-            return CloseResponse::Close;
-        };
-
-        let request = CloseRequest { address, reason };
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: a close handler's panic keeps the window open and is reported"
-        )]
-        let answered =
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handler.call(&request)));
-        if let (Ok(CloseResponse::KeepOpen), Some(guard)) = (&answered, &guard) {
-            guard.record(reason);
-        }
-        answered.unwrap_or_else(|payload| {
-            tracing::error!(
-                ?address,
-                panic = payload_text(&*payload).unwrap_or("<non-string panic payload>"),
-                "close-request handler panicked; vetoing the close (a panicking handler cannot \
-                 be read as consent to discard unsaved work)"
-            );
-            flui_foundation::panic::discard_payload(payload);
-            CloseResponse::KeepOpen
-        })
-    }
-
-    /// Ask the application whether the session may end at the window at
-    /// `address` (ADR-0260 §1): its handler first, with
-    /// [`CloseReason::SessionEnd`], so a handler can still start the save or
-    /// put up the decision; then its guard. A handler's
-    /// [`CloseResponse::KeepOpen`] records the close on the guard; a hold for
-    /// work never refuses a session end, a hold for a decision does. A handler
-    /// that panics keeps the window open and records nothing.
-    pub fn consult_session_end(&self, address: PresentationAddress) -> CloseResponse {
-        let reason = CloseReason::SessionEnd;
-        let Some((handler, guard)) = self.answerers(address) else {
-            return CloseResponse::Close;
-        };
-        if let Some(handler) = handler {
-            let request = CloseRequest { address, reason };
-            #[expect(
-                clippy::disallowed_methods,
-                reason = "ADR-0287: a close handler's panic keeps the window open and is reported"
-            )]
-            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handler.call(&request)))
-            {
-                Ok(CloseResponse::KeepOpen) => {
-                    if let Some(guard) = &guard {
-                        guard.record(reason);
-                    }
-                    return CloseResponse::KeepOpen;
+        let answered = handler.map_or(Some(CloseResponse::Close), |handler| {
+            handler.answer(&request)
+        });
+        match answered {
+            Some(CloseResponse::KeepOpen) => {
+                if let Some(guard) = &guard {
+                    guard.record(reason);
                 }
-                Ok(_) => {}
-                Err(payload) => {
-                    tracing::error!(
-                        ?address,
-                        panic = payload_text(&*payload).unwrap_or("<non-string panic payload>"),
-                        "close-request handler panicked on a session end; refusing it"
-                    );
-                    // Kept, not dropped: a payload whose destructor panics
-                    // must not overturn the refusal on its way out.
-                    flui_foundation::panic::discard_payload(payload);
-                    return CloseResponse::KeepOpen;
-                }
+                CloseResponse::KeepOpen
             }
-        }
-        if guard.is_some_and(|guard| guard.refuses(reason)) {
-            CloseResponse::KeepOpen
-        } else {
-            CloseResponse::Close
+            None => CloseResponse::KeepOpen,
+            Some(_) if reason == CloseReason::SessionEnd && refused_by_guard(&guard) => {
+                CloseResponse::KeepOpen
+            }
+            Some(answer) => answer,
         }
     }
 

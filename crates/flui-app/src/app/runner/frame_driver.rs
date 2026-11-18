@@ -170,10 +170,13 @@ impl FrameDriver {
         // frame, outside this runtime's lease. A host busy elsewhere leaves
         // the settle owed for the next turn, so no released close is lost.
         // What each settled close asks is `settled_steps`'s.
-        if let Some(queues) = window_commands() {
+        if let Some(queues) = window_commands()
+            && let settled = runtime.settle_close_guards()
+            // Most wakes settle nothing, and read no loop state.
+            && !(settled.due.is_empty() && settled.declined.is_empty())
+        {
             use flui_runtime::owner_turn::SettledStep;
 
-            let settled = runtime.settle_close_guards();
             let session_end = super::host::APP_RUNTIME.with(|slot| {
                 slot.try_borrow()
                     .map_or_default(|state| Rc::clone(&state.session_end))

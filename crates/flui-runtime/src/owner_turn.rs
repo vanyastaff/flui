@@ -24,25 +24,36 @@ pub use close::{
     ClosePublication, CloseRequest, CloseRequestError, CloseRequestHandler, CloseRequestRouter,
     CloseResponse, PreparedCloseRequest,
 };
-pub use quit::{QuitAnswer, QuitRequest, QuitVerdict, SettledStep, ask_quit, settled_steps};
-pub use session_end::{
-    NoticeDelivery, SESSION_END_USER_CODE_THRESHOLD, SessionEnd, SessionEndHost, SessionEndStep,
-    session_end_budget,
+pub use quit::{
+    QuitAnswer, QuitConsultation, QuitRequest, QuitVerdict, SettledStep, settled_steps,
 };
+pub use session_end::{NoticeDelivery, SessionEnd, SessionEndHost, SessionEndStep};
 
-use flui_platform::SessionEndSupport;
+use flui_platform::{SessionEndSupport, TargetPlatform};
 use flui_view::CloseReason;
 
-/// The closes a platform lets the application refuse. `windows_ask` is
-/// whether its window system asks before a window closes: a desktop's does,
-/// for the user and for the program; Android's, iOS's and the web's never
-/// do. `support` is how it lets the session end (`None` for a host with no
-/// platform installed): the session's end is refusable only where the
-/// platform holds the session for a block (Windows, macOS); one that only
-/// delays it (logind) or only tells cannot be refused, so a guard's holds
-/// never refuse it there.
+/// The closes `platform` lets the application refuse, where it lets the
+/// session end with `support` (`None` for a host with no platform
+/// installed). Every host builds its UI runtimes and registers its close
+/// handlers from this one answer: a runner with the platform it was built for
+/// and the support its platform reports, a headless host with the platform
+/// its window names.
+///
+/// A desktop's window system asks before a window closes, for the user and
+/// for the program; Android's, iOS's and the browser's never do, so nothing
+/// there is refusable but the session's end. The browser is the platform
+/// [`TargetPlatform::current`] names `Unknown` on `wasm32`. The session's end
+/// is refusable only where the platform holds the session for a block
+/// (Windows, macOS); one that only delays it (logind) or only tells cannot be
+/// refused, so a guard's holds never refuse it there.
 #[must_use]
-pub fn close_vetoes(windows_ask: bool, support: Option<SessionEndSupport>) -> Vec<CloseReason> {
+pub fn close_vetoes(
+    platform: TargetPlatform,
+    support: Option<SessionEndSupport>,
+) -> Vec<CloseReason> {
+    let in_browser = cfg!(target_arch = "wasm32") && platform == TargetPlatform::Unknown;
+    let windows_ask =
+        !in_browser && !matches!(platform, TargetPlatform::Android | TargetPlatform::iOS);
     let mut vetoes = Vec::with_capacity(3);
     if windows_ask {
         vetoes.extend([CloseReason::User, CloseReason::Program]);

@@ -620,14 +620,24 @@ pub(super) fn drive_program_quit() {
     }) else {
         return;
     };
+    // Most turns have no quit: they collect no presentations, so a steady
+    // frame allocates nothing. A quit asked after this check is the next
+    // turn's.
+    if !ingress.is_quit_pending() {
+        return;
+    }
     let registered = router.addresses();
     ingress.quit_forget_gone(&registered);
     if !ingress.begin_quit_consult() {
         return;
     }
-    // The router contains every handler's panic, so the consultation always
-    // ends with an answer.
-    ingress.finish_quit_consult(flui_runtime::owner_turn::ask_quit(&router, registered));
+    // Ended on every exit: a panic that unwinds out of the code it runs (a
+    // handler's drop, a subscriber of the router's report) cancels the quit
+    // instead of leaving it asked forever.
+    let _verdict = flui_runtime::owner_turn::QuitConsultation::new(|answer| {
+        ingress.finish_quit_consult(answer)
+    })
+    .ask(&router, registered);
 }
 
 pub(super) fn main_window_closing(address: flui_foundation::PresentationAddress) {

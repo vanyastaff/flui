@@ -31,7 +31,7 @@ enum QuitState {
     Deferred(Vec<PresentationAddress>),
 }
 
-/// What the presentations answered a quit ([`ask_quit`]).
+/// What the presentations answered a quit ([`QuitConsultation::ask`]).
 #[derive(Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum QuitAnswer {
@@ -85,7 +85,8 @@ impl QuitRequest {
     }
 
     /// Start asking the presentations: `true` when a quit is asked and not
-    /// being asked already.
+    /// being asked already. The host then asks them through a
+    /// [`QuitConsultation`], which ends the consultation on every exit.
     pub fn begin_consult(&mut self) -> bool {
         if self.0 != QuitState::Asked {
             return false;
@@ -177,15 +178,71 @@ impl QuitRequest {
     }
 }
 
-/// Ask each of `presentations`, in order, whether the quit may go ahead, as a
-/// close for [`CloseReason::Program`]: its guard first, then its handler
-/// ([`CloseRequestRouter::consult`]). Every one is asked, not only up to the
-/// first refusal, so each that refuses records its close. A refusal that
-/// recorded nothing (a handler that panicked, a presentation without a
-/// guard) cancels the quit.
+/// The consultation of a quit's presentations that a host began with
+/// [`QuitRequest::begin_consult`], which ends it exactly once through
+/// `finish`, the host's way to [`QuitRequest::finish_consult`]: with what the
+/// presentations answered ([`ask`](Self::ask)), or with
+/// [`QuitAnswer::Cancelled`] when it is dropped unasked, as it is when a
+/// panic unwinds out of the code it ran. A quit therefore never stays in its
+/// consultation: the next one the application asks for is asked again.
 ///
-/// Runs application code: call it with no borrow of the host's state held.
-pub fn ask_quit(
+/// `finish` runs while a panic unwinds when the consultation is cancelled;
+/// one that panics then aborts, as any destructor does (ADR-0281).
+#[must_use = "a consultation dropped unasked cancels the quit"]
+pub struct QuitConsultation<F: FnOnce(QuitAnswer) -> QuitVerdict> {
+    finish: Option<F>,
+}
+
+impl<F: FnOnce(QuitAnswer) -> QuitVerdict> QuitConsultation<F> {
+    /// The consultation a host just began, ended by `finish`.
+    pub fn new(finish: F) -> Self {
+        Self {
+            finish: Some(finish),
+        }
+    }
+
+    /// Ask each of `presentations`, in order, whether the quit may go ahead,
+    /// as a close for [`CloseReason::Program`]: its guard first, then its
+    /// handler ([`CloseRequestRouter::consult`]). Every one is asked, not
+    /// only up to the first refusal, so each that refuses records its close.
+    /// A refusal that recorded nothing (a handler that panicked, a
+    /// presentation without a guard) cancels the quit. The consultation ends
+    /// with the answer, and its verdict is returned.
+    ///
+    /// Runs application code: call it with no borrow of the host's state
+    /// held.
+    pub fn ask(
+        mut self,
+        router: &CloseRequestRouter,
+        presentations: impl IntoIterator<Item = PresentationAddress>,
+    ) -> QuitVerdict {
+        let answer = answer_quit(router, presentations);
+        let finish = self
+            .finish
+            .take()
+            .expect("BUG: a consultation ends once, by `ask` or by its drop");
+        finish(answer)
+    }
+}
+
+impl<F: FnOnce(QuitAnswer) -> QuitVerdict> Drop for QuitConsultation<F> {
+    fn drop(&mut self) {
+        if let Some(finish) = self.finish.take() {
+            let _verdict = finish(QuitAnswer::Cancelled);
+        }
+    }
+}
+
+impl<F: FnOnce(QuitAnswer) -> QuitVerdict> std::fmt::Debug for QuitConsultation<F> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("QuitConsultation")
+            .field("ended", &self.finish.is_none())
+            .finish()
+    }
+}
+
+/// What `presentations` answer a quit ([`QuitConsultation::ask`]).
+fn answer_quit(
     router: &CloseRequestRouter,
     presentations: impl IntoIterator<Item = PresentationAddress>,
 ) -> QuitAnswer {

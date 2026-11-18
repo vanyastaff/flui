@@ -146,6 +146,8 @@ mod owner_publication;
 mod owner_registry;
 #[path = "contracts/owner_sampling.rs"]
 mod owner_sampling;
+#[path = "contracts/quit_consultation.rs"]
+mod quit_consultation;
 #[path = "contracts/recovered_panic_context.rs"]
 mod recovered_panic_context;
 #[path = "contracts/render_view_lending.rs"]

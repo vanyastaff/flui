@@ -1350,6 +1350,10 @@ impl Tester {
     /// the write leave the window open. Returns the application's answer:
     /// [`Block`](flui_platform::SessionEndAnswer::Block) on a phone while
     /// writes are in flight.
+    ///
+    /// On `wasm32` the session's end is the browser's `pagehide`, as a
+    /// runner answers it there: the notice alone reaches the application,
+    /// and the window stays open with nothing written and nothing closed.
     pub fn end_session(&mut self) -> flui_platform::SessionEndAnswer {
         self.host
             .end_session(flui_platform::SessionEndPhase::Ending)

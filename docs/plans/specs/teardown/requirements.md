@@ -54,7 +54,7 @@
   `window_proc`, тот после `tracing::error!` вызывает `std::process::abort()`
   (`crates/flui-platform/src/platforms/windows/platform.rs:955-975`).
 - **Диагностика.** Production panic hook нет (`set_hook` есть только в тесте
-  `close_request.rs:602`), поэтому стандартный hook печатает текст паники в stderr ещё до
+  `crates/flui-runtime/src/owner_turn/close.rs`), поэтому стандартный hook печатает текст паники в stderr ещё до
   abort. Реальный пробел — код выхода: abort на Windows даёт `0xC0000409`, а не 101.
 - **Остаток при выходе из цикла.** `teardown_platform_realm` (`realm_dispatch.rs:1980`)
   уничтожает оставшиеся realms (`:2034`) **до** shutdown сервисов (`:2046`, 5 с) и пулов
@@ -73,7 +73,7 @@
   (`crates/flui-view/src/element/behavior_commons.rs:202-217`). Сегмент кадра изолирован
   (ADR-0048). Обработчик ввода выходит за dispatch, но перед этим перевзводит redraw
   (`crates/flui-runtime/ARCHITECTURE.md`, «Addressed dispatch retains redraw demand»). Паника
-  в обработчике вето закрытия уже даёт `KeepOpen` (`crates/flui-app/src/app/close_request.rs:461`,
+  в обработчике вето закрытия уже даёт `KeepOpen` (`crates/flui-runtime/src/owner_turn/close.rs`,
   тест `a_panicking_handler_vetoes_and_stays_registered`).
 - **Не обрабатываются.** `WM_QUERYENDSESSION`/`WM_ENDSESSION` не обрабатываются нигде в `crates/`.
 - **Доказательства.** `windows-notes` проверяет, что Alt+F4 даёт успешный выход

@@ -190,16 +190,22 @@ host.
   session-end steps (`owner_turn`) and the built-in tier of an application's
   registry (`capability::BuiltIns`) live here, so `flui-app`'s runners and
   `flui-testing`'s headless host call the same code: one
-  `CloseRequestRouter` asks a window's guard before its handler for a close
-  and after it for the session's end, `ask_quit` and `QuitRequest` decide a
-  quit, `settled_steps` routes what the guards let through, and
-  `SessionEnd::answer` orders the session end (notice, `Detached`, flush, host
-  state, teardown, background hold) within `session_end_budget`. A host
+  `CloseRequestRouter::consult` asks a window's guard before its handler for
+  a close and after it for the session's end, whoever asks; `QuitRequest`
+  holds a quit and a `QuitConsultation` asks its presentations, ending the
+  consultation on every exit, a panic that unwinds out of it included, so a
+  quit never stays asked; `settled_steps` routes what the guards let through;
+  and `SessionEnd::answer` orders the session end (notice, `Detached`, flush,
+  host state, teardown, background hold) within its budget, on the clock the
+  host names (`SessionEndHost::clock`: the operating system's on a runner, the
+  manual clock on a headless host), containing a panic at each step that runs
+  application code, a window's question at the query included. A host
   supplies only what a step does to its own state, through `SessionEndHost`,
   whose methods take no borrow of the book, so application code they run may
   re-enter it. `close_vetoes` says which closes a platform lets the
-  application refuse, and `BuiltIns::primary_selection` registers the
-  primary selection only on Linux.
+  application refuse, from the platform and its session-end support, for
+  every host, and `BuiltIns::primary_selection` registers the primary
+  selection only on Linux.
 - **A UI runtime is owner-affine.** `UiRuntime` is `!Send + !Sync` (a raw-pointer
   `PhantomData` marker; pinned by `assert_not_impl_any!` in the UI runtime tests).
   Everything that crosses a thread goes through a `UiCommandSender` into a

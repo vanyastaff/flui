@@ -90,7 +90,7 @@ pub use runner::open_window;
 pub use runner::run_app;
 pub use runner::{FontRegistrationError, register_font};
 #[cfg(not(target_os = "ios"))]
-pub use runner::{request_presentation_close, window_handle};
+pub use runner::{PresentationCloseError, request_presentation_close, window_handle};
 #[cfg(not(target_os = "ios"))]
 pub use runtime::ExitPolicy;
 #[cfg(all(not(target_os = "ios"), feature = "unstable-windows"))]
