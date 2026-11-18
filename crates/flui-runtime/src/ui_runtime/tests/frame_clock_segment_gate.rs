@@ -377,11 +377,11 @@ pub(crate) fn gated_presentations_hold_samples_then_catch_up_when_visible() {
         let held_value = controller.value();
         let held_status = controller.status();
 
-        let mut scheduler = runtime.scheduler().clone();
+        let scheduler = runtime.scheduler().clone();
         if hidden {
             runtime.set_presentation_hidden(runtime.presentation_id(), true);
         } else {
-            scheduler.set_frames_enabled(false);
+            scheduler.handle_app_lifecycle_state_change(flui_scheduler::AppLifecycleState::Hidden);
         }
         let held_frames = runtime.presentations.primary().clock().produced_count();
         for time in [0.5, 1.0, 2.0] {
@@ -406,7 +406,7 @@ pub(crate) fn gated_presentations_hold_samples_then_catch_up_when_visible() {
         if hidden {
             runtime.set_presentation_hidden(runtime.presentation_id(), false);
         } else {
-            scheduler.set_frames_enabled(true);
+            scheduler.handle_app_lifecycle_state_change(flui_scheduler::AppLifecycleState::Resumed);
         }
         runtime.set_now_secs_for_test(2.1);
         let _ = runtime.render_frame(&mut sink);

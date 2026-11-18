@@ -380,8 +380,8 @@ graph LR
   - Skipping the frame evaluation, the deadline wake, the cap, the close answer and the redraw
     request for `Frames` each fails a test.
   - As built: `AgentWindow::wait` and the same on `SemanticsAgent`; `UiRuntime::next_wake` counts
-    a parked wait's deadline. Left for the scheduler's decode service (s4-10): `image_loads` among
-    the unsettled causes, since the runtime cannot see image loads. Evaluating after input
+    a parked wait's deadline. Image loads are not among the unsettled causes, since the runtime
+    cannot see them; protocol 0.26 carries no value for them (ADR-0368). Evaluating after input
     delivery needs nothing more: the tree changes only in a frame. Moving an act-and-read
     completion into `drive_frame` right after the frame makes it independent of the commit anchor,
     which also runs at the end of a platform entry.

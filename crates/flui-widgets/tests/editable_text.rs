@@ -2106,15 +2106,16 @@ pub(crate) mod text_store {
         // the field, ahead of its build.
         let outcome = Rc::new(RefCell::new(None));
         let (queued, target) = (Rc::clone(&outcome), Rc::clone(&field));
-        let _ = harness
-            .scheduler()
-            .schedule_frame_callback(Box::new(move |_| {
-                *queued.borrow_mut() = Some(flui_platform::text_store::project_ime_event(
-                    &*target,
-                    &flui_platform::ImeEvent::Commit("東京".to_owned()),
-                    drop,
-                ));
-            }));
+        let driver = harness
+            .with_build_owner_mut(|owner| owner.async_driver().cloned())
+            .expect("the runtime installs its async driver");
+        let _task = driver.spawn_local(Box::pin(async move {
+            *queued.borrow_mut() = Some(flui_platform::text_store::project_ime_event(
+                &*target,
+                &flui_platform::ImeEvent::Commit("東京".to_owned()),
+                drop,
+            ));
+        }));
         harness.swap_root(flui_widgets::SizedBox::square(10.0));
         harness.tick();
 
