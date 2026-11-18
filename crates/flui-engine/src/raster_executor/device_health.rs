@@ -9,6 +9,8 @@
 
 use web_time::{Duration, Instant};
 
+use super::DeviceTicket;
+
 /// Where the context's device stands, as the owner reads it from
 /// [`RasterSender::device_health`](super::RasterSender::device_health).
 ///
@@ -86,6 +88,9 @@ pub(crate) struct DeviceRebuilds {
     given_up: bool,
     /// The earliest instant the next rebuild may run; `None` for now.
     next_at: Option<Instant>,
+    /// The request the executor waits for: no other starts, and no deadline
+    /// is owed meanwhile, since its answer wakes the executor.
+    requested: Option<DeviceTicket>,
 }
 
 impl DeviceRebuilds {
@@ -103,10 +108,11 @@ impl DeviceRebuilds {
     }
 
     /// When the next rebuild may run, for the owner's wake: `now` while one
-    /// is due at once, `None` while the device is healthy or the rebuild is
-    /// given up, which need no wake.
+    /// is due at once, `None` while the device is healthy, the rebuild is
+    /// given up or a request is under way, which need no wake: a request's
+    /// answer wakes the executor itself.
     pub(crate) fn next_attempt_at(&self, now: Instant) -> Option<Instant> {
-        if self.lost && !self.given_up {
+        if self.lost && !self.given_up && self.requested.is_none() {
             Some(self.next_at.unwrap_or(now))
         } else {
             None
@@ -119,6 +125,7 @@ impl DeviceRebuilds {
         self.lost = true;
         self.given_up = true;
         self.next_at = None;
+        self.requested = None;
     }
 
     /// The device was seen lost.
@@ -126,9 +133,22 @@ impl DeviceRebuilds {
         self.lost = true;
     }
 
-    /// Whether a rebuild may run at `now`.
+    /// Whether a rebuild may start at `now`: never while one is under way.
     pub(crate) fn due(&self, now: Instant) -> bool {
-        self.lost && !self.given_up && self.next_at.is_none_or(|at| now >= at)
+        self.lost
+            && !self.given_up
+            && self.requested.is_none()
+            && self.next_at.is_none_or(|at| now >= at)
+    }
+
+    /// A request started under `ticket`; the executor waits for its answer.
+    pub(crate) fn note_requested(&mut self, ticket: DeviceTicket) {
+        self.requested = Some(ticket);
+    }
+
+    /// The request the executor waits for, if one is under way.
+    pub(crate) fn requested(&self) -> Option<DeviceTicket> {
+        self.requested
     }
 
     /// A rebuild failed at `now`: arm the next one, or give the rebuild up
@@ -144,6 +164,7 @@ impl DeviceRebuilds {
             self.at_cap = self.at_cap.saturating_add(1);
         }
         self.next_at = now.checked_add(wait);
+        self.requested = None;
         if self.at_cap >= REBUILD_ATTEMPTS_AT_CAP {
             self.given_up = true;
             return FailedRebuild::GivenUp;

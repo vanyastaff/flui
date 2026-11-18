@@ -50,9 +50,18 @@ fn rig_on(paced: std::rc::Rc<dyn MonotonicClock>, clock: ManualClock) -> Rig {
     let backend = ScriptedSlots::new();
     let wakes = Arc::new(AtomicUsize::new(0));
     let counted = Arc::clone(&wakes);
-    let (executor, sender) = RasterExecutor::new(backend.clone(), paced, move || {
-        counted.fetch_add(1, Ordering::SeqCst);
-    });
+    let answered = Arc::clone(&wakes);
+    let (executor, sender) = RasterExecutor::new(
+        backend.clone(),
+        paced,
+        move || {
+            counted.fetch_add(1, Ordering::SeqCst);
+        },
+        // A device request's answer wakes the owner as a settlement does.
+        move || {
+            answered.fetch_add(1, Ordering::SeqCst);
+        },
+    );
     Rig {
         executor,
         sender,
@@ -499,6 +508,7 @@ fn a_command_sent_during_the_stop_comes_back_gone() {
                     .push(sender.send(attach_command(slot, address(9))));
             }
         },
+        || {},
     );
     let queued = sender.mint_slot().expect("a slot id is left");
     let SendReceipt::Configured(generation) = sender
@@ -1259,6 +1269,7 @@ fn a_panicking_host_wake_is_resumed_after_the_turn_committed() {
                 "the first wake panics"
             );
         },
+        || {},
     );
     let mut rig = Rig {
         executor,
@@ -1624,10 +1635,19 @@ impl flui_engine::RasterBackend for PanicsAtAttach {
         false
     }
 
-    fn rebuild_device(
+    fn request_device(
         &mut self,
-    ) -> flui_engine::EngineResult<Vec<(SlotId, flui_engine::EngineError)>> {
-        Ok(Vec::new())
+        _: flui_engine::DeviceTicket,
+        _: flui_engine::DeviceAnswered,
+    ) -> flui_engine::EngineResult<()> {
+        Ok(())
+    }
+
+    fn install_requested_device(
+        &mut self,
+        _: flui_engine::DeviceTicket,
+    ) -> Option<flui_engine::EngineResult<Vec<(SlotId, flui_engine::EngineError)>>> {
+        Some(Ok(Vec::new()))
     }
 
     fn adopt_device(
@@ -1638,7 +1658,7 @@ impl flui_engine::RasterBackend for PanicsAtAttach {
         Vec::new()
     }
 
-    fn rebuilds_inline(&self) -> bool {
+    fn requests_devices(&self) -> bool {
         true
     }
 }
@@ -1651,6 +1671,7 @@ fn an_untaken_panic_payload_is_dropped_outside_the_slot_table() {
     let (mut executor, sender) = RasterExecutor::new(
         PanicsAtAttach,
         std::rc::Rc::new(flui_foundation::SystemClock),
+        || {},
         || {},
     );
     let slot = sender.mint_slot().expect("a slot id is left");
@@ -2312,10 +2333,10 @@ fn a_panicking_clock_still_publishes_a_loss_and_wakes_the_owner() {
 /// A backend that cannot rebuild where the executor runs (the web) is given
 /// up at the first due attempt instead of walking the backoff.
 #[test]
-fn a_backend_that_cannot_rebuild_inline_gives_up_at_once() {
+fn a_backend_that_cannot_request_devices_gives_up_at_once() {
     let mut rig = rig();
     let _at = attached(&mut rig, 1);
-    rig.backend.cannot_rebuild_inline();
+    rig.backend.cannot_request_devices();
     rig.backend.lose_device();
     let _ = rig.executor.turn();
     assert_eq!(
@@ -2382,8 +2403,10 @@ fn a_settlement_is_announced_only_by_a_wake_that_returned() {
     let panics: std::rc::Rc<Cell<bool>> = std::rc::Rc::default();
     let clock = ManualClock::new();
     let backend = ScriptedSlots::new();
-    let (executor, sender) =
-        RasterExecutor::new(backend.clone(), std::rc::Rc::new(clock.clone()), {
+    let (executor, sender) = RasterExecutor::new(
+        backend.clone(),
+        std::rc::Rc::new(clock.clone()),
+        {
             let owner = std::rc::Rc::clone(&owner);
             let seen_inside = std::rc::Rc::clone(&seen_inside);
             let panics = std::rc::Rc::clone(&panics);
@@ -2393,7 +2416,9 @@ fn a_settlement_is_announced_only_by_a_wake_that_returned() {
                 }
                 assert!(!panics.get(), "a window's redraw requester panics");
             }
-        });
+        },
+        || {},
+    );
     let mut rig = Rig {
         executor,
         sender: sender.clone(),
@@ -2452,5 +2477,196 @@ fn a_settlement_is_announced_only_by_a_wake_that_returned() {
         rig.sender.settlements_announced(at.slot),
         1,
         "the next wake that returns announces its settlement"
+    );
+}
+
+/// A lost device's replacement is asked for off the turn: the turn that
+/// starts the request settles its frames lost and owes no deadline, and the
+/// request's answer wakes the owner, whose next turn installs the device.
+///
+/// Red-check: owe the next attempt's deadline while a request is under way
+/// (`DeviceRebuilds::next_attempt_at`) and the owner is paced by a timer
+/// instead of the answer.
+#[test]
+fn a_device_request_answered_after_its_turn_is_installed_by_the_next() {
+    let mut rig = rig();
+    let at = attached(&mut rig, 1);
+    rig.backend.hold_device_requests();
+    rig.backend.lose_device();
+    let _ = rig.sender.send(frame(at, 1)).expect("accepted");
+    let _ = rig.executor.turn();
+    assert_eq!(
+        verdicts(&rig.sender, at.slot),
+        [(1, RasterVerdict::DeviceLost)]
+    );
+    assert_eq!(rig.backend.held_device_requests(), 1);
+    assert_eq!(rebuilds(&rig.backend), 0, "nothing is installed yet");
+    assert_eq!(
+        rig.sender.device_health(),
+        DeviceHealth::Rebuilding { attempts: 0 }
+    );
+    assert_eq!(
+        rig.sender.device_retry_at(),
+        None,
+        "the request's answer wakes the owner; no deadline is owed"
+    );
+    let _ = rig.executor.turn();
+    assert_eq!(rig.backend.held_device_requests(), 1, "no second request");
+
+    let woken = rig.wakes.load(Ordering::SeqCst);
+    assert!(rig.backend.answer_device_request());
+    assert_eq!(
+        rig.wakes.load(Ordering::SeqCst),
+        woken + 1,
+        "the answer wakes the owner"
+    );
+    let _ = rig
+        .sender
+        .send(frame(restamped(&rig, at), 2))
+        .expect("accepted");
+    let _ = rig.executor.turn();
+    assert_eq!(rebuilds(&rig.backend), 1);
+    assert_eq!(rig.sender.device_health(), DeviceHealth::Healthy);
+    assert_eq!(
+        verdicts(&rig.sender, at.slot),
+        [(2, RasterVerdict::SurfaceStale)],
+        "frames stamped before the install are refused"
+    );
+    let _ = rig
+        .sender
+        .send(frame(restamped(&rig, at), 3))
+        .expect("accepted");
+    let _ = rig.executor.turn();
+    assert_eq!(
+        verdicts(&rig.sender, at.slot),
+        [(3, RasterVerdict::Presented)]
+    );
+}
+
+/// A window closed while its device is asked for is not served by the new
+/// device: the install configures the slots left, and the closed one gets
+/// no call and no settlement after its detach.
+///
+/// Red-check: keep the ticket when the streak ends (`DeviceRebuilds::recovered`)
+/// and the install after the detach never comes.
+#[test]
+fn a_window_closed_while_its_device_is_requested_is_not_served_by_the_new_device() {
+    let mut rig = rig();
+    let closed = attached(&mut rig, 1);
+    let kept = attached(&mut rig, 2);
+    rig.backend.hold_device_requests();
+    rig.backend.lose_device();
+    let _ = rig.executor.turn();
+    assert_eq!(rig.backend.held_device_requests(), 1);
+    let _ = rig
+        .sender
+        .send(RasterCommand::Detach { slot: closed.slot })
+        .expect("accepted");
+    let _ = rig.executor.turn();
+    let detached_at = rig.backend.calls().len();
+
+    assert!(rig.backend.answer_device_request());
+    let _ = rig
+        .sender
+        .send(frame(restamped(&rig, kept), 1))
+        .expect("accepted");
+    let _ = rig.executor.turn();
+    assert_eq!(rig.sender.device_health(), DeviceHealth::Healthy);
+    assert_eq!(
+        verdicts(&rig.sender, kept.slot),
+        [(1, RasterVerdict::SurfaceStale)]
+    );
+    let _ = rig
+        .sender
+        .send(frame(restamped(&rig, kept), 2))
+        .expect("accepted");
+    let _ = rig.executor.turn();
+    let after_install = &rig.backend.calls()[detached_at..];
+    assert_eq!(
+        verdicts(&rig.sender, kept.slot),
+        [(2, RasterVerdict::Presented)]
+    );
+    assert!(
+        after_install.iter().all(|call| !matches!(
+            call,
+            SlotCall::Render(slot, _) | SlotCall::Resize(slot, _) | SlotCall::Restore(slot)
+                if *slot == closed.slot
+        )),
+        "the closed window is not served: {after_install:?}"
+    );
+    assert!(
+        rig.backend.calls()[..detached_at].contains(&SlotCall::Detach(closed.slot)),
+        "the window was detached while the request was under way"
+    );
+}
+
+/// An answer the executor no longer waits for installs nothing: the device
+/// came back by itself while its replacement was asked for, so the late
+/// answer is dropped, and the next loss asks again under a new ticket.
+///
+/// Red-check: keep the ticket when the streak ends (`DeviceRebuilds::recovered`)
+/// and the late answer installs a device.
+#[test]
+fn an_answer_nobody_waits_for_installs_nothing() {
+    let mut rig = rig();
+    let _at = attached(&mut rig, 1);
+    rig.backend.hold_device_requests();
+    rig.backend.lose_device();
+    let _ = rig.executor.turn();
+    rig.backend.recover_device();
+    let _ = rig.executor.turn();
+    assert_eq!(rig.sender.device_health(), DeviceHealth::Healthy);
+
+    assert!(rig.backend.answer_device_request(), "the late answer");
+    let _ = rig.executor.turn();
+    assert_eq!(
+        rebuilds(&rig.backend),
+        0,
+        "the late answer installs nothing"
+    );
+
+    rig.backend.lose_device();
+    let _ = rig.executor.turn();
+    assert_eq!(rig.backend.held_device_requests(), 1, "a new request");
+    assert!(rig.backend.answer_device_request());
+    let _ = rig.executor.turn();
+    assert_eq!(rebuilds(&rig.backend), 1);
+    assert_eq!(rig.sender.device_health(), DeviceHealth::Healthy);
+}
+
+/// A request that answers no device fails its attempt when the answer is
+/// taken: the backoff counts from then, however long the driver took.
+///
+/// Red-check: keep the ticket after a failed answer
+/// (`DeviceRebuilds::record_failure`) and no next attempt is armed.
+#[test]
+fn a_failed_device_request_waits_its_backoff_from_its_answer() {
+    let mut rig = rig();
+    let _at = attached(&mut rig, 1);
+    rig.backend.hold_device_requests();
+    rig.backend
+        .script_rebuild(ScriptedAnswer::Fail(EngineError::GpuUnavailable));
+    rig.backend.lose_device();
+    let _ = rig.executor.turn();
+    rig.clock.advance(Duration::from_millis(500));
+    assert!(rig.backend.answer_device_request());
+    let answered = MonotonicClock::now(&rig.clock);
+    let _ = rig.executor.turn();
+    assert_eq!(
+        rig.sender.device_health(),
+        DeviceHealth::Rebuilding { attempts: 1 }
+    );
+    assert!(matches!(
+        rig.sender.take_device_failure(),
+        Some(EngineError::GpuUnavailable)
+    ));
+    let retry_at = rig
+        .sender
+        .device_retry_at()
+        .expect("a failed request arms the next");
+    assert_eq!(
+        retry_at.duration_since(answered),
+        Duration::from_millis(16),
+        "the backoff counts from the answer"
     );
 }

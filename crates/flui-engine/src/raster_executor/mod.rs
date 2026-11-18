@@ -29,6 +29,7 @@
 mod backend;
 mod command;
 mod device_health;
+mod device_request;
 mod inbox;
 mod sender;
 mod slot;
@@ -36,11 +37,11 @@ mod surface;
 #[cfg(not(target_arch = "wasm32"))]
 mod thread;
 
-use std::{rc::Rc, sync::Arc};
+use std::{num::NonZeroU64, rc::Rc, sync::Arc};
 
 use crossbeam_channel::{Receiver, bounded};
 use flui_foundation::{
-    MonotonicClock, SurfaceGeneration,
+    IdMint, MonotonicClock, SurfaceGeneration,
     geometry::DeviceSize,
     panic::{FirstPanic, discard_payload},
 };
@@ -53,6 +54,7 @@ pub use command::{
     SlotTarget, SlotVisibility,
 };
 pub use device_health::DeviceHealth;
+pub use device_request::{DeviceAnswered, DeviceTicket};
 pub use inbox::{SlotFailure, SlotPhase, SlotRecord};
 pub use sender::{DeviceRetries, RasterSender};
 pub(crate) use slot::SlotMint;
@@ -158,6 +160,12 @@ pub struct RasterExecutor<B: RasterBackend = crate::GpuContext> {
     read_at: std::cell::Cell<web_time::Instant>,
     /// The context's device rebuilds (ADR-0305 §8).
     rebuilds: DeviceRebuilds,
+    /// What a device request calls once it answered, from the thread that
+    /// answered: the host's wake inline, the raster thread's doorbell
+    /// threaded, so the next turn installs the device.
+    device_answered: DeviceAnswered,
+    /// One ticket per device request, never reissued.
+    tickets: IdMint<NonZeroU64>,
     slots: Vec<Option<ExecSlot>>,
 }
 
@@ -176,11 +184,15 @@ impl<B: RasterBackend> RasterExecutor<B> {
     ///
     /// `clock` paces the rebuilds of a lost device; `wake` is the host's: the
     /// executor calls it once a turn wrote a settlement or moved the device's
-    /// health, with no lock held and contained.
+    /// health, with no lock held and contained. `device_answered` is the
+    /// host's wake from another thread: a lost device's replacement is asked
+    /// for on a worker, which calls it once the owner's next turn can install
+    /// the device (ADR-0305 §8).
     pub fn new(
         backend: B,
         clock: Rc<dyn MonotonicClock>,
         wake: impl Fn() + 'static,
+        device_answered: impl Fn() + Send + Sync + 'static,
     ) -> (Self, RasterSender) {
         let (lifecycle_tx, lifecycle) = bounded(LIFECYCLE_CAPACITY);
         let shared = Arc::new(Shared::new(lifecycle_tx));
@@ -191,6 +203,7 @@ impl<B: RasterBackend> RasterExecutor<B> {
                 clock.now(),
                 clock,
                 Box::new(wake),
+                DeviceAnswered::new(Arc::new(device_answered)),
                 shared,
                 lifecycle,
             ),
@@ -206,6 +219,7 @@ impl<B: RasterBackend> RasterExecutor<B> {
         read_at: web_time::Instant,
         clock: Rc<dyn MonotonicClock>,
         wake: Box<dyn Fn()>,
+        device_answered: DeviceAnswered,
         shared: Arc<Shared>,
         lifecycle: Receiver<Lifecycle>,
     ) -> Self {
@@ -217,6 +231,8 @@ impl<B: RasterBackend> RasterExecutor<B> {
             read_at: std::cell::Cell::new(read_at),
             clock,
             rebuilds: DeviceRebuilds::default(),
+            device_answered,
+            tickets: IdMint::new(),
             slots: Vec::new(),
         }
     }
@@ -547,11 +563,15 @@ impl<B: RasterBackend> RasterExecutor<B> {
         true
     }
 
-    /// See whether the device is lost, rebuild it when its backoff allows,
-    /// and publish its health; answers whether the health moved, so the
-    /// owner is woken to read it.
+    /// See whether the device is lost, ask for its replacement when its
+    /// backoff allows, install the replacement once the request answered,
+    /// and publish the device's health; answers whether the health moved, so
+    /// the owner is woken to read it.
     ///
-    /// A rebuild that fails or panics counts toward the backoff. Its error
+    /// The request is answered off this thread (ADR-0305 §8): the turn that
+    /// starts it does not wait, and the turn after the answer's wake installs
+    /// it. A request that fails, answers no device or panics on its worker
+    /// counts toward the backoff, from when its answer was taken. Its error
     /// waits in the device's record for the owner; its panic is resumed at
     /// the end of the turn, once every slot is served.
     fn recover_device(&mut self, first: &mut FirstPanic) -> bool {
@@ -561,10 +581,11 @@ impl<B: RasterBackend> RasterExecutor<B> {
         if lost {
             self.rebuilds.note_lost();
         } else if before.is_lost() {
-            // The backend renders again without a rebuild this executor saw
-            // succeed (one that panicked after its device was in place): the
-            // slots are restamped all the same, so "healthy after lost" always
-            // means every frame stamped before the loss is refused.
+            // The backend renders again without an installed device this
+            // executor saw succeed (one that panicked after its device was in
+            // place): the slots are restamped all the same, so "healthy after
+            // lost" always means every frame stamped before the loss is
+            // refused. A request still under way is dropped with the streak.
             self.rebuilds.recovered();
             self.after_rebuild(Vec::new(), first);
             rebuilt = true;
@@ -573,20 +594,17 @@ impl<B: RasterBackend> RasterExecutor<B> {
         let mut failed = None;
         let mut now = self.now(first);
         if self.rebuilds.due(now) {
-            if self.backend.rebuilds_inline() {
-                let attempt = first.contain(|| self.backend.rebuild_device());
-                // A failed attempt blocked for as long as the driver took: the
-                // next waits out its backoff from when this one ended. The
-                // clock is read only once the attempt's own answer is committed.
-                match attempt {
-                    Some(Ok(refused)) => {
-                        self.rebuilds.recovered();
-                        // The slots are restamped before the health says the
-                        // device renders, so no owner stamps a frame for the
-                        // old device after reading it.
-                        self.after_rebuild(refused, first);
-                        rebuilt = true;
-                    }
+            if !self.backend.requests_devices() {
+                // No request can be answered here: give up at once instead of
+                // walking the backoff (the web, ADR-0305 §8).
+                self.rebuilds.give_up();
+                failure = Some(EngineError::GpuUnavailable);
+                failed = Some(FailedRebuild::GivenUp);
+            } else if let Ok(raw) = self.tickets.next() {
+                let ticket = DeviceTicket::new(raw);
+                let answered = self.device_answered.clone();
+                match first.contain(|| self.backend.request_device(ticket, answered)) {
+                    Some(Ok(())) => self.rebuilds.note_requested(ticket),
                     Some(Err(error)) => {
                         failure = Some(error);
                         now = self.now(first);
@@ -597,20 +615,44 @@ impl<B: RasterBackend> RasterExecutor<B> {
                         failed = Some(self.rebuilds.record_failure(now));
                     }
                 }
-                if failed.is_some() && !self.backend.device_lost() {
-                    // The rebuild failed with its new device in place: the
-                    // slots are restamped before this turn serves them, as
-                    // after a rebuild that succeeded.
-                    self.rebuilds.recovered();
-                    self.after_rebuild(Vec::new(), first);
-                    rebuilt = true;
-                }
             } else {
-                // No attempt can succeed here: give up at once instead of
-                // walking the backoff (the web, ADR-0305 §8).
+                // Every ticket was spent: no request can be told from an
+                // earlier one, so none starts.
                 self.rebuilds.give_up();
                 failure = Some(EngineError::GpuUnavailable);
                 failed = Some(FailedRebuild::GivenUp);
+            }
+        }
+        // A request answered at once (a backend that asks on this thread) is
+        // installed in the turn that started it.
+        if let Some(ticket) = self.rebuilds.requested() {
+            match first.contain(|| self.backend.install_requested_device(ticket)) {
+                Some(None) => {}
+                Some(Some(Ok(refused))) => {
+                    self.rebuilds.recovered();
+                    // The slots are restamped before the health says the
+                    // device renders, so no owner stamps a frame for the old
+                    // device after reading it.
+                    self.after_rebuild(refused, first);
+                    rebuilt = true;
+                }
+                Some(Some(Err(error))) => {
+                    failure = Some(error);
+                    now = self.now(first);
+                    failed = Some(self.rebuilds.record_failure(now));
+                }
+                None => {
+                    now = self.now(first);
+                    failed = Some(self.rebuilds.record_failure(now));
+                }
+            }
+            if failed.is_some() && !self.backend.device_lost() {
+                // The install failed with its new device in place: the slots
+                // are restamped before this turn serves them, as after an
+                // install that succeeded.
+                self.rebuilds.recovered();
+                self.after_rebuild(Vec::new(), first);
+                rebuilt = true;
             }
         }
         let after = self.publish_device(failure, now, first);

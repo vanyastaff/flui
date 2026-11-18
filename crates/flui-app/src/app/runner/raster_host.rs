@@ -568,7 +568,8 @@ impl Executor {
     }
 }
 
-/// The redraw requesters a raster thread's wake calls, as one list it clones
+/// The redraw requesters a raster thread's wake or a device request's answer
+/// calls, as one list it clones
 /// out under the lock and calls with the lock released: a requester is the
 /// platform's code.
 #[derive(Clone, Default)]
@@ -579,10 +580,6 @@ type RedrawList = Arc<[Arc<dyn RedrawRequester>]>;
 
 impl Redraws {
     /// Ask every listed window for a frame.
-    #[cfg_attr(
-        target_arch = "wasm32",
-        expect(dead_code, reason = "the web has no raster thread to wake its windows")
-    )]
     fn wake(&self) {
         let listed = Arc::clone(
             &*self
@@ -1116,7 +1113,12 @@ impl RasterHost {
                 let clock: Rc<dyn flui_foundation::MonotonicClock> =
                     Rc::new(flui_foundation::SystemClock);
                 let backend: Box<dyn RasterBackend> = backend;
-                let (executor, sender) = RasterExecutor::new(backend, clock, || {});
+                // A lost device's replacement is asked for on a worker, which
+                // asks every attached window for a frame once it answered:
+                // that frame's turn installs the device (ADR-0305 §8).
+                let woken = redraws.clone();
+                let (executor, sender) =
+                    RasterExecutor::new(backend, clock, || {}, move || woken.wake());
                 (Executor::Inline(executor), sender)
             }
             #[cfg(not(target_arch = "wasm32"))]
@@ -1520,7 +1522,7 @@ impl RasterHost {
         let Some(backend) = placed.executor.inline().map(RasterExecutor::backend) else {
             return health;
         };
-        if backend.rebuilds_inline() || !(health.is_lost() || backend.device_lost()) {
+        if backend.requests_devices() || !(health.is_lost() || backend.device_lost()) {
             return health;
         }
         DeviceHealth::Rebuilding { attempts: 0 }
