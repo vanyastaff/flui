@@ -861,7 +861,7 @@ fn detached_text_service_returns_the_runtime_before_native_reentry(case: TextSer
                     for run in paragraph.runs() {
                         let key = registry.prepare_run(&run).expect("actual submitted font");
                         sizes.extend(
-                            run.placed_glyphs(key, (0.0, 0.0), 1.0)
+                            run.placed_glyphs(key, (0.0, 0.0), (0.0, 0.0), 1.0)
                                 .map(|glyph| f64::from(glyph.key.size())),
                         );
                     }

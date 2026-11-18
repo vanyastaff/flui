@@ -197,7 +197,7 @@ pub fn retained_theme_roles_paint_distinct_numeric_sizing_answers() {
             };
             for run in paragraph.runs() {
                 let key = registry.prepare_run(&run).expect("painted face");
-                for glyph in run.placed_glyphs(key, (0.0, 0.0), 1.0) {
+                for glyph in run.placed_glyphs(key, (0.0, 0.0), (0.0, 0.0), 1.0) {
                     assert_ne!(glyph.key.glyph_id(), 0, "actual theme glyph must exist");
                     let wanted = if index < 3 {
                         expected[index]

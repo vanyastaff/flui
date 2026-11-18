@@ -634,12 +634,18 @@ fn place_paragraph(
     origin: (f32, f32),
     scale: f32,
 ) -> Vec<flui_painting::glyphs::PlacedGlyph> {
-    place_paragraph_at(paragraph, (f64::from(origin.0), f64::from(origin.1)), scale)
+    place_paragraph_at(
+        paragraph,
+        (0.0, 0.0),
+        (f64::from(origin.0), f64::from(origin.1)),
+        scale,
+    )
 }
 
 fn place_paragraph_at(
     paragraph: &flui_painting::ShapedParagraph,
-    origin: (f64, f64),
+    whole: (f64, f64),
+    offset: (f64, f64),
     scale: f32,
 ) -> Vec<flui_painting::glyphs::PlacedGlyph> {
     let run = paragraph
@@ -648,31 +654,29 @@ fn place_paragraph_at(
         .expect("the public paragraph has a run");
     let mut fonts = FontRegistry::new();
     let key = fonts.prepare_run(&run).expect("the shaped face registers");
-    run.placed_glyphs(key, origin, scale).collect()
+    run.placed_glyphs(key, whole, offset, scale).collect()
 }
 
 /// A paragraph moved by whole device pixels places every glyph that many
 /// pixels away with the same key: across 0 on either axis, at a tie between
-/// bins, and far from 0, where an `f32` origin would round its fraction.
+/// bins, and far from 0, where adding the whole pixels to the offset in
+/// `f32` would round its fraction to another bin or row.
 pub(crate) fn placed_glyphs_move_with_whole_pixels() {
     let (paragraph, _) = placement_paragraph(flui_painting::typography::TextStyle::default());
-    // (row, an origin, a whole-pixel move)
-    for (row, origin, (dx, dy)) in [
+    // (row, the offset, the whole pixels it moves by)
+    for (row, offset, (dx, dy)) in [
         ("up across 0", (3.0, 0.5), (0, -2)),
         ("left across 0", (0.875, 3.0), (-1, 0)),
         ("a tie left across 0", (0.625, 3.0), (-1, 0)),
         ("down across 0", (2.0, -1.5), (0, 2)),
+        ("far down", (0.0, 3.0 - 2.0_f64.powi(-20)), (0, 1_500_000)),
         ("far right", (8.374_992_370_6, 0.0), (4096, 0)),
         ("farther right", (8.374_023_437_5, 0.0), (1_500_000, 0)),
-        ("far down", (0.0, 3.3), (0, 1_500_000)),
     ] {
         for scale in [1.0, 1.25] {
-            let here = place_paragraph_at(&paragraph, origin, scale);
-            let moved = place_paragraph_at(
-                &paragraph,
-                (origin.0 + f64::from(dx), origin.1 + f64::from(dy)),
-                scale,
-            );
+            let here = place_paragraph_at(&paragraph, (0.0, 0.0), offset, scale);
+            let moved =
+                place_paragraph_at(&paragraph, (f64::from(dx), f64::from(dy)), offset, scale);
             assert_eq!(here.len(), 2, "{row}");
             let shifted: Vec<_> = here
                 .iter()
@@ -685,6 +689,58 @@ pub(crate) fn placed_glyphs_move_with_whole_pixels() {
             assert_eq!(placed, shifted, "{row} at {scale}");
         }
     }
+
+    // A glyph whose pen lies left of 0 at a tie between bins takes the bin
+    // and pixel a pen whole pixels to the right of 0 takes, less as many.
+    let (tight, _) = placement_paragraph(
+        flui_painting::typography::TextStyle::default().with_letter_spacing(-30.0),
+    );
+    let pen = tight
+        .runs()
+        .next()
+        .expect("the public paragraph has a run")
+        .glyphs()[1]
+        .x;
+    assert!(pen < -1.0, "precondition: the second glyph is left of 0");
+    // The tie at a quarter's edge within a pixel of the glyph.
+    let tie = (pen - 0.625).ceil() + 0.625;
+    let fraction = tie - pen;
+    assert!((0.0..1.0).contains(&fraction) && fraction + pen == tie);
+    let placed = place_paragraph_at(&tight, (0.0, 0.0), (f64::from(fraction), 0.0), 1.0);
+    let (column, bin) = SubpixelBin::split(tie + 64.0);
+    assert_eq!(
+        (placed[1].x, placed[1].key.x_bin()),
+        (column - 64, bin),
+        "a pen of {tie}"
+    );
+}
+
+/// A glyph whose pen alone is past the `i32` range is omitted even where the
+/// whole pixels bring it back: the split would place it at a saturated
+/// column.
+pub(crate) fn placed_glyphs_omit_a_pen_the_split_would_saturate() {
+    let (paragraph, baseline) =
+        placement_paragraph(flui_painting::typography::TextStyle::default());
+    let advance = paragraph
+        .runs()
+        .next()
+        .expect("the public paragraph has a run")
+        .glyphs()[1]
+        .x;
+    let scale = 3.0e9 / advance;
+    let whole = f64::from(i32::MIN) + 1.0;
+    // The rows cancel the scaled baseline, so only the columns can fail.
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "the public baseline is a widened f32 layout value, narrowed back to its native precision"
+    )]
+    let row = -f64::from((baseline as f32 * scale).round());
+    let placed = place_paragraph_at(&paragraph, (whole, row), (0.0, 0.0), scale);
+    assert_eq!(
+        placed.iter().map(|glyph| glyph.x).collect::<Vec<_>>(),
+        vec![i32::MIN + 1],
+        "only the glyph at the pen's start is placed"
+    );
 }
 
 fn assert_origin_is_omitted(origin: (f32, f32)) {

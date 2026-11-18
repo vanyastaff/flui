@@ -296,6 +296,10 @@ fn parley_oracle_contract() {
                 "placed_glyphs_move_with_whole_pixels",
                 parley_oracle::placed_glyphs_move_with_whole_pixels,
             ),
+            (
+                "placed_glyphs_omit_a_pen_the_split_would_saturate",
+                parley_oracle::placed_glyphs_omit_a_pen_the_split_would_saturate,
+            ),
         ],
     );
 }

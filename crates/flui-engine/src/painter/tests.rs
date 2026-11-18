@@ -3260,7 +3260,7 @@ fn extreme_glyph_bearings_do_not_overflow_before_clipping(
     );
     {
         let glyph = run
-            .placed_glyphs(key, (origin.x, origin.y), 1.0)
+            .placed_glyphs(key, (0.0, 0.0), (origin.x, origin.y), 1.0)
             .next()
             .expect("extreme placed origin is admitted");
         let bitmap = rasterizer
