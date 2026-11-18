@@ -861,6 +861,28 @@ pub(crate) mod title_bar {
         Some(DevicePoint::new(pixel(x)?, pixel(y)?))
     }
 
+    /// What a click into a window that is not key does (`acceptsFirstMouse:`).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(crate) enum FirstMouse {
+        /// It only makes the window key: AppKit's convention for a window's
+        /// content, where the click that brings a window forward does not act
+        /// on what it lands on.
+        Activates,
+        /// It makes the window key and acts: a press on the move area of a
+        /// title bar the application draws starts moving the window at once,
+        /// as a press on the system's title bar of a window behind does.
+        ActivatesAndActs,
+    }
+
+    /// What the click whose press is `press` does when it lands in a window
+    /// that is not key.
+    pub(crate) fn first_mouse(press: Press) -> FirstMouse {
+        match press {
+            Press::Drag | Press::DoubleClick => FirstMouse::ActivatesAndActs,
+            Press::App => FirstMouse::Activates,
+        }
+    }
+
     /// What a double-click on the bar does: `action` is `AppleActionOnDoubleClick`
     /// (`Maximize`, `Minimize` or `None`), `minimize` the older
     /// `AppleMiniaturizeOnDoubleClick`, read only where the newer key is not set. Unset,
@@ -880,7 +902,7 @@ pub(crate) mod title_bar {
         use flui_foundation::geometry::{DevicePoint, DeviceRect};
         use flui_platform::input_regions::{CaptionButton, DeviceInputRegion, InputRegionKind};
 
-        use super::{DoubleClick, Press, double_click, press};
+        use super::{DoubleClick, FirstMouse, Press, double_click, first_mouse, press};
 
         #[test]
         fn a_left_press_on_the_bar_moves_the_window_and_a_second_click_asks_the_setting() {
@@ -904,23 +926,45 @@ pub(crate) mod title_bar {
             ];
             // (x, y, scale, clicks): logical points on a 2x screen.
             let cases = [
-                ((10.0, 10.0, 2.0, 1), Press::Drag),
-                ((10.0, 10.0, 2.0, 2), Press::DoubleClick),
-                ((10.0, 10.0, 2.0, 3), Press::Drag),
-                ((10.0, 10.0, 2.0, 4), Press::DoubleClick),
-                ((110.0, 10.0, 2.0, 1), Press::App),
-                ((110.0, 10.0, 2.0, 2), Press::App),
-                ((360.0, 10.0, 2.0, 1), Press::App),
-                ((10.0, 40.0, 2.0, 1), Press::App),
-                ((99.9, 10.0, 2.0, 1), Press::Drag),
-                ((f64::NAN, 10.0, 2.0, 1), Press::App),
-                ((1e12, 10.0, 2.0, 1), Press::App),
+                (
+                    (10.0, 10.0, 2.0, 1),
+                    Press::Drag,
+                    FirstMouse::ActivatesAndActs,
+                ),
+                (
+                    (10.0, 10.0, 2.0, 2),
+                    Press::DoubleClick,
+                    FirstMouse::ActivatesAndActs,
+                ),
+                (
+                    (10.0, 10.0, 2.0, 3),
+                    Press::Drag,
+                    FirstMouse::ActivatesAndActs,
+                ),
+                (
+                    (10.0, 10.0, 2.0, 4),
+                    Press::DoubleClick,
+                    FirstMouse::ActivatesAndActs,
+                ),
+                ((110.0, 10.0, 2.0, 1), Press::App, FirstMouse::Activates),
+                ((110.0, 10.0, 2.0, 2), Press::App, FirstMouse::Activates),
+                ((360.0, 10.0, 2.0, 1), Press::App, FirstMouse::Activates),
+                ((10.0, 40.0, 2.0, 1), Press::App, FirstMouse::Activates),
+                (
+                    (99.9, 10.0, 2.0, 1),
+                    Press::Drag,
+                    FirstMouse::ActivatesAndActs,
+                ),
+                ((f64::NAN, 10.0, 2.0, 1), Press::App, FirstMouse::Activates),
+                ((1e12, 10.0, 2.0, 1), Press::App, FirstMouse::Activates),
             ];
-            for ((x, y, scale, clicks), expected) in cases {
+            for ((x, y, scale, clicks), expected, into_inactive) in cases {
+                let answered = press(&regions, x, y, scale, clicks);
+                assert_eq!(answered, expected, "({x}, {y}) at {scale}x, click {clicks}");
                 assert_eq!(
-                    press(&regions, x, y, scale, clicks),
-                    expected,
-                    "({x}, {y}) at {scale}x, click {clicks}"
+                    first_mouse(answered),
+                    into_inactive,
+                    "({x}, {y}) at {scale}x, click {clicks}, into an inactive window"
                 );
             }
         }
@@ -1312,6 +1356,11 @@ pub(crate) mod macos {
             for input in inputs {
                 view.dispatch_input(input);
             }
+        }
+
+        fn accepts_first_mouse(&self, view: &ContentView<'_>, event: &NSEvent) -> bool {
+            title_bar::first_mouse(self.title_bar_press(view, event))
+                == title_bar::FirstMouse::ActivatesAndActs
         }
 
         fn set_input_regions(

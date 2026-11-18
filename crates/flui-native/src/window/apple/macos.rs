@@ -46,10 +46,10 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
+use objc2::class;
 use objc2::rc::Retained;
-use objc2::runtime::{AnyClass, AnyObject, Bool, ClassBuilder, Sel};
+use objc2::runtime::{AnyObject, Bool};
 use objc2::{MainThreadMarker, msg_send};
-use objc2::{class, sel};
 use objc2_app_kit::{NSBackingStoreType, NSWindowCollectionBehavior, NSWindowStyleMask};
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 
@@ -82,8 +82,6 @@ use raw_window_handle::{
 // `Bool` arguments, and a manual `release`) and these aliases keep the
 // Cocoa-era spelling readable.
 type ObjcId = *mut AnyObject;
-type Object = AnyObject;
-type Class = AnyClass;
 const NIL: ObjcId = std::ptr::null_mut();
 type BObjC = Bool;
 const YES: Bool = Bool::YES;
@@ -138,7 +136,7 @@ pub struct MacOSWindow {
     /// it. The wrapper owns it: it outlives every re-parenting, and the
     /// window's [`Drop`] releases it after detaching what is hooked to it and
     /// releasing the NSWindow, or keeps it if a detach failed.
-    view: ManuallyDrop<Retained<AnyObject>>,
+    view: ManuallyDrop<Retained<content_view::FluiContentView>>,
 
     /// What the window keeps of itself between AppKit's notifications. Only
     /// the main thread reaches it, through the window (neither `Send` nor
@@ -168,6 +166,12 @@ pub struct MacOSWindow {
     /// the flag only on the main thread.
     closed: Arc<AtomicBool>,
     loop_control: OnceLock<std::sync::Weak<crate::owner::apple::macos::LoopControl>>,
+
+    /// The window's `NSWindowDelegate`, which AppKit holds only weakly: the
+    /// window keeps it from right after it is made until its drop detaches
+    /// it from the `NSWindow` and hands it to the autorelease pool, so a
+    /// delegate method on the stack outlives the drop it caused.
+    delegate: OnceCell<Retained<delegate::WindowDelegate>>,
 
     /// The window's owner lane (see `owner::apple::macos::owner_lane`): the
     /// AppKit main queue, which runs on the thread the window lives on. What
@@ -496,7 +500,7 @@ impl MacOSWindow {
     }
 
     fn new_inner(
-        _main: MainThreadMarker,
+        main: MainThreadMarker,
         id: WindowId,
         opening: Opening,
         handler: Rc<dyn WindowHandler>,
@@ -550,7 +554,7 @@ impl MacOSWindow {
             }
 
             // Create NSWindow
-            let ns_window: ObjcId = msg_send![window_class(), alloc];
+            let ns_window: ObjcId = msg_send![<FluiWindow as objc2::ClassType>::class(), alloc];
             let ns_window: ObjcId = msg_send![ns_window,
                 initWithContentRect: frame
                 styleMask: style_mask
@@ -709,7 +713,8 @@ impl MacOSWindow {
 
             // Create content view for input events. `frame` is
             // objc2-foundation's `NSRect`, the type `create_content_view` takes.
-            let content_view = content_view::create(frame, Arc::downgrade(&delivery), view_hooks);
+            let content_view =
+                content_view::create(frame, Arc::downgrade(&delivery), view_hooks, main);
 
             // What the features beside the window make their part of it from.
             let closed = Arc::new(AtomicBool::new(false));
@@ -758,6 +763,7 @@ impl MacOSWindow {
                 delivery,
                 closed,
                 loop_control: OnceLock::new(),
+                delegate: OnceCell::new(),
                 owner,
                 owner_is_main,
                 presentation: windows.presentation,
@@ -793,14 +799,15 @@ impl MacOSWindow {
             window.place_system_controls();
 
             // Enable mouse tracking for mouse moved events
-            content_view::enable_mouse_tracking(window.view_ptr());
+            content_view::enable_mouse_tracking(&window.view);
 
             // Make content view first responder to receive keyboard events
             let _: Bool = msg_send![ns_window, makeFirstResponder: window.view_ptr()];
 
             // Set window delegate for lifecycle events
-            let delegate = create_window_delegate(Rc::downgrade(&window));
-            let _: () = msg_send![ns_window, setDelegate: delegate];
+            let delegate = create_window_delegate(Rc::downgrade(&window), main);
+            let _: () = msg_send![ns_window, setDelegate: &*delegate];
+            let _ = window.delegate.set(delegate);
 
             // Store in windows map, which the owner thread alone reaches: the
             // window is made there.
@@ -1199,7 +1206,11 @@ impl SurfaceTarget for MacOSSurface {
         if self.is_gone() {
             return;
         }
-        if let Some(view) = self.view.object(main) {
+        if let Some(view) = self
+            .view
+            .object(main)
+            .and_then(|view| view.downcast_ref::<content_view::FluiContentView>())
+        {
             content_view::layer_presenting(view, frame);
         }
     }
@@ -1417,38 +1428,32 @@ impl host::Window<MacOSLoop> for MacOSWindow {
     }
 }
 
-/// The class every window is an instance of: `NSWindow`, except that it can
-/// take keyboard focus without a title bar. A plain borderless `NSWindow`
-/// answers `canBecomeKeyWindow` with `NO`, which would leave a window that is
-/// opened undecorated, or made undecorated later, deaf to the keyboard.
-fn window_class() -> &'static Class {
-    use std::sync::Once;
-    static INIT: Once = Once::new();
+objc2::define_class!(
+    // SAFETY: `NSWindow` may be subclassed; the class adds no ivars, and
+    // `MainThreadOnly` is `NSWindow`'s own thread kind.
+    #[unsafe(super(objc2_app_kit::NSWindow, objc2_app_kit::NSResponder, objc2_foundation::NSObject))]
+    #[thread_kind = objc2::MainThreadOnly]
+    #[name = "FLUIWindow"]
+    /// The class every window is an instance of: `NSWindow`, except that it
+    /// can take keyboard focus without a title bar. A plain borderless
+    /// `NSWindow` answers `canBecomeKeyWindow` with `NO`, which would leave a
+    /// window that is opened undecorated, or made undecorated later, deaf to
+    /// the keyboard.
+    struct FluiWindow;
 
-    INIT.call_once(|| {
-        extern "C-unwind" fn takes_focus(_this: &Object, _sel: Sel) -> Bool {
-            YES
+    impl FluiWindow {
+        // A constant answer runs no code, so it needs no boundary.
+        #[unsafe(method(canBecomeKeyWindow))]
+        fn can_become_key_window(&self) -> bool {
+            true
         }
 
-        let mut decl = ClassBuilder::new(c"FLUIWindow", class!(NSWindow))
-            .expect("BUG: FLUIWindow must be registered exactly once (guarded by Once)");
-        // SAFETY: both selectors are `NSWindow` getters returning `BOOL` and
-        // taking no argument, which `takes_focus` matches.
-        unsafe {
-            decl.add_method(
-                sel!(canBecomeKeyWindow),
-                takes_focus as extern "C-unwind" fn(_, _) -> Bool,
-            );
-            decl.add_method(
-                sel!(canBecomeMainWindow),
-                takes_focus as extern "C-unwind" fn(_, _) -> Bool,
-            );
+        #[unsafe(method(canBecomeMainWindow))]
+        fn can_become_main_window(&self) -> bool {
+            true
         }
-        decl.register();
-    });
-
-    AnyClass::get(c"FLUIWindow").expect("BUG: FLUIWindow was registered by the Once block above")
-}
+    }
+);
 
 /// Make the title bar of `ns_window` transparent with its title hidden, for a
 /// title bar of the application's drawn under it, or the system's again.
@@ -2115,6 +2120,17 @@ impl Drop for MacOSWindow {
         let a11y = Arc::clone(&self.facets.accessibility);
         let text = Arc::clone(&self.facets.text);
         let ns_window = self.ns_window;
+        // AppKit holds the delegate weakly: it is detached before the window
+        // lets go of it, and released by the pool, since the drop may run
+        // inside one of its methods (a handler that let the last wrapper go).
+        if let Some(delegate) = self.delegate.take() {
+            // SAFETY: `ns_window` is alive until the release below, messaged
+            // on the main thread; a nil delegate is AppKit's "none".
+            unsafe {
+                let _: () = msg_send![ns_window, setDelegate: NIL];
+            }
+            let _ = Retained::autorelease_ptr(delegate);
+        }
         // SAFETY: `Drop` runs once, and nothing reads `self.view` after this.
         let view = unsafe { ManuallyDrop::take(&mut self.view) };
         super::teardown::take_apart(
