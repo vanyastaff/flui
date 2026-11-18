@@ -22,7 +22,6 @@ mod adr_numbers;
 mod android_dex;
 mod bench;
 mod changelog;
-mod doc_strict;
 mod docs_links;
 mod doctor;
 mod fonts;
@@ -51,30 +50,8 @@ struct Cli {
 enum Command {
     /// Run the source checks that need no workspace build (the CI `checks` job).
     Checks(tasks::ChecksArgs),
-    /// Run clippy the way CI does.
-    Lint(tasks::LintArgs),
-    /// `checks`, `lint` and `doc-strict`.
-    Gate(tasks::GateArgs),
-    /// Run the workspace test suite the way CI does.
-    Test(tasks::TestArgs),
-    /// Run the native platform suites on this host.
-    PlatformTest(tasks::PlatformTestArgs),
-    /// Run the CLI suite on this host.
-    CliTest(tasks::CliTestArgs),
-    /// Run the Wayland cases CI's Weston cannot, against a compositor that offers their subjects.
-    WaylandOptional(tasks::WaylandOptionalArgs),
-    /// Link the examples and benches with the test suite's features.
-    BuildAllTargets(tasks::BuildAllTargetsArgs),
-    /// `gate`, `test` and the doctests: the local mirror of CI's required checks.
-    Ci(tasks::CiArgs),
-    /// `ci` plus every heavy CI job this host can run.
-    CiFull(tasks::CiFullArgs),
-    /// Check the dependency graph (cargo-deny).
-    Deps(tasks::DepsArgs),
     /// Clippy every feature on its own (cargo-hack).
     FeatureMatrix(tasks::FeatureMatrixArgs),
-    /// Clippy flui-native once per single feature (the part of feature-matrix pull requests run).
-    NativeFeatures(tasks::NativeFeaturesArgs),
     /// Build each supported facade feature combination on its own.
     FacadeCombos(tasks::FacadeCombosArgs),
     /// Clippy the Win32, AppKit, Android and iOS backends without linking.
@@ -85,10 +62,6 @@ enum Command {
     WasmLink(tasks::WasmLinkArgs),
     /// Run the wasm32 tests under wasm-bindgen-test-runner.
     WasmTest(tasks::WasmTestArgs),
-    /// The GPU readback suites.
-    GpuTest(tasks::GpuTestArgs),
-    /// The unsafe-code paths under Miri.
-    Miri(tasks::MiriArgs),
     /// Run the fuzz targets under libFuzzer.
     Fuzz(tasks::FuzzArgs),
     /// Remove the nested-cargo test caches under the target directory.
@@ -105,8 +78,6 @@ enum Command {
     WasmTestCrates(wasm::WasmTestCratesArgs),
     /// Print a package's version from Cargo.lock.
     LockedVersion(wasm::LockedVersionArgs),
-    /// Build the workspace docs with warnings denied.
-    DocStrict(doc_strict::DocStrictArgs),
     /// Check the links in the repository's markdown (lychee, offline).
     DocsLinks(docs_links::DocsLinksArgs),
     /// Check or list the bundled font assets.
@@ -123,7 +94,7 @@ enum Command {
     PlatformFloor(platform_floor::PlatformFloorArgs),
     /// Validate changelog.d fragments; --write merges them into CHANGELOG.md and deletes them.
     Changelog(changelog::ChangelogArgs),
-    /// List missing tools for `ci` / `ci-full`.
+    /// List missing tools for the local checks.
     Doctor(doctor::DoctorArgs),
     /// Collect benchmark results.
     BenchCollect(bench::BenchCollectArgs),
@@ -141,25 +112,12 @@ fn main() -> ExitCode {
     }
     let result = match cli.command {
         Command::Checks(args) => tasks::checks(&args),
-        Command::Lint(args) => tasks::lint(&args),
-        Command::Gate(args) => tasks::gate(&args),
-        Command::Test(args) => tasks::test(&args),
-        Command::PlatformTest(args) => tasks::platform_test(&args),
-        Command::CliTest(args) => tasks::cli_test(&args),
-        Command::WaylandOptional(args) => tasks::wayland_optional(&args),
-        Command::BuildAllTargets(args) => tasks::build_all_targets_task(&args),
-        Command::Ci(args) => tasks::ci(&args),
-        Command::CiFull(args) => tasks::ci_full(&args),
-        Command::Deps(args) => tasks::deps(&args),
         Command::FeatureMatrix(args) => tasks::feature_matrix(&args),
-        Command::NativeFeatures(args) => tasks::native_features(&args),
         Command::FacadeCombos(args) => tasks::facade_combos(&args),
         Command::CrossTypecheck(args) => tasks::cross_typecheck(&args),
         Command::WasmCheck(args) => tasks::wasm_check(&args),
         Command::WasmLink(args) => tasks::wasm_link(&args),
         Command::WasmTest(args) => tasks::wasm_test(&args),
-        Command::GpuTest(args) => tasks::gpu_test(&args),
-        Command::Miri(args) => tasks::miri(&args),
         Command::Fuzz(args) => tasks::fuzz(&args),
         Command::CleanNested(args) => tasks::clean_nested(&args),
         Command::Toolchain(args) => toolchain::toolchain(&args),
@@ -168,7 +126,6 @@ fn main() -> ExitCode {
         Command::WasmImports(args) => wasm::wasm_imports(&args),
         Command::WasmTestCrates(args) => wasm::wasm_test_crates(&args),
         Command::LockedVersion(args) => wasm::locked_version(&args),
-        Command::DocStrict(args) => doc_strict::doc_strict(&args),
         Command::DocsLinks(args) => docs_links::docs_links(&args),
         Command::FontAssets(args) => fonts::font_assets(&args),
         Command::IconImport(args) => icon_import::icon_import(&args),

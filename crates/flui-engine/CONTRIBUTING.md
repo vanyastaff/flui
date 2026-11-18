@@ -53,8 +53,8 @@ cargo clippy -p flui-engine --all-targets --locked -- -D warnings
 cargo clippy -p flui-engine --all-targets --locked --features testing -- -D warnings
 ```
 
-`cargo xtask lint` runs the workspace pass plus the `testing` one — that is
-the one to run.
+CI's `clippy` job runs the workspace pass and then the `testing` one; run both
+for a change here.
 
 **A single test, with its output.** Without `--features testing` a filter only
 reaches the default suite — for a GPU test, pass the feature:
@@ -102,16 +102,18 @@ for the harness API.
 
 ```bash
 cargo fmt --all                                         # before a PR, one at a time:
-cargo clippy -p flui-engine --all-targets -- -D warnings
-cargo nextest run -p flui-engine
-cargo xtask ci                                          # reproduce CI locally
+cargo clippy -p flui-engine --all-targets --features testing -- -D warnings
+cargo nextest run -p flui-engine --features testing
 ```
+
+CI's jobs and their commands are in `.github/workflows/ci.yml`
+(`docs/testing.md`, "CI jobs and their local commands").
 
 For a change confined to this crate, the parts that matter most:
 
 | Gate | Command | Why it catches *this* crate |
 |---|---|---|
-| clippy, both feature sets | `cargo xtask lint` | The GPU-gated code is invisible to the workspace pass |
+| clippy, both feature sets | both `cargo clippy -p flui-engine --all-targets` lines above | The GPU-gated code is invisible to the workspace pass |
 | engine tests | `cargo nextest run -p flui-engine --features testing` | The readback oracles |
 | docs | `RUSTDOCFLAGS="-D warnings" cargo doc -p flui-engine --no-deps` | Broken intra-doc links; the crate renamed a lot of public surface recently |
 | doc examples | `cargo test -p flui-engine --doc` | Every `///` example in this crate is compile-checked |
