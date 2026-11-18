@@ -54,7 +54,7 @@ use flui_platform::SystemFailure;
 
 /// `FluiCallback.PROTOCOL`: the contract between the library and its Java
 /// classes, checked before anything is bound or called.
-pub(crate) const PROTOCOL: i32 = 2;
+pub(crate) const PROTOCOL: i32 = 3;
 
 /// The binary name of the class Android calls the library back through.
 pub(crate) const CALLBACK_CLASS: &str = "dev.flui.system.FluiCallback";
@@ -72,16 +72,32 @@ pub(crate) enum StartAnswer {
     NoHandler,
     /// The application may not start it (`SecurityException`).
     Denied,
-    /// `FluiDocuments` serves as many documents as it keeps
-    /// (`IllegalStateException` from its `offer`): one must expire first.
-    Busy,
+    /// `FluiDocuments` serves `MAX_OFFERED` documents already: its `offer`
+    /// refused one more (`IllegalStateException`, classified from that call
+    /// alone). One must be opened, withdrawn or expire first.
+    TooManyOffered,
     /// Android failed otherwise.
     Failed,
+}
+
+impl StartAnswer {
+    /// Whether the offers made for the start stay served: only a start that
+    /// happened hands their grant to anyone. Every other answer withdraws
+    /// them at once, so a refused start holds none of `MAX_OFFERED`.
+    pub(crate) const fn keeps_offers(self) -> bool {
+        matches!(self, Self::Started)
+    }
 }
 
 /// The failure of a start Android gives no code for: an exception its
 /// documentation does not name, so an answer outside its contract.
 pub(crate) const UNNAMED_FAILURE: SystemFailure = SystemFailure::MalformedAnswer;
+
+/// What a start whose files `FluiDocuments` could not offer answers:
+/// `EMFILE`, since the provider holds a descriptor per offer and has as many
+/// as it keeps. Trying again succeeds once an offer was opened, withdrawn or
+/// expired.
+pub(crate) const TOO_MANY_OFFERED: SystemFailure = SystemFailure::Os(24);
 
 #[cfg(target_os = "android")]
 pub(crate) use java::register;

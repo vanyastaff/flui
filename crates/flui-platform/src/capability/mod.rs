@@ -43,7 +43,7 @@ pub use activity_result::{
     ResultToken, ResultTokenMint,
 };
 pub use completion::{Abandoned, Completion, CompletionSource, Resolver};
-pub use main_thread::{MAX_POSTED_WORK, MainThreadRefusal, MainThreadRefused, MainThreadWork};
+pub use main_thread::{MAX_POSTED_WORK, MainThreadRefused, PostedWork};
 pub use owner::{OwnerJob, OwnerPoster, OwnerRetired, OwnerScope, PendingCompletions};
 pub use portal_parent::PortalParent;
 pub use registrar::{CapabilityRegistrar, Plugin, RegisteredProvider};

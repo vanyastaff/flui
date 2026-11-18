@@ -862,12 +862,8 @@ mod tests {
             false
         }
 
-        fn post(
-            &self,
-            _work: flui_platform::capability::MainThreadWork,
-            refused: flui_platform::capability::MainThreadRefusal,
-        ) {
-            refused(flui_platform::capability::MainThreadRefused::ActivityEnded);
+        fn post(&self, work: flui_platform::capability::PostedWork) {
+            work.refuse(flui_platform::capability::MainThreadRefused::ActivityEnded);
         }
     }
 

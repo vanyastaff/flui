@@ -105,8 +105,8 @@ smallest leaf that makes it drivable, and nothing more:
 ### §2. How Android Java ships
 
 Java that uses only framework APIs, a manifest component included, ships as the owning crate's
-checked-in dex: the sources under the crate's `android/java`, the compiled `classes.dex` and its
-record beside them, all declared in the crate's metadata (ADR-0307):
+checked-in dex: the sources, the compiled dex and its record beside it (the dex's path with
+`.toml` added), wherever the crate keeps them, all declared in the crate's metadata (ADR-0307):
 `[package.metadata.flui.declares.android]` `java`, `dex`, `proguard`, and the components it
 contributes (`android.providers`, the first key of the kind; another kind of component gets its
 key with its first consumer). `flui build` adds each declared dex to the APK as the next
@@ -120,8 +120,9 @@ library module of its crate, and the crate's platform row says "Android (Gradle)
 
 `cargo xtask android-dex` checks, for every workspace crate that declares `android.dex` and
 `android.java` (at the top or under a feature), that the record's digests match the sources and
-the dex; the list comes from `cargo metadata`, never from a list kept by hand, and the `Android
-dex` workflow runs on any `android/java` tree and uploads what `--list` names. Each crate's Java
+the dex; the list comes from `cargo metadata`, never from a list kept by hand, and no path
+convention is assumed: the `Android dex` workflow runs on a change to any Java source or dex and
+uploads the paths `--list` names. Each crate's Java
 declares a protocol constant (`FluiHost.PROTOCOL`, `FluiCallback.PROTOCOL`) that its Rust compares
 with its own before it binds a native or calls a method, and refuses with a typed error naming
 both values; a provider that needs its crate's classes answers `NotDeclared` when they are

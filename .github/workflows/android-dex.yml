@@ -4,7 +4,7 @@ name: Android dex
 # (`[package.metadata.flui.declares.android]` `java` and `dex`, ADR-0375 §2;
 # `cargo xtask android-dex --list` names them) on a GitHub runner, so changing
 # the Java sources needs no local JDK or Android SDK. A pull request that
-# changes any `android/java` tree (or this file) runs it in `write` mode, so
+# changes any Java source or dex (or this file) runs it in `write` mode, so
 # its checks carry the `android-dex` artifact to commit. Or run it by hand on
 # the branch that changed them:
 #
@@ -21,7 +21,9 @@ name: Android dex
 on:
   pull_request:
     paths:
-      - "**/android/java/**"
+      - "**/*.java"
+      - "**/*.dex"
+      - "**/*.dex.toml"
       - ".github/workflows/android-dex.yml"
   workflow_dispatch:
     inputs:

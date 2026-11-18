@@ -19,6 +19,7 @@
 //! Activity went) answers nobody: its caller hears that the window closed,
 //! or went with the runtime.
 
+use flui_platform::capability::{Activity, CompletionSource, JniFrame, MainThreadRefused};
 use flui_platform::{Unsupported, UnsupportedReason};
 
 use crate::dialog::{
@@ -172,6 +173,48 @@ pub(crate) fn body(request: &MessageBoxRequest) -> String {
     }
 }
 
+/// What dismisses one box on Java's main thread, made again for each try.
+pub(crate) type Dismissal = std::rc::Rc<dyn Fn() -> Box<dyn FnOnce(JniFrame) + Send>>;
+
+/// Post the dismissal `make` builds until the host runs it, or the Activity
+/// ends (which takes the box's window with it). A dropped box's dismissal is
+/// owed to its caller (ADR-0344): a refusal (`TooMuchPosted`,
+/// `HandOffFailed`) is tried again at the owner turn its answer arrives on,
+/// and logged once, so no box stays up answering nobody.
+pub(crate) fn dismiss_until_landed(
+    activity: &Activity,
+    completions: &CompletionSource,
+    make: Dismissal,
+) {
+    try_dismissal(activity.clone(), completions.clone(), make, false);
+}
+
+fn try_dismissal(
+    activity: Activity,
+    completions: CompletionSource,
+    make: Dismissal,
+    reported: bool,
+) {
+    let posted = activity.on_main_thread(&completions, make());
+    let mut again = Some((activity, completions, make));
+    posted.on_complete(move |outcome| match (outcome, again.take()) {
+        (Ok(Err(refused)), Some((activity, completions, make)))
+            if refused != MainThreadRefused::ActivityEnded =>
+        {
+            if !reported {
+                tracing::warn!(
+                    target: "flui_system::android",
+                    ?refused,
+                    "a message box's dismissal was refused; it is tried again"
+                );
+            }
+            try_dismissal(activity, completions, make, true);
+        }
+        // Landed, the Activity ended, or the owner retired.
+        _ => {}
+    });
+}
+
 /// The answer of a box Android did not show: its window is not there to
 /// attach to just now.
 pub(crate) fn not_shown() -> DialogError {
@@ -277,8 +320,58 @@ mod provider {
 mod tests {
     use flui_platform::{SystemFailure, UnsupportedReason};
 
-    use super::{BoxEvent, BoxLayout, body, event_of};
+    use super::{BoxEvent, BoxLayout, Dismissal, body, dismiss_until_landed, event_of};
     use crate::dialog::{DialogError, MessageAnswer, MessageBoxRequest, MessageButtons};
+
+    /// A dropped box's dismissal is tried again at each owner turn its
+    /// refusal arrives on until the host runs it, and stops when the
+    /// Activity ends, so no box stays up answering nobody.
+    #[test]
+    fn a_refused_dismissal_is_tried_again_until_it_lands_or_the_activity_ends() {
+        use std::rc::Rc;
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        use flui_platform::capability::{ActivityBridge, MainThreadRefused};
+
+        use crate::testing::android::{ActivityStandIn, TestOwner, reach_activity};
+
+        let owner = TestOwner::new();
+        let stand_in = Rc::new(ActivityStandIn::default());
+        owner.offer_activity(Rc::clone(&stand_in) as Rc<dyn ActivityBridge>);
+        let activity = reach_activity(&owner);
+        let dismissed = Arc::new(AtomicUsize::new(0));
+        let make = |dismissed: &Arc<AtomicUsize>| -> Dismissal {
+            let dismissed = Arc::clone(dismissed);
+            Rc::new(move || {
+                let dismissed = Arc::clone(&dismissed);
+                Box::new(move |_frame| {
+                    dismissed.fetch_add(1, Ordering::Relaxed);
+                })
+            })
+        };
+
+        stand_in.refuse_posts(&[
+            MainThreadRefused::TooMuchPosted,
+            MainThreadRefused::HandOffFailed,
+        ]);
+        dismiss_until_landed(&activity, owner.completions(), make(&dismissed));
+        owner.turn_until(|| dismissed.load(Ordering::Relaxed) == 1);
+        assert_eq!(stand_in.posts(), 3, "two refusals, then the run");
+
+        let ended = Arc::new(AtomicUsize::new(0));
+        stand_in.refuse_posts(&[MainThreadRefused::ActivityEnded]);
+        dismiss_until_landed(&activity, owner.completions(), make(&ended));
+        for _ in 0..10 {
+            owner.turn();
+        }
+        assert_eq!(
+            stand_in.posts(),
+            4,
+            "an ended Activity took the box with it"
+        );
+        assert_eq!(ended.load(Ordering::Relaxed), 0);
+    }
 
     /// Each button answers its answer, leaving answers what closing means
     /// for the buttons, a box that went answers nobody, and no event

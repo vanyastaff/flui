@@ -13,9 +13,9 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use flui_platform::capability::{
     ActivityBridge, ActivityResult, CapabilityId, CompletionSource, DataRefused, IntentFrame,
-    JniFrame, MainThreadRefusal, MainThreadRefused, MainThreadWork, RequestKey, Resolver,
-    ResultCode, ResultIntent, ResultIntentHold, ResultKey, ResultMint, ResultOutcome,
-    ResultRefused, ResultRequest, ResultTicketHold, ResultToken, ResultTokenMint,
+    JniFrame, MainThreadRefused, PostedWork, RequestKey, Resolver, ResultCode, ResultIntent,
+    ResultIntentHold, ResultKey, ResultMint, ResultOutcome, ResultRefused, ResultRequest,
+    ResultTicketHold, ResultToken, ResultTokenMint,
 };
 
 use crate::android::documents::{
@@ -30,6 +30,34 @@ pub(crate) use super::window::window;
 fn empty_frame() -> JniFrame {
     let nothing = NonNull::<c_void>::dangling();
     JniFrame::new(nothing, nothing, nothing)
+}
+
+/// The Activity `owner` offers, as a registered provider reaches it.
+pub(crate) fn reach_activity(owner: &TestOwner) -> flui_platform::capability::Activity {
+    use flui_platform::capability::{Activity, Capability, CapabilityRegistrar, ProviderContext};
+
+    /// A capability whose handle is the Activity its provider reached.
+    enum Reached {}
+
+    impl Capability for Reached {
+        type Handle = Option<Activity>;
+        const NAME: &'static str = "flui-system-test.activity";
+    }
+
+    let mut registrar = CapabilityRegistrar::new();
+    registrar.provide::<Reached>(|ctx: &ProviderContext<'_>| {
+        Ok::<_, flui_platform::Unsupported>(ctx.activity())
+    });
+    let provider = registrar
+        .into_entries()
+        .pop()
+        .expect("one provider was registered");
+    provider
+        .provide(&owner.ctx(None))
+        .expect("provided")
+        .downcast::<Option<Activity>>()
+        .expect("the handle")
+        .expect("the owner offers an Activity")
 }
 
 /// One request the stand-in Activity took.
@@ -64,6 +92,10 @@ pub(crate) struct ActivityStandIn {
     intents_read: Cell<usize>,
     /// How many times a provider reattached, answered or not.
     reattachments: Cell<usize>,
+    /// The refusals the next posts of work get, in order.
+    post_refusals: RefCell<VecDeque<MainThreadRefused>>,
+    /// How many pieces of work a provider posted.
+    posts: Cell<usize>,
 }
 
 impl ActivityStandIn {
@@ -154,6 +186,18 @@ impl ActivityStandIn {
     pub(crate) fn reattachments(&self) -> usize {
         self.reattachments.get()
     }
+
+    /// The next posts of work are refused with `refusals`, in order.
+    pub(crate) fn refuse_posts(&self, refusals: &[MainThreadRefused]) {
+        self.post_refusals
+            .borrow_mut()
+            .extend(refusals.iter().copied());
+    }
+
+    /// How many pieces of work a provider posted.
+    pub(crate) fn posts(&self) -> usize {
+        self.posts.get()
+    }
 }
 
 impl ActivityBridge for ActivityStandIn {
@@ -235,11 +279,15 @@ impl ActivityBridge for ActivityStandIn {
         false
     }
 
-    /// The stand-in has no Java main thread: work is refused as a hand-off
-    /// that failed, and never runs.
-    fn post(&self, work: MainThreadWork, refused: MainThreadRefusal) {
-        drop(work);
-        refused(MainThreadRefused::HandOffFailed);
+    /// Work is refused with the next refusal the test queued, else run at
+    /// once with a frame that lends nothing, as if the main thread took it.
+    fn post(&self, work: PostedWork) {
+        self.posts.set(self.posts.get() + 1);
+        let refusal = self.post_refusals.borrow_mut().pop_front();
+        match refusal {
+            Some(reason) => work.refuse(reason),
+            None => work.run(empty_frame()),
+        }
     }
 }
 

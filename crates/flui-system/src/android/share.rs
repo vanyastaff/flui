@@ -19,7 +19,7 @@ use flui_platform::launch::ExternalUri;
 use flui_platform::{SystemFailure, Unsupported, UnsupportedReason};
 
 use super::workers::NotRun;
-use super::{StartAnswer, UNNAMED_FAILURE};
+use super::{StartAnswer, TOO_MANY_OFFERED, UNNAMED_FAILURE};
 use crate::share::{ShareCapability, ShareError, ShareRequest, ShareResult};
 
 /// `ENOENT` and `ENOTDIR`, on Linux and so on Android.
@@ -111,7 +111,7 @@ pub(crate) fn start_result(started: StartAnswer) -> ShareResult {
         // The chooser is the system's own: a device without one shares
         // nothing.
         StartAnswer::NoHandler => Err(refused(UnsupportedReason::NotOnThisDevice)),
-        StartAnswer::Busy => Err(unavailable()),
+        StartAnswer::TooManyOffered => Err(ShareError::Failed(TOO_MANY_OFFERED)),
         StartAnswer::Denied | StartAnswer::Failed => Err(ShareError::Failed(UNNAMED_FAILURE)),
     }
 }
@@ -334,11 +334,27 @@ mod tests {
             not_run::<()>(NotRun::Busy).map_err(reason),
             Err(Some(UnsupportedReason::Unavailable))
         );
+    }
+
+    /// When the provider serves as many documents as it keeps, a share
+    /// answers that typed failure, not a retry-later refusal, and only a
+    /// start that happened keeps its offers: every refused or failed start
+    /// withdraws them, so it holds none of the provider's places.
+    #[test]
+    fn a_full_provider_is_its_own_failure_and_only_a_started_share_keeps_its_offers() {
         assert_eq!(
-            start_result(StartAnswer::Busy).map_err(reason),
-            Err(Some(UnsupportedReason::Unavailable)),
-            "the provider keeps as many documents as it serves"
+            start_result(StartAnswer::TooManyOffered),
+            Err(ShareError::Failed(SystemFailure::Os(24)))
         );
+        for (answer, keeps) in [
+            (StartAnswer::Started, true),
+            (StartAnswer::NoHandler, false),
+            (StartAnswer::Denied, false),
+            (StartAnswer::TooManyOffered, false),
+            (StartAnswer::Failed, false),
+        ] {
+            assert_eq!(answer.keeps_offers(), keeps, "{answer:?}");
+        }
     }
 
     /// A shared file is the one its open reached, named by where it ends: a

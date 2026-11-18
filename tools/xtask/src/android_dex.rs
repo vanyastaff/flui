@@ -29,7 +29,7 @@
 //!
 //! Without a local JDK or SDK, `.github/workflows/android-dex.yml` runs
 //! `--write` on a GitHub runner for a pull request that changes any
-//! `android/java` tree (and `--write` or `--rebuild` by hand on any branch)
+//! Java source or dex (and `--write` or `--rebuild` by hand on any branch)
 //! and uploads each dex and its record as an artifact to commit.
 
 use std::fmt::Write as _;

@@ -504,9 +504,11 @@ Threads:
   resolver in a frame the Activity lends, and keeps them with the runtime.
 - **Starting an activity and the message box run on Java's main thread**, each work the host runs
   there for the provider (`Activity::on_main_thread`, ADR-0375 §6) inside its panic boundary. Work
-  the host refuses (the Activity ended, `MAX_POSTED_WORK` pieces wait, the main thread did not take
-  it within the host's limit, or it panicked) answers a launch or a share `Unavailable`, and a
-  message box `NotShown`.
+  the host refuses (the Activity ended, `MAX_POSTED_WORK` pieces wait, or the main thread did not
+  take it within the host's limit) answers a launch or a share `Unavailable`, and a message box
+  `NotShown`. A dropped box's dismissal is owed: refused, it is tried again at the owner turn the
+  refusal arrives on, until it lands or the Activity ends (`dismiss_until_landed`), and the
+  refusal is logged once.
 - **Whatever reads a content provider or the file system runs on a thread of its own**
   (`android::workers`), at most `Workers::MAX_IN_FLIGHT` per runtime; a request past that answers
   `Unavailable`, and a worker gives its place back on every exit. A provider answers when it will
@@ -546,10 +548,17 @@ descriptor holds is judged (a regular file whose final name, read from `/proc/se
 serves it under `content://<authority>/<random token>/<name>` (the authority the manifest gave it,
 `<application id>.flui.documents`) to the one activity the intent's read grant reaches (ADR-0360
 §2). The provider is not exported, serves only what was offered, and reopens the file through the
-descriptor it holds (never the path). An offer is served for `FluiDocuments.OFFER_LIFETIME_MS`
-after it was made, then closed (a grantee that opened it keeps its own descriptor); at most
-`FluiDocuments.MAX_OFFERED` are served at once, and one more is refused rather than replacing an
-offer whose grant may be in use, which answers the launch or the share `Unavailable`.
+descriptor it holds (never the path). An offer ends at the first of: its grantee's first open
+(the grantee keeps its own descriptor; a second open is refused); its start not happening (the
+`Intent` failed to build, or Android refused the start), when the library withdraws every offer
+the start made (`FluiDocuments.withdraw`, `StartAnswer::keeps_offers`); or
+`FluiDocuments.OFFER_LIFETIME_MS` with neither, which is what ends the offers of a share whose
+chooser the user dismissed, since Android reports no dismissal. At most
+`FluiDocuments.MAX_OFFERED` are served at once; one more is refused rather than replacing an
+offer whose grant may be in use, classified from `offer` alone, and answers the launch or the
+share `Failed(Os(EMFILE))` (`TOO_MANY_OFFERED`). A file unlinked between its open and the read of
+its final name is refused by the `fstat` already made (`Held::Unlinked`), not judged by the
+`(deleted)` name the kernel gives it.
 
 **Sharing** is `ACTION_SEND`, or `ACTION_SEND_MULTIPLE` for several files, through the chooser: the
 text and the link travel as `EXTRA_TEXT`, the link on its own line, the title is the chooser's and

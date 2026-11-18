@@ -26,9 +26,7 @@ use std::{cell::Cell, ffi::c_void, fmt, num::NonZeroU64, ptr::NonNull, rc::Rc};
 
 use flui_foundation::{IdExhausted, IdMint};
 
-use super::{
-    Completion, CompletionSource, MainThreadRefusal, MainThreadRefused, MainThreadWork, Resolver,
-};
+use super::{Completion, CompletionSource, MainThreadRefused, PostedWork, Resolver};
 
 /// The identity of one request an [`Activity`] took, minted by the host per
 /// call.
@@ -734,11 +732,11 @@ pub trait ActivityBridge: 'static {
     /// attach.
     fn lend(&self, f: &mut dyn FnMut(JniFrame)) -> bool;
 
-    /// Run `work` once on Android's main thread with the Activity lent in
-    /// the frame, or call `refused` once with the reason it did not run to
-    /// its end; never both, and never neither. See
-    /// [`Activity::on_main_thread`].
-    fn post(&self, work: MainThreadWork, refused: MainThreadRefusal);
+    /// Run `work` on Android's main thread with the Activity lent in the
+    /// frame ([`PostedWork::run`]), or refuse it with the reason it does not
+    /// run ([`PostedWork::refuse`]); the type ends it exactly once, a drop
+    /// included. See [`Activity::on_main_thread`].
+    fn post(&self, work: PostedWork);
 }
 
 /// The running Android Activity, as one capability's provider reaches it.
@@ -868,38 +866,23 @@ impl Activity {
     /// inside its panic boundary and clears a Java exception it leaves
     /// pending. The completion settles at an owner turn, once: with `work`'s
     /// answer, or with the [`MainThreadRefused`] that says why there is
-    /// none: the Activity has ended, [`MAX_POSTED_WORK`](super::MAX_POSTED_WORK) pieces wait, the
-    /// main thread did not take it within the host's limit (the work then
-    /// never runs), or it panicked there. Work that does not run is dropped
-    /// on whichever thread refused it.
+    /// none: the Activity has ended, [`MAX_POSTED_WORK`](super::MAX_POSTED_WORK)
+    /// pieces wait, or the main thread did not take it within the host's
+    /// limit (the work then never runs). Work that panics there ends the
+    /// completion as [`ProviderDropped`](super::Abandoned::ProviderDropped).
+    /// Work that does not run is dropped on whichever thread refused it.
     pub fn on_main_thread<T: Send + 'static>(
         &self,
         completions: &CompletionSource,
         work: impl FnOnce(JniFrame) -> T + Send + 'static,
     ) -> Completion<Result<T, MainThreadRefused>> {
-        let (completion, resolver) = completions.pending();
-        // Whichever of the work and the refusal runs takes the resolver.
-        let answer = std::sync::Arc::new(std::sync::Mutex::new(Some(resolver)));
-        let refusal = std::sync::Arc::clone(&answer);
-        let take = |slot: &std::sync::Mutex<Option<Resolver<_>>>| {
-            slot.lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .take()
-        };
-        self.bridge.post(
-            Box::new(move |frame| {
-                let value = work(frame);
-                if let Some(resolver) = take(&answer) {
-                    // The owner retiring first leaves nothing waiting.
-                    let _ = resolver.resolve(Ok(value));
-                }
-            }),
-            Box::new(move |refused| {
-                if let Some(resolver) = take(&refusal) {
-                    let _ = resolver.resolve(Err(refused));
-                }
-            }),
-        );
+        let (completion, resolver): (_, Resolver<Result<T, MainThreadRefused>>) =
+            completions.pending();
+        self.bridge.post(PostedWork::new(move |lent| {
+            let answer = lent.map(work);
+            // The owner retiring first leaves nothing waiting.
+            let _ = resolver.resolve(answer);
+        }));
         completion
     }
 }

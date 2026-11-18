@@ -27,7 +27,7 @@ use flui_platform::{SystemFailure, Unsupported, UnsupportedReason};
 
 use super::opened::Held;
 use super::workers::NotRun;
-use super::{StartAnswer, UNNAMED_FAILURE};
+use super::{StartAnswer, TOO_MANY_OFFERED, UNNAMED_FAILURE};
 
 /// `ENOENT`, `EACCES`, `ENOTDIR` and `EPERM`, on Linux and so on Android.
 const ENOENT: i32 = 2;
@@ -63,7 +63,7 @@ pub(crate) fn installs_when_viewed(name: &Path) -> bool {
 pub(crate) fn judge(held: Held, final_name: &Path) -> Result<(), LaunchError> {
     match held {
         Held::Folder => Err(not_on_android()),
-        Held::Other => Err(LaunchError::NotADocument),
+        Held::Other | Held::Unlinked => Err(LaunchError::NotADocument),
         Held::File if runs_when_opened(final_name) || installs_when_viewed(final_name) => {
             Err(LaunchError::NotADocument)
         }
@@ -87,7 +87,7 @@ pub(crate) fn start_result(started: StartAnswer) -> LaunchResult {
         StartAnswer::Started => Ok(()),
         StartAnswer::NoHandler => Err(LaunchError::NoHandler),
         StartAnswer::Denied => Err(LaunchError::Denied),
-        StartAnswer::Busy => Err(unavailable()),
+        StartAnswer::TooManyOffered => Err(LaunchError::Failed(TOO_MANY_OFFERED)),
         StartAnswer::Failed => Err(LaunchError::Failed(UNNAMED_FAILURE)),
     }
 }
@@ -272,6 +272,11 @@ mod tests {
                 "/data/user/0/app/files/pipe.pdf",
                 Err(LaunchError::NotADocument),
             ),
+            (
+                Held::Unlinked,
+                "/data/user/0/app/files/run.py (deleted)",
+                Err(LaunchError::NotADocument),
+            ),
         ] {
             assert_eq!(judge(held, Path::new(name)), expected, "{held:?} {name}");
         }
@@ -300,6 +305,11 @@ mod tests {
         assert_eq!(
             start_result(StartAnswer::Failed),
             Err(LaunchError::Failed(SystemFailure::MalformedAnswer))
+        );
+        assert_eq!(
+            start_result(StartAnswer::TooManyOffered),
+            Err(LaunchError::Failed(SystemFailure::Os(24))),
+            "a full provider is its own failure, not a retry-later refusal"
         );
         let busy = not_run::<()>(NotRun::Busy).expect_err("no worker took it");
         assert_eq!(refused(&busy), Some(UnsupportedReason::Unavailable));

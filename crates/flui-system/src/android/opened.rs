@@ -19,6 +19,9 @@ pub(crate) enum Held {
     Folder,
     /// Anything else: a pipe, a device, a socket.
     Other,
+    /// A file no name leads to any more (unlinked after the open), whose
+    /// final name the kernel gives as `<name> (deleted)`.
+    Unlinked,
 }
 
 /// A path opened for reading, with what it holds and its final name.
@@ -52,15 +55,34 @@ impl Opened {
 /// that failed.
 #[cfg(any(target_os = "android", all(test, target_os = "linux")))]
 pub(crate) fn open(path: &std::path::Path) -> std::io::Result<Opened> {
-    use std::os::fd::AsRawFd as _;
     use std::os::unix::fs::OpenOptionsExt as _;
 
     let file = std::fs::OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NONBLOCK | libc::O_NOCTTY)
         .open(path)?;
-    let kind = file.metadata()?.file_type();
-    let held = if kind.is_file() {
+    examine(file)
+}
+
+/// What the open `file` holds, by its `fstat`, and the name it ends at.
+///
+/// A file with no link left (unlinked after the open) is
+/// [`Held::Unlinked`]: the kernel then names it `<name> (deleted)`, which no
+/// rule about names can judge, so the `fstat` already made decides.
+///
+/// # Errors
+///
+/// The system's error for an `fstat` or a read of the final name.
+#[cfg(any(target_os = "android", all(test, target_os = "linux")))]
+pub(crate) fn examine(file: std::fs::File) -> std::io::Result<Opened> {
+    use std::os::fd::AsRawFd as _;
+    use std::os::unix::fs::MetadataExt as _;
+
+    let metadata = file.metadata()?;
+    let kind = metadata.file_type();
+    let held = if metadata.nlink() == 0 {
+        Held::Unlinked
+    } else if kind.is_file() {
         Held::File
     } else if kind.is_dir() {
         Held::Folder
@@ -73,4 +95,31 @@ pub(crate) fn open(path: &std::path::Path) -> std::io::Result<Opened> {
         held,
         final_name,
     })
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::{Held, examine, open};
+
+    /// A file unlinked between its open and the read of its name is judged
+    /// by the `fstat` that already counted no link, not by the `(deleted)`
+    /// name the kernel gives it then.
+    #[test]
+    fn a_file_unlinked_after_its_open_is_held_as_unlinked() {
+        let folder = tempfile::tempdir().expect("a folder of the test's own");
+        let script = folder.path().join("run.py");
+        std::fs::write(&script, b"#!/bin/sh\n").expect("written");
+        let file = std::fs::File::open(&script).expect("opened");
+        std::fs::remove_file(&script).expect("unlinked");
+        let opened = examine(file).expect("examined");
+        assert_eq!(opened.held, Held::Unlinked);
+        assert!(
+            opened.final_name.to_string_lossy().ends_with("(deleted)"),
+            "{}",
+            opened.final_name.display()
+        );
+        let document = folder.path().join("report.pdf");
+        std::fs::write(&document, b"%PDF").expect("written");
+        assert_eq!(open(&document).expect("opened").held, Held::File);
+    }
 }

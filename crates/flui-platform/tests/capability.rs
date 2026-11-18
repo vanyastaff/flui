@@ -15,11 +15,10 @@ use flui_platform::{
     capability::{
         Abandoned, Activity, ActivityBridge, Capability, CapabilityId, CapabilityProvider,
         CapabilityRegistrar, CompletionSource, DataRefused, HostBridge, IntentFrame,
-        InvalidResultKey, JniFrame, MAX_RESULT_KEY_LEN, MainThreadRefusal, MainThreadRefused,
-        MainThreadWork, OwnerJob, OwnerPoster, OwnerRetired, OwnerScope, PendingCompletions,
-        ProviderContext, RequestKey, Resolver, ResultCode, ResultIntent, ResultKey, ResultMint,
-        ResultOutcome, ResultRefused, ResultRequest, ResultTicketHold, ResultToken,
-        ResultTokenMint, RuntimeLocals,
+        InvalidResultKey, JniFrame, MAX_RESULT_KEY_LEN, MainThreadRefused, OwnerJob, OwnerPoster,
+        OwnerRetired, OwnerScope, PendingCompletions, PostedWork, ProviderContext, RequestKey,
+        Resolver, ResultCode, ResultIntent, ResultKey, ResultMint, ResultOutcome, ResultRefused,
+        ResultRequest, ResultTicketHold, ResultToken, ResultTokenMint, RuntimeLocals,
     },
 };
 
@@ -624,7 +623,7 @@ struct BridgeCalls {
     resolvers: RefCell<Vec<Resolver<ResultOutcome>>>,
     tickets: RefCell<Vec<ResultTicketHold>>,
     /// The work handed to Android's main thread, with its refusal, in order.
-    posted: RefCell<Vec<(MainThreadWork, MainThreadRefusal)>>,
+    posted: RefCell<Vec<PostedWork>>,
 }
 
 impl BridgeCalls {
@@ -679,8 +678,8 @@ impl ActivityBridge for BridgeCalls {
         false
     }
 
-    fn post(&self, work: MainThreadWork, refused: MainThreadRefusal) {
-        self.posted.borrow_mut().push((work, refused));
+    fn post(&self, work: PostedWork) {
+        self.posted.borrow_mut().push(work);
     }
 }
 
@@ -783,9 +782,9 @@ fn a_provider_reaches_the_activity_the_host_offers() {
 }
 
 /// Work a provider hands to Android's main thread goes through the host,
-/// and its completion settles at an owner turn with what the work answered
-/// or with the host's refusal, once: a refusal after the work ran, or the
-/// work after a refusal, changes nothing.
+/// and its completion settles at an owner turn, once: with what the work
+/// answered, with the host's refusal, or, for work the host dropped without
+/// either, as a hand-off that failed.
 #[test]
 fn work_for_the_main_thread_answers_through_the_host() {
     let owner = Owner::new();
@@ -808,19 +807,28 @@ fn work_for_the_main_thread_answers_through_the_host() {
 
     let mut ran = activity.on_main_thread(&owner.source, |_frame| 7_u32);
     let mut refused = activity.on_main_thread(&owner.source, |_frame| 8_u32);
+    let mut dropped = activity.on_main_thread(&owner.source, |_frame| 9_u32);
     let mut posted = bridge.posted.take().into_iter();
-    let (work, refusal) = posted.next().expect("the first work reached the host");
-    work(frame());
-    refusal(MainThreadRefused::HandOffFailed);
-    let (work, refusal) = posted.next().expect("the second work reached the host");
-    refusal(MainThreadRefused::ActivityEnded);
-    work(frame());
+    posted
+        .next()
+        .expect("the first work reached the host")
+        .run(frame());
+    posted
+        .next()
+        .expect("the second work reached the host")
+        .refuse(MainThreadRefused::ActivityEnded);
+    drop(posted.next().expect("the third work reached the host"));
     assert!(ran.poll().is_none(), "settles at the owner's turn");
     owner.turn();
     assert_eq!(ran.poll(), Some(Ok(Ok(7))));
     assert_eq!(
         refused.poll(),
         Some(Ok(Err(MainThreadRefused::ActivityEnded)))
+    );
+    assert_eq!(
+        dropped.poll(),
+        Some(Ok(Err(MainThreadRefused::HandOffFailed))),
+        "work a host drops unended is refused, never left waiting"
     );
 }
 

@@ -1,7 +1,7 @@
 # Written by `cargo xtask android-dex --write`; checked by `cargo xtask checks`.
 # The dex is compiled from the sources under `java/` (ADR-0247).
-sources = "b8a5022501f88ebc74a58dc1e2d610c10d7c1f674df44bbe9e194894a20d36d5"
-dex = "58dc1ac365e925d20f549e40835b4e3914d47060e411ee24bda990e5c978cf31"
+sources = "2d8910b87ebbac03dd47e4c289b2c2aef0882436ce920954fa292f9db95059ec"
+dex = "ea58520e22f77c4b6ec260dcc44eade93ba3ee3cb0ce9b20a85b5c9890c052db"
 javac = "21.0.12.1"
 build-tools = "35.0.0"
 platform = "android-35"

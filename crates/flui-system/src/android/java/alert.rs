@@ -7,7 +7,9 @@ use flui_platform::capability::{Activity, Completion, CompletionSource, MainThre
 use jni::objects::{Global, JObject};
 use jni::{Env, JValue, jni_sig, jni_str};
 
-use super::super::message_box::{BoxEvent, BoxLayout, body, event_of};
+use super::super::message_box::{
+    BoxEvent, BoxLayout, Dismissal, body, dismiss_until_landed, event_of,
+};
 use super::{CallbackSlot, Java, in_frame};
 use crate::dialog::{MessageBoxRequest, MessageLevel};
 
@@ -210,20 +212,22 @@ impl Java {
     ) {
         on_screen.state().let_go = true;
         let on_screen = Arc::clone(on_screen);
-        // An Activity that ended took the box's window with it, so whether
-        // the dismissal ran is nobody's to hear.
-        drop(activity.on_main_thread(completions, move |frame| {
-            let dialog = on_screen.state().dialog.take();
-            if let Some(dialog) = dialog {
-                let _ = in_frame(frame, |env, _| {
-                    let dismissed =
-                        env.call_method(&dialog, jni_str!("dismiss"), jni_sig!("()V"), &[]);
-                    if dismissed.is_err() {
-                        env.exception_clear();
-                    }
-                    Ok(())
-                });
-            }
-        }));
+        let make: Dismissal = std::rc::Rc::new(move || {
+            let on_screen = Arc::clone(&on_screen);
+            Box::new(move |frame| {
+                let dialog = on_screen.state().dialog.take();
+                if let Some(dialog) = dialog {
+                    let _ = in_frame(frame, |env, _| {
+                        let dismissed =
+                            env.call_method(&dialog, jni_str!("dismiss"), jni_sig!("()V"), &[]);
+                        if dismissed.is_err() {
+                            env.exception_clear();
+                        }
+                        Ok(())
+                    });
+                }
+            })
+        });
+        dismiss_until_landed(activity, completions, make);
     }
 }

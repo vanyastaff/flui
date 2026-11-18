@@ -1,5 +1,7 @@
 package dev.flui.system;
 
+import android.util.Log;
+
 import java.lang.ref.PhantomReference;
 import java.lang.ref.ReferenceQueue;
 import java.lang.reflect.InvocationHandler;
@@ -25,7 +27,9 @@ public final class FluiCallback implements InvocationHandler {
      * The contract with the native library, over this package's classes; raised with every
      * change of a signature the library calls or binds.
      */
-    public static final int PROTOCOL = 2;
+    public static final int PROTOCOL = 3;
+
+    private static final String TAG = "FluiCallback";
 
     /** Where the collected callbacks' references arrive. */
     private static final ReferenceQueue<FluiCallback> COLLECTED = new ReferenceQueue<>();
@@ -67,7 +71,13 @@ public final class FluiCallback implements InvocationHandler {
                 synchronized (PENDING) {
                     PENDING.remove(release);
                 }
-                released(release.handle);
+                try {
+                    released(release.handle);
+                } catch (Throwable thrown) {
+                    // The native side contains its own failures; anything else
+                    // must not end the thread every later release waits on.
+                    Log.w(TAG, "a callback's handle was not released", thrown);
+                }
             }
         }
     }
@@ -75,7 +85,8 @@ public final class FluiCallback implements InvocationHandler {
     private static void track(FluiCallback callback, long handle) {
         synchronized (PENDING) {
             PENDING.add(new Release(callback, handle));
-            if (releaser == null) {
+            // Started with the first callback, and again should it have died.
+            if (releaser == null || !releaser.isAlive()) {
                 releaser = new Thread(new Releaser(), "flui-callback-release");
                 releaser.setDaemon(true);
                 releaser.start();

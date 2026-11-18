@@ -1128,13 +1128,8 @@ impl flui_platform::capability::ActivityBridge for EndedActivity {
         false
     }
 
-    fn post(
-        &self,
-        work: flui_platform::capability::MainThreadWork,
-        refused: flui_platform::capability::MainThreadRefusal,
-    ) {
-        drop(work);
-        refused(flui_platform::capability::MainThreadRefused::ActivityEnded);
+    fn post(&self, work: flui_platform::capability::PostedWork) {
+        work.refuse(flui_platform::capability::MainThreadRefused::ActivityEnded);
     }
 }
 
