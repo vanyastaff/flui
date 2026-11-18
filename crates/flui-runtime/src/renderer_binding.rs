@@ -506,9 +506,9 @@ impl RendererBinding for RenderingBinding {
         // Upgrade-or-skip: if the owning ui_runtime's scheduler is already gone,
         // there is no frame left to schedule.
         //
-        // Routes through the scheduler's gated pair (`ensure_visual_update`
-        // -> `schedule_frame_if_enabled`), which no-ops while frames are
-        // disabled instead of unconditionally requesting one.
+        // `ensure_visual_update` requests a frame only while frames are
+        // enabled (the lifecycle state decides), instead of unconditionally
+        // requesting one.
         if let Some(scheduler) = self.scheduler.upgrade() {
             scheduler.ensure_visual_update();
         }

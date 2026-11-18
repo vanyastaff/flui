@@ -25,7 +25,7 @@ use flui_scheduler::UpdateScheduler;
 //     inside it violates `set_on_frame_scheduled`'s own documented contract
 //     ("must only touch wake machinery, never re-enter the scheduler"), and
 //     a hook reached from a post-drain registration would re-enter
-//     `handle_begin_frame` at phase `PostFrameCallbacks`, which has no valid
+//     `handle_begin_frame` at phase `PostFrame`, which has no valid
 //     transition.
 //   * Demand behaviour is driven through a raw `impl Wake`, never
 //     `spawn_local`. `AsyncDriver`'s own wake hook requests a frame
@@ -84,7 +84,6 @@ fn an_idle_registration_demands_one_frame_and_resolves_with_its_timing() {
         .expect("the scheduler has no live owner frame")
         .drive_frame(
             flui_scheduler::Instant::now(),
-            flui_scheduler::IdleDeadline::far_future(flui_scheduler::Instant::now()),
             || {},
             || {
                 scheduler
@@ -133,19 +132,14 @@ fn a_registration_from_inside_an_aborted_frames_waker_demands_exactly_one_frame(
             .is_pending()
     );
 
-    scheduler.add_persistent_frame_callback(std::rc::Rc::new(|_timing| {
-        panic!("persistent callback fails this frame");
-    }));
-
     let edges_before = edges.load(Ordering::SeqCst);
     let attempt = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         flui_scheduler::OwnerFrame::try_new(&scheduler)
             .expect("the scheduler has no live owner frame")
             .drive_frame(
                 flui_scheduler::Instant::now(),
-                flui_scheduler::IdleDeadline::far_future(flui_scheduler::Instant::now()),
                 || {},
-                || {},
+                || panic!("the pipeline fails this frame"),
             )
             .expect("live owner frame");
     }));

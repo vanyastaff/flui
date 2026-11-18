@@ -241,9 +241,8 @@ parses, enqueues, waits a bounded time and answers. Consequences:
   manual clock. The driver advances it frame by frame (`frame_dt`, default 16.667 ms) up to
   `max_frames`, so the outcome is deterministic.
 - **Unsettled causes** come from the runtime's own predicates (`needs_redraw`,
-  `is_frame_scheduled`, `has_pending_work`, `next_wake`, transient callback count, pending image
-  loads), the same signals `pump_until_settled` reads (kittest reports repaint causes; Flutter
-  `waitUntilNoTransientCallbacks`).
+  `is_frame_scheduled`, `has_pending_work`, `next_wake`), the same signals `pump_until_settled`
+  reads (kittest reports repaint causes; Flutter `waitUntilNoTransientCallbacks`).
 - **Reentrancy (F5).** Jobs run outside any borrow of the agent table. The owner commits the job's
   answer slot before running user-visible effects (semantics action handlers, injected input
   dispatch), and a callback that closes the window makes the answer `gone` rather than tearing the

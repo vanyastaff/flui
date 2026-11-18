@@ -65,7 +65,7 @@ mod sealed {
 
 /// An identity an [`IdMint`] can issue. Sealed: each implementor is an id
 /// whose only source is a mint — no `Default`, no conversion from a number
-/// (`ListenerId`, `FrameCallbackId`, `TaskId`, `PressId`, `InputSequenceId`), an id a
+/// (`ListenerId`, `FrameCallbackId`, `PressId`, `InputSequenceId`), an id a
 /// private wire representation names back (`DragSessionId`), or the raw
 /// `NonZeroU64` issue for an identity type defined above this crate, whose
 /// owner keeps its constructor private.
@@ -181,8 +181,8 @@ minted_ids! {
     /// ```
     ListenerId;
 
-    /// The identity of one scheduler frame callback (transient, persistent or
-    /// post-frame), minted by its scheduler's own [`IdMint`] on the owner
+    /// The identity of one scheduler callback (a post-frame callback or a
+    /// lifecycle listener), minted by its scheduler's own [`IdMint`] on the owner
     /// thread.
     ///
     /// ```compile_fail
@@ -190,15 +190,6 @@ minted_ids! {
     /// let forged = flui_foundation::FrameCallbackId::zip(1);
     /// ```
     FrameCallbackId;
-
-    /// The identity of one task in a priority task queue, minted by an
-    /// [`AtomicIdMint`]: tasks are created on whichever thread asks.
-    ///
-    /// ```compile_fail
-    /// // A task id is minted, never built from a number.
-    /// let forged = flui_foundation::TaskId::new(1);
-    /// ```
-    TaskId;
 
     /// The identity of one press sequence of one contact, from the press that
     /// begins it to the release or cancellation that ends it, minted by the

@@ -1,13 +1,14 @@
 //! # FLUI UpdateScheduler
 //!
-//! Owner-local frame execution, callbacks, and task prioritization for FLUI.
+//! Owner-local frame execution, post-frame callbacks, lifecycle and async
+//! tasks for FLUI.
 //!
-//! `UpdateScheduler` owns *logical* time only — the phase machine, callback
-//! queues, and the priority task queue — and makes no refresh-rate, display,
-//! or surface assumption of its own; a caller supplies the frame's vsync
-//! timestamp and an Idle-slice deadline to the owner frame through the
-//! composition-root seam [`__runtime::DriveFrame`] (physical pacing is a
-//! presentation-owned concern, split out from this crate).
+//! `UpdateScheduler` owns *logical* time only (the phase machine, frame
+//! demand and the callbacks that observe a frame) and makes no refresh-rate,
+//! display or surface assumption of its own; a caller supplies the frame's
+//! vsync timestamp to the owner frame through the composition-root seam
+//! [`__runtime::DriveFrame`] (physical pacing is a presentation-owned concern,
+//! split out from this crate).
 //!
 //! ## Architecture
 //!
@@ -16,26 +17,10 @@
 //!     ↓
 //! OwnerFrame (executes complete frame and background turns)
 //!     └─ UpdateScheduler (admits work and observes logical frame state)
-//!     └─ TaskQueue (priority-based execution)
 //!
 //! Frame Timeline:
-//! BeginFrame → Tasks (Build/Layout/Paint) → EndFrame → Present
+//! Idle → Frame (async poll, pipeline) → PostFrame (post-frame callbacks) → Idle
 //! ```
-//!
-//! ## Key Components
-//!
-//! ### UpdateScheduler
-//! Manages the frame lifecycle's phase machine:
-//! - Schedule frame callbacks
-//! - Post-frame callbacks
-//! - Deadline-bounded Idle-priority task slice (Animation/Build always run)
-//!
-//! ### TaskQueue
-//! Priority-based task execution:
-//! - **Priority::UserInput** - Immediate (mouse, keyboard)
-//! - **Priority::Animation** - High (smooth 60fps)
-//! - **Priority::Build** - Normal (widget rebuilds)
-//! - **Priority::Idle** - Low (background work)
 //!
 //! ### Frame telemetry
 //! What a frame cost and when it reached the display is measured in
@@ -43,51 +28,28 @@
 //! [`frame_telemetry::FrameSnapshot`]; [`frame_histogram`]
 //! summarizes a run of them.
 //!
-//! ## Type-Safe IDs
-//!
-//! Callback and task ids are distinct opaque types; only a mint issues one,
-//! and none is built from a number:
-//! ```rust
-//! use flui_scheduler::{Priority, Task};
-//!
-//! let first = Task::new(Priority::Build, || {});
-//! let second = Task::new(Priority::Build, || {});
-//! // Ids of one domain are never issued twice; a `TaskId` and a
-//! // `CallbackId` are different types and can't be mixed.
-//! assert_ne!(first.id(), second.id());
-//! ```
-//!
 //! ## Example Usage
 //!
 //! ```rust
 //! use flui_scheduler::__runtime::DriveFrame as _;
-//! use flui_scheduler::{OwnerFrame, Priority, UpdateScheduler};
+//! use flui_scheduler::{OwnerFrame, UpdateScheduler};
 //!
 //! let scheduler = UpdateScheduler::new();
 //! // The owner thread's frame state: owner-local post-frame callbacks and
 //! // async tasks and complete execution. A UI runtime owns one.
 //! let owner = OwnerFrame::try_new(&scheduler).expect("the scheduler has no live owner frame");
 //!
-//! // Schedule a one-time frame callback (animation tick)
-//! scheduler.schedule_frame_callback(Box::new(|vsync_time| {
-//!     println!("Frame start: {:?}", vsync_time);
-//! }));
-//!
-//! // Add task
-//! scheduler.add_task(Priority::Animation, || {
-//!     // Perform animation work
-//! });
-//!
 //! // Execute frame (called by event loop)
 //! let now = flui_scheduler::Instant::now();
-//! owner.drive_frame(now, flui_scheduler::IdleDeadline::far_future(now), || {}, || {})
+//! owner
+//!     .drive_frame(now, || {}, || {})
 //!     .expect("the owner accepts the frame");
 //! ```
 //!
 //! ## Feature Flags
 //!
-//! - **`serde`** - Enable serialization support for priorities and the frame
-//!   and lifecycle enums. Adds `Serialize` and `Deserialize` derives to them.
+//! - **`serde`** - Enable serialization support for the frame and lifecycle
+//!   enums. Adds `Serialize` and `Deserialize` derives to them.
 //! - **`testing`** - Test-only lock-discipline probes (e.g.
 //!   `AsyncDriver::is_unlocked`) for a consumer crate's own reentrancy
 //!   tests. Never enabled in production; auto-enabled for this crate's own
@@ -125,7 +87,6 @@
 #![deny(missing_docs)]
 
 // Core modules
-pub mod config;
 pub mod frame;
 // The composition-root frame-drive seam (ADR-0081 §4).
 #[doc(hidden)]
@@ -134,7 +95,6 @@ pub mod frame_clock;
 pub mod frame_histogram;
 pub mod frame_telemetry;
 pub mod scheduler;
-pub mod task;
 
 // Type-safe primitives
 pub mod async_driver;
@@ -143,7 +103,6 @@ pub mod timer;
 
 // Re-exports - Core types
 pub use async_driver::{AsyncDriver, BoxedTask, TaskToken};
-pub use config::TimingsCallback;
 /// [`FrameSnapshot::address`]'s type and the two ids it pairs — re-exported
 /// so a consumer of this crate's frame telemetry (e.g. `flui-devtools`'
 /// `timeline` feature) can name them without an extra, redundant direct
@@ -177,8 +136,8 @@ mod wake_delivery;
 mod table_test;
 
 pub use frame::{
-    AppLifecycleState, FrameId, FramePhase, FrameTiming, LifecycleStateCallback,
-    OneShotFrameCallback, PostFrameCallback, RecurringFrameCallback, SchedulerPhase,
+    AppLifecycleState, FrameId, FramePhase, FrameTiming, LifecycleStateCallback, PostFrameCallback,
+    SchedulerPhase,
 };
 /// The instant type the frame clock is stamped with. `std::time::Instant` on
 /// native, a `performance.now()` shim on wasm32 — re-exported so a binding can
@@ -187,10 +146,9 @@ pub use web_time::Instant;
 // Re-exports - ID types (opaque foundation identities)
 pub use id::CallbackId;
 pub use scheduler::{
-    FrameCompletionFuture, FrameOutcome, FrameWaker, IdleDeadline, MAX_BUILD_REENTRY_PASSES,
-    SchedulerBuilder, SchedulerClosed, UpdateScheduler, WeakUpdateScheduler,
+    FrameCompletionFuture, FrameOutcome, FrameWaker, SchedulerBuilder, SchedulerClosed,
+    UpdateScheduler, WeakUpdateScheduler,
 };
-pub use task::{Priority, PriorityCount, Task, TaskId, TaskQueue};
 
 // Keep standalone prose examples inside the existing workspace doctest gate.
 // Context-dependent fragments in these files are explicitly `rust,ignore`.

@@ -4,7 +4,7 @@
 //! # The three-owner split
 //!
 //! [`UpdateScheduler`](crate::UpdateScheduler) owns *logical* time (phases,
-//! callback queues, the priority task queue) and makes no refresh-rate,
+//! frame demand, post-frame callbacks) and makes no refresh-rate,
 //! display, or surface assumption. `FrameClock` owns *physical* time for
 //! **one presentation**: demand coalescing, actuator-edge coalescing
 //! ([`try_arm_redraw_request`](FrameClock::try_arm_redraw_request)),
@@ -334,9 +334,6 @@ pub struct FrameClock {
     /// [`record_compositor_tick`](Self::record_compositor_tick) calls —
     /// `None` until at least two ticks have been recorded.
     last_compositor_tick_interval: Cell<Option<Duration>>,
-    /// The newest report that a frame of this presentation reached the
-    /// screen ([`record_presentation`](Self::record_presentation)).
-    last_presentation: Cell<Option<Shown>>,
     /// How many [`poll`](Self::poll) calls returned `Skip(Hidden)` — a
     /// deferral, never a drop. See the module doc's "Deferral accounting"
     /// section.
@@ -354,31 +351,6 @@ pub struct FrameClock {
     /// reason as `pending_input_epochs` above.
     history: RefCell<FrameHistory>,
 }
-
-/// The newest report that a frame of a presentation reached the screen, on
-/// this clock's timeline: what [`FrameClock::record_presentation`] keeps.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct Shown {
-    /// When the display started showing the frame.
-    at: Instant,
-    /// The display's refresh interval then, where the platform named one
-    /// (`flui_platform::FramePresented` makes a zero interval none).
-    refresh: Option<Duration>,
-}
-
-/// How many refreshes past the newest presentation report
-/// [`FrameClock::next_presentation_after`] still extrapolates the refresh
-/// grid: 8, about 133 ms at 60 Hz and 33 ms at 240 Hz.
-///
-/// A live report trails the frame that reads it by the frames in flight: two
-/// in the swap chain and the compositor's own, so three or four refreshes
-/// (measured on Windows: the shown present three behind the newest). Twice
-/// that is still a display presenting this window's frames; past it the
-/// window has been idle, the display may have changed its rate (variable
-/// refresh, a mode switch) without a report, and a grid carried over would
-/// end idle work at an instant that is not a refresh. The host's deadline
-/// applies then, as without a report.
-pub(crate) const PRESENTATION_GRID_HORIZON: u32 = 8;
 
 /// When the stages of one produced frame happened: what
 /// [`FrameClock::record_frame`] stores in its [`FrameSnapshot`].
@@ -421,7 +393,6 @@ impl FrameClock {
             redraw_requested: Cell::new(false),
             last_compositor_tick: Cell::new(None),
             last_compositor_tick_interval: Cell::new(None),
-            last_presentation: Cell::new(None),
             deferred_hidden: Cell::new(0),
             deferred_backpressure: Cell::new(0),
             pending_input_epochs: RefCell::new(PendingInputEpochs::default()),
@@ -631,61 +602,6 @@ impl FrameClock {
     #[must_use]
     pub fn last_compositor_tick_interval(&self) -> Option<Duration> {
         self.last_compositor_tick_interval.get()
-    }
-
-    // ------------------------------------------------------------------
-    // Presentation feedback — when the platform says this presentation's
-    // frames reached the screen (DXGI frame statistics, Metal's presented
-    // handler, `wp_presentation_time`), fed in by
-    // the caller that receives the host's frame requests. It marks no demand
-    // and moves no frame time: the frame tick stays the vsync instant
-    // (ADR-0347 decision 2), never a presentation time.
-    // ------------------------------------------------------------------
-
-    /// Record that the platform reported a frame of this presentation shown
-    /// at `at`, at the display's `refresh` interval where it named one (a
-    /// `flui_platform::FramePresented`, rebased onto this clock). A report no
-    /// later than the one kept is a repeat or out of order and is ignored: the
-    /// presentation timeline never runs backwards.
-    pub fn record_presentation(&self, at: Instant, refresh: Option<Duration>) {
-        if self.last_presentation.get().is_none_or(|last| at > last.at) {
-            self.last_presentation.set(Some(Shown { at, refresh }));
-        }
-    }
-
-    /// The first refresh after both `now` and the newest report at which a
-    /// frame can next reach the screen: on the grid of refreshes that report
-    /// starts, one refresh interval apart.
-    ///
-    /// A report is of a frame already shown, never a prediction, so the
-    /// refresh it names has passed even where it lies after `now` (a reading
-    /// taken before the report arrived): the next one is a refresh after it,
-    /// never the report itself.
-    ///
-    /// `None` without a report, without a refresh interval in it, or past
-    /// eight refreshes from it: a report that
-    /// old belongs to a window that has been idle, and the grid it started is
-    /// not the display's now.
-    #[must_use]
-    pub fn next_presentation_after(&self, now: Instant) -> Option<Instant> {
-        let report = self.last_presentation.get()?;
-        // Zero is no interval; `FramePresented` already makes it none, and
-        // this keeps the division below defined whatever a caller passes.
-        let refresh = report.refresh?.as_nanos();
-        if refresh == 0 {
-            return None;
-        }
-        // Nothing, for a report after `now`.
-        let since_report = now
-            .checked_duration_since(report.at)
-            .unwrap_or_default()
-            .as_nanos();
-        let refreshes = since_report / refresh + 1;
-        if refreshes > u128::from(PRESENTATION_GRID_HORIZON) {
-            return None;
-        }
-        let offset = u64::try_from(refreshes * refresh).ok()?;
-        report.at.checked_add(Duration::from_nanos(offset))
     }
 
     // ------------------------------------------------------------------

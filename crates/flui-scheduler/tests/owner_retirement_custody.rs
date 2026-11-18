@@ -8,9 +8,7 @@ use std::rc::{Rc, Weak};
 use std::task::{Context, Poll};
 
 use flui_scheduler::__runtime::DriveFrame as _;
-use flui_scheduler::{
-    ExecutionError, IdleDeadline, Instant, OwnerFrame, TaskToken, UpdateScheduler,
-};
+use flui_scheduler::{ExecutionError, Instant, OwnerFrame, TaskToken, UpdateScheduler};
 
 struct RejectedCapture;
 impl Drop for RejectedCapture {
@@ -100,45 +98,6 @@ fn finished_and_cancelled_futures_preserve_caught_failure_custody() {
     }
 }
 
-fn cancelling_transient_work_preserves_caught_failure_custody() {
-    struct Capture(Rc<Cell<usize>>);
-    impl Drop for Capture {
-        fn drop(&mut self) {
-            self.0.set(self.0.get() + 1);
-        }
-    }
-    let scheduler = UpdateScheduler::new();
-    let owner = OwnerFrame::try_new(&scheduler).expect("fresh owner");
-    let drops = Rc::new(Cell::new(0));
-    let capture = Capture(Rc::clone(&drops));
-    let cancelled = scheduler.schedule_frame_callback(Box::new(move |_| {
-        let _ = &capture;
-        panic!("cancelled transient ran");
-    }));
-    let sibling_calls = Rc::new(Cell::new(0));
-    let observed = Rc::clone(&sibling_calls);
-    scheduler.schedule_frame_callback(Box::new(move |_| observed.set(observed.get() + 1)));
-    let now = Instant::now();
-    owner
-        .drive_frame(
-            now,
-            IdleDeadline::far_future(now),
-            || {
-                catch_nested_refusal_failure(&owner);
-                assert!(scheduler.cancel_frame_callback(cancelled));
-            },
-            || {},
-        )
-        .expect("caught nested failure does not abort the outer frame");
-    assert_eq!(
-        drops.get(),
-        1,
-        "the cancelled capture is destroyed after a caught failure"
-    );
-    assert_eq!(sibling_calls.get(), 1);
-    assert_eq!(owner.pump_background(|| {}), Ok(0));
-}
-
 /// Cancelling A in a healthy owner turn drops a capture that cancels B, whose
 /// capture's destructor panics. That panic is the turn's first failure: the
 /// outer retirement must not read the signal the nested one just set as an
@@ -151,7 +110,7 @@ fn nested_cancellation_failure_propagates_from_a_healthy_turn() {
     impl Drop for CancelsOnDrop {
         fn drop(&mut self) {
             if let Some(other) = self.other.take() {
-                self.scheduler.cancel_frame_callback(other);
+                self.scheduler.remove_lifecycle_state_listener(other);
             }
         }
     }
@@ -162,11 +121,11 @@ fn nested_cancellation_failure_propagates_from_a_healthy_turn() {
         scheduler: scheduler.clone(),
         other: Rc::clone(&other),
     };
-    let a = scheduler.schedule_frame_callback(Box::new(move |_| {
+    let a = scheduler.add_lifecycle_state_listener(Rc::new(move |_| {
         let _ = &outer;
     }));
     let inner = RejectedCapture;
-    other.set(Some(scheduler.schedule_frame_callback(Box::new(
+    other.set(Some(scheduler.add_lifecycle_state_listener(Rc::new(
         move |_| {
             let _ = &inner;
         },
@@ -175,9 +134,8 @@ fn nested_cancellation_failure_propagates_from_a_healthy_turn() {
     let failure = catch_unwind(AssertUnwindSafe(|| {
         owner.drive_frame(
             now,
-            IdleDeadline::far_future(now),
             || {
-                scheduler.cancel_frame_callback(a);
+                scheduler.remove_lifecycle_state_listener(a);
             },
             || {},
         )
@@ -211,7 +169,6 @@ fn presentation_close_behind_a_held_failure_discards_a_capture_panic() {
     owner
         .drive_frame(
             now,
-            IdleDeadline::far_future(now),
             || {
                 catch_nested_refusal_failure(&owner);
                 let presentation = owner.presentation_scope();
@@ -266,7 +223,6 @@ fn self_uninstalling_hook_behind_a_held_failure_discards_a_capture_panic() {
     owner
         .drive_frame(
             now,
-            IdleDeadline::far_future(now),
             || {
                 catch_nested_refusal_failure(&owner);
                 scheduler.request_frame();
@@ -286,12 +242,7 @@ fn callbacks_and_task_polls_refuse_nested_owner_turns() {
     fn refuse(owner: &OwnerFrame, calls: &Cell<usize>) {
         let now = Instant::now();
         assert_eq!(
-            owner.drive_frame(
-                now,
-                IdleDeadline::far_future(now),
-                || panic!("nested frame prepared"),
-                || ()
-            ),
+            owner.drive_frame(now, || panic!("nested frame prepared"), || ()),
             Err(ExecutionError::AlreadyExecuting)
         );
         assert_eq!(
@@ -305,11 +256,6 @@ fn callbacks_and_task_polls_refuse_nested_owner_turns() {
     let calls = Rc::new(Cell::new(0));
     let weak = Rc::downgrade(&owner);
     let observed = Rc::clone(&calls);
-    scheduler.schedule_frame_callback(Box::new(move |_| {
-        refuse(&weak.upgrade().expect("transient owner"), &observed);
-    }));
-    let weak = Rc::downgrade(&owner);
-    let observed = Rc::clone(&calls);
     let task = owner.async_driver().spawn_local(Box::pin(async move {
         refuse(&weak.upgrade().expect("task owner"), &observed);
     }));
@@ -320,13 +266,11 @@ fn callbacks_and_task_polls_refuse_nested_owner_turns() {
         .schedule(move |_| refuse(&weak.upgrade().expect("post-frame owner"), &observed))
         .expect("live lane");
     let now = Instant::now();
-    owner
-        .drive_frame(now, IdleDeadline::far_future(now), || {}, || {})
-        .expect("outer frame");
+    owner.drive_frame(now, || {}, || {}).expect("outer frame");
     assert_eq!(
         calls.get(),
-        3,
-        "transient, task and post-frame slots all preserve admission"
+        2,
+        "task and post-frame slots both preserve admission"
     );
     assert_eq!(scheduler.frame_count(), 1);
     assert_eq!(owner.pump_background(|| {}), Ok(0));
@@ -368,7 +312,6 @@ fn lifecycle_removal_preserves_caught_failure() {
     owner
         .drive_frame(
             now,
-            IdleDeadline::far_future(now),
             || {
                 catch_nested_refusal_failure(&owner);
                 assert!(scheduler.remove_lifecycle_state_listener(id));
@@ -401,7 +344,6 @@ fn hook_replacement_preserves_caught_failure() {
     owner
         .drive_frame(
             now,
-            IdleDeadline::far_future(now),
             || {
                 catch_nested_refusal_failure(&owner);
                 scheduler.set_on_frame_scheduled(None);
@@ -428,7 +370,6 @@ fn explicit_task_cancellation_preserves_caught_failure() {
     owner
         .drive_frame(
             now,
-            IdleDeadline::far_future(now),
             || {
                 catch_nested_refusal_failure(&owner);
                 token.cancel();
@@ -453,7 +394,6 @@ fn eager_completion_preserves_caught_failure() {
     owner
         .drive_frame(
             now,
-            IdleDeadline::far_future(now),
             || {
                 catch_nested_refusal_failure(&owner);
                 assert!(
@@ -524,10 +464,6 @@ fn owner_retirement_custody_contract() {
             (
                 "finished and cancelled future custody",
                 finished_and_cancelled_futures_preserve_caught_failure_custody as fn(),
-            ),
-            (
-                "transient cancellation custody",
-                cancelling_transient_work_preserves_caught_failure_custody,
             ),
             (
                 "nested cancellation failure propagates from a healthy turn",
@@ -810,7 +746,6 @@ fn closed_execution_publishes_task_custody(frame: bool) {
             assert_eq!(
                 owner.drive_frame(
                     now,
-                    IdleDeadline::far_future(now),
                     move || {
                         let _ = &capture;
                     },
@@ -937,7 +872,7 @@ fn owner_drop_preserves_first_failure_through_terminal_release() {
     let weak = scheduler.downgrade();
     let terminal_drops = Rc::new(Cell::new(0));
     let capture = RemovedCapture(Rc::clone(&terminal_drops));
-    scheduler.schedule_frame_callback(Box::new(move |_| {
+    let _listener = scheduler.add_lifecycle_state_listener(Rc::new(move |_| {
         let _ = &capture;
     }));
     let producer = Rc::new(RefCell::new(Some(scheduler)));
@@ -1020,7 +955,6 @@ fn completed_retirement_ends_caller_failure_custody() {
     assert_eq!(
         owner.drive_frame(
             now,
-            IdleDeadline::far_future(now),
             move || {
                 let _ = &prepare;
             },
@@ -1107,7 +1041,6 @@ fn standalone_refusal_ends_custody(frame: bool) {
             let now = Instant::now();
             let _ = owner.drive_frame(
                 now,
-                IdleDeadline::far_future(now),
                 move || {
                     let _ = &capture;
                 },
@@ -1168,7 +1101,7 @@ fn standalone_retirement_publishes_producer_custody() {
                 self.scheduler
                     .upgrade()
                     .expect("scheduler lives")
-                    .cancel_frame_callback(self.callback)
+                    .remove_lifecycle_state_listener(self.callback)
             );
         }
     }
@@ -1176,7 +1109,7 @@ fn standalone_retirement_publishes_producer_custody() {
     let owner = Rc::new(OwnerFrame::try_new(&scheduler).expect("fresh owner"));
     let drops = Rc::new(Cell::new(0));
     let capture = RemovedCapture(Rc::clone(&drops));
-    let callback = scheduler.schedule_frame_callback(Box::new(move |_| {
+    let callback = scheduler.add_lifecycle_state_listener(Rc::new(move |_| {
         let _ = &capture;
     }));
     let capture = ProducerRemoval {
