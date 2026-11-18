@@ -4895,6 +4895,7 @@ impl core::fmt::Debug for flui::interaction::ClientToken
 impl core::marker::StructuralPartialEq for flui::interaction::ClientToken
 pub trait flui::interaction::ClipboardBackend: 'static
 fn flui::interaction::ClipboardBackend::concealment(&self) -> flui::platform::Concealment
+fn flui::interaction::ClipboardBackend::expiry_clearing(&self) -> flui::platform::ExpiryClearing
 fn flui::interaction::ClipboardBackend::read_text(&self, answer: flui::platform::capability::Resolver<flui::platform::ClipboardRead>)
 fn flui::interaction::ClipboardBackend::write(&self, write: flui::platform::ClipboardWrite, answer: flui::platform::capability::Resolver<flui::platform::ClipboardWritten>)
 pub enum flui::interaction::ClipboardCapability
@@ -4904,6 +4905,7 @@ pub struct flui::interaction::ClipboardHandle { .. }
 impl Clone for flui::interaction::ClipboardHandle
 impl core::fmt::Debug for flui::interaction::ClipboardHandle
 pub fn flui::interaction::ClipboardHandle::concealment(&self) -> flui::platform::Concealment
+pub fn flui::interaction::ClipboardHandle::expiry_clearing(&self) -> flui::platform::ExpiryClearing
 pub fn flui::interaction::ClipboardHandle::new(backend: impl flui::interaction::ClipboardBackend, ctx: &flui::platform::capability::ProviderContext<'_>) -> Self
 pub fn flui::interaction::ClipboardHandle::read_text(&self) -> flui::platform::capability::Completion<flui::platform::ClipboardRead>
 pub fn flui::interaction::ClipboardHandle::write(&self, write: flui::platform::ClipboardWrite) -> flui::platform::capability::Completion<flui::platform::ClipboardWritten>
@@ -11544,6 +11546,15 @@ impl core::fmt::Debug for flui::platform::CapabilityParts
 impl core::hash::Hash for flui::platform::CapabilityParts
 impl core::marker::StructuralPartialEq for flui::platform::CapabilityParts
 pub const fn flui::platform::CapabilityParts::into_capabilities(self) -> flui::platform::WindowCapabilities
+pub struct flui::platform::ClipboardEntryId(_)
+impl Clone for flui::platform::ClipboardEntryId
+impl Copy for flui::platform::ClipboardEntryId
+impl Eq for flui::platform::ClipboardEntryId
+impl PartialEq for flui::platform::ClipboardEntryId
+impl core::fmt::Debug for flui::platform::ClipboardEntryId
+impl core::hash::Hash for flui::platform::ClipboardEntryId
+impl core::marker::StructuralPartialEq for flui::platform::ClipboardEntryId
+pub const fn flui::platform::ClipboardEntryId::get(self) -> u64
 #[non_exhaustive] pub enum flui::platform::ClipboardError
 impl Clone for flui::platform::ClipboardError
 impl Copy for flui::platform::ClipboardError
@@ -11561,6 +11572,32 @@ variant flui::platform::ClipboardError::Malformed // at 3
 variant flui::platform::ClipboardError::Timeout // at 2
 variant flui::platform::ClipboardError::TooLarge // at 4
 variant flui::platform::ClipboardError::Unavailable // at 0
+pub struct flui::platform::ClipboardExpiry(_)
+impl Clone for flui::platform::ClipboardExpiry
+impl Copy for flui::platform::ClipboardExpiry
+impl Eq for flui::platform::ClipboardExpiry
+impl Ord for flui::platform::ClipboardExpiry
+impl PartialEq for flui::platform::ClipboardExpiry
+impl PartialOrd for flui::platform::ClipboardExpiry
+impl core::fmt::Debug for flui::platform::ClipboardExpiry
+impl core::hash::Hash for flui::platform::ClipboardExpiry
+impl core::marker::StructuralPartialEq for flui::platform::ClipboardExpiry
+pub const flui::platform::ClipboardExpiry::MAX: core::time::Duration = _
+pub const flui::platform::ClipboardExpiry::MIN: core::time::Duration = _
+pub const fn flui::platform::ClipboardExpiry::get(self) -> core::time::Duration
+pub const fn flui::platform::ClipboardExpiry::try_new(after: core::time::Duration) -> Result<Self, flui::platform::ClipboardExpiryError>
+#[non_exhaustive] pub enum flui::platform::ClipboardExpiryError
+impl Clone for flui::platform::ClipboardExpiryError
+impl Copy for flui::platform::ClipboardExpiryError
+impl Eq for flui::platform::ClipboardExpiryError
+impl PartialEq for flui::platform::ClipboardExpiryError
+impl core::error::Error for flui::platform::ClipboardExpiryError
+impl core::fmt::Debug for flui::platform::ClipboardExpiryError
+impl core::fmt::Display for flui::platform::ClipboardExpiryError
+impl core::hash::Hash for flui::platform::ClipboardExpiryError
+impl core::marker::StructuralPartialEq for flui::platform::ClipboardExpiryError
+variant flui::platform::ClipboardExpiryError::TooLong // at 1
+variant flui::platform::ClipboardExpiryError::TooShort // at 0
 pub type flui::platform::ClipboardRead = Result<Option<alloc::rcs::arc::Arc<str>>, flui::platform::ClipboardError>
 #[non_exhaustive] pub struct flui::platform::ClipboardWrite { .. }
 impl Clone for flui::platform::ClipboardWrite
@@ -11570,6 +11607,9 @@ impl core::fmt::Debug for flui::platform::ClipboardWrite
 impl core::marker::StructuralPartialEq for flui::platform::ClipboardWrite
 pub fn flui::platform::ClipboardWrite::as_text(&self) -> &str
 pub fn flui::platform::ClipboardWrite::concealed(self) -> Self
+pub fn flui::platform::ClipboardWrite::entry(&self) -> Option<flui::platform::ClipboardEntryId>
+pub fn flui::platform::ClipboardWrite::expires_after(self, after: flui::platform::ClipboardExpiry) -> Self
+pub fn flui::platform::ClipboardWrite::expiry(&self) -> Option<flui::platform::ClipboardExpiry>
 pub fn flui::platform::ClipboardWrite::into_text(self) -> String
 pub fn flui::platform::ClipboardWrite::is_concealed(&self) -> bool
 pub fn flui::platform::ClipboardWrite::text(text: impl Into<String>) -> Self
@@ -11865,6 +11905,18 @@ variant flui::platform::Environment::MacOS // at 1
 variant flui::platform::Environment::Web // at 5
 variant flui::platform::Environment::Windows // at 0
 variant flui::platform::Environment::iOS // at 2
+#[non_exhaustive] pub enum flui::platform::ExpiryClearing
+impl Clone for flui::platform::ExpiryClearing
+impl Copy for flui::platform::ExpiryClearing
+impl Eq for flui::platform::ExpiryClearing
+impl PartialEq for flui::platform::ExpiryClearing
+impl core::fmt::Debug for flui::platform::ExpiryClearing
+impl core::hash::Hash for flui::platform::ExpiryClearing
+impl core::marker::StructuralPartialEq for flui::platform::ExpiryClearing
+variant flui::platform::ExpiryClearing::AtTime // at 1
+variant flui::platform::ExpiryClearing::AtTimeAndLock // at 0
+variant flui::platform::ExpiryClearing::AtTimeOrInFront // at 2
+variant flui::platform::ExpiryClearing::Unavailable // at 3
 pub struct flui::platform::FlingSpeeds { .. }
 impl Clone for flui::platform::FlingSpeeds
 impl Copy for flui::platform::FlingSpeeds

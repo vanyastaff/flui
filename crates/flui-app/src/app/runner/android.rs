@@ -394,11 +394,17 @@ where
             install_owner_platform(owner)?;
             with_owner_platform(|owner| {
                 owner.on_wake(Box::new(|| {
-                    super::host::drive_native_text_sizing();
+                    // Each step contained on its own, so a panic in one
+                    // costs the turn none of the others; the first resumes
+                    // after all of them.
+                    let mut first = flui_foundation::panic::FirstPanic::new();
+                    first.contain(super::host::drive_native_text_sizing);
+                    first.contain(super::host::serve_clipboard_expiries);
                     // What an opened URL's loan returned is routed here,
                     // outside the destructor that returned it.
-                    super::host::route_owed_opened_urls();
-                    super::host::release_finished_background_writes();
+                    first.contain(super::host::route_owed_opened_urls);
+                    first.contain(super::host::release_finished_background_writes);
+                    first.resume();
                 }))
             })
             .expect("BUG: Android owner was just installed")?;

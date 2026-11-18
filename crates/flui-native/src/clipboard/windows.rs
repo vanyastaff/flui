@@ -28,6 +28,16 @@
 //! and the delivery of its answer. A request whose work panics is answered
 //! [`ClipboardError::Unavailable`], the first failure is reported and the
 //! thread goes on to the next request.
+//!
+//! An expiring write that lands is recorded on the thread with the
+//! clipboard's sequence number and owner, read once its session closed
+//! (closing a session that changed the clipboard moves the number again),
+//! and only while the thread's window still owns it (ADR-0363). A
+//! conditional clear opens the clipboard, which shuts every other process out
+//! until it closes, and empties it only while the owner is still the thread's
+//! window and the sequence number is still the recorded one: the check and
+//! the clear are one step, so a copy another process makes can land only
+//! before the check, which then sees it, or after the clear.
 
 // This module calls the operating system directly, which has no safe wrapper:
 // the workspace lint `unsafe_code = "warn"` is opted out here, at the module
@@ -38,11 +48,14 @@ use std::mem::ManuallyDrop;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock, mpsc};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use flui_foundation::panic::{FirstPanic, discard_payload};
 use flui_platform::capability::Resolver;
-use flui_platform::{ClipboardError, ClipboardRead, ClipboardWrite, ClipboardWritten, Concealment};
+use flui_platform::{
+    ClipboardEntryId, ClipboardError, ClipboardRead, ClipboardWrite, ClipboardWritten, Concealment,
+    ExpiryClearing,
+};
 
 use windows::{
     Win32::{
@@ -52,8 +65,9 @@ use windows::{
         },
         System::{
             DataExchange::{
-                CloseClipboard, EmptyClipboard, GetClipboardData, IsClipboardFormatAvailable,
-                OpenClipboard, RegisterClipboardFormatW, SetClipboardData,
+                CloseClipboard, EmptyClipboard, GetClipboardData, GetClipboardOwner,
+                GetClipboardSequenceNumber, IsClipboardFormatAvailable, OpenClipboard,
+                RegisterClipboardFormatW, SetClipboardData,
             },
             LibraryLoader::GetModuleHandleW,
             Memory::{
@@ -72,7 +86,10 @@ use windows::{
 };
 
 use crate::clipboard::patience::{OpenAttempts, Waiting};
-use crate::host::{NativeClipboard, admit_text, host_text, text_fits};
+use crate::host::{
+    ClearDecision, ExpiredClear, ExpiredEntry, ExpiringRecord, NativeClipboard, admit_text,
+    host_text, text_fits,
+};
 use crate::owner::panic_boundary::{AfterPanic, os_entry};
 
 /// The Win32 clipboard: a handle to the process's clipboard thread.
@@ -121,6 +138,30 @@ impl NativeClipboard for WindowsClipboard {
     fn concealment(&self) -> Concealment {
         Concealment::Honored
     }
+
+    /// The window station's clipboard is cleared by sequence number and
+    /// ownership, and the Win32 loop hears `WM_WTSSESSION_CHANGE`.
+    fn expiry_clearing(&self) -> ExpiryClearing {
+        ExpiryClearing::AtTimeAndLock
+    }
+
+    /// Queued to the clipboard thread behind every request made before it,
+    /// so a clear asked after a write is checked against what that write
+    /// left.
+    fn clear_expired(&self, entry: ExpiredEntry, answer: Resolver<ExpiredClear>) {
+        submit(Task::ClearExpired(entry), Answer::Cleared(answer));
+    }
+
+    /// Queued like any clear and waited for: the clipboard thread ends with
+    /// the process, and an entry left on the window station's clipboard
+    /// outlives it.
+    fn clear_expired_before_exit(&self, within: Duration) -> ExpiredClear {
+        let (sent, answered) = mpsc::sync_channel(1);
+        submit(Task::ClearExpired(ExpiredEntry::Any), Answer::Exit(sent));
+        answered
+            .recv_timeout(within)
+            .unwrap_or(ExpiredClear::Failed(ClipboardError::Timeout))
+    }
 }
 
 /// The most requests waiting for the clipboard thread at once. The handles
@@ -132,6 +173,8 @@ const MAX_WAITING: usize = 64;
 enum Task {
     Read,
     Write(ClipboardWrite),
+    /// Empty the clipboard if it still holds this expiring entry.
+    ClearExpired(ExpiredEntry),
     /// A test's look at the clipboard while a session holds it open.
     #[cfg(test)]
     Inspect(Box<dyn FnOnce() + Send>),
@@ -142,6 +185,9 @@ enum Task {
 enum Answer {
     Read(Resolver<ClipboardRead>),
     Written(Resolver<ClipboardWritten>),
+    Cleared(Resolver<ExpiredClear>),
+    /// The loop's end, waiting on the owner thread for the clear.
+    Exit(mpsc::SyncSender<ExpiredClear>),
     /// A test's look, which answers nobody.
     #[cfg(test)]
     Nobody,
@@ -173,6 +219,7 @@ impl Drop for Owed {
 enum Settlement {
     Read(ClipboardRead),
     Written(ClipboardWritten),
+    Cleared(ExpiredClear),
     #[cfg(test)]
     Nothing,
 }
@@ -253,15 +300,33 @@ impl Drop for Reservation {
 }
 
 impl Task {
-    /// Run the task in the open `session`.
-    fn run(self, session: &ClipboardSession) -> Settlement {
+    /// Run the task in the open `session`, against the thread's record of
+    /// the last expiring entry that landed. A write that landed returns its
+    /// [`Landed`], which is stamped once the clipboard is closed.
+    fn run(
+        self,
+        session: &ClipboardSession,
+        expiring: &mut ExpiringRecord<Stamp>,
+    ) -> (Settlement, Option<Landed>) {
         match self {
-            Task::Read => Settlement::Read(session.read_text()),
-            Task::Write(write) => Settlement::Written(session.write(write)),
+            Task::Read => (Settlement::Read(session.read_text()), None),
+            Task::Write(write) => {
+                let entry = write.entry();
+                let written = session.write(write);
+                // A write that failed before `EmptyClipboard` left the
+                // clipboard as it was; one that failed after moved the
+                // sequence number, which the recorded entry then misses.
+                let landed = written.is_ok().then_some(Landed(entry));
+                (Settlement::Written(written), landed)
+            }
+            Task::ClearExpired(entry) => (
+                Settlement::Cleared(session.clear_expired(entry, expiring)),
+                None,
+            ),
             #[cfg(test)]
             Task::Inspect(look) => {
                 look();
-                Settlement::Nothing
+                (Settlement::Nothing, None)
             }
         }
     }
@@ -269,8 +334,8 @@ impl Task {
 
 impl Answer {
     /// Hand the request its answer: what its task found, or `error` when
-    /// the task found nothing (it panicked, or never ran). A retired owner
-    /// has nobody left to answer.
+    /// the task found nothing (it panicked, or never ran). A retired owner,
+    /// or a loop's end that stopped waiting, has nobody left to answer.
     fn settle(self, settled: Option<Settlement>, error: ClipboardError) {
         let _ = match (self, settled) {
             (Answer::Read(answer), Some(Settlement::Read(read))) => answer.resolve(read),
@@ -279,6 +344,18 @@ impl Answer {
                 answer.resolve(written)
             }
             (Answer::Written(answer), _) => answer.resolve(Err(error)),
+            (Answer::Cleared(answer), Some(Settlement::Cleared(cleared))) => {
+                answer.resolve(cleared)
+            }
+            (Answer::Cleared(answer), _) => answer.resolve(ExpiredClear::Failed(error)),
+            (Answer::Exit(answer), settled) => {
+                let cleared = match settled {
+                    Some(Settlement::Cleared(cleared)) => cleared,
+                    _ => ExpiredClear::Failed(error),
+                };
+                let _ = answer.try_send(cleared);
+                Ok(())
+            }
             #[cfg(test)]
             (Answer::Nobody, _) => Ok(()),
         };
@@ -310,7 +387,7 @@ fn submit_accepted_at(task: Task, answer: Answer, accepted: Instant) {
             };
             Some(reserved)
         }
-        Task::Read => None,
+        Task::Read | Task::ClearExpired(_) => None,
         #[cfg(test)]
         Task::Inspect(_) => None,
     };
@@ -441,6 +518,7 @@ impl ClipboardThread {
 /// queue's bound is measured once, as the turn comes.
 fn serve(window: HWND, wake: &OwnedHandle, requests: &mpsc::Receiver<Request>) {
     let mut turn: Option<Turn> = None;
+    let mut expiring = ExpiringRecord::<Stamp>::default();
     loop {
         if !pump_messages() {
             return;
@@ -487,9 +565,16 @@ fn serve(window: HWND, wake: &OwnedHandle, requests: &mpsc::Receiver<Request>) {
             };
             let Turn { task, answer, .. } = current;
             let mut failure = FirstPanic::new();
-            let settled = failure.contain(|| task.run(&session));
-            // The clipboard closes before the answer is delivered.
+            let ran = failure.contain(|| task.run(&session, &mut expiring));
+            let (settled, landed) =
+                ran.map_or((None, None), |(settled, landed)| (Some(settled), landed));
+            // The clipboard closes before the answer is delivered, and before
+            // a write that landed is stamped: closing it moves the sequence
+            // number once more.
             drop(session);
+            if let Some(landed) = landed {
+                landed.stamp(window, &mut expiring);
+            }
             failure.contain(|| answer.settle(settled, ClipboardError::Unavailable));
             report(failure);
         }
@@ -575,9 +660,56 @@ fn read_failure(error: &windows::core::Error) -> ClipboardError {
 /// window, and Win32 refuses a concurrent `OpenClipboard` from any other
 /// owner, `NULL` included. Dropping the session closes the clipboard.
 struct ClipboardSession {
+    /// The window the clipboard is open with, which an `EmptyClipboard`
+    /// makes its owner.
+    owner: HWND,
     /// A session is the clipboard thread's: Win32 ties an open clipboard
     /// to the thread that opened it.
     _thread: std::marker::PhantomData<*const ()>,
+}
+
+/// What Win32 says of the clipboard's entry: its sequence number, which
+/// every change, every emptying and the close of a session that changed it
+/// moves, and whether the thread's window owns it. Two stamps are equal only
+/// while no other write landed between them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Stamp {
+    sequence: u32,
+    owned: bool,
+}
+
+impl Stamp {
+    /// The clipboard's stamp now, for the thread's window `owner`. With no
+    /// session open another process may change the clipboard between the two
+    /// reads: the owner is read first, so a change after it moves the
+    /// sequence number past what any later stamp, which that process's
+    /// ownership marks as not the window's, can equal.
+    fn read(owner: HWND) -> Self {
+        // SAFETY: a plain FFI call with no arguments. It failing means the
+        // clipboard has no owner, which is not the thread's window.
+        let current = unsafe { GetClipboardOwner() };
+        // SAFETY: a plain FFI call with no arguments, which reads the window
+        // station's counter.
+        let sequence = unsafe { GetClipboardSequenceNumber() };
+        Self {
+            sequence,
+            owned: current.is_ok_and(|current| current == owner),
+        }
+    }
+}
+
+/// A write that landed and the entry it makes when it expires, stamped once
+/// its session closed.
+struct Landed(Option<ClipboardEntryId>);
+
+impl Landed {
+    /// Record the write's entry in `expiring` with the clipboard's stamp
+    /// after the close. A clipboard the window no longer owns lost the entry
+    /// to another process already, and nothing is recorded.
+    fn stamp(self, owner: HWND, expiring: &mut ExpiringRecord<Stamp>) {
+        let stamp = Stamp::read(owner);
+        expiring.landed(self.0.filter(|_| stamp.owned), stamp);
+    }
 }
 
 impl ClipboardSession {
@@ -589,8 +721,32 @@ impl ClipboardSession {
         // constructed on success.
         unsafe { OpenClipboard(Some(owner)) }.ok()?;
         Some(Self {
+            owner,
             _thread: std::marker::PhantomData,
         })
+    }
+
+    /// Empty the clipboard if it still holds the expiring entry `entry`
+    /// names, as `expiring` recorded it: the stamp is read and the clipboard
+    /// emptied in this one session, which no other process can change.
+    fn clear_expired(
+        &self,
+        entry: ExpiredEntry,
+        expiring: &mut ExpiringRecord<Stamp>,
+    ) -> ExpiredClear {
+        let now = Stamp::read(self.owner);
+        match expiring.decide(entry, &now) {
+            ClearDecision::NotHeld => ExpiredClear::NotHeld,
+            ClearDecision::Clear => {
+                // SAFETY: `self` holds the clipboard open on this thread.
+                if let Err(error) = unsafe { EmptyClipboard() } {
+                    tracing::warn!(%error, "an expired clipboard entry could not be cleared");
+                    return ExpiredClear::Failed(ClipboardError::Unavailable);
+                }
+                expiring.landed(None, now);
+                ExpiredClear::Cleared
+            }
+        }
     }
 
     /// The clipboard's text, or why it could not be read.

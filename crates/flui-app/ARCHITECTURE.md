@@ -566,7 +566,8 @@ run with nothing borrowed.
 
 - **The owner's turns come from the turn deadline (ADR-0343 §1).**
   `AppRuntime::turn_deadline` answers `AppHandler::turn_deadline` with the
-  placements' next due instant and the main window's read bound; every host
+  placements' next due instant and the main window's read bound (and, on every
+  host, the next expiring clipboard entry's clear, below); every host
   gives the owner a turn at it, with or without a window open, and asks no
   window for a frame. The answer may be past: a held write's
   `last_attempt + interval` is, when the change arrives after the interval
@@ -633,6 +634,47 @@ run with nothing borrowed.
 
 `placement_recorder` (the model's table) and the runner's `placement::tests`
 hold each rule.
+
+### An expiring clipboard entry is owed one clear, served at the turn deadline
+
+The built-in clipboard provider holds the loop's `ClipboardExpiries` beside the
+host's clipboard (ADR-0363 §2): every expiring write a handle passes on
+(`ClipboardWrite::expires_after`) owes one clear at its time, counted from the
+write's request and answered through the writer's UI runtime. A host that
+answers `ExpiryClearing::Unavailable` (the web) is owed none.
+
+- **The time is a turn deadline.** The earliest owed time is part of
+  `AppRuntime::turn_deadline` on every host (the route is installed with the
+  owner on all of them), and the owner's turn (`serve_clipboard_expiries`, from
+  each runner's wake handler) asks the host for every clear due by its own
+  time; a clear asked is no longer owed, so a served time is not armed again.
+- **A clear names its own entry.** The host clears only the entry the clear
+  names while the system still shows it, so a later write that lands takes the
+  clipboard from the entry and the clear does nothing: a second expiring write
+  replaces the first's time without the first's clear touching it, and where
+  the second failed the first entry is still there for its own clear.
+- **A lock clears now.** `SystemNotice::SessionLocked` and `Sleep` ask the host
+  once to clear whatever expiring entry it holds (`ExpiredEntry::Any`), once any
+  expiring write was made, before the application's subscribers hear the
+  notice and contained apart from them; a retry of that clear is dropped once a
+  later expiring write is made.
+- **The loop's end asks once.** Right after the UI runtimes retire and before
+  the flush, within a budget of its own (`EXIT_CLIPBOARD_BOUND`), the host is
+  asked the same, once any expiring write was made.
+- **A clear the host could not see the clipboard for waits for the
+  application in front.** `Unseen` stays owed with no deadline until a UI
+  runtime is `Resumed` again (`OwnerEffects::runtime_lifecycle`).
+- **A clear the host could not reach the clipboard for is owed again** on
+  `CLEAR_RETRY`, at most `MAX_CLEAR_RETRIES` times; at most `MAX_OWED` clears
+  are owed at once, the oldest given up past it.
+- **Each step contained.** The rule asks each clear contained apart; the desktop,
+  Android and iOS owner turns contain the clear apart from their other steps,
+  resuming the first panic after all of them.
+
+`clipboard_expiry`'s table holds each rule over a host the test speaks for;
+the runner's `clipboard_expiry_tests` hold the wiring (the provider, the turn
+deadline, the lock and the loop's end) through the headless platform, the
+expiries timed on a manual clock (`ClipboardExpiries::set_clock`).
 
 ### Native execution caps remain presentation-local
 

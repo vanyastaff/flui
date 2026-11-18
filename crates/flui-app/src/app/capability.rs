@@ -12,22 +12,26 @@ use flui_interaction::{
     ClipboardBackend, ClipboardCapability, ClipboardHandle, PrimaryClaimId, PrimaryClaims,
     PrimarySelectionBackend, PrimarySelectionCapability, PrimarySelectionHandle, SelectionText,
 };
-use flui_native::{NativeClipboard, NativePrimarySelection};
+use flui_native::NativePrimarySelection;
 use flui_platform::executor::{ComputeJob, Executor, IoFuture, Lane, RoomFuture, SpawnError};
 use flui_platform::{
-    ClipboardRead, ClipboardWrite, ClipboardWritten, Concealment, Storage, Unsupported,
-    UnsupportedReason,
+    ClipboardRead, ClipboardWrite, ClipboardWritten, Concealment, ExpiryClearing, Storage,
+    Unsupported, UnsupportedReason,
     capability::{
-        Capability, CapabilityProvider, CapabilityRegistrar, Plugin, ProviderContext, Resolver,
+        Capability, CapabilityProvider, CapabilityRegistrar, CompletionSource, Plugin,
+        ProviderContext, Resolver,
     },
 };
+
+use super::clipboard_expiry::ClipboardExpiries;
 use flui_runtime::capability::{CapabilityConflict, CapabilityRegistry};
 use flui_runtime::execution::ExecutionServices;
 use flui_view::background::{Background, BackgroundCapability};
 use flui_view::persist::{StorageCapability, StorageHandle};
 
-/// The slot the owner platform's clipboard is installed in for a loop's life.
-pub(crate) type ClipboardSlot = Rc<RefCell<Option<Rc<dyn NativeClipboard>>>>;
+/// The slot the owner platform's clipboard is installed in for a loop's life,
+/// with the expiring entries owed a clear on it (ADR-0363).
+pub(crate) type ClipboardSlot = Rc<RefCell<Option<Rc<ClipboardExpiries>>>>;
 
 /// The capability providers an application registers before it runs
 /// (ADR-0152): its overrides, which replace a built-in provider, and its
@@ -140,28 +144,43 @@ struct PlatformClipboard {
 
 impl CapabilityProvider<ClipboardCapability> for PlatformClipboard {
     fn provide(&self, ctx: &ProviderContext<'_>) -> Result<ClipboardHandle, Unsupported> {
-        let native = self.slot.borrow().clone().ok_or_else(|| {
+        let expiries = self.slot.borrow().clone().ok_or_else(|| {
             // Between loops: no owner platform is installed.
             Unsupported::of::<ClipboardCapability>(UnsupportedReason::Unavailable)
         })?;
-        Ok(ClipboardHandle::new(NativeBackend(native), ctx))
+        Ok(ClipboardHandle::new(
+            NativeBackend {
+                expiries,
+                completions: ctx.completions().clone(),
+            },
+            ctx,
+        ))
     }
 }
 
-/// A handle's view of the host's clipboard.
-struct NativeBackend(Rc<dyn NativeClipboard>);
+/// A handle's view of the host's clipboard: an expiring write owes the loop
+/// its clear (ADR-0363), answered through the handle's UI runtime.
+struct NativeBackend {
+    expiries: Rc<ClipboardExpiries>,
+    completions: CompletionSource,
+}
 
 impl ClipboardBackend for NativeBackend {
     fn read_text(&self, answer: Resolver<ClipboardRead>) {
-        self.0.read_text(answer);
+        self.expiries.native().read_text(answer);
     }
 
     fn write(&self, write: ClipboardWrite, answer: Resolver<ClipboardWritten>) {
-        self.0.write(write, answer);
+        self.expiries.wrote(&write, &self.completions);
+        self.expiries.native().write(write, answer);
     }
 
     fn concealment(&self) -> Concealment {
-        self.0.concealment()
+        self.expiries.native().concealment()
+    }
+
+    fn expiry_clearing(&self) -> ExpiryClearing {
+        self.expiries.native().expiry_clearing()
     }
 }
 
