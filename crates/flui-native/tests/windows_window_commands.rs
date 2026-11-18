@@ -39,8 +39,8 @@ use windows::Win32::{
     Graphics::{
         Dwm::{DWMWA_CLOAK, DWMWA_CLOAKED, DwmGetWindowAttribute, DwmSetWindowAttribute},
         Gdi::{
-            ClientToScreen, GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO,
-            MonitorFromWindow,
+            ClientToScreen, GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITOR_DEFAULTTONULL,
+            MONITORINFO, MonitorFromPoint, MonitorFromWindow,
         },
     },
     UI::{
@@ -2934,24 +2934,60 @@ fn locked_pixel(hwnd: HWND) -> Option<POINT> {
     })
 }
 
-/// The logical size of the display `window` is on.
-fn display_extent(window: &Rc<dyn HostWindow>) -> (f64, f64) {
-    // SAFETY: plain queries of the live window's monitor into a stack local
-    // with `cbSize` set.
-    let monitor = unsafe {
-        let monitor = MonitorFromWindow(hwnd_of(window), MONITOR_DEFAULTTONEAREST);
-        let mut info = MONITORINFO {
-            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
-            ..Default::default()
-        };
-        assert!(GetMonitorInfoW(monitor, &raw mut info).as_bool());
-        info.rcMonitor
-    };
+/// Two positions of `window` on its display, past an edge no other display
+/// lies beyond: one that leaves about 200 by 150 logical pixels of the window
+/// on the display, and one that leaves none of it on any display.
+fn off_display_targets(window: &Rc<dyn HostWindow>) -> ((f64, f64), (f64, f64)) {
+    let display = monitor_rect(window);
     let (_, scale) = monitor_frame(window);
-    (
-        f64::from(monitor.right - monitor.left) / scale,
-        f64::from(monitor.bottom - monitor.top) / scale,
-    )
+    let (width, height) = (
+        f64::from(display.right - display.left) / scale,
+        f64::from(display.bottom - display.top) / scale,
+    );
+    let (mid_x, mid_y) = (
+        i32::midpoint(display.left, display.right),
+        i32::midpoint(display.top, display.bottom),
+    );
+    let beyond = |x: i32, y: i32| {
+        // SAFETY: a monitor query by value.
+        !unsafe { MonitorFromPoint(POINT { x, y }, MONITOR_DEFAULTTONULL) }.is_invalid()
+    };
+    // The window is CONTENT plus its frame; 2000 logical pixels clear it.
+    if !beyond(display.right, mid_y) {
+        ((width - 200.0, 120.0), (width + 2000.0, 120.0))
+    } else if !beyond(mid_x, display.bottom) {
+        ((160.0, height - 150.0), (160.0, height + 2000.0))
+    } else if !beyond(display.left - 1, mid_y) {
+        (
+            (200.0 - CONTENT.width - 16.0, 120.0),
+            (-2000.0 - CONTENT.width, 120.0),
+        )
+    } else if !beyond(mid_x, display.top - 1) {
+        (
+            (160.0, 150.0 - CONTENT.height - 39.0),
+            (160.0, -2000.0 - CONTENT.height),
+        )
+    } else {
+        panic!("the test window's display has a display beyond each of its edges")
+    }
+}
+
+/// Whether a display shows the one pixel the desktop's cursor clip holds.
+fn clip_on_a_display() -> bool {
+    use windows::Win32::UI::WindowsAndMessaging::GetClipCursor;
+    let mut clip = RECT::default();
+    // SAFETY: a plain query into a live local, then a monitor query by value.
+    unsafe {
+        GetClipCursor(&raw mut clip).is_ok()
+            && !MonitorFromPoint(
+                POINT {
+                    x: clip.left,
+                    y: clip.top,
+                },
+                MONITOR_DEFAULTTONULL,
+            )
+            .is_invalid()
+    }
 }
 
 /// The grab the desktop's cursor clip holds for `hwnd`: its client area is a
@@ -3020,28 +3056,35 @@ fn a_grab_is_held_while_focused_and_let_go_with_the_focus() {
         assert_eq!(cursor_clip_of(hwnd), grab, "{grab:?} held by the desktop");
     }
     // A lock keeps its pixel of the client area when the window moves and
-    // resizes, never an old screen pixel over another window.
-    let pixel = locked_pixel(hwnd).expect("a lock clips the pointer to one pixel");
-    let on_screen = |window: &Rc<dyn HostWindow>| {
-        WindowCommand::SetPosition(on_its_display(window, 300.0, 250.0))
+    // resizes, never an old screen pixel over another window. The moves stay
+    // on the window's first display, toward an edge no display lies beyond,
+    // so they mean the same on a small display and beside a neighbour.
+    let display = window
+        .state()
+        .display
+        .expect("a Win32 window names its display");
+    let to = |x: f64, y: f64| {
+        WindowCommand::SetPosition(
+            WindowPosition::try_new(display, Point::new(x, y)).expect("a finite point"),
+        )
     };
-    apply(&window, on_screen(&window));
+    let home = to(160.0, 120.0);
+    let (mostly_off, all_off) = off_display_targets(&window);
+    let pixel = locked_pixel(hwnd).expect("a lock clips the pointer to one pixel");
+    apply(&window, home.clone());
     settle();
     assert_eq!(locked_pixel(hwnd), Some(pixel), "the lock follows a move");
     // Moved mostly off its display, the lock is the nearest pixel of the
-    // client area still on the screen, and its own pixel again once back.
-    let (width, height) = display_extent(&window);
-    apply(
-        &window,
-        WindowCommand::SetPosition(on_its_display(&window, width - 200.0, height - 150.0)),
-    );
+    // client area a display shows, and its own pixel again once back.
+    apply(&window, to(mostly_off.0, mostly_off.1));
     settle();
     assert_eq!(
         cursor_clip_of(hwnd),
         CursorGrab::Locked,
-        "the lock stays on the part of the client on the screen"
+        "the lock stays on the part of the client a display shows"
     );
-    apply(&window, on_screen(&window));
+    assert!(clip_on_a_display(), "the locked pixel is on a display");
+    apply(&window, home.clone());
     settle();
     assert_eq!(
         locked_pixel(hwnd),
@@ -3056,6 +3099,26 @@ fn a_grab_is_held_while_focused_and_let_go_with_the_focus() {
         "the lock stays inside a smaller client"
     );
     assert_eq!(window.state().cursor_grab, CursorGrab::Locked);
+    // A window no display shows holds no pointer, and says so.
+    for grab in [CursorGrab::Locked, CursorGrab::Confined] {
+        apply(&window, WindowCommand::SetCursorGrab(grab));
+        settle();
+        assert_eq!(window.state().cursor_grab, grab, "{grab:?} held again");
+        apply(&window, to(all_off.0, all_off.1));
+        settle();
+        assert_eq!(
+            window.state().cursor_grab,
+            CursorGrab::None,
+            "{grab:?} let go off every display"
+        );
+        assert_eq!(
+            cursor_clip_of(hwnd),
+            CursorGrab::None,
+            "{grab:?} clip freed"
+        );
+        apply(&window, home.clone());
+        settle();
+    }
     apply(&window, WindowCommand::SetCursorGrab(CursorGrab::Confined));
     apply(&window, WindowCommand::SetSize(extent(500.0, 300.0)));
     settle();

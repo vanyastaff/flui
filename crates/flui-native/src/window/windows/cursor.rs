@@ -15,15 +15,18 @@
 use flui_platform::{Cursor, CursorError, CursorIcon, CursorImage, PlatformFailure};
 use windows::Win32::{
     Foundation::{HWND, POINT, RECT},
-    Graphics::Gdi::{ClientToScreen, CreateBitmap, DeleteObject, HBITMAP},
+    Graphics::Gdi::{
+        ClientToScreen, CreateBitmap, DeleteObject, GetMonitorInfoW, HBITMAP, HMONITOR,
+        MONITOR_DEFAULTTONEAREST, MONITOR_DEFAULTTONULL, MONITORINFO, MonitorFromPoint,
+        MonitorFromRect,
+    },
     UI::{
         Input::{RAWINPUTDEVICE, RAWINPUTDEVICE_FLAGS, RIDEV_REMOVE, RegisterRawInputDevices},
         WindowsAndMessaging::{
             ClipCursor, CreateIconIndirect, DestroyIcon, GetClientRect, GetCursor, GetCursorPos,
-            GetSystemMetrics, HCURSOR, HICON, ICONINFO, IDC_APPSTARTING, IDC_ARROW, IDC_CROSS,
-            IDC_HAND, IDC_IBEAM, IDC_NO, IDC_SIZEALL, IDC_SIZENESW, IDC_SIZENS, IDC_SIZENWSE,
-            IDC_SIZEWE, IDC_WAIT, LoadCursorW, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN,
-            SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SetCursor,
+            HCURSOR, HICON, ICONINFO, IDC_APPSTARTING, IDC_ARROW, IDC_CROSS, IDC_HAND, IDC_IBEAM,
+            IDC_NO, IDC_SIZEALL, IDC_SIZENESW, IDC_SIZENS, IDC_SIZENWSE, IDC_SIZEWE, IDC_WAIT,
+            LoadCursorW, SetCursor,
         },
     },
 };
@@ -272,27 +275,30 @@ pub(crate) fn hold(hwnd: HWND, locked: bool) -> Result<Held, PlatformFailure> {
 
 /// Clip the pointer as `held` says, where `hwnd`'s client area is now: what a
 /// window holding the pointer does after it moved, resized or changed scale.
-/// A lock point the client area no longer reaches, or that lies off the
-/// screen, is moved to the nearest pixel of the client area on the screen, so
-/// the pointer never rests over another window: the desktop clamps a clip to
-/// the virtual screen, and a pixel it clamps is no pixel of the client.
+/// A lock point the client area no longer reaches, or that no display shows,
+/// is moved to the nearest pixel of the client area a display shows, so the
+/// pointer never rests over another window or off every display: the desktop
+/// clamps a clip to its displays, and a pixel it clamps is no pixel of the
+/// client.
 ///
 /// # Errors
-/// [`PlatformFailure::Failed`] when Win32 refuses the clip.
+/// [`PlatformFailure::Failed`] when no display shows any of the client area,
+/// a grab no pointer can be held to, or when Win32 refuses the clip.
 pub(crate) fn clip(hwnd: HWND, held: Held) -> Result<(), PlatformFailure> {
     let client = client_on_screen(hwnd)?;
     let rect = match held {
-        Held::Confined => client,
+        Held::Confined => {
+            shown_part(client, None).ok_or_else(no_display)?;
+            client
+        }
         Held::Locked(at) => {
-            let reach = on_the_screen(client).unwrap_or(client);
-            let x = client
-                .left
-                .saturating_add(at.x)
-                .clamp(reach.left, (reach.right - 1).max(reach.left));
-            let y = client
-                .top
-                .saturating_add(at.y)
-                .clamp(reach.top, (reach.bottom - 1).max(reach.top));
+            let point = POINT {
+                x: client.left.saturating_add(at.x),
+                y: client.top.saturating_add(at.y),
+            };
+            let reach = shown_part(client, Some(point)).ok_or_else(no_display)?;
+            let x = point.x.clamp(reach.left, reach.right - 1);
+            let y = point.y.clamp(reach.top, reach.bottom - 1);
             RECT {
                 left: x,
                 top: y,
@@ -305,25 +311,39 @@ pub(crate) fn clip(hwnd: HWND, held: Held) -> Result<(), PlatformFailure> {
     unsafe { ClipCursor(Some(&raw const rect)) }.map_err(failed)
 }
 
-/// The part of `rect` on the virtual screen, the bounds of every display;
-/// `None` when none of it is.
-fn on_the_screen(rect: RECT) -> Option<RECT> {
-    // SAFETY: metric queries by value.
-    let (left, top, width, height) = unsafe {
-        (
-            GetSystemMetrics(SM_XVIRTUALSCREEN),
-            GetSystemMetrics(SM_YVIRTUALSCREEN),
-            GetSystemMetrics(SM_CXVIRTUALSCREEN),
-            GetSystemMetrics(SM_CYVIRTUALSCREEN),
-        )
+/// The part of `rect` one display shows: the display nearest `near` when it
+/// shows some of `rect`, else the display showing most of it. `None` when no
+/// display shows any of it. One display's part, not the virtual screen's
+/// bounding box, which covers the gaps between displays of different sizes.
+fn shown_part(rect: RECT, near: Option<POINT>) -> Option<RECT> {
+    let part = |monitor: HMONITOR| {
+        let mut info = MONITORINFO {
+            cbSize: u32::try_from(size_of::<MONITORINFO>()).expect("BUG: MONITORINFO is small"),
+            ..Default::default()
+        };
+        // SAFETY: `info` is a live local with `cbSize` set; a null or stale
+        // monitor only makes the call fail.
+        if monitor.is_invalid() || !unsafe { GetMonitorInfoW(monitor, &raw mut info) }.as_bool() {
+            return None;
+        }
+        let display = info.rcMonitor;
+        let shown = RECT {
+            left: rect.left.max(display.left),
+            top: rect.top.max(display.top),
+            right: rect.right.min(display.right),
+            bottom: rect.bottom.min(display.bottom),
+        };
+        (shown.left < shown.right && shown.top < shown.bottom).then_some(shown)
     };
-    let visible = RECT {
-        left: rect.left.max(left),
-        top: rect.top.max(top),
-        right: rect.right.min(left.saturating_add(width)),
-        bottom: rect.bottom.min(top.saturating_add(height)),
-    };
-    (visible.left < visible.right && visible.top < visible.bottom).then_some(visible)
+    // SAFETY: monitor queries by value.
+    near.and_then(|point| part(unsafe { MonitorFromPoint(point, MONITOR_DEFAULTTONEAREST) }))
+        .or_else(|| part(unsafe { MonitorFromRect(&raw const rect, MONITOR_DEFAULTTONULL) }))
+}
+
+fn no_display() -> PlatformFailure {
+    PlatformFailure::Failed {
+        message: "no display shows the window's client area".to_owned(),
+    }
 }
 
 /// Let the pointer go: no clip, and no raw input once a lock held it.
