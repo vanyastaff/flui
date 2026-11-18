@@ -16,8 +16,7 @@
 //!     ↓
 //! OwnerFrame (executes complete frame and background turns)
 //!     └─ UpdateScheduler (admits work and observes logical frame state)
-//!     ├─ TaskQueue (priority-based execution)
-//!     └─ FrameBudget (phase-duration stats)
+//!     └─ TaskQueue (priority-based execution)
 //!
 //! Frame Timeline:
 //! BeginFrame → Tasks (Build/Layout/Paint) → EndFrame → Present
@@ -38,21 +37,11 @@
 //! - **Priority::Build** - Normal (widget rebuilds)
 //! - **Priority::Idle** - Low (background work)
 //!
-//! ### FrameBudget
-//! Per-phase timing statistics against a caller-chosen target framerate:
-//! - Tracks time spent in each phase
-//! - Reports jank / over-budget statistics
-//! - Provides frame skip policies
-//!
-//! ## Type-Safe Duration Wrappers
-//!
-//! ```rust
-//! use flui_scheduler::duration::{FrameDuration, Milliseconds};
-//!
-//! let elapsed = Milliseconds::new(10.0); // 10ms elapsed
-//! let budget = FrameDuration::try_from_fps(60).expect("fps > 0"); // ~60fps budget
-//! assert!(!budget.is_over_budget(elapsed)); // Still under budget!
-//! ```
+//! ### Frame telemetry
+//! What a frame cost and when it reached the display is measured in
+//! [`std::time::Duration`] and recorded per frame as a
+//! [`frame_telemetry::FrameSnapshot`]; [`frame_histogram`]
+//! summarizes a run of them.
 //!
 //! ## Type-Safe IDs
 //!
@@ -72,7 +61,7 @@
 //!
 //! ```rust
 //! use flui_scheduler::__runtime::DriveFrame as _;
-//! use flui_scheduler::{FrameBudget, OwnerFrame, Priority, UpdateScheduler};
+//! use flui_scheduler::{OwnerFrame, Priority, UpdateScheduler};
 //!
 //! let scheduler = UpdateScheduler::new();
 //! // The owner thread's frame state: owner-local post-frame callbacks and
@@ -97,8 +86,8 @@
 //!
 //! ## Feature Flags
 //!
-//! - **`serde`** - Enable serialization support for duration types, priorities,
-//!   and statistics. Adds `Serialize` and `Deserialize` derives to data types.
+//! - **`serde`** - Enable serialization support for priorities and the frame
+//!   and lifecycle enums. Adds `Serialize` and `Deserialize` derives to them.
 //! - **`testing`** - Test-only lock-discipline probes (e.g.
 //!   `AsyncDriver::is_unlocked`) for a consumer crate's own reentrancy
 //!   tests. Never enabled in production; auto-enabled for this crate's own
@@ -122,15 +111,6 @@
 //! retaining UI callback storage. [`AsyncDriver`] and [`PostFrameHandle`]
 //! address the exact owner lifetime.
 //!
-//! ## Prelude
-//!
-//! ```rust
-//! use flui_scheduler::prelude::*;
-//!
-//! let scheduler = UpdateScheduler::new();
-//! let budget = FrameBudget::new(std::num::NonZeroU32::new(60).expect("60 is non-zero"));
-//! ```
-//!
 //! [`web_time`]: https://docs.rs/web-time
 
 #![cfg_attr(
@@ -145,7 +125,6 @@
 #![deny(missing_docs)]
 
 // Core modules
-pub mod budget;
 pub mod config;
 pub mod frame;
 // The composition-root frame-drive seam (ADR-0081 §4).
@@ -159,15 +138,11 @@ pub mod task;
 
 // Type-safe primitives
 pub mod async_driver;
-pub mod duration;
 pub mod id;
 pub mod timer;
 
 // Re-exports - Core types
 pub use async_driver::{AsyncDriver, BoxedTask, TaskToken};
-pub use budget::{
-    AllPhaseStats, BudgetPolicy, FrameBudget, FrameBudgetBuilder, PhaseStats, SharedBudget,
-};
 pub use config::TimingsCallback;
 /// [`FrameSnapshot::address`]'s type and the two ids it pairs — re-exported
 /// so a consumer of this crate's frame telemetry (e.g. `flui-devtools`'
@@ -201,16 +176,14 @@ mod wake_delivery;
 #[cfg(test)]
 mod table_test;
 
-/// The instant type the frame clock is stamped with. `std::time::Instant` on
-/// native, a `performance.now()` shim on wasm32 — re-exported so a binding can
-/// name the frame drive's timestamp without depending on `web_time`.
-pub use web_time::Instant;
-// Re-exports - Duration types
-pub use duration::{BudgetPercentage, FrameDuration, Microseconds, Milliseconds, Seconds};
 pub use frame::{
     AppLifecycleState, FrameId, FramePhase, FrameTiming, LifecycleStateCallback,
     OneShotFrameCallback, PostFrameCallback, RecurringFrameCallback, SchedulerPhase,
 };
+/// The instant type the frame clock is stamped with. `std::time::Instant` on
+/// native, a `performance.now()` shim on wasm32 — re-exported so a binding can
+/// name the frame drive's timestamp without depending on `web_time`.
+pub use web_time::Instant;
 // Re-exports - ID types (opaque foundation identities)
 pub use id::CallbackId;
 pub use scheduler::{
@@ -218,15 +191,6 @@ pub use scheduler::{
     SchedulerBuilder, SchedulerClosed, UpdateScheduler, WeakUpdateScheduler,
 };
 pub use task::{Priority, PriorityCount, Task, TaskId, TaskQueue};
-
-/// Prelude for common scheduler types
-pub mod prelude {
-    pub use crate::{
-        BudgetPolicy, FrameBudget, FrameId, FramePhase, FrameTiming, OneShotFrameCallback,
-        Priority, SchedulerPhase, Task, TaskId, TaskQueue, UpdateScheduler,
-        duration::{BudgetPercentage, FrameDuration, Milliseconds, Seconds},
-    };
-}
 
 // Keep standalone prose examples inside the existing workspace doctest gate.
 // Context-dependent fragments in these files are explicitly `rust,ignore`.

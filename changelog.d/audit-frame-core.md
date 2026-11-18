@@ -15,12 +15,8 @@
 - **`FrameId` is the scheduler's own 64-bit id** (`flui-scheduler`), numbered per scheduler (every
   scheduler's first frame is frame 1) instead of a process-wide `usize` counter that panicked on
   wasm32 once it wrapped.
-- **`FrameTiming` is issued by the scheduler** (`flui-scheduler`): it measures against an instant
-  you pass (`elapsed_at`, `is_janky_at`, …) instead of the wall clock; `phase`,
-  `phase_duration` and `FrameTimingBuilder` are removed.
-- **`FrameBudget`** (`flui-scheduler`): fps parameters are `NonZeroU32`, live-frame queries take
-  the current instant, `record_frame_duration` refuses non-finite and negative samples, and the raw
-  `f64` recorders are removed.
+- **`FrameTiming` is issued by the scheduler** (`flui-scheduler`): it carries the frame's id and
+  start instant; `phase`, `phase_duration` and `FrameTimingBuilder` are removed.
 - **`TaskQueue` drains per-priority FIFO lanes** (`flui-scheduler`): a task queued during a drain
   waits for the next one, so a re-queueing high-priority task cannot starve older work.
 

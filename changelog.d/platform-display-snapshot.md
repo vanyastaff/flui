@@ -17,10 +17,8 @@
   one instead of losing to it, and an apply that fails part-way is offered again on the next
   sample. `UiRuntime::window_display` and `refresh_interval`, and the haptic frame deadline
   (`DEFAULT_REFRESH_PERIOD` is the 60 Hz policy while a display reports nothing) read the result.
-- **Frame budget and frame span follow the display** (`flui-scheduler`):
-  `FrameDuration::try_from_period` keeps a fractional rate exact,
-  `UpdateScheduler::set_budget_frame_duration` points the stats-only budget at it, and the `frame`
-  span carries the period it judged the frame by as `period_us`.
+- **The frame span follows the display** (`flui-scheduler`): `UpdateScheduler::set_display_period`
+  takes the display's exact refresh period, and the `frame` span carries it as `period_us`.
 - **`JankLine`** (`flui-devtools`): `JankLine::FramePeriod` judges a frame against the period the
   `frame` span reports; `JankLine::Fixed(ms)` keeps one threshold. `Profiler::set_frame_period`
   feeds it.

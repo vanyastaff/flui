@@ -70,9 +70,7 @@ use parking_lot::Mutex;
 use web_time::{Duration, Instant};
 
 use crate::{
-    budget::FrameBudget,
     config::TimingsCallback,
-    duration::{FrameDuration, Milliseconds},
     frame::{
         AppLifecycleState, FrameId, FrameTiming, LifecycleStateCallback, OneShotFrameCallback,
         RecurringFrameCallback, SchedulerPhase,
@@ -116,6 +114,10 @@ pub const MAX_BUILD_REENTRY_PASSES: usize = 32;
 /// doc. Crate-private, unlike [`MAX_BUILD_REENTRY_PASSES`]: its pinning test
 /// lives in this same module.
 const MAX_MICROTASK_REENTRY_PASSES: usize = 32;
+
+/// The display period a scheduler labels frames with until the runtime sets
+/// the real one: 60 Hz, the refresh most displays run at.
+const DEFAULT_DISPLAY_PERIOD: Duration = Duration::from_nanos(16_666_667);
 
 /// How many queued closures one frame runs from a queue that held `queued`
 /// when the frame reached it: four per queued entry, and never fewer than 256.
@@ -711,17 +713,12 @@ struct FrameState {
     /// The timeline frame times come from; frame durations and the Idle
     /// deadline are measured on it.
     clock: ClockSource,
-    /// Per-phase timing statistics against a caller-chosen target framerate.
-    /// This is the only place `flui-scheduler` tracks a frame-duration
-    /// value at all — it is stats-only (`UpdateScheduler::budget_snapshot`,
-    /// `avg_fps`, `is_janky`), never a gate. There is deliberately no
-    /// separate `frame_duration`/`target_fps` field or accessor on
-    /// `UpdateScheduler` itself; see `UpdateScheduler::new`'s doc.
-    budget: RefCell<FrameBudget>,
+    /// The refresh period of the display the frames are produced for, which
+    /// the `frame` span reports as `period_us`. A label for profilers only:
+    /// nothing here is gated by it.
+    display_period: Cell<Duration>,
     /// Frame counter
     frame_count: AtomicU64,
-    /// Jank tracking - count of frames that exceeded budget
-    janky_frame_count: AtomicU64,
     /// The current frame's Idle-slice deadline, set by
     /// `OwnerFrame::drive_frame` and consumed by
     /// the internal frame-dispatch step to decide whether Idle-priority
@@ -1045,26 +1042,21 @@ impl UpdateScheduler {
     /// `UpdateScheduler` makes no refresh-rate assumption of its own — it
     /// never knows a display, a surface, or a frame rate (that split lives
     /// in the presentation-owned `FrameClock`; see the ownership rule in
-    /// ADR-0044), and carries no `frame_duration`/`target_fps` field or
-    /// accessor. The internal [`FrameBudget`] [`SchedulerBuilder`] seeds is a
-    /// stats-window default only (`avg_fps`/jank tracking for a caller who
-    /// never configured [`SchedulerBuilder::target_fps`]) — it does not gate
-    /// anything. `OwnerFrame::drive_frame`'s `deadline` parameter is the only
-    /// thing that bounds work, and it bounds Idle priority tasks alone:
-    /// Animation and Build tasks always run.
+    /// ADR-0044). The display period the runtime hands it through
+    /// [`Self::set_display_period`] only labels the `frame` span.
+    /// `OwnerFrame::drive_frame`'s `deadline` parameter is the only thing
+    /// that bounds work, and it bounds Idle priority tasks alone: Animation
+    /// and Build tasks always run.
     pub fn new() -> Self {
         SchedulerBuilder::new().build()
     }
 
-    /// [`SchedulerBuilder::build`]'s constructor seam: `budget_target` seeds
-    /// only the internal, stats-only [`FrameBudget`] (see [`Self::new`]'s
-    /// doc) — it is not stored anywhere else, and `UpdateScheduler` exposes
-    /// no way to read or change it after construction.
+    /// [`SchedulerBuilder::build`]'s constructor seam.
     ///
     /// Taking the queue as a parameter avoids needing mutable access to the
     /// constructed `Arc` at all: `Arc::get_mut` fails as soon as any
     /// [`FrameWaker`] or weak handle exists.
-    fn with_parts(budget_target: FrameDuration, task_queue: TaskQueue, clock: ClockSource) -> Self {
+    fn with_parts(task_queue: TaskQueue, clock: ClockSource) -> Self {
         let frame_thread = Arc::new(Mutex::new(None));
         let inner = Rc::new(SchedulerInner {
             wake: Arc::new(WakeShared {
@@ -1082,9 +1074,8 @@ impl UpdateScheduler {
                 current_vsync_time: RefCell::new(None),
                 next_frame_id: Cell::new(Some(FrameId::FIRST)),
                 clock,
-                budget: RefCell::new(FrameBudget::with_duration(budget_target)),
+                display_period: Cell::new(DEFAULT_DISPLAY_PERIOD),
                 frame_count: AtomicU64::new(0),
-                janky_frame_count: AtomicU64::new(0),
                 idle_deadline: RefCell::new(None),
                 completion_waiters: RefCell::new(FrameCompletionRegistry::new()),
                 frame_thread,
@@ -1202,11 +1193,6 @@ impl UpdateScheduler {
         // Store vsync time for all tickers to use
         *self.inner.frame.current_vsync_time.borrow_mut() = Some(vsync_time);
 
-        // Create frame timing with vsync timestamp. `FrameTiming` labels its
-        // own stats with the persistent budget's target — the only
-        // frame-duration value this scheduler tracks anywhere (see
-        // `UpdateScheduler::new`'s doc); this does not gate anything.
-        let frame_duration = self.inner.frame.budget.borrow_mut().frame_duration();
         let frame_id = self
             .inner
             .frame
@@ -1214,7 +1200,7 @@ impl UpdateScheduler {
             .get()
             .expect("BUG: a scheduler cannot run 2^64 frames");
         self.inner.frame.next_frame_id.set(frame_id.next());
-        let timing = FrameTiming::begun(frame_id, vsync_time, frame_duration);
+        let timing = FrameTiming::begun(frame_id, vsync_time);
 
         *self.inner.frame.current_frame.borrow_mut() = Some(timing);
         self.inner.wake.wake_delivery.consume(|| {
@@ -1467,22 +1453,6 @@ impl UpdateScheduler {
         let timing = self.inner.frame.current_frame.borrow_mut().take();
 
         if let Some(timing) = timing {
-            // Record timing and check for jank, on the clock the frame time
-            // came from.
-            let now = self.inner.frame.clock.now();
-            self.inner
-                .frame
-                .budget
-                .borrow_mut()
-                .record_frame_duration(timing.elapsed_at(now));
-
-            if timing.is_janky_at(now) {
-                self.inner
-                    .frame
-                    .janky_frame_count
-                    .fetch_add(1, Ordering::Relaxed);
-            }
-
             // Telemetry is opt-in and bounded even when failed frames postpone
             // normal reporting. Retain the newest samples during recovery.
             if !self.inner.binding.timings_callbacks.borrow().is_empty() {
@@ -2032,68 +2002,6 @@ impl UpdateScheduler {
     }
 
     // =========================================================================
-    // Budget and Timing
-    // =========================================================================
-    //
-    // These read the frame's *labeled* target duration (see `UpdateScheduler::new`'s
-    // doc) for informational stats only — none of them gate anything. The
-    // only thing that ever bounds work here is the `deadline` a caller
-    // passes to `drive_frame`, and it bounds `Priority::Idle` alone; see
-    // `handle_draw_frame`'s doc for the actual gate.
-
-    /// Check if currently over budget (informational only — does not gate).
-    pub fn is_over_budget(&self) -> bool {
-        self.inner
-            .frame
-            .current_frame
-            .borrow_mut()
-            .as_ref()
-            .is_some_and(|timing| timing.is_over_budget_at(self.inner.frame.clock.now()))
-    }
-
-    /// Check if deadline is near, i.e. >80% of the labeled target duration
-    /// used (informational only — does not gate; see this section's doc).
-    pub fn is_deadline_near(&self) -> bool {
-        self.inner
-            .frame
-            .current_frame
-            .borrow_mut()
-            .as_ref()
-            .is_some_and(|timing| timing.is_deadline_near_at(self.inner.frame.clock.now()))
-    }
-
-    /// Get remaining budget as type-safe Milliseconds
-    pub fn remaining_budget(&self) -> Milliseconds {
-        self.inner
-            .frame
-            .current_frame
-            .borrow_mut()
-            .as_ref()
-            .map_or(Milliseconds::ZERO, |timing| {
-                timing.remaining_at(self.inner.frame.clock.now())
-            })
-    }
-
-    /// Get remaining budget in milliseconds (raw f64)
-    pub fn remaining_budget_ms(&self) -> f64 {
-        self.remaining_budget().value()
-    }
-
-    /// Snapshot the current frame budget statistics.
-    ///
-    /// Returns an owned [`FrameBudget`] value rather than a live lock guard
-    /// — the caller cannot deadlock the scheduler by holding this past its
-    /// own scope. It is one small allocation, not free (`FrameBudget` carries
-    /// a bounded rolling-window frame-time history), and the returned value
-    /// is a stats snapshot only: it does not gate anything (see
-    /// `OwnerFrame::drive_frame` for the actual
-    /// Idle-slice deadline gate).
-    #[must_use]
-    pub fn budget_snapshot(&self) -> FrameBudget {
-        self.inner.frame.budget.borrow_mut().clone()
-    }
-
-    // =========================================================================
     // Statistics
     // =========================================================================
 
@@ -2102,63 +2010,21 @@ impl UpdateScheduler {
         self.inner.frame.frame_count.load(Ordering::Relaxed)
     }
 
-    /// Get average FPS from budget statistics
-    pub fn avg_fps(&self) -> f64 {
-        self.inner.frame.budget.borrow_mut().avg_fps()
-    }
-
-    /// Judge frames against `frame_duration` from the next frame on: the
-    /// period of the display being produced for, so `is_janky`, `avg_fps` and
-    /// the `period_us` field of the `frame` span follow the display instead of
-    /// the 60 Hz the scheduler was built with.
+    /// Label frames with `period`, the refresh period of the display being
+    /// produced for, from the next frame on: the `frame` span reports it as
+    /// `period_us`, which profilers read to judge a frame late. Nothing in the
+    /// scheduler is gated by it.
     ///
-    /// The host sets it before the frame begins. [`FrameTiming`]
-    /// copies the budget's duration when a frame starts, so a change made
-    /// inside a frame applies to the following one.
-    pub fn set_budget_frame_duration(&self, frame_duration: FrameDuration) {
-        self.inner
-            .frame
-            .budget
-            .borrow_mut()
-            .set_frame_duration(frame_duration);
+    /// The runtime sets it before each frame begins, from the displays of the
+    /// presentations the frame is produced for.
+    pub fn set_display_period(&self, period: Duration) {
+        self.inner.frame.display_period.set(period);
     }
 
-    /// The period, in microseconds, the budget currently judges frames against.
-    pub(crate) fn budget_period_micros(&self) -> u64 {
-        self.inner
-            .frame
-            .budget
-            .borrow()
-            .frame_duration()
-            .as_micros()
-    }
-
-    /// Check if last frame was janky
-    pub fn is_janky(&self) -> bool {
-        self.inner.frame.budget.borrow_mut().is_janky()
-    }
-
-    /// Get count of janky frames
-    pub fn janky_frame_count(&self) -> u64 {
-        self.inner.frame.janky_frame_count.load(Ordering::Relaxed)
-    }
-
-    /// Get jank rate as percentage
-    pub fn jank_rate(&self) -> f64 {
-        let total = self.frame_count();
-        if total == 0 {
-            0.0
-        } else {
-            (self.janky_frame_count() as f64 / total as f64) * 100.0
-        }
-    }
-
-    /// Clear jank statistics
-    pub fn clear_jank_stats(&self) {
-        self.inner
-            .frame
-            .janky_frame_count
-            .store(0, Ordering::Relaxed);
+    /// The refresh period frames are labelled with: the last one
+    /// [`Self::set_display_period`] set, 60 Hz before that.
+    pub fn display_period(&self) -> Duration {
+        self.inner.frame.display_period.get()
     }
 
     // =========================================================================
@@ -2201,7 +2067,7 @@ impl UpdateScheduler {
     /// scheduler.handle_app_lifecycle_state_change(AppLifecycleState::Hidden);
     ///
     /// // Check if we should render
-    /// if !scheduler.lifecycle_state().should_render() {
+    /// if !scheduler.lifecycle_state().is_visible() {
     ///     // Skip frame rendering
     /// }
     /// ```
@@ -2723,15 +2589,8 @@ impl Default for UpdateScheduler {
 }
 
 /// Builder for creating a scheduler with custom configuration.
-///
-/// `budget_target` configures ONLY the internal, stats-only [`FrameBudget`]
-/// (`avg_fps`/jank tracking via [`UpdateScheduler::budget_snapshot`]) — the
-/// scheduler itself never gates on it, and `UpdateScheduler` exposes no way
-/// to read it back. This is the sole place in `flui-scheduler` a fixed
-/// frame-rate default is declared; see [`UpdateScheduler::new`]'s doc.
 #[derive(Debug, Clone)]
 pub struct SchedulerBuilder {
-    budget_target: FrameDuration,
     task_queue_capacity: Option<usize>,
     clock: ClockSource,
 }
@@ -2740,25 +2599,9 @@ impl SchedulerBuilder {
     /// Create a new builder
     pub fn new() -> Self {
         Self {
-            budget_target: FrameDuration::try_from_fps(60).expect("BUG: 60 fps is always valid"),
             task_queue_capacity: None,
             clock: ClockSource::Platform,
         }
-    }
-
-    /// Set the stats budget's target FPS (see this type's own doc — this
-    /// does not configure a scheduler-wide rate).
-    pub fn target_fps(mut self, fps: std::num::NonZeroU32) -> Self {
-        self.budget_target = FrameDuration::try_from_fps(fps.get())
-            .expect("BUG: a non-zero frame rate is a valid frame duration");
-        self
-    }
-
-    /// Set the stats budget's target duration directly (see this type's own
-    /// doc — this does not configure a scheduler-wide rate).
-    pub fn frame_duration(mut self, duration: FrameDuration) -> Self {
-        self.budget_target = duration;
-        self
     }
 
     /// Set task queue capacity
@@ -2769,7 +2612,7 @@ impl SchedulerBuilder {
 
     /// Read time from `clock`: the clock the frame times passed to
     /// `OwnerFrame::drive_frame` come from,
-    /// so frame durations, jank and the Idle deadline are measured on the
+    /// so frame durations and the Idle deadline are measured on the
     /// frames' own timeline. The OS clock by default.
     pub fn clock(mut self, clock: ClockSource) -> Self {
         self.clock = clock;
@@ -2782,7 +2625,7 @@ impl SchedulerBuilder {
             .task_queue_capacity
             .map_or_else(TaskQueue::new, TaskQueue::with_capacity);
 
-        UpdateScheduler::with_parts(self.budget_target, task_queue, self.clock)
+        UpdateScheduler::with_parts(task_queue, self.clock)
     }
 }
 
