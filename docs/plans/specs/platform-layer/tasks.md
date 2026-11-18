@@ -1,7 +1,7 @@
 # Платформенный слой — задачи
 
 - **Статус:** редакция 3 утверждена: ADR-0151, 0152, 0153, 0154, 0254 и 0255 приняты 2026-10-21.
-  Из 134 задач серии 113 закрыты и 21 открыта (сверено с `main` @ `b7a30405c`); записи — в разделе
+  Из 134 задач серии 114 закрыты и 20 открыты (сверено с `main` @ `4db9c6981`); записи — в разделе
   «Ход исполнения». Прогоны на устройствах, которых ждут закрытые задачи, — строки
   `crates/flui-native/platform-parity.toml`. Открытые задачи и код, которого они ждут:
   - LY61 — удалить сервисы `Platform`, `PathPromptOptions`, `Task` и `TaskLabel`, когда LY67 даст
@@ -11,7 +11,6 @@
   - LY69 — `selectionRectsForRange:` и `UITextInteraction` на iOS;
   - LY71 — golden `Info.plist` и ориентации iPad;
   - LY85 — настоящее окно X11 через `assert_backend_conforms`;
-  - LY87 — три комментария, которые называют winit источником событий;
   - LY89 — тест в виртуальном времени «простой без пробуждений» на источниках macOS и Android;
   - LY93 — доступ песочницы у выбранных файлов и `data_dirs` (не начата);
   - LY96 и LY99 — заблокированы спекой flui-driver (`os`-lane);
@@ -5973,15 +5972,19 @@ GPU-память простаивающего или невидимого окн
   сольётся. Строка и граф говорят то же. Что часть тестов `wayland_window` под Weston
   выходит рано, потому что он не даёт `xdg-decoration`, `wp_fractional_scale_v1` и `xdg-foreign`,
   — находка LY106.
-- [ ] **LY87** (открыта: три комментария) — файлы `winit` в фичах, `hosts/winit.rs`, фича
-  `winit-backend`, `WinitPlatform` и зависимости удалены, `deny.toml` запрещает крейт
-  (`deny.toml:166`), пропуска RUSTSEC для `ttf-parser` больше нет. Законные упоминания остаются:
-  запрет в `deny.toml`, списки `forbid` у `reach` в корневом `Cargo.toml`, фикстуры xtask, prior
-  art в комментариях и документах. Остаётся: комментарии, которые всё ещё называют winit
-  источником событий, — `crates/flui-widgets/src/text/editable_text.rs:320` и `:2576` (контракт
-  подавления `Key::Character`) и `crates/flui-widgets/ARCHITECTURE.md:2856` («Winit's
-  `LineDelta`»). Тест строки читается так: winit не зависимость и ни один текст не называет его
-  частью FLUI.
+- [x] **LY87** — #2276 (`053507d53`) удалил файлы `winit` в фичах, `hosts/winit.rs`, фичу
+  `winit-backend`, `WinitPlatform`, зависимости `winit`, `arboard`, `ui-events-winit` и прямой
+  `crossbeam-channel`, профиль conformance и запись winit; `deny.toml` запрещает крейт, а `zbus`
+  и `futures-util` остались, потому что ими пользуются нативные хосты. Тексты, говорившие о winit
+  как о части графа или запасном хосте, исправлены в LY113; контракт подавления `Key::Character`
+  в `crates/flui-widgets/src/text/editable_text.rs` (два места) и
+  `crates/flui-platform/src/ime.rs` и строка о шаге колеса в `crates/flui-widgets/ARCHITECTURE.md`
+  больше не называют winit источником событий. Пропуск RUSTSEC-2026-0192 в `deny.toml` ушёл
+  вместе с `ttf-parser`. Доказательство: `rg -i winit` по `crates/`, `packages/`, `examples/`,
+  `docs/` (кроме `docs/plans` и `CHANGELOG.md`) и `src/` находит 304 строки вместо 308, и каждая
+  из них — запрет в `deny.toml` и списках `forbid`, пример в тесте xtask, ссылка на тикет winit,
+  сравнение с другим фреймворком (prior art в ADR, `ARCHITECTURE.md` и комментариях) или история
+  в ADR; ни одна не называет winit хостом или источником событий FLUI.
 - [ ] **LY89** (открыта: счётчик пробуждений) — macOS слушает `NSWorkspace` и
   `NSNotificationCenter` (параметры отображения доступности, локаль, активация); Android —
   `ContentObserver` в `FluiView` (`nativeSettingsChanged`) и `ConfigChanged`; пока `FluiView` не
