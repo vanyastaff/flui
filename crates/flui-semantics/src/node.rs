@@ -5,7 +5,7 @@
 //! semantics into the nearest boundary ancestor.
 
 use flui_foundation::geometry::{Matrix4, Rect};
-use flui_foundation::{ElementId, RenderId, SemanticsId};
+use flui_foundation::{RenderId, SemanticsId};
 
 // Use our optimized types from flui-semantics
 use crate::{configuration::SemanticsConfiguration, identity::AccessibilityNodeId};
@@ -59,9 +59,6 @@ pub struct SemanticsNode {
     children: Vec<SemanticsId>,
 
     // ========== Cross-tree Reference ==========
-    /// The render element that owns this semantics node.
-    element_id: Option<ElementId>,
-
     /// Render boundary or independently allocated authored content. Both
     /// origins survive semantics-arena rebuilds under their identity authority.
     origin: Option<NodeOrigin>,
@@ -99,7 +96,6 @@ impl SemanticsNode {
         Self {
             parent: None,
             children: Vec::new(),
-            element_id: None,
             origin: None,
             config: SemanticsConfiguration::new(),
             rect: Rect::ZERO,
@@ -108,12 +104,6 @@ impl SemanticsNode {
             transform: None,
             dirty: true,
         }
-    }
-
-    /// Creates a node with an associated element ID.
-    pub fn with_element_id(mut self, element_id: ElementId) -> Self {
-        self.element_id = Some(element_id);
-        self
     }
 
     /// Associates this semantics boundary with its source render object.
@@ -175,17 +165,6 @@ impl SemanticsNode {
 
     // ========== Cross-tree Reference ==========
 
-    /// Returns the associated element ID.
-    #[inline]
-    pub fn element_id(&self) -> Option<ElementId> {
-        self.element_id
-    }
-
-    /// Sets the associated element ID.
-    pub fn set_element_id(&mut self, element_id: Option<ElementId>) {
-        self.element_id = element_id;
-    }
-
     /// Returns the render object that forms this semantics boundary.
     #[inline]
     pub fn source_render_id(&self) -> Option<RenderId> {
@@ -229,19 +208,19 @@ impl SemanticsNode {
     /// Returns the label text.
     #[inline]
     pub fn label(&self) -> Option<&str> {
-        self.config.label().map(|l| l.string.as_str())
+        self.config.label()
     }
 
     /// Returns the value text.
     #[inline]
     pub fn value(&self) -> Option<&str> {
-        self.config.value().map(|v| v.string.as_str())
+        self.config.value()
     }
 
     /// Returns the hint text.
     #[inline]
     pub fn hint(&self) -> Option<&str> {
-        self.config.hint().map(|h| h.string.as_str())
+        self.config.hint()
     }
 
     // ========== Geometry ==========

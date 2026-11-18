@@ -20,7 +20,7 @@ use flui_widgets::{Semantics, SizedBox};
 /// laid out with semantics on.
 fn button_with(label: &str, selected: Option<bool>) -> LaidOut {
     let mut config = SemanticsConfiguration::default();
-    config.set_label(label.to_owned());
+    config.set_label(label);
     config.set_role(SemanticsRole::Button);
     if let Some(selected) = selected {
         config.set_selected(selected);
