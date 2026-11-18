@@ -234,7 +234,7 @@ of its own.
   - declares a `pub use` or `pub mod`, or sits inside a `pub use` that spans several lines (read
     from the blob on its side of the diff), which decides what the facade re-exports;
   - names, in the file that defines an item the list names, a segment of that item's path
-    there (`AppConfig`, `memory_reclaim`), so a rename or a move on a line apart from the
+    there (`LaunchError`, `Platform`), so a rename or a move on a line apart from the
     bound is seen. An implementation's entry (`impl Trait for Type`) resolves each path it
     holds.
 
@@ -252,8 +252,8 @@ of its own.
 - **What runs for every node of a frame is read by its path.** The `perf-gates` job compares the
   perf scenarios' counts with their baseline. `plan` sets `perf_required` when a changed file
   sits under the element tree and its owners, the render tree's storage, the pipeline owner's
-  passes or the semantics model, where one more allocation is a rise in every scenario, or is
-  the baseline, the scenarios, their allocator, the task or the rule
+  passes, the layer crate or the semantics model, where one more allocation is a rise
+  in every scenario, or is the baseline, the scenarios, their allocator, the task or the rule
   (`change_scope::perf_scope`). A pull request then runs the comparison; callgrind, a renamed
   counter and a rise from any other source are left to main.
 - **What a build without the agent compiles is read by its path.** The `test-without-agent` job

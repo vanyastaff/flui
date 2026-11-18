@@ -40,8 +40,7 @@ use std::{rc::Rc, sync::Arc};
 
 use crossbeam_channel::{Receiver, bounded};
 use flui_foundation::{
-    SurfaceGeneration,
-    clock::MonotonicClock,
+    MonotonicClock, SurfaceGeneration,
     geometry::DeviceSize,
     panic::{FirstPanic, discard_payload},
 };
@@ -370,7 +369,14 @@ impl<B: RasterBackend> RasterExecutor<B> {
             device_moved |= self.note_loss(&mut first);
         }
         if outcome.settled > 0 || device_moved {
-            first.contain(|| (self.wake)());
+            // Only a wake that returned has asked every window for its
+            // frame; the owner waives a window's in-flight floor only for
+            // settlements announced so (ADR-0305 §5).
+            if first.contain(|| (self.wake)()).is_some() {
+                for slot in self.slots.iter().flatten() {
+                    slot.inbox.lock().announce();
+                }
+            }
         }
         first.resume();
         outcome

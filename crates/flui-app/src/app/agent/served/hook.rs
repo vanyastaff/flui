@@ -4,7 +4,7 @@
 use std::fmt;
 use std::sync::Arc;
 
-use flui_protocol::AppInfo;
+use flui_protocol::session::AppDescription;
 use flui_view::dev_agent::{AgentWindow, DevAgentHook};
 
 use super::super::Disconnect;
@@ -16,7 +16,7 @@ use super::transport::{self, Running};
 /// [module docs](self).
 pub(crate) struct DriverAgent {
     launch: Launch,
-    app: AppInfo,
+    app: AppDescription,
     /// `Some` when the launch asked to exit when the driver goes.
     disconnect: Option<Arc<Disconnect>>,
     /// Whether the loop journals its backend: the hello lists the `native` layer then.
@@ -31,7 +31,7 @@ impl DriverAgent {
     /// what a driver's disconnect does when the launch asked to exit on one.
     pub(crate) fn new(
         launch: Launch,
-        app: AppInfo,
+        app: AppDescription,
         disconnect: Arc<Disconnect>,
         records_native: bool,
     ) -> Self {

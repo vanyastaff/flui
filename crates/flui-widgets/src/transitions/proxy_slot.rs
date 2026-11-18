@@ -44,7 +44,7 @@ mod tests {
     use flui_animation::{
         AnimationController, AnimationStatus, StatusObserver, StatusSubscription,
     };
-    use flui_foundation::notifier::ListenerObserver;
+    use flui_foundation::ListenerObserver;
     use flui_foundation::{Listenable, ListenerCallback, Subscription};
 
     use super::*;

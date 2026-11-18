@@ -14,8 +14,9 @@ use flui_interaction::testing::input::KeyEventBuilder;
 use flui_platform::PlatformInput;
 use flui_protocol::native_recording::Line as NativeLine;
 use flui_protocol::{
-    ActParams, ActionName, ActionSequence, AppInfo, InputParams, InputSource, Locator,
-    LogicalPoint, PointerAction, PointerButton, PointerDevice, Target, WindowId,
+    act::ActParams, geometry::LogicalPoint, input::ActionSequence, input::InputParams,
+    input::InputSource, input::PointerAction, input::PointerButton, input::PointerDevice,
+    locator::Locator, locator::Target, session::AppDescription, tree::WindowId, wire::ActionName,
 };
 use flui_runtime::agent::{Limits, Refused, Service, ServiceConfig, Session, Status};
 use flui_runtime::ui_runtime::{NativeForms, NativeLines};
@@ -496,7 +497,7 @@ fn record(
     now: Instant,
     waker: &Waker,
 ) -> Vec<Value> {
-    let params = flui_protocol::RecordParams::input(window);
+    let params = flui_protocol::record::RecordParams::input(window);
     session.receive(
         &line(&json!({ "id": 1, "method": "record.start", "params": params })),
         now,
@@ -562,7 +563,11 @@ fn a_recording_streams_the_runtimes_rows_to_its_connection_until_it_stops() {
             &header["clock"],
             &header["keep_text"]
         ),
-        (&json!(4), &json!("virtual"), &json!(false)),
+        (
+            &json!(flui_protocol::input_recording::FORMAT_VERSION),
+            &json!("virtual"),
+            &json!(false)
+        ),
         "{header}"
     );
     assert_eq!(
@@ -810,7 +815,7 @@ fn native_service() -> Service {
     Service::new(ServiceConfig {
         records_native: true,
         token: TOKEN.to_owned(),
-        app: AppInfo::new("counter", "headless"),
+        app: AppDescription::new("counter", "headless"),
         limits: Limits::default(),
         on_driver_gone: None,
     })

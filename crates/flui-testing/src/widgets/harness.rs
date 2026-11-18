@@ -95,6 +95,17 @@ pub fn mount_with_ime(root: impl View) -> Harness {
     )
 }
 
+/// [`mount_with_ime`], on a window that names `platform`, as
+/// [`mount_on`] names it.
+pub fn mount_with_ime_on(root: impl View, platform: flui_platform::TargetPlatform) -> Harness {
+    mount_in(
+        root,
+        HeadlessWindow::new(SURFACE.0, SURFACE.1)
+            .with_text_store_host()
+            .with_platform(platform),
+    )
+}
+
 /// [`mount`], with a window that offers a recording push-model text input:
 /// the UI runtime's presentation enables the IME and reports the
 /// candidate area ([`Harness::cursor_area_calls`],
@@ -142,7 +153,9 @@ impl Harness {
     }
 
     /// The primary selection this tree's widgets acquire through
-    /// `ctx.capability::<PrimarySelectionCapability>()`.
+    /// `ctx.capability::<PrimarySelectionCapability>()`, on a window whose
+    /// platform has one (Linux, through [`mount_on`]); elsewhere they are
+    /// refused it.
     pub fn primary_selection(&self) -> crate::ScriptedPrimarySelection {
         self.host.ui_runtime().primary_selection()
     }
@@ -339,7 +352,7 @@ impl Harness {
     /// # Panics
     ///
     /// As [`Self::store_host_calls`].
-    pub fn active_text_store(&self) -> Option<Rc<dyn flui_platform::TextStore>> {
+    pub fn active_text_store(&self) -> Option<Rc<dyn flui_platform::text_store::TextStore>> {
         self.store_host().focused_store()
     }
 

@@ -6,84 +6,108 @@ use std::path::Path;
 use std::rc::Rc;
 
 use flui_platform::SystemFailure;
-use flui_platform::capability::{Resolver, WindowRef};
+use flui_platform::capability::{CompletionSource, Resolver, WindowRef};
 use zbus::{OwnedVariant, Variant};
 
 use super::request::{self, Response};
-use super::{Dismissal, Portal, PortalError, parent_window};
+use super::{Dismissal, Interface, Portal, PortalError, with_parent};
 use crate::dialog::{
     DialogError, DialogHold, FileDialogBackend, FileFilter, OpenRequest, OpenResult, PickedFile,
-    Picks, SaveRequest, SaveResult,
+    Picks, SaveLocation, SaveRequest, SaveResult,
 };
 
-const FILE_CHOOSER: &str = "org.freedesktop.portal.FileChooser";
+/// `FileChooser` at the version a dialog needs: picking folders
+/// (`directory`) came with 3.
+const FILE_CHOOSER: Interface = Interface::new("org.freedesktop.portal.FileChooser", 1);
+const FOLDER_CHOOSER: Interface = Interface::new("org.freedesktop.portal.FileChooser", 3);
 
 /// [`FileDialogBackend`] over the desktop portal.
 pub(crate) struct PortalDialogs {
     portal: Rc<Portal>,
+    completions: CompletionSource,
 }
 
 impl PortalDialogs {
-    pub(crate) fn new(portal: Rc<Portal>) -> Self {
-        Self { portal }
+    pub(crate) fn new(portal: Rc<Portal>, completions: CompletionSource) -> Self {
+        Self {
+            portal,
+            completions,
+        }
     }
 
-    /// Show `method`'s dialog with `options` and answer `answer` with what
-    /// `picked` makes of the files the user chose. The dialog stays up while
-    /// the returned hold is held; dropping it closes the portal's request.
-    fn show<T>(
+    /// Show `method`'s dialog of `interface` with `options`, modal to
+    /// `window`, and answer `answer` with what `picked` makes of the files
+    /// the user chose and the rest of the portal's results. The dialog stays
+    /// up while the returned hold is held; dropping it closes the portal's
+    /// request. The request holds the window's parent until it ends.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one dialog's parts, each its own type; a struct would only rename them"
+    )]
+    fn show<T, P>(
         &self,
         window: &WindowRef,
+        interface: Interface,
         method: &'static str,
         title: Option<&str>,
         mut options: Options,
         answer: Resolver<Result<Option<T>, DialogError>>,
-        picked: fn(Picks) -> Result<T, DialogError>,
+        picked: P,
     ) -> DialogHold
     where
         T: Send + 'static,
+        P: FnOnce(Picks, &Results) -> Result<T, DialogError> + Send + 'static,
     {
         if let Err(error) = self.portal.start() {
             let _ = answer.resolve(Err(dialog_error(error)));
             return DialogHold::new(());
         }
-        let token = self.portal.token();
-        options.insert("handle_token", Variant::from(token.clone()));
-        let body = (
-            parent_window(window),
-            title.unwrap_or_default().to_owned(),
-            options,
-        );
+        let title = title.unwrap_or_default().to_owned();
         let (hold, dismissal) = Dismissal::pair();
-        self.portal.spawn(move |bus| async move {
-            let result = async {
-                let connection = bus.connection().await?;
-                request::call(
-                    &connection,
-                    FILE_CHOOSER,
-                    method,
-                    &token,
-                    &body,
-                    Some(&dismissal),
-                )
-                .await
+        let portal = Rc::clone(&self.portal);
+        with_parent(Some(window), &self.completions, move |parent| {
+            if dismissal.is_dismissed() {
+                // The dialog ended (its caller, its window) before its
+                // window was named: nothing is shown.
+                return;
             }
-            .await;
-            let answered = match result {
-                Ok(Response::Answered(results)) => picks(&results).and_then(picked).map(Some),
-                Ok(Response::Cancelled) => Ok(None),
-                Ok(Response::Ended(code)) => Err(SystemFailure::PortalResponse(code).into()),
-                // Nobody waits: the resolver drops unanswered.
-                Ok(Response::Dismissed) => return,
-                Err(error) => Err(dialog_error(error)),
-            };
-            let _ = answer.resolve(answered);
+            let token = portal.token();
+            options.insert("handle_token", Variant::from(token.clone()));
+            let body = (parent.as_str().to_owned(), title, options);
+            portal.spawn(move |bus| async move {
+                let result = async {
+                    let desktop = bus.desktop().await?;
+                    request::call(&desktop, interface, method, &token, &body, Some(&dismissal))
+                        .await
+                }
+                .await;
+                // The window's export lasts until the request ended.
+                drop(parent);
+                let answered = match result {
+                    Ok(Response::Answered(results)) => picks(&results)
+                        .and_then(|picks| picked(picks, &results))
+                        .map(Some),
+                    Ok(Response::Cancelled) => Ok(None),
+                    Ok(Response::Ended(code)) => Err(SystemFailure::PortalResponse(code).into()),
+                    // Nobody waits: the resolver drops unanswered.
+                    Ok(Response::Dismissed) => return,
+                    Err(error) => Err(dialog_error(error)),
+                };
+                let _ = answer.resolve(answered);
+            });
         });
         DialogHold::new(hold)
     }
 }
 
 type Options = HashMap<&'static str, Variant<'static>>;
+
+/// A dialog's results, by name.
+type Results = HashMap<String, OwnedVariant>;
+
+/// One filter as the portal's `(sa(us))` carries it: the name, then each
+/// pattern with its kind, `0` for a glob and `1` for a MIME type.
+type PortalFilter = (String, Vec<(u32, String)>);
 
 fn dialog_error(error: PortalError) -> DialogError {
     match error {
@@ -96,7 +120,7 @@ fn dialog_error(error: PortalError) -> DialogError {
 /// least: one that names none, or holds something other than a list of
 /// strings, is outside the portal's contract, and a URI that names no local
 /// file fails the whole answer, since the handle hands out paths only.
-fn picks(results: &HashMap<String, OwnedVariant>) -> Result<Picks, DialogError> {
+fn picks(results: &Results) -> Result<Picks, DialogError> {
     let malformed = DialogError::Failed(SystemFailure::MalformedAnswer);
     let uris = results
         .get("uris")
@@ -115,50 +139,57 @@ fn picks(results: &HashMap<String, OwnedVariant>) -> Result<Picks, DialogError> 
     Picks::try_new(files).ok_or(malformed)
 }
 
-/// The one file a save dialog answers; several are outside the portal's
-/// contract.
-fn one_file(picks: Picks) -> Result<PickedFile, DialogError> {
+/// Where a save dialog answers: its one file, and the filter the portal
+/// reports as selected (`current_filter`), found in `names` by its name,
+/// which a request holds once. Several files are outside the portal's
+/// contract; a selected filter the request did not offer, or one the portal
+/// does not report, is no filter, since the file the user chose stands
+/// without it.
+fn save_location(
+    picks: Picks,
+    results: &Results,
+    names: &[String],
+) -> Result<SaveLocation, DialogError> {
     if picks.len() > 1 {
         return Err(SystemFailure::MalformedAnswer.into());
     }
-    Ok(picks.first().clone())
+    let selected = results
+        .get("current_filter")
+        .and_then(|filter| PortalFilter::try_from(filter.clone()).ok())
+        .and_then(|(name, _)| names.iter().position(|offered| *offered == name));
+    Ok(SaveLocation::new(picks.first().clone(), selected))
 }
 
-/// The portal's `a(sa(us))` filters: `0` with a glob, `1` with a MIME type.
-fn filters(filters: &[FileFilter]) -> Vec<(String, Vec<(u32, String)>)> {
-    filters
-        .iter()
-        .map(|filter| {
-            let globs = filter
-                .extensions()
-                .iter()
-                .map(|extension| (0, format!("*.{}", literal_glob(extension))));
-            let types = filter
-                .mime_types()
-                .iter()
-                .map(|mime_type| (1, mime_type.clone()));
-            (
-                filter.name().to_owned(),
-                globs.chain(types).collect::<Vec<(u32, String)>>(),
-            )
-        })
-        .collect::<Vec<(String, Vec<(u32, String)>)>>()
-}
-
-/// `text` as a glob that matches only itself: each glob character in a
-/// bracket of its own, which every glob dialect reads as that character.
-fn literal_glob(text: &str) -> String {
-    let mut glob = String::with_capacity(text.len());
-    for character in text.chars() {
-        if matches!(character, '*' | '?' | '[' | ']') {
-            glob.push('[');
-            glob.push(character);
-            glob.push(']');
-        } else {
-            glob.push(character);
+/// One filter as the portal takes it: each extension as a glob in lower
+/// case and one in upper case (`*.png`, `*.PNG`), then each MIME type.
+///
+/// The portal's backends match a glob case-sensitively, while the contract,
+/// as Windows and macOS, ignores case. A bracket per letter (`*.[pP][nN][gG]`)
+/// would match every case, but a save dialog derives the extension it
+/// appends from the selected glob and would meet the brackets, so the portal
+/// gets the two plain spellings GTK applications send, and a name in mixed
+/// case is not matched on a case-sensitive file system. A checked extension
+/// holds no glob character, so each spelling stands for itself; one with no
+/// letter is sent once.
+fn portal_filter(filter: &FileFilter) -> PortalFilter {
+    let mut patterns =
+        Vec::with_capacity(filter.extensions().len() * 2 + filter.mime_types().len());
+    for extension in filter.extensions() {
+        // Extensions are kept in lower case.
+        let upper = extension.to_ascii_uppercase();
+        let has_letter = upper != *extension;
+        patterns.push((0, format!("*.{extension}")));
+        if has_letter {
+            patterns.push((0, format!("*.{upper}")));
         }
     }
-    glob
+    patterns.extend(
+        filter
+            .mime_types()
+            .iter()
+            .map(|mime_type| (1, mime_type.clone())),
+    );
+    (filter.name().to_owned(), patterns)
 }
 
 /// A path as the portal's `ay` options take it: its bytes and a NUL.
@@ -180,8 +211,15 @@ fn common(
     if let Some(directory) = directory {
         options.insert("current_folder", Variant::from(bytes(directory)));
     }
-    if !filter_list.is_empty() {
-        options.insert("filters", Variant::from(filters(filter_list)));
+    // The first filter is the selected one: said in `current_filter` as well
+    // as by its place, since a backend need not select the first.
+    if let Some(first) = filter_list.first() {
+        let filters = filter_list
+            .iter()
+            .map(portal_filter)
+            .collect::<Vec<PortalFilter>>();
+        options.insert("current_filter", Variant::from(portal_filter(first)));
+        options.insert("filters", Variant::from(filters));
     }
 }
 
@@ -201,13 +239,19 @@ impl FileDialogBackend for PortalDialogs {
             request.directory.as_deref(),
             &request.filters,
         );
+        let interface = if request.picks_folders() {
+            FOLDER_CHOOSER
+        } else {
+            FILE_CHOOSER
+        };
         self.show(
             window,
+            interface,
             "OpenFile",
             request.title.as_deref(),
             options,
             answer,
-            Ok,
+            |picks, _| Ok(picks),
         )
     }
 
@@ -227,41 +271,60 @@ impl FileDialogBackend for PortalDialogs {
             request.directory.as_deref(),
             &request.filters,
         );
+        let names = request
+            .filters
+            .iter()
+            .map(|filter| filter.name().to_owned())
+            .collect::<Vec<String>>();
         self.show(
             window,
+            FILE_CHOOSER,
             "SaveFile",
             request.title.as_deref(),
             options,
             answer,
-            one_file,
+            move |picks, results| save_location(picks, results, &names),
         )
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::filters;
+    use super::portal_filter;
     use crate::dialog::FileFilter;
 
     #[test]
     fn a_filter_becomes_globs_then_mime_types() {
         let filter = FileFilter::new("Images")
             .with_extension("png")
-            .with_extension("jpg")
-            .with_extension("a[1]?")
+            .with_extension("JPG")
+            .with_extension("tar.gz")
+            .with_extension("c++")
+            .with_extension("7z")
+            .with_extension("123")
             .with_mime_type("image/webp");
         assert_eq!(
-            filters(&[filter]),
-            [(
+            portal_filter(&filter),
+            (
                 "Images".to_owned(),
                 vec![
+                    // Lower and upper case, as GTK applications send them:
+                    // plain globs a save dialog can append an extension from.
                     (0, "*.png".to_owned()),
+                    (0, "*.PNG".to_owned()),
                     (0, "*.jpg".to_owned()),
-                    // Glob characters in an extension match only themselves.
-                    (0, "*.a[[]1[]][?]".to_owned()),
+                    (0, "*.JPG".to_owned()),
+                    (0, "*.tar.gz".to_owned()),
+                    (0, "*.TAR.GZ".to_owned()),
+                    (0, "*.c++".to_owned()),
+                    (0, "*.C++".to_owned()),
+                    (0, "*.7z".to_owned()),
+                    (0, "*.7Z".to_owned()),
+                    // No letter: one spelling.
+                    (0, "*.123".to_owned()),
                     (1, "image/webp".to_owned()),
                 ]
-            )]
+            )
         );
     }
 }

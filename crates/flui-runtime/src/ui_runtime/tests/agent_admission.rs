@@ -4,7 +4,9 @@ use super::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use flui_protocol::method;
-use flui_protocol::{ActParams, EventKind, HandleKind, MotionParams, ReadParams};
+use flui_protocol::{
+    act::ActParams, error::HandleKind, events::EventKind, motion::MotionParams, tree::ReadParams,
+};
 use parking_lot::Mutex;
 
 fn run_child(action: bool) {
@@ -147,7 +149,7 @@ fn agent_port_admission_matrix() {
 }
 
 fn agent_motion_sets_rate_and_steps_a_paused_window() {
-    use flui_protocol::MotionRequest;
+    use flui_protocol::motion::MotionRequest;
     let runtime = super::super::tests::new_runtime(Arc::new(|| {})).expect("runtime");
     let window = runtime
         .dev_agent_window(runtime.presentation_id())
@@ -225,7 +227,9 @@ fn a_closed_port_admits_no_subscription() {
         "closed, though the in-flight call still holds the port"
     );
     let refused = in_flight
-        .subscribe(vec![flui_protocol::EventFilter::new(EventKind::Frame)])
+        .subscribe(vec![flui_protocol::events::EventFilter::new(
+            EventKind::Frame,
+        )])
         .expect_err("a closed port admits no subscription");
     assert_eq!(
         (refused.code, refused.kind),

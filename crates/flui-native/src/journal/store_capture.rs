@@ -18,9 +18,9 @@ use std::cell::{Cell, RefCell};
 use std::num::NonZeroU64;
 use std::rc::Rc;
 
+use flui_foundation::IdMint;
 use flui_foundation::geometry::{Bounds, Point};
 use flui_foundation::panic::FirstPanic;
-use flui_foundation::sequence::IdMint;
 use flui_platform::text_store::{
     CommitGate, Composition, CompositionEnd, LockGrant, LockKind, LockOutcome, LockTiming,
     OwnerCalls, PointMode, RangeRect, Selection, TextChange, TextStore, TextStoreChange,

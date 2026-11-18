@@ -14,6 +14,7 @@ use rustc_hash::FxHashMap;
 use flui_painting::BlendMode;
 
 use crate::pipeline_cache::{CoverageShaderSources, select_coverage_blend};
+use crate::pipeline_device::PipelineDevice;
 use crate::pipeline_set::{QuadPipelineSpec, create_unit_quad_pipeline};
 
 /// Create bind group layout for gradient stops: the `rgba32float` texture
@@ -139,16 +140,19 @@ pub(crate) struct GradientPipelines {
     isolation_bind_group_layout: Option<wgpu::BindGroupLayout>,
     isolation_viewport_layout: wgpu::BindGroupLayout,
     isolation_stops_layout: wgpu::BindGroupLayout,
+    /// The driver's pipeline cache every gradient pipeline is created through.
+    driver_cache: Option<wgpu::PipelineCache>,
 }
 
 impl GradientPipelines {
     /// Build the shared layout; the pipelines themselves wait for a draw.
     pub(crate) fn new(
-        device: &wgpu::Device,
+        gpu: PipelineDevice<'_>,
         surface_format: wgpu::TextureFormat,
         viewport_bind_group_layout: &wgpu::BindGroupLayout,
         gradient_bind_group_layout: &wgpu::BindGroupLayout,
     ) -> Self {
+        let device = gpu.device();
         Self {
             layout: create_gradient_pipeline_layout(
                 device,
@@ -165,6 +169,7 @@ impl GradientPipelines {
             isolation_bind_group_layout: None,
             isolation_viewport_layout: viewport_bind_group_layout.clone(),
             isolation_stops_layout: gradient_bind_group_layout.clone(),
+            driver_cache: gpu.owned_cache(),
         }
     }
 
@@ -234,7 +239,7 @@ impl GradientPipelines {
         }
         let targets = crate::pipeline_cache::isolation_targets(self.surface_format);
         let pipeline = crate::pipeline_set::create_unit_quad_pipeline_with_targets(
-            device,
+            PipelineDevice::new(device, self.driver_cache.as_ref()),
             self.isolation_layout
                 .as_ref()
                 .expect("BUG: isolation layout created above"),
@@ -273,7 +278,7 @@ impl GradientPipelines {
         );
         let kind_label = kind.label();
         create_unit_quad_pipeline(
-            device,
+            PipelineDevice::new(device, self.driver_cache.as_ref()),
             self.surface_format,
             &self.layout,
             &QuadPipelineSpec {
@@ -290,10 +295,11 @@ impl GradientPipelines {
 
 /// Create shadow rendering pipeline
 pub(crate) fn create_shadow_pipeline(
-    device: &wgpu::Device,
+    gpu: PipelineDevice<'_>,
     surface_format: wgpu::TextureFormat,
     viewport_bind_group_layout: &wgpu::BindGroupLayout,
 ) -> wgpu::RenderPipeline {
+    let device = gpu.device();
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("Shadow Pipeline Layout"),
         bind_group_layouts: &[Some(viewport_bind_group_layout)],
@@ -301,7 +307,7 @@ pub(crate) fn create_shadow_pipeline(
     });
 
     create_unit_quad_pipeline(
-        device,
+        gpu,
         surface_format,
         &pipeline_layout,
         &QuadPipelineSpec {

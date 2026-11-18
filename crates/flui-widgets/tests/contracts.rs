@@ -418,6 +418,7 @@ fn pointer_and_gesture_recognition() {
             ("touchpad_pan::a_horizontal_pan_beside_a_vertical_list_goes_to_the_drag", crate::touchpad_pan::a_horizontal_pan_beside_a_vertical_list_goes_to_the_drag),
             ("touchpad_pan::a_list_with_nowhere_to_go_leaves_the_pan_to_the_drag", crate::touchpad_pan::a_list_with_nowhere_to_go_leaves_the_pan_to_the_drag),
             ("touchpad_pan::a_plain_list_scrolls_with_a_touchpad_pan_as_before", crate::touchpad_pan::a_plain_list_scrolls_with_a_touchpad_pan_as_before),
+            ("touchpad_pan::a_touchpad_swipe_is_a_gesture_and_no_scroll", crate::touchpad_pan::a_touchpad_swipe_is_a_gesture_and_no_scroll),
             ("listener::presentation_resampling_uses_the_owner_frame_clock", crate::listener::presentation_resampling_uses_the_owner_frame_clock as fn()),
             ("gesture_detector::pan_claim_region_keeps_the_pan_from_an_enclosing_drag", crate::gesture_detector::pan_claim_region_keeps_the_pan_from_an_enclosing_drag),
             ("gesture_detector::recognizers_follow_a_changed_arena_scope", crate::gesture_detector::recognizers_follow_a_changed_arena_scope),
@@ -2043,6 +2044,14 @@ fn scrollbar() {
             (
                 "scrollbar::the_track_pages_and_the_wheel_scrolls_over_the_bar",
                 crate::scrollbar::the_track_pages_and_the_wheel_scrolls_over_the_bar,
+            ),
+            (
+                "scrollbar::a_track_tap_jumps_to_the_spot_where_the_system_asks",
+                crate::scrollbar::a_track_tap_jumps_to_the_spot_where_the_system_asks,
+            ),
+            (
+                "scrollbar::an_unset_thumb_follows_the_systems_scroll_bar_visibility",
+                crate::scrollbar::an_unset_thumb_follows_the_systems_scroll_bar_visibility,
             ),
             (
                 "scrollbar::the_bar_fades_in_while_scrolling_and_out_after_it_stops",

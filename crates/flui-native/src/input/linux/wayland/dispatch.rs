@@ -1,9 +1,14 @@
 //! `SeatInput`: the Wayland loop's input hook over `wayland-client`.
 //!
-//! It binds `wl_seat`, `zwp_tablet_manager_v2`, `zwp_pointer_gestures_v1`
-//! and `wp_cursor_shape_manager_v1` as the compositor announces them, makes
-//! each seat's devices as its capabilities say, and implements the dispatch
-//! of their objects on the owner's queue. A dispatch only records: it copies
+//! It binds `wl_seat`, `zwp_tablet_manager_v2`, `zwp_pointer_gestures_v1`,
+//! `wp_cursor_shape_manager_v1`, and the `zwp_pointer_constraints_v1` and
+//! `zwp_relative_pointer_manager_v1` a window's grab is made of, as the
+//! compositor announces them, makes each seat's devices as its capabilities
+//! say, and implements the dispatch of their objects on the owner's queue. A
+//! window holds the pointer of the seat whose keyboard is in it, until the
+//! keyboard leaves, the window lets go, or the compositor ends the
+//! constraint; a locked pointer shows no cursor, and its relative motion is
+//! the window's raw motion. A dispatch only records: it copies
 //! the event into a wire event ([`super::wire`]) or a keyboard event. On each
 //! turn the loop asks it to deliver ([`WaylandInput::deliver`]): the wire
 //! events become owned input through the one assembly, the keys through the
@@ -23,20 +28,20 @@ use std::sync::{Arc, OnceLock, Weak};
 use std::time::Duration;
 
 use cursor_icon::CursorIcon;
+use flui_foundation::IdMint;
 use flui_foundation::panic::FirstPanic;
-use flui_foundation::sequence::IdMint;
 use flui_platform::input_capabilities::InputCapabilities;
 use flui_platform::keyboard::{KeyEvent, KeyPress, KeyState};
 use flui_platform::pointer::{PenTool, PointerEvent, PointerKind};
 use flui_platform::{
-    CursorError, EventTime, PlatformInput, Unsupported, UnsupportedReason, WindowId,
+    Cursor, CursorError, CursorGrab, EventTime, PlatformFailure, PlatformInput, Unsupported,
+    UnsupportedReason, WindowId,
 };
-use wayland_client::protocol::wl_buffer::WlBuffer;
 use wayland_client::protocol::wl_keyboard::{self, KeymapFormat, WlKeyboard};
 use wayland_client::protocol::wl_pointer::{self, WlPointer};
 use wayland_client::protocol::wl_registry::WlRegistry;
 use wayland_client::protocol::wl_seat::{self, Capability, WlSeat};
-use wayland_client::protocol::wl_surface::{self, WlSurface};
+use wayland_client::protocol::wl_surface::WlSurface;
 use wayland_client::protocol::wl_touch::{self, WlTouch};
 use wayland_client::{Connection, Dispatch, Proxy, QueueHandle, WEnum, event_created_child};
 use wayland_cursor::CursorTheme;
@@ -46,12 +51,20 @@ use wayland_protocols::wp::cursor_shape::v1::client::wp_cursor_shape_device_v1::
 use wayland_protocols::wp::cursor_shape::v1::client::wp_cursor_shape_manager_v1::{
     self, WpCursorShapeManagerV1,
 };
+use wayland_protocols::wp::pointer_constraints::zv1::client::zwp_pointer_constraints_v1::ZwpPointerConstraintsV1;
+use wayland_protocols::wp::pointer_gestures::zv1::client::zwp_pointer_gesture_hold_v1::{
+    self, ZwpPointerGestureHoldV1,
+};
 use wayland_protocols::wp::pointer_gestures::zv1::client::zwp_pointer_gesture_pinch_v1::{
     self, ZwpPointerGesturePinchV1,
+};
+use wayland_protocols::wp::pointer_gestures::zv1::client::zwp_pointer_gesture_swipe_v1::{
+    self, ZwpPointerGestureSwipeV1,
 };
 use wayland_protocols::wp::pointer_gestures::zv1::client::zwp_pointer_gestures_v1::{
     self, ZwpPointerGesturesV1,
 };
+use wayland_protocols::wp::relative_pointer::zv1::client::zwp_relative_pointer_manager_v1::ZwpRelativePointerManagerV1;
 use wayland_protocols::wp::tablet::zv2::client::zwp_tablet_manager_v2::{self, ZwpTabletManagerV2};
 use wayland_protocols::wp::tablet::zv2::client::zwp_tablet_pad_group_v2::{
     self, ZwpTabletPadGroupV2,
@@ -68,15 +81,14 @@ use wayland_protocols::wp::tablet::zv2::client::zwp_tablet_tool_v2::{
     self, ButtonState, Type as ToolType, ZwpTabletToolV2,
 };
 use wayland_protocols::wp::tablet::zv2::client::zwp_tablet_v2::{self, ZwpTabletV2};
-use wayland_protocols::wp::viewporter::client::wp_viewport::WpViewport;
 use web_time::Instant;
 
-use super::cursor::{self, SurfaceRequest};
+use super::cursor;
 use super::keyboards::Keyboards;
 use super::repeat::RepeatSettings;
 use super::wire::{
-    Axis, AxisSource, PinchWire, PointerWire, Routed, SeatAssembly, SeatEvent, SeatKey, SeatWire,
-    ToolWire, TouchWire, WireTime,
+    Axis, AxisSource, HoldWire, PinchWire, PointerWire, Routed, SeatAssembly, SeatEvent, SeatKey,
+    SeatWire, SwipeWire, ToolWire, TouchWire, WireTime,
 };
 use crate::input::assembly::{NativeClock, NativeDevice, NativeSurface};
 use crate::input::availability::{self, WaylandInputGlobals};
@@ -87,22 +99,35 @@ use crate::owner::layout_callback::LayoutCallback;
 use crate::owner::linux::wayland::ShownCursor;
 use crate::owner::linux::wayland::user_input::{MAX_SEATS, UserInput};
 use crate::owner::linux::wayland::{
-    CursorGlobals, FramePointer, LastInput, SeatText, SeatWindow, TextRecorder, TextWire,
-    WaylandInput, WaylandState,
+    CursorGlobals, FramePointer, LastInput, PointerOffer, SeatText, SeatWindow, TextRecorder,
+    TextWire, WaylandInput, WaylandState,
 };
 use crate::owner::panic_boundary::contain_owner_callback;
 use crate::owner::slot::OwnerCell;
 use crate::owner::window_delivery::WindowDelivery;
+
+mod cursors;
+mod grab;
+
+use cursors::{ImageBuffer, ThemeSurface, show_cursor, show_frame_cursor};
+use grab::{Hold, end_hold, hold, let_go_of_pointer, let_go_on_leave};
 
 /// The newest `wl_seat` the input understands: version 9 says which way a
 /// scroll turned relative to the fingers.
 const SEAT_VERSION: u32 = 9;
 /// `zwp_tablet_manager_v2` version 1: no pad dials.
 const TABLET_VERSION: u32 = 1;
-/// `zwp_pointer_gestures_v1` version 1: pinches (and swipes, unasked).
-const GESTURES_VERSION: u32 = 1;
+/// `zwp_pointer_gestures_v1` version 3: pinches, swipes and holds.
+const GESTURES_VERSION: u32 = 3;
+/// The `zwp_pointer_gestures_v1` version from which fingers resting on a
+/// touchpad are a hold.
+const HOLD_VERSION: u32 = 3;
 /// `wp_cursor_shape_manager_v1` version 1.
 const CURSOR_SHAPE_VERSION: u32 = 1;
+/// `zwp_pointer_constraints_v1` has one version.
+const CONSTRAINTS_VERSION: u32 = 1;
+/// `zwp_relative_pointer_manager_v1` has one version.
+const RELATIVE_POINTER_VERSION: u32 = 1;
 /// The `wl_pointer` version from which events come in frames.
 const POINTER_FRAMES: u32 = 5;
 /// The tablet tools a seat keeps: a pen, its eraser, an airbrush and a lens
@@ -177,6 +202,10 @@ enum Wire {
         seat: SeatKey,
         settings: RepeatSettings,
     },
+    /// What the window `id` holds of the pointer changed: the compositor
+    /// carried out or ended its constraint, or the input let it go; the
+    /// window reads its snapshot again.
+    Grab(WindowId),
 }
 
 /// Record `wire` for the next delivery. A keymap replaces one its seat's
@@ -204,17 +233,20 @@ struct Attached {
     id: WindowId,
     surface: WlSurface,
     delivery: Arc<WindowDelivery>,
-    cursor: CursorIcon,
+    cursor: Cursor,
     scale: WindowScale,
     /// The frame it draws itself, whose surfaces the pointer's events go to.
     frame: Rc<dyn FramePointer>,
+    /// The constraint it asked for on a seat's pointer, until it lets go,
+    /// the keyboard leaves it, or the compositor ends it.
+    hold: Option<Hold>,
 }
 
 /// A pointer's objects.
 struct PointerObjects {
     pointer: WlPointer,
     device: NativeDevice,
-    pinch: Option<ZwpPointerGesturePinchV1>,
+    gestures: Option<GestureObjects>,
     shape: Option<WpCursorShapeDeviceV1>,
     /// The surface a theme cursor is drawn on, made at its first.
     cursor_surface: Option<ThemeSurface>,
@@ -225,6 +257,9 @@ struct PointerObjects {
     focus_surface: Option<WlSurface>,
     /// The window frame it is over instead, which its events go to.
     frame_focus: Option<FrameFocus>,
+    /// The compositor holds it in place for a window (`locked`): it shows no
+    /// cursor, and its motion is the relative pointer's.
+    locked: bool,
 }
 
 /// A pointer over a surface of a window's own frame.
@@ -270,9 +305,13 @@ struct Objects {
     tablet: Option<(u32, ZwpTabletManagerV2)>,
     gestures: Option<(u32, ZwpPointerGesturesV1)>,
     shapes: Option<(u32, WpCursorShapeManagerV1)>,
-    /// What theme cursors are drawn from: the loop's `wl_shm` and
+    /// What theme cursors and images are drawn from: the loop's `wl_shm` and
     /// `wl_compositor`, where the compositor has shared memory.
     cursor_source: Option<CursorGlobals>,
+    /// What a window's grab is made with, and the queue its objects go on.
+    constraints: Option<(u32, ZwpPointerConstraintsV1, QueueHandle<WaylandState>)>,
+    /// What a locked pointer's motion is reported by.
+    relative: Option<(u32, ZwpRelativePointerManagerV1)>,
 }
 
 impl Objects {
@@ -285,9 +324,21 @@ impl Objects {
             self.gestures.is_some()
         } else if interface == WpCursorShapeManagerV1::interface().name {
             self.shapes.is_some()
+        } else if interface == ZwpPointerConstraintsV1::interface().name {
+            self.constraints.is_some()
+        } else if interface == ZwpRelativePointerManagerV1::interface().name {
+            self.relative.is_some()
         } else {
             false
         }
+    }
+
+    /// The pointer object `pointer` is.
+    fn pointer_mut(&mut self, pointer: &WlPointer) -> Option<&mut PointerObjects> {
+        self.seats
+            .iter_mut()
+            .filter_map(|seat| seat.pointer.as_mut())
+            .find(|held| held.pointer == *pointer)
     }
 }
 
@@ -327,6 +378,8 @@ struct Shared {
     seat_keys: OwnerCell<IdMint<NonZeroU64>>,
     /// The cursor theme loaded at each buffer scale a cursor was drawn at.
     themes: OwnerCell<Vec<(NonZeroU32, CursorTheme)>>,
+    /// The last application image shown as a cursor.
+    image: OwnerCell<Option<ImageBuffer>>,
     /// The cursor last shown, for a test.
     #[cfg(any(test, feature = "testing"))]
     shown: OwnerCell<Option<ShownCursor>>,
@@ -511,11 +564,48 @@ impl Shared {
             .flatten()
     }
 
+    /// The delivery of the window `id`, while it is attached.
+    fn delivery_of(&self, id: WindowId) -> Option<Arc<WindowDelivery>> {
+        self.windows
+            .with(|windows| {
+                windows
+                    .iter()
+                    .find(|window| window.id == id)
+                    .map(|window| Arc::clone(&window.delivery))
+            })
+            .flatten()
+    }
+
+    /// Whether the compositor holds the pointer in place for the window
+    /// `id` now.
+    fn holds_locked(&self, id: WindowId) -> bool {
+        self.windows
+            .with(|windows| {
+                windows
+                    .iter()
+                    .find(|window| window.id == id)
+                    .and_then(|window| window.hold.as_ref())
+                    .is_some_and(|hold| hold.grab() == CursorGrab::Locked)
+            })
+            .unwrap_or(false)
+    }
+
+    /// Whether the compositor holds `pointer` in place for a window.
+    fn is_locked(&self, pointer: &WlPointer) -> bool {
+        self.objects
+            .with(|objects| objects.pointer_mut(pointer).is_some_and(|held| held.locked))
+            .unwrap_or(false)
+    }
+
     fn globals(&self) -> WaylandInputGlobals {
         self.objects
             .with(|objects| WaylandInputGlobals {
                 tablet: objects.tablet.is_some(),
                 pointer_gestures: objects.gestures.is_some(),
+                pointer_gesture_hold: objects
+                    .gestures
+                    .as_ref()
+                    .is_some_and(|(_, manager)| manager.version() >= HOLD_VERSION),
             })
             .unwrap_or_default()
     }
@@ -567,6 +657,7 @@ impl SeatInput {
             labels: OwnerCell::new(),
             seat_keys: OwnerCell::new(),
             themes: OwnerCell::new(),
+            image: OwnerCell::new(),
             #[cfg(any(test, feature = "testing"))]
             shown: OwnerCell::new(),
             last_input,
@@ -985,8 +1076,9 @@ impl Delivering {
                 self.keyboards.configure(seat, settings);
                 Vec::new()
             }
-            // Assembled elsewhere, and delivered to the text inputs.
-            Wire::Seat(_) | Wire::Text(_) => Vec::new(),
+            // Assembled elsewhere, delivered to the text inputs, or a window's
+            // snapshot to read again.
+            Wire::Seat(_) | Wire::Text(_) | Wire::Grab(_) => Vec::new(),
         }
     }
 
@@ -1087,8 +1179,8 @@ impl WaylandInput for SeatInput {
                     .iter_mut()
                     .filter_map(|seat| seat.pointer.as_mut())
                 {
-                    if pointer.pinch.is_none() {
-                        pointer.pinch = pinch(&manager, pointer, queue, &self.shared);
+                    if pointer.gestures.is_none() {
+                        pointer.gestures = gesture_objects(&manager, pointer, queue, &self.shared);
                     }
                 }
                 objects.gestures = Some((name, manager));
@@ -1111,6 +1203,26 @@ impl WaylandInput for SeatInput {
                     }
                 }
                 objects.shapes = Some((name, manager));
+            });
+        } else if interface == ZwpPointerConstraintsV1::interface().name {
+            let manager = registry.bind::<ZwpPointerConstraintsV1, (), WaylandState>(
+                name,
+                version.min(CONSTRAINTS_VERSION),
+                queue,
+                (),
+            );
+            self.shared.objects.with(|objects| {
+                objects.constraints = Some((name, manager, queue.clone()));
+            });
+        } else if interface == ZwpRelativePointerManagerV1::interface().name {
+            let manager = registry.bind::<ZwpRelativePointerManagerV1, (), WaylandState>(
+                name,
+                version.min(RELATIVE_POINTER_VERSION),
+                queue,
+                (),
+            );
+            self.shared.objects.with(|objects| {
+                objects.relative = Some((name, manager));
             });
         }
     }
@@ -1140,6 +1252,22 @@ impl WaylandInput for SeatInput {
                     .is_some_and(|(held, _)| *held == name)
                 {
                     objects.shapes = None;
+                }
+                // A grab made with a manager that went keeps its objects
+                // until it ends; no new one is made.
+                if objects
+                    .constraints
+                    .as_ref()
+                    .is_some_and(|(held, _, _)| *held == name)
+                {
+                    objects.constraints = None;
+                }
+                if objects
+                    .relative
+                    .as_ref()
+                    .is_some_and(|(held, _)| *held == name)
+                {
+                    objects.relative = None;
                 }
                 let index = objects.seats.iter().position(|seat| seat.name == name)?;
                 Some(objects.seats.remove(index))
@@ -1177,6 +1305,12 @@ impl WaylandInput for SeatInput {
                     failure.contain(|| self.texts.deliver(text));
                     continue;
                 }
+                if let Wire::Grab(id) = wire {
+                    if let Some(delivery) = self.shared.delivery_of(id) {
+                        failure.contain(|| delivery.publish_state());
+                    }
+                    continue;
+                }
                 let inputs = self.assemble(wire);
                 self.refresh_capabilities(&mut failure);
                 self.hand_out(inputs, &mut failure);
@@ -1212,16 +1346,17 @@ impl WaylandInput for SeatInput {
                 id: window.id,
                 surface: window.surface,
                 delivery: window.delivery,
-                cursor: CursorIcon::Default,
+                cursor: Cursor::Icon(CursorIcon::Default),
                 scale: window.scale,
                 frame: window.frame,
+                hold: None,
             });
         });
     }
 
     fn detach(&self, id: WindowId) {
         self.texts.detach(id);
-        let removed = self
+        let mut removed = self
             .shared
             .windows
             .with(|windows| {
@@ -1229,8 +1364,12 @@ impl WaylandInput for SeatInput {
                 Some(windows.remove(index))
             })
             .flatten();
-        if removed.is_none() {
+        let Some(hold) = removed.as_mut().map(|window| window.hold.take()) else {
             return;
+        };
+        // A closed window holds no pointer.
+        if let Some(hold) = hold {
+            end_hold(&self.shared, id, hold);
         }
         let surface = surface_key(id);
         self.shared.objects.with(|objects| {
@@ -1263,51 +1402,73 @@ impl WaylandInput for SeatInput {
         contain_owner_callback(|| drop(removed));
     }
 
-    fn set_cursor(&self, id: WindowId, cursor: CursorIcon) -> Result<(), CursorError> {
-        let known = self
+    /// A system cursor needs `cursor-shape` or shared memory for the theme,
+    /// an image shared memory for its buffer; hiding the cursor needs
+    /// neither. A cursor the compositor cannot be given is refused and not
+    /// kept.
+    fn set_cursor(&self, id: WindowId, cursor: &Cursor) -> Result<(), CursorError> {
+        let showable = self
             .shared
-            .windows
-            .with(|windows| {
-                windows
-                    .iter_mut()
-                    .find(|held| held.id == id)
-                    .map(|held| held.cursor = cursor)
-                    .is_some()
+            .objects
+            .with(|objects| match cursor {
+                Cursor::Icon(_) => objects.shapes.is_some() || objects.cursor_source.is_some(),
+                Cursor::Image(_) => objects.cursor_source.is_some(),
+                Cursor::Hidden => true,
             })
             .unwrap_or(false);
-        if !known {
-            return Err(CursorError::failed(
-                "the window is not open on this Wayland loop".to_owned(),
-            ));
+        if !showable {
+            return Err(CursorError::Unsupported(Unsupported::new(
+                UnsupportedReason::NotOnThisDevice,
+            )));
         }
         let scale = self
             .shared
             .windows
             .with(|windows| {
+                windows.iter_mut().find(|held| held.id == id).map(|held| {
+                    held.cursor = cursor.clone();
+                    (held.scale)()
+                })
+            })
+            .flatten();
+        let Some(scale) = scale else {
+            return Err(CursorError::failed(
+                "the window is not open on this Wayland loop".to_owned(),
+            ));
+        };
+        let surface = surface_key(id);
+        self.shared
+            .objects
+            .with(|objects| show_cursor(&self.shared, objects, surface, cursor, scale));
+        Ok(())
+    }
+
+    fn hold_pointer(&self, id: WindowId, grab: CursorGrab) -> Result<(), PlatformFailure> {
+        hold(&self.shared, id, grab)
+    }
+
+    fn pointer_grab(&self, id: WindowId) -> CursorGrab {
+        self.shared
+            .windows
+            .with(|windows| {
                 windows
                     .iter()
                     .find(|held| held.id == id)
-                    .map(|held| (held.scale)())
+                    .and_then(|held| held.hold.as_ref())
+                    .map_or(CursorGrab::None, Hold::grab)
             })
-            .flatten()
-            .unwrap_or(1.0);
-        let surface = surface_key(id);
-        let showable = self
-            .shared
+            .unwrap_or(CursorGrab::None)
+    }
+
+    fn pointer_offer(&self) -> PointerOffer {
+        self.shared
             .objects
-            .with(|objects| {
-                show_cursor(&self.shared, objects, surface, cursor, scale);
-                objects.shapes.is_some() || objects.cursor_source.is_some()
+            .with(|objects| PointerOffer {
+                shared_memory: objects.cursor_source.is_some(),
+                constraints: objects.constraints.is_some(),
+                relative_motion: objects.relative.is_some(),
             })
-            .unwrap_or(false);
-        if showable {
-            Ok(())
-        } else {
-            // Neither `cursor-shape` nor `wl_shm` for a theme cursor.
-            Err(CursorError::Unsupported(Unsupported::new(
-                UnsupportedReason::NotOnThisDevice,
-            )))
-        }
+            .unwrap_or_default()
     }
 
     fn rescaled(&self, id: WindowId) {
@@ -1318,7 +1479,7 @@ impl WaylandInput for SeatInput {
                 windows
                     .iter()
                     .find(|held| held.id == id)
-                    .map(|held| (held.cursor, (held.scale)()))
+                    .map(|held| (held.cursor.clone(), (held.scale)()))
             })
             .flatten()
         else {
@@ -1326,9 +1487,10 @@ impl WaylandInput for SeatInput {
         };
         let surface = surface_key(id);
         self.shared.objects.with(|objects| {
-            // A `cursor-shape` cursor is the compositor's to scale.
-            if objects.shapes.is_none() {
-                show_cursor(&self.shared, objects, surface, cursor, scale);
+            // A `cursor-shape` cursor is the compositor's to scale; a theme
+            // cursor and an application's image are drawn for the scale.
+            if objects.shapes.is_none() || !matches!(cursor, Cursor::Icon(_)) {
+                show_cursor(&self.shared, objects, surface, &cursor, scale);
             }
         });
     }
@@ -1375,184 +1537,6 @@ impl WaylandInput for SeatInput {
     #[cfg(any(test, feature = "testing"))]
     fn shown_cursor(&self) -> Option<ShownCursor> {
         self.shared.shown.with(|shown| shown.clone()).flatten()
-    }
-}
-
-/// A pointer's theme-cursor surface.
-pub(crate) struct CursorSurface;
-
-/// The surface a pointer's theme cursor is drawn on, and its viewport, made
-/// the first time an image needs one ([`cursor::CursorBuffer::Viewported`]).
-struct ThemeSurface {
-    surface: WlSurface,
-    viewport: Option<WpViewport>,
-}
-
-impl ThemeSurface {
-    /// Put `buffer`, an image of `width` by `height` pixels, on the surface
-    /// as `fit` says: send it what [`cursor::CursorBuffer::requests`] lists.
-    fn show(
-        &mut self,
-        source: &CursorGlobals,
-        buffer: &WlBuffer,
-        (width, height): (u32, u32),
-        fit: cursor::CursorBuffer,
-    ) {
-        let requests = fit.requests(
-            width,
-            height,
-            self.viewport.is_some(),
-            self.surface.version(),
-        );
-        for request in requests {
-            match request {
-                SurfaceRequest::MakeViewport => {
-                    self.viewport = source.viewporter.as_ref().map(|viewporter| {
-                        viewporter.get_viewport(&self.surface, &source.queue, ())
-                    });
-                }
-                SurfaceRequest::Destination(size) => {
-                    if let Some(viewport) = &self.viewport {
-                        let (width, height) = size.unwrap_or((-1, -1));
-                        viewport.set_destination(width, height);
-                    }
-                }
-                SurfaceRequest::BufferScale(scale) => self.surface.set_buffer_scale(scale),
-                SurfaceRequest::Attach => self.surface.attach(Some(buffer), 0, 0),
-                SurfaceRequest::DamageBuffer(width, height) => {
-                    self.surface.damage_buffer(0, 0, width, height);
-                }
-                SurfaceRequest::Damage(width, height) => self.surface.damage(0, 0, width, height),
-                SurfaceRequest::Commit => self.surface.commit(),
-            }
-        }
-    }
-
-    /// Destroy the viewport, then the surface.
-    fn destroy(self) {
-        if let Some(viewport) = self.viewport {
-            viewport.destroy();
-        }
-        self.surface.destroy();
-    }
-}
-
-impl Dispatch<WlSurface, CursorSurface> for WaylandState {
-    fn event(
-        _: &mut Self,
-        _: &WlSurface,
-        _: wl_surface::Event,
-        _: &CursorSurface,
-        _: &Connection,
-        _: &QueueHandle<Self>,
-    ) {
-        // A cursor surface's outputs and scale are its window's concern.
-    }
-}
-
-/// Show `cursor` on every pointer over the window of `surface`, since that
-/// pointer's enter: by its `cursor-shape` value where the compositor has
-/// `cursor-shape`, else as the cursor theme draws it at `scale`.
-fn show_cursor(
-    shared: &Shared,
-    objects: &mut Objects,
-    surface: NativeSurface,
-    cursor: CursorIcon,
-    scale: f64,
-) {
-    let shapes = objects
-        .shapes
-        .as_ref()
-        .map(|(_, manager)| manager.version());
-    let source = objects.cursor_source.clone();
-    for pointer in objects
-        .seats
-        .iter_mut()
-        .filter_map(|seat| seat.pointer.as_mut())
-    {
-        let Some((focus, serial)) = pointer.focus else {
-            continue;
-        };
-        if focus != surface {
-            continue;
-        }
-        show_pointer_cursor(
-            shared,
-            shapes,
-            source.as_ref(),
-            pointer,
-            serial,
-            cursor,
-            scale,
-        );
-    }
-}
-
-/// Show `cursor` on `pointer` since its enter `serial`: by its
-/// `cursor-shape` value where the compositor (`shapes`, its version) has
-/// `cursor-shape`, else as the cursor theme `source` draws it at `scale`.
-fn show_pointer_cursor(
-    shared: &Shared,
-    shapes: Option<u32>,
-    source: Option<&CursorGlobals>,
-    pointer: &mut PointerObjects,
-    serial: u32,
-    cursor: CursorIcon,
-    scale: f64,
-) {
-    match (&pointer.shape, shapes, source) {
-        (Some(shape), Some(version), _) => {
-            let value = cursor::shape(cursor, version);
-            if let Ok(shape_value) = wp_cursor_shape_device_v1::Shape::try_from(value) {
-                shape.set_shape(serial, shape_value);
-                #[cfg(any(test, feature = "testing"))]
-                shared.shown.with(|shown| {
-                    *shown = Some(ShownCursor {
-                        name: value.to_string(),
-                        scale: 0,
-                    });
-                });
-            }
-        }
-        (_, _, Some(source)) => {
-            if let Some(drawn) = draw_theme_cursor(shared, source, pointer, serial, cursor, scale) {
-                #[cfg(any(test, feature = "testing"))]
-                shared.shown.with(|shown| {
-                    *shown = Some(ShownCursor {
-                        name: drawn.0.to_owned(),
-                        scale: i32::try_from(drawn.1.get()).unwrap_or(i32::MAX),
-                    });
-                });
-                #[cfg(not(any(test, feature = "testing")))]
-                let _ = drawn;
-            }
-        }
-        _ => {}
-    }
-}
-
-/// Show `cursor` on `pointer`, which is over a window's own frame since the
-/// enter `serial`, drawn at `scale`.
-fn show_frame_cursor(
-    shared: &Shared,
-    objects: &mut Objects,
-    pointer: &WlPointer,
-    serial: u32,
-    cursor: CursorIcon,
-    scale: f64,
-) {
-    let shapes = objects
-        .shapes
-        .as_ref()
-        .map(|(_, manager)| manager.version());
-    let source = objects.cursor_source.clone();
-    if let Some(held) = objects
-        .seats
-        .iter_mut()
-        .filter_map(|seat| seat.pointer.as_mut())
-        .find(|held| held.pointer == *pointer)
-    {
-        show_pointer_cursor(shared, shapes, source.as_ref(), held, serial, cursor, scale);
     }
 }
 
@@ -1677,80 +1661,6 @@ fn frame_event(
     true
 }
 
-/// The cursor theme's name and its size at scale one: `XCURSOR_THEME` and
-/// `XCURSOR_SIZE`, else the default theme at [`cursor::THEME_SIZE`].
-fn theme_setting() -> (String, u32) {
-    let name = std::env::var("XCURSOR_THEME")
-        .ok()
-        .filter(|name| !name.is_empty())
-        .unwrap_or_else(|| "default".to_owned());
-    let size = std::env::var("XCURSOR_SIZE")
-        .ok()
-        .and_then(|size| size.parse::<u32>().ok())
-        .filter(|size| (1..=256).contains(size))
-        .unwrap_or(cursor::THEME_SIZE);
-    (name, size)
-}
-
-/// Draw `cursor` from the theme on `pointer`'s cursor surface for the scale
-/// `scale` rounds up to, put on the surface so the compositor takes its
-/// buffer ([`cursor::CursorBuffer::fit`]), and set it since the enter
-/// `serial`. What was drawn and its pixels per logical pixel, or `None`
-/// where the theme has no image of it.
-fn draw_theme_cursor(
-    shared: &Shared,
-    source: &CursorGlobals,
-    pointer: &mut PointerObjects,
-    serial: u32,
-    cursor: CursorIcon,
-    scale: f64,
-) -> Option<(&'static str, NonZeroU32)> {
-    let scale = cursor::theme_scale(scale);
-    let theme_surface = pointer.cursor_surface.get_or_insert_with(|| ThemeSurface {
-        surface: source
-            .compositor
-            .create_surface(&source.queue, CursorSurface),
-        viewport: None,
-    });
-    let drawn = shared
-        .themes
-        .with(|themes| {
-            let index = if let Some(index) = themes.iter().position(|(held, _)| *held == scale) {
-                index
-            } else {
-                let (name, size) = theme_setting();
-                let theme = CursorTheme::load_from_name(
-                    &source.connection,
-                    source.shm.clone(),
-                    &name,
-                    size.saturating_mul(scale.get()),
-                )
-                .ok()?;
-                themes.push((scale, theme));
-                themes.len() - 1
-            };
-            let theme = &mut themes[index].1;
-            cursor::theme_names(cursor).into_iter().find_map(|name| {
-                let image = &theme.get_cursor(name)?[0];
-                let (width, height) = image.dimensions();
-                let fit =
-                    cursor::CursorBuffer::fit(width, height, scale, source.viewporter.is_some());
-                theme_surface.show(source, image, (width, height), fit);
-                let (x, y) = image.hotspot();
-                let (x, y) = fit.surface_point(x, y);
-                pointer
-                    .pointer
-                    .set_cursor(serial, Some(&theme_surface.surface), x, y);
-                Some((name, fit.scale()))
-            })
-        })
-        .flatten();
-    if drawn.is_none() {
-        tracing::debug!(?cursor, "the cursor theme has no image of the cursor");
-    }
-    drawn
-}
-
 /// The tablet seat of `seat`, whose key is `key`.
 fn tablet_seat(
     manager: &ZwpTabletManagerV2,
@@ -1769,23 +1679,45 @@ fn tablet_seat(
     )
 }
 
-/// The pinch of `pointer`; `None` past the last device label.
-fn pinch(
+/// A pointer's touchpad gesture objects, under one device label: its pinch,
+/// its swipe, and its hold where the gestures global is version 3.
+struct GestureObjects {
+    device: NativeDevice,
+    pinch: ZwpPointerGesturePinchV1,
+    swipe: ZwpPointerGestureSwipeV1,
+    hold: Option<ZwpPointerGestureHoldV1>,
+}
+
+impl GestureObjects {
+    fn destroy(self) {
+        self.pinch.destroy();
+        self.swipe.destroy();
+        if let Some(hold) = self.hold {
+            hold.destroy();
+        }
+    }
+}
+
+/// The gesture objects of `pointer`; `None` past the last device label.
+fn gesture_objects(
     manager: &ZwpPointerGesturesV1,
     pointer: &PointerObjects,
     queue: &QueueHandle<WaylandState>,
     shared: &Arc<Shared>,
-) -> Option<ZwpPointerGesturePinchV1> {
+) -> Option<GestureObjects> {
     let device = shared.label()?;
-    Some(manager.get_pinch_gesture(
-        &pointer.pointer,
-        queue,
-        PinchData {
-            shared: Arc::downgrade(shared),
-            device,
-            pointer: pointer.device,
-        },
-    ))
+    let data = || GestureData {
+        shared: Arc::downgrade(shared),
+        device,
+        pointer: pointer.device,
+    };
+    Some(GestureObjects {
+        device,
+        pinch: manager.get_pinch_gesture(&pointer.pointer, queue, data()),
+        swipe: manager.get_swipe_gesture(&pointer.pointer, queue, data()),
+        hold: (manager.version() >= HOLD_VERSION)
+            .then(|| manager.get_hold_gesture(&pointer.pointer, queue, data())),
+    })
 }
 
 /// Let go of a removed seat's objects. Every device of it, its tablet tools
@@ -1796,9 +1728,12 @@ fn pinch(
 fn release_seat(seat: SeatObjects, shared: &Shared, time: WireTime) {
     shared.last_input.seat_gone(&seat.seat);
     shared.unfollow(&seat.seat);
+    if let Some(pointer) = &seat.pointer {
+        let_go_of_pointer(shared, &pointer.pointer);
+    }
     if let Some(pointer) = seat.pointer {
-        if let Some(pinch) = pointer.pinch {
-            pinch.destroy();
+        if let Some(gestures) = pointer.gestures {
+            gestures.destroy();
         }
         if let Some(surface) = pointer.cursor_surface {
             surface.destroy();
@@ -1838,16 +1773,15 @@ fn release_seat(seat: SeatObjects, shared: &Shared, time: WireTime) {
 fn release_pointer(pointer: PointerObjects, seat: &WlSeat, shared: &Shared, time: WireTime) {
     shared.last_input.pointer_gone(seat);
     shared.unfollow(seat);
-    if let Some(pinch) = pointer.pinch {
-        if let Some(data) = pinch.data::<PinchData>() {
-            shared.record_seat(
-                time,
-                SeatEvent::DeviceRemoved {
-                    device: data.device,
-                },
-            );
-        }
-        pinch.destroy();
+    let_go_of_pointer(shared, &pointer.pointer);
+    if let Some(gestures) = pointer.gestures {
+        shared.record_seat(
+            time,
+            SeatEvent::DeviceRemoved {
+                device: gestures.device,
+            },
+        );
+        gestures.destroy();
     }
     if let Some(surface) = pointer.cursor_surface {
         surface.destroy();
@@ -1902,8 +1836,9 @@ pub(crate) struct TouchData {
     seat: SeatKey,
 }
 
-/// A pinch's user data.
-pub(crate) struct PinchData {
+/// A touchpad gesture object's user data: the device its gestures are, and
+/// the pointer they belong to.
+pub(crate) struct GestureData {
     shared: Weak<Shared>,
     device: NativeDevice,
     pointer: NativeDevice,
@@ -1991,15 +1926,16 @@ impl Dispatch<WlSeat, SeatData> for WaylandState {
                             .map(|manager| manager.get_pointer(&pointer, queue, ())),
                         pointer,
                         device,
-                        pinch: None,
+                        gestures: None,
                         cursor_surface: None,
                         focus: None,
                         focus_surface: None,
                         frame_focus: None,
+                        locked: false,
                     };
-                    objects.pinch = gestures
+                    objects.gestures = gestures
                         .as_ref()
-                        .and_then(|manager| pinch(manager, &objects, queue, &shared));
+                        .and_then(|manager| gesture_objects(manager, &objects, queue, &shared));
                     held.pointer = Some(objects);
                     shared.record_seat(
                         time,
@@ -2107,10 +2043,10 @@ impl Dispatch<WlPointer, PointerData> for WaylandState {
                         windows
                             .iter()
                             .find(|window| surface_key(window.id) == key)
-                            .map(|window| (window.cursor, (window.scale)()))
+                            .map(|window| (window.cursor.clone(), (window.scale)()))
                     })
                     .flatten()
-                    .unwrap_or((CursorIcon::Default, 1.0));
+                    .unwrap_or((Cursor::Icon(CursorIcon::Default), 1.0));
                 shared.objects.with(|objects| {
                     for held in objects
                         .seats
@@ -2122,7 +2058,7 @@ impl Dispatch<WlPointer, PointerData> for WaylandState {
                             held.focus_surface = Some(surface.clone());
                         }
                     }
-                    show_cursor(&shared, objects, key, cursor, scale);
+                    show_cursor(&shared, objects, key, &cursor, scale);
                 });
                 if let Some((frame, seat)) = shared.content_frame(pointer) {
                     frame.content_moved(&seat, surface_x, surface_y);
@@ -2156,6 +2092,10 @@ impl Dispatch<WlPointer, PointerData> for WaylandState {
                 surface_x,
                 surface_y,
             } => {
+                // A pointer held in place moves by its relative motion alone.
+                if shared.is_locked(pointer) {
+                    return;
+                }
                 if let Some((frame, seat)) = shared.content_frame(pointer) {
                     frame.content_moved(&seat, surface_x, surface_y);
                 }
@@ -2351,6 +2291,8 @@ impl Dispatch<WlKeyboard, KeyboardData> for WaylandState {
             }
             wl_keyboard::Event::Leave { surface, .. } => {
                 shared.set_keyboard_focus(seat, None);
+                // A window holds the pointer only while it has the keyboard.
+                let_go_on_leave(&shared, seat, &surface);
                 // The clipboard sets no selection under an input the window
                 // took once the keyboard left it.
                 shared.record_keyboard_leave(seat, &surface);
@@ -2465,12 +2407,12 @@ impl Dispatch<WlTouch, TouchData> for WaylandState {
     }
 }
 
-impl Dispatch<ZwpPointerGesturePinchV1, PinchData> for WaylandState {
+impl Dispatch<ZwpPointerGesturePinchV1, GestureData> for WaylandState {
     fn event(
         _: &mut Self,
         _: &ZwpPointerGesturePinchV1,
         event: zwp_pointer_gesture_pinch_v1::Event,
-        data: &PinchData,
+        data: &GestureData,
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
@@ -2512,6 +2454,94 @@ impl Dispatch<ZwpPointerGesturePinchV1, PinchData> for WaylandState {
         shared.record_seat(
             time,
             SeatEvent::Pinch {
+                device: data.device,
+                pointer: data.pointer,
+                event: wire,
+            },
+        );
+    }
+}
+
+impl Dispatch<ZwpPointerGestureSwipeV1, GestureData> for WaylandState {
+    fn event(
+        _: &mut Self,
+        _: &ZwpPointerGestureSwipeV1,
+        event: zwp_pointer_gesture_swipe_v1::Event,
+        data: &GestureData,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        let Some(shared) = data.shared.upgrade() else {
+            return;
+        };
+        let (time, wire) = match event {
+            zwp_pointer_gesture_swipe_v1::Event::Begin {
+                time,
+                surface,
+                fingers,
+                ..
+            } => {
+                let Some(surface) = shared.surface_of(&surface) else {
+                    return;
+                };
+                (arrival(Some(time)), SwipeWire::Begin { surface, fingers })
+            }
+            zwp_pointer_gesture_swipe_v1::Event::Update { time, dx, dy } => {
+                (arrival(Some(time)), SwipeWire::Update { dx, dy })
+            }
+            zwp_pointer_gesture_swipe_v1::Event::End {
+                time, cancelled, ..
+            } => (
+                arrival(Some(time)),
+                SwipeWire::End {
+                    cancelled: cancelled != 0,
+                },
+            ),
+            _ => return,
+        };
+        shared.record_seat(
+            time,
+            SeatEvent::Swipe {
+                device: data.device,
+                pointer: data.pointer,
+                event: wire,
+            },
+        );
+    }
+}
+
+impl Dispatch<ZwpPointerGestureHoldV1, GestureData> for WaylandState {
+    fn event(
+        _: &mut Self,
+        _: &ZwpPointerGestureHoldV1,
+        event: zwp_pointer_gesture_hold_v1::Event,
+        data: &GestureData,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        let Some(shared) = data.shared.upgrade() else {
+            return;
+        };
+        let (time, wire) = match event {
+            zwp_pointer_gesture_hold_v1::Event::Begin { time, surface, .. } => {
+                let Some(surface) = shared.surface_of(&surface) else {
+                    return;
+                };
+                (arrival(Some(time)), HoldWire::Begin { surface })
+            }
+            zwp_pointer_gesture_hold_v1::Event::End {
+                time, cancelled, ..
+            } => (
+                arrival(Some(time)),
+                HoldWire::End {
+                    cancelled: cancelled != 0,
+                },
+            ),
+            _ => return,
+        };
+        shared.record_seat(
+            time,
+            SeatEvent::Hold {
                 device: data.device,
                 pointer: data.pointer,
                 event: wire,
@@ -2839,7 +2869,7 @@ mod tests {
     fn a_label_past_the_last_is_none() {
         use std::num::NonZeroU64;
 
-        use flui_foundation::sequence::IdMint;
+        use flui_foundation::IdMint;
 
         use crate::owner::slot::OwnerCell;
 

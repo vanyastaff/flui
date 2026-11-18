@@ -21,7 +21,7 @@
   double two test files need lives in the kit)
 - **Sources:** LeakCanary, *How LeakCanary works*
   (<https://square.github.io/leakcanary/fundamentals-how-leakcanary-works/>);
-  `flutter/flutter@97cd226ec5ee4c4075b8516ea294152dba1fbfcc`
+  Flutter 3.50.0, `flutter/flutter@ab2912035e`
   `packages/flutter/lib/src/foundation/memory_allocations.dart`;
   `chromium/chromium@b57678612bff5bf5c88c18146bdf5878292e6384`
   `content/web_test/browser/leak_detector.h`

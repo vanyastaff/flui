@@ -10,6 +10,7 @@
 //! | `MoveCoalescer` | one frame-coalesced move per pointer and surface |
 //! | `ScrollSequences` | wheel and trackpad scroll latches per source and surface |
 //! | `PanZoomSequences` | native pan/zoom leases per source and surface |
+//! | `TouchpadSwipes` | the hit path each open touchpad swipe took at its start |
 //! | [`MouseTracker`] | hover, enter/exit and cursor state per source and surface |
 //! | `ArenaDriver` | the close-on-down / sweep-on-up arena lifecycle |
 //! | `CloseCoordinator` | the closed flag and when a close retires state |
@@ -96,11 +97,11 @@
 //! use flui_interaction::{GestureBinding, HitTestResult};
 //! use flui_foundation::geometry::Point;
 //! use flui_platform::{EventTime, pointer::{PointerButton, PointerButtons,
-//!     PointerEvent, PointerId, PointerInfo, PointerKind, PointerPosition,
+//!     PointerEvent, PointerId, PointerSource, PointerKind, PointerPosition,
 //!     PointerPress, PointerSample}};
 //!
 //! let binding = GestureBinding::new();
-//! let pointer = PointerInfo::new(PointerId::try_from(1_u64)?, PointerKind::Touch);
+//! let pointer = PointerSource::new(PointerId::try_from(1_u64)?, PointerKind::Touch);
 //! let sample = PointerSample::new(EventTime::from_nanos(1),
 //!     PointerPosition::try_new(Point::new(12.0, 24.0))?);
 //! let event = PointerEvent::Down(PointerPress::new(pointer, PointerButton::PRIMARY,
@@ -123,6 +124,7 @@ mod pointer_frame;
 mod pointer_sequences;
 mod scroll_contact;
 mod scroll_sequences;
+mod touchpad_swipes;
 
 use std::{
     cell::{Cell, RefCell},
@@ -148,7 +150,8 @@ use self::{
     scroll_sequences::{ScrollAdmission, ScrollSequences},
 };
 use crate::events::{
-    CancelReason, DeviceId, PointerCancel, PointerEvent, PointerEventExt, PointerInfo, PointerKind,
+    CancelReason, DeviceId, PointerCancel, PointerEvent, PointerEventExt, PointerKind,
+    PointerSource,
 };
 use crate::{
     close::{CloseMode, ClosePanic, CloseTombstone},
@@ -179,8 +182,8 @@ enum SignalSource {
     Pointer(PointerId),
 }
 
-impl From<PointerInfo> for SignalSource {
-    fn from(pointer: PointerInfo) -> Self {
+impl From<PointerSource> for SignalSource {
+    fn from(pointer: PointerSource) -> Self {
         pointer
             .device
             .map_or(Self::Pointer(pointer.id), Self::Device)
@@ -304,7 +307,7 @@ pub struct InvalidSamplingWindow;
 /// # Ownership
 ///
 /// A UI runtime owns one `GestureBinding`. Prefer accessing the binding through
-/// the active `HeadlessBinding` / `UiRuntime`; process-global gesture ownership is
+/// the active `UiRuntime`; process-global gesture ownership is
 /// intentionally not part of ADR-0027.
 ///
 /// # Event Coalescing
@@ -326,6 +329,7 @@ pub struct GestureBinding {
     moves: MoveCoalescer,
     scrolls: ScrollSequences,
     pan_zooms: PanZoomSequences,
+    touchpad_swipes: touchpad_swipes::TouchpadSwipes,
 
     /// Sampling mode captured by each pointer sequence at Down.
     ///
@@ -378,7 +382,7 @@ impl GestureBinding {
     /// Create a new GestureBinding with default settings.
     ///
     /// `GestureBinding` is owner-local; prefer using the binding owned by the
-    /// active UI runtime (`HeadlessBinding`/`UiRuntime`) over a process global.
+    /// active UI runtime over a process global.
     pub fn new() -> Self {
         Self::with_settings_and_clock(
             GestureSettings::default(),
@@ -394,7 +398,7 @@ impl GestureBinding {
     /// Create against an explicit monotonic clock.
     ///
     /// This is the canonical constructor for deterministic runtimes such as
-    /// `HeadlessBinding`: the binding, its arena, and every recognizer deadline
+    /// a headless host's UI runtime: the binding, its arena, and every recognizer deadline
     /// observe the same clock instead of a test harness owning a second arena.
     pub fn with_clock(clock: std::sync::Arc<dyn MonotonicClock>) -> Self {
         Self::with_settings_and_clock(GestureSettings::default(), clock)
@@ -419,6 +423,7 @@ impl GestureBinding {
             moves: MoveCoalescer::default(),
             scrolls: ScrollSequences::default(),
             pan_zooms: PanZoomSequences::default(),
+            touchpad_swipes: touchpad_swipes::TouchpadSwipes::default(),
             resampling_enabled: Cell::new(false),
             sampling_clock: Cell::new(SamplingClock::default()),
             clock: std::sync::Arc::clone(&clock),
@@ -1293,6 +1298,7 @@ impl GestureBinding {
             route.capture.close();
         }
         let moves = self.moves.drain();
+        let swipes = self.touchpad_swipes.drain();
         let native_tickets: Vec<_> = native_sequences
             .into_iter()
             .flat_map(|sequence| sequence.take_staged())
@@ -1324,6 +1330,11 @@ impl GestureBinding {
         }
         for (_, event) in moves {
             failure.retire(event);
+        }
+        // The arena drained above rejected each swipe's contest; its path
+        // goes now.
+        for swipe in swipes {
+            failure.retire(swipe);
         }
         if failure.preserving() {
             failure.invoke(|| self.arena.drain(CloseMode::PreservingFailure));
@@ -1365,6 +1376,11 @@ impl GestureBinding {
             let mut first_panic = self.drain_capture_losses(None);
             let contacts = self.contacts.contacts(None);
             pan_zoom_sequences::retire_sequences(native_sequences, &mut first_panic);
+            // A swipe the platform will not end for an unfocused window ends
+            // here, as a contact does.
+            for swipe in self.touchpad_swipes.drain() {
+                self.cancel_touchpad_swipe(swipe, &mut first_panic);
+            }
             for contact in contacts {
                 // A handler run by an earlier iteration may have re-entered the
                 // binding and terminated or replaced this sequence. The numeric
@@ -1586,7 +1602,7 @@ impl GestureBinding {
             if let PointerEvent::DeviceRemoved(device) = event {
                 // A removed device hovers nothing at the next frame.
                 let dropped = self.drop_queued_hovers(|_, queued| {
-                    crate::events::pointer_info(queued).and_then(|info| info.device)
+                    crate::events::pointer_source(queued).and_then(|info| info.device)
                         == Some(device.device)
                 });
                 RoutePanic::preserve_first(&mut first_panic, dropped, "removed-device hover moves");
@@ -1595,6 +1611,9 @@ impl GestureBinding {
                 self.cancel_orphaned_scroll_contacts(orphans, device.time, &mut first_panic);
                 let native = self.pan_zooms.withdraw_source(source);
                 pan_zoom_sequences::retire_sequences(native, &mut first_panic);
+                for swipe in self.touchpad_swipes.close_device(device.device) {
+                    self.cancel_touchpad_swipe(swipe, &mut first_panic);
+                }
                 for contact in self.contacts.contacts(Some(device.device)) {
                     if !self
                         .contacts
@@ -1656,7 +1675,7 @@ impl GestureBinding {
                 | PointerEvent::Up(_)
                 | PointerEvent::Cancel(_)
                 | PointerEvent::ButtonChange(_)
-        ) && let Some(pointer) = crate::events::pointer_info(event)
+        ) && let Some(pointer) = crate::events::pointer_source(event)
             && !self
                 .contacts
                 .observe(pointer, crate::events::event_time(event))
@@ -1953,7 +1972,7 @@ impl GestureBinding {
                     // added/removed-class event dispatches with no hit path,
                     // router only).
                     let result = match event.position().or_else(|| {
-                        crate::events::pointer_info(event)
+                        crate::events::pointer_source(event)
                             .and_then(|info| self.mouse_tracker.source_position_on(surface, info))
                     }) {
                         Some(position) => hit_test_fn(position),
@@ -2060,7 +2079,13 @@ impl GestureBinding {
                     panic.resume();
                 }
             }
-            PointerEvent::ScrollInertiaCancel(_) => {
+            PointerEvent::TouchpadSwipe(swipe) => {
+                self.handle_touchpad_swipe(surface, event, swipe, hit_test_fn);
+            }
+            // A touchpad hold, like a locked pointer's motion, goes where its
+            // contact went, the target its press found, or where the pointer
+            // rests: the view that holds the pointer turns with it either way.
+            PointerEvent::TouchpadHold(_) | PointerEvent::RawMotion(_) => {
                 let panic = if self.contacts.contains(pointer_id) {
                     self.dispatch_on_cached_route(pointer_id, event)
                 } else {
@@ -2469,7 +2494,7 @@ impl GestureBinding {
     /// claim's `owner`.
     fn cancel_claimed(
         &self,
-        pointer: PointerInfo,
+        pointer: PointerSource,
         time: flui_platform::EventTime,
         token: ResolvedRouteToken,
         owner: crate::pointer::PointerTarget,
@@ -2796,6 +2821,7 @@ impl GestureBinding {
             cached.capture.end();
         }
         let pending_moves = self.moves.drain();
+        let swipes = self.touchpad_swipes.drain();
         pan_zoom_sequences::retire_sequences(native_sequences, &mut first_panic);
 
         // Every map above is empty before any arena callback or destructor
@@ -2829,6 +2855,14 @@ impl GestureBinding {
                 &mut first_panic,
                 pending_drop,
                 "interrupted pending-move cleanup",
+            );
+        }
+        for swipe in swipes {
+            let swipe_drop = RoutePanic::capture(|| drop(swipe));
+            RoutePanic::preserve_first(
+                &mut first_panic,
+                swipe_drop,
+                "interrupted touchpad swipe cleanup",
             );
         }
         first_panic

@@ -9,12 +9,13 @@ use flui_foundation::geometry::{
 };
 use flui_platform::{
     AppTitleBar, Availability, Brightness, CapabilityAbsence, ColorGamut, DisplayColor,
-    DisplayInfo, DisplayKey, DisplayRegistry, GesturePreferences, HourCycle, KeyboardInset, Locale,
-    MeasurementSystem, MotionPreference, NumberingSystem, RegionOverride, RegionalFormats,
-    SizeConstraints, SystemPreferences, TextWeightPreference, Weekday, WheelPreferences, WheelStep,
+    DisplayDescription, DisplayKey, DisplayRegistry, GesturePreferences, HourCycle, KeyboardInset,
+    Locale, MeasurementSystem, MotionPreference, NumberingSystem, RegionOverride, RegionalFormats,
+    ScrollBarPreferences, ScrollBarVisibility, ScrollTrackClick, SizeConstraints, SrgbColor,
+    SystemPreferences, TextWeightPreference, Weekday, WheelPreferences, WheelStep,
     WindowCapabilities, WindowCapability, WindowCommand, WindowExecutionState, WindowExtent,
     WindowFocus, WindowFrame, WindowGeometry, WindowInsets, WindowMaterial, WindowMode,
-    WindowState,
+    WindowPosition, WindowState,
 };
 
 fn preferences_round_trip_through_their_parts() {
@@ -43,9 +44,23 @@ fn preferences_round_trip_through_their_parts() {
             WheelPreferences::default()
                 .with_vertical(WheelStep::Page)
                 .with_horizontal_characters(4),
+        )
+        .with_accent_color(Some(SrgbColor::from_rgba8(0, 120, 215, 255)))
+        .with_scroll_bars(
+            ScrollBarPreferences::default()
+                .with_visibility(ScrollBarVisibility::Always)
+                .with_track_click(ScrollTrackClick::JumpToSpot),
         );
     let parts = preferences.clone().into_parts();
     assert_eq!(parts.text_scale, Some(1.5));
+    assert_eq!(
+        parts.accent_color,
+        Some(SrgbColor::from_rgba8(0, 120, 215, 255))
+    );
+    assert_eq!(
+        parts.scroll_bars.track_click,
+        Some(ScrollTrackClick::JumpToSpot)
+    );
     assert_eq!(parts.try_into_preferences(), Ok(preferences));
 }
 
@@ -61,13 +76,14 @@ fn preference_parts_validate_as_the_builder_does() {
 fn a_display_round_trips_through_its_parts() {
     let registry = DisplayRegistry::new();
     let id = registry.mint(&DisplayKey::Injected(9)).expect("id");
-    let display = DisplayInfo::new(
+    let display = DisplayDescription::from_device(
         id,
         "Studio Display",
         Bounds::new(Point::new(-1920, 0), Size::new(5120, 2880)),
+        Bounds::new(Point::new(-1920, 40), Size::new(5120, 2840)),
         DevicePixelRatio::try_new(2.0).expect("a positive ratio"),
     )
-    .with_usable_bounds(Bounds::new(Point::new(-1920, 40), Size::new(5120, 2840)))
+    .expect("a display with an area")
     .with_primary(true)
     .with_refresh_period(Duration::from_micros(16_667))
     .with_persistent_key("studio")
@@ -77,7 +93,7 @@ fn a_display_round_trips_through_its_parts() {
     )));
     let (taken, parts) = display.clone().into_parts();
     assert_eq!(taken, id);
-    assert_eq!(parts.into_info(id), display);
+    assert_eq!(parts.into_description(id), display);
 }
 
 fn a_window_state_round_trips_through_its_parts() {
@@ -93,13 +109,20 @@ fn a_window_state_round_trips_through_its_parts() {
         WindowCapability::Absent(CapabilityAbsence::NOT_YET_ON_THIS_HOST);
     let capabilities = capabilities.into_capabilities();
     let metrics = WindowMetrics::try_new(DeviceSize::new(1600, 1200), 2.0).expect("valid");
+    let display = DisplayRegistry::new()
+        .mint(&DisplayKey::Injected(1))
+        .expect("an id");
+    let at = |x, y| WindowPosition::try_new(display, Point::new(x, y)).expect("a point");
     let state = WindowState::new(
-        WindowGeometry::try_new(Some(Point::new(10.0, 20.0)), Size::new(820.0, 640.0))
+        WindowGeometry::try_new(Some(at(10.0, 20.0)), Size::new(820.0, 640.0))
             .expect("a finite rectangle"),
         extent(800.0, 600.0),
     )
+    .with_display(Some(display))
     .with_mode(WindowMode::Maximized)
-    .with_normal_geometry(Some(WindowGeometry::unplaced(extent(400.0, 300.0))))
+    .with_normal_geometry(Some(
+        WindowGeometry::unplaced(extent(400.0, 300.0)).at(Some(at(-600.0, 40.0))),
+    ))
     .with_visible(true)
     .with_occluded(false)
     .with_focus(WindowFocus::Focused)

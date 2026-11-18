@@ -23,7 +23,7 @@ use std::{
 
 use crossbeam_channel::{Receiver, RecvTimeoutError, bounded};
 use flui_foundation::{
-    clock::MonotonicClock,
+    MonotonicClock,
     panic::{FirstPanic, discard_payload, payload_text},
 };
 

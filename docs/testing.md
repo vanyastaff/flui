@@ -14,7 +14,7 @@ Write the test with `flui::testing::{Tester, find}`: `Tester::mount` mounts the 
 window's own input path, and `Tester::expect` waits while the application has a frame or work
 due ([cookbook](../book/src/cookbook/testing.md)). `flui::testing::rendering::{RenderTester,
 BoxQueryRun}` tests a render object of one's own. The framework's own harnesses
-(`flui_testing::widgets::lay_out`, `HeadlessHost`, `HeadlessBinding`, gesture replay and the
+(`flui_testing::widgets::lay_out`, `HeadlessHost`, gesture replay and the
 accessibility reader) stay in `flui-testing` and out of the facade.
 
 The `testing` feature is off by default. Independent consumer tests check that
@@ -35,12 +35,12 @@ the same bug found by a whole-demo snapshot names a demo.
 | Painting | A `DisplayList`, no canvas boilerplate | `flui_painting::testing::{record, command_count, bounds}` | `flui-painting/testing` |
 | Layer | Structural walkers over a `LayerTree` (built with `SceneBuilder` or `push_child`) | `flui_layer::testing::inspect` | `flui-layer/testing` |
 | Render object | A real `PipelineOwner` — layout, paint, hit-test, intrinsics | `flui_rendering::testing::{RenderTester, Probe}` | `flui-rendering/testing` |
-| **Frame** | A **whole headless frame** on a virtual clock: build → layout → paint → composite, gestures, animation, async tasks | `flui_testing::HeadlessBinding` | dev-dependency |
+| **Frame** | A **whole headless frame** on a virtual clock: build → layout → paint → composite, gestures, animation, async tasks | `flui_testing::HeadlessHost` | dev-dependency |
 | Runtime | A `UiRuntime`'s own frame transaction, multi-presentation routing and failure containment, submitting to a scripted sink | `flui_runtime::ui_runtime::UiRuntime::for_test` with `flui_runtime::testing::{ScriptedSink, TestWindow}` (the UI runtime tests live in `crates/flui-runtime/src/ui_runtime/`) | `flui-runtime/testing` |
 | **Widget** | A mounted widget tree with geometry probes and synthetic input, every frame the UI runtime's own `UiRuntime::pump` on a manual clock | `flui_testing::widgets::{lay_out, LaidOut}`, `flui_testing::HeadlessHost` | dev-dependency |
 | Accessibility | The assembled semantics tree, queried by role | `flui_testing::a11y::{A11yTree, A11yQuery}` | dev-dependency |
 | Gesture replay | A scripted gesture replayed with its timing | `flui_testing::replay::PointerScript` | dev-dependency |
-| Log capture | The `tracing` events a frame emitted | `flui_log::testing::capture` (`flui_testing::log_capture` re-exports it for the crates whose edges go through the testing kit) | dev-dependency |
+| Log capture | The `tracing` events a frame emitted | `flui_log::testing::capture` (`flui_testing::log_capture` re-exports it for the crates whose edges go through the testing kit) | dev-dependency (`flui-log`'s `testing` feature, which `flui-testing` turns on) |
 | GPU readback | Real pixels off a local device (adapter required) | `flui-engine`'s readback suite | `flui-engine/testing` |
 
 Two structural rules hold across the stack:
@@ -51,14 +51,13 @@ Two structural rules hold across the stack:
   transaction: `lay_out` mounts its tree in a `HeadlessHost`, whose frames are
   `UiRuntime::pump` (ADR-0083 §4). A crate below it exposes its own kit behind a
   feature named `testing`, never `test-support` or `test-utils`.
-- **On the substrate driver, mount through `HeadlessBinding::mount_root`.** It owns the eight-step
-  bootstrap whose ordering is load-bearing, and its contract is that the
-  bootstrap frame is the same frame `pump_frame` runs (same layout↔build
-  fixpoint, same lazy-sliver service pass). Hand-rolled copies of that sequence
-  have already drifted once, silently: of the eight that existed, one
-  bootstrapped with a bare `PipelineOwner::run_frame` and captured every
-  `SliverAppBar` delegate child unbuilt, and none ran the lazy-sliver service
-  pass. All eight now go through `mount_root`.
+- **A test's frames are the UI runtime's.** A tree mounts through `HeadlessHost::attach` (or
+  `lay_out`, which wraps it), and its first frame, the mount included, is `UiRuntime::pump`:
+  the same layout↔build fixpoint and lazy-sliver service pass every later frame runs. Frame
+  loops hand-rolled over raw owners drifted once, silently: one
+  bootstrapped with a bare `PipelineOwner::run_frame` and captured every `SliverAppBar`
+  delegate child unbuilt. Presentations at independent cadences are separate hosts, each on
+  its own manual clock.
 
 ### wasm32: compiled everywhere, executed in one place
 
@@ -135,7 +134,7 @@ cargo xtask checks                        # fmt, typos, taplo, markdown links (d
 cargo xtask lint                          # clippy -D warnings, as the CI clippy job runs it: the workspace, then flui-engine's `testing` code
 cargo xtask doc-strict                    # cargo doc --workspace --no-deps --locked --document-private-items with every workspace `testing` feature on
 cargo xtask test                          # nextest over the local scope, flui-native headless, then the nested-cargo group (see "What `cargo xtask test` runs")
-cargo test --workspace --locked --doc     # doc-tests (flui-native included — its doctests need no display server)
+cargo test --workspace --locked --doc --features flui/testing,flui/material,flui/cupertino     # doc-tests, the book's included (flui-native included — its doctests need no display server)
 ```
 
 The reload-lifecycle fixture is a real plugin image. `test`
@@ -212,7 +211,7 @@ compositor `WAYLAND_DISPLAY` names. No one compositor runs them all:
 | `wayland_window::` outside `optional` | headless Weston 13, in `cargo xtask test` | The conformance kit and `a_window_maximized_before_fullscreen_returns_to_normal` maximize a window. Sway tiles and, at 1.9, offers `xdg_wm_base` 2 with no `wm_capabilities`, so it carries out no maximize and the window cannot know. |
 | `wayland_window::optional::` | headless Weston 13, where each says what it skipped, then a headless sway, in `cargo xtask wayland-optional` | Their subjects are what a compositor may not offer: `xdg-decoration`, `wp_fractional_scale_v1`, `xdg-foreign`, `xdg-activation`, `zwlr_foreign_toplevel_manager_v1` (a window's app id read back), a seat. Weston 13 lacks all six. |
 | `a_window_moved_to_another_output_names_its_display` | none: a case of `optional`, it says under both runs that it skipped | It needs two outputs and a compositor that returns a window to the output it left: Weston on its X11 backend with `--output-count=2`. Sway leaves a window on the output it went fullscreen on. |
-| `wayland_scripted::` | the compositor of the case's own, in the Xvfb suite of `cargo xtask test` | What no installed compositor does on demand: `configure_bounds`, a seat older than `repeat_info`, a scale change while the host runs, a strict buffer-scale rule on cursors, frame callbacks never answered, an output removed with no `leave`, a configure storm, a connection closed mid-request. |
+| `wayland_scripted::` | the compositor of the case's own, in the Xvfb suite of `cargo xtask test` | What no installed compositor does on demand: `configure_bounds`, a seat older than `repeat_info`, a scale change while the host runs, a strict buffer-scale rule on cursors, frame callbacks never answered, an output removed with no `leave`, a configure storm, a connection closed mid-request, a touchpad swipe and hold on a gestures global of a chosen version. |
 
 The `wayland_scripted` harness and `flui-app`'s
 `native_linux::an_app_whose_window_is_never_drawn_still_quits` need no
@@ -791,7 +790,18 @@ change to the code it links, so a size fails only past 2% over its baseline,
 and `--bless` on a fresh `main` moves it. The baseline is Linux x86_64's. The
 `size` job runs the builds on `main` and on a pull request whose diff reaches a
 manifest, `Cargo.lock`, the toolchain, `.cargo/`, the `flui create` templates
-or the baseline.
+or the baseline. That 2% is cumulative, so on `main` each push also compares its
+sizes with the commit before it (`--previous`, from a cache entry each push
+saves under its commit with `--record`): one push may grow a binary by 0.5%,
+and a push past that fails with both commits and the delta, for its author to
+make the binary smaller or justify the growth in a follow-up pull request. A
+push that restates the baseline names under `## Expectations` why each counter
+it moves grew, so a restated counter is not compared. A push whose parent has
+no measurement (its run was cancelled or skipped, or a force push replaced it)
+is compared with the baseline alone, with a warning on the run, and a push
+that lands several merges at once compares them as one. The job summary lists
+each size at the baseline, the previous commit and this one, which a later
+`--bless` cites to say whose merges it restates.
 
 ```bash
 cargo xtask perf --size --graph --check   # the package counts alone, no build (the `deps` job, every PR)
@@ -880,7 +890,7 @@ tests/benches/examples via a self dev-dependency; downstream crates opt in with
 | `flui-layer` | [crates/flui-layer/README.md](../crates/flui-layer/README.md) | `SceneBuilder`, `inspect::structure` / `clip_rects` / `first_picture_bounds` |
 | `flui-painting` | [crates/flui-painting/src/testing/mod.rs](../crates/flui-painting/src/testing/mod.rs) | `record`, `command_count`, `bounds` |
 | `flui-foundation` | [crates/flui-foundation/docs/TESTING.md](../crates/flui-foundation/docs/TESTING.md) | `inspect::{Inspect, SnapshotNode}` for structured assertions (no `testing` module) |
-| `flui-testing` | [crates/flui-testing/README.md](../crates/flui-testing/README.md) | `HeadlessBinding` (`pump_frame`, `mount_root`, `replay`), `a11y::A11yQuery` — a **dev-dependency**, not a `testing` feature |
+| `flui-testing` | [crates/flui-testing/README.md](../crates/flui-testing/README.md) | `HeadlessHost` (`pump`, `run_script`), `replay::PointerScript`, `a11y::A11yQuery` — a **dev-dependency**, not a `testing` feature |
 | `flui-testing` (widgets) | [crates/flui-testing/ARCHITECTURE.md](../crates/flui-testing/ARCHITECTURE.md) | `widgets::{lay_out, LaidOut, settle_lazy}`, `widgets::harness::{mount, mount_with_ime}` — the canonical widget harness on the UI runtime, shared verbatim by `flui-widgets` / `flui-material` / `flui-cupertino` |
 
 | Crate | What it gives you |
@@ -890,7 +900,7 @@ tests/benches/examples via a self dev-dependency; downstream crates opt in with
 | `flui-rendering` | Real `PipelineOwner` trees (Box + Sliver), layout/frame depths, animation helpers. |
 | `flui-testing` | A whole headless frame on a virtual clock: gesture deadlines, animation ticks, async tasks, build/layout/paint/composite, semantics, scripted gesture replay. |
 | `flui-widgets` | A mounted widget tree: geometry probes, synthetic pointer/scroll input with per-contact identity, root swap, lazy-sliver settling. |
-| `flui-foundation` | The `inspect` substrate: `Inspect`, `SnapshotNode::{get, get_fact, find_by_kind}`, `render`. |
+| `flui-foundation` | The `inspect` substrate: `Inspect`, `SnapshotNode::{get, fact_as, find_by_kind}`, `render`. |
 
 Render-tree snapshots are backed by `flui_foundation::inspect::Inspect`: every
 node self-describes its own **user-config** fields (a `RenderFlex`'s
@@ -902,7 +912,7 @@ not Dart camelCase). Prefer a typed `Value` or `#[derive(Inspect)]` over
 
 Structured assertions should read the typed snapshot, `Probe::render_snapshot()`
 or `Probe::node_snapshot(id)`, by type: `node.get::<f64>("width")`,
-`node.get_fact::<Size>("size")`, `tree.find_by_kind("RenderFlex")`, instead of
+`node.fact_as::<Size>("size")`, `tree.find_by_kind("RenderFlex")`, instead of
 substring-matching `Probe::dump()`. In a widget test, `LaidOut::render_node(id)`
 is the one-node snapshot.
 A `Probe::dump()` is what a failing assertion should print to show *why*.
@@ -955,18 +965,16 @@ production-faithful animation tests. Assert per frame via `Probe` (`offset`,
 
 ## Headless frames and widget trees
 
-`flui_testing::HeadlessBinding` is the frame tier: a non-singleton, sleep-free
-runtime whose `pump_frame(dt)` advances a virtual `ManualClock` and runs the
-same frame the live `draw_frame` runs. Mount through `mount_root`; never
-hand-roll the bootstrap (see the map above). `mount_root` wraps the caller in
-`RootRenderView` — the same production root-bootstrap path as
-`WidgetsBinding::attach_root_widget` — so `PipelineOwner.root_id` is installed
-by `RootRenderElement`, not by a post-hoc parentless-node scan.
+`flui_testing::HeadlessHost` is the frame tier: a non-singleton, sleep-free
+host whose `pump(dt)` advances a virtual `ManualClock` and runs
+`UiRuntime::pump`, the same frame transaction a platform runner drives.
+`attach` mounts the root under the UI runtime's own root scopes, as `run_app`
+does, and the first pump builds, lays out and paints it.
 
 ```rust,ignore
-let mut binding = HeadlessBinding::new();
-let mounted = binding.mount_root(&root, MountOwners::fresh(), MountOptions::tight(800.0, 600.0));
-binding.pump_frame(Duration::from_millis(16));
+let mut host = HeadlessHost::new(HeadlessWindow::new(800, 600));
+host.attach(&root)?;
+let _ = host.pump(Duration::from_millis(16));
 ```
 
 `flui_testing::widgets::lay_out` is the widget tier: it mounts the tree in a
@@ -1015,8 +1023,8 @@ deadline-driven recognizer's verdict is part of the script, not of how the test
 process happened to be scheduled.
 
 ```rust,ignore
-binding.replay(&PointerScript::long_press(at, Duration::from_millis(600)));
-binding.replay(&PointerScript::fling(from, to));
+laid.replay(&PointerScript::long_press(at, Duration::from_millis(600)));
+host.run_script(&PointerScript::fling(from, to));
 ```
 
 Presets: `tap`, `double_tap`, `long_press`, `drag`, `fling`, `swipe`, `pinch`.
@@ -1053,7 +1061,8 @@ wire form mirrors it.
 
 ### Accessibility
 
-`binding.enable_semantics()` then `binding.a11y_tree()` gives an `A11yTree` of
+`laid.enable_semantics()` then `laid.a11y_tree()` (`HeadlessHost::enable_semantics` then
+`published_a11y_tree` on a bare host) gives an `A11yTree` of
 AccessKit nodes, translated by the same `flui_semantics::tree_to_update` a
 platform adapter uses — so a test and a screen reader cannot disagree. Query by
 role rather than by node index.
@@ -1061,7 +1070,7 @@ role rather than by node index.
 ### Text fields and IME
 
 `flui_testing::text_store_kit` is the conformance kit for any widget that
-implements `flui_platform::TextStore` (ADR-0090): write a
+implements `flui_platform::text_store::TextStore` (ADR-0090): write a
 `TextStoreFixture` for it and call `text_store_kit::assert_conforms(&mut fixture,
 KIT_VERSION)`. The kit holds frame transactions itself, through the
 `CommitGate` it installs with `TextStore::set_commit_gate`; the fixture only
@@ -1110,8 +1119,8 @@ dev-dependency, since it sits above `flui-testing`.
 
 Two crates deliberately do not, because they have nothing to poison — their
 capture tests share no callsite with anything else in their binary, each
-emitting at its own source line inside its own helper. `flui-log` additionally
-has no in-workspace dependencies at all; `flui-foundation` is emission-only and may not construct a subscriber,
+emitting at its own source line inside its own helper. `flui-log` depends on
+nothing in the workspace but `flui-foundation`, which is emission-only and may not construct a subscriber,
 which is why the capture primitive's home is the subscriber's crate:
 `flui_log::testing` builds a capture subscriber, so it lives in the crate
 whose composition decision a subscriber is, not at the DAG's bottom.
@@ -1221,7 +1230,7 @@ cargo xtask test --nested --nested-group native               # test-nested: gen
 cargo xtask test --nested --nested-group trybuild             # test-trybuild: compile-fail suites (CI runs each shard alone: --trybuild-shard facade, core or view)
 cargo xtask platform-test                                    # native platform suites, default and all features
 cargo xtask cli-test                                         # native CLI suite
-cargo test --workspace --locked --doc
+cargo test --workspace --locked --doc --features flui/testing,flui/material,flui/cupertino
 cargo +nightly miri test -p flui-foundation --lib             # miri job: every unit test of the
 cargo +nightly miri test -p flui-log --lib                    # two base crates, and the render-node
 cargo +nightly miri test -p flui-rendering --lib storage::    # arena; `cargo xtask miri` runs them all
@@ -1320,8 +1329,8 @@ reaches what the check reads. `plan` decides this in its outputs, and each job i
 - `perf-gates` runs its baseline comparison (`cargo xtask perf --check`) when `perf_required` is
   set: a changed file under a source that runs for every node of a frame
   (`crates/flui-view/src/tree/`, `crates/flui-view/src/owner/`, `crates/flui-rendering/src/storage/`,
-  `crates/flui-rendering/src/pipeline/`, `crates/flui-semantics/src/`), where one more
-  allocation is a rise in every scenario, or a change to the baseline
+  `crates/flui-rendering/src/pipeline/`, `crates/flui-layer/src/`, `crates/flui-semantics/src/`),
+  where one more allocation is a rise in every scenario, or a change to the baseline
   (`crates/flui-widgets/perf/baseline/`), the scenarios (`crates/flui-widgets/tests/perf.rs`),
   what counts for them (`crates/flui-testing/src/heap.rs`, `crates/flui-testing/src/control_cost.rs`),
   the task (`tools/xtask/src/perf.rs`) or this rule
@@ -1369,7 +1378,7 @@ what it needs. One row per job in `.github/workflows/ci.yml`:
 | `doc` | `cargo xtask doc-strict` (in `gate`) | — |
 | `public-api` | `cargo xtask public-api` | nightly (rustdoc JSON); `cargo xtask public-api --write` restates `api/flui.txt` when a change to the facade's API is meant (ADR-0324) |
 | `deps` | `cargo xtask deps` | CI runs `--only policy` and `--only advisories` as two steps, with `--strict` (a missing cargo-deny fails instead of being skipped); an unused or misplaced dependency is not this job's: cargo's `unused_dependencies` lint fails every build under `CARGO_BUILD_WARNINGS=deny`; every lane but `docs` runs it; the advisories step blocks on main and on a pull request whose change is workspace-wide or touches `deny.toml`, and only reports on other pull requests, because a new RustSec entry can fail a commit that passed the day before; `advisories.yml` runs the same step against main every day |
-| `doc-test` | `cargo test --workspace --locked --doc` (in `cargo xtask ci`) | — |
+| `doc-test` | `cargo test --workspace --locked --doc --features flui/testing,flui/material,flui/cupertino` (in `cargo xtask ci`) | — |
 | `miri` | `cargo xtask miri` | nightly + miri |
 | `feature-matrix` | `cargo xtask feature-matrix` (runs `facade-combos` too) | CI runs `--slice 1/5` to `5/5` and `combinations` in parallel; locally it is one run over the workspace |
 | `feature-scope` | `cargo xtask feature-matrix --packages "<hack_args>"` | CI runs `--slice 1/3` to `3/3` in parallel: a pull request's per-feature clippy over its changed crates that have features and its changed manifests; runs when `hack_args` names one |

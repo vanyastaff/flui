@@ -18,7 +18,8 @@ use flui_platform::keyboard::{KeyEvent, KeyState};
 use flui_platform::pointer::{ButtonChange, PointerEvent, PointerKind};
 use flui_platform::{EventTime, ImeEvent, PlatformInput};
 use flui_protocol::{
-    DeviceClass, Event, InputEvent, InputKind, Journal, JournalEntry, JournalParams, LogicalPoint,
+    events::Event, events::InputEvent, geometry::LogicalPoint, input::DeviceClass,
+    input::InputKind, input::Journal, input::JournalEntry, input::JournalParams,
 };
 
 use super::UiRuntime;
@@ -141,9 +142,11 @@ fn pointer_step(event: &PointerEvent, now: &impl Fn() -> EventTime) -> Option<St
         PointerEvent::Move(_) => InputKind::PointerMove,
         PointerEvent::Cancel(_) => InputKind::PointerCancel,
         PointerEvent::Scroll(_) => InputKind::Scroll,
-        PointerEvent::PanZoom(_) | PointerEvent::SmartZoom(_) => InputKind::Gesture,
-        // Entering, leaving, a revision, a squeeze, a device coming or going: not a step a
-        // driver plays.
+        PointerEvent::PanZoom(_)
+        | PointerEvent::SmartZoom(_)
+        | PointerEvent::TouchpadHold(_)
+        | PointerEvent::TouchpadSwipe(_) => InputKind::Gesture,
+        // Entering, leaving, a device coming or going: not a step a driver plays.
         _ => return None,
     };
     let device = match event.pointer_kind() {

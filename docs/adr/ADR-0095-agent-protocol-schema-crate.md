@@ -211,7 +211,7 @@ recorded by one is a valid golden file for the other.
 
 ### Versioning
 
-The schema carries its own version, `flui_protocol::PROTOCOL_VERSION` (`0.4`), serialized
+The schema carries its own version, `flui_protocol::version::PROTOCOL_VERSION` (`0.4`), serialized
 as the `protocol` field of a `Tree`. Each version's JSON schema is a golden file
 (`crates/flui-protocol/tests/schema/protocol-<version>.json`), and a test refuses a schema that
 differs from its version's file. Any change to the schema bumps `minor` and adds a golden
@@ -328,7 +328,7 @@ For the accepted part:
   not executed in CI.
 - **Round trip against the wire, in part.** `cargo nextest run -p flui-desktop-mcp`:
   `the_desktop_node_is_a_protocol_node` (the desktop server's node JSON reads as
-  `flui_protocol::Node`, writes back unchanged, and outlines the same) and
+  `flui_protocol::tree::Node`, writes back unchanged, and outlines the same) and
   `every_code_is_a_protocol_error_code`.
 - **The CLI half of §3.** `cargo nextest run -p flui-cli`: `agent::mcp` tests
   (`a_read_forwards_its_bounds_as_the_endpoints_query`,

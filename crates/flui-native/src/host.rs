@@ -34,14 +34,20 @@
 //! [`Absent`] gets windows that hand out [`Absent`].
 
 mod clipboard;
+mod drag;
+mod provider;
 
-#[cfg(any(wayland_host, x11_host, windows))]
+#[cfg(any(wayland_host, x11_host, windows, test))]
 pub(crate) use clipboard::MAX_TEXT;
 #[cfg(any(target_arch = "wasm32", wayland_host, x11_host, test))]
 pub(crate) use clipboard::owned_text;
 #[cfg(windows)]
 pub(crate) use clipboard::text_fits;
-pub use clipboard::{MemoryClipboard, NativeClipboard, NativePrimarySelection};
+#[cfg(any(windows, target_os = "android", target_os = "macos", target_os = "ios"))]
+pub(crate) use clipboard::{ClearDecision, ExpiringRecord};
+pub use clipboard::{
+    ExpiredClear, ExpiredEntry, MemoryClipboard, NativeClipboard, NativePrimarySelection,
+};
 pub(crate) use clipboard::{SharedClipboard, SyncClipboard};
 #[cfg(any(
     windows,
@@ -53,6 +59,17 @@ pub(crate) use clipboard::{SharedClipboard, SyncClipboard};
     x11_host,
 ))]
 pub(crate) use clipboard::{admit_text, host_text};
+#[cfg(any(
+    windows,
+    target_os = "android",
+    target_arch = "wasm32",
+    x11_host,
+    wayland_host,
+    test
+))]
+pub(crate) use drag::{MAX_OFFERED_TYPES, MAX_TYPE_LEN};
+#[cfg(any(target_os = "android", test))]
+pub(crate) use provider::MAX_PROVIDER_READS;
 
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
@@ -63,9 +80,9 @@ use flui_foundation::geometry::{Bounds, Size};
 use flui_platform::data_transfer::{DragTransport, NullDragTransport};
 use flui_platform::haptics::{HapticCapabilities, HapticOutcome, HapticPattern, HapticRequest};
 use flui_platform::{
-    AppDataDir, DeviceId, DisplaySnapshot, HapticFeedback, LaunchKey, PlatformHaptics,
-    PlatformSystemChrome, SystemPreferences, SystemUiOverlayStyle, Unsupported, UnsupportedReason,
-    WindowCapabilities, WindowHandler, WindowOptions,
+    AppDataDir, DisplaySnapshot, HapticFeedback, LaunchKey, PlatformSystemChrome,
+    SystemPreferences, SystemUiOverlayStyle, Unsupported, UnsupportedReason, WindowCapabilities,
+    WindowHandler, WindowOptions, haptics::PlatformHaptics, pointer::DeviceId,
 };
 use flui_semantics::platform::{
     AccessibilityActionListener, AccessibilityActivationListener, PlatformAccessibility,
@@ -707,6 +724,17 @@ impl SyncClipboard for Absent<position::Clipboard> {
     /// A refused write is kept nowhere, so nothing can keep a history of it.
     fn concealment(&self) -> flui_platform::Concealment {
         flui_platform::Concealment::Honored
+    }
+
+    /// A refused write is kept nowhere, so nothing outlives its time.
+    fn expiry_clearing(&self) -> flui_platform::ExpiryClearing {
+        flui_platform::ExpiryClearing::AtTimeAndLock
+    }
+
+    /// No write ever lands, so the clipboard holds no entry of this
+    /// application's.
+    fn clear_expired_now(&self, _: clipboard::ExpiredEntry) -> clipboard::ExpiredClear {
+        clipboard::ExpiredClear::NotHeld
     }
 }
 

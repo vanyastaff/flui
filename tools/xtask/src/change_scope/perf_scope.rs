@@ -12,13 +12,17 @@
 /// The source roots whose code runs for every element or render node of a
 /// frame: the element tree's storage, the element
 /// owners' build walk, the render tree's storage, the pipeline owner's
-/// layout, paint and semantics passes, and the
+/// layout, paint and semantics passes, the layer crate (whose retained scene
+/// takes each repainted boundary, and whose layers, damage and regions its
+/// patch and walk compute each frame; its hand-built scene and test kit come
+/// along as one root), and the
 /// semantics model those passes merge.
-pub(super) const PER_NODE: [&str; 5] = [
+pub(super) const PER_NODE: [&str; 6] = [
     "crates/flui-view/src/tree/",
     "crates/flui-view/src/owner/",
     "crates/flui-rendering/src/storage/",
     "crates/flui-rendering/src/pipeline/",
+    "crates/flui-layer/src/",
     "crates/flui-semantics/src/",
 ];
 
@@ -62,6 +66,8 @@ mod tests {
             "crates/flui-view/src/owner/build_owner.rs",
             "crates/flui-rendering/src/storage/tree.rs",
             "crates/flui-rendering/src/pipeline/owner/semantics.rs",
+            "crates/flui-layer/src/scene/geometry.rs",
+            "crates/flui-layer/src/damage/closure.rs",
             "crates/flui-testing/src/heap.rs",
             "crates/flui-semantics/src/configuration.rs",
             "crates/flui-widgets/perf/baseline/full_reassemble.toml",
@@ -78,7 +84,7 @@ mod tests {
                 "crates/flui-rendering/src/traits/render_object.rs",
                 "crates/flui-view/src/element/mod.rs",
                 "crates/flui-view/src/owner_notify.rs",
-                "crates/flui-layer/src/scene/mod.rs",
+                "crates/flui-layer/tests/scene_damage.rs",
                 "crates/flui-testing/src/lib.rs",
                 "crates/flui-testing/src/host.rs",
                 "crates/flui-rendering/tests/semantics_assembly.rs",

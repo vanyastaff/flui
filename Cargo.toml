@@ -35,7 +35,7 @@ members = [
     "crates/flui-widgets", # Widget catalog
     "crates/flui-runtime", # Frame runtime a UI runtime drives (ADR-0083)
     "crates/flui-sdk",     # Package-author surface (ADR-0088)
-    "crates/flui-testing", # Headless UI runtime host, widget harness, substrate driver
+    "crates/flui-testing", # Headless UI runtime host, widget harness, Tester
 
     # H: hosts
     "crates/flui-native", # The core host: native and headless hosts
@@ -829,7 +829,7 @@ pollster = { workspace = true }
 tracing.workspace = true
 
 [features]
-testing = ["dep:flui-testing", "flui-rendering/testing"]
+testing = ["dep:flui-testing", "flui-rendering/testing", "flui-platform/scripted"]
 animation-diagnostics = ["flui-animation/diagnostics"]
 # No catalog, tool or capability is on by default: an application names what it
 # uses (ADR-0088 §6). The base widget surface (`flui::widgets`, `flui::prelude`
@@ -853,7 +853,7 @@ system = ["dep:flui-system"]
 # over rustls on Linux and the BSDs, which have none (ADR-0280). Off, a widget
 # acquiring `HttpCapability` is refused as not registered and the application
 # links no HTTP client or TLS stack.
-http = ["flui-app/http"]
+http = ["flui-app/http", "flui-testing?/http"]
 
 # === One instance per user session ===
 # `Application::single_instance` (ADR-0254 §4): on Linux and Windows a later
@@ -986,6 +986,13 @@ required-features = ["material", "serde"]
 [[example]]
 name = "navigation"
 path = "examples/navigation.rs"
+required-features = ["material"]
+
+# The application the book's tutorial builds (book/src/tutorial/), in one
+# program.
+[[example]]
+name = "notes"
+path = "examples/notes.rs"
 required-features = ["material"]
 
 # The escape hatch from a widget: its window's Win32 or AppKit view

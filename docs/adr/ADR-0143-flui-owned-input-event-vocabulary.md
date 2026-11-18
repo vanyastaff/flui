@@ -3,7 +3,7 @@
 - **Status:** Accepted (2026-10-06)
 - **Date:** 2026-10-06
 - **Amended by:** [ADR-0217](ADR-0217-interaction-module-layers-and-pointer-assembly.md) (`PanZoomTransform` loses its pan component; a two-finger pan is `Scroll` with phases)
-- **Superseded-by:** [ADR-0346](ADR-0346-a-key-down-says-its-kind-a-dead-key-its-accent-and-a-scroll-its-direction.md) for a key event's state and repeat (§1), `KeyRepeat` and the dead key as a named key (§2, §3)
+- **Superseded-by:** [ADR-0346](ADR-0346-a-key-down-says-its-kind-a-dead-key-its-accent-and-a-scroll-its-direction.md) for a key event's state and repeat (§1), `KeyRepeat` and the dead key as a named key (§2, §3); [ADR-0358](ADR-0358-a-touchpad-hold-stops-what-coasts-and-a-touchpad-swipe-is-a-gesture.md) for `ScrollInertiaCancel` (§1, §2), which a phased touchpad hold replaces
 - **Related:** [ADR-0089](ADR-0089-upstream-types-in-stable-signatures.md) §4 (this record is
   its input vocabulary, with the generator and the gate §4 asks for),
   [ADR-0082](ADR-0082-platform-api-contract-crate.md) (the contract crate that holds it),
@@ -39,7 +39,7 @@ cannot, which the interaction audit's market matrix lists against the code:
 `flui-platform` defines the vocabulary in two public modules and one root type:
 
 - `pointer`: `PointerEvent` (`Down`, `ButtonChange`, `Up`, `Move`, `Cancel`, `Enter`, `Leave`,
-  `Scroll`, `ScrollInertiaCancel`, `PanZoom`, `DeviceAdded`, `DeviceRemoved`), `PointerInfo`
+  `Scroll`, `ScrollInertiaCancel`, `PanZoom`, `DeviceAdded`, `DeviceRemoved`), `PointerSource`
   (`PointerId`, `Option<DeviceId>`, `PointerKind`, `PointerRole`), `PointerKind` (`Mouse`,
   `Touch`, `Pen { tool: PenTool }`, `Trackpad`, `Unknown`), `PointerButton`/`PointerButtons`,
   `PointerSample`, `PenOrientation`, `PointerButtonEvent<D>` (`PointerPress`, `PointerRelease`, typestate over a sealed `ButtonDirection`), `ButtonChange`, `PointerMove`, `PointerSignal`,
@@ -82,10 +82,10 @@ history, a key event's state and repeat, and a pan/zoom event's pointer, whose k
   `DeviceRemoved`, and a consumer that still holds one ends it there.
 - **The pen eraser is a tool.** `Pen { tool: Eraser }` can hover and touch like the tip and
   can flip mid-hover or during a contact, so it is not a button; the W3C eraser bit has no `PointerButton`.
-- **Primary is a role, not an id.** `PointerInfo::role` is the W3C `isPrimary`;
+- **Primary is a role, not an id.** `PointerSource::role` is the W3C `isPrimary`;
   `PointerId` values carry no meaning and may be reused after a sequence ends.
   A cached contact admits packets by pointer id and device identity, not by mutable
-  kind/tool or role. Coalescing requires the full `PointerInfo` to match because
+  kind/tool or role. Coalescing requires the full `PointerSource` to match because
   individual samples do not carry their old metadata; a metadata boundary delivers
   both packets separately and preserves accepted delivery debt during reentry.
 - **Coalesced and predicted readings** travel on `PointerMove`, oldest first, before and after

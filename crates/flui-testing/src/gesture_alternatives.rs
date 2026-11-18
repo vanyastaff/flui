@@ -49,7 +49,9 @@ use flui_foundation::geometry::Offset;
 use flui_interaction::GestureSettings;
 use flui_platform::keyboard::{Code, KeyEvent, KeyPress, KeyState, NamedKey};
 use flui_platform::pointer::PointerButton;
-use flui_platform::{DeviceId, EventTime, MotionPreference, SystemPreferences, TargetPlatform};
+use flui_platform::{
+    EventTime, MotionPreference, SystemPreferences, TargetPlatform, pointer::DeviceId,
+};
 use flui_rendering::constraints::BoxConstraints;
 use flui_view::{BoxedView, View, ViewExt};
 use flui_widgets::{

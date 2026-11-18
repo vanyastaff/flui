@@ -4,8 +4,8 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
+use flui_foundation::Listenable;
 use flui_foundation::geometry::Size;
-use flui_foundation::notifier::Listenable;
 use flui_layer::LayerLink;
 use flui_objects::{RenderFlex, RenderLeaderLayer, RenderSizedBox};
 use flui_rendering::{

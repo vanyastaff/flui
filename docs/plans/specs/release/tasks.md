@@ -18,7 +18,7 @@
 | Рендер (render-scaling G1–G7) | [render-scaling/tasks.md](../render-scaling/tasks.md): сделаны RS1, RS3–RS8, RS14, RS15a, RS15c1, RS15c2; дальше RS8c, RS19, RS9, RS16, RS15b. У ADR-0304, ADR-0305 и ADR-0306 остаются пункты в `docs/gaps.md`: движок рисует версию сцены целиком, ни один runner не вызывает `GpuContext::bootstrap`, команды хранят свою `Matrix4` | в работе |
 | Цена контрола | `RawButton` и `InkWell` на узле ADR-0322; `RawButton` поверх `Text` добавляет 2 элемента, 1 узел рендера, 35 аллокаций и 4630 байт (`perf_raw_button_over_text`). Остальные контролы Material и все Cupertino на обёртках; цель записи — 3 КБ | в работе |
 | Снимок публичного API (R3) | снимок фасада `api/flui.txt` держит `cargo xtask public-api` в CI каждого PR (ADR-0324); фасад ещё реэкспортирует внутренние крейты целиком: 8588 строк снимка называют пути `flui_*::`; `cargo xtask api-closure` проверяет чужие типы только с фичами по умолчанию (ADR-0089 §6) | в работе |
-| Тестовый API авторов (R19) | `src/testing.rs` отдаёт `HeadlessBinding` (колонка «Not» в `AGENTS.md`); живут четыре драйвера: `HeadlessBinding`, `widgets::lay_out`, `widgets::harness::mount`, `HeadlessHost`. Тест шаблона `flui create` (`crates/flui-cli/src/templates/counter.rs`) считает координаты кнопки сам | не начато |
+| Тестовый API авторов (R19) | `src/testing.rs` отдаёт `Tester`, `find` и `rendering`; драйверов фреймворка три: `widgets::lay_out`, `widgets::harness::mount` и `HeadlessHost`, все кадры которых — `UiRuntime::pump`. Тест шаблона `flui create` (`crates/flui-cli/src/templates/counter.rs`) идёт через `Tester`. | в работе |
 | Имена крейтов (R21) | на crates.io занято одно имя, `flui-cli`; публикуемые манифесты — `rg -l '^publish = \["crates-io"\]' --glob '**/Cargo.toml'`. Заглушки публикуются с машины владельца после того, как он подтвердит список | в работе |
 
 ## Требования
@@ -49,7 +49,7 @@
 | R24 один вход | окна сверх первого только под `unstable-windows` (#2466); входы `run_app`, `run_app_android`, `AppLaunch` (`src/lib.rs`) ещё живы, один `run_app` и `#[flui::main]` — открытый #2483 | слить #2483 | тред «Свести запуск к одному `run_app`» | в работе |
 | R25 навигация | пункт ADR-0093 в `docs/gaps.md`: Router, `push_for_result`, `WidgetsApp::router` есть; именованные маршруты и двери `NavigatorHandle` живы, роутера в `MaterialApp` и `CupertinoApp` нет | достроить ADR-0093 | тред «Оставить одну форму навигации» | в работе |
 | R26 закрытые enum | `#[non_exhaustive]` на части публичных `enum`; линта нет | правило и clippy-линт | тред снимка API | не начато |
-| R27 состояние виджета | запись [Widget states still fill their handles in `init_state`](../../../gaps.md#widget-states-still-fill-their-handles-in-init_state); `StateCell` рядом с `Signal` (решение 7 аудита) | перевести состояния каталогов на `create_state`; решить судьбу `StateCell` | тред инвентаря | в работе |
+| R27 состояние виджета | состояния каталогов рождаются со своими хэндлами в `create_state`; `StateCell` рядом с `Signal` (решение 7 аудита) | решить судьбу `StateCell` | тред инвентаря | в работе |
 
 ## Открытые issue critical и high
 
@@ -80,7 +80,7 @@
 | #1039 | локальные линейные коммиты топологии рендера | квадратичное удаление ушло; глобальный `needs_render_reorder` и обход леса остались (`crates/flui-view/src/tree/element_tree.rs`) | R13 | тред perf-гейтов |
 | #1041 | обход всей арены при заимствовании грязных поддеревьев | `collect_disjoint_mut` обходит slab на каждый корень (`crates/flui-rendering/src/storage/tree.rs`) | R13 | тред perf-гейтов |
 | #540 | выделение, многострочность, скрытый ввод в `EditableText` | выделение, скрытие и ручки есть; многострочного поля нет ни на одном хосте ([No text input on mobile and the Web](../../../gaps.md#no-text-input-on-mobile-and-the-web)): недостающая возможность, не дефект | известное ограничение первого выпуска в release notes; поле — после ворот «Рендер» | тред инвентаря |
-| #546 (critical) | корпус верности виджетов Flutter 3.44 | чек-лист вехи над #540, #542 | release notes | координатор |
+| #546 (critical) | корпус верности виджетов Flutter (issue сверяет с 3.44; с 3.50 виджеты Material и Cupertino — пакеты `material_ui` и `cupertino_ui` из `flutter/packages`, корпус берёт их оттуда) | чек-лист вехи над #540, #542 | release notes | координатор |
 | #1091 | изменения геометрии текста без полного relayout | канала нет | после релиза, новый API | тред perf-гейтов (текстовая полоса) |
 | #560 | рантайм под управлением хоста, interop с wgpu | нет; запись [Add-to-app](../../../gaps.md#add-to-app-no-flui-view-inside-an-existing-native-app) | вне scope | — |
 | #562 | ворота последовательного и параллельного исполнения | отложено до параллельной раскладки (D5) | вне scope | — |

@@ -236,12 +236,12 @@ pub(crate) fn expand(input: &DeriveInput, kind: ViewKind) -> syn::Result<TokenSt
             if mentions_param(ty, &parameters) {
                 where_clause
                     .predicates
-                    .push(parse_quote!(#ty: #foundation::key::AsViewKey));
+                    .push(parse_quote!(#ty: #foundation::AsViewKey));
             }
             let this = receiver();
             // Spanned at the field's type, where a type that is not a key is reported.
             let key = quote_spanned! {ty.span()=>
-                <#ty as #foundation::key::AsViewKey>::as_view_key(&#this.#member)
+                <#ty as #foundation::AsViewKey>::as_view_key(&#this.#member)
             };
             methods.extend(quote! {
                 fn key(&self) -> ::core::option::Option<&dyn #foundation::ViewKey> {

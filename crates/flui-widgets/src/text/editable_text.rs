@@ -8,8 +8,8 @@ use std::{
     rc::Rc,
 };
 
+use flui_foundation::Listenable;
 use flui_foundation::geometry::{Bounds, Offset, Point, Rect};
-use flui_foundation::notifier::Listenable;
 use flui_foundation::panic::FirstPanic;
 use flui_interaction::PointerDispatch;
 use flui_interaction::events::PointerEventExt;
@@ -277,7 +277,7 @@ pub(super) fn source_offset_for_masked_offset(
 /// # IME composition
 ///
 /// The field is a text store the platform's input method pulls from
-/// ([`flui_platform::TextStore`], ADR-0090). On focus gain,
+/// ([`flui_platform::text_store::TextStore`], ADR-0090). On focus gain,
 /// `EditableTextState` attaches it as a [`TextInputClient`] through
 /// [`LifecycleContext::text_input_handle`] (acquired in `init_state`, per the
 /// frame-capability rule that method's doc states). The input method reads
@@ -695,7 +695,7 @@ impl EditableText {
     ///
     /// The callback receives the dispatch's `&mut EventContext<'_>` first, so it
     /// writes a signal directly (ADR-0086); the field opens that write from
-    /// the writer source it acquired in `init_state`.
+    /// the writer source its state is created with.
     #[must_use]
     pub fn on_submitted<F, R>(mut self, callback: F) -> Self
     where
@@ -778,7 +778,7 @@ pub struct EditableTextState {
     /// even if an external node is subsequently attached to another field.
     accepts_semantics_actions: Rc<Cell<bool>>,
     /// Exact manager acquired from the mounting build owner.
-    focus_manager: Option<Rc<FocusManager>>,
+    focus_manager: Rc<FocusManager>,
     /// The one generation-checked attachment owned by this mounted state.
     /// Shared privately with accessibility delivery; cloning the `Rc` does
     /// not mint a second attachment or expose reparenting to a consumer.
@@ -828,7 +828,7 @@ pub struct EditableTextState {
     /// The single notifier that drives the inner `AnimatedBuilder`.  Fires on
     /// text changes (forwarded from the controller listener) **and** on focus
     /// changes (forwarded from the FocusManager listener).
-    rebuild_notifier: flui_foundation::notifier::ChangeNotifier,
+    rebuild_notifier: flui_foundation::ChangeNotifier,
     /// ID for the focus-change listener we added to the [`FocusManager`], so
     /// dispose removes exactly ours.
     focus_listening: Option<flui_foundation::Subscription>,
@@ -925,9 +925,9 @@ pub struct EditableTextState {
     autofocus: bool,
     /// Whether the one autofocus request was made; it is never repeated.
     did_autofocus: bool,
-    /// Acquired first in `init_state`: `on_changed` and `on_submitted` run
-    /// inside a write it opens (ADR-0086). `None` only before `init_state`.
-    writer: Option<WriterSource>,
+    /// `on_changed` and `on_submitted` run inside a write it opens
+    /// (ADR-0086).
+    writer: WriterSource,
     /// The touch handles: shown by a touch, taken by a key, a mouse, the
     /// focus leaving or a change they did not make.
     touch_handles: Rc<FieldHandles>,
@@ -950,14 +950,14 @@ impl std::fmt::Debug for EditableTextState {
 impl StatefulView for EditableText {
     type State = EditableTextState;
 
-    fn create_state(&self, _ctx: &dyn LifecycleContext) -> EditableTextState {
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> EditableTextState {
         let focus_node = Rc::clone(&self.focus_node);
         focus_node.set_can_request_focus(self.enabled);
         EditableTextState {
             focus_node: Rc::clone(&focus_node),
             observed_focus_node: Rc::new(RefCell::new(focus_node)),
             accepts_semantics_actions: Rc::new(Cell::new(self.enabled)),
-            focus_manager: None,
+            focus_manager: ctx.focus_manager(),
             focus_attachment: Rc::new(RefCell::new(None)),
             rect_provider: None,
             rect_provider_registration: None,
@@ -968,7 +968,7 @@ impl StatefulView for EditableText {
             parent: None,
             controller: Rc::new(RefCell::new(self.controller.clone())),
             controller_listener_id: None,
-            rebuild_notifier: flui_foundation::notifier::ChangeNotifier::new(),
+            rebuild_notifier: flui_foundation::ChangeNotifier::new(),
             focus_listening: None,
             ime_focus_listening: None,
             ime_focus_transition: None,
@@ -976,7 +976,7 @@ impl StatefulView for EditableText {
             ime_token: Rc::new(RefCell::new(None)),
             post_frame_handle: None,
             cursor_area_alive: Rc::new(RefCell::new(None)),
-            writer: None,
+            writer: ctx.writer_source(),
             touch_handles: FieldHandles::new(),
             platform: Rc::new(Cell::new(TargetPlatform::Unknown)),
             long_press: FieldLongPress::new(),
@@ -1334,12 +1334,6 @@ impl EditableTextState {
         );
     }
 
-    fn manager(&self) -> &Rc<FocusManager> {
-        self.focus_manager.as_ref().expect(
-            "BUG: EditableText lifecycle used before init_state installed its focus manager",
-        )
-    }
-
     /// The one autofocus request, made the first time `autofocus` is (or
     /// becomes) `true` once the node is attached; the latch is set before
     /// the request runs, so a panicking focus listener does not repeat it.
@@ -1350,16 +1344,9 @@ impl EditableTextState {
         self.did_autofocus = true;
         crate::interaction::focus::request_autofocus(
             self.parent.as_ref(),
-            self.manager(),
+            &self.focus_manager,
             &self.focus_node,
         );
-    }
-
-    /// The writer source `on_changed` and `on_submitted` run inside.
-    fn writer(&self) -> WriterSource {
-        self.writer
-            .clone()
-            .expect("BUG: EditableText init_state acquires its writer source first")
     }
 
     /// The observer every user-edit path reports through.
@@ -1368,7 +1355,7 @@ impl EditableTextState {
             controller: Rc::clone(&self.controller),
             on_changed: Rc::clone(&self.on_changed),
             reports: Rc::clone(&self.reports_edits),
-            writer: self.writer(),
+            writer: self.writer.clone(),
         }
     }
 
@@ -1388,7 +1375,7 @@ impl EditableTextState {
             Rc::clone(node),
             Rc::clone(&self.on_submitted),
             Rc::clone(&self.text_input),
-            self.writer(),
+            self.writer.clone(),
             Rc::clone(&self.platform),
         );
         let edits = self.edit_observer();
@@ -1744,10 +1731,6 @@ impl EditObserver {
 
 impl ViewState<EditableText> for EditableTextState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        // First: every edit path built below reports through it.
-        self.writer = Some(ctx.writer_source());
-        self.focus_manager = Some(ctx.focus_manager());
-
         // Resolve the focus parent first, but attach only after every
         // focus/IME listener is installed below. An external node may carry a
         // focus request queued before mount; `attach_node` fulfills it
@@ -1813,7 +1796,7 @@ impl ViewState<EditableText> for EditableTextState {
         //    gains or loses focus. Removed by id in `dispose`.
         let rebuild_notifier_for_focus = self.rebuild_notifier.clone();
         let focus_node_for_rebuild = Rc::clone(&self.observed_focus_node);
-        self.focus_listening = Some(self.manager().listen(move |previous, current| {
+        self.focus_listening = Some(self.focus_manager.listen(move |previous, current| {
             let focus_node = focus_node_for_rebuild.borrow();
             // Only rebuild when this node's focus state actually changed.
             let was_focused = previous
@@ -1862,7 +1845,7 @@ impl ViewState<EditableText> for EditableTextState {
                     .replace(Rc::clone(&alive));
 
                 let last_sent_for_session = Rc::clone(&last_sent);
-                let store: Rc<dyn flui_platform::TextStore> = store_for_ime.clone(); // the presentation holds this field through the erased text-store contract.
+                let store: Rc<dyn flui_platform::text_store::TextStore> = store_for_ime.clone(); // the presentation holds this field through the erased text-store contract.
                 // The backend may have restarted the IME session (`Enabled`
                 // re-fires on that restart) — clearing `last_sent`
                 // guarantees the new session gets a fresh rect instead of
@@ -1930,7 +1913,7 @@ impl ViewState<EditableText> for EditableTextState {
         let focus_node_for_ime = Rc::clone(&self.observed_focus_node);
         let handles_for_focus = Rc::downgrade(&self.touch_handles);
         let drag_for_focus = Rc::downgrade(&self.selection_drag);
-        self.ime_focus_listening = Some(self.manager().listen(move |previous, current| {
+        self.ime_focus_listening = Some(self.focus_manager.listen(move |previous, current| {
             let focus_node = focus_node_for_ime.borrow();
             let was_focused = previous
                 .as_ref()
@@ -2403,7 +2386,6 @@ impl ViewState<EditableText> for EditableTextState {
             let _ = calls.run(|| attachment.detach());
         }
         self.parent = None;
-        self.focus_manager = None;
         calls.resume();
 
         // Deliberately NOT disposed here: `self.rebuild_notifier` is also

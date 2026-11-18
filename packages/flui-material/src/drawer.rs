@@ -557,17 +557,15 @@ struct DrawerControllerCore {
     /// Rebuilds the drawer, for a drag that ends on a closed panel: no run
     /// starts or settles then, so no status change rebuilds it to drop the
     /// panel's content.
-    rebuild: RefCell<Option<flui_sdk::view::RebuildHandle>>,
+    rebuild: flui_sdk::view::RebuildHandle,
 }
 
 impl DrawerControllerCore {
     /// Rebuild the drawer to drop the panel it still shows over a closed
     /// position.
     fn rebuild_closed(&self) {
-        let rebuild = self.rebuild.borrow().clone();
-        if let Some(rebuild) = rebuild {
-            rebuild.schedule(flui_sdk::view::RebuildReason::AnimationTick);
-        }
+        self.rebuild
+            .schedule(flui_sdk::view::RebuildReason::AnimationTick);
     }
 
     fn replace_callback(&self, callback: Option<BoundDrawerCallback>) {
@@ -671,7 +669,7 @@ impl DrawerControllerCore {
 pub struct DrawerControllerState {
     controller: DrivenController,
     core: Rc<DrawerControllerCore>,
-    writer: Option<WriterSource>,
+    writer: WriterSource,
 }
 
 impl std::fmt::Debug for DrawerControllerState {
@@ -702,7 +700,7 @@ impl DrawerControllerState {
 impl StatefulView for DrawerController {
     type State = DrawerControllerState;
 
-    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
         let controller = AnimationController::builder(BASE_SETTLE_DURATION)
             .debug_label("Drawer.settle")
             .build_on(None);
@@ -710,14 +708,14 @@ impl StatefulView for DrawerController {
             let _ = controller.controller().set_value(1.0);
         }
         DrawerControllerState {
-            writer: None,
+            writer: ctx.writer_source(),
             core: Rc::new(DrawerControllerCore {
                 controller: controller.controller().clone(),
                 previously_opened: Cell::new(false),
                 alignment: Cell::new(self.alignment),
                 panel_width: Cell::new(self.panel_width),
                 on_open_changed: RefCell::new(None),
-                rebuild: RefCell::new(None),
+                rebuild: ctx.rebuild_handle(),
             }),
             controller,
         }
@@ -726,16 +724,12 @@ impl StatefulView for DrawerController {
 
 impl ViewState<DrawerController> for DrawerControllerState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        self.writer = Some(ctx.writer_source());
-        let rebuild = ctx.rebuild_handle();
-        *self.core.rebuild.borrow_mut() = Some(rebuild.clone());
-
         self.did_change_dependencies(ctx);
 
         // Status changes rebuild the panel's admission as a run starts or
         // settles. Closed admission depends on position and run ownership;
         // render transitions consume value ticks without rebuilding the widget.
-        let rebuild_for_status = rebuild;
+        let rebuild_for_status = self.core.rebuild.clone();
         self.core
             .controller
             .subscribe_status(std::rc::Rc::new(move |_status| {
@@ -769,10 +763,7 @@ impl ViewState<DrawerController> for DrawerControllerState {
     fn build(&self, view: &DrawerController, ctx: &dyn BuildContext) -> impl IntoView {
         self.core.panel_width.set(view.panel_width);
         self.core.alignment.set(view.alignment);
-        let writer = self
-            .writer
-            .clone()
-            .expect("BUG: drawer lifecycle precedes build");
+        let writer = self.writer.clone();
         let callback = view.on_open_changed.clone().map(|callback| {
             Rc::new(move |opened| writer.write(|ctx| callback(ctx, opened))) as Rc<dyn Fn(bool)>
         });
@@ -796,7 +787,6 @@ impl ViewState<DrawerController> for DrawerControllerState {
 
     fn dispose(&mut self) {
         self.core.replace_callback(None);
-        self.writer = None;
         self.controller.dispose();
     }
 }

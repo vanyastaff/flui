@@ -96,6 +96,7 @@ mod new_probes_before_gpu_work_tests {
             wgpu::Features::IMMEDIATES,
             wgpu::Features::TIMESTAMP_QUERY,
             wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS,
+            wgpu::Features::PIPELINE_CACHE,
         ] {
             let capabilities = super::GpuCapabilities {
                 backend: crate::GpuBackend::WebGpu,
@@ -108,6 +109,12 @@ mod new_probes_before_gpu_work_tests {
             assert!(
                 features.contains(requested),
                 "device request {requested:?} exceeds adapter features {features:?}"
+            );
+            // The pipeline cache is asked for wherever it is offered.
+            assert_eq!(
+                requested.contains(wgpu::Features::PIPELINE_CACHE),
+                features.contains(wgpu::Features::PIPELINE_CACHE),
+                "{features:?}"
             );
         }
     }
@@ -483,7 +490,7 @@ impl Renderer {
     /// The request is met as far as the surface, the adapter and the display
     /// allow and falls back down `Hdr` → `WideGamut` → `Srgb8`;
     /// [`Self::surface_color`] says what was granted. `display` is the
-    /// [`DisplayInfo::color`](flui_platform::DisplayInfo::color) of the
+    /// [`DisplayDescription::color`](flui_platform::DisplayDescription::color) of the
     /// display the window is on, `None` where the platform reports none: an
     /// extended-range surface is granted only on a display in high range, and
     /// its tone mapping is bounded by the display's headroom (ADR-0256). A
@@ -697,7 +704,7 @@ impl Renderer {
         crate::offscreen::OffscreenRenderer,
     ) {
         let painter = frame.new_painter(Arc::clone(&domain), format, size);
-        let offscreen = crate::offscreen::OffscreenRenderer::with_domain(domain);
+        let offscreen = crate::offscreen::OffscreenRenderer::with_domain(domain, None);
         (painter, offscreen)
     }
 
@@ -1162,6 +1169,10 @@ impl Renderer {
         if capabilities.supports_dual_source_blending() {
             features |= wgpu::Features::DUAL_SOURCE_BLENDING;
         }
+
+        // The driver's pipeline cache, which `GpuContext::load_pipeline_cache`
+        // keeps between runs; wgpu offers it on Vulkan alone.
+        features |= capabilities.features & wgpu::Features::PIPELINE_CACHE;
 
         features
     }
@@ -2033,7 +2044,8 @@ impl Renderer {
     /// with `damage::begin_partial` (its rect's scissor and the clear inside
     /// it) and walks the scene culled by its own rect. Answers whether an
     /// advanced shape straddles the rect of the pass that drew it, in which
-    /// case the caller forces its next frame full, and the passes drawn.
+    /// case the caller forces its next frame full, and what its walk and
+    /// recording did.
     ///
     /// The windowed renderer and the crate's headless retained capture both
     /// record through this, so the partial-frame protocol a readback test
@@ -2051,8 +2063,11 @@ impl Renderer {
             // Reset per-frame clip/transform/opacity/layer state so that
             // partial-damage scissors from frame N cannot leak into frame N+1.
             backend.painter_mut().begin_frame_in_scope();
-            crate::layer_walk::record_scene(scene.content(), None, &mut backend)?;
-            return Ok(crate::frame_protocol::RecordedContent::default());
+            let counters = crate::layer_walk::record_scene(scene.content(), None, &mut backend)?;
+            return Ok(crate::frame_protocol::RecordedContent {
+                straddled: false,
+                counters,
+            });
         };
         let mut recorded = crate::frame_protocol::RecordedContent::default();
         for (pass, &rect) in (0_u32..).zip(plan.rects()) {
@@ -2079,8 +2094,10 @@ impl Renderer {
             // advanced-blend passes read from `render_texture`, which always
             // has COPY_SRC here: the swapchain image when the surface offers
             // it, the retained target (created with it) otherwise. A
-            // version's walk skips the boundaries this rect cannot reach.
-            crate::layer_walk::record_scene(scene.content(), Some(redrawn), &mut backend)?;
+            // version's walk skips the boundaries and chunks this rect cannot
+            // reach.
+            recorded.counters +=
+                crate::layer_walk::record_scene(scene.content(), Some(redrawn), &mut backend)?;
 
             // An advanced shape (one that reads the destination) whose bounds
             // straddle the pass's rect was drawn clipped, so outside the rect
@@ -2102,7 +2119,7 @@ impl Renderer {
                 );
                 recorded.straddled = true;
             }
-            recorded.region_passes += 1;
+            recorded.counters.region_passes = recorded.counters.region_passes.saturating_add(1);
         }
         Ok(recorded)
     }

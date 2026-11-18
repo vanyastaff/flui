@@ -1557,7 +1557,8 @@ fn lazy_pipeline_admission_recovers() {
                 ..Default::default()
             },
         );
-        let mut pipeline = ClipMaskPipeline::new(&device);
+        let mut pipeline =
+            ClipMaskPipeline::new(crate::pipeline_device::PipelineDevice::uncached(&device));
         let nodes = [MaskNode {
             bounds: [0.0, 0.0, 4.0, 4.0],
             radii_x: [1.0; 4],

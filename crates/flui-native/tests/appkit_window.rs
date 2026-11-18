@@ -214,12 +214,15 @@ mod cases {
     /// the next one.
     struct AppKitFixture {
         app: Retained<NSApplication>,
-        _platform: MacOSPlatform,
+        platform: MacOSPlatform,
         window: Rc<dyn HostWindow>,
         ns_window: Retained<NSWindow>,
         handler: Rc<RecordingWindowHandler>,
         /// How many drawables the fixture presented into the window.
         presents: u64,
+        /// The window that took the keyboard focus away
+        /// (`take_focus_away`), closed with the fixture.
+        focus_holder: Option<Rc<dyn HostWindow>>,
     }
 
     impl WindowFixture for AppKitFixture {
@@ -365,12 +368,46 @@ mod cases {
             }
             request
         }
+
+        /// No reading: whether the mouse is detached from the cursor
+        /// (`CGAssociateMouseAndMouseCursorPosition`) is a setting Quartz
+        /// writes and never answers, and `CGGetLastMouseDelta` reports motion
+        /// whether or not the mouse is attached. The grab check keeps to the
+        /// snapshot.
+        fn held_grab(&self) -> Option<flui_platform::CursorGrab> {
+            None
+        }
+
+        /// Another AppKit window of the platform is made key, as a click in
+        /// it would; `false` where the window under test is not key to lose
+        /// it (the test process is not the active application). On a Mac it
+        /// would show the window under test resigning key, its lock let go
+        /// (`windowDidResignKey:`) and its snapshot holding no grab.
+        fn take_focus_away(&mut self) -> bool {
+            if !self.ns_window.isKeyWindow() {
+                return false;
+            }
+            let other = self
+                .platform
+                .open_window(
+                    WindowOptions::default().title("focus holder"),
+                    RecordingWindowHandler::new() as _,
+                )
+                .expect("a second AppKit window opens");
+            ns_window_of(other.as_ref()).makeKeyAndOrderFront(None);
+            self.focus_holder = Some(other);
+            self.settle();
+            !self.ns_window.isKeyWindow()
+        }
     }
 
     impl Drop for AppKitFixture {
         fn drop(&mut self) {
             // A window the checks closed already is closed; any other refusal
             // is logged, so a case already unwinding keeps its first failure.
+            if let Some(other) = self.focus_holder.take() {
+                other.close_for_cleanup();
+            }
             self.window.close_for_cleanup();
             self.settle();
         }
@@ -406,11 +443,12 @@ mod cases {
         let ns_window = ns_window_of(window.as_ref());
         let mut fixture = AppKitFixture {
             app,
-            _platform: platform,
+            platform,
             window,
             ns_window,
             handler,
             presents: 0,
+            focus_holder: None,
         };
         fixture.settle();
         fixture
@@ -609,7 +647,9 @@ mod cases {
         ] {
             fixture
                 .window
-                .admit_and_apply(WindowCommand::SetSize(asked))
+                .admit_and_apply(WindowCommand::SetSize(
+                    flui_platform::WindowExtent::try_new(asked).expect("an extent"),
+                ))
                 .unwrap_or_else(|refusal| panic!("SetSize({asked:?}) was refused: {refusal:?}"));
             fixture.settle();
             assert_eq!(

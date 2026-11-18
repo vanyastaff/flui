@@ -13,10 +13,10 @@
   the provider context, the permission vocabulary), [ADR-0277](ADR-0277-a-window-publishes-its-insets-and-the-keyboards-motion.md)
   (the keyboard inset and its motion), [ADR-0348](ADR-0348-android-text-input-loses-no-edit-and-restarts-the-keyboard-only-for-its-composition.md) §2 (the Java
   side never waits for the owner)
-- **Sources:** flutter/flutter@f60eef8885
-  `engine/src/flutter/shell/platform/android/io/flutter/plugin/editing/TextInputPlugin.java`,
-  `ImeSyncDeferringInsetsCallback.java`, and
-  `packages/flutter_tools/templates/app/android.tmpl/app/src/main/AndroidManifest.xml.tmpl:14`
+- **Sources:** Flutter 3.50.0, `flutter/flutter@ab2912035e`
+  [`engine/src/flutter/shell/platform/android/io/flutter/plugin/editing/TextInputPlugin.java:92-93`](https://github.com/flutter/flutter/blob/ab2912035e/engine/src/flutter/shell/platform/android/io/flutter/plugin/editing/TextInputPlugin.java#L92-L93),
+  [`ImeSyncDeferringInsetsCallback.java:49-52`](https://github.com/flutter/flutter/blob/ab2912035e/engine/src/flutter/shell/platform/android/io/flutter/plugin/editing/ImeSyncDeferringInsetsCallback.java#L49-L52), and
+  [`packages/flutter_tools/templates/app/android.tmpl/app/src/main/AndroidManifest.xml.tmpl:14`](https://github.com/flutter/flutter/blob/ab2912035e/packages/flutter_tools/templates/app/android.tmpl/app/src/main/AndroidManifest.xml.tmpl#L14)
 
 ## Context and problem statement
 
@@ -75,7 +75,7 @@ on every host but Android's, and the host table and `Platform` gain nothing: `an
 returns an `AndroidStart` with the platform and the Activity's bridge, which every Android
 platform has (one whose epoch cannot be read does not start). The composition root installs the
 bridge in a `HostBridge` only it holds, which hands the bridge its `ResultMint`; a
-`ResultTicket`, a `ResultData`, an `ActivityResult` and a `ResultRequest` are made only with it,
+`ResultTicket`, a `ResultIntent`, an `ActivityResult` and a `ResultRequest` are made only with it,
 so a provider holds only what the host handed it. `Activity::launch_for_result(completions, key,
 fill)` lends the provider an empty `Intent` the host made (`IntentFrame`), so no reference flows
 from a provider's JNI code into the host, and answers with a
@@ -107,9 +107,9 @@ not taken within a deadline the loop waits for), `Cancelled`, `ActivityEnded`, `
 `DataLost` (an `Intent` the host could not keep, with the answer's code) or `AnswerUnreadable` (a
 record the library cannot read); every record the host takes off Java's queue settles a request or
 is reported. The answered `Intent` stays with the host on the owner thread, under its request's
-token and capability, until that capability's provider hands the answer's `ResultData` to
+token and capability, until that capability's provider hands the answer's `ResultIntent` to
 `Activity::take_data` (another capability's is refused as `DataRefused::OtherCapability`); a
-`ResultData` dropped unread releases it.
+`ResultIntent` dropped unread releases it.
 
 Each count has one owner. `FluiHost` counts the requests it holds, waiting to start, started, or
 answered and not drained, of every Activity of the process: at most `MAX_OPEN_REQUESTS` in all and

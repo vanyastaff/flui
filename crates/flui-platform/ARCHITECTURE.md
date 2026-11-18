@@ -41,7 +41,7 @@ this one path (ADR-0151 §9).
   `docs/gaps.md`, "A window larger than a renderer draws"), since `flui-native` and
   `flui-engine` both read this crate and neither the other.
 - **A headroom is finite and at least white; an absent colour says why.** A display's
-  colour profile is `DisplayInfo::color`: a `DisplayColor` or the `CapabilityAbsence` the
+  colour profile is `DisplayDescription::color`: a `DisplayColor` or the `CapabilityAbsence` the
   platform gives, which `color_space()` and `headroom()` answer as `Unsupported`.
   `DisplayColor` is `Standard(gamut)` or `High(gamut, headroom)`: only the high range
   carries a headroom (or the absence of one), so a standard-range display that
@@ -109,11 +109,24 @@ this one path (ADR-0151 §9).
   (`ApplyError::Platform`), a cursor (`CursorError::Platform`) and a
   preference query (`PreferenceQueryError::Platform`) the window system
   refused or failed carry a `PlatformFailure`, so a caller matches one type.
+- **A position names its display; a display's bounds are its own logical
+  pixels (ADR-0364).** A `WindowPosition` is a finite point of one display, in
+  that display's logical pixels from its corner, and is the one shape of a
+  window's place: the snapshot's outer and normal positions, `SetPosition`
+  and the options' positions. There is no global logical space. The snapshot's
+  outer position is measured on the window's `display`, which `successor`
+  sets from it. A `DisplayDescription` carries its extent and usable area in its own
+  logical pixels (`DisplayBounds`, the usable area inside the extent) and its
+  place in the window system's desktop as a `DesktopOrigin`, whose unit is
+  the window system's and which no arithmetic mixes with a logical position.
+  Commands and options carry the checked types (`WindowPosition`,
+  `WindowExtent`), so a number that is not finite cannot be asked for and
+  admission checks only an area and the limits' order.
 - **A snapshot holds no number that is not a window's.** Its rectangles are
   valid by construction, as its metrics and insets are: `WindowGeometry` is a
-  finite position and a `WindowExtent` (each side finite and not negative),
-  the content size is a `WindowExtent`, and so is each bound of
-  `SizeConstraints`. A window system's report can be numbers no window has (a
+  `WindowPosition` where the window system reports one and a `WindowExtent`
+  (each side finite and not negative), the content size is a `WindowExtent`,
+  and so is each bound of `SizeConstraints`. A window system's report can be numbers no window has (a
   size over a scale of zero, a NaN a compositor sent); a host builds the
   values with `try_new`, and a report it cannot build them from costs the
   snapshot its geometry and nothing else (`flui-native`'s window state cell
@@ -200,6 +213,24 @@ this one path (ADR-0151 §9).
   every command absent as `CapabilityAbsence::WITHDRAWN`, reports kept, nothing
   admitted, and so in every later snapshot) while the window's other
   facts publish on.
+- **The cursor is a value of the region that asked for it; a grab lasts while the focus does
+  (ADR-0354).** `set_cursor` takes a `Cursor` (`Icon`, `Image`, `Hidden`): hidden is a cursor,
+  shown over that window until the next one, never a window-wide switch beside it, so nothing
+  must remember to show it again. A `CursorImage` is checked where it is built (each side
+  `1..=CursorImage::MAX_SIDE`, sides before pixels, four bytes per pixel, the hotspot a pixel)
+  and shares its pixels, so a host keeps the last native cursor it made and compares with `==`;
+  `cursor_image` is a verb's `Availability`, answered as the frame-rate hint is
+  (`a_cursor_image_holds_only_what_a_window_system_shows`). `SetCursorGrab(Confined | Locked)`
+  is admitted against `confines_cursor`/`locks_cursor`, `SetCursorGrab(None)` and
+  `SetLevel(Normal)` against nothing, as the normal mode; `WindowState::cursor_grab` is
+  `None` for every window without the keyboard focus, which `successor` holds
+  (`a_grab_is_published_only_for_a_focused_window`) and every host's window system holds too
+  (the conformance check `a_grab_ends_with_the_focus`). A locked pointer's motion is
+  `PointerEvent::RawMotion` instead of moves. The level is a snapshot fact (`WindowLevel`); the
+  resize steps and the proportion (`AspectRatio`, lowest terms) are requests the window system
+  holds during the user's resize, not facts, as the material. A live resize is
+  `WindowInteraction::UserResizing`, and `WindowInteraction::is_user` is the one reading of "the
+  user changed it".
 - **A window is opened with its handler (ADR-0254 §4).** `WindowHandler` has
   one required method per obligation (`input`, `state_changed`,
   `frame_requested`, `close_requested`, `closed`, `surface_changed`) and no
@@ -335,7 +366,10 @@ admission and the retained aliases, including serde when enabled.
 (ADR-0172). Text factors use the bounded accessibility range `1/64..=64`;
 motion observations distinguish
 reduced motion from duration scaling. Vertical wheel lines/pages and horizontal
-character counts have separate representations. The `preferences_contract` table
+character counts have separate representations. The accent colour is an
+`SrgbColor`: finite sRGB components and alpha in `0..=1`, refused rather than
+clamped outside it; scroll-bar visibility and what a click in the track does
+are separate observations (ADR-0359). The `preferences_contract` table
 pins numeric admission, including adjacent rejected boundary values, subnormal
 text factors and both signs of zero. The widget contract
 `media_text_scaling_changes_the_laid_out_text` checks real paragraph layout at
@@ -368,7 +402,7 @@ What only the host owns reaches a provider through its `ProviderContext`
 elsewhere. The Activity is scoped by the `CapabilityId` the registrar minted
 for the provider's registration, which only its `RegisteredProvider` puts in
 the context, so no caller names another capability by its string; the
-values the host hands providers (`ResultTicket`, `ResultData`,
+values the host hands providers (`ResultTicket`, `ResultIntent`,
 `ActivityResult`, `ResultRequest`) are made only with the `ResultMint`
 `HostBridge::install_activity` hands the bridge. `capability::activity_result` holds that vocabulary and no JNI
 type: a request is identified by a `ResultToken` the host mints per call and
@@ -378,7 +412,7 @@ replaces; it ends exactly once, with an `ActivityResult` or a typed
 `ResultRefused`, and lasts while the provider holds its `ResultTicket`, whose
 `Drop` the host reads as a cancel (the `Resolver` answers no liveness query);
 an answer's `Intent` stays with the host until the provider
-hands its `ResultData` back, and a `ResultData` dropped unread releases it;
+hands its `ResultIntent` back, and a `ResultIntent` dropped unread releases it;
 and the provider's own `jni` crate works on raw pointers the
 host lends for one call (`JniFrame`, `IntentFrame`), filling objects the host
 made instead of handing the host a reference it would have to trust.
@@ -398,6 +432,19 @@ What a service's own error does not name is `SystemFailure`: an OS error code, a
 response code, a bus failure, or an answer outside the system's contract. `LaunchError::Failed`
 and `flui-system`'s `DialogError::Failed` carry it, so no backend invents a number or guesses a
 named variant for a code it cannot read.
+
+### A launch is decided at the seam, by what its caller allows
+
+`launch` holds the launch policy for every backend, the scripted double included, so no backend
+re-implements it (ADR-0360). A URI reaches a backend only as an `ExternalUri`, built from the
+schemes its caller names (`&[Scheme::HTTPS]`): bounded before it is read, with no character it
+must percent-encode and no hidden one, an authority's `//` written and no user in it, a `mailto`
+query of the five admitted fields, and never a scheme of `REFUSED_SCHEMES`, which no `Scheme` can
+be. `Launcher`'s path verbs, from the path alone and with no file system call on the owner
+thread, refuse a relative path and any Windows prefix but a drive letter, and `open_path` refuses
+a name that `runs_when_opened` (`RUNNABLE_EXTENSIONS`, a class id). That name list is the floor; a
+backend opens the file off the owner thread and judges what it opened, by its resolved name and
+by its own system, before it hands it on.
 
 ### A capability's double is built from one scenario primitive
 

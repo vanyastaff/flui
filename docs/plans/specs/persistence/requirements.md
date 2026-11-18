@@ -74,8 +74,8 @@ cross-crate контракт оформляется ADR.
   (`crates/flui-app/src/app/close_request.rs:70`), flush при закрытии отложен (`close_request.rs:52`–`55`).
   Widget видит `AppLifecycleState` (`Resumed`/`Inactive`/`Hidden`/`Paused`/`Detached`,
   `crates/flui-scheduler/src/frame.rs:230`) через `lifecycle_handle` (`build_context.rs:537`–`542`).
-  Headless-хост: `set_lifecycle_state` (`crates/flui-testing/src/lib.rs:323`) и `close_lifecycle`,
-  который дерево не снимает (`lib.rs:332`–`334`).
+  Headless-хост (`flui_testing::HeadlessHost`): окно уходит в `Hidden` через `set_window_visible`,
+  теряет фокус через `set_window_focused`, закрытие запрашивает `request_close`.
 - В workspace есть `serde`/`serde_json` (`Cargo.toml:240`–`241`) и `tempfile` (`Cargo.toml:264`);
   фича facade `serde` покрывает только value-типы (`Cargo.toml:790`–`795`). Web-бэкенд без
   файловой системы: `crates/flui-platform/src/platforms/web`.
@@ -126,7 +126,7 @@ cross-crate контракт оформляется ADR.
   завершения. Ни одно изменение не теряется. H (запрос закрытия у headless-двойника), N.
 - **R13.** КОГДА окно уходит в `Hidden` или `Paused` (платформенное `Suspended`), СИСТЕМА ДОЛЖНА
   записать сеанс; при возврате в `Resumed` — НЕ перечитывать диск поверх состояния в памяти. H
-  (`set_lifecycle_state`), N.
+  (`HeadlessHost::set_window_visible`), N.
 - **R14.** КОГДА закрытие запрошено, а несохранённые правки нельзя записать (запись идёт или не
   удалась, файл повреждён или от более новой версии, загрузка не удалась после правок вроде
   compact-строк), СИСТЕМА ДОЛЖНА удерживать окно через вето закрытия и показывать причину с Retry

@@ -36,7 +36,7 @@ pub(crate) fn swap_chain_statistics(
 /// present, a break in the statistics, or nothing (nothing shown yet: DXGI
 /// then answers an error, not statistics). Nothing on another backend.
 ///
-/// The crate's one production `unsafe`: wgpu reaches its swap chain only
+/// A production `unsafe` the crate's `ARCHITECTURE.md` lists: wgpu reaches its swap chain only
 /// through the hal escape (`Surface::as_hal`), and DXGI's statistics are COM
 /// calls on it.
 #[cfg(windows)]
@@ -457,7 +457,7 @@ impl crate::frame_protocol::FrameSteps for SwapchainFrame<'_> {
 
     /// Traverses the scene's layer tree, once per pass of a partial frame,
     /// and flushes all painter batches to the GPU, reporting the
-    /// damage-straddle check and the passes drawn.
+    /// damage-straddle check and what the walk and recording did.
     fn content(
         &mut self,
         render_view: &wgpu::TextureView,

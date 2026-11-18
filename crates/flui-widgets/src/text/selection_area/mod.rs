@@ -294,19 +294,19 @@ impl View for SelectionArea {
 impl StatefulView for SelectionArea {
     type State = SelectionAreaState;
 
-    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
         SelectionAreaState {
             model: Rc::new_cyclic(|this| SelectionModel {
                 this: Weak::clone(this),
                 registry: Rc::new(SelectionRegistry::default()),
                 selection: RefCell::new(None),
                 on_selection_changed: RefCell::new(self.on_selection_changed.clone()),
-                rebuild: RefCell::new(None),
+                rebuild: RefCell::new(Some(ctx.rebuild_handle())),
                 pipeline: RefCell::new(None),
                 primary: RefCell::default(),
                 direction: Cell::new(TextDirection::Ltr),
                 platform: Cell::new(flui_platform::TargetPlatform::Unknown),
-                writer: RefCell::new(None),
+                writer: ctx.writer_source(),
                 clipboard: RefCell::new(None),
                 focus: FocusNode::with_debug_label("SelectionArea"),
                 focused: Cell::new(false),
@@ -343,10 +343,8 @@ impl std::fmt::Debug for SelectionAreaState {
 
 impl ViewState<SelectionArea> for SelectionAreaState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        *self.model.rebuild.borrow_mut() = Some(ctx.rebuild_handle());
         *self.model.pipeline.borrow_mut() = ctx.pipeline_owner();
         *self.model.primary.borrow_mut() = Rc::new(PrimarySelectionOwner::acquire(ctx));
-        *self.model.writer.borrow_mut() = Some(ctx.writer_source());
         *self.model.clipboard.borrow_mut() = ctx.capability::<ClipboardCapability>().ok();
         *self.model.post_frame.borrow_mut() = ctx.post_frame_handle();
         *self.model.handles.overlay.borrow_mut() = Overlay::maybe_of(ctx);
@@ -517,6 +515,8 @@ struct SelectionModel {
     registry: Rc<SelectionRegistry>,
     selection: RefCell<Option<DocumentSelection>>,
     on_selection_changed: RefCell<Option<SelectionCallback>>,
+    /// Made in `create_state`; `dispose` takes it, so a handler a frame
+    /// already captured finds no area to rebuild.
     rebuild: RefCell<Option<RebuildHandle>>,
     pipeline: RefCell<Option<PipelineCell>>,
     /// The area's hold on the primary selection, acquired in `init_state`.
@@ -528,9 +528,8 @@ struct SelectionModel {
     /// build: which chord extends by word, whether a secondary press
     /// selects the word under it.
     pub(super) platform: Cell<flui_platform::TargetPlatform>,
-    /// Where the listener hears of a change the pointer made, acquired in
-    /// `init_state`.
-    writer: RefCell<Option<WriterSource>>,
+    /// Where the listener hears of a change the pointer made.
+    writer: WriterSource,
     /// Where Copy writes, acquired in `init_state`; `None` disables Copy.
     clipboard: RefCell<Option<ClipboardHandle>>,
     /// The node the area holds the focus with once the user selects in it.
@@ -818,17 +817,14 @@ impl SelectionModel {
                 }
             });
         self.rebase_drag(held, next.as_ref());
-        let writer = self.writer.borrow().clone();
-        if let Some(writer) = writer {
-            writer.write(|ctx| {
-                self.commit(
-                    ctx,
-                    next.as_ref(),
-                    SelectionChangeCause::TextRemoved,
-                    CaretMemory::default(),
-                );
-            });
-        }
+        self.writer.write(|ctx| {
+            self.commit(
+                ctx,
+                next.as_ref(),
+                SelectionChangeCause::TextRemoved,
+                CaretMemory::default(),
+            );
+        });
     }
 
     /// The parts of the texts `selection` covers, in reading order, each as
@@ -1151,6 +1147,8 @@ struct SelectableEntry {
     /// The links it publishes the selection's start and end under, for the
     /// handles, while it holds them.
     handles: Cell<HandleEnds>,
+    /// Made in `create_state`; `dispose` takes it, since the area's registry
+    /// can still hold the entry.
     rebuild: RefCell<Option<RebuildHandle>>,
 }
 
@@ -1325,7 +1323,7 @@ impl View for SelectableParagraph {
 impl StatefulView for SelectableParagraph {
     type State = SelectableParagraphState;
 
-    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
         SelectableParagraphState {
             entry: Rc::new(SelectableEntry {
                 anchor: SemanticsAnchor::new(),
@@ -1333,7 +1331,7 @@ impl StatefulView for SelectableParagraph {
                 subtree: SubtreeAnchor::new(),
                 highlight: RefCell::new(None),
                 handles: Cell::new((None, None)),
-                rebuild: RefCell::new(None),
+                rebuild: RefCell::new(Some(ctx.rebuild_handle())),
             }),
             registry: Rc::clone(&self.registry),
         }
@@ -1355,8 +1353,7 @@ impl std::fmt::Debug for SelectableParagraphState {
 }
 
 impl ViewState<SelectableParagraph> for SelectableParagraphState {
-    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        *self.entry.rebuild.borrow_mut() = Some(ctx.rebuild_handle());
+    fn init_state(&mut self, _ctx: &dyn LifecycleContext) {
         self.registry.register(&self.entry);
     }
 

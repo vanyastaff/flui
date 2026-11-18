@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use flui_foundation::RenderId;
 use flui_foundation::geometry::{DevicePixelRatio, Rect};
-use flui_protocol::{ElementId, ReadQuery, WindowId};
+use flui_protocol::{tree::ElementId, tree::ReadQuery, tree::WindowId};
 use flui_semantics::{
     AccessibilityNodeId, DuplicateIdentifier, Placement, SemanticsConfiguration,
     SemanticsDiagnostic, SemanticsNode, SemanticsOwner, SemanticsRole, TreeUpdate,
@@ -69,7 +69,7 @@ fn published_node(update: &TreeUpdate) -> &accesskit::Node {
 }
 
 /// The button as an agent reads it from the wire.
-fn wire_button(owner: &SemanticsOwner) -> flui_protocol::Node {
+fn wire_button(owner: &SemanticsOwner) -> flui_protocol::tree::Node {
     let element =
         ElementId::from_u64(button_id().as_u64()).expect("an accessibility id is non-zero");
     let placement = Placement::new(
@@ -77,7 +77,7 @@ fn wire_button(owner: &SemanticsOwner) -> flui_protocol::Node {
         WindowId::from_u64(1).expect("non-zero"),
     );
     owner
-        .read_wire(&ReadQuery::new().with_root(element), placement)
+        .read_wire(&ReadQuery::new().root(element), placement)
         .expect("the published tree reads")
         .roots
         .into_iter()
@@ -236,7 +236,7 @@ fn siblings_sharing_an_identifier_are_reported_and_published_as_written() {
         DevicePixelRatio::try_new(1.0).expect("1 is a ratio"),
         WindowId::from_u64(1).expect("non-zero"),
     );
-    let clash = vec![flui_protocol::TreeDiagnostic::DuplicateIdentifier {
+    let clash = vec![flui_protocol::tree::TreeDiagnostic::DuplicateIdentifier {
         identifier: "delete".into(),
         parent: element(1),
         elements: vec![element(2), element(3), element(8)],
@@ -264,7 +264,7 @@ fn siblings_sharing_an_identifier_are_reported_and_published_as_written() {
     );
 
     let shallow = owner
-        .read_wire(&ReadQuery::new().with_max_depth(0), placement)
+        .read_wire(&ReadQuery::new().max_depth(0), placement)
         .expect("the published tree reads");
     assert!(shallow.truncated);
     assert_eq!(
@@ -273,7 +273,7 @@ fn siblings_sharing_an_identifier_are_reported_and_published_as_written() {
     );
 
     let below = owner
-        .read_wire(&ReadQuery::new().with_root(element(5)), placement)
+        .read_wire(&ReadQuery::new().root(element(5)), placement)
         .expect("the group reads");
     assert_eq!(below.diagnostics, Vec::new(), "an only child is no clash");
 }
@@ -347,5 +347,170 @@ fn debug_builds_queue_a_published_clash_once_per_shape() {
         clashes(&mut owner),
         clash(vec![id(2), id(3), id(4)]),
         "a sibling joining the clash"
+    );
+}
+
+/// An identifier on a node that publishes nothing else (no role, label or
+/// text) is reported beside the read, naming the node it is lifted into:
+/// the agent and the AccessKit adapters lift such a node, so nothing
+/// selects it, and the author learns why, in the order the read reaches
+/// the nodes they are lifted into. A node the identifier keeps visible, a
+/// group, is not reported, and the tree is published as written.
+#[test]
+fn an_identifier_on_a_node_that_publishes_nothing_else_is_reported() {
+    let mut owner = SemanticsOwner::new(Arc::new(|_: &TreeUpdate| {}));
+    let node = |index: u32, configure: &dyn Fn(&mut SemanticsConfiguration)| {
+        let mut node = SemanticsNode::new().with_source_render_id(render_id(index));
+        node.set_rect(Rect::from_ltwh(0.0, f64::from(index) * 10.0, 80.0, 10.0));
+        configure(node.config_mut());
+        node
+    };
+    let root = owner.insert(node(1, &|c| c.set_label("Window")));
+    let button = owner.insert(node(2, &|c| c.set_role(SemanticsRole::Button)));
+    let inside = owner.insert(node(3, &|c| c.set_identifier("save")));
+    let label = owner.insert(node(4, &|c| c.set_label("Save")));
+    let bare = owner.insert(node(5, &|c| c.set_identifier("swatch")));
+    let deeper = owner.insert(node(6, &|c| c.set_identifier("dot")));
+    let group = owner.insert(node(7, &|c| {
+        c.set_role(SemanticsRole::Group);
+        c.set_identifier("legend");
+    }));
+    for child in [button, bare, group] {
+        owner.add_child(root, child);
+    }
+    owner.add_child(button, inside);
+    owner.add_child(inside, label);
+    owner.add_child(bare, deeper);
+    owner.set_root(Some(root));
+    owner.flush();
+
+    let element = |index: u32| {
+        ElementId::from_u64(AccessibilityNodeId::from(render_id(index)).as_u64())
+            .expect("an accessibility id is non-zero")
+    };
+    let unpublished = |identifier: &str, parent: u32| {
+        flui_protocol::tree::TreeDiagnostic::UnpublishedIdentifier {
+            identifier: identifier.into(),
+            parent: element(parent),
+        }
+    };
+    let placement = Placement::new(
+        DevicePixelRatio::try_new(1.0).expect("1 is a ratio"),
+        WindowId::from_u64(1).expect("non-zero"),
+    );
+    let tree = owner
+        .read_wire(&ReadQuery::new(), placement)
+        .expect("the published tree reads");
+    assert_eq!(
+        tree.diagnostics,
+        [
+            unpublished("swatch", 1),
+            unpublished("dot", 1),
+            unpublished("save", 2),
+        ]
+    );
+    let shown: Vec<Option<&str>> = tree.roots[0]
+        .children
+        .iter()
+        .map(|node| node.identifier.as_deref())
+        .collect();
+    assert_eq!(shown, [None, Some("legend")], "the button and the group");
+}
+
+#[test]
+fn unpublished_identifiers_are_reported_once_per_parent_and_bounded() {
+    let mut owner = SemanticsOwner::new(Arc::new(|_: &TreeUpdate| {}));
+    let node = |index: u32, identifier: Option<String>| {
+        let mut node = SemanticsNode::new().with_source_render_id(render_id(index));
+        node.set_rect(Rect::from_ltwh(0.0, 0.0, 80.0, 10.0));
+        match identifier {
+            Some(identifier) => node.config_mut().set_identifier(identifier),
+            None => node.config_mut().set_label("Window"),
+        }
+        node
+    };
+    let root = owner.insert(node(1, None));
+    // Two lifted siblings share "repeat", then 300 distinct ones follow.
+    let names = ["repeat".to_owned(), "repeat".to_owned()]
+        .into_iter()
+        .chain((0..300).map(|index| format!("item-{index}")));
+    for (index, name) in (2..).zip(names) {
+        let child = owner.insert(node(index, Some(name)));
+        owner.add_child(root, child);
+    }
+    owner.set_root(Some(root));
+    owner.flush();
+
+    let placement = Placement::new(
+        DevicePixelRatio::try_new(1.0).expect("1 is a ratio"),
+        WindowId::from_u64(1).expect("non-zero"),
+    );
+    let tree = owner
+        .read_wire(&ReadQuery::new(), placement)
+        .expect("the published tree reads");
+    let reported: Vec<&str> = tree
+        .diagnostics
+        .iter()
+        .filter_map(|diagnostic| match diagnostic {
+            flui_protocol::tree::TreeDiagnostic::UnpublishedIdentifier { identifier, .. } => {
+                Some(identifier.as_str())
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(reported.len(), 256, "a read reports at most 256");
+    assert_eq!(reported[0], "repeat");
+    assert_eq!(
+        reported[1], "item-0",
+        "a shared identifier is reported once"
+    );
+}
+
+#[test]
+fn an_identifier_lifted_under_many_parents_leaves_room_for_the_rest() {
+    let mut owner = SemanticsOwner::new(Arc::new(|_: &TreeUpdate| {}));
+    let node = |index: u32, configure: &dyn Fn(&mut SemanticsConfiguration)| {
+        let mut node = SemanticsNode::new().with_source_render_id(render_id(index));
+        node.set_rect(Rect::from_ltwh(0.0, 0.0, 80.0, 10.0));
+        configure(node.config_mut());
+        node
+    };
+    let root = owner.insert(node(1, &|c| c.set_label("Window")));
+    // A row template: each of 80 rows lifts a "swatch", more rows than one
+    // identifier is reported under, and a "footer" follows them.
+    for row in 0..80 {
+        let published = owner.insert(node(2 + 2 * row, &|c| c.set_label("Row")));
+        let swatch = owner.insert(node(3 + 2 * row, &|c| c.set_identifier("swatch")));
+        owner.add_child(published, swatch);
+        owner.add_child(root, published);
+    }
+    let footer_parent = owner.insert(node(500, &|c| c.set_label("Footer")));
+    let footer = owner.insert(node(501, &|c| c.set_identifier("footer")));
+    owner.add_child(footer_parent, footer);
+    owner.add_child(root, footer_parent);
+    owner.set_root(Some(root));
+    owner.flush();
+
+    let placement = Placement::new(
+        DevicePixelRatio::try_new(1.0).expect("1 is a ratio"),
+        WindowId::from_u64(1).expect("non-zero"),
+    );
+    let tree = owner
+        .read_wire(&ReadQuery::new(), placement)
+        .expect("the published tree reads");
+    let reported: Vec<&str> = tree
+        .diagnostics
+        .iter()
+        .filter_map(|diagnostic| match diagnostic {
+            flui_protocol::tree::TreeDiagnostic::UnpublishedIdentifier { identifier, .. } => {
+                Some(identifier.as_str())
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        reported,
+        ["swatch", "swatch", "swatch", "swatch", "footer"],
+        "the first four rows, then the rest"
     );
 }

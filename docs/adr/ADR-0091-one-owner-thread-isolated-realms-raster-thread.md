@@ -49,13 +49,13 @@ When this record was written the render-object bounds pointed the other way —
 `RenderView::RenderObject` had to be `Send + Sync`, although ADR-0027 §9 says render objects are
 not `Send + Sync`. The flip of §1 removed that bound (`crates/flui-view/src/view/render.rs`).
 
-On the raster side, [ADR-0045](ADR-0045-raster-lane.md) is still Proposed, and production runs
-inline:
+On the raster side, [ADR-0045](ADR-0045-raster-lane.md) was still Proposed when this was written,
+and production ran inline:
 
-- Every native window (desktop, Android, iOS) is a slot on the loop's one inline raster executor
+- Every native window (desktop, Android, iOS) was a slot on the loop's one inline raster executor
   (`crates/flui-app/src/app/runner/raster_host.rs`, ADR-0305), turned on the owner thread with no
   lock.
-- No production raster thread exists.
+- No production raster thread existed; the Wayland host draws on one now (§5).
 - The web's canvas is a slot on the same inline executor, attached once the page's GPU context
   has been awaited (`crates/flui-app/src/app/runner/web.rs`).
 - Every renderer creates its own `wgpu::Instance`, surface and adapter
@@ -85,7 +85,7 @@ success metric: with one window's UI runtime blocked, another window stays withi
 Adopting them needs its own ADR, and needs the platform callbacks to stop requiring `Send`
 ([ADR-0082](ADR-0082-platform-api-contract-crate.md)) and the UI traits to become `!Send` as
 ADR-0027 §9 already requires. That flip — `Listenable: Send + Sync` and `ListenerCallback`
-(`crates/flui-foundation/src/notifier.rs:78`, `:46`), `RenderView::RenderObject`, and
+(`crates/flui-foundation/src/notifier/mod.rs:78`, `:46`), `RenderView::RenderObject`, and
 `RenderObject::metadata()`'s `Arc<dyn Any + Send + Sync>`
 (`crates/flui-rendering/src/traits/render_object.rs:661`) — is conformance work ADR-0027 already
 demands, and this ADR schedules it: it lands **before the first crates.io publication** of any
@@ -133,12 +133,13 @@ contention counter as its metric.
 
 ADR-0045's single criterion becomes a table. A platform is threaded when surface acquisition and
 present run on the raster thread and the ADR-0045 pacing budget (median, p90 and max
-inter-present interval against the display period) holds on that platform. No platform is threaded today: every native window draws through the inline executor (ADR-0305), so the Lane column is the target a threaded placement has to meet.
+inter-present interval against the display period) holds on that platform. The Wayland host is threaded (ADR-0305 §10, its run recorded in `docs/platform-parity.md`); every other native window, X11 included until a run on a real X server, draws through the inline executor, so the Lane column is the target a threaded placement there has to meet.
 
 | Platform | Lane | Reason recorded |
 |---|---|---|
 | Win32 | threaded | — |
-| Linux (winit) | threaded | — |
+| Linux (Wayland) | threaded | — |
+| Linux (X11) | threaded once run | Xvfb has no vsync, so its run could not judge pacing; an unmapped window's `Fifo` present may block the one raster thread (`docs/gaps.md`) |
 | macOS | inline | `wgpu-hal`'s Metal `acquire_texture` messages `NSWindow` from the acquiring thread; ADR-0045 decision 1 and its reopen condition (tracked as issue #653) |
 | wasm | inline | no raster thread; the canvas is a slot of the inline executor |
 | Android, iOS | inline until measured | no platform reason is recorded against threading; the lane is threaded once a device run meets the budget |

@@ -6,7 +6,8 @@
 //! - [`java_host`]: the handshake with FLUI's Java classes in the APK, checked
 //!   before the platform starts (ADR-0255 decision 5);
 //! - [`intent`]: what an intent the Activity receives opens, read from the
-//!   record `FluiHost` queues for it;
+//!   record `FluiHost` queues for it, and `documents`: the `content:`
+//!   documents it names, opened off the owner thread and delivered in order;
 //! - `java_view`: `FluiView`, the Java side, and the queue of what it
 //!   reported since the loop's last turn (ADR-0348);
 //! - `activity`: the Activity reached through JNI, which every feature asks
@@ -37,6 +38,8 @@ pub(crate) mod activity_callbacks;
 #[cfg(any(target_os = "android", test))]
 pub(crate) mod activity_results;
 pub(crate) mod bridge_slot;
+#[cfg(any(target_os = "android", all(test, not(target_arch = "wasm32"))))]
+pub(crate) mod documents;
 pub(crate) mod frame_clock;
 pub(crate) mod intent;
 pub(crate) mod java_host;
@@ -50,12 +53,21 @@ mod looper;
 // its tests, on every native host; wasm32 has none.
 #[cfg(any(target_os = "android", all(test, not(target_arch = "wasm32"))))]
 pub(crate) mod main_thread;
+// The one way a native method answers Java, and the view's installation, as
+// state machines over their JNI calls; their tests run them inside the panic
+// boundary, which wasm32 does not have.
+#[cfg(any(target_os = "android", all(test, not(target_arch = "wasm32"))))]
+pub(crate) mod native_call;
 pub(crate) mod ndk;
 pub(crate) mod poll;
 #[cfg(target_os = "android")]
 pub(crate) mod result_bridge;
-// The decision `FluiActivity` applies, as data; its test holds the Java side
-// to it.
+#[cfg(any(target_os = "android", all(test, not(target_arch = "wasm32"))))]
+pub(crate) mod view_install;
+// The decisions `FluiActivity` applies, as data; their tests hold the Java
+// side to them.
+#[cfg(test)]
+pub(crate) mod admission;
 #[cfg(test)]
 pub(crate) mod window_setup;
 

@@ -10,8 +10,8 @@ use flui_platform::{
     keyboard::Modifiers,
     pointer::{
         DeviceId, PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerButton, PointerButtons,
-        PointerEvent, PointerId, PointerInfo, PointerKind, PointerMove, PointerPosition,
-        PointerPress, PointerRelease, PointerRole, PointerSample, ScrollDelta, ScrollEvent,
+        PointerEvent, PointerId, PointerKind, PointerMove, PointerPosition, PointerPress,
+        PointerRelease, PointerRole, PointerSample, PointerSource, ScrollDelta, ScrollEvent,
         ScrollPhase, ScrollPrecision, ScrollUnit,
     },
 };
@@ -492,7 +492,7 @@ fn viewer_focal_inertia_uses_profile(native: bool) {
     );
     laid.adopt_vsync(vsync).expect("clock admission");
     for attempt in 0..3 {
-        let info = PointerInfo::new(
+        let info = PointerSource::new(
             PointerId::try_from(100_u64 + attempt).expect("contact identity"),
             if native {
                 PointerKind::Mouse
@@ -627,7 +627,7 @@ pub(crate) fn viewer_focal_fling_advances_then_stops_on_new_input() {
         tight(200.0, 200.0),
     );
     laid.adopt_vsync(vsync).expect("clock admission");
-    let source = PointerInfo::new(
+    let source = PointerSource::new(
         PointerId::try_from(81_u64).expect("contact"),
         PointerKind::Touch,
     );
@@ -688,6 +688,43 @@ pub(crate) fn viewer_focal_fling_advances_then_stops_on_new_input() {
         controller.value(),
         stopped,
         "new contact stops the previous focal fling"
+    );
+    // Flung again, the scene stops when fingers come to rest on a touchpad,
+    // and stays stopped once they lift.
+    for (millis, x) in [(110, 110.0), (120, 140.0), (130, 170.0)] {
+        laid.dispatch_pointer_event(&movement(millis, x));
+        laid.pump_for(Duration::from_millis(10));
+    }
+    laid.dispatch_pointer_event(&PointerEvent::Up(PointerRelease::new(
+        source,
+        PointerButton::PRIMARY,
+        PointerButtons::NONE,
+        sample(131, 170.0),
+    )));
+    laid.pump_for(Duration::from_millis(16));
+    let before = controller.value().transform_point(0.0, 0.0).0;
+    laid.pump_for(Duration::from_millis(16));
+    laid.pump_for(Duration::from_millis(16));
+    assert!(
+        controller.value().transform_point(0.0, 0.0).0 > before,
+        "the second fling coasts"
+    );
+    let rest = flui_testing::TrackpadScript::new(
+        "fingers rest",
+        flui_foundation::geometry::Offset::new(100.0, 100.0),
+    )
+    .rest()
+    .lift()
+    .build()
+    .expect("a hold that begins and ends");
+    laid.replay(&rest);
+    let held = controller.value();
+    laid.pump_for(Duration::from_millis(16));
+    laid.pump_for(Duration::from_millis(16));
+    assert_eq!(
+        controller.value(),
+        held,
+        "resting fingers stop the focal fling"
     );
     viewer_focal_fling_without_clock_preserves_the_scene();
 }
@@ -961,8 +998,8 @@ pub(crate) fn viewer_reports_scale_velocity_separately_from_focal_velocity() {
     assert!(observed[0].velocity.pixels_per_second.dy.abs() < 1e-9);
 }
 
-fn mouse() -> PointerInfo {
-    PointerInfo::new(
+fn mouse() -> PointerSource {
+    PointerSource::new(
         PointerId::try_from(7_u64).expect("valid pointer"),
         PointerKind::Mouse,
     )
@@ -1035,7 +1072,7 @@ pub(crate) fn pointer_delivery_preserves_source_and_sample_families() {
             .child(SizedBox::new(100.0, 100.0)),
         tight(100.0, 100.0),
     );
-    let pointer = PointerInfo::new(
+    let pointer = PointerSource::new(
         PointerId::try_from(3_u64).expect("authored contact"),
         PointerKind::Pen {
             tool: PenTool::Eraser,

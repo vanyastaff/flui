@@ -1,6 +1,6 @@
 //! The iOS display source (`UIScreen`).
 //!
-//! Each screen UIKit lists becomes a [`DisplayInfo`]. `bounds` are in points
+//! Each screen UIKit lists becomes a [`DisplayDescription`]. `bounds` are in points
 //! (logical, top-left origin) and `nativeScale` is the device pixel ratio, so
 //! bounds are scaled by it to the device pixels the snapshot carries.
 //!
@@ -42,7 +42,7 @@ use block2::RcBlock;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2::{MainThreadMarker, Message};
-use objc2_foundation::{NSNotification, NSNotificationCenter, NSObjectProtocol, NSRect};
+use objc2_foundation::{NSNotification, NSNotificationCenter, NSObjectProtocol};
 use objc2_ui_kit::{
     UIDevice, UIDisplayGamut, UISceneDidDisconnectNotification, UISceneWillConnectNotification,
     UIScreen, UIScreenDidConnectNotification, UIScreenDidDisconnectNotification,
@@ -50,8 +50,11 @@ use objc2_ui_kit::{
 };
 use parking_lot::Mutex;
 
-use flui_foundation::geometry::{Bounds, Point, Size};
-use flui_platform::{DisplayId, DisplayInfo, DisplayKey, DisplaySnapshot, FrameRateHint};
+use flui_foundation::geometry::Size;
+use flui_platform::{
+    DesktopOrigin, DisplayBounds, DisplayDescription, DisplayId, DisplayKey, DisplaySnapshot,
+    FrameRateHint,
+};
 
 use objc2_quartz_core::{CADisplayLink, CAFrameRateRange};
 
@@ -120,7 +123,7 @@ impl IosDisplays {
     }
 
     /// Read every screen UIKit lists.
-    fn read(&self, marker: MainThreadMarker) -> Vec<DisplayInfo> {
+    fn read(&self, marker: MainThreadMarker) -> Vec<DisplayDescription> {
         let listed = UIScreen::screens(marker);
         let live: Vec<RetainedScreen> = listed.iter().collect();
         let mut displays = Vec::with_capacity(live.len());
@@ -143,8 +146,14 @@ impl IosDisplays {
                     .lock()
                     .read(id, screen.nativeScale(), "UIScreen nativeScale");
             refusals.extend(refused);
-            let scale = ratio.get();
-            let bounds = device_bounds_from_points(screen.bounds(), scale);
+
+            // A screen's bounds are in points, its logical pixels; screens are
+            // not arranged in one desktop, so each is at the origin.
+            let points = screen.bounds();
+            let Ok(bounds) = DisplayBounds::whole(Size::new(points.size.width, points.size.height))
+            else {
+                continue;
+            };
             let name = if index == 0 {
                 "iOS Display".to_owned()
             } else {
@@ -153,7 +162,9 @@ impl IosDisplays {
             // iOS has no per-display "usable bounds" separate from the frame:
             // safe-area insets carve out the notch and home indicator for
             // CONTENT, not for the display itself.
-            let mut display = DisplayInfo::new(id, name, bounds, ratio).with_primary(index == 0);
+            let mut display =
+                DisplayDescription::new(id, name, DesktopOrigin::default(), bounds, ratio)
+                    .with_primary(index == 0);
             display.refresh_period = self.link_periods.lock().period_of(number);
             // SAFETY: `displayGamut` is read on the main thread, which
             // `marker` proves, as UIKit's trait collections require.
@@ -175,16 +186,6 @@ impl IosDisplays {
         let read: Vec<DisplayId> = displays.iter().map(|display| display.id).collect();
         self.scale_streak.lock().keep_only(&read);
         displays
-    }
-}
-
-/// The `(points, scale)` → device-pixel conversion, free-standing so it can
-/// be tested without a display. `CGRect`/`CGSize` are plain C structs.
-fn device_bounds_from_points(bounds: NSRect, scale: f64) -> Bounds<i32> {
-    let to_device = |points: f64| (points * scale).round() as i32;
-    Bounds {
-        origin: Point::new(to_device(bounds.origin.x), to_device(bounds.origin.y)),
-        size: Size::new(to_device(bounds.size.width), to_device(bounds.size.height)),
     }
 }
 

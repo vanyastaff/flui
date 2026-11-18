@@ -239,10 +239,12 @@ the dispatch layer moves there too.
   owner platform's display connection and places a `RasterExecutor`; each
   later window mints a slot on it. Inline, a frame is sent and the executor
   turns at once, so its settlement is in hand before the pump returns; a frame
-  that finds the host already turning is answered `Retry`. Threaded (a debug
-  build on Linux started with `FLUI_RASTER_PLACEMENT=threaded`,
+  that finds the host already turning is answered `Retry`. Threaded (the
+  Wayland host; every other host stays inline, `desktop_placement`,
   ADR-0305 §10), a frame is answered `Queued` or `QueuedReplacing`, two may be
-  in flight, the raster thread's wake asks every window for a frame, and each
+  in flight (one for a window whose compositor paces its surface, since only
+  the present arms the frame callback that withholds its next frame,
+  ADR-0305 §5), the raster thread's wake asks every window for a frame, and each
   window's wake hands its slot's settlements to `UiRuntime::settle_frame`
   before its frame gate (`RasterSlot::settle`): what they became paces the
   window and counts toward its first reveal, and a panic of the code they ran
@@ -403,6 +405,39 @@ the dispatch layer moves there too.
   `the_host_feed_runs_off_the_owner_thread_and_wakes_once`,
   `a_landed_host_feed_wakes_every_ui_runtime_window`).
 
+- **State only the loop's thread reaches holds no lock (ADR-0323 §1, §5).**
+  The close-request router and the handlers it calls, the host's memory
+  receivers, a window's pacing fallback, background pace and first reveal,
+  the browser's GPU-loss ledger, an installation's closed flag and window
+  snapshot, the data-transfer slot and direct mode's renderer are `Rc` with
+  `Cell` or `RefCell`: each is reached only from the loop's routes, its frame
+  drivers and its wake-deadline query, none of which another thread calls.
+  No call checks its thread at run time: the router and a handler are
+  neither `Send` nor `Sync` (`close_request_matrix` asserts it), and a thread
+  that runs no loop finds no runtime of its own, so a close it asks for is
+  answered `NoHostedRuntime`
+  (`a_close_from_a_thread_without_a_loop_is_refused`). A table is borrowed
+  only inside its owner's methods (the router's publication holds the router,
+  not a borrow of its table), and code the owner does not own (a handler, a
+  guard's signal, a receiver, a `tracing` event, a window command, the drop
+  of a removed entry) runs after the borrow ends: a handler that closes its
+  own window from inside its answer finds the router free
+  (`a_handler_that_closes_its_own_window_closes_it_once`), and a subscriber
+  that reads the pacing deadline inside its event finds it stored
+  (`a_subscriber_reading_the_deadline_inside_its_abandonment_event_finds_it_gone`).
+  Direct mode's closure builds its scene with the renderer free; a scene
+  built across a resize is not drawn and the frame is asked again, and a
+  frame asked for inside the build declines
+  (`a_scene_built_across_a_resize_is_not_drawn_and_the_frame_is_asked_again`,
+  `a_frame_asked_for_inside_the_build_declines`). A close handler and a
+  memory receiver may hold `Rc` state
+  (`a_refused_quit_waits_for_the_record_then_exits`,
+  `an_owner_thread_memory_receiver_is_reclaimed_per_notice`). What another
+  thread reaches keeps its lock or atomic: the application's handle and its
+  device retry, a pending window's waker, the frame wake and redraw flag, the
+  raster thread's redraw list, the agent endpoint, workers and services,
+  storage lanes and the development hooks.
+
 ## Mapping decisions
 
 ### Lifecycle observations are typed and lossless
@@ -531,7 +566,8 @@ run with nothing borrowed.
 
 - **The owner's turns come from the turn deadline (ADR-0343 §1).**
   `AppRuntime::turn_deadline` answers `AppHandler::turn_deadline` with the
-  placements' next due instant and the main window's read bound; every host
+  placements' next due instant and the main window's read bound (and, on every
+  host, the next expiring clipboard entry's clear, below); every host
   gives the owner a turn at it, with or without a window open, and asks no
   window for a frame. The answer may be past: a held write's
   `last_attempt + interval` is, when the change arrives after the interval
@@ -561,11 +597,23 @@ run with nothing borrowed.
   displays, which moves a window back onto a live display) each open the
   window from its configuration. A panic is reported and its payload
   discarded.
+- **A position is placed on a display when the window opens (ADR-0364).** A
+  restored placement opens at the `WindowPosition` `resolve` gives, on the
+  display it chose; a configured `AppConfig::position` is whole logical
+  pixels of the primary display (the first where none is marked), which
+  `AppConfig::window_options` turns into a position against the owner's
+  display snapshot at every open site (the main window, `run_direct`, a
+  secondary window, Android and the web); it is the one way to build a
+  window's options from the configuration. A window state with no position
+  stores nothing, and one whose position names a display the snapshot lacks
+  keeps the placement stored before.
 - **Only the user overwrites a placement the run could not read.** After a
   read that timed out, was refused or panicked, the recorder holds
   `StoredPlacement::Unknown`, which owes nothing until a change the host
   states was the user's (`ChangeOrigin::User`): the report that carries the
-  change says `WindowState::interaction` is `UserPlacing` (ADR-0343 §2).
+  change says `WindowState::interaction` is the user's
+  (`WindowInteraction::is_user`: `UserPlacing` or `UserResizing`; ADR-0343
+  §2, ADR-0354 §4).
   Nothing is inferred from what did not change nor from the report before:
   where the window opened, a display or scale change, a window manager's
   adjustment, an application's command and a change after the user's
@@ -596,6 +644,47 @@ run with nothing borrowed.
 
 `placement_recorder` (the model's table) and the runner's `placement::tests`
 hold each rule.
+
+### An expiring clipboard entry is owed one clear, served at the turn deadline
+
+The built-in clipboard provider holds the loop's `ClipboardExpiries` beside the
+host's clipboard (ADR-0363 §2): every expiring write a handle passes on
+(`ClipboardWrite::expires_after`) owes one clear at its time, counted from the
+write's request and answered through the writer's UI runtime. A host that
+answers `ExpiryClearing::Unavailable` (the web) is owed none.
+
+- **The time is a turn deadline.** The earliest owed time is part of
+  `AppRuntime::turn_deadline` on every host (the route is installed with the
+  owner on all of them), and the owner's turn (`serve_clipboard_expiries`, from
+  each runner's wake handler) asks the host for every clear due by its own
+  time; a clear asked is no longer owed, so a served time is not armed again.
+- **A clear names its own entry.** The host clears only the entry the clear
+  names while the system still shows it, so a later write that lands takes the
+  clipboard from the entry and the clear does nothing: a second expiring write
+  replaces the first's time without the first's clear touching it, and where
+  the second failed the first entry is still there for its own clear.
+- **A lock clears now.** `SystemNotice::SessionLocked` and `Sleep` ask the host
+  once to clear whatever expiring entry it holds (`ExpiredEntry::Any`), once any
+  expiring write was made, before the application's subscribers hear the
+  notice and contained apart from them; a retry of that clear is dropped once a
+  later expiring write is made.
+- **The loop's end asks once.** Right after the UI runtimes retire and before
+  the flush, within a budget of its own (`EXIT_CLIPBOARD_BOUND`), the host is
+  asked the same, once any expiring write was made.
+- **A clear the host could not see the clipboard for waits for the
+  application in front.** `Unseen` stays owed with no deadline until a UI
+  runtime is `Resumed` again (`OwnerEffects::runtime_lifecycle`).
+- **A clear the host could not reach the clipboard for is owed again** on
+  `CLEAR_RETRY`, at most `MAX_CLEAR_RETRIES` times; at most `MAX_OWED` clears
+  are owed at once, the oldest given up past it.
+- **Each step contained.** The rule asks each clear contained apart; the desktop,
+  Android and iOS owner turns contain the clear apart from their other steps,
+  resuming the first panic after all of them.
+
+`clipboard_expiry`'s table holds each rule over a host the test speaks for;
+the runner's `clipboard_expiry_tests` hold the wiring (the provider, the turn
+deadline, the lock and the loop's end) through the headless platform, the
+expiries timed on a manual clock (`ClipboardExpiries::set_clock`).
 
 ### Native execution caps remain presentation-local
 
@@ -724,9 +813,21 @@ whose poll panicked (ADR-0281 §2, §3); healthy completion and cancellation dro
 normally. A compute panic is reported as complete before its diagnostics run.
 Pinned by `service_lifecycle_matrix`.
 
+### A service watches the application's lifecycle, not a window's
+
+`ServiceContext::lifecycle` is a latest-wins watch of one owner-side fold
+(`ServiceLifecycle`): the state each live UI runtime's scheduler last
+committed, folded into the most active one, `Detached` while none is live.
+The runner feeds it where it builds every UI runtime: it notes the scheduler's
+state, adds a lifecycle listener, and the listener's capture forgets the
+runtime when the scheduler drops it with the runtime. The fold publishes only
+a change, and its table's borrow ends before a reader's waker runs. Memory
+pressure reaches a service through `AppConfig::memory_reclaim`, the route that
+already exists. Pinned by `a_service_watches_the_application_pause_and_resume`.
+
 ### The owner's teardown raises its failure from functions, never from `Drop`
 
 `owner_dispatch` implements no `Drop`: the exit's failure is held in the terminal slot and resumed
 by the function that ends the loop (`teardown_platform_ui_runtime`), after every step has run, so
 no field drop glue runs inside that unwind. A UI runtime the exit drops raises its own first
-failure only after destroying its application values (`flui-runtime`, #1165).
+failure only after destroying its application values (`flui-runtime`).

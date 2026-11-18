@@ -18,7 +18,12 @@
 //!   precision and its gesture phase, and a two-finger trackpad pan is a phased scroll on
 //!   every backend; [`PanZoomEvent`] carries a trackpad's pinch and rotation as one cumulative
 //!   transform about a focal point between `Start` and `End`; [`SmartZoomEvent`] is the
-//!   trackpad's two-finger double-tap.
+//!   trackpad's two-finger double-tap; [`TouchpadHoldEvent`] is fingers resting on a touchpad,
+//!   which stops whatever coasts; [`TouchpadSwipeEvent`] is a swipe of three fingers or more,
+//!   a gesture of its own with a cumulative travel, never a scroll.
+//! - **A locked pointer.** While a window holds the pointer in place
+//!   ([`CursorGrab::Locked`](crate::CursorGrab::Locked)) its motion is a [`RawMotion`]: a
+//!   [`MotionDelta`], before or after the system's acceleration, instead of moves.
 //!
 //! Every number is a validated newtype ([`PointerPosition`], [`Pressure`], [`PenOrientation`],
 //! [`ScrollDelta`], [`PanZoomTransform`], …) whose fallible constructor states its NaN,
@@ -34,11 +39,11 @@
 //! use flui_platform::EventTime;
 //! use flui_platform::keyboard::Modifiers;
 //! use flui_platform::pointer::{
-//!     PointerButton, PointerButtons, PointerEvent, PointerId, PointerInfo, PointerKind,
+//!     PointerButton, PointerButtons, PointerEvent, PointerId, PointerSource, PointerKind,
 //!     PointerPosition, PointerPress, PointerRole, PointerSample,
 //! };
 //!
-//! let mouse = PointerInfo::new(PointerId::try_from(1_u64)?, PointerKind::Mouse)
+//! let mouse = PointerSource::new(PointerId::try_from(1_u64)?, PointerKind::Mouse)
 //!     .with_role(PointerRole::Primary);
 //! let at = PointerSample::new(
 //!     EventTime::from_nanos(1_000),
@@ -55,8 +60,10 @@
 
 mod buttons;
 mod pan_zoom;
+mod raw_motion;
 mod sample;
 mod scroll;
+mod touchpad;
 mod value;
 
 use core::marker::PhantomData;
@@ -64,9 +71,13 @@ use core::num::{NonZeroU8, NonZeroU64, TryFromIntError};
 
 pub use buttons::{InvalidButtonNumber, PointerButton, PointerButtons};
 pub use pan_zoom::{PanZoomEvent, PanZoomPhase, PanZoomTransform, SmartZoomEvent};
+pub use raw_motion::{MotionAcceleration, MotionDelta, RawMotion};
 pub use sample::PointerSample;
 pub use scroll::{
     ScrollDelta, ScrollEvent, ScrollInversion, ScrollPhase, ScrollPrecision, ScrollUnit,
+};
+pub use touchpad::{
+    SwipeOffset, TouchpadHoldEvent, TouchpadHoldPhase, TouchpadSwipeEvent, TouchpadSwipePhase,
 };
 pub use value::{
     ContactSize, HoverDistance, InputValueError, PenOrientation, PointerPosition, Pressure,
@@ -83,7 +94,7 @@ use crate::keyboard::Modifiers;
 /// Unique among the window's active pointers while the contact is down or in range. A backend
 /// may reuse an id once its sequence has ended with `Up`, `Cancel` or `Leave`, so a consumer
 /// that keeps per-pointer state drops it at the end of the sequence. The id says nothing about
-/// the contact's kind or whether it is primary: [`PointerInfo`] carries both.
+/// the contact's kind or whether it is primary: [`PointerSource`] carries both.
 ///
 /// # Examples
 ///
@@ -259,7 +270,7 @@ pub enum PointerKind {
     Trackpad,
     /// A pointer with no physical contact: a gamepad-driven cursor, a dwell or switch device
     /// driving a pointer of its own, UI automation, a future XR ray. Which one is the event's
-    /// [`DeviceId`] ([`PointerInfo::device`]), so the kind carries no fields of its own: routing
+    /// [`DeviceId`] ([`PointerSource::device`]), so the kind carries no fields of its own: routing
     /// treats every contactless pointer alike (ADR-0216 §3).
     Virtual,
     /// The platform did not say.
@@ -285,15 +296,15 @@ pub enum PointerRole {
 
 /// Who an event comes from: the contact, its device and its kind.
 ///
-/// Built with [`PointerInfo::new`], [`with_device`](Self::with_device) and
+/// Built with [`PointerSource::new`], [`with_device`](Self::with_device) and
 /// [`with_role`](Self::with_role).
 ///
 /// # Examples
 ///
 /// ```
-/// use flui_platform::pointer::{DeviceId, PenTool, PointerId, PointerInfo, PointerKind, PointerRole};
+/// use flui_platform::pointer::{DeviceId, PenTool, PointerId, PointerSource, PointerKind, PointerRole};
 ///
-/// let pen = PointerInfo::new(PointerId::try_from(3_u64)?, PointerKind::Pen { tool: PenTool::Eraser })
+/// let pen = PointerSource::new(PointerId::try_from(3_u64)?, PointerKind::Pen { tool: PenTool::Eraser })
 ///     .with_device(DeviceId::try_from(9_u64)?)
 ///     .with_role(PointerRole::Primary);
 /// assert!(pen.is_primary());
@@ -301,7 +312,7 @@ pub enum PointerRole {
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
-pub struct PointerInfo {
+pub struct PointerSource {
     /// The contact.
     pub id: PointerId,
     /// The hardware behind it, when the platform reports it.
@@ -312,7 +323,7 @@ pub struct PointerInfo {
     pub role: PointerRole,
 }
 
-impl PointerInfo {
+impl PointerSource {
     /// An [additional](PointerRole::Additional) contact `id` of `kind`, with no device id.
     #[must_use]
     pub const fn new(id: PointerId, kind: PointerKind) -> Self {
@@ -397,7 +408,7 @@ pub type PointerRelease = PointerButtonEvent<Release>;
 /// # use flui_foundation::geometry::Point;
 /// # use flui_platform::EventTime;
 /// # use flui_platform::pointer::*;
-/// # let info = PointerInfo::new(PointerId::try_from(1_u64).unwrap(), PointerKind::Mouse);
+/// # let info = PointerSource::new(PointerId::try_from(1_u64).unwrap(), PointerKind::Mouse);
 /// # let at = PointerSample::new(EventTime::from_nanos(0), PointerPosition::try_new(Point::new(0.0, 0.0)).unwrap());
 /// let button = PointerRelease::new(info, PointerButton::PRIMARY, PointerButtons::NONE, at);
 /// let _ = PointerEvent::Down(button);
@@ -409,7 +420,7 @@ pub type PointerRelease = PointerButtonEvent<Release>;
 /// # use flui_foundation::geometry::Point;
 /// # use flui_platform::EventTime;
 /// # use flui_platform::pointer::*;
-/// # let info = PointerInfo::new(PointerId::try_from(1_u64).unwrap(), PointerKind::Mouse);
+/// # let info = PointerSource::new(PointerId::try_from(1_u64).unwrap(), PointerKind::Mouse);
 /// # let at = PointerSample::new(EventTime::from_nanos(0), PointerPosition::try_new(Point::new(0.0, 0.0)).unwrap());
 /// let button = PointerPress::new(info, PointerButton::PRIMARY, PointerButtons::NONE, at);
 /// let _ = PointerEvent::Down(button);
@@ -418,7 +429,7 @@ pub type PointerRelease = PointerButtonEvent<Release>;
 #[non_exhaustive]
 pub struct PointerButtonEvent<D: ButtonDirection> {
     /// Who pressed or released.
-    pub pointer: PointerInfo,
+    pub pointer: PointerSource,
     button: PointerButton,
     buttons: PointerButtons,
     /// The modifiers held.
@@ -460,7 +471,7 @@ impl<D: ButtonDirection> PointerButtonEvent<D> {
     /// holds `button` after a press and not after a release.
     #[must_use]
     pub const fn new(
-        pointer: PointerInfo,
+        pointer: PointerSource,
         button: PointerButton,
         buttons: PointerButtons,
         sample: PointerSample,
@@ -534,7 +545,7 @@ pub enum ButtonChange {
 #[non_exhaustive]
 pub struct PointerMove {
     /// Who moved.
-    pub pointer: PointerInfo,
+    pub pointer: PointerSource,
     /// The buttons held.
     pub buttons: PointerButtons,
     /// The modifiers held.
@@ -547,7 +558,7 @@ pub struct PointerMove {
 /// Two movements describe different contact metadata and cannot be coalesced.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 #[error("pointer metadata differs between movements")]
-pub struct MismatchedPointerInfo;
+pub struct MismatchedPointerSource;
 
 impl PointerMove {
     /// The measured history a queue that folds moves into one keeps: the
@@ -599,16 +610,16 @@ impl PointerMove {
 
     /// Fold an earlier movement's measured readings into this dispatch.
     ///
-    /// The complete [`PointerInfo`] must match; refusal leaves both movements
+    /// The complete [`PointerSource`] must match; refusal leaves both movements
     /// unchanged. This dispatch keeps its current sample, predicted readings,
     /// buttons and modifiers, while its history includes `older`'s history and
     /// current sample before its own history. As in [`with_coalesced`](Self::with_coalesced),
     /// readings are sorted oldest first, future readings and exact copies of
     /// this dispatch's current sample are excluded. Repeated historical readings
     /// remain distinct: a coarse timestamp does not identify a reading.
-    pub fn try_coalesce(&mut self, older: &Self) -> Result<(), MismatchedPointerInfo> {
+    pub fn try_coalesce(&mut self, older: &Self) -> Result<(), MismatchedPointerSource> {
         if self.pointer != older.pointer {
-            return Err(MismatchedPointerInfo);
+            return Err(MismatchedPointerSource);
         }
         self.merge_checked_history(older.coalesced.clone(), older.current);
         Ok(())
@@ -622,9 +633,9 @@ impl PointerMove {
     /// empties `older`'s measured history and reuses its storage; `older` retains
     /// its current reading, predictions and dispatch metadata. This operation
     /// lets bounded queues transfer ownership before retiring the older packet.
-    pub fn try_coalesce_from(&mut self, older: &mut Self) -> Result<(), MismatchedPointerInfo> {
+    pub fn try_coalesce_from(&mut self, older: &mut Self) -> Result<(), MismatchedPointerSource> {
         if self.pointer != older.pointer {
-            return Err(MismatchedPointerInfo);
+            return Err(MismatchedPointerSource);
         }
         self.merge_checked_history(std::mem::take(&mut older.coalesced), older.current);
         Ok(())
@@ -681,7 +692,7 @@ impl PointerMove {
     /// A move to `current` with no coalesced or predicted readings and no modifiers.
     #[must_use]
     pub const fn new(
-        pointer: PointerInfo,
+        pointer: PointerSource,
         buttons: PointerButtons,
         current: PointerSample,
     ) -> Self {
@@ -730,12 +741,12 @@ impl PointerMove {
 }
 
 /// An event that only says a pointer did something at a moment: entering or leaving the
-/// window, or touching a trackpad to stop the platform's scroll momentum.
+/// window.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
 pub struct PointerSignal {
     /// Who.
-    pub pointer: PointerInfo,
+    pub pointer: PointerSource,
     /// When the platform observed it.
     pub time: EventTime,
     /// Where the pointer was, when the platform says.
@@ -745,7 +756,7 @@ pub struct PointerSignal {
 impl PointerSignal {
     /// A signal from `pointer` at `time` with no position.
     #[must_use]
-    pub const fn new(pointer: PointerInfo, time: EventTime) -> Self {
+    pub const fn new(pointer: PointerSource, time: EventTime) -> Self {
         Self {
             pointer,
             time,
@@ -798,7 +809,7 @@ pub enum CancelReason {
 #[non_exhaustive]
 pub struct PointerCancel {
     /// Whose sequence ended.
-    pub pointer: PointerInfo,
+    pub pointer: PointerSource,
     /// When the platform observed the cancellation.
     pub time: EventTime,
     /// Why it ended.
@@ -808,7 +819,7 @@ pub struct PointerCancel {
 impl PointerCancel {
     /// `pointer`'s sequence cancelled at `time` for `reason`.
     #[must_use]
-    pub const fn new(pointer: PointerInfo, time: EventTime, reason: CancelReason) -> Self {
+    pub const fn new(pointer: PointerSource, time: EventTime, reason: CancelReason) -> Self {
         Self {
             pointer,
             time,
@@ -859,15 +870,23 @@ pub enum PointerEvent {
     Leave(PointerSignal),
     /// A wheel or trackpad scroll.
     Scroll(ScrollEvent),
-    /// A finger touched the trackpad while the platform was scrolling with momentum: a
-    /// framework fling in progress stops too.
-    ScrollInertiaCancel(PointerSignal),
+    /// Fingers came to rest on a touchpad, lifted, or started a gesture. Its `Begin` stops a
+    /// framework fling in progress, as the platform's own momentum stops.
+    TouchpadHold(TouchpadHoldEvent),
     /// A trackpad pinch/rotate gesture event. A two-finger pan is a phased
     /// [`Scroll`](Self::Scroll), never this.
     PanZoom(PanZoomEvent),
+    /// A swipe of three fingers or more across a touchpad: a gesture, never a
+    /// [`Scroll`](Self::Scroll).
+    TouchpadSwipe(TouchpadSwipeEvent),
     /// The platform's smart zoom: a two-finger double-tap on a trackpad. One discrete
     /// event, offered to the innermost target that claims it.
     SmartZoom(SmartZoomEvent),
+    /// A locked pointer's device moved
+    /// ([`CursorGrab::Locked`](crate::CursorGrab::Locked)): it arrives
+    /// instead of [`Move`](Self::Move) while the window holds the pointer in
+    /// place, and never otherwise.
+    RawMotion(RawMotion),
     /// A pointer device was connected.
     DeviceAdded(PointerDeviceChange),
     /// A pointer device was disconnected. A backend cancels each of its active contacts with

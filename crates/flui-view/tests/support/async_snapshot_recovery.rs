@@ -1,6 +1,6 @@
 //! Real async builders publish before retiring caller-owned values.
-use flui_foundation::{AsyncSnapshot, ConnectionState};
 use flui_scheduler::{OwnerFrame, UpdateScheduler};
+use flui_view::element::{AsyncSnapshot, ConnectionState};
 use flui_view::{
     BuildOwner, ElementTree, ErrorView, RebuildReason, ViewExt,
     element::{FutureBuilder, FutureFactory, SnapshotBuilder, StreamBuilder, StreamFactory},

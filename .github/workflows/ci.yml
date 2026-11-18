@@ -921,8 +921,8 @@ jobs:
   # cold release builds, so a pull request runs it only when `size_required`:
   # its diff touches a manifest, Cargo.lock, the toolchain, .cargo/, the
   # `flui create` templates, the baseline or the check (ON_DEMAND). A code
-  # change moves a size a little at a time; main runs it on every push and
-  # catches that drift.
+  # change moves a size a little at a time; main runs it on every push, where
+  # one push may grow a binary by 0.5% over the commit before it.
   # ─────────────────────────────────────────────────────────────────────────
   size:
     name: size
@@ -948,8 +948,52 @@ jobs:
           shared-key: workspace-size-v1
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
+      # A push to main compares its sizes with the commit before it
+      # (`github.event.before`) as well as with the baseline: the baseline's 2%
+      # is cumulative, so merges that each add a little pass until a later one
+      # crosses it. Each push's measurement is a cache entry keyed by its
+      # commit and saved from main only, failing pushes included; a re-run
+      # reads the same parent, so it fails again until the growth is answered.
+      # A parent whose run was cancelled or skipped has no entry, and the push
+      # is compared with the baseline alone. One file serves both options:
+      # xtask reads the parent's measurement before it records this one.
+      - name: Restore the previous commit's sizes
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: target/size-step/measurement.toml
+          key: size-step-${{ github.event.before }}
+
       - name: cargo xtask perf --size --check
+        if: github.event_name != 'push' || github.ref != 'refs/heads/main'
         run: cargo xtask perf --size --check
+
+      - name: cargo xtask perf --size --check against the previous commit
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: >-
+          cargo xtask perf --size --check
+          --previous target/size-step/measurement.toml
+          --parent "$PARENT"
+          --record target/size-step/measurement.toml
+        env:
+          PARENT: ${{ github.event.before }}
+
+      # Only a file this commit wrote is saved under its key: a run that failed
+      # before it measured still holds the parent's file.
+      - name: Check this commit recorded its sizes
+        id: recorded
+        if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          if grep -qx "commit = \"$GITHUB_SHA\"" target/size-step/measurement.toml 2>/dev/null; then
+            echo "measured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Save this commit's sizes
+        if: always() && steps.recorded.outputs.measured == 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: target/size-step/measurement.toml
+          key: size-step-${{ github.sha }}
 
   # ─────────────────────────────────────────────────────────────────────────
   # deps — `cargo xtask deps`: cargo-deny over every workspace member (bans,
@@ -1041,7 +1085,10 @@ jobs:
 
 
       - name: cargo test --doc
-        run: cargo test --workspace --locked --doc
+        # `flui/testing` compiles the book's chapters that run through Tester; the
+        # catalogs are lane_args.rs FACADE_CATALOGS, the narrowed run's (keep them in step), so
+        # the theme chapter and the facade's Material-gated half compile here too (src/book.rs).
+        run: cargo test --workspace --locked --doc --features flui/testing,flui/material,flui/cupertino
 
   # ─────────────────────────────────────────────────────────────────────────
   # miri checks selected ownership and containment contracts without a GPU:

@@ -9,7 +9,7 @@ use cursor_icon::CursorIcon;
 use flui_platform::DispatchEventResult;
 use flui_platform::input_capabilities::InputCapabilities;
 use flui_platform::{
-    CloseDecision, FrameOutcome, FrameRequest, PlatformInput, SurfaceChange, WindowHandler,
+    CloseDecision, Cursor, FrameOutcome, FrameRequest, PlatformInput, SurfaceChange, WindowHandler,
     WindowId,
 };
 
@@ -51,7 +51,7 @@ impl Drop for ResetsTheCursor {
     fn drop(&mut self) {
         if let Some(input) = self.input.upgrade() {
             // Refused or not, it must not find the input borrowed.
-            drop(input.set_cursor(self.window, CursorIcon::Default));
+            drop(input.set_cursor(self.window, &Cursor::Icon(CursorIcon::Default)));
         }
         self.dropped.set(true);
     }
@@ -241,4 +241,20 @@ fn a_burst_of_keymap_changes_reads_the_keymap_once() {
             "{case}: read in all"
         );
     }
+}
+
+/// A window's mask reaches every event it selects: XInput 2.4's swipe end
+/// (type 32) sets the first bit of a second word, which a single 32-bit word
+/// cannot hold.
+#[test]
+fn an_event_mask_takes_a_word_for_each_thirty_two_types() {
+    use x11rb::protocol::xinput::{self, XIEventMask};
+    assert_eq!(
+        super::event_mask(&[xinput::MOTION_EVENT, xinput::GESTURE_SWIPE_END_EVENT]),
+        [
+            XIEventMask::from(1_u32 << xinput::MOTION_EVENT),
+            XIEventMask::from(1_u32),
+        ]
+    );
+    assert_eq!(super::event_mask(&[]), Vec::<XIEventMask>::new());
 }

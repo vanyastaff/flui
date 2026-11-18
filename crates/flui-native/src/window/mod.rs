@@ -14,6 +14,8 @@
 //! what it asks of the window feature, a platform file here implements it, and
 //! `hosts/<os>.rs` hands the loop the window feature's object.
 
+#[cfg(any(windows, x11_host, test))]
+pub(crate) mod desktop;
 pub(crate) mod installation;
 #[cfg(x11_host)]
 pub(crate) mod plan;

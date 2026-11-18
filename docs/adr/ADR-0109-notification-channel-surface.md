@@ -25,7 +25,7 @@ move or borrow its value.
 
 1. Remove `ListenerRegistry`. Use the existing `Notifier` channel for borrowed
    typed notifications, and `ChangeNotifier` for zero-argument listeners.
-   `ArgCallback<T>` receives `&T`; `Notifier::notify` borrows its argument and
+   `NotifierCallback<T>` receives `&T`; `Notifier::notify` borrows its argument and
    never owns its destruction. Channel clones share listeners without requiring
    `T: Clone`.
 2. `ValueNotifier<T>` admits non-Clone values for construction, access, mutation

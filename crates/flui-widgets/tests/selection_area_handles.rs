@@ -16,8 +16,8 @@ use flui_interaction::testing::input::KeyEventBuilder;
 use flui_painting::typography::{TextDirection, TextStyle};
 use flui_platform::EventTime;
 use flui_platform::pointer::{
-    PointerButton, PointerButtons, PointerEvent, PointerId, PointerInfo, PointerKind, PointerMove,
-    PointerPosition, PointerPress, PointerRelease, PointerSample,
+    PointerButton, PointerButtons, PointerEvent, PointerId, PointerKind, PointerMove,
+    PointerPosition, PointerPress, PointerRelease, PointerSample, PointerSource,
 };
 use flui_rendering::semantics::{DocumentPosition, DocumentSelection};
 use flui_testing::replay::{MouseScript, PointerScript};
@@ -28,7 +28,7 @@ use flui_widgets::{
     SelectionInput, SizedBox, Text, WidgetsApp,
 };
 
-use crate::common::{LaidOut, lay_out, tight};
+use crate::common::{LaidOut, lay_out_on, tight};
 
 const WORDS: &str = "alpha beta gamma";
 
@@ -64,7 +64,11 @@ impl Scene {
     }
 
     fn laid_out(app: WidgetsApp, heard: Heard) -> Self {
-        let mut laid = lay_out(app, tight(400.0, 300.0));
+        let mut laid = lay_out_on(
+            app,
+            tight(400.0, 300.0),
+            flui_platform::TargetPlatform::Linux,
+        );
         laid.pump();
         Self { laid, heard }
     }
@@ -151,7 +155,7 @@ impl Scene {
 
     /// A primary mouse click at `at` with Shift held.
     fn shift_click(&mut self, at: Offset<f64>) {
-        let mouse = PointerInfo::new(
+        let mouse = PointerSource::new(
             PointerId::try_from(77_u64).expect("a nonzero id"),
             PointerKind::Mouse,
         );
@@ -177,7 +181,7 @@ impl Scene {
     /// One step of touch contact `finger` by hand, `millis` into it, for a test
     /// whose release lands where no move reported.
     fn touch(&mut self, finger: u64, step: Touch, millis: u64, at: Offset<f64>) {
-        let finger = PointerInfo::new(
+        let finger = PointerSource::new(
             PointerId::try_from(finger).expect("a nonzero id"),
             PointerKind::Touch,
         );
@@ -584,7 +588,11 @@ fn with_failing_wake() -> (Scene, std::sync::Arc<std::sync::atomic::AtomicBool>)
     use std::sync::atomic::{AtomicBool, Ordering};
 
     let armed = Arc::new(AtomicBool::new(false));
-    let mut laid = lay_out(SizedBox::new(1.0, 1.0), tight(400.0, 300.0));
+    let mut laid = lay_out_on(
+        SizedBox::new(1.0, 1.0),
+        tight(400.0, 300.0),
+        flui_platform::TargetPlatform::Linux,
+    );
     let arm = Arc::clone(&armed);
     laid.with_build_owner_mut(|owner| {
         owner.set_on_build_scheduled(move || {
@@ -956,7 +964,11 @@ pub(crate) fn failing_wakes_as_the_focus_leaves_are_reported_not_raised() {
         Arc::new(AtomicBool::new(false)),
         Arc::new(AtomicUsize::new(0)),
     );
-    let mut laid = lay_out(SizedBox::new(1.0, 1.0), tight(400.0, 300.0));
+    let mut laid = lay_out_on(
+        SizedBox::new(1.0, 1.0),
+        tight(400.0, 300.0),
+        flui_platform::TargetPlatform::Linux,
+    );
     let (arm, count) = (Arc::clone(&armed), Arc::clone(&failures));
     laid.with_build_owner_mut(|owner| {
         owner.set_on_build_scheduled(move || {

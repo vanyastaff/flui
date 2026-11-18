@@ -56,6 +56,11 @@
 //!   drawable metrics and scale, focus, visibility, occlusion where it can be
 //!   asked) is the snapshot's
 //!   (ADR-0254 §1). The capabilities the checks read are the snapshot's.
+//! - **A grab ends with the focus.** A focused window that takes a grab
+//!   publishes it and its window system holds it
+//!   ([`WindowFixture::held_grab`]); once the fixture takes the focus away
+//!   ([`WindowFixture::take_focus_away`]) the window system holds none and
+//!   the snapshot says so.
 //! - **A window opens only its own publication** (ADR-0341). A command
 //!   admitted against the window's snapshot opens, so a window that publishes
 //!   anew on every read is caught; one admitted against capabilities the caller
@@ -75,9 +80,10 @@ use std::rc::Rc;
 use flui_foundation::geometry::{Point, Rect, Size, WindowMetrics};
 use flui_platform::input_regions::{InputRegion, InputRegionKind};
 use flui_platform::{
-    AdmissionError, AppTitleBar, ApplyError, Availability, EventTime, FrameRateHint, FrameRequest,
-    PlatformWindow, SizeConstraints, Unsupported, UnsupportedReason, WindowCapability,
-    WindowCommand, WindowFocus, WindowFrame, WindowMaterial, WindowMode, WindowState,
+    AdmissionError, AppTitleBar, ApplyError, AspectRatio, Availability, CursorGrab, EventTime,
+    FrameRateHint, FrameRequest, PlatformWindow, SizeConstraints, Unsupported, UnsupportedReason,
+    WindowCapability, WindowCommand, WindowExtent, WindowFocus, WindowFrame, WindowLevel,
+    WindowMaterial, WindowMode, WindowPosition, WindowState,
 };
 
 use crate::window_commands::AdmitAndApply;
@@ -180,6 +186,22 @@ pub trait WindowFixture {
     fn open_another(&mut self) -> Option<Rc<dyn PlatformWindow>> {
         None
     }
+
+    /// The grab the window system holds for the window, read by the
+    /// fixture's own means (Win32's cursor clip, a headless host's model),
+    /// never through the snapshot; `None` where it answers no such query,
+    /// which leaves the grab check to the snapshot alone.
+    fn held_grab(&self) -> Option<CursorGrab> {
+        None
+    }
+
+    /// Take the keyboard focus away from the window the way the user
+    /// switching to another window does, and settle; `false` where the
+    /// window system gives a test no such lever, which skips the check that
+    /// a grab ends with the focus.
+    fn take_focus_away(&mut self) -> bool {
+        false
+    }
 }
 
 /// One promise a window broke.
@@ -245,6 +267,7 @@ const CHECKS: &[(&str, Check)] = &[
         "a_command_admitted_before_a_revision_is_superseded",
         a_command_admitted_before_a_revision_is_superseded,
     ),
+    ("a_grab_ends_with_the_focus", a_grab_ends_with_the_focus),
     (
         "a_window_opens_only_its_own_publication",
         a_window_opens_only_its_own_publication,
@@ -273,12 +296,19 @@ const CHECKS: &[(&str, Check)] = &[
 ];
 
 /// Every command kind, with numbers a window of any size can take, built from
-/// the window's current state so toggles actually toggle.
+/// the window's current state so toggles actually toggle. A position is on
+/// the display the window is on: a window on no display has no place to be
+/// moved to, and its list has no position.
 fn sample_commands(state: &WindowState) -> Vec<WindowCommand> {
-    vec![
+    let position = state.display.map(|display| {
+        WindowCommand::SetPosition(
+            WindowPosition::try_new(display, Point::new(120.0, 90.0))
+                .expect("BUG: the sample position is finite"),
+        )
+    });
+    let mut commands = vec![
         WindowCommand::SetTitle("window conformance".to_owned()),
-        WindowCommand::SetPosition(Point::new(120.0, 90.0)),
-        WindowCommand::SetSize(Size::new(640.0, 480.0)),
+        WindowCommand::SetSize(extent(640.0, 480.0)),
         WindowCommand::SetConstraints(
             SizeConstraints::try_new(
                 Some(Size::new(200.0, 150.0)),
@@ -304,7 +334,91 @@ fn sample_commands(state: &WindowState) -> Vec<WindowCommand> {
         WindowCommand::Activate,
         WindowCommand::SetMaterial(WindowMaterial::System),
         WindowCommand::SetMaterial(WindowMaterial::Opaque),
-    ]
+        WindowCommand::SetLevel(WindowLevel::AlwaysOnTop),
+        WindowCommand::SetLevel(WindowLevel::AlwaysOnBottom),
+        WindowCommand::SetLevel(WindowLevel::Normal),
+        WindowCommand::SetResizeIncrements(Some(
+            WindowExtent::try_new(Size::new(8.0, 16.0)).expect("BUG: the sample step is finite"),
+        )),
+        WindowCommand::SetResizeIncrements(None),
+        WindowCommand::SetAspectRatio(Some(AspectRatio::new(
+            std::num::NonZeroU32::MIN.saturating_add(3),
+            std::num::NonZeroU32::MIN.saturating_add(2),
+        ))),
+        WindowCommand::SetAspectRatio(None),
+    ];
+    commands.splice(1..1, position);
+    commands
+}
+
+/// The extent `width` by `height`, finite by the kit's own numbers.
+fn extent(width: f64, height: f64) -> WindowExtent {
+    WindowExtent::try_new(Size::new(width, height)).expect("BUG: the kit's sizes are finite")
+}
+
+/// A window holds the pointer only while it has the keyboard focus: a grab
+/// it takes is published and held by the window system, and once the focus
+/// goes the window system holds none and the snapshot says so. A window that
+/// takes no grab, cannot be focused here, or whose fixture cannot take the
+/// focus away, skips the part it cannot show.
+fn a_grab_ends_with_the_focus(fixture: &mut dyn WindowFixture) -> Result<(), String> {
+    let window = fixture.window();
+    let capabilities = window.state().capabilities;
+    let grab = if capabilities.confines_cursor().is_available() {
+        CursorGrab::Confined
+    } else if capabilities.locks_cursor().is_available() {
+        CursorGrab::Locked
+    } else {
+        return Ok(());
+    };
+    let _activated = window.admit_and_apply(WindowCommand::Activate);
+    fixture.settle();
+    if !window.state().focus.is_focused() {
+        return Ok(());
+    }
+    let mut broken = Vec::new();
+    if let Err(refused) = window.admit_and_apply(WindowCommand::SetCursorGrab(grab)) {
+        return Err(format!("{grab:?} is supported but was refused: {refused}"));
+    }
+    fixture.settle();
+    let held = window.state().cursor_grab;
+    if held != grab {
+        broken.push(format!(
+            "a focused window asked for {grab:?} publishes {held:?}"
+        ));
+    }
+    if let Some(system) = fixture.held_grab()
+        && system != grab
+    {
+        broken.push(format!(
+            "a focused window asked for {grab:?}: the window system holds {system:?}"
+        ));
+    }
+    if fixture.take_focus_away() {
+        let state = window.state();
+        if state.focus.is_focused() {
+            broken.push("the window kept the focus the fixture took away".to_owned());
+        }
+        if state.cursor_grab != CursorGrab::None {
+            broken.push(format!(
+                "after the focus went, the snapshot still says {:?}",
+                state.cursor_grab
+            ));
+        }
+        if let Some(system) = fixture.held_grab()
+            && system != CursorGrab::None
+        {
+            broken.push(format!(
+                "after the focus went, the window system holds {system:?}"
+            ));
+        }
+    } else if let Err(refused) =
+        window.admit_and_apply(WindowCommand::SetCursorGrab(CursorGrab::None))
+    {
+        broken.push(format!("letting the grab go was refused: {refused}"));
+    }
+    fixture.settle();
+    finish(broken)
 }
 
 fn capabilities_are_honest(fixture: &mut dyn WindowFixture) -> Result<(), String> {
@@ -356,17 +470,22 @@ fn accepted_commands_converge(fixture: &mut dyn WindowFixture) -> Result<(), Str
                 .ok_or_else(|| format!("the title is {:?}, not {title:?}", state.title)),
             WindowCommand::SetPosition(at) => {
                 if capabilities.observes_position().is_available() {
+                    // The same display, and the same point of it.
                     let there = state.outer.position();
                     there
-                        .is_some_and(|there| near(there.x, at.x) && near(there.y, at.y))
+                        .is_some_and(|there| {
+                            there.display() == at.display()
+                                && near(there.at().x, at.at().x)
+                                && near(there.at().y, at.at().y)
+                        })
                         .then_some(())
                         .ok_or_else(|| format!("the window is at {there:?}, not {at:?}"))
                 } else {
                     Ok(())
                 }
             }
-            WindowCommand::SetSize(size) => (near(state.content_size.width(), size.width)
-                && near(state.content_size.height(), size.height))
+            WindowCommand::SetSize(size) => (near(state.content_size.width(), size.width())
+                && near(state.content_size.height(), size.height()))
             .then_some(())
             .ok_or_else(|| format!("the content size is {:?}, not {size:?}", state.content_size)),
             WindowCommand::SetConstraints(constraints) => (state.constraints == *constraints)
@@ -412,6 +531,9 @@ fn accepted_commands_converge(fixture: &mut dyn WindowFixture) -> Result<(), Str
                     .then_some(())
                     .ok_or_else(|| format!("the window system draws {held:?}, not {material:?}"))
             }
+            WindowCommand::SetLevel(level) => (state.level == *level)
+                .then_some(())
+                .ok_or_else(|| format!("the level is {:?}, not {level:?}", state.level)),
             _ => Ok(()),
         };
         if let Err(detail) = outcome {
@@ -453,10 +575,12 @@ fn revisions_mean_change(fixture: &mut dyn WindowFixture) -> Result<(), String> 
 fn bad_numbers_are_refused(fixture: &mut dyn WindowFixture) -> Result<(), String> {
     let window = fixture.window();
     let mut broken = Vec::new();
+    // A size or position that is not finite cannot be put in a command; what
+    // is left to refuse is a size, a limit or a step that encloses no area.
     for command in [
-        WindowCommand::SetSize(Size::new(f64::NAN, 100.0)),
-        WindowCommand::SetSize(Size::new(-5.0, 100.0)),
-        WindowCommand::SetPosition(Point::new(f64::INFINITY, 0.0)),
+        WindowCommand::SetSize(extent(0.0, 100.0)),
+        WindowCommand::SetSize(extent(640.0, 0.0)),
+        WindowCommand::SetResizeIncrements(Some(extent(0.0, 8.0))),
     ] {
         // Before the capabilities: no window, whatever it honours, is handed
         // numbers that describe none.
@@ -517,12 +641,12 @@ fn a_report_that_describes_no_window_publishes_nothing(
             ));
         }
     }
-    let size = Size::new(600.0, 400.0);
+    let size = extent(600.0, 400.0);
     if window.admit_and_apply(WindowCommand::SetSize(size)).is_ok() {
         fixture.settle();
         let recovered = window.state();
-        if !(near(recovered.content_size.width(), size.width)
-            && near(recovered.content_size.height(), size.height))
+        if !(near(recovered.content_size.width(), size.width())
+            && near(recovered.content_size.height(), size.height()))
         {
             broken.push(format!(
                 "after the report, a resize to {size:?} left the content at {:?}",

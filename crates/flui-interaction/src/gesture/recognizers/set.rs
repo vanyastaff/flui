@@ -3,7 +3,11 @@ use super::{
     callback_containment::finish_containment,
     recognizer::{GestureRecognizer, admits_device},
 };
-use crate::{containment::RoutePanic, events::PointerEvent, pointer::PointerDispatch};
+use crate::{
+    containment::RoutePanic,
+    events::{PointerEvent, TouchpadSwipePhase},
+    pointer::PointerDispatch,
+};
 use smallvec::SmallVec;
 use std::rc::{Rc, Weak};
 
@@ -66,16 +70,22 @@ impl RecognizerSet {
             let Some(recognizer) = entry.recognizer.upgrade() else {
                 continue;
             };
-            let candidate = RoutePanic::capture(|| {
-                if let PointerEvent::Down(down) = dispatch.local {
+            let candidate = RoutePanic::capture(|| match dispatch.local {
+                PointerEvent::Down(down) => {
                     if admits_device(recognizer.allowed_devices(), down.pointer.kind)
                         && entry.admit.as_ref().is_none_or(|admit| admit(dispatch))
                     {
                         recognizer.add_pointer(dispatch);
                     }
-                } else {
-                    recognizer.handle_event(dispatch);
                 }
+                PointerEvent::TouchpadSwipe(swipe) if swipe.phase == TouchpadSwipePhase::Start => {
+                    if admits_device(recognizer.allowed_devices(), swipe.pointer().kind)
+                        && entry.admit.as_ref().is_none_or(|admit| admit(dispatch))
+                    {
+                        recognizer.add_touchpad_swipe(dispatch);
+                    }
+                }
+                _ => recognizer.handle_event(dispatch),
             });
             RoutePanic::preserve_first(&mut first, candidate, "recognizer attachment");
             let candidate = RoutePanic::capture(|| drop(recognizer));

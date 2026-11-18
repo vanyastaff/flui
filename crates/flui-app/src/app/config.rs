@@ -3,7 +3,7 @@
 use flui_engine::FrameLatency;
 use flui_foundation::AppId;
 use flui_foundation::geometry::{Point, Size};
-use flui_log::AppIdentity;
+use flui_log::identity::AppIdentity;
 pub use flui_runtime::MotionOverride;
 pub use flui_runtime::presentation::PointerResampling;
 
@@ -44,22 +44,12 @@ impl Default for DiagnosticsProfile {
 ///
 /// Use this to customize the app window and behavior.
 ///
-/// # Frame pacing has no field here
+/// # Frame pacing
 ///
-/// `vsync`/`target_fps` fields previously lived here, advisory-only and
-/// never wired to the real present path — this crate removed the unwired
-/// `vsync`/`target_fps` fields rather than leave a persistently misleading
-/// shape a caller could reasonably expect to govern pacing. Both are
-/// removed, not deprecated: a frame-configuration field is wired end to end
-/// or it does not exist. A frame-pacing surface
-/// returns with the threaded raster lane that can act on one: the unwired
-/// `flui_engine::RasterOptions` DTO was deleted rather than kept as a shape
-/// nothing read, because its every consumer was its own test (and
-/// ADR-0045 decision 6 had already decided to replace its
-/// `max_frames_in_flight` field with `PipelineDepth`). There is no field
-/// here to remove-or-wire because there is no consumer downstream to wire
-/// it to yet — that consumer is #559's job, not a claim this removal gets
-/// to make in the meantime.
+/// A frame-configuration field here is wired end to end or does not exist:
+/// there is no `vsync` or `target_fps`. Frames follow the refresh of the
+/// display the window is on (ADR-0353), and the one pacing choice an
+/// application makes is the swapchain's [`frame_latency`](Self::frame_latency).
 ///
 /// # Example
 ///
@@ -93,8 +83,8 @@ pub struct AppConfig {
     /// Window title.
     pub title: String,
 
-    /// Initial window size.
-    pub size: Size,
+    /// Initial content size, in logical pixels.
+    pub size: flui_platform::WindowExtent,
 
     /// Minimum window size.
     pub min_size: Option<flui_platform::WindowExtent>,
@@ -102,9 +92,12 @@ pub struct AppConfig {
     /// Maximum window size.
     pub max_size: Option<flui_platform::WindowExtent>,
 
-    /// Initial outer position in global logical pixels; `None` lets the system
-    /// place the window. A platform that cannot place a window ignores it.
-    pub position: Option<Point<f64>>,
+    /// Initial outer position, in whole logical pixels of the primary display
+    /// from its top-left corner (the first display where the platform marks
+    /// none primary); `None` lets the system place the window. A platform that
+    /// cannot place a window ignores it, and so does one that reports no
+    /// display to measure it on.
+    pub position: Option<Point<i32>>,
 
     /// The mode the window opens in. A platform that cannot enter it opens the
     /// window in [`WindowMode::Normal`].
@@ -143,8 +136,8 @@ pub struct AppConfig {
     /// cheap `None` check per frame; snapshot collection, percentile reduction,
     /// and line formatting run only while the overlay is enabled.
     ///
-    /// `From<&AppConfig> for flui_platform::WindowOptions` drops this field —
-    /// it is a compositing concern, not a window-creation one.
+    /// [`window_options`](Self::window_options) drops this field: it is a
+    /// compositing concern, not a window-creation one.
     pub show_performance_overlay: bool,
 
     /// How many frames a window's swapchain holds ahead of the display (ADR-0347).
@@ -293,7 +286,7 @@ pub struct AppConfig {
     /// On iOS services start once during process bootstrap and survive scene
     /// disconnection; framework quit cancels and joins them. Their lifetime
     /// does not grant background execution time from the operating system.
-    /// Native-only today — the lifecycle layer has no wasm32 slice yet.
+    /// Native-only: `wasm32` does not build the lifecycle module.
     #[cfg(not(target_arch = "wasm32"))]
     pub services: Vec<ServiceDefinition>,
 
@@ -346,7 +339,7 @@ impl Default for AppConfig {
             diagnostics_profile: DiagnosticsProfile::default(),
             motion_override: MotionOverride::FollowSystem,
             title: "FLUI App".to_string(),
-            size: Size::new(800.0, 600.0),
+            size: window_extent(800, 600),
             min_size: None,
             max_size: None,
             position: None,
@@ -462,7 +455,7 @@ impl AppConfig {
     /// naming `size`.
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
     pub fn size(mut self, width: u32, height: u32) -> Self {
-        self.size = Size::new(width as f64, height as f64);
+        self.size = window_extent(width, height);
         self
     }
 
@@ -486,20 +479,66 @@ impl AppConfig {
         self
     }
 
-    /// Set the initial outer position, in global logical pixels.
+    /// Set the initial outer position: `(x, y)` whole logical pixels of the
+    /// primary display from its top-left corner (the first display where the
+    /// platform marks none primary), which the runner turns into a
+    /// [`WindowPosition`](flui_platform::WindowPosition) on that display when
+    /// it opens the window. Whole pixels are always a place, so no position
+    /// refuses the start.
     ///
     /// Applied where the backend places a window at open
     /// ([`WindowCapabilities::places_at_open`](flui_platform::WindowCapabilities::places_at_open)):
     /// a backend that does not report it (the Wayland host, where the
-    /// compositor places windows) leaves the place to the system. A coordinate
-    /// that is NaN or infinite is no place: the application does not start,
-    /// on any platform, and `run` answers
-    /// [`LaunchError::InvalidWindowOption`](crate::app::LaunchError::InvalidWindowOption)
-    /// naming `position`.
+    /// compositor places windows) leaves the place to the system, and so does
+    /// one that reports no display.
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
-    pub fn position(mut self, at: Point<f64>) -> Self {
-        self.position = Some(at);
+    pub fn position(mut self, x: i32, y: i32) -> Self {
+        self.position = Some(Point::new(x, y));
         self
+    }
+
+    /// The window options this configuration opens a window with, among
+    /// `displays`: every window field of the configuration, with
+    /// [`position`](Self::position) placed on the primary display (the first
+    /// where none is marked). Without displays, or among none, the options
+    /// name no position and the system places the window.
+    ///
+    /// `visible` and `reveal` are not the configuration's to set and keep the
+    /// options' own defaults: on screen when the window opens
+    /// ([`WindowReveal::AtOpen`](flui_platform::WindowReveal::AtOpen)).
+    /// [`AfterFirstFrame`](flui_platform::WindowReveal::AfterFirstFrame) is a
+    /// promise to call `reveal_after_first_frame`, which only the runner that
+    /// keeps it opts into at its own open site, so nothing opens a window at
+    /// alpha 0 that no one will reveal.
+    #[must_use]
+    pub fn window_options(
+        &self,
+        displays: Option<&flui_platform::DisplaySnapshot>,
+    ) -> flui_platform::WindowOptions {
+        let display = displays.and_then(|displays| {
+            displays
+                .primary()
+                .or_else(|| displays.displays().first())
+                .map(|display| display.id)
+        });
+        let position = self.position.zip(display).and_then(|(at, display)| {
+            flui_platform::WindowPosition::try_new(
+                display,
+                Point::new(f64::from(at.x), f64::from(at.y)),
+            )
+            .ok()
+        });
+        flui_platform::WindowOptions::default()
+            .title(self.title.clone())
+            .size(self.size)
+            .position(position)
+            .resizable(self.resizable)
+            .frame(self.frame)
+            .min_size(self.min_size)
+            .max_size(self.max_size)
+            .mode(self.mode)
+            .input_latency(self.input_latency)
+            .os_options(os_options_for(self))
     }
 
     /// Set the mode the window opens in.
@@ -742,39 +781,16 @@ impl AppConfig {
     /// order registered, before any subscriber of
     /// [`HostNotice::MemoryPressure`](flui_platform::HostNotice::MemoryPressure)
     /// hears the notice. The host has one set of receivers, read from the
-    /// configuration the run starts with.
+    /// configuration the run starts with. A receiver is reclaimed on the
+    /// thread that runs the application and never leaves it, so it needs no
+    /// `Send` or `Sync` and may keep `Rc`, `Cell` and `RefCell` state.
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
     pub fn memory_reclaim(
         mut self,
-        receiver: impl flui_foundation::memory::ReclaimMemory + Send + Sync + 'static,
+        receiver: impl flui_foundation::memory::ReclaimMemory + 'static,
     ) -> Self {
-        self.memory_reclaimers.0.push(std::sync::Arc::new(receiver));
+        self.memory_reclaimers.0.push(std::rc::Rc::new(receiver));
         self
-    }
-}
-
-impl From<&AppConfig> for flui_platform::WindowOptions {
-    fn from(config: &AppConfig) -> Self {
-        // `visible` and `reveal` are not the configuration's to set, so they
-        // keep the options' own defaults: on screen when the window opens
-        // (`AtOpen`). `AfterFirstFrame` is a PROMISE to call
-        // `reveal_after_first_frame`, and this conversion is shared by callers
-        // that keep it (the desktop runner, through `FirstReveal`) and callers
-        // that do not (`run_direct`, the bare `open_secondary_window`). The
-        // paths that keep it opt in at their own open site
-        // (`runner::desktop::OpeningWindow::open`), so nothing can open a
-        // window at alpha 0 that no one will ever reveal.
-        Self::default()
-            .title(config.title.clone())
-            .size(config.size)
-            .resizable(config.resizable)
-            .frame(config.frame)
-            .min_size(config.min_size)
-            .max_size(config.max_size)
-            .position(config.position)
-            .mode(config.mode)
-            .input_latency(config.input_latency)
-            .os_options(os_options_for(config))
     }
 }
 
@@ -823,11 +839,11 @@ mod tests {
     /// in, and an application's own Android options are kept as they are.
     #[test]
     fn the_android_colour_mode_follows_the_requested_surface_colour() {
-        use flui_platform::WindowOptions;
         use flui_platform::os_options::{AndroidColorMode, AndroidWindowOptions, OsWindowOptions};
 
         let mode = |config: &AppConfig| {
-            WindowOptions::from(config)
+            config
+                .window_options(None)
                 .os_options
                 .android
                 .map(|android| android.color_mode)

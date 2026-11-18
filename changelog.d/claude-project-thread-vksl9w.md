@@ -68,7 +68,7 @@
   testing kit's window now offers a push-model input method, as winit does.
 - **`flui_protocol::launch` and `flui_protocol::framing`**: the driver agent's launch contract
   (variable names, Android extras, the shortest token, the exit code) and its framing limits
-  and binary-payload header. `Hello::new`, `HelloReply::new`, `AppInfo::new` build the
+  and binary-payload header. `Hello::new`, `HelloReply::new`, `AppDescription::new` build the
   handshake.
 - **`flui_protocol::envelope`**: the lines of a conversation as types, `Greeting`,
   `Request<P>`, `RequestId` and `ServerLine<R>`, the last read by its keys (`hello`, `event`,

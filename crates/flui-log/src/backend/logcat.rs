@@ -45,11 +45,7 @@ const FALLBACK_TAG: &str = "flui";
 /// `android_log_sys::LogPriority`'s.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(i32)]
-#[expect(
-    clippy::exhaustive_enums,
-    reason = "one logcat priority per `tracing` level, and `tracing` has five"
-)]
-pub enum LogcatPriority {
+pub(crate) enum LogcatPriority {
     /// `TRACE` — logcat `V`.
     Verbose = 2,
     /// `DEBUG` — logcat `D`.
@@ -65,7 +61,7 @@ pub enum LogcatPriority {
 impl LogcatPriority {
     /// The logcat priority a `tracing` level maps to.
     #[must_use]
-    pub fn for_level(level: Level) -> Self {
+    pub(crate) fn for_level(level: Level) -> Self {
         match level {
             Level::TRACE => Self::Verbose,
             Level::DEBUG => Self::Debug,
@@ -113,7 +109,7 @@ pub(crate) fn logcat_message(rendered: &str) -> CString {
 }
 
 #[cfg(target_os = "android")]
-pub(crate) use android::{LogcatLayer, write_to_logcat};
+pub(crate) use android::LogcatLayer;
 
 #[cfg(target_os = "android")]
 mod android {
@@ -130,10 +126,8 @@ mod android {
     /// Write one already-rendered line to logcat under an already-resolved tag.
     ///
     /// The single FFI call site in the crate, so its safety argument is made
-    /// once. Both the layer and the emergency path in
-    /// [`crate::report_to_logcat`] go through here, and both resolve their tag
-    /// with [`logcat_tag`] first so the fallback chain stays in one place.
-    pub(crate) fn write_to_logcat(priority: LogcatPriority, tag: &std::ffi::CStr, rendered: &str) {
+    /// once.
+    fn write_to_logcat(priority: LogcatPriority, tag: &std::ffi::CStr, rendered: &str) {
         let message = logcat_message(rendered);
 
         // The workspace warns on `unsafe_code`; logcat has no safe binding.

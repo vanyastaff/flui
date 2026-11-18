@@ -85,7 +85,7 @@ returns `OwnerGone`.
 Owners on different threads exchange owned `Send` data through bounded
 channels or dedicated one-shot completions — never UI closures or a generic
 "run this on the UI thread" job. `RuntimeEvent` (native/host observations → UI runtime) and
-`RasterSendError`-checked commands (UI → raster) and each slot's settlement record (raster → UI) are the shapes of that traffic; the one placement shipped is the inline executor on the owner thread, so a `Frame` and a `Configure` go through the slot's mutex-guarded inbox, and the lifecycle commands (`Attach`, `Release`, `Restore`, `Detach`, `RetryDevice`) through one bounded channel (`LIFECYCLE_CAPACITY`) that the executor drains with `try_recv` on the owner thread; the channel is a queue the bounded-queue rule below covers. The rules:
+`RasterSendError`-checked commands (UI → raster) and each slot's settlement record (raster → UI) are the shapes of that traffic; the executor turns on a raster thread on the Wayland host and inline on the owner thread elsewhere (ADR-0305 §10), and in both a `Frame` and a `Configure` go through the slot's mutex-guarded inbox, and the lifecycle commands (`Attach`, `Release`, `Restore`, `Detach`, `RetryDevice`) through one bounded channel (`LIFECYCLE_CAPACITY`) that the executor drains with `try_recv` on the thread it turns on; the channel is a queue the bounded-queue rule below covers. The rules:
 
 - every routable message carries, or is structurally bound to, its exact
   `PresentationAddress`;
@@ -244,7 +244,9 @@ policy-free abstraction with two production consumers and its own ADR.
 | A generic UI executor carrying closures | open-ended authority, unreviewable ordering, no backpressure class |
 | `Arc<RwLock<PresentationRuntime>>` | lets the compiler permit ownership violations; a deadlock-prone lock graph |
 
-Flutter reference points: focus nodes retain their owning manager and key
-events walk the focused chain; text input has one current connection with
-replacement semantics (`focus_manager.dart`, `text_input.dart`, Flutter 3.44).
+Flutter reference points, read at 3.50.0: focus nodes retain their owning
+manager and key events walk the focused chain
+([`focus_manager.dart:660, 2272-2278`](https://github.com/flutter/flutter/blob/ab2912035e/packages/flutter/lib/src/widgets/focus_manager.dart#L2272-L2278));
+text input has one current connection, which the next `attach` replaces
+([`text_input.dart:2115-2130`](https://github.com/flutter/flutter/blob/ab2912035e/packages/flutter/lib/src/services/text_input.dart#L2115-L2130)).
 FLUI keeps those behaviors; the ownership topology is its own.

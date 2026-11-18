@@ -3,16 +3,16 @@
 //! flushes add.
 
 use std::rc::Rc;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use std::task::{Context, Waker};
 use std::time::{Duration, Instant};
 
 use flui_foundation::geometry::{Bounds, DevicePixelRatio, Point, Size};
-use flui_platform::{AppTitleBar, WindowFrame, WindowOptions};
+use flui_platform::{AppTitleBar, PlacementOffset, WindowFrame, WindowOptions};
 use flui_platform::{
-    DisplayInfo, DisplayKey, DisplayRegistry, DisplaySnapshot, Storage, StorageError,
-    StorageFuture, StorageName, Stored, WindowCapabilities, WindowGeometry, WindowInteraction,
-    WindowMode, WindowPlacement, WindowState,
+    DisplayDescription, DisplayId, DisplayKey, DisplayRegistry, DisplaySnapshot, Storage,
+    StorageError, StorageFuture, StorageName, Stored, WindowCapabilities, WindowExtent,
+    WindowGeometry, WindowInteraction, WindowMode, WindowPlacement, WindowPosition, WindowState,
 };
 use flui_testing::storage::MemoryStorage;
 use flui_view::persist::StorageHandle;
@@ -24,25 +24,33 @@ use super::{
 
 const NAME: StorageName = StorageName::machine_local("window-main");
 
+/// Issues the id of this file's one display: a window position names the
+/// display it is measured on by an id, which only the registry that issued it
+/// resolves, so every snapshot and position here comes from this registry.
+static REGISTRY: LazyLock<DisplayRegistry> = LazyLock::new(DisplayRegistry::new);
+
+/// The id of the display every snapshot of this file holds.
+fn main_display() -> DisplayId {
+    REGISTRY.mint(&DisplayKey::Injected(1)).expect("id")
+}
+
+/// A window extent of this size.
+fn extent(width: f64, height: f64) -> WindowExtent {
+    WindowExtent::try_new(Size::new(width, height)).expect("a finite extent")
+}
+
+/// The point `(x, y)` of the main display, from its corner.
+fn position(x: f64, y: f64) -> WindowPosition {
+    WindowPosition::try_new(main_display(), Point::new(x, y)).expect("a finite position")
+}
+
 fn displays() -> DisplaySnapshot {
-    let registry = DisplayRegistry::new();
-    let id = registry.mint(&DisplayKey::Injected(1)).expect("id");
-    let display = DisplayInfo::new(
-        id,
-        "main",
-        Bounds::new(Point::new(0, 0), Size::new(1920, 1080)),
-        DevicePixelRatio::ONE,
-    )
-    .with_primary(true)
-    .with_persistent_key("key-main");
-    DisplaySnapshot::empty()
-        .successor(vec![display])
-        .expect("revision")
+    displays_with_left_edge(0)
 }
 
 fn at(x: f64, y: f64) -> WindowState {
     WindowState::new(
-        WindowGeometry::try_new(Some(Point::new(x, y)), Size::new(816.0, 639.0))
+        WindowGeometry::try_new(Some(position(x, y)), Size::new(816.0, 639.0))
             .expect("a finite rectangle"),
         flui_platform::WindowExtent::try_new(Size::new(800.0, 600.0)).expect("a finite size"),
     )
@@ -86,6 +94,7 @@ impl Fixture {
         WindowPlacement::from_bytes(&bytes)
             .expect("a placement was stored")
             .offset
+            .map(PlacementOffset::get)
     }
 }
 
@@ -137,10 +146,10 @@ fn a_recall_reads_what_storage_answers_and_checks_it() {
     let now = Instant::now();
     let placement = WindowPlacement::new(
         Some("key-main".into()),
-        Some(Point::new(40.0, 30.0)),
-        Size::new(800.0, 600.0),
+        Some(PlacementOffset::try_new(Point::new(40.0, 30.0)).expect("a finite offset")),
+        extent(800.0, 600.0),
         WindowMode::Maximized,
-        1.0,
+        DevicePixelRatio::ONE,
     );
     let stored_bytes = placement.to_bytes();
     let too_large = vec![b'x'; 5000];
@@ -197,10 +206,10 @@ fn a_recall_waits_until_its_bound_and_then_never_takes_the_answer() {
     let storage = MemoryStorage::new();
     let placement = WindowPlacement::new(
         None,
-        Some(Point::new(40.0, 30.0)),
-        Size::new(800.0, 600.0),
+        Some(PlacementOffset::try_new(Point::new(40.0, 30.0)).expect("a finite offset")),
+        extent(800.0, 600.0),
         WindowMode::Normal,
-        1.0,
+        DevicePixelRatio::ONE,
     );
     storage.put(&NAME, placement.to_bytes());
     let held = storage.hold_reads();
@@ -305,20 +314,7 @@ fn a_display_change_alone_measures_the_window_again() {
     let fixture = Fixture::new();
     fixture.observe(&at(100.0, 80.0), Duration::ZERO);
     // The taskbar moved to the left: the usable area starts 60 pixels in.
-    let registry = DisplayRegistry::new();
-    let id = registry.mint(&DisplayKey::Injected(1)).expect("id");
-    let moved = DisplaySnapshot::empty()
-        .successor(vec![
-            DisplayInfo::new(
-                id,
-                "main",
-                Bounds::new(Point::new(60, 0), Size::new(1860, 1080)),
-                DevicePixelRatio::ONE,
-            )
-            .with_primary(true)
-            .with_persistent_key("key-main"),
-        ])
-        .expect("revision");
+    let moved = displays_with_left_edge(60);
     fixture
         .recorder
         .redisplay(&moved, fixture.after(WRITE_INTERVAL));
@@ -328,19 +324,18 @@ fn a_display_change_alone_measures_the_window_again() {
 /// The displays the host sampled, with the usable area starting `left`
 /// pixels in.
 fn displays_with_left_edge(left: i32) -> DisplaySnapshot {
-    let registry = DisplayRegistry::new();
-    let id = registry.mint(&DisplayKey::Injected(1)).expect("id");
+    let display = DisplayDescription::from_device(
+        main_display(),
+        "main",
+        Bounds::new(Point::new(0, 0), Size::new(1920, 1080)),
+        Bounds::new(Point::new(left, 0), Size::new(1920 - left, 1080)),
+        DevicePixelRatio::ONE,
+    )
+    .expect("a display with an area")
+    .with_primary(true)
+    .with_persistent_key("key-main");
     DisplaySnapshot::empty()
-        .successor(vec![
-            DisplayInfo::new(
-                id,
-                "main",
-                Bounds::new(Point::new(left, 0), Size::new(1920 - left, 1080)),
-                DevicePixelRatio::ONE,
-            )
-            .with_primary(true)
-            .with_persistent_key("key-main"),
-        ])
+        .successor(vec![display])
         .expect("revision")
 }
 
@@ -366,8 +361,8 @@ fn user_placing(state: WindowState) -> WindowState {
 /// hold against everything the report carrying the change does not state was
 /// the user: where it opened, a display change, a scale change, a window
 /// manager's adjustment after the window opened, an application's command in
-/// two reports, and a change in the report after one by the user. A move or a
-/// mode change whose own report says the user's is written.
+/// two reports, and a change in the report after one by the user. A move, a
+/// resize or a mode change whose own report says the user's is written.
 fn an_unread_placement_is_overwritten_only_by_the_user() {
     let not_the_user: [ChangeSinceOpen; 6] = [
         ("a display change", |recorder, now| {
@@ -414,10 +409,23 @@ fn an_unread_placement_is_overwritten_only_by_the_user() {
             recorder.observe(&scaled(at(400.0, 80.0), 1.0), &displays(), now);
         }),
     ];
-    let the_user: [ChangeSinceOpen; 2] = [
+    let the_user: [ChangeSinceOpen; 3] = [
         ("a drag of the frame", |recorder, now| {
             recorder.observe(
                 &user_placing(scaled(at(400.0, 80.0), 1.0)),
+                &displays(),
+                now,
+            );
+        }),
+        ("a resize by the frame", |recorder, now| {
+            let resized = WindowState::new(
+                WindowGeometry::try_new(Some(position(100.0, 80.0)), Size::new(1016.0, 739.0))
+                    .expect("a finite rectangle"),
+                flui_platform::WindowExtent::try_new(Size::new(1000.0, 700.0))
+                    .expect("a finite size"),
+            );
+            recorder.observe(
+                &scaled(resized, 1.0).with_interaction(WindowInteraction::UserResizing),
                 &displays(),
                 now,
             );
@@ -566,7 +574,7 @@ fn a_reopened_window_takes_over_the_write_in_flight() {
         storage
             .contents(&NAME)
             .and_then(|bytes| WindowPlacement::from_bytes(&bytes).ok())
-            .and_then(|placement| placement.offset),
+            .and_then(|placement| placement.offset.map(PlacementOffset::get)),
         Some(Point::new(500.0, 80.0)),
         "the reopened window's placement is the last one stored"
     );
@@ -701,7 +709,7 @@ fn storage_code_runs_with_nothing_borrowed() {
             let stored = inner
                 .contents(&NAME)
                 .and_then(|bytes| WindowPlacement::from_bytes(&bytes).ok())
-                .and_then(|placement| placement.offset);
+                .and_then(|placement| placement.offset.map(PlacementOffset::get));
             assert_eq!(
                 stored,
                 Some(Point::new(100.0, 80.0)),
@@ -715,7 +723,7 @@ fn storage_code_runs_with_nothing_borrowed() {
         let stored = inner
             .contents(&NAME)
             .and_then(|bytes| WindowPlacement::from_bytes(&bytes).ok())
-            .and_then(|placement| placement.offset);
+            .and_then(|placement| placement.offset.map(PlacementOffset::get));
         assert_eq!(
             stored,
             Some(Point::new(300.0, 80.0)),
@@ -728,10 +736,10 @@ fn restore_opens_the_window_where_it_was_and_back_onto_a_display() {
     let mut options = WindowOptions::default();
     let placement = WindowPlacement::new(
         Some("key-main".into()),
-        Some(Point::new(1800.0, 900.0)),
-        Size::new(800.0, 600.0),
+        Some(PlacementOffset::try_new(Point::new(1800.0, 900.0)).expect("a finite offset")),
+        extent(800.0, 600.0),
         WindowMode::Normal,
-        1.0,
+        DevicePixelRatio::ONE,
     );
     restore_into(
         &mut options,
@@ -740,21 +748,28 @@ fn restore_opens_the_window_where_it_was_and_back_onto_a_display() {
         &WindowCapabilities::ALL,
         |_| NO_FRAME,
     );
-    assert_eq!(options.position, Some(Point::new(1120.0, 480.0)));
+    assert_eq!(
+        options.position.map(WindowPosition::at),
+        Some(Point::new(1120.0, 480.0))
+    );
+    assert_eq!(
+        options.position.map(WindowPosition::display),
+        Some(main_display()),
+        "the position is on that display"
+    );
     assert_eq!(options.size, Size::new(800.0, 600.0));
     assert_eq!(options.mode, WindowMode::Normal);
     assert_eq!(options.normal_geometry, None, "a normal window needs none");
-    assert!(options.display.is_some(), "the position is on that display");
 }
 
 fn restore_fits_the_outer_size_and_hands_a_maximized_window_its_normal_bounds() {
     let mut options = WindowOptions::default();
     let placement = WindowPlacement::new(
         Some("key-main".into()),
-        Some(Point::new(100.0, 80.0)),
-        Size::new(5000.0, 600.0),
+        Some(PlacementOffset::try_new(Point::new(100.0, 80.0)).expect("a finite offset")),
+        extent(5000.0, 600.0),
         WindowMode::Maximized,
-        1.0,
+        DevicePixelRatio::ONE,
     );
     restore_into(
         &mut options,
@@ -780,15 +795,15 @@ fn restore_fits_the_outer_size_and_hands_a_maximized_window_its_normal_bounds() 
 /// A frame measured as no extent gives no bounds to return to: the window
 /// keeps the ones its configuration gave, rather than losing them.
 fn restore_keeps_the_configured_normal_bounds_for_a_frame_that_is_no_extent() {
-    let configured = WindowGeometry::try_new(Some(Point::new(40.0, 30.0)), Size::new(640.0, 480.0))
+    let configured = WindowGeometry::try_new(Some(position(40.0, 30.0)), Size::new(640.0, 480.0))
         .expect("a rectangle");
     let mut options = WindowOptions::default().normal_geometry(Some(configured));
     let placement = WindowPlacement::new(
         Some("key-main".into()),
-        Some(Point::new(100.0, 80.0)),
-        Size::new(800.0, 600.0),
+        Some(PlacementOffset::try_new(Point::new(100.0, 80.0)).expect("a finite offset")),
+        extent(800.0, 600.0),
         WindowMode::Maximized,
-        1.0,
+        DevicePixelRatio::ONE,
     );
     restore_into(
         &mut options,
@@ -807,10 +822,10 @@ fn restore_asks_the_platform_for_what_it_can_place() {
     let mut options = WindowOptions::default();
     let placement = WindowPlacement::new(
         Some("key-main".into()),
-        Some(Point::new(100.0, 80.0)),
-        Size::new(800.0, 600.0),
+        Some(PlacementOffset::try_new(Point::new(100.0, 80.0)).expect("a finite offset")),
+        extent(800.0, 600.0),
         WindowMode::Normal,
-        1.0,
+        DevicePixelRatio::ONE,
     );
     let mut capabilities = WindowCapabilities::ALL.into_parts();
     capabilities.places_at_open = flui_platform::Availability::Unavailable;
@@ -832,10 +847,10 @@ fn restore_asks_the_platform_for_what_it_can_place() {
 fn restore_fits_the_frame_the_window_opens_with() {
     let placement = WindowPlacement::new(
         Some("key-main".into()),
-        Some(Point::new(100.0, 80.0)),
-        Size::new(5000.0, 600.0),
+        Some(PlacementOffset::try_new(Point::new(100.0, 80.0)).expect("a finite offset")),
+        extent(5000.0, 600.0),
         WindowMode::Normal,
-        1.0,
+        DevicePixelRatio::ONE,
     );
     let mut no_app_title_bar = WindowCapabilities::ALL.into_parts();
     no_app_title_bar.app_title_bar = flui_platform::WindowCapability::Absent(
@@ -861,7 +876,7 @@ fn restore_fits_the_frame_the_window_opens_with() {
             &no_app_title_bar,
             |_| Size::new(16.0, 39.0),
         );
-        assert_eq!(options.size.width, width, "{case}");
+        assert_eq!(options.size.width(), width, "{case}");
     }
 }
 
@@ -1000,10 +1015,10 @@ fn a_placement_already_stored_is_not_written_again() {
     let storage = MemoryStorage::new();
     let placement = WindowPlacement::new(
         Some("key-main".into()),
-        Some(Point::new(100.0, 80.0)),
-        Size::new(800.0, 600.0),
+        Some(PlacementOffset::try_new(Point::new(100.0, 80.0)).expect("a finite offset")),
+        extent(800.0, 600.0),
         WindowMode::Normal,
-        1.0,
+        DevicePixelRatio::ONE,
     );
     // A sentinel in place of the stored placement: any write replaces it.
     storage.put(&NAME, b"sentinel".to_vec());
@@ -1068,7 +1083,10 @@ fn closing_writes_the_held_placement_without_waiting_for_the_interval() {
     settle(&[Rc::new(fixture.recorder)], now, BUDGET, || {});
     let stored = WindowPlacement::from_bytes(&storage.contents(&NAME).expect("stored"))
         .expect("a placement");
-    assert_eq!(stored.offset, Some(Point::new(250.0, 90.0)));
+    assert_eq!(
+        stored.offset.map(PlacementOffset::get),
+        Some(Point::new(250.0, 90.0))
+    );
 }
 
 fn a_flush_keeps_going_until_storage_holds_the_newest_placement() {
@@ -1090,7 +1108,7 @@ fn a_flush_keeps_going_until_storage_holds_the_newest_placement() {
     let stored = WindowPlacement::from_bytes(&storage.contents(&NAME).expect("stored"))
         .expect("a placement");
     assert_eq!(
-        stored.offset,
+        stored.offset.map(PlacementOffset::get),
         Some(Point::new(250.0, 90.0)),
         "the answer to the older write is not the end of the flush"
     );

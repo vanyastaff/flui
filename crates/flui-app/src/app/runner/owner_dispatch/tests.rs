@@ -93,10 +93,7 @@ impl PlatformWindow for ReentrantIdentityWindow {
     fn surface_target(&self) -> Arc<dyn flui_platform::SurfaceTarget> {
         self.inner.surface_target()
     }
-    fn set_cursor(
-        &self,
-        cursor: flui_platform::CursorIcon,
-    ) -> Result<(), flui_platform::CursorError> {
+    fn set_cursor(&self, cursor: &flui_platform::Cursor) -> Result<(), flui_platform::CursorError> {
         self.inner.set_cursor(cursor)
     }
     fn set_frame_rate_hint(
@@ -131,7 +128,7 @@ impl PlatformWindow for ReentrantIdentityWindow {
         None
     }
 
-    fn haptics(&self) -> Option<std::sync::Arc<dyn flui_platform::PlatformHaptics>> {
+    fn haptics(&self) -> Option<std::sync::Arc<dyn flui_platform::haptics::PlatformHaptics>> {
         None
     }
 
@@ -1055,7 +1052,7 @@ fn native_keyboard_cannot_overtake_queued_window_changes_and_keys() {
             let native = host
                 .as_any()
                 .downcast_ref::<flui_native::HeadlessHostWindow>()
-                .expect("native mock");
+                .expect("the window is a headless one");
             let result = native.inject_event(PlatformInput::Keyboard(
                 KeyEventBuilder::new(Code::F5).build(),
             ));
@@ -1179,7 +1176,7 @@ fn two_ui_runtimes_via_isolated_policy_share_nothing() {
             let id = host.runtime_ids().expect("host readable").into_iter()
                 .find(|id| *id != dispatcher_a.address.ui_runtime_id)?;
             Some(PresentationDispatcher {
-                owner_thread: state.owner_thread?,
+                owner_thread: state.loop_thread()?,
                 address: host.runtime_status(id).ok()?.primary,
             })
         })
@@ -2236,6 +2233,19 @@ fn platform_replacement_contains_reentrant_retirement() {
         fn concealment(&self) -> flui_platform::Concealment {
             flui_platform::Concealment::Honored
         }
+        fn expiry_clearing(&self) -> flui_platform::ExpiryClearing {
+            flui_platform::ExpiryClearing::AtTimeAndLock
+        }
+        fn clear_expired(
+            &self,
+            _: flui_native::ExpiredEntry,
+            answer: flui_platform::capability::Resolver<flui_native::ExpiredClear>,
+        ) {
+            drop(answer);
+        }
+        fn clear_expired_before_exit(&self, _: std::time::Duration) -> flui_native::ExpiredClear {
+            flui_native::ExpiredClear::NotHeld
+        }
     }
     impl Drop for RetiredProducer {
         fn drop(&mut self) {
@@ -2346,7 +2356,9 @@ fn isolated_windows_shape_over_the_runtimes_font_collection() {
 
     let secondaries: Vec<PresentationDispatcher> = APP_RUNTIME.with(|slot| {
         let state = slot.borrow();
-        let owner_thread = state.owner_thread.expect("the owner platform is installed");
+        let owner_thread = state
+            .loop_thread()
+            .expect("the owner platform is installed");
         state
             .installed_host
             .logical()
@@ -2591,7 +2603,7 @@ fn resize_reaches_the_surface_in_the_pixels_the_platform_reported() {
 /// Installs UI runtime A under `ExitPolicy::OnLastWindowClosed` with a quit
 /// counter, and returns the parked re-evaluation handle with them.
 ///
-/// The headless mock has no event loop, so a
+/// The headless host has no event loop, so a
 /// `Platform::request_exit_policy_reevaluation` is PARKED and its
 /// owner-thread half runs only when a test calls
 /// `HeadlessExitReevaluation::drive`. A test asserting on an exit that a
@@ -2677,7 +2689,7 @@ fn install_ui_runtime_a_with_exit_policy_quit_counter_and_reevaluation() -> (
 /// request is a no-op by that seam's contract, so it is armed on every
 /// applied mutation rather than on a detected shape.
 ///
-/// The headless mock has no event loop, so the request is PARKED and its
+/// The headless host has no event loop, so the request is PARKED and its
 /// owner-thread half runs on `drive()`. This asserts both halves: that a
 /// request was made at all, and that driving it produces the quit. The
 /// first is what actually pins the fix — without the tail change nothing

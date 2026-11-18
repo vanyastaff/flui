@@ -11,16 +11,17 @@
 //!   action or error code) needs nothing more: the same test checks that every
 //!   published schema is a subset of the next one. A reader built on an older
 //!   schema still reads the newer reply: an unknown field is ignored, an
-//!   unknown role reads as [`Role::Unknown`](crate::Role::Unknown), an
+//!   unknown role reads as [`Role::Unknown`](crate::wire::Role::Unknown), an
 //!   unknown action name is dropped from a node's `actions`, and an unknown
-//!   error code reads as [`ErrorCode::Platform`](crate::ErrorCode::Platform).
+//!   error code reads as [`ErrorCode::Platform`](crate::error::ErrorCode::Platform).
 //! - A change that is not additive (a field renamed or removed, a name
 //!   respelled, an optional field made required, an existing field given a
 //!   new meaning, or a variant or value added to a union whose reader has no
 //!   fallback for it and refuses it whole: a new native recording row, a new
 //!   close answer) is listed in
-//!   [`BREAKING`] with the ADR that decided it and the names it respelled or removed; the
-//!   test lets those names, and nothing else, go. A union is open to a new
+//!   [`BREAKING`] with the ADR that decided it, the names it respelled or removed and the
+//!   fields of an existing type it made required in their place; the
+//!   test lets those, and nothing else, go. A union is open to a new
 //!   value or variant exactly when its reader reads an unknown one as a
 //!   fallback (a role, an action name, an error code, above, and a tree
 //!   diagnostic), whatever the union's shape: a string `enum`, a `oneOf` of
@@ -79,7 +80,7 @@ impl ProtocolVersion {
 }
 
 /// The schema this build of the crate speaks.
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion::new(0, 19);
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion::new(0, 25);
 
 /// A published version that is not additive to the one before it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -91,9 +92,13 @@ pub struct Break {
     /// The names it respelled, old then new.
     pub renamed: &'static [(&'static str, &'static str)],
     /// The schema paths it removed, each in full (`/$defs/KeyEvent/properties/repeat`): a
-    /// property, a tagged variant or a definition, and everything under it. Nothing but these
-    /// and `renamed` may differ from the version before.
+    /// property, a tagged variant or a definition, and everything under it. Nothing but these,
+    /// `renamed` and `required` may differ from the version before.
     pub removed: &'static [&'static str],
+    /// The fields of an existing type it made required, each in full
+    /// (`/$defs/Display/required/extent`): what stands in for a field it removed, which an
+    /// older reader never wrote.
+    pub required: &'static [&'static str],
 }
 
 /// The versions that are not additive to the one before it, by their schema or by a value
@@ -110,6 +115,7 @@ pub const BREAKING: &[Break] = &[
             ("motion", "motion.set"),
         ],
         removed: &[],
+        required: &[],
     },
     Break {
         version: ProtocolVersion::new(0, 11),
@@ -119,6 +125,7 @@ pub const BREAKING: &[Break] = &[
         // is respelled, the handle has a new meaning, so an older client cannot read it.
         renamed: &[],
         removed: &[],
+        required: &[],
     },
     Break {
         version: ProtocolVersion::new(0, 14),
@@ -128,6 +135,7 @@ pub const BREAKING: &[Break] = &[
         // client, which refuses the unknown row, so an app speaking 0.14 refuses older clients.
         renamed: &[],
         removed: &[],
+        required: &[],
     },
     Break {
         version: ProtocolVersion::new(0, 15),
@@ -137,6 +145,7 @@ pub const BREAKING: &[Break] = &[
         // speaking 0.15 refuses older clients.
         renamed: &[],
         removed: &[],
+        required: &[],
     },
     Break {
         version: ProtocolVersion::new(0, 16),
@@ -152,6 +161,47 @@ pub const BREAKING: &[Break] = &[
             "/$defs/PointerEvent/oneOf/revise=revise",
             "/$defs/PointerEvent/oneOf/pen_squeeze=pen_squeeze",
             "/$defs/SqueezePhase",
+        ],
+        required: &[],
+    },
+    Break {
+        version: ProtocolVersion::new(0, 21),
+        adr: "ADR-0358",
+        // Fingers resting on a touchpad are a phased `touchpad_hold`, which replaces the
+        // `scroll_inertia_cancel` signal; a touchpad swipe is a `touchpad_swipe`; recorded
+        // capabilities say whether either reaches the window.
+        renamed: &[],
+        removed: &["/$defs/PointerEvent/oneOf/scroll_inertia_cancel=scroll_inertia_cancel"],
+        required: &[],
+    },
+    Break {
+        version: ProtocolVersion::new(0, 24),
+        adr: "ADR-0354",
+        // A recorded pointer event may be a locked pointer's `raw_motion`: a `record` event
+        // carrying one does not read in an older client, which refuses the unknown variant, so
+        // an app speaking 0.24 refuses older clients.
+        renamed: &[],
+        removed: &[],
+        required: &[],
+    },
+    Break {
+        version: ProtocolVersion::new(0, 25),
+        adr: "ADR-0364",
+        // A recorded window position names the display it is measured on, in that display's
+        // logical pixels from its corner, where it was a point in a global space; a recorded
+        // display carries its arrangement origin, its logical extent and its usable area in its
+        // own logical pixels, where it carried device-pixel bounds whose unit changed with the
+        // platform.
+        renamed: &[],
+        removed: &[
+            "/$defs/Display/properties/bounds",
+            "/$defs/Display/properties/usable_bounds",
+            "/$defs/WindowGeometry/properties/position",
+        ],
+        required: &[
+            "/$defs/Display/required/origin",
+            "/$defs/Display/required/extent",
+            "/$defs/Display/required/usable",
         ],
     },
 ];
@@ -237,8 +287,8 @@ mod tests {
 
     #[test]
     fn a_version_is_spelled_major_dot_minor_and_parses_back() {
-        assert_eq!(PROTOCOL_VERSION.to_string(), "0.19");
-        assert_eq!("0.19".parse(), Ok(PROTOCOL_VERSION));
+        assert_eq!(PROTOCOL_VERSION.to_string(), "0.25");
+        assert_eq!("0.25".parse(), Ok(PROTOCOL_VERSION));
         assert_eq!("0.1".parse(), Ok(ProtocolVersion::new(0, 1)));
         assert_eq!("12.30".parse(), Ok(ProtocolVersion::new(12, 30)));
         for refused in ["", "1", "0.01", "+0.1", "0.1.2", "0.x", " 0.1", "00.1"] {
@@ -260,10 +310,10 @@ mod tests {
     fn a_version_serializes_as_its_string() {
         assert_eq!(
             serde_json::to_value(PROTOCOL_VERSION).ok(),
-            Some(serde_json::json!("0.19"))
+            Some(serde_json::json!("0.25"))
         );
         assert_eq!(
-            serde_json::from_value::<ProtocolVersion>(serde_json::json!("0.19")).ok(),
+            serde_json::from_value::<ProtocolVersion>(serde_json::json!("0.25")).ok(),
             Some(PROTOCOL_VERSION)
         );
         assert!(serde_json::from_value::<ProtocolVersion>(serde_json::json!(0.1)).is_err());

@@ -244,6 +244,14 @@ impl HeadlessRunHandle {
         self.host_events.session_end(phase)
     }
 
+    /// Report a system notice, as the operating system does: the session
+    /// locking, the machine going to sleep, memory pressure. The application
+    /// hears it, and the runner acts on it first (a lock clears an expiring
+    /// clipboard entry, ADR-0363).
+    pub fn notice(&self, notice: flui_platform::SystemNotice) {
+        self.host_events.notice(notice);
+    }
+
     /// Tear the loop down as the end of [`Application::run`] does, and report
     /// how the run ended: `Err` with what `Application::run` would return,
     /// or the exit and the teardown steps that ran.

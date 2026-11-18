@@ -12,6 +12,9 @@ use flui_interaction::PointerKind;
 use flui_painting::display_list::DrawOp;
 use flui_painting::styling::Color;
 use flui_painting::typography::TextDirection;
+use flui_platform::{
+    ScrollBarPreferences, ScrollBarVisibility, ScrollTrackClick, SystemPreferences,
+};
 use flui_testing::widgets::SharedSignal;
 use flui_view::environment::VsyncScope;
 use flui_view::prelude::*;
@@ -432,6 +435,124 @@ pub(crate) fn the_track_pages_and_the_wheel_scrolls_over_the_bar() {
     );
 }
 
+/// The system's scroll-bar preferences, as a host reports them.
+fn system_scroll_bars(preferences: ScrollBarPreferences) -> SystemPreferences {
+    SystemPreferences::default().with_scroll_bars(preferences)
+}
+
+/// Where the system asks for it (macOS's "Jump to the spot that's
+/// clicked"), a press on the track moves the thumb's middle to the spot at
+/// once and moving on drags it from there; where it asks for paging, or says
+/// nothing, a tap pages. Red-check: page whatever the system says, or jump on
+/// the release.
+pub(crate) fn a_track_tap_jumps_to_the_spot_where_the_system_asks() {
+    for (track_click, after_tap) in [
+        // 300 of 3000 show: a thumb of 30 travels 270; its middle at 150 is
+        // halfway, 1350 of 2700.
+        (Some(ScrollTrackClick::JumpToSpot), 1350.0),
+        (Some(ScrollTrackClick::Page), 240.0),
+        (None, 240.0),
+    ] {
+        let scroll = ScrollController::new();
+        let (mut laid, _vsync) = animated(shown(column(&scroll, 3000.0)));
+        let preferences = track_click.map_or_else(ScrollBarPreferences::default, |click| {
+            ScrollBarPreferences::default().with_track_click(click)
+        });
+        laid.set_system_preferences(system_scroll_bars(preferences));
+        laid.pump_for(Duration::ZERO);
+        tap(&laid, 297.0, 150.0);
+        run(&mut laid, Duration::from_millis(200));
+        assert_close(scroll.pixels(), after_tap, &format!("{track_click:?}"));
+    }
+    // The jump happens on the press, and moving on drags the thumb from
+    // there: 30 more pixels of the track's 270 are 300 of the list's 2700.
+    let scroll = ScrollController::new();
+    let (mut laid, _vsync) = animated(shown(column(&scroll, 3000.0)));
+    laid.set_system_preferences(system_scroll_bars(
+        ScrollBarPreferences::default().with_track_click(ScrollTrackClick::JumpToSpot),
+    ));
+    laid.pump_for(Duration::ZERO);
+    laid.dispatch_pointer_down(297.0, 150.0);
+    run(&mut laid, FRAME);
+    assert_close(scroll.pixels(), 1350.0, "the press jumps");
+    for y in [160.0, 170.0, 180.0] {
+        laid.dispatch_pointer_move(297.0, y);
+        run(&mut laid, FRAME);
+    }
+    laid.dispatch_pointer_up(297.0, 180.0);
+    run(&mut laid, Duration::from_millis(200));
+    assert!(
+        scroll.pixels() > 1350.0 && scroll.pixels() <= 1650.0,
+        "moving on drags the thumb from the spot: {}",
+        scroll.pixels()
+    );
+    // A reversed list measures the spot from its far end.
+    let scroll = ScrollController::new();
+    let (mut laid, _vsync) = animated(shown(
+        SingleChildScrollView::new()
+            .reverse(true)
+            .controller(scroll.clone())
+            .child(SizedBox::new(SIDE, 3000.0)),
+    ));
+    laid.set_system_preferences(system_scroll_bars(
+        ScrollBarPreferences::default().with_track_click(ScrollTrackClick::JumpToSpot),
+    ));
+    laid.pump_for(Duration::ZERO);
+    // Reversed, the thumb starts at the bottom; its middle at 60 is 1/6 of
+    // the travel from the top, 5/6 of the way from the start.
+    tap(&laid, 297.0, 60.0);
+    run(&mut laid, Duration::from_millis(200));
+    assert_close(scroll.pixels(), 2250.0, "reversed");
+}
+
+/// A bar whose author did not choose shows its thumb at rest where the
+/// system asks for scroll bars that always show, and only while scrolling
+/// where it asks for overlay scroll bars or says nothing; an author's choice
+/// wins over the system's either way. Red-check: ignore the system.
+pub(crate) fn an_unset_thumb_follows_the_systems_scroll_bar_visibility() {
+    let always = system_scroll_bars(
+        ScrollBarPreferences::default().with_visibility(ScrollBarVisibility::Always),
+    );
+    let when_scrolling = system_scroll_bars(
+        ScrollBarPreferences::default().with_visibility(ScrollBarVisibility::WhenScrolling),
+    );
+    let scroll = ScrollController::new();
+    let (mut laid, _vsync) = animated(Scrollbar::new(column(&scroll, 3000.0)).thumb_color(THUMB));
+    assert!(
+        painted(&laid, THUMB).is_empty(),
+        "no observation: hidden at rest"
+    );
+    laid.set_system_preferences(always.clone());
+    laid.pump_for(Duration::ZERO);
+    assert_eq!(
+        painted(&laid, THUMB),
+        [(Rect::from_ltwh(294.0, 0.0, 6.0, 30.0), 255)],
+        "the system asks for scroll bars that always show"
+    );
+    laid.set_system_preferences(when_scrolling.clone());
+    laid.pump_for(Duration::ZERO);
+    assert!(
+        painted(&laid, THUMB).is_empty(),
+        "overlay scroll bars hide at rest"
+    );
+    // The author's choice wins.
+    let (mut hidden, _vsync) = animated(
+        Scrollbar::new(column(&ScrollController::new(), 3000.0))
+            .thumb_visibility(false)
+            .thumb_color(THUMB),
+    );
+    hidden.set_system_preferences(always);
+    hidden.pump_for(Duration::ZERO);
+    assert!(
+        painted(&hidden, THUMB).is_empty(),
+        "authored hidden at rest"
+    );
+    let (mut kept, _vsync) = animated(shown(column(&ScrollController::new(), 3000.0)));
+    kept.set_system_preferences(when_scrolling);
+    kept.pump_for(Duration::ZERO);
+    assert_eq!(painted(&kept, THUMB).len(), 1, "authored shown at rest");
+}
+
 /// The bar shows while its scroll view scrolls or jumps, stays for the time
 /// to fade, then fades out; under reduced motion it appears and goes at once.
 pub(crate) fn the_bar_fades_in_while_scrolling_and_out_after_it_stops() {
@@ -698,10 +819,11 @@ fn run(laid: &mut LaidOut, duration: Duration) {
 /// A wheel tick of one line at `(x, y)`.
 fn wheel_line(laid: &LaidOut, x: f64, y: f64) {
     use flui_platform::pointer::{
-        PointerEvent, PointerId, PointerInfo, PointerPosition, ScrollDelta, ScrollEvent, ScrollUnit,
+        PointerEvent, PointerId, PointerPosition, PointerSource, ScrollDelta, ScrollEvent,
+        ScrollUnit,
     };
     laid.dispatch_pointer_event(&PointerEvent::Scroll(ScrollEvent::new(
-        PointerInfo::new(
+        PointerSource::new(
             PointerId::try_from(1_u64).expect("nonzero pointer"),
             PointerKind::Mouse,
         ),

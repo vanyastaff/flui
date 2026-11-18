@@ -167,11 +167,7 @@ mod uri_list {
             let mut list = String::new();
             for uri in uris {
                 let Some(uri) = uri.to_uri(style) else {
-                    tracing::debug!(
-                        ?uri,
-                        ?style,
-                        "a path with no file URI is left out of the list"
-                    );
+                    tracing::debug!(?style, "a path with no file URI is left out of the list");
                     continue;
                 };
                 list.push_str(&uri);
@@ -357,6 +353,25 @@ mod uri_list {
 // ============================================================================
 // Media types
 // ============================================================================
+
+// The Wayland offers read them through `host`, which their transfer objects
+// share with the clipboard.
+#[cfg(any(windows, target_os = "android", target_arch = "wasm32", x11_host, test))]
+pub(crate) use crate::host::{MAX_OFFERED_TYPES, MAX_TYPE_LEN};
+
+/// The type names of `names`, in their order, an offer is read from: the
+/// first [`MAX_OFFERED_TYPES`], less those longer than [`MAX_TYPE_LEN`]
+/// bytes: the rule above, for the hosts that are handed their source's types
+/// as a list of names (Android, the Web).
+#[cfg(any(target_os = "android", target_arch = "wasm32", test))]
+pub(crate) fn offered_types<'a>(
+    names: impl IntoIterator<Item = &'a str>,
+) -> impl Iterator<Item = &'a str> {
+    names
+        .into_iter()
+        .take(MAX_OFFERED_TYPES)
+        .filter(|name| name.len() <= MAX_TYPE_LEN)
+}
 
 /// What one media type offers, or `None` for a type FLUI does not announce
 /// (the browser's `Files`, a browser's private types, names that are not

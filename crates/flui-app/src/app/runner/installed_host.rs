@@ -2,8 +2,6 @@
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use flui_foundation::{PresentationAddress, panic::FirstPanic};
 use flui_runtime::owner::{
@@ -42,7 +40,7 @@ impl From<InstallError> for crate::app::AppWindowError {
             source @ (InstallError::Logical(_)
             | InstallError::Native(_)
             | InstallError::InitializationFailed) => Self::Mount {
-                source: Arc::new(source),
+                source: std::sync::Arc::new(source),
             },
         }
     }
@@ -63,7 +61,7 @@ pub(super) struct Installation {
     ))]
     pub(super) address: PresentationAddress,
     result: Rc<Cell<Option<Result<(), InstallError>>>>,
-    closed: Arc<AtomicBool>,
+    closed: Rc<Cell<bool>>,
 }
 
 impl Installation {
@@ -72,7 +70,7 @@ impl Installation {
     }
 
     pub(super) fn cancel(&self) {
-        self.closed.store(true, Ordering::Release);
+        self.closed.set(true);
     }
 }
 
@@ -296,6 +294,11 @@ impl OwnerEffects for HostState {
         }
         #[cfg(any(target_os = "android", target_os = "ios", target_arch = "wasm32"))]
         let _ = state;
+        // In front again: the expiring clipboard entries the host could not
+        // see the clipboard for are cleared now, if still there (ADR-0363).
+        if state == flui_scheduler::AppLifecycleState::Resumed && self.is_current() {
+            super::host::clipboard_expiries_in_front();
+        }
     }
 
     fn runtimes_stopped(&self, _: RecoveryState) {

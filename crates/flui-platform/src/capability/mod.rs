@@ -26,6 +26,7 @@
 mod activity_result;
 mod completion;
 mod owner;
+mod portal_parent;
 mod registrar;
 mod runtime_local;
 #[cfg(feature = "scripted")]
@@ -36,12 +37,13 @@ mod window_ref;
 pub use activity_result::{
     Activity, ActivityBridge, ActivityResult, CapabilityId, DataRefused, HostBridge, IntentFrame,
     InvalidResultKey, JniFrame, MAX_OPEN_REQUESTS, MAX_OPEN_REQUESTS_PER_CAPABILITY,
-    MAX_RESULT_KEY_LEN, RequestKey, ResultCode, ResultData, ResultDataHold, ResultKey, ResultMint,
-    ResultOutcome, ResultRefused, ResultRequest, ResultTicket, ResultTicketHold, ResultToken,
-    ResultTokenMint,
+    MAX_RESULT_KEY_LEN, RequestKey, ResultCode, ResultIntent, ResultIntentHold, ResultKey,
+    ResultMint, ResultOutcome, ResultRefused, ResultRequest, ResultTicket, ResultTicketHold,
+    ResultToken, ResultTokenMint,
 };
 pub use completion::{Abandoned, Completion, CompletionSource, Resolver};
 pub use owner::{OwnerJob, OwnerPoster, OwnerRetired, OwnerScope, PendingCompletions};
+pub use portal_parent::PortalParent;
 pub use registrar::{CapabilityRegistrar, Plugin, RegisteredProvider};
 pub use runtime_local::RuntimeLocals;
 pub use window_lifetime::{WindowCloseWatch, WindowCloser, WindowLifetime};
@@ -179,6 +181,14 @@ impl<'a> ProviderContext<'a> {
     #[must_use]
     pub fn window(&self) -> Option<WindowRef> {
         self.window.clone()
+    }
+
+    /// The application's id (ADR-0351), which a desktop portal attributes
+    /// requests to and a shell matches the desktop entry by; `None` for an
+    /// application that declares none, and for a host that names none.
+    #[must_use]
+    pub fn app_id(&self) -> Option<flui_foundation::AppId> {
+        self.host.app_id()
     }
 }
 

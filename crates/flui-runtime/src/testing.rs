@@ -21,7 +21,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use flui_foundation::geometry::Size;
 use flui_layer::ScenePublication;
 use flui_platform::{
-    CursorError, CursorIcon, PlatformTextInput, PlatformWindow, WindowId, WindowIdMint,
+    Cursor, CursorError, CursorIcon, PlatformTextInput, PlatformWindow, WindowId, WindowIdMint,
 };
 use flui_semantics::platform::PlatformAccessibility;
 
@@ -61,7 +61,7 @@ pub struct TestWindow {
     accessibility: Option<Arc<dyn PlatformAccessibility>>,
     /// Last cursor set through [`PlatformWindow::set_cursor`]; read back via
     /// [`Self::cursor`].
-    cursor: parking_lot::Mutex<CursorIcon>,
+    cursor: parking_lot::Mutex<Cursor>,
     /// What the window honours, nothing but the normal mode every window has,
     /// published once when it was made: what its commands are admitted against
     /// and opened under.
@@ -102,7 +102,7 @@ impl TestWindow {
             text_input: None,
             system_chrome: None,
             accessibility: None,
-            cursor: parking_lot::Mutex::new(CursorIcon::Default),
+            cursor: parking_lot::Mutex::new(Cursor::Icon(CursorIcon::Default)),
             capabilities: flui_platform::WindowCapabilities::NONE
                 .publish()
                 .expect("BUG: a test opens far fewer than u64::MAX windows"),
@@ -195,8 +195,8 @@ impl TestWindow {
 
     /// The last cursor recorded by [`PlatformWindow::set_cursor`].
     #[must_use]
-    pub fn cursor(&self) -> CursorIcon {
-        *self.cursor.lock()
+    pub fn cursor(&self) -> Cursor {
+        self.cursor.lock().clone()
     }
 }
 
@@ -239,7 +239,7 @@ impl PlatformWindow for TestWindow {
         None
     }
 
-    fn haptics(&self) -> Option<Arc<dyn flui_platform::PlatformHaptics>> {
+    fn haptics(&self) -> Option<Arc<dyn flui_platform::haptics::PlatformHaptics>> {
         None
     }
 
@@ -257,8 +257,8 @@ impl PlatformWindow for TestWindow {
 
     fn reveal_after_first_frame(&self) {}
 
-    fn set_cursor(&self, cursor: CursorIcon) -> Result<(), CursorError> {
-        *self.cursor.lock() = cursor;
+    fn set_cursor(&self, cursor: &Cursor) -> Result<(), CursorError> {
+        cursor.clone_into(&mut self.cursor.lock());
         Ok(())
     }
 

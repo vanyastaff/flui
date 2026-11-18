@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::time::Duration;
 
-use flui_protocol::AppInfo;
+use flui_protocol::session::AppDescription;
 use flui_view::dev_agent::AgentWindow;
 use parking_lot::Mutex;
 use web_time::Instant;
@@ -51,7 +51,7 @@ pub struct ServiceConfig {
     /// shorter than [`MIN_TOKEN_LEN`](flui_protocol::launch::MIN_TOKEN_LEN) bytes.
     pub token: String,
     /// What the hello's answer says of the app.
-    pub app: AppInfo,
+    pub app: AppDescription,
     /// The bounds the service serves within.
     pub limits: Limits,
     /// Runs once when the app's driver goes: the conversation admitted as its driver ends while
@@ -132,7 +132,7 @@ pub(super) struct Shared {
     pub(super) registry: Registry,
     pub(super) token: String,
     pub(super) limits: Limits,
-    pub(super) app: AppInfo,
+    pub(super) app: AppDescription,
     on_driver_gone: Option<Box<dyn Fn() + Send + Sync>>,
     pub(super) records_native: bool,
     /// Taken by the conversation admitted as the driver, and given back when it ends. Locked

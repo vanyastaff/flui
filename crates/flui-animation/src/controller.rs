@@ -32,7 +32,7 @@ use crate::origin::ControllerOrigin;
 use crate::run_future::{RunCompleter, RunDelivery};
 use crate::simulation::{Simulation, SpeedLimit, SpringDescription, Tolerance};
 use crate::status::AnimationStatus;
-use flui_foundation::notifier_generic::NotificationCallback;
+use flui_foundation::NotificationCallback;
 use flui_foundation::panic::{FailureClass, RecoveryScope};
 use flui_foundation::{ChangeNotifier, ListenerId, Notifier};
 use smallvec::SmallVec;
@@ -99,8 +99,7 @@ struct RetiredSources {
     /// through the controller's containment rather than the channel's.
     refused_status: SmallVec<[Opaque<StatusObserver>; 2]>,
     status_callbacks: SmallVec<[Rc<NotificationCallback<AnimationStatus>>; 4]>,
-    value_callbacks:
-        SmallVec<[Opaque<Rc<flui_foundation::notifier_generic::NotificationCallback<()>>>; 4]>,
+    value_callbacks: SmallVec<[Opaque<Rc<flui_foundation::NotificationCallback<()>>>; 4]>,
 }
 
 impl RetiredSources {
@@ -560,8 +559,8 @@ impl AnimationController {
     /// a fresh run begins — every `forward`/`reverse`/`animate_to`/`animate_back`/
     /// `repeat`/`fling`/`animate_with` that begins the run at elapsed zero.
     ///
-    /// An external, deterministic frame driver (e.g. `flui-testing`'s
-    /// `HeadlessBinding`) reads this to detect that a new run's `t = 0` was just
+    /// A frame driver (the UI runtime's registry, deterministic under
+    /// `flui-testing`'s headless host) reads this to detect that a new run's `t = 0` was just
     /// established and re-anchor the virtual instant it feeds to
     /// [`tick_at`](Self::tick_at). Without it, a controller run a *second* time
     /// (forward to completion, then reverse) would be ticked from the first

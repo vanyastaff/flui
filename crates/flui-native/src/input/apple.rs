@@ -674,6 +674,122 @@ pub(crate) mod force {
 }
 
 #[cfg(any(target_os = "macos", test))]
+pub(crate) mod resting {
+    //! Fingers resting on a trackpad, as AppKit's scroll phases tell it. Two
+    //! fingers that touch send a scroll in `NSEventPhaseMayBegin` with no
+    //! momentum: a hold begins. If they lift without moving, AppKit sends
+    //! `NSEventPhaseCancelled` for a scroll that never began: the hold ends.
+    //! If they move, the scroll's `NSEventPhaseBegan` cancels the hold, and
+    //! the scroll goes on as a scroll.
+
+    #![forbid(unsafe_code)]
+
+    use flui_platform::pointer::TouchpadHoldPhase;
+
+    /// A scroll event's finger phase, as far as a hold reads it.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(crate) enum FingerPhase {
+        /// `NSEventPhaseMayBegin`.
+        MayBegin,
+        /// `NSEventPhaseBegan`.
+        Began,
+        /// `NSEventPhaseCancelled`.
+        Cancelled,
+        /// Any other phase, `NSEventPhaseNone` included.
+        Other,
+    }
+
+    /// What a scroll event does to a hold.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(crate) struct HoldStep {
+        /// The hold event it makes, if any.
+        pub(crate) hold: Option<TouchpadHoldPhase>,
+        /// Whether the event is the hold's alone, and no scroll.
+        pub(crate) consumed: bool,
+    }
+
+    /// Whether fingers rest on the trackpad now.
+    #[derive(Debug, Default)]
+    pub(crate) struct RestingFingers {
+        resting: bool,
+    }
+
+    impl RestingFingers {
+        /// The step a scroll event of finger phase `fingers` makes, with
+        /// `coasting` when its momentum phase is not `NSEventPhaseNone`.
+        pub(crate) fn step(&mut self, fingers: FingerPhase, coasting: bool) -> HoldStep {
+            let (hold, consumed) = match (fingers, self.resting) {
+                (FingerPhase::MayBegin, _) if !coasting => {
+                    let begins = !self.resting;
+                    self.resting = true;
+                    (begins.then_some(TouchpadHoldPhase::Begin), true)
+                }
+                (FingerPhase::Cancelled, true) => {
+                    self.resting = false;
+                    (Some(TouchpadHoldPhase::End), true)
+                }
+                (FingerPhase::Began, true) => {
+                    self.resting = false;
+                    (Some(TouchpadHoldPhase::Cancelled), false)
+                }
+                _ => (None, false),
+            };
+            HoldStep { hold, consumed }
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::{FingerPhase, HoldStep, RestingFingers};
+        use flui_platform::pointer::TouchpadHoldPhase;
+
+        const fn step(hold: Option<TouchpadHoldPhase>, consumed: bool) -> HoldStep {
+            HoldStep { hold, consumed }
+        }
+
+        #[test]
+        fn resting_fingers_begin_a_hold_that_a_lift_ends_and_a_scroll_cancels() {
+            let mut fingers = RestingFingers::default();
+            let rows = [
+                // Two fingers touch: a hold begins, and is no scroll.
+                (
+                    FingerPhase::MayBegin,
+                    false,
+                    step(Some(TouchpadHoldPhase::Begin), true),
+                ),
+                // AppKit repeats it: nothing new.
+                (FingerPhase::MayBegin, false, step(None, true)),
+                // They lift without moving: the hold ends.
+                (
+                    FingerPhase::Cancelled,
+                    false,
+                    step(Some(TouchpadHoldPhase::End), true),
+                ),
+                // A cancel with no hold is the scroll grammar's to decline.
+                (FingerPhase::Cancelled, false, step(None, false)),
+                // They touch and move: the scroll cancels the hold and goes on.
+                (
+                    FingerPhase::MayBegin,
+                    false,
+                    step(Some(TouchpadHoldPhase::Begin), true),
+                ),
+                (
+                    FingerPhase::Began,
+                    false,
+                    step(Some(TouchpadHoldPhase::Cancelled), false),
+                ),
+                (FingerPhase::Other, false, step(None, false)),
+                // A may-begin while the platform coasts is momentum's.
+                (FingerPhase::MayBegin, true, step(None, false)),
+            ];
+            for (index, (phase, coasting, expected)) in rows.into_iter().enumerate() {
+                assert_eq!(fingers.step(phase, coasting), expected, "row {index}");
+            }
+        }
+    }
+}
+
+#[cfg(any(target_os = "macos", test))]
 pub(crate) mod title_bar {
     //! A press on a title bar the application draws (ADR-0286 §8): where the
     //! chrome regions put a left press, and what a double-click on the bar
@@ -1119,7 +1235,7 @@ pub(crate) mod macos {
     //! area of a title bar the application draws moves the window instead
     //! (`title_bar`).
 
-    use std::cell::RefCell;
+    use std::cell::{Cell, RefCell};
 
     use flui_platform::input_regions::InputRegion;
     use objc2_app_kit::{NSEvent, NSEventType};
@@ -1130,12 +1246,16 @@ pub(crate) mod macos {
     use events::MacInputState;
 
     /// The input of one content view: its pointer contacts, its trackpad
-    /// gesture session and its scrolling, and the window's chrome regions a
-    /// left press is answered from, made with the view and dropped with it.
+    /// gesture session and its scrolling, the window's chrome regions a
+    /// left press is answered from, and whether the window holds the pointer
+    /// locked, made with the view and dropped with it.
     #[derive(Default)]
     pub(crate) struct ViewInputs {
         state: RefCell<MacInputState>,
         chrome: RefCell<ChromeRegions>,
+        /// Set by the window while it holds the pointer locked: the mouse's
+        /// motion is then raw motion, and no move is delivered.
+        locked: Cell<bool>,
     }
 
     /// The window's input regions in device pixels, and the scale they were
@@ -1185,7 +1305,10 @@ pub(crate) mod macos {
             let height = view.height();
             // Converted before anything is dispatched, with the borrow
             // released: a callback may re-enter the view.
-            let inputs = self.state.borrow_mut().convert(event, height);
+            let inputs = self
+                .state
+                .borrow_mut()
+                .convert(event, height, self.locked.get());
             for input in inputs {
                 view.dispatch_input(input);
             }
@@ -1203,6 +1326,10 @@ pub(crate) mod macos {
             let mut chrome = self.chrome.borrow_mut();
             chrome.projected = projected;
             chrome.scale = scale;
+        }
+
+        fn set_pointer_locked(&self, locked: bool) {
+            self.locked.set(locked);
         }
     }
 
@@ -1226,7 +1353,8 @@ pub(crate) mod macos {
         //! the shared [`pointer_assembly`](crate::input::assembly): mouse
         //! chords belong to the receiving view; trackpad magnify and rotate components
         //! share one cumulative session. Two-finger scroll remains scroll, retaining
-        //! the native finger/momentum phase and delta precision.
+        //! the native finger/momentum phase and delta precision; fingers resting
+        //! before it are a touchpad hold (`resting`).
 
         use std::num::{NonZeroU8, NonZeroU64};
         use std::time::Duration;
@@ -1234,12 +1362,14 @@ pub(crate) mod macos {
         use flui_platform::EventTime;
         use flui_platform::keyboard::{Key, KeyEvent, KeyPress, KeyState, Modifiers, NamedKey};
         use flui_platform::pointer::{
-            PanZoomEvent, PointerButton, PointerButtons, PointerEvent, PointerId, PointerInfo,
-            PointerKind, PointerPosition, PointerRole, PointerSignal, ScrollEvent, ScrollInversion,
-            ScrollPhase, SmartZoomEvent,
+            MotionAcceleration, MotionDelta, PanZoomEvent, PointerButton, PointerButtons,
+            PointerEvent, PointerId, PointerKind, PointerPosition, PointerRole, PointerSource,
+            ScrollEvent, ScrollInversion, ScrollPhase, SmartZoomEvent,
         };
         use objc2_app_kit::{NSEvent, NSEventModifierFlags, NSEventPhase, NSEventType};
         use objc2_foundation::NSProcessInfo;
+
+        use crate::input::apple::resting::FingerPhase;
 
         use crate::input::assembly::{
             ClockChoice, ContactRegistry, DecodeError, GestureComponent, GestureDelta,
@@ -1253,11 +1383,14 @@ pub(crate) mod macos {
         const MOUSE: NativeContact = NativeContact(0);
         /// The view's trackpad gesture session.
         const GESTURE: NativeContact = NativeContact(1);
+        /// Fingers resting on the trackpad.
+        const HOLD: NativeContact = NativeContact(2);
 
         /// Owner-local AppKit input state, committed before callbacks run.
         pub(super) struct MacInputState {
             contacts: ContactRegistry,
             scrolling: ScrollPhases,
+            resting: crate::input::apple::resting::RestingFingers,
             force: crate::input::apple::force::ForceClick,
             /// Keys held down whose key code names no code, with the key each
             /// was pressed as.
@@ -1277,6 +1410,7 @@ pub(crate) mod macos {
                 Self {
                     contacts: ContactRegistry::new(clock).with_reserved_contact(MOUSE),
                     scrolling: ScrollPhases::default(),
+                    resting: crate::input::apple::resting::RestingFingers::default(),
                     force: crate::input::apple::force::ForceClick::default(),
                     pressed_as: crate::input::keys::PressedAs::default(),
                 }
@@ -1285,11 +1419,13 @@ pub(crate) mod macos {
 
         impl MacInputState {
             /// What `event`, delivered to a view `view_height` points tall,
-            /// carries.
+            /// carries; while its window holds the pointer `locked`, a mouse
+            /// move or drag carries the mouse's motion instead.
             pub(super) fn convert(
                 &mut self,
                 event: &NSEvent,
                 view_height: f64,
+                locked: bool,
             ) -> Vec<PlatformInput> {
                 let reading_time =
                     ReadingTime::coarse(NativeTime::UptimeSeconds(event.timestamp()));
@@ -1346,6 +1482,23 @@ pub(crate) mod macos {
                         .with_location(crate::input::keys::location_for_code(code))
                         .with_modifiers(extract_modifiers(event)),
                     )];
+                }
+                if locked {
+                    if matches!(
+                        event_type,
+                        NSEventType::MouseMoved
+                            | NSEventType::LeftMouseDragged
+                            | NSEventType::RightMouseDragged
+                            | NSEventType::OtherMouseDragged
+                    ) {
+                        return self.locked_motion(event, reading_time);
+                    }
+                    if event_type == NSEventType::Pressure {
+                        // The click's pressure stage still moves on; the move
+                        // a pressure event carries is no move while locked.
+                        let _pressure = self.force.pressure_event(event.stage(), event.pressure());
+                        return Vec::new();
+                    }
                 }
                 let modifiers = extract_modifiers(event);
                 let location = event.locationInWindow();
@@ -1438,7 +1591,7 @@ pub(crate) mod macos {
                         SmartZoomEvent::new(pointer, time, position).with_modifiers(modifiers),
                     ))];
                 } else if event_type == NSEventType::ScrollWheel {
-                    return self.scroll(event, time, x, y, modifiers);
+                    return self.scroll(event, (time, reading_time), x, y, modifiers);
                 } else if let Some((component, delta)) = gesture_component(event, event_type) {
                     let phase = if event_type == NSEventType::BeginGesture {
                         NSEventPhase::Began
@@ -1460,10 +1613,36 @@ pub(crate) mod macos {
                     .into_vec()
             }
 
+            /// A mouse move or drag while the window holds the pointer
+            /// locked: the event's deltas, which AppKit reports after the
+            /// user's pointer speed and acceleration, in points, right and
+            /// down positive, as the locked pointer's motion at the place it
+            /// rests. A motion of nothing delivers nothing.
+            fn locked_motion(&self, event: &NSEvent, time: ReadingTime) -> Vec<PlatformInput> {
+                let (dx, dy) = (event.deltaX(), event.deltaY());
+                if dx == 0.0 && dy == 0.0 {
+                    return Vec::new();
+                }
+                let Ok(delta) = MotionDelta::try_new(dx, dy) else {
+                    return Vec::new();
+                };
+                self.contacts
+                    .raw_motion(
+                        NativeSurface::default(),
+                        None,
+                        MOUSE,
+                        time,
+                        delta,
+                        MotionAcceleration::System,
+                    )
+                    .into_iter()
+                    .collect()
+            }
+
             fn scroll(
                 &mut self,
                 event: &NSEvent,
-                time: EventTime,
+                (time, reading_time): (EventTime, ReadingTime),
                 x: f64,
                 y: f64,
                 modifiers: Modifiers,
@@ -1495,12 +1674,36 @@ pub(crate) mod macos {
                     .with_precision(precision)
                     .with_inversion(inversion);
                 let (phase, momentum) = (event.phase(), event.momentumPhase());
-                if phase == NSEventPhase::MayBegin && momentum == NSEventPhase::None {
-                    // Fingers came to rest on the trackpad: a fling in
-                    // progress stops, as the platform's own momentum would.
-                    return vec![PlatformInput::Pointer(PointerEvent::ScrollInertiaCancel(
-                        PointerSignal::new(pointer, time).with_position(position),
-                    ))];
+                // Fingers that come to rest begin a hold, which stops a fling
+                // in progress as the platform's own momentum would stop.
+                let fingers = if phase == NSEventPhase::MayBegin {
+                    FingerPhase::MayBegin
+                } else if phase == NSEventPhase::Began {
+                    FingerPhase::Began
+                } else if phase == NSEventPhase::Cancelled {
+                    FingerPhase::Cancelled
+                } else {
+                    FingerPhase::Other
+                };
+                let step = self.resting.step(fingers, momentum != NSEventPhase::None);
+                let mut out = Vec::new();
+                if let Some(hold) = step.hold {
+                    let reading = NativeReading::new(
+                        HOLD,
+                        PointerKind::Trackpad,
+                        ReadingAction::Hold(hold),
+                        reading_time,
+                    )
+                    .with_primary(true)
+                    .with_modifiers(modifiers)
+                    .at_logical(x, y);
+                    out.extend(
+                        decode(&mut self.contacts, &reading)
+                            .unwrap_or_else(DecodeError::into_inputs),
+                    );
+                }
+                if step.consumed {
+                    return out;
                 }
                 match scroll_phase(&mut self.scrolling, phase, momentum, precise) {
                     Some(phase) => scroll = scroll.with_phase(phase),
@@ -1508,11 +1711,12 @@ pub(crate) mod macos {
                     // gesture that never began) moved nothing: it is no wheel
                     // tick either.
                     None if phase != NSEventPhase::None || momentum != NSEventPhase::None => {
-                        return Vec::new();
+                        return out;
                     }
                     None => {}
                 }
-                vec![PlatformInput::Pointer(PointerEvent::Scroll(scroll))]
+                out.push(PlatformInput::Pointer(PointerEvent::Scroll(scroll)));
+                out
             }
 
             /// One trackpad gesture component at view point `(x, y)`; a non-finite
@@ -1584,8 +1788,8 @@ pub(crate) mod macos {
             }
         }
 
-        fn mouse_info() -> PointerInfo {
-            PointerInfo::new(PointerId::new(NonZeroU64::MIN), PointerKind::Mouse)
+        fn mouse_info() -> PointerSource {
+            PointerSource::new(PointerId::new(NonZeroU64::MIN), PointerKind::Mouse)
                 .with_role(PointerRole::Primary)
         }
 
@@ -1836,8 +2040,8 @@ pub(crate) mod ios {
 
     use flui_platform::EventTime;
     use flui_platform::pointer::{
-        PenOrientation, PenTool, PointerButton, PointerEvent, PointerId, PointerInfo, PointerKind,
-        PointerPosition, PointerRole, ScrollEvent,
+        PenOrientation, PenTool, PointerButton, PointerEvent, PointerId, PointerKind,
+        PointerPosition, PointerRole, PointerSource, ScrollEvent,
     };
     use objc2::{msg_send, sel};
     use objc2_foundation::NSObjectProtocol;
@@ -2131,7 +2335,7 @@ pub(crate) mod ios {
                 .contacts
                 .pointer(NativeSurface::default(), None, CURSOR)
                 .unwrap_or_else(|| {
-                    PointerInfo::new(PointerId::new(NonZeroU64::MIN), PointerKind::Mouse)
+                    PointerSource::new(PointerId::new(NonZeroU64::MIN), PointerKind::Mouse)
                         .with_role(PointerRole::Primary)
                 });
             let (delta, precision) = if precise {

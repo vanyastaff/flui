@@ -19,13 +19,13 @@
 //! keeps its id when it is unplugged and plugged back in during the session; two
 //! identical monitors differ by connector; swapping the cables swaps the
 //! identities; an output with no stable native key gets a fresh id each time it
-//! appears. An identity that survives a restart is [`DisplayInfo::persistent_key`]
+//! appears. An identity that survives a restart is [`DisplayDescription::persistent_key`]
 //! (ADR-0237): a string the platform derives from the monitor itself, compared
 //! only for equality and absent where the platform has none.
 //!
 //! # Refresh period
 //!
-//! [`DisplayInfo::refresh_period`] is the period of the mode the display is
+//! [`DisplayDescription::refresh_period`] is the period of the mode the display is
 //! running, never its maximum, and a variable-rate range is not modelled. A
 //! value that does not describe a cadence (zero, a zero denominator, a
 //! non-positive rate, or a period outside 1 ms to 1 s) is recorded as unknown
@@ -35,7 +35,7 @@
 //!
 //! # Colour
 //!
-//! [`DisplayInfo::color`] is the display's colour profile: the
+//! [`DisplayDescription::color`] is the display's colour profile: the
 //! [`SurfaceColorSpace`] the operating system shows surfaces on it in (gamut
 //! and dynamic range) and its [`Headroom`] over SDR white. A display that
 //! enters or leaves HDR, or whose headroom or gamut moves, is a new snapshot
@@ -43,7 +43,7 @@
 //! display change like a mode switch, ordered by the same revision, so a later
 //! sample never loses to an earlier one. Where the operating system does not
 //! say, the colour is the [`CapabilityAbsence`] that says why, and
-//! [`DisplayInfo::color_space`] and [`DisplayInfo::headroom`] answer it as
+//! [`DisplayDescription::color_space`] and [`DisplayDescription::headroom`] answer it as
 //! [`Unsupported`]. A headroom is finite and at least `1.0` by construction.
 
 use std::collections::HashMap;
@@ -51,8 +51,8 @@ use std::num::NonZeroU64;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use flui_foundation::UniqueKey;
-use flui_foundation::geometry::{Bounds, DevicePixelRatio};
+use flui_foundation::geometry::{Bounds, DevicePixelRatio, Rect};
+use flui_foundation::{IdExhausted, IdMint, UniqueKey};
 
 use crate::unsupported::{CapabilityAbsence, Unsupported};
 
@@ -151,23 +151,22 @@ pub struct DisplayRegistry {
 #[derive(Debug)]
 struct RegistryState {
     known: HashMap<DisplayKey, DisplayId>,
-    /// The next id to issue; `None` once exhausted, for good.
-    next: Option<NonZeroU64>,
+    ids: IdMint<NonZeroU64>,
 }
 
 impl DisplayRegistry {
     /// An empty registry; its first id is 1.
     #[must_use]
     pub fn new() -> Self {
-        Self::starting_at(NonZeroU64::MIN)
+        Self::starting_after(0)
     }
 
-    fn starting_at(first: NonZeroU64) -> Self {
+    fn starting_after(last: u64) -> Self {
         Self {
             tag: UniqueKey::new(),
             inner: Mutex::new(RegistryState {
                 known: HashMap::new(),
-                next: Some(first),
+                ids: IdMint::starting_after(last),
             }),
         }
     }
@@ -192,8 +191,10 @@ impl DisplayRegistry {
         {
             return Ok(*id);
         }
-        let issued = state.next.ok_or(DisplayIdsExhausted)?;
-        state.next = issued.checked_add(1);
+        let issued = state
+            .ids
+            .next()
+            .map_err(|IdExhausted| DisplayIdsExhausted)?;
         let id = DisplayId {
             number: issued,
             registry: self.tag,
@@ -317,21 +318,213 @@ impl TryFrom<Duration> for RefreshPeriod {
     }
 }
 
+/// Where a display's top-left corner sits in the window system's desktop, in
+/// the unit that window system lays its desktop out in: device pixels on
+/// Windows, X11 and Android, points on macOS and iOS, the compositor's logical
+/// units on Wayland, CSS pixels on the web.
+///
+/// It says how the displays of one snapshot are arranged (which one is left of
+/// or above another) and nothing more: the unit differs from host to host, so
+/// an origin is never a logical position and no arithmetic mixes it with one.
+/// Where a window is, and the bounds a consumer fits a window into, are
+/// measured on the display itself ([`WindowPosition`](crate::WindowPosition),
+/// [`DisplayBounds`]).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub struct DesktopOrigin {
+    x: i32,
+    y: i32,
+}
+
+impl DesktopOrigin {
+    /// The origin `(x, y)` in the window system's desktop units.
+    #[must_use]
+    pub const fn new(x: i32, y: i32) -> Self {
+        Self { x, y }
+    }
+
+    /// The origin, in the window system's desktop units.
+    #[must_use]
+    pub const fn get(self) -> flui_foundation::geometry::Point<i32> {
+        flui_foundation::geometry::Point::new(self.x, self.y)
+    }
+}
+
+/// Why numbers describe no display's bounds.
+///
+/// Two errors are equal when they carry the same numbers bit for bit, so an
+/// error read from a NaN equals itself.
+#[derive(Debug, Clone, Copy, thiserror::Error)]
+#[error(
+    "display bounds {}x{} with usable area ({}, {})-({}, {}) describe no display",
+    extent.width,
+    extent.height,
+    usable.min.x,
+    usable.min.y,
+    usable.max.x,
+    usable.max.y
+)]
+pub struct InvalidDisplayBounds {
+    /// The extent asked for.
+    pub extent: flui_foundation::geometry::Size<f64>,
+    /// The usable area asked for.
+    pub usable: Rect<f64>,
+}
+
+impl PartialEq for InvalidDisplayBounds {
+    fn eq(&self, other: &Self) -> bool {
+        let bits = |bounds: &Self| {
+            [
+                bounds.extent.width,
+                bounds.extent.height,
+                bounds.usable.min.x,
+                bounds.usable.min.y,
+                bounds.usable.max.x,
+                bounds.usable.max.y,
+            ]
+            .map(f64::to_bits)
+        };
+        bits(self) == bits(other)
+    }
+}
+
+impl Eq for InvalidDisplayBounds {}
+
+/// How large a display is and which part of it windows may use, in that
+/// display's own logical pixels, measured from its top-left corner: the space a
+/// [`WindowPosition`](crate::WindowPosition) on it is measured in.
+///
+/// The extent is finite and encloses an area; the usable area is finite and
+/// lies inside it. A display of a mixed-scale desktop is measured in its own
+/// logical pixels, so fitting a window to it needs no other display's scale.
+///
+/// ```
+/// use flui_foundation::geometry::{Bounds, DevicePixelRatio, Point, Rect, Size};
+/// use flui_platform::{DesktopOrigin, DisplayBounds};
+///
+/// // A 2560x1440 monitor at 1.25, right of the primary one, with a 60-pixel
+/// // taskbar along its bottom.
+/// let ratio = DevicePixelRatio::try_new(1.25).expect("a ratio");
+/// let (origin, bounds) = DisplayBounds::from_device(
+///     Bounds::new(Point::new(1920, 0), Size::new(2560, 1440)),
+///     Bounds::new(Point::new(1920, 0), Size::new(2560, 1380)),
+///     ratio,
+/// )?;
+/// assert_eq!(origin, DesktopOrigin::new(1920, 0));
+/// assert_eq!(bounds.extent(), Size::new(2048.0, 1152.0));
+/// assert_eq!(bounds.usable(), Rect::from_ltrb(0.0, 0.0, 2048.0, 1104.0));
+/// # Ok::<(), flui_platform::InvalidDisplayBounds>(())
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DisplayBounds {
+    extent: flui_foundation::geometry::Size<f64>,
+    usable: Rect<f64>,
+}
+
+// Every number is finite, never NaN, so equality is total.
+impl Eq for DisplayBounds {}
+
+impl DisplayBounds {
+    /// A display `extent` large whose windows may use `usable`.
+    ///
+    /// # Errors
+    /// [`InvalidDisplayBounds`] when a number is not finite, a side of the
+    /// extent is not positive, or the usable area is inverted or reaches past
+    /// the extent.
+    pub fn try_new(
+        extent: flui_foundation::geometry::Size<f64>,
+        usable: Rect<f64>,
+    ) -> Result<Self, InvalidDisplayBounds> {
+        let positive = |side: f64| side.is_finite() && side > 0.0;
+        let inside = |low: f64, high: f64, side: f64| {
+            low.is_finite() && high.is_finite() && 0.0 <= low && low <= high && high <= side
+        };
+        if positive(extent.width)
+            && positive(extent.height)
+            && inside(usable.min.x, usable.max.x, extent.width)
+            && inside(usable.min.y, usable.max.y, extent.height)
+        {
+            Ok(Self { extent, usable })
+        } else {
+            Err(InvalidDisplayBounds { extent, usable })
+        }
+    }
+
+    /// A display `extent` large whose windows may use all of it.
+    ///
+    /// # Errors
+    /// [`InvalidDisplayBounds`] when a side is not finite and positive.
+    pub fn whole(
+        extent: flui_foundation::geometry::Size<f64>,
+    ) -> Result<Self, InvalidDisplayBounds> {
+        Self::try_new(
+            extent,
+            Rect::from_ltrb(0.0, 0.0, extent.width, extent.height),
+        )
+    }
+
+    /// The bounds of a display a window system lays out in device pixels
+    /// (Windows, X11, Android): its rectangle `display` and its usable area
+    /// `usable` in the desktop's device pixels, over its `scale`. Answers the
+    /// display's [`DesktopOrigin`] beside them.
+    ///
+    /// # Errors
+    /// [`InvalidDisplayBounds`] when the display has no area or the usable
+    /// area reaches past it: a host intersects a work area that spans
+    /// displays with each display first.
+    pub fn from_device(
+        display: Bounds<i32>,
+        usable: Bounds<i32>,
+        scale: DevicePixelRatio,
+    ) -> Result<(DesktopOrigin, Self), InvalidDisplayBounds> {
+        // Every difference of two `i32`s is exact in `f64`, and a ratio of at
+        // least 1/32 keeps the quotient finite.
+        let logical = |device: i64| scale.to_logical(device as f64);
+        let from = |edge: i32, origin: i32| logical(i64::from(edge) - i64::from(origin));
+        let end = |origin: i32, side: i32| i64::from(origin) + i64::from(side);
+        let (x, y) = (display.origin.x, display.origin.y);
+        let extent = flui_foundation::geometry::Size::new(
+            logical(i64::from(display.size.width)),
+            logical(i64::from(display.size.height)),
+        );
+        let area = Rect::from_ltrb(
+            from(usable.origin.x, x),
+            from(usable.origin.y, y),
+            logical(end(usable.origin.x, usable.size.width) - i64::from(x)),
+            logical(end(usable.origin.y, usable.size.height) - i64::from(y)),
+        );
+        Ok((DesktopOrigin::new(x, y), Self::try_new(extent, area)?))
+    }
+
+    /// The display's extent, in its logical pixels.
+    #[must_use]
+    pub const fn extent(self) -> flui_foundation::geometry::Size<f64> {
+        self.extent
+    }
+
+    /// The part windows may use without being covered by the system's own
+    /// bars (a taskbar, a dock, a panel), from the display's top-left corner,
+    /// in its logical pixels.
+    #[must_use]
+    pub const fn usable(self) -> Rect<f64> {
+        self.usable
+    }
+}
+
 /// One display as the operating system describes it right now.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
-pub struct DisplayInfo {
+pub struct DisplayDescription {
     /// The framework-issued identity.
     pub id: DisplayId,
     /// The display's name, such as "Built-in Display". A label, never an
     /// identity.
     pub name: String,
-    /// Bounds in global screen coordinates, in device pixels. A Wayland
-    /// compositor has no global device-pixel space, so there they are in its
-    /// logical coordinate space.
-    pub bounds: Bounds<i32>,
-    /// The area windows can occupy without being covered by system chrome.
-    pub usable_bounds: Bounds<i32>,
+    /// Where the display sits among the others, in the window system's own
+    /// desktop units: an arrangement, never a logical position.
+    pub origin: DesktopOrigin,
+    /// The display's extent and its usable area, in its logical pixels from
+    /// its top-left corner.
+    pub bounds: DisplayBounds,
     /// Device pixels per logical pixel: finite and positive by its type, so
     /// a host checks the number its operating system reports once, where it
     /// builds the display.
@@ -354,8 +547,8 @@ pub struct DisplayInfo {
     pub color: Result<DisplayColor, CapabilityAbsence>,
 }
 
-impl DisplayInfo {
-    /// A display with its bounds as usable area, an unknown refresh period, not
+impl DisplayDescription {
+    /// A display at `origin` with these bounds, an unknown refresh period, not
     /// primary, and a colour the host has not read
     /// ([`CapabilityAbsence::NOT_YET_ON_THIS_HOST`]). Refine it with the `with_*`
     /// methods.
@@ -363,20 +556,41 @@ impl DisplayInfo {
     pub fn new(
         id: DisplayId,
         name: impl Into<String>,
-        bounds: Bounds<i32>,
+        origin: DesktopOrigin,
+        bounds: DisplayBounds,
         scale_factor: DevicePixelRatio,
     ) -> Self {
         Self {
             id,
             name: name.into(),
+            origin,
             bounds,
-            usable_bounds: bounds,
             scale_factor,
             refresh_period: None,
             is_primary: false,
             persistent_key: None,
             color: Err(CapabilityAbsence::NOT_YET_ON_THIS_HOST),
         }
+    }
+
+    /// A display a window system lays out in device pixels (Windows, X11,
+    /// Android): its rectangle `display` and its usable area `usable` in the
+    /// desktop's device pixels, over its `scale`
+    /// ([`DisplayBounds::from_device`]), with the rest as [`new`](Self::new)
+    /// leaves it.
+    ///
+    /// # Errors
+    /// [`InvalidDisplayBounds`] when the display has no area or the usable
+    /// area reaches past it.
+    pub fn from_device(
+        id: DisplayId,
+        name: impl Into<String>,
+        display: Bounds<i32>,
+        usable: Bounds<i32>,
+        scale_factor: DevicePixelRatio,
+    ) -> Result<Self, InvalidDisplayBounds> {
+        let (origin, bounds) = DisplayBounds::from_device(display, usable, scale_factor)?;
+        Ok(Self::new(id, name, origin, bounds, scale_factor))
     }
 
     /// Record the display's colour as the operating system reports it, or why
@@ -415,13 +629,6 @@ impl DisplayInfo {
     #[must_use]
     pub fn with_persistent_key(mut self, key: impl Into<String>) -> Self {
         self.persistent_key = Some(key.into());
-        self
-    }
-
-    /// Set the usable area.
-    #[must_use]
-    pub fn with_usable_bounds(mut self, usable_bounds: Bounds<i32>) -> Self {
-        self.usable_bounds = usable_bounds;
         self
     }
 
@@ -623,7 +830,7 @@ pub struct DisplayRevisionExhausted;
 #[derive(Debug, Clone, PartialEq)]
 pub struct DisplaySnapshot {
     revision: DisplayRevision,
-    displays: Arc<[DisplayInfo]>,
+    displays: Arc<[DisplayDescription]>,
 }
 
 impl DisplaySnapshot {
@@ -643,7 +850,10 @@ impl DisplaySnapshot {
     /// # Errors
     /// [`DisplayRevisionExhausted`] when `displays` differ and the revision is
     /// the last one. The revision never wraps.
-    pub fn successor(&self, displays: Vec<DisplayInfo>) -> Result<Self, DisplayRevisionExhausted> {
+    pub fn successor(
+        &self,
+        displays: Vec<DisplayDescription>,
+    ) -> Result<Self, DisplayRevisionExhausted> {
         if *self.displays == *displays {
             return Ok(self.clone());
         }
@@ -661,19 +871,19 @@ impl DisplaySnapshot {
 
     /// Every display, in the order the source listed them.
     #[must_use]
-    pub fn displays(&self) -> &[DisplayInfo] {
+    pub fn displays(&self) -> &[DisplayDescription] {
         &self.displays
     }
 
     /// The display with this id, if the snapshot holds it.
     #[must_use]
-    pub fn get(&self, id: DisplayId) -> Option<&DisplayInfo> {
+    pub fn get(&self, id: DisplayId) -> Option<&DisplayDescription> {
         self.displays.iter().find(|display| display.id == id)
     }
 
     /// The primary display, if the platform has one.
     #[must_use]
-    pub fn primary(&self) -> Option<&DisplayInfo> {
+    pub fn primary(&self) -> Option<&DisplayDescription> {
         self.displays.iter().find(|display| display.is_primary)
     }
 
@@ -718,7 +928,7 @@ pub struct WindowDisplay {
     /// That display's refresh period; `None` when unknown.
     pub refresh_period: Option<RefreshPeriod>,
     /// That display's colour profile; `None` where the platform reports none
-    /// ([`DisplayInfo::color`] says why).
+    /// ([`DisplayDescription::color`] says why).
     pub color: Option<DisplayColor>,
 }
 
@@ -749,7 +959,7 @@ mod tests {
     /// repeats; this needs the private counter.
     #[test]
     fn exhausted_counter_refuses_without_wrapping() {
-        let registry = DisplayRegistry::starting_at(NonZeroU64::MAX);
+        let registry = DisplayRegistry::starting_after(u64::MAX - 1);
         let last = registry
             .mint(&DisplayKey::Injected(1))
             .expect("the last id is still issued");
@@ -809,7 +1019,15 @@ mod tests {
         };
         let registry = DisplayRegistry::new();
         let id = registry.mint(&DisplayKey::Injected(1)).expect("id");
-        let display = DisplayInfo::new(id, "d", Bounds::default(), DevicePixelRatio::ONE);
+        let bounds =
+            DisplayBounds::whole(flui_foundation::geometry::Size::new(1.0, 1.0)).expect("an area");
+        let display = DisplayDescription::new(
+            id,
+            "d",
+            DesktopOrigin::default(),
+            bounds,
+            DevicePixelRatio::ONE,
+        );
         assert_eq!(
             at_last.successor(vec![display]),
             Err(DisplayRevisionExhausted),
@@ -822,47 +1040,47 @@ mod tests {
     }
 }
 
-/// The fields of a [`DisplayInfo`] other than its id, public: the boundary
+/// The fields of a [`DisplayDescription`] other than its id, public: the boundary
 /// every serialization and mirror of a display goes through (a recording's
 /// schema).
 ///
-/// Deliberately not `#[non_exhaustive]`, unlike [`DisplayInfo`]: a mirror
+/// Deliberately not `#[non_exhaustive]`, unlike [`DisplayDescription`]: a mirror
 /// builds and destructures this struct exhaustively, so a field added to a
 /// display breaks every mirror at compile time until it carries the field,
 /// instead of dropping it from a recording. The id stays apart because it is
 /// issued by a [`DisplayRegistry`] and means nothing outside it: a mirror
 /// writes a label for it and the reader mints its own
-/// ([`DisplayInfo::into_parts`], [`Self::into_info`]).
+/// ([`DisplayDescription::into_parts`], [`Self::into_description`]).
 #[derive(Debug, Clone, PartialEq)]
 pub struct DisplayParts {
-    /// [`DisplayInfo::name`].
+    /// [`DisplayDescription::name`].
     pub name: String,
-    /// [`DisplayInfo::bounds`].
-    pub bounds: Bounds<i32>,
-    /// [`DisplayInfo::usable_bounds`].
-    pub usable_bounds: Bounds<i32>,
-    /// [`DisplayInfo::scale_factor`].
+    /// [`DisplayDescription::origin`].
+    pub origin: DesktopOrigin,
+    /// [`DisplayDescription::bounds`].
+    pub bounds: DisplayBounds,
+    /// [`DisplayDescription::scale_factor`].
     pub scale_factor: DevicePixelRatio,
-    /// [`DisplayInfo::refresh_period`].
+    /// [`DisplayDescription::refresh_period`].
     pub refresh_period: Option<RefreshPeriod>,
-    /// [`DisplayInfo::is_primary`].
+    /// [`DisplayDescription::is_primary`].
     pub is_primary: bool,
-    /// [`DisplayInfo::persistent_key`].
+    /// [`DisplayDescription::persistent_key`].
     pub persistent_key: Option<String>,
-    /// [`DisplayInfo::color`]. A mirror matches the colour's variants, each
+    /// [`DisplayDescription::color`]. A mirror matches the colour's variants, each
     /// of which holds all it says.
     pub color: Result<DisplayColor, CapabilityAbsence>,
 }
 
-impl DisplayInfo {
+impl DisplayDescription {
     /// Take the display apart into its id and the rest of its fields.
     #[must_use]
     pub fn into_parts(self) -> (DisplayId, DisplayParts) {
         let Self {
             id,
             name,
+            origin,
             bounds,
-            usable_bounds,
             scale_factor,
             refresh_period,
             is_primary,
@@ -873,8 +1091,8 @@ impl DisplayInfo {
             id,
             DisplayParts {
                 name,
+                origin,
                 bounds,
-                usable_bounds,
                 scale_factor,
                 refresh_period,
                 is_primary,
@@ -889,22 +1107,22 @@ impl DisplayParts {
     /// The display these fields describe, under `id`; every field is valid by
     /// its type.
     #[must_use]
-    pub fn into_info(self, id: DisplayId) -> DisplayInfo {
+    pub fn into_description(self, id: DisplayId) -> DisplayDescription {
         let Self {
             name,
+            origin,
             bounds,
-            usable_bounds,
             scale_factor,
             refresh_period,
             is_primary,
             persistent_key,
             color,
         } = self;
-        DisplayInfo {
+        DisplayDescription {
             id,
             name,
+            origin,
             bounds,
-            usable_bounds,
             scale_factor,
             refresh_period,
             is_primary,

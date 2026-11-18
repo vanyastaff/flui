@@ -8,10 +8,9 @@
 use std::cell::Cell;
 use std::rc::{Rc, Weak};
 
-use flui_foundation::geometry::{Point, Size};
 use flui_platform::{
-    SizeConstraints, SubmitError, WindowCommand, WindowControl, WindowFrame, WindowMode,
-    WindowRevision, WindowState,
+    SizeConstraints, SubmitError, WindowCommand, WindowControl, WindowExtent, WindowFrame,
+    WindowMode, WindowPosition, WindowRevision, WindowState,
 };
 
 use crate::observation::{Observation, Phase, Subscription, WeakObservation};
@@ -93,13 +92,15 @@ impl WindowHandle {
         self.submit(WindowCommand::SetTitle(title.into()))
     }
 
-    /// Move the window's outer top-left corner to a global position in logical
-    /// pixels.
+    /// Move the window's outer top-left corner to a point of a display, in
+    /// that display's logical pixels from its top-left corner: a position the
+    /// window's [`state`](Self::state) published, or one built on a display of
+    /// the display snapshot. A display unplugged before the command applies
+    /// leaves the window where it is.
     ///
     /// # Errors
-    /// [`InvalidGeometry`](flui_platform::AdmissionError::InvalidGeometry) for
-    /// a non-finite position; otherwise as [`Self::set_title`].
-    pub fn set_position(&self, at: Point<f64>) -> Result<(), SubmitError> {
+    /// As [`Self::set_title`].
+    pub fn set_position(&self, at: WindowPosition) -> Result<(), SubmitError> {
         self.submit(WindowCommand::SetPosition(at))
     }
 
@@ -107,9 +108,8 @@ impl WindowHandle {
     ///
     /// # Errors
     /// [`InvalidGeometry`](flui_platform::AdmissionError::InvalidGeometry) for
-    /// a size that is not finite and positive; otherwise as
-    /// [`Self::set_title`].
-    pub fn set_size(&self, size: Size<f64>) -> Result<(), SubmitError> {
+    /// a size that encloses no area; otherwise as [`Self::set_title`].
+    pub fn set_size(&self, size: WindowExtent) -> Result<(), SubmitError> {
         self.submit(WindowCommand::SetSize(size))
     }
 
@@ -182,6 +182,65 @@ impl WindowHandle {
     /// otherwise as [`Self::set_title`].
     pub fn set_material(&self, material: flui_platform::WindowMaterial) -> Result<(), SubmitError> {
         self.submit(WindowCommand::SetMaterial(material))
+    }
+
+    /// Hold the pointer inside the window, hold it in place (its motion then
+    /// arrives as `PointerEvent::RawMotion`), or let it go. Only a window
+    /// with the keyboard focus takes a grab, and it ends with the focus: the
+    /// snapshot's [`cursor_grab`](WindowState::cursor_grab) says what the
+    /// window holds.
+    ///
+    /// # Errors
+    /// [`Unsupported`](flui_platform::AdmissionError::Unsupported) where the
+    /// window takes no such grab
+    /// ([`WindowCapabilities::confines_cursor`](flui_platform::WindowCapabilities::confines_cursor),
+    /// [`locks_cursor`](flui_platform::WindowCapabilities::locks_cursor));
+    /// letting go is taken everywhere. Otherwise as [`Self::set_title`].
+    pub fn set_cursor_grab(&self, grab: flui_platform::CursorGrab) -> Result<(), SubmitError> {
+        self.submit(WindowCommand::SetCursorGrab(grab))
+    }
+
+    /// Keep the window above or below the other windows, or neither.
+    ///
+    /// # Errors
+    /// [`Unsupported`](flui_platform::AdmissionError::Unsupported) where the
+    /// window system keeps no such level
+    /// ([`WindowCapabilities::keeps_on_top`](flui_platform::WindowCapabilities::keeps_on_top),
+    /// [`keeps_on_bottom`](flui_platform::WindowCapabilities::keeps_on_bottom));
+    /// the normal level is taken everywhere. Otherwise as [`Self::set_title`].
+    pub fn set_level(&self, level: flui_platform::WindowLevel) -> Result<(), SubmitError> {
+        self.submit(WindowCommand::SetLevel(level))
+    }
+
+    /// Resize the content only in steps of `step` while the user drags the
+    /// frame; `None` lifts the steps.
+    ///
+    /// # Errors
+    /// [`Unsupported`](flui_platform::AdmissionError::Unsupported) where the
+    /// window takes no steps
+    /// ([`WindowCapabilities::sets_resize_increments`](flui_platform::WindowCapabilities::sets_resize_increments)),
+    /// [`InvalidGeometry`](flui_platform::AdmissionError::InvalidGeometry) for a
+    /// step that encloses no area; otherwise as [`Self::set_title`].
+    pub fn set_resize_increments(
+        &self,
+        step: Option<flui_platform::WindowExtent>,
+    ) -> Result<(), SubmitError> {
+        self.submit(WindowCommand::SetResizeIncrements(step))
+    }
+
+    /// Keep the content at `ratio` while the user drags the frame; `None`
+    /// lifts it.
+    ///
+    /// # Errors
+    /// [`Unsupported`](flui_platform::AdmissionError::Unsupported) where the
+    /// window keeps no proportion
+    /// ([`WindowCapabilities::sets_aspect_ratio`](flui_platform::WindowCapabilities::sets_aspect_ratio));
+    /// otherwise as [`Self::set_title`].
+    pub fn set_aspect_ratio(
+        &self,
+        ratio: Option<flui_platform::AspectRatio>,
+    ) -> Result<(), SubmitError> {
+        self.submit(WindowCommand::SetAspectRatio(ratio))
     }
 
     /// Ask the window to close through the vetoed close path; the window may

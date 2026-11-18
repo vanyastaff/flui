@@ -484,13 +484,16 @@ pub(crate) struct PipelineCache {
     /// Owned here rather than passed in, because every pipeline this cache
     /// builds uses it and there is exactly one shader module behind them all.
     clip_bind_group_layout: wgpu::BindGroupLayout,
+
+    /// The driver's pipeline cache every pipeline here is created through.
+    driver_cache: Option<wgpu::PipelineCache>,
 }
 
 impl PipelineCache {
     /// Create a new pipeline cache.
     ///
     /// # Arguments
-    /// * `device` - wgpu device
+    /// * `gpu` - the device, and the driver cache every pipeline is created through
     /// * `shader_sources` - the three assemblies of the shape shader
     /// * `format` - Surface texture format
     /// * `viewport_bind_group_layout` - Bind group layout for viewport uniform
@@ -500,11 +503,12 @@ impl PipelineCache {
     /// replay instead isolates source and coverage and composites against a
     /// destination snapshot; devices without that feature retain coverage fidelity.
     pub(crate) fn new(
-        device: &wgpu::Device,
+        gpu: crate::pipeline_device::PipelineDevice<'_>,
         shader_sources: CoverageShaderSources,
         format: wgpu::TextureFormat,
         viewport_bind_group_layout: wgpu::BindGroupLayout,
     ) -> Self {
+        let device = gpu.device();
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Shape Shader"),
             source: wgpu::ShaderSource::Wgsl(shader_sources.folded.into()),
@@ -546,6 +550,7 @@ impl PipelineCache {
             format,
             viewport_bind_group_layout,
             clip_bind_group_layout,
+            driver_cache: gpu.owned_cache(),
         }
     }
 
@@ -722,7 +727,7 @@ impl PipelineCache {
                 alpha_to_coverage_enabled: false,
             },
             multiview_mask: None,
-            cache: None,
+            cache: self.driver_cache.as_ref(),
         })
     }
 

@@ -17,7 +17,7 @@ use flui_platform::{
         CapabilityRegistrar, CompletionSource, DataRefused, HostBridge, IntentFrame,
         InvalidResultKey, JniFrame, MAX_RESULT_KEY_LEN, OwnerJob, OwnerPoster, OwnerRetired,
         OwnerScope, PendingCompletions, ProviderContext, RequestKey, Resolver, ResultCode,
-        ResultData, ResultKey, ResultMint, ResultOutcome, ResultRefused, ResultRequest,
+        ResultIntent, ResultKey, ResultMint, ResultOutcome, ResultRefused, ResultRequest,
         ResultTicketHold, ResultToken, ResultTokenMint, RuntimeLocals,
     },
 };
@@ -666,7 +666,7 @@ impl ActivityBridge for BridgeCalls {
     fn take_data(
         &self,
         _capability: &CapabilityId,
-        _data: ResultData,
+        _data: ResultIntent,
         _f: &mut dyn FnMut(JniFrame),
     ) -> Result<(), DataRefused> {
         Err(DataRefused::NotHeld)

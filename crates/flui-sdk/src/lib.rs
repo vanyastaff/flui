@@ -70,11 +70,15 @@ pub mod view {
 pub mod platform {
     pub use flui_platform::AdmissionError;
     pub use flui_platform::Brightness;
+    pub use flui_platform::ClipboardEntryId;
     pub use flui_platform::ClipboardError;
+    pub use flui_platform::ClipboardExpiry;
+    pub use flui_platform::ClipboardExpiryError;
     pub use flui_platform::ClipboardRead;
     pub use flui_platform::ClipboardWrite;
     pub use flui_platform::Concealment;
     pub use flui_platform::DurationScale;
+    pub use flui_platform::ExpiryClearing;
     pub use flui_platform::GesturePreferences;
     pub use flui_platform::HapticFeedback;
     pub use flui_platform::HostNotice;
@@ -91,8 +95,12 @@ pub mod platform {
     pub use flui_platform::NumberingSystem;
     pub use flui_platform::RegionOverride;
     pub use flui_platform::RegionalFormats;
+    pub use flui_platform::ScrollBarPreferences;
+    pub use flui_platform::ScrollBarVisibility;
+    pub use flui_platform::ScrollTrackClick;
     pub use flui_platform::SessionEndBlock;
     pub use flui_platform::SessionEndRequest;
+    pub use flui_platform::SrgbColor;
     pub use flui_platform::SubmitError;
     pub use flui_platform::SystemPreferences;
     pub use flui_platform::TargetPlatform;
@@ -135,7 +143,7 @@ pub mod platform {
         pub use flui_platform::capability::ProviderContext;
         pub use flui_platform::capability::Resolver;
         pub use flui_platform::capability::ResultCode;
-        pub use flui_platform::capability::ResultData;
+        pub use flui_platform::capability::ResultIntent;
         pub use flui_platform::capability::ResultKey;
         pub use flui_platform::capability::ResultOutcome;
         pub use flui_platform::capability::ResultRefused;

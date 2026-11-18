@@ -380,7 +380,7 @@ pub(super) fn prepare_replacement_ui_runtime(
     let installation = super::window_install::WindowInstall::new(host.clone(), prepared, window);
     let displaced = APP_RUNTIME.with(|slot| {
         let mut state = slot.borrow_mut();
-        state.owner_thread = Some(std::thread::current().id());
+        state.hosts_loop = true;
         let _ = state.ensure_services();
         let _ = state.ensure_execution();
         #[cfg(not(target_arch = "wasm32"))]
@@ -412,9 +412,7 @@ pub(super) fn prepare_ui_runtime_alongside(
 ) -> super::window_install::WindowInstall {
     let host = APP_RUNTIME.with(|slot| {
         let mut state = slot.borrow_mut();
-        state
-            .owner_thread
-            .get_or_insert_with(|| std::thread::current().id());
+        state.hosts_loop = true;
         let _ = state.ensure_services();
         state.installed_host.clone()
     });
@@ -733,7 +731,7 @@ pub(super) fn deliver_host_notice_while(
         let Ok(runtime) = slot.try_borrow() else {
             return Vec::new();
         };
-        let Some(owner_thread) = runtime.owner_thread else {
+        let Some(owner_thread) = runtime.loop_thread() else {
             return Vec::new();
         };
         runtime
@@ -783,7 +781,7 @@ pub(super) fn deliver_session_end_close(deadline: std::time::Instant, margin: st
         let Ok(runtime) = slot.try_borrow() else {
             return Vec::new();
         };
-        let Some(owner_thread) = runtime.owner_thread else {
+        let Some(owner_thread) = runtime.loop_thread() else {
             return Vec::new();
         };
         let logical = runtime.installed_host.logical();
@@ -839,7 +837,7 @@ fn reclaim_host_memory(level: flui_foundation::memory::MemoryPressureLevel) {
     let memory = APP_RUNTIME.with(|slot| {
         slot.try_borrow()
             .ok()
-            .map(|state| std::sync::Arc::clone(&state.host_memory))
+            .map(|state| Rc::clone(&state.host_memory))
     });
     if let Some(memory) = memory {
         memory.reclaim(level);
@@ -1060,6 +1058,13 @@ pub(crate) const EXIT_BUDGET: std::time::Duration = std::time::Duration::from_se
 /// the pool shutdown that follows.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) const SERVICE_SHUTDOWN_DEADLINE: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// The longest the loop's end waits for the host to clear an expiring
+/// clipboard entry (ADR-0363), a budget of its own ahead of the exit
+/// deadline's: the Win32 clipboard thread may be waiting out another process
+/// that holds the clipboard.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) const EXIT_CLIPBOARD_BOUND: std::time::Duration = std::time::Duration::from_millis(500);
 
 /// The one deadline the exit order's framework steps share, taken when the
 /// flush starts: the flush and the services end by [`Self::services`], the
@@ -1303,10 +1308,21 @@ pub(super) fn teardown_platform_ui_runtime() {
 /// offer.
 #[cfg(not(target_arch = "wasm32"))]
 pub(super) fn teardown_platform_ui_runtime_logged(log: &mut dyn FnMut(TeardownStep)) {
-    APP_RUNTIME.with(|slot| slot.borrow_mut().owner_thread = None);
+    APP_RUNTIME.with(|slot| slot.borrow_mut().hosts_loop = false);
     let mut first_panic = FirstPanic::new();
     retire_installed_host(&mut first_panic);
     log(TeardownStep::UiRuntimes);
+
+    // An expiring clipboard entry still on the clipboard is cleared now, if
+    // it is still there (ADR-0363), before the flush can spend the exit's
+    // deadline: within a budget of its own, `EXIT_CLIPBOARD_BOUND`, which only
+    // the hosts whose clipboard outlives the process wait out.
+    first_panic.contain(|| {
+        let expiries = APP_RUNTIME.with(|slot| slot.borrow().clipboard_expiries());
+        if let Some(expiries) = expiries {
+            expiries.before_exit(EXIT_CLIPBOARD_BOUND);
+        }
+    });
 
     // The framework's part of the exit runs against one deadline taken
     // here, after the application code above (ADR-0258 §7). The flush

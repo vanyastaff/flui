@@ -104,7 +104,7 @@ use derive::view::ViewKind;
 /// `ViewKey` (`ValueKey<T>`, `UniqueKey`, `GlobalKey<T>`, …), an `Option` of
 /// one for a view that is keyed only sometimes, or an `Rc<dyn ViewKey>` or
 /// `Box<dyn ViewKey>` for a key whose type the view does not name
-/// (`flui_foundation::key::AsViewKey` lists them). One field of a struct can
+/// (`flui_foundation::AsViewKey` lists them). One field of a struct can
 /// carry the mark; without it the view has no key.
 ///
 /// ```rust,ignore

@@ -74,6 +74,14 @@ pub(crate) fn an_app_runs_on_the_native_wayland_host() {
 /// the application asks for four seconds after it is ready is carried out.
 /// The child draws through Vulkan, whose `Fifo` present on Wayland waits for
 /// that frame callback.
+///
+/// The window is drawn on the raster thread, where the Wayland host places
+/// its executor (ADR-0305 §10), and presents one frame per frame callback:
+/// every buffer the compositor is handed comes with a frame callback of its
+/// own. The thread presents after the wake that queued the frame returned, so
+/// until then no callback holds the window's next frame back; taken then,
+/// that frame is presented right behind the first, with no callback, and the
+/// compositor is handed two buffers for each one it would show.
 pub(crate) fn an_app_whose_window_is_never_drawn_still_quits() {
     use flui_native::testing::wayland_compositor::{Offer, ScriptedCompositor};
 
@@ -106,7 +114,8 @@ pub(crate) fn an_app_whose_window_is_never_drawn_still_quits() {
     let heard = compositor.heard();
     assert!(
         heard.frames >= 3 && heard.withheld >= heard.frames,
-        "the window drew frame after frame, none of them shown: {heard:?}"
+        "the window drew frame after frame, none of them shown and each with its frame \
+         callback: {heard:?}"
     );
 }
 

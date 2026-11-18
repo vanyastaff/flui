@@ -3,18 +3,10 @@
 The workspace's test support, placed above the frame runtime and the widget
 catalog (tier K, `order = 6`) so its driver can run the product frame
 transaction ([ADR-0083](../../docs/adr/ADR-0083-one-frame-transaction-in-flui-runtime.md) §4).
-Two drivers live here while that move is in progress: `HeadlessHost`, which
-pumps a `flui_runtime::ui_runtime::UiRuntime`, and `HeadlessBinding`, the
-substrate driver over raw owners, which the raw-owner suites still use.
+Its frame driver is `HeadlessHost`, which pumps a
+`flui_runtime::ui_runtime::UiRuntime` on a manual clock.
 
 ## Invariants
-
-- **Raw-owner animation work runs inside its scheduler frame.**
-  `HeadlessBinding::pump_frame` projects time, then ticks Vsync in the persistent
-  pipeline slot before build/layout/paint. This matches runtime sampling and
-  gives the work the owning frame's tracing extent (ADR-0202).
-  Devtools' `a_real_animation_reaches_the_profiler_with_its_work` pins actual
-  animation progress, same-frame paint and CPU phase attribution.
 
 - **Adopted widget clocks have one runtime parent.** Re-adopting the same registry
   is a no-op. A foreign, closed or otherwise refused replacement returns its typed
@@ -31,15 +23,6 @@ substrate driver over raw owners, which the raw-owner suites still use.
   and `snack_bar_keeps_its_display_duration_under_reduced_motion` drive real
   mounted timers through this entry and observe both retained duration and expiry.
 
-- **Extra presentation motion clocks remain independent.** An owning controller
-  registers through `build_on` and remains alive for the scripted run. The
-  harness has no manual controller-registration shortcut. Editing an extra
-  presentation clock stays within its borrow; a step marks that presentation's
-  demand after the borrow is released. A paused clock contributes no continuous
-  animation demand. `presentation_rates_pause_and_step_are_independent` pins
-  distinct rates, sibling progress, no paused produce and exactly one step
-  produce. The runtime and development-agent projection is still separate.
-
 - **A harness frame is `UiRuntime::pump`.** `host::HeadlessHost::pump` is the
   only way the widget harness (`widgets::lay_out`, `widgets::harness::mount`)
   draws a frame, the mount included: apply commands, begin frame, the
@@ -48,6 +31,55 @@ substrate driver over raw owners, which the raw-owner suites still use.
   `tests/runtime_driver.rs` fail against a harness that drives the pipeline
   itself (the root `MediaQuery`, the commit gate, the owner inbox, the
   window's cursor).
+- **A headless close is a runner's close.** `HeadlessHost` keeps no window
+  apart: a window another one outlives closes through
+  `UiRuntime::close_presentation_entered`, which removes it and moves the OS
+  focus to a survivor, and the last window stops its presentation and drops
+  the UI runtime, as the owner retires a runtime whose last presentation
+  closed, so what the runtime held to answer ends as `OwnerRetired`. The host
+  keeps the primary window's double readable after it closed; a pump of a
+  retired host moves time, the scenario, the writes and the background lanes
+  only. `closing_the_focused_window_moves_the_focus_to_a_survivor` and the
+  last-window row of `a_read_pending_when_its_runtime_drops_ends_as_owner_retired`
+  pin both. The widget harness closes through the same path.
+- **A turn does what a runner's owner turn does, in its order.** A close a
+  widget asks for through its window's handle is queued and carried out at
+  the next turn after the guard is asked as for the program's close (a
+  runner's window queue); every close the guards let through is carried out
+  contained, the first panic resumed after the rest; a `Program` close that
+  comes due is a window's consent to a quit and closes nothing alone, and one
+  kept open cancels the quit; a quit (`request_quit`) asks every window,
+  defers on a recorded refusal and commits by closing every window past its
+  hold. The session's end follows the primary window's platform: `Hold` and
+  `Delay` close every window and retire, `Background` keeps them open and
+  answers `Block` while writes are in flight. A closed window hears no input
+  or fact, and its handle answers `Closed`. These are mirrors, not calls:
+  the runner's close router, application control and session end live in
+  `flui-app`, which sits above this crate, and `docs/gaps.md` ("The headless
+  host mirrors the runner's owner turn") names what that leaves out.
+- **The built-ins are a runner's built-ins.** Without a registry of the test's
+  own, the host registers what `flui-app` registers on the primary window's
+  platform with the test build's features: the clipboard and background lanes,
+  the primary selection only on Linux, scripted HTTP only with this crate's
+  `http` feature (the facade's `http` forwards it), and the application's
+  overrides and plugins a `TestWindow` carries, in the runner's tiers
+  (`a_runtime_without_a_primary_selection_answers_not_registered`,
+  `a_plugin_the_test_registers_answers_and_an_override_replaces_it`). The
+  native-window capability is `flui-app`'s and above this crate: a test of a
+  widget that reaches `flui::native` runs on `flui_app::testing`.
+- **A phone's trip is delivered in a phone's order.** `Tester::background`
+  reports focus lost, execution suspended, hidden, then the session's
+  `Ending` (the session-ended notice, then the documents' write) with the
+  window kept open, as Android's `onPause`/`onStop` and a UIKit scene entering
+  the background do (ADR-0350 §2); `Tester::foreground` reports shown, running,
+  focused. Only a window that names Android or iOS takes the trip, once
+  before each return, so a test reaches no state a phone does not
+  (`TestError::NotAPhone`, `InBackground`, `InForeground`); the session end's
+  answer comes back to the test. `HeadlessHost::set_window_execution`,
+  `notify` and `leave_unshown` are the single entries for execution, system
+  notices and a surface that shows nothing. A runner contains and logs a
+  panicking session-end subscriber; the host contains it the same way, so
+  every step still runs, and then raises it, as it raises a dropped frame.
 - **A scale change has one runtime entry.** `HeadlessHost::set_scale_factor`
   updates its native-window stand-in and surface dimensions through
   `UiRuntime::apply_window_observation` with a `Metrics` observation, the
@@ -93,16 +125,12 @@ substrate driver over raw owners, which the raw-owner suites still use.
   queues are flushed before the helper returns, so a synthetic move is
   observable at once. IME events go the same way, into the presentation's
   own text-input owner.
-- **`HeadlessBinding` is the substrate driver until the second half of §4.**
-  It drives raw owners (`flui-view`, scheduler, animation and interaction
-  suites, the `perf` target, the facade's `tests/*.rs`) and the
-  configurations a UI runtime cannot express. Its `pump_frame`, `run_pipeline` and
-  `pump_presentation`/`pump_all` go when those suites move to the pump
-  (ADR-0083 `## Migration`, move 6b).
-  Its raw-owner frame uses the same complete frame drive (`flui_scheduler::__runtime::DriveFrame::drive_frame`, an operation off the public surface)
-  as the production runtime, preserving mid-frame task polling and post-frame
-  observation of committed layout. An admission refusal is a driver invariant
-  failure; it cannot be reported as a successful empty frame.
+- **Every frame is a UI runtime's.** `HeadlessHost::pump` is the one frame
+  driver: it advances the host's manual clock and runs `UiRuntime::pump`.
+  Presentations at independent cadences are separate hosts, each on its own
+  clock (ADR-0083 `## Migration`, move 6b);
+  `two_presentations_at_independent_scripted_cadences_tick_and_advance_independently` pins
+  that pumping one leaves the other's animation where it was.
 - **Only `log_capture` crosses the dev cycles.** `flui-widgets` and
   `flui-runtime` name this crate on dev edges while it depends on both, so
   their unit-test builds compile a second copy of themselves. Their unit
@@ -126,7 +154,17 @@ substrate driver over raw owners, which the raw-owner suites still use.
   `element.actionability` and delivers input with `input.inject`, so it
   hit-tests and walks no tree itself and proves what the driver would. The
   one exception is `Tester::draw_commands`, which reads the scene the
-  headless host received, because the agent's protocol carries no drawing.
+  headless host received, because the agent's protocol carries no drawing;
+  it locates through the agent and selects the picture layers whose render
+  object `inspect.render` lists under the element. A node an inspection cut
+  is inspected a level deep and each child it did not list read from there,
+  and the read starts again when a frame submits a scene between those
+  reads, unless two in a row find the same render objects. It refuses a
+  render object with more children than one inspection lists rather than
+  return part of its drawing
+  (`draw_commands_read_one_element_and_none_of_its_sibling`,
+  `draw_commands_read_a_subtree_past_one_inspection_whole`,
+  `draw_commands_refuse_a_render_object_with_more_children_than_one_inspection`).
   Each read first runs the frames due now at zero duration, so its answer comes
   from the tree that work committed. An expectation pumps a frame only while
   `time_to_next_frame` is zero (a scheduled frame or pending work); with
@@ -192,9 +230,7 @@ wake the runtime that replaced it.
 `starting_an_idle_bound_controller_requests_its_first_frame`,
 `adopting_a_registry_revokes_the_previous_driver_binding` and
 `widget_registry_adoption_preserves_its_driver_on_refusal` exercise public
-handles in `headless_frame_driver_matrix`. The public
-`extra_registry_drivers_request_frames_and_retire_on_replacement` row checks
-extra clock installation and replacement while preserving a sibling's driver.
+handles in `headless_frame_driver_matrix`.
 
 ### Unique accessibility queries materialize only failure diagnostics
 

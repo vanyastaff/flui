@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use flui_foundation::DataTransferId;
 use flui_foundation::geometry::{
-    DevicePixelRatio, DeviceSize, EdgeInsets, Point, Size, WindowMetrics,
+    DevicePixelRatio, DeviceSize, EdgeInsets, Offset, Point, Size, WindowMetrics,
 };
 use flui_interaction::GestureDisposition;
 use flui_platform::Availability;
@@ -21,19 +21,22 @@ use flui_platform::keyboard::{
     Code, ImeComposition, Key, KeyEvent, KeyPress, KeyState, Location, Modifiers, NamedKey,
 };
 use flui_platform::pointer::{
-    ButtonChange, CancelReason, ContactSize, DeviceId, HoverDistance, PanZoomEvent, PanZoomPhase,
-    PanZoomTransform, PenOrientation, PenTool, PointerButton, PointerButtons, PointerCancel,
-    PointerDeviceChange, PointerEvent, PointerId, PointerInfo, PointerKind, PointerMove,
-    PointerPosition, PointerPress, PointerRelease, PointerRole, PointerSample, PointerSignal,
-    Pressure, ScrollDelta, ScrollEvent, ScrollInversion, ScrollPhase, ScrollPrecision, ScrollUnit,
-    SmartZoomEvent, TangentialPressure, Twist,
+    ButtonChange, CancelReason, ContactSize, DeviceId, HoverDistance, MotionAcceleration,
+    MotionDelta, PanZoomEvent, PanZoomPhase, PanZoomTransform, PenOrientation, PenTool,
+    PointerButton, PointerButtons, PointerCancel, PointerDeviceChange, PointerEvent, PointerId,
+    PointerKind, PointerMove, PointerPosition, PointerPress, PointerRelease, PointerRole,
+    PointerSample, PointerSignal, PointerSource, Pressure, RawMotion, ScrollDelta, ScrollEvent,
+    ScrollInversion, ScrollPhase, ScrollPrecision, ScrollUnit, SmartZoomEvent, SwipeOffset,
+    TangentialPressure, TouchpadHoldEvent, TouchpadHoldPhase, TouchpadSwipeEvent,
+    TouchpadSwipePhase, Twist,
 };
 use flui_platform::{
     Brightness, DragDropEvent, EventTime, GesturePreferences, HourCycle, ImeEvent, InsetCurve,
     InsetMotion, KeyboardInset, Locale, MeasurementSystem, MotionPreference, NativeMouseGeometry,
     NativeTouchGeometry, NumberingSystem, PlatformInput, RegionOverride, RegionalFormats,
-    SystemPreferences, TextWeightPreference, Weekday, WheelPreferences, WheelStep,
-    WindowExecutionState, WindowId, WindowInsets,
+    ScrollBarPreferences, ScrollBarVisibility, ScrollTrackClick, SrgbColor, SystemPreferences,
+    TextWeightPreference, Weekday, WheelPreferences, WheelStep, WindowExecutionState, WindowId,
+    WindowInsets,
 };
 use flui_runtime::owner::{InputOutcome, WindowObservation};
 use flui_runtime::{
@@ -74,13 +77,13 @@ fn pointer_event(event: PointerEvent) -> InputRecord {
     platform(PlatformInput::Pointer(event))
 }
 
-fn info(kind: PointerKind, role: PointerRole) -> PointerInfo {
-    PointerInfo::new(PointerId::try_from(4_u64).expect("nonzero"), kind)
+fn info(kind: PointerKind, role: PointerRole) -> PointerSource {
+    PointerSource::new(PointerId::try_from(4_u64).expect("nonzero"), kind)
         .with_device(DeviceId::try_from(9_u64).expect("nonzero"))
         .with_role(role)
 }
 
-fn touch() -> PointerInfo {
+fn touch() -> PointerSource {
     info(PointerKind::Touch, PointerRole::Primary)
 }
 
@@ -103,7 +106,7 @@ fn plain_sample(t: u64) -> PointerSample {
     PointerSample::new(at(t), position(10.0, 20.0))
 }
 
-fn press(pointer: PointerInfo) -> PointerPress {
+fn press(pointer: PointerSource) -> PointerPress {
     PointerPress::new(
         pointer,
         PointerButton::SECONDARY,
@@ -114,7 +117,7 @@ fn press(pointer: PointerInfo) -> PointerPress {
     .with_click_count(NonZeroU8::new(2).expect("nonzero"))
 }
 
-fn release(pointer: PointerInfo) -> PointerRelease {
+fn release(pointer: PointerSource) -> PointerRelease {
     PointerRelease::new(
         pointer,
         PointerButton::BACK,
@@ -123,11 +126,11 @@ fn release(pointer: PointerInfo) -> PointerRelease {
     )
 }
 
-fn down_with(pointer: PointerInfo) -> InputRecord {
+fn down_with(pointer: PointerSource) -> InputRecord {
     pointer_event(PointerEvent::Down(press(pointer)))
 }
 
-fn signal(pointer: PointerInfo) -> PointerSignal {
+fn signal(pointer: PointerSource) -> PointerSignal {
     PointerSignal::new(pointer, at(12)).with_position(position(0.5, 0.25))
 }
 
@@ -158,6 +161,26 @@ fn pan_zoom(phase: PanZoomPhase) -> InputRecord {
     pointer_event(PointerEvent::PanZoom(
         PanZoomEvent::new(touch(), at(15), position(7.0, 8.0), phase)
             .with_modifiers(Modifiers::META),
+    ))
+}
+
+fn hold(phase: TouchpadHoldPhase) -> InputRecord {
+    pointer_event(PointerEvent::TouchpadHold(
+        TouchpadHoldEvent::new(touch(), at(18), position(2.5, 4.0), phase)
+            .with_modifiers(Modifiers::SHIFT),
+    ))
+}
+
+fn swipe(phase: TouchpadSwipePhase) -> InputRecord {
+    pointer_event(PointerEvent::TouchpadSwipe(
+        TouchpadSwipeEvent::new(
+            touch(),
+            at(19),
+            position(6.0, 1.5),
+            NonZeroU8::new(3).expect("nonzero"),
+            phase,
+        )
+        .with_modifiers(Modifiers::CONTROL),
     ))
 }
 
@@ -219,6 +242,8 @@ fn capabilities(availability: Availability) -> InputRecord {
             .pen(availability)
             .precise_scroll(Availability::Native)
             .trackpad_gestures(Availability::Emulated)
+            .touchpad_hold(Availability::Native)
+            .touchpad_swipe(Availability::Unavailable)
             .present(PointerKindSet::TOUCH | PointerKindSet::PEN)
             .build(),
     ))
@@ -279,6 +304,12 @@ fn full_preferences() -> SystemPreferences {
             WheelPreferences::default()
                 .with_vertical(WheelStep::Lines(3))
                 .with_horizontal_characters(2),
+        )
+        .with_accent_color(Some(SrgbColor::from_rgba8(0, 120, 215, 255)))
+        .with_scroll_bars(
+            ScrollBarPreferences::default()
+                .with_visibility(ScrollBarVisibility::Always)
+                .with_track_click(ScrollTrackClick::JumpToSpot),
         )
 }
 
@@ -495,13 +526,31 @@ fn sample(enumeration: &str, variant: &str) -> Option<Vec<InputRecord>> {
         ("PointerEvent", "Scroll") => {
             one(scroll(ScrollUnit::Pixels, ScrollPrecision::Precise, None))
         }
-        ("PointerEvent", "ScrollInertiaCancel") => one(pointer_event(
-            PointerEvent::ScrollInertiaCancel(signal(touch())),
-        )),
+        ("PointerEvent", "TouchpadHold") => one(hold(TouchpadHoldPhase::Begin)),
         ("PointerEvent", "PanZoom") => one(pan_zoom(PanZoomPhase::Start)),
+        ("PointerEvent", "TouchpadSwipe") => one(swipe(TouchpadSwipePhase::Start)),
         ("PointerEvent", "SmartZoom") => one(pointer_event(PointerEvent::SmartZoom(
             SmartZoomEvent::new(touch(), at(16), position(9.0, 10.0)),
         ))),
+        ("PointerEvent", "RawMotion") | ("MotionAcceleration", "None") => {
+            one(pointer_event(PointerEvent::RawMotion(
+                RawMotion::new(
+                    info(PointerKind::Mouse, PointerRole::Primary),
+                    at(17),
+                    MotionDelta::try_new(-4.0, 2.5).expect("finite"),
+                    MotionAcceleration::None,
+                )
+                .with_position(position(11.0, 12.0)),
+            )))
+        }
+        ("MotionAcceleration", "System") => {
+            one(pointer_event(PointerEvent::RawMotion(RawMotion::new(
+                info(PointerKind::Mouse, PointerRole::Primary),
+                at(18),
+                MotionDelta::try_new(0.5, 0.0).expect("finite"),
+                MotionAcceleration::System,
+            ))))
+        }
         ("PointerEvent", "DeviceAdded") => one(pointer_event(PointerEvent::DeviceAdded(
             PointerDeviceChange::new(
                 DeviceId::try_from(9_u64).expect("nonzero"),
@@ -600,6 +649,15 @@ fn sample(enumeration: &str, variant: &str) -> Option<Vec<InputRecord>> {
         ))),
         ("PanZoomPhase", "End") => one(pan_zoom(PanZoomPhase::End)),
         ("PanZoomPhase", "Cancelled") => one(pan_zoom(PanZoomPhase::Cancelled)),
+        ("TouchpadHoldPhase", "Begin") => one(hold(TouchpadHoldPhase::Begin)),
+        ("TouchpadHoldPhase", "End") => one(hold(TouchpadHoldPhase::End)),
+        ("TouchpadHoldPhase", "Cancelled") => one(hold(TouchpadHoldPhase::Cancelled)),
+        ("TouchpadSwipePhase", "Start") => one(swipe(TouchpadSwipePhase::Start)),
+        ("TouchpadSwipePhase", "Update") => one(swipe(TouchpadSwipePhase::Update(
+            SwipeOffset::try_new(Offset::new(-42.5, 3.25)).expect("finite"),
+        ))),
+        ("TouchpadSwipePhase", "End") => one(swipe(TouchpadSwipePhase::End)),
+        ("TouchpadSwipePhase", "Cancelled") => one(swipe(TouchpadSwipePhase::Cancelled)),
         ("Key", "Character") => one(key(
             KeyState::Down(KeyPress::AutoRepeat),
             Key::character("ß"),
@@ -692,6 +750,19 @@ fn sample(enumeration: &str, variant: &str) -> Option<Vec<InputRecord>> {
             SystemPreferences::default()
                 .with_wheel(WheelPreferences::default().with_vertical(WheelStep::Page)),
         )),
+        ("ScrollBarVisibility", "WhenScrolling") => {
+            one(preferences(SystemPreferences::default().with_scroll_bars(
+                ScrollBarPreferences::default().with_visibility(ScrollBarVisibility::WhenScrolling),
+            )))
+        }
+        ("ScrollBarVisibility", "Always") | ("ScrollTrackClick", "JumpToSpot") => {
+            one(preferences(full_preferences()))
+        }
+        ("ScrollTrackClick", "Page") => {
+            one(preferences(SystemPreferences::default().with_scroll_bars(
+                ScrollBarPreferences::default().with_track_click(ScrollTrackClick::Page),
+            )))
+        }
         ("Weekday", name) => {
             let day = Weekday::ALL
                 .into_iter()
@@ -937,7 +1008,9 @@ fn preference_rows_keep_their_json_spelling() {
                 r#""native_mouse_geometry":{"double_click_area":[4,4],"drag_tolerance":[2,3],"#,
                 r#""pixel_ratio":1.5},"native_touch_geometry":{"touch_slop":8,"#,
                 r#""double_tap_slop":100,"min_fling":50,"max_fling":8000,"pixel_ratio":1.5}},"#,
-                r#""wheel_vertical":{"lines":3},"wheel_horizontal_characters":2}}"#,
+                r#""wheel_vertical":{"lines":3},"wheel_horizontal_characters":2,"#,
+                r#""accent_color":[0.0,0.47058824,0.84313726,1.0],"#,
+                r#""scroll_bar_visibility":"always","scroll_track_click":"jump_to_spot"}}"#,
             ),
             concat!(
                 r#"{"preferences":{"revision":7,"motion":{"scaled":0.5},"#,

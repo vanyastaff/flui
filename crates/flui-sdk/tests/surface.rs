@@ -60,7 +60,7 @@ mod measured {
         Simulation as _, SimulationError as _, SpringDescription as _, SpringSimulation as _,
         Tolerance as _,
     };
-    use flui_sdk::foundation::notifier::Listenable as _;
+    use flui_sdk::foundation::Listenable as _;
     use flui_sdk::foundation::observe::{
         ElementMounted as _, ElementMoved as _, ElementRebuilt as _, ElementUnmounted as _,
         TreeObserver as _,
@@ -151,7 +151,7 @@ mod measured {
     // The Android Activity a provider starts activities for results through.
     use flui_sdk::platform::capability::{
         Activity as _, ActivityResult as _, DataRefused as _, IntentFrame as _,
-        InvalidResultKey as _, JniFrame as _, ResultCode as _, ResultData as _, ResultKey as _,
+        InvalidResultKey as _, JniFrame as _, ResultCode as _, ResultIntent as _, ResultKey as _,
         ResultOutcome as _, ResultRefused as _, ResultRequest as _, ResultTicket as _,
         ResultToken as _,
     };
@@ -390,6 +390,12 @@ fn the_re_exports_are_the_facades_types() {
         |x| x;
     let _: fn(flui::platform::WheelPreferences) -> flui_sdk::platform::WheelPreferences = |x| x;
     let _: fn(flui::platform::WheelStep) -> flui_sdk::platform::WheelStep = |x| x;
+    let _: fn(flui::platform::SrgbColor) -> flui_sdk::platform::SrgbColor = |x| x;
+    let _: fn(flui::platform::ScrollBarPreferences) -> flui_sdk::platform::ScrollBarPreferences =
+        |x| x;
+    let _: fn(flui::platform::ScrollBarVisibility) -> flui_sdk::platform::ScrollBarVisibility =
+        |x| x;
+    let _: fn(flui::platform::ScrollTrackClick) -> flui_sdk::platform::ScrollTrackClick = |x| x;
     let _: fn(flui::platform::InvalidPreference) -> flui_sdk::platform::InvalidPreference = |x| x;
     let _: fn(flui::platform::TargetPlatform) -> flui_sdk::platform::TargetPlatform = |x| x;
     let _: fn(flui::platform::HapticFeedback) -> flui_sdk::platform::HapticFeedback = |x| x;
@@ -631,12 +637,16 @@ fn the_public_surface_is_the_measured_list() {
         "pub use flui_platform::AdmissionError;",
         "pub use flui_platform::Availability;",
         "pub use flui_platform::Brightness;",
+        "pub use flui_platform::ClipboardEntryId;",
         "pub use flui_platform::ClipboardError;",
+        "pub use flui_platform::ClipboardExpiry;",
+        "pub use flui_platform::ClipboardExpiryError;",
         "pub use flui_platform::ClipboardRead;",
         "pub use flui_platform::ClipboardWrite;",
         "pub use flui_platform::Concealment;",
         "pub use flui_platform::DurationScale;",
         "pub use flui_platform::EventTime;",
+        "pub use flui_platform::ExpiryClearing;",
         "pub use flui_platform::GesturePreferences;",
         "pub use flui_platform::HapticFeedback;",
         "pub use flui_platform::HostNotice;",
@@ -653,8 +663,12 @@ fn the_public_surface_is_the_measured_list() {
         "pub use flui_platform::NumberingSystem;",
         "pub use flui_platform::RegionOverride;",
         "pub use flui_platform::RegionalFormats;",
+        "pub use flui_platform::ScrollBarPreferences;",
+        "pub use flui_platform::ScrollBarVisibility;",
+        "pub use flui_platform::ScrollTrackClick;",
         "pub use flui_platform::SessionEndBlock;",
         "pub use flui_platform::SessionEndRequest;",
+        "pub use flui_platform::SrgbColor;",
         "pub use flui_platform::SubmitError;",
         "pub use flui_platform::SystemPreferences;",
         "pub use flui_platform::TargetPlatform;",
@@ -684,7 +698,7 @@ fn the_public_surface_is_the_measured_list() {
         "pub use flui_platform::capability::ProviderContext;",
         "pub use flui_platform::capability::Resolver;",
         "pub use flui_platform::capability::ResultCode;",
-        "pub use flui_platform::capability::ResultData;",
+        "pub use flui_platform::capability::ResultIntent;",
         "pub use flui_platform::capability::ResultKey;",
         "pub use flui_platform::capability::ResultOutcome;",
         "pub use flui_platform::capability::ResultRefused;",

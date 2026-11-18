@@ -16,10 +16,10 @@ use std::time::{Duration, Instant};
 
 use flui_platform::SystemFailure;
 use flui_platform::capability::{Abandoned, Completion};
-use flui_platform::launch::{ExternalUri, LaunchError, LaunchResult, LauncherCapability};
+use flui_platform::launch::{ExternalUri, LaunchError, LaunchResult, LauncherCapability, Scheme};
 use flui_system::dialog::{
     Dialog, DialogError, FileDialogCapability, FileFilter, OpenRequest, OpenResult, PickedFile,
-    Picks, SaveRequest,
+    Picks, SaveLocation, SaveRequest,
 };
 use flui_system::testing::PortalOnBus;
 use flui_testing::HeadlessHost;
@@ -29,13 +29,13 @@ use zbus::{OwnedFd, OwnedObjectPath, OwnedVariant, Variant};
 use crate::{acquire, outcome_slot, turn};
 
 /// A `dbus-daemon` of the test's own.
-struct PrivateBus {
+pub(crate) struct PrivateBus {
     daemon: Child,
-    address: String,
+    pub(crate) address: String,
 }
 
 impl PrivateBus {
-    fn start() -> Self {
+    pub(crate) fn start() -> Self {
         Self::spawn(Command::new("dbus-daemon").arg("--session"))
     }
 
@@ -91,7 +91,26 @@ impl Drop for PrivateBus {
 
 /// One call the stand-in portal received.
 #[derive(Clone, Debug, PartialEq)]
-enum Call {
+pub(crate) enum Call {
+    /// `Registry.Register`: the application named itself.
+    Register {
+        app_id: String,
+    },
+    /// `Background.RequestBackground`.
+    Background {
+        parent: String,
+        autostart: bool,
+        reason: Option<String>,
+        commandline: Option<Vec<String>>,
+    },
+    /// `GlobalShortcuts.CreateSession`.
+    CreateSession,
+    /// `GlobalShortcuts.BindShortcuts`: each shortcut's id and preferred
+    /// trigger.
+    BindShortcuts {
+        parent: String,
+        shortcuts: Vec<(String, Option<String>)>,
+    },
     OpenUri {
         parent: String,
         uri: String,
@@ -122,12 +141,21 @@ enum Call {
     },
 }
 
-type Results = HashMap<String, OwnedVariant>;
+pub(crate) type Results = HashMap<String, OwnedVariant>;
 
 /// What the stand-in received and how it answers.
 #[derive(Default)]
-struct Script {
+pub(crate) struct Script {
     calls: Mutex<Vec<Call>>,
+    /// The version each interface reports, by its last name; the newest the
+    /// stand-in knows when unset.
+    versions: Mutex<HashMap<&'static str, u32>>,
+    /// The sessions a caller closed, oldest first.
+    sessions_closed: Mutex<Vec<String>>,
+    /// The sessions the portal made, oldest first.
+    sessions: Mutex<Vec<String>>,
+    /// The triggers `BindShortcuts` answers each shortcut with.
+    triggers: Mutex<HashMap<String, String>>,
     /// The next `Request` answers, oldest first; `(0, {})` when none.
     responses: Mutex<VecDeque<(u32, Results)>>,
     /// What `TrashFile` answers.
@@ -161,9 +189,52 @@ impl RequestObject {
     }
 }
 
+/// A session's `org.freedesktop.portal.Session` object, which records a
+/// caller's `Close`.
+struct SessionObject {
+    script: Arc<Script>,
+    path: String,
+}
+
+#[zbus::interface(name = "org.freedesktop.portal.Session")]
+impl SessionObject {
+    async fn close(&self, #[zbus(object_server)] server: &zbus::ObjectServer) {
+        self.script
+            .sessions_closed
+            .lock()
+            .expect("sessions closed")
+            .push(self.path.clone());
+        let _ = server.remove::<Self, _>(self.path.as_str()).await;
+    }
+}
+
+/// The path the portal gives `header`'s sender's object of `kind` named by
+/// the `key` token in `options`.
+fn object_path(header: &Header<'_>, kind: &str, options: &Results, key: &str) -> String {
+    let sender = header
+        .sender()
+        .expect("a method call has a sender")
+        .trim_start_matches(':')
+        .replace('.', "_");
+    let token = options
+        .get(key)
+        .map(|token| String::try_from(token.clone()).expect("a string token"))
+        .expect("the provider names its object");
+    format!("/org/freedesktop/portal/desktop/{kind}/{sender}/{token}")
+}
+
 impl Script {
     fn record(&self, call: Call) {
         self.calls.lock().expect("calls").push(call);
+    }
+
+    fn version(&self, interface: &'static str, newest: u32) -> u32 {
+        self.versions
+            .lock()
+            .expect("versions")
+            .get(interface)
+            .copied()
+            .unwrap_or(newest)
     }
 
     fn next(&self) -> (u32, Results) {
@@ -175,23 +246,27 @@ impl Script {
     }
 
     /// Answer the request `token` names for `header`'s sender, as the
-    /// portal does: a `Response` signal on the `Request` object.
+    /// portal does: a `Response` signal on the `Request` object, with the
+    /// next scripted answer.
     async fn respond(
         self: &Arc<Self>,
         connection: &zbus::Connection,
         header: &Header<'_>,
         options: &Results,
     ) -> OwnedObjectPath {
-        let sender = header
-            .sender()
-            .expect("a method call has a sender")
-            .trim_start_matches(':')
-            .replace('.', "_");
-        let token = options
-            .get("handle_token")
-            .map(|token| String::try_from(token.clone()).expect("a string token"))
-            .expect("the provider names its request");
-        let path = format!("/org/freedesktop/portal/desktop/request/{sender}/{token}");
+        self.respond_with(connection, header, options, None).await
+    }
+
+    /// As [`Self::respond`], answering `answer` when given rather than the
+    /// next scripted one.
+    async fn respond_with(
+        self: &Arc<Self>,
+        connection: &zbus::Connection,
+        header: &Header<'_>,
+        options: &Results,
+        answer: Option<(u32, Results)>,
+    ) -> OwnedObjectPath {
+        let path = object_path(header, "request", options, "handle_token");
         if self.holding.load(Ordering::SeqCst) {
             let caller = header
                 .sender()
@@ -211,7 +286,7 @@ impl Script {
                 .expect("the held request's object is served");
             return OwnedObjectPath::try_from(path).expect("a valid request path");
         }
-        let answer = self.next();
+        let answer = answer.unwrap_or_else(|| self.next());
         connection
             .emit_signal(
                 None::<&str>,
@@ -246,6 +321,11 @@ struct OpenUri(Arc<Script>);
 
 #[zbus::interface(name = "org.freedesktop.portal.OpenURI")]
 impl OpenUri {
+    #[zbus(property, name = "version")]
+    fn version(&self) -> u32 {
+        self.0.version("OpenURI", 5)
+    }
+
     #[zbus(name = "OpenURI")]
     async fn open_uri(
         &self,
@@ -290,6 +370,11 @@ struct Trash(Arc<Script>);
 
 #[zbus::interface(name = "org.freedesktop.portal.Trash")]
 impl Trash {
+    #[zbus(property, name = "version")]
+    fn version(&self) -> u32 {
+        self.0.version("Trash", 1)
+    }
+
     fn trash_file(&self, fd: OwnedFd) -> u32 {
         self.0.record(Call::Trash {
             path: fd_path(&fd),
@@ -309,6 +394,11 @@ fn option_names(options: &Results) -> Vec<String> {
 
 #[zbus::interface(name = "org.freedesktop.portal.FileChooser")]
 impl FileChooser {
+    #[zbus(property, name = "version")]
+    fn version(&self) -> u32 {
+        self.0.version("FileChooser", 4)
+    }
+
     async fn open_file(
         &self,
         #[zbus(header)] header: Header<'_>,
@@ -354,31 +444,169 @@ impl FileChooser {
     }
 }
 
+struct Registry(Arc<Script>);
+
+#[zbus::interface(name = "org.freedesktop.host.portal.Registry")]
+impl Registry {
+    #[zbus(property, name = "version")]
+    fn version(&self) -> u32 {
+        self.0.version("Registry", 1)
+    }
+
+    fn register(&self, app_id: String, options: Results) {
+        // The stand-in reads no option.
+        drop(options);
+        self.0.record(Call::Register { app_id });
+    }
+}
+
+struct Background(Arc<Script>);
+
+#[zbus::interface(name = "org.freedesktop.portal.Background")]
+impl Background {
+    #[zbus(property, name = "version")]
+    fn version(&self) -> u32 {
+        self.0.version("Background", 2)
+    }
+
+    async fn request_background(
+        &self,
+        #[zbus(header)] header: Header<'_>,
+        #[zbus(connection)] connection: &zbus::Connection,
+        parent: String,
+        options: Results,
+    ) -> OwnedObjectPath {
+        let flag = |name: &str| {
+            options
+                .get(name)
+                .is_some_and(|value| bool::try_from(value.clone()).expect("a boolean"))
+        };
+        self.0.record(Call::Background {
+            parent,
+            autostart: flag("autostart"),
+            reason: options
+                .get("reason")
+                .map(|reason| String::try_from(reason.clone()).expect("a string")),
+            commandline: options
+                .get("commandline")
+                .map(|line| Vec::<String>::try_from(line.clone()).expect("strings")),
+        });
+        self.0.respond(connection, &header, &options).await
+    }
+}
+
+struct GlobalShortcuts(Arc<Script>);
+
+#[zbus::interface(name = "org.freedesktop.portal.GlobalShortcuts")]
+impl GlobalShortcuts {
+    #[zbus(property, name = "version")]
+    fn version(&self) -> u32 {
+        self.0.version("GlobalShortcuts", 2)
+    }
+
+    async fn create_session(
+        &self,
+        #[zbus(header)] header: Header<'_>,
+        #[zbus(connection)] connection: &zbus::Connection,
+        options: Results,
+    ) -> OwnedObjectPath {
+        self.0.record(Call::CreateSession);
+        let session = object_path(&header, "session", &options, "session_handle_token");
+        connection
+            .object_server()
+            .at(
+                session.as_str(),
+                SessionObject {
+                    script: Arc::clone(&self.0),
+                    path: session.clone(),
+                },
+            )
+            .await
+            .expect("the session's object is served");
+        self.0
+            .sessions
+            .lock()
+            .expect("sessions")
+            .push(session.clone());
+        let results = HashMap::from([(
+            "session_handle".to_owned(),
+            OwnedVariant::try_from(Variant::from(session)).expect("an owned string"),
+        )]);
+        self.0
+            .respond_with(connection, &header, &options, Some((0, results)))
+            .await
+    }
+
+    async fn bind_shortcuts(
+        &self,
+        #[zbus(header)] header: Header<'_>,
+        #[zbus(connection)] connection: &zbus::Connection,
+        session: OwnedObjectPath,
+        shortcuts: Vec<(String, Results)>,
+        parent: String,
+        options: Results,
+    ) -> OwnedObjectPath {
+        assert!(
+            self.0
+                .sessions
+                .lock()
+                .expect("sessions")
+                .iter()
+                .any(|made| made == session.as_str()),
+            "the shortcuts are bound to a session the portal made"
+        );
+        self.0.record(Call::BindShortcuts {
+            parent,
+            shortcuts: shortcuts
+                .iter()
+                .map(|(id, details)| {
+                    let preferred = details
+                        .get("preferred_trigger")
+                        .map(|trigger| String::try_from(trigger.clone()).expect("a string"));
+                    (id.clone(), preferred)
+                })
+                .collect(),
+        });
+        let triggers = self.0.triggers.lock().expect("triggers").clone();
+        let bound = shortcuts
+            .into_iter()
+            .map(|(id, _)| {
+                let trigger = triggers.get(&id).cloned().unwrap_or_default();
+                let details = HashMap::from([(
+                    "trigger_description".to_owned(),
+                    OwnedVariant::try_from(Variant::from(trigger)).expect("an owned string"),
+                )]);
+                (id, details)
+            })
+            .collect::<Vec<(String, Results)>>();
+        let results = HashMap::from([(
+            "shortcuts".to_owned(),
+            OwnedVariant::try_from(Variant::from(bound)).expect("an owned list"),
+        )]);
+        let answer = self.0.next();
+        let answer = if answer.0 == 0 { (0, results) } else { answer };
+        self.0
+            .respond_with(connection, &header, &options, Some(answer))
+            .await
+    }
+}
+
 /// A private bus with a stand-in portal on it.
-struct StandIn {
+pub(crate) struct StandIn {
     script: Arc<Script>,
     server: Option<zbus::Connection>,
     bus: PrivateBus,
 }
 
 impl StandIn {
-    fn serve() -> Self {
+    pub(crate) fn serve() -> Self {
         Self::serve_on(PrivateBus::start())
     }
 
     /// The stand-in on `bus`, which may have started it.
-    fn serve_on(bus: PrivateBus) -> Self {
+    pub(crate) fn serve_on(bus: PrivateBus) -> Self {
         let script = Arc::new(Script::default());
-        let path = "/org/freedesktop/portal/desktop";
-        let server = zruntime::block_on(
-            zbus::connection::Builder::address(bus.address.as_str())
-                .name("org.freedesktop.portal.Desktop")
-                .serve_at(path, OpenUri(Arc::clone(&script)))
-                .serve_at(path, Trash(Arc::clone(&script)))
-                .serve_at(path, FileChooser(Arc::clone(&script)))
-                .build(),
-        )
-        .expect("the stand-in owns the portal's name");
+        let server = Self::own(&bus, &script);
         Self {
             script,
             server: Some(server),
@@ -386,18 +614,107 @@ impl StandIn {
         }
     }
 
+    /// A connection on `bus` that owns the portal's name and serves its
+    /// interfaces over `script`.
+    fn own(bus: &PrivateBus, script: &Arc<Script>) -> zbus::Connection {
+        let path = "/org/freedesktop/portal/desktop";
+        zruntime::block_on(
+            zbus::connection::Builder::address(bus.address.as_str())
+                .name("org.freedesktop.portal.Desktop")
+                .serve_at(path, OpenUri(Arc::clone(script)))
+                .serve_at(path, Trash(Arc::clone(script)))
+                .serve_at(path, FileChooser(Arc::clone(script)))
+                .serve_at(path, Registry(Arc::clone(script)))
+                .serve_at(path, Background(Arc::clone(script)))
+                .serve_at(path, GlobalShortcuts(Arc::clone(script)))
+                .build(),
+        )
+        .expect("the stand-in owns the portal's name")
+    }
+
+    /// Come back after [`Self::depart`], as a restarted portal: a new
+    /// unique name, the same script.
+    pub(crate) fn return_to_bus(&mut self) {
+        self.server = Some(Self::own(&self.bus, &self.script));
+    }
+
+    /// Report `version` for `interface` (its last name, `OpenURI`).
+    pub(crate) fn set_version(&self, interface: &'static str, version: u32) {
+        self.script
+            .versions
+            .lock()
+            .expect("versions")
+            .insert(interface, version);
+    }
+
+    /// Answer `BindShortcuts` with `trigger` for the shortcut `id`.
+    pub(crate) fn set_trigger(&self, id: &str, trigger: &str) {
+        self.script
+            .triggers
+            .lock()
+            .expect("triggers")
+            .insert(id.to_owned(), trigger.to_owned());
+    }
+
+    /// The sessions made, oldest first.
+    pub(crate) fn sessions(&self) -> Vec<String> {
+        self.script.sessions.lock().expect("sessions").clone()
+    }
+
+    /// The sessions a caller closed, oldest first.
+    pub(crate) fn sessions_closed(&self) -> Vec<String> {
+        self.script
+            .sessions_closed
+            .lock()
+            .expect("sessions closed")
+            .clone()
+    }
+
+    /// Send the `GlobalShortcuts` signal `member` for `session` as the
+    /// portal: `Activated` or `Deactivated` of `id`.
+    pub(crate) fn shortcut(&self, member: &str, session: &str, id: &str) {
+        let server = self.server.as_ref().expect("the stand-in is on the bus");
+        let session = zbus::ObjectPath::try_from(session).expect("a session path");
+        zruntime::block_on(server.emit_signal(
+            None::<&str>,
+            "/org/freedesktop/portal/desktop",
+            "org.freedesktop.portal.GlobalShortcuts",
+            member,
+            &(session, id, 0_u64, Results::new()),
+        ))
+        .expect("the signal is sent");
+    }
+
+    /// Close `session` as the portal: its object goes, with `Closed`.
+    pub(crate) fn close_session(&self, session: &str) {
+        let server = self.server.as_ref().expect("the stand-in is on the bus");
+        zruntime::block_on(server.emit_signal(
+            None::<&str>,
+            session,
+            "org.freedesktop.portal.Session",
+            "Closed",
+            &(Results::new(),),
+        ))
+        .expect("the signal is sent");
+    }
+
+    /// The private bus's address.
+    pub(crate) fn address(&self) -> &str {
+        &self.bus.address
+    }
+
     /// Hold every later request unanswered.
-    fn hold(&self) {
+    pub(crate) fn hold(&self) {
         self.script.holding.store(true, Ordering::SeqCst);
     }
 
     /// The requests held so far: the caller's unique name and the path.
-    fn held(&self) -> Vec<(String, String)> {
+    pub(crate) fn held(&self) -> Vec<(String, String)> {
         self.script.held.lock().expect("held").clone()
     }
 
     /// Answer the held request at `path` as the portal.
-    fn release(&self, path: &str, code: u32, results: Results) {
+    pub(crate) fn release(&self, path: &str, code: u32, results: Results) {
         let server = self.server.as_ref().expect("the stand-in is on the bus");
         zruntime::block_on(server.emit_signal(
             None::<&str>,
@@ -410,18 +727,18 @@ impl StandIn {
     }
 
     /// Leave the bus, as a portal that exits or restarts does.
-    fn depart(&mut self) {
+    pub(crate) fn depart(&mut self) {
         let server = self.server.take().expect("the stand-in is on the bus");
         zruntime::block_on(server.release_name("org.freedesktop.portal.Desktop"))
             .expect("the stand-in gives up the portal's name");
         drop(server);
     }
 
-    fn plugin(&self) -> PortalOnBus {
+    pub(crate) fn plugin(&self) -> PortalOnBus {
         PortalOnBus::new(self.bus.address.as_str())
     }
 
-    fn answer(&self, code: u32, results: Results) {
+    pub(crate) fn answer(&self, code: u32, results: Results) {
         self.script
             .responses
             .lock()
@@ -429,18 +746,18 @@ impl StandIn {
             .push_back((code, results));
     }
 
-    fn calls(&self) -> Vec<Call> {
+    pub(crate) fn calls(&self) -> Vec<Call> {
         self.script.calls.lock().expect("calls").clone()
     }
 
     /// The `Request` paths a caller closed, oldest first.
-    fn closed(&self) -> Vec<String> {
+    pub(crate) fn closed(&self) -> Vec<String> {
         self.script.closed.lock().expect("closed").clone()
     }
 }
 
 /// What [`settle`] waits on: a launcher's completion or a dialog.
-trait Settles<T: 'static> {
+pub(crate) trait Settles<T: 'static> {
     fn land(self, f: impl FnMut(Result<T, Abandoned>) + 'static);
 }
 
@@ -457,7 +774,10 @@ impl<T: 'static> Settles<T> for Dialog<T> {
 }
 
 /// Land `pending`'s outcome, pumping `host` until it settles.
-fn settle<T: 'static>(host: &mut HeadlessHost, pending: impl Settles<T>) -> Result<T, Abandoned> {
+pub(crate) fn settle<T: 'static>(
+    host: &mut HeadlessHost,
+    pending: impl Settles<T>,
+) -> Result<T, Abandoned> {
     let slot = outcome_slot::<Result<T, Abandoned>>();
     let into = Rc::clone(&slot);
     pending.land(move |outcome| *into.borrow_mut() = Some(outcome));
@@ -471,7 +791,7 @@ fn settle<T: 'static>(host: &mut HeadlessHost, pending: impl Settles<T>) -> Resu
     outcome.expect("settled")
 }
 
-fn uris(uris: &[&str]) -> Results {
+pub(crate) fn uris(uris: &[&str]) -> Results {
     let uris = uris
         .iter()
         .map(ToString::to_string)
@@ -496,7 +816,8 @@ fn the_launcher_reaches_the_open_uri_and_trash_portals() {
     let launcher = launcher.expect("the portal provides a launcher on Linux");
     let file = scratch_file("launch.txt");
 
-    let uri = ExternalUri::try_new("https://example.com/a b").expect("a web URI");
+    let uri =
+        ExternalUri::try_new("https://example.com/a%20b", &[Scheme::HTTPS]).expect("a web URI");
     portal.answer(0, Results::new());
     assert_eq!(settle(&mut host, launcher.open_uri(&uri)), Ok(Ok(())));
 
@@ -552,7 +873,7 @@ fn the_launcher_reaches_the_open_uri_and_trash_portals() {
         [
             Call::OpenUri {
                 parent: String::new(),
-                uri: "https://example.com/a b".to_owned(),
+                uri: "https://example.com/a%20b".to_owned(),
             },
             Call::OpenFile {
                 parent: String::new(),
@@ -660,6 +981,7 @@ fn the_dialogs_reach_the_file_chooser_and_answer_its_picks() {
             title: "Pictures".to_owned(),
             options: [
                 "accept_label",
+                "current_filter",
                 "current_folder",
                 "directory",
                 "filters",
@@ -683,10 +1005,123 @@ fn the_dialogs_reach_the_file_chooser_and_answer_its_picks() {
     assert_eq!(folder, b"/home/me\0", "the folder is NUL-terminated bytes");
     let filters = Vec::<(String, Vec<(u32, String)>)>::try_from(options[0]["filters"].clone())
         .expect("a(sa(us))");
+    let images = (
+        "Images".to_owned(),
+        vec![(0, "*.png".to_owned()), (0, "*.PNG".to_owned())],
+    );
     assert_eq!(
         filters,
-        [("Images".to_owned(), vec![(0, "*.png".to_owned())])]
+        std::slice::from_ref(&images),
+        "`PHOTO.PNG` is matched as Windows and macOS match it"
     );
+    assert_eq!(
+        <(String, Vec<(u32, String)>)>::try_from(options[0]["current_filter"].clone())
+            .expect("(sa(us))"),
+        images,
+        "the first filter is the selected one"
+    );
+}
+
+#[test]
+fn a_save_dialog_reports_the_filter_the_portal_says_was_selected() {
+    let portal = StandIn::serve();
+    let (mut host, dialogs) = acquire::<FileDialogCapability>(&portal.plugin());
+    let dialogs = dialogs.expect("the portal provides dialogs on Linux");
+    let request = || {
+        SaveRequest::new()
+            .filter(FileFilter::new("PNG").with_extension("png"))
+            .filter(FileFilter::new("JPEG").with_extension("jpg"))
+    };
+    let answer = |current: Option<(&str, &str)>| {
+        let mut results = uris(&["file:///home/me/picture"]);
+        if let Some((name, glob)) = current {
+            let filter = (name.to_owned(), vec![(0_u32, glob.to_owned())]);
+            results.insert(
+                "current_filter".to_owned(),
+                OwnedVariant::try_from(Variant::from(filter)).expect("an owned structure"),
+            );
+        }
+        results
+    };
+    let file = PickedFile::try_new("/home/me/picture").expect("an absolute path");
+
+    portal.answer(0, answer(Some(("JPEG", "*.jpg"))));
+    assert_eq!(
+        settle(&mut host, dialogs.save(request())),
+        Ok(Ok(Some(SaveLocation::new(file.clone(), Some(1))))),
+        "the filter is found by its name"
+    );
+    portal.answer(0, answer(Some(("Raw", "*.raw"))));
+    assert_eq!(
+        settle(&mut host, dialogs.save(request())),
+        Ok(Ok(Some(SaveLocation::new(file.clone(), None)))),
+        "a filter the request did not offer is none: the file stands"
+    );
+    portal.answer(0, answer(None));
+    assert_eq!(
+        settle(&mut host, dialogs.save(request())),
+        Ok(Ok(Some(SaveLocation::new(file, None)))),
+        "a portal that does not say reports none"
+    );
+
+    let options = portal.script.dialog_options.lock().expect("options");
+    let current = <(String, Vec<(u32, String)>)>::try_from(options[0]["current_filter"].clone())
+        .expect("(sa(us))");
+    assert_eq!(
+        current,
+        (
+            "PNG".to_owned(),
+            vec![(0, "*.png".to_owned()), (0, "*.PNG".to_owned())]
+        )
+    );
+}
+
+#[test]
+fn a_file_that_would_run_is_judged_by_what_was_opened_and_never_handed_on() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let portal = StandIn::serve();
+    let (mut host, launcher) = acquire::<LauncherCapability>(&portal.plugin());
+    let launcher = launcher.expect("the portal provides a launcher on Linux");
+    let folder = std::env::temp_dir().join(format!("flui-system-runs-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&folder);
+    std::fs::create_dir_all(&folder).expect("a scratch folder");
+
+    // A link whose name says document and whose target is a desktop entry.
+    let entry = folder.join("evil.desktop");
+    std::fs::write(&entry, b"[Desktop Entry]\nExec=true\n").expect("a desktop entry");
+    let disguised = folder.join("report.pdf");
+    std::os::unix::fs::symlink(&entry, &disguised).expect("a symbolic link");
+    // An executable whose name says nothing.
+    let program = folder.join("report");
+    std::fs::write(&program, b"#!/bin/sh\n").expect("a script");
+    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755))
+        .expect("an executable");
+
+    for path in [&disguised, &program] {
+        assert_eq!(
+            settle(&mut host, launcher.open_path(path)),
+            Ok(Err(LaunchError::NotADocument)),
+            "{}",
+            path.display()
+        );
+    }
+    assert!(portal.calls().is_empty(), "the portal was never asked");
+
+    // Showing one runs nothing.
+    portal.answer(0, Results::new());
+    assert_eq!(
+        settle(&mut host, launcher.reveal_path(&program)),
+        Ok(Ok(()))
+    );
+    assert_eq!(
+        portal.calls(),
+        [Call::OpenDirectory {
+            parent: String::new(),
+            path: program.canonicalize().expect("the script exists"),
+        }]
+    );
+    let _ = std::fs::remove_dir_all(&folder);
 }
 
 #[test]
@@ -695,7 +1130,8 @@ fn without_a_portal_on_the_bus_the_services_are_unavailable() {
     let plugin = PortalOnBus::new(bus.address.as_str());
     let (mut host, launcher) = acquire::<LauncherCapability>(&plugin);
     let launcher = launcher.expect("the launcher is handed out before the bus is asked");
-    let uri = ExternalUri::try_new("mailto:someone@example.com").expect("a mail URI");
+    let uri =
+        ExternalUri::try_new("mailto:someone@example.com", &[Scheme::MAILTO]).expect("a mail URI");
     let answered: Result<LaunchResult, Abandoned> = settle(&mut host, launcher.open_uri(&uri));
     assert!(
         matches!(answered, Ok(Err(LaunchError::Unsupported(_)))),
@@ -737,7 +1173,7 @@ fn an_installed_portal_that_is_not_running_is_started_first() {
     let (mut host, launcher) = acquire::<LauncherCapability>(&plugin);
     let launcher = launcher.expect("the portal provides a launcher on Linux");
 
-    let uri = ExternalUri::try_new("https://example.com/").expect("a web URI");
+    let uri = ExternalUri::try_new("https://example.com/", &[Scheme::HTTPS]).expect("a web URI");
     let slot = outcome_slot::<Result<LaunchResult, Abandoned>>();
     let into = Rc::clone(&slot);
     launcher
@@ -772,7 +1208,7 @@ fn a_session_bus_that_restarts_is_connected_to_again() {
     let plugin = PortalOnBus::new(listen.as_str());
     let (mut host, launcher) = acquire::<LauncherCapability>(&plugin);
     let launcher = launcher.expect("the portal provides a launcher on Linux");
-    let uri = ExternalUri::try_new("https://example.com/").expect("a web URI");
+    let uri = ExternalUri::try_new("https://example.com/", &[Scheme::HTTPS]).expect("a web URI");
 
     let portal = StandIn::serve_on(PrivateBus::configured(&directory, &listen));
     assert_eq!(settle(&mut host, launcher.open_uri(&uri)), Ok(Ok(())));
@@ -826,7 +1262,7 @@ fn a_named_pipe_without_a_writer_does_not_stall_the_caller() {
 }
 
 /// Pump `host` until `ready` holds.
-fn pump_until(host: &mut HeadlessHost, what: &str, mut ready: impl FnMut() -> bool) {
+pub(crate) fn pump_until(host: &mut HeadlessHost, what: &str, mut ready: impl FnMut() -> bool) {
     let deadline = Instant::now() + Duration::from_secs(10);
     while !ready() {
         assert!(Instant::now() < deadline, "{what} within 10 s");

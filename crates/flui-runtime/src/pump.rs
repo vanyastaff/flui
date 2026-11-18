@@ -59,8 +59,9 @@ impl FrameClockSource for flui_foundation::ManualClock {
 /// What one pump did.
 ///
 /// Fields stay private behind accessors so later facts can be added without
-/// breaking a host that reads this one.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// breaking a host that reads this one. The default is a turn that ran no
+/// frame: nothing reached `present()`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[must_use]
 pub struct FrameOutcome {
     presented: bool,

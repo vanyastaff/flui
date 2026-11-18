@@ -143,11 +143,47 @@ pub struct GpuContext {
   (`crates/flui-engine/src/frame_protocol.rs:1-9`), its committed images (ADR-0100), its viewport,
   its `SurfaceGeneration` counter (§6) and its external textures, whose `TextureId`s each
   presentation's registry mints on its own (`crates/flui-layer/src/texture_registry.rs:103-113`).
-- `wgpu::PipelineCache` reaches pipeline creation only where the adapter has
-  `Features::PIPELINE_CACHE`, which wgpu implements on Vulkan alone
-  (`wgpu-types/src/features.rs:1163-1172`); every other site passes `None`, as all fourteen
-  pipeline sites do today. Its data lives for the context's life and is not persisted: where it
-  would be stored and how a driver update invalidates it is a separate decision.
+- **The first format's pipelines are built while the first frame is.** The first slot to name a
+  target format starts that format's `PipelineLibrary` on a worker thread
+  (`crates/flui-engine/src/pipeline_warmup.rs`): a window slot at its attach, from the format its
+  surface's capabilities give before any size is known; an offscreen slot at its attach; the
+  headless renderer when it is made. The frame that first needs the library joins the worker, so
+  the driver's compilation overlaps the application's first build instead of following it. A
+  panic of the worker resumes on that frame, which settles `Retry` as any panicking frame does
+  (§7), and the next frame builds the library itself; a device rebuild drops a warm-up under way
+  (its library is the lost device's) and the first frame after it builds the new device's library
+  itself. A first frame in another format than the warm-up's (a colour
+  change before the first size, an offscreen slot of another format attached first) waits for the
+  warm-up and builds its own format too. A second format, and the variants the shape and gradient
+  caches build on demand, are built on the frame that first draws them. wasm32 has no thread to
+  build on, and there the frame builds the library. Flutter's counterpart is Impeller, which
+  creates its pipelines when its context starts, on its worker pool, where Skia's backend needed
+  an SkSL warm-up captured by hand for each application; FLUI takes Impeller's shape, so an
+  application captures nothing.
+- **On Vulkan the pipelines are built through a `wgpu::PipelineCache` kept between runs.** A
+  device is requested with `Features::PIPELINE_CACHE` where the adapter offers it, which wgpu
+  implements on Vulkan alone (`wgpu-types/src/features.rs:1163-1172`), and every pipeline site
+  creates through the context's cache (`crates/flui-engine/src/pipeline_device.rs`); elsewhere
+  there is none. Its data lives in the application's machine-local storage under one name,
+  `gpu-pipeline-cache` (`crates/flui-engine/src/pipeline_store.rs`), loaded by
+  `GpuContext::load_pipeline_cache` before the first window attaches. The stored value is an
+  envelope: a tag, the adapter's `wgpu::util::pipeline_cache_key` (vendor and device), the
+  payload's length and a 64-bit `FxHasher` digest over key and payload (a crate the engine
+  already has; the store has one writer, so the digest catches a torn or altered value, not a
+  forger), refused above 64 MiB. wgpu checks
+  only the payload's header, so a truncated, extended or altered value, or another adapter's, is
+  the envelope's to refuse; a refused value is emptied at once and the context starts cold,
+  without failing, and a driver update is wgpu's and the driver's to refuse inside the payload.
+  The worker saves the cache after handing the warm-up's library over, off the frame path; the
+  platform store stages and renames, so a crash mid-write leaves the previous value or none.
+  Pipelines built later (another format, effects, variants built on first use) are not saved:
+  the runners stop admitting storage writes before the context retires. The load waits a bounded
+  time on the owner thread and past it starts a cold cache, which the warm-up still saves, since
+  an IO pool may run on that thread (an application whose pool the owner drives never loads
+  one). A
+  lost device's data is not saved, and a rebuild starts a cold cache on the new device. This is
+  what a driver without a disk cache of its own (Android's Vulkan drivers) needs between
+  launches; lavapipe stores only a header in it.
 - **An atlas entry ages by queue submission.** The glyph atlas and the image cache stamp an entry
   with the submission that last used it; the counter advances once per `queue.submit`, and an
   entry used at or after the start of the oldest shown slot's latest frame is immune from
@@ -311,7 +347,11 @@ impl UiRuntime { pub fn settle_frame(&mut self, settlement: FrameSettlement) -> 
   frame's sink names,
   `FrameSink::in_flight_limit`. A presentation at its limit skips with `Backpressure`, keeps its
   demand and reports no pending work, and the settlement that frees a place wakes the loop. The
-  limit is the placement's depth (§10): 1 inline, which never queues, 2 threaded. wgpu's
+  limit is the placement's depth (§10): 1 inline, which never queues, 2 threaded. A slot whose
+  surface its compositor paces (`FramePacing::Compositor`, ADR-0356) holds 1 in either placement:
+  the frame callback that withholds the window's next frame is armed by the present, which a
+  raster thread makes after the wake that queued the frame returned, so a second frame taken
+  meanwhile would be presented in the same refresh as the first. wgpu's
   `desired_maximum_frame_latency` stays the slot's `FrameLatency` (ADR-0347 decision 4), set at
   `Attach` and changed by `Configure`, and stays decoupled from the depth; the GL backend ignores
   it as before.
@@ -321,9 +361,17 @@ impl UiRuntime { pub fn settle_frame(&mut self, settlement: FrameSettlement) -> 
 - `FallbackWake`'s deadline applies only when the slot's in-flight count is zero and its last
   settlement did not present. While a frame is in flight `UiRuntime::next_wake` keeps a floor, the
   next multiple of 50 ms since the oldest pending frame was handed to its sink, which the host
-  turns into its `WaitUntil`; the host drains the raster side's settlements on every wake, whatever
-  its frame gate decides, so a lost wake costs at most one floor interval and a frame that never
-  settles wakes the owner once per interval.
+  turns into its `WaitUntil`; each window's frame wake drains the raster side's settlements,
+  whatever its frame gate decides, so a lost wake costs at most one floor interval and a frame that
+  never settles wakes the owner once per interval. The floor guards a settlement the raster side
+  has not written: once it has settled every frame it holds of a window, its wake, which follows
+  the settlement, has asked that window for the frame that drains them, and the window owes the
+  loop no floor (`RasterHost::floor_owed`, `UiRuntime::next_wake_owing_floors`). Its host
+  delivers that frame once the window can take one, as it does for a window drawn inline: a
+  window its compositor does not draw, or has occluded, waits for its frame callback or its
+  return, and the loop is not woken at the floor's pace to ask the other windows for frames
+  they do not owe. A host that holds a window's frame back also wakes for any other wake
+  deadline only once a window can take a frame (the Wayland loop's `FrameHold`, ADR-0356).
 - The raster side never asks a window for a frame; a frame is asked through the window's
   `RedrawRequester` on the owner's side (ADR-0254 decision 5).
 - **A hidden slot is not acquired.** `Configure { change: Shown(..) }` carries the window's
@@ -520,8 +568,8 @@ impl<B: RasterBackend + Send + 'static> RasterExecutor<B> {
   the owner's thread, and the backend is asked `Send` alone, not `Sync`. The thread turns once per
   ring of a doorbell, which every accepted send and every drain that frees a ring's place rings,
   and once when a lost device's rebuild is due.
-- The target placement is ADR-0091 §5's table: threaded on Win32 and Linux; inline on macOS
-  (wgpu-hal's Metal acquire messages `NSWindow` from the acquiring thread,
+- The target placement is ADR-0091 §5's table: threaded on Win32 and on Linux (Wayland and X11);
+  inline on macOS (wgpu-hal's Metal acquire messages `NSWindow` from the acquiring thread,
   `wgpu-hal/src/metal/surface.rs:354-370`) and on the web; inline on Android and iOS until a
   device run meets the budget; inline in headless and testing. A platform becomes threaded when a
   run on it meets ADR-0091 §5's pacing budget, including a two-window case with one window
@@ -535,7 +583,8 @@ impl<B: RasterBackend + Send + 'static> RasterExecutor<B> {
   is not refused, since the thread or its queue may still hold its surface;
   it is quarantined as §9 says. It answers a frame `Queued`, or `QueuedReplacing` with the epoch the
   slot's `SendReceipt::Replaced` names, keeps what each held frame's verdict needs (its version,
-  surface and retry), and its sink's in-flight limit is the placement's depth. A settlement
+  surface and retry), and its sink's in-flight limit is the slot's (§5): the placement's depth,
+  or one where the compositor paces the surface. A settlement
   carries whether a call on its slot panicked since the previous settlement and the owner has
   not taken it (`SlotSettlement::panicked`), which is how an owner that drains later
   than the turn tells the frame a slot's panic came with; a slot holds a panic in place of a
@@ -559,11 +608,14 @@ impl<B: RasterBackend + Send + 'static> RasterExecutor<B> {
   the thread (`ExecutorHandle::detach`) once the host's borrow is released, or at once through the
   host's link to the thread when it meets the host busy, since the window goes when the detach
   returns.
-- Until a run makes a platform threaded, a debug build on Linux places the desktop loop's
-  executor on its raster thread when started with `FLUI_RASTER_PLACEMENT=threaded`; a release
-  build and every other host ignore the variable, Windows until the owner's wait services sent
-  messages (§9). It is the switch those runs are made with, and it goes when the first
-  platform's placement is threaded by the table above.
+- The desktop loop places its executor on its raster thread on the Wayland host, in every build
+  (`desktop_placement` in `crates/flui-app/src/app/runner/raster_host.rs`), by the run the
+  Confirmation records. X11 stays inline until a run on a real X server meets the budget: Xvfb
+  has no vsync, so its pacing could not be judged, and an unmapped window's `Fifo` present may
+  block (`docs/gaps.md`), which on the one raster thread would hold every window's frames.
+  Windows and macOS stay inline until a run on each meets the budget, Windows also until the
+  owner's wait services sent messages (§9); the headless host and every run of
+  `flui_app::testing` stay inline. No switch chooses the placement.
 - `render_lent` serves the hot-reload plugin's scene, lent by reference for the length of one
   call (`ScenePlugin::try_render_frame` in `crates/flui-app/src/app/hot_reload.rs`, through
   `RasterHost::render_lent` on Android).
@@ -648,6 +700,16 @@ the facade. Every production use of `with_backend` becomes:
   - `a_panic_in_one_slot_rebuilds_the_shared_caches_and_keeps_the_pipelines`: the panicking frame
     settles `Retry`, another slot's committed image is unchanged, no pipeline is built again;
   - `a_device_rebuild_keeps_the_surfaces_and_redraws_every_slot_in_full`;
+  - `the_first_slots_attach_builds_its_pipelines_on_a_worker_once`,
+    `a_warm_up_that_panics_fails_the_frame_that_joins_it_and_the_next_builds_inline` and
+    `a_device_rebuild_drops_a_warm_up_under_way` and, in `headless.rs`,
+    `a_new_renderer_warms_its_capture_pipelines_and_the_first_capture_takes_them` (the warm-up of
+    §1), with the cold first frame timed by `crates/flui-engine/benches/first_frame.rs`;
+  - the persisted cache of §1: `pipeline_store::tests::bytes_the_envelope_does_not_prove_are_refused_with_their_reason`,
+    `a_corrupt_stored_pipeline_cache_is_emptied_and_the_context_starts_cold`,
+    `a_finished_warm_up_saves_the_pipeline_cache_for_this_adapter`,
+    `a_saved_pipeline_cache_seeds_the_next_context`
+    and `a_device_rebuild_restarts_the_pipeline_cache_cold`;
   - `a_hidden_slot_is_not_acquired_and_settles_not_shown`.
 - Tests to be added through the public API, without a GPU, in `flui-engine`'s `tests/` against
   the testing backend: `a_full_lifecycle_queue_returns_the_command`,
@@ -693,7 +755,10 @@ the facade. Every production use of `with_backend` becomes:
   `a_threaded_windows_detach_returns_once_its_slot_is_down`,
   `a_window_the_raster_thread_refuses_is_refused_at_attach`,
   `a_window_whose_attach_the_raster_thread_does_not_answer_is_kept`,
-  `a_window_wake_settles_what_the_raster_thread_finished` and
+  `a_window_wake_settles_what_the_raster_thread_finished`,
+  `a_compositor_paced_window_holds_one_frame_on_a_raster_thread` (§5, with
+  `crates/flui-app/tests/native_linux.rs`'s
+  `an_app_whose_window_is_never_drawn_still_quits` on the Wayland host's raster thread),
   `a_threaded_frame_that_did_not_present_counts_toward_the_first_reveal` and
   `a_wedged_raster_thread_quarantines_its_open_window` (§9), with the pacing it leaves in
   `crates/flui-app/src/app/runner/frame_pacing.rs`'s `a_held_frame_arms_no_fallback` (§10);
@@ -705,8 +770,21 @@ the facade. Every production use of `with_backend` becomes:
   `a_lost_device_waits_out_its_rebuild_backoff`,
   `a_dead_renderer_is_reported_once_and_its_frames_go_on` (§9) and
   `a_given_up_device_renders_again_when_the_application_asks`.
-- Runs: a platform's placement becomes threaded only with its row in `docs/platform-parity.md`
-  (§10).
+- Runs: a platform's placement becomes threaded only with its run recorded in
+  `docs/platform-parity.md` (§10, the row `frames-drawn-on-a-raster-thread`). Wayland is threaded
+  on this run of two windows, one occluded, on lavapipe and on no device:
+  - Wayland under Weston: threaded, a median interval of 26.6 ms (p99 29–31 ms) and none of
+    1108 intervals under 5 ms; inline, a median of 26.5 ms. The compositor runs at about 26 ms.
+  - The raster share: an update frame takes about 0.3 ms on the owner's thread and 0.7–4.3 ms of
+    raster CPU (`crates/flui-app/benches/raster_share.rs`).
+
+  X11 under Xvfb, which has no vsync, did not judge its pacing: there the occluded window did
+  not slow the visible one (threaded 1.13/1.43/11.0 ms median/p90/max, inline
+  1.71/2.08/24.1 ms), and X11 stays inline until a run on a real X server.
+- The floor of §5: `crates/flui-app/src/app/runner/raster_host/tests.rs`'s
+  `a_window_the_raster_thread_settled_owes_no_floor_beside_one_it_renders`, and for any
+  deadline on a host that holds frames back, `flui-native`'s `wayland_scripted` case
+  `a_moving_wake_deadline_polls_no_window_the_compositor_never_draws`.
 
 ## Pros and cons of the options
 
@@ -756,12 +834,12 @@ the facade. Every production use of `with_backend` becomes:
 
 ## Migration
 
-The code moves in this order, each a change of its own and the inline placement first, because it is
-the shipping one on every platform: the context and the executor inline, with the headless
+The code moves in this order, each a change of its own and the inline placement first, because it
+shipped first on every platform: the context and the executor inline, with the headless
 renderer on offscreen slots; the desktop, Android and iOS runners on slots, with `with_backend`,
 the lane's lock and the hook closure removed; the web on the inline executor, with its direct sink
-removed; the settlement path in the UI runtime; then the threaded placement on Linux and Win32, each
-when its run meets the budget.
+removed; the settlement path in the UI runtime; then the threaded placement on Wayland, X11 and
+Win32, each when its run meets the budget.
 
 ## More information
 

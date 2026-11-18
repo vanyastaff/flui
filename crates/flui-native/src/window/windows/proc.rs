@@ -24,11 +24,8 @@ use std::{
     },
 };
 
-use cursor_icon::CursorIcon;
 use flui_foundation::geometry::{Bounds, Point, Size};
-use flui_platform::{
-    Brightness, SizeConstraints, WindowExtent, WindowGeometry, WindowId, WindowMode,
-};
+use flui_platform::{Brightness, SizeConstraints, WindowExtent, WindowId, WindowMode};
 use windows::Win32::{
     Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, SIZE, WPARAM},
     Graphics::{
@@ -51,6 +48,7 @@ use windows::Win32::{
 };
 
 use super::frame_timing::{RefreshTiming, refresh_timing};
+use super::geometry::{DeviceRects, sampled_geometry, window_display};
 use super::mode::NativeMode;
 use super::record::WindowRecord;
 use super::set::{WindowSet, checked_logical_to_device, restore_rectangle};
@@ -67,9 +65,7 @@ use crate::owner::windows::{
     WindowChrome, WindowHooks, WindowIdentity, WindowMessages, WindowStep, window_step,
 };
 use crate::owner::windows::{get_x_lparam, get_y_lparam};
-use crate::window::state::{
-    ReportedFacts, Sample, SampledGeometry, WindowStateCell, mode_of, reported_frame,
-};
+use crate::window::state::{ReportedFacts, Sample, WindowStateCell, mode_of, reported_frame};
 
 /// Posted to a window nothing paints, so its frame still runs: a hidden window
 /// never receives `WM_PAINT`. It names the window's identity ([`FramePost`]).
@@ -333,8 +329,21 @@ pub(crate) struct WindowContext {
     /// drop target's revoke, the text services' retirement), even when the
     /// last wrapper let go of the window inside that `WM_DESTROY`.
     pub(crate) _apartment: Rc<crate::owner::windows::com_apartment::ComApartment>,
-    /// Cursor selected by this exact window's presentation.
-    pub cursor: std::cell::Cell<CursorIcon>,
+    /// The cursor this window shows over its client area, as its presentation
+    /// selected it.
+    pub cursor: std::cell::RefCell<super::cursor::NativeCursor>,
+    /// The grab the window holds; `None` whenever it lost the focus.
+    pub(crate) pointer_hold: Cell<Option<super::cursor::Held>>,
+    /// Whether the window is kept below the others, a level Win32 has no
+    /// style for: `WM_WINDOWPOSCHANGING` keeps it at the bottom.
+    pub(crate) kept_below: Cell<bool>,
+    /// The steps and the proportion the user's resize keeps, in logical
+    /// pixels; `WM_SIZING` holds the rectangle to them at the window's scale.
+    pub(crate) resize_increments: Cell<Option<WindowExtent>>,
+    pub(crate) aspect_ratio: Cell<Option<flui_platform::AspectRatio>>,
+    /// Set from the first `WM_SIZING` of a size-move loop to its end: the
+    /// user is resizing the window by its frame, not moving it.
+    pub(crate) live_resize: Cell<bool>,
     /// Window style bits before fullscreen (Windows-specific: WS_OVERLAPPEDWINDOW, etc.)
     ///
     /// Stored here instead of in `NativeMode` to keep the cross-platform enum
@@ -531,22 +540,28 @@ impl WindowContext {
 
     /// What this context knows of the window beyond what Win32 reports.
     pub(crate) fn tracking(&self, hwnd: HWND) -> OwnerTracking {
+        let (display, desktop) = window_display(&*self.displays, hwnd);
         OwnerTracking {
             mode: self.mode.get(),
             restore_style: self.restore_style.get(),
             constraints: self.constraints.get(),
-            display: self.displays.display_of_window(hwnd),
+            display,
+            desktop,
             occluded: self.visibility.occluded(),
             appearance: self.appearance.get(),
             active: self.active.get(),
             hovered: self.delivery.hovered(),
             capabilities: self.capabilities,
             frame: self.frame.get(),
-            interaction: if self.in_size_move.get() || self.in_system_command.get() {
+            interaction: if self.in_size_move.get() && self.live_resize.get() {
+                flui_platform::WindowInteraction::UserResizing
+            } else if self.in_size_move.get() || self.in_system_command.get() {
                 flui_platform::WindowInteraction::UserPlacing
             } else {
                 flui_platform::WindowInteraction::None
             },
+            cursor_grab: self.cursor_grab(),
+            kept_below: self.kept_below.get(),
         }
     }
 
@@ -718,7 +733,7 @@ pub(crate) fn with_window_context_checked<R>(
         UserDataVerdict::Refuse(reason) => {
             tracing::debug!(
                 op,
-                hwnd = ?hwnd,
+                handle = ?hwnd,
                 ?reason,
                 "refusing to touch this window's native context"
             );
@@ -832,7 +847,8 @@ impl WindowMessages for WindowProc {
             | WindowStep::Rescaled
             | WindowStep::ScaleApplied
             | WindowStep::SettingChanged
-            | WindowStep::Closed => {}
+            | WindowStep::Closed
+            | WindowStep::PointerLocked(_) => {}
         }
     }
 
@@ -843,12 +859,13 @@ impl WindowMessages for WindowProc {
     /// posted to it, and the keyboard's system-menu command.
     fn answers(&self, msg: u32, wparam: WPARAM) -> bool {
         use windows::Win32::UI::WindowsAndMessaging::{
-            WM_ENTERMENULOOP, WM_ENTERSIZEMOVE, WM_EXITMENULOOP, WM_EXITSIZEMOVE, WM_TIMER,
+            WM_ENTERMENULOOP, WM_ENTERSIZEMOVE, WM_EXITMENULOOP, WM_EXITSIZEMOVE, WM_SIZING,
+            WM_TIMER,
         };
         match msg {
             WM_CREATE | WM_CLOSE | WM_DESTROY | WM_ERASEBKGND | WM_ENTERSIZEMOVE
-            | WM_EXITSIZEMOVE | WM_ENTERMENULOOP | WM_EXITMENULOOP | WM_PAINT | WM_SIZE
-            | WM_SHOWWINDOW | WM_MOVE | WM_DPICHANGED | WM_WINDOWPOSCHANGING
+            | WM_EXITSIZEMOVE | WM_SIZING | WM_ENTERMENULOOP | WM_EXITMENULOOP | WM_PAINT
+            | WM_SIZE | WM_SHOWWINDOW | WM_MOVE | WM_DPICHANGED | WM_WINDOWPOSCHANGING
             | WM_WINDOWPOSCHANGED | CLOSE_WINDOW | DELIVER_QUEUED | WM_SETTEXT
             | WM_STYLECHANGED | WM_GETMINMAXINFO | REQUEST_FRAME | WM_SETCURSOR | WM_SETFOCUS
             | WM_KILLFOCUS | WM_ACTIVATE | WM_SETTINGCHANGE | WM_NCCALCSIZE | WM_NCHITTEST
@@ -919,12 +936,12 @@ impl WindowProc {
                     {
                         tracing::warn!(%error, "pointer device notifications unavailable");
                     }
-                    tracing::debug!("WM_CREATE for HWND {:?}", hwnd);
+                    tracing::debug!(handle = ?hwnd, "WM_CREATE");
                     LRESULT(0)
                 }
 
                 WM_CLOSE => {
-                    tracing::debug!("WM_CLOSE for HWND {:?}", hwnd);
+                    tracing::debug!(handle = ?hwnd, "WM_CLOSE");
 
                     if let Some(ctx) = ctx {
                         // Ask the handler whether the close proceeds;
@@ -946,12 +963,12 @@ impl WindowProc {
                         // destroys or keeps it. A raster thread may still
                         // present over a kept one.
                         tracing::debug!(
-                            ?hwnd,
+                            handle = ?hwnd,
                             "WM_CLOSE for a retired window: left to its retirement"
                         );
                     } else if let Err(error) = DestroyWindow(hwnd) {
                         tracing::warn!(
-                            ?hwnd,
+                            handle = ?hwnd,
                             ?error,
                             "DestroyWindow failed on WM_CLOSE (no WindowContext)"
                         );
@@ -961,7 +978,7 @@ impl WindowProc {
                 }
 
                 WM_DESTROY => {
-                    tracing::debug!("WM_DESTROY for HWND {:?}", hwnd);
+                    tracing::debug!(handle = ?hwnd, "WM_DESTROY");
 
                     // A close the window granted retired it before destroying
                     // it, and cleared its slot: this finds no context. One
@@ -998,11 +1015,33 @@ impl WindowProc {
                     if let Some(ctx) = ctx {
                         ctx.exit_modal_loop();
                         ctx.in_size_move.set(false);
+                        ctx.live_resize.set(false);
                         ctx.step(hwnd, WindowStep::SizeMoveEnded);
                         // The snapshot ends the user's placement here: the next
                         // report that changes the placement is not the user's
                         // unless it says so itself (ADR-0343 §2).
                         ctx.publish_window_state(hwnd);
+                    }
+                    DefWindowProcW(hwnd, msg, wparam, lparam)
+                }
+
+                // The user drags the frame: the loop is a live resize from
+                // here to its end, and the rectangle keeps the steps and the
+                // proportion the application asked for.
+                windows::Win32::UI::WindowsAndMessaging::WM_SIZING => {
+                    if let Some(ctx) = ctx {
+                        if ctx.in_size_move.get() && !ctx.live_resize.replace(true) {
+                            ctx.publish_window_state(hwnd);
+                        }
+                        // SAFETY: for this message `lParam` is the address of
+                        // the dragged `RECT`, which the system owns for the call
+                        // and reads back; the null check guards a sender that
+                        // breaks that contract.
+                        if let Some(proposed) = (lparam.0 as *mut RECT).as_mut()
+                            && ctx.hold_sizing(hwnd, wparam.0, proposed)
+                        {
+                            return Some(LRESULT(1));
+                        }
                     }
                     DefWindowProcW(hwnd, msg, wparam, lparam)
                 }
@@ -1080,6 +1119,8 @@ impl WindowProc {
                         let size = Size::new(width, height);
                         let prev_mode = ctx.mode.get();
                         if size_type != SIZE_MINIMIZED {
+                            // The pointer the window holds follows its client area.
+                            ctx.hold_again(hwnd);
                             ctx.step(hwnd, WindowStep::Resized((width, height)));
                             ctx.update_window_state(|record| WindowRecord {
                                 bounds: Bounds {
@@ -1096,7 +1137,7 @@ impl WindowProc {
                         // Handle the state transition
                         let new_mode = match size_type {
                             SIZE_MINIMIZED => {
-                                tracing::debug!(?hwnd, "window minimized");
+                                tracing::debug!(handle = ?hwnd, "window minimized");
                                 // A fullscreen window that is minimized comes back
                                 // fullscreen, so it keeps what it returns to.
                                 let candidate = NativeMode::Minimized {
@@ -1115,7 +1156,7 @@ impl WindowProc {
                                     candidate
                                 } else {
                                     tracing::warn!(
-                                        ?hwnd,
+                                        handle = ?hwnd,
                                         from = ?prev_mode,
                                         "a minimize from this mode is not a transition; ignored"
                                     );
@@ -1123,7 +1164,7 @@ impl WindowProc {
                                 }
                             }
                             SIZE_MAXIMIZED => {
-                                tracing::debug!(?hwnd, width, height, "window maximized");
+                                tracing::debug!(handle = ?hwnd, width, height, "window maximized");
                                 let candidate = NativeMode::Maximized;
                                 if prev_mode.is_fullscreen() {
                                     // A fullscreen window covers its monitor as a
@@ -1134,7 +1175,7 @@ impl WindowProc {
                                     candidate
                                 } else {
                                     tracing::warn!(
-                                        ?hwnd,
+                                        handle = ?hwnd,
                                         from = ?prev_mode,
                                         "a maximize from this mode is not a transition; ignored"
                                     );
@@ -1151,9 +1192,9 @@ impl WindowProc {
                                 // on every live-resize drag step.
                                 ctx.last_size.set(size);
                                 if prev_mode.is_minimized() || prev_mode.is_maximized() {
-                                    tracing::debug!(?hwnd, width, height, "window restored");
+                                    tracing::debug!(handle = ?hwnd, width, height, "window restored");
                                 } else {
-                                    tracing::trace!(?hwnd, width, height, "window resized");
+                                    tracing::trace!(handle = ?hwnd, width, height, "window resized");
                                 }
                                 match prev_mode {
                                     // A resize does not end fullscreen.
@@ -1169,7 +1210,7 @@ impl WindowProc {
                             _ => {
                                 // A resize that keeps the mode (`SIZE_MAXSHOW`,
                                 // `SIZE_MAXHIDE`).
-                                tracing::trace!(?hwnd, width, height, "window resized");
+                                tracing::trace!(handle = ?hwnd, width, height, "window resized");
                                 if prev_mode.is_normal() {
                                     ctx.last_size.set(size);
                                 }
@@ -1248,7 +1289,7 @@ impl WindowProc {
                     } else {
                         (get_x_lparam(lparam), get_y_lparam(lparam))
                     };
-                    tracing::debug!("Window Moved: ({}, {})", x, y);
+                    tracing::debug!(handle = ?hwnd, x, y, "window moved");
 
                     if let Some(ctx) = ctx {
                         ctx.update_window_state(|record| WindowRecord {
@@ -1261,6 +1302,9 @@ impl WindowProc {
                             },
                             ..record
                         });
+                        // The pointer the window holds follows its client
+                        // area, a lock at its pixel of it.
+                        ctx.hold_again(hwnd);
                         ctx.publish_window_state(hwnd);
                     }
 
@@ -1285,7 +1329,22 @@ impl WindowProc {
                     if let Some(ctx) = ctx {
                         // SAFETY: for this message `lParam` is the address of a
                         // `WINDOWPOS` the system owns for the call.
-                        ctx.clamp_pending_size(hwnd, &mut *(lparam.0 as *mut WINDOWPOS));
+                        let pending = &mut *(lparam.0 as *mut WINDOWPOS);
+                        ctx.clamp_pending_size(hwnd, pending);
+                        // A window kept below the others goes back under them
+                        // whenever something would raise it (an activation, a
+                        // click): Win32 has no level for it. Fullscreen wins
+                        // while it lasts (ADR-0354 §3), and the level applies
+                        // again when it ends.
+                        if ctx.kept_below.get()
+                            && !ctx.mode.get().holds_fullscreen()
+                            && !pending
+                                .flags
+                                .contains(windows::Win32::UI::WindowsAndMessaging::SWP_NOZORDER)
+                        {
+                            pending.hwndInsertAfter =
+                                windows::Win32::UI::WindowsAndMessaging::HWND_BOTTOM;
+                        }
                     }
                     DefWindowProcW(hwnd, msg, wparam, lparam)
                 }
@@ -1473,7 +1532,14 @@ impl WindowProc {
                     if let Some(ctx) = ctx
                         && (lparam.0 as u32 & 0xffff) == HTCLIENT
                     {
-                        match WindowsWindow::apply_native_cursor(ctx.cursor.get()) {
+                        // A locked pointer stays hidden whatever the hovered
+                        // region asks for.
+                        let shown = if ctx.cursor_grab() == flui_platform::CursorGrab::Locked {
+                            super::cursor::NativeCursor::Hidden.show()
+                        } else {
+                            ctx.cursor.borrow().show()
+                        };
+                        match shown {
                             Ok(()) => return Some(LRESULT(1)),
                             Err(error) => {
                                 tracing::warn!(
@@ -1522,6 +1588,8 @@ impl WindowProc {
                             focused: false,
                             ..record
                         });
+                        // A grab ends with the focus.
+                        ctx.let_pointer_go(hwnd);
                         ctx.step(hwnd, WindowStep::FocusLost);
                         ctx.publish_window_state(hwnd);
                     }
@@ -1625,12 +1693,15 @@ fn hiword(value: u32) -> u16 {
 /// mode it tracks from `WM_SIZE` and its own fullscreen toggle, the style a
 /// fullscreen window returns to, the limits the app set and the display the
 /// window is on.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub(crate) struct OwnerTracking {
     pub(crate) mode: NativeMode,
     pub(crate) restore_style: u32,
     pub(crate) constraints: SizeConstraints,
     pub(crate) display: Option<flui_platform::DisplayId>,
+    /// The displays as last published: what the window's position, and the
+    /// position of the rectangle it returns to, are measured on.
+    pub(crate) desktop: flui_platform::DisplaySnapshot,
     /// Whether a cloak or a locked session hides the window from the screen.
     pub(crate) occluded: bool,
     /// The user's theme as `WM_SETTINGCHANGE` last read it: never the
@@ -1646,8 +1717,14 @@ pub(crate) struct OwnerTracking {
     /// application title bar reads back as itself.
     pub(crate) frame: flui_platform::WindowFrame,
     /// Whether the user is placing the window: inside the size-move loop, or
-    /// inside a system command the user worked (ADR-0343).
+    /// inside a system command the user worked (ADR-0343); resizing it, from
+    /// the loop's first `WM_SIZING`.
     pub(crate) interaction: flui_platform::WindowInteraction,
+    /// The grab the window holds.
+    pub(crate) cursor_grab: flui_platform::CursorGrab,
+    /// Whether the window is kept below the others; whether it is kept above
+    /// them is its `WS_EX_TOPMOST` style, which another program may change.
+    pub(crate) kept_below: bool,
 }
 
 /// Whether a `WM_SYSCOMMAND` is one that places the window: maximize, minimize
@@ -1720,6 +1797,7 @@ pub(crate) fn sample_state(hwnd: HWND, record: WindowRecord, tracking: OwnerTrac
         restore_style,
         constraints,
         display,
+        desktop,
         occluded,
         appearance,
         active,
@@ -1727,7 +1805,20 @@ pub(crate) fn sample_state(hwnd: HWND, record: WindowRecord, tracking: OwnerTrac
         capabilities,
         frame,
         interaction,
+        cursor_grab,
+        kept_below,
     } = tracking;
+    // SAFETY: a plain style query; a stale handle reads as no style.
+    let topmost = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32 }
+        & windows::Win32::UI::WindowsAndMessaging::WS_EX_TOPMOST.0
+        != 0;
+    let level = if topmost {
+        flui_platform::WindowLevel::AlwaysOnTop
+    } else if kept_below {
+        flui_platform::WindowLevel::AlwaysOnBottom
+    } else {
+        flui_platform::WindowLevel::Normal
+    };
     let WindowRecord {
         bounds: Bounds { size: cached, .. },
         scale_factor,
@@ -1753,14 +1844,6 @@ pub(crate) fn sample_state(hwnd: HWND, record: WindowRecord, tracking: OwnerTrac
             },
         )
     };
-    let content = if have_client {
-        Size::new(
-            f64::from(client.right - client.left) / scale,
-            f64::from(client.bottom - client.top) / scale,
-        )
-    } else {
-        cached
-    };
     // The rectangle the window returns to: Win32's own for a maximized or
     // minimized window (`rcNormalPosition`), and for a fullscreen one the
     // rectangle it was given on entering, taken from the same source.
@@ -1772,42 +1855,18 @@ pub(crate) fn sample_state(hwnd: HWND, record: WindowRecord, tracking: OwnerTrac
         NativeMode::Maximized | NativeMode::Minimized { .. } => restore_rectangle(hwnd),
         NativeMode::Normal => None,
     };
-    let geometry = (|| {
-        let content = WindowExtent::try_new(if mode.is_minimized() { cached } else { content })?;
-        let outer = if have_window && !mode.is_minimized() {
-            WindowGeometry::try_new(
-                Some(Point::new(
-                    f64::from(window.left) / scale,
-                    f64::from(window.top) / scale,
-                )),
-                Size::new(
-                    f64::from(window.right - window.left) / scale,
-                    f64::from(window.bottom - window.top) / scale,
-                ),
-            )?
-        } else {
-            WindowGeometry::unplaced(content)
-        };
-        let normal = restore
-            .map(|bounds| {
-                WindowGeometry::try_new(
-                    Some(Point::new(
-                        f64::from(bounds.origin.x) / scale,
-                        f64::from(bounds.origin.y) / scale,
-                    )),
-                    Size::new(
-                        f64::from(bounds.size.width) / scale,
-                        f64::from(bounds.size.height) / scale,
-                    ),
-                )
-            })
-            .transpose()?;
-        Ok(SampledGeometry {
-            outer,
-            content,
-            normal,
-        })
-    })();
+    let geometry = sampled_geometry(
+        DeviceRects {
+            window: (have_window && !mode.is_minimized()).then_some(window),
+            client: have_client.then_some(client),
+            restore,
+            cached,
+            minimized: mode.is_minimized(),
+            scale: scale_factor,
+        },
+        display,
+        &desktop,
+    );
     Sample::read(geometry, |state| {
         let state = state
             .with_mode(mode_of(mode.flags()))
@@ -1823,7 +1882,10 @@ pub(crate) fn sample_state(hwnd: HWND, record: WindowRecord, tracking: OwnerTrac
             metrics: have_client
                 .then(|| {
                     flui_foundation::geometry::WindowMetrics::try_new(
-                        Size::new(client.right - client.left, client.bottom - client.top),
+                        Size::new(
+                            client.right.checked_sub(client.left)?,
+                            client.bottom.checked_sub(client.top)?,
+                        ),
                         scale,
                     )
                     .ok()
@@ -1840,6 +1902,8 @@ pub(crate) fn sample_state(hwnd: HWND, record: WindowRecord, tracking: OwnerTrac
             focus: flui_platform::WindowFocus::reported(focused, active),
             capabilities,
             interaction,
+            cursor_grab,
+            level,
         }
         .onto(state)
     })
@@ -1976,7 +2040,7 @@ impl WindowsWindow {
                         normal.bottom - normal.top,
                         SWP_FRAMECHANGED | SWP_NOZORDER | SWP_NOACTIVATE,
                     ) {
-                        tracing::warn!(?hwnd, ?error, "the window left fullscreen in place");
+                        tracing::warn!(handle = ?hwnd, ?error, "the window left fullscreen in place");
                     }
                 } else {
                     // The frame is measured again for the restored style, then
@@ -1993,7 +2057,7 @@ impl WindowsWindow {
                         0,
                         SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
                     ) {
-                        tracing::warn!(?hwnd, ?error, "the restored frame was not measured");
+                        tracing::warn!(handle = ?hwnd, ?error, "the restored frame was not measured");
                     }
                     let show = match exit {
                         FullscreenExit::Normal => SW_SHOWNORMAL,
@@ -2005,7 +2069,7 @@ impl WindowsWindow {
                         SetWindowPlacement(hwnd, &raw const placement)
                     });
                     if let Err(error) = placed {
-                        tracing::warn!(?hwnd, ?error, ?exit, "the window left fullscreen in place");
+                        tracing::warn!(handle = ?hwnd, ?error, ?exit, "the window left fullscreen in place");
                     }
                 }
             }
@@ -2013,7 +2077,7 @@ impl WindowsWindow {
             ctx.publish_window_state(hwnd);
         });
         if left.is_none() {
-            tracing::warn!(?hwnd, "cannot leave fullscreen: no usable window context");
+            tracing::warn!(handle = ?hwnd, "cannot leave fullscreen: no usable window context");
         }
     }
 
@@ -2059,7 +2123,7 @@ impl WindowsWindow {
                 let mut rect = RECT::default();
                 if let Err(error) = GetWindowRect(hwnd, &raw mut rect) {
                     tracing::warn!(
-                        ?hwnd,
+                        handle = ?hwnd,
                         ?error,
                         "GetWindowRect failed entering fullscreen; restore bounds will be zeroed"
                     );
@@ -2120,7 +2184,7 @@ impl WindowsWindow {
                 };
                 if let Err(error) = GetMonitorInfoW(monitor, &raw mut monitor_info).ok() {
                     tracing::warn!(
-                        ?hwnd,
+                        handle = ?hwnd,
                         ?error,
                         "GetMonitorInfoW failed entering fullscreen; monitor rect will be zeroed"
                     );
@@ -2145,7 +2209,7 @@ impl WindowsWindow {
                     monitor_rect.bottom - monitor_rect.top,
                     SWP_FRAMECHANGED | SWP_NOACTIVATE,
                 ) {
-                    tracing::warn!(?hwnd, ?error, "SetWindowPos (enter fullscreen) failed");
+                    tracing::warn!(handle = ?hwnd, ?error, "SetWindowPos (enter fullscreen) failed");
                 }
                 ctx.limits_waived.set(false);
                 ctx.mode.set(NativeMode::Fullscreen { restore_bounds });
@@ -2154,7 +2218,7 @@ impl WindowsWindow {
             ctx.publish_window_state(hwnd);
         });
         if entered.is_none() {
-            tracing::warn!(?hwnd, "cannot enter fullscreen: no usable window context");
+            tracing::warn!(handle = ?hwnd, "cannot enter fullscreen: no usable window context");
         }
     }
 }
@@ -2219,7 +2283,7 @@ impl WindowContext {
         let old_dpi = self.scale.dpi();
         self.scale.rescale(dpi);
         let new_scale = self.scale.scale();
-        tracing::info!(dpi = dpi.get(), new_scale, "DPI changed");
+        tracing::info!(handle = ?hwnd, scale = new_scale, "window scale changed");
         // The display's scale changed, so its snapshot entry did.
         self.displays.invalidate();
         self.step(hwnd, WindowStep::Rescaled);
@@ -2434,7 +2498,7 @@ impl WindowContext {
         };
         self.limits_waived.set(false);
         if let Err(error) = moved {
-            tracing::warn!(?hwnd, ?error, "SetWindowPos (DPI change) failed");
+            tracing::warn!(handle = ?hwnd, ?error, "SetWindowPos (DPI change) failed");
         }
     }
 }

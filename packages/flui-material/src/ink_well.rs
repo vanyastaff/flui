@@ -508,6 +508,10 @@ impl StatefulView for InkWell {
         // switch and before the listener exists, keeps that write from
         // notifying the well while it builds.
         states.update(WidgetState::Disabled, !self.is_enabled());
+        // Fired later, from the states-controller listener, the
+        // press-deactivation timer and the indication's runs, never from
+        // `build` (ADR-0018).
+        let rebuild = ctx.rebuild_handle();
         let indication = Indication::new(
             states.clone(),
             IndicationStyle {
@@ -518,14 +522,13 @@ impl StatefulView for InkWell {
                 has_clock: false,
                 focus_layer: self.focus_indicator == FocusIndicator::Halo,
             },
+            rebuild.clone(),
         );
         let core = Rc::new_cyclic(|this| Core {
             on_tap: RefCell::new(self.on_tap.clone()),
             activation: RefCell::default(),
             indication,
-            // Fired later, from the states-controller listener and the
-            // press-deactivation timer, never from `build` (ADR-0018).
-            rebuild: ctx.rebuild_handle(),
+            rebuild,
             this: std::rc::Weak::clone(this),
         });
         InkWellState {
@@ -544,7 +547,6 @@ impl ViewState<InkWell> for InkWellState {
         self.listen_to_states();
 
         self.read_ambient(ctx);
-        self.core.indication.set_rebuild(self.core.rebuild.clone());
     }
 
     fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {

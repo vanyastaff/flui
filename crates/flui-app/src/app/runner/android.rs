@@ -73,14 +73,14 @@ where
     /// The actual Android bootstrap: window, GPU, UI runtime, and callback
     /// wiring. Runs once, synchronously, inside `on_ready` — which this
     /// backend delivers at the first `MainEvent::InitWindow`, not at the
-    /// first `Resume` (module doc, `owner/android/looper.rs`'s
-    /// "# Surface Lifecycle": `Resume` arrives before any window exists, so
+    /// first `Start` (module doc, `owner/android/looper.rs`'s
+    /// "# Surface Lifecycle": `Start` arrives before any window exists, so
     /// only `InitWindow` can carry a presentation). Migrated here from
     /// before `run()` (ADR-0039 §1): `on_ready` is `FnOnce` and fires
     /// exactly once, matching the once-only pre-run bootstrap semantics it
     /// replaced. **The surface-recreation path is no longer untouched**: this
     /// bootstrap routes the window's `surface_changed`, which releases its
-    /// slot's surface on `Pause`/`TerminateWindow` and rebuilds it when a
+    /// slot's surface on `Stop`/`TerminateWindow` and rebuilds it when a
     /// window returns — see that route below. **Unvalidated
     /// on-device**: no device and no CI compile target for
     /// `target_os = "android"` verify this; stated here and in the registry
@@ -108,7 +108,7 @@ where
         //
         // 0b. The bound on backgrounded pumps: a deadline the wake hook
         // reports, not a sleep on the loop thread.
-        let background_pace = Arc::new(BackgroundPace::default());
+        let background_pace = std::rc::Rc::new(BackgroundPace::default());
 
         // The existing owner wake carries runtime deadlines, which count the
         // raster work of the window while its frames run (a lost device's next
@@ -116,7 +116,7 @@ where
         // Geometry refresh is owner work even while a hidden presentation
         // cannot produce frames.
         {
-            let background_pace = Arc::clone(&background_pace);
+            let background_pace = std::rc::Rc::clone(&background_pace);
             super::host::route_wake_deadline(move || {
                 super::host::merge_wake_deadlines(
                     APP_RUNTIME.with(|slot| slot.borrow().next_wake()),
@@ -127,20 +127,20 @@ where
 
         // 1. Open window (wraps the existing ANativeWindow). `Ready` is
         // guaranteed inside `on_ready` (ADR-0039 §1).
-        let options: WindowOptions = (&config).into();
         let routes = super::window_routes::WindowRoutes::new();
-        let host =
-            match owner_platform_installed(|owner| owner.open_window(options, routes.clone()))
-                .and_then(flui_native::WindowOpen::try_ready)
-            {
-                Ok(window) => window,
-                Err(error) => {
-                    tracing::error!(%error, "Failed to create Android window");
-                    return Err(
-                        anyhow::Error::from(error).context("Failed to create Android window")
-                    );
-                }
-            };
+        let host = match owner_platform_installed(|owner| {
+            let options: WindowOptions =
+                config.window_options(owner.display_snapshot().ok().as_ref());
+            owner.open_window(options, routes.clone())
+        })
+        .and_then(flui_native::WindowOpen::try_ready)
+        {
+            Ok(window) => window,
+            Err(error) => {
+                tracing::error!(%error, "Failed to create Android window");
+                return Err(anyhow::Error::from(error).context("Failed to create Android window"));
+            }
+        };
         routes.adopt(host.id());
         let presentation_window = super::presentation_window(std::rc::Rc::clone(&host))
             .with_pointer_resampling(config.pointer_resampling);
@@ -299,7 +299,8 @@ where
         // happen before the native window behind the surface dies, and the
         // rebuild for the window that replaces it. `flui-native` reports
         // both out of its own event loop: `Release` on
-        // `Pause`/`TerminateWindow`, `Rebuild` on `Resume`/`InitWindow`, with
+        // `Stop`/`TerminateWindow`, `Rebuild` on `Start`/`InitWindow` (a paused
+        // Activity that stays on screen keeps its surface, ADR-0366), with
         // the mapping and its reason in `flui-native`'s
         // `owner/android/looper.rs`, "# Surface Lifecycle".
         //
@@ -344,11 +345,12 @@ where
         // point, anything resolving it during that frame would silently
         // no-op instead of waking the loop.
         //
-        // The Activity's three lifecycle facts reach the runtime as they are,
-        // and `derive_lifecycle_state` builds the application state from them:
-        // on screen (`onStart`/`onStop`), allowed to run (`onResume`/`onPause`)
-        // and holding input focus. Focus alone must not stand for the other two
-        // (a dialog or the notification shade takes focus from a running
+        // The Activity's lifecycle reaches the runtime as the window reports it
+        // (ADR-0366): running while on screen (`onStart`/`onStop`), occluded
+        // while not, and focused while it holds the input focus and is in the
+        // foreground (`onResume`/`onPause`); `derive_lifecycle_state` builds the
+        // application state from them. Focus alone must not stand for the
+        // others (a dialog or the notification shade takes focus from a running
         // Activity). They arrive with the metrics, the insets, the night mode
         // and the display through the window's one snapshot subscription,
         // seeded from the snapshot read right after it, so a fact that changed
@@ -394,11 +396,17 @@ where
             install_owner_platform(owner)?;
             with_owner_platform(|owner| {
                 owner.on_wake(Box::new(|| {
-                    super::host::drive_native_text_sizing();
+                    // Each step contained on its own, so a panic in one
+                    // costs the turn none of the others; the first resumes
+                    // after all of them.
+                    let mut first = flui_foundation::panic::FirstPanic::new();
+                    first.contain(super::host::drive_native_text_sizing);
+                    first.contain(super::host::serve_clipboard_expiries);
                     // What an opened URL's loan returned is routed here,
                     // outside the destructor that returned it.
-                    super::host::route_owed_opened_urls();
-                    super::host::release_finished_background_writes();
+                    first.contain(super::host::route_owed_opened_urls);
+                    first.contain(super::host::release_finished_background_writes);
+                    first.resume();
                 }))
             })
             .expect("BUG: Android owner was just installed")?;
@@ -453,7 +461,7 @@ where
 pub(super) struct AndroidFrameDriver {
     raster: RasterSlot,
     hot_reload: crate::app::hot_reload::ScenePlugin,
-    background_pace: std::sync::Arc<BackgroundPace>,
+    background_pace: std::rc::Rc<BackgroundPace>,
 }
 
 impl AndroidFrameDriver {

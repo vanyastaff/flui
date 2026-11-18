@@ -63,7 +63,16 @@ pub(super) enum FrameDriver {
         not(target_os = "ios"),
         not(target_arch = "wasm32")
     ))]
-    TestDeadlines(std::sync::Arc<super::desktop::DesktopWakeDeadlines>),
+    TestDeadlines(std::rc::Rc<super::desktop::DesktopWakeDeadlines>),
+    /// Frame seam over a raster host's slot, as the desktop driver draws.
+    #[cfg(all(
+        test,
+        feature = "testing",
+        not(target_os = "android"),
+        not(target_os = "ios"),
+        not(target_arch = "wasm32")
+    ))]
+    TestRaster(super::raster_host::RasterSlot),
 }
 
 #[cfg(all(test, not(target_os = "android"), not(target_arch = "wasm32")))]
@@ -89,6 +98,14 @@ impl FrameDriver {
                 not(target_arch = "wasm32")
             ))]
             Self::TestDeadlines(_) => {}
+            #[cfg(all(
+                test,
+                feature = "testing",
+                not(target_os = "android"),
+                not(target_os = "ios"),
+                not(target_arch = "wasm32")
+            ))]
+            Self::TestRaster(_) => {}
             #[cfg(all(
                 not(target_os = "android"),
                 not(target_os = "ios"),
@@ -118,6 +135,14 @@ impl FrameDriver {
                 not(target_arch = "wasm32")
             ))]
             Self::TestDeadlines(_) => {}
+            #[cfg(all(
+                test,
+                feature = "testing",
+                not(target_os = "android"),
+                not(target_os = "ios"),
+                not(target_arch = "wasm32")
+            ))]
+            Self::TestRaster(_) => {}
             #[cfg(all(
                 not(target_os = "android"),
                 not(target_os = "ios"),
@@ -231,6 +256,21 @@ impl FrameDriver {
                 not(target_arch = "wasm32")
             ))]
             Self::Desktop(driver) => driver.wake(runtime, record.binding.0.presentation_id),
+            #[cfg(all(
+                test,
+                feature = "testing",
+                not(target_os = "android"),
+                not(target_os = "ios"),
+                not(target_arch = "wasm32")
+            ))]
+            Self::TestRaster(slot) => {
+                // What the raster thread finished settles first, then the
+                // frame draws through the slot, as the desktop driver's wake.
+                let (_settled, mut caught) = slot.settle(runtime);
+                runtime.mark_primary_needs_full_repaint();
+                let _ran = caught.contain(|| slot.pump(runtime, web_time::Instant::now(), None));
+                caught.resume();
+            }
             #[cfg(target_os = "android")]
             Self::Android(driver) => driver.wake(runtime, record.binding.0.presentation_id),
             #[cfg(target_os = "ios")]
@@ -269,7 +309,7 @@ struct FrameRecord {
         not(target_os = "ios"),
         not(target_arch = "wasm32")
     ))]
-    deadlines: Option<std::sync::Arc<super::desktop::DesktopWakeDeadlines>>,
+    deadlines: Option<std::rc::Rc<super::desktop::DesktopWakeDeadlines>>,
     binding: FrameBinding,
     state: RefCell<DriverState>,
     /// Closing forbids new publication while earlier admitted frames finish.
@@ -291,11 +331,13 @@ impl PreparedFrame {
             not(target_arch = "wasm32")
         ))]
         let deadlines = match &driver {
-            FrameDriver::Desktop(driver) => Some(std::sync::Arc::clone(&driver.deadlines)),
+            FrameDriver::Desktop(driver) => Some(Rc::clone(&driver.deadlines)),
             #[cfg(test)]
-            FrameDriver::TestDeadlines(deadlines) => Some(std::sync::Arc::clone(deadlines)),
+            FrameDriver::TestDeadlines(deadlines) => Some(Rc::clone(deadlines)),
             #[cfg(test)]
             FrameDriver::Test(_) => None,
+            #[cfg(all(test, feature = "testing"))]
+            FrameDriver::TestRaster(_) => None,
         };
         let binding = FrameBinding(address);
         let record = Rc::new(FrameRecord {

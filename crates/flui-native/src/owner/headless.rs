@@ -15,7 +15,7 @@ use std::{
 };
 
 use crate::host::MemoryClipboard;
-use flui_foundation::geometry::{Bounds, Point, Size};
+use flui_foundation::geometry::Point;
 use flui_foundation::{ClaimSlot, DataTransferId, claim_slot};
 use flui_platform::data_transfer::{DropFeedback, RepresentationDescriptor, TransferActions};
 use flui_platform::drag::{OsDragEndHook, OsDragProvider, OsDragStart, PlatformDragSource};
@@ -81,7 +81,7 @@ pub(crate) struct HeldPresses(Mutex<Vec<HeldPress>>);
 /// One press sequence a headless window holds, and the contact holding it.
 #[derive(Debug, Clone, Copy)]
 struct HeldPress {
-    pointer: flui_platform::PointerId,
+    pointer: flui_platform::pointer::PointerId,
     press: flui_platform::pointer::PressId,
 }
 
@@ -367,21 +367,11 @@ impl HeadlessState {
         self.displays.lock().snapshot.get(id).is_some()
     }
 
-    /// The bounds of display `id` in the logical pixels of its own scale.
-    pub(crate) fn display_bounds(&self, id: DisplayId) -> Option<Bounds<f64>> {
-        let display = self.displays.lock().snapshot.get(id)?.clone();
-        let scale = display.scale_factor.get();
-        let device = display.bounds;
-        Some(Bounds::new(
-            Point::new(
-                f64::from(device.origin.x) / scale,
-                f64::from(device.origin.y) / scale,
-            ),
-            Size::new(
-                f64::from(device.size.width) / scale,
-                f64::from(device.size.height) / scale,
-            ),
-        ))
+    /// Display `id` as the system describes it now: its bounds in its own
+    /// logical pixels, its place on the simulated desktop (device pixels,
+    /// displays laid left to right) and its scale.
+    pub(crate) fn display(&self, id: DisplayId) -> Option<flui_platform::DisplayDescription> {
+        self.displays.lock().snapshot.get(id).cloned()
     }
 
     /// The drag source a window opened now hands out, reading the presses
@@ -693,8 +683,12 @@ impl host::Services for HeadlessLoop {
         host::environment_launch_value(key)
     }
 
+    /// The executable the process runs, as on the desktop hosts: a headless
+    /// platform still runs in a real process.
     fn app_path(&self) -> Result<PathBuf, PlatformError> {
-        Ok(PathBuf::from("/mock/app/path"))
+        std::env::current_exe().map_err(|error| PlatformError::AppPath {
+            message: error.to_string(),
+        })
     }
 
     fn open_url(&self, url: &str) {
@@ -737,6 +731,8 @@ const fn default_input_availability() -> flui_platform::input_capabilities::Inpu
         .pen(Native)
         .precise_scroll(Native)
         .trackpad_gestures(Native)
+        .touchpad_hold(Native)
+        .touchpad_swipe(Native)
         .system_gesture_exclusion(Native)
         .window_move(Native)
         .window_resize(Native)
@@ -1010,7 +1006,7 @@ impl HeadlessDeferredWindowOpens {
     /// real headless window and delivering it through that request's
     /// [`ClaimSlot`] — the same registration/activation/`Created`-event
     /// bookkeeping the synchronous `Platform::open_window` path performs
-    /// (`create_mock_window`), so a test cannot tell the two paths apart
+    /// (`HeadlessWindows::open`), so a test cannot tell the two paths apart
     /// except by timing. Returns the same window handle that was delivered
     /// (a real, live [`PlatformWindow`](flui_platform::PlatformWindow) a test can drive further — including
     /// a genuine `.close()` — since the whole point of this test seam is

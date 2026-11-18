@@ -493,6 +493,10 @@ async fn web_window_reports_what_a_page_can_do() {
     expected.sets_title = flui_platform::WindowCapability::Native;
     expected.enters_fullscreen = flui_platform::WindowCapability::Native;
     expected.closes = flui_platform::WindowCapability::Emulated;
+    // A CSS `url(…)` cursor and the page's pointer lock; a page has no
+    // confinement, level, resize steps or proportion (`NONE`'s absence).
+    expected.cursor_image = flui_platform::Availability::Native;
+    expected.locks_cursor = flui_platform::WindowCapability::Native;
     let expected = expected.into_capabilities();
     assert_eq!(window.state().capabilities, expected);
     assert_eq!(

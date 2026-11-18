@@ -16,6 +16,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use flui_foundation::geometry::Size;
 use flui_interaction::focus::FocusNode;
 use flui_painting::styling::Color;
+use flui_platform::Cursor;
 use flui_platform::text_store::{
     LockGrant, LockOutcome, LockTiming, TextStoreError, TextStoreRead, Utf16Offset,
 };
@@ -464,11 +465,11 @@ fn mouse_region_cursor_reaches_the_window_through_the_ui_runtime() {
             .child(SizedBox::new(40.0, 40.0)),
         tight(100.0, 100.0),
     );
-    assert_eq!(laid.cursor(), CursorIcon::Default);
+    assert_eq!(laid.cursor(), Cursor::Icon(CursorIcon::Default));
 
     laid.dispatch_pointer_hover(20.0, 20.0);
 
-    assert_eq!(laid.cursor(), CursorIcon::Pointer);
+    assert_eq!(laid.cursor(), Cursor::Icon(CursorIcon::Pointer));
 }
 
 #[derive(Clone, StatefulView)]
@@ -623,4 +624,84 @@ fn a_frame_report_counts_only_the_frame_it_drove() {
     assert_eq!(idle.build.builds_run, 0, "{idle:#?}");
     assert_eq!(idle.pipeline.frames_produced, 0, "{idle:#?}");
     assert_eq!(idle.scene.damage_rects, 0, "{idle:#?}");
+}
+
+// ---------------------------------------------------------------------------
+// Semantics author errors fail a bare host's frame
+// ---------------------------------------------------------------------------
+
+/// A link that declares a checked state, which `link` does not support in
+/// WAI-ARIA 1.2: the publication leaves it out and reports an author error.
+fn checked_link() -> flui_view::BoxedView {
+    Semantics::new()
+        .role(flui_widgets::SemanticsRole::Link)
+        .toggled(flui_widgets::Toggled::On)
+        .label("link")
+        .child(SizedBox::new(40.0, 24.0))
+        .boxed()
+}
+
+/// `HeadlessHost::pump` fails a frame whose semantics publication found an
+/// author error, in whichever window published it, with no widget harness
+/// around the host.
+///
+/// Fails against a host that leaves the check to the widget harness: the
+/// frame publishes the link without its state and the pump returns.
+#[test]
+fn a_bare_host_frame_fails_on_an_attribute_its_role_does_not_support() {
+    use flui_testing::{HeadlessHost, HeadlessWindow};
+
+    let mut primary = HeadlessHost::new(HeadlessWindow::new(40, 24));
+    primary
+        .attach(&checked_link())
+        .expect("a fresh host has no root");
+    primary.enable_semantics();
+    let payload = catch_unwind(AssertUnwindSafe(|| {
+        primary.pump(std::time::Duration::from_millis(16))
+    }))
+    .expect_err("the primary window's author error fails its frame");
+    assert!(
+        panic_text(&*payload).contains("semantics publication found author errors"),
+        "the pump raised something else: {}",
+        panic_text(&*payload)
+    );
+
+    let mut host = HeadlessHost::new(HeadlessWindow::new(40, 24));
+    host.attach(&SizedBox::new(40.0, 24.0).boxed())
+        .expect("a fresh host has no root");
+    let second = host.open_window(HeadlessWindow::new(40, 24));
+    host.attach_to(second, &checked_link())
+        .expect("a freshly opened window has no root yet");
+    host.enable_semantics_on(second);
+    let payload = catch_unwind(AssertUnwindSafe(|| {
+        host.pump(std::time::Duration::from_millis(16))
+    }))
+    .expect_err("a secondary window's author error fails the frame");
+    assert!(
+        panic_text(&*payload).contains("InapplicableAttribute"),
+        "the pump raised something else: {}",
+        panic_text(&*payload)
+    );
+
+    // Both windows at once: one failure names both, and neither window's
+    // findings are left to fail a later, clean frame.
+    let mut both = HeadlessHost::new(HeadlessWindow::new(40, 24));
+    both.attach(&checked_link())
+        .expect("a fresh host has no root");
+    both.enable_semantics();
+    let second = both.open_window(HeadlessWindow::new(40, 24));
+    both.attach_to(second, &checked_link())
+        .expect("a freshly opened window has no root yet");
+    both.enable_semantics_on(second);
+    let payload = catch_unwind(AssertUnwindSafe(|| {
+        both.pump(std::time::Duration::from_millis(16))
+    }))
+    .expect_err("both windows' author errors fail the frame");
+    let text = panic_text(&*payload);
+    assert_eq!(
+        text.matches("attribute: Toggled").count(),
+        2,
+        "one failure reports each window's finding: {text}"
+    );
+    let _clean = both.pump(std::time::Duration::ZERO);
 }

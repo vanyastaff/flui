@@ -23,7 +23,7 @@ use flui_painting::typography::TextDirection;
 use flui_platform::data_transfer::{TransferActions, TransferFormat};
 use flui_platform::drag::OsDragEnd;
 use flui_platform::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, NamedKey};
-use flui_platform::{CursorIcon, EventTime, HapticFeedback, TargetPlatform};
+use flui_platform::{Cursor, CursorIcon, EventTime, HapticFeedback, TargetPlatform};
 use flui_testing::a11y::{Action, ActionData, ActionRequest, Role, TreeId};
 use flui_testing::widgets::SharedSignal;
 use flui_view::element::ElementKind;
@@ -453,7 +453,7 @@ fn press_control(laid: &mut LaidOut, label: &str, pointer: Pointer) {
             .build(),
         Pointer::Virtual => flui_testing::replay::VirtualScript::new(
             "virtual press",
-            flui_platform::DeviceId::try_from(7_u64).expect("a nonzero device id"),
+            flui_platform::pointer::DeviceId::try_from(7_u64).expect("a nonzero device id"),
         )
         .press(at)
         .wait(wait)
@@ -777,7 +777,7 @@ pub(crate) fn a_panicking_drop_callback_ends_the_drag_cancelled_and_the_next_dro
     assert!(laid.find_text("feedback").is_none());
     assert_ne!(
         laid.cursor(),
-        CursorIcon::Grabbing,
+        Cursor::Icon(CursorIcon::Grabbing),
         "the drag gave the cursor back"
     );
     assert_eq!(shared.board().todo, ["Alice", "Bob"]);
@@ -825,34 +825,38 @@ pub(crate) fn the_cursor_shows_what_a_drop_would_do() {
     let shared = shared();
     let mut laid = mount(&shared);
     laid.dispatch_pointer_hover(100.0, 30.0);
-    assert_eq!(laid.cursor(), CursorIcon::Grab);
+    assert_eq!(laid.cursor(), Cursor::Icon(CursorIcon::Grab));
     laid.dispatch_pointer_down_with_kind(100.0, 30.0, PointerKind::Mouse);
     laid.dispatch_pointer_move(100.0, 45.0);
     laid.dispatch_pointer_move(300.0, 120.0);
-    assert_eq!(laid.cursor(), CursorIcon::Grabbing, "over nothing");
+    assert_eq!(
+        laid.cursor(),
+        Cursor::Icon(CursorIcon::Grabbing),
+        "over nothing"
+    );
     laid.dispatch_pointer_move(inside(DONE).0, inside(DONE).1);
     assert_eq!(
         laid.cursor(),
-        CursorIcon::Grabbing,
+        Cursor::Icon(CursorIcon::Grabbing),
         "over a target that would move it"
     );
     laid.dispatch_pointer_move(inside(COPIES).0, inside(COPIES).1);
     assert_eq!(
         laid.cursor(),
-        CursorIcon::Copy,
+        Cursor::Icon(CursorIcon::Copy),
         "over a target that would copy it"
     );
     laid.dispatch_pointer_move(inside(LOCKED).0, inside(LOCKED).1);
     assert_eq!(
         laid.cursor(),
-        CursorIcon::NoDrop,
+        Cursor::Icon(CursorIcon::NoDrop),
         "over a target that declines"
     );
     laid.dispatch_pointer_up(inside(LOCKED).0, inside(LOCKED).1);
     settle(&mut laid);
     assert_eq!(
         laid.cursor(),
-        CursorIcon::Default,
+        Cursor::Icon(CursorIcon::Default),
         "the hovered regions have the cursor back"
     );
 
@@ -872,7 +876,7 @@ pub(crate) fn the_cursor_shows_what_a_drop_would_do() {
     touch(40, inside(COPIES), 1);
     assert_eq!(
         laid.cursor(),
-        CursorIcon::Default,
+        Cursor::Icon(CursorIcon::Default),
         "a finger has no cursor to change"
     );
     touch(40, inside(COPIES), 2);

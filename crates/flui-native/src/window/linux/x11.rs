@@ -159,6 +159,49 @@ pub(crate) mod mode {
         (atoms != current).then_some(atoms)
     }
 
+    /// The `_NET_WM_STATE` atoms a window's level is kept by, as the server
+    /// numbered them.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(crate) struct LevelAtoms {
+        /// `_NET_WM_STATE_ABOVE`.
+        pub above: u32,
+        /// `_NET_WM_STATE_BELOW`.
+        pub below: u32,
+    }
+
+    /// The level `_NET_WM_STATE`'s `atoms` keep a window at: above the
+    /// others, below them, or neither. A property that names both says
+    /// neither, as EWMH leaves that pair to no window manager.
+    pub(crate) fn level_of(atoms: &[u32], known: &LevelAtoms) -> flui_platform::WindowLevel {
+        use flui_platform::WindowLevel;
+        match (atoms.contains(&known.above), atoms.contains(&known.below)) {
+            (true, false) => WindowLevel::AlwaysOnTop,
+            (false, true) => WindowLevel::AlwaysOnBottom,
+            _ => WindowLevel::Normal,
+        }
+    }
+
+    /// The `_NET_WM_STATE` a window not mapped yet holds to be mapped at
+    /// `level`, from the atoms it holds now (`current`): the level atoms
+    /// replaced, every other kept, as [`with_mode`] does for the mode.
+    /// `None` when the property already says so.
+    pub(crate) fn with_level(
+        current: &[u32],
+        level: flui_platform::WindowLevel,
+        known: &LevelAtoms,
+    ) -> Option<Vec<u32>> {
+        use flui_platform::WindowLevel;
+        let wanted: &[u32] = match level {
+            WindowLevel::Normal => &[],
+            WindowLevel::AlwaysOnTop => &[known.above],
+            WindowLevel::AlwaysOnBottom => &[known.below],
+        };
+        let mut atoms = current.to_vec();
+        atoms.retain(|atom| *atom != known.above && *atom != known.below);
+        atoms.extend_from_slice(wanted);
+        (atoms != current).then_some(atoms)
+    }
+
     #[cfg(test)]
     mod tests {
         use flui_platform::WindowMode;
@@ -360,6 +403,60 @@ pub(crate) mod mode {
                 );
             }
         }
+
+        const LEVELS: LevelAtoms = LevelAtoms {
+            above: 305,
+            below: 306,
+        };
+
+        /// A window's level is what `_NET_WM_STATE` keeps it at, and a window
+        /// not mapped yet asks for its level there: the level atoms are
+        /// replaced, the mode's and the others kept, and a property that
+        /// already says so is not written again.
+        #[test]
+        fn a_window_is_kept_at_the_level_its_state_property_names() {
+            use flui_platform::WindowLevel::{AlwaysOnBottom, AlwaysOnTop, Normal};
+
+            // (case, atoms held, level read)
+            let read: &[(&str, &[u32], flui_platform::WindowLevel)] = &[
+                ("no atoms", &[], Normal),
+                ("above", &[OTHER, 305], AlwaysOnTop),
+                ("below", &[306, 302, 303], AlwaysOnBottom),
+                ("both is neither", &[305, 306], Normal),
+                ("only other states", &[OTHER, 304], Normal),
+            ];
+            for (case, atoms, expected) in read {
+                assert_eq!(level_of(atoms, &LEVELS), *expected, "{case}");
+            }
+
+            /// A case, the atoms held, the level, the atoms written.
+            type Row = (
+                &'static str,
+                &'static [u32],
+                flui_platform::WindowLevel,
+                Option<&'static [u32]>,
+            );
+            let written: &[Row] = &[
+                ("above from nothing", &[], AlwaysOnTop, Some(&[305])),
+                ("below replaces above", &[305], AlwaysOnBottom, Some(&[306])),
+                ("normal clears below", &[306], Normal, Some(&[])),
+                ("normal from nothing", &[], Normal, None),
+                ("above again", &[305], AlwaysOnTop, None),
+                (
+                    "the mode and other states are kept",
+                    &[302, 303, OTHER, 306],
+                    AlwaysOnTop,
+                    Some(&[302, 303, OTHER, 305]),
+                ),
+            ];
+            for (case, current, level, expected) in written {
+                assert_eq!(
+                    with_level(current, *level, &LEVELS).as_deref(),
+                    *expected,
+                    "{case}"
+                );
+            }
+        }
     }
 }
 
@@ -390,6 +487,8 @@ pub(crate) mod support {
         pub maximized_vert: u32,
         pub fullscreen: u32,
         pub moveresize: u32,
+        pub above: u32,
+        pub below: u32,
         pub frame_drawn: u32,
     }
 
@@ -423,6 +522,10 @@ pub(crate) mod support {
         /// It moves and resizes a window from a press on a title bar or a
         /// border the application draws (`_NET_WM_MOVERESIZE`).
         pub moves_and_resizes: bool,
+        /// It keeps a window above the others (`_NET_WM_STATE_ABOVE`).
+        pub above: bool,
+        /// It keeps a window below the others (`_NET_WM_STATE_BELOW`).
+        pub below: bool,
         /// It synchronises the frames a window draws with what it composites
         /// (`_NET_WM_FRAME_DRAWN`), reading the window's extended XSync
         /// counter: odd while a frame draws, even once it is drawn.
@@ -456,6 +559,8 @@ pub(crate) mod support {
                 maximizes: lists(atoms.maximized_horz) && lists(atoms.maximized_vert),
                 fullscreen: lists(atoms.fullscreen),
                 moves_and_resizes: lists(atoms.moveresize),
+                above: lists(atoms.above),
+                below: lists(atoms.below),
                 paces_frames: lists(atoms.frame_drawn),
                 composited: false,
             }
@@ -544,6 +649,20 @@ pub(crate) mod support {
         };
         capabilities.maximizes = from_the_window_manager(support.maximizes);
         capabilities.enters_fullscreen = from_the_window_manager(support.fullscreen);
+        // A grab is the server's (`GrabPointer`, confined to the window); a
+        // lock is that grab with a blank cursor, the pointer put back where
+        // it was locked, and its motion read from XInput 2's raw events.
+        capabilities.confines_cursor = Native;
+        capabilities.locks_cursor = Native;
+        // The levels are `_NET_WM_STATE_ABOVE` and `_NET_WM_STATE_BELOW`, which
+        // a window manager that lists them keeps; the resize steps and the
+        // proportion are `WM_NORMAL_HINTS`, which any window manager holds.
+        capabilities.keeps_on_top = from_the_window_manager(support.above);
+        capabilities.keeps_on_bottom = from_the_window_manager(support.below);
+        capabilities.sets_resize_increments = from_the_window_manager(support.managed());
+        capabilities.sets_aspect_ratio = from_the_window_manager(support.managed());
+        // A Render picture made into a cursor.
+        capabilities.cursor_image = Availability::Native;
         capabilities.into_capabilities()
     }
 
@@ -562,7 +681,9 @@ pub(crate) mod support {
             maximized_vert: 303,
             fullscreen: 304,
             moveresize: 305,
-            frame_drawn: 306,
+            above: 306,
+            below: 307,
+            frame_drawn: 308,
         };
 
         /// What a window manager lists decides what a window honours: with no
@@ -599,7 +720,7 @@ pub(crate) mod support {
                 (
                     "a list where no window manager answers the check",
                     Icccm,
-                    &[302, 303, 304, 305],
+                    &[302, 303, 304, 305, 306, 307],
                     [Native, Unavailable, Unavailable, Native],
                 ),
                 (
@@ -623,7 +744,7 @@ pub(crate) mod support {
                 (
                     "everything",
                     Extended,
-                    &[302, 303, 304, 305, 306, 999],
+                    &[302, 303, 304, 305, 306, 307, 308, 999],
                     [Native, Native, Native, Native],
                 ),
             ];
@@ -775,7 +896,7 @@ pub(crate) mod support {
 
             let honoured = capabilities(WindowManagerSupport::read(
                 WindowManager::Extended,
-                &[302, 303, 304, 305],
+                &[302, 303, 304, 305, 306, 307],
                 &ATOMS,
             ));
             assert_eq!(
@@ -796,6 +917,12 @@ pub(crate) mod support {
                     activates: Native,
                     closes: Native,
                     material: WindowCapability::NOT_ON_THIS_PLATFORM,
+                    confines_cursor: Native,
+                    locks_cursor: Native,
+                    keeps_on_top: Native,
+                    keeps_on_bottom: Native,
+                    sets_resize_increments: Native,
+                    sets_aspect_ratio: Native,
                     reports_presentation: WindowCapability::NOT_ON_THIS_PLATFORM,
                     reports_keyboard_inset: WindowCapability::NOT_ON_THIS_PLATFORM,
                     reports_system_gestures: WindowCapability::NOT_ON_THIS_PLATFORM,
@@ -804,6 +931,7 @@ pub(crate) mod support {
                     observes_minimized: Availability::Native,
                     places_at_open: Availability::Native,
                     frame_rate_hint: Availability::Unavailable,
+                    cursor_image: Availability::Native,
                 }
             );
         }
@@ -824,21 +952,9 @@ pub(crate) mod placement {
     #![forbid(unsafe_code)]
 
     use flui_foundation::geometry::{Bounds, DevicePixelRatio, Point, Size};
-    use flui_platform::{DisplayInfo, DisplaySnapshot, InvalidGeometry, WindowGeometry};
+    use flui_platform::{DisplaySnapshot, InvalidGeometry, WindowGeometry};
 
-    /// `pixels`, already rounded, as the whole number it is, when it is one
-    /// between `min` and `max`.
-    fn whole(pixels: f64, min: i32, max: i32) -> Option<i32> {
-        if !(pixels.is_finite() && pixels >= f64::from(min) && pixels <= f64::from(max)) {
-            return None;
-        }
-        #[expect(
-            clippy::cast_possible_truncation,
-            reason = "a whole number between two i32 bounds, checked just above"
-        )]
-        let whole = pixels as i32;
-        Some(whole)
-    }
+    use crate::window::desktop::{DisplayFrame, display_of_rect};
 
     /// A logical length at `scale` as a window extent in device pixels, by
     /// the hosts' one rule ([`state::device_extent`](crate::window::state::device_extent)),
@@ -846,13 +962,6 @@ pub(crate) mod placement {
     /// not finite and positive.
     pub(crate) fn device_extent(logical: f64, scale: DevicePixelRatio) -> Option<u16> {
         u16::try_from(crate::window::state::device_extent(logical, scale)?).ok()
-    }
-
-    /// A logical coordinate at `scale` as an X11 coordinate in device pixels,
-    /// rounded. `None` when it is not finite or does not fit 16 bits.
-    pub(crate) fn device_coordinate(logical: f64, scale: DevicePixelRatio) -> Option<i16> {
-        let pixels = scale.to_device(logical).round();
-        i16::try_from(whole(pixels, i32::from(i16::MIN), i32::from(i16::MAX))?).ok()
     }
 
     /// The frame a window manager put around a window, in device pixels, as
@@ -915,22 +1024,22 @@ pub(crate) mod placement {
         )
     }
 
-    /// `bounds`, in device pixels, at `scale` as the logical geometry the
-    /// window state publishes.
+    /// `bounds`, in device pixels, as the geometry the window state
+    /// publishes: its position on the display it is on (`display`, which
+    /// converts through its own origin and scale), and its extent at the
+    /// window's `scale`. A window on no display has no position.
     ///
     /// # Errors
     /// [`InvalidGeometry`] when the rectangle over the scale describes no
     /// window.
     pub(crate) fn logical_geometry(
         bounds: Bounds<i32>,
+        display: Option<DisplayFrame>,
         scale: DevicePixelRatio,
     ) -> Result<WindowGeometry, InvalidGeometry> {
         let logical = |device: i32| scale.to_logical(f64::from(device));
         WindowGeometry::try_new(
-            Some(Point::new(
-                logical(bounds.origin.x),
-                logical(bounds.origin.y),
-            )),
+            display.and_then(|display| display.position(bounds.origin)),
             Size::new(logical(bounds.size.width), logical(bounds.size.height)),
         )
     }
@@ -938,38 +1047,29 @@ pub(crate) mod placement {
     /// The scale a window on `display` has: the display's, else `last`, the
     /// window's last one.
     pub(crate) fn window_scale(
-        display: Option<&DisplayInfo>,
+        display: Option<DisplayFrame>,
         last: DevicePixelRatio,
     ) -> DevicePixelRatio {
-        display.map_or(last, |display| display.scale_factor)
+        display.map_or(last, DisplayFrame::scale)
     }
 
-    /// The area two rectangles share, in square device pixels.
-    fn overlap(a: Bounds<i32>, b: Bounds<i32>) -> i64 {
-        let span = |start_a: i32, len_a: i32, start_b: i32, len_b: i32| {
-            let start = i64::from(start_a).max(i64::from(start_b));
-            let end = (i64::from(start_a) + i64::from(len_a.max(0)))
-                .min(i64::from(start_b) + i64::from(len_b.max(0)));
-            (end - start).max(0)
-        };
-        span(a.origin.x, a.size.width, b.origin.x, b.size.width)
-            * span(a.origin.y, a.size.height, b.origin.y, b.size.height)
+    /// The X11 coordinates position `at` on `display` names: the desktop
+    /// pixel through the display's own origin and scale
+    /// ([`DisplayFrame::to_desktop`]), when it fits X11's signed 16 bits;
+    /// never a saturated coordinate.
+    pub(crate) fn x11_coordinates(display: DisplayFrame, at: Point<f64>) -> Option<(i16, i16)> {
+        let pixel = display.to_desktop(at)?;
+        Some((i16::try_from(pixel.x).ok()?, i16::try_from(pixel.y).ok()?))
     }
 
-    /// The display of `snapshot` that `bounds` overlaps most, the first of
-    /// equals; `None` when it overlaps none.
+    /// The display of `snapshot` a window at `bounds` is on: the one it
+    /// overlaps most, the first of equals, else the nearest
+    /// ([`display_of_rect`]); `None` for a snapshot with no display.
     pub(crate) fn display_of(
         snapshot: &DisplaySnapshot,
         bounds: Bounds<i32>,
-    ) -> Option<&DisplayInfo> {
-        let mut best: Option<(i64, &DisplayInfo)> = None;
-        for display in snapshot.displays() {
-            let area = overlap(display.bounds, bounds);
-            if area > 0 && best.is_none_or(|(most, _)| area > most) {
-                best = Some((area, display));
-            }
-        }
-        best.map(|(_, display)| display)
+    ) -> Option<DisplayFrame> {
+        display_of_rect(snapshot, bounds)
     }
 
     #[cfg(test)]
@@ -986,7 +1086,8 @@ pub(crate) mod placement {
         fn logical_numbers_become_x11_numbers_only_when_they_fit() {
             let max = u16::try_from(flui_platform::MAX_SURFACE_EXTENT)
                 .expect("the largest surface fits X11's 16 bits");
-            // (case, logical, scale, extent, coordinate)
+            // (case, logical, scale, extent, coordinate on a display at the
+            // desktop's origin)
             let table = [
                 ("whole", 100.0, 1.0, Some(100), Some(100)),
                 ("scaled and rounded", 10.3, 1.5, Some(15), Some(15)),
@@ -1011,11 +1112,14 @@ pub(crate) mod placement {
                     extent,
                     "{case}: extent"
                 );
-                assert_eq!(
-                    device_coordinate(logical, ratio(scale)),
-                    coordinate,
-                    "{case}: coordinate"
-                );
+                if logical.is_finite() {
+                    let frame = DisplayFrame::of(&display("display", 0, scale));
+                    assert_eq!(
+                        x11_coordinates(frame, Point::new(logical, 0.0)).map(|(x, _)| x),
+                        coordinate,
+                        "{case}: coordinate"
+                    );
+                }
             }
         }
 
@@ -1039,79 +1143,104 @@ pub(crate) mod placement {
             let outer = outer_bounds(Point::new(i32::MIN, 0), Size::new(i32::MAX, 1), huge);
             assert_eq!(outer.origin.x, i32::MIN);
             assert_eq!(outer.size.width, i32::MAX);
+            // On a 2x display whose corner is at device x 40: the position is
+            // the corner's distance over that display's scale, the extent the
+            // window's own pixels over its scale.
+            let snapshot = DisplaySnapshot::empty()
+                .successor(vec![display("hidpi", 40, 2.0)])
+                .expect("a snapshot");
+            let frame = DisplayFrame::find(&snapshot, snapshot.displays()[0].id);
+            let geometry = logical_geometry(
+                Bounds::new(Point::new(98, 50), Size::new(646, 514)),
+                frame,
+                ratio(2.0),
+            )
+            .expect("a rectangle");
+            assert_eq!(
+                geometry.position().map(flui_platform::WindowPosition::at),
+                Some(Point::new(29.0, 25.0))
+            );
+            assert_eq!(geometry.size(), Size::new(323.0, 257.0));
             assert_eq!(
                 logical_geometry(
                     Bounds::new(Point::new(98, 50), Size::new(646, 514)),
+                    None,
                     ratio(2.0)
-                ),
-                WindowGeometry::try_new(Some(Point::new(49.0, 25.0)), Size::new(323.0, 257.0))
+                )
+                .map(WindowGeometry::position),
+                Ok(None),
+                "a window on no display has no position"
             );
+        }
+
+        fn display(name: &str, x: i32, scale: f64) -> flui_platform::DisplayDescription {
+            let id = DisplayRegistry::new()
+                .mint(&DisplayKey::Unkeyed)
+                .expect("an id");
+            let bounds = Bounds::new(Point::new(x, 0), Size::new(1920, 1080));
+            flui_platform::DisplayDescription::from_device(id, name, bounds, bounds, ratio(scale))
+                .expect("a display")
         }
 
         /// A window takes its display's scale, which is one by its type, and
         /// keeps its last one when it is on no display.
         #[test]
         fn a_window_takes_its_displays_scale() {
-            let registry = DisplayRegistry::new();
-            let at = |scale: f64| {
-                let id = registry.mint(&DisplayKey::Unkeyed).expect("an id");
-                DisplayInfo::new(
-                    id,
-                    "display",
-                    Bounds::new(Point::new(0, 0), Size::new(1920, 1080)),
-                    DevicePixelRatio::try_new(scale).expect("a positive ratio"),
-                )
-            };
+            let on = |scale: f64| DisplayFrame::of(&display("display", 0, scale));
             // (case, display scale, last, scale taken)
             let table = [
                 ("a scale", Some(2.0), 1.0, 2.0),
                 ("no display", None, 1.25, 1.25),
             ];
             for (case, scale, last, expected) in table {
-                let display = scale.map(at);
                 assert_eq!(
-                    window_scale(display.as_ref(), ratio(last)),
+                    window_scale(scale.map(on), ratio(last)),
                     ratio(expected),
                     "{case}"
                 );
             }
         }
 
+        /// A window is on the display it overlaps most, the first of equals,
+        /// and on the nearest one when it overlaps none: a window always has
+        /// a display while the snapshot has one, so it always has a place.
         #[test]
         fn a_window_is_on_the_display_it_overlaps_most() {
-            let registry = DisplayRegistry::new();
-            let display = |name: &str, x: i32| {
-                let id = registry.mint(&DisplayKey::Unkeyed).expect("an id");
-                DisplayInfo::new(
-                    id,
-                    name,
-                    Bounds::new(Point::new(x, 0), Size::new(1920, 1080)),
-                    DevicePixelRatio::ONE,
-                )
-            };
+            let (left, right) = (display("left", 0, 1.0), display("right", 1920, 1.0));
+            let (left_id, right_id) = (left.id, right.id);
             let snapshot = DisplaySnapshot::empty()
-                .successor(vec![display("left", 0), display("right", 1920)])
+                .successor(vec![left, right])
                 .expect("a snapshot");
             let on = |x: i32, width: i32| {
                 display_of(
                     &snapshot,
                     Bounds::new(Point::new(x, 100), Size::new(width, 300)),
                 )
-                .map(|display| display.name.as_str())
+                .map(DisplayFrame::display)
             };
             // (case, window x, window width, display)
             let table = [
-                ("inside the left", 100, 800, Some("left")),
-                ("mostly right", 1800, 800, Some("right")),
-                ("mostly left", 1500, 800, Some("left")),
-                ("evenly across: the first", 1520, 800, Some("left")),
-                ("off every display", 5000, 800, None),
-                ("no width", 100, 0, None),
-                ("at the edge of the range", i32::MAX - 10, i32::MAX, None),
+                ("inside the left", 100, 800, Some(left_id)),
+                ("mostly right", 1800, 800, Some(right_id)),
+                ("mostly left", 1500, 800, Some(left_id)),
+                ("evenly across: the first", 1520, 800, Some(left_id)),
+                ("off every display: the nearest", 5000, 800, Some(right_id)),
+                ("no width: the one it touches", 100, 0, Some(left_id)),
+                (
+                    "at the edge of the range: the nearest",
+                    i32::MAX - 10,
+                    i32::MAX,
+                    Some(right_id),
+                ),
             ];
             for (case, x, width, expected) in table {
                 assert_eq!(on(x, width), expected, "{case}");
             }
+            assert_eq!(
+                display_of(&DisplaySnapshot::empty(), Bounds::default()),
+                None,
+                "no display"
+            );
         }
     }
 }
@@ -1126,7 +1255,7 @@ pub(crate) mod hints {
     #![forbid(unsafe_code)]
 
     use flui_foundation::geometry::{DevicePixelRatio, Size};
-    use flui_platform::{SizeConstraints, WindowExtent};
+    use flui_platform::{AspectRatio, SizeConstraints, WindowExtent};
 
     use crate::window::state::device_limits;
 
@@ -1163,6 +1292,50 @@ pub(crate) mod hints {
         SizeLimits {
             min: limits.min.map(signed),
             max: limits.max.map(signed),
+        }
+    }
+
+    /// What a window asks of the user's resize in `WM_NORMAL_HINTS` beside
+    /// its limits, in device pixels.
+    #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+    pub(crate) struct ResizeSteps {
+        /// `PResizeInc`: the step of the width and of the height.
+        pub increment: Option<(i32, i32)>,
+        /// `PBaseSize`: the size the steps count from, the window's minimum.
+        pub base: Option<(i32, i32)>,
+        /// `PAspect`: the proportion, width to height, as both its least and
+        /// its greatest.
+        pub aspect: Option<(i32, i32)>,
+    }
+
+    /// The steps `step` (logical pixels) and the proportion `aspect` at
+    /// `scale`, the steps counted from the device minimum `min` where the
+    /// window has one. A step is at least one device pixel; a proportion
+    /// whose terms an `i32` does not hold is halved once, which brings any
+    /// `u32` within it.
+    pub(crate) fn resize_steps(
+        step: Option<WindowExtent>,
+        aspect: Option<AspectRatio>,
+        min: Option<(i32, i32)>,
+        scale: DevicePixelRatio,
+    ) -> ResizeSteps {
+        let device = |logical: f64| {
+            crate::window::state::device_extent(logical, scale).map_or(1, u32::cast_signed)
+        };
+        let increment = step.map(|step| (device(step.width()), device(step.height())));
+        let aspect = aspect.map(|ratio| {
+            let (width, height) = (ratio.width().get(), ratio.height().get());
+            let halve = i32::try_from(width.max(height)).is_err();
+            let term = |term: u32| {
+                let term = if halve { (term >> 1).max(1) } else { term };
+                i32::try_from(term).unwrap_or(i32::MAX)
+            };
+            (term(width), term(height))
+        });
+        ResizeSteps {
+            increment,
+            base: increment.and(min),
+            aspect,
         }
     }
 
@@ -1295,6 +1468,106 @@ pub(crate) mod hints {
                         constraints,
                         resizable,
                         content,
+                        DevicePixelRatio::try_new(scale).expect("a positive ratio")
+                    ),
+                    expected,
+                    "{case}"
+                );
+            }
+        }
+
+        /// The resize steps are device pixels at the window's scale, counted
+        /// from its minimum where it has one, and the proportion is its
+        /// lowest terms, as both the least and the greatest.
+        #[test]
+        fn a_window_asks_its_resize_steps_and_proportion() {
+            use std::num::NonZeroU32;
+
+            let ratio = |width: u32, height: u32| {
+                AspectRatio::new(
+                    NonZeroU32::new(width).expect("non-zero"),
+                    NonZeroU32::new(height).expect("non-zero"),
+                )
+            };
+            let cell = WindowExtent::try_new(Size::new(8.0, 16.0)).expect("an extent");
+            let sliver = WindowExtent::try_new(Size::new(0.25, 0.25)).expect("an extent");
+            // (case, step, proportion, minimum, scale, steps)
+            let table = [
+                (
+                    "nothing asked",
+                    None,
+                    None,
+                    Some((200, 150)),
+                    1.0,
+                    ResizeSteps::default(),
+                ),
+                (
+                    "a step from the minimum",
+                    Some(cell),
+                    None,
+                    Some((200, 150)),
+                    1.0,
+                    ResizeSteps {
+                        increment: Some((8, 16)),
+                        base: Some((200, 150)),
+                        aspect: None,
+                    },
+                ),
+                (
+                    "a step at a scale, with no minimum",
+                    Some(cell),
+                    None,
+                    None,
+                    2.0,
+                    ResizeSteps {
+                        increment: Some((16, 32)),
+                        base: None,
+                        aspect: None,
+                    },
+                ),
+                (
+                    "a step under a pixel is one",
+                    Some(sliver),
+                    None,
+                    None,
+                    1.0,
+                    ResizeSteps {
+                        increment: Some((1, 1)),
+                        base: None,
+                        aspect: None,
+                    },
+                ),
+                (
+                    "a proportion alone keeps no base",
+                    None,
+                    Some(ratio(32, 18)),
+                    Some((200, 150)),
+                    1.0,
+                    ResizeSteps {
+                        increment: None,
+                        base: None,
+                        aspect: Some((16, 9)),
+                    },
+                ),
+                (
+                    "terms past an i32 are halved",
+                    None,
+                    Some(ratio(u32::MAX, 1)),
+                    None,
+                    1.0,
+                    ResizeSteps {
+                        increment: None,
+                        base: None,
+                        aspect: Some((i32::MAX, 1)),
+                    },
+                ),
+            ];
+            for (case, step, aspect, min, scale, expected) in table {
+                assert_eq!(
+                    resize_steps(
+                        step,
+                        aspect,
+                        min,
                         DevicePixelRatio::try_new(scale).expect("a positive ratio")
                     ),
                     expected,

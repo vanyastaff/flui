@@ -14,6 +14,7 @@
 pub mod __entry;
 pub(crate) mod agent;
 pub(crate) mod capability;
+pub(crate) mod clipboard_expiry;
 pub(crate) mod close_request;
 mod config;
 pub(crate) mod dev_agent;
@@ -66,10 +67,10 @@ pub use flui_runtime::{
 pub use launch::{Application, LaunchError, UnsupportedSystem};
 #[cfg(not(target_arch = "wasm32"))]
 pub use lifecycle::{
-    CancellationSignal, JoinTimeout, PublishError, ServiceContext, ServiceDefinition,
-    ServiceEvents, ServiceFuture, ServiceLifetime, ServicePublisher, ServiceStartError,
-    TaskContext, TaskHandle, TaskOutcome, TaskSpawner, WorkerGeneration, WorkerHandle,
-    service_events,
+    CancellationSignal, JoinTimeout, LifecycleWatch, PublishError, ServiceContext,
+    ServiceDefinition, ServiceEvents, ServiceFuture, ServiceLifetime, ServicePublisher,
+    ServiceStartError, TaskContext, TaskHandle, TaskOutcome, TaskSpawner, WorkerGeneration,
+    WorkerHandle, service_events,
 };
 pub use runner::EXIT_CODE_HUNG;
 #[cfg(all(

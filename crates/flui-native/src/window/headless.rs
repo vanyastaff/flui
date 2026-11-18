@@ -17,11 +17,12 @@ use flui_foundation::geometry::{Bounds, Point, Size, device_size, snap};
 use flui_platform::input_regions::{DeviceInputRegion, InputRegion};
 use flui_platform::text_store::TextStoreHost;
 use flui_platform::{
-    AdmittedCommand, ApplyError, Brightness, CursorError, DispatchEventResult, DisplayId,
-    PlatformHaptics, PlatformInput, PlatformTextInput, PlatformWindow, SizeConstraints,
-    SurfaceChange, Unsupported, UnsupportedReason, WindowCapabilities, WindowCommand, WindowFocus,
-    WindowFrame, WindowGeometry, WindowHandler, WindowId, WindowIdMint, WindowInteraction,
-    WindowMaterial, WindowMode, WindowOptions, WindowState,
+    AdmittedCommand, ApplyError, Brightness, Cursor, CursorError, CursorGrab, DispatchEventResult,
+    DisplayDescription, DisplayId, PlatformInput, PlatformTextInput, PlatformWindow,
+    SizeConstraints, SurfaceChange, Unsupported, UnsupportedReason, WindowCapabilities,
+    WindowCommand, WindowFocus, WindowFrame, WindowGeometry, WindowHandler, WindowId, WindowIdMint,
+    WindowInteraction, WindowLevel, WindowMaterial, WindowMode, WindowOptions, WindowPosition,
+    WindowState, haptics::PlatformHaptics,
 };
 use parking_lot::Mutex;
 
@@ -174,11 +175,24 @@ impl TrackedWindows for HeadlessWindows {
     ) -> Result<Rc<dyn HostWindow>, OpenWindowError> {
         // Refused before an id is taken, for what a command is refused for.
         let opening = options.geometry()?;
-        let display = state.window_display();
         let window_id = HEADLESS_WINDOW_IDS.lock().next()?;
         let (capabilities, limits) = {
             let tracked = self.tracked.borrow_mut();
             (tracked.capabilities, tracked.policy)
+        };
+        // The window opens where its options place it, on a display the
+        // system holds; otherwise at the corner of the primary display, as a
+        // window system places a window it was given no place for.
+        let placed = opening
+            .position
+            .filter(|_| capabilities.places_at_open().is_available())
+            .and_then(|at| Some((state.display(at.display())?, at.at())));
+        let (display, position) = match placed {
+            Some((display, at)) => (Some(display), at),
+            None => (
+                state.window_display().and_then(|id| state.display(id)),
+                Point::new(0.0, 0.0),
+            ),
         };
         // The capability snapshot reflects the devices already attached
         // (ADR-0213 §3).
@@ -194,7 +208,7 @@ impl TrackedWindows for HeadlessWindows {
                 positions: self.positions,
                 text_store_host: state.text_store_host.clone(),
                 display,
-                display_bounds: display.and_then(|id| state.display_bounds(id)),
+                position,
                 capabilities,
                 limits,
                 opening,
@@ -341,7 +355,7 @@ impl host::Window<HeadlessLoop> for HeadlessHostWindow {
         options: WindowOptions,
         handler: Rc<dyn WindowHandler>,
     ) -> Result<Rc<dyn HostWindow>, OpenWindowError> {
-        tracing::info!(?options, "Creating headless window");
+        tracing::debug!("a window is opening");
 
         let platform_state = std::rc::Rc::downgrade(&owner.state);
         owner.with_state(|state| {
@@ -370,8 +384,6 @@ impl host::Window<HeadlessLoop> for HeadlessHostWindow {
         std::sync::Arc::new(crate::display_connection::NoDisplay)
     }
 }
-
-// ==================== Mock Implementations ====================
 
 /// A simulated move of a window named a display its platform does not hold
 /// ([`HeadlessHostWindow::simulate_move_to`]).
@@ -406,6 +418,16 @@ pub struct HeadlessWindowSystem {
     /// The material the simulated system draws behind the window: the last
     /// [`WindowCommand::SetMaterial`] it applied, `Opaque` before any.
     pub material: WindowMaterial,
+    /// The grab the simulated system holds for the window.
+    pub cursor_grab: CursorGrab,
+    /// Where the simulated system stacks the window.
+    pub level: WindowLevel,
+    /// The steps the simulated system holds the user's resize to: the last
+    /// [`WindowCommand::SetResizeIncrements`] it applied.
+    pub resize_increments: Option<flui_platform::WindowExtent>,
+    /// The proportion the simulated system holds the user's resize to: the
+    /// last [`WindowCommand::SetAspectRatio`] it applied.
+    pub aspect_ratio: Option<flui_platform::AspectRatio>,
     /// Where the window last told its accessibility bridge it lies, as every
     /// native window tells its own ([`WindowAccessibility::bounds_changed`](crate::host::WindowAccessibility::bounds_changed)).
     pub accessibility_bounds: Option<ScreenBounds>,
@@ -645,11 +667,11 @@ struct HeadlessWindowSetup {
     /// What the window hands out of the window-level positions.
     positions: WindowPositions<()>,
     text_store_host: Option<TextStoreHostFactory>,
-    /// The display the window opens on; `None` when the platform has none.
-    display: Option<DisplayId>,
-    /// That display's bounds in logical pixels, for a window that opens
-    /// maximized or fullscreen.
-    display_bounds: Option<Bounds<f64>>,
+    /// The display the window opens on, as the system describes it; `None`
+    /// when the platform has none.
+    display: Option<DisplayDescription>,
+    /// Where on that display the window opens, in its logical pixels.
+    position: Point<f64>,
     capabilities: WindowCapabilities,
     limits: HeadlessWindowPolicy,
     /// The size, limits and position the options ask for, checked.
@@ -663,8 +685,9 @@ struct HeadlessHostWindowState {
     /// Every [`WindowCommand::SetMaterial`] the window applied, in order.
     materials: Vec<WindowMaterial>,
     title: String,
-    /// The outer top-left corner. This host draws no frame, so the outer
-    /// rectangle and the content area are the same.
+    /// The outer top-left corner, in the logical pixels of the window's
+    /// [`display`](Self::display) from its corner. This host draws no frame,
+    /// so the outer rectangle and the content area are the same.
     position: Point<f64>,
     size: Size<f64>,
     mode: WindowMode,
@@ -685,7 +708,15 @@ struct HeadlessHostWindowState {
     closed: bool,
 
     brightness: Brightness,
-    cursor: CursorIcon,
+    cursor: Cursor,
+    /// The grab the simulated window system holds; let go when the window
+    /// loses the focus.
+    cursor_grab: CursorGrab,
+    level: WindowLevel,
+    /// The steps and the proportion the last commands asked the user's
+    /// resize to keep ([`HeadlessHostWindow::window_system`]).
+    resize_increments: Option<flui_platform::WindowExtent>,
+    aspect_ratio: Option<flui_platform::AspectRatio>,
     /// The display this window is on; `None` when the platform has no displays.
     display: Option<DisplayId>,
     /// What the simulated window system lets this window do now.
@@ -705,37 +736,74 @@ struct HeadlessHostWindowState {
 /// ([`WindowGeometry::try_new`]).
 #[derive(Debug, Clone, Copy)]
 struct ModelBounds {
-    position: Option<Point<f64>>,
+    /// The display the position is on, and the point in its logical pixels.
+    position: Option<(DisplayId, Point<f64>)>,
     size: Size<f64>,
 }
 
 impl From<WindowGeometry> for ModelBounds {
     fn from(geometry: WindowGeometry) -> Self {
         Self {
-            position: geometry.position(),
+            position: geometry
+                .position()
+                .map(|position| (position.display(), position.at())),
             size: geometry.size(),
         }
     }
 }
 
+/// Where a display sits on the simulated desktop, in device pixels, and how
+/// many device pixels make one of its logical pixels: what turns a position on
+/// it into a desktop point.
+#[derive(Debug, Clone, Copy)]
+struct DesktopFrame {
+    origin: Point<f64>,
+    scale: flui_foundation::geometry::DevicePixelRatio,
+}
+
+impl DesktopFrame {
+    fn of(display: &DisplayDescription) -> Self {
+        let origin = display.origin.get();
+        Self {
+            origin: Point::new(f64::from(origin.x), f64::from(origin.y)),
+            scale: display.scale_factor,
+        }
+    }
+
+    /// `at`, in the display's logical pixels, as a desktop point.
+    fn desktop(self, at: Point<f64>) -> Point<f64> {
+        Point::new(
+            self.origin.x + self.scale.to_device(at.x),
+            self.origin.y + self.scale.to_device(at.y),
+        )
+    }
+
+    /// The desktop point `desktop` in the display's logical pixels, from its
+    /// corner: the inverse of [`Self::desktop`].
+    fn on_display(self, desktop: Point<f64>) -> Point<f64> {
+        Point::new(
+            self.scale.to_logical(desktop.x - self.origin.x),
+            self.scale.to_logical(desktop.y - self.origin.y),
+        )
+    }
+}
+
 impl HeadlessHostWindowState {
     /// Where the window lies on the simulated screen, in device pixels: its
-    /// position and size at its scale. This host draws no frame, so the
-    /// content is the whole window. `None` for a size that is no rectangle.
-    fn screen_bounds(&self) -> Option<ScreenBounds> {
-        let ratio = self.scale_factor;
+    /// position on its display's `frame` and its size at its scale. This host
+    /// draws no frame, so the content is the whole window. `None` for a
+    /// window on no display or a size that is no rectangle.
+    fn screen_bounds(&self, frame: Option<DesktopFrame>) -> Option<ScreenBounds> {
+        let corner = frame?.desktop(self.position);
         // `as` saturates and reads NaN as zero, as a coordinate must.
-        let origin = Point::new(
-            snap(ratio.to_device(self.position.x)) as i32,
-            snap(ratio.to_device(self.position.y)) as i32,
-        );
-        let window = Bounds::new(origin, device_size(self.size, ratio));
+        let origin = Point::new(snap(corner.x) as i32, snap(corner.y) as i32);
+        let window = Bounds::new(origin, device_size(self.size, self.scale_factor));
         ScreenBounds::try_new(window, window).ok()
     }
 
     fn geometry(&self) -> ModelBounds {
         ModelBounds {
-            position: Some(self.position),
+            position: self.display.map(|display| (display, self.position)),
             size: self.size,
         }
     }
@@ -770,20 +838,22 @@ impl HeadlessHostWindowState {
         }
     }
 
-    /// Enter `mode` the way the host does: maximized and fullscreen fill the
-    /// window's display (as far as the host allows), minimized keeps the
-    /// bounds, and normal returns to the remembered rectangle. A host that
-    /// declines maximizing leaves the window as it was.
+    /// Enter `mode` the way the host does: maximized fills the usable area of
+    /// the window's `display` and fullscreen the whole display (as far as the
+    /// host allows), minimized keeps the bounds, and normal returns to the
+    /// remembered rectangle, on its display. A host that declines maximizing
+    /// leaves the window as it was.
     fn enter_mode(
         &mut self,
         mode: WindowMode,
         limits: &HeadlessWindowPolicy,
-        display_bounds: Option<Bounds<f64>>,
+        display: Option<flui_platform::DisplayBounds>,
     ) {
         match mode {
             WindowMode::Normal => {
                 if let Some(normal) = self.normal_geometry.take() {
-                    if let Some(position) = normal.position {
+                    if let Some((display, position)) = normal.position {
+                        self.display = Some(display);
                         self.position = position;
                     }
                     self.size = normal.size;
@@ -798,9 +868,17 @@ impl HeadlessHostWindowState {
             WindowMode::Maximized if limits.refuses_maximize => {}
             WindowMode::Maximized | WindowMode::Fullscreen => {
                 self.remember_normal();
-                if let Some(bounds) = display_bounds {
-                    self.position = bounds.origin;
-                    self.size = Self::clamp_to_host(bounds.size, limits);
+                if let Some(bounds) = display {
+                    let area = if mode == WindowMode::Maximized {
+                        bounds.usable()
+                    } else {
+                        flui_foundation::geometry::Rect::from_origin_size(
+                            Point::new(0.0, 0.0),
+                            bounds.extent(),
+                        )
+                    };
+                    self.position = area.min;
+                    self.size = Self::clamp_to_host(area.size(), limits);
                 }
                 self.mode = mode;
             }
@@ -824,12 +902,12 @@ fn sample_window_state(model: &HeadlessHostWindowState, hovered: bool) -> Sample
     }
     let capabilities = &model.capabilities;
     let observed = |bounds: ModelBounds| {
-        WindowGeometry::try_new(
-            bounds
-                .position
-                .filter(|_| capabilities.observes_position().is_available()),
-            bounds.size,
-        )
+        let position = bounds
+            .position
+            .filter(|_| capabilities.observes_position().is_available())
+            .map(|(display, at)| WindowPosition::try_new(display, at))
+            .transpose()?;
+        WindowGeometry::try_new(position, bounds.size)
     };
     let mode = match model.mode {
         WindowMode::Minimized if !capabilities.observes_minimized().is_available() => {
@@ -877,6 +955,8 @@ fn sample_window_state(model: &HeadlessHostWindowState, hovered: bool) -> Sample
             focus: WindowFocus::reported(model.focused, model.focused),
             capabilities: *capabilities,
             interaction: model.interaction,
+            cursor_grab: model.cursor_grab,
+            level: model.level,
         }
         .onto(state)
     })
@@ -922,19 +1002,18 @@ impl HeadlessHostWindow {
             positions,
             text_store_host,
             display,
-            display_bounds,
+            position,
             capabilities,
             limits,
             opening,
         } = host;
+        let display_bounds = display.as_ref().map(|display| display.bounds);
+        let frame = display.as_ref().map(DesktopFrame::of);
         let mut model = HeadlessHostWindowState {
             frame_rate_hints: Vec::new(),
             materials: Vec::new(),
             title: options.title.clone(),
-            position: opening
-                .position
-                .filter(|_| capabilities.places_at_open().is_available())
-                .unwrap_or_default(),
+            position,
             size: opening.content.get(),
             mode: WindowMode::Normal,
             normal_geometry: None,
@@ -951,8 +1030,12 @@ impl HeadlessHostWindow {
             closed: false,
 
             brightness: Brightness::default(),
-            cursor: CursorIcon::default(),
-            display,
+            cursor: Cursor::Icon(CursorIcon::default()),
+            cursor_grab: CursorGrab::None,
+            level: WindowLevel::Normal,
+            resize_increments: None,
+            aspect_ratio: None,
+            display: display.as_ref().map(|display| display.id),
             capabilities,
             reported: None,
             interaction: WindowInteraction::None,
@@ -1006,29 +1089,33 @@ impl HeadlessHostWindow {
                 reports,
             }),
         };
-        window.tell_bridge_bounds();
+        window.tell_bridge_bounds(frame);
         window
     }
 
-    /// The window's display bounds in logical pixels, from the platform's
-    /// current displays; `None` when the platform is gone or knows none.
-    fn display_bounds(&self) -> Option<Bounds<f64>> {
-        let display = self.state.borrow_mut().display?;
-        self.platform_state
-            .upgrade()?
-            .borrow_mut()
-            .display_bounds(display)
+    /// Display `id` as the platform describes it now; `None` when the
+    /// platform is gone or holds no such display.
+    fn display(&self, id: DisplayId) -> Option<DisplayDescription> {
+        self.platform_state.upgrade()?.borrow_mut().display(id)
     }
 
-    /// Tell the accessibility bridge where the window lies, when that changed
-    /// since it was last told, as a native window does, and keep what it was
-    /// told once it returns: the model's borrow is released while the bridge
-    /// runs.
-    fn tell_bridge_bounds(&self) {
+    /// The window's display as the platform describes it now; `None` when
+    /// the window is on none, or the platform is gone or no longer holds it.
+    fn current_display(&self) -> Option<DisplayDescription> {
+        let display = self.state.borrow_mut().display?;
+        self.display(display)
+    }
+
+    /// Tell the accessibility bridge where the window lies on its display's
+    /// `frame`, when that changed since it was last told, as a native window
+    /// does, and keep what it was told once it returns: the model's borrow is
+    /// released while the bridge runs. The frame is passed in: a window that
+    /// opens does so under the platform's borrow.
+    fn tell_bridge_bounds(&self, frame: Option<DesktopFrame>) {
         let due = {
             let state = self.state.borrow_mut();
             state
-                .screen_bounds()
+                .screen_bounds(frame)
                 .filter(|bounds| state.bridge_bounds != Some(*bounds))
         };
         if let Some(bounds) = due {
@@ -1043,7 +1130,7 @@ impl HeadlessHostWindow {
     /// place ([`Self::simulate_state`]); a read never does.
     fn publish_state(&self) {
         self.state.borrow_mut().reported = None;
-        self.tell_bridge_bounds();
+        self.tell_bridge_bounds(self.current_display().as_ref().map(DesktopFrame::of));
         self.source.cell.publish_report(
             &self.delivery,
             sample_of(&self.source.model, &self.delivery),
@@ -1207,6 +1294,10 @@ impl HeadlessHostWindow {
             focused: state.focused,
             visible: state.visible && !state.closed,
             occluded: state.occluded,
+            cursor_grab: state.cursor_grab,
+            level: state.level,
+            resize_increments: state.resize_increments,
+            aspect_ratio: state.aspect_ratio,
             accessibility_bounds: state.bridge_bounds,
         }
     }
@@ -1221,6 +1312,13 @@ impl HeadlessHostWindow {
     #[must_use]
     pub fn materials(&self) -> Vec<WindowMaterial> {
         self.state.borrow_mut().materials.clone()
+    }
+
+    /// The cursor the simulated window system shows over the window: the
+    /// last one [`PlatformWindow::set_cursor`] took.
+    #[must_use]
+    pub fn cursor(&self) -> Cursor {
+        self.state.borrow().cursor.clone()
     }
 
     /// Inject a platform input event for testing.
@@ -1258,9 +1356,11 @@ impl HeadlessHostWindow {
     }
 
     /// Simulate the user (or the OS) moving the window to `position`, outer
-    /// top-left in global logical pixels. This host draws no frame, so that is
-    /// also where its content starts: [`PlatformWindow::window_at`] answers
-    /// from it. Fires the handler's `state_changed` when the snapshot differs.
+    /// top-left in the logical pixels of the display it is on, from that
+    /// display's corner ([`Self::simulate_move_to`] moves it to another
+    /// display). This host draws no frame, so that is also where its content
+    /// starts: [`PlatformWindow::window_at`] answers from it. Fires the
+    /// handler's `state_changed` when the snapshot differs.
     pub fn simulate_move(&self, position: Point<f64>) {
         self.state.borrow_mut().position = position;
         self.publish_state();
@@ -1297,7 +1397,15 @@ impl HeadlessHostWindow {
     /// Simulate focus change for testing. Fires the handler's `state_changed` when the
     /// snapshot differs.
     pub fn simulate_focus(&self, focused: bool) {
-        self.state.borrow_mut().focused = focused;
+        {
+            let mut state = self.state.borrow_mut();
+            state.focused = focused;
+            // The simulated window system lets a grab go with the focus, as
+            // every native one does.
+            if !focused {
+                state.cursor_grab = CursorGrab::None;
+            }
+        }
         self.publish_state();
     }
 
@@ -1498,7 +1606,15 @@ impl PlatformWindow for HeadlessHostWindow {
         }
         let display_bounds = match command {
             WindowCommand::SetMode(WindowMode::Maximized | WindowMode::Fullscreen) => {
-                self.display_bounds()
+                self.current_display().map(|display| display.bounds)
+            }
+            // A position names its display: one the simulated system no
+            // longer holds is no place to put the window.
+            WindowCommand::SetPosition(at) => {
+                if self.display(at.display()).is_none() {
+                    return Err(ApplyError::DisplayGone(at.display()));
+                }
+                None
             }
             _ => None,
         };
@@ -1508,13 +1624,14 @@ impl PlatformWindow for HeadlessHostWindow {
                 WindowCommand::SetTitle(title) => state.title = title,
                 WindowCommand::SetPosition(at) => {
                     if state.mode == WindowMode::Normal {
-                        state.position = at;
+                        state.display = Some(at.display());
+                        state.position = at.at();
                     } else if let Some(normal) = state.normal_geometry.as_mut() {
-                        normal.position = Some(at);
+                        normal.position = Some((at.display(), at.at()));
                     }
                 }
                 WindowCommand::SetSize(size) => {
-                    let size = state.clamp_size(size, &self.limits);
+                    let size = state.clamp_size(size.get(), &self.limits);
                     if state.mode == WindowMode::Normal {
                         state.size = size;
                     } else if let Some(normal) = state.normal_geometry.as_mut() {
@@ -1538,9 +1655,26 @@ impl PlatformWindow for HeadlessHostWindow {
                     }
                     state.visible = true;
                 }
-                WindowCommand::Hide => state.visible = false,
+                // A hidden window stands nowhere (`WindowState::successor`),
+                // so its grab ends with it.
+                WindowCommand::Hide => {
+                    state.visible = false;
+                    state.cursor_grab = CursorGrab::None;
+                }
                 WindowCommand::Activate => state.focused = true,
                 WindowCommand::SetMaterial(material) => state.materials.push(material),
+                // Only a window with the focus takes a grab, as the native
+                // window systems grant one.
+                WindowCommand::SetCursorGrab(grab) => {
+                    state.cursor_grab = if state.focused && state.visible {
+                        grab
+                    } else {
+                        CursorGrab::None
+                    };
+                }
+                WindowCommand::SetLevel(level) => state.level = level,
+                WindowCommand::SetResizeIncrements(step) => state.resize_increments = step,
+                WindowCommand::SetAspectRatio(ratio) => state.aspect_ratio = ratio,
                 // `Close` returned above; a command the contract gained
                 // before this host learnt it is not carried out, and says so.
                 other => return Err(crate::window::state::not_carried_out(&other)),
@@ -1621,9 +1755,13 @@ impl PlatformWindow for HeadlessHostWindow {
             }
             tracked.windows.clone()
         };
+        // A window on no display has no place on the desktop.
+        let Some(frame) = self.current_display().as_ref().map(DesktopFrame::of) else {
+            return WindowAt::Unknown;
+        };
         // No frame: a window's outer top-left is where its content starts.
         let origin = self.state.borrow_mut().position;
-        let desktop = Point::new(origin.x + position.x, origin.y + position.y);
+        let desktop = frame.desktop(Point::new(origin.x + position.x, origin.y + position.y));
         if !(desktop.x.is_finite() && desktop.y.is_finite()) {
             return WindowAt::Outside;
         }
@@ -1631,9 +1769,11 @@ impl PlatformWindow for HeadlessHostWindow {
             .iter()
             .rev()
             .find_map(|window| {
+                let frame = window.current_display().as_ref().map(DesktopFrame::of)?;
                 let state = window.state.borrow_mut();
                 let (origin, size) = (state.position, state.size);
-                let local = Point::new(desktop.x - origin.x, desktop.y - origin.y);
+                let at = frame.on_display(desktop);
+                let local = Point::new(at.x - origin.x, at.y - origin.y);
                 let inside =
                     (0.0..size.width).contains(&local.x) && (0.0..size.height).contains(&local.y);
                 let shown = state.visible
@@ -1654,8 +1794,14 @@ impl PlatformWindow for HeadlessHostWindow {
 
     // ==================== Control Methods ====================
 
-    fn set_cursor(&self, cursor: CursorIcon) -> Result<(), CursorError> {
-        self.state.borrow_mut().cursor = cursor;
+    /// Shows any cursor; an image only while the simulated window system's
+    /// capabilities take one, as a native host answers.
+    fn set_cursor(&self, cursor: &Cursor) -> Result<(), CursorError> {
+        let mut state = self.state.borrow_mut();
+        if matches!(cursor, Cursor::Image(_)) && !state.capabilities.cursor_image().is_available() {
+            return Err(Unsupported::new(UnsupportedReason::NotOnThisPlatform).into());
+        }
+        cursor.clone_into(&mut state.cursor);
         Ok(())
     }
 }

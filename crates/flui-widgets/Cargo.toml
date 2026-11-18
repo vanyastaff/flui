@@ -104,14 +104,14 @@ flui-scheduler = { workspace = true }
 # the `Listener` dispatch test.
 flui-interaction = { workspace = true, features = ["testing"] }
 # The headless harness the integration tests drive (`tests/common/mod.rs`
-# re-exports `flui_testing::widgets`), and `pump_frame` to poll deadline-driven
+# re-exports `flui_testing::widgets`), whose frames poll deadline-driven
 # gestures. `flui-testing` depends on this crate, so this is a dev-only cycle
 # (ADR-0083 §4): the integration tests link one copy of the library; the
 # unit-test build compiles a second, and only `log_capture` crosses into it,
 # so no type of this crate meets its twin. Keep the harness checkout-only:
 # Cargo omits this versionless dev edge from archives, breaking the publication
 # cycle while retaining the public, versioned testing-to-widgets dependency.
-flui-testing = { path = "../flui-testing" }
+flui-testing = { path = "../flui-testing", features = ["http"] }
 # A capability registry without the background lanes, for the `Image` test of
 # a host that has none. Checkout-only test edge, like `flui-testing` above.
 flui-runtime = { path = "../flui-runtime" }

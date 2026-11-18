@@ -1,23 +1,43 @@
 # Testing
 
+Flutter counterpart: `WidgetTester`, `find`, `testWidgets`.
+
 Enable `flui`'s `testing` feature in your development dependency and write a test the way a user
 uses the screen: find what they see, act on it, expect what they should see next.
 
-```rust,ignore
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use flui::testing::{Tester, find};
+```rust
+use flui::prelude::*;
+use flui::testing::{Tester, find};
 
-    #[test]
-    fn counter_increments() {
-        let mut t = Tester::mount(CounterView);
-        t.expect(find::text("0")).to_exist();
-        t.tap(&find::button("Increment"));
-        t.expect(find::text("1")).to_exist();
-    }
-}
+# #[derive(Clone, StatefulView)]
+# struct CounterView;
+# struct CounterState { count: Signal<usize> }
+# impl StatefulView for CounterView {
+#     type State = CounterState;
+#     fn create_state(&self, ctx: &dyn LifecycleContext) -> CounterState {
+#         CounterState { count: ctx.signal(0) }
+#     }
+# }
+# impl ViewState<CounterView> for CounterState {
+#     fn build(&self, _view: &CounterView, ctx: &dyn BuildContext) -> impl IntoView {
+#         let count = self.count;
+#         Column::new((
+#             Text::new(count.get(ctx).to_string()),
+#             RawButton::new(Text::new("Increment"))
+#                 .on_pressed(move |ctx| count.update(ctx, |n| *n += 1)),
+#         ))
+#     }
+# }
+// In an application this is the body of a `#[test] fn counter_increments()`.
+let mut t = Tester::mount(CounterView);
+t.expect(find::text("0")).to_exist();
+t.tap(&find::button("Increment"));
+t.expect(find::text("1")).to_exist();
 ```
+
+The view under test is a counter like the one in
+[View, Element, RenderObject](../concepts/view-element-render.md), with a labelled button; its
+definition is hidden here.
 
 `Tester::mount` mounts the view as `run_app` does, with the runtime's root scopes, in an 800 by
 600 window on a manual clock (`Tester::mount_in` with a `TestWindow` for another size or
@@ -29,7 +49,8 @@ application has a frame or work due now, and fails at once, listing what the win
 application is idle: advance the clock yourself with `pump_for` to reach a timer.
 
 A failure names what was looked for and what the window showed instead. A widget that publishes
-no semantics is found by the identifier you give it with `Semantics::identifier` and `find::id`.
+no semantics is found by the identifier you give a group around it,
+`Semantics::new().container(true).role(SemanticsRole::Group).identifier(..)`, and `find::id`.
 
 `flui::testing::rendering` tests a render object of your own without widgets. The
 [test tiers](https://github.com/vanyastaff/flui/blob/main/docs/testing.md) map the framework's own

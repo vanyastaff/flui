@@ -8,7 +8,7 @@ use std::rc::Rc;
 use std::sync::atomic::AtomicU64;
 
 use flui_foundation::geometry::Size;
-use flui_platform::WindowOptions;
+use flui_platform::{WindowExtent, WindowOptions};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::UI::Controls::WM_MOUSELEAVE;
 use windows::Win32::UI::WindowsAndMessaging::{SendMessageW, WM_MOUSEMOVE};
@@ -22,12 +22,17 @@ use crate::owner::windows::{
 use crate::platform::Platform as _;
 use crate::window::windows::WindowsWindow;
 
+/// A window extent of this size.
+fn extent(width: f64, height: f64) -> WindowExtent {
+    WindowExtent::try_new(Size::new(width, height)).expect("a finite extent")
+}
+
 fn open(platform: &WindowsPlatform, title: &str) -> Rc<dyn HostWindow> {
     platform
         .open_window(
             WindowOptions::default()
                 .title(title)
-                .size(Size::new(160.0, 120.0)),
+                .size(extent(160.0, 120.0)),
             flui_testing::window_handler::RecordingWindowHandler::new(),
         )
         .expect("window")
@@ -145,7 +150,7 @@ fn the_input_takes_only_the_applications_caption_buttons_and_ends_their_hover() 
             .open_window(
                 WindowOptions::default()
                     .title("flui caption input")
-                    .size(Size::new(160.0, 120.0))
+                    .size(extent(160.0, 120.0))
                     .visible(false)
                     .frame(frame),
                 flui_testing::window_handler::RecordingWindowHandler::new(),

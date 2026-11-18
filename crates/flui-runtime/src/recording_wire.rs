@@ -22,7 +22,7 @@ use std::time::Duration;
 
 use flui_foundation::DataTransferId;
 use flui_foundation::generation::Generation;
-use flui_foundation::geometry::{DevicePixelRatio, EdgeInsets, Point, Size, WindowMetrics};
+use flui_foundation::geometry::{DevicePixelRatio, EdgeInsets, Offset, Point, Size, WindowMetrics};
 use flui_interaction::gesture::{OneEuroTuning, VelocityEstimator};
 use flui_interaction::{
     GestureDisposition, GestureProfiles, GestureSettings, GestureValues, RemainderHandoff,
@@ -37,19 +37,21 @@ use flui_platform::keyboard::{
     Code, ImeComposition, Key, KeyEvent, KeyPress, KeyState, Location, Modifiers, NamedKey,
 };
 use flui_platform::pointer::{
-    ButtonChange, CancelReason, ContactSize, DeviceId, HoverDistance, PanZoomEvent, PanZoomPhase,
-    PanZoomTransform, PenOrientation, PenTool, PointerButton, PointerButtonEvent, PointerButtons,
-    PointerCancel, PointerDeviceChange, PointerEvent, PointerId, PointerInfo, PointerKind,
-    PointerMove, PointerPosition, PointerRole, PointerSample, PointerSignal, Pressure, ScrollDelta,
-    ScrollEvent, ScrollInversion, ScrollPhase, ScrollPrecision, ScrollUnit, SmartZoomEvent,
-    TangentialPressure, Twist,
+    ButtonChange, CancelReason, ContactSize, DeviceId, HoverDistance, MotionAcceleration,
+    MotionDelta, PanZoomEvent, PanZoomPhase, PanZoomTransform, PenOrientation, PenTool,
+    PointerButton, PointerButtonEvent, PointerButtons, PointerCancel, PointerDeviceChange,
+    PointerEvent, PointerId, PointerKind, PointerMove, PointerPosition, PointerRole, PointerSample,
+    PointerSignal, PointerSource, Pressure, RawMotion, ScrollDelta, ScrollEvent, ScrollInversion,
+    ScrollPhase, ScrollPrecision, ScrollUnit, SmartZoomEvent, SwipeOffset, TangentialPressure,
+    TouchpadHoldEvent, TouchpadHoldPhase, TouchpadSwipeEvent, TouchpadSwipePhase, Twist,
 };
 use flui_platform::{
     Brightness, DragDropEvent, EventTime, GestureParts, HourCycle, ImeEvent, InsetCurve,
     InsetMotion, KeyboardInset, Locale, MeasurementSystem, MotionPreference, NativeMouseGeometry,
     NativeTouchGeometry, NumberingSystem, PlatformInput, PreferenceParts, RefreshPeriod,
-    RegionOverride, RegionalParts, SystemPreferences, TextWeightPreference, Weekday, WheelParts,
-    WheelStep, WindowExecutionState, WindowInsets,
+    RegionOverride, RegionalParts, ScrollBarParts, ScrollBarVisibility, ScrollTrackClick,
+    SrgbColor, SystemPreferences, TextWeightPreference, Weekday, WheelParts, WheelStep,
+    WindowExecutionState, WindowInsets,
 };
 use flui_protocol::input_recording as rec;
 use flui_protocol::native_recording as wire;
@@ -469,8 +471,8 @@ impl Convert<rec::PointerKind> for PointerKind {
     }
 }
 
-impl TryConvert<&PointerInfo> for rec::PointerInfo {
-    fn try_convert(info: &PointerInfo) -> Result<Self> {
+impl TryConvert<&PointerSource> for rec::PointerSource {
+    fn try_convert(info: &PointerSource) -> Result<Self> {
         Ok(Self {
             id: info.id.get().get(),
             device: info.device.map(|device| device.get().get()),
@@ -480,8 +482,8 @@ impl TryConvert<&PointerInfo> for rec::PointerInfo {
     }
 }
 
-impl TryConvert<rec::PointerInfo> for PointerInfo {
-    fn try_convert(info: rec::PointerInfo) -> Result<Self> {
+impl TryConvert<rec::PointerSource> for PointerSource {
+    fn try_convert(info: rec::PointerSource) -> Result<Self> {
         let mut pointer =
             Self::new(pointer_id(info.id)?, info.kind.convert_into()).with_role(if info.primary {
                 PointerRole::Primary
@@ -780,8 +782,40 @@ impl TryConvert<&PointerEvent> for rec::PointerEvent {
                     modifiers: modifiers_dto(scroll.modifiers),
                 })
             }
-            PointerEvent::ScrollInertiaCancel(signal) => {
-                Self::ScrollInertiaCancel(signal.try_convert_into()?)
+            PointerEvent::TouchpadHold(hold) => {
+                let point = hold.position.get();
+                Self::TouchpadHold(rec::TouchpadHold {
+                    pointer: hold.pointer().try_convert_into()?,
+                    t: hold.time.as_nanos(),
+                    x: point.x,
+                    y: point.y,
+                    phase: match hold.phase {
+                        TouchpadHoldPhase::Begin => rec::TouchpadHoldPhase::Begin,
+                        TouchpadHoldPhase::End => rec::TouchpadHoldPhase::End,
+                        TouchpadHoldPhase::Cancelled => rec::TouchpadHoldPhase::Cancelled,
+                    },
+                    modifiers: modifiers_dto(hold.modifiers),
+                })
+            }
+            PointerEvent::TouchpadSwipe(swipe) => {
+                let point = swipe.position.get();
+                Self::TouchpadSwipe(rec::TouchpadSwipe {
+                    pointer: swipe.pointer().try_convert_into()?,
+                    t: swipe.time.as_nanos(),
+                    x: point.x,
+                    y: point.y,
+                    fingers: swipe.fingers.get(),
+                    phase: match swipe.phase {
+                        TouchpadSwipePhase::Start => rec::TouchpadSwipePhase::Start,
+                        TouchpadSwipePhase::Update(travel) => rec::TouchpadSwipePhase::Update {
+                            dx: travel.get().dx,
+                            dy: travel.get().dy,
+                        },
+                        TouchpadSwipePhase::End => rec::TouchpadSwipePhase::End,
+                        TouchpadSwipePhase::Cancelled => rec::TouchpadSwipePhase::Cancelled,
+                    },
+                    modifiers: modifiers_dto(swipe.modifiers),
+                })
             }
             PointerEvent::PanZoom(gesture) => {
                 let point = gesture.position.get();
@@ -813,6 +847,20 @@ impl TryConvert<&PointerEvent> for rec::PointerEvent {
                     modifiers: modifiers_dto(zoom.modifiers),
                 })
             }
+            PointerEvent::RawMotion(motion) => Self::RawMotion(rec::RawMotion {
+                pointer: (&motion.pointer).try_convert_into()?,
+                t: motion.time.as_nanos(),
+                at: motion.position.map(|at| {
+                    let point = at.get();
+                    [point.x, point.y]
+                }),
+                dx: motion.delta.x(),
+                dy: motion.delta.y(),
+                unaccelerated: match motion.acceleration {
+                    MotionAcceleration::None => true,
+                    MotionAcceleration::System => false,
+                },
+            }),
             PointerEvent::DeviceAdded(change) => Self::DeviceAdded(device_change_dto(change)?),
             PointerEvent::DeviceRemoved(change) => Self::DeviceRemoved(device_change_dto(change)?),
             _ => return Err(unmirrored("PointerEvent")),
@@ -902,9 +950,37 @@ impl TryConvert<rec::PointerEvent> for PointerEvent {
                 }
                 Self::Scroll(event)
             }
-            rec::PointerEvent::ScrollInertiaCancel(signal) => {
-                Self::ScrollInertiaCancel(signal.try_convert_into()?)
-            }
+            rec::PointerEvent::TouchpadHold(hold) => Self::TouchpadHold(
+                TouchpadHoldEvent::new(
+                    hold.pointer.try_convert_into()?,
+                    EventTime::from_nanos(hold.t),
+                    position(hold.x, hold.y)?,
+                    match hold.phase {
+                        rec::TouchpadHoldPhase::Begin => TouchpadHoldPhase::Begin,
+                        rec::TouchpadHoldPhase::End => TouchpadHoldPhase::End,
+                        rec::TouchpadHoldPhase::Cancelled => TouchpadHoldPhase::Cancelled,
+                    },
+                )
+                .with_modifiers(modifiers(&hold.modifiers)?),
+            ),
+            rec::PointerEvent::TouchpadSwipe(swipe) => Self::TouchpadSwipe(
+                TouchpadSwipeEvent::new(
+                    swipe.pointer.try_convert_into()?,
+                    EventTime::from_nanos(swipe.t),
+                    position(swipe.x, swipe.y)?,
+                    NonZeroU8::new(swipe.fingers)
+                        .ok_or_else(|| invalid("a touchpad swipe of no fingers"))?,
+                    match swipe.phase {
+                        rec::TouchpadSwipePhase::Start => TouchpadSwipePhase::Start,
+                        rec::TouchpadSwipePhase::Update { dx, dy } => TouchpadSwipePhase::Update(
+                            SwipeOffset::try_new(Offset::new(dx, dy)).map_err(invalid)?,
+                        ),
+                        rec::TouchpadSwipePhase::End => TouchpadSwipePhase::End,
+                        rec::TouchpadSwipePhase::Cancelled => TouchpadSwipePhase::Cancelled,
+                    },
+                )
+                .with_modifiers(modifiers(&swipe.modifiers)?),
+            ),
             rec::PointerEvent::PanZoom(gesture) => Self::PanZoom(
                 PanZoomEvent::new(
                     gesture.pointer.try_convert_into()?,
@@ -929,6 +1005,22 @@ impl TryConvert<rec::PointerEvent> for PointerEvent {
                 )
                 .with_modifiers(modifiers(&zoom.modifiers)?),
             ),
+            rec::PointerEvent::RawMotion(motion) => {
+                let event = RawMotion::new(
+                    motion.pointer.try_convert_into()?,
+                    EventTime::from_nanos(motion.t),
+                    MotionDelta::try_new(motion.dx, motion.dy).map_err(invalid)?,
+                    if motion.unaccelerated {
+                        MotionAcceleration::None
+                    } else {
+                        MotionAcceleration::System
+                    },
+                );
+                Self::RawMotion(match motion.at {
+                    Some([x, y]) => event.with_position(position(x, y)?),
+                    None => event,
+                })
+            }
             rec::PointerEvent::DeviceAdded(change) => Self::DeviceAdded(device_change(change)?),
             rec::PointerEvent::DeviceRemoved(change) => Self::DeviceRemoved(device_change(change)?),
         })
@@ -1211,6 +1303,8 @@ impl Convert<&InputCapabilities> for rec::Capabilities {
             pen: rec::Availability::convert(capabilities.pen()),
             precise_scroll: rec::Availability::convert(capabilities.precise_scroll()),
             trackpad_gestures: rec::Availability::convert(capabilities.trackpad_gestures()),
+            touchpad_hold: rec::Availability::convert(capabilities.touchpad_hold()),
+            touchpad_swipe: rec::Availability::convert(capabilities.touchpad_swipe()),
             system_gesture_exclusion: region(InputRegionKind::SystemGestureExclusion),
             window_move: region(InputRegionKind::WindowMove),
             window_resize: region(InputRegionKind::WindowResize(ResizeEdge::Top)),
@@ -1237,6 +1331,8 @@ impl Convert<rec::Capabilities> for InputCapabilities {
             .pen(Availability::convert(capabilities.pen))
             .precise_scroll(Availability::convert(capabilities.precise_scroll))
             .trackpad_gestures(Availability::convert(capabilities.trackpad_gestures))
+            .touchpad_hold(Availability::convert(capabilities.touchpad_hold))
+            .touchpad_swipe(Availability::convert(capabilities.touchpad_swipe))
             .system_gesture_exclusion(Availability::convert(capabilities.system_gesture_exclusion))
             .window_move(Availability::convert(capabilities.window_move))
             .window_resize(Availability::convert(capabilities.window_resize))
@@ -1608,8 +1704,32 @@ fn preferences_wire(values: SystemPreferences) -> Result<wire::Preferences> {
             vertical,
             horizontal_characters,
         },
+        accent_color,
+        scroll_bars: ScrollBarParts {
+            visibility,
+            track_click,
+        },
     } = values.into_parts();
     Ok(wire::Preferences {
+        accent_color: accent_color.map(SrgbColor::to_array),
+        scroll_bar_visibility: visibility
+            .map(|visibility| {
+                Ok(match visibility {
+                    ScrollBarVisibility::WhenScrolling => wire::ScrollBarVisibility::WhenScrolling,
+                    ScrollBarVisibility::Always => wire::ScrollBarVisibility::Always,
+                    _ => return Err(unmirrored("ScrollBarVisibility")),
+                })
+            })
+            .transpose()?,
+        scroll_track_click: track_click
+            .map(|click| {
+                Ok(match click {
+                    ScrollTrackClick::Page => wire::ScrollTrackClick::Page,
+                    ScrollTrackClick::JumpToSpot => wire::ScrollTrackClick::JumpToSpot,
+                    _ => return Err(unmirrored("ScrollTrackClick")),
+                })
+            })
+            .transpose()?,
         text_scale,
         motion: motion
             .map(|motion| {
@@ -1751,9 +1871,45 @@ fn preferences_from_wire(wire: wire::Preferences) -> Result<SystemPreferences> {
         gestures,
         wheel_vertical,
         wheel_horizontal_characters,
+        accent_color,
+        scroll_bar_visibility,
+        scroll_track_click,
     } = wire;
     let duration = std::time::Duration::from_nanos;
     PreferenceParts {
+        accent_color: accent_color
+            .map(|[red, green, blue, alpha]| {
+                SrgbColor::try_new(
+                    f64::from(red),
+                    f64::from(green),
+                    f64::from(blue),
+                    f64::from(alpha),
+                )
+                .map_err(invalid)
+            })
+            .transpose()?,
+        scroll_bars: ScrollBarParts {
+            visibility: scroll_bar_visibility
+                .map(|visibility| {
+                    Ok(match visibility {
+                        wire::ScrollBarVisibility::WhenScrolling => {
+                            ScrollBarVisibility::WhenScrolling
+                        }
+                        wire::ScrollBarVisibility::Always => ScrollBarVisibility::Always,
+                        _ => return Err(unmirrored("native_recording::ScrollBarVisibility")),
+                    })
+                })
+                .transpose()?,
+            track_click: scroll_track_click
+                .map(|click| {
+                    Ok(match click {
+                        wire::ScrollTrackClick::Page => ScrollTrackClick::Page,
+                        wire::ScrollTrackClick::JumpToSpot => ScrollTrackClick::JumpToSpot,
+                        _ => return Err(unmirrored("native_recording::ScrollTrackClick")),
+                    })
+                })
+                .transpose()?,
+        },
         text_scale,
         motion: motion
             .map(|motion| {

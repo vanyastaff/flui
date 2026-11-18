@@ -51,8 +51,14 @@
 //! - **A pinch is one pan-zoom.** `pointer-gestures` reports a pinch's scale
 //!   relative to its start and its rotation relative to the last update; the
 //!   assembly takes each update's own factor and clockwise radians, about the
-//!   cursor moved by the update's translation. Swipes and holds are the
-//!   compositor's.
+//!   cursor moved by the update's translation.
+//! - **A swipe is a gesture, a hold stops what coasts.** A
+//!   `zwp_pointer_gesture_swipe_v1` is one touchpad swipe of its finger count,
+//!   its steps summed into the travel since it began while the cursor stays
+//!   where it began; a `zwp_pointer_gesture_hold_v1` (version 3 of the
+//!   gestures global) is fingers resting where the cursor is, until they lift
+//!   or start another gesture. A compositor keeps the swipes its own gestures
+//!   take (GNOME and KDE take those of three and four fingers).
 
 pub mod wire;
 

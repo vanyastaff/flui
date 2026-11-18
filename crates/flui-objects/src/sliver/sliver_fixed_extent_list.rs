@@ -69,7 +69,7 @@ use super::sliver_grid::{MAX_UNBOUNDED_WINDOW_CHILDREN, UNBOUNDED_SENTINEL_WINDO
 
 /// How far a layout offset may miss an exact multiple of the item extent and
 /// still count as that multiple, in pixels.
-pub const PRECISION_ERROR_TOLERANCE: f64 = flui_foundation::EPSILON;
+pub const PRECISION_ERROR_TOLERANCE: f64 = flui_foundation::geometry::PRECISION_ERROR_TOLERANCE;
 
 /// A sliver that places lazily built Box children one after another along the
 /// scroll axis, each with the same main-axis extent.

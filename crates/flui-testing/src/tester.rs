@@ -38,16 +38,19 @@ use flui_protocol::method::{
     SemanticsLocate, SemanticsRead,
 };
 use flui_protocol::{
-    ActionSequence, Actionability, ActionabilityCheck, ActionabilityParams, Checked, ErrorObject,
-    ImeAction, InputParams, InputSource, InspectParams, InspectReading, KeyAction, LocateParams,
-    Locator, LogicalPoint, LogicalRect, Match, Node, PointerAction, PointerButton, PointerDevice,
-    ReadParams, Tree, WindowParams, outline,
+    act::Actionability, act::ActionabilityCheck, act::ActionabilityParams, error::ErrorObject,
+    geometry::LogicalPoint, geometry::LogicalRect, input::ActionSequence, input::ImeAction,
+    input::InputParams, input::InputSource, input::KeyAction, input::PointerAction,
+    input::PointerButton, input::PointerDevice, inspect::InspectParams, inspect::InspectReading,
+    locator::LocateParams, locator::Locator, locator::Match, session::WindowParams,
+    tree::ElementId, tree::Node, tree::ReadParams, tree::Tree, tree::TreeDiagnostic, tree::outline,
+    wire::Checked, wire::Role,
 };
 use flui_view::dev_agent::{AgentAnswer, AgentWindow, DevAgentHook, InputLease};
 use flui_view::{CloseReason, View};
 use parking_lot::Mutex;
 
-use crate::host::KitStorage;
+use crate::host::{AppRegistrations, KitStorage};
 use crate::storage::{MemoryStorage, RunId};
 use crate::{HeadlessDevAgent, HeadlessHost, HeadlessWindow};
 
@@ -74,14 +77,30 @@ const VISIBLE_READS: usize = 4;
 const DUE_NOW_FRAMES: u32 = 8;
 
 /// The window a [`Tester`] mounts its view in: its logical size, the
-/// platform whose conventions the application follows, and the storage its
-/// documents are kept in.
-#[derive(Debug, Clone)]
+/// platform whose conventions the application follows, the storage its
+/// documents are kept in, and the capability providers the application
+/// registers.
+#[derive(Clone)]
 pub struct TestWindow {
     width: u32,
     height: u32,
     platform: Option<flui_platform::TargetPlatform>,
     storage: WindowStorage,
+    registrations: AppRegistrations,
+}
+
+impl std::fmt::Debug for TestWindow {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let (overrides, plugins) = self.registrations.counts();
+        f.debug_struct("TestWindow")
+            .field("width", &self.width)
+            .field("height", &self.height)
+            .field("platform", &self.platform)
+            .field("storage", &self.storage)
+            .field("overrides", &overrides)
+            .field("plugins", &plugins)
+            .finish()
+    }
 }
 
 /// Where a [`TestWindow`]'s application keeps its documents.
@@ -105,7 +124,33 @@ impl TestWindow {
             height,
             platform: None,
             storage: WindowStorage::Fresh,
+            registrations: AppRegistrations::new(),
         }
+    }
+
+    /// Register `plugin`'s providers, as `Application::plugin` does: a widget
+    /// acquires what it provides and nothing else does. A
+    /// [`restart`](Tester::restart) registers it again.
+    ///
+    /// The mount panics when two registrations conflict, as a run fails
+    /// before its platform starts.
+    #[must_use]
+    pub fn plugin(mut self, plugin: impl flui_platform::capability::Plugin) -> Self {
+        self.registrations.plugin(plugin);
+        self
+    }
+
+    /// Provide the capability `C` with `provider`, in place of the built-in
+    /// one and of any plugin's, as `Application::capability` does.
+    ///
+    /// The mount panics when two registrations conflict.
+    #[must_use]
+    pub fn capability<C: flui_platform::capability::Capability>(
+        mut self,
+        provider: impl flui_platform::capability::CapabilityProvider<C>,
+    ) -> Self {
+        self.registrations.capability::<C, _>(provider);
+        self
     }
 
     /// Follow `platform`'s conventions (chords, handles, menus, transitions)
@@ -148,12 +193,34 @@ pub enum TestError {
     /// Nothing matches the locator.
     #[error(
         "nothing matches {locator:?}.\nThe window shows:\n{shown}\nA widget that publishes no \
-         semantics is found by an identifier: give it one with `Semantics::identifier` and find \
-         it with `find::id`."
+         semantics is found by an identifier on a group around it: wrap it in \
+         `Semantics::new().container(true).role(SemanticsRole::Group).identifier(..)` and find it \
+         with `find::id`. An identifier alone forms no node a reader sees."
     )]
     NotFound {
         /// What was looked for.
         locator: Box<Locator>,
+        /// The window's outline, cut to its first lines.
+        shown: String,
+    },
+    /// Nothing matches the locator, and an identifier it names is on a node
+    /// the agent and the accessibility adapters lift into its parent, so
+    /// nothing selects it by that identifier (ADR-0240 §3).
+    #[error(
+        "nothing matches {locator:?}: the identifier {identifier:?} is on a node that publishes \
+         nothing of its own (no role, label or text, or a generic or presentation role), which the \
+         agent and accessibility clients lift into its parent, so nothing \
+         selects it. {fix}\nThe window shows:\n{shown}",
+        fix = unpublished_identifier_fix(control.as_deref())
+    )]
+    UnpublishedIdentifier {
+        /// What was looked for.
+        locator: Box<Locator>,
+        /// The identifier nothing selects.
+        identifier: String,
+        /// The control the node is lifted into, as its outline line, when it
+        /// is one AccessKit names from its contents.
+        control: Option<String>,
         /// The window's outline, cut to its first lines.
         shown: String,
     },
@@ -234,13 +301,52 @@ pub enum TestError {
     /// The window's agent refused or failed a call.
     #[error("the window's agent answered {}: {}", .0.code, .0.message)]
     Agent(Box<ErrorObject>),
-    /// Frames kept changing the semantics tree between a locate and the
-    /// readings of what it found, every time it was read.
-    #[error("the semantics tree changed between a locate and its readings {reads} times")]
+    /// Frames kept changing the window between a locate and the readings of
+    /// what it found (its semantics tree, or the scene a drawing is read
+    /// from), every time it was read.
+    #[error("the window changed between a locate and its readings {reads} times")]
     KeptChanging {
         /// The locates made.
         reads: usize,
     },
+    /// The element is an authored semantics region, which no render object
+    /// forms, so no drawing is its own.
+    #[error(
+        "{element} is an authored region no render object forms, so it painted nothing of its \
+         own; locate the widget that paints"
+    )]
+    NoRenderObject {
+        /// The element, as its outline line.
+        element: String,
+    },
+    /// A render object below the element has more children than one
+    /// inspection lists, so its drawing cannot be read whole.
+    #[error(
+        "a render object under {element} has more children than one inspection lists \
+         ({children} left out); locate a smaller part of it"
+    )]
+    TooManyChildren {
+        /// The element, as its outline line.
+        element: String,
+        /// How many children the inspection left out.
+        children: u32,
+    },
+    /// A trip to the background or back was asked of a window that names no
+    /// phone: only Android and iOS leave the screen that way.
+    #[error(
+        "{platform:?} is no phone: only a window that names Android or iOS goes to the background"
+    )]
+    NotAPhone {
+        /// The platform the window names.
+        platform: flui_platform::TargetPlatform,
+    },
+    /// A trip to the background was asked while the application is already
+    /// there: a phone reports no second trip before a return.
+    #[error("the application is already in the background; bring it back with `foreground` first")]
+    InBackground,
+    /// A return was asked while the application is not in the background.
+    #[error("the application is not in the background; send it there with `background` first")]
+    InForeground,
 }
 
 impl From<ErrorObject> for TestError {
@@ -288,6 +394,9 @@ pub struct Tester {
     run: Option<RunId>,
     /// Mounts the same view again in a window: what [`Tester::restart`] runs.
     relaunch: Rc<dyn Fn(TestWindow) -> Tester>,
+    /// Whether the application is on a trip to the background
+    /// ([`Tester::background`]).
+    in_background: bool,
 }
 
 impl std::fmt::Debug for Tester {
@@ -343,12 +452,13 @@ impl Tester {
         let windows = Arc::new(Mutex::new(Vec::new()));
         let mut agent = HeadlessDevAgent::attach(Windows(Arc::clone(&windows)));
         let (run_storage, run) = storage.as_ref().map(MemoryStorage::for_run).unzip();
-        let mut host = HeadlessHost::with_storage(
+        let mut host = HeadlessHost::with_application(
             headless,
             run_storage.map(|storage| KitStorage {
                 host: Arc::new(storage),
                 provided: None,
             }),
+            config.registrations.clone(),
         )
         .with_dev_agent(&mut agent);
         host.attach(&view)
@@ -370,6 +480,7 @@ impl Tester {
             held_keys: Vec::new(),
             run,
             relaunch: Rc::new(move |window| Self::mount_in(view.clone(), window)),
+            in_background: false,
         };
         // The window collects semantics from the frame after its agent took
         // it; run that frame so the first locate reads a tree.
@@ -472,7 +583,10 @@ impl Tester {
     /// # Errors
     ///
     /// [`TestError::NotFound`] or [`TestError::Ambiguous`] unless exactly one
-    /// element matches (or the locator picks one).
+    /// element matches (or the locator picks one);
+    /// [`TestError::UnpublishedIdentifier`] in place of `NotFound` when an
+    /// identifier the locator names is on a node the read lifts into its
+    /// parent.
     pub fn try_read(&mut self, locator: &Locator) -> Result<Node, TestError> {
         Ok(self.resolve(locator)?.node)
     }
@@ -618,25 +732,155 @@ impl Tester {
             .unwrap_or_else(|error| panic!("{error}"))
     }
 
-    /// Every draw command of the window's last submitted scene, in paint
-    /// order: what a paint test samples at a virtual time. Each command's
-    /// `transform` places it in the window, its canvas transform composed
-    /// with every offset and transform of the layers above it; a command
-    /// under a follower its leader does not place is left out, as it is not
-    /// painted. The frames due now run first, as for every read; a scene that
-    /// painted nothing new keeps the last one.
+    /// The draw commands the one element `locator` names painted in the
+    /// window's last submitted scene, in paint order: the render object that
+    /// forms the element and every render object below it, as `flutter_test`'s
+    /// `paints` matcher reads one render object's painting. A painter that
+    /// draws outside its own bounds is read whole, and a sibling's drawing is
+    /// left out, even where it overlaps.
     ///
-    /// This is the one read that does not go through the window's agent: the
-    /// agent's protocol carries no drawing, so the tester reads the scene the
-    /// headless host received. The commands are the whole scene's
-    /// ([gaps](https://github.com/vanyastaff/flui/blob/main/docs/gaps.md#a-tester-reads-the-whole-scenes-drawing-not-one-elements)).
+    /// Each command's `transform` places it in the window, its canvas
+    /// transform composed with every offset and transform of the layers above
+    /// it; a command under a follower its leader does not place is left out,
+    /// as it is not painted. The frames due now run first, as for every read;
+    /// a scene that painted nothing new keeps the last one.
+    ///
+    /// The agent's protocol carries no drawing, so the tester reads the scene
+    /// the headless host received and selects its picture layers by the
+    /// render objects the window's agent lists under the element. A subtree
+    /// larger than one inspection lists is read in several: each node one
+    /// cut is inspected a level deep, and each child it did not list is read
+    /// from there, so the drawing is read whole. A frame that
+    /// submits a scene between those reads starts the read again, and two
+    /// such reads in a row that find the same render objects stand, as an
+    /// animation submits a scene every frame.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::try_read`]; [`TestError::NoRenderObject`] when the element
+    /// is an authored region no render object forms;
+    /// [`TestError::TooManyChildren`] when one render object below it has
+    /// more children than one inspection lists, rather than a partial
+    /// drawing; [`TestError::KeptChanging`] when every read saw a new scene.
+    pub fn try_draw_commands(
+        &mut self,
+        locator: &Locator,
+    ) -> Result<Vec<flui_painting::DrawCommandBuf>, TestError> {
+        // The subtree a read found when a frame ran during it: an animation
+        // submits a scene on every frame without changing which render
+        // objects the element has, so two reads that agree stand.
+        let mut changed: Option<rustc_hash::FxHashSet<flui_foundation::RenderId>> = None;
+        for _ in 0..VISIBLE_READS {
+            self.run_due_now();
+            let submits = self.host.sink().submits();
+            let found = self.resolve(locator)?;
+            // A render-formed node's id is its render object's packed id;
+            // an authored region's carries a domain bit no render id has.
+            let Some(render) = flui_foundation::RenderId::from_u64(found.element.element.get())
+            else {
+                return Err(TestError::NoRenderObject {
+                    element: line_of(&found.node),
+                });
+            };
+            let painters = self.render_subtree(render, &found.node);
+            // A frame between the locate and the inspections may have
+            // replaced what they read, its failure included: read again,
+            // unless this read and the last agree.
+            let painters = if self.host.sink().submits() == submits {
+                painters?
+            } else {
+                match painters {
+                    Ok(painters) if changed.as_ref() == Some(&painters) => painters,
+                    other => {
+                        changed = other.ok();
+                        continue;
+                    }
+                }
+            };
+            return Ok(self.host.sink().layer_tree().map_or_else(Vec::new, |tree| {
+                scene_commands(tree, |painter| painters.contains(&painter))
+            }));
+        }
+        Err(TestError::KeptChanging {
+            reads: VISIBLE_READS,
+        })
+    }
+
+    /// `render` and every render object below it, read with as many
+    /// inspections as the subtree takes.
+    ///
+    /// An inspection walks depth first on one node budget, so where it runs
+    /// out every ancestor still open counts its unvisited children as
+    /// omitted, and the protocol does not name them. Each node cut that way
+    /// is inspected one level deep to name its children, and each child the
+    /// first inspection did not list is the root of the next.
+    fn render_subtree(
+        &mut self,
+        render: flui_foundation::RenderId,
+        element: &Node,
+    ) -> Result<rustc_hash::FxHashSet<flui_foundation::RenderId>, TestError> {
+        let mut painters = rustc_hash::FxHashSet::default();
+        let mut roots = vec![render];
+        while let Some(root) = roots.pop() {
+            let mut cut = Vec::new();
+            let reading = self.inspect_render_from(root, None)?;
+            let mut pending = vec![&reading];
+            while let Some(node) = pending.pop() {
+                pending.extend(&node.children);
+                let id = render_of(node);
+                painters.insert(id);
+                if node.omitted_children > 0 {
+                    cut.push(id);
+                }
+            }
+            for parent in cut {
+                let level = self.inspect_render_from(parent, Some(1))?;
+                if level.omitted_children > 0 {
+                    // Its children alone are more than one inspection lists.
+                    return Err(TestError::TooManyChildren {
+                        element: line_of(element),
+                        children: level.omitted_children,
+                    });
+                }
+                roots.extend(
+                    level
+                        .children
+                        .iter()
+                        .map(render_of)
+                        .filter(|child| !painters.contains(child)),
+                );
+            }
+        }
+        Ok(painters)
+    }
+
+    /// One `inspect.render` reading from `root`, `max_depth` levels deep.
+    fn inspect_render_from(
+        &mut self,
+        root: flui_foundation::RenderId,
+        max_depth: Option<u32>,
+    ) -> Result<flui_protocol::inspect::InspectNode, TestError> {
+        let mut params = InspectParams::new(self.window.id());
+        params.root = Some(flui_foundation::inspect::Link::Render(root).to_string());
+        params.max_depth = max_depth;
+        let call = self.window.call::<InspectRender>(params)?;
+        let reading = self.answered(call)?;
+        let [node] = <[flui_protocol::inspect::InspectNode; 1]>::try_from(reading.roots)
+            .expect("BUG: an inspection from one root reads one root");
+        Ok(node)
+    }
+
+    /// The draw commands the one element `locator` names painted, as
+    /// [`Self::try_draw_commands`] reads them.
+    ///
+    /// # Panics
+    ///
+    /// As [`Self::try_draw_commands`] fails.
+    #[track_caller]
     #[must_use]
-    pub fn draw_commands(&mut self) -> Vec<flui_painting::DrawCommandBuf> {
-        self.run_due_now();
-        self.host
-            .sink()
-            .layer_tree()
-            .map_or_else(Vec::new, scene_commands)
+    pub fn draw_commands(&mut self, locator: &Locator) -> Vec<flui_painting::DrawCommandBuf> {
+        self.try_draw_commands(locator)
+            .unwrap_or_else(|error| panic!("{error}"))
     }
 
     // --- Acting -----------------------------------------------------------
@@ -991,9 +1235,11 @@ impl Tester {
         }
     }
 
-    /// Stop this run and launch the same view in the same window over the
-    /// same storage, as when the application quits and is opened again: the
-    /// window commits its composition and closes past every hold, what the
+    /// End this run by force and launch the same view in the same window over
+    /// the same storage, as when the application is made to quit and is
+    /// opened again. Nothing is asked, unlike a quit the user asks for
+    /// ([`request_quit`](Self::request_quit)): the window commits its
+    /// composition and closes past every hold, what the
     /// documents published is written (a write the storage holds is not
     /// waited for: it lands when the hold ends, ahead of the next run's,
     /// which read the storage without it and so conflicts with it, as on a
@@ -1065,22 +1311,140 @@ impl Tester {
         self.host.is_closed(self.host.primary_window())
     }
 
-    /// The operating system ends the user's session: the session-ended notice
-    /// reaches the application, the window commits its composition and closes
-    /// past every hold, as a session that is ending no longer asks, and then
-    /// what the application's documents published is written, as in
-    /// [`Self::restart`]: a write the storage holds is not waited for, and
-    /// what any document still owes then is lost.
-    pub fn end_session(&mut self) {
-        self.host.end_session_now();
+    /// The user quits the application, as `AppHandle::request_quit` and
+    /// AppKit's Dock Quit ask it (ADR-0350 §1): the frame after asks the
+    /// window, as for the program's close; a refusal its guard records
+    /// defers the quit until the hold is released, a refusal without one
+    /// cancels it and leaves the window as it was, and a quit nothing holds
+    /// closes the window, writes what the documents published and ends the
+    /// run ([`is_closed`](Self::is_closed)).
+    pub fn request_quit(&mut self) {
+        self.host.request_quit();
+        self.run_due_now();
+    }
+
+    /// The operating system ends the user's session, as the platform the
+    /// window names does it ([`HeadlessHost::end_session`]): on a desktop the
+    /// session-ended notice reaches the application, the window commits its
+    /// composition and closes past every hold, as a session that is ending no
+    /// longer asks, and what the documents published is written, as in
+    /// [`Self::restart`] (a write the storage holds is not waited for, and
+    /// what any document still owes then is lost); on a phone the notice and
+    /// the write leave the window open. Returns the application's answer:
+    /// [`Block`](flui_platform::SessionEndAnswer::Block) on a phone while
+    /// writes are in flight.
+    pub fn end_session(&mut self) -> flui_platform::SessionEndAnswer {
+        self.host
+            .end_session(flui_platform::SessionEndPhase::Ending)
     }
 
     /// The window becomes hidden (`false`) or shown again (`true`), as when
-    /// the user minimizes it or switches away on a phone; then the frame that
-    /// reports it runs.
+    /// the user minimizes it or another window covers it on a desktop; then
+    /// the frame that reports it runs. Its focus and whether it may run stay
+    /// as they were: a phone's trip to the background is
+    /// [`background`](Self::background).
     pub fn set_window_visible(&mut self, visible: bool) {
         self.host.set_window_visible(visible);
         self.run_due_now();
+    }
+
+    /// The application leaves the screen on a phone, in the order Android
+    /// and UIKit report it: the window loses the focus, its execution is
+    /// suspended, it is hidden, and then the session's end is announced once
+    /// for the trip: the session-ended notice arrives and what the documents
+    /// published is written (ADR-0350 §2). The window stays open;
+    /// [`foreground`](Self::foreground) brings it back. Then the frame that
+    /// reports it runs. Returns the application's answer to the session's
+    /// end: [`Block`](flui_platform::SessionEndAnswer::Block) while writes are
+    /// in flight, released once they end
+    /// ([`HeadlessHost::session_end_releases`]).
+    ///
+    /// # Errors
+    ///
+    /// [`TestError::NotAPhone`] for a window that names no phone (only
+    /// Android and iOS leave the screen this way), and
+    /// [`TestError::InBackground`] while the application is already in the
+    /// background: a phone reports no second trip before a return.
+    ///
+    /// # Panics
+    ///
+    /// With the first panic of a notice subscriber or the write.
+    pub fn try_background(&mut self) -> Result<flui_platform::SessionEndAnswer, TestError> {
+        self.phone()?;
+        if self.in_background {
+            return Err(TestError::InBackground);
+        }
+        self.in_background = true;
+        let window = self.host.primary_window();
+        self.host.set_window_focused(false);
+        self.host
+            .set_window_execution(window, flui_platform::WindowExecutionState::Suspended);
+        self.host.set_window_visible(false);
+        let answer = self
+            .host
+            .end_session(flui_platform::SessionEndPhase::Ending);
+        self.run_due_now();
+        Ok(answer)
+    }
+
+    /// [`try_background`](Self::try_background), panicking at its caller
+    /// with its refusal.
+    ///
+    /// # Panics
+    ///
+    /// When `try_background` refuses, or as it panics.
+    #[track_caller]
+    pub fn background(&mut self) -> flui_platform::SessionEndAnswer {
+        self.try_background()
+            .unwrap_or_else(|error| panic!("{error}"))
+    }
+
+    /// The application comes back to the screen on a phone, in the order
+    /// Android and UIKit report it: the window is shown, it may run again,
+    /// and it takes the focus. Then the frame that reports it runs.
+    ///
+    /// # Errors
+    ///
+    /// [`TestError::NotAPhone`] for a window that names no phone, and
+    /// [`TestError::InForeground`] when the application is not in the
+    /// background.
+    pub fn try_foreground(&mut self) -> Result<(), TestError> {
+        self.phone()?;
+        if !self.in_background {
+            return Err(TestError::InForeground);
+        }
+        self.in_background = false;
+        let window = self.host.primary_window();
+        self.host.set_window_visible(true);
+        self.host
+            .set_window_execution(window, flui_platform::WindowExecutionState::Running);
+        self.host.set_window_focused(true);
+        self.run_due_now();
+        Ok(())
+    }
+
+    /// [`try_foreground`](Self::try_foreground), panicking at its caller
+    /// with its refusal.
+    ///
+    /// # Panics
+    ///
+    /// When `try_foreground` refuses.
+    #[track_caller]
+    pub fn foreground(&mut self) {
+        self.try_foreground()
+            .unwrap_or_else(|error| panic!("{error}"));
+    }
+
+    /// `Ok` when the window names a phone.
+    fn phone(&self) -> Result<(), TestError> {
+        match self.config.platform {
+            Some(flui_platform::TargetPlatform::Android | flui_platform::TargetPlatform::iOS) => {
+                Ok(())
+            }
+            platform => Err(TestError::NotAPhone {
+                platform: platform.unwrap_or(flui_platform::TargetPlatform::Unknown),
+            }),
+        }
     }
 
     /// The window loses (`false`) or regains (`true`) the operating system's
@@ -1148,10 +1512,7 @@ impl Tester {
     fn resolve(&mut self, locator: &Locator) -> Result<Match, TestError> {
         let mut matches = self.try_find_all(locator)?;
         match matches.len() {
-            0 => Err(TestError::NotFound {
-                locator: Box::new(locator.clone()),
-                shown: self.shown(),
-            }),
+            0 => Err(self.not_found(locator)),
             1 => Ok(matches.remove(0)),
             count => Err(TestError::Ambiguous {
                 locator: Box::new(locator.clone()),
@@ -1164,6 +1525,71 @@ impl Tester {
                     .join("\n"),
             }),
         }
+    }
+
+    /// Why nothing matches `locator`: an identifier it or a scope of it names
+    /// is on a node the window reports as lifted, or else nothing carries it.
+    fn not_found(&mut self, locator: &Locator) -> TestError {
+        self.unpublished_identifier(locator)
+            .unwrap_or_else(|| TestError::NotFound {
+                locator: Box::new(locator.clone()),
+                shown: self.shown(),
+            })
+    }
+
+    /// [`TestError::UnpublishedIdentifier`] when `locator`, which matched
+    /// nothing, names an identifier the window reports on a node it lifts
+    /// away: its own identifier, or a scope's (`within`, `has`) that no
+    /// published node carries. A scope a published node satisfies leaves the
+    /// miss to the rest of the locator (ADR-0240 §4 lets one identifier stand
+    /// in several places); the target's own identifier is blamed even then,
+    /// since the lifted instance may be the one its scope holds. It only
+    /// explains a failure, so a misplaced guess costs a hint, never a verdict.
+    fn unpublished_identifier(&mut self, locator: &Locator) -> Option<TestError> {
+        let mut scopes: Vec<&str> = Vec::new();
+        let mut pending: Vec<&Locator> = Vec::new();
+        pending.extend(locator.within.as_deref());
+        pending.extend(locator.has.as_deref());
+        while let Some(scope) = pending.pop() {
+            scopes.extend(scope.identifier.as_deref());
+            pending.extend(scope.within.as_deref());
+            pending.extend(scope.has.as_deref());
+        }
+        if locator.identifier.is_none() && scopes.is_empty() {
+            return None;
+        }
+        let tree = self.try_semantics().ok()?;
+        scopes.retain(|identifier| !carries_identifier(&tree.roots, identifier));
+        let mut wanted = scopes;
+        wanted.extend(locator.identifier.as_deref());
+        // A node lifted inside a control is preferred, since that fix
+        // differs.
+        let mut lifted = tree
+            .diagnostics
+            .iter()
+            .filter_map(|diagnostic| match diagnostic {
+                TreeDiagnostic::UnpublishedIdentifier { identifier, parent }
+                    if wanted.contains(&identifier.as_str()) =>
+                {
+                    Some((identifier, *parent))
+                }
+                _ => None,
+            })
+            .peekable();
+        let first = lifted.peek().map(|(identifier, _)| (*identifier).clone())?;
+        let (identifier, control) = lifted
+            .find_map(|(identifier, parent)| {
+                let control =
+                    find_node(&tree.roots, parent).filter(|node| names_from_contents(node.role))?;
+                Some((identifier.clone(), Some(line_of(control))))
+            })
+            .unwrap_or((first, None));
+        Some(TestError::UnpublishedIdentifier {
+            locator: Box::new(locator.clone()),
+            identifier,
+            control,
+            shown: self.shown(),
+        })
     }
 
     fn actionability(&mut self, found: &Match) -> Result<Actionability, TestError> {
@@ -1290,7 +1716,9 @@ impl Expectation<'_> {
         self.to_have_count(1);
     }
 
-    /// No element matches: `findsNothing`.
+    /// No element matches: `findsNothing`. A node whose identifier the read
+    /// lifts away matches nothing, so this passes for it: give such a node a
+    /// role to find it (ADR-0240 §3).
     #[track_caller]
     pub fn to_be_gone(self) {
         self.to_have_count(0);
@@ -1407,6 +1835,17 @@ fn wait(
         // Only a frame due now keeps the expectation pumping: a timer due
         // later is the test's to reach with `pump_for`.
         let next = tester.host.time_to_next_frame();
+        let gives_up = next != Some(Duration::ZERO) || waited >= timeout;
+        // An expectation that gives up matching nothing, on an identifier
+        // nothing selects, says why, as a lookup does. The reason only
+        // explains a failure: an expectation that holds by matching nothing
+        // (`to_be_gone`) passes, whatever lifted node carries the identifier.
+        if gives_up
+            && matches.is_empty()
+            && let Some(error) = tester.unpublished_identifier(locator)
+        {
+            return Err(error);
+        }
         if next != Some(Duration::ZERO) {
             return Err(TestError::Idle {
                 expected: expected.to_owned(),
@@ -1430,7 +1869,67 @@ fn wait(
     }
 }
 
+/// What [`TestError::UnpublishedIdentifier`] tells the author to do: give
+/// the identifier to the control the node is lifted into, since a group
+/// there would cut the name the control's label gives it, or else give the
+/// node a role.
+fn unpublished_identifier_fix(control: Option<&str>) -> String {
+    match control {
+        Some(control) => format!(
+            "Give the identifier to the control it is inside, `{control}`: a group there can \
+             cut the name its label gives it."
+        ),
+        None => "Give that node a role other than generic or presentation, as \
+                 `Semantics::new().container(true).role(SemanticsRole::Group).identifier(..)`."
+            .to_owned(),
+    }
+}
+
+/// Whether AccessKit names a node of `role` from the labels beneath it, so a
+/// group between them would cut its name.
+fn names_from_contents(role: Role) -> bool {
+    matches!(
+        role,
+        Role::Button | Role::CheckBox | Role::RadioButton | Role::Link | Role::MenuItem
+    )
+}
+
+/// Whether a node under `roots` is published with `identifier`.
+fn carries_identifier(roots: &[Node], identifier: &str) -> bool {
+    let mut pending: Vec<&Node> = roots.iter().collect();
+    while let Some(node) = pending.pop() {
+        if node.identifier.as_deref() == Some(identifier) {
+            return true;
+        }
+        pending.extend(&node.children);
+    }
+    false
+}
+
+/// The node `id` names among `roots` and their descendants.
+fn find_node(roots: &[Node], id: ElementId) -> Option<&Node> {
+    let mut pending: Vec<&Node> = roots.iter().collect();
+    while let Some(node) = pending.pop() {
+        if node.id == id {
+            return Some(node);
+        }
+        pending.extend(&node.children);
+    }
+    None
+}
+
 /// `node` as one outline line.
+/// The render object an `inspect.render` node names.
+fn render_of(node: &flui_protocol::inspect::InspectNode) -> flui_foundation::RenderId {
+    match node.id.parse::<flui_foundation::inspect::Link>() {
+        Ok(flui_foundation::inspect::Link::Render(id)) => id,
+        _ => panic!(
+            "BUG: inspect.render names its nodes by render handle, not {:?}",
+            node.id
+        ),
+    }
+}
+
 fn line_of(node: &Node) -> String {
     outline(std::slice::from_ref(node))
         .lines()
@@ -1476,15 +1975,19 @@ fn chord_keys(chord: &str) -> Vec<&str> {
     }
 }
 
-/// Every draw command of `tree`, in paint order, each placed in the tree's
-/// root coordinates; what [`Tester::draw_commands`] reads.
+/// The draw commands of `tree`'s picture layers whose painter `selects`, in
+/// paint order, each placed in the tree's root coordinates; what
+/// [`Tester::draw_commands`] reads.
 ///
 /// Pre-order is paint order: a parent keeps its children in the order they
 /// paint, a repaint boundary's content under its slot. An explicit stack,
 /// children pushed last first, so a deep chain of effects cannot overflow
 /// the test thread's stack. A follower its leader does not place is skipped
 /// with its subtree, as the engine skips it.
-fn scene_commands(tree: &flui_rendering::layer::LayerTree) -> Vec<flui_painting::DrawCommandBuf> {
+fn scene_commands(
+    tree: &flui_rendering::layer::LayerTree,
+    selects: impl Fn(flui_foundation::RenderId) -> bool,
+) -> Vec<flui_painting::DrawCommandBuf> {
     use flui_foundation::geometry::Matrix4;
     use flui_rendering::layer::{Layer, resolve_follower_transform};
 
@@ -1494,6 +1997,11 @@ fn scene_commands(tree: &flui_rendering::layer::LayerTree) -> Vec<flui_painting:
         let Some(node) = tree.get(id) else { continue };
         let local = match node.layer() {
             Layer::Picture(picture) => {
+                // A picture is one render object's run (ADR-0304 §2); one no
+                // render object painted is no element's drawing.
+                if !node.render_id().is_some_and(&selects) {
+                    continue;
+                }
                 commands.extend(picture.picture().iter().map(|command| {
                     let mut command = command.to_buf();
                     command.transform = above * command.transform;
@@ -1522,20 +2030,27 @@ mod tests {
     use flui_foundation::geometry::{Matrix4, Offset, Point, Rect, Size};
     use flui_painting::{Canvas, DrawOp, Paint, styling::Color};
     use flui_rendering::layer::{
-        FollowerLayer, Layer, LayerLink, LayerTree, LeaderLayer, OffsetLayer, PictureLayer,
+        FollowerLayer, Layer, LayerLink, LayerNode, LayerTree, LeaderLayer, OffsetLayer,
+        PictureLayer,
     };
 
-    fn swatch(shade: u8) -> Layer {
+    /// A one-pixel swatch of `shade`, painted by a render object of that slot.
+    fn swatch(shade: u8) -> LayerNode {
         let mut canvas = Canvas::new();
         canvas.draw_rect(
             Rect::from_origin_size(Point::ZERO, Size::new(1.0, 1.0)),
             &Paint::fill(Color::rgb(shade, 0, 0)),
         );
-        Layer::Picture(PictureLayer::new(canvas.finish()))
+        LayerNode::new(Layer::Picture(PictureLayer::new(canvas.finish()))).with_render(
+            flui_foundation::RenderId::new_gen(
+                u32::from(shade),
+                flui_foundation::generation::Generation::FIRST,
+            ),
+        )
     }
 
     fn placed(tree: &LayerTree) -> Vec<(u8, Matrix4)> {
-        super::scene_commands(tree)
+        super::scene_commands(tree, |_| true)
             .into_iter()
             .filter_map(|command| match command.op {
                 DrawOp::Rect { paint, .. } => {

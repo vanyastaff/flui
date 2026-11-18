@@ -14,6 +14,14 @@ mod android;
 #[cfg(any(windows, test))]
 mod associations;
 #[cfg(all(
+    test,
+    feature = "testing",
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+mod clipboard_expiry_tests;
+#[cfg(all(
     not(target_os = "android"),
     not(target_os = "ios"),
     not(target_arch = "wasm32")
@@ -222,7 +230,7 @@ fn presented_host_window(
 ) -> Option<Rc<dyn flui_native::HostWindow>> {
     host::APP_RUNTIME.with(|slot| {
         let state = slot.try_borrow().ok()?;
-        if state.owner_thread != Some(std::thread::current().id()) {
+        if !state.hosts_loop {
             return None;
         }
         let presented = find(&state.window_commands)?;
@@ -237,7 +245,7 @@ fn presented_host_window(
 
 fn text_store_host_of(
     window: &Rc<dyn flui_native::HostWindow>,
-) -> Option<std::rc::Rc<dyn flui_platform::TextStoreHost>> {
+) -> Option<std::rc::Rc<dyn flui_platform::text_store::TextStoreHost>> {
     host::with_owner_platform(|owner| owner.text_store_host(window)).flatten()
 }
 
@@ -254,7 +262,8 @@ pub fn window_handle(
 ) -> Option<flui_view::WindowHandle> {
     host::APP_RUNTIME.with(|slot| {
         let state = slot.try_borrow().ok()?;
-        (state.owner_thread == Some(std::thread::current().id()))
+        state
+            .hosts_loop
             .then(|| state.window_commands.handle_for(address))
             .flatten()
     })
@@ -277,14 +286,15 @@ pub fn window_handle(
 /// Win32's `DestroyWindow` does not send `WM_CLOSE`).
 ///
 /// Owner-thread only, like every other operation on a hosted UI runtime — a
-/// call from a worker thread is REFUSED with a typed error rather than
-/// silently doing nothing. That matters for the deferral case above: the
-/// work an application finishes before calling this often finishes on a
-/// worker, and `AppRuntime` is thread-local, so a worker would otherwise
-/// look at its own empty runtime and report "nothing registered". Marshal
-/// back to the thread that ran the handler.
+/// call from a thread that runs no FLUI loop is REFUSED with
+/// [`NoHostedRuntime`](crate::CloseRequestError::NoHostedRuntime) rather
+/// than silently doing nothing. That matters for the deferral case above:
+/// the work an application finishes before calling this often finishes on a
+/// worker, and the runtime that hosts the presentations is the loop
+/// thread's own, so a worker finds none. Marshal back to the thread that
+/// ran the handler.
 ///
-/// The check is thread-scoped rather than process-scoped because "the
+/// The answer is thread-scoped rather than process-scoped because "the
 /// owner thread" is not a process-wide fact: a process may host several
 /// event loops on several threads, each with its own `AppRuntime`. Merely
 /// reading this thread's slot is side-effect-free by construction (see
@@ -305,33 +315,35 @@ pub fn window_handle(
 ///
 /// [`CloseRequestError::NoHostedRuntime`](crate::CloseRequestError::NoHostedRuntime)
 /// when the calling thread hosts no FLUI runtime,
-/// [`CloseRequestError::WrongThread`](crate::CloseRequestError::WrongThread)
-/// when it hosts one but not the presentation's,
 /// [`CloseRequestError::UnknownPresentation`](crate::CloseRequestError::UnknownPresentation)
 /// when no presentation is registered at `address` (never installed, or
-/// already closed), and
+/// already closed),
 /// [`CloseRequestError::WindowGone`](crate::CloseRequestError::WindowGone)
-/// when its native window is already destroyed.
+/// when its native window is already destroyed,
+/// [`CloseRequestError::Refused`](crate::CloseRequestError::Refused) when
+/// its window system closes no window, and
+/// [`CloseRequestError::Failed`](crate::CloseRequestError::Failed) when the
+/// window took the close and failed it.
 pub fn request_presentation_close(
     address: flui_foundation::PresentationAddress,
 ) -> Result<(), crate::app::close_request::CloseRequestError> {
     use crate::app::close_request::CloseRequestError;
 
-    // Read the owner thread and the router in ONE visit, then leave the
-    // thread-local: `WindowCommand::Close` fires the window's own
-    // `on_close`, which re-enters `APP_RUNTIME` through
-    // `close_this_window`. A thread that hosts no loop has `owner_thread`
-    // unset — that, not an empty router, is what distinguishes "you are on
-    // the wrong thread" from "that presentation is gone".
-    let (owner_thread, router) = host::APP_RUNTIME.with(|slot| {
+    // Read whether this thread hosts a loop and its router in ONE visit,
+    // then leave the thread-local: `WindowCommand::Close` fires the window's
+    // own `on_close`, which re-enters `APP_RUNTIME` through
+    // `close_this_window`. The slot is this thread's own, so a loop it
+    // hosts is the loop of this thread: a thread that hosts none, not an
+    // empty router, is what tells "no FLUI loop here" from "that
+    // presentation is gone".
+    let (hosts_loop, router) = host::APP_RUNTIME.with(|slot| {
         let state = slot.borrow();
-        (state.owner_thread, state.close_requests())
+        (state.hosts_loop, state.close_requests())
     });
-    match owner_thread {
-        None => Err(CloseRequestError::NoHostedRuntime),
-        Some(owner) if owner != std::thread::current().id() => Err(CloseRequestError::WrongThread),
-        Some(_) => router.request_close(address),
+    if !hosts_loop {
+        return Err(CloseRequestError::NoHostedRuntime);
     }
+    router.request_close(address)
 }
 
 /// Run `root` in a main window with the default configuration and the
@@ -360,14 +372,15 @@ where
 
 /// The one check of an application's window options, before any runner
 /// starts, on every platform: the numbers a window command would refuse (a
-/// size or position that is not finite, a size or limit that encloses no
-/// area, a minimum above the maximum) refuse the start, naming the option.
-/// A host checks the options of every window it opens later itself
-/// (`WindowOptions::geometry`).
+/// size or limit that encloses no area, a minimum above the maximum) refuse
+/// the start, naming the option. A configured position is whole pixels and is
+/// always a place, so none is refused here. A host checks the options of
+/// every window it opens later itself (`WindowOptions::geometry`).
 pub(in crate::app) fn check_window_options(
     config: &crate::app::AppConfig,
 ) -> Result<(), LaunchError> {
-    flui_platform::WindowOptions::from(config)
+    config
+        .window_options(None)
         .geometry()
         .map(drop)
         .map_err(LaunchError::InvalidWindowOption)
@@ -422,7 +435,6 @@ where
         // Before anything starts, so a conflict starts nothing (ADR-0152 §1).
         install_capabilities(capabilities)?;
         tracing::info!(
-            title = %config.title,
             size = ?config.size,
             "Starting FLUI application"
         );
@@ -645,7 +657,10 @@ mod tests {
         use std::sync::Arc;
         use std::sync::atomic::{AtomicBool, Ordering};
 
-        let marker_size = flui_foundation::geometry::Size::new(4001.0, 4002.0);
+        let marker_size = flui_platform::WindowExtent::try_new(
+            flui_foundation::geometry::Size::new(4001.0, 4002.0),
+        )
+        .expect("a finite extent");
 
         let platform = flui_native::headless_platform();
         let window = platform
@@ -740,13 +755,16 @@ mod tests {
     struct FocusLog(std::sync::Arc<parking_lot::Mutex<Vec<bool>>>);
 
     impl flui_platform::text_store::TextStoreHost for FocusLog {
-        fn focus_store(&self, store: Option<std::rc::Rc<dyn flui_platform::TextStore>>) {
+        fn focus_store(
+            &self,
+            store: Option<std::rc::Rc<dyn flui_platform::text_store::TextStore>>,
+        ) {
             self.0.lock().push(store.is_some());
         }
 
         fn complete_composition(
             &self,
-            _: &std::rc::Rc<dyn flui_platform::TextStore>,
+            _: &std::rc::Rc<dyn flui_platform::text_store::TextStore>,
         ) -> Result<
             flui_platform::text_store::CompositionEnd,
             flui_platform::text_store::TextStoreHostError,
@@ -754,7 +772,7 @@ mod tests {
             Ok(flui_platform::text_store::CompositionEnd::Committed)
         }
 
-        fn show_keyboard(&self, _: &std::rc::Rc<dyn flui_platform::TextStore>) {}
+        fn show_keyboard(&self, _: &std::rc::Rc<dyn flui_platform::text_store::TextStore>) {}
     }
 
     /// A pull-model window's host reaches the presentation the runner builds

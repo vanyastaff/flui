@@ -594,10 +594,10 @@ impl View for Overlay {
 impl StatefulView for Overlay {
     type State = OverlayState;
 
-    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
         OverlayState {
             shared: crate::support::retirement::Terminal::new(Arc::clone(&self.handle.shared)),
-            rebuild: None,
+            rebuild: ctx.rebuild_handle(),
             serving: false,
         }
     }
@@ -617,7 +617,7 @@ pub struct OverlayState {
     /// This element's own rebuild capability, kept so the slot can move to a
     /// replacement handle (`did_update_view`) and be released only by its
     /// holder (`dispose`).
-    rebuild: Option<RebuildHandle>,
+    rebuild: RebuildHandle,
     /// Whether this state holds `shared`'s rebuild slot. `false` for a second
     /// concurrent mount of one handle, which builds nothing.
     serving: bool,
@@ -625,9 +625,9 @@ pub struct OverlayState {
 
 impl Drop for OverlayState {
     fn drop(&mut self) {
+        // `rebuild` drops after this, once `shared` is gone.
         let shared = self.shared.withdraw();
-        let rebuild = crate::support::retirement::Terminal::new(self.rebuild.take());
-        drop((shared, rebuild));
+        drop(shared);
     }
 }
 
@@ -642,13 +642,8 @@ impl fmt::Debug for OverlayState {
 impl ViewState<Overlay> for OverlayState {
     /// Publish the rebuild capability so [`OverlayHandle`] mutations, which run
     /// outside any frame phase, can schedule this element.
-    ///
-    /// `init_state` is the correct hook: only `LifecycleContext` offers
-    /// `rebuild_handle()`, so `build`/layout/paint cannot acquire one.
-    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        let rebuild = ctx.rebuild_handle();
-        self.serving = self.shared.claim_rebuild(&rebuild);
-        self.rebuild = Some(rebuild);
+    fn init_state(&mut self, _ctx: &dyn LifecycleContext) {
+        self.serving = self.shared.claim_rebuild(&self.rebuild);
     }
 
     /// A rebuild that hands this element a *different* handle moves the
@@ -659,15 +654,11 @@ impl ViewState<Overlay> for OverlayState {
         if Arc::ptr_eq(&self.shared, &new.handle.shared) {
             return;
         }
-        let element = self.rebuild.as_ref().and_then(RebuildHandle::element_id);
         if self.serving {
-            self.shared.release_rebuild(element);
+            self.shared.release_rebuild(self.rebuild.element_id());
         }
         *self.shared = Arc::clone(&new.handle.shared);
-        self.serving = self
-            .rebuild
-            .as_ref()
-            .is_some_and(|rebuild| self.shared.claim_rebuild(rebuild));
+        self.serving = self.shared.claim_rebuild(&self.rebuild);
     }
 
     /// Bottom → top: `entries[i]` paints below `entries[i + 1]`, because
@@ -705,8 +696,7 @@ impl ViewState<Overlay> for OverlayState {
     /// inert.
     fn dispose(&mut self) {
         if self.serving {
-            self.shared
-                .release_rebuild(self.rebuild.as_ref().and_then(RebuildHandle::element_id));
+            self.shared.release_rebuild(self.rebuild.element_id());
         }
     }
 }

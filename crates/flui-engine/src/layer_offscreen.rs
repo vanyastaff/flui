@@ -13,7 +13,7 @@
 //!   layer's full draw-item list (not a single segment), so it keeps its own
 //!   `LoadOp::Clear(TRANSPARENT)` pass rather than delegating to
 //!   `render_segment_to_offscreen`; both paths use the identical
-//!   clear-then-`LoadOp::Load` sequence (R3).
+//!   clear-then-`LoadOp::Load` sequence.
 //!
 //! - `GpuReplay::flush_opacity_layer` — composite a rendered layer onto the
 //!   main surface, dispatching to the advanced-blend path or the premultiplied

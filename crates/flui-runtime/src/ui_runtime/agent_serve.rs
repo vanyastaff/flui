@@ -18,10 +18,13 @@ use flui_foundation::PresentationId;
 use flui_foundation::panic::FirstPanic;
 use flui_protocol::method::{self, Method, WindowMethod};
 use flui_protocol::{
-    ActOutcome, ActParams, ActionRequest, ActionabilityParams, AnnouncementJournal,
-    AnnouncementsParams, InputParams, InputPath, InspectParams, InspectReading, Journal,
-    JournalParams, LocateParams, Locator, Matches, MotionParams, MotionState, Pick, ReadParams,
-    Released, Target, Tree, WaitOutcome, WaitParams, WindowId, WindowParams,
+    act::ActOutcome, act::ActParams, act::ActionRequest, act::ActionabilityParams,
+    events::AnnouncementJournal, events::AnnouncementsParams, input::InputParams, input::InputPath,
+    input::Journal, input::JournalParams, input::Released, inspect::InspectParams,
+    inspect::InspectReading, locator::LocateParams, locator::Locator, locator::Matches,
+    locator::Pick, locator::Target, motion::MotionParams, motion::MotionState,
+    session::WindowParams, tree::ReadParams, tree::Tree, tree::WindowId, wait::WaitOutcome,
+    wait::WaitParams,
 };
 use flui_view::__runtime::{LeaseId, Reply, WindowCall};
 
@@ -90,7 +93,7 @@ impl<T> ServeContext<'_, T> {
     }
 
     /// Whether an answer of this presentation reported `element`.
-    pub(super) fn was_issued(&self, element: flui_protocol::ElementId) -> bool {
+    pub(super) fn was_issued(&self, element: flui_protocol::tree::ElementId) -> bool {
         self.issued.borrow().was_issued(element)
     }
 
@@ -389,7 +392,7 @@ impl Serve for method::SemanticsAct {
 fn resolve<T>(
     ctx: &ServeContext<'_, T>,
     locator: &Locator,
-) -> Result<flui_protocol::ElementId, AgentError> {
+) -> Result<flui_protocol::tree::ElementId, AgentError> {
     let strict = locator.pick == Pick::Strict;
     let mut params = LocateParams::new(locator.clone());
     if strict {
@@ -414,9 +417,9 @@ fn resolve<T>(
 
 impl Serve for method::ElementActionability {
     fn serve(
-        ctx: &mut ServeContext<'_, flui_protocol::Actionability>,
+        ctx: &mut ServeContext<'_, flui_protocol::act::Actionability>,
         params: ActionabilityParams,
-    ) -> Answer<flui_protocol::Actionability> {
+    ) -> Answer<flui_protocol::act::Actionability> {
         let element = params.element.element;
         ctx.if_panics.set(AgentError::ResolvePanicked { element });
         Answer::Now(agent::actionability(

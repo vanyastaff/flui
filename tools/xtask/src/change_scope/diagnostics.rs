@@ -320,7 +320,7 @@ mod tests {
 error[E0277]: `Rc<X>` cannot be sent between threads safely
   --> tests/ui/case.rs:13:30
 note: required because it appears within the type `X`
-  --> $WORKSPACE/crates/flui-foundation/src/notifier.rs
+  --> $WORKSPACE/crates/flui-foundation/src/notifier/mod.rs
    |
    | pub struct X {
   --> $RUST/core/src/marker.rs
@@ -329,7 +329,7 @@ note: required because it appears within the type `X`
 ";
         let cited = cited_paths(text, "crates/flui-view");
         let expected: BTreeSet<String> = [
-            "crates/flui-foundation/src/notifier.rs",
+            "crates/flui-foundation/src/notifier/mod.rs",
             "crates/flui-view/tests/ui/case.rs",
             "tests/ui/case.rs",
             "crates/flui-view/src/owned.rs",

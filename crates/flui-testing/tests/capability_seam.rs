@@ -19,7 +19,8 @@ use flui_platform::capability::{
     Plugin, ProviderContext, Resolver,
 };
 use flui_platform::{
-    ClipboardError, ClipboardRead, ClipboardWrite, Concealment, Unsupported, UnsupportedReason,
+    ClipboardError, ClipboardExpiry, ClipboardRead, ClipboardWrite, Concealment, ExpiryClearing,
+    Unsupported, UnsupportedReason,
 };
 use flui_runtime::capability::{CapabilityConflict, CapabilityRegistry, ProviderTier};
 use flui_testing::{HeadlessHost, HeadlessWindow, ScriptedClipboard};
@@ -120,6 +121,11 @@ pub(crate) fn acquire_capability_in<C: Capability>(
 
 fn window() -> HeadlessWindow {
     HeadlessWindow::new(10, 10)
+}
+
+/// [`window`] on Linux, the platform with a primary selection.
+fn linux_window() -> HeadlessWindow {
+    window().with_platform(flui_platform::TargetPlatform::Linux)
 }
 
 /// Where a test keeps what a completion settled with.
@@ -359,6 +365,15 @@ pub(crate) fn a_concealed_write_reaches_the_host_marked() {
 
     drop(clipboard.write_text("plain"));
     assert!(!scripted.is_concealed(), "an ordinary write is unmarked");
+
+    // An expiring write is a concealed one, and the handle answers what the
+    // host does with its time (ADR-0363).
+    assert_eq!(clipboard.expiry_clearing(), ExpiryClearing::AtTimeAndLock);
+    scripted.answer_expiry_clearing(ExpiryClearing::Unavailable);
+    assert_eq!(clipboard.expiry_clearing(), ExpiryClearing::Unavailable);
+    let thirty = ClipboardExpiry::try_new(Duration::from_secs(30)).expect("a valid expiry");
+    drop(clipboard.write(ClipboardWrite::text("token").expires_after(thirty)));
+    assert!(scripted.is_concealed(), "an expiring write is concealed");
 }
 
 /// Answers every read from a thread of its own, as an OS callback does.
@@ -387,6 +402,10 @@ impl ClipboardBackend for OtherThreadBackend {
 
     fn concealment(&self) -> flui_platform::Concealment {
         flui_platform::Concealment::Unavailable
+    }
+
+    fn expiry_clearing(&self) -> ExpiryClearing {
+        ExpiryClearing::Unavailable
     }
 }
 
@@ -433,35 +452,57 @@ impl Drop for DropFlag {
     }
 }
 
+/// A read still pending when its runtime ends, whether the host drops it or
+/// its last window closes, which retires the runtime on a real host, ends as
+/// `OwnerRetired`: its waiting closure is dropped unrun, and the late answer
+/// runs nothing.
+///
+/// The last-window row fails against a host that only stops its last
+/// presentation: the runtime lives on, and the late answer runs the closure.
 pub(crate) fn a_read_pending_when_its_runtime_drops_ends_as_owner_retired() {
-    let mut host = HeadlessHost::new(window());
-    let scripted = host.clipboard();
-    scripted.hold_reads();
-    let clipboard = acquire(&mut host).expect("provided");
+    for last_window_closes in [false, true] {
+        let mut host = HeadlessHost::new(window());
+        let scripted = host.clipboard();
+        scripted.hold_reads();
+        let clipboard = acquire(&mut host).expect("provided");
 
-    let mut polled = clipboard.read_text();
-    let waiting = clipboard.read_text();
-    let (ran, dropped) = (Rc::new(Cell::new(false)), Rc::new(Cell::new(false)));
-    let (flag, ran_in) = (DropFlag(Rc::clone(&dropped)), Rc::clone(&ran));
-    waiting.on_complete(move |_| {
-        let _flag = &flag;
-        ran_in.set(true);
-    });
-    assert_eq!(polled.poll(), None, "held");
+        let mut polled = clipboard.read_text();
+        let waiting = clipboard.read_text();
+        let (ran, dropped) = (Rc::new(Cell::new(false)), Rc::new(Cell::new(false)));
+        let (flag, ran_in) = (DropFlag(Rc::clone(&dropped)), Rc::clone(&ran));
+        waiting.on_complete(move |_| {
+            let _flag = &flag;
+            ran_in.set(true);
+        });
+        assert_eq!(polled.poll(), None, "held");
 
-    drop(host);
-    assert!(
-        dropped.get(),
-        "the waiting closure is dropped with the runtime"
-    );
-    assert!(!ran.get(), "and never runs");
-    assert_eq!(polled.poll(), Some(Err(Abandoned::OwnerRetired)));
-    assert_eq!(
-        scripted.answer_held_reads(),
-        1,
-        "the two reads share one host read, whose late answer finds nobody and does not panic"
-    );
-    assert_eq!(polled.poll(), None, "a completion ends once");
+        let kept = if last_window_closes {
+            let primary = host.primary_window();
+            assert!(host.request_close(primary, flui_view::CloseReason::User));
+            assert!(host.is_retired(), "the last close retires the runtime");
+            Some(host)
+        } else {
+            drop(host);
+            None
+        };
+        assert!(
+            dropped.get(),
+            "the waiting closure is dropped with the runtime (last window closes: \
+             {last_window_closes})"
+        );
+        assert!(!ran.get(), "and never runs");
+        assert_eq!(polled.poll(), Some(Err(Abandoned::OwnerRetired)));
+        assert_eq!(
+            scripted.answer_held_reads(),
+            1,
+            "the two reads share one host read, whose late answer finds nobody and does not panic"
+        );
+        if let Some(mut host) = kept {
+            let _ = host.pump(Duration::ZERO);
+        }
+        assert!(!ran.get(), "a pump after the late answer runs nothing");
+        assert_eq!(polled.poll(), None, "a completion ends once");
+    }
 }
 
 pub(crate) fn a_read_whose_answer_is_dropped_ends_as_provider_dropped() {
@@ -870,7 +911,7 @@ pub(crate) fn a_provider_after_a_teardown_failure_is_kept_not_dropped() {
 /// selecting, makes it stale, and a stale claim's drop leaves the selection
 /// alone.
 pub(crate) fn a_primary_read_after_a_release_never_joins_the_read_before_it() {
-    let mut host = HeadlessHost::new(window());
+    let mut host = HeadlessHost::new(linux_window());
     let selection = acquire_capability::<PrimarySelectionCapability>(&mut host)
         .expect("the headless host provides a primary selection");
     let claim = selection.claim(|| Some("withdrawn".to_owned()));
@@ -888,7 +929,7 @@ pub(crate) fn a_primary_read_after_a_release_never_joins_the_read_before_it() {
 }
 
 pub(crate) fn a_primary_claim_is_asked_lazily_and_released_only_while_current() {
-    let mut host = HeadlessHost::new(window());
+    let mut host = HeadlessHost::new(linux_window());
     let scripted = host.primary_selection();
     let selection = acquire_capability::<PrimarySelectionCapability>(&mut host)
         .expect("the headless host provides a primary selection");
@@ -927,12 +968,41 @@ pub(crate) fn a_primary_claim_is_asked_lazily_and_released_only_while_current() 
     assert_eq!(scripted.text(), None, "a current claim's drop releases it");
 }
 
+/// A runtime whose registry has no primary selection refuses it as not
+/// registered, and the host's built-ins have one only where the window's
+/// platform does, as a runner's: on Linux and nowhere else, the
+/// platform-neutral window included.
+///
+/// The platform rows fail against a host that registers the primary selection
+/// whatever the platform: a field under a Windows convention would paste it
+/// on a middle press.
 pub(crate) fn a_runtime_without_a_primary_selection_answers_not_registered() {
+    use flui_platform::TargetPlatform::{Android, Linux, MacOS, Unknown, Windows, iOS};
+
     let mut host = HeadlessHost::with_capabilities(window(), CapabilityRegistry::empty());
     let refusal = acquire_capability::<PrimarySelectionCapability>(&mut host)
         .expect_err("nothing provides the primary selection");
     assert_eq!(refusal.reason, UnsupportedReason::NotRegistered);
     assert_eq!(refusal.capability(), Some(PrimarySelectionCapability::NAME));
+
+    for (platform, provided) in [
+        (Linux, true),
+        (Windows, false),
+        (MacOS, false),
+        (Android, false),
+        (iOS, false),
+        (Unknown, false),
+    ] {
+        let mut host = HeadlessHost::new(window().with_platform(platform));
+        let acquired = acquire_capability::<PrimarySelectionCapability>(&mut host);
+        match acquired {
+            Ok(_) => assert!(provided, "{platform:?} has no primary selection"),
+            Err(refusal) => {
+                assert!(!provided, "{platform:?} provides a primary selection");
+                assert_eq!(refusal.reason, UnsupportedReason::NotRegistered);
+            }
+        }
+    }
 }
 
 /// A capture that, as it drops, claims the selection anew and then panics.
@@ -953,7 +1023,7 @@ impl Drop for ClaimsThenPanics {
 /// claim, whose guard never reached its caller, is withdrawn; a claim that
 /// panicking `Drop` made in turn stays current.
 pub(crate) fn a_claim_whose_predecessor_panics_as_it_drops_is_withdrawn() {
-    let mut host = HeadlessHost::new(window());
+    let mut host = HeadlessHost::new(linux_window());
     let scripted = host.primary_selection();
     let selection = acquire_capability::<PrimarySelectionCapability>(&mut host)
         .expect("the headless host provides a primary selection");
@@ -1048,7 +1118,7 @@ impl flui_platform::capability::ActivityBridge for EndedActivity {
     fn take_data(
         &self,
         _capability: &flui_platform::capability::CapabilityId,
-        _data: flui_platform::capability::ResultData,
+        _data: flui_platform::capability::ResultIntent,
         _f: &mut dyn FnMut(flui_platform::capability::JniFrame),
     ) -> Result<(), flui_platform::capability::DataRefused> {
         Err(flui_platform::capability::DataRefused::NotHeld)

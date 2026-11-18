@@ -31,7 +31,7 @@
 //! wakes the owner, whose turn ends the request as cancelled and cancels a
 //! started activity on the Java side, which frees its place there. The
 //! `Intent` an answer carries is held here, under its request's token and
-//! capability, until that capability's provider hands its [`ResultData`] to
+//! capability, until that capability's provider hands its [`ResultIntent`] to
 //! `Activity::take_data` or drops it, which [`ResultRouter::sweep`] sees. A
 //! launch the Java main thread never
 //! takes within [`HAND_OFF_LIMIT`] ends as `HandOffFailed`
@@ -46,9 +46,9 @@ use std::time::Duration;
 use flui_foundation::IdMint;
 use flui_platform::capability::{
     CapabilityId, CompletionSource, DataRefused, MAX_OPEN_REQUESTS,
-    MAX_OPEN_REQUESTS_PER_CAPABILITY, RequestKey, Resolver, ResultCode, ResultData, ResultDataHold,
-    ResultKey, ResultMint, ResultOutcome, ResultRefused, ResultRequest, ResultTicketHold,
-    ResultToken, ResultTokenMint,
+    MAX_OPEN_REQUESTS_PER_CAPABILITY, RequestKey, Resolver, ResultCode, ResultIntent,
+    ResultIntentHold, ResultKey, ResultMint, ResultOutcome, ResultRefused, ResultRequest,
+    ResultTicketHold, ResultToken, ResultTokenMint,
 };
 use web_time::Instant;
 
@@ -210,7 +210,7 @@ struct Held<D> {
     token: ResultToken,
     capability: CapabilityId,
     data: D,
-    hold: ResultDataHold,
+    hold: ResultIntentHold,
 }
 
 /// What became of an answer, for the owner's log and the tests.
@@ -267,7 +267,7 @@ struct Earlier<D> {
 
 /// What the router makes the values it hands providers with, which the
 /// composition root handed the bridge ([`ResultMint`]), and what a dropped
-/// ticket or `ResultData` wakes.
+/// ticket or `ResultIntent` wakes.
 pub(crate) struct Issuer {
     pub(crate) mint: ResultMint,
     pub(crate) wake: Rc<dyn Fn()>,
@@ -294,7 +294,7 @@ pub(crate) struct ResultRouter<D> {
     /// Earlier Activities' answers; at most [`MAX_EARLIER`].
     earlier: Vec<Earlier<D>>,
     /// The `Intent` each answered request received, until its provider takes
-    /// it or lets its `ResultData` go; at most [`MAX_OPEN_REQUESTS`], and per
+    /// it or lets its `ResultIntent` go; at most [`MAX_OPEN_REQUESTS`], and per
     /// capability [`MAX_OPEN_REQUESTS_PER_CAPABILITY`]. Each came from an
     /// admitted request, so none is ever let go to make room.
     held: Vec<Held<D>>,
@@ -345,7 +345,7 @@ impl<D> ResultRouter<D> {
             .expect("BUG: a request opens only through an Activity, offered after bind")
     }
 
-    /// Release every held `Intent` whose provider let its `ResultData` go,
+    /// Release every held `Intent` whose provider let its `ResultIntent` go,
     /// and end every open request whose provider let its ticket go, as
     /// cancelled.
     pub(crate) fn sweep(&mut self) {
@@ -714,7 +714,7 @@ impl<D> ResultRouter<D> {
     pub(crate) fn take_data(
         &mut self,
         capability: &CapabilityId,
-        data: ResultData,
+        data: ResultIntent,
     ) -> Result<D, DataRefused> {
         let ours = self
             .issuer
@@ -790,7 +790,7 @@ mod tests {
         Abandoned, ActivityBridge, ActivityResult, Capability, CapabilityId, CapabilityRegistrar,
         Completion, CompletionSource, DataRefused, HostBridge, IntentFrame, JniFrame,
         MAX_OPEN_REQUESTS, MAX_OPEN_REQUESTS_PER_CAPABILITY, OwnerJob, OwnerPoster, OwnerRetired,
-        OwnerScope, PendingCompletions, ProviderContext, RequestKey, ResultCode, ResultData,
+        OwnerScope, PendingCompletions, ProviderContext, RequestKey, ResultCode, ResultIntent,
         ResultKey, ResultMint, ResultOutcome, ResultRefused, ResultRequest, ResultTicket,
         ResultToken,
     };
@@ -852,7 +852,7 @@ mod tests {
         fn take_data(
             &self,
             _capability: &CapabilityId,
-            _data: ResultData,
+            _data: ResultIntent,
             _f: &mut dyn FnMut(JniFrame),
         ) -> Result<(), DataRefused> {
             Err(DataRefused::NotHeld)
@@ -1222,7 +1222,7 @@ mod tests {
     /// most `MAX_OPEN_REQUESTS_PER_CAPABILITY` untaken `Intent`s of one
     /// capability, so it is refused while another still launches, and an
     /// `Intent` is never let go to make room (taking it, or dropping its
-    /// `ResultData`, does); and at most `MAX_OPEN_REQUESTS` launches the Java
+    /// `ResultIntent`, does); and at most `MAX_OPEN_REQUESTS` launches the Java
     /// main thread has not taken. Launches Java took are Java's to count.
     #[test]
     fn the_untaken_intents_and_unhanded_launches_are_bounded() {
@@ -1395,7 +1395,7 @@ mod tests {
     /// The `Intent` an answer carries stays with the router, under the token
     /// of the request it settled (a reattachment's own, for an earlier
     /// Activity's answer) and the capability whose request received it, and
-    /// is taken once through its `ResultData`: another capability is refused
+    /// is taken once through its `ResultIntent`: another capability is refused
     /// with a typed reason, data another Activity's host handed out is not
     /// held here, and the end lets every one go.
     #[test]

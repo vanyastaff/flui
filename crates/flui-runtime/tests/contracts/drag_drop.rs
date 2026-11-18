@@ -1260,10 +1260,7 @@ impl PlatformWindow for WithDragSource {
     fn surface_target(&self) -> Arc<dyn flui_platform::SurfaceTarget> {
         self.window.surface_target()
     }
-    fn set_cursor(
-        &self,
-        cursor: flui_platform::CursorIcon,
-    ) -> Result<(), flui_platform::CursorError> {
+    fn set_cursor(&self, cursor: &flui_platform::Cursor) -> Result<(), flui_platform::CursorError> {
         self.window.set_cursor(cursor)
     }
     fn set_frame_rate_hint(
@@ -1293,7 +1290,7 @@ impl PlatformWindow for WithDragSource {
     fn text_input(&self) -> Option<Arc<dyn flui_platform::PlatformTextInput>> {
         self.window.text_input()
     }
-    fn haptics(&self) -> Option<Arc<dyn flui_platform::PlatformHaptics>> {
+    fn haptics(&self) -> Option<Arc<dyn flui_platform::haptics::PlatformHaptics>> {
         self.window.haptics()
     }
     fn system_chrome(&self) -> Option<Arc<dyn flui_platform::PlatformSystemChrome>> {

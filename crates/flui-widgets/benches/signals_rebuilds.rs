@@ -10,7 +10,7 @@
 //!   `BuildOwner::last_frame_build_report` (the drain's own telemetry);
 //! - `layout_roots`, the frame's difference of `PipelineOwner::layout_roots_total`
 //!   (dirty layout entries the frame's `run_layout` passes drained);
-//! - the wall time of `change + pump_frame`, from criterion.
+//! - the wall time of `change + tick`, from criterion.
 //!
 //! The counts are deterministic and printed once as a markdown table (that
 //! table is the evidence ADR-0074 §8 cites); the timings follow as criterion
@@ -78,7 +78,9 @@ impl<T> OwnerState<T> {
         }
     }
 
-    /// Take the element's rebuild handle; call from `init_state`.
+    /// Take the element's rebuild handle; the owning state's `create_state`
+    /// calls it. The value is built before any element, so it starts with
+    /// none.
     fn bind(&self, ctx: &dyn LifecycleContext) {
         self.rebuild.replace(Some(ctx.rebuild_handle()));
     }
@@ -110,7 +112,8 @@ struct ListAState {
 
 impl StatefulView for ListA {
     type State = ListAState;
-    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
+        self.values.bind(ctx);
         ListAState {
             values: self.values.clone(),
         }
@@ -118,9 +121,6 @@ impl StatefulView for ListA {
 }
 
 impl ViewState<ListA> for ListAState {
-    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        self.values.bind(ctx);
-    }
     fn build(&self, _view: &ListA, _ctx: &dyn BuildContext) -> impl IntoView {
         use flui_view::ViewExt;
         Column::new(self.values.with(|values| {
@@ -145,7 +145,8 @@ struct FormAState {
 
 impl StatefulView for FormA {
     type State = FormAState;
-    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
+        self.fields.bind(ctx);
         FormAState {
             fields: self.fields.clone(),
         }
@@ -153,9 +154,6 @@ impl StatefulView for FormA {
 }
 
 impl ViewState<FormA> for FormAState {
-    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        self.fields.bind(ctx);
-    }
     fn build(&self, _view: &FormA, _ctx: &dyn BuildContext) -> impl IntoView {
         use flui_view::ViewExt;
         self.fields.with(|fields| {
@@ -179,7 +177,8 @@ struct AppAState {
 
 impl StatefulView for AppA {
     type State = AppAState;
-    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
+        self.unit.bind(ctx);
         AppAState {
             unit: self.unit.clone(),
         }
@@ -187,9 +186,6 @@ impl StatefulView for AppA {
 }
 
 impl ViewState<AppA> for AppAState {
-    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        self.unit.bind(ctx);
-    }
     fn build(&self, _view: &AppA, _ctx: &dyn BuildContext) -> impl IntoView {
         use flui_view::ViewExt;
         let unit = self.unit.with(|u| *u);

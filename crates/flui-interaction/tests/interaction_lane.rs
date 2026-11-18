@@ -475,7 +475,7 @@ impl flui_platform::PlatformWindow for CaptureWakeWindow {
 
     fn reveal_after_first_frame(&self) {}
 
-    fn set_cursor(&self, _: flui_platform::CursorIcon) -> Result<(), flui_platform::CursorError> {
+    fn set_cursor(&self, _: &flui_platform::Cursor) -> Result<(), flui_platform::CursorError> {
         Ok(())
     }
     fn state(&self) -> flui_platform::WindowState {
@@ -501,7 +501,7 @@ impl flui_platform::PlatformWindow for CaptureWakeWindow {
         None
     }
 
-    fn haptics(&self) -> Option<std::sync::Arc<dyn flui_platform::PlatformHaptics>> {
+    fn haptics(&self) -> Option<std::sync::Arc<dyn flui_platform::haptics::PlatformHaptics>> {
         None
     }
 
@@ -1470,7 +1470,7 @@ fn assert_queued_hover_retirement(mismatch: bool, failing_metadata: usize) {
         };
         if changed {
             // Synthetic motion is already Primary; Additional is a genuine
-            // full-PointerInfo boundary for try_coalesce.
+            // full-PointerSource boundary for try_coalesce.
             motion.pointer.role = PointerRole::Additional;
         }
         PointerEvent::Move(PointerMove::new(
@@ -2952,7 +2952,7 @@ fn assert_signal_owner_batch(device_removal: bool, native: bool) {
         EventTime,
         pointer::{
             DeviceId, PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerDeviceChange, PointerId,
-            PointerInfo, PointerPosition, ScrollPhase,
+            PointerPosition, PointerSource, ScrollPhase,
         },
     };
     use std::{cell::Cell, rc::Rc};
@@ -2974,7 +2974,7 @@ fn assert_signal_owner_batch(device_removal: bool, native: bool) {
                 _ => unreachable!("batch fixture phase"),
             };
             return PointerEvent::PanZoom(PanZoomEvent::new(
-                PointerInfo::new(
+                PointerSource::new(
                     PointerId::try_from(3_u64).expect("distinct native pointer"),
                     PointerKind::Trackpad,
                 )
@@ -3179,8 +3179,8 @@ fn assert_signal_claim_retirement(competing: bool, native: bool) {
     use flui_platform::{
         EventTime,
         pointer::{
-            PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerId, PointerInfo, PointerKind,
-            PointerPosition, ScrollPhase,
+            PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerId, PointerKind, PointerPosition,
+            PointerSource, ScrollPhase,
         },
     };
     use std::{
@@ -3206,7 +3206,7 @@ fn assert_signal_claim_retirement(competing: bool, native: bool) {
                 _ => unreachable!("fixture phase"),
             };
             return PointerEvent::PanZoom(PanZoomEvent::new(
-                PointerInfo::new(
+                PointerSource::new(
                     PointerId::try_from(1_u64).expect("pointer"),
                     PointerKind::Trackpad,
                 ),
@@ -3363,8 +3363,8 @@ fn native_staged_retirement_preserves_delivery_and_failure() {
     use flui_platform::{
         EventTime,
         pointer::{
-            PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerEvent, PointerId, PointerInfo,
-            PointerKind, PointerPosition,
+            PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerEvent, PointerId, PointerKind,
+            PointerPosition, PointerSource,
         },
     };
     use std::{
@@ -3396,7 +3396,7 @@ fn native_staged_retirement_preserves_delivery_and_failure() {
                 .on_update(move |_| updated.set(updated.get() + 1))
                 .on_end(move |_| ended.set(ended.get() + 1))
                 .build();
-            let source = PointerInfo::new(
+            let source = PointerSource::new(
                 PointerId::try_from(810_u64).expect("source"),
                 PointerKind::Trackpad,
             );
@@ -3470,8 +3470,8 @@ fn native_cancellation_destroys_captures_after_prior_capture_failure() {
     use flui_platform::{
         EventTime,
         pointer::{
-            CancelReason, PanZoomEvent, PanZoomPhase, PointerEvent, PointerId, PointerInfo,
-            PointerKind, PointerPosition,
+            CancelReason, PanZoomEvent, PanZoomPhase, PointerEvent, PointerId, PointerKind,
+            PointerPosition, PointerSource,
         },
     };
     use std::{
@@ -3513,7 +3513,7 @@ fn native_cancellation_destroys_captures_after_prior_capture_failure() {
                 let mut native_path = HitTestResult::new();
                 native_path.add(HitTestEntry::new(RenderId::new(2)).pan_zoom_target(target));
                 let start = PointerEvent::PanZoom(PanZoomEvent::new(
-                    PointerInfo::new(
+                    PointerSource::new(
                         PointerId::try_from(849_u64).expect("native source"),
                         PointerKind::Trackpad,
                     ),
@@ -3598,8 +3598,8 @@ fn native_claim_prior_observation_failure_destroys_captures() {
     use flui_platform::{
         EventTime,
         pointer::{
-            PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerEvent, PointerId, PointerInfo,
-            PointerKind, PointerPosition,
+            PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerEvent, PointerId, PointerKind,
+            PointerPosition, PointerSource,
         },
     };
     use std::{
@@ -3640,7 +3640,7 @@ fn native_claim_prior_observation_failure_destroys_captures() {
             .on_update(move |_| updated.set(updated.get() + 1))
             .on_end(move |_| ended.set(ended.get() + 1))
             .build();
-        let source = PointerInfo::new(
+        let source = PointerSource::new(
             PointerId::try_from(860_u64).expect("source"),
             PointerKind::Trackpad,
         );
@@ -3773,8 +3773,8 @@ fn native_cached_actor_reentry_preserves_new_generation(
     use flui_platform::{
         EventTime,
         pointer::{
-            PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerEvent, PointerId, PointerInfo,
-            PointerKind, PointerPosition,
+            PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerEvent, PointerId, PointerKind,
+            PointerPosition, PointerSource,
         },
     };
     use std::{
@@ -3804,7 +3804,7 @@ fn native_cached_actor_reentry_preserves_new_generation(
             .on_end(move |_| ended.set(ended.get() + 1))
             .on_cancel(move || cancels.set(cancels.get() + 1))
             .build();
-        let source = PointerInfo::new(
+        let source = PointerSource::new(
             PointerId::try_from(854_u64).expect("source"),
             PointerKind::Trackpad,
         );
@@ -3879,8 +3879,8 @@ fn native_same_actor_terminal_reentry_preserves_new_generation() {
     use flui_platform::{
         EventTime,
         pointer::{
-            PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerEvent, PointerId, PointerInfo,
-            PointerKind, PointerPosition,
+            PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerEvent, PointerId, PointerKind,
+            PointerPosition, PointerSource,
         },
     };
     use std::{
@@ -3912,7 +3912,7 @@ fn native_same_actor_terminal_reentry_preserves_new_generation() {
                         .on_end(move |_| ended.set(ended.get() + 1))
                         .on_cancel(move || cancels.set(cancels.get() + 1))
                         .build();
-                    let source = PointerInfo::new(
+                    let source = PointerSource::new(
                         PointerId::try_from(850_u64).expect("source"),
                         PointerKind::Trackpad,
                     );
@@ -3990,8 +3990,8 @@ fn native_close_preserves_retirement_ownership() {
     use flui_platform::{
         EventTime,
         pointer::{
-            PanZoomEvent, PanZoomPhase, PointerEvent, PointerId, PointerInfo, PointerKind,
-            PointerPosition,
+            PanZoomEvent, PanZoomPhase, PointerEvent, PointerId, PointerKind, PointerPosition,
+            PointerSource,
         },
     };
     use std::{
@@ -4050,7 +4050,7 @@ fn native_close_preserves_retirement_ownership() {
             path.add(HitTestEntry::new(RenderId::new(2)).pan_zoom_target(target));
             binding.handle_pointer_event(
                 &PointerEvent::PanZoom(PanZoomEvent::new(
-                    PointerInfo::new(
+                    PointerSource::new(
                         PointerId::try_from(840_u64).expect("source"),
                         PointerKind::Trackpad,
                     ),
@@ -4141,8 +4141,8 @@ fn native_terminal_observation_failure_keeps_owned_delivery() {
     use flui_platform::{
         EventTime,
         pointer::{
-            PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerEvent, PointerId, PointerInfo,
-            PointerKind, PointerPosition,
+            PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerEvent, PointerId, PointerKind,
+            PointerPosition, PointerSource,
         },
     };
     use std::{
@@ -4165,7 +4165,7 @@ fn native_terminal_observation_failure_keeps_owned_delivery() {
                 assert!(!fail.replace(false), "native terminal callback failure");
             })
             .build();
-        let source = PointerInfo::new(
+        let source = PointerSource::new(
             PointerId::try_from(830_u64).expect("source"),
             PointerKind::Trackpad,
         );
@@ -4223,8 +4223,8 @@ fn native_staged_owner_cleanup_is_exact() {
     use flui_platform::{
         EventTime,
         pointer::{
-            PanZoomEvent, PanZoomPhase, PointerEvent, PointerId, PointerInfo, PointerKind,
-            PointerPosition,
+            PanZoomEvent, PanZoomPhase, PointerEvent, PointerId, PointerKind, PointerPosition,
+            PointerSource,
         },
     };
     use std::{cell::Cell, rc::Rc};
@@ -4255,7 +4255,7 @@ fn native_staged_owner_cleanup_is_exact() {
             path.add(HitTestEntry::new(RenderId::new(1)).pan_zoom_target(target));
             let packet = |id: u64, phase| {
                 PointerEvent::PanZoom(PanZoomEvent::new(
-                    PointerInfo::new(
+                    PointerSource::new(
                         PointerId::try_from(id).expect("source"),
                         PointerKind::Trackpad,
                     ),
@@ -4307,8 +4307,8 @@ fn native_staged_generation_survives_geometry_and_reentry() {
     use flui_platform::{
         EventTime,
         pointer::{
-            PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerEvent, PointerId, PointerInfo,
-            PointerKind, PointerPosition,
+            PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerEvent, PointerId, PointerKind,
+            PointerPosition, PointerSource,
         },
     };
     use std::{
@@ -4323,7 +4323,7 @@ fn native_staged_generation_survives_geometry_and_reentry() {
             let handle = lane.dispatch_handle();
             let binding = Rc::new(GestureBinding::new());
             let replacement_path = Rc::new(RefCell::new(HitTestResult::new()));
-            let source = PointerInfo::new(
+            let source = PointerSource::new(
                 PointerId::try_from(800_u64).expect("source"),
                 PointerKind::Trackpad,
             );
@@ -4436,8 +4436,8 @@ fn assert_signal_lease(case: ScrollLeaseCase, native: bool) {
     use flui_platform::{
         EventTime,
         pointer::{
-            PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerId, PointerInfo, PointerKind,
-            PointerPosition, ScrollPhase,
+            PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerId, PointerKind, PointerPosition,
+            PointerSource, ScrollPhase,
         },
     };
     use std::{
@@ -4457,7 +4457,7 @@ fn assert_signal_lease(case: ScrollLeaseCase, native: bool) {
                 _ => unreachable!("fixture phase"),
             };
             return PointerEvent::PanZoom(PanZoomEvent::new(
-                PointerInfo::new(
+                PointerSource::new(
                     PointerId::try_from(1_u64).expect("pointer"),
                     PointerKind::Trackpad,
                 ),
@@ -6322,7 +6322,7 @@ fn non_pointer_invocation_destroys_its_snapshot_across_a_reentrant_close() {
     use flui_interaction::__runtime::{CloseMode, close_dispatch, presentation_dispatch};
     use flui_interaction::PointerId;
     use flui_interaction::events::{
-        PanZoomEvent, PanZoomPhase, PointerInfo, PointerKind, PointerPosition,
+        PanZoomEvent, PanZoomPhase, PointerKind, PointerPosition, PointerSource,
     };
     use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::rc::Rc;
@@ -6358,7 +6358,7 @@ fn non_pointer_invocation_destroys_its_snapshot_across_a_reentrant_close() {
                         .register_pan_zoom(move |_| close_then_fail())
                         .expect("pan-zoom target");
                     let event = PanZoomEvent::new(
-                        PointerInfo::new(
+                        PointerSource::new(
                             PointerId::try_from(1).expect("nonzero pointer id"),
                             PointerKind::Trackpad,
                         ),

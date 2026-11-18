@@ -37,7 +37,7 @@ use flui_rendering::{
 
 /// Absolute values below this threshold collapse to zero, guarding the
 /// running subtractions in the child constraint derivation against f64 drift.
-const PRECISION_ERROR_TOLERANCE: f64 = flui_foundation::EPSILON;
+const PRECISION_ERROR_TOLERANCE: f64 = flui_foundation::geometry::PRECISION_ERROR_TOLERANCE;
 
 fn fix_precision_error(value: f64) -> f64 {
     if value.abs() < PRECISION_ERROR_TOLERANCE {

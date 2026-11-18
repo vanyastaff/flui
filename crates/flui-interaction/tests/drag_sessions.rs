@@ -24,7 +24,7 @@ use flui_interaction::events::{
 use flui_interaction::{
     GestureBinding, HitMetadata, HitTestEntry, HitTestHandle, HitTestProbe, HitTestResult,
     InteractionDispatchError, InteractionDispatchHandle, InteractionLane, LocalPayloadTarget,
-    PenTool, PointerEvent, PointerId, PointerInfo,
+    PenTool, PointerEvent, PointerId, PointerSource,
 };
 use flui_platform::data_transfer::{
     DataTransferOffer, DragTransport, DropFeedback, Mime, RepresentationIndex, TransferActions,
@@ -166,7 +166,7 @@ impl PlatformWindow for DragWindow {
 
     fn reveal_after_first_frame(&self) {}
 
-    fn set_cursor(&self, _: flui_platform::CursorIcon) -> Result<(), flui_platform::CursorError> {
+    fn set_cursor(&self, _: &flui_platform::Cursor) -> Result<(), flui_platform::CursorError> {
         Ok(())
     }
     fn drag_source(&self) -> Option<Arc<dyn PlatformDragSource>> {
@@ -190,7 +190,7 @@ impl PlatformWindow for DragWindow {
         None
     }
 
-    fn haptics(&self) -> Option<Arc<dyn flui_platform::PlatformHaptics>> {
+    fn haptics(&self) -> Option<Arc<dyn flui_platform::haptics::PlatformHaptics>> {
         None
     }
 
@@ -515,7 +515,7 @@ impl Fixture {
         press: Option<PressId>,
     ) -> DragSession {
         let mut start = DragStart::new(self.presentation, items, allowed)
-            .pointer(PointerInfo::new(
+            .pointer(PointerSource::new(
                 PointerId::try_from(1_u64).expect("pointer"),
                 PointerKind::Touch,
             ))
@@ -3149,7 +3149,7 @@ fn a_receiver_under_perspective_sees_its_own_plane() {
     in_lane(|f| {
         // Perspective with depth, over a tilt toward the viewer.
         let mut perspective = Matrix4::identity();
-        *perspective.get_mut(3, 2) = -0.002;
+        perspective[(3, 2)] = -0.002;
         let forward = perspective * Matrix4::rotation_x(0.6);
         let plane = Rc::new(TiltedPlane {
             seen: RefCell::new(Vec::new()),
@@ -3168,7 +3168,7 @@ fn a_receiver_under_perspective_sees_its_own_plane() {
                     vec![DragItem::new().with_value("payload".to_owned())],
                     AllowedActions::within(COPY),
                 )
-                .pointer(PointerInfo::new(
+                .pointer(PointerSource::new(
                     PointerId::try_from(1_u64).expect("pointer"),
                     PointerKind::Touch,
                 ))

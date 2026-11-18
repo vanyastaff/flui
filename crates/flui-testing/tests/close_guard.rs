@@ -264,11 +264,253 @@ pub(crate) fn a_cancelled_session_end_withdraws_only_its_own_record() {
     );
 }
 
+/// Panics as its window detaches.
+#[derive(Clone)]
+struct FailsAsItDetaches;
+
+/// Holds the subscription for its drop alone.
+struct FailsAsItDetachesState {
+    _observation: flui_view::LifecycleSubscription,
+}
+
+impl StatefulView for FailsAsItDetaches {
+    type State = FailsAsItDetachesState;
+
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
+        let (_, observation) = ctx
+            .lifecycle_handle()
+            .expect("a hosted presentation has a lifecycle")
+            .subscribe(|state| {
+                assert!(
+                    state != AppLifecycleState::Detached,
+                    "an observer fails as its window detaches"
+                );
+            })
+            .expect("the presentation is open");
+        FailsAsItDetachesState {
+            _observation: observation,
+        }
+    }
+}
+
+impl View for FailsAsItDetaches {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateful(self)
+    }
+}
+
+impl ViewState<FailsAsItDetaches> for FailsAsItDetachesState {
+    fn build(&self, _view: &FailsAsItDetaches, _ctx: &dyn BuildContext) -> impl IntoView {
+        flui_widgets::SizedBox::new(10.0, 10.0)
+    }
+}
+
+/// A host with a plain primary window and two windows that hold their close,
+/// the first of them failing as it detaches.
+fn two_held_windows() -> (
+    HeadlessHost,
+    flui_testing::HeadlessWindowId,
+    flui_testing::HeadlessWindowId,
+    Seen,
+    Seen,
+) {
+    let mut host = HeadlessHost::new(HeadlessWindow::new(10, 10));
+    let (failing, other) = (Seen::default(), Seen::default());
+    let first = host.open_window(HeadlessWindow::new(10, 10));
+    let second = host.open_window(HeadlessWindow::new(10, 10));
+    host.attach_to(
+        first,
+        &flui_widgets::Column::new((
+            Guarded {
+                hold: true,
+                seen: failing.clone(),
+            },
+            FailsAsItDetaches,
+        )),
+    )
+    .expect("first root");
+    host.attach_to(
+        second,
+        &Guarded {
+            hold: true,
+            seen: other.clone(),
+        },
+    )
+    .expect("second root");
+    let _ = host.pump(Duration::ZERO);
+    (host, first, second, failing, other)
+}
+
+/// Two closes released in one turn are both carried out though the first
+/// one's observer panics: the panic reaches the test once both closed.
+///
+/// Fails against a turn that carries the closes out uncontained: the second
+/// window, its close already taken out of its guard, stays open.
+pub(crate) fn every_due_close_is_carried_out_past_one_that_panics() {
+    let (mut host, first, second, failing, other) = two_held_windows();
+    assert!(!host.request_close(first, CloseReason::User));
+    assert!(!host.request_close(second, CloseReason::User));
+    failing.holds.borrow_mut().clear();
+    other.holds.borrow_mut().clear();
+
+    let turn = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| host.pump(Duration::ZERO)));
+    assert!(turn.is_err(), "the observer's panic reaches the test");
+    assert!(host.is_closed(first));
+    assert!(
+        host.is_closed(second),
+        "the second close was carried out past the first one's panic"
+    );
+}
+
+/// A close the program asked for that a hold refused is, once the hold is
+/// released, the window's consent to a quit, as a runner treats it: no quit
+/// is asked, so the window stays open.
+///
+/// Fails against a host that carries every due close out whatever its reason.
+pub(crate) fn a_held_program_close_is_consent_to_a_quit_and_closes_nothing() {
+    let (mut host, first, _second, failing, _other) = two_held_windows();
+    assert!(!host.request_close(first, CloseReason::Program));
+    failing.holds.borrow_mut().clear();
+    let _ = host.pump(Duration::ZERO);
+    assert!(
+        !host.is_closed(first),
+        "the program's close closes nothing alone"
+    );
+    // The first window's observer fails as the host's drop detaches it.
+    let dropped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(host)));
+    assert!(dropped.is_err());
+}
+
+/// A quit no window holds closes every window at the next turn and retires
+/// the host.
+pub(crate) fn a_quit_nothing_holds_closes_every_window() {
+    let mut host = HeadlessHost::new(HeadlessWindow::new(10, 10));
+    let second = host.open_window(HeadlessWindow::new(10, 10));
+    let _ = host.pump(Duration::ZERO);
+    host.request_quit();
+    assert!(!host.is_retired(), "the next turn asks the windows");
+    let _ = host.pump(Duration::ZERO);
+    assert!(host.is_closed(second));
+    assert!(host.is_retired(), "the quit closed every window");
+}
+
+/// A quit a window's hold refuses waits for the hold: the windows stay as
+/// they were, and the turn after the release closes them all.
+///
+/// Fails against a quit that closes past every hold.
+pub(crate) fn a_quit_a_hold_refuses_waits_for_its_release() {
+    let (mut host, first, second, failing, other) = two_held_windows();
+    host.request_quit();
+    let _ = host.pump(Duration::ZERO);
+    assert!(!host.is_closed(first) && !host.is_closed(second), "held");
+    failing.holds.borrow_mut().clear();
+    let _ = host.pump(Duration::ZERO);
+    assert!(!host.is_retired(), "the second window still holds it");
+    other.holds.borrow_mut().clear();
+    let quit = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| host.pump(Duration::ZERO)));
+    assert!(
+        quit.is_err(),
+        "the first window's observer fails as it detaches"
+    );
+    assert!(host.is_retired(), "the released quit closed every window");
+}
+
+/// A quit a window decides to stay open for is cancelled: every window stays
+/// as it was.
+pub(crate) fn a_quit_a_window_stays_open_for_is_cancelled() {
+    let mut host = HeadlessHost::new(HeadlessWindow::new(10, 10));
+    let seen = Seen::default();
+    host.attach(&Guarded {
+        hold: false,
+        seen: seen.clone(),
+    })
+    .expect("root");
+    let _ = host.pump(Duration::ZERO);
+    let guard = seen.guard.borrow().clone().expect("guard acquired");
+    let decision = guard.require_decision();
+    host.request_quit();
+    let _ = host.pump(Duration::ZERO);
+    guard
+        .pending()
+        .expect("the quit's close is recorded")
+        .stay_open()
+        .expect("the recording is current");
+    let _ = host.pump(Duration::ZERO);
+    drop(decision);
+    let _ = host.pump(Duration::ZERO);
+    assert!(
+        !host.is_retired(),
+        "the window stayed open: the quit is over"
+    );
+    assert_eq!(seen.detached.get(), 0);
+}
+
+/// The session's end follows the platform the window names, as a runner
+/// does: a desktop closes every window past its hold and retires; a phone
+/// keeps every window open for the user's return.
+///
+/// Fails against a host that keeps every window open on every platform.
+pub(crate) fn a_session_end_follows_the_platform_the_window_names() {
+    use flui_platform::{SessionEndAnswer, SessionEndPhase, TargetPlatform};
+
+    for (platform, ends_application) in [
+        (TargetPlatform::Windows, true),
+        (TargetPlatform::MacOS, true),
+        (TargetPlatform::Linux, true),
+        (TargetPlatform::Android, false),
+        (TargetPlatform::iOS, false),
+    ] {
+        let mut host = HeadlessHost::new(HeadlessWindow::new(10, 10).with_platform(platform));
+        let seen = Seen::default();
+        host.attach(&Guarded {
+            hold: true,
+            seen: seen.clone(),
+        })
+        .expect("root");
+        let _ = host.pump(Duration::ZERO);
+        assert_eq!(
+            host.end_session(SessionEndPhase::Ending),
+            SessionEndAnswer::Proceed,
+            "{platform:?}: nothing is in flight"
+        );
+        assert_eq!(
+            host.is_retired(),
+            ends_application,
+            "{platform:?}: the session's end ends the application: {ends_application}"
+        );
+        assert_eq!(seen.detached.get(), usize::from(ends_application));
+    }
+}
+
 #[test]
 fn close_guard_hosting() {
     crate::run_table(
         "close_guard_hosting",
         &[
+            (
+                "every_due_close_is_carried_out_past_one_that_panics",
+                every_due_close_is_carried_out_past_one_that_panics,
+            ),
+            (
+                "a_held_program_close_is_consent_to_a_quit_and_closes_nothing",
+                a_held_program_close_is_consent_to_a_quit_and_closes_nothing,
+            ),
+            (
+                "a_quit_nothing_holds_closes_every_window",
+                a_quit_nothing_holds_closes_every_window,
+            ),
+            (
+                "a_quit_a_hold_refuses_waits_for_its_release",
+                a_quit_a_hold_refuses_waits_for_its_release,
+            ),
+            (
+                "a_quit_a_window_stays_open_for_is_cancelled",
+                a_quit_a_window_stays_open_for_is_cancelled,
+            ),
+            (
+                "a_session_end_follows_the_platform_the_window_names",
+                a_session_end_follows_the_platform_the_window_names,
+            ),
             (
                 "a_held_close_is_carried_out_once_the_hold_is_released",
                 a_held_close_is_carried_out_once_the_hold_is_released,

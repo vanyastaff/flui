@@ -9,13 +9,13 @@ use flui_foundation::geometry::{Matrix4, Offset, Point, Rect, Size};
 use flui_foundation::{LayerId, RenderId, SurfaceGeneration};
 use flui_layer::{
     BackdropFilterLayer, BackdropGroupKey, BoundaryContent, Chunk, ClipRectLayer, Closures,
-    ContentToken, ContentVersion, DamageMode, DamageRect, DamageRegion, Entry, FollowerLayer,
-    ImageFilterLayer, Layer, LayerDiffer, LayerLink, LayerNode, LayerTree, LeaderClip, LeaderLayer,
-    OffsetLayer, OpacityLayer, PictureLayer, Placement, Region, Scene, SceneNodeId, SceneOp,
-    SceneOwner, SceneVersion, SubtreeCull, SurfaceKey, TransformLayer, close_over,
-    resolve_follower_transform,
+    ContentToken, ContentVersion, DamageMode, DamageRect, DamageRegion, Entry, EntryAddress,
+    EntryIndex, FollowerLayer, ImageFilterLayer, Layer, LayerDiffer, LayerLink, LayerNode,
+    LayerTree, LeaderClip, LeaderLayer, OffsetLayer, OpacityLayer, PictureLayer, Placement, Region,
+    Scene, SceneNodeId, SceneOp, SceneOwner, SceneVersion, SubtreeCull, SurfaceKey, TransformLayer,
+    close_over, resolve_follower_transform,
 };
-use flui_painting::paint::{BlendMode, Clip, ImageFilter};
+use flui_painting::paint::{BlendMode, Clip, ImageFilter, ImageSampling, ImageTransform};
 use flui_painting::styling::Color;
 use flui_painting::{Canvas, Paint};
 
@@ -400,6 +400,73 @@ pub(crate) fn a_magnifier_damages_its_sampling_fringe() {
         covered(&damage, covering(395.0, 95.0, 505.0, 205.0)),
         "{damage:?}"
     );
+}
+
+/// A transform filter reads its source in whole device pixels: a box that
+/// ends inside one shows there. The 8× bilinear magnifier about x = 98 draws
+/// that pixel (96) up to x = 98 − 8 × 0.5 = 94; a nearest scale of 8 across
+/// and 2 down draws it up to 98 − 8 = 90. A repaint of the box damages that
+/// far, and the cull keeps the node there. A box that ends on a pixel edge
+/// shows only as far as its last whole pixel draws (86).
+pub(crate) fn a_magnifier_reads_a_partly_covered_source_pixel_whole() {
+    let magnifier = || ImageFilter::try_magnify(Point::new(98.0, 20.0), 8.0).expect("a magnifier");
+    let stretch = || ImageFilter::Transform {
+        transform: ImageTransform::try_scale_about(Point::new(98.0, 20.0), 8.0, 2.0)
+            .expect("a stretch"),
+        sampling: ImageSampling::Nearest,
+    };
+    let cases = [
+        (magnifier(), 96.7, 94.0),
+        (magnifier(), 96.1, 94.0),
+        (magnifier(), 96.0, 86.0),
+        (stretch(), 96.1, 90.0),
+    ];
+    for (filter, right, shown_to) in cases {
+        let mut owner = SceneOwner::new();
+        let mut writer = owner.writer();
+        let root = writer.current().root();
+        let lens = writer.mint_node();
+        let content = |writer: &mut flui_layer::SceneWriter<'_>| {
+            let version = writer.next_content_version().expect("a version");
+            let mut content = BoundaryContent::builder();
+            content.push_effect(
+                Layer::from(ImageFilterLayer::new(filter.clone())),
+                RenderId::new(1),
+                0,
+            );
+            content.chunk(chunk(2, version, Rect::from_ltrb(70.0, 4.0, right, 28.0)));
+            content.pop_effect();
+            content.finish()
+        };
+        let first = content(&mut writer);
+        writer.push(publish(lens, first));
+        let mut top = BoundaryContent::builder();
+        top.slot(lens);
+        writer.push(publish(root, top.finish()));
+        owner.apply(SURFACE).expect("a magnified box");
+
+        let mut writer = owner.writer();
+        let next = content(&mut writer);
+        writer.push(publish(lens, next));
+        owner.apply(SURFACE).expect("the box repaints");
+        let damage = rects(owner.patch_damage());
+        // A damage rect is whole pixels: the last shown pixel, [shown_to - 1,
+        // shown_to), is damaged when a rect on its row reaches `shown_to`.
+        assert!(
+            damage.iter().any(|rect| rect.top() <= 20
+                && rect.bottom() >= 21
+                && f64::from(rect.left()) <= shown_to - 1.0
+                && f64::from(rect.right()) >= shown_to),
+            "a box to {right}: the repaint damages its last shown pixel: {damage:?}"
+        );
+        assert!(
+            owner
+                .current()
+                .subtree_cull(Rect::from_ltrb(shown_to - 1.0, 20.0, shown_to, 21.0))
+                .meets(lens),
+            "a box to {right}: the cull keeps the node where its last pixel shows"
+        );
+    }
 }
 
 /// Footprints count follower nesting as the renderer does: the follower
@@ -1698,41 +1765,58 @@ pub(crate) fn patch_damage_covers_diff_damage() {
     );
 }
 
-/// Asks `cull` about each slot under `node` in paint order, descending where
-/// it meets, and checks each answer against a cull asked fresh, which
-/// builds the chain from the root. Counts the slots it skips.
+/// Asks `cull` about each slot and chunk under `node` in paint order,
+/// descending where a slot meets, and checks each answer against a cull
+/// asked fresh, which builds the chain from the root. Counts the slots and
+/// chunks it skips.
 fn walk_cull(
     version: &SceneVersion,
     rect: Rect<f64>,
     cull: &mut SubtreeCull<'_>,
     node: SceneNodeId,
-    skipped: &mut u32,
+    skipped: &mut (u32, u32),
 ) -> Result<(), String> {
     let Some(held) = version.node(node) else {
         return Ok(());
     };
-    for entry in held.content().entries() {
-        let Entry::Slot { node: child, .. } = entry else {
-            continue;
-        };
-        let walked = cull.meets(*child);
-        let fresh = version.subtree_cull(rect).meets(*child);
-        if walked != fresh {
-            return Err(format!("{child:?}: walked {walked}, fresh {fresh}"));
-        }
-        if walked {
-            walk_cull(version, rect, cull, *child, skipped)?;
-        } else {
-            *skipped += 1;
+    for (position, entry) in held.content().entries().iter().enumerate() {
+        match entry {
+            Entry::Slot { node: child, .. } => {
+                let walked = cull.meets(*child);
+                let fresh = version.subtree_cull(rect).meets(*child);
+                if walked != fresh {
+                    return Err(format!("{child:?}: walked {walked}, fresh {fresh}"));
+                }
+                if walked {
+                    walk_cull(version, rect, cull, *child, skipped)?;
+                } else {
+                    skipped.0 += 1;
+                }
+            }
+            Entry::Chunk { .. } => {
+                let at = EntryAddress {
+                    node,
+                    entry: EntryIndex::try_from(position).expect("a small content"),
+                };
+                let walked = cull.meets_chunk(at);
+                let fresh = version.subtree_cull(rect).meets_chunk(at);
+                if walked != fresh {
+                    return Err(format!("{at:?}: walked {walked}, fresh {fresh}"));
+                }
+                skipped.1 += u32::from(!walked);
+            }
+            Entry::Effect { .. } => {}
         }
     }
     Ok(())
 }
 
 /// A cull asked in walk order, which keeps the chains of the path it walks,
-/// answers each slot as a cull asked about that slot alone (ADR-0304 §9).
+/// answers each slot and chunk as a cull asked about it alone (ADR-0304 §9);
+/// a chunk lands through its node's placement, and an address that names no
+/// chunk meets nothing.
 pub(crate) fn a_cull_asked_in_walk_order_answers_as_one_asked_alone() {
-    let mut skipped = 0_u32;
+    let mut skipped = (0_u32, 0_u32);
     for case in 0..2_000_u64 {
         let seed = 0x2545_F491_4F6C_DD1D ^ (case + 1).wrapping_mul(0xBF58_476D_1CE4_E5B9);
         let mut rng = Rng(seed);
@@ -1753,8 +1837,60 @@ pub(crate) fn a_cull_asked_in_walk_order_answers_as_one_asked_alone() {
         }
     }
     assert!(
-        skipped > 0,
-        "no case skipped a subtree, so a walk never climbed back past one"
+        skipped.0 > 0 && skipped.1 > 0,
+        "no case skipped both a subtree and a chunk, so a walk never climbed back past \
+         one or asked a chunk it left out: {skipped:?}"
+    );
+
+    // A chunk lands through its node's chain, and an address that names no
+    // chunk of the version meets nothing.
+    let mut owner = SceneOwner::new();
+    let mut writer = owner.writer();
+    let root = writer.current().root();
+    let child = writer.mint_node();
+    let version = writer.next_content_version().expect("a version");
+    let square = Rect::from_xywh(0.0, 0.0, 10.0, 10.0);
+    let mut own = BoundaryContent::builder();
+    own.chunk(chunk(2, version, square));
+    writer.push(SceneOp::Publish {
+        node: child,
+        content: Arc::new(own.finish()),
+    });
+    writer.push(place(child, 100.0, 0.0));
+    let mut content = BoundaryContent::builder();
+    content.chunk(chunk(1, version, square));
+    content.slot(child);
+    writer.push(SceneOp::Publish {
+        node: root,
+        content: Arc::new(content.finish()),
+    });
+    owner.apply(SURFACE).expect("a placed child applies");
+    let version = owner.current();
+    let at = |node, entry: usize| EntryAddress {
+        node,
+        entry: EntryIndex::try_from(entry).expect("a small index"),
+    };
+    let moved = Rect::from_xywh(102.0, 2.0, 4.0, 4.0);
+    let drawn = Rect::from_xywh(2.0, 2.0, 4.0, 4.0);
+    assert!(
+        version.subtree_cull(moved).meets_chunk(at(child, 0)),
+        "the child's square where its placement moves it"
+    );
+    assert!(
+        !version.subtree_cull(drawn).meets_chunk(at(child, 0)),
+        "not where the child's square is drawn before its placement"
+    );
+    assert!(version.subtree_cull(drawn).meets_chunk(at(root, 0)));
+    assert!(!version.subtree_cull(moved).meets_chunk(at(root, 0)));
+    let everywhere = Rect::from_xywh(0.0, 0.0, 200.0, 20.0);
+    let mut cull = version.subtree_cull(everywhere);
+    assert!(!cull.meets_chunk(at(root, 1)), "a slot is no chunk");
+    assert!(!cull.meets_chunk(at(root, 2)), "past the content's end");
+    let mut other = SceneOwner::new();
+    let stranger = other.writer().current().root();
+    assert!(
+        !cull.meets_chunk(at(stranger, 0)),
+        "a node of another lineage"
     );
 }
 

@@ -833,15 +833,17 @@ pub(super) fn open_secondary_window_impl(
         None
     };
     let reservation = reserve_window()?;
-    // Reveal at open (`From<&AppConfig>`'s default): a bare secondary
+    // Reveal at open (`AppConfig::window_options`' default): a bare secondary
     // window has no renderer and no frame loop, so nothing here would
     // ever call `reveal_after_first_frame` — see
     // `desktop::OpeningWindow::open` for the path that defers.
-    let options: WindowOptions = (&config).into();
     let routes = super::window_routes::WindowRoutes::new();
-    let open = with_owner_platform(|owner| owner.open_window(options, routes.clone()))
-        .ok_or(AppWindowError::NoOwnerLoop)?
-        .map_err(native_error)?;
+    let open = with_owner_platform(|owner| {
+        let options: WindowOptions = config.window_options(owner.display_snapshot().ok().as_ref());
+        owner.open_window(options, routes.clone())
+    })
+    .ok_or(AppWindowError::NoOwnerLoop)?
+    .map_err(native_error)?;
 
     let install_config = SecondaryWindowInstallConfig {
         loop_identity,
@@ -1135,7 +1137,7 @@ fn finish_open_secondary_window(
                     let ui_runtime_id = shared_with?;
                     let status = state.installed_host.logical().runtime_status(ui_runtime_id).ok()?;
                     Some(PresentationDispatcher {
-                        owner_thread: state.owner_thread?,
+                        owner_thread: state.loop_thread()?,
                         address: status.primary,
                     })
                 })

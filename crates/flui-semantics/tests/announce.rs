@@ -248,7 +248,7 @@ fn an_agent_neither_reads_nor_locates_the_announcer_nodes() {
     owner.flush();
     let tree = owner
         .read_wire(
-            &flui_protocol::ReadQuery::new(),
+            &flui_protocol::tree::ReadQuery::new(),
             crate::fixture::placement(),
         )
         .expect("the tree reads");
@@ -259,9 +259,9 @@ fn an_agent_neither_reads_nor_locates_the_announcer_nodes() {
     );
     let announcer = owner
         .locate_wire(
-            &flui_protocol::LocateParams::new(flui_protocol::Locator::identifier(
-                Urgency::Polite.announcer_identifier(),
-            )),
+            &flui_protocol::locator::LocateParams::new(
+                flui_protocol::locator::Locator::identifier(Urgency::Polite.announcer_identifier()),
+            ),
             crate::fixture::placement(),
         )
         .expect("the tree reads");
@@ -276,7 +276,7 @@ fn an_agent_neither_reads_nor_locates_the_announcer_nodes() {
 /// and a read after a sequence number answers only what came later.
 #[test]
 fn the_agent_journal_holds_each_delivered_announcement() {
-    use flui_protocol::{AnnouncementUrgency, AnnouncementsParams, WindowId};
+    use flui_protocol::{events::AnnouncementUrgency, events::AnnouncementsParams, tree::WindowId};
 
     let announcements = announcements();
     let (mut owner, _, failing) = owner_with(&announcements);
@@ -329,7 +329,7 @@ fn the_agent_journal_holds_each_delivered_announcement() {
 /// asked sequence number it no longer holds.
 #[test]
 fn the_agent_journal_counts_what_it_no_longer_holds() {
-    use flui_protocol::{AnnouncementsParams, WindowId};
+    use flui_protocol::{events::AnnouncementsParams, tree::WindowId};
 
     let announcements = announcements();
     let (mut owner, _, _) = owner_with(&announcements);

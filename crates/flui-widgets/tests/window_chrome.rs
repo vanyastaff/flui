@@ -186,6 +186,10 @@ pub(crate) fn the_close_button_asks_to_close() {
     tap(&mut laid);
     laid.pump();
     assert_eq!(laid.window().close_requests(), 1);
+    assert!(
+        laid.is_closed(),
+        "nothing holds the close, so the host's turn carried it out"
+    );
 }
 
 pub(crate) fn caption_buttons_are_buttons_named_after_what_they_do() {

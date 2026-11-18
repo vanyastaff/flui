@@ -42,7 +42,7 @@
 
 use std::{pin::Pin, rc::Rc, sync::Arc};
 
-use flui_foundation::{AsyncSnapshot, ConnectionState};
+use super::{AsyncSnapshot, ConnectionState};
 use flui_scheduler::{AsyncDriver, TaskToken};
 use futures_core::Stream;
 use parking_lot::Mutex;
@@ -161,13 +161,13 @@ where
 {
     type State = StreamBuilderState<K, T, E>;
 
-    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
         // `ViewState::init_state` is handed a `BuildContext` but NOT the view, so
         // the configuration the first subscription needs is copied here.
         StreamBuilderState {
             slot: Arc::new(Mutex::new(Slot::new(AsyncSnapshot::nothing()))),
-            handle: None,
-            driver: None,
+            handle: ctx.rebuild_handle(),
+            driver: ctx.async_driver(),
             token: None,
             key: None,
             initial_key: self.key.clone(),
@@ -201,9 +201,9 @@ where
 pub struct StreamBuilderState<K, T, E> {
     /// The snapshot the builder reads, written by the task.
     slot: SharedSlot<T, E>,
-    /// Captured in `init_state` — the only lifecycle hook handed a `BuildContext`.
-    handle: Option<RebuildHandle>,
-    /// The binding's driver, likewise captured in `init_state`.
+    /// Schedules this element's rebuild when the task writes the slot.
+    handle: RebuildHandle,
+    /// The binding's driver; `None` when no binding installed one.
     driver: Option<AsyncDriver>,
     /// Cancels the live subscription on drop.
     token: Option<TaskToken>,
@@ -262,7 +262,7 @@ where
             );
             return;
         };
-        let handle = self.handle.clone().unwrap_or_else(RebuildHandle::inert);
+        let handle = self.handle.clone();
 
         let generation = {
             let mut slot = self.slot.lock();
@@ -311,12 +311,7 @@ where
     E: 'static,
 {
     /// `_StreamBuilderBaseState.initState`: seed from `initial()`, then subscribe.
-    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        // Capture the capabilities here — the ONLY lifecycle hook handed a
-        // context. `did_update_view` and `dispose` receive none.
-        self.handle = Some(ctx.rebuild_handle());
-        self.driver = ctx.async_driver();
-
+    fn init_state(&mut self, _ctx: &dyn LifecycleContext) {
         let initial = match &self.initial_data {
             Some(initial_data) => AsyncSnapshot::with_data(ConnectionState::None, initial_data()),
             None => AsyncSnapshot::nothing(),

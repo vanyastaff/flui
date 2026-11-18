@@ -20,7 +20,6 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::Receiver;
-use std::thread::ThreadId;
 
 use flui_native::OwnerPlatform;
 use flui_painting::{FallbackOrder, FontCollection, HostFontFeed};
@@ -293,7 +292,7 @@ pub(super) enum QuitNotification {
 /// UI runtime the host builds so their drags name one platform instance.
 #[derive(Clone)]
 pub(crate) struct PlatformDataTransfer {
-    pub(crate) source: Arc<dyn flui_platform::DragTransport>,
+    pub(crate) source: Arc<dyn flui_platform::data_transfer::DragTransport>,
     pub(crate) nonce: flui_platform::drag::ProcessNonce,
 }
 
@@ -359,12 +358,11 @@ pub(crate) struct AppRuntime {
     /// trip's writes never release a later trip's hold.
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) background_writes: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
-    /// The thread that installed the first UI runtime hosted here; every dispatch
-    /// checks against this before touching the registry. Loop-scoped, not
-    /// per-UI runtime: every UI runtime this `AppRuntime` ever hosts lives on the same
-    /// owner thread (`APP_RUNTIME` is thread-local), so one shared value is
-    /// exact, not an approximation of a per-UI runtime concept.
-    pub(super) owner_thread: Option<ThreadId>,
+    /// Whether this thread hosts a loop: set when the first UI runtime is
+    /// installed and cleared at teardown. `APP_RUNTIME` is thread-local, so the
+    /// thread that hosts the loop is always the thread reading this; see
+    /// [`Self::loop_thread`].
+    pub(super) hosts_loop: bool,
     /// The loop-scoped owner-thread platform capability (ADR-0039 §6).
     /// Deliberately *not* cleared by UI runtime teardown — the loop may host
     /// another UI runtime before it exits (hot-restart does exactly this).
@@ -488,7 +486,8 @@ pub(crate) struct AppRuntime {
     /// the clear half, a live platform resource (arboard on X11 owns a live
     /// X11 connection) would stay pinned behind this `Arc` past the event
     /// loop's exit. See [`Drop`]'s impl below for the last-resort third clear
-    /// path.
+    /// path. The slot holds the clipboard with the expiring entries owed a
+    /// clear on it (ADR-0363), whose times are part of [`Self::turn_deadline`].
     platform_clipboard: crate::app::capability::ClipboardSlot,
     /// The platform's primary selection, installed and cleared with the
     /// clipboard; empty where the platform has none.
@@ -505,7 +504,7 @@ pub(crate) struct AppRuntime {
     /// The platform instance's data-transfer source and the nonce that names
     /// this platform instance's drags (ADR-0211 §3), installed and cleared
     /// with the clipboard. Every UI runtime this host builds takes both.
-    platform_data_transfer: Arc<Mutex<Option<PlatformDataTransfer>>>,
+    platform_data_transfer: RefCell<Option<PlatformDataTransfer>>,
     /// The byte storage every UI runtime this host builds hands its widgets,
     /// resolved once from the run's configuration when the host starts
     /// ([`Self::install_host_storage`]) and released with the owner platform
@@ -522,9 +521,9 @@ pub(crate) struct AppRuntime {
     /// left to continue after, as text, held until the exit order has
     /// written what the application persisted and then resumed.
     pub(super) terminal: Option<Box<dyn std::any::Any + Send>>,
-    /// What this host gives back on a memory-pressure notice: one receiver every
-    /// UI runtime it builds shares (`runner::host::build_lending_ui_runtime`).
-    pub(super) host_memory: Arc<super::host_memory::HostMemory>,
+    /// What this host gives back on a memory-pressure notice: the receivers the
+    /// run start installs, reclaimed by the owner's turn for the notice.
+    pub(super) host_memory: Rc<super::host_memory::HostMemory>,
     /// The run's window placements: where the host acquires the storage they
     /// are kept in, the windows that remember one and the writes still out
     /// (`runner::placement`).
@@ -540,6 +539,12 @@ pub(crate) struct AppRuntime {
 }
 
 impl AppRuntime {
+    /// The thread the dispatchers of this loop are minted for: the current
+    /// one, when it hosts a loop.
+    pub(super) fn loop_thread(&self) -> Option<std::thread::ThreadId> {
+        self.hosts_loop.then(|| std::thread::current().id())
+    }
+
     /// Construct the composition root: cheap, side-effect-free.
     /// Called as the `APP_RUNTIME` TLS slot's own initializer (`runner.rs`),
     /// so simply *touching* the thread-local -- for any reason, on any
@@ -564,7 +569,7 @@ impl AppRuntime {
         Self {
             installed_host: InstalledHost::new(),
             owner_turn_wake: None,
-            owner_thread: None,
+            hosts_loop: false,
             owner_platform: None,
             owner_install_generation: 0,
             run_routes: Vec::new(),
@@ -620,7 +625,7 @@ impl AppRuntime {
             platform_primary_selection: Rc::default(),
             host_bridge: flui_platform::capability::HostBridge::new(),
             capabilities: None,
-            platform_data_transfer: Arc::new(Mutex::new(None)),
+            platform_data_transfer: RefCell::new(None),
             execution_slot: Rc::default(),
             host_storage: crate::app::capability::StorageSlot::default(),
             flush_host: None,
@@ -638,7 +643,7 @@ impl AppRuntime {
             session_end_refusals: Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
             background_writes: None,
-            host_memory: Arc::default(),
+            host_memory: Rc::default(),
             #[cfg(all(
                 not(target_os = "android"),
                 not(target_os = "ios"),
@@ -970,6 +975,13 @@ impl AppRuntime {
         self.service_registry.reopen();
     }
 
+    /// The application's lifecycle the services watch
+    /// ([`ServiceContext::lifecycle`](super::lifecycle::ServiceContext::lifecycle)).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn service_lifecycle(&self) -> Rc<super::lifecycle::ServiceLifecycle> {
+        self.service_registry.lifecycle()
+    }
+
     /// The staged service shutdown: stop admission, cancel
     /// every running service, then join each until `join_by` — run at
     /// full loop-exit teardown BEFORE [`Self::shutdown_execution`], so
@@ -1080,10 +1092,18 @@ impl AppRuntime {
     #[cfg(not(target_arch = "wasm32"))]
     #[must_use]
     pub(super) fn next_wake(&self) -> Option<web_time::Instant> {
+        // A floor whose window the raster thread has settled and asked for
+        // its frame is that window's to serve (`RasterHost::floor_owed`).
+        // While the host is turning the floor stands: that turn answers it.
+        let floor_owed = |address| {
+            self.raster_host
+                .try_read(|host| host.floor_owed(address))
+                .unwrap_or(true)
+        };
         let runtime = self
             .installed_host
             .logical()
-            .next_wake()
+            .next_wake_owing_floors(&floor_owed)
             .expect("BUG: wake deadline read before owner checkout returned");
         #[cfg(all(
             not(target_os = "android"),
@@ -1115,28 +1135,35 @@ impl AppRuntime {
         .min()
     }
 
-    /// When the owner needs a turn for work no frame serves: a window
-    /// placement held back by the write throttle or retrying a refused write,
-    /// and a window waiting for its placement read, which opens at the read's
-    /// bound. The loop gives that turn with or without a window open and asks
-    /// no window for a frame (`AppHandler::turn_deadline`); `after_turn`
-    /// ticks the placements and drives the main window.
-    #[cfg(all(
-        not(target_os = "android"),
-        not(target_os = "ios"),
-        not(target_arch = "wasm32")
-    ))]
+    /// When the owner needs a turn for work no frame serves: an expiring
+    /// clipboard entry's clear (ADR-0363), on every host; on the desktop, a
+    /// window placement held back by the write throttle or retrying a refused
+    /// write, and a window waiting for its placement read, which opens at the
+    /// read's bound. The loop gives that turn with or without a window open
+    /// and asks no window for a frame (`AppHandler::turn_deadline`); the
+    /// owner's turn serves the clears, and on the desktop `after_turn` ticks
+    /// the placements and drives the main window.
     #[must_use]
     pub(super) fn turn_deadline(&self) -> Option<web_time::Instant> {
-        [
+        let clipboard = self
+            .platform_clipboard
+            .try_borrow()
+            .ok()
+            .and_then(|slot| slot.as_ref().and_then(|expiries| expiries.next_due()));
+        #[cfg(all(
+            not(target_os = "android"),
+            not(target_os = "ios"),
+            not(target_arch = "wasm32")
+        ))]
+        let desktop = [
             self.placement.next_due(),
             self.main_controller
                 .as_ref()
                 .and_then(super::runner::main_window::MainController::recall_deadline),
-        ]
-        .into_iter()
-        .flatten()
-        .min()
+        ];
+        #[cfg(any(target_os = "android", target_os = "ios", target_arch = "wasm32"))]
+        let desktop: [Option<web_time::Instant>; 0] = [];
+        desktop.into_iter().chain([clipboard]).flatten().min()
     }
 
     /// Whether `address`'s UI runtime runs frames, which is what serves the
@@ -1368,8 +1395,19 @@ impl AppRuntime {
     pub(super) fn set_platform_clipboard(
         &self,
         clipboard: Rc<dyn flui_native::NativeClipboard>,
-    ) -> Option<Rc<dyn flui_native::NativeClipboard>> {
-        self.platform_clipboard.borrow_mut().replace(clipboard)
+    ) -> Option<Rc<crate::app::clipboard_expiry::ClipboardExpiries>> {
+        let expiries = crate::app::clipboard_expiry::ClipboardExpiries::new(
+            clipboard,
+            Rc::new(flui_foundation::SystemClock),
+        );
+        self.platform_clipboard.borrow_mut().replace(expiries)
+    }
+
+    /// The expiring entries of the installed clipboard, while one is.
+    pub(super) fn clipboard_expiries(
+        &self,
+    ) -> Option<Rc<crate::app::clipboard_expiry::ClipboardExpiries>> {
+        self.platform_clipboard.borrow().clone()
     }
 
     /// Install the platform's primary selection, or none where it has none.
@@ -1401,17 +1439,18 @@ impl AppRuntime {
     pub(super) fn clear_platform_clipboard(&self) {
         let _prev = self.platform_clipboard.borrow_mut().take();
         let _prev = self.platform_primary_selection.borrow_mut().take();
-        let _prev = self.platform_data_transfer.lock().take();
+        let _prev = self.platform_data_transfer.borrow_mut().take();
         let _prev = self.host_bridge.install_activity(None);
     }
 
     /// What the installed platform offers capability providers beyond the
     /// window, shared with every registry this host builds.
     #[cfg_attr(
-        not(target_os = "android"),
+        any(target_os = "ios", target_arch = "wasm32"),
         expect(
             dead_code,
-            reason = "only the Android host offers an Activity to install"
+            reason = "the Android host installs its Activity and a desktop host names the \
+                      application; iOS and the web do neither yet"
         )
     )]
     pub(super) fn host_bridge(&self) -> flui_platform::capability::HostBridge {
@@ -1423,10 +1462,10 @@ impl AppRuntime {
     /// retirement outside the caller's borrow.
     pub(super) fn set_platform_data_transfer(
         &self,
-        source: Arc<dyn flui_platform::DragTransport>,
+        source: Arc<dyn flui_platform::data_transfer::DragTransport>,
     ) -> Option<PlatformDataTransfer> {
         self.platform_data_transfer
-            .lock()
+            .borrow_mut()
             .replace(PlatformDataTransfer {
                 source,
                 nonce: flui_platform::drag::ProcessNonce::mint(),
@@ -1436,7 +1475,7 @@ impl AppRuntime {
     /// The installed data-transfer source and nonce, for the UI runtimes the
     /// runners build.
     pub(super) fn data_transfer(&self) -> Option<PlatformDataTransfer> {
-        self.platform_data_transfer.lock().clone()
+        self.platform_data_transfer.borrow().clone()
     }
 
     /// Install the host's byte storage over `store`, or none, once, when the
@@ -1660,7 +1699,7 @@ impl Drop for AppRuntime {
     fn drop(&mut self) {
         let _prev = self.platform_clipboard.borrow_mut().take();
         let _prev = self.platform_primary_selection.borrow_mut().take();
-        let _prev = self.platform_data_transfer.lock().take();
+        let _prev = self.platform_data_transfer.borrow_mut().take();
         let _prev = self.host_bridge.install_activity(None);
     }
 }

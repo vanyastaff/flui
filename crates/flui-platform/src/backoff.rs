@@ -1,15 +1,18 @@
-//! The one schedule a surface that shows nothing backs off on: a wait that
-//! doubles with each attempt in a row that came to nothing, from a first wait
-//! up to a ceiling, and starts over once an attempt succeeds.
+//! The one schedule the platform layer backs off on: a wait that doubles with
+//! each attempt in a row that came to nothing, from a first wait up to a
+//! ceiling, and starts over once an attempt succeeds.
 //!
-//! Two callers use it, each arming the wait as a deadline of its loop, never a
-//! sleep or a poll: the UI runtime's retry of a frame the surface refused or
-//! that failed (the first wait one display period, the ceiling
-//! `FAILURE_RETRY_CAP`), and the Wayland host's wait on a frame callback the
-//! compositor does not answer (`CALLBACK_GRACE` to `MAX_CALLBACK_GRACE`). The
-//! other hosts pace their frames by a signal that always comes (a blocking
-//! present, AppKit's display pass, a display link, the choreographer, the
-//! browser's animation frame) and wait on nothing a surface can withhold.
+//! Each caller arms the wait as a deadline of its loop, never a poll: the UI
+//! runtime's retry of a frame the surface refused or that failed (the first
+//! wait one display period, the ceiling `FAILURE_RETRY_CAP`), the Wayland
+//! host's wait on a frame callback the compositor does not answer
+//! (`CALLBACK_GRACE` to `MAX_CALLBACK_GRACE`), and the Linux settings watch's
+//! retries of a portal read that can heal and of a session bus that does not
+//! answer, which it counts so a failure that never heals costs a bounded
+//! number of attempts (`READ_RETRIES`, `CONNECT_RETRIES`). The other hosts
+//! pace their frames by a signal that always comes (a blocking present,
+//! AppKit's display pass, a display link, the choreographer, the browser's
+//! animation frame) and wait on nothing a surface can withhold.
 
 use std::time::Duration;
 

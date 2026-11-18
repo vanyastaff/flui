@@ -7,7 +7,7 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use flui_foundation::MonotonicClock as _;
-use flui_testing::{TestError, TestWindow, Tester, find};
+use flui_testing::{Locator, TestError, TestWindow, Tester, find};
 use flui_view::prelude::*;
 use flui_view::{Signal, StatefulView};
 use flui_widgets::{Center, Column, RawButton, SizedBox, Text};
@@ -579,6 +579,8 @@ struct Opened {
     note: Option<flui_view::persist::Persisted<Note>>,
     hold: Option<flui_view::CloseHold>,
     lifecycle: Vec<flui_view::AppLifecycleState>,
+    /// How many session-ended notices reached the window.
+    session_ended: usize,
     _observation: Option<flui_view::LifecycleSubscription>,
     _notices: Option<flui_view::HostNoticeSubscription>,
 }
@@ -630,10 +632,14 @@ impl ViewState<Notebook> for NotebookState {
         let lifecycle = Rc::clone(&self.0.opened);
         let save_on_detach = self.0.save_on_detach;
         let panic_at_session_end = self.0.panic_at_session_end;
+        let noticed = Rc::clone(&self.0.opened);
         let notices = ctx
             .lifecycle_handle()
             .expect("a hosted window has a lifecycle")
             .subscribe_notices(move |notice| {
+                if matches!(notice, flui_platform::HostNotice::SessionEnded) {
+                    noticed.borrow_mut().session_ended += 1;
+                }
                 assert!(
                     !(panic_at_session_end
                         && matches!(notice, flui_platform::HostNotice::SessionEnded)),
@@ -665,6 +671,7 @@ impl ViewState<Notebook> for NotebookState {
             note: Some(flui_view::persist::Persisted::open(ctx)),
             hold: self.0.hold_close.then(|| guard.hold()),
             lifecycle: Vec::new(),
+            session_ended: 0,
             _observation: Some(observation),
             _notices: Some(notices),
         };
@@ -880,6 +887,196 @@ fn showing_an_unfocused_window_leaves_it_unfocused() {
         Some(&Inactive),
         "the OS focus never came back"
     );
+}
+
+/// A trip to the background walks the lifecycle down to `Paused` in a
+/// phone's order and tells the application its session may end, with the
+/// window still open; the return walks it back up to `Resumed`.
+///
+/// Fails against a tester that only hides the window: the application stops
+/// at `Hidden` and hears nothing of its session.
+#[test]
+fn a_trip_to_the_background_pauses_the_application_and_its_return_resumes_it() {
+    use flui_view::AppLifecycleState::{Hidden, Inactive, Paused, Resumed};
+
+    use flui_platform::{SessionEndAnswer, TargetPlatform};
+
+    let (view, opened) = notebook(false);
+    let mut t = Tester::mount_in(
+        view,
+        TestWindow::default().platform(TargetPlatform::Android),
+    );
+    opened.borrow_mut().lifecycle.clear();
+    assert_eq!(t.try_foreground(), Err(TestError::InForeground));
+
+    assert_eq!(
+        t.background(),
+        SessionEndAnswer::Proceed,
+        "nothing in flight"
+    );
+    assert_eq!(opened.borrow().lifecycle, [Inactive, Hidden, Paused]);
+    assert_eq!(
+        opened.borrow().session_ended,
+        1,
+        "a phone reports its session may end on each trip to the background"
+    );
+    assert!(
+        !t.is_closed(),
+        "the window stays open for the user's return"
+    );
+    assert_eq!(
+        t.try_background(),
+        Err(TestError::InBackground),
+        "a phone reports no second trip before a return"
+    );
+    assert_eq!(opened.borrow().session_ended, 1, "announced once a trip");
+
+    opened.borrow_mut().lifecycle.clear();
+    t.foreground();
+    assert_eq!(opened.borrow().lifecycle, [Hidden, Inactive, Resumed]);
+}
+
+/// Only a phone leaves the screen this way: a window that names no phone is
+/// refused, and nothing is reported to it.
+#[test]
+fn a_window_that_names_no_phone_has_no_trip_to_the_background() {
+    use flui_platform::TargetPlatform;
+
+    for platform in [
+        None,
+        Some(TargetPlatform::Windows),
+        Some(TargetPlatform::Linux),
+    ] {
+        let (view, opened) = notebook(false);
+        let mut window = TestWindow::default();
+        if let Some(platform) = platform {
+            window = window.platform(platform);
+        }
+        let mut t = Tester::mount_in(view, window);
+        opened.borrow_mut().lifecycle.clear();
+        assert_eq!(
+            t.try_background(),
+            Err(TestError::NotAPhone {
+                platform: platform.unwrap_or(TargetPlatform::Unknown)
+            })
+        );
+        assert!(opened.borrow().lifecycle.is_empty(), "{platform:?}");
+    }
+}
+
+/// A phone's trip to the background with a write still in flight answers
+/// `Block`, so the platform keeps the process running for it (ADR-0350 §2).
+///
+/// Fails against a host that answers `Proceed` to every session end.
+#[test]
+fn a_trip_to_the_background_with_a_write_in_flight_holds_the_process() {
+    use flui_platform::{SessionEndAnswer, TargetPlatform};
+
+    let (view, opened) = notebook(false);
+    let mut t = Tester::mount_in(
+        view,
+        TestWindow::default().platform(TargetPlatform::Android),
+    );
+    let _ = settle(&mut t, note(&opened).load()).expect("an empty storage loads");
+    let storage = t
+        .storage()
+        .cloned()
+        .expect("a mounted window has a storage");
+    let hold = storage.hold_writes();
+    note(&opened)
+        .set(Note("in flight".to_owned()))
+        .expect("a loaded note takes a value");
+    assert_eq!(t.background(), SessionEndAnswer::Block);
+    drop(hold);
+}
+
+/// Closing the application's only window retires it, as on a real host: the
+/// window detaches, and the tester keeps pumping a host with nothing left to
+/// frame.
+///
+/// Fails against a host whose loop asks the retired runtime when to wake:
+/// the close's own frame panics.
+#[test]
+fn closing_the_only_window_retires_the_application() {
+    use flui_view::AppLifecycleState::Detached;
+
+    let (view, opened) = notebook(false);
+    let mut t = Tester::mount(view);
+    assert!(t.request_close(), "nothing holds the window open");
+    assert!(t.is_closed());
+    assert_eq!(opened.borrow().lifecycle.last(), Some(&Detached));
+    t.pump();
+    t.pump_and_settle();
+}
+
+/// The capability a widget acquires.
+struct GreetingCapability;
+
+impl flui_platform::capability::Capability for GreetingCapability {
+    type Handle = &'static str;
+    const NAME: &'static str = "test-greeting";
+}
+
+/// A plugin that provides [`GreetingCapability`] with its greeting.
+struct Greets(&'static str);
+
+impl flui_platform::capability::Plugin for Greets {
+    fn register(&self, registrar: &mut flui_platform::capability::CapabilityRegistrar) {
+        let greeting = self.0;
+        registrar.provide::<GreetingCapability>(
+            move |_: &flui_platform::capability::ProviderContext<'_>| Ok(greeting),
+        );
+    }
+}
+
+/// Shows the greeting [`GreetingCapability`] answers, or the refusal's
+/// reason.
+#[derive(Clone, StatefulView)]
+struct Greeter;
+
+struct GreeterState {
+    shown: String,
+}
+
+impl StatefulView for Greeter {
+    type State = GreeterState;
+
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
+        GreeterState {
+            shown: match ctx.capability::<GreetingCapability>() {
+                Ok(greeting) => greeting.to_owned(),
+                Err(refusal) => format!("{:?}", refusal.reason),
+            },
+        }
+    }
+}
+
+impl ViewState<Greeter> for GreeterState {
+    fn build(&self, _view: &Greeter, _ctx: &dyn BuildContext) -> impl IntoView {
+        Center::new().child(Text::new(self.shown.clone()))
+    }
+}
+
+/// A plugin the test registers answers the application's widget, an
+/// override answers in its place, and a relaunch registers both again;
+/// without either the widget is refused, as in a run without them.
+#[test]
+fn a_plugin_the_test_registers_answers_and_an_override_replaces_it() {
+    let mut t = Tester::mount(Greeter);
+    t.expect(find::text("NotRegistered")).to_exist();
+
+    let mut t = Tester::mount_in(Greeter, TestWindow::default().plugin(Greets("hello")));
+    t.expect(find::text("hello")).to_exist();
+
+    let window = TestWindow::default()
+        .plugin(Greets("hello"))
+        .capability::<GreetingCapability>(|_: &flui_platform::capability::ProviderContext<'_>| {
+            Ok("overridden")
+        });
+    let mut t = Tester::mount_in(Greeter, window);
+    t.expect(find::text("overridden")).to_exist();
+    let mut t = t.restart();
+    t.expect(find::text("overridden")).to_exist();
 }
 
 /// A restart is the user quitting and opening the application again: a write
@@ -1274,7 +1471,7 @@ fn a_session_end_writes_even_when_committing_the_composition_panics() {
 /// check, as `flutter_test` warns that it is not hit-testable.
 #[test]
 fn a_row_past_a_lists_viewport_is_found_and_a_tap_on_it_is_not_visible() {
-    use flui_protocol::ActionabilityCheck;
+    use flui_protocol::act::ActionabilityCheck;
     use flui_widgets::ListView;
 
     let items: Vec<_> = (0..40)
@@ -1323,6 +1520,15 @@ impl flui_widgets::CustomPainter for SwatchPainter {
     }
 }
 
+/// `child` inside a group `find::id(identifier)` locates.
+fn named(identifier: &str, child: impl IntoView) -> impl IntoView {
+    flui_widgets::Semantics::new()
+        .container(true)
+        .role(flui_widgets::SemanticsRole::Group)
+        .identifier(identifier)
+        .child(child)
+}
+
 /// `draw_commands` reads the scene the window submitted last, after the
 /// frames due now: a change from outside the tree repaints the swatch, and
 /// the next read sees the new colour with no pump between.
@@ -1338,15 +1544,16 @@ fn draw_commands_read_the_last_submitted_scene() {
     let mut t = Tester::mount(flui_widgets::AnimatedBuilder::new(
         Rc::clone(&changed) as Rc<dyn flui_foundation::Listenable>,
         move || {
-            Center::new().child(
+            Center::new().child(named(
+                "swatch",
                 flui_widgets::CustomPaint::new()
                     .size(flui_foundation::geometry::Size::new(24.0, 16.0))
                     .painter(SwatchPainter(Color::rgb(read.get(), 0, 0))),
-            )
+            ))
         },
     ));
     let rectangles = |t: &mut Tester| -> Vec<(flui_foundation::geometry::Rect, Color)> {
-        t.draw_commands()
+        t.draw_commands(&find::id("swatch"))
             .into_iter()
             .filter_map(|command| match command.op {
                 flui_painting::DrawOp::Rect { rect, paint } => Some((rect, paint.color)),
@@ -1381,13 +1588,16 @@ fn draw_commands_follow_paint_order_across_repaint_boundaries() {
             .size(Size::new(10.0, 10.0))
             .painter(SwatchPainter(Color::rgb(shade, 0, 0)))
     };
-    let mut t = Tester::mount(Center::new().child(flui_widgets::Row::new(vec![
+    let mut t = Tester::mount(Center::new().child(named(
+        "row",
+        flui_widgets::Row::new(vec![
         flui_widgets::RepaintBoundary::new().child(swatch(1)).into_view().boxed(),
         swatch(2).into_view().boxed(),
         flui_widgets::RepaintBoundary::new().child(swatch(3)).into_view().boxed(),
-    ])));
+        ]),
+    )));
     let painted: Vec<(Rect, Color, Matrix4)> = t
-        .draw_commands()
+        .draw_commands(&find::id("row"))
         .into_iter()
         .filter_map(|command| match command.op {
             flui_painting::DrawOp::Rect { rect, paint } => {
@@ -1435,18 +1645,19 @@ fn draw_commands_place_a_command_through_a_transform_layer() {
     let mut t = Tester::mount(
         Center::new().child(
             flui_widgets::Transform::new(Matrix4::scaling(2.0, 2.0, 1.0)).child(
-                flui_widgets::RepaintBoundary::new().child(
+                flui_widgets::RepaintBoundary::new().child(named(
+                    "swatch",
                     flui_widgets::Padding::all(5.0).child(
                         flui_widgets::CustomPaint::new()
                             .size(Size::new(10.0, 10.0))
                             .painter(SwatchPainter(flui_painting::styling::Color::rgb(1, 0, 0))),
                     ),
-                ),
+                )),
             ),
         ),
     );
     let transforms: Vec<Matrix4> = t
-        .draw_commands()
+        .draw_commands(&find::id("swatch"))
         .into_iter()
         .filter(|command| matches!(command.op, flui_painting::DrawOp::Rect { .. }))
         .map(|command| command.transform)
@@ -1457,4 +1668,301 @@ fn draw_commands_place_a_command_through_a_transform_layer() {
         * Matrix4::scaling(2.0, 2.0, 1.0)
         * Matrix4::translation(5.0, 5.0, 0.0);
     assert_eq!(transforms, [placed]);
+}
+
+/// An element with no semantics of its own is found by the identifier on a
+/// group around it, the form `find`'s documentation and the failure below
+/// give.
+#[test]
+fn an_element_is_found_by_the_identifier_on_a_group_around_it() {
+    let mut t = Tester::mount(
+        Center::new().child(
+            flui_widgets::Semantics::new()
+                .container(true)
+                .role(flui_widgets::SemanticsRole::Group)
+                .identifier("swatch")
+                .child(SizedBox::new(24.0, 16.0)),
+        ),
+    );
+    let rect = t.rect(&find::id("swatch"));
+    assert_eq!((rect.width, rect.height), (24.0, 16.0));
+}
+
+/// An identifier on a node that publishes nothing else selects nothing, and
+/// the failure says so and gives the form that does: beside other content,
+/// and inside a button, which keeps the name its label gives it.
+///
+/// Fails if the failure is the plain `NotFound`, which tells the author to
+/// do what they already did.
+#[test]
+fn an_identifier_on_a_node_that_publishes_nothing_else_fails_saying_so() {
+    let unpublished = |identifier: &str| {
+        flui_widgets::Semantics::new()
+            .container(true)
+            .identifier(identifier)
+    };
+    let mut t = Tester::mount(
+        Center::new().child(Column::new((
+            unpublished("swatch").child(SizedBox::new(24.0, 16.0)),
+            RawButton::new(
+                unpublished("save").child(
+                    flui_widgets::Semantics::new()
+                        .container(true)
+                        .label("Save")
+                        .child(SizedBox::new(40.0, 20.0)),
+                ),
+            )
+            .on_pressed(|_| {}),
+            // A published group and a lifted node share "legend".
+            flui_widgets::Semantics::new()
+                .container(true)
+                .role(flui_widgets::SemanticsRole::Group)
+                .identifier("legend")
+                .child(SizedBox::new(24.0, 16.0)),
+            unpublished("legend").child(SizedBox::new(24.0, 16.0)),
+            // "save" lifted outside the button too, which the read reports
+            // first: the fix still names the button, the control it is in.
+            unpublished("save").child(SizedBox::new(24.0, 16.0)),
+        ))),
+    );
+    let _ = t.rect(&find::button("Save"));
+    // The identifier blamed, and the message.
+    let failure = |t: &mut Tester, locator: Locator| {
+        let error = t
+            .try_rect(&locator)
+            .expect_err("an identifier on a lifted node selects nothing");
+        let message = error.to_string();
+        let TestError::UnpublishedIdentifier { identifier, .. } = error else {
+            panic!("{locator:?}: {message}");
+        };
+        (identifier, message)
+    };
+    let (_, swatch) = failure(&mut t, find::id("swatch"));
+    assert!(
+        swatch.contains("publishes nothing of its own")
+            && swatch.contains(".role(SemanticsRole::Group)"),
+        "{swatch}"
+    );
+    // Inside a control a group would cut the name its label gives it, so
+    // the fix names the control instead.
+    let (_, save) = failure(&mut t, find::id("save"));
+    assert!(
+        save.contains("Give the identifier to the control")
+            && !save.contains(".role(SemanticsRole::Group)"),
+        "{save}"
+    );
+    // A scope names the identifier as much as the target does.
+    let (scoped, _) = failure(&mut t, find::button("Save").within(find::id("swatch")));
+    assert_eq!(scoped, "swatch");
+    // An expectation that gives up says the same.
+    let expected = panic_text(|| t.expect(find::id("swatch")).to_exist());
+    assert!(
+        expected.contains("publishes nothing of its own"),
+        "{expected}"
+    );
+    // The reason only explains a failure: an expectation that holds by
+    // matching nothing passes.
+    t.expect(find::id("swatch")).to_be_gone();
+    // The target's own identifier is the likely reason even where a
+    // published node carries it too.
+    let (own, _) = failure(&mut t, find::id("legend").within(find::button("Save")));
+    assert_eq!(own, "legend");
+    // An identifier a published node carries selects it, and a failure
+    // there is the expectation's own, not the lifted node's.
+    let _ = t.rect(&find::id("legend"));
+    let present = panic_text(|| t.expect(find::id("legend")).to_be_gone());
+    assert!(
+        present.contains("0 matches") && !present.contains("publishes nothing of its own"),
+        "{present}"
+    );
+    // A scope a published node satisfies is not the reason a lookup misses.
+    assert!(
+        matches!(
+            t.try_rect(&find::button("Nope").within(find::id("legend"))),
+            Err(TestError::NotFound { .. })
+        ),
+        "the published legend scopes the lookup"
+    );
+    assert!(
+        matches!(
+            t.try_rect(&find::id("absent")),
+            Err(TestError::NotFound { .. })
+        ),
+        "an identifier nothing carries is not found"
+    );
+}
+
+/// Paints a swatch over its own bounds and a mark past their right edge.
+#[derive(Debug)]
+struct OverhangPainter(flui_painting::styling::Color);
+
+impl flui_widgets::CustomPainter for OverhangPainter {
+    fn paint(&self, canvas: &mut flui_painting::Canvas, size: flui_foundation::geometry::Size) {
+        use flui_foundation::geometry::{Point, Rect, Size};
+        let paint = flui_painting::Paint::fill(self.0);
+        canvas.draw_rect(Rect::from_origin_size(Point::ZERO, size), &paint);
+        canvas.draw_rect(
+            Rect::from_origin_size(Point::new(size.width, 0.0), Size::new(4.0, 4.0)),
+            &paint,
+        );
+    }
+    fn should_repaint(&self, _old: &dyn flui_widgets::CustomPainter) -> bool {
+        true
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+/// `draw_commands` reads one element's drawing: of two painted siblings,
+/// each read finds its own painter's commands, the mark one draws past its
+/// bounds over the other included, and none of the other's.
+///
+/// Fails if the read selects by the element's bounds, or returns the whole
+/// scene.
+#[test]
+fn draw_commands_read_one_element_and_none_of_its_sibling() {
+    use flui_foundation::geometry::Size;
+    use flui_painting::styling::Color;
+
+    let painter = |shade: u8| {
+        flui_widgets::CustomPaint::new()
+            .size(Size::new(10.0, 10.0))
+            .painter(OverhangPainter(Color::rgb(shade, 0, 0)))
+    };
+    let mut t = Tester::mount(Center::new().child(flui_widgets::Row::new(vec![
+        named("left", painter(1)).into_view().boxed(),
+        named("right", painter(2)).into_view().boxed(),
+    ])));
+    let colours = |t: &mut Tester, identifier: &str| -> Vec<Color> {
+        t.draw_commands(&find::id(identifier))
+            .into_iter()
+            .filter_map(|command| match command.op {
+                flui_painting::DrawOp::Rect { paint, .. } => Some(paint.color),
+                _ => None,
+            })
+            .collect()
+    };
+    let left = Color::rgb(1, 0, 0);
+    let right = Color::rgb(2, 0, 0);
+    assert_eq!(
+        colours(&mut t, "left"),
+        [left, left],
+        "the overhang is the left painter's"
+    );
+    assert_eq!(colours(&mut t, "right"), [right, right]);
+}
+
+/// `draw_commands` reads a subtree larger than one inspection lists whole,
+/// in several inspections: six columns of a thousand render objects, each
+/// ending in a swatch, give all six swatches in paint order.
+///
+/// Fails if the read stops at the first inspection's 4096 nodes, or if it
+/// pages only from the node an inspection cut, which never reaches the
+/// columns after the one the budget ran out in.
+#[test]
+fn draw_commands_read_a_subtree_past_one_inspection_whole() {
+    use flui_painting::styling::Color;
+
+    let column = |shade: u8| {
+        let mut children: Vec<_> = (0..1000)
+            .map(|_| SizedBox::new(1.0, 0.0).into_view().boxed())
+            .collect();
+        children.push(
+            flui_widgets::CustomPaint::new()
+                .size(flui_foundation::geometry::Size::new(1.0, 1.0))
+                .painter(SwatchPainter(Color::rgb(shade, 0, 0)))
+                .into_view()
+                .boxed(),
+        );
+        flui_widgets::Column::new(children).into_view().boxed()
+    };
+    let columns: Vec<_> = (1..=6).map(column).collect();
+    let mut t = Tester::mount(Center::new().child(named("many", flui_widgets::Row::new(columns))));
+    let colours: Vec<Color> = t
+        .draw_commands(&find::id("many"))
+        .into_iter()
+        .filter_map(|command| match command.op {
+            flui_painting::DrawOp::Rect { paint, .. } => Some(paint.color),
+            _ => None,
+        })
+        .collect();
+    let expected: Vec<Color> = (1..=6).map(|shade| Color::rgb(shade, 0, 0)).collect();
+    assert_eq!(colours, expected);
+}
+
+/// `draw_commands` refuses an element under which one render object has
+/// more children than one inspection lists, rather than returning part of
+/// its drawing.
+///
+/// Fails if the read returns the commands of the listed children.
+#[test]
+fn draw_commands_refuse_a_render_object_with_more_children_than_one_inspection() {
+    let boxes: Vec<_> = (0..4200)
+        .map(|_| SizedBox::new(1.0, 0.0).into_view().boxed())
+        .collect();
+    let mut t = Tester::mount(Center::new().child(named("many", flui_widgets::Column::new(boxes))));
+    let refused = t.try_draw_commands(&find::id("many"));
+    assert!(
+        matches!(refused, Err(TestError::TooManyChildren { .. })),
+        "{refused:?}"
+    );
+}
+
+/// A painter's region of its own semantics, with a stable identifier.
+#[derive(Debug)]
+struct RegionPainter;
+
+impl flui_widgets::CustomPainter for RegionPainter {
+    fn paint(&self, canvas: &mut flui_painting::Canvas, size: flui_foundation::geometry::Size) {
+        canvas.draw_rect(
+            flui_foundation::geometry::Rect::from_origin_size(
+                flui_foundation::geometry::Point::ZERO,
+                size,
+            ),
+            &flui_painting::Paint::fill(flui_painting::styling::Color::rgb(1, 0, 0)),
+        );
+    }
+    fn should_repaint(&self, _old: &dyn flui_widgets::CustomPainter) -> bool {
+        false
+    }
+    fn semantics_regions(
+        &self,
+        size: flui_foundation::geometry::Size,
+    ) -> Vec<flui_semantics::SemanticsRegion> {
+        let mut config = flui_semantics::SemanticsConfiguration::new();
+        config.set_label("dot");
+        config.set_identifier("dot");
+        vec![flui_semantics::SemanticsRegion::new(
+            flui_semantics::SemanticsRegionKey(1),
+            flui_foundation::geometry::Rect::from_origin_size(
+                flui_foundation::geometry::Point::ZERO,
+                size,
+            ),
+            config,
+        )]
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+/// `draw_commands` refuses a painter's authored region, which no render
+/// object forms: its drawing is the painter's, located by the painter.
+///
+/// Fails if the read decodes the region's identity as a render object's.
+#[test]
+fn draw_commands_refuse_an_authored_region() {
+    let mut t = Tester::mount(
+        Center::new().child(
+            flui_widgets::CustomPaint::new()
+                .size(flui_foundation::geometry::Size::new(10.0, 10.0))
+                .painter(RegionPainter),
+        ),
+    );
+    let refused = t.try_draw_commands(&find::id("dot"));
+    assert!(
+        matches!(refused, Err(TestError::NoRenderObject { .. })),
+        "{refused:?}"
+    );
 }

@@ -8,11 +8,11 @@
 
 use std::num::NonZeroU64;
 
-use flui_foundation::geometry::{Point, Size};
+use flui_foundation::geometry::Size;
 use flui_foundation::{IdExhausted, IdMint};
 
 use crate::os_options::OsWindowOptions;
-use crate::{Unsupported, WindowExtent, WindowFrame, WindowGeometry, WindowMode};
+use crate::{WindowExtent, WindowFrame, WindowGeometry, WindowMode, WindowPosition};
 
 // ==================== Creation ====================
 
@@ -76,19 +76,27 @@ pub enum InputLatency {
 /// borders) to ask the window system for the outer window, so reopening a
 /// window with the size it last reported does not shrink it by its frame.
 ///
-/// [`position`](Self::position) and
-/// [`normal_geometry`](Self::normal_geometry) are measured from the origin of
-/// the usable area of [`display`](Self::display) in that display's logical
-/// pixels when a display is given, and in global logical pixels when it is
-/// not. A backend converts through the display's own scale, so a desktop of
-/// mixed scales needs no single global scale.
+/// [`position`](Self::position) and the position of
+/// [`normal_geometry`](Self::normal_geometry) are each a [`WindowPosition`]:
+/// a point of one display, in that display's logical pixels from its top-left
+/// corner. A backend converts it through that display's own scale and origin,
+/// so a desktop of mixed scales needs no single global scale. A position on a
+/// display the backend's display snapshot no longer holds is no place the
+/// backend can find: the window opens where the window system places it, and
+/// its first snapshot says where that is.
+///
+/// The numbers are checked by their types ([`WindowExtent`],
+/// [`WindowPosition`]), so only what a type cannot say is checked when the
+/// window opens ([`geometry`](Self::geometry)): a size or limit that encloses
+/// no area, a minimum above the maximum.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct WindowOptions {
     /// Window title
     pub title: String,
-    /// Initial content size (logical pixels).
-    pub size: Size<f64>,
+    /// Initial content size, in logical pixels. One that encloses no area
+    /// refuses the open ([`geometry`](Self::geometry)).
+    pub size: WindowExtent,
     /// Whether window is resizable
     pub resizable: bool,
     /// Whether the window should be visible initially.
@@ -116,21 +124,18 @@ pub struct WindowOptions {
     pub min_size: Option<WindowExtent>,
     /// The largest content size, if limited.
     pub max_size: Option<WindowExtent>,
-    /// The display `position` and `normal_geometry` are measured on; `None`
-    /// measures them in global logical pixels. A display that no longer exists
-    /// is treated as `None`.
-    pub display: Option<crate::DisplayId>,
-    /// Initial outer position, relative to [`display`](Self::display); `None`
-    /// lets the system place the window. A backend that cannot place a window
-    /// at open ignores it, and says so through its
+    /// Initial outer position, on the display it names; `None` lets the
+    /// system place the window. A backend that cannot place a window at open
+    /// ignores it, and says so through its
     /// [`WindowCapabilities::places_at_open`](crate::WindowCapabilities::places_at_open).
-    pub position: Option<Point<f64>>,
+    pub position: Option<WindowPosition>,
     /// The mode the window opens in. A backend that cannot enter it opens the
     /// window in [`WindowMode::Normal`], which its first snapshot shows.
     pub mode: WindowMode,
     /// The outer rectangle the window returns to from a maximized or fullscreen
     /// opening mode, so a restored maximized window keeps its earlier bounds.
-    /// Measured like [`position`](Self::position).
+    /// Its position, where it has one, names its own display, as
+    /// [`position`](Self::position) does.
     pub normal_geometry: Option<WindowGeometry>,
     /// How early pointer samples reach the window; see [`InputLatency`].
     pub input_latency: InputLatency,
@@ -150,7 +155,7 @@ impl WindowOptions {
 
     /// Set the initial content size.
     #[must_use]
-    pub const fn size(mut self, size: Size<f64>) -> Self {
+    pub const fn size(mut self, size: WindowExtent) -> Self {
         self.size = size;
         self
     }
@@ -201,23 +206,21 @@ impl WindowOptions {
     /// check as the command that sets it later: [`size`](Self::size) as
     /// [`WindowCommand::SetSize`](crate::WindowCommand::SetSize),
     /// [`min_size`](Self::min_size) and [`max_size`](Self::max_size) as
-    /// [`WindowCommand::SetConstraints`](crate::WindowCommand::SetConstraints),
-    /// [`position`](Self::position) as
-    /// [`WindowCommand::SetPosition`](crate::WindowCommand::SetPosition).
-    /// ([`normal_geometry`](Self::normal_geometry) is a
-    /// [`WindowGeometry`], valid by its type.)
+    /// [`WindowCommand::SetConstraints`](crate::WindowCommand::SetConstraints).
+    /// ([`position`](Self::position) and
+    /// [`normal_geometry`](Self::normal_geometry) are valid by their types, as
+    /// [`WindowCommand::SetPosition`](crate::WindowCommand::SetPosition)'s
+    /// position is.)
     ///
     /// Every host opens a window through here, before it takes an id for it,
     /// and refuses the open for numbers a command would be refused for.
     ///
     /// # Errors
     /// [`InvalidWindowOption`], naming the option and the numbers: a size or
-    /// position that is not finite, a size or limit that encloses no area, a
-    /// minimum above the maximum.
+    /// limit that encloses no area, a minimum above the maximum.
     pub fn geometry(&self) -> Result<OpeningGeometry, InvalidWindowOption> {
         let refused = |option| move |refused| InvalidWindowOption { option, refused };
-        let content =
-            crate::window_state::asked_size(self.size).map_err(refused(WindowOption::Size))?;
+        let content = self.size.area().map_err(refused(WindowOption::Size))?;
         let min = self
             .min_size
             .map(crate::WindowExtent::area)
@@ -231,28 +234,16 @@ impl WindowOptions {
         let constraints = crate::SizeConstraints::new(min, max)
             .asked()
             .map_err(refused(WindowOption::Limits))?;
-        let position = self
-            .position
-            .map(crate::window_geometry::finite_position)
-            .transpose()
-            .map_err(refused(WindowOption::Position))?;
         Ok(OpeningGeometry {
             content,
             constraints,
-            position,
+            position: self.position,
         })
-    }
-
-    /// Set the display the position is measured on.
-    #[must_use]
-    pub const fn display(mut self, display: Option<crate::DisplayId>) -> Self {
-        self.display = display;
-        self
     }
 
     /// Set the initial outer position.
     #[must_use]
-    pub const fn position(mut self, position: Option<Point<f64>>) -> Self {
+    pub const fn position(mut self, position: Option<WindowPosition>) -> Self {
         self.position = position;
         self
     }
@@ -291,14 +282,13 @@ impl Default for WindowOptions {
     fn default() -> Self {
         Self {
             title: "FLUI Window".to_string(),
-            size: Size::new(800.0, 600.0),
+            size: DEFAULT_SIZE,
             resizable: true,
             visible: true,
             reveal: WindowReveal::AtOpen,
             frame: WindowFrame::System,
             min_size: None,
             max_size: None,
-            display: None,
             position: None,
             mode: WindowMode::Normal,
             normal_geometry: None,
@@ -308,9 +298,16 @@ impl Default for WindowOptions {
     }
 }
 
+/// The content size a window opens at when its options name none: 800 by 600
+/// logical pixels.
+const DEFAULT_SIZE: WindowExtent = match WindowExtent::try_new(Size::new(800.0, 600.0)) {
+    Ok(size) => size,
+    Err(_) => panic!("BUG: 800x600 is a finite, non-negative extent"),
+};
+
 /// The numbers a window opens at, each checked as the command that sets it
 /// is ([`WindowOptions::geometry`]).
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct OpeningGeometry {
     /// The content extent asked for ([`WindowOptions::size`]): finite and
@@ -320,8 +317,8 @@ pub struct OpeningGeometry {
     /// [`WindowOptions::max_size`]): each enclosing an area, the minimum not
     /// above the maximum.
     pub constraints: crate::SizeConstraints,
-    /// The position asked for ([`WindowOptions::position`]), finite.
-    pub position: Option<Point<f64>>,
+    /// The position asked for ([`WindowOptions::position`]).
+    pub position: Option<WindowPosition>,
 }
 
 /// A [`WindowOptions`] field whose numbers no window can be asked for.
@@ -336,8 +333,6 @@ pub enum WindowOption {
     MaxSize,
     /// The two limits together: the minimum is above the maximum.
     Limits,
-    /// [`WindowOptions::position`].
-    Position,
 }
 
 impl std::fmt::Display for WindowOption {
@@ -347,7 +342,6 @@ impl std::fmt::Display for WindowOption {
             Self::MinSize => "min_size",
             Self::MaxSize => "max_size",
             Self::Limits => "min_size, max_size",
-            Self::Position => "position",
         })
     }
 }
@@ -386,13 +380,12 @@ impl std::fmt::Display for InvalidWindowOption {
                 f,
                 "the window options `min_size` and `max_size` describe no window: {refused}"
             ),
-            option @ (WindowOption::Size
-            | WindowOption::MinSize
-            | WindowOption::MaxSize
-            | WindowOption::Position) => write!(
-                f,
-                "the window option `{option}` describes no window: {refused}"
-            ),
+            option @ (WindowOption::Size | WindowOption::MinSize | WindowOption::MaxSize) => {
+                write!(
+                    f,
+                    "the window option `{option}` describes no window: {refused}"
+                )
+            }
         }
     }
 }
@@ -522,35 +515,4 @@ pub enum WindowMaterial {
     /// The window system's material for a long-lived window's background,
     /// tinted by the desktop behind it: Mica on Windows 11.
     System,
-}
-
-/// Failure to apply a cursor to one exact platform window.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[non_exhaustive]
-pub enum CursorError {
-    /// The backend has no pointer-cursor facility for this window.
-    #[error("the window shows no pointer cursor: {0}")]
-    Unsupported(#[from] Unsupported),
-    /// The window system refused or failed the cursor update, in the shape
-    /// every refusal of a window's window system takes
-    /// ([`ApplyError::Platform`](crate::ApplyError::Platform)).
-    #[error("platform cursor update failed: {0}")]
-    Platform(#[from] crate::PlatformFailure),
-}
-
-impl CursorError {
-    /// A window-system failure with this message.
-    #[must_use]
-    pub fn failed(message: String) -> Self {
-        Self::Platform(crate::PlatformFailure::Failed { message })
-    }
-
-    /// What is not here, when that is why the cursor was not applied.
-    #[must_use]
-    pub const fn unsupported(&self) -> Option<Unsupported> {
-        match self {
-            Self::Unsupported(unsupported) => Some(*unsupported),
-            Self::Platform(_) => None,
-        }
-    }
 }

@@ -569,8 +569,8 @@ pub(crate) fn a_remaining_touch_continues_scroll_without_an_intermediate_fling()
     use flui_platform::{
         EventTime,
         pointer::{
-            PointerButton, PointerButtons, PointerEvent, PointerInfo, PointerKind, PointerMove,
-            PointerPosition, PointerPress, PointerRelease, PointerSample,
+            PointerButton, PointerButtons, PointerEvent, PointerKind, PointerMove, PointerPosition,
+            PointerPress, PointerRelease, PointerSample, PointerSource,
         },
     };
     use flui_testing::PointerPhase;
@@ -584,7 +584,7 @@ pub(crate) fn a_remaining_touch_continues_scroll_without_an_intermediate_fling()
         .child(SizedBox::new(300.0, 5000.0));
     let mut scoped = fling_scoped(widget, Vsync::new(), tight(300.0, 300.0));
     let event = |id: u64, millis: u64, y: f64, phase| {
-        let info = PointerInfo::new(
+        let info = PointerSource::new(
             flui_interaction::PointerId::try_from(id).expect("nonzero touch identity"),
             PointerKind::Touch,
         );
@@ -1407,7 +1407,7 @@ fn phased_scroll(
     device: u64,
 ) -> flui_interaction::PointerEvent {
     use flui_interaction::events::pointer::*;
-    let pointer = PointerInfo::new(
+    let pointer = PointerSource::new(
         PointerId::try_from(1_u64).expect("pointer"),
         PointerKind::Mouse,
     )
@@ -1938,11 +1938,11 @@ fn dispatch_typed_wheel(
     use flui_foundation::geometry::Point;
     use flui_platform::EventTime;
     use flui_platform::pointer::{
-        PointerEvent, PointerId, PointerInfo, PointerKind, PointerPosition, ScrollDelta,
+        PointerEvent, PointerId, PointerKind, PointerPosition, PointerSource, ScrollDelta,
         ScrollEvent, ScrollUnit,
     };
     let event = ScrollEvent::new(
-        PointerInfo::new(
+        PointerSource::new(
             PointerId::try_from(1_u64).expect("nonzero mouse"),
             PointerKind::Mouse,
         ),
@@ -1986,12 +1986,12 @@ fn dispatch_wheel_distance(
     modifiers: flui_platform::keyboard::Modifiers,
 ) {
     use flui_platform::pointer::{
-        PointerEvent, PointerId, PointerInfo, PointerKind, PointerPosition, ScrollDelta,
+        PointerEvent, PointerId, PointerKind, PointerPosition, PointerSource, ScrollDelta,
         ScrollEvent,
     };
     laid.dispatch_pointer_event(&PointerEvent::Scroll(
         ScrollEvent::new(
-            PointerInfo::new(
+            PointerSource::new(
                 PointerId::try_from(1_u64).expect("pointer"),
                 PointerKind::Mouse,
             ),
@@ -2376,10 +2376,13 @@ pub(crate) fn resting_fingers_catch_a_fling_and_leave_wheel_easing() {
         tight(300.0, 300.0),
         vsync,
     );
+    // A hold's begin catches the fling; its end, when the fingers lift
+    // without moving, changes nothing more.
     let rest = TrackpadScript::new("fingers rest", Offset::new(150.0, 150.0))
         .rest()
+        .lift()
         .build()
-        .expect("one discrete event");
+        .expect("a hold that begins and ends");
 
     dispatch_typed_wheel(&laid, Notched, 100.0);
     laid.pump_for(Duration::ZERO);
@@ -3644,8 +3647,8 @@ pub(crate) fn nested_fling_parent_boundary_policy_receives_presentation_pixel_ra
     use flui_platform::{
         EventTime, PlatformInput,
         pointer::{
-            PointerButton, PointerButtons, PointerEvent, PointerId, PointerInfo, PointerKind,
-            PointerMove, PointerPosition, PointerPress, PointerRelease, PointerSample,
+            PointerButton, PointerButtons, PointerEvent, PointerId, PointerKind, PointerMove,
+            PointerPosition, PointerPress, PointerRelease, PointerSample, PointerSource,
         },
     };
     use flui_testing::{HeadlessHost, HeadlessWindow};
@@ -3710,7 +3713,7 @@ pub(crate) fn nested_fling_parent_boundary_policy_receives_presentation_pixel_ra
             outer.jump_to(600.0).expect("no build is running");
             inner.jump_to(650.0).expect("no build is running");
             let _ = host.pump(Duration::ZERO);
-            let pointer = PointerInfo::new(
+            let pointer = PointerSource::new(
                 PointerId::try_from(id).expect("nonzero contact"),
                 PointerKind::Touch,
             );
@@ -4013,7 +4016,7 @@ fn assert_notification_failures(log: &flui_testing::log_capture::CapturedLog, ex
     let reported: Vec<_> = log
         .records()
         .iter()
-        .filter(|record| record.target == "flui_foundation::notifier_generic")
+        .filter(|record| record.target == "flui.notifier")
         .filter_map(|record| record.field("panic_payload"))
         .collect();
     assert!(

@@ -14,8 +14,9 @@
 //! it: each node an offset at its placement, each effect entry its layer over
 //! the entries under it, each chunk its recording, each slot the child node
 //! where it stands. A partial frame passes its damage, and a slot whose
-//! subtree cannot reach it is skipped ([`SceneVersion::subtree_cull`]): what
-//! the walk costs follows what the damage reaches, not the scene's size.
+//! subtree or a chunk whose bounds cannot reach it is skipped
+//! ([`SceneVersion::subtree_cull`]): what the walk costs follows what the
+//! damage reaches, not the scene's size.
 //!
 //! The explicit stack owns traversal order; `record_scene` is the shared
 //! window/capture recorder. Shader masks and backdrops lower into ordered IR;
@@ -105,15 +106,19 @@ pub(crate) trait SceneVisitor {
 }
 
 /// Walks `scene` from its root in paint order. A version's slot whose
-/// subtree cannot reach `cull`, in surface pixels, is skipped; a tree is
-/// walked whole.
+/// subtree or chunk whose bounds cannot reach `cull`, in surface pixels, is
+/// skipped; a tree is walked whole. Answers how many slots and chunks the
+/// walk asked the cull about.
 pub(crate) fn walk_scene<V: SceneVisitor>(
     scene: SceneContent<'_>,
     cull: Option<Rect<f64>>,
     visitor: &mut V,
-) {
+) -> u64 {
     match scene {
-        SceneContent::Tree(tree) => walk_layer_tree(tree, tree.root(), visitor),
+        SceneContent::Tree(tree) => {
+            walk_layer_tree(tree, tree.root(), visitor);
+            0
+        }
         SceneContent::Version(version) => walk_version(version, cull, visitor),
     }
 }
@@ -189,13 +194,19 @@ enum Visit {
 }
 
 /// Walk `version` from its root, visiting what `flatten` would build in the
-/// same order, without building it. A slot's subtree that cannot reach
-/// `cull` is skipped.
+/// same order, without building it. A slot's subtree or a chunk that cannot
+/// reach `cull` is skipped. Answers how many slots and chunks it asked the
+/// cull about.
 ///
 /// Termination: a version's slots form a tree (`SceneOwner::apply` refuses a
 /// cycle and a second parent), so every node is entered at most once.
-fn walk_version<V: SceneVisitor>(version: &SceneVersion, cull: Option<Rect<f64>>, visitor: &mut V) {
+fn walk_version<V: SceneVisitor>(
+    version: &SceneVersion,
+    cull: Option<Rect<f64>>,
+    visitor: &mut V,
+) -> u64 {
     let mut cull = cull.map(|rect| version.subtree_cull(rect));
+    let mut tested: u64 = 0;
     let mut stack = vec![Visit::Node(version.root())];
     while let Some(visit) = stack.pop() {
         match visit {
@@ -267,13 +278,22 @@ fn walk_version<V: SceneVisitor>(version: &SceneVersion, cull: Option<Rect<f64>>
                             });
                         }
                         Entry::Chunk { chunk, .. } => {
+                            if cull.as_mut().is_some_and(|cull| {
+                                tested = tested.saturating_add(1);
+                                !cull.meets_chunk(at)
+                            }) {
+                                continue;
+                            }
                             let item = Item::Chunk(chunk.commands());
                             if visitor.enter(Site::Entry(version, at), &item) == Step::Descend {
                                 visitor.exit(Site::Entry(version, at), &item);
                             }
                         }
                         Entry::Slot { node: child, .. } => {
-                            if cull.as_mut().is_some_and(|cull| !cull.meets(*child)) {
+                            if cull.as_mut().is_some_and(|cull| {
+                                tested = tested.saturating_add(1);
+                                !cull.meets(*child)
+                            }) {
                                 continue;
                             }
                             stack.push(Visit::Entries {
@@ -293,6 +313,7 @@ fn walk_version<V: SceneVisitor>(version: &SceneVersion, cull: Option<Rect<f64>>
             }
         }
     }
+    tested
 }
 
 /// Exits the open effects of `node` above `parent`, innermost first.
@@ -323,16 +344,18 @@ fn close_until<V: SceneVisitor>(
 }
 
 /// Record every consumer through the same layer semantics; GPU effects remain
-/// ordered IR. A partial frame passes its damage as `cull`.
+/// ordered IR. A partial frame passes its damage as `cull`. Answers what the
+/// walk and the recording did.
 pub(crate) fn record_scene(
     scene: SceneContent<'_>,
     cull: Option<Rect<f64>>,
     backend: &mut crate::layer_dispatcher::LayerDispatcher<'_>,
-) -> crate::EngineResult<()> {
+) -> crate::EngineResult<crate::frame_protocol::RasterCounters> {
     struct Recorder<'a, 'b> {
         backend: &'a mut crate::layer_dispatcher::LayerDispatcher<'b>,
         error: Option<crate::EngineError>,
         followers: Vec<SiteKey>,
+        counters: crate::frame_protocol::RasterCounters,
     }
     impl Recorder<'_, '_> {
         fn enter_layer(&mut self, site: Site<'_>, layer: &Layer) -> Step {
@@ -413,6 +436,9 @@ pub(crate) fn record_scene(
                 return Step::SkipSubtree;
             }
             self.backend.flush_active_transform();
+            if matches!(site, Site::Node | Site::Tree(..)) {
+                self.counters.nodes_entered = self.counters.nodes_entered.saturating_add(1);
+            }
             let step = match item {
                 Item::Layer(layer) => self.enter_layer(site, layer),
                 Item::Placed(offset) => {
@@ -420,6 +446,7 @@ pub(crate) fn record_scene(
                     Step::Descend
                 }
                 Item::Chunk(commands) => {
+                    self.counters.chunks_recorded = self.counters.chunks_recorded.saturating_add(1);
                     crate::dispatch::dispatch_commands(*commands, self.backend);
                     Step::Descend
                 }
@@ -451,9 +478,14 @@ pub(crate) fn record_scene(
         backend,
         error: None,
         followers: Vec::new(),
+        counters: crate::frame_protocol::RasterCounters::default(),
     };
-    walk_scene(scene, cull, &mut recorder);
-    recorder.error.map_or(Ok(()), Err)
+    let cull_tests = walk_scene(scene, cull, &mut recorder);
+    if let Some(error) = recorder.error {
+        return Err(error);
+    }
+    recorder.counters.cull_tests = cull_tests;
+    Ok(recorder.counters)
 }
 
 #[cfg(test)]
@@ -991,5 +1023,84 @@ mod tests {
             "the damage reaches the same boundaries in both rows"
         );
         assert_eq!(ten, 3, "the root, the damaged boundary and its chunk");
+    }
+
+    /// A partial frame's walk replays only the chunks of a boundary its
+    /// damage can reach: over a row of ten or a hundred squares painted into
+    /// one boundary, a damage rect over the third replays that square alone.
+    /// A chunk under an effect is culled through it: a translated square
+    /// lands where the translation moves it, and a blurred one reaches as far
+    /// as the blur spreads it.
+    #[test]
+    fn a_partial_walk_replays_only_the_chunks_its_damage_reaches() {
+        use flui_layer::{
+            BoundaryContent, ImageFilterLayer, Layer, SceneOp, SceneOwner, TransformLayer,
+        };
+        let replayed = |row: usize, damage: Rect<f64>| {
+            let mut owner = SceneOwner::new();
+            let mut writer = owner.writer();
+            let root = writer.current().root();
+            let version = writer.next_content_version().expect("a version");
+            let mut content = BoundaryContent::builder();
+            for index in 0..row {
+                content.chunk(square(index + 2, version, (12.0 * index as f64, 0.0)));
+            }
+            // Drawn at 0..10, moved to 300..310.
+            content.push_effect(
+                Layer::from(TransformLayer::new(Matrix4::translation(300.0, 0.0, 0.0))),
+                flui_foundation::RenderId::new(row + 2),
+                0,
+            );
+            content.chunk(square(row + 3, version, (0.0, 0.0)));
+            content.pop_effect();
+            // Drawn at 400..410, spread a few pixels past that by the blur.
+            content.push_effect(
+                Layer::from(ImageFilterLayer::new(
+                    flui_painting::paint::ImageFilter::blur(4.0),
+                )),
+                flui_foundation::RenderId::new(row + 4),
+                0,
+            );
+            content.chunk(square(row + 5, version, (400.0, 0.0)));
+            content.pop_effect();
+            writer.push(SceneOp::Publish {
+                node: root,
+                content: std::sync::Arc::new(content.finish()),
+            });
+            owner
+                .apply(flui_layer::SurfaceKey {
+                    size: (2_000, 100),
+                    generation: flui_foundation::SurfaceGeneration::ZERO,
+                })
+                .expect("a row applies");
+            let mut entered = Entered::default();
+            walk_scene(
+                SceneContent::Version(owner.current()),
+                Some(damage),
+                &mut entered,
+            );
+            entered.0.len()
+        };
+        // Over the third square alone, clear of its neighbours' edges.
+        let third = Rect::from_xywh(25.0, 2.0, 6.0, 6.0);
+        assert_eq!(replayed(10, third), 1, "the third of ten squares");
+        assert_eq!(replayed(100, third), 1, "the third of a hundred squares");
+        let clear = Rect::from_xywh(1_000.0, 2.0, 4.0, 4.0);
+        assert_eq!(replayed(10, clear), 0, "a damage clear of every square");
+        assert_eq!(
+            replayed(0, Rect::from_xywh(302.0, 2.0, 4.0, 4.0)),
+            1,
+            "the square its transform moves under the damage"
+        );
+        assert_eq!(
+            replayed(0, Rect::from_xywh(2.0, 2.0, 4.0, 4.0)),
+            0,
+            "not where the square was drawn before its transform"
+        );
+        assert_eq!(
+            replayed(0, Rect::from_xywh(412.0, 2.0, 2.0, 2.0)),
+            1,
+            "beside the blurred square, inside the blur's reach"
+        );
     }
 }

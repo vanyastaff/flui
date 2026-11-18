@@ -55,10 +55,7 @@ impl PlatformWindow for Window {
     fn surface_target(&self) -> Arc<dyn flui_platform::SurfaceTarget> {
         self.inner.surface_target()
     }
-    fn set_cursor(
-        &self,
-        cursor: flui_platform::CursorIcon,
-    ) -> Result<(), flui_platform::CursorError> {
+    fn set_cursor(&self, cursor: &flui_platform::Cursor) -> Result<(), flui_platform::CursorError> {
         self.inner.set_cursor(cursor)
     }
     fn set_frame_rate_hint(
@@ -89,7 +86,7 @@ impl PlatformWindow for Window {
         None
     }
 
-    fn haptics(&self) -> Option<Arc<dyn flui_platform::PlatformHaptics>> {
+    fn haptics(&self) -> Option<Arc<dyn flui_platform::haptics::PlatformHaptics>> {
         None
     }
 
@@ -355,10 +352,7 @@ impl PlatformWindow for HapticWindow {
     fn surface_target(&self) -> Arc<dyn flui_platform::SurfaceTarget> {
         self.inner.surface_target()
     }
-    fn set_cursor(
-        &self,
-        cursor: flui_platform::CursorIcon,
-    ) -> Result<(), flui_platform::CursorError> {
+    fn set_cursor(&self, cursor: &flui_platform::Cursor) -> Result<(), flui_platform::CursorError> {
         self.inner.set_cursor(cursor)
     }
     fn set_frame_rate_hint(
@@ -382,7 +376,7 @@ impl PlatformWindow for HapticWindow {
     ) -> Result<(), flui_platform::ApplyError> {
         self.inner.apply(command)
     }
-    fn haptics(&self) -> Option<Arc<dyn flui_platform::PlatformHaptics>> {
+    fn haptics(&self) -> Option<Arc<dyn flui_platform::haptics::PlatformHaptics>> {
         Some(self.haptics.clone())
     }
     fn text_input(&self) -> Option<Arc<dyn flui_platform::PlatformTextInput>> {

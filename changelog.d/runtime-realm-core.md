@@ -10,8 +10,7 @@
 - **`flui-semantics`**: `PlatformAccessibility` and its listener aliases are defined in
   `flui_semantics::platform`; `flui_native::traits` re-exports them at their old paths
   ([ADR-0082](/docs/adr/ADR-0082-platform-api-contract-crate.md) §2, amended).
-- **`flui-foundation`**: `diagnostics::REDACTED_VALUE` is the redaction placeholder;
-  `flui_log::REDACTED_VALUE` re-exports it.
+- **`flui-foundation`**: `diagnostics::REDACTED_VALUE` is the redaction placeholder.
 - **`flui-app`**: closing one presentation of a realm no longer hides that presentation's
   `GlobalKey`s from the realm-wide lookup while it detaches; they resolve until its tree is torn
   down, and resolve to nothing during the teardown, as before.

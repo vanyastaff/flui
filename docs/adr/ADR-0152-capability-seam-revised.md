@@ -24,6 +24,9 @@
   mark from one where only some clipboard managers read it and one with no way to mark it.
 - **Superseded-by:** [ADR-0337](ADR-0337-a-clipboard-write-answers-and-win32-serves-the-clipboard-off-the-owner-thread.md)
   for §6 in part (a write answers through a resolver; `NativeClipboard` has no `write_text`)
+- **Superseded-by:** [ADR-0365](ADR-0365-a-window-names-itself-to-a-portal-for-each-request.md)
+  for §2 item 6 in part (`WindowRef` also answers the window's portal parent, for one request at a
+  time; `ProviderContext` also names the application id)
 - **Supersedes:** [ADR-0084](ADR-0084-open-capability-seam-and-plugins.md) (Proposed) as a whole;
   what carries over is restated in §1.
   [ADR-0078](ADR-0078-rules-live-in-types-and-lints.md) §1's last sentence ("A new capability is a
@@ -48,7 +51,7 @@
   [ADR-0244](ADR-0244-os-version-floors-and-gates.md)
 - **Sources:** other projects are read at pinned commits and cited as `owner/repo@sha path:line`:
   Tauri v2 (`tauri-apps/tauri@9318ab84b8`) and its plugins (`tauri-apps/plugins-workspace@11211c30e7`),
-  Flutter (`flutter/flutter@6597889f57`) and its packages (`flutter/packages@1383427519`,
+  Flutter 3.50.0 (`flutter/flutter@ab2912035e`) and its packages (`flutter/packages@1383427519`,
   `Baseflow/flutter-permission-handler@0684469188`), Capacitor (`ionic-team/capacitor@841017a3c7`),
   Expo (`expo/expo@0937842df7`), Compose Multiplatform
   (`JetBrains/compose-multiplatform-core@13b7599795`), Bevy (`bevyengine/bevy@2614884437`), GPUI
@@ -187,7 +190,7 @@ ADR-0084 also rested on a premise that no longer holds: that Flutter's federated
 application no way to replace an endorsed implementation
 ([flutter/flutter#80374](https://github.com/flutter/flutter/issues/80374)). The issue closed on
 2024-07-11, and the Flutter tool now resolves a direct dependency over the default package
-([flutter/flutter@6597889f57 packages/flutter_tools/lib/src/flutter_plugins.dart:1950-1993](https://github.com/flutter/flutter/blob/6597889f57/packages/flutter_tools/lib/src/flutter_plugins.dart#L1950-L1993)). Nothing
+([flutter/flutter@ab2912035e packages/flutter_tools/lib/src/flutter_plugins.dart:1950-1993](https://github.com/flutter/flutter/blob/ab2912035e/packages/flutter_tools/lib/src/flutter_plugins.dart#L1950-L1993)). Nothing
 in this ADR depends on that claim. Substitution in FLUI is a provider override because the registry
 is keyed by the marker, not by the implementation.
 

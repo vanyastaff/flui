@@ -70,7 +70,12 @@ use crate::owner::windows::{HostDrag, WindowsLoop};
 use crate::window::windows::WindowsWindow;
 use crate::window::windows::proc::with_window_context;
 use crate::{host_window::HostWindow, platform::Platform as _};
-use flui_platform::WindowOptions;
+use flui_platform::{WindowExtent, WindowOptions};
+
+/// A window extent of this size.
+fn extent(width: f64, height: f64) -> WindowExtent {
+    WindowExtent::try_new(Size::new(width, height)).expect("a finite extent")
+}
 
 /// A drop source whose answers the case scripts.
 #[expect(
@@ -318,7 +323,7 @@ fn open(
         .open_window(
             WindowOptions::default()
                 .title(title)
-                .size(Size::new(240.0, 160.0))
+                .size(extent(240.0, 160.0))
                 .visible(true),
             handler.clone(),
         )

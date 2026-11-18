@@ -653,7 +653,7 @@ mod tests {
     /// cancelled, which no client reads.
     #[test]
     fn every_code_is_a_protocol_error_code() {
-        let protocol: Vec<&str> = flui_protocol::ErrorCode::ALL
+        let protocol: Vec<&str> = flui_protocol::error::ErrorCode::ALL
             .iter()
             .map(|code| code.name())
             .collect();
@@ -669,9 +669,9 @@ mod tests {
             assert_eq!(
                 serde_json::to_value(error.retry()).ok(),
                 serde_json::to_value(match error.retry() {
-                    Retry::Never => flui_protocol::Retry::Never,
-                    Retry::Soon => flui_protocol::Retry::Soon,
-                    Retry::WhenAppears => flui_protocol::Retry::WhenAppears,
+                    Retry::Never => flui_protocol::error::Retry::Never,
+                    Retry::Soon => flui_protocol::error::Retry::Soon,
+                    Retry::WhenAppears => flui_protocol::error::Retry::WhenAppears,
                 })
                 .ok(),
                 "retry advice is spelled as flui-protocol spells it"

@@ -290,10 +290,10 @@ which the workspace has left. Invariants:
 - **A description says what the object holds, infinity and NaN included.** An unconstrained
   maximum is infinity, which is meaningful, and a NaN is usually a bug worth seeing, so `Fields`
   never turns either into an absent value. The wire carries them as a typed value
-  (`flui_protocol::InspectValue::NonFinite`), a composite holding one as its `Debug` text.
+  (`flui_protocol::inspect::InspectValue::NonFinite`), a composite holding one as its `Debug` text.
   `a_non_finite_number_is_described_as_itself` pins it.
 - **The value set is closed.** A consumer that handles every `Value` handles every description,
-  which is what lets the owned snapshot be a wire contract (`flui_protocol::InspectNode`). The
+  which is what lets the owned snapshot be a wire contract (`flui_protocol::inspect::InspectNode`). The
   colour type lives in `flui-painting`, so a description carries `Rgba` channels.
 - **Values compare by value; `Value::Debug` equals nothing,** itself included, because its type
   is unknown. A snapshot counts `Debug` fields per node so a ratchet can drive them down.
@@ -343,8 +343,8 @@ typed protocol tree rather than this diagnostics representation (ADR-0095).
 | Site | Primitive | Where | Why |
 |------|-----------|-------|-----|
 | `GlobalKey` ID counter | `AtomicU64` (static) | `key.rs:140, 462` | Monotonic key allocator. `fetch_add` only, no contention pattern. Off any hot path. |
-| `Notifier::listeners` | `Rc<ListenerStorage>` with `RefCell<Listeners>`: registrations sorted by `ListenerId`, the first inline, a withdrawn one an empty slot until the empty outnumber the live | `notifier_generic.rs` | Owner-local membership. Delivery snapshots registration order and releases every borrow before invocation or retirement. `ChangeNotifier` adapts this same storage. |
-| `Notifier::next_id` | `Rc<Cell<usize>>` | `notifier_generic.rs` | Monotonic owner-local identities. Exhaustion refuses permanently before an identity can be reissued. |
+| `Notifier::listeners` | `Rc<ListenerStorage>` with `RefCell<Listeners>`: registrations sorted by `ListenerId`, the first inline, a withdrawn one an empty slot until the empty outnumber the live | `notifier/channel.rs` | Owner-local membership. Delivery snapshots registration order and releases every borrow before invocation or retirement. `ChangeNotifier` adapts this same storage. |
+| `Notifier::next_id` | `IdMint<ListenerId>` | `notifier/channel.rs` | Monotonic owner-local identities. Exhaustion refuses permanently before an identity can be reissued. |
 
 No `RwLock` in `flui-foundation`. No primitive listed here sits inside `perform_layout` / `paint` / `View::build`.
 

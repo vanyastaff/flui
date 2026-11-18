@@ -858,7 +858,7 @@ pub(crate) struct ListItemFocusState {
     index: usize,
     node: Rc<FocusNode>,
     controller: Option<ListFocusController>,
-    keep_alive: Option<KeepAliveHandle>,
+    keep_alive: KeepAliveHandle,
     pin: Rc<RefCell<Option<KeepAliveLease>>>,
     /// The pin refresh the controller calls; the controller holds it weakly.
     refresh: Rc<dyn Fn()>,
@@ -869,14 +869,14 @@ pub(crate) struct ListItemFocusState {
 impl StatefulView for ListItemFocus {
     type State = ListItemFocusState;
 
-    fn create_state(&self, _ctx: &dyn LifecycleContext) -> ListItemFocusState {
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> ListItemFocusState {
         let node = FocusNode::new();
 
         ListItemFocusState {
             index: self.index,
             node,
             controller: None,
-            keep_alive: None,
+            keep_alive: ctx.keep_alive_handle(),
             pin: Rc::new(RefCell::new(None)),
             refresh: Rc::new(|| {}),
             subscription: None,
@@ -903,10 +903,8 @@ impl ListItemFocusState {
             let wants = focused || remembered;
             let held = pin.borrow().is_some();
             if wants && !held {
-                if let Some(keep_alive) = &keep_alive {
-                    let lease = keep_alive.pin();
-                    *pin.borrow_mut() = Some(lease);
-                }
+                let lease = keep_alive.pin();
+                *pin.borrow_mut() = Some(lease);
             } else if !wants && held {
                 // Released outside the borrow: the lease's drop notifies the
                 // slivers watching the pins.
@@ -972,7 +970,6 @@ impl ListItemFocusState {
 
 impl ViewState<ListItemFocus> for ListItemFocusState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        self.keep_alive = Some(ctx.keep_alive_handle());
         self.post_frame = ctx.post_frame_handle();
         self.controller = ctx.get::<ListFocusScope, _>(|scope| scope.controller.clone());
         self.register();

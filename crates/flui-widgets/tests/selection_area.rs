@@ -15,7 +15,7 @@ use flui_widgets::{
     Column, MergeSemantics, Row, SelectionArea, SelectionContainer, Semantics, SizedBox, Text,
 };
 
-use crate::common::{LaidOut, lay_out, loose, painted_selection, rgba};
+use crate::common::{LaidOut, lay_out_on, loose, painted_selection, rgba};
 use flui_foundation::inspect::Rgba;
 
 /// An adapter's view of the tree the presentation publishes now.
@@ -99,8 +99,10 @@ fn recorded_area(
     (area, seen)
 }
 
+/// `view` laid out on Linux, where an area offers its selection as the
+/// primary selection, with semantics on.
 fn mounted(view: impl flui_view::View) -> LaidOut {
-    let mut laid = lay_out(view, loose(4000.0));
+    let mut laid = lay_out_on(view, loose(4000.0), flui_platform::TargetPlatform::Linux);
     laid.enable_semantics();
     laid.tick();
     laid

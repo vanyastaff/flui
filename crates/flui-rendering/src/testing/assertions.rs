@@ -34,7 +34,7 @@ pub fn assert_descendant_properties(tree: &SnapshotNode, kind: &str, required: &
 #[track_caller]
 pub fn assert_has_committed_size(node: &SnapshotNode) {
     assert!(
-        node.get_fact::<Size>("size").is_ok(),
+        node.fact_as::<Size>("size").is_ok(),
         "expected committed size on {:?}",
         node.kind,
     );

@@ -3,10 +3,7 @@
 //! Android's logcat and any other line-oriented native sink take a single
 //! string, so the structured fields have to be rendered somewhere. This module
 //! is compiled on **every** target, not just Android, so its behaviour is
-//! covered by tests that run on the ordinary CI host — the historical version
-//! lived inside a `cfg(target_os = "android")` module, which meant its tests
-//! never compiled anywhere (they called a `tracing::field::Field::new` that no
-//! released `tracing-core` exposes).
+//! covered by tests that run on the ordinary CI host.
 //!
 //! This renderer holds no privacy opinion: field classification happens
 //! upstream in [`super::redact`], which the shipped Android sink sits behind,
@@ -94,10 +91,7 @@ impl FieldRecorder {
             self.output.push(' ');
         } else if !self.output.is_empty() {
             // A message is already down and this is the first field, so the
-            // two need separating. The historical implementation only ever
-            // added the separator on the prepend path, which ran the message
-            // straight into the first field whenever the message arrived
-            // first — the usual order.
+            // two need separating whichever order they arrived in.
             self.output.push_str(MESSAGE_SEPARATOR);
         }
         self.has_fields = true;

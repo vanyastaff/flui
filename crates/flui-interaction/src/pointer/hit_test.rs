@@ -13,7 +13,7 @@ pub use flui_foundation::RenderId;
 use flui_foundation::geometry::{Matrix4, Offset, Point};
 use flui_platform::pointer::{
     ButtonChange, PanZoomEvent, PointerMove, PointerPosition, PointerSample, ScrollDelta,
-    ScrollEvent, ScrollUnit, SmartZoomEvent,
+    ScrollEvent, ScrollUnit, SmartZoomEvent, SwipeOffset, TouchpadSwipeEvent, TouchpadSwipePhase,
 };
 
 use crate::{
@@ -1089,9 +1089,18 @@ pub(crate) fn transform_pointer_event(
         PointerEvent::Scroll(event) => *event = transform_scroll_event(event, transform)?,
         PointerEvent::PanZoom(event) => *event = transform_pan_zoom_event(event, transform)?,
         PointerEvent::SmartZoom(event) => *event = transform_smart_zoom_event(event, transform)?,
-        PointerEvent::Enter(event)
-        | PointerEvent::Leave(event)
-        | PointerEvent::ScrollInertiaCancel(event) => {
+        PointerEvent::TouchpadHold(event) => {
+            event.position = transform_position(event.position, transform)?;
+        }
+        PointerEvent::TouchpadSwipe(event) => *event = transform_swipe_event(event, transform)?,
+        PointerEvent::Enter(event) | PointerEvent::Leave(event) => {
+            if let Some(position) = event.position {
+                event.position = Some(transform_position(position, transform)?);
+            }
+        }
+        // The resting point is localized; the delta is the device's motion,
+        // which no transform of the content changes.
+        PointerEvent::RawMotion(event) => {
             if let Some(position) = event.position {
                 event.position = Some(transform_position(position, transform)?);
             }
@@ -1148,6 +1157,20 @@ fn transform_smart_zoom_event(
 ) -> Option<SmartZoomEvent> {
     let mut local = *event;
     local.position = transform_position(event.position, transform)?;
+    Some(local)
+}
+
+/// Localize where the pointer rests and the travel, a displacement from that point.
+pub(crate) fn transform_swipe_event(
+    event: &TouchpadSwipeEvent,
+    transform: &Matrix4,
+) -> Option<TouchpadSwipeEvent> {
+    let mut local = *event;
+    local.position = transform_position(event.position, transform)?;
+    if let TouchpadSwipePhase::Update(travel) = event.phase {
+        let travel = transform_delta(transform, event.position, travel.get())?;
+        local.phase = TouchpadSwipePhase::Update(SwipeOffset::try_new(travel).ok()?);
+    }
     Some(local)
 }
 

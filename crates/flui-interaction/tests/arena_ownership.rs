@@ -529,7 +529,7 @@ impl flui_platform::PlatformWindow for RedrawCounter {
 
     fn reveal_after_first_frame(&self) {}
 
-    fn set_cursor(&self, _: flui_platform::CursorIcon) -> Result<(), flui_platform::CursorError> {
+    fn set_cursor(&self, _: &flui_platform::Cursor) -> Result<(), flui_platform::CursorError> {
         Ok(())
     }
     fn state(&self) -> flui_platform::WindowState {
@@ -553,7 +553,7 @@ impl flui_platform::PlatformWindow for RedrawCounter {
         None
     }
 
-    fn haptics(&self) -> Option<std::sync::Arc<dyn flui_platform::PlatformHaptics>> {
+    fn haptics(&self) -> Option<std::sync::Arc<dyn flui_platform::haptics::PlatformHaptics>> {
         None
     }
 

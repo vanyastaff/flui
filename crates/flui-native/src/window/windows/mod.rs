@@ -15,6 +15,11 @@
 //!   a maximized window without the system's title bar leaves their edge;
 //! - [`material`]: the pure half too: from which build the window draws a
 //!   material behind it;
+//! - [`sizing`]: the pure half too: the steps and the proportion a window
+//!   keeps while the user drags its frame, which Win32 has neither of;
+//! - `cursor`: the cursor the window shows and how it holds the pointer;
+//! - `holds`: the window context's grab and `WM_SIZING` handling, over
+//!   `cursor` and `sizing`;
 //! - `window`: [`WindowsWindow`], the handle a host hands out, how it opens
 //!   and what its commands ask of the OS;
 //! - `set`: [`WindowSet`], the windows of a platform, which the loop holds as
@@ -47,7 +52,13 @@ pub(crate) mod chrome;
 mod cloak;
 #[cfg(windows)]
 mod close;
+#[cfg(windows)]
+mod cursor;
 pub(crate) mod frame_timing;
+#[cfg(windows)]
+mod geometry;
+#[cfg(windows)]
+mod holds;
 pub(crate) mod limits;
 #[cfg(windows)]
 pub(crate) mod proc;
@@ -57,6 +68,7 @@ mod record;
 mod rescale;
 #[cfg(windows)]
 mod set;
+pub(crate) mod sizing;
 #[cfg(windows)]
 mod window;
 
@@ -64,6 +76,8 @@ mod window;
 mod app_bar_tests;
 #[cfg(all(test, target_os = "windows"))]
 mod delivery_tests;
+#[cfg(all(test, target_os = "windows"))]
+mod geometry_tests;
 
 #[cfg(windows)]
 pub(crate) use cloak::CloakWatch;

@@ -2,8 +2,9 @@
 //! apart from the host so a table of inputs checks it.
 //!
 //! - [`OpenPlan`] turns the creation options into what the window system is
-//!   asked for: a physical position, a content size and an initial mode, as
-//!   far as the window's capabilities allow.
+//!   asked for: a desktop position, a content size at the scale of the display
+//!   the window opens on and an initial mode, as far as the window's
+//!   capabilities allow.
 //! - [`FrameInset`] is the frame around the content of a decorated window,
 //!   reported once a window with a frame is on screen, so a remembered outer
 //!   size can be fitted before the next window exists.
@@ -12,71 +13,28 @@
 
 use flui_foundation::geometry::{DevicePixelRatio, Point, Size};
 use flui_platform::{
-    DisplayId, DisplaySnapshot, WindowCapabilities, WindowGeometry, WindowMode, WindowOptions,
+    DisplaySnapshot, WindowCapabilities, WindowGeometry, WindowMode, WindowOptions, WindowPosition,
     WindowReveal,
 };
 use parking_lot::Mutex;
 
-/// The display a window is placed on: where its origin is in the global
-/// device-pixel space, and how many device pixels make a logical one.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) struct PlacementDisplay {
-    pub origin: Point<i32>,
-    pub scale_factor: DevicePixelRatio,
-}
-
-impl PlacementDisplay {
-    /// `geometry`, measured from this display's usable origin in its logical
-    /// pixels, as the global logical rectangle a window state publishes.
-    fn to_global(self, geometry: WindowGeometry) -> WindowGeometry {
-        let ratio = self.scale_factor;
-        let origin = Point::new(
-            ratio.to_logical(f64::from(self.origin.x)),
-            ratio.to_logical(f64::from(self.origin.y)),
-        );
-        // A sum that leaves the finite numbers moves nothing.
-        geometry
-            .at(geometry
-                .position()
-                .map(|at| Point::new(at.x + origin.x, at.y + origin.y)))
-            .unwrap_or(geometry)
-    }
-
-    /// The display options measure their position on: the one `wanted` names
-    /// if the snapshot holds it, else global coordinates (origin zero) at the
-    /// primary display's scale.
-    ///
-    /// A named display's origin is that of its **usable area**, which is what
-    /// `WindowPlacement` measures a remembered offset from: a window on a
-    /// display with a panel along its top reopens below the panel, not under
-    /// it.
-    pub(crate) fn choose(snapshot: Option<&DisplaySnapshot>, wanted: Option<DisplayId>) -> Self {
-        let named = snapshot
-            .zip(wanted)
-            .and_then(|(snapshot, id)| snapshot.get(id));
-        match named {
-            Some(display) => Self {
-                origin: display.usable_bounds.origin,
-                scale_factor: display.scale_factor,
-            },
-            None => Self {
-                origin: Point::new(0, 0),
-                scale_factor: snapshot
-                    .and_then(DisplaySnapshot::primary)
-                    .map_or(DevicePixelRatio::ONE, |display| display.scale_factor),
-            },
-        }
-    }
-}
+use crate::window::desktop::DisplayFrame;
 
 /// What the window system is asked for when a window is created.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct OpenPlan {
-    /// The outer top-left corner in global device pixels; `None` lets the
-    /// window manager place the window.
+    /// The outer top-left corner in the desktop's device pixels; `None` lets
+    /// the window manager place the window.
     pub position: Option<Point<i32>>,
+    /// Where [`position`](Self::position) is, read back on the display it was
+    /// converted through: the position a window created there has before
+    /// the window system first reports it. `None` exactly when `position` is.
+    pub placed: Option<WindowPosition>,
     /// The content size in logical pixels.
     pub content_size: Size<f64>,
+    /// The scale the content is sized at: that of the display the window
+    /// opens on, else the primary display's.
+    pub scale: DevicePixelRatio,
     /// The mode the window opens in. Minimized is not one: a window cannot be
     /// created minimized, so it opens in [`WindowMode::Normal`].
     pub mode: WindowMode,
@@ -93,8 +51,8 @@ pub(crate) struct OpenPlan {
     /// its properties like any other unmapped window's, and it stays unmapped
     /// until the application shows it.
     pub hidden_by_application: bool,
-    /// The rectangle the window returns to from `mode`, in global logical
-    /// pixels, when it opens
+    /// The rectangle the window returns to from `mode`, as the window state
+    /// publishes it (its position on its own display), when it opens
     /// maximized or fullscreen with one remembered.
     pub normal_geometry: Option<WindowGeometry>,
 }
@@ -113,11 +71,17 @@ impl OpenPlan {
         self.created_unmapped() || self.hidden_by_application
     }
 
-    /// Plan the creation of a window with `capabilities` from `options`.
+    /// Plan the creation of a window with `capabilities` from `options`, on
+    /// the displays of `snapshot`.
     ///
-    /// `display` is the display the options measure their position on, or the
-    /// primary one when they name none or it is gone. `inset` is the frame
-    /// around the content of a decorated window, which turns a remembered
+    /// The window opens on the display its position names (the position of
+    /// the rectangle it returns to, for a window that opens maximized or
+    /// fullscreen), converted through that display's origin and scale
+    /// ([`DisplayFrame`]); a position on a display the snapshot does not hold,
+    /// or past the desktop's coordinates, places nothing, and the window
+    /// manager places the window. Its content is sized at that display's
+    /// scale, else the primary display's. `inset` is the frame around the
+    /// content of a decorated window at a scale, which turns a remembered
     /// outer size into a content size.
     ///
     /// A window that opens maximized or fullscreen is created with the
@@ -129,8 +93,8 @@ impl OpenPlan {
         options: &WindowOptions,
         opening: &flui_platform::OpeningGeometry,
         capabilities: &WindowCapabilities,
-        display: PlacementDisplay,
-        inset: Size<f64>,
+        snapshot: Option<&DisplaySnapshot>,
+        inset: impl FnOnce(DevicePixelRatio) -> Size<f64>,
     ) -> Self {
         let mode = match options.mode {
             WindowMode::Maximized if capabilities.maximizes().is_available() => {
@@ -145,59 +109,62 @@ impl OpenPlan {
             WindowMode::Maximized | WindowMode::Fullscreen => options.normal_geometry,
             _ => None,
         };
+        let at = match returns_to {
+            Some(geometry) => geometry.position(),
+            None => opening.position,
+        };
+        let frame_of = |position: WindowPosition| {
+            snapshot.and_then(|snapshot| DisplayFrame::find(snapshot, position.display()))
+        };
+        let frame = at.and_then(frame_of);
+        let scale = frame.map_or_else(
+            || {
+                snapshot
+                    .and_then(DisplaySnapshot::primary)
+                    .map_or(DevicePixelRatio::ONE, |display| display.scale_factor)
+            },
+            DisplayFrame::scale,
+        );
         // A window without the system's frame has none to take from a remembered
         // outer size, whatever the framed windows before it measured.
         let inset = if options.frame.at_open(capabilities).has_system_title_bar() {
-            inset
+            inset(scale)
         } else {
             Size::new(0.0, 0.0)
         };
-        let (at, content_size) = match returns_to {
-            Some(geometry) => (
-                geometry.position(),
-                Size::new(
-                    (geometry.size().width - inset.width).max(1.0),
-                    (geometry.size().height - inset.height).max(1.0),
-                ),
+        let content_size = match returns_to {
+            Some(geometry) => Size::new(
+                (geometry.size().width - inset.width).max(1.0),
+                (geometry.size().height - inset.height).max(1.0),
             ),
-            None => (opening.position, opening.content.get()),
+            None => opening.content.get(),
         };
         let hidden_until_first_frame =
             options.visible && options.reveal == WindowReveal::AfterFirstFrame;
-        let position = if capabilities.places_at_open().is_available() {
-            at.and_then(|at| device_position(at, display))
+        let placed = if capabilities.places_at_open().is_available() {
+            at.zip(frame).and_then(|(at, frame)| {
+                let pixel = frame.to_desktop(at.at())?;
+                Some((pixel, frame.position(pixel)?))
+            })
         } else {
             None
         };
         Self {
-            position,
+            position: placed.map(|(pixel, _)| pixel),
+            placed: placed.map(|(_, position)| position),
             content_size,
+            scale,
             mode,
             hidden_until_first_frame,
             map_after_setup: options.visible
                 && !hidden_until_first_frame
                 && mode != WindowMode::Normal,
             hidden_by_application: !options.visible,
-            normal_geometry: returns_to.map(|geometry| display.to_global(geometry)),
+            // Its position is already measured on its own display, as the
+            // window state publishes it.
+            normal_geometry: returns_to,
         }
     }
-}
-
-/// `at`, in logical pixels from `display`'s origin, as global device pixels.
-/// `None` for a position that is not a finite number of pixels an X11 or Win32
-/// coordinate can hold.
-fn device_position(at: Point<f64>, display: PlacementDisplay) -> Option<Point<i32>> {
-    let device = |offset: f64, origin: i32| {
-        let pixels = display.scale_factor.to_device(offset).round() + f64::from(origin);
-        // Not `as`: a value past the range saturates silently, and a placement
-        // that far from every display is a bad one, not one to clamp.
-        (pixels.is_finite() && pixels >= f64::from(i32::MIN) && pixels <= f64::from(i32::MAX))
-            .then_some(pixels as i32)
-    };
-    Some(Point::new(
-        device(at.x, display.origin.x)?,
-        device(at.y, display.origin.y)?,
-    ))
 }
 
 /// The frame a decorated window has around its content, in device pixels:
@@ -242,187 +209,159 @@ impl FrameInset {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::LazyLock;
+
+    use flui_foundation::geometry::Bounds;
+    use flui_platform::{
+        AppTitleBar, CapabilityAbsence, DisplayDescription, DisplayId, DisplayKey, DisplayRegistry,
+        WindowCommand, WindowExtent, WindowFrame,
+    };
+
     use super::*;
-    use flui_platform::{AppTitleBar, CapabilityAbsence, WindowCommand, WindowFrame};
 
     fn ratio(scale: f64) -> DevicePixelRatio {
         DevicePixelRatio::try_new(scale).expect("a positive ratio")
     }
 
-    const DISPLAY: PlacementDisplay = PlacementDisplay {
-        origin: Point { x: 1920, y: 0 },
-        scale_factor: DevicePixelRatio::ONE,
-    };
-
     const ALL: WindowCapabilities = WindowCapabilities::ALL;
+
+    /// A desktop of two displays: the primary at scale 2 with a 56-pixel
+    /// panel along its top, and one at scale 1 right of it.
+    struct Desk {
+        snapshot: DisplaySnapshot,
+        primary: DisplayId,
+        right: DisplayId,
+    }
+
+    static DESK: LazyLock<Desk> = LazyLock::new(|| {
+        let registry = DisplayRegistry::new();
+        let display = |key, x, scale, panel| {
+            let id = registry.mint(&DisplayKey::Injected(key)).expect("an id");
+            let bounds = Bounds::new(Point::new(x, 0), Size::new(1920, 1080));
+            let usable = Bounds::new(Point::new(x, panel), Size::new(1920, 1080 - panel));
+            DisplayDescription::from_device(id, "display", bounds, usable, ratio(scale))
+                .expect("a display")
+        };
+        let primary = display(1, 0, 2.0, 56).with_primary(true);
+        let right = display(2, 1920, 1.0, 0);
+        let (primary_id, right_id) = (primary.id, right.id);
+        Desk {
+            snapshot: DisplaySnapshot::empty()
+                .successor(vec![primary, right])
+                .expect("a snapshot"),
+            primary: primary_id,
+            right: right_id,
+        }
+    });
+
+    fn on(display: DisplayId, x: f64, y: f64) -> WindowPosition {
+        WindowPosition::try_new(display, Point::new(x, y)).expect("a finite point")
+    }
 
     fn options() -> WindowOptions {
         WindowOptions::default()
-            .size(Size::new(800.0, 600.0))
-            .position(Some(Point::new(100.0, 50.0)))
+            .size(WindowExtent::try_new(Size::new(800.0, 600.0)).expect("an extent"))
+            .position(Some(on(DESK.right, 100.0, 50.0)))
     }
 
-    fn geometry(position: Option<Point<f64>>, size: Size<f64>) -> WindowGeometry {
+    fn geometry(position: Option<WindowPosition>, size: Size<f64>) -> WindowGeometry {
         WindowGeometry::try_new(position, size).expect("a finite rectangle")
     }
 
-    /// The checked numbers `options` open a window at.
-    fn geometry_of(options: &WindowOptions) -> flui_platform::OpeningGeometry {
-        options.geometry().expect("valid options")
-    }
-
-    fn plan(options: &WindowOptions) -> OpenPlan {
+    /// The plan of `options` on the desk, with `capabilities` and a frame of
+    /// `frame` logical pixels at every scale.
+    fn plan_with(
+        options: &WindowOptions,
+        capabilities: &WindowCapabilities,
+        frame: Size<f64>,
+    ) -> OpenPlan {
+        let opening = options.geometry().expect("valid options");
         OpenPlan::new(
             options,
-            &geometry_of(options),
-            &ALL,
-            DISPLAY,
-            Size::new(0.0, 0.0),
+            &opening,
+            capabilities,
+            Some(&DESK.snapshot),
+            |_| frame,
         )
     }
 
-    #[test]
-    fn placement_display_is_measured_from_the_usable_area() {
-        use flui_foundation::geometry::Bounds;
-        use flui_platform::{DisplayInfo, DisplayKey, DisplayRegistry};
-
-        let registry = DisplayRegistry::new();
-        let id = |_| registry.mint(&DisplayKey::Unkeyed).expect("an id");
-        // A 1920x1080 display at scale 2 with a 56-pixel panel along its top.
-        let bounds = Bounds::new(Point::new(1920, 0), Size::new(1920, 1080));
-        let usable = Bounds::new(Point::new(1920, 56), Size::new(1920, 1024));
-        let main = DisplayInfo::new(id(0), "main", bounds, ratio(2.0))
-            .with_usable_bounds(usable)
-            .with_primary(true);
-        let other = DisplayInfo::new(id(1), "other", bounds, DevicePixelRatio::ONE);
-        let (main_id, other_id) = (main.id, other.id);
-        let snapshot = DisplaySnapshot::empty()
-            .successor(vec![main, other])
-            .expect("a snapshot");
-
-        // (case, wanted display, display placed on)
-        let table = [
-            (
-                "a named display: its usable origin and scale",
-                Some(main_id),
-                PlacementDisplay {
-                    origin: Point::new(1920, 56),
-                    scale_factor: ratio(2.0),
-                },
-            ),
-            (
-                "a named display with no panel",
-                Some(other_id),
-                PlacementDisplay {
-                    origin: Point::new(1920, 0),
-                    scale_factor: DevicePixelRatio::ONE,
-                },
-            ),
-            (
-                "none named: global, at the primary scale",
-                None,
-                PlacementDisplay {
-                    origin: Point::new(0, 0),
-                    scale_factor: ratio(2.0),
-                },
-            ),
-        ];
-        for (case, wanted, expected) in table {
-            assert_eq!(
-                PlacementDisplay::choose(Some(&snapshot), wanted),
-                expected,
-                "{case}"
-            );
-        }
-        let gone = registry.mint(&DisplayKey::Unkeyed).expect("an id");
-        assert_eq!(
-            PlacementDisplay::choose(Some(&snapshot), Some(gone)).origin,
-            Point::new(0, 0),
-            "a display that is gone"
-        );
-        assert_eq!(
-            PlacementDisplay::choose(None, Some(main_id)),
-            PlacementDisplay {
-                origin: Point::new(0, 0),
-                scale_factor: DevicePixelRatio::ONE,
-            },
-            "no snapshot"
-        );
-
-        // A window 100 logical pixels below the top of the display is saved as
-        // an offset from the usable area and reopens where it was.
-        let main_display = PlacementDisplay::choose(Some(&snapshot), Some(main_id));
-        let options = options().position(Some(Point::new(10.0, 22.0)));
-        let planned = OpenPlan::new(
-            &options,
-            &geometry_of(&options),
-            &ALL,
-            main_display,
-            Size::new(0.0, 0.0),
-        );
-        assert_eq!(planned.position, Some(Point::new(1940, 100)));
+    fn plan(options: &WindowOptions) -> OpenPlan {
+        plan_with(options, &ALL, Size::new(0.0, 0.0))
     }
 
+    /// A position is a point of its own display: it converts through that
+    /// display's origin and scale, the content is sized at that display's
+    /// scale, and a position on a display the snapshot does not hold, or past
+    /// the desktop's coordinates, places nothing.
     #[test]
     fn open_plan_places_by_display_origin_and_scale() {
-        // (case, position, display, device position)
-        let scaled = PlacementDisplay {
-            origin: Point::new(-2560, 100),
-            scale_factor: ratio(1.5),
-        };
+        let gone = DisplayRegistry::new()
+            .mint(&DisplayKey::Injected(9))
+            .expect("an id");
+        // (case, position, device position, scale)
         let table = [
             (
-                "on the origin display",
-                Some(Point::new(100.0, 50.0)),
-                DISPLAY,
+                "on the right display at scale one",
+                Some(on(DESK.right, 100.0, 50.0)),
                 Some(Point::new(2020, 50)),
+                1.0,
             ),
             (
-                "scaled, left of the origin",
-                Some(Point::new(10.0, 10.0)),
-                scaled,
-                Some(Point::new(-2545, 115)),
+                "on the primary at scale two, from its corner, not its panel",
+                Some(on(DESK.primary, 10.0, 22.0)),
+                Some(Point::new(20, 44)),
+                2.0,
             ),
             (
-                "fractions round",
-                Some(Point::new(0.4, 0.6)),
-                DISPLAY,
+                "left of the right display, on the primary's pixels",
+                Some(on(DESK.right, -300.0, 10.0)),
+                Some(Point::new(1620, 10)),
+                1.0,
+            ),
+            (
+                "fractions snap",
+                Some(on(DESK.right, 0.4, 0.6)),
                 Some(Point::new(1920, 1)),
+                1.0,
             ),
-            ("no position", None, DISPLAY, None),
-            // A position that is not finite is refused with the options
-            // (`WindowOptions::geometry`); a finite one can still leave the
-            // finite numbers once it is scaled.
+            ("no position: the primary's scale", None, None, 2.0),
+            (
+                "a display that is gone",
+                Some(on(gone, 10.0, 10.0)),
+                None,
+                2.0,
+            ),
             (
                 "scaled past every number",
-                Some(Point::new(f64::MAX, 0.0)),
-                scaled,
+                Some(on(DESK.primary, f64::MAX, 0.0)),
                 None,
+                2.0,
             ),
             (
                 "past the coordinate range",
-                Some(Point::new(3.0e9, 0.0)),
-                DISPLAY,
+                Some(on(DESK.right, 3.0e9, 0.0)),
                 None,
-            ),
-            (
-                "before the coordinate range",
-                Some(Point::new(-3.0e9, 0.0)),
-                DISPLAY,
-                None,
+                1.0,
             ),
         ];
-        for (case, position, display, expected) in table {
-            let options = options().position(position);
-            let planned = OpenPlan::new(
-                &options,
-                &geometry_of(&options),
-                &ALL,
-                display,
-                Size::new(0.0, 0.0),
-            );
+        for (case, position, expected, scale) in table {
+            let planned = plan(&options().position(position));
             assert_eq!(planned.position, expected, "{case}");
+            assert_eq!(planned.scale, ratio(scale), "{case}: scale");
+            // What the window has before its first report is where it was
+            // created, on the display it was converted through.
+            assert_eq!(
+                planned.placed.map(WindowPosition::display),
+                expected.and(position.map(WindowPosition::display)),
+                "{case}: placed on its display"
+            );
         }
+        let snapped = plan(&options().position(Some(on(DESK.right, 0.4, 0.6))));
+        assert_eq!(
+            snapped.placed,
+            Some(on(DESK.right, 0.0, 1.0)),
+            "the pixel it was created at"
+        );
     }
 
     #[test]
@@ -430,14 +369,9 @@ mod tests {
         let mut capabilities = ALL.into_parts();
         capabilities.places_at_open = flui_platform::Availability::Unavailable;
         let capabilities = capabilities.into_capabilities();
-        let planned = OpenPlan::new(
-            &options(),
-            &geometry_of(&options()),
-            &capabilities,
-            DISPLAY,
-            Size::new(0.0, 0.0),
-        );
+        let planned = plan_with(&options(), &capabilities, Size::new(0.0, 0.0));
         assert_eq!(planned.position, None);
+        assert_eq!(planned.placed, None, "no position it was not created at");
         assert_eq!(planned.content_size, Size::new(800.0, 600.0));
     }
 
@@ -482,77 +416,54 @@ mod tests {
             ),
         ];
         for (case, mode, capabilities, expected) in table {
-            let options = options().mode(mode);
-            let planned = OpenPlan::new(
-                &options,
-                &geometry_of(&options),
-                &capabilities,
-                DISPLAY,
-                Size::new(0.0, 0.0),
-            );
+            let planned = plan_with(&options().mode(mode), &capabilities, Size::new(0.0, 0.0));
             assert_eq!(planned.mode, expected, "{case}");
         }
     }
 
     #[test]
     fn open_plan_opens_a_maximized_window_at_the_rectangle_it_returns_to() {
-        let returns_to = geometry(Some(Point::new(300.0, 200.0)), Size::new(1000.0, 700.0));
+        let returns_to = geometry(Some(on(DESK.right, 300.0, 200.0)), Size::new(1000.0, 700.0));
         let frame = Size::new(2.0, 30.0);
         let maximized = options()
             .mode(WindowMode::Maximized)
             .normal_geometry(Some(returns_to));
 
-        let planned = OpenPlan::new(&maximized, &geometry_of(&maximized), &ALL, DISPLAY, frame);
+        let planned = plan_with(&maximized, &ALL, frame);
         assert_eq!(planned.position, Some(Point::new(2220, 200)));
         assert_eq!(
             planned.content_size,
             Size::new(998.0, 670.0),
             "outer less the frame"
         );
-        // The state publishes global positions, whatever display the options
-        // measured theirs from.
-        assert_eq!(
-            planned.normal_geometry,
-            Some(geometry(
-                Some(Point::new(2220.0, 200.0)),
-                Size::new(1000.0, 700.0)
-            ))
-        );
+        // The state publishes the rectangle on its own display, as the
+        // options gave it.
+        assert_eq!(planned.normal_geometry, Some(returns_to));
 
-        // On a scaled display the usable origin is in device pixels.
-        let scaled = PlacementDisplay {
-            origin: Point::new(1920, 56),
-            scale_factor: ratio(2.0),
-        };
-        let relative = geometry(Some(Point::new(100.0, 50.0)), Size::new(1000.0, 700.0));
+        // On a scaled display the rectangle's position converts through that
+        // display's scale, and its content is sized at it.
         let on_scaled = options()
             .mode(WindowMode::Maximized)
-            .normal_geometry(Some(relative));
-        let planned = OpenPlan::new(
-            &on_scaled,
-            &geometry_of(&on_scaled),
-            &ALL,
-            scaled,
-            Size::new(0.0, 0.0),
-        );
-        assert_eq!(
-            planned.normal_geometry.and_then(WindowGeometry::position),
-            Some(Point::new(1060.0, 78.0))
-        );
+            .normal_geometry(Some(geometry(
+                Some(on(DESK.primary, 100.0, 50.0)),
+                Size::new(1000.0, 700.0),
+            )));
+        let planned = plan(&on_scaled);
+        assert_eq!(planned.position, Some(Point::new(200, 100)));
+        assert_eq!(planned.scale, ratio(2.0));
 
         // A normal window ignores the rectangle it has no use for.
         let normal = options().normal_geometry(Some(returns_to));
-        let planned = OpenPlan::new(&normal, &geometry_of(&normal), &ALL, DISPLAY, frame);
+        let planned = plan_with(&normal, &ALL, frame);
         assert_eq!(planned.position, Some(Point::new(2020, 50)));
         assert_eq!(planned.content_size, Size::new(800.0, 600.0));
         assert_eq!(planned.normal_geometry, None);
 
         // A rectangle smaller than the frame still has a content area.
-        let tiny = geometry(None, Size::new(1.0, 1.0));
         let tiny = options()
             .mode(WindowMode::Fullscreen)
-            .normal_geometry(Some(tiny));
-        let planned = OpenPlan::new(&tiny, &geometry_of(&tiny), &ALL, DISPLAY, frame);
+            .normal_geometry(Some(geometry(None, Size::new(1.0, 1.0))));
+        let planned = plan_with(&tiny, &ALL, frame);
         assert_eq!(planned.content_size, Size::new(1.0, 1.0));
         assert_eq!(
             planned.position, None,
@@ -562,7 +473,7 @@ mod tests {
 
     #[test]
     fn open_plan_takes_no_frame_from_a_window_without_the_systems() {
-        let returns_to = geometry(Some(Point::new(300.0, 200.0)), Size::new(1000.0, 700.0));
+        let returns_to = geometry(Some(on(DESK.right, 300.0, 200.0)), Size::new(1000.0, 700.0));
         let frame = Size::new(2.0, 30.0);
         // (case, frame asked for, content size)
         let table = [
@@ -579,7 +490,7 @@ mod tests {
                 .frame(frame_asked)
                 .mode(WindowMode::Maximized)
                 .normal_geometry(Some(returns_to));
-            let planned = OpenPlan::new(&options, &geometry_of(&options), &ALL, DISPLAY, frame);
+            let planned = plan_with(&options, &ALL, frame);
             assert_eq!(planned.content_size, expected, "{case}");
         }
     }

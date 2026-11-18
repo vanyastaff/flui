@@ -28,7 +28,6 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
-use cursor_icon::CursorIcon;
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2::runtime::ProtocolObject;
@@ -78,7 +77,7 @@ use flui_platform::{
     WindowState,
 };
 use flui_platform::{
-    CursorError, PlatformWindow, RedrawRequester, SurfaceChange, SurfaceTarget,
+    Cursor, CursorError, PlatformWindow, RedrawRequester, SurfaceChange, SurfaceTarget,
     WindowExecutionState, WindowId, WindowOptions,
 };
 use status_bar::FluiViewController;
@@ -1523,6 +1522,9 @@ impl IOSWindow {
                 // The user can resize a scene in Stage Manager or split view,
                 // which this host does not read: it cannot tell.
                 interaction: flui_platform::WindowInteraction::Unknown,
+                // The scene takes no grab and is stacked by the system.
+                cursor_grab: flui_platform::CursorGrab::None,
+                level: flui_platform::WindowLevel::Normal,
             }
             .onto(state)
         });
@@ -1879,7 +1881,7 @@ impl PlatformWindow for IOSWindow {
         })
     }
 
-    fn haptics(&self) -> Option<Arc<dyn flui_platform::PlatformHaptics>> {
+    fn haptics(&self) -> Option<Arc<dyn flui_platform::haptics::PlatformHaptics>> {
         Some(Arc::clone(&self.facets.haptics))
     }
 
@@ -1963,9 +1965,9 @@ impl PlatformWindow for IOSWindow {
         None
     }
 
-    /// Not set: an iPhone shows no pointer, and an iPad's pointer style is not
-    /// chosen by this host yet (`pointer_absence`).
-    fn set_cursor(&self, _cursor: CursorIcon) -> Result<(), CursorError> {
+    /// Not set, whichever cursor: an iPhone shows no pointer, and an iPad's
+    /// pointer style is not chosen by this host yet (`pointer_absence`).
+    fn set_cursor(&self, _cursor: &Cursor) -> Result<(), CursorError> {
         Err(flui_platform::Unsupported::from(self.pointer).into())
     }
 
@@ -1974,15 +1976,17 @@ impl PlatformWindow for IOSWindow {
             return Err(ApplyError::Closed);
         }
         // The system owns the surface: admission refuses every command but a
-        // close and the normal mode, which the scene is always in. A scene
-        // cannot bring itself to the foreground: the user and the system
-        // decide which app is shown.
+        // close and what the scene always is: the normal mode and level, and
+        // no grab, which it never takes. A scene cannot bring itself to the
+        // foreground: the user and the system decide which app is shown.
         match command.against(&self.snapshot.published_capabilities())? {
             WindowCommand::Close => {
                 crate::owner::apple::ios::request_close(self.id);
                 Ok(())
             }
-            WindowCommand::SetMode(flui_platform::WindowMode::Normal) => Ok(()),
+            WindowCommand::SetMode(flui_platform::WindowMode::Normal)
+            | WindowCommand::SetLevel(flui_platform::WindowLevel::Normal)
+            | WindowCommand::SetCursorGrab(flui_platform::CursorGrab::None) => Ok(()),
             other => Err(crate::window::state::not_carried_out(&other)),
         }
     }

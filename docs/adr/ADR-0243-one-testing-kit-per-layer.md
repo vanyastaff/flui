@@ -12,7 +12,7 @@
 `docs/testing.md` maps the test support as a stack and says to pick the shallowest tier that can
 fail for the reason that matters. Nothing enforces it, and the tree has drifted. The feature that
 exposes a crate's test support is `testing` in eight crates, `test-support` in `flui-runtime` and
-`test-utils` in `flui-view`. Tests that could use `HeadlessBinding` or `lay_out` carry their own
+`test-utils` in `flui-view`. Tests that could use `HeadlessHost` or `lay_out` carry their own
 `pump` or `advance` in `flui-widgets`, `flui-runtime`, `flui-interaction` and `flui-animation`. A view
 that counts its builds is written again in more than ten test files while `flui-testing` ships
 `ProbeRoot`, two crates each define a `RecordingTextInput`, and `flui-app` and `flui-engine` keep
@@ -29,7 +29,7 @@ a feature: that holds from the frame layer up, and a crate below `flui-testing` 
 behind `testing`. The guide is amended in the same change.
 
 **D2 — One kit per layer.** Each layer has one kit, `<crate>::testing`, built on the kit of the layer
-below. From the frame layer up it is `flui-testing` (`HeadlessBinding`, `HeadlessHost`, `lay_out`).
+below. From the frame layer up it is `flui-testing` (`HeadlessHost`, `lay_out`, `Tester`).
 A crate below `flui-testing` may use it from `tests/` through a dev-dependency: the layer check
 skips dev-dependencies (`tools/xtask/src/workspace.rs`) and `flui-view` already does so. It cannot
 pass its own types to `flui-testing` from a unit test inside `src/`, because that test is built

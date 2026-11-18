@@ -30,7 +30,13 @@ its driver), Compose's `testTag`, Android `resource-id`, iOS `accessibilityIdent
    `data-flui-id` DOM attribute; that obligation is recorded in their gaps entries.
 3. The wire `Node` gains `identifier` (schema `0.5`), and `Locator.identifier` matches it exactly.
    When the OS reports an `automation_id` equal to the identifier, the normalized projection
-   (ADR-0095 §4) treats the two as one field.
+   (ADR-0095 §4) treats the two as one field. An identifier on a node the agent and the
+   AccessKit adapters lift into its parent (one with no role, label or text, or with the
+   `Generic` or `Presentation` role) is in no agent or OS automation tree, so no locator selects
+   it there; the web mirror still writes it as `data-flui-id` on the element it makes. A wire
+   read lists an `unpublished_identifier` diagnostic naming the node it is lifted into, a bounded
+   number per identifier and per read (schema `0.20`), and the testing kit's failure for it gives
+   the form that is found, a role on the node (as `Group`) or the identifier on the control.
 4. An identifier is unique among its siblings by contract, as AccessKit requires of `author_id`:
    an OS automation client matching it on two siblings finds only one. It need not be unique
    anywhere else, so a row template can name its "delete" button in every row. A clash is the
@@ -58,6 +64,8 @@ its driver), Compose's `testTag`, Android `resource-id`, iOS `accessibilityIdent
 
 - an identifier reaches the AccessKit node as `author_id`;
 - it is absent from the label and from a merged parent;
-- it does not create a boundary.
+- it does not create a boundary;
+- one on a node that publishes nothing else is reported beside a read
+  (`an_identifier_on_a_node_that_publishes_nothing_else_is_reported`).
 
 On Windows the a11y scenario reads it back as `AutomationId` through UIA.

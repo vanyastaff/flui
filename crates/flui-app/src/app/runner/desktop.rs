@@ -87,7 +87,8 @@ impl OpeningWindow {
             .and_then(RememberedPlacement::deadline)
     }
 
-    /// Open the window on `owner`: [`From<&AppConfig>`]'s options, where the
+    /// Open the window on `owner`: [`AppConfig::window_options`] among the
+    /// owner's displays, where the
     /// window was last time when it remembers a placement and the read found
     /// one in time, with the reveal deferred to the first presented frame.
     ///
@@ -95,15 +96,16 @@ impl OpeningWindow {
     /// `PlatformWindow::reveal_after_first_frame`, and
     /// [`install_desktop_window`] is what keeps it (the [`FirstReveal`]
     /// policy wired into its frame closure), so only the windows it installs
-    /// open this way. `run_direct` and the bare `open_secondary_window`
-    /// convert `AppConfig` directly and reveal at open, because nothing in
-    /// them would ever perform the reveal.
+    /// open this way. `run_direct` and the bare `open_secondary_window` take
+    /// the same options and reveal at open, because nothing in them would ever
+    /// perform the reveal.
     pub(super) fn open(
         &self,
         config: &AppConfig,
         owner: &flui_native::OwnerPlatform,
     ) -> Result<flui_native::WindowOpen, flui_native::OpenWindowError> {
-        let mut options = flui_platform::WindowOptions::from(config)
+        let mut options = config
+            .window_options(owner.display_snapshot().ok().as_ref())
             .reveal(flui_platform::WindowReveal::AfterFirstFrame);
         if let Some(remembered) = &self.remembered {
             remembered.restore_into(&mut options, owner);
@@ -158,7 +160,7 @@ where
     // below hands it the reveal on the first presented frame, or at the
     // policy's fallback bound. Its deadline joins the wake hook and the
     // dirty predicate like every other wake-deadline source here.
-    let first_reveal = Arc::new(FirstReveal::new());
+    let first_reveal = Rc::new(FirstReveal::new());
 
     let geometry = super::window_install::SurfaceGeometry::of(window.as_ref());
     let phys_size = geometry.physical;
@@ -245,11 +247,11 @@ where
     let owner_dispatch = installation.dispatcher();
     rollback.dispatcher = Some(owner_dispatch);
 
-    // 3c1. Wire this presentation into the close-request seam (issue
-    // #558): the application's own answer to "may this window close?",
-    // plus the entry that makes the window closable programmatically
-    // afterwards. One shared implementation with
-    // `open_secondary_window`'s window — see that function's own doc.
+    // 3c1. Wire this presentation into the close-request seam: the
+    // application's own answer to "may this window close?", plus the entry
+    // that makes the window closable programmatically afterwards. One shared
+    // implementation with `open_secondary_window`'s window — see that
+    // function's own doc.
     installation.close_requests(config.close_request_handler.clone());
 
     // 3c2. The frame-pacing fallback (ADR-0353): a non-blocking bound on
@@ -262,7 +264,7 @@ where
     // presentation's current refresh interval, which follows the display the
     // window is on (a mode switch, a move to another monitor, a display that
     // reports nothing) with or without a resize.
-    let fallback = Arc::new(FallbackWake::new());
+    let fallback = Rc::new(FallbackWake::new());
 
     // 3d. The window's wall-clock wake sources: the owner loop consults them
     // every idle iteration instead of blocking forever, so the pacing
@@ -270,9 +272,9 @@ where
     // is dirty (the raster work of the window is the loop's own term, in
     // `AppRuntime::next_wake`). Read only while this presentation's frames
     // are enabled.
-    let deadlines = Arc::new(DesktopWakeDeadlines {
-        fallback: Arc::clone(&fallback),
-        first_reveal: Arc::clone(&first_reveal),
+    let deadlines = Rc::new(DesktopWakeDeadlines {
+        fallback: Rc::clone(&fallback),
+        first_reveal: Rc::clone(&first_reveal),
     });
 
     // 4. The window's slot on the loop's raster executor (ADR-0305): the
@@ -441,7 +443,7 @@ where
 }
 
 pub(super) struct DesktopFrameDriver {
-    pub(super) deadlines: Arc<DesktopWakeDeadlines>,
+    pub(super) deadlines: Rc<DesktopWakeDeadlines>,
     raster: RasterSlot,
     worker_reload: WorkerReload,
     reveal_window: std::rc::Weak<dyn PlatformWindow>,
@@ -450,8 +452,8 @@ pub(super) struct DesktopFrameDriver {
 
 /// Presentation-owned pacing sources, retained even while its driver is leased.
 pub(super) struct DesktopWakeDeadlines {
-    pub(super) fallback: Arc<FallbackWake>,
-    pub(super) first_reveal: Arc<FirstReveal>,
+    pub(super) fallback: Rc<FallbackWake>,
+    pub(super) first_reveal: Rc<FirstReveal>,
 }
 
 impl DesktopWakeDeadlines {

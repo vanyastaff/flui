@@ -13,7 +13,7 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use flui_protocol::session::ClientRole;
-use flui_protocol::{RecordLayer, RecordParams, WindowId};
+use flui_protocol::{record::RecordLayer, record::RecordParams, tree::WindowId};
 
 use crate::agent::Credentials;
 use crate::agent::client::{Connection, Failure};

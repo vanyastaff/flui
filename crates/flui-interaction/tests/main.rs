@@ -67,3 +67,4 @@ mod haptics;
 mod input_sequences;
 mod replay_determinism;
 mod scroll_contact;
+mod touchpad_swipes;

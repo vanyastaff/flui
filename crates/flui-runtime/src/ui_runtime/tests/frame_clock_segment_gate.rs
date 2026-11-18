@@ -100,7 +100,7 @@ pub(crate) fn starting_an_idle_presentation_animation_requests_its_first_frame()
 
 pub(crate) fn agent_playback_drives_independent_windows_and_one_paused_step_frame() {
     use flui_animation::{Animation as _, AnimationController};
-    use flui_protocol::{MotionParams, MotionRequest, method};
+    use flui_protocol::{method, motion::MotionParams, motion::MotionRequest};
     use std::time::Duration;
 
     let mut runtime = mount_root_here();
@@ -233,6 +233,82 @@ pub(crate) fn agent_playback_drives_independent_windows_and_one_paused_step_fram
         "pausing animation leaves an independent widget build deliverable"
     );
     assert_eq!(a_owner.controller().value(), 0.6);
+}
+
+/// After a pause and a step, resuming the motion clock to normal speed wakes
+/// the window and produces the next frame, and the run advances again from
+/// where the step left it, at the raw time that passed since the resume.
+pub(crate) fn agent_playback_resumes_a_paused_stepped_run_at_normal_speed() {
+    use flui_animation::{Animation as _, AnimationController};
+    use flui_protocol::{method, motion::MotionParams, motion::MotionRequest};
+    use std::time::Duration;
+
+    let mut runtime = mount_root_here();
+    let a = runtime.presentation_id();
+    let window = runtime.dev_agent_window(a).expect("agent");
+    let edit = |runtime: &mut UiRuntime, request| {
+        let mut answer = window
+            .call::<method::MotionSet>(MotionParams::new(window.id(), request))
+            .expect("admitted");
+        assert_eq!(runtime.drain_commands().invoked, 1);
+        answer.try_take().expect("answered").expect("valid request")
+    };
+    let produced = |runtime: &UiRuntime| {
+        runtime
+            .presentations
+            .get(a)
+            .expect("presentation")
+            .clock()
+            .produced_count()
+    };
+    let owner =
+        AnimationController::builder(Duration::from_secs(1)).build_on(Some(&runtime.vsync()));
+    owner.controller().forward().expect("run");
+    let mut sink = ScriptedSink::always_presents();
+    runtime.set_now_secs_for_test(0.0);
+    let _ = runtime.render_frame(&mut sink);
+    runtime.set_now_secs_for_test(0.1);
+    let _ = runtime.render_frame(&mut sink);
+    assert!((owner.controller().value() - 0.1).abs() < 1e-9);
+
+    edit(&mut runtime, MotionRequest::new().rate(0.0));
+    edit(&mut runtime, MotionRequest::new().step_ms(100));
+    let _ = runtime.render_frame(&mut sink);
+    assert!((owner.controller().value() - 0.2).abs() < 1e-9);
+    runtime.set_now_secs_for_test(2.0);
+    let _ = runtime.render_frame(&mut sink);
+    let paused_frames = produced(&runtime);
+    runtime.mark_rendered();
+    assert!(
+        !runtime.needs_redraw(),
+        "the paused run, its step delivered, asks for no frame"
+    );
+
+    let resumed = edit(&mut runtime, MotionRequest::new().rate(1.0));
+    assert_eq!(resumed.rate, 1.0);
+    assert!(
+        runtime.needs_redraw(),
+        "the resume command wakes the runtime for a frame"
+    );
+    runtime.set_now_secs_for_test(2.3);
+    let _ = runtime.render_frame(&mut sink);
+    assert_eq!(
+        produced(&runtime),
+        paused_frames + 1,
+        "the requested frame is produced"
+    );
+    assert!(
+        (owner.controller().value() - 0.5).abs() < 1e-9,
+        "the run resumes from the step's 0.2 at the resume's raw time (value {})",
+        owner.controller().value()
+    );
+    runtime.set_now_secs_for_test(2.5);
+    let _ = runtime.render_frame(&mut sink);
+    assert!(
+        (owner.controller().value() - 0.7).abs() < 1e-9,
+        "the resumed clock keeps advancing at normal speed (value {})",
+        owner.controller().value()
+    );
 }
 
 pub(crate) fn gated_presentations_hold_samples_then_catch_up_when_visible() {

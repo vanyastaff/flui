@@ -5,7 +5,7 @@ use std::rc::Rc;
 use crate::widget_state::WidgetStatesController;
 use flui_foundation::geometry::Offset;
 use flui_objects::RenderMouseRegion;
-use flui_platform::pointer::PointerInfo;
+use flui_platform::pointer::PointerSource;
 use flui_rendering::hit_testing::{
     CursorIcon, CursorRequest, HitTestBehavior, MouseEnterCallback, MouseExitCallback,
     MouseHoverCallback, MouseRegionCallbacks,
@@ -17,12 +17,12 @@ use flui_view::{
 
 /// An enter, hover or exit callback, stored already adapted to report its
 /// outcome.
-type MouseCallback = Rc<dyn Fn(&mut EventContext<'_>, PointerInfo, Offset)>;
+type MouseCallback = Rc<dyn Fn(&mut EventContext<'_>, PointerSource, Offset)>;
 
 /// Store a mouse callback, adapted to report its outcome.
 fn mouse_callback<F, R>(callback: F) -> MouseCallback
 where
-    F: Fn(&mut EventContext<'_>, PointerInfo, Offset) -> R + 'static,
+    F: Fn(&mut EventContext<'_>, PointerSource, Offset) -> R + 'static,
     R: EventOutcome,
 {
     Rc::new(move |ctx: &mut EventContext<'_>, pointer, position| {
@@ -31,7 +31,7 @@ where
 }
 
 /// Wrap a stored callback into the lane's shape: one write per event.
-fn in_write(writer: &WriterSource, callback: &MouseCallback) -> Rc<dyn Fn(PointerInfo, Offset)> {
+fn in_write(writer: &WriterSource, callback: &MouseCallback) -> Rc<dyn Fn(PointerSource, Offset)> {
     let writer = writer.clone();
     let callback = Rc::clone(callback);
     Rc::new(move |pointer, position| writer.write(|ctx| callback(ctx, pointer, position)))
@@ -98,7 +98,7 @@ impl MouseRegion {
     #[must_use]
     pub fn on_enter<F, R>(mut self, callback: F) -> Self
     where
-        F: Fn(&mut EventContext<'_>, PointerInfo, Offset) -> R + 'static,
+        F: Fn(&mut EventContext<'_>, PointerSource, Offset) -> R + 'static,
         R: EventOutcome,
     {
         self.on_enter = Some(mouse_callback(callback));
@@ -109,7 +109,7 @@ impl MouseRegion {
     #[must_use]
     pub fn on_hover<F, R>(mut self, callback: F) -> Self
     where
-        F: Fn(&mut EventContext<'_>, PointerInfo, Offset) -> R + 'static,
+        F: Fn(&mut EventContext<'_>, PointerSource, Offset) -> R + 'static,
         R: EventOutcome,
     {
         self.on_hover = Some(mouse_callback(callback));
@@ -120,7 +120,7 @@ impl MouseRegion {
     #[must_use]
     pub fn on_exit<F, R>(mut self, callback: F) -> Self
     where
-        F: Fn(&mut EventContext<'_>, PointerInfo, Offset) -> R + 'static,
+        F: Fn(&mut EventContext<'_>, PointerSource, Offset) -> R + 'static,
         R: EventOutcome,
     {
         self.on_exit = Some(mouse_callback(callback));

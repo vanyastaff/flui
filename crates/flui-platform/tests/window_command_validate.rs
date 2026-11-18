@@ -3,12 +3,14 @@
 
 use flui_foundation::geometry::{EdgeInsets, Point, Size, WindowMetrics};
 use flui_platform::{
-    AdmissionError, AdmittedCommand, AppTitleBar, ApplyError, Availability, Brightness,
-    CapabilityAbsence, CapabilityParts, ControlsOffset, InvalidControlsOffset, InvalidGeometry,
-    KeyboardInset, SizeConstraints, SystemControls, Unsupported, UnsupportedReason,
-    WindowCapabilities, WindowCapability, WindowCommand, WindowExecutionState, WindowExtent,
-    WindowFocus, WindowFrame, WindowGeometry, WindowInsets, WindowMaterial, WindowMode,
-    WindowOption, WindowOptions, WindowRevision, WindowRevisionExhausted, WindowState,
+    AdmissionError, AdmittedCommand, AppTitleBar, ApplyError, AspectRatio, Availability,
+    Brightness, CapabilityAbsence, CapabilityParts, ControlsOffset, CursorGrab, DisplayId,
+    DisplayKey, DisplayRegistry, InvalidControlsOffset, InvalidGeometry, KeyboardInset,
+    SizeConstraints, SystemControls, Unsupported, UnsupportedReason, WindowCapabilities,
+    WindowCapability, WindowCommand, WindowExecutionState, WindowExtent, WindowFocus, WindowFrame,
+    WindowGeometry, WindowInsets, WindowInteraction, WindowLevel, WindowMaterial, WindowMode,
+    WindowOption, WindowOptions, WindowPosition, WindowRevision, WindowRevisionExhausted,
+    WindowState,
 };
 
 fn size(width: f64, height: f64) -> Size<f64> {
@@ -32,6 +34,13 @@ fn extent(width: f64, height: f64) -> WindowExtent {
     WindowExtent::try_new(size(width, height)).expect("an extent")
 }
 
+fn ratio(width: u32, height: u32) -> AspectRatio {
+    AspectRatio::new(
+        std::num::NonZeroU32::new(width).expect("a nonzero term"),
+        std::num::NonZeroU32::new(height).expect("a nonzero term"),
+    )
+}
+
 fn valid(command: &WindowCommand) {
     assert_eq!(command.validate(), Ok(()), "{command:?} describes a window");
 }
@@ -50,35 +59,55 @@ fn a_window_opens_with_balanced_input_unless_it_asks_for_low_latency() {
     );
 }
 
+/// One display for every position of these tests, so two snapshots read
+/// from the same numbers are equal.
+fn display() -> DisplayId {
+    static DISPLAY: std::sync::LazyLock<DisplayId> = std::sync::LazyLock::new(|| {
+        DisplayRegistry::new()
+            .mint(&DisplayKey::Injected(1))
+            .expect("an id")
+    });
+    *DISPLAY
+}
+
+fn at(x: f64, y: f64) -> WindowPosition {
+    WindowPosition::try_new(display(), Point::new(x, y)).expect("a finite point")
+}
+
+/// A position that is not finite cannot be put in a command at all: the
+/// position's own constructor refuses it, naming the numbers. Every position
+/// it builds describes a place, negative ones included.
 fn position_must_be_finite() {
     for (x, y) in [
         (f64::NAN, 0.0),
         (0.0, f64::INFINITY),
         (f64::NEG_INFINITY, 1.0),
     ] {
-        invalid(
-            &WindowCommand::SetPosition(Point::new(x, y)),
-            InvalidGeometry::Position { x, y },
+        assert_eq!(
+            WindowPosition::try_new(display(), Point::new(x, y)),
+            Err(InvalidGeometry::Position { x, y }),
         );
     }
-    valid(&WindowCommand::SetPosition(Point::new(-1920.0, -40.0)));
+    valid(&WindowCommand::SetPosition(at(-1920.0, -40.0)));
 }
 
+/// A size that is no extent cannot be put in a command; one with no area is
+/// refused at admission.
 fn size_must_be_finite_and_positive() {
     invalid(
-        &WindowCommand::SetSize(size(0.0, 100.0)),
+        &WindowCommand::SetSize(extent(0.0, 100.0)),
         InvalidGeometry::Empty {
             width: 0.0,
             height: 100.0,
         },
     );
     for (width, height) in [(100.0, -1.0), (f64::NAN, 100.0), (100.0, f64::INFINITY)] {
-        invalid(
-            &WindowCommand::SetSize(size(width, height)),
-            InvalidGeometry::Extent { width, height },
+        assert_eq!(
+            WindowExtent::try_new(size(width, height)),
+            Err(InvalidGeometry::Extent { width, height }),
         );
     }
-    valid(&WindowCommand::SetSize(size(1.0, 1.0)));
+    valid(&WindowCommand::SetSize(extent(1.0, 1.0)));
 }
 
 /// A limit with no area is refused at admission; one that is no extent at all
@@ -176,12 +205,7 @@ fn an_opening_is_refused_for_what_a_command_is_refused_for() {
             "{min:?} {max:?}"
         );
     }
-    for asked in [
-        size(0.0, 600.0),
-        size(f64::NAN, 600.0),
-        size(800.0, -1.0),
-        size(800.0, 600.0),
-    ] {
+    for asked in [extent(0.0, 600.0), extent(800.0, 0.0), extent(800.0, 600.0)] {
         let options = WindowOptions::default().size(asked);
         assert_eq!(
             named(&options),
@@ -189,19 +213,14 @@ fn an_opening_is_refused_for_what_a_command_is_refused_for() {
             "{asked:?}"
         );
     }
-    for at in [
-        Point::new(f64::NAN, 0.0),
-        Point::new(0.0, f64::INFINITY),
-        Point::new(-1920.0, 40.0),
-    ] {
-        let options = WindowOptions::default().position(Some(at));
-        assert_eq!(
-            named(&options),
-            refusal(WindowCommand::SetPosition(at))
-                .map(|refused| (WindowOption::Position, refused)),
-            "{at:?}"
-        );
-    }
+    // A position is a place by its type, at open as in a command.
+    let options = WindowOptions::default().position(Some(at(-1920.0, 40.0)));
+    assert_eq!(named(&options), None);
+    assert_eq!(refusal(WindowCommand::SetPosition(at(-1920.0, 40.0))), None);
+    assert_eq!(
+        options.geometry().map(|opening| opening.position),
+        Ok(Some(at(-1920.0, 40.0)))
+    );
 }
 
 fn open_or_absent_constraints_are_valid() {
@@ -293,12 +312,37 @@ fn admits(
 }
 
 fn admit_refuses_exactly_when_the_capability_is_unavailable() {
-    let rows: [(WindowCommand, Capability); 16] = [
+    let rows: [(WindowCommand, Capability); 24] = [
+        (WindowCommand::SetCursorGrab(CursorGrab::Confined), |c| {
+            &mut c.confines_cursor
+        }),
+        (WindowCommand::SetCursorGrab(CursorGrab::Locked), |c| {
+            &mut c.locks_cursor
+        }),
+        (WindowCommand::SetLevel(WindowLevel::AlwaysOnTop), |c| {
+            &mut c.keeps_on_top
+        }),
+        (WindowCommand::SetLevel(WindowLevel::AlwaysOnBottom), |c| {
+            &mut c.keeps_on_bottom
+        }),
+        (
+            WindowCommand::SetResizeIncrements(Some(extent(8.0, 16.0))),
+            |c| &mut c.sets_resize_increments,
+        ),
+        (WindowCommand::SetResizeIncrements(None), |c| {
+            &mut c.sets_resize_increments
+        }),
+        (WindowCommand::SetAspectRatio(Some(ratio(16, 9))), |c| {
+            &mut c.sets_aspect_ratio
+        }),
+        (WindowCommand::SetAspectRatio(None), |c| {
+            &mut c.sets_aspect_ratio
+        }),
         (WindowCommand::SetTitle("t".into()), |c| &mut c.sets_title),
-        (WindowCommand::SetPosition(Point::new(1.0, 1.0)), |c| {
+        (WindowCommand::SetPosition(at(1.0, 1.0)), |c| {
             &mut c.sets_position
         }),
-        (WindowCommand::SetSize(size(10.0, 10.0)), |c| {
+        (WindowCommand::SetSize(extent(10.0, 10.0)), |c| {
             &mut c.sets_size
         }),
         (constraints(None, None), |c| &mut c.sets_constraints),
@@ -486,22 +530,215 @@ fn no_absence_is_retryable() {
     );
 }
 
+/// What every window is when nothing was asked of it (the normal mode, the
+/// normal level, no grab) is admitted on a window that honours nothing: a
+/// window that cannot leave it is in it already.
 fn restoring_normal_needs_no_capability() {
-    assert_eq!(
-        admits(
-            &WindowCommand::SetMode(WindowMode::Normal),
-            &WindowCapabilities::NONE
-        ),
-        Ok(())
+    for command in [
+        WindowCommand::SetMode(WindowMode::Normal),
+        WindowCommand::SetLevel(WindowLevel::Normal),
+        WindowCommand::SetCursorGrab(CursorGrab::None),
+    ] {
+        assert_eq!(
+            admits(&command, &WindowCapabilities::NONE),
+            Ok(()),
+            "{command:?}"
+        );
+        assert_eq!(
+            WindowCapabilities::NONE.capability(&command),
+            WindowCapability::Native,
+            "{command:?}"
+        );
+    }
+}
+
+/// A resize step is a size: one that encloses no area is refused before the
+/// capabilities are asked, as a size is; lifting the steps has no numbers.
+fn a_resize_step_must_enclose_an_area() {
+    invalid(
+        &WindowCommand::SetResizeIncrements(Some(extent(0.0, 8.0))),
+        InvalidGeometry::Empty {
+            width: 0.0,
+            height: 8.0,
+        },
     );
+    valid(&WindowCommand::SetResizeIncrements(Some(extent(1.0, 1.0))));
+    valid(&WindowCommand::SetResizeIncrements(None));
+    valid(&WindowCommand::SetAspectRatio(Some(ratio(4, 3))));
+}
+
+/// A cursor image is refused for what no window system shows, its sides
+/// checked before its pixels; images with one pixel buffer, or equal pixels,
+/// are equal.
+fn a_cursor_image_holds_only_what_a_window_system_shows() {
+    use flui_platform::{CursorImage, CursorImageError};
+
+    let max = CursorImage::MAX_SIDE;
+    // (width, height, hotspot, bytes) → refusal
+    for (width, height, hotspot, bytes, refused) in [
+        (
+            0,
+            4,
+            (0, 0),
+            0,
+            CursorImageError::Empty {
+                width: 0,
+                height: 4,
+            },
+        ),
+        (
+            max + 1,
+            1,
+            (0, 0),
+            usize::from(max + 1) * 4,
+            CursorImageError::TooLarge {
+                width: max + 1,
+                height: 1,
+            },
+        ),
+        // The sides are refused before the pixels are counted.
+        (
+            u16::MAX,
+            u16::MAX,
+            (0, 0),
+            0,
+            CursorImageError::TooLarge {
+                width: u16::MAX,
+                height: u16::MAX,
+            },
+        ),
+        (
+            2,
+            2,
+            (0, 0),
+            15,
+            CursorImageError::PixelCount {
+                expected: 16,
+                found: 15,
+            },
+        ),
+        (
+            2,
+            2,
+            (0, 2),
+            16,
+            CursorImageError::HotspotOutside { x: 0, y: 2 },
+        ),
+    ] {
+        assert_eq!(
+            CursorImage::try_new(width, height, hotspot, vec![0; bytes]),
+            Err(refused),
+            "{width}x{height} at {hotspot:?} with {bytes} bytes"
+        );
+    }
+    let largest = CursorImage::try_new(
+        max,
+        max,
+        (max - 1, max - 1),
+        vec![7; usize::from(max) * usize::from(max) * 4],
+    )
+    .expect("the largest image");
+    assert_eq!(largest.clone(), largest, "a clone shares the pixels");
+    let same = CursorImage::try_new(
+        max,
+        max,
+        (max - 1, max - 1),
+        vec![7; usize::from(max) * usize::from(max) * 4],
+    )
+    .expect("the largest image");
+    assert_eq!(same, largest, "equal pixels are one image");
+    let moved = CursorImage::try_new(
+        max,
+        max,
+        (0, 0),
+        vec![7; usize::from(max) * usize::from(max) * 4],
+    )
+    .expect("the largest image");
+    assert_ne!(moved, largest, "the hotspot is part of the cursor");
+}
+
+/// A proportion is held in lowest terms, so two spellings of one ratio are
+/// one value.
+fn an_aspect_ratio_is_held_in_lowest_terms() {
+    for (width, height, reduced) in [
+        (16, 9, (16, 9)),
+        (32, 18, (16, 9)),
+        (1920, 1080, (16, 9)),
+        (7, 7, (1, 1)),
+        (u32::MAX, 1, (u32::MAX, 1)),
+        (u32::MAX, u32::MAX, (1, 1)),
+    ] {
+        let held = ratio(width, height);
+        assert_eq!(
+            (held.width().get(), held.height().get()),
+            reduced,
+            "{width}:{height}"
+        );
+        assert_eq!(held, ratio(reduced.0, reduced.1), "{width}:{height}");
+    }
+    assert!((ratio(16, 9).get() - 16.0 / 9.0).abs() < f64::EPSILON);
+}
+
+/// A window holds the pointer only while it has the keyboard focus: a sample
+/// of a window without it is published holding nothing, whatever it said, so
+/// a grab lost with the focus is a state change a reader sees.
+fn a_grab_is_published_only_for_a_focused_window() {
+    use WindowFocus::{Active, Focused, Inactive};
+
+    // (shown, standing, grab sampled) → grab published
+    for (visible, standing, sampled, published) in [
+        (true, Focused, CursorGrab::Locked, CursorGrab::Locked),
+        (true, Focused, CursorGrab::Confined, CursorGrab::Confined),
+        (true, Active, CursorGrab::Locked, CursorGrab::None),
+        (true, Inactive, CursorGrab::Confined, CursorGrab::None),
+        (false, Focused, CursorGrab::Locked, CursorGrab::None),
+    ] {
+        let state = base_state()
+            .successor(
+                base_state()
+                    .with_visible(visible)
+                    .with_focus(standing)
+                    .with_cursor_grab(sampled),
+            )
+            .expect("a revision");
+        assert_eq!(
+            state.cursor_grab, published,
+            "shown {visible}, {standing:?}, sampled {sampled:?}"
+        );
+    }
+    let held = base_state()
+        .successor(
+            base_state()
+                .with_focus(Focused)
+                .with_cursor_grab(CursorGrab::Locked),
+        )
+        .expect("a revision");
+    let lost = held
+        .successor(held.clone().with_focus(Inactive))
+        .expect("a revision");
+    assert_eq!(lost.cursor_grab, CursorGrab::None);
+    assert!(lost.revision > held.revision, "the loss is a new revision");
+}
+
+/// A user's resize is a change the user makes, as a placement is; the host
+/// that cannot tell says neither.
+fn a_live_resize_is_the_users_change() {
+    for (interaction, users) in [
+        (WindowInteraction::UserPlacing, true),
+        (WindowInteraction::UserResizing, true),
+        (WindowInteraction::None, false),
+        (WindowInteraction::Unknown, false),
+    ] {
+        assert_eq!(interaction.is_user(), users, "{interaction:?}");
+    }
 }
 
 fn admit_checks_numbers_before_capabilities() {
-    let bad = WindowCommand::SetSize(size(-1.0, 10.0));
+    let bad = WindowCommand::SetSize(extent(0.0, 10.0));
     assert_eq!(
         admits(&bad, &WindowCapabilities::NONE),
-        Err(AdmissionError::InvalidGeometry(InvalidGeometry::Extent {
-            width: -1.0,
+        Err(AdmissionError::InvalidGeometry(InvalidGeometry::Empty {
+            width: 0.0,
             height: 10.0
         }))
     );
@@ -509,10 +746,11 @@ fn admit_checks_numbers_before_capabilities() {
 
 fn base_state() -> WindowState {
     WindowState::new(
-        WindowGeometry::try_new(Some(Point::new(10.0, 20.0)), size(800.0, 600.0))
+        WindowGeometry::try_new(Some(at(10.0, 20.0)), size(800.0, 600.0))
             .expect("a finite rectangle"),
         WindowExtent::try_new(size(784.0, 561.0)).expect("a finite extent"),
     )
+    .with_display(Some(display()))
 }
 
 fn equal_sample_keeps_the_revision() {
@@ -572,7 +810,18 @@ fn each_window_fact_advances_the_revision() {
     let mut honours_title = WindowCapabilities::NONE.into_parts();
     honours_title.sets_title = WindowCapability::Native;
     let honours_title = honours_title.into_capabilities();
-    let facts: [(&str, WindowState); 12] = [
+    let facts: [(&str, WindowState); 15] = [
+        ("level", base_state().with_level(WindowLevel::AlwaysOnTop)),
+        (
+            "grab",
+            base_state()
+                .with_focus(WindowFocus::Focused)
+                .with_cursor_grab(CursorGrab::Confined),
+        ),
+        (
+            "live resize",
+            base_state().with_interaction(WindowInteraction::UserResizing),
+        ),
         ("focus", base_state().with_focus(WindowFocus::Focused)),
         ("visibility", base_state().with_visible(false)),
         ("occlusion", base_state().with_occluded(true)),
@@ -621,6 +870,47 @@ fn each_window_fact_advances_the_revision() {
             "{fact}: the same report again publishes nothing"
         );
     }
+}
+
+/// A window's position is measured on the display it is on, so the two are
+/// one fact: a sample whose position names a display publishes that display
+/// as the window's, whatever display the sample said, and a window whose
+/// window system reports no position keeps the display it was given.
+fn a_position_names_the_display_the_window_is_on() {
+    let other = DisplayRegistry::new()
+        .mint(&DisplayKey::Injected(2))
+        .expect("an id");
+    let placed = base_state()
+        .successor(base_state().with_display(Some(other)))
+        .expect("an equal sample");
+    assert_eq!(
+        placed.display,
+        Some(display()),
+        "the position's display is the window's"
+    );
+    assert_eq!(placed.revision.get(), 0, "nothing changed");
+
+    let placed_at = |position: Option<WindowPosition>, display| {
+        let mut sample = base_state().with_display(display);
+        sample.outer = sample.outer.at(position);
+        sample
+    };
+    let moved_to = WindowPosition::try_new(other, Point::new(-30.0, 5.0)).expect("a point");
+    let moved = placed
+        .successor(placed_at(Some(moved_to), None))
+        .expect("a move publishes");
+    assert_eq!(
+        moved.display,
+        Some(other),
+        "the window moved to the other display"
+    );
+    assert_eq!(moved.revision.get(), 1);
+
+    let unplaced = moved
+        .successor(placed_at(None, Some(other)))
+        .expect("a sample with no position");
+    assert_eq!(unplaced.display, Some(other));
+    assert_eq!(unplaced.outer.position(), None);
 }
 
 /// A report that is not a drawable area keeps the metrics before it, and
@@ -1117,6 +1407,26 @@ fn window_command_validate() {
                 restoring_normal_needs_no_capability,
             ),
             (
+                "a_resize_step_must_enclose_an_area",
+                a_resize_step_must_enclose_an_area,
+            ),
+            (
+                "an_aspect_ratio_is_held_in_lowest_terms",
+                an_aspect_ratio_is_held_in_lowest_terms,
+            ),
+            (
+                "a_cursor_image_holds_only_what_a_window_system_shows",
+                a_cursor_image_holds_only_what_a_window_system_shows,
+            ),
+            (
+                "a_grab_is_published_only_for_a_focused_window",
+                a_grab_is_published_only_for_a_focused_window,
+            ),
+            (
+                "a_live_resize_is_the_users_change",
+                a_live_resize_is_the_users_change,
+            ),
+            (
                 "admit_checks_numbers_before_capabilities",
                 admit_checks_numbers_before_capabilities,
             ),
@@ -1139,6 +1449,10 @@ fn window_command_validate() {
             (
                 "each_window_fact_advances_the_revision",
                 each_window_fact_advances_the_revision,
+            ),
+            (
+                "a_position_names_the_display_the_window_is_on",
+                a_position_names_the_display_the_window_is_on,
             ),
             (
                 "a_report_that_is_not_drawable_keeps_the_metrics",

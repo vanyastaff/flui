@@ -171,7 +171,8 @@ impl StoredPlacement {
 
 /// Who changed a window between two of its reports. A change is the user's
 /// only when the report that carries it says so
-/// ([`WindowInteraction::UserPlacing`]); nothing is inferred from what did not
+/// ([`WindowInteraction::is_user`]: placing or resizing it); nothing is
+/// inferred from what did not
 /// change, nor from the report before.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ChangeOrigin {
@@ -188,7 +189,7 @@ impl ChangeOrigin {
     /// Who changed a window whose new report says `now`, with `changed`
     /// whether that report changed its placement.
     fn of(now: WindowInteraction, changed: bool) -> Self {
-        if changed && now == WindowInteraction::UserPlacing {
+        if changed && now.is_user() {
             Self::User
         } else {
             Self::Other
@@ -346,8 +347,9 @@ fn report_panic(first: FirstPanic, name: &StorageName, while_doing: &'static str
 /// one exists (`Platform::window_capabilities`, `Platform::window_frame_inset`
 /// at the target display's scale): a platform that cannot place a window at open
 /// keeps size and mode and leaves the position to the system, and the fit is of
-/// the outer size, frame included. The options' position, size, mode and
-/// display come from the placement; everything else stays the configuration's.
+/// the outer size, frame included. The options' position (on the display the
+/// placement resolved to), size and mode come from the placement; everything
+/// else stays the configuration's.
 /// Does nothing when no display can hold the placement.
 pub(crate) fn restore_into(
     options: &mut WindowOptions,
@@ -375,8 +377,7 @@ pub(crate) fn restore_into(
         return;
     };
     options.size = resolved.size;
-    options.display = Some(resolved.display);
-    options.position = resolved.offset_in_display;
+    options.position = resolved.position();
     options.mode = resolved.mode;
     // A window that opens away from normal returns to the bounds it was
     // remembered at: outer, so the content size plus the frame. A frame
@@ -387,10 +388,10 @@ pub(crate) fn restore_into(
         return;
     }
     match WindowGeometry::try_new(
-        resolved.offset_in_display,
+        resolved.position(),
         Size::new(
-            resolved.size.width + frame.width,
-            resolved.size.height + frame.height,
+            resolved.size.width() + frame.width,
+            resolved.size.height() + frame.height,
         ),
     ) {
         Ok(normal) => options.normal_geometry = Some(normal),

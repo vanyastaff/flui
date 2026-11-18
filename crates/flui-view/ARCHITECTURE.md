@@ -565,7 +565,7 @@ write a widget opens inside its own `build` is refused with `WrittenDuringBuild`
 not a `WriteTarget`, and no context hands it out: `BuildContext::graph` takes a crate-private
 token. Host code writes through `BuildOwner::writer_source` (`writer_source_for(slot)` routes a
 cross-thread `UiCommand::SignalWrite` to the presentation that minted the slot), and
-`HeadlessBinding::writer_source` serves tests. Only the `testing` feature reaches the graph
+the widget harness's `SignalProbe` serves tests. Only the `testing` feature reaches the graph
 itself (`BuildOwner::signal_graph`, which no build context reaches), for minting test signals
 and inspecting the reader registry; writing still needs a source. An event callback may
 return `()` or a write's `Result`; `EventOutcome::report` logs a refused write on
@@ -790,7 +790,7 @@ own facts (element kind, key, lifecycle, dirtiness, depth, slot) and links the e
 object. The view writes only its configuration, through the provided `View::inspect`, which
 `#[view(inspect)]` on the view derives fills from the type's `#[derive(Inspect)]`. The hook is a
 method because stable Rust cannot ask at mount whether `V: Inspect`. The snapshot keeps the
-tree's facts (`SnapshotNode::facts`, read with `get_fact`) apart from the view's fields
+tree's facts (`SnapshotNode::facts`, read with `fact_as`) apart from the view's fields
 (`SnapshotNode::fields`, read with `get`), so a view may name a field `lifecycle` or `dirty`
 without shadowing the element's fact or diffing against it. Pinned by `flui-testing`'s
 `a_counters_elements_link_to_render_objects_that_link_to_semantics`,

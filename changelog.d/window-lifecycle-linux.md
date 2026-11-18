@@ -25,5 +25,5 @@
   second window for a process without `CAP_SYS_RESOURCE`. A source that cannot start (no system
   bus, no pressure information) is logged and leaves the others running. A wake marks the
   displays and every window's state stale.
-- **`flui-native`** (Linux): `DisplayInfo::persistent_key` is the RandR connector and the
+- **`flui-native`** (Linux): `DisplayDescription::persistent_key` is the RandR connector and the
   panel's EDID identity on X11 (`HDMI-1|DEL4115-0000002A`) and the connector name on Wayland.
