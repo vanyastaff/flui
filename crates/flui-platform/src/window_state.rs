@@ -361,20 +361,31 @@ pub struct WindowState {
     /// The content (client) area extent.
     pub content_size: WindowExtent,
     /// How the window occupies its display: a mode the window settled in.
-    /// A [`WindowCommand::SetMode`] the window system carries out in several
-    /// steps (a window manager or compositor answering in turn, a full-screen
-    /// animation) changes it once, from the mode the window left to the mode
-    /// asked; until the window system reaches that mode, or the host stops
-    /// waiting for it, a snapshot keeps the mode the window left while its
-    /// geometry and metrics follow the window.
+    /// A command that changes the mode ([`WindowCommand::SetMode`], a
+    /// [`WindowCommand::SetSize`] of a maximized or fullscreen window) and
+    /// that the window system carries out in several steps (a window manager
+    /// or compositor answering in turn, a full-screen animation) changes it
+    /// once, from the mode the window left to the mode asked; until the
+    /// window system reaches that mode, or the host stops waiting for it, a
+    /// snapshot keeps the mode the window left while its geometry and metrics
+    /// follow the window. The one exception is a window on its way out of
+    /// [`WindowMode::Minimized`]: no snapshot says minimized of a window on
+    /// screen, so the modes it passes through are published.
     pub mode: WindowMode,
-    /// The rectangle the window returns to from a maximized or fullscreen
-    /// mode, when the OS reports it. Its position names the display it lies
-    /// on, which need not be the one the window is on now. While a
-    /// [`WindowCommand::SetMode`] is carried out in steps (see
-    /// [`mode`](Self::mode)), every snapshot names the rectangle the window
-    /// returned to as the change began, a snapshot in normal mode too, whose
-    /// outer rectangle is then a step of the change's.
+    /// The rectangle the window returns to from a maximized, fullscreen or
+    /// minimized mode, when the OS reports it. Its position names the display
+    /// it lies on, which need not be the one the window is on now.
+    ///
+    /// A snapshot in normal mode names none, and its
+    /// [`outer`](Self::outer) rectangle is the window's place, except while
+    /// the window system carries out a mode change in steps (see
+    /// [`mode`](Self::mode)). Then a snapshot that keeps the mode the window
+    /// left names the rectangle the window returned to as the change began,
+    /// also when that mode is normal, and so does a snapshot in normal mode
+    /// of a window on its way there from another mode: the outer rectangle
+    /// of either may be a step's (a window still at its fullscreen size).
+    /// [`WindowPlacement::from_state`](crate::WindowPlacement::from_state)
+    /// reads the window's place by this rule.
     pub normal_geometry: Option<WindowGeometry>,
     /// Whether the window is shown: opened visible or shown since, and not
     /// hidden since ([`WindowCommand::Show`], [`WindowCommand::Hide`]). It is

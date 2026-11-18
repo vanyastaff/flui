@@ -7201,44 +7201,63 @@ GPU-память простаивающего или невидимого окн
   `[Normal, Normal, Normal, Maximized]` для `SetMode(Maximized)` полноэкранного окна, развёрнутого
   до этого; скриптовый композитор — `[Normal, Maximized]`). Ни у одного из них нет клавиши
   полноэкранного режима (у AppKit нет и главного меню). Построено одно правило в ячейке
-  состояния: `WindowStateCell::expect_mode`, который хост вызывает на каждую просьбу о режиме,
-  и на режим, в котором окно уже есть: новая просьба заменяет ожидание прежней. Чтение в другом
-  из обычного, развёрнутого и полноэкранного режимов публикует режим снимка; свёрнутое чтение и
-  чтение окна, опубликованного свёрнутым, публикуются как прочитаны. Каждый снимок смены называет
-  прямоугольник возврата, бывший в начале смены (и в обычном режиме), а
-  `WindowPlacement::from_state` берёт `normal_geometry` всегда, когда снимок его называет: шаг
-  во весь экран не записывается как место окна. Найдя запрошенный режим, окно ждёт ещё
-  `MODE_SETTLE` (250 мс) против шага, который система окон не успела сделать (openbox, выводя из
-  полноэкранного в обычный окно, развёрнутое до этого, читает обычный, снова разворачивает и
-  лишь затем снимает разворот), всего не дольше `MODE_ANSWER_LIMIT` (1 с; AppKit — предел
-  анимации 3 с, затем 1 с после конца перехода). Геометрия, метрики и прочее идут как прочитаны.
+  состояния: `WindowStateCell::expect_mode`, который хост вызывает на каждую свою просьбу,
+  меняющую режим или выводящую из него, и на режим, в котором окно уже есть: новая просьба
+  заменяет ожидание прежней. Просьбы: `SetMode`, `SetSize` развёрнутого или полноэкранного окна
+  (X11 `resize`, Wayland `leave_compositor_modes`), переключатель разворота и кнопки заголовка
+  или рамки, которые окно рисует само, на AppKit — каждый zoom и полноэкранный переход
+  (`windowShouldZoom:toFrame:`, `windowWill{Enter,Exit}FullScreen:`). Просьба, на которую никто
+  не отвечает, ожидание кончает (`end_mode_wait`): свёртывание Wayland, режим, который
+  неотображённое окно X11 пишет в свои свойства, рамка, которую AppKit сразу даёт zoom-окну.
+  Чтение в запрошенном режиме публикуется как прочитано; чтение в другом из обычного,
+  развёрнутого и полноэкранного — шаг: снимок держит свой режим и называет прямоугольник
+  возврата, бывший в начале смены. Так же его называет обычное чтение окна, идущего в обычный
+  режим из другого (`ModeChange::was_elsewhere`): первый обычный шаг openbox из полноэкранного
+  ещё во весь экран, а `WindowPlacement::from_state` берёт `normal_geometry`, когда снимок его
+  называет. Окно, спрошенное о режиме, в котором оно стоит, нигде больше не было: его чтения
+  идут как прочитаны, просьба не публикует ревизии, а передвинутое тем временем окно
+  запоминается там, где оно есть. Исключение, оставленное открытым: свёрнутое чтение и чтение
+  окна, опубликованного свёрнутым, публикуются как прочитаны, поэтому свёрнутое окно, которое
+  просят развернуть или сделать полноэкранным, публикует режимы по пути (openbox: обычный,
+  затем запрошенный) — держать «свёрнуто» над окном на экране нельзя, а запрошенного режима
+  оно ещё не достигло. Найдя запрошенный режим, окно ждёт ещё `MODE_SETTLE` против шага,
+  который система окон не успела сделать, всего не дольше `MODE_ANSWER_LIMIT` (AppKit — предел
+  анимации, затем `MODE_ANSWER_LIMIT` после конца перехода, если ожидание к нему не истекло).
   Конец ожидания без событий: X11 будит цикл и помечает окно (`LoopWindows::mode_deadline`),
-  Wayland будит цикл (`LoopWindow::mode_due`), AppKit планирует чтение на полосе владельца.
-  Свёртывание Wayland, о котором композитор не сообщает, ожидание кончает. X11 не запоминает
+  Wayland будит цикл (`LoopWindow::mode_due`), окно AppKit держит один таймер на полосе
+  владельца, взведённый на текущий конец ожидания (`WaitEndRead`). X11 не запоминает
   прямоугольник возврата из шага на пути к другому режиму, а команда действует по режиму
-  сервера, не снимка. AppKit ждёт и переход, начатый пользователем (зелёная кнопка, системное
-  сочетание): это просьба пользователя через системный хром, исполняется и сообщается, как
-  кнопка разворота у менеджера окон Linux (`ModeSequence::fullscreen_transition`). Тесты, в
-  скобках результат с откатом строки проводки:
+  сервера, не снимка (`mode_now`). AppKit ждёт и переход, начатый пользователем (зелёная кнопка,
+  системное сочетание): это просьба пользователя через системный хром, исполняется и
+  сообщается, как кнопка разворота у менеджера окон Linux
+  (`ModeSequence::fullscreen_transition`). Тесты, в скобках результат с откатом правила:
   `a_fullscreen_window_changes_mode_in_one_step` (X11, openbox, таблица из четырёх, с местом
   размещения каждого снимка; без `expect_mode` — `[Normal, Normal, Normal, Maximized]`, с
-  пропуском просьбы о текущем режиме — `Maximized` пять раз между двумя `Fullscreen`),
+  пропуском просьбы о текущем режиме — `Maximized` пять раз между двумя `Fullscreen`, без
+  прямоугольника возврата у обычного чтения на пути в обычный режим — снимок `Normal`
+  1280×1024 как место окна),
   `a_mode_change_another_client_overtakes_is_published_when_the_wait_ends` (X11; без
   пробуждения цикла к концу ожидания — опубликовано через 3,01 с),
   `a_command_during_a_mode_wait_acts_on_the_mode_the_server_says` (X11; с режимом снимка в
   `mode_now` окно остаётся развёрнутым 1280×1024),
-  `a_mode_the_compositor_reaches_in_two_configures_is_published_once` (Wayland, таблица из трёх;
+  `a_request_for_the_mode_the_window_is_in_publishes_nothing` (X11; с прямоугольником возврата у
+  каждого чтения — две ревизии, 5 → 7),
+  `a_mode_the_compositor_reaches_in_two_configures_is_published_once` (Wayland, таблица из пяти;
   без `expect_mode` — `[Normal, Maximized]`, с пропуском просьбы о текущем режиме —
-  `[Maximized, Maximized]`), `a_mode_the_compositor_does_not_carry_out_is_published_when_the_wait_ends`
-  (Wayland; без `mode_due` снимок остаётся `Fullscreen`), модельные
-  `a_mode_change_in_flight_publishes_its_steps_in_the_mode_the_window_left` и
-  `a_mode_wait_settles_waits_longer_and_ends` (ячейка; без прямоугольника возврата или без
-  правила свёрнутого — красная), `a_fullscreen_transition_lands_where_it_heads_or_where_it_came_from`
-  (AppKit), `from_state_remembers_the_normal_bounds_relative_to_the_usable_area` (размещение;
-  со старым `from_state` — красная). Прогон на Mac и под настольными менеджером окон и
-  композитором — в строке `fullscreen` `crates/flui-native/platform-parity.toml`; система окон
-  медленнее ожидания — в `docs/gaps.md` («A window system slower than the mode wait publishes
-  its steps»). Проверки и непрогнанное — в теле PR.
+  `[Maximized, Maximized]`, без `expect_mode` в `SetSize` — `[Maximized, Normal]`, а после
+  `SetMode(Maximized)` в том же ходе — `[Maximized, Maximized]`),
+  `a_mode_the_compositor_does_not_carry_out_is_published_when_the_wait_ends` (Wayland; без
+  `mode_due` снимок остаётся `Fullscreen`), модельные
+  `a_mode_change_in_flight_publishes_its_steps_in_the_mode_the_window_left` (ячейка, таблица из
+  одиннадцати; строка о свёрнутом окне закрепляет исключение, прочие красные без своего правила)
+  и `a_mode_wait_settles_waits_longer_and_ends` (ячейка; истёкшее ожидание, продлённое концом
+  перехода, — красная), `a_fullscreen_transition_lands_where_it_heads_or_where_it_came_from` и
+  `one_timer_reads_a_window_at_the_end_of_its_wait` (модели AppKit),
+  `from_state_remembers_the_normal_bounds_relative_to_the_usable_area` (размещение; со старым
+  `from_state` — красная). Прогон на Mac и под настольными менеджером окон и композитором — в
+  строке `fullscreen` `crates/flui-native/platform-parity.toml`; система окон медленнее
+  ожидания и режимы по пути из свёрнутого — в `docs/gaps.md` («A window system slower than the
+  mode wait publishes its steps»). Проверки и непрогнанное — в теле PR.
 
 - [x] **LY133** — ветка `native/quit-contract`, решение — ADR-0350 (заменяет первое предложение
   §4 ADR-0259). Обе находки подтверждены на `main` @ `ac3b1ee58`: `LoopControl::terminate_requested`

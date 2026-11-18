@@ -207,6 +207,19 @@ pub struct MacOSWindow {
 // other thread can hold the window.
 static_assertions::assert_not_impl_any!(MacOSWindow: Send, Sync);
 
+/// Follows the snapshot's wait for a mode change to its end as a read of the
+/// window ends (`MacOSWindow::read_when_the_mode_wait_ends`), whether the
+/// read returned or unwound: a read that publishes runs the handler's
+/// `state_changed`, and one that panics there still leaves the end of the
+/// wait read.
+struct ModeWaitFollowed<'a>(&'a MacOSWindow);
+
+impl Drop for ModeWaitFollowed<'_> {
+    fn drop(&mut self) {
+        self.0.read_when_the_mode_wait_ends();
+    }
+}
+
 /// What a window keeps of itself between AppKit's notifications.
 struct MacOSWindowState {
     /// Current window bounds (logical pixels)
@@ -2061,27 +2074,24 @@ impl MacOSWindow {
     /// invalidated it. A revision the read publishes is announced at the
     /// owner's turn, never from the read.
     fn current_state(&self) -> WindowState {
-        let state = self.snapshot.read(&self.delivery, || self.sample_state());
-        self.read_when_the_mode_wait_ends();
-        state
+        let _followed = ModeWaitFollowed(self);
+        self.snapshot.read(&self.delivery, || self.sample_state())
     }
 
     /// AppKit reported a change, or a command was just carried out: read the
     /// window again, and raise `WindowHandler::state_changed` when that
     /// produced a new revision.
     fn publish_state(&self) {
+        let _followed = ModeWaitFollowed(self);
         self.snapshot
             .publish_report(&self.delivery, || self.sample_state());
-        self.read_when_the_mode_wait_ends();
     }
 
     /// Read the window again for its state publisher, announcing nothing.
     fn read_state(&self) -> crate::owner::window_delivery::Publication {
-        let publication = self
-            .snapshot
-            .refresh(&self.delivery, || self.sample_state());
-        self.read_when_the_mode_wait_ends();
-        publication
+        let _followed = ModeWaitFollowed(self);
+        self.snapshot
+            .refresh(&self.delivery, || self.sample_state())
     }
 
     /// Have the window read again at the instant the snapshot's wait for a
@@ -2089,9 +2099,10 @@ impl MacOSWindow {
     /// from AppKit marks: a step AppKit refused, and a step published under
     /// the mode the window left, are published as read then. Called wherever
     /// that instant may have moved: after a mode request, and after every
-    /// read, since one that finds the mode asked shortens the wait and one
-    /// made at a transition's end finds it lengthened. One timer is live at
-    /// a time ([`WaitEndRead`]), and it holds the window weakly.
+    /// read ([`ModeWaitFollowed`]), since one that finds the mode asked
+    /// shortens the wait and one made at a transition's end finds it
+    /// lengthened. One timer is live at a time ([`WaitEndRead`]), and it
+    /// holds the window weakly.
     fn read_when_the_mode_wait_ends(&self) {
         let end = self.snapshot.mode_deadline();
         let mut read = self.wait_end_read.get();

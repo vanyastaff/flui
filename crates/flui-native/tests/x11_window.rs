@@ -2426,8 +2426,7 @@ mod cases {
         let after = fixture.window.state();
         assert_eq!(
             after.revision, settled.revision,
-            "the request published a window returning to {:?}",
-            after.normal_geometry
+            "a request for the mode the window is in published a revision"
         );
 
         request_normal();

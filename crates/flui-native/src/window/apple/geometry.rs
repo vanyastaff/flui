@@ -1106,10 +1106,7 @@ pub(crate) mod mode {
             assert!(!read.fired(settled), "a timer reads once");
             // The timer's read left the wait standing: another is armed, at
             // once for an end already past.
-            assert_eq!(
-                read.follow(Some(settled), at(now, 2)),
-                Some(Duration::ZERO)
-            );
+            assert_eq!(read.follow(Some(settled), at(now, 2)), Some(Duration::ZERO));
             assert_eq!(read.follow(None, at(now, 2)), None, "the wait ended");
             assert!(!read.fired(settled), "a wait that ended reads nothing");
         }
