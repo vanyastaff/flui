@@ -11,7 +11,9 @@ use crate::ui_runtime::SettledCloses;
 /// Where a quit stands, from the ask until the host commits it or it is
 /// cancelled. The host keeps one for its application and moves it only
 /// through these methods, so every host defers, cancels and commits a quit
-/// on the same answers.
+/// on the same answers. No method runs code it does not own (a `tracing`
+/// event included), so a host may move it under its own lock and act on the
+/// verdict once the lock is released.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct QuitRequest(QuitState);
 
@@ -102,9 +104,6 @@ impl QuitRequest {
         match answer {
             QuitAnswer::Cancelled => {
                 self.0 = QuitState::None;
-                tracing::info!(
-                    "a presentation refused the quit without recording it; quit cancelled"
-                );
                 QuitVerdict::Abandoned
             }
             QuitAnswer::Waiting(waiting) if !waiting.is_empty() => {
@@ -157,10 +156,6 @@ impl QuitRequest {
     pub fn declined(&mut self, address: PresentationAddress) -> QuitVerdict {
         if matches!(&self.0, QuitState::Deferred(waiting) if waiting.contains(&address)) {
             self.0 = QuitState::None;
-            tracing::info!(
-                ?address,
-                "a presentation stayed open; deferred quit cancelled"
-            );
             QuitVerdict::Abandoned
         } else {
             QuitVerdict::Unchanged

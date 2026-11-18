@@ -604,6 +604,10 @@ impl Ingress {
         let mut state = self.state.lock();
         let verdict = state.quit.finish_consult(answer);
         self.follow_quit(state, verdict);
+        // With the state unlocked: a subscriber is user code.
+        if verdict == QuitVerdict::Abandoned {
+            tracing::info!("a presentation refused the quit without recording it; quit cancelled");
+        }
     }
 
     /// The presentation at `address` gave the deferred quit its consent: its
@@ -628,6 +632,13 @@ impl Ingress {
         let mut state = self.state.lock();
         let verdict = state.quit.declined(address);
         self.follow_quit(state, verdict);
+        // With the state unlocked: a subscriber is user code.
+        if verdict == QuitVerdict::Abandoned {
+            tracing::info!(
+                ?address,
+                "a presentation stayed open; deferred quit cancelled"
+            );
+        }
     }
 
     pub(crate) fn try_auto_quit(&self) -> bool {

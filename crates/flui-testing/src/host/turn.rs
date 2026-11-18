@@ -155,7 +155,10 @@ impl HeadlessHost {
                     self.follow_quit(verdict);
                 }
                 SettledStep::QuitDeclined(address) => {
-                    let _abandoned = self.quit.declined(address);
+                    let verdict = self.quit.declined(address);
+                    if verdict == QuitVerdict::Abandoned {
+                        tracing::info!(?address, "a window stayed open; deferred quit cancelled");
+                    }
                 }
                 _ => {}
             }
@@ -225,6 +228,9 @@ impl HeadlessHost {
         }
         let router: Rc<CloseRequestRouter> = Rc::clone(&self.close_requests);
         let verdict = self.quit.finish_consult(ask_quit(&router, open));
+        if verdict == QuitVerdict::Abandoned {
+            tracing::info!("a window refused the quit without recording it; quit cancelled");
+        }
         self.follow_quit(verdict);
     }
 
