@@ -1,9 +1,9 @@
 //! Observer containment and ordered lifecycle notification after state commit.
 
 use crate::wake_delivery::FailureSignal;
+use flui_foundation::panic::FirstPanic;
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
-use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{Arc, Weak};
 
 use super::{AppLifecycleState, UpdateScheduler};
@@ -83,18 +83,15 @@ impl Drop for DrainGuard<'_> {
     }
 }
 
-pub(super) fn preserve_first_failure(
+/// Run `step` contained: a failure raises the custody's signal, and the first
+/// one stays the one resumed (ADR-0281).
+pub(super) fn contain_observer(
     custody: &FailureCustody<'_>,
-    first: &mut Option<Box<dyn std::any::Any + Send>>,
-    result: std::thread::Result<()>,
+    first: &mut FirstPanic,
+    step: impl FnOnce(),
 ) {
-    if let Err(payload) = result {
+    if first.contain(step).is_none() {
         custody.signal.set(true);
-        if first.is_some() {
-            flui_foundation::panic::discard_payload(payload);
-        } else {
-            *first = Some(payload);
-        }
     }
 }
 
@@ -114,7 +111,7 @@ impl LifecycleDelivery {
         }
         let _guard = DrainGuard(&self.draining);
         let custody = FailureCustody::new(scheduler);
-        let mut first = None;
+        let mut first = FirstPanic::new();
         loop {
             let next = self.pending.borrow_mut().pop_front();
             let Some(LifecycleTransition {
@@ -125,59 +122,15 @@ impl LifecycleDelivery {
                 break;
             };
             if request_frame {
-                #[expect(
-                    clippy::disallowed_methods,
-                    reason = "ADR-0287: the frame request runs a wake hook, contained; delivery goes on"
-                )]
-                preserve_first_failure(
-                    &custody,
-                    &mut first,
-                    catch_unwind(AssertUnwindSafe(|| scheduler.request_frame())),
-                );
+                // The frame request runs a wake hook; delivery goes on.
+                contain_observer(&custody, &mut first, || scheduler.request_frame());
             }
-            let listeners: Vec<_> = scheduler
-                .inner
-                .callbacks
-                .lifecycle_listeners
-                .borrow()
-                .iter()
-                .map(|listener| (listener.id, listener.callback.clone()))
-                .collect();
-            for (id, callback) in listeners {
-                let live = scheduler
-                    .inner
-                    .callbacks
-                    .lifecycle_listeners
-                    .borrow()
-                    .iter()
-                    .any(|listener| listener.id == id);
-                if live {
-                    #[expect(
-                        clippy::disallowed_methods,
-                        reason = "ADR-0287: a lifecycle listener's panic must not stop the remaining listeners"
-                    )]
-                    preserve_first_failure(
-                        &custody,
-                        &mut first,
-                        catch_unwind(AssertUnwindSafe(|| callback(state))),
-                    );
-                }
-                // A callback may remove its last registered owner while running.
-                // Its captures retire contained; an earlier failure stays first
-                // (ADR-0281).
-                #[expect(
-                    clippy::disallowed_methods,
-                    reason = "ADR-0287: a callback's captures retire contained; an earlier failure stays first"
-                )]
-                preserve_first_failure(
-                    &custody,
-                    &mut first,
-                    catch_unwind(AssertUnwindSafe(|| drop(callback))),
-                );
-            }
+            // The channel runs every listener, contains each one's panic and
+            // raises the first after the round; caught here, it stays first
+            // across the transitions still queued.
+            let listeners = &scheduler.inner.callbacks.lifecycle_listeners;
+            contain_observer(&custody, &mut first, || listeners.notify(&state));
         }
-        if let Some(first) = first {
-            std::panic::resume_unwind(first);
-        }
+        first.resume();
     }
 }

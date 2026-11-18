@@ -12,8 +12,10 @@
 //! # The loop
 //!
 //! `X11Loop::run` waits in `poll` on two descriptors, the connection and the
-//! doorbell (an eventfd), with no timeout but the application's wake deadline:
-//! an idle application costs no CPU. A turn of the loop:
+//! doorbell (an eventfd), with no timeout but a deadline something is owed at
+//! (the application's wake deadline, a drag's fetch, a window's wait for a
+//! mode change, a held key's repeat): an idle application costs no CPU. A
+//! turn of the loop:
 //!
 //! 1. reads the doorbell, before anything it rang for is read, so a ring that
 //!    lands while the turn runs leaves the doorbell readable for the next one;
@@ -842,10 +844,17 @@ pub(crate) trait LoopWindows: OpenWindows {
     fn event(&self, event: &Event);
 
     /// Each window an event of this turn, or [`refresh`](Self::refresh),
-    /// marked reads itself again, once, and its handler hears
-    /// `state_changed` for a new revision; what the window manager supports
-    /// is read first, once, if an event said it may have changed.
+    /// marked, or whose wait for a mode change passed
+    /// ([`mode_deadline`](Self::mode_deadline)), reads itself again, once,
+    /// and its handler hears `state_changed` for a new revision; what the
+    /// window manager supports is read first, once, if an event said it may
+    /// have changed.
     fn read_stale(&self);
+
+    /// The earliest instant a window stops waiting for the window manager
+    /// to carry out a mode change it asked for, and reads itself again at
+    /// [`read_stale`](Self::read_stale): the loop wakes for it.
+    fn mode_deadline(&self) -> Option<web_time::Instant>;
 
     /// A pointer event the server sent, asked before the input hears it:
     /// `true` when a window took it for its chrome (a press on a title bar or
@@ -1125,13 +1134,15 @@ impl X11Loop {
     }
 
     /// When the loop wakes with nothing to read: the application's wake
-    /// deadline, a drag's fetch or a held key running out of time.
+    /// deadline, a drag's fetch, a window's wait for a mode change or a held
+    /// key running out of time.
     fn wake_at(&self, turns: &mut Turns) -> Option<web_time::Instant> {
         let wake_at = earliest(
             self.wake_deadline(&mut turns.deadline),
             self.drag.deadline(),
         );
         let wake_at = earliest(wake_at, self.turn_deadline(&mut turns.turn_deadline));
+        let wake_at = earliest(wake_at, self.windows.mode_deadline());
         earliest(wake_at, self.text.deadline())
     }
 

@@ -660,6 +660,17 @@ fn frame_deadline() -> Option<web_time::Instant> {
 /// read back through the host's wake-deadline query. The smallest of several
 /// frames, because a slow host can only lengthen the gap.
 fn armed_gap(win: &Win, frame: super::super::frame_driver::FrameBinding) -> Duration {
+    armed_gap_read(win, frame, frame_deadline)
+}
+
+/// [`armed_gap`] with the deadline read by `deadline`: the host's query
+/// reports the earliest deadline of every window, so a row with two paced
+/// windows reads the one it measures from that window's own fallback.
+fn armed_gap_read(
+    win: &Win,
+    frame: super::super::frame_driver::FrameBinding,
+    deadline: impl Fn() -> Option<web_time::Instant>,
+) -> Duration {
     (0..5)
         .map(|_| {
             let before = web_time::Instant::now();
@@ -668,7 +679,7 @@ fn armed_gap(win: &Win, frame: super::super::frame_driver::FrameBinding) -> Dura
                 RuntimeTask::Frame(frame, flui_native::frame_request_now()),
             )
             .expect("deliver a frame");
-            frame_deadline()
+            deadline()
                 .expect("the frame armed the fallback")
                 .saturating_duration_since(before)
         })
@@ -746,11 +757,16 @@ fn secondary_window_paces_by_its_own_display() {
         Duration::from_millis(16),
         "the main window",
     );
-    // The query reports the earliest deadline of any window, so the secondary's
-    // is the one it reports only if it is the nearer: a secondary paced by the
-    // main window's 16 ms would leave the main window's deadline the earliest.
+    // Read from the secondary's own fallback: the host's query reports the
+    // earliest deadline of any window, and the main window's, armed above,
+    // becomes the earliest once the host has spent half a period since.
+    let own_deadline = || {
+        secondary_deadlines
+            .fallback
+            .next_wake(web_time::Instant::now(), Duration::from_millis(8))
+    };
     assert_paced_by(
-        armed_gap(&secondary, secondary_frame),
+        armed_gap_read(&secondary, secondary_frame, own_deadline),
         Duration::from_millis(8),
         "the secondary window (paced by the main window's display)",
     );

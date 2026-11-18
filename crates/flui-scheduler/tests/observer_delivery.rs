@@ -1,4 +1,5 @@
 //! Observer delivery survives containment and preserves committed transition order.
+use flui_foundation::Subscription;
 use flui_scheduler::__runtime::DriveFrame as _;
 use flui_scheduler::{AppLifecycleState, Instant, OwnerFrame, UpdateScheduler};
 use std::{
@@ -10,17 +11,17 @@ use std::{
 fn lifecycle_failure_delivers_healthy_tail() {
     let scheduler = UpdateScheduler::new();
     let seen = Rc::new(RefCell::new(Vec::new()));
-    let failed = scheduler.add_lifecycle_state_listener(Rc::new(|_| panic!("first listener")));
-    let competing = scheduler.add_lifecycle_state_listener(Rc::new(|_| panic!("second listener")));
+    let failed = scheduler.listen_lifecycle_state(|_| panic!("first listener"));
+    let competing = scheduler.listen_lifecycle_state(|_| panic!("second listener"));
     let output = Rc::clone(&seen);
-    scheduler.add_lifecycle_state_listener(Rc::new(move |state| output.borrow_mut().push(state)));
+    let _healthy = scheduler.listen_lifecycle_state(move |state| output.borrow_mut().push(state));
     let failure = catch_unwind(AssertUnwindSafe(|| {
         scheduler.handle_app_lifecycle_state_change(AppLifecycleState::Hidden);
     }))
     .expect_err("listener failures propagate after delivery");
     assert_eq!(failure.downcast_ref::<&str>(), Some(&"first listener"));
-    scheduler.remove_lifecycle_state_listener(failed);
-    scheduler.remove_lifecycle_state_listener(competing);
+    failed.detach();
+    competing.detach();
     scheduler.handle_app_lifecycle_state_change(AppLifecycleState::Resumed);
     assert_eq!(
         &*seen.borrow(),
@@ -31,16 +32,16 @@ fn lifecycle_failure_delivers_healthy_tail() {
 fn lifecycle_reentry_preserves_order() {
     let scheduler = UpdateScheduler::new();
     let weak = scheduler.downgrade();
-    scheduler.add_lifecycle_state_listener(Rc::new(move |state| {
+    let _reentering = scheduler.listen_lifecycle_state(move |state| {
         if state == AppLifecycleState::Hidden {
             weak.upgrade()
                 .expect("live owner")
                 .handle_app_lifecycle_state_change(AppLifecycleState::Resumed);
         }
-    }));
+    });
     let seen = Rc::new(RefCell::new(Vec::new()));
     let output = Rc::clone(&seen);
-    scheduler.add_lifecycle_state_listener(Rc::new(move |state| output.borrow_mut().push(state)));
+    let _recording = scheduler.listen_lifecycle_state(move |state| output.borrow_mut().push(state));
     scheduler.handle_app_lifecycle_state_change(AppLifecycleState::Hidden);
     assert_eq!(
         &*seen.borrow(),
@@ -50,29 +51,22 @@ fn lifecycle_reentry_preserves_order() {
 
 fn lifecycle_removal_before_delivery_skips_retired_listener() {
     let scheduler = UpdateScheduler::new();
-    let removed = Rc::new(std::cell::Cell::new(None));
+    let removed = Rc::new(RefCell::new(None::<Subscription>));
     let target = Rc::clone(&removed);
-    let weak = scheduler.downgrade();
-    scheduler.add_lifecycle_state_listener(Rc::new(move |_| {
-        if let Some(id) = target.take() {
-            assert!(
-                weak.upgrade()
-                    .expect("live scheduler")
-                    .remove_lifecycle_state_listener(id)
-            );
+    let _removing = scheduler.listen_lifecycle_state(move |_| {
+        if let Some(subscription) = target.borrow_mut().take() {
+            subscription.detach();
         }
-    }));
+    });
     let seen = Rc::new(RefCell::new(Vec::new()));
     let retired_output = Rc::clone(&seen);
-    removed.set(Some(scheduler.add_lifecycle_state_listener(Rc::new(
-        move |state| {
-            retired_output.borrow_mut().push(("retired", state));
-        },
-    ))));
-    let healthy_output = Rc::clone(&seen);
-    scheduler.add_lifecycle_state_listener(Rc::new(move |state| {
-        healthy_output.borrow_mut().push(("healthy", state));
+    *removed.borrow_mut() = Some(scheduler.listen_lifecycle_state(move |state| {
+        retired_output.borrow_mut().push(("retired", state));
     }));
+    let healthy_output = Rc::clone(&seen);
+    let _healthy = scheduler.listen_lifecycle_state(move |state| {
+        healthy_output.borrow_mut().push(("healthy", state));
+    });
     scheduler.handle_app_lifecycle_state_change(AppLifecycleState::Hidden);
     scheduler.handle_app_lifecycle_state_change(AppLifecycleState::Resumed);
     assert_eq!(
@@ -96,22 +90,23 @@ fn observer_failures_protect_nested_retirement() {
         let scheduler = UpdateScheduler::new();
         let owner = Rc::new(OwnerFrame::try_new(&scheduler).expect("fresh owner"));
         let drops = Rc::new(std::cell::Cell::new(0));
-        let pending = Rc::new(std::cell::Cell::new(None));
+        let pending = Rc::new(RefCell::new(None::<Subscription>));
         let pending_task = Rc::new(RefCell::new(None::<flui_scheduler::TaskToken>));
         let cancel = {
-            let weak = scheduler.downgrade();
             let pending = Rc::clone(&pending);
             let pending_task = Rc::clone(&pending_task);
             let owner = Rc::downgrade(&owner);
             move || {
-                let id = pending.take().expect("accepted listener");
-                let scheduler = weak.upgrade().expect("live scheduler");
+                let detach = || {
+                    let subscription = pending.borrow_mut().take();
+                    subscription.expect("accepted listener").detach();
+                };
                 if mode == "nested" {
                     owner
                         .upgrade()
                         .expect("live owner")
                         .pump_background(|| {
-                            assert!(scheduler.remove_lifecycle_state_listener(id));
+                            detach();
                             pending_task
                                 .borrow_mut()
                                 .take()
@@ -120,7 +115,7 @@ fn observer_failures_protect_nested_retirement() {
                         })
                         .expect("nested owner turn");
                 } else {
-                    assert!(scheduler.remove_lifecycle_state_listener(id));
+                    detach();
                     pending_task
                         .borrow_mut()
                         .take()
@@ -129,15 +124,13 @@ fn observer_failures_protect_nested_retirement() {
                 }
             }
         };
-        scheduler.add_lifecycle_state_listener(Rc::new(|_| panic!("observer failure")));
-        scheduler.add_lifecycle_state_listener(Rc::new(move |_| cancel()));
+        let _failing = scheduler.listen_lifecycle_state(|_| panic!("observer failure"));
+        let _cancelling = scheduler.listen_lifecycle_state(move |_| cancel());
         let deliver = || {
             let capture = Capture(Rc::clone(&drops));
-            pending.set(Some(scheduler.add_lifecycle_state_listener(Rc::new(
-                move |_| {
-                    let _ = &capture;
-                },
-            ))));
+            *pending.borrow_mut() = Some(scheduler.listen_lifecycle_state(move |_| {
+                let _ = &capture;
+            }));
             let capture = Capture(Rc::clone(&drops));
             *pending_task.borrow_mut() =
                 Some(owner.async_driver().spawn_local(Box::pin(async move {
@@ -164,10 +157,10 @@ fn observer_failures_protect_nested_retirement() {
             "{mode}: nested cleanup destroys both opaque captures behind the first failure"
         );
         let capture = Capture(Rc::clone(&drops));
-        let id = scheduler.add_lifecycle_state_listener(Rc::new(move |_| {
+        let subscription = scheduler.listen_lifecycle_state(move |_| {
             let _ = &capture;
-        }));
-        assert!(scheduler.remove_lifecycle_state_listener(id));
+        });
+        subscription.detach();
         assert_eq!(drops.get(), 3, "healthy next operation retires normally");
     }
 }
@@ -202,8 +195,8 @@ fn observer_failure_custody_follows_a_replacement_owner() {
             *owner.borrow_mut() = Some(replacement);
         }
     };
-    scheduler.add_lifecycle_state_listener(Rc::new(|_| panic!("observer failure")));
-    scheduler.add_lifecycle_state_listener(Rc::new(move |_| replace()));
+    let _failing = scheduler.listen_lifecycle_state(|_| panic!("observer failure"));
+    let _replacing = scheduler.listen_lifecycle_state(move |_| replace());
     let capture = Capture(Rc::clone(&drops));
     let _outgoing_task = owner
         .borrow()

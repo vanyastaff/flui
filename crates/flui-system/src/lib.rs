@@ -21,7 +21,8 @@
 //! An application registers [`SystemPlugin`]; a scenario registers
 //! `testing::ScriptedSystem` instead (feature `testing`).
 //!
-//! Windows provides every service. Linux reaches the launcher, the file
+//! Windows provides every service, macOS every one but the jump list.
+//! Linux reaches the launcher, the file
 //! dialogs, autostart and the global shortcuts through the XDG desktop
 //! portal on the session bus, the launcher entry through its session-bus
 //! signal, and the user folders through the XDG user directories; it
@@ -31,7 +32,7 @@
 //! and badges an installed application's icon through the browser, and
 //! refuses autostart, global shortcuts, the user folders, the jump list and
 //! the system information with `NotOnThisPlatform`: a page has none of
-//! them. Elsewhere, and for the system information off Windows, the handle is
+//! them. Elsewhere, and for the system information on Linux, the handle is
 //! refused with `UnsupportedReason::NotYetOnThisHost` until a platform's
 //! provider lands, never faked (ADR-0154 §10); the jump list is refused with
 //! `NotOnThisPlatform` everywhere but Windows.
@@ -39,8 +40,10 @@
 pub mod autostart;
 pub mod dialog;
 pub mod jump_list;
+#[cfg(any(target_os = "macos", test))]
+mod macos;
 pub mod os;
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 mod owner;
 #[cfg(target_os = "linux")]
 mod portal;
@@ -58,9 +61,9 @@ mod win32;
 use flui_platform::capability::{CapabilityRegistrar, Plugin};
 
 /// The system services' providers for the platform the application runs on:
-/// the Windows shell on Windows, the XDG desktop portal on Linux, the
-/// browser on the web, and a refusal for what a platform's provider does
-/// not have.
+/// the Windows shell on Windows, AppKit and the system frameworks on macOS,
+/// the XDG desktop portal on Linux, the browser on the web, and a refusal
+/// for what a platform's provider does not have.
 #[derive(Clone, Copy, Debug, Default)]
 #[non_exhaustive]
 pub struct SystemPlugin;
@@ -77,6 +80,8 @@ impl Plugin for SystemPlugin {
     fn register(&self, registrar: &mut CapabilityRegistrar) {
         #[cfg(windows)]
         win32::register(registrar);
+        #[cfg(target_os = "macos")]
+        macos::register(registrar);
         #[cfg(target_os = "linux")]
         portal::register(registrar, None, None);
         #[cfg(target_arch = "wasm32")]
@@ -93,8 +98,6 @@ mod refusals {
     use flui_platform::capability::{Capability, CapabilityRegistrar, ProviderContext};
     use flui_platform::{Unsupported, UnsupportedReason};
 
-    use crate::os::OsCapability;
-
     /// Provide `C` as a refusal for `reason`.
     fn refuse<C: Capability>(registrar: &mut CapabilityRegistrar, reason: UnsupportedReason) {
         registrar.provide::<C>(move |_: &ProviderContext<'_>| {
@@ -102,6 +105,16 @@ mod refusals {
         });
     }
 
+    /// macOS provides every service but the jump list, which is Windows'.
+    #[cfg(target_os = "macos")]
+    pub(crate) fn register(registrar: &mut CapabilityRegistrar) {
+        refuse::<crate::jump_list::JumpListCapability>(
+            registrar,
+            UnsupportedReason::NotOnThisPlatform,
+        );
+    }
+
+    #[cfg(not(target_os = "macos"))]
     pub(crate) fn register(registrar: &mut CapabilityRegistrar) {
         let not_yet = UnsupportedReason::NotYetOnThisHost;
         // The portal's registration provides the rest on Linux, and refuses
@@ -127,6 +140,6 @@ mod refusals {
             refuse::<UserDirCapability>(registrar, not_yet);
             refuse::<JumpListCapability>(registrar, UnsupportedReason::NotOnThisPlatform);
         }
-        refuse::<OsCapability>(registrar, not_yet);
+        refuse::<crate::os::OsCapability>(registrar, not_yet);
     }
 }

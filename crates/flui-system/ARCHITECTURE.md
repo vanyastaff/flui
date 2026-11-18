@@ -151,6 +151,121 @@ A user folder is `SHGetKnownFolderPath`'s, on a shell thread, since a redirected
 the network; `PublicShare` is `FOLDERID_Public`. A folder the user does not have answers none, and
 a relative path the system's contract excludes is `MalformedAnswer`.
 
+## macOS (`macos`)
+
+The `macos` module provides every service but the jump list, which macOS has no form of (the
+Dock menu is the application delegate's, the host's). Each provider's rules (what a request
+becomes, what an answer means) are functions of its file over plain values, compiled and tested on
+every host (`macos::*::tests`); the AppKit, Foundation, ServiceManagement and Carbon calls are the
+file's `macos`-only `appkit` module, checked by CI's macOS type-check. The owed Mac runs are in the
+parity rows.
+
+Threads:
+
+- **AppKit runs on the main thread**, the UI runtime's owner thread in a macOS application: the
+  panels, the alert, the share picker, the Dock tile and the hot keys are acquired with a
+  `MainThreadMarker`, and a runtime whose owner thread is not the main thread (the headless host)
+  is refused them with `NotYetOnThisHost` before AppKit is touched.
+- **Work that touches the file system or waits on a daemon runs on a global dispatch queue**
+  (`macos::queue::WorkQueue`): the launcher, the share picker's file check, the login item and the
+  user's folders, at most `WorkQueue::MAX_IN_FLIGHT` per runtime; a request past that answers its
+  refusal with `Unavailable`, and a work item gives its place back on every exit. No file system
+  call runs on the main thread (ADR-0360 §2).
+
+Every block, work item, Objective-C method and Carbon handler the system calls is one call of
+`owner::panic_boundary::os_entry`, and the one class the crate declares (the open panel's name
+check) keeps its ivars in `ContainedIvars`, as in
+`flui-native`.
+
+A feature newer than the floor is behind a gate of `macos::version` (ADR-0244 §4): a marker with its
+`SINCE`, a `Since` proof the call takes, and a compile error for a gate at or below the floor, which
+`macos/floor.rs` states, generated from `platform-support.toml` by `cargo xtask platform-floor`. The
+floor is 10.13 on x86_64 and 11.0 on arm64, so a gate between them exists on x86_64 only. A class
+above the floor is looked up at run time, never linked: `UTType` (macOS 11, in a framework 10.15
+lacks) through `AnyClass::get`, `SMAppService` (macOS 13) through objc2's lookup behind the proof.
+
+A dialog and the alert are sheets on the acquiring widget's window (`beginSheetModalForWindow:`),
+and a window with no AppKit window answers `NoWindow`. The sheet's completion handler and the
+dialog's hold share the caller's resolver (`macos::sheet::Pending`): the first to come takes it, so
+a hold dropped while the sheet is up (the caller let go, the window closed, the runtime retired)
+ends the sheet (`endSheet:returnCode:`), and the handler that ending runs answers nobody
+(ADR-0344). A filter is what the panel allows: from macOS 11 its content types (an extension the
+`UTType` of its last part, a MIME type its type, a MIME family, `image/*`, `audio/*`, `video/*`,
+`text/*` or `font/*`, the family's system type; another family is refused `NotOnThisPlatform`
+rather than widened); below macOS 11, on an Intel Mac, its file types, the extensions' last parts,
+and a filter with a MIME type answers `NotOnThisDevice`. macOS admits what conforms to an allowed
+type (`.swift` under `txt`) and derives a type from a name's last part, so an open panel with a
+filter holds every item to the contract's rule through its delegate (`panel:shouldEnableURL:`): a
+folder to browse, or a file whose name ends in an extension, which reads nothing of the file, or
+whose type conforms to a MIME pattern's (ADR-0360 §3, §4). The item judged is the one the panel
+answers, an alias's or a link's target, and that target is what the pick hands out, so the
+delegate and the handle's name check judge one file. Under a MIME pattern, where the handle does
+not check, a pick whose name and type both fail the rule answers the handle's `NotInFilter`; a
+pick whose type cannot be read is not refused for that. A save's pick names a file to create and
+is not checked. A panel has no filter menu, so every filter is allowed at once and a save reports
+no selected filter. The alert adds its buttons default first, so AppKit puts it rightmost and
+gives Escape to the button titled Cancel.
+
+A path reaches Foundation as the file system's bytes (`fileURLWithFileSystemRepresentation:`) and
+comes back the same way (`getFileSystemRepresentation:`), so a name that is not UTF-8, which a FAT,
+exFAT, SMB or NFS volume may hold, names its file.
+
+Launching opens no shell. A URI goes to `NSWorkspace` `openURL:` as written once
+`URLForApplicationToOpenURL:` finds a handler. Only a regular file or a folder is a document, and
+nothing else is ever opened: the path is examined first (`stat`), since opening is itself an act
+on a pipe or a device (a pipe's writer is let through, a terminal may become the process's), then
+opened following links, without blocking and without taking a terminal
+(`O_NONBLOCK | O_NOCTTY | O_CLOEXEC`: a node swapped in between must neither hold the work item's
+place nor become the controlling terminal), and what the descriptor holds is examined again
+(`fstat`). Its final path
+(`F_GETPATH`) is judged: the name floor (`runs_when_opened`), an execute bit on a regular file, and
+a folder Launch Services calls an application (`NSURLIsApplicationKey`) are `NotADocument`; only
+then is the final path handed to `openURL:`, while the file is still open. Reveal is
+`activateFileViewerSelectingURLs:` once the path exists; trash is `NSFileManager`
+`trashItemAtURL:`, a volume with no trash `NotOnThisDevice`. A volume that stops answering holds a
+request's place until it answers.
+
+The share picker is a popover on the window's content view, shown at the owner turn where the file
+check settles, unless the window closed meanwhile; it shares the text as a string, the link as a URL
+and each file as a file URL, and has no title.
+
+Autostart is the application's own login item, `SMAppService.mainAppService`. The user's switch-off
+in System Settings (`requiresApproval`) is never registered over: enabling then answers `Disabled`.
+An unbundled executable has no item (`NotDeclared`).
+
+A global shortcut is a Carbon hot key (`RegisterEventHotKey`), which needs no Accessibility
+permission and reports the release. Each runtime installs its handler on the application event
+target with its first binding. A shortcut is bound to the trigger it prefers or left out of `Bound`:
+no preferred trigger, F21 to F24 (no key code), or a chord another application holds, which an
+exclusive registration (`kEventHotKeyExclusive`) refuses. A letter or digit is the key of the main
+block (`kVK_ANSI_A` to `kVK_ANSI_Grave`, never the keypad, which types the digits on every layout)
+that types it on the current layout while the chord's Shift and Command are held (`UCKeyTranslate`
+over the current input source), so `⌘S` on Dvorak – QWERTY ⌘ is the key QWERTY has it on; Control
+and Option are left out of the question, since under them a key types another character than the
+one its chord is read by. Where no such key types it (a non-Latin layout, a digit AZERTY types only
+with Shift) it is its ANSI position. The runtime observes
+`kTISNotifySelectedKeyboardInputSourceChanged` while its handler is installed and, when the layout
+changes, moves every shortcut whose key is another one now: all that move are unregistered before
+any is registered, since two may trade keys, and a binding whose shortcuts changed by it (one whose
+new chord is held leaves, one that was left out and whose new chord is free joins) hears `Changed`
+with the ones bound. Two runtimes of one process each move their own, so a pair of chords that
+trade keys across them can collide. Carbon hands every hot key to every handler on the application
+target, so a hot key's number is unique in the process (one counter, ADR-0097 §2, folded into the
+`EventHotKeyID`'s signature and id) and never handed out again: a handler passes on an event whose
+number it does not hold, for the next runtime's handler, and a process that handed out every number
+ends a binding that needs one with `ShortcutError::Exhausted`.
+
+The launcher entry is the process's Dock tile: the count its badge, in full; a known extent a bar
+over the application's icon in the tile's content view, made once per runtime and updated. The Dock
+draws the tile once per change, so an indeterminate bar could not move and shows no progress. The
+entry's state is a UI runtime's (`TaskbarEntry`), while the tile is the process's: in a process with
+two runtimes, the last to set its entry is what the tile shows.
+
+A user folder is `URLsForDirectory:inDomains:` in the user's domain (Movies for videos, Public for
+the public share; there is no templates folder), the home folder `homeDirectoryForCurrentUser`; a
+folder the user does not have answers none. The system information is `NSProcessInfo`'s version,
+read once per runtime, and the machine's processor, Arm64 for a process Rosetta translates.
+
 ## Linux (`portal`)
 
 - One `Portal` per UI runtime (`ProviderContext::runtime_local`): a thread of its own runs a
@@ -199,10 +314,14 @@ a relative path the system's contract excludes is `MalformedAnswer`.
   picks' declared sizes are checked before a byte is read and the bytes read are counted again,
   and more is `DialogError::TooLarge`. Each file is copied once, from the browser's buffer into the
   pick's own.
-- A host whose dialog only suggests the filters checks every pick against them
-  (`FileFilter::matches`, ADR-0360 §4) and refuses the whole answer with
-  `DialogError::NotInFilter` when one matches none: the answer is what the user chose, and it is
-  not what the request asked for.
+- Every pick is held to the request's filters, and one that matches none refuses the whole answer
+  with `DialogError::NotInFilter`: the answer is what the user chose, and it is not what the
+  request asked for. A pick's name is the handle's to check, for every backend (`FileDialogs::open`):
+  every system's dialog lets a user past its filters somewhere (a name typed into it, a link whose
+  target has another name, a type that only conforms to an allowed one, a browser's input that
+  offers every file beside them). The handle cannot tell a file's type, so it checks a request
+  whose filters name extensions only, and a backend that mapped a MIME pattern judges the pick by
+  its type (`FileFilter::matches` with the browser's type on the web, type conformance on macOS).
 - A save may carry the contents it writes (`SaveRequest::contents`), the one way to save where
   the system gives a page no file to write later. The handle writes them to a path the user
   chose on a thread of its own, into a new file beside it that is synced and renamed over it, so a
@@ -291,14 +410,17 @@ a relative path the system's contract excludes is `MalformedAnswer`.
 - `crates/flui-system/tests/` (`system_it`, feature `testing`): the handles through the public API
   on a headless host over `testing::ScriptedSystem`, and the conformance table
   `every_provider_keeps_the_system_services_contract`, every service run against the doubles and
-  against `SystemPlugin` on the host it runs on (the Windows shell or the Linux portal), asking
-  nothing a user answers. Against the platform's providers it proves acquisition, the seam's
+  against `SystemPlugin` on the host it runs on (the Windows shell, AppKit or the Linux portal),
+  asking nothing a user answers. Against the platform's providers it proves acquisition, the seam's
   refusals and the launcher entry's shared state only (its windows are headless), and the system's
   name and home folder.
-- `win32::*::tests`: each Windows provider at its OS seam, with the stand-ins and the test owner
-  of the crate's kit (`testing::win32`, test builds on Windows only); `win32::modal::tests` and
+- `win32::*::tests`: each Windows provider at its OS seam, with the test owner
+  (`testing::owner`) and the stand-ins of the crate's kit (`testing::win32`, test builds on
+  Windows only); `win32::modal::tests` and
   `win32::dialogs::tests` run the dialog thread and its dismissal window with a stand-in dialog.
 - `tests/portal.rs` and `tests/portal_services.rs` (Linux): the portal providers against a
   stand-in portal on a private bus.
+- `macos::*::tests` (every host): each macOS provider's rules as a model, with the system's answers
+  as inputs and `testing::owner::TestOwner`'s turns; the AppKit calls compile only for macOS.
 - `web::rules::tests` on every host, and `web::tests` in headless Chrome (CI's `wasm-check` job
   runs `cargo test -p flui-system --lib --target wasm32-unknown-unknown`).

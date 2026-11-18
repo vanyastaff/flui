@@ -630,6 +630,9 @@ pub(crate) mod mode {
         heading: Option<WindowMode>,
         /// The mode a window that opened hidden enters when it is first shown.
         when_shown: Option<WindowMode>,
+        /// The mode the window last entered full screen from, zoomed or
+        /// normal, which AppKit puts back as it leaves full screen.
+        fullscreen_from: Option<WindowMode>,
     }
 
     impl ModeSequence {
@@ -700,6 +703,39 @@ pub(crate) mod mode {
             self.animating_since = Some(now);
         }
 
+        /// AppKit starts a full-screen transition at `now`, `entering` it or
+        /// leaving it (`windowWillEnterFullScreen:`,
+        /// `windowWillExitFullScreen:`), for a window with `flags`: the step
+        /// starts, and the answer is the mode the transition lands in, which
+        /// the window's snapshot waits for. A transition a command sent lands
+        /// where the command heads. One the user started (the green button,
+        /// the system's full-screen shortcut) lands in full screen
+        /// as it enters, and as it leaves, in the mode the window entered full
+        /// screen from, zoomed or normal, which AppKit puts back.
+        pub(crate) fn fullscreen_transition(
+            &mut self,
+            now: Instant,
+            entering: bool,
+            flags: WindowFlags,
+        ) -> WindowMode {
+            self.expire(now);
+            let heading = self.heading(now);
+            self.step_started(now);
+            if entering {
+                // The frame is still the one the window had before.
+                self.fullscreen_from = Some(if flags.is_maximized() {
+                    WindowMode::Maximized
+                } else {
+                    WindowMode::Normal
+                });
+            }
+            match heading {
+                Some(target) => target,
+                None if entering => WindowMode::Fullscreen,
+                None => self.fullscreen_from.unwrap_or(WindowMode::Normal),
+            }
+        }
+
         /// The step that was animating is over, or failed: the window's flags
         /// say its mode again.
         pub(crate) fn step_ended(&mut self) {
@@ -752,6 +788,46 @@ pub(crate) mod mode {
             self.when_shown.take()
         }
     }
+
+    /// The read a window owes at the instant its wait for a mode change ends
+    /// (`WindowStateCell::mode_deadline`), which nothing from AppKit marks.
+    ///
+    /// The end moves: a newer mode request replaces the wait, a read that
+    /// finds the mode asked shortens it, a transition's end lengthens it.
+    /// One timer is live at a time, the one armed for the end the wait has
+    /// now; a timer armed for an end the wait no longer has reads nothing
+    /// when it fires, so a window never reads once per request.
+    #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+    pub(crate) struct WaitEndRead {
+        /// The end of the wait the live timer was armed for.
+        armed_for: Option<Instant>,
+    }
+
+    impl WaitEndRead {
+        /// The wait ends at `end` now, or there is none. Answers how long
+        /// after `now` a timer for that end fires, when one is to be armed:
+        /// `None` when the live timer already serves `end`, or nothing is
+        /// waited for.
+        pub(crate) fn follow(&mut self, end: Option<Instant>, now: Instant) -> Option<Duration> {
+            if self.armed_for == end {
+                return None;
+            }
+            self.armed_for = end;
+            end.map(|end| end.saturating_duration_since(now))
+        }
+
+        /// A timer armed for `end` fired: whether it is the live one, whose
+        /// read the window makes now. After it no timer is live, so the read
+        /// arms the next if the wait goes on.
+        pub(crate) fn fired(&mut self, end: Instant) -> bool {
+            let live = self.armed_for == Some(end);
+            if live {
+                self.armed_for = None;
+            }
+            live
+        }
+    }
+
     #[cfg(test)]
     mod tests {
         use WindowMode::{Fullscreen, Maximized, Minimized, Normal};
@@ -954,6 +1030,85 @@ pub(crate) mod mode {
                 sequence.command(start + ANIMATION_LIMIT, flags("R"), Maximized),
                 [ModeStep::Zoom]
             );
+        }
+
+        /// A full-screen transition lands where the command that sent it
+        /// heads; one the user started lands in full screen, and back in the
+        /// zoomed state or normal mode the window entered it from.
+        #[test]
+        fn a_fullscreen_transition_lands_where_it_heads_or_where_it_came_from() {
+            let start = Instant::now();
+            // (the case, the command before, the flags as the transition
+            // enters, as it leaves, where entering and leaving land)
+            let table = [
+                ("the user's, from normal", None, "R", (Fullscreen, Normal)),
+                (
+                    "the user's, from zoomed",
+                    None,
+                    "ZR",
+                    (Fullscreen, Maximized),
+                ),
+                (
+                    "a command's to full screen",
+                    Some(Fullscreen),
+                    "R",
+                    (Fullscreen, Normal),
+                ),
+            ];
+            for (case, command, entering_flags, (enters, leaves)) in table {
+                let mut sequence = ModeSequence::default();
+                if let Some(mode) = command {
+                    sequence.command(start, flags(entering_flags), mode);
+                }
+                let entered = sequence.fullscreen_transition(start, true, flags(entering_flags));
+                assert_eq!(entered, enters, "{case}: entering");
+                sequence.step_ended();
+                let left = sequence.fullscreen_transition(at(start, 1), false, flags("FR"));
+                assert_eq!(left, leaves, "{case}: leaving");
+            }
+            // A command out of full screen heads where it asked, whatever
+            // the window came from.
+            let mut sequence = ModeSequence::default();
+            sequence.fullscreen_transition(start, true, flags("ZR"));
+            sequence.step_ended();
+            assert_eq!(
+                sequence.command(at(start, 1), flags("FR"), Normal),
+                [ModeStep::ExitFullscreen]
+            );
+            assert_eq!(
+                sequence.fullscreen_transition(at(start, 1), false, flags("FR")),
+                Normal
+            );
+        }
+
+        /// One timer reads the window at the end of its wait: the end a
+        /// timer already serves arms no second, an end that moved arms
+        /// another and the timer of the end before reads nothing, and the
+        /// timer that reads leaves none live.
+        #[test]
+        fn one_timer_reads_a_window_at_the_end_of_its_wait() {
+            let now = Instant::now();
+            let (animation, settled) = (at(now, 3), at(now, 1));
+            let mut read = WaitEndRead::default();
+            assert_eq!(read.follow(None, now), None, "nothing is waited for");
+            assert_eq!(
+                read.follow(Some(animation), now),
+                Some(Duration::from_secs(3))
+            );
+            assert_eq!(read.follow(Some(animation), now), None, "its timer is live");
+            // A read found the mode asked: the wait ends sooner.
+            assert_eq!(
+                read.follow(Some(settled), now),
+                Some(Duration::from_secs(1))
+            );
+            assert!(!read.fired(animation), "an end the wait no longer has");
+            assert!(read.fired(settled));
+            assert!(!read.fired(settled), "a timer reads once");
+            // The timer's read left the wait standing: another is armed, at
+            // once for an end already past.
+            assert_eq!(read.follow(Some(settled), at(now, 2)), Some(Duration::ZERO));
+            assert_eq!(read.follow(None, at(now, 2)), None, "the wait ended");
+            assert!(!read.fired(settled), "a wait that ended reads nothing");
         }
 
         #[test]

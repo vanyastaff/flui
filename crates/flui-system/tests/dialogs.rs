@@ -193,6 +193,55 @@ fn several_picks_for_a_single_pick_request_are_a_malformed_answer() {
 }
 
 #[test]
+fn a_pick_whose_name_ends_in_no_extension_of_the_filters_refuses_the_whole_answer() {
+    let (dialogs, plugin) = scripted();
+    let (mut host, handle) = acquire::<FileDialogCapability>(&plugin);
+    let handle = handle.expect("the scripted plugin provides dialogs");
+    let by_name = || {
+        vec![
+            FileFilter::new("Text").with_extension("txt"),
+            FileFilter::new("Archives").with_extension("tar.gz"),
+        ]
+    };
+    let by_name_or_type = || {
+        vec![
+            FileFilter::new("Text")
+                .with_extension("txt")
+                .with_mime_type("text/*"),
+        ]
+    };
+    let cases: [(Vec<FileFilter>, &[&str], bool); 9] = [
+        (by_name(), &["notes.txt"], true),
+        (by_name(), &["NOTES.TXT", "backup.Tar.Gz"], true),
+        // A type that conforms to an allowed one is not one of its names.
+        (by_name(), &["main.swift"], false),
+        // A dialog that matched the last part of `tar.gz` only.
+        (by_name(), &["notes.gz"], false),
+        (by_name(), &["notes.txt", "run.command"], false),
+        (by_name(), &["txt"], false),
+        // A file's type is its system's to tell: the backend judged it.
+        (by_name_or_type(), &["main.swift"], true),
+        (Vec::new(), &["anything"], true),
+        (by_name(), &["notes.txt.zip"], false),
+    ];
+    for (filters, names, admitted) in cases {
+        let picked = picks(names);
+        dialogs.answer_next_open(Ok(Some(picked.clone())));
+        let mut request = OpenRequest::files().allow_multiple();
+        request.filters = filters;
+        let answered = land(handle.open(request));
+        turn(&mut host);
+        turn(&mut host);
+        let expected = if admitted {
+            Ok(Some(picked))
+        } else {
+            Err(DialogError::NotInFilter)
+        };
+        assert_eq!(*answered.borrow(), Some(Ok(expected)), "{names:?}");
+    }
+}
+
+#[test]
 fn a_window_shows_one_dialog_at_a_time() {
     let (dialogs, plugin) = scripted();
     let mut host = HeadlessHost::with_plugin(HeadlessWindow::new(10, 10), &plugin);

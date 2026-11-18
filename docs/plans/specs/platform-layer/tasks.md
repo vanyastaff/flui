@@ -5558,6 +5558,89 @@ GPU-память простаивающего или невидимого окн
   iOS, Android, wasm не компилировались здесь. Удаление `Platform::prompt_for_*`, `open_url`,
   `reveal_path`, `open_path` из ядра — LY61 (ждёт провайдеров остальных ОС), записано в
   `docs/gaps.md`.
+- [x] **LY58** (закрыта веткой `system/macos-providers`: провайдеры macOS всех служб, кроме
+  jump list; прогоны на Mac — заметки строк parity). `crates/flui-system/src/macos/` на objc2:
+  файловые диалоги — листы `NSOpenPanel`/`NSSavePanel` на окне виджета, message box — лист
+  `NSAlert`, share — поповер `NSSharingServicePicker`; ответ листа и удержание делят резолвер
+  (`macos::sheet::Pending`), сброшенное удержание (вызывающий ушёл, окно закрылось, runtime
+  отставлен) закрывает лист `endSheet:returnCode:`, и обработчик никому не отвечает (ADR-0344).
+  Фильтры (ADR-0360 §3, §4): расширение — `UTType` его последней части, MIME — его тип, семейство
+  (`image/*`, `audio/*`, `video/*`, `text/*`, `font/*`) — системный тип, иное семейство —
+  `NotOnThisPlatform`; делегат открывающей панели (`panel:shouldEnableURL:`) держит каждый
+  элемент правилом контракта: сначала имя (ничего не читая), затем тип против MIME-шаблонов, и
+  судит то, что панель ответит, — цель псевдонима или ссылки, она же и выдаётся; меню фильтров
+  нет, сохранение не сообщает выбранный фильтр. Имя каждого выбора сверяет с фильтрами сама ручка
+  на всех ОС (`FileDialogs::open`: фильтры только из расширений, имя не оканчивается ни одним —
+  весь ответ `DialogError::NotInFilter`); тип ручке неизвестен, поэтому при MIME-шаблоне судит
+  провайдер: на macOS выбор, не прошедший ни по имени, ни по прочитанному типу, — тот же
+  `NotInFilter`, а непрочитанный тип отказом не служит. Лаунчер — `NSWorkspace` вне главного
+  потока (очередь GCD, не больше `WorkQueue::MAX_IN_FLIGHT` на runtime): путь сначала
+  осматривается (`stat`), открывается только обычный файл или папка (канал, устройство и сокет
+  отклоняются неоткрытыми), без блокировки и без управляющего терминала
+  (`O_NONBLOCK | O_NOCTTY | O_CLOEXEC`), дескриптор осматривается снова (`fstat`), итоговый путь
+  (`F_GETPATH`) судится полом имён, битом исполнения и `NSURLIsApplicationKey`, затем `openURL:`
+  по нему; reveal — `activateFileViewerSelectingURLs:`, trash — `trashItemAtURL:`. Автозапуск —
+  `SMAppService.mainAppService` (macOS 13; ниже — `NotOnThisDevice`), выключение пользователем
+  (`requiresApproval`) не перезаписывается: включение отвечает `Disabled`. Глобальные сочетания
+  — Carbon `RegisterEventHotKey`, исключительная регистрация, нажатие и отпускание; буква или
+  цифра — клавиша основного блока (не цифровой), которая печатает её на текущей раскладке при
+  Shift и Command сочетания (`UCKeyTranslate`), иначе её место ANSI; runtime слушает
+  `kTISNotifySelectedKeyboardInputSourceChanged` и переносит каждое сочетание, чья клавиша
+  сменилась (сначала все снимаются, потом регистрируются: две могут поменяться местами),
+  привязка слышит `Changed`, когда сочетание выпало на занятый аккорд или вернулось; номер
+  уникален в процессе, не переиспользуется, а исчерпание завершает привязку `Exhausted`. Запись
+  лаунчера — плитка Dock (значок и полоса, неопределённый прогресс не показывается). Папки —
+  `URLsForDirectory:inDomains:`, сведения об ОС — `NSProcessInfo` и Rosetta. Ворота версий —
+  `macos::version` той же формы, что в `flui-native` (до него ёмкостный крейт не дотягивается),
+  пол — `macos/floor.rs` от `cargo xtask platform-floor`; класс выше пола ищется во время
+  выполнения (`UTType`, `SMAppService`). Контракт: `SystemFailure::Framework(i64)` — код
+  `NSError` вне POSIX или `OSStatus`. Каждый блок, задача GCD, метод класса и обработчик Carbon —
+  через `owner::panic_boundary::os_entry`, ivars класса — `ContainedIvars`; `xtask
+  panic-boundary` зелёный. Тесты-модели на всех ОС (`macos::*::tests`):
+  `only_a_document_or_a_plain_folder_is_handed_on`,
+  `a_file_system_error_is_named_where_the_contract_names_it`,
+  `a_filter_allows_each_type_once_and_a_several_part_extension_by_its_last_part`,
+  `a_mime_family_macos_has_no_type_for_is_refused_rather_than_widened`,
+  `a_name_matches_as_the_contract_says`,
+  `an_ended_panel_answers_its_picks_a_cancel_or_why_it_could_not`,
+  `the_first_of_the_answer_and_the_dismissal_takes_the_caller`,
+  `each_button_answers_its_answer_and_no_other_response_is_one`,
+  `enabling_registers_once_and_the_users_switch_off_stands`,
+  `disabling_unregisters_what_is_registered_and_nothing_else`,
+  `a_refusal_and_a_failure_are_named_and_an_unbundled_application_has_no_item`,
+  `a_shortcut_is_bound_to_its_preferred_chord_or_left_out_and_a_number_is_never_reused`,
+  `a_trigger_is_its_key_code_and_flags_and_is_shown_as_macos_writes_it`,
+  `the_tile_shows_the_count_and_a_known_extent_and_says_so`,
+  `each_folder_is_the_one_foundation_keeps_and_templates_none`,
+  `the_system_is_macos_at_its_version_on_the_machines_processor`,
+  `a_runtime_holds_a_bounded_number_of_places_and_each_comes_back_when_dropped`,
+  `a_pipe_or_a_device_named_like_a_document_is_refused_without_being_opened` (Linux),
+  `an_items_name_admits_it_before_anything_of_it_is_read`,
+  `a_letter_or_digit_is_the_main_block_key_that_types_it_under_the_chords_shift_and_command`,
+  `a_layout_switch_moves_each_shortcut_to_the_key_that_types_it_now`,
+  `a_process_out_of_hot_key_numbers_binds_nothing_more`,
+  `two_runtimes_never_take_each_others_hot_keys`,
+  `a_number_names_one_hot_key_in_the_process_and_survives_carbon_unchanged`, через публичный API
+  `a_pick_whose_name_ends_in_no_extension_of_the_filters_refuses_the_whole_answer`, ворота
+  `the_login_item_is_there_from_macos_13_on`, `content_types_are_there_from_macos_11_on`,
+  `a_gate_opens_from_its_version_on_and_never_for_an_unknown_one`. Проверено: модели на Windows и
+  Linux (WSL), проверка типов `aarch64-apple-darwin`, `aarch64-apple-ios`, `aarch64-linux-android`
+  и `wasm32-unknown-unknown` на nightly в WSL; clippy для macOS — только CI. С откатом своей
+  правки красные: открытие до осмотра пути —
+  `a_pipe_or_a_device_named_like_a_document_is_refused_without_being_opened` (писатель канала
+  пропущен); поиск по всем кодам клавиш или без модификаторов сочетания —
+  `a_letter_or_digit_is_the_main_block_key_…` (`⌘1` на AZERTY — клавиша цифрового блока; `⌘S` на
+  Dvorak – QWERTY ⌘ — место Dvorak); перенос без действия или в один проход —
+  `a_layout_switch_moves_each_shortcut_…` (`⌘A` выпадает, пока `⌘Q` держит её новую клавишу);
+  счётчик с переполнением — `a_process_out_of_hot_key_numbers_binds_nothing_more`; чтение типа
+  до имени — `an_items_name_admits_it_before_anything_of_it_is_read`; без сверки в ручке —
+  `a_pick_whose_name_ends_in_no_extension_of_the_filters_refuses_the_whole_answer`. Не
+  запускалось: ни одна панель, лист, запуск, сочетание, смена раскладки, вход в систему, плитка
+  Dock на Mac; цель `x86_64-apple-darwin` (ворота `UTType`) не проверялась здесь. Чего macOS не
+  достаёт до контракта (английские подписи кнопок, суффикс многочастного расширения при
+  сохранении, плитка Dock процесса при двух runtime, сочетания двух runtime при смене раскладки,
+  стоящий том держит место запроса) — `docs/gaps.md`; там же: лаунчер Linux открывает любой узел
+  до суждения.
 - [x] **LY59** (закрыта веткой `system/linux-portals`: порталы, родитель окна и поправка
   ADR-0152 построены; прогоны на рабочем столе записаны в parity) — #2158 (`bb618a7f7`), zbus на
   своём runtime #2155, `PortalParent` окна Wayland #1934. `crates/flui-system/src/portal/`
@@ -7167,7 +7250,7 @@ GPU-память простаивающего или невидимого окн
   все. Cut, Copy и извлечённый текст на устройстве не запускались — строка
   `ime-composition-and-candidate-placement` паритета; потеря клавиш форматтером при быстрой печати —
   `docs/gaps.md`. Проверки и непрогнанное — в теле PR.
-- [ ] **LY124** — ветка `native/fullscreen-policy`. Обе находки подтверждены на `main` @
+- [x] **LY124** — ветки `native/fullscreen-policy` (Win32, PR #2680) и `native/fullscreen-policy-unix-apple`. Обе находки подтверждены на `main` @
   `e166cabd3` запуском на Windows: F11, которое обработчик пропустил, переводило окно в
   полноэкранный режим; `SetMode(Maximized)` полноэкранного окна, развёрнутого до этого,
   публиковало `[Fullscreen, Normal, Normal, Maximized]`. Переключатель, терявший «развёрнуто»,
@@ -7197,12 +7280,67 @@ GPU-память простаивающего или невидимого окн
   дисплеев); документы говорят правило как есть — ни один хост не переключает полноэкранный
   режим своим решением, смена системой (зелёная кнопка macOS, Escape браузера) сообщается и не
   оспаривается; устаревшие фрагменты changelog о F11 переписаны.
-  Остаётся строимое, поэтому строка открыта: X11, Wayland и AppKit исполняют выход несколькими
-  ответами системы окон и публикуют режим между (openbox на Xvfb в WSL: `Normal` трижды до
-  `Maximized`, и при развороте до снятия полноэкранного). Нужно: хост держит режим снимка, пока
-  запрошенная им смена режима в пути, с ограничением по времени и ходом владельца по его
-  истечении; записано в `docs/gaps.md` («Leaving fullscreen publishes a mode in between on
-  AppKit, X11 and Wayland»). Проверки и непрогнанное — в теле PR #2680.
+  X11, Wayland и AppKit (подтверждено на `main` @ `7b596b26b`: openbox на Xvfb в WSL публиковал
+  `[Normal, Normal, Normal, Maximized]` для `SetMode(Maximized)` полноэкранного окна, развёрнутого
+  до этого; скриптовый композитор — `[Normal, Maximized]`). Ни у одного из них нет клавиши
+  полноэкранного режима (у AppKit нет и главного меню). Построено одно правило в ячейке
+  состояния: `WindowStateCell::expect_mode`, который хост вызывает на каждую свою просьбу,
+  меняющую режим или выводящую из него, и на режим, в котором окно уже есть: новая просьба
+  заменяет ожидание прежней. Просьбы: `SetMode`, `SetSize` развёрнутого или полноэкранного окна
+  (X11 `resize`, Wayland `leave_compositor_modes`), переключатель разворота и кнопки заголовка
+  или рамки, которые окно рисует само, на AppKit — каждый zoom и полноэкранный переход
+  (`windowShouldZoom:toFrame:`, `windowWill{Enter,Exit}FullScreen:`). Просьба, на которую никто
+  не отвечает, ожидание кончает (`end_mode_wait`): свёртывание Wayland, режим, который
+  неотображённое окно X11 пишет в свои свойства, рамка, которую AppKit сразу даёт zoom-окну.
+  Чтение в запрошенном режиме публикуется как прочитано; чтение в другом из обычного,
+  развёрнутого и полноэкранного — шаг: снимок держит свой режим и называет прямоугольник
+  возврата, бывший в начале смены. Так же его называет обычное чтение окна, идущего в обычный
+  режим из другого (`ModeChange::was_elsewhere`): первый обычный шаг openbox из полноэкранного
+  ещё во весь экран, а `WindowPlacement::from_state` берёт `normal_geometry`, когда снимок его
+  называет. Окно, спрошенное о режиме, в котором оно стоит, нигде больше не было: его чтения
+  идут как прочитаны, просьба не публикует ревизии, а передвинутое тем временем окно
+  запоминается там, где оно есть. Исключение, оставленное открытым: свёрнутое чтение и чтение
+  окна, опубликованного свёрнутым, публикуются как прочитаны, поэтому свёрнутое окно, которое
+  просят развернуть или сделать полноэкранным, публикует режимы по пути (openbox: обычный,
+  затем запрошенный) — держать «свёрнуто» над окном на экране нельзя, а запрошенного режима
+  оно ещё не достигло. Найдя запрошенный режим, окно ждёт ещё `MODE_SETTLE` против шага,
+  который система окон не успела сделать, всего не дольше `MODE_ANSWER_LIMIT` (AppKit — предел
+  анимации, затем `MODE_ANSWER_LIMIT` после конца перехода, если ожидание к нему не истекло).
+  Конец ожидания без событий: X11 будит цикл и помечает окно (`LoopWindows::mode_deadline`),
+  Wayland будит цикл (`LoopWindow::mode_due`), окно AppKit держит один таймер на полосе
+  владельца, взведённый на текущий конец ожидания (`WaitEndRead`). X11 не запоминает
+  прямоугольник возврата из шага на пути к другому режиму, а команда действует по режиму
+  сервера, не снимка (`mode_now`). AppKit ждёт и переход, начатый пользователем (зелёная кнопка,
+  системное сочетание): это просьба пользователя через системный хром, исполняется и
+  сообщается, как кнопка разворота у менеджера окон Linux
+  (`ModeSequence::fullscreen_transition`). Тесты, в скобках результат с откатом правила:
+  `a_fullscreen_window_changes_mode_in_one_step` (X11, openbox, таблица из четырёх, с местом
+  размещения каждого снимка; без `expect_mode` — `[Normal, Normal, Normal, Maximized]`, с
+  пропуском просьбы о текущем режиме — `Maximized` пять раз между двумя `Fullscreen`, без
+  прямоугольника возврата у обычного чтения на пути в обычный режим — снимок `Normal`
+  1280×1024 как место окна),
+  `a_mode_change_another_client_overtakes_is_published_when_the_wait_ends` (X11; без
+  пробуждения цикла к концу ожидания — опубликовано через 3,01 с),
+  `a_command_during_a_mode_wait_acts_on_the_mode_the_server_says` (X11; с режимом снимка в
+  `mode_now` окно остаётся развёрнутым 1280×1024),
+  `a_request_for_the_mode_the_window_is_in_publishes_nothing` (X11; с прямоугольником возврата у
+  каждого чтения — две ревизии, 5 → 7),
+  `a_mode_the_compositor_reaches_in_two_configures_is_published_once` (Wayland, таблица из пяти;
+  без `expect_mode` — `[Normal, Maximized]`, с пропуском просьбы о текущем режиме —
+  `[Maximized, Maximized]`, без `expect_mode` в `SetSize` — `[Maximized, Normal]`, а после
+  `SetMode(Maximized)` в том же ходе — `[Maximized, Maximized]`),
+  `a_mode_the_compositor_does_not_carry_out_is_published_when_the_wait_ends` (Wayland; без
+  `mode_due` снимок остаётся `Fullscreen`), модельные
+  `a_mode_change_in_flight_publishes_its_steps_in_the_mode_the_window_left` (ячейка, таблица из
+  одиннадцати; строка о свёрнутом окне закрепляет исключение, прочие красные без своего правила)
+  и `a_mode_wait_settles_waits_longer_and_ends` (ячейка; истёкшее ожидание, продлённое концом
+  перехода, — красная), `a_fullscreen_transition_lands_where_it_heads_or_where_it_came_from` и
+  `one_timer_reads_a_window_at_the_end_of_its_wait` (модели AppKit),
+  `from_state_remembers_the_normal_bounds_relative_to_the_usable_area` (размещение; со старым
+  `from_state` — красная). Прогон на Mac и под настольными менеджером окон и композитором — в
+  строке `fullscreen` `crates/flui-native/platform-parity.toml`; система окон медленнее
+  ожидания и режимы по пути из свёрнутого — в `docs/gaps.md` («A window system slower than the
+  mode wait publishes its steps»). Проверки и непрогнанное — в теле PR.
 
 - [x] **LY133** — ветка `native/quit-contract`, решение — ADR-0350 (заменяет первое предложение
   §4 ADR-0259). Обе находки подтверждены на `main` @ `ac3b1ee58`: `LoopControl::terminate_requested`

@@ -150,13 +150,7 @@ impl FileFilter {
     /// beside them.
     #[must_use]
     pub fn matches(&self, name: &str, mime_type: Option<&str>) -> bool {
-        let by_name = self.extensions.iter().any(|extension| {
-            name.len() > extension.len() + 1
-                && name.is_char_boundary(name.len() - extension.len() - 1)
-                && name[name.len() - extension.len() - 1..]
-                    .strip_prefix('.')
-                    .is_some_and(|tail| tail.eq_ignore_ascii_case(extension))
-        });
+        let by_name = self.names(name.as_bytes());
         let by_type = mime_type
             .map(|mime_type| mime_type.split(';').next().unwrap_or_default().trim())
             .filter(|mime_type| !mime_type.is_empty())
@@ -171,6 +165,15 @@ impl FileFilter {
                     })
             });
         by_name || by_type
+    }
+
+    /// Whether a file named `name`, in the bytes its system keeps names in,
+    /// is one this filter means by its name: the name half of
+    /// [`matches`](Self::matches), for a name that need not be UTF-8.
+    pub(crate) fn names(&self, name: &[u8]) -> bool {
+        self.extensions
+            .iter()
+            .any(|extension| name_ends_in(name, extension))
     }
 
     /// The first thing wrong with the filter: its name, matching nothing, or
@@ -204,6 +207,39 @@ impl FileFilter {
         }
         Ok(())
     }
+}
+
+/// Whether `name` is longer than, and ends in, `.` and `extension`, ignoring
+/// ASCII case: the one rule a name is matched by (ADR-0360 §3). `name` is a
+/// file name in the bytes its system keeps it in; an extension is ASCII, so
+/// the rule reads no character of a name that is not UTF-8.
+pub(crate) fn name_ends_in(name: &[u8], extension: &str) -> bool {
+    let extension = extension.as_bytes();
+    name.len()
+        .checked_sub(extension.len())
+        .filter(|tail| *tail > 1)
+        .is_some_and(|tail| name[tail - 1] == b'.' && name[tail..].eq_ignore_ascii_case(extension))
+}
+
+/// Whether `filters` admit every one of `picks` as far as its name says:
+/// the check [`FileDialogs::open`](super::FileDialogs::open) makes of every
+/// backend's answer.
+///
+/// A request without filters admits every pick. So does one with a MIME
+/// type among its filters: a pick's type is its system's to tell, and the
+/// backend that mapped the pattern judges it. Otherwise each pick's name
+/// must be one a filter [names](FileFilter::names), and a pick with no name
+/// (a root) is one none does.
+pub(super) fn names_admit(filters: &[FileFilter], picks: &Picks) -> bool {
+    if filters.is_empty() || filters.iter().any(|filter| !filter.mime_types.is_empty()) {
+        return true;
+    }
+    picks.iter().all(|pick| {
+        pick.file_name().is_some_and(|name| {
+            let name = name.as_encoded_bytes();
+            filters.iter().any(|filter| filter.names(name))
+        })
+    })
 }
 
 /// Whether `extension` is one: at most [`FileFilter::MAX_PATTERN_LEN`]

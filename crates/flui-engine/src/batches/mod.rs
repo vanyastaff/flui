@@ -191,7 +191,6 @@ impl DrawBatcher {
             shape_segment.vertices.extend(vertices);
             let device_bounds = vertices_aabb(&shape_segment.vertices);
             shape_segment.indices.extend(indices.iter().copied()); // already 0-based
-            shape_segment.current_pipeline_key = Some(key);
             shape_segment.tess_batches.push(TessellatedBatch {
                 // Use SrcOver alpha-blend pipeline for rendering the shape into
                 // the offscreen foreground texture.  The advanced blend formula
@@ -236,42 +235,16 @@ impl DrawBatcher {
 
         let index_count = indices.len() as u32;
 
-        let clip = state.active_clip();
-        // Merging also requires the SAME clip: two different rounded clips can
-        // share one bounding scissor (same rect, different radii), and the
-        // batch's clip is what its draw binds.
-        segment.current_pipeline_key = Some(key);
-        let batch_index = segment.tess_batches.len();
-        let adjacent_tess = segment.runs.last().is_some_and(|run| {
-            run.clip == state.clip_chain()
-                && matches!(&run.kind, DrawRun::Tess(range) if range.end == batch_index)
-        });
-        let merged = adjacent_tess
-            && segment.tess_batches.last_mut().is_some_and(|batch| {
-                if batch.pipeline_key == key
-                    && batch.scissor == state.current_scissor()
-                    && batch.clip == clip
-                    && batch.index_start.checked_add(batch.index_count) == Some(index_start)
-                    && let Some(count) = batch.index_count.checked_add(index_count)
-                {
-                    batch.index_count = count;
-                    return true;
-                }
-                false
-            });
-        if !merged {
-            segment.tess_batches.push(TessellatedBatch {
+        segment.push_tess_batch(
+            TessellatedBatch {
                 pipeline_key: key,
                 scissor: state.current_scissor(),
                 index_start,
                 index_count,
-                clip,
-            });
-            segment.record_run(
-                DrawRun::Tess(batch_index..batch_index + 1),
-                state.clip_chain(),
-            );
-        }
+                clip: state.active_clip(),
+            },
+            state.clip_chain(),
+        );
 
         // Draw-order contract: close the segment after any non-SrcOver blend.
         if key.blend_mode() != BlendMode::SrcOver {
@@ -334,7 +307,6 @@ impl DrawBatcher {
         path_segment.vertices.extend(vertices);
         let device_bounds = vertices_aabb(&path_segment.vertices);
         path_segment.indices.extend(indices.iter().copied());
-        path_segment.current_pipeline_key = Some(PipelineKey::alpha_blend());
         path_segment.tess_batches.push(TessellatedBatch {
             pipeline_key: PipelineKey::alpha_blend(),
             scissor: state.current_scissor(),

@@ -2477,7 +2477,6 @@ impl Clone for flui::foundation::ChangeNotifier
 impl Default for flui::foundation::ChangeNotifier
 impl core::fmt::Debug for flui::foundation::ChangeNotifier
 impl flui::foundation::Listenable for flui::foundation::ChangeNotifier
-pub fn flui::foundation::ChangeNotifier::add_listener(&self, listener: flui::foundation::ListenerCallback) -> flui::foundation::ListenerId
 pub fn flui::foundation::ChangeNotifier::add_with_recovery(&self, relay: flui::foundation::ListenerObserver) -> flui::foundation::ListenerId
 pub fn flui::foundation::ChangeNotifier::dispose(&self)
 pub fn flui::foundation::ChangeNotifier::has_listeners(&self) -> bool
@@ -2491,7 +2490,6 @@ pub fn flui::foundation::ChangeNotifier::new() -> Self
 pub fn flui::foundation::ChangeNotifier::notify_listeners(&self)
 pub fn flui::foundation::ChangeNotifier::notify_listeners_with_recovery(&self, recovery: &mut flui::foundation::panic::RecoveryScope<'_>)
 pub fn flui::foundation::ChangeNotifier::remove_all_listeners(&self)
-pub fn flui::foundation::ChangeNotifier::remove_listener(&self, id: flui::foundation::ListenerId)
 pub fn flui::foundation::ChangeNotifier::retire_after_delivery<T: 'static>(&self, capture: T) -> Option<T>
 pub fn flui::foundation::ChangeNotifier::take_listener(&self, id: flui::foundation::ListenerId) -> Option<alloc::rcs::rc::Rc<flui::foundation::NotificationCallback<()>>>
 pub fn flui::foundation::ChangeNotifier::take_listeners(&self) -> Vec<alloc::rcs::rc::Rc<flui::foundation::NotificationCallback<()>>>
@@ -2712,7 +2710,6 @@ pub struct flui::foundation::Notifier<Arg> { .. }
 impl<Arg> Clone for flui::foundation::Notifier<Arg>
 impl<Arg> Default for flui::foundation::Notifier<Arg>
 impl<Arg> core::fmt::Debug for flui::foundation::Notifier<Arg>
-pub fn flui::foundation::Notifier::add(&self, listener: flui::foundation::NotifierCallback<Arg>) -> flui::foundation::ListenerId // impl<Arg> flui::foundation::Notifier<Arg>
 pub fn flui::foundation::Notifier::add_with_recovery(&self, listener: flui::foundation::RecoveryCallback<Arg>) -> flui::foundation::ListenerId // impl<Arg> flui::foundation::Notifier<Arg>
 pub fn flui::foundation::Notifier::dispose(&self) // impl<Arg> flui::foundation::Notifier<Arg>
 pub fn flui::foundation::Notifier::inherit_failure(&self, recovery: &mut flui::foundation::panic::RecoveryScope<'_>) // impl<Arg> flui::foundation::Notifier<Arg>
@@ -2724,10 +2721,9 @@ pub fn flui::foundation::Notifier::listen_with_recovery(&self, relay: flui::foun
 pub fn flui::foundation::Notifier::new() -> Self // impl<Arg> flui::foundation::Notifier<Arg>
 pub fn flui::foundation::Notifier::notify(&self, arg: &Arg) // impl<Arg> flui::foundation::Notifier<Arg>
 pub fn flui::foundation::Notifier::notify_with_recovery(&self, arg: &Arg, recovery: &mut flui::foundation::panic::RecoveryScope<'_>) // impl<Arg> flui::foundation::Notifier<Arg>
-pub fn flui::foundation::Notifier::remove(&self, id: flui::foundation::ListenerId) // impl<Arg> flui::foundation::Notifier<Arg>
 pub fn flui::foundation::Notifier::remove_all(&self) // impl<Arg> flui::foundation::Notifier<Arg>
-pub fn flui::foundation::Notifier::remove_even_if_disposed(&self, id: flui::foundation::ListenerId) // impl<Arg> flui::foundation::Notifier<Arg>
 pub fn flui::foundation::Notifier::retire_after_delivery<T: 'static>(&self, capture: T) -> Option<T> // impl<Arg> flui::foundation::Notifier<Arg>
+pub fn flui::foundation::Notifier::subscribe(&self, listener: flui::foundation::NotifierCallback<Arg>) -> flui::foundation::Subscription where Arg: 'static // impl<Arg> flui::foundation::Notifier<Arg>
 pub fn flui::foundation::Notifier::take_callback(&self, id: flui::foundation::ListenerId) -> Option<alloc::rcs::rc::Rc<flui::foundation::NotificationCallback<Arg>>> // impl<Arg> flui::foundation::Notifier<Arg>
 pub type flui::foundation::NotifierCallback<Arg> = alloc::rcs::rc::Rc<dyn Fn(&Arg) + 'static>
 #[non_exhaustive] pub struct flui::foundation::PathEntry { .. }
@@ -12882,6 +12878,7 @@ impl core::fmt::Display for flui::platform::SystemFailure
 impl core::hash::Hash for flui::platform::SystemFailure
 impl core::marker::StructuralPartialEq for flui::platform::SystemFailure
 variant flui::platform::SystemFailure::Bus // at 2
+variant flui::platform::SystemFailure::Framework(i64) // at 5
 variant flui::platform::SystemFailure::MalformedAnswer // at 3
 variant flui::platform::SystemFailure::Os(i32) // at 0
 variant flui::platform::SystemFailure::PortalResponse(u32) // at 1
@@ -24580,6 +24577,7 @@ impl Clone for flui::view::PostFrameHandle
 impl core::fmt::Debug for flui::view::PostFrameHandle
 pub fn flui::view::PostFrameHandle::new(scheduler: &flui::view::UpdateScheduler) -> Self
 pub fn flui::view::PostFrameHandle::schedule(&self, callback: impl FnOnce(&flui::view::FrameTiming) + 'static) -> Result<(), flui::view::PostFrameScheduleError>
+pub fn flui::view::PostFrameHandle::schedule_frame(&self) -> Result<(), flui::view::PostFrameScheduleError>
 pub fn flui::view::PostFrameHandle::schedule_or_return<T: 'static>(&self, value: T, run: fn(_: T, _: &flui::view::FrameTiming)) -> Result<(), flui_scheduler::post_frame::PostFrameRejection<T>>
 pub fn flui::view::PostFrameHandle::targets_same_scheduler(&self, other: &flui::view::UpdateScheduler) -> bool
 #[non_exhaustive] pub enum flui::view::PostFrameScheduleError
@@ -24821,7 +24819,6 @@ pub struct flui::view::UpdateScheduler { .. }
 impl Clone for flui::view::UpdateScheduler
 impl Default for flui::view::UpdateScheduler
 impl core::fmt::Debug for flui::view::UpdateScheduler
-pub fn flui::view::UpdateScheduler::add_lifecycle_state_listener(&self, callback: flui_scheduler::frame::LifecycleStateCallback) -> flui::foundation::FrameCallbackId
 pub fn flui::view::UpdateScheduler::add_post_frame_callback(&self, callback: flui_scheduler::frame::PostFrameCallback)
 pub fn flui::view::UpdateScheduler::current_frame(&self) -> Option<flui::view::FrameTiming>
 pub fn flui::view::UpdateScheduler::display_period(&self) -> core::time::Duration
@@ -24835,9 +24832,9 @@ pub fn flui::view::UpdateScheduler::handle_app_lifecycle_state_change(&self, new
 pub fn flui::view::UpdateScheduler::is_frame_scheduled(&self) -> bool
 pub fn flui::view::UpdateScheduler::is_same_instance(&self, other: &Self) -> bool
 pub fn flui::view::UpdateScheduler::lifecycle_state(&self) -> flui::prelude::AppLifecycleState
+pub fn flui::view::UpdateScheduler::listen_lifecycle_state(&self, listener: impl Fn(flui::prelude::AppLifecycleState) + 'static) -> flui::foundation::Subscription
 pub fn flui::view::UpdateScheduler::new() -> Self
 pub fn flui::view::UpdateScheduler::phase(&self) -> flui_scheduler::frame::SchedulerPhase
-pub fn flui::view::UpdateScheduler::remove_lifecycle_state_listener(&self, id: flui::foundation::FrameCallbackId) -> bool
 pub fn flui::view::UpdateScheduler::request_frame(&self)
 pub fn flui::view::UpdateScheduler::set_display_period(&self, period: core::time::Duration)
 pub fn flui::view::UpdateScheduler::set_on_frame_scheduled(&self, hook: Option<alloc::rcs::arc::Arc<dyn Fn() + Send + Sync>>)
@@ -36415,7 +36412,6 @@ impl core::fmt::Debug for flui_runtime::ui_runtime::text_preparation::TextSizing
 pub fn flui_runtime::ui_runtime::text_preparation::TextSizingWork::presentation(&self) -> flui::foundation::PresentationId
 pub fn flui_runtime::ui_runtime::text_preparation::TextSizingWork::requests(&self) -> &[flui::foundation::TextSizeRequest]
 pub fn flui_runtime::ui_runtime::text_preparation::TextSizingWork::source(&self) -> &flui_painting::text_painter::sizing::TextSizingSource
-pub type flui_scheduler::frame::LifecycleStateCallback = alloc::rcs::rc::Rc<dyn Fn(flui::prelude::AppLifecycleState)>
 pub type flui_scheduler::frame::PostFrameCallback = Box<dyn FnOnce(&flui::view::FrameTiming)>
 #[non_exhaustive] #[repr(u8)] pub enum flui_scheduler::frame::SchedulerPhase
 impl Clone for flui_scheduler::frame::SchedulerPhase

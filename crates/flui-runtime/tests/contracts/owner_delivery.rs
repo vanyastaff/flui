@@ -430,9 +430,9 @@ fn listener_panic_reaches_the_realm_report() {
     let address = install(&owner, ui_runtime);
     let notifier = flui_foundation::ChangeNotifier::new();
     let later = Rc::new(Cell::new(0));
-    notifier.add_listener(Rc::new(|| panic!("listener failed")));
+    let _failing = notifier.listen(Rc::new(|| panic!("listener failed")));
     let counted = Rc::clone(&later);
-    notifier.add_listener(Rc::new(move || counted.set(counted.get() + 1)));
+    let _counted = notifier.listen(Rc::new(move || counted.set(counted.get() + 1)));
     let effects = Effects { notifier };
     let dispatcher = owner.frame_dispatcher(address).expect("dispatcher");
 

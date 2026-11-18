@@ -2762,34 +2762,38 @@ fn panicking_stop_notifies_siblings_and_restores_runtime_delivery() {
             dispatch_platform_ui_runtime(
                 dispatcher,
                 RuntimeTask::TestCallback(Box::new(move |runtime| {
-                    runtime
-                        .scheduler()
-                        .add_lifecycle_state_listener(std::rc::Rc::new(move |state| {
-                            if state != AppLifecycleState::Detached {
-                                return;
-                            }
-                            notifications.fetch_add(1, Ordering::SeqCst);
-                            if index == 0 {
-                                let notifications = Arc::clone(&notifications);
-                                let delivered = Arc::clone(&delivered);
-                                dispatch_platform_ui_runtime(
-                                    second,
-                                    RuntimeTask::TestCallback(Box::new(move |_| {
-                                        assert_eq!(
-                                            notifications.load(Ordering::SeqCst),
-                                            2,
-                                            "reentry waits for both terminal notifications"
-                                        );
-                                        delivered.fetch_add(1, Ordering::SeqCst);
-                                    })),
-                                )
-                                .expect("accepted reentry");
-                                std::panic::panic_any("first terminal listener");
-                            }
-                            if fail_second {
-                                std::panic::panic_any("second terminal listener");
-                            }
-                        }));
+                    // The listener holds its own subscription, so it hears
+                    // until the runtime's scheduler retires it.
+                    let held = std::rc::Rc::new(std::cell::RefCell::new(None));
+                    let holder = std::rc::Rc::clone(&held);
+                    let subscription = runtime.scheduler().listen_lifecycle_state(move |state| {
+                        let _held = &holder;
+                        if state != AppLifecycleState::Detached {
+                            return;
+                        }
+                        notifications.fetch_add(1, Ordering::SeqCst);
+                        if index == 0 {
+                            let notifications = Arc::clone(&notifications);
+                            let delivered = Arc::clone(&delivered);
+                            dispatch_platform_ui_runtime(
+                                second,
+                                RuntimeTask::TestCallback(Box::new(move |_| {
+                                    assert_eq!(
+                                        notifications.load(Ordering::SeqCst),
+                                        2,
+                                        "reentry waits for both terminal notifications"
+                                    );
+                                    delivered.fetch_add(1, Ordering::SeqCst);
+                                })),
+                            )
+                            .expect("accepted reentry");
+                            std::panic::panic_any("first terminal listener");
+                        }
+                        if fail_second {
+                            std::panic::panic_any("second terminal listener");
+                        }
+                    });
+                    *held.borrow_mut() = Some(subscription);
                 })),
             )
             .expect("install actual lifecycle listener");

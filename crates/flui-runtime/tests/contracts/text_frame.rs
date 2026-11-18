@@ -511,7 +511,25 @@ fn a_clean_presentation_delivers_successor_callbacks_without_rebuilding() {
         .schedule(move |_| {
             count.fetch_add(1, Ordering::SeqCst);
         })
-        .expect("accept clean completion demand");
+        .expect("accept the callback");
+    assert_eq!(
+        wakes.load(Ordering::SeqCst),
+        0,
+        "registering a callback asks for no frame"
+    );
+    assert!(
+        !runtime.has_pending_work(),
+        "a registered callback alone leaves the presentation idle"
+    );
+    assert!(!pump(&mut runtime, &mut sink).presented());
+    assert_eq!(
+        completed.load(Ordering::SeqCst),
+        0,
+        "no frame ran, so the callback waits"
+    );
+    handle
+        .schedule_frame()
+        .expect("ask for the presentation's frame");
     assert!(
         wakes.load(Ordering::SeqCst) > 0,
         "an idle host must be woken"

@@ -64,3 +64,42 @@ pub(crate) fn self_rescheduling_local_post_frame_callback_fires_exactly_once_per
         );
     }
 }
+
+/// A field that holds the focus runs its cursor-area loop on the frames that
+/// happen and asks for none itself: once the typing has been drawn, the
+/// application settles.
+///
+/// Fails when registering a presentation's post-frame callback asks for a
+/// frame, which turns the loop into a frame on every vsync for as long as the
+/// field has the focus.
+pub(crate) fn a_focused_text_field_settles_after_typing() {
+    let mut t = flui_testing::Tester::mount(focused_field());
+    t.enter_text(&flui_testing::find::id("field"), "notes");
+    t.expect(flui_testing::find::id("field"))
+        .to_have_value("notes");
+    t.try_pump_and_settle(300)
+        .expect("a focused field with nothing to animate settles");
+}
+
+/// Once settled, a focused field with no input leaves its presentation with
+/// no frame to run, vsync after vsync.
+///
+/// Fails when the cursor-area loop's re-registration asks for the next frame.
+pub(crate) fn a_focused_text_field_runs_no_frame_while_idle() {
+    let mut t = flui_testing::Tester::mount(focused_field());
+    t.enter_text(&flui_testing::find::id("field"), "notes");
+    t.try_pump_and_settle(300)
+        .expect("a focused field with nothing to animate settles");
+    for vsync in 0..60 {
+        t.pump();
+        assert_eq!(
+            t.try_pump_and_settle(0).ok(),
+            Some(0),
+            "vsync {vsync}: an idle focused field has no frame or work due"
+        );
+    }
+}
+
+fn focused_field() -> flui_widgets::RawTextField {
+    flui_widgets::RawTextField::new(flui_widgets::TextEditingController::new()).identifier("field")
+}

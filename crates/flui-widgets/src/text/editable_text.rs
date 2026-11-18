@@ -1873,7 +1873,7 @@ impl ViewState<EditableText> for EditableTextState {
                         alive,
                         last_sent,
                     }
-                    .schedule();
+                    .start();
                 } else {
                     tracing::warn!(
                         "IME cursor-area tracking not started: no post-frame handle \

@@ -18,7 +18,8 @@ use crate::text::text_store::{EditableTextStore, with_editable_global};
 /// One instance is created per IME attach (focus gain). Each firing reads the
 /// caret's current global rect and forwards it through
 /// [`TextInputHandle::set_cursor_area`] when it changed, then reschedules
-/// itself for the next completed frame, dormant whenever no frame runs.
+/// itself for the next completed frame. It asks for no frame of its own after
+/// the first, so it is dormant whenever no frame runs.
 /// `Clone` because
 /// [`flui_scheduler::PostFrameHandle::schedule`] takes an `FnOnce`, so the only way to
 /// make it self-rescheduling without boxing a trait object is for each
@@ -50,6 +51,21 @@ pub(super) struct CursorAreaLoop {
 }
 
 impl CursorAreaLoop {
+    /// Register the first firing and ask for the frame it runs after, so a
+    /// new IME session gets its first rect though focusing changed nothing
+    /// on screen. Later firings ride the frames that run for other reasons.
+    pub(super) fn start(self) {
+        let post_frame = self.post_frame.clone();
+        self.schedule();
+        if let Err(error) = post_frame.schedule_frame() {
+            tracing::warn!(
+                ?error,
+                "IME cursor-area tracking asked for no first frame; the candidate \
+                 window follows the caret from the next frame that runs"
+            );
+        }
+    }
+
     /// Register the next firing. Every `schedule` failure is warned,
     /// never silent: a loop that stops rescheduling without a diagnostic is
     /// a candidate window stuck at (0, 0) with no signal anything is wrong.

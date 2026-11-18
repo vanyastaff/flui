@@ -121,10 +121,10 @@ fn custom_sources_can_construct_removal_authority() {
     let source = Rc::new(Notifier::new());
     let calls = Rc::new(Cell::new(0));
     let drops = Rc::new(Cell::new(0));
-    let token = source.add({
+    let token = source.add_with_recovery({
         let calls = Rc::clone(&calls);
         let capture = Capture(Rc::clone(&drops));
-        Rc::new(move |_| {
+        Rc::new(move |_, _recovery| {
             let _keep = &capture;
             calls.set(calls.get() + 1);
         })

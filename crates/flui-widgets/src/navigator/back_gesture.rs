@@ -411,11 +411,13 @@ impl BackGestureRuntime {
         match navigator.post_frame_handle() {
             Some(post_frame) => {
                 let deferred = navigator.clone();
-                let schedule_result = post_frame.schedule(move |_timing| {
-                    if deferred.is_mounted() {
-                        deferred.did_stop_user_gesture();
-                    }
-                });
+                let schedule_result = post_frame
+                    .schedule(move |_timing| {
+                        if deferred.is_mounted() {
+                            deferred.did_stop_user_gesture();
+                        }
+                    })
+                    .and_then(|()| post_frame.schedule_frame());
                 if schedule_result.is_err() && navigator.is_mounted() {
                     // No owner-local post-frame lane available — report now
                     // rather than leak the gesture count forever.

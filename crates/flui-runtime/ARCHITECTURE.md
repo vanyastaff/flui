@@ -74,7 +74,9 @@ host.
 - **Completion belongs to a presentation.** Assembly installs that
   presentation's weak post-frame handle before mounting elements. An incomplete
   segment retains its callbacks; only a completed segment makes them eligible.
-  Retained handles scheduled between segments create completion demand, which
+  A callback scheduled between segments asks for no frame (ADR-0367); a
+  caller that needs one asks with `PostFrameHandle::schedule_frame`, whose
+  completion demand
   wakes a clean presentation without rebuilding its widget tree or submitting
   another scene. Withdrawal closes admission before retiring callback captures.
   `native_text_preparation_does_not_complete_the_presentation` and
