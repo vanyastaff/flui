@@ -227,7 +227,7 @@ pub use window::{
     WindowIdMint, WindowMaterial, WindowOption, WindowOptions, WindowReveal,
 };
 pub use window_capabilities::{
-    CapabilityParts, PublicationMint, WindowCapabilities, WindowCapability,
+    CapabilityParts, OccludedSurface, PublicationMint, WindowCapabilities, WindowCapability,
 };
 pub use window_frame::{
     AppTitleBar, ControlsOffset, InvalidControlsOffset, SystemControls, WindowFrame,

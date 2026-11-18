@@ -127,6 +127,7 @@ pub(crate) fn presentation_window(
     keep_native_window(&host);
     let accessibility = host.accessibility();
     let text_store_host = text_store_host_of(&host);
+    let occluded_surface = host.occluded_surface();
     // The runner names the platform it was built for: the tree follows its
     // conventions, and host observations replace the gesture values the OS
     // publishes (ADR-0212 §4). The one place a platform is taken from the
@@ -138,6 +139,7 @@ pub(crate) fn presentation_window(
     let platform = flui_platform::TargetPlatform::current();
     crate::app::presentation::PresentationWindow::new(host, accessibility)
         .with_text_store_host(text_store_host)
+        .with_occluded_surface(occluded_surface)
         .with_platform(platform)
         .with_gesture_profiles(flui_interaction::gesture::GestureProfiles::preset(platform))
 }

@@ -2108,6 +2108,11 @@ mod toplevel {
     }
 
     impl HostWindow for WaylandWindow {
+        /// The host holds a suspended toplevel's frames until it is shown.
+        fn occluded_surface(&self) -> flui_platform::OccludedSurface {
+            flui_platform::OccludedSurface::Discarded
+        }
+
         fn accessibility(&self) -> Option<Arc<dyn PlatformAccessibility>> {
             Some(Arc::clone(&self.facets.accessibility) as _)
         }

@@ -93,6 +93,7 @@
 //! now, and is forgotten as the window closes, before the X window is
 //! destroyed; everything else names the window by its identity.
 
+mod compositing;
 mod manager_hints;
 mod mode_wait;
 mod sync;
@@ -130,6 +131,7 @@ use x11rb::protocol::xproto::{
 };
 use x11rb::wrapper::ConnectionExt as _;
 
+use self::compositing::CompositingManager;
 use self::sync::{SyncCounters, initialize_sync};
 use super::hints::WM_HINTS;
 use super::mode::{
@@ -2097,6 +2099,12 @@ impl crate::host_window::CoreHostWindow for X11Window {
 }
 
 impl HostWindow for X11Window {
+    /// Without a compositing manager the server keeps no image of an obscured
+    /// window, and under one a covering is not told.
+    fn occluded_surface(&self) -> flui_platform::OccludedSurface {
+        flui_platform::OccludedSurface::Discarded
+    }
+
     /// The window's AT-SPI bridge, which announced the window on the bus as
     /// it opened.
     fn accessibility(&self) -> Option<Arc<dyn PlatformAccessibility>> {
@@ -2148,6 +2156,9 @@ pub struct X11Windows {
     /// The server has the SYNC extension, initialised on the connection: each
     /// window makes the counters a synchronised resize waits on.
     synchronises: bool,
+    /// The screen's compositing manager, whose coming and going changes
+    /// whether a window tells a covering.
+    compositing: CompositingManager,
     table: RefCell<WindowTable>,
     /// A window closed since the loop last asked.
     closed: Cell<bool>,
@@ -2210,6 +2221,8 @@ impl X11Windows {
         if let Err(error) = watched {
             tracing::debug!(%error, "the X11 root window's properties go unheard");
         }
+        let compositing =
+            CompositingManager::watch(connection.xcb(), connection.root(), atoms.cm_selection);
         let windows = Self {
             positions,
             atoms,
@@ -2223,6 +2236,7 @@ impl X11Windows {
                 std::process::id(),
             ),
             synchronises: initialize_sync(connection.xcb()),
+            compositing,
             table: RefCell::default(),
             closed: Cell::new(false),
             frames: FrameCount::default(),
@@ -2274,24 +2288,12 @@ impl X11Windows {
             .and_then(|cookie| cookie.reply().ok())
             .and_then(|reply| Some(reply.value32()?.collect()))
             .unwrap_or_default();
+        // Read with the support, which every change of the compositing
+        // manager's selection leaves unread (`route`).
         self.support.set(
             WindowManagerSupport::read(manager, &supported, &self.atoms.support())
-                .with_compositing(self.compositing_manager_runs()),
+                .with_compositing(self.compositing.runs(self.connection.xcb())),
         );
-    }
-
-    /// Whether a compositing manager owns the screen's `_NET_WM_CM_S<n>`
-    /// selection (EWMH). Read with the window manager's support, again when a
-    /// manager announces that it took the selection; a compositing manager
-    /// that quits announces nothing, and the windows keep saying they cannot
-    /// tell a covering until the support is next read.
-    fn compositing_manager_runs(&self) -> bool {
-        self.connection
-            .xcb()
-            .get_selection_owner(self.atoms.cm_selection)
-            .ok()
-            .and_then(|cookie| cookie.reply().ok())
-            .is_some_and(|reply| reply.owner != x11rb::NONE)
     }
 
     /// The supporting window of a window manager that speaks EWMH: the one
@@ -2654,6 +2656,13 @@ impl X11Windows {
         {
             // A window manager or a compositing manager took the screen's
             // selection (ICCCM §2.8, EWMH).
+            self.support_unread.set(true);
+            self.mark_all();
+            return;
+        }
+        if self.compositing.changed_by(event) {
+            // A compositing manager took the selection, gave it up or went,
+            // which announces nothing.
             self.support_unread.set(true);
             self.mark_all();
             return;
