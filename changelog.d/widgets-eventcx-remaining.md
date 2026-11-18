@@ -7,5 +7,5 @@
 
 ### Added
 
-- `RenderObjectContext::{register,replace,unregister}_local_payload` and `flui_interaction::{LocalPayloadTarget, resolve_local_payload}`: owner-local state reached from `Send + Sync` render data through an interaction-lane ticket (ADR-0086 §3).
+- `RenderObjectContext::{register,replace,unregister}_local_payload` and `flui_interaction::pointer::{LocalPayloadTarget, resolve_local_payload}`: owner-local state reached from `Send + Sync` render data through an interaction-lane ticket (ADR-0086 §3).
 - `flui_objects::SemanticsActionRoute` and `RenderSemanticsAnnotations::{action_route, set_action_route}`.

@@ -37,7 +37,7 @@ use flui_animation::{Animation, AnimationController, curves};
 use flui_foundation::Listenable;
 use flui_foundation::TextDirection;
 use flui_interaction::gesture::DragAxis;
-use flui_interaction::{
+use flui_interaction::gesture::{
     DragEndDetails, DragGestureRecognizer, DragStartDetails, DragUpdateDetails, GestureRecognizer,
 };
 use flui_rendering::hit_testing::HitTestBehavior;
@@ -329,7 +329,7 @@ impl BackGestureRuntime {
     }
 
     fn on_drag_end(&self, details: DragEndDetails) {
-        if details.reason == flui_interaction::GestureEndReason::Cancelled {
+        if details.reason == flui_interaction::gesture::GestureEndReason::Cancelled {
             self.on_drag_cancel();
             return;
         }

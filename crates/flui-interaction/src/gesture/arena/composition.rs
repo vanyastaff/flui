@@ -233,7 +233,7 @@ impl GestureArena {
     /// gesture. Cancellation abandons both branches.
     ///
     /// ```rust
-    /// use flui_interaction::{GestureArena, DoubleTapGestureRecognizer, TapGestureRecognizer};
+    /// use flui_interaction::{gesture::{GestureArena, DoubleTapGestureRecognizer, TapGestureRecognizer}};
     /// use flui_interaction::gesture::GestureComposition;
     /// let arena = GestureArena::new();
     /// let (preferred, fallback) = arena

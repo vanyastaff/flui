@@ -24,11 +24,11 @@ use std::time::Duration;
 use flui_foundation::ElementId;
 use flui_foundation::geometry::Bounds;
 use flui_foundation::geometry::Offset;
-use flui_interaction::PointerId;
 use flui_interaction::events::{
     PointerButton, PointerKind, make_cancel_event_for_id, make_down_event_for_id_with_button,
     make_move_event_for_id_with_button, make_up_event_for_id_with_button,
 };
+use flui_interaction::ids::PointerId;
 use flui_painting::Alignment;
 use flui_platform::PlatformInput;
 use flui_rendering::pipeline::PipelineCell;
@@ -138,7 +138,7 @@ fn aligned(root: impl View) -> flui_view::BoxedView {
 
 impl Harness {
     /// Focus manager that owns this harness's mounted tree.
-    pub fn focus_manager(&self) -> Rc<flui_interaction::FocusManager> {
+    pub fn focus_manager(&self) -> Rc<flui_interaction::focus::FocusManager> {
         self.host
             .ui_runtime()
             .ui_runtime()

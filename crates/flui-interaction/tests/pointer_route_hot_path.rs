@@ -7,9 +7,10 @@ use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::{Arc, Barrier};
 
+use flui_foundation::geometry::Offset;
 use flui_foundation::geometry::Point;
 use flui_interaction::events::{PointerEventExt, PointerKind, make_move_event};
-use flui_interaction::{HitTestEntry, InteractionLane, Offset, PointerTarget, RenderId};
+use flui_interaction::pointer::{HitTestEntry, InteractionLane, PointerTarget, RenderId};
 use flui_platform::pointer::{
     DeviceId, PointerEvent, PointerMove, PointerPosition, PointerRole, PointerSample, Pressure,
 };
@@ -188,7 +189,7 @@ fn resolved_route_move_invocation_allocates_no_heap_after_setup() {
 /// A contact's moves coalesced into one frame move their history instead of
 /// copying it, and keep a bounded tail however many arrive before the frame.
 fn binding_frame_coalescing_moves_bounded_history() {
-    use flui_interaction::{GestureBinding, HitTestResult, InputSurface};
+    use flui_interaction::{binding::GestureBinding, ids::InputSurface, pointer::HitTestResult};
     use flui_platform::pointer::{PointerButton, PointerButtons, PointerPress, PointerSource};
     let binding = GestureBinding::new();
     let pointer = PointerSource::new(
@@ -269,7 +270,7 @@ fn steady_hover_allocates_nothing() {
     };
     let moves: Vec<_> = (1..=8).map(hover).collect();
     lane.enter(|| {
-        let mut path = flui_interaction::HitTestResult::new();
+        let mut path = flui_interaction::pointer::HitTestResult::new();
         for index in 1..=3 {
             let region = handle
                 .register_mouse_region(MouseRegionCallbacks {
@@ -299,7 +300,7 @@ fn steady_hover_allocates_nothing() {
 
 fn empty_hit_test_result_allocates_nothing() {
     reset_allocations();
-    let result = flui_interaction::HitTestResult::new();
+    let result = flui_interaction::pointer::HitTestResult::new();
     assert!(result.is_empty());
     drop(result);
     assert_eq!(allocations(), 0, "an empty hit test result owns no storage");
@@ -599,7 +600,7 @@ fn measure_route_shape(target_count: usize, shape: RouteShape, history: bool) {
         let mut path: Vec<_> = targets.iter().enumerate()
             .map(|(index, target)| hit_entry(index, *target)).collect();
         if !matches!(shape, RouteShape::Global) {
-            let mut result = flui_interaction::HitTestResult::new();
+            let mut result = flui_interaction::pointer::HitTestResult::new();
             if translated {
                 result.with_paint_offset(Offset::new(dx, dy), |result| {
                     for entry in path.drain(..) { result.add(entry); }
@@ -633,14 +634,17 @@ fn measure_route_shape(target_count: usize, shape: RouteShape, history: bool) {
 /// A member with no behavior: the arena's own decisions are what is measured.
 struct QuietMember;
 
-impl flui_interaction::GestureArenaMember for QuietMember {
-    fn accept_gesture(&self, _: flui_interaction::GestureContest) {}
-    fn reject_gesture(&self, _: flui_interaction::GestureContest) {}
+impl flui_interaction::gesture::GestureArenaMember for QuietMember {
+    fn accept_gesture(&self, _: flui_interaction::gesture::GestureContest) {}
+    fn reject_gesture(&self, _: flui_interaction::gesture::GestureContest) {}
 }
 
 #[test]
 fn arena_decisions_allocate_nothing_for_observation_without_observers() {
-    use flui_interaction::{GestureArena, GestureDisposition, PointerId};
+    use flui_interaction::{
+        gesture::{GestureArena, GestureDisposition},
+        ids::PointerId,
+    };
 
     let arena = GestureArena::new();
     let pointer = PointerId::try_from(1_u64).expect("nonzero pointer id");

@@ -113,6 +113,7 @@ pub use flui_interaction::events::{
     CursorIcon, PointerButtons, PointerEvent, PointerEventExt, PointerKind,
 };
 pub use flui_interaction::gesture::DoubleTapDetails;
+pub use flui_interaction::gesture::GestureSettingsProvider;
 pub use flui_interaction::gesture::MultiTapDetails;
 pub use flui_interaction::gesture::{
     ArenaMembership, BeginContactError, CancelOutcome, ContactId, ContactSnapshot,
@@ -125,32 +126,37 @@ pub use flui_interaction::gesture::{
     SequencedBranch,
 };
 pub use flui_interaction::gesture::{
-    GestureArena, GestureArenaEntry, GestureArenaMember, GestureDeadlineError,
-    GestureDeadlineRegistration, GestureDeadlineUpdate, GestureDisposition, SweepModel,
-};
-pub use flui_interaction::gesture::{ScaleEndDetails, ScaleStartDetails, ScaleUpdateDetails};
-pub use flui_interaction::{
-    DoubleTapGestureRecognizer, DragAxis, DragDownDetails, DragEndDetails, DragGestureRecognizer,
-    DragStartDetails, DragUpdateDetails, ForcePressGestureRecognizer, GestureEndReason,
-    GestureProfiles, GestureRecognizer, GestureSettings, GestureSettingsError,
-    LongPressGestureRecognizer, MultiDragAxis, MultiDragEndDetails, MultiDragGestureRecognizer,
-    MultiDragHandle, MultiDragUpdateDetails, MultiTapCount, MultiTapCountError,
-    MultiTapGestureRecognizer, PointerId, ScaleGestureRecognizer, TapAndDragGestureRecognizer,
-    TapDragDownDetails, TapDragEndDetails, TapDragStartDetails, TapDragUpDetails,
-    TapDragUpdateDetails, TapGestureRecognizer,
-};
-pub use flui_interaction::{
     ForcePressDetails, LongPressCallback, LongPressDetails, LongPressDownCallback,
     LongPressDownDetails, LongPressEndCallback, LongPressEndDetails, LongPressMoveUpdateCallback,
     LongPressMoveUpdateDetails, LongPressSimpleCallback, LongPressStartCallback,
     LongPressStartDetails, TapCallback, TapDetails, TapDownCallback, TapDownDetails, TapUpCallback,
     TapUpDetails, Velocity, VelocityEstimate,
 };
-pub use flui_interaction::{GestureSettingsProvider, PointerKindSet};
+pub use flui_interaction::gesture::{
+    GestureArena, GestureArenaEntry, GestureArenaMember, GestureDeadlineError,
+    GestureDeadlineRegistration, GestureDeadlineUpdate, GestureDisposition, SweepModel,
+};
+pub use flui_interaction::gesture::{ScaleEndDetails, ScaleStartDetails, ScaleUpdateDetails};
+pub use flui_interaction::{
+    gesture::{
+        DoubleTapGestureRecognizer, DragAxis, DragDownDetails, DragEndDetails,
+        DragGestureRecognizer, DragStartDetails, DragUpdateDetails, ForcePressGestureRecognizer,
+        GestureEndReason, GestureProfiles, GestureRecognizer, GestureSettings,
+        GestureSettingsError, LongPressGestureRecognizer, MultiDragAxis, MultiDragEndDetails,
+        MultiDragGestureRecognizer, MultiDragHandle, MultiDragUpdateDetails, MultiTapCount,
+        MultiTapCountError, MultiTapGestureRecognizer, ScaleGestureRecognizer,
+        TapAndDragGestureRecognizer, TapDragDownDetails, TapDragEndDetails, TapDragStartDetails,
+        TapDragUpDetails, TapDragUpdateDetails, TapGestureRecognizer,
+    },
+    ids::PointerId,
+};
+pub use flui_platform::input_capabilities::PointerKindSet;
 // A drag's rail and a transform's locked components (ADR-0208 §4), which
 // `widgets::DragSlot` and `widgets::TransformSlot` take, and the swipe.
-pub use flui_interaction::{AxisLock, TransformLock};
-pub use flui_interaction::{PhysicalEdge, SwipeDetails, SwipeGestureRecognizer, SwipeStart};
+pub use flui_interaction::gesture::{AxisLock, TransformLock};
+pub use flui_interaction::gesture::{
+    PhysicalEdge, SwipeDetails, SwipeGestureRecognizer, SwipeStart,
+};
 
 /// Drag-and-drop (ADR-0211): what a `Draggable` carries and a `DropTarget`
 /// sees, and the sessions a custom drag source starts through the
@@ -167,7 +173,7 @@ pub mod drag {
 /// A widget's haptics capability, from `LifecycleContext::haptics`
 /// (ADR-0210); unstable, under the `unstable-input` feature.
 #[cfg(feature = "unstable-input")]
-pub use flui_interaction::{HapticObserver, HapticsHandle};
+pub use flui_interaction::haptics::{HapticObserver, HapticsHandle};
 // Arena deadlines are points on the event timeline (ADR-0207 §2).
 pub use flui_platform::EventTime;
 pub use flui_platform::pointer::{

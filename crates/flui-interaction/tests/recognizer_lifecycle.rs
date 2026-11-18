@@ -9,8 +9,12 @@ use std::{
     time::Duration,
 };
 
+use flui_foundation::ManualClock;
 use flui_foundation::panic::payload_text;
-use flui_interaction::{GestureArena, GestureArenaMember, ManualClock, PointerId};
+use flui_interaction::{
+    gesture::{GestureArena, GestureArenaMember},
+    ids::PointerId,
+};
 use flui_platform::EventTime;
 
 struct Member {
@@ -154,7 +158,7 @@ fn a_verdict_callback_can_drop_a_later_notification_owner() {
         if later_wins {
             // The entry upgrades its weak identity internally. No borrowed
             // caller owner keeps the later recipient alive across delivery.
-            later_entry.resolve(flui_interaction::GestureDisposition::Accepted);
+            later_entry.resolve(flui_interaction::gesture::GestureDisposition::Accepted);
         } else {
             let winner: Rc<dyn GestureArenaMember> = survivor;
             arena.resolve(pointer, Some(&winner));

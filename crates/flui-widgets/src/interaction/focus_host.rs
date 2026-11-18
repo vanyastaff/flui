@@ -156,7 +156,7 @@ impl FocusConfig {
     ///
     /// A fresh node is the host's alone: once the host lets it go, a
     /// request a stale callback still makes on it answers
-    /// [`Stale`](flui_interaction::FocusRequestOutcome::Stale) rather than
+    /// [`Stale`](flui_interaction::focus::FocusRequestOutcome::Stale) rather than
     /// waiting for an attachment that will never come.
     fn make_node(&self) -> Rc<FocusNode> {
         match &self.node_ownership {

@@ -465,7 +465,7 @@ fn viewer_focal_inertia_uses_profile(native: bool) {
     use flui_widgets::{InteractiveViewer, TransformationController};
     use std::time::Duration;
     let profile = |min, max| {
-        flui_interaction::GestureSettings::default()
+        flui_interaction::gesture::GestureSettings::default()
             .try_with_fling_velocity(min, max)
             .expect("valid focal fling range")
     };
@@ -1255,7 +1255,9 @@ pub(crate) fn viewer_raw_detents_zoom_without_stealing_plain_scrolls() {
 
             // A phase-less burst retains its claimant until owner-clock
             // inactivity. The next chord is a fresh burst on the same source.
-            laid.pump_for(flui_interaction::GestureSettings::default().contactless_latch_idle());
+            laid.pump_for(
+                flui_interaction::gesture::GestureSettings::default().contactless_latch_idle(),
+            );
             laid.dispatch_pointer_event(&packet(0.25, Modifiers::NONE));
             let plain_distance = if unit == ScrollUnit::Detents {
                 13.25 * f64::from(count)
@@ -1270,7 +1272,9 @@ pub(crate) fn viewer_raw_detents_zoom_without_stealing_plain_scrolls() {
             assert_scale(scale_of(&transform), second);
             assert_eq!(scales.borrow().len(), 2);
 
-            laid.pump_for(flui_interaction::GestureSettings::default().contactless_latch_idle());
+            laid.pump_for(
+                flui_interaction::gesture::GestureSettings::default().contactless_latch_idle(),
+            );
             laid.dispatch_pointer_event(&packet(f64::MAX, Modifiers::CONTROL));
             assert_eq!(
                 scroll.pixels(),

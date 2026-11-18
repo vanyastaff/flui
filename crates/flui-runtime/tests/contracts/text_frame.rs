@@ -570,7 +570,7 @@ struct ImeGeometryRead {
 #[derive(Clone, StatefulView)]
 struct PartialTextFrame {
     pending: std::rc::Rc<std::cell::Cell<bool>>,
-    hit_test: std::rc::Rc<std::cell::RefCell<Option<flui_interaction::HitTestHandle>>>,
+    hit_test: std::rc::Rc<std::cell::RefCell<Option<flui_interaction::pointer::HitTestHandle>>>,
     pending_sizing: flui_painting::TextSizing,
     controller: flui_widgets::TextEditingController,
     focus: std::rc::Rc<flui_interaction::focus::FocusNode>,
@@ -593,7 +593,7 @@ struct PartialTextFrame {
 
 struct PartialTextFrameState(
     std::rc::Rc<std::cell::RefCell<Option<flui_view::RebuildHandle>>>,
-    std::rc::Rc<std::cell::RefCell<Option<flui_interaction::HitTestHandle>>>,
+    std::rc::Rc<std::cell::RefCell<Option<flui_interaction::pointer::HitTestHandle>>>,
 );
 
 impl StatefulView for PartialTextFrame {
@@ -841,7 +841,7 @@ fn parked_partial_text_geometry_is_unavailable_to_the_real_ime_store() {
     assert!(
         matches!(
             unavailable_hit,
-            Err(flui_interaction::InteractionDispatchError::TreeBusy)
+            Err(flui_interaction::pointer::InteractionDispatchError::TreeBusy)
         ),
         "a lifecycle hit-test handle must refuse partially updated geometry while text is parked: {unavailable_hit:?}"
     );
@@ -1258,9 +1258,9 @@ fn animated_preparation_retains_its_tick(failing_deadline: bool) {
         },
     )));
     let _deadline = failing_deadline.then(|| {
-        use flui_interaction::GestureRecognizer as _;
+        use flui_interaction::gesture::GestureRecognizer as _;
         let calls = Rc::clone(&deadline_calls);
-        let recognizer = flui_interaction::LongPressGestureRecognizer::builder(
+        let recognizer = flui_interaction::gesture::LongPressGestureRecognizer::builder(
             runtime.gestures().arena().clone(),
         )
         .settings(
@@ -1278,7 +1278,7 @@ fn animated_preparation_retains_its_tick(failing_deadline: bool) {
             flui_platform::pointer::PointerKind::Touch,
         )
         .expect("finite retained contact");
-        recognizer.add_pointer(flui_interaction::PointerDispatch::at_root(&down));
+        recognizer.add_pointer(flui_interaction::pointer::PointerDispatch::at_root(&down));
         recognizer
     });
     for _ in 0..2 {
@@ -1560,9 +1560,9 @@ struct UnknownRetainedDeadline {
 }
 
 impl flui_interaction::gesture::GestureArenaMember for UnknownRetainedDeadline {
-    fn accept_gesture(&self, _: flui_interaction::GestureContest) {}
+    fn accept_gesture(&self, _: flui_interaction::gesture::GestureContest) {}
 
-    fn reject_gesture(&self, _: flui_interaction::GestureContest) {}
+    fn reject_gesture(&self, _: flui_interaction::gesture::GestureContest) {}
 
     fn deadline(&self) -> Option<flui_platform::EventTime> {
         if self.fail_query {

@@ -57,7 +57,7 @@
 //!
 //! use flui_interaction::gesture::VelocityTracker;
 //! use flui_foundation::geometry::Offset;
-//! use flui_interaction::PointerKind;
+//! use flui_platform::pointer::PointerKind;
 //!
 //! let mut tracker = VelocityTracker::with_kind(PointerKind::Touch);
 //! let start = Instant::now();

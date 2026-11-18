@@ -3,7 +3,7 @@
 
 use std::io::{BufRead, Write};
 
-use flui_interaction::GestureProfiles;
+use flui_interaction::gesture::GestureProfiles;
 use flui_platform::WindowId;
 use flui_platform::pointer::{DeviceId, PointerKind};
 use flui_protocol::input_recording as rec;

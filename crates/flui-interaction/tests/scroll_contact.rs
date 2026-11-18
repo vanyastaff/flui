@@ -5,8 +5,12 @@ use std::{cell::RefCell, rc::Rc};
 
 use flui_foundation::geometry::{Axis, Point};
 use flui_interaction::{
-    DragAxis, DragGestureRecognizer, EventPropagation, GestureBinding, GestureRecognizer,
-    HitTestEntry, HitTestResult, InteractionLane, PointerTarget, RenderId, ScrollTarget,
+    binding::GestureBinding,
+    gesture::{DragAxis, DragGestureRecognizer, GestureRecognizer},
+    pointer::{
+        EventPropagation, HitTestEntry, HitTestResult, InteractionLane, PointerTarget, RenderId,
+        ScrollTarget,
+    },
 };
 use flui_platform::{
     EventTime,

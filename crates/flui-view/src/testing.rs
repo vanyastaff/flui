@@ -19,7 +19,7 @@ use std::{
 };
 
 use flui_foundation::{ElementId, RenderId};
-use flui_interaction::FocusManager;
+use flui_interaction::focus::FocusManager;
 use std::cell::RefCell;
 
 use crate::context::build_context::{BuildContext, LifecycleContext};
@@ -594,7 +594,7 @@ impl LifecycleContext for ElementBuildContext {
     fn keep_alive_handle(&self) -> crate::owner::KeepAliveHandle {
         self.owner.borrow().keep_alive.handle(self.element_id)
     }
-    fn text_input_handle(&self) -> Option<flui_interaction::TextInputHandle> {
+    fn text_input_handle(&self) -> Option<flui_interaction::text_input::TextInputHandle> {
         self.owner.borrow().capabilities().text_input.clone()
     }
     fn capability_erased(
@@ -611,7 +611,7 @@ impl LifecycleContext for ElementBuildContext {
     fn assistive_focus_support(&self) -> flui_rendering::semantics::AssistiveFocusSupport {
         self.owner.borrow().capabilities().assistive_focus
     }
-    fn haptics(&self) -> Option<flui_interaction::HapticsHandle> {
+    fn haptics(&self) -> Option<flui_interaction::haptics::HapticsHandle> {
         let handle = self.owner.borrow().capabilities().haptics.clone()?;
         Some(crate::haptics_mode::scoped(self, handle))
     }
@@ -633,7 +633,7 @@ impl LifecycleContext for ElementBuildContext {
     ) -> Option<crate::flush_registry::FlushRegistry> {
         self.owner.borrow().flush_registry.clone()
     }
-    fn hit_test_handle(&self) -> Option<flui_interaction::HitTestHandle> {
+    fn hit_test_handle(&self) -> Option<flui_interaction::pointer::HitTestHandle> {
         self.owner.borrow().hit_test_handle().cloned()
     }
     fn lifecycle_handle(&self) -> Option<crate::LifecycleHandle> {

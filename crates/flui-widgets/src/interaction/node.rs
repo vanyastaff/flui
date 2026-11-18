@@ -26,7 +26,10 @@ use std::sync::Arc;
 
 use flui_foundation::panic::FirstPanic;
 use flui_interaction::focus::FocusNode;
-use flui_interaction::{PointerDispatch, TapDetails, TapDownDetails, TapUpDetails};
+use flui_interaction::{
+    gesture::{TapDetails, TapDownDetails, TapUpDetails},
+    pointer::PointerDispatch,
+};
 use flui_objects::{FocusRingStyle, RenderInteractive, RenderListener, SubtreeAnchor};
 use flui_platform::TargetPlatform;
 use flui_rendering::RenderUpdateImpact;

@@ -2,7 +2,7 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use flui_foundation::geometry::Vec2;
-use flui_interaction::InputSequenceId;
+use flui_foundation::InputSequenceId;
 use flui_widgets::{
     FlingHandoff, FlingStep, NestedScroll, NestedScrollConnection, ScrollEndReason, ScrollStep,
     SingleChildScrollView, SizedBox,

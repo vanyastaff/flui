@@ -15,10 +15,18 @@ fn headless_text_input() -> (
 }
 
 /// A client over a fresh in-memory store, and the store.
-fn in_memory_client(text: &str) -> (Rc<InMemoryTextStore>, flui_interaction::TextInputClient) {
+fn in_memory_client(
+    text: &str,
+) -> (
+    Rc<InMemoryTextStore>,
+    flui_interaction::text_input::TextInputClient,
+) {
     let store = InMemoryTextStore::new(text);
     let erased: Rc<dyn TextStore> = store.clone(); // the presentation holds the field's store through the erased contract.
-    (store, flui_interaction::TextInputClient::new(erased))
+    (
+        store,
+        flui_interaction::text_input::TextInputClient::new(erased),
+    )
 }
 
 /// Asks `store` for an async read-write lock on every build, logging around
