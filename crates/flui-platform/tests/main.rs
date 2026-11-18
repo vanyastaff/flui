@@ -4,6 +4,9 @@
     clippy::disallowed_methods,
     reason = "test code catches a panic to assert on it (ADR-0303 §5)"
 )]
+#[path = "clipboard.rs"]
+mod clipboard;
+
 #[path = "drag_plan.rs"]
 mod drag_plan;
 

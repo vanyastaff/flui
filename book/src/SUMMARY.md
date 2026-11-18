@@ -12,6 +12,12 @@
 - [Your first window](tutorial/first-app.md)
 - [Laying out a screen](tutorial/layout.md)
 - [Adding state](tutorial/state.md)
+- [Handling input](tutorial/input.md)
+- [Lists and keys](tutorial/lists.md)
+- [Navigation](tutorial/navigation.md)
+- [Theming](tutorial/theme.md)
+- [Testing](tutorial/testing.md)
+- [Platforms](tutorial/platforms.md)
 
 # Concepts
 

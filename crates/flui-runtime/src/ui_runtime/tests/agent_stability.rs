@@ -1,4 +1,4 @@
-//! What the actionability check remembers decides `stable` (R11): bounds
+//! What the actionability check remembers decides `stable` (ADR-0238 §6): bounds
 //! compare only once a frame has run since they were read, or while nothing is
 //! pending that could still move the element.
 

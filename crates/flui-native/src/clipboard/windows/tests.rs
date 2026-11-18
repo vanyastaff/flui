@@ -791,3 +791,214 @@ fn a_writes_text_is_encoded_straight_into_its_memory() {
         assert_eq!(held, expected, "{text:?}");
     }
 }
+
+/// The clear's decision over the stamps Win32 answers, scripted: the entry
+/// is cleared only while the sequence number is the one its write left and
+/// the thread's window owns the clipboard. Another process's copy moves both,
+/// an ordinary write of this application moves the sequence number, and an
+/// entry the stamp missed once is not cleared later.
+#[test]
+fn an_expiring_entry_is_cleared_only_under_its_stamp() {
+    let ours = |sequence| Stamp {
+        sequence,
+        owned: true,
+    };
+    let theirs = |sequence| Stamp {
+        sequence,
+        owned: false,
+    };
+    let entry = expiring_write("secret").entry().expect("an expiring write");
+    let other = expiring_write("other").entry().expect("an expiring write");
+    for (name, now, which, decision) in [
+        (
+            "unchanged",
+            ours(10),
+            ExpiredEntry::Entry(entry),
+            ClearDecision::Clear,
+        ),
+        (
+            "at a lock",
+            ours(10),
+            ExpiredEntry::Any,
+            ClearDecision::Clear,
+        ),
+        (
+            "another process copied",
+            theirs(12),
+            ExpiredEntry::Entry(entry),
+            ClearDecision::NotHeld,
+        ),
+        (
+            "another process emptied it",
+            theirs(11),
+            ExpiredEntry::Any,
+            ClearDecision::NotHeld,
+        ),
+        (
+            "an ordinary write of ours",
+            ours(12),
+            ExpiredEntry::Entry(entry),
+            ClearDecision::NotHeld,
+        ),
+        (
+            "another entry's clear",
+            ours(10),
+            ExpiredEntry::Entry(other),
+            ClearDecision::NotHeld,
+        ),
+    ] {
+        let mut record = ExpiringRecord::<Stamp>::default();
+        record.landed(Some(entry), ours(10));
+        assert_eq!(record.decide(which, &now), decision, "{name}");
+    }
+    let mut record = ExpiringRecord::<Stamp>::default();
+    record.landed(Some(entry), ours(10));
+    assert_eq!(
+        record.decide(ExpiredEntry::Entry(entry), &theirs(11)),
+        ClearDecision::NotHeld
+    );
+    assert_eq!(
+        record.decide(ExpiredEntry::Entry(entry), &ours(10)),
+        ClearDecision::NotHeld,
+        "a missed entry stays forgotten"
+    );
+}
+
+fn expiring_write(text: &str) -> ClipboardWrite {
+    ClipboardWrite::text(text).expires_after(
+        flui_platform::ClipboardExpiry::try_new(Duration::from_secs(30))
+            .expect("thirty seconds expire"),
+    )
+}
+
+/// Ask the clipboard thread to clear `entry` if it is still there, and wait.
+fn clear_and_wait(clipboard: &WindowsClipboard, entry: ExpiredEntry) -> ExpiredClear {
+    let owner = SettlingOwner::new();
+    let (mut completion, answer) = owner.pending::<ExpiredClear>();
+    clipboard.clear_expired(entry, answer);
+    owner
+        .settle_within(&mut completion, ANSWER_WITHIN)
+        .expect("the clear is answered in time")
+        .expect("the clear is answered, not abandoned")
+}
+
+/// Write `write` and wait for the write's answer.
+fn write_entry_and_wait(clipboard: &WindowsClipboard, write: ClipboardWrite) -> ClipboardWritten {
+    let owner = SettlingOwner::new();
+    let (mut completion, answer) = owner.pending::<ClipboardWritten>();
+    clipboard.write(write, answer);
+    owner
+        .settle_within(&mut completion, ANSWER_WITHIN)
+        .expect("the write is answered in time")
+        .expect("the write is answered, not abandoned")
+}
+
+/// Another application copies `text` from a window of its own, concealed so
+/// the user's clipboard history keeps nothing of the test, and returns once
+/// the copy landed.
+fn copy_from_another_window(text: &'static str) {
+    std::thread::spawn(move || {
+        // SAFETY: a message-only window of the predefined `STATIC` class on
+        // this thread, which outlives every clipboard call below and is
+        // destroyed last; the clipboard is closed only after this thread's
+        // own open succeeded, and each format's memory is ours until
+        // `hand_over` takes it, with the clipboard open and emptied.
+        unsafe {
+            let window = CreateWindowExW(
+                WINDOW_EX_STYLE(0),
+                w!("STATIC"),
+                w!("another application"),
+                WINDOW_STYLE(0),
+                0,
+                0,
+                0,
+                0,
+                Some(HWND_MESSAGE),
+                None,
+                None,
+                None,
+            )
+            .expect("a message-only window");
+            let deadline = Instant::now() + ANSWER_WITHIN;
+            while OpenClipboard(Some(window)).is_err() {
+                assert!(
+                    Instant::now() < deadline,
+                    "another process held the clipboard for {ANSWER_WITHIN:?}"
+                );
+                std::thread::sleep(Duration::from_millis(2));
+            }
+            EmptyClipboard().expect("the clipboard empties");
+            for (name, _) in CONCEALMENT_FORMATS {
+                let format = RegisterClipboardFormatW(name);
+                let marker = Prepared::try_new(format, &EXCLUDE.to_le_bytes()).expect("memory");
+                assert!(marker.hand_over(), "a marker lands");
+            }
+            let text = Prepared::utf16(CF_UNICODETEXT.0 as u32, text).expect("memory");
+            assert!(text.hand_over(), "the text lands");
+            let _ = CloseClipboard();
+            let _ = windows::Win32::UI::WindowsAndMessaging::DestroyWindow(window);
+        }
+    })
+    .join()
+    .expect("the other application's copy");
+}
+
+/// On the real clipboard (saved and put back by [`ClipboardTest`]): an
+/// expiring entry is cleared while the clipboard still holds it, a copy
+/// another window made after it survives the clear, a later ordinary write
+/// of this application survives too, and the loop's end clears an entry still
+/// there. The sequence number the write records is the one the clear reads
+/// back, so closing the clipboard after the write moves nothing.
+#[test]
+fn an_expiring_entry_clears_only_while_the_clipboard_still_holds_it() {
+    let _test = ClipboardTest::begin();
+    let clipboard = WindowsClipboard::new();
+
+    let write = expiring_write("expiring secret");
+    let entry = write.entry().expect("an expiring write");
+    assert_eq!(write_entry_and_wait(&clipboard, write), Ok(()));
+    assert_eq!(
+        clear_and_wait(&clipboard, ExpiredEntry::Entry(entry)),
+        ExpiredClear::Cleared
+    );
+    assert_eq!(read_and_wait(&clipboard), Ok(None), "the entry is gone");
+    assert_eq!(
+        clear_and_wait(&clipboard, ExpiredEntry::Entry(entry)),
+        ExpiredClear::NotHeld,
+        "a cleared entry is not cleared twice"
+    );
+
+    let write = expiring_write("expiring secret");
+    let entry = write.entry().expect("an expiring write");
+    assert_eq!(write_entry_and_wait(&clipboard, write), Ok(()));
+    copy_from_another_window("another application's copy");
+    assert_eq!(
+        clear_and_wait(&clipboard, ExpiredEntry::Entry(entry)),
+        ExpiredClear::NotHeld
+    );
+    assert_eq!(
+        read_and_wait(&clipboard),
+        Ok(Some("another application's copy".to_owned())),
+        "the later copy survives"
+    );
+
+    let write = expiring_write("expiring secret");
+    assert_eq!(write_entry_and_wait(&clipboard, write), Ok(()));
+    assert_eq!(
+        write_entry_and_wait(&clipboard, ClipboardWrite::text("ordinary").concealed()),
+        Ok(())
+    );
+    assert_eq!(
+        clear_and_wait(&clipboard, ExpiredEntry::Any),
+        ExpiredClear::NotHeld
+    );
+    assert_eq!(read_and_wait(&clipboard), Ok(Some("ordinary".to_owned())));
+
+    let write = expiring_write("expiring secret");
+    assert_eq!(write_entry_and_wait(&clipboard, write), Ok(()));
+    assert_eq!(
+        clipboard.clear_expired_before_exit(ANSWER_WITHIN),
+        ExpiredClear::Cleared
+    );
+    assert_eq!(read_and_wait(&clipboard), Ok(None));
+}
