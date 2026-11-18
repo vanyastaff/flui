@@ -788,7 +788,7 @@ so a change that adds a package to an application's default graph runs
 `perf --size --bless` in the same PR and says why. A binary grows with every
 change to the code it links, so a size fails only past 2% over its baseline,
 and `--bless` on a fresh `main` moves it. The baseline is Linux x86_64's. The
-`size` job runs the builds on `main` (ADR-0372); a change to a manifest, `Cargo.lock`,
+`size` job runs the builds on `main` (ADR-0374); a change to a manifest, `Cargo.lock`,
 the toolchain, `.cargo/`, the `flui create` templates or the baseline runs
 `cargo xtask perf --size --check` before its PR. That 2% is cumulative, so on `main` each push also compares its
 sizes with the commit before it (`--previous`, from a cache entry each push
@@ -1258,7 +1258,7 @@ runs `checks`, `plan` and the `ci` aggregator:
 
 - **Wide lane**: every pull request that compiles anything runs the Linux
   gate, in parallel, over the whole workspace, and compiles for no other
-  target (ADR-0372). Both jobs start once `plan` has picked the lane,
+  target (ADR-0374). Both jobs start once `plan` has picked the lane,
   beside `checks`. One serial job over the
   changed crates and their dependents was slower (35 min median, against 18
   for parallel jobs, over the runs of 2026-09-30). The
@@ -1302,7 +1302,7 @@ turn main red: the per-feature matrix (`feature-matrix`), miri and the
 doctests (`doc-test`) — over 171 runs
 of 2026-09-26..30 none of them failed where `clippy` and `test` passed, so
 they run after the merge and a break is fixed forward. The same holds for
-the rest of `FULL_JOBS` (the table above; ADR-0370 and ADR-0372 have the
+the rest of `FULL_JOBS` (the table above; ADR-0370 and ADR-0374 have the
 measurements): of those, `wasm-check` and `cross-typecheck` are the ones
 that fail alone, so a change to the web or a native backend is the one to
 check by hand before its pull request. Native application

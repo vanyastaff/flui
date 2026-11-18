@@ -13,7 +13,7 @@
   for §3's signature of `CurrentHost::start_with` only (it also takes the application id)
   [ADR-0371](ADR-0371-before-the-first-release-no-xtask-gate-holds-a-rule-about-the-sources.md)
   for the `xtask send-impls` gate only (Confirmation): the rule stands and its reader confirms it.
-  [ADR-0372](ADR-0372-before-the-first-release-a-pull-request-runs-a-fixed-gate-and-no-api-contract-gate.md)
+  [ADR-0374](ADR-0374-before-the-first-release-a-pull-request-runs-a-fixed-gate-and-no-api-contract-gate.md)
   for the `send-positions` list only (Confirmation): the rule stands and its reader confirms it.
 - **Related:** [ADR-0323](ADR-0323-a-value-stays-on-the-owner-thread-unless-its-signature-names-what-crosses.md)
   §1, §2 and §4 (the rule this record applies to `flui-native`, and the five capability traits

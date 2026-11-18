@@ -22,7 +22,7 @@
   `Send` bound on registered callbacks and the deletion of `capabilities` are §4's and §5's, which
   are Proposed); [ADR-0037](ADR-0037-presentation-ownership-domains.md)
   (the `interaction -> platform` edge becomes `interaction -> platform-api`)
-- **Superseded-by:** [ADR-0372](ADR-0372-before-the-first-release-a-pull-request-runs-a-fixed-gate-and-no-api-contract-gate.md)
+- **Superseded-by:** [ADR-0374](ADR-0374-before-the-first-release-a-pull-request-runs-a-fixed-gate-and-no-api-contract-gate.md)
   for the API-closure gate only (Confirmation): the rule stands and its reader confirms it.
 - **Related:** [ADR-0035](ADR-0035-lifecycle-consolidation-and-frames-enabled.md),
   [ADR-0047](ADR-0047-unified-execution-services.md),

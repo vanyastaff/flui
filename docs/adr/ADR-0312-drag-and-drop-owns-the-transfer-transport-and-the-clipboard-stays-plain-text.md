@@ -5,7 +5,7 @@
 - **Superseded-by:** [ADR-0337](ADR-0337-a-clipboard-write-answers-and-win32-serves-the-clipboard-off-the-owner-thread.md)
   for §6 in part (the write's shape: a write answers through a resolver, and `NativeClipboard`
   has no `write_text`)
-  [ADR-0372](ADR-0372-before-the-first-release-a-pull-request-runs-a-fixed-gate-and-no-api-contract-gate.md)
+  [ADR-0374](ADR-0374-before-the-first-release-a-pull-request-runs-a-fixed-gate-and-no-api-contract-gate.md)
   for the `xtask send-positions` gate only (Confirmation): the rule stands and its reader confirms
   it.
 - **Supersedes:** [ADR-0038](ADR-0038-data-transfer-architecture.md) as a whole: its transport,

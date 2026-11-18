@@ -1,4 +1,4 @@
-# ADR-0372: Before the first release a pull request runs a fixed gate, and no API contract gate
+# ADR-0374: Before the first release a pull request runs a fixed gate, and no API contract gate
 
 - **Status:** Accepted (2026-11-18)
 - **Date:** 2026-11-18

@@ -3,7 +3,7 @@ name: CI
 # Runtime CI runs on Linux. A pull request that compiles anything runs the
 # Linux gate (clippy, test); main, the merge queue and a manual run add every
 # other check: the nested, feature-gated and compile-fail suites, rustdoc,
-# wasm32, the platform typechecks, the sizes, perf, miri (ADR-0372). This
+# wasm32, the platform typechecks, the sizes, perf, miri (ADR-0374). This
 # workflow compiles no other target for a pull request: what a change breaks there
 # shows on main, and nightly-platforms.yml runs each host's suites.
 # There is no scheduled run: advisories.yml checks the RustSec database daily,
@@ -1413,7 +1413,7 @@ jobs:
       #      docs      nothing else
       #      tooling   deps
       #      wide      deps + HEAVY_JOBS (the Linux PR gate)
-      #      full      wide + FULL_JOBS (every other check, ADR-0372)
+      #      full      wide + FULL_JOBS (every other check, ADR-0374)
       #    Every other job must skip. Any other skip (a drifted `if:`, a
       #    cancellation) or a job that ran where it should have skipped fails
       #    the aggregator. Each list must equal the jobs whose `if:` names its

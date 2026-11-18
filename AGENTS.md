@@ -142,7 +142,7 @@ conversation:
   its features, examples, shaders and tooling and its checks green, and then repeated across
   the rest.
 - Commits are `area: what changed`. On a pull request `ci.yml` runs one fixed gate, `clippy` and
-  `test` on Linux (ADR-0372): main checks wasm32, type-checks the Windows, macOS, iOS and Android
+  `test` on Linux (ADR-0374): main checks wasm32, type-checks the Windows, macOS, iOS and Android
   backends and runs the nested, compile-fail and feature-gated suites, the sizes, perf and miri,
   and Windows, macOS, the iOS Simulator and an Android emulator run nightly on main
   (`nightly-platforms.yml`). So a change to a native backend, a shader, a trybuild case or a
@@ -195,7 +195,7 @@ host change needs `cargo heli nextest run -p flui-native` by hand.
 
 ### Rules a reader holds
 
-No program checks these before the first release (ADR-0371, ADR-0372). The author follows them
+No program checks these before the first release (ADR-0371, ADR-0374). The author follows them
 and the reader of "Before a merge" looks for a change that breaks one:
 
 - Dependencies point down the tiers. A manifest's `[package.metadata.flui]` states the crate's
