@@ -7,6 +7,7 @@ use std::pin::Pin;
 use std::rc::{Rc, Weak};
 use std::task::{Context, Poll};
 
+use flui_foundation::Subscription;
 use flui_scheduler::__runtime::DriveFrame as _;
 use flui_scheduler::{ExecutionError, Instant, OwnerFrame, TaskToken, UpdateScheduler};
 
@@ -104,38 +105,37 @@ fn finished_and_cancelled_futures_preserve_caught_failure_custody() {
 /// earlier failure and discard it.
 fn nested_cancellation_failure_propagates_from_a_healthy_turn() {
     struct CancelsOnDrop {
-        scheduler: UpdateScheduler,
-        other: Rc<Cell<Option<flui_foundation::FrameCallbackId>>>,
+        other: Rc<RefCell<Option<Subscription>>>,
     }
     impl Drop for CancelsOnDrop {
         fn drop(&mut self) {
-            if let Some(other) = self.other.take() {
-                self.scheduler.remove_lifecycle_state_listener(other);
+            let other = self.other.borrow_mut().take();
+            if let Some(other) = other {
+                other.detach();
             }
         }
     }
     let scheduler = UpdateScheduler::new();
     let owner = OwnerFrame::try_new(&scheduler).expect("fresh owner");
-    let other = Rc::new(Cell::new(None));
+    let other = Rc::new(RefCell::new(None));
     let outer = CancelsOnDrop {
-        scheduler: scheduler.clone(),
         other: Rc::clone(&other),
     };
-    let a = scheduler.add_lifecycle_state_listener(Rc::new(move |_| {
+    let a = Cell::new(Some(scheduler.listen_lifecycle_state(move |_| {
         let _ = &outer;
-    }));
+    })));
     let inner = RejectedCapture;
-    other.set(Some(scheduler.add_lifecycle_state_listener(Rc::new(
-        move |_| {
-            let _ = &inner;
-        },
-    ))));
+    *other.borrow_mut() = Some(scheduler.listen_lifecycle_state(move |_| {
+        let _ = &inner;
+    }));
     let now = Instant::now();
     let failure = catch_unwind(AssertUnwindSafe(|| {
         owner.drive_frame(
             now,
             || {
-                scheduler.remove_lifecycle_state_listener(a);
+                if let Some(a) = a.take() {
+                    a.detach();
+                }
             },
             || {},
         )
@@ -305,16 +305,16 @@ fn lifecycle_removal_preserves_caught_failure() {
     let owner = OwnerFrame::try_new(&scheduler).expect("fresh owner");
     let drops = Rc::new(Cell::new(0));
     let capture = RemovedCapture(Rc::clone(&drops));
-    let id = scheduler.add_lifecycle_state_listener(Rc::new(move |_| {
+    let subscription = Cell::new(Some(scheduler.listen_lifecycle_state(move |_| {
         let _ = &capture;
-    }));
+    })));
     let now = Instant::now();
     owner
         .drive_frame(
             now,
             || {
                 catch_nested_refusal_failure(&owner);
-                assert!(scheduler.remove_lifecycle_state_listener(id));
+                subscription.take().expect("live subscription").detach();
             },
             || {},
         )
@@ -872,9 +872,9 @@ fn owner_drop_preserves_first_failure_through_terminal_release() {
     let weak = scheduler.downgrade();
     let terminal_drops = Rc::new(Cell::new(0));
     let capture = RemovedCapture(Rc::clone(&terminal_drops));
-    let _listener = scheduler.add_lifecycle_state_listener(Rc::new(move |_| {
+    let _listener = scheduler.listen_lifecycle_state(move |_| {
         let _ = &capture;
-    }));
+    });
     let producer = Rc::new(RefCell::new(Some(scheduler)));
     let capture = FirstFailure {
         producer: Rc::clone(&producer),
@@ -1091,31 +1091,30 @@ fn standalone_retirement_publishes_producer_custody() {
     struct ProducerRemoval {
         owner: Weak<OwnerFrame>,
         scheduler: flui_scheduler::WeakUpdateScheduler,
-        callback: flui_foundation::FrameCallbackId,
+        subscription: Option<Subscription>,
     }
     impl Drop for ProducerRemoval {
         fn drop(&mut self) {
             let owner = self.owner.upgrade().expect("retiring owner lives");
             catch_nested_refusal_failure(&owner);
-            assert!(
-                self.scheduler
-                    .upgrade()
-                    .expect("scheduler lives")
-                    .remove_lifecycle_state_listener(self.callback)
-            );
+            assert!(self.scheduler.upgrade().is_some(), "scheduler lives");
+            self.subscription
+                .take()
+                .expect("the listener is still subscribed")
+                .detach();
         }
     }
     let scheduler = UpdateScheduler::new();
     let owner = Rc::new(OwnerFrame::try_new(&scheduler).expect("fresh owner"));
     let drops = Rc::new(Cell::new(0));
     let capture = RemovedCapture(Rc::clone(&drops));
-    let callback = scheduler.add_lifecycle_state_listener(Rc::new(move |_| {
+    let subscription = scheduler.listen_lifecycle_state(move |_| {
         let _ = &capture;
-    }));
+    });
     let capture = ProducerRemoval {
         owner: Rc::downgrade(&owner),
         scheduler: scheduler.downgrade(),
-        callback,
+        subscription: Some(subscription),
     };
     owner
         .post_frame_handle()

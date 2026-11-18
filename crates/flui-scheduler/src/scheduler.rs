@@ -51,10 +51,10 @@ use flui_foundation::panic::FirstPanic;
 use parking_lot::Mutex;
 use web_time::{Duration, Instant};
 
-use flui_foundation::FrameCallbackId;
+use flui_foundation::{FrameCallbackId, Notifier, Subscription};
 
 use crate::{
-    frame::{AppLifecycleState, FrameId, FrameTiming, LifecycleStateCallback, SchedulerPhase},
+    frame::{AppLifecycleState, FrameId, FrameTiming, SchedulerPhase},
     frame_clock::ClockSource,
 };
 
@@ -67,12 +67,6 @@ mod teardown;
 /// The display period a scheduler labels frames with until the runtime sets
 /// the real one: 60 Hz, the refresh most displays run at.
 const DEFAULT_DISPLAY_PERIOD: Duration = Duration::from_nanos(16_666_667);
-
-/// Lifecycle state listener with ID for removal
-struct LifecycleListener {
-    id: FrameCallbackId,
-    callback: LifecycleStateCallback,
-}
 
 /// How a frame that an [`end_of_frame`](UpdateScheduler::end_of_frame) waiter
 /// was pending for finished.
@@ -628,8 +622,8 @@ struct CallbackState {
     id_mint: IdMint<FrameCallbackId>,
     /// Post-frame callbacks (after frame completes)
     post_frame: RefCell<crate::post_frame::PostFrameStorage>,
-    /// Lifecycle state change listeners
-    lifecycle_listeners: RefCell<Vec<LifecycleListener>>,
+    /// Lifecycle state change listeners, each held by its `Subscription`
+    lifecycle_listeners: Notifier<AppLifecycleState>,
 }
 
 impl CallbackState {
@@ -898,7 +892,7 @@ impl UpdateScheduler {
             callbacks: CallbackState {
                 id_mint: IdMint::new(),
                 post_frame: RefCell::new(crate::post_frame::PostFrameStorage::new()),
-                lifecycle_listeners: RefCell::new(Vec::new()),
+                lifecycle_listeners: Notifier::new(),
             },
             binding: BindingState {
                 lifecycle_state: Cell::new(AppLifecycleState::Resumed),
@@ -1478,60 +1472,34 @@ impl UpdateScheduler {
         }
     }
 
-    /// Add a lifecycle state change listener
+    /// Hear every lifecycle state the scheduler commits, in order, for as
+    /// long as the returned [`Subscription`] is held.
     ///
-    /// Returns a `FrameCallbackId` that can be used to remove the listener.
+    /// A change that walks several states (ADR-0345) reaches the listener
+    /// once per state. A listener's panic does not stop the others; the first
+    /// is raised once every listener has heard the state.
     ///
     /// # Example
     ///
     /// ```rust
-    /// use std::rc::Rc;
-    ///
     /// use flui_scheduler::{AppLifecycleState, UpdateScheduler};
     ///
     /// let scheduler = UpdateScheduler::new();
-    ///
-    /// let id = scheduler.add_lifecycle_state_listener(Rc::new(|state| {
-    ///     println!("App lifecycle changed to: {}", state);
-    /// }));
-    ///
-    /// // Later, remove the listener
-    /// scheduler.remove_lifecycle_state_listener(id);
+    /// let subscription = scheduler.listen_lifecycle_state(|state| {
+    ///     println!("App lifecycle changed to: {state}");
+    /// });
+    /// scheduler.handle_app_lifecycle_state_change(AppLifecycleState::Inactive);
+    /// // Dropping the subscription detaches the listener.
+    /// drop(subscription);
     /// ```
-    pub fn add_lifecycle_state_listener(
+    pub fn listen_lifecycle_state(
         &self,
-        callback: LifecycleStateCallback,
-    ) -> FrameCallbackId {
-        let id = self.inner.callbacks.mint_id();
+        listener: impl Fn(AppLifecycleState) + 'static,
+    ) -> Subscription {
         self.inner
             .callbacks
             .lifecycle_listeners
-            .borrow_mut()
-            .push(LifecycleListener { id, callback });
-        id
-    }
-
-    /// Remove a lifecycle state change listener by ID
-    ///
-    /// Returns `true` if the listener was found and removed.
-    pub fn remove_lifecycle_state_listener(&self, id: FrameCallbackId) -> bool {
-        // Retire the removed listener only after the storage borrow ends:
-        // its captures may reenter this scheduler during Drop.
-        // `position` + `remove` finds the single
-        // matching entry (ids are unique) with no allocation and no full-Vec
-        // move on the common no-match path, and the removed value is
-        // dropped only after the guard falls.
-        let removed = {
-            let mut listeners = self.inner.callbacks.lifecycle_listeners.borrow_mut();
-            listeners
-                .iter()
-                .position(|listener| listener.id == id)
-                .map(|index| listeners.remove(index))
-        };
-
-        let found = removed.is_some();
-        execution::retire_with_execution_custody(&self.inner.execution_failure, removed);
-        found
+            .subscribe(Rc::new(move |state: &AppLifecycleState| listener(*state)))
     }
 
     // =========================================================================

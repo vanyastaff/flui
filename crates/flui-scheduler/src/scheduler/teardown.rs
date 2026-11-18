@@ -94,7 +94,10 @@ impl Drop for SchedulerInner {
             .post_frame
             .get_mut()
             .detach_unclaimed_for_retirement();
-        let listeners = std::mem::take(self.callbacks.lifecycle_listeners.get_mut());
+        let listeners = self
+            .callbacks
+            .lifecycle_listeners
+            .dispose_and_take_callbacks();
         let hook = self.wake.on_frame_scheduled.lock().take();
         let waiters = self.frame.completion_waiters.get_mut().drain();
         let mut delivery =
