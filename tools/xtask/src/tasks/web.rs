@@ -12,8 +12,8 @@ use regex::Regex;
 
 use super::exec::{Cmd, Runner, Step, parsed, target_dir};
 use super::{WASM_TARGET, deny_warnings, wasm_hot_reload_check};
-use crate::util::repo_root;
-use crate::{change_scope, wasm};
+use crate::util::{metadata, repo_root};
+use crate::wasm;
 
 /// The two web demos, as cdylibs: `(package, artifact name)`.
 const LINKED: [(&str, &str); 2] = [
@@ -79,9 +79,27 @@ fn check_plan(no_wasm: &BTreeSet<String>) -> Vec<Step> {
     ]
 }
 
+/// The workspace packages that do not build for wasm32 (`[package.metadata.flui] wasm =
+/// false`), which the wasm steps exclude.
+fn no_wasm_packages() -> anyhow::Result<BTreeSet<String>> {
+    let workspace = metadata(&repo_root())?;
+    Ok(workspace
+        .workspace_packages()
+        .into_iter()
+        .filter(|package| {
+            package
+                .metadata
+                .pointer("/flui/wasm")
+                .and_then(serde_json::Value::as_bool)
+                == Some(false)
+        })
+        .map(|package| package.name.to_string())
+        .collect())
+}
+
 /// `cargo xtask wasm-check`.
 pub(super) fn check(runner: Runner) -> anyhow::Result<()> {
-    let no_wasm = change_scope::no_wasm_packages()?;
+    let no_wasm = no_wasm_packages()?;
     // an empty set would silently check packages that cannot build for wasm32
     ensure!(
         !no_wasm.is_empty(),
@@ -291,5 +309,13 @@ mod tests {
         assert_eq!(passed("test result: FAILED. 1 passed; 2 failed\n"), None);
         assert_eq!(passed("no tests to run\n"), None);
         assert_eq!(passed("  test result: ok. 4 passed\n"), None);
+    }
+
+    /// The wasm steps exclude a package its manifest marks, and only that one.
+    #[test]
+    fn a_package_without_wasm32_is_read_from_its_manifest() {
+        let no_wasm = no_wasm_packages().expect("cargo metadata");
+        assert!(no_wasm.contains("flui-cli"), "{no_wasm:?}");
+        assert!(!no_wasm.contains("flui-native"), "{no_wasm:?}");
     }
 }
