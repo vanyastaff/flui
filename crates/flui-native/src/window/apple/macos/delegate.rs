@@ -6,7 +6,7 @@ use std::rc::{Rc, Weak};
 use std::sync::atomic::Ordering;
 
 use flui_foundation::geometry::{Point, Size};
-use flui_platform::DisplayId;
+use flui_platform::{DisplayId, WindowMode};
 use objc2::rc::Retained;
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send};
 use objc2_app_kit::{NSScreen, NSWindow, NSWindowDelegate, NSWindowStyleMask};
@@ -16,7 +16,7 @@ use super::MacOSWindow;
 use crate::owner::apple::macos::HostDisplays;
 use crate::owner::panic_boundary::{AfterPanic, ContainedIvars, os_entry};
 use crate::window::apple::geometry::mode::{ANIMATION_LIMIT, HeldCommand};
-use crate::window::state::MODE_ANSWER_LIMIT;
+use crate::window::state::{MODE_ANSWER_LIMIT, mode_of};
 
 /// The display `screen` names, or `None` when there is none (a window not on
 /// any screen) or the source leaves that screen out.
@@ -145,6 +145,7 @@ define_class!(
                 || {
                     if let Some(window) = self.window() {
                         window.record_normal();
+                        window.handle_zoom_started();
                     }
                     true
                 },
@@ -290,6 +291,23 @@ impl MacOSWindow {
         self.wait_out_mode(lands_in, ANIMATION_LIMIT);
     }
 
+    /// AppKit is about to zoom the window or to put it back
+    /// (`windowShouldZoom:toFrame:`, asked before every zoom: the user's
+    /// through the title bar or the green button, and a mode command's own
+    /// step). It animates the frame there, so the snapshot waits for the
+    /// mode the zoom lands in, as for any request that changes a mode. Only
+    /// a window in normal mode or zoomed has a zoom to carry out, and only a
+    /// resizable one zooms.
+    fn handle_zoom_started(&self) {
+        let flags = self.read_flags();
+        let lands_in = match mode_of(flags.mode_flags()) {
+            WindowMode::Normal if flags.resizable => WindowMode::Maximized,
+            WindowMode::Maximized => WindowMode::Normal,
+            _ => return,
+        };
+        self.wait_out_mode(lands_in, MODE_ANSWER_LIMIT);
+    }
+
     /// A step that animates is over (or failed): publish the window, then send
     /// the mode held back for it, if there is one.
     ///
@@ -300,15 +318,13 @@ impl MacOSWindow {
     /// un-zoom and leave it maximized. It is also taken after the publish,
     /// since a subscriber that runs in it may command a newer one. A window
     /// dropped before that turn has no mode left to take. The mode the
-    /// snapshot waits for is waited for a short while more, past the frame
-    /// AppKit puts back and the held mode's step.
+    /// snapshot still waits for is waited for a short while more, past the
+    /// frame AppKit puts back and the held mode's step; a wait already over
+    /// stays over (`WindowStateCell::wait_longer`).
     fn handle_transition_ended(self: &Rc<Self>) {
         self.state.borrow_mut().sequence.step_ended();
-        if self.snapshot.mode_deadline().is_some() {
-            self.snapshot
-                .wait_longer(std::time::Instant::now() + MODE_ANSWER_LIMIT);
-            self.read_again_after(MODE_ANSWER_LIMIT);
-        }
+        self.snapshot
+            .wait_longer(std::time::Instant::now() + MODE_ANSWER_LIMIT);
         // A window that left full screen, or failed to enter it, stands at
         // its own level again; one still full screen stays at the normal one.
         let fullscreen = self.read_flags().fullscreen;

@@ -15,12 +15,21 @@ use crate::window::state::MODE_ANSWER_LIMIT;
 impl X11Window {
     /// The window asked its window manager for `mode`: the snapshot keeps
     /// the mode the window left until the server's properties say `mode`, or
-    /// for at most [`MODE_ANSWER_LIMIT`]. Every mode request calls it, one
-    /// for the mode the window is in too, so a newer request replaces the
-    /// wait of an older one whose answers may still be coming.
+    /// for at most [`MODE_ANSWER_LIMIT`]. Every request that changes or
+    /// leaves a mode calls it (a mode command, a size given to a maximized
+    /// or fullscreen window, a double click on a title bar the application
+    /// draws), one for the mode the window is in too, so a newer request
+    /// replaces the wait of an older one whose answers may still be coming.
     pub(super) fn expect_mode(&self, mode: WindowMode) {
         self.cell
             .expect_mode(mode, Instant::now() + MODE_ANSWER_LIMIT);
+    }
+
+    /// The window, unmapped, took a mode by writing it into its own
+    /// properties: no window manager manages it, so nothing answers and no
+    /// wait starts, and the wait of a request made while it was mapped ends.
+    pub(super) fn end_mode_wait(&self) {
+        self.cell.end_mode_wait();
     }
 
     /// Whether a read at `now` of a window in `mode` finds it where it

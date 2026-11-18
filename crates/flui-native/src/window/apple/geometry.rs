@@ -788,6 +788,46 @@ pub(crate) mod mode {
             self.when_shown.take()
         }
     }
+
+    /// The read a window owes at the instant its wait for a mode change ends
+    /// (`WindowStateCell::mode_deadline`), which nothing from AppKit marks.
+    ///
+    /// The end moves: a newer mode request replaces the wait, a read that
+    /// finds the mode asked shortens it, a transition's end lengthens it.
+    /// One timer is live at a time, the one armed for the end the wait has
+    /// now; a timer armed for an end the wait no longer has reads nothing
+    /// when it fires, so a window never reads once per request.
+    #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+    pub(crate) struct WaitEndRead {
+        /// The end of the wait the live timer was armed for.
+        armed_for: Option<Instant>,
+    }
+
+    impl WaitEndRead {
+        /// The wait ends at `end` now, or there is none. Answers how long
+        /// after `now` a timer for that end fires, when one is to be armed:
+        /// `None` when the live timer already serves `end`, or nothing is
+        /// waited for.
+        pub(crate) fn follow(&mut self, end: Option<Instant>, now: Instant) -> Option<Duration> {
+            if self.armed_for == end {
+                return None;
+            }
+            self.armed_for = end;
+            end.map(|end| end.saturating_duration_since(now))
+        }
+
+        /// A timer armed for `end` fired: whether it is the live one, whose
+        /// read the window makes now. After it no timer is live, so the read
+        /// arms the next if the wait goes on.
+        pub(crate) fn fired(&mut self, end: Instant) -> bool {
+            let live = self.armed_for == Some(end);
+            if live {
+                self.armed_for = None;
+            }
+            live
+        }
+    }
+
     #[cfg(test)]
     mod tests {
         use WindowMode::{Fullscreen, Maximized, Minimized, Normal};
@@ -1039,6 +1079,39 @@ pub(crate) mod mode {
                 sequence.fullscreen_transition(at(start, 1), false, flags("FR")),
                 Normal
             );
+        }
+
+        /// One timer reads the window at the end of its wait: the end a
+        /// timer already serves arms no second, an end that moved arms
+        /// another and the timer of the end before reads nothing, and the
+        /// timer that reads leaves none live.
+        #[test]
+        fn one_timer_reads_a_window_at_the_end_of_its_wait() {
+            let now = Instant::now();
+            let (animation, settled) = (at(now, 3), at(now, 1));
+            let mut read = WaitEndRead::default();
+            assert_eq!(read.follow(None, now), None, "nothing is waited for");
+            assert_eq!(
+                read.follow(Some(animation), now),
+                Some(Duration::from_secs(3))
+            );
+            assert_eq!(read.follow(Some(animation), now), None, "its timer is live");
+            // A read found the mode asked: the wait ends sooner.
+            assert_eq!(
+                read.follow(Some(settled), now),
+                Some(Duration::from_secs(1))
+            );
+            assert!(!read.fired(animation), "an end the wait no longer has");
+            assert!(read.fired(settled));
+            assert!(!read.fired(settled), "a timer reads once");
+            // The timer's read left the wait standing: another is armed, at
+            // once for an end already past.
+            assert_eq!(
+                read.follow(Some(settled), at(now, 2)),
+                Some(Duration::ZERO)
+            );
+            assert_eq!(read.follow(None, at(now, 2)), None, "the wait ended");
+            assert!(!read.fired(settled), "a wait that ended reads nothing");
         }
 
         #[test]

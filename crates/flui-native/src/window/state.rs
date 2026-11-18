@@ -499,35 +499,55 @@ struct ModeChange {
     asked: WindowMode,
     until: web_time::Instant,
     reached: bool,
+    /// Whether the window has been anywhere but the mode asked since the
+    /// change began: its snapshot said so then, a request before this one
+    /// was still being answered, or a read since found it in another mode.
+    /// A window that never was is where it was asked to be, and its reads
+    /// are its own; one that was is on its way, and the rectangle of a read
+    /// in normal mode may still be a step's.
+    was_elsewhere: bool,
     /// The published rectangle the window returns to from another mode, or
-    /// the published outer rectangle of a window that was normal: what every
-    /// snapshot of the change names as its `normal_geometry`, so no step's
-    /// rectangle (a fullscreen-sized normal read on the way) is taken for
-    /// the place the window returns to. `None` on a host that reports no
-    /// such rectangle.
+    /// the published outer rectangle of a window that was normal: what a
+    /// step names as its `normal_geometry`, so no step's rectangle (a
+    /// fullscreen-sized normal read on the way) is taken for the place the
+    /// window returns to. `None` on a host that reports no such rectangle.
     restore: Option<WindowGeometry>,
 }
 
 #[cfg(any(target_os = "macos", x11_host, wayland_host, test))]
 impl ModeChange {
     /// `sample`, read at `now` while the snapshot shows `published`, as the
-    /// change publishes it ([`WindowStateCell::expect_mode`]): a read in the
-    /// mode asked starts the settling, a read in another of the normal,
-    /// maximized and fullscreen modes keeps the published mode, and the
-    /// rectangle the window returns to is the one the change began with. A
-    /// minimized read, or a read of a window published minimized, is
-    /// published as read.
+    /// change publishes it ([`WindowStateCell::expect_mode`]). A read in the
+    /// mode asked publishes its mode and starts the settling. A minimized
+    /// read, or a read of a window published minimized, is published as
+    /// read. Any other read is a step, which keeps the published mode. The
+    /// rectangle the change began with is named by a step, and by a read in
+    /// normal mode of a window on its way there: a window manager passes
+    /// through a screen-sized normal mode on the way out of fullscreen
+    /// (openbox), and a normal read names no rectangle of its own, so its
+    /// outer one would be taken for the place the window returns to.
     fn hold(&mut self, sample: &mut WindowState, published: WindowMode, now: web_time::Instant) {
         if sample.mode == self.asked {
             if !std::mem::replace(&mut self.reached, true) {
                 self.until = self.until.min(now + MODE_SETTLE);
             }
-        } else if sample.mode == WindowMode::Minimized || published == WindowMode::Minimized {
+            if self.was_elsewhere && self.asked == WindowMode::Normal {
+                self.name_restore(sample);
+            }
             return;
-        } else {
-            sample.mode = published;
         }
-        if sample.mode != WindowMode::Minimized && self.restore.is_some() {
+        if sample.mode == WindowMode::Minimized || published == WindowMode::Minimized {
+            return;
+        }
+        self.was_elsewhere = true;
+        sample.mode = published;
+        self.name_restore(sample);
+    }
+
+    /// `sample` names the rectangle the change began with, where the host
+    /// reported one.
+    const fn name_restore(&self, sample: &mut WindowState) {
+        if self.restore.is_some() {
             sample.normal_geometry = self.restore;
         }
     }
@@ -678,57 +698,87 @@ impl WindowStateCell {
     }
 
     /// The host asked its window system for `asked`. The host calls it for
-    /// every mode request it carries out, so each request replaces the change
-    /// before it, also one for the mode the window reads now: the window
-    /// system may still be answering the request before it, whose steps are
-    /// then held, and the first read in `asked` starts the settling. The
-    /// window system may carry a change out in several answers (an EWMH
+    /// every request it makes that changes or leaves a mode (a mode command,
+    /// a size given to a maximized or fullscreen window, a button of a frame
+    /// it draws), so each request replaces the change before it, also one
+    /// for the mode the window reads now: the window system may still be
+    /// answering the request before it, whose steps are then held, and the
+    /// first read in `asked` starts the settling.
+    ///
+    /// The window system may carry a change out in several answers (an EWMH
     /// window manager's property changes, a Wayland compositor's configures,
-    /// AppKit's full-screen
-    /// transition and the frame it puts back after it): until `until`, a read
-    /// in another of the normal, maximized and fullscreen modes publishes the
-    /// mode the snapshot has, with every other fact as read; a read in
-    /// `asked` publishes as read, and from then on the window waits only
-    /// `MODE_SETTLE` more, for a step the window system had still to take. A
-    /// minimized read, or a read of a window the snapshot shows minimized, is
-    /// never held: a window shown again is drawn at once. Every snapshot of
-    /// the change names the rectangle the window returned to as it began
-    /// (`ModeChange::restore`). So the published mode changes once, from the
-    /// mode the window left to the one asked, while the geometry and the
-    /// metrics follow the window the renderer draws. The host reads the
-    /// window again once the wait ends ([`Self::mode_deadline`]), so a change
-    /// the window system refused, or a later one of the user's, is published
+    /// AppKit's full-screen transition and the frame it puts back after it).
+    /// Until `until`:
+    ///
+    /// - a read in `asked` publishes its mode, and from the first one on the
+    ///   window waits only `MODE_SETTLE` more, for a step the window system
+    ///   had still to take;
+    /// - a read in another of the normal, maximized and fullscreen modes is
+    ///   a step: it publishes the mode the snapshot has and the rectangle
+    ///   the window returned to as the change began (`ModeChange::restore`),
+    ///   with every other fact as read;
+    /// - a minimized read, or a read of a window the snapshot shows
+    ///   minimized, publishes as read. A window shown again is drawn at
+    ///   once, and no snapshot says minimized of a window on screen, so the
+    ///   modes a window passes through on its way out of minimized are
+    ///   published.
+    ///
+    /// A read in normal mode names no rectangle of its own to return to, so
+    /// while a window is on its way into normal mode from elsewhere
+    /// (`ModeChange::was_elsewhere`) its normal reads name the rectangle the
+    /// change began with too: the rectangle such a read has may still be a
+    /// step's. A window asked for the mode it is settled in was nowhere
+    /// else, and its reads are published as read: the request publishes
+    /// nothing, and the window moved meanwhile is where it reads.
+    ///
+    /// So the published mode of a window on screen changes once, from the
+    /// mode it left to the one asked, while the geometry and the metrics
+    /// follow the window the renderer draws. The host reads the window
+    /// again once the wait ends ([`Self::mode_deadline`]), so a change the
+    /// window system refused, or a later one of the user's, is published
     /// then.
     #[cfg(any(target_os = "macos", x11_host, wayland_host, test))]
     pub(crate) fn expect_mode(&self, asked: WindowMode, until: web_time::Instant) {
+        let now = web_time::Instant::now();
         let mut slot = self.last.lock();
         let published = &slot.state;
         let restore = published
             .normal_geometry
             .or_else(|| (published.mode == WindowMode::Normal).then_some(published.outer));
+        let answering_another = slot.mode_change.is_some_and(|before| {
+            now < before.until && (before.was_elsewhere || before.asked != asked)
+        });
         slot.mode_change = Some(ModeChange {
             asked,
             until,
             reached: false,
+            was_elsewhere: published.mode != asked || answering_another,
             restore,
         });
     }
 
-    /// The host asked for a mode its window system never reports (a Wayland
-    /// compositor's minimize): no answer is waited for, and a change before
-    /// it ends.
-    #[cfg(any(wayland_host, test))]
+    /// The host changed the window's mode by a request nothing answers: a
+    /// Wayland compositor's minimize, which it never reports, a mode an
+    /// unmapped X11 window writes into its own properties, a frame AppKit
+    /// gave a zoomed window at once. No answer is waited for, and a change
+    /// before it ends.
+    #[cfg(any(target_os = "macos", x11_host, wayland_host, test))]
     pub(crate) fn end_mode_wait(&self) {
         self.last.lock().mode_change = None;
     }
 
-    /// The change in flight waits until `until` from now on, as if no read
-    /// had found the mode asked yet: AppKit's full-screen transition ended,
-    /// and the frame it puts back after it is still to come.
+    /// The change in flight, while its wait lasts, waits until `until` from
+    /// now on, as if no read had found the mode asked yet: AppKit's
+    /// full-screen transition ended, and the frame it puts back after it is
+    /// still to come. A wait already past its end stays over: what the
+    /// window read since may be published, and nothing holds a mode again.
     #[cfg(any(target_os = "macos", test))]
     pub(crate) fn wait_longer(&self, until: web_time::Instant) {
+        let now = web_time::Instant::now();
         let mut slot = self.last.lock();
-        if let Some(change) = &mut slot.mode_change {
+        if let Some(change) = &mut slot.mode_change
+            && now < change.until
+        {
             change.until = until;
             change.reached = false;
         }
@@ -1095,21 +1145,23 @@ mod tests {
         window(width).outer
     }
 
-    /// A read of a window `width` wide in `mode`, which returns to a window
-    /// 300 wide from every mode but normal.
-    fn in_mode(width: f64, mode: flui_platform::WindowMode) -> Sample {
-        let normal = (mode != flui_platform::WindowMode::Normal).then(|| outer(300.0));
+    /// A read of a window `width` wide in `mode`, as a host samples it: in
+    /// every mode but normal it names the rectangle the window returns to,
+    /// `returns_to` wide.
+    fn in_mode(width: f64, mode: flui_platform::WindowMode, returns_to: f64) -> Sample {
+        let normal = (mode != flui_platform::WindowMode::Normal).then(|| outer(returns_to));
         Sample::from(window(width).with_mode(mode).with_normal_geometry(normal))
     }
 
     /// One case of a mode change: the mode the window is published in (800
-    /// wide), the modes asked in order, whether the limit passed, and each
-    /// read after them (the width read, which the snapshot publishes, the
-    /// mode read, the mode published and the width of the rectangle it
-    /// returns to).
+    /// wide), the width of the rectangle its host reads it returns to, the
+    /// modes asked in order, whether the limit passed, and each read after
+    /// them (the width read, which the snapshot publishes, the mode read, the
+    /// mode published and the width of the rectangle it returns to).
     struct ModeChangeCase {
         name: &'static str,
         start: flui_platform::WindowMode,
+        returns_to: f64,
         requests: &'static [flui_platform::WindowMode],
         settled: bool,
         reads: &'static [(
@@ -1123,12 +1175,17 @@ mod tests {
     /// While a mode change the host asked for is in flight, a read in
     /// another of the normal, maximized and fullscreen modes publishes the
     /// mode the snapshot had, a read in the mode asked publishes it and a
-    /// step after it keeps it while the window system settles, and every
-    /// snapshot names the rectangle the window returned to as the change
-    /// began, a normal one's included. A newer request replaces the change,
-    /// also one for the mode the window is in, whose older steps are held. A
-    /// minimized read, a read of a window published minimized, and a change
-    /// past its limit publish as read.
+    /// step after it keeps it while the window system settles. A step names
+    /// the rectangle the window returned to as the change began, a normal
+    /// window's own included, and so does a normal read of a window on its
+    /// way into normal mode, whose rectangle may be a step's. A window asked
+    /// for the mode it is settled in was nowhere else: its reads publish as
+    /// read, so the request publishes nothing and the window moved
+    /// meanwhile is remembered where it is. A newer request replaces the
+    /// change, also one for the mode the window is in, whose older steps
+    /// are held. A minimized read, a read of a window published minimized
+    /// (the modes a window passes through as it is shown again are
+    /// published), and a change past its limit publish as read.
     #[test]
     fn a_mode_change_in_flight_publishes_its_steps_in_the_mode_the_window_left() {
         use flui_platform::WindowMode::{Fullscreen, Maximized, Minimized, Normal};
@@ -1141,6 +1198,7 @@ mod tests {
             ModeChangeCase {
                 name: "steps through normal on the way to maximized",
                 start: Fullscreen,
+                returns_to: 300.0,
                 requests: &[Maximized],
                 settled: false,
                 reads: &[
@@ -1152,6 +1210,7 @@ mod tests {
             ModeChangeCase {
                 name: "a step after the mode asked keeps it",
                 start: Fullscreen,
+                returns_to: 300.0,
                 requests: &[Maximized],
                 settled: false,
                 reads: &[
@@ -1163,6 +1222,7 @@ mod tests {
             ModeChangeCase {
                 name: "a normal window names its own rectangle on the way",
                 start: Normal,
+                returns_to: 800.0,
                 requests: &[Fullscreen],
                 settled: false,
                 reads: &[
@@ -1173,6 +1233,7 @@ mod tests {
             ModeChangeCase {
                 name: "a step past the limit publishes as read",
                 start: Fullscreen,
+                returns_to: 300.0,
                 requests: &[Maximized],
                 settled: true,
                 reads: &[
@@ -1183,6 +1244,7 @@ mod tests {
             ModeChangeCase {
                 name: "a minimized read and what follows it publish as read",
                 start: Fullscreen,
+                returns_to: 300.0,
                 requests: &[Maximized],
                 settled: false,
                 reads: &[
@@ -1193,6 +1255,7 @@ mod tests {
             ModeChangeCase {
                 name: "a request for the mode the window is in replaces the wait",
                 start: Fullscreen,
+                returns_to: 300.0,
                 requests: &[Maximized, Fullscreen],
                 settled: false,
                 reads: &[
@@ -1200,11 +1263,68 @@ mod tests {
                     (800.0, Fullscreen, Fullscreen, Some(300.0)),
                 ],
             },
+            ModeChangeCase {
+                name: "a window shown again from minimized publishes the modes it passes through",
+                start: Minimized,
+                returns_to: 300.0,
+                requests: &[Maximized],
+                settled: false,
+                reads: &[
+                    (300.0, Normal, Normal, None),
+                    (1920.0, Normal, Normal, Some(300.0)),
+                    (500.0, Maximized, Maximized, Some(300.0)),
+                ],
+            },
+            ModeChangeCase {
+                name: "a request for the mode a settled window is in publishes nothing, \
+                       and the window moved in that mode names no other rectangle",
+                start: Normal,
+                returns_to: 800.0,
+                requests: &[Normal],
+                settled: false,
+                reads: &[(800.0, Normal, Normal, None), (640.0, Normal, Normal, None)],
+            },
+            ModeChangeCase {
+                name: "the same request made again finds the window as settled",
+                start: Normal,
+                returns_to: 800.0,
+                requests: &[Normal, Normal],
+                settled: false,
+                reads: &[(800.0, Normal, Normal, None)],
+            },
+            ModeChangeCase {
+                name: "a window on its way into normal mode names the rectangle it returns to",
+                start: Fullscreen,
+                returns_to: 300.0,
+                requests: &[Normal],
+                settled: false,
+                reads: &[
+                    (1920.0, Normal, Normal, Some(300.0)),
+                    (1920.0, Maximized, Normal, Some(300.0)),
+                    (300.0, Normal, Normal, Some(300.0)),
+                ],
+            },
+            ModeChangeCase {
+                name: "a request that replaces one still being answered is on its way too",
+                start: Normal,
+                returns_to: 800.0,
+                requests: &[Fullscreen, Normal],
+                settled: false,
+                reads: &[
+                    (1920.0, Fullscreen, Normal, Some(800.0)),
+                    (1920.0, Normal, Normal, Some(800.0)),
+                    (800.0, Normal, Normal, Some(800.0)),
+                ],
+            },
         ];
+        // What differs between the reads of these cases.
+        let facts = |state: &WindowState| (state.mode, state.outer, state.normal_geometry);
         for case in table {
             let name = case.name;
             let cell = WindowStateCell::new(window(800.0));
-            let _ = cell.read_quietly(|| in_mode(800.0, case.start));
+            let mut last = cell
+                .read_quietly(|| in_mode(800.0, case.start, case.returns_to))
+                .state;
             let until = if case.settled { past } else { later };
             for &asked in case.requests {
                 cell.expect_mode(asked, until);
@@ -1214,28 +1334,36 @@ mod tests {
             assert_eq!(cell.mode_in_flight(now), in_flight, "{name}");
             for &(width, mode, published, normal) in case.reads {
                 cell.invalidate();
-                let state = cell.read_quietly(|| in_mode(width, mode)).state;
+                let read = cell.read_quietly(|| in_mode(width, mode, case.returns_to));
+                let state = read.state;
                 assert_eq!(state.mode, published, "{name}: read {mode:?}");
                 assert_eq!(state.outer.size().width, width, "{name}");
                 let normal = normal.map(outer);
                 assert_eq!(state.normal_geometry, normal, "{name}: read {mode:?}");
+                assert_eq!(
+                    read.changed,
+                    facts(&state) != facts(&last),
+                    "{name}: read {mode:?} publishes a revision only for a fact that changed"
+                );
+                last = state;
             }
         }
     }
 
     /// Reaching the mode asked leaves only the settling to wait for; a
-    /// transition's end waits longer again; a request for a mode the window
-    /// system never reports ends the wait.
+    /// transition's end waits longer again, but only while the wait lasts:
+    /// one already past its end is not taken up again; a request for a mode
+    /// the window system never reports ends the wait.
     #[test]
     fn a_mode_wait_settles_waits_longer_and_ends() {
-        use flui_platform::WindowMode::{Fullscreen, Maximized};
+        use flui_platform::WindowMode::{Fullscreen, Maximized, Normal};
 
         let cell = WindowStateCell::new(window(800.0));
-        let _ = cell.read_quietly(|| in_mode(800.0, Fullscreen));
+        let _ = cell.read_quietly(|| in_mode(800.0, Fullscreen, 300.0));
         let later = web_time::Instant::now() + std::time::Duration::from_secs(3600);
         cell.expect_mode(Maximized, later);
         cell.invalidate();
-        let _ = cell.read_quietly(|| in_mode(500.0, Maximized));
+        let _ = cell.read_quietly(|| in_mode(500.0, Maximized, 300.0));
         let settles_by = web_time::Instant::now() + super::MODE_SETTLE;
         assert!(
             cell.mode_deadline()
@@ -1245,6 +1373,17 @@ mod tests {
         assert_eq!(cell.mode_deadline(), Some(later));
         cell.end_mode_wait();
         assert_eq!(cell.mode_deadline(), None);
+
+        let past = web_time::Instant::now()
+            .checked_sub(std::time::Duration::from_millis(1))
+            .expect("a clock past its first millisecond");
+        cell.expect_mode(Fullscreen, past);
+        cell.wait_longer(later);
+        assert_eq!(cell.mode_in_flight(web_time::Instant::now()), None);
+        // What the window reads after the wait is published as read.
+        cell.invalidate();
+        let state = cell.read_quietly(|| in_mode(300.0, Normal, 300.0)).state;
+        assert_eq!(state.mode, Normal);
     }
 
     /// A read whose geometry describes no window publishes nothing of its

@@ -176,6 +176,10 @@ mod cases {
             a_command_during_a_mode_wait_acts_on_the_mode_the_server_says,
         ),
         (
+            "a_request_for_the_mode_the_window_is_in_publishes_nothing",
+            a_request_for_the_mode_the_window_is_in_publishes_nothing,
+        ),
+        (
             "a_window_minimized_as_it_hears_its_show_stays_minimized",
             a_window_minimized_as_it_hears_its_show_stays_minimized,
         ),
@@ -2398,6 +2402,52 @@ mod cases {
         let state = fixture.window.state();
         assert_eq!(state.mode, WindowMode::Normal, "{state:?}");
         assert_eq!(state.content_size.get(), size, "{state:?}");
+    }
+
+    /// A request for the mode a settled window is in publishes nothing: the
+    /// window reads that mode at once, and no snapshot of the request's wait
+    /// names a rectangle the window returns to. A window another client
+    /// resizes during that wait, as a user's drag of its border does, is
+    /// remembered at the size it was given.
+    fn a_request_for_the_mode_the_window_is_in_publishes_nothing() {
+        let fixture = X11Fixture::open("asked for its own mode");
+        let displays = fixture.platform.display_snapshot().expect("the displays");
+        let request_normal = || {
+            fixture
+                .window
+                .admit_and_apply(WindowCommand::SetMode(WindowMode::Normal))
+                .expect("openbox takes every mode");
+        };
+        let settled = fixture.window.state();
+        assert_eq!(settled.mode, WindowMode::Normal);
+        request_normal();
+        // Longer than the window waits for any mode.
+        run_for(&fixture.platform, Duration::from_millis(1_500)).expect("the loop turns");
+        let after = fixture.window.state();
+        assert_eq!(
+            after.revision, settled.revision,
+            "the request published a window returning to {:?}",
+            after.normal_geometry
+        );
+
+        request_normal();
+        let resized = Size::new(460.0, 330.0);
+        fixture
+            .server
+            .configure_window(
+                fixture.xid,
+                &ConfigureWindowAux::new().width(460).height(330),
+            )
+            .expect("request");
+        fixture.server.flush().expect("flush");
+        turn_until(&fixture, "the resize", || {
+            fixture.window.state().content_size.get() == resized
+        });
+        let state = fixture.window.state();
+        assert_eq!(state.normal_geometry, None, "{state:?}");
+        let placement =
+            WindowPlacement::from_state(&state, &displays, false).expect("a placed window");
+        assert_eq!(placement.size.get(), resized, "{state:?}");
     }
 
     /// A command acts on the window as it is, not as its last snapshot had
