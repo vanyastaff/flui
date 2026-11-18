@@ -18,6 +18,11 @@
 //! behind its OS seam, with the system's answers as inputs (`win32::*::tests`
 //! on Windows, the portal's tests on a private bus on Linux, `macos::*::tests`
 //! as a model on every host).
+//!
+//! The web providers reach their page through a canvas window, which the
+//! headless host does not make, and this harness waits on threads a page
+//! does not have: their rows run in a browser instead
+//! (`web::tests::the_web_providers_keep_the_system_services_contract`).
 
 use std::cell::RefCell;
 use std::rc::Rc;

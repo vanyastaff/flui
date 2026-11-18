@@ -49,13 +49,7 @@ impl TestOwner {
         &self.completions
     }
 
-    #[cfg_attr(
-        not(windows),
-        expect(
-            dead_code,
-            reason = "only the Windows providers' tests acquire in a context"
-        )
-    )]
+    /// The acquisition context of a widget in `window`, or in none.
     pub(crate) fn ctx(&self, window: Option<WindowRef>) -> ProviderContext<'_> {
         ProviderContext::new(
             &self.poster,
@@ -79,13 +73,6 @@ impl TestOwner {
 
     /// Run turns until `done`, or panic after ten seconds: what another
     /// thread answers arrives as a posted job.
-    #[cfg_attr(
-        not(windows),
-        expect(
-            dead_code,
-            reason = "only the Windows providers' tests wait on a thread"
-        )
-    )]
     pub(crate) fn turn_until(&self, done: impl Fn() -> bool) {
         let deadline = Instant::now() + Duration::from_secs(10);
         while !done() {

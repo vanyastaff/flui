@@ -15,12 +15,19 @@
 //! name, while the contract matches names exactly. So an open panel with a
 //! filter checks each item itself through its delegate
 //! (`panel:shouldEnableURL:`), which enables a folder to browse or a file
-//! the contract's rule admits, and every pick it answers is checked again by
-//! that rule: a pick the rule refuses is a malformed answer, never handed
-//! out. A save panel appends the first allowed type's extension to a typed
-//! name without one, which for a several-part extension is its last part;
-//! its pick is not checked, since it names a file to create. A panel shows
-//! no filter menu, so every filter is allowed at once and a save reports no
+//! the contract's rule admits ([`judge_item`]): by its name first, which
+//! reads nothing, then by its type against the MIME patterns. The item
+//! judged is the one the panel answers, an alias's or a link's target, and
+//! that target is what a pick hands out, so the delegate and the handle,
+//! which holds every pick's name to the filters on every host
+//! (`FileDialogs::open`), judge one file. The handle cannot tell a type, so
+//! under a MIME pattern a pick whose name no extension admits and whose
+//! type no pattern does is refused here, with the handle's own
+//! `NotInFilter`; a pick whose type cannot be read is not refused for that.
+//! A save panel appends the first allowed type's extension to a typed name
+//! without one, which for a several-part extension is its last part; its
+//! pick is not checked, since it names a file to create. A panel shows no
+//! filter menu, so every filter is allowed at once and a save reports no
 //! selected filter.
 //!
 //! The title is the panel's message (a sheet has no title bar) as well as
@@ -34,7 +41,7 @@ use flui_platform::{SystemFailure, Unsupported, UnsupportedReason};
 
 use crate::dialog::{
     DialogError, FileDialogCapability, FileFilter, OpenResult, PickedFile, Picks, SaveLocation,
-    SaveResult,
+    SaveResult, name_ends_in,
 };
 
 /// What a filter pattern asks the panel to allow.
@@ -126,25 +133,54 @@ pub(super) fn panel_filter(filters: &[FileFilter]) -> Result<Option<PanelFilter>
     Ok(Some(filter))
 }
 
-/// Whether a file named `name` ends in `.` and one of `extensions`,
-/// ignoring ASCII case: the contract's rule for a name (ADR-0360 §3).
+/// Whether a file named `name` is one `extensions` name: the contract's
+/// rule for a name (ADR-0360 §3), the one the handle checks a pick by.
 pub(super) fn name_matches(name: &[u8], extensions: &[String]) -> bool {
-    extensions.iter().any(|extension| {
-        let extension = extension.as_bytes();
-        name.len() > extension.len()
-            && name[name.len() - extension.len() - 1] == b'.'
-            && name[name.len() - extension.len()..].eq_ignore_ascii_case(extension)
-    })
+    extensions
+        .iter()
+        .any(|extension| name_ends_in(name, extension))
+}
+
+/// What the contract's rule makes of one item of an open panel.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Judged {
+    /// Its name ends in one of the extensions, or its type is one of the
+    /// MIME patterns'.
+    Admitted,
+    /// Neither, and its type was read.
+    Refused,
+    /// Its name does not admit it, and its type could not be read.
+    Unread,
+}
+
+/// Judge an item named `name` (`None` for one with no name, a root) by the
+/// request's `extensions`, and by its type only when its name does not
+/// admit it: `conforms` reads whether its type is one of the MIME patterns',
+/// `None` when the file system does not say. A name that admits the item
+/// reads nothing, so a file that cannot be read is never refused for it.
+pub(super) fn judge_item(
+    name: Option<&[u8]>,
+    extensions: &[String],
+    conforms: impl FnOnce() -> Option<bool>,
+) -> Judged {
+    if name.is_some_and(|name| name_matches(name, extensions)) {
+        return Judged::Admitted;
+    }
+    match conforms() {
+        Some(true) => Judged::Admitted,
+        Some(false) => Judged::Refused,
+        None => Judged::Unread,
+    }
 }
 
 /// One item the user picked, as the panel names it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum PanelPick {
-    /// A file the request admits, at this path.
+    /// A file at this path.
     Path(PathBuf),
-    /// A file the request's filters do not admit, which the panel answered
-    /// all the same.
-    Unfiltered,
+    /// A file neither an extension nor a MIME pattern of the request
+    /// admits, which the panel answered all the same.
+    NotInFilter,
     /// A URL that names no file.
     NotAFile,
 }
@@ -162,7 +198,7 @@ fn picked(pick: PanelPick) -> Result<PickedFile, DialogError> {
         PanelPick::Path(path) => {
             PickedFile::try_new(path).ok_or(DialogError::Failed(SystemFailure::MalformedAnswer))
         }
-        PanelPick::Unfiltered => Err(DialogError::Failed(SystemFailure::MalformedAnswer)),
+        PanelPick::NotInFilter => Err(DialogError::NotInFilter),
         PanelPick::NotAFile => Err(DialogError::NotAFile),
     }
 }
@@ -226,20 +262,24 @@ mod appkit {
     use block2::RcBlock;
     use flui_platform::UnsupportedReason;
     use flui_platform::capability::{Resolver, WindowRef};
+    use std::rc::Rc;
+
     use objc2::rc::{Retained, Weak};
     use objc2::runtime::{AnyClass, AnyObject, NSObject, NSObjectProtocol, ProtocolObject};
-    use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send};
+    use objc2::{
+        DefinedClass, MainThreadMarker, MainThreadOnly, Message as _, define_class, msg_send,
+    };
     use objc2_app_kit::{
         NSModalResponse, NSOpenPanel, NSOpenSavePanelDelegate, NSSavePanel, NSWindow,
     };
-    use objc2_foundation::{NSArray, NSNumber, NSString, NSURL};
+    use objc2_foundation::{NSArray, NSNumber, NSString, NSURL, NSURLBookmarkResolutionOptions};
 
     use super::super::appkit::{file_url, ns_window, url_path};
     use super::super::sheet::Pending;
     use super::super::version::MacOSVersion;
     use super::{
-        ABORTED, ContentType, PanelFilter, PanelPick, name_matches, open_answer, panel_filter,
-        save_answer, unsupported,
+        ABORTED, ContentType, Judged, PanelFilter, PanelPick, judge_item, open_answer,
+        panel_filter, save_answer, unsupported,
     };
     use crate::dialog::{
         DialogError, DialogHold, FileDialogBackend, OpenRequest, OpenResult, SaveRequest,
@@ -297,13 +337,124 @@ mod appkit {
         mime_types: Vec<Retained<AnyObject>>,
     }
 
+    /// The item the panel answers for `url`: the target of an alias or a
+    /// link, resolved without asking the user or mounting a volume, and
+    /// `url` itself when it is neither or does not resolve.
+    fn answered_item(url: &NSURL) -> Retained<NSURL> {
+        NSURL::URLByResolvingAliasFileAtURL_options_error(
+            url,
+            NSURLBookmarkResolutionOptions::WithoutUI
+                | NSURLBookmarkResolutionOptions::WithoutMounting,
+        )
+        .unwrap_or_else(|_| url.retain())
+    }
+
+    /// What the file system tells of an item beside its name.
+    struct ItemKind {
+        /// A folder the panel opens rather than picks: not a package.
+        browsable: bool,
+        /// Its uniform type identifier, when it has one.
+        type_identifier: Option<Retained<NSString>>,
+    }
+
+    impl ItemKind {
+        /// Read `item`'s kind; `None` when the file system does not say (a
+        /// file gone since it was listed, a volume that stopped answering).
+        #[expect(
+            deprecated,
+            reason = "its successor, NSURLContentTypeKey, is macOS 11 and a symbol the floor's Foundation lacks"
+        )]
+        fn read(item: &NSURL) -> Option<Self> {
+            // SAFETY: Foundation's resource key constants live for the
+            // process; each of these is in every macOS FLUI supports.
+            let (folder_key, package_key, type_key) = unsafe {
+                (
+                    objc2_foundation::NSURLIsDirectoryKey,
+                    objc2_foundation::NSURLIsPackageKey,
+                    objc2_foundation::NSURLTypeIdentifierKey,
+                )
+            };
+            let values = item
+                .resourceValuesForKeys_error(&NSArray::from_slice(&[
+                    folder_key,
+                    package_key,
+                    type_key,
+                ]))
+                .ok()?;
+            let flag = |key| {
+                values
+                    .objectForKey(key)
+                    .and_then(|value| value.downcast::<NSNumber>().ok())
+                    .is_some_and(|value| value.boolValue())
+            };
+            Some(Self {
+                browsable: flag(folder_key) && !flag(package_key),
+                type_identifier: values
+                    .objectForKey(type_key)
+                    .and_then(|identifier| identifier.downcast::<NSString>().ok()),
+            })
+        }
+    }
+
+    impl NameRule {
+        /// What the rule makes of `item`, with its kind as far as it had
+        /// to be read: `None` for an item its name admitted, or whose kind
+        /// the file system does not say.
+        fn judge(&self, item: &NSURL) -> (Judged, Option<ItemKind>) {
+            use std::os::unix::ffi::OsStrExt as _;
+
+            let path = url_path(item);
+            let name = path
+                .as_deref()
+                .and_then(std::path::Path::file_name)
+                .map(std::ffi::OsStr::as_bytes);
+            let mut kind = None;
+            let judged = judge_item(name, &self.extensions, || {
+                let read = ItemKind::read(item)?;
+                let conforms = self.conforms(read.type_identifier.as_deref());
+                kind = Some(read);
+                Some(conforms)
+            });
+            (judged, kind)
+        }
+
+        /// Whether a file of the type `identifier` is one of the rule's
+        /// MIME types.
+        fn conforms(&self, identifier: Option<&NSString>) -> bool {
+            if self.mime_types.is_empty() {
+                return false;
+            }
+            let (Some(identifier), Some(class)) = (identifier, AnyClass::get(c"UTType")) else {
+                return false;
+            };
+            // SAFETY: a class method of `UTType` taking an `NSString`.
+            let file_type: Option<Retained<AnyObject>> =
+                unsafe { msg_send![class, typeWithIdentifier: identifier] };
+            file_type.is_some_and(|file_type| {
+                self.mime_types.iter().any(|allowed| {
+                    // SAFETY: `conformsToType:` takes a `UTType` and answers
+                    // a `BOOL`; both are `UTType`s.
+                    unsafe { msg_send![&*file_type, conformsToType: &**allowed] }
+                })
+            })
+        }
+
+        /// Whether the panel shows `url` enabled: a file the rule admits,
+        /// or a folder to browse. An item whose name does not admit it and
+        /// whose kind cannot be read is not shown as one to choose.
+        fn enables(&self, url: &NSURL) -> bool {
+            let (judged, kind) = self.judge(&answered_item(url));
+            judged == Judged::Admitted || kind.is_some_and(|kind| kind.browsable)
+        }
+    }
+
     define_class!(
         /// An open panel's delegate that enables only a folder to browse or
         /// a file the contract's rule admits.
         #[unsafe(super(NSObject))]
         #[thread_kind = MainThreadOnly]
         #[name = "FluiSystemPanelNameRule"]
-        #[ivars = ContainedIvars<NameRule>]
+        #[ivars = ContainedIvars<Rc<NameRule>>]
         struct NameRuleDelegate;
 
         unsafe impl NSObjectProtocol for NameRuleDelegate {}
@@ -317,7 +468,7 @@ mod appkit {
     );
 
     impl NameRuleDelegate {
-        fn new(mtm: MainThreadMarker, rule: NameRule) -> Retained<Self> {
+        fn new(mtm: MainThreadMarker, rule: Rc<NameRule>) -> Retained<Self> {
             let this = Self::alloc(mtm).set_ivars(ContainedIvars::new(rule));
             // SAFETY: `NSObject`'s `init`, on an instance whose ivars are set.
             unsafe { msg_send![super(this), init] }
@@ -329,76 +480,8 @@ mod appkit {
                 (),
                 // A pick is checked again when the panel answers.
                 AfterPanic::Answer(|()| false),
-                || self.admits(url),
+                || self.ivars().enables(url),
             )
-        }
-
-        /// Whether `url` is a folder to browse or a file the rule admits.
-        #[expect(
-            deprecated,
-            reason = "its successor, NSURLContentTypeKey, is macOS 11 and a symbol the floor's Foundation lacks"
-        )]
-        fn admits(&self, url: &NSURL) -> bool {
-            // SAFETY: Foundation's resource key constants live for the
-            // process; each of these is in every macOS FLUI supports.
-            let (folder_key, package_key, type_key) = unsafe {
-                (
-                    objc2_foundation::NSURLIsDirectoryKey,
-                    objc2_foundation::NSURLIsPackageKey,
-                    objc2_foundation::NSURLTypeIdentifierKey,
-                )
-            };
-            let Ok(values) = url.resourceValuesForKeys_error(&NSArray::from_slice(&[
-                folder_key,
-                package_key,
-                type_key,
-            ])) else {
-                return false;
-            };
-            let flag = |key| {
-                values
-                    .objectForKey(key)
-                    .and_then(|value| value.downcast::<NSNumber>().ok())
-                    .is_some_and(|value| value.boolValue())
-            };
-            if flag(folder_key) && !flag(package_key) {
-                return true;
-            }
-            let rule = &**self.ivars();
-            let named = url_path(url)
-                .and_then(|path| {
-                    use std::os::unix::ffi::OsStrExt as _;
-                    path.file_name()
-                        .map(|name| name_matches(name.as_bytes(), &rule.extensions))
-                })
-                .unwrap_or(false);
-            named || Self::conforms(values.objectForKey(type_key).as_deref(), rule)
-        }
-
-        /// Whether a file of the type `identifier` is one of the rule's
-        /// MIME types.
-        fn conforms(identifier: Option<&AnyObject>, rule: &NameRule) -> bool {
-            if rule.mime_types.is_empty() {
-                return false;
-            }
-            let Some(identifier) =
-                identifier.and_then(|identifier| identifier.downcast_ref::<NSString>())
-            else {
-                return false;
-            };
-            let Some(class) = AnyClass::get(c"UTType") else {
-                return false;
-            };
-            // SAFETY: a class method of `UTType` taking an `NSString`.
-            let file_type: Option<Retained<AnyObject>> =
-                unsafe { msg_send![class, typeWithIdentifier: identifier] };
-            file_type.is_some_and(|file_type| {
-                rule.mime_types.iter().any(|allowed| {
-                    // SAFETY: `conformsToType:` takes a `UTType` and answers
-                    // a `BOOL`; both are `UTType`s.
-                    unsafe { msg_send![&*file_type, conformsToType: &**allowed] }
-                })
-            })
         }
     }
 
@@ -473,8 +556,9 @@ mod appkit {
             Ok(())
         }
 
-        /// The delegate that holds an open panel to the contract's rule.
-        fn name_rule(&self, filter: &PanelFilter) -> Retained<NameRuleDelegate> {
+        /// The contract's rule an open panel's delegate and its picks are
+        /// held to.
+        fn name_rule(&self, filter: &PanelFilter) -> Rc<NameRule> {
             let mime_types = self.content_types.map_or_else(Vec::new, |proof| {
                 filter
                     .types
@@ -483,13 +567,10 @@ mod appkit {
                     .filter_map(|content_type| ut_type(proof, content_type))
                     .collect::<Vec<Retained<AnyObject>>>()
             });
-            NameRuleDelegate::new(
-                self.mtm,
-                NameRule {
-                    extensions: filter.extensions.clone(),
-                    mime_types,
-                },
-            )
+            Rc::new(NameRule {
+                extensions: filter.extensions.clone(),
+                mime_types,
+            })
         }
     }
 
@@ -513,13 +594,24 @@ mod appkit {
         }
     }
 
-    /// A URL the panel answered, as a pick: refused when `rule` is set and
-    /// does not admit it.
-    fn pick(url: &NSURL, rule: Option<&NameRuleDelegate>) -> PanelPick {
-        match url_path(url) {
-            Some(_) if rule.is_some_and(|rule| !rule.admits(url)) => PanelPick::Unfiltered,
-            Some(path) => PanelPick::Path(path),
-            None => PanelPick::NotAFile,
+    /// A URL the panel answered, as a pick.
+    ///
+    /// Under a rule the pick is the item the delegate judged: an alias's or
+    /// a link's target. The handle holds its name to the filters, so only
+    /// its type is judged here, where a MIME pattern makes the name alone
+    /// no answer, and only a type that was read refuses it.
+    fn pick(url: &NSURL, rule: Option<&NameRule>) -> PanelPick {
+        let Some(rule) = rule else {
+            return url_path(url).map_or(PanelPick::NotAFile, PanelPick::Path);
+        };
+        let item = answered_item(url);
+        let Some(path) = url_path(&item) else {
+            return PanelPick::NotAFile;
+        };
+        if !rule.mime_types.is_empty() && rule.judge(&item).0 == Judged::Refused {
+            PanelPick::NotInFilter
+        } else {
+            PanelPick::Path(path)
         }
     }
 
@@ -555,11 +647,11 @@ mod appkit {
             panel.setCanChooseDirectories(folders);
             panel.setCanCreateDirectories(folders);
             panel.setAllowsMultipleSelection(request.is_multiple());
-            let mut delegate = None;
+            let mut rule = None;
             let filtered = panel_filter(&request.filters).and_then(|filter| match filter {
                 Some(filter) => {
                     self.allow(&panel, &filter)?;
-                    delegate = Some(self.name_rule(&filter));
+                    rule = Some(self.name_rule(&filter));
                     Ok(())
                 }
                 None => Ok(()),
@@ -568,6 +660,9 @@ mod appkit {
                 let _ = answer.resolve(Err(refusal));
                 return DialogHold::new(());
             }
+            let delegate = rule
+                .as_ref()
+                .map(|rule| NameRuleDelegate::new(self.mtm, Rc::clone(rule)));
             if let Some(delegate) = &delegate {
                 // SAFETY: the delegate is the panel's until the hold clears
                 // it, and the hold keeps it alive until then.
@@ -576,7 +671,6 @@ mod appkit {
             let pending = Pending::new(answer);
             let handler_pending = pending.clone();
             let answered = Weak::from_retained(&panel);
-            let rule = delegate.as_ref().map(Weak::from_retained);
             let handler = RcBlock::new(move |response: NSModalResponse| {
                 os_entry(
                     "NSOpenPanel completion handler",
@@ -585,18 +679,12 @@ mod appkit {
                     || {
                         handler_pending.answer(|| {
                             open_answer(response, || {
-                                let rule = rule.as_ref().map(Weak::load);
-                                // A rule that was set and is gone admits nothing.
-                                if rule.as_ref().is_some_and(Option::is_none) {
-                                    return vec![PanelPick::Unfiltered];
-                                }
-                                let rule = rule.flatten();
                                 answered.load().map_or_else(Vec::new, |panel| {
                                     panel
                                         .URLs()
                                         .iter()
                                         .map(|url| pick(&url, rule.as_deref()))
-                                        .collect()
+                                        .collect::<Vec<PanelPick>>()
                                 })
                             })
                         });
@@ -676,7 +764,8 @@ mod tests {
     use flui_platform::{SystemFailure, Unsupported, UnsupportedReason};
 
     use super::{
-        ABORTED, ContentType, PanelPick, name_matches, open_answer, panel_filter, save_answer,
+        ABORTED, ContentType, Judged, PanelPick, judge_item, name_matches, open_answer,
+        panel_filter, save_answer,
     };
     use crate::dialog::{DialogError, FileDialogCapability, FileFilter};
 
@@ -752,7 +841,8 @@ mod tests {
             (b"photo.Png", true),
             (b"notes.gz", false),
             (b"tar.gz", false),
-            (b".png", true),
+            // A name is longer than its extension and the dot before it.
+            (b".png", false),
             (b"png", false),
             (b"photo.png.txt", true),
             ("é.png".as_bytes(), true),
@@ -774,13 +864,43 @@ mod tests {
     }
 
     #[test]
+    fn an_items_name_admits_it_before_anything_of_it_is_read() {
+        let rule = extensions(&["png", "tar.gz"]);
+        assert_eq!(
+            judge_item(Some(b"photo.PNG"), &rule, || panic!(
+                "a name that admits its file reads nothing of it"
+            )),
+            Judged::Admitted
+        );
+        /// An item's name, what its type's read answers, and the verdict.
+        type Case<'a> = (Option<&'a [u8]>, Option<bool>, Judged);
+        let cases: [Case<'_>; 5] = [
+            // A file whose type is one of the MIME patterns'.
+            (Some(b"scan"), Some(true), Judged::Admitted),
+            (Some(b"main.swift"), Some(false), Judged::Refused),
+            // A file gone since it was listed, a volume that stopped
+            // answering: not read, so not refused.
+            (Some(b"scan"), None, Judged::Unread),
+            (Some(b"notes.gz"), None, Judged::Unread),
+            (None, Some(false), Judged::Refused),
+        ];
+        for (name, conforms, judged) in cases {
+            assert_eq!(
+                judge_item(name, &rule, || conforms),
+                judged,
+                "{name:?} {conforms:?}"
+            );
+        }
+    }
+
+    #[test]
     fn an_ended_panel_answers_its_picks_a_cancel_or_why_it_could_not() {
         // Absolute on every host the model runs on.
         let file = std::env::temp_dir().join("report.pdf");
         let picks = open_answer(1, || vec![PanelPick::Path(file.clone())])
             .expect("accepted")
             .expect("a pick");
-        assert_eq!(picks.first().path(), file);
+        assert_eq!(picks.first().path(), Some(file.as_path()));
         assert_eq!(
             open_answer(0, || panic!("a cancel reads no picks")),
             Ok(None)
@@ -797,10 +917,10 @@ mod tests {
         assert_eq!(
             open_answer(1, || vec![
                 PanelPick::Path(file.clone()),
-                PanelPick::Unfiltered
+                PanelPick::NotInFilter
             ]),
-            Err(DialogError::Failed(SystemFailure::MalformedAnswer)),
-            "a pick the filters do not admit is never handed out"
+            Err(DialogError::NotInFilter),
+            "a pick the filters do not admit refuses the answer as the handle does"
         );
         assert_eq!(
             open_answer(ABORTED, Vec::new),
@@ -818,7 +938,7 @@ mod tests {
         let saved = save_answer(1, || Some(PanelPick::Path(file.clone())))
             .expect("accepted")
             .expect("a file");
-        assert_eq!(saved.file().path(), file);
+        assert_eq!(saved.file().path(), Some(file.as_path()));
         assert_eq!(saved.filter(), None, "a panel has no filter menu to report");
         assert_eq!(
             save_answer(1, || None),

@@ -302,11 +302,11 @@ pub enum ShortcutError {
     /// closed it.
     #[error("the system ended the binding")]
     Revoked,
-    /// The UI runtime bound more shortcuts over its life than the system
-    /// numbers: a Windows hot key takes one of 49 151 numbers, and the
-    /// provider gives each number once, so a press still queued for an
-    /// unbound shortcut never reaches a later one. No later binding of the
-    /// runtime is bound.
+    /// More shortcuts were bound than the system numbers: a provider gives
+    /// each hot key number once, so a press still queued for an unbound
+    /// shortcut never reaches a later one. A Windows hot key takes one of a
+    /// UI runtime's 49 151 numbers, a macOS one a number of the process's.
+    /// No later binding of that runtime, or process, is bound.
     #[error("the system has no number left for another shortcut")]
     Exhausted,
     /// The service is not here (no shortcuts portal, or one too old), as the
@@ -330,7 +330,11 @@ pub enum ShortcutEvent {
     Pressed(ShortcutId),
     /// The trigger of `id` was released.
     Released(ShortcutId),
-    /// The user changed the triggers; the list is the whole binding now.
+    /// The shortcuts bound changed, and the list is the whole binding now:
+    /// the user changed the triggers in the system's settings, or, where a
+    /// shortcut is bound to the key that types its letter (macOS), the
+    /// keyboard layout changed and a shortcut's new chord was another
+    /// application's, or one left out before found its own free.
     Changed(Vec<BoundShortcut>),
     /// The binding ended: no shortcut fires any more, and every later
     /// [`ShortcutBinding::next`] answers this again.

@@ -155,6 +155,11 @@ mod appkit {
         })
     }
 
+    /// The longest path Darwin's calls take or answer, in bytes, its NUL
+    /// included (`PATH_MAX`).
+    pub(crate) const PATH_MAX: usize = 1024;
+    const _: () = assert!(libc::PATH_MAX == 1024);
+
     /// The path a file URL names, as the file system's bytes; `None` for a
     /// URL that names no file. `getFileSystemRepresentation:` answers `NO`
     /// where `fileSystemRepresentation` would raise an exception.
@@ -164,18 +169,18 @@ mod appkit {
         if !url.isFileURL() {
             return None;
         }
-        let mut buffer = vec![0_u8; usize::try_from(libc::PATH_MAX).unwrap_or(1024) + 1];
-        let pointer = std::ptr::NonNull::new(buffer.as_mut_ptr().cast::<std::ffi::c_char>())?;
+        // On the stack: the panel's delegate asks this of every item shown.
+        let mut buffer = [0_u8; PATH_MAX];
+        let pointer = std::ptr::NonNull::from(&mut buffer).cast::<std::ffi::c_char>();
         // SAFETY: the buffer outlives the call and holds the length given,
         // which the method writes at most, a NUL included.
         let written = unsafe { url.getFileSystemRepresentation_maxLength(pointer, buffer.len()) };
         if !written {
             return None;
         }
-        let length = buffer.iter().position(|byte| *byte == 0)?;
-        buffer.truncate(length);
+        let path = std::ffi::CStr::from_bytes_until_nul(&buffer).ok()?;
         Some(std::path::PathBuf::from(std::ffi::OsStr::from_bytes(
-            &buffer,
+            path.to_bytes(),
         )))
     }
 

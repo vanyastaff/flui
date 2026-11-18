@@ -16,6 +16,10 @@
 mod message;
 mod request;
 
+use std::path::PathBuf;
+use std::sync::Arc;
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::Mutex;
 use std::{any::Any, cell::Cell, cell::RefCell, fmt, future::Future, rc::Rc, rc::Weak};
 
 use flui_platform::capability::{
@@ -30,9 +34,12 @@ pub use message::{
     MessageBoxes, MessageButtons, MessageLevel,
 };
 pub use request::{
-    FileFilter, MAX_TEXT_LEN, MalformedRequest, OpenRequest, PickedFile, Picks, SaveLocation,
-    SaveRequest,
+    FileFilter, MAX_TEXT_LEN, MalformedRequest, OpenRequest, PickedFile, PickedForm, Picks,
+    SaveLocation, SaveRequest,
 };
+// The macOS panel's delegate holds each item it shows to the same name rule.
+#[cfg(any(target_os = "macos", test))]
+pub(crate) use request::name_ends_in;
 
 /// The file dialog capability: `ctx.capability::<FileDialogCapability>()`
 /// hands out [`FileDialogs`].
@@ -74,6 +81,24 @@ pub enum DialogError {
     /// handle cannot hand out.
     #[error("the pick is not a local file")]
     NotAFile,
+    /// A pick matches none of the request's filters: its system's dialog
+    /// let the user past them (a browser's file input offers every file
+    /// beside them, a desktop dialog takes a typed name). The whole answer
+    /// is refused, since it is not what the request asked the user for;
+    /// nothing was read. [`FileDialogs::open`] says what is checked where.
+    #[error("a pick matches none of the request's filters")]
+    NotInFilter,
+    /// The picks hold more than the request's
+    /// [`max_bytes`](OpenRequest::max_bytes), on a system that hands over a
+    /// pick's contents (a browser). Nothing was read past the check.
+    #[error("the picks hold {actual} bytes, more than the {limit} the request reads")]
+    TooLarge {
+        /// The picks' size, as the system declared it or as far as it was
+        /// read.
+        actual: u64,
+        /// The request's [`max_bytes`](OpenRequest::max_bytes).
+        limit: u64,
+    },
     /// The system failed in a way the handle does not name; the
     /// [`SystemFailure`] says where the failure came from, for diagnostics.
     #[error("the system failed: {0}")]
@@ -90,6 +115,8 @@ impl DialogError {
             | Self::InvalidRequest(_)
             | Self::WindowClosed
             | Self::NotAFile
+            | Self::NotInFilter
+            | Self::TooLarge { .. }
             | Self::Failed(_) => None,
         }
     }
@@ -390,15 +417,29 @@ impl FileDialogs {
     /// A backend that answers several picks to a request that allowed one
     /// answers [`SystemFailure::MalformedAnswer`]: its answer is not one the
     /// request can have.
+    ///
+    /// Every pick is held to the request's filters by its name, on every
+    /// host: a system's dialog may let the user past them (a name typed
+    /// into it, a link whose target has another name, a type that only
+    /// conforms to an allowed one). When the filters name extensions only
+    /// and a pick's name ends in none of them, the whole answer is
+    /// [`DialogError::NotInFilter`], and no pick is handed out. A request
+    /// with a MIME type among its filters is not checked here: a file's
+    /// type is its system's to tell, so the backend that mapped the pattern
+    /// judges the pick by it.
     pub fn open(&self, request: OpenRequest) -> Dialog<OpenResult> {
         let checked = request.check();
         let multiple = request.is_multiple();
+        let filters = request.filters.clone();
         self.scope.show(
             checked,
             |window, answer| self.backend.open(window, request, answer),
             move |result| match result {
                 Ok(Some(picks)) if !multiple && picks.len() > 1 => {
                     Err(SystemFailure::MalformedAnswer.into())
+                }
+                Ok(Some(picks)) if !request::names_admit(&filters, &picks) => {
+                    Err(DialogError::NotInFilter)
                 }
                 result => result,
             },
@@ -409,10 +450,21 @@ impl FileDialogs {
     ///
     /// A backend that names a selected filter the request does not have
     /// answers [`SystemFailure::MalformedAnswer`].
+    ///
+    /// A request that carries [`contents`](SaveRequest::contents) answers
+    /// once they are written: a backend that hands over no path (a browser)
+    /// writes them itself and answers the file it wrote; to a path the user
+    /// chose, the handle writes them on a thread of its own, since no file
+    /// system call runs on the owner thread (ADR-0360 §2), and a failed
+    /// write answers [`DialogError::Failed`] with the system's code. The
+    /// window is free for the next dialog once the user has chosen; the
+    /// write itself cannot be called back, so dropping the [`Dialog`] while
+    /// it runs drops only the answer.
     pub fn save(&self, request: SaveRequest) -> Dialog<SaveResult> {
         let checked = request.check();
         let filters = request.filters.len();
-        self.scope.show(
+        let contents = request.contents.clone();
+        let chosen = self.scope.show(
             checked,
             |window, answer| self.backend.save(window, request, answer),
             move |result| match result {
@@ -421,8 +473,181 @@ impl FileDialogs {
                 }
                 result => result,
             },
-        )
+        );
+        match contents {
+            Some(contents) => self.write_where_chosen(chosen, contents),
+            None => chosen,
+        }
     }
+
+    /// `chosen`'s answer, after `contents` are written to the path it chose;
+    /// a location without a path was written by the backend.
+    fn write_where_chosen(
+        &self,
+        chosen: Dialog<SaveResult>,
+        contents: Arc<[u8]>,
+    ) -> Dialog<SaveResult> {
+        let Dialog {
+            completion: chosen,
+            guard,
+        } = chosen;
+        let completions = self.scope.completions.clone();
+        let (completion, caller) = completions.pending();
+        let mut waiting = Some((caller, contents));
+        chosen.on_complete(move |outcome| {
+            let Some((caller, contents)) = waiting.take() else {
+                return;
+            };
+            match outcome {
+                Ok(Ok(Some(location))) => match location.file().path() {
+                    Some(path) => {
+                        write_file(&completions, path.to_path_buf(), contents, location, caller);
+                    }
+                    // The backend wrote the contents itself (a browser).
+                    None => {
+                        // A retired owner has nobody left to answer.
+                        let _ = caller.resolve(Ok(Some(location)));
+                    }
+                },
+                // A retired owner has nobody left to answer.
+                Ok(unwritten) => {
+                    // A retired owner has nobody left to answer.
+                    let _ = caller.resolve(unwritten);
+                }
+                // The backend dropped its answer: so does the handle.
+                Err(_) => drop(caller),
+            }
+        });
+        Dialog { completion, guard }
+    }
+}
+
+/// Write `contents` to `path` on a thread of its own, then answer `caller`
+/// with `location`, or with the failure of the write.
+#[cfg(not(target_arch = "wasm32"))]
+fn write_file(
+    completions: &CompletionSource,
+    path: PathBuf,
+    contents: Arc<[u8]>,
+    location: SaveLocation,
+    caller: Resolver<SaveResult>,
+) {
+    let (written, answer) = completions.pending::<Result<(), DialogError>>();
+    let mut waiting = Some((caller, location));
+    written.on_complete(move |outcome| {
+        let Some((caller, location)) = waiting.take() else {
+            return;
+        };
+        match outcome {
+            Ok(Ok(())) => {
+                // A retired owner has nobody left to answer.
+                let _ = caller.resolve(Ok(Some(location)));
+            }
+            Ok(Err(error)) => {
+                // A retired owner has nobody left to answer.
+                let _ = caller.resolve(Err(error));
+            }
+            Err(_) => drop(caller),
+        }
+    });
+    // The thread answers through the slot; a thread that cannot start leaves
+    // the resolver there, and the failure is answered here.
+    let slot = Arc::new(Mutex::new(Some(answer)));
+    let writer = Arc::clone(&slot);
+    let started = std::thread::Builder::new()
+        .name("flui-system-save".to_owned())
+        .spawn(move || {
+            let written = write_replacing(&path, &contents).map_err(|error| write_failure(&error));
+            let answer = writer
+                .lock()
+                .expect("BUG: the save slot's holders run no code under its lock")
+                .take();
+            if let Some(answer) = answer {
+                // A retired owner has nobody left to answer.
+                let _ = answer.resolve(written);
+            }
+        });
+    if let Err(error) = started {
+        let answer = slot
+            .lock()
+            .expect("BUG: the save slot's holders run no code under its lock")
+            .take();
+        if let Some(answer) = answer {
+            let _ = answer.resolve(Err(write_failure(&error)));
+        }
+    }
+}
+
+/// A save to a path on a system with no file system of its own: a backend
+/// of this platform hands over no path, so only a stand-in answers one.
+#[cfg(target_arch = "wasm32")]
+fn write_file(
+    _: &CompletionSource,
+    _: PathBuf,
+    _: Arc<[u8]>,
+    _: SaveLocation,
+    caller: Resolver<SaveResult>,
+) {
+    // A retired owner has nobody left to answer.
+    let _ = caller.resolve(Err(DialogError::Unsupported(Unsupported::of::<
+        FileDialogCapability,
+    >(
+        UnsupportedReason::NotOnThisPlatform,
+    ))));
+}
+
+/// How many names beside the chosen file a save tries for its new file
+/// before it gives up: each is taken only by one this process is writing.
+#[cfg(not(target_arch = "wasm32"))]
+const MAX_TEMPORARY_NAMES: u32 = 16;
+
+/// Write `contents` to `path` whole or not at all: into a new file beside
+/// it, synced, then renamed over it, so a write that fails leaves the file
+/// the user chose as it was, and a reader never sees it half written.
+#[cfg(not(target_arch = "wasm32"))]
+fn write_replacing(path: &std::path::Path, contents: &[u8]) -> std::io::Result<()> {
+    use std::io::{ErrorKind, Write as _};
+
+    let (Some(folder), Some(name)) = (path.parent(), path.file_name()) else {
+        return Err(ErrorKind::InvalidInput.into());
+    };
+    let mut taken = None;
+    for attempt in 0..MAX_TEMPORARY_NAMES {
+        let mut temporary_name = std::ffi::OsString::from(".");
+        temporary_name.push(name);
+        temporary_name.push(format!(".{}-{attempt}.flui-save", std::process::id()));
+        let temporary = folder.join(temporary_name);
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+        {
+            Ok(mut file) => {
+                let written = file.write_all(contents).and_then(|()| file.sync_all());
+                drop(file);
+                let replaced = written.and_then(|()| std::fs::rename(&temporary, path));
+                if replaced.is_err() {
+                    // The write's failure is the answer; the clean-up's is not.
+                    let _ = std::fs::remove_file(&temporary);
+                }
+                return replaced;
+            }
+            Err(error) if error.kind() == ErrorKind::AlreadyExists => taken = Some(error),
+            Err(error) => return Err(error),
+        }
+    }
+    Err(taken.unwrap_or_else(|| ErrorKind::AlreadyExists.into()))
+}
+
+/// The failure a write reports: the system's code, or a write that took no
+/// bytes without one ([`SystemFailure::MalformedAnswer`]).
+#[cfg(not(target_arch = "wasm32"))]
+fn write_failure(error: &std::io::Error) -> DialogError {
+    DialogError::Failed(
+        error
+            .raw_os_error()
+            .map_or(SystemFailure::MalformedAnswer, SystemFailure::Os),
+    )
 }
 
 impl fmt::Debug for FileDialogs {

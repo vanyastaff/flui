@@ -5381,8 +5381,8 @@ GPU-память простаивающего или невидимого окн
   `an_intent_opens_its_link_or_documents` и trybuild-снимок `owner_platform_is_not_send`. Не
   собирались здесь macOS, iOS, Android и wasm32 (CI `cross-typecheck`); тесты X11 и Wayland не
   запускались.
-- [ ] **LY53** (не закрыта: запрета `build.rs`, запускающего `javac`, `swiftc` или `d8`, нет) —
-  #2150 (`9450db8e1`), #2325 (`75872fc6e`). kind `capability` входит в закрытый список
+- [x] **LY53** — #2150 (`9450db8e1`), #2325 (`75872fc6e`), ветка `xtask/capability-build-script`
+  от `main` @ `7b596b26b`. kind `capability` входит в закрытый список
   (`tools/xtask/src/workspace/tiers.rs`): крейт возможности живёт только в ярусе `pkg`
   (`CapabilityTier`), зависит только от `flui-sdk`, `flui-platform` и `flui-protocol`
   (`CapabilityOffContract`), его не называет ни другой крейт возможности, ни член workspace, кроме
@@ -5391,8 +5391,34 @@ GPU-память простаивающего или невидимого окн
   `[workspace.metadata.flui.reach.kind.capability]` запрещает `flui-native`, `flui-app`,
   `flui-engine`, `winit`, `wgpu` и `tokio`. `workspace --self-test` сажает нарушение на каждое
   правило kind. Версию с поездом держит общее правило поезда (`links = "flui_train"`), своего у
-  kind нет. Остаётся правило про `build.rs` с посаженным нарушением: `rg 'javac|swiftc|d8'
-  tools/xtask/src/workspace` пуст.
+  kind нет. Сборочный скрипт крейта возможности (ADR-0154 решение 6: `links` и `build.rs` —
+  только у крейта, экспортирующего глобальный нативный символ): kind-правило
+  (`CapabilityBuildScript`) отказывает крейту возможности без `links` или с пустым `links`
+  (Cargo принимает `links = ""`), для которого Cargo
+  сообщает `custom-build`-цель (корневой `build.rs`, не выключенный `build = false`, или любой
+  `build = "<путь>"`); исходники не разбираются. Держится ровно собственный скрипт крейта без
+  `links`. Не проверяются: что запускает скрипт крейта с `links` (держит ревью),
+  сборочные скрипты сторонних зависимостей крейта возможности (kind-правило их допускает:
+  `robius-location`, чей `build.rs` запускает `javac`, проходит и `workspace`, и `deps`) и
+  скрипты крейтов фреймворка — всё это пункт ADR-0255 решения 21 и ADR-0154 решения 5 в
+  `docs/gaps.md` («Accepted ADR sections not built yet»); пять скриптов на `main` запускают
+  только `rustc`. `deny.toml` запрещает `android-build` и `swift-rs`, которые запускают эти
+  инструменты из сборочного скрипта. Строки подтверждения ADR-0154 и ADR-0255, называвшие
+  `android-dex`, теперь называют то, что держит правило; столбец проверки R5.11 — гейт вместо
+  `rg`. `workspace --self-test` сажает `cap-build` (корневой `build.rs`), `cap-build-path`
+  (`build = "gen.rs"`) и `cap-links-empty` (`links` из пробела); молчат `cap-links` (крейт возможности с `links` и скриптом), узел
+  `flui-foundation` (скрипт при `links` поезда) и `k1` (скрипт крейта kind `internal`). Без
+  проверки самотест печатает `MISSED` на все посадки, без условия kind — `FALSE POSITIVE` на
+  `k1`, без исключения `links` — `FALSE POSITIVE` на `cap-links`, с проверкой только
+  `is_none()` — `MISSED` на `cap-links-empty`. `build = false` держит тест на `cargo metadata`:
+  `a_capability_crates_build_script_is_reported` (корневой `build.rs`, `build = "gen.rs"` и
+  `build.rs` при `links = ""` найдены; `build.rs` при `build = false`, при `links` и скрипт
+  крейта kind `internal` — нет; без проверки падает, со старым `is_none()` падает строка
+  `links = ""`). `a_build_script_outside_the_repository_is_read`:
+  `build = "<путь вне репозитория>"` у крейта другого kind больше не обрывает `workspace` (с
+  прежним `?` падает с «is outside the repository»). Единственный крейт возможности,
+  `flui-system`, скрипта не имеет. Проверки на Windows: `workspace`, `workspace --self-test`,
+  `deps`, clippy `-D warnings` и nextest `xtask`, `checks`.
 - [x] **LY54** — ветка `platform/scripted-primitive` от `main` @ `ab45cd94c`. #2033 (`5b4ece201`)
   дал `HeadlessHost::with_capabilities` и `HeadlessHost::with_plugin`; эта ветка дала примитив.
   Фича `scripted` контракта (её включает `testing`), модуль `flui_platform::capability::scripted`:
@@ -5637,6 +5663,80 @@ GPU-память простаивающего или невидимого окн
   порталов GNOME и KDE (внутри и вне Flatpak), док KDE/Dash to Dock для сигнала — в строках parity
   «Open a URL», «Open, save and folder dialogs», «Taskbar and Dock progress, badge», «Global
   shortcuts», «Launch at login», «User folders».
+- [ ] **LY60** (не закрыта: все службы сделаны веткой `system/web-providers` (#2765), остаётся
+  диалог папок; прогоны в Chrome, Firefox и Safari — заметки строк parity) — модуль
+  `crates/flui-system/src/web/`, правила — раздел «The web providers» в
+  `crates/flui-system/ARCHITECTURE.md`. Страница достаётся через окно виджета: канвас, на который
+  указывает `WebCanvasWindowHandle` его `WindowRef` (`web::page::Page`), не через глобальные
+  объекты браузера; виджет без окна или в окне не-канвасе — `NoWindow`; `ProviderContext::app_id`
+  и `WindowRef::portal_parent` странице ничего не значат. Пикер и новое окно вне жеста
+  пользователя отказываются `Unavailable` до обращения к браузеру, и тот же `Unavailable` отвечает
+  отказ самого браузера (`NotAllowedError`, `SecurityError`, заблокированное окно): один ответ.
+  Открытие — `showOpenFilePicker`, где он есть и выражает фильтры, иначе `<input type=file>`, и
+  ввод же — на месте пикера, которого документ показать не может (`SecurityError`,
+  cross-origin-фрейм), пока жест длится. Каждый выбор сверяется с фильтрами
+  (`FileFilter::matches`, ADR-0360 §4; иначе весь ответ — `DialogError::NotInFilter`), объявленные
+  размеры — с `OpenRequest::max_bytes` до чтения, прочитанное — снова (`TooLarge`); файл копируется
+  один раз, в буфер выбора. Ввод кончается на `change`, `cancel`, `pagehide` или, где `cancel` нет,
+  на возврате фокуса окну без `change` в пределах `FOCUS_GRACE_MS` (поздний выбор тогда — отмена).
+  Сохранение несёт содержимое (`SaveRequest::contents`): `showSaveFilePicker` пишет его после
+  выбора пользователя и после сброса диалога; без пикера, без жеста или при отказе браузера —
+  загрузка, ответ `PickedForm::Download` (где и записана ли, браузер не говорит). Страница не
+  закрывает пикер браузера: `PagePicker` держит её занятой (`Busy`), пока пикер не кончится, и
+  после сброса диалога. Запуск `http(s)`: пустой новый контекст (`null` — заблокирован,
+  `Unavailable`), `opener` обрезан, страница открыта ссылкой этого контекста с `rel=noreferrer`;
+  прочие разрешённые схемы — ссылкой самой страницы (без выгрузки), `ftp`/`ws`/`wss` —
+  `NoHandler`; пути — `NotOnThisPlatform`. Значок (`TaskbarEntry`) — счёт Badging API, без
+  прогресса и без подтверждения; без API — `NotOnThisDevice`. Message box — модальный `<dialog>`
+  рядом с канвасом, кнопки по-английски, не `alert`/`confirm` (те держат единственный поток
+  страницы, страница не может их закрыть при сбросе диалога или закрытии окна, ADR-0344, и в них
+  нет «да/нет/отмена»); Escape закрывает с ответом закрытия, «да/нет» его не пропускает и
+  показывается снова. Share — `navigator.share` (заголовок, текст, ссылка) под жестом; без API —
+  `NotOnThisDevice`, файлы — `NotOnThisPlatform`, отказ жеста браузером — `Unavailable`, закрытый
+  лист не сообщается. Автозапуск, глобальные сочетания, папки, jump list и сведения об ОС —
+  `NotOnThisPlatform`. На всех хостах: `PickedFile::path` — `Option<&Path>`,
+  `PickedFile::form`/`PickedForm`, `try_from_contents`, `try_download`, `contents`, `file_name`;
+  сохранение с содержимым пишет новый файл рядом с выбранным, синхронизирует и переименовывает
+  поверх, на своём потоке, и отвечает после записи (сбой — код системы);
+  `SystemFailure::Browser(BrowserException)` в контракте, веб-буфер обмена `flui-native` читает
+  исключение через него же. Тесты: `web::rules::tests` на каждом хосте
+  (`the_accept_attribute_is_the_union_of_the_filters`,
+  `a_picker_type_keeps_each_filter_and_puts_extensions_under_a_type`,
+  `an_extension_the_picker_refuses_sends_the_request_to_the_input`,
+  `a_save_is_named_after_the_first_filter_when_its_name_has_no_extension`,
+  `a_download_is_typed_after_the_first_concrete_type_of_the_first_filter`,
+  `the_picks_are_refused_past_the_limit_before_they_are_read`,
+  `a_picker_ends_cancelled_handed_to_the_input_or_with_one_refusal_of_the_gesture`,
+  `a_pick_the_filters_do_not_mean_refuses_the_whole_answer`,
+  `a_page_opens_apart_a_handler_takes_its_scheme_and_a_socket_has_none`,
+  `a_dismissed_share_sheet_is_not_reported_and_a_refused_gesture_is_one_answer`,
+  `a_closed_box_answers_what_closing_means_for_its_buttons`);
+  `a_browser_exception_is_read_from_its_name_and_shown_by_it` во `flui-platform`; через публичный
+  API (`tests/dialogs.rs`): `a_save_with_contents_answers_once_they_are_written_where_the_user_chose`,
+  `a_save_whose_write_fails_answers_the_systems_failure` (обе красные без записи в handle),
+  `a_save_replaces_the_chosen_file_whole_and_leaves_nothing_beside_it` (красный при записи на
+  месте: жёсткая ссылка на старый файл видит новое содержимое),
+  `a_save_the_system_wrote_itself_answers_the_file_it_wrote`,
+  `a_file_handed_over_without_a_path_carries_its_name_and_contents`,
+  `a_pick_says_whether_it_is_at_a_path_handed_over_or_a_download_of_unknown_fate`,
+  `a_filter_means_a_files_name_or_its_type_ignoring_ascii_case`; DOM — `web::tests`, lib-тест на
+  wasm32 в headless Chrome, новый шаг задания `wasm-check` CI (здесь только проверка типов
+  `cargo +nightly check -p flui-system --lib --tests --target wasm32-unknown-unknown` в WSL:
+  раннера wasm-bindgen-test нет): выбор с содержимым, сверка с фильтрами, отмена, конец по фокусу
+  и по `pagehide`, `TooLarge`, страница занята после сброса диалога, один пикер на страницу,
+  отказ вне жеста и для папок, передача ввода на место отказанного пикера и `Unavailable` при
+  истёкшем жесте, загрузка на месте отказанного пикера сохранения, запись выбранного файла после
+  сброса, загрузка вне жеста (`PickedForm::Download`), сохранение без содержимого, запуск через
+  пустой контекст без `opener` и с `rel=noreferrer`, заблокированное окно, ссылка `mailto:`
+  страницы, `wss` — `NoHandler`, значок в замещённый Badging API и браузер без него, message box
+  по кнопкам, Escape и «да/нет», сброшенный box, share в замещённый `navigator.share` и браузер
+  без него; строки conformance-таблицы для страницы —
+  `the_web_providers_keep_the_system_services_contract` (через регистрацию `SystemPlugin`: каждая
+  служба выдана или отказана по долгой причине, окно не-канвас — `NoWindow`, отказ шва на ходу
+  владельца, искажённый запрос без браузера, закрытое окно); сама таблица `tests/conformance.rs`
+  идёт на headless-хосте, чьи окна — не канвасы, а обвязка ждёт потоки, поэтому на wasm32 не
+  запускается. Остаётся: диалог папок (`NotYetOnThisHost`: браузер может отдать папку, но выбор не
+  несёт её дерево), записан в `docs/gaps.md`.
 - [ ] **LY61** (не закрыта: исполнитель ушёл, сервисы остаются на `Platform`) — #2300
   (`dacf540dc`) удалил `Platform::background_executor`, `PlatformExecutor` и его реализации в
   хостах; #2487 (`89adcc532`) удалил `BackgroundExecutor`: хост ведёт своё IO на runtime, который

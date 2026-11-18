@@ -5,11 +5,11 @@
 //!
 //! A URI goes to Launch Services as written, which hands it to the
 //! application the user chose for its scheme; the seam admitted only the
-//! schemes its caller named. An open first opens the file, without blocking
-//! (a named pipe with no writer would hold the open forever), and judges
-//! what the descriptor holds (ADR-0360 §2): only a regular file or a folder
-//! is a document, and its final path (`F_GETPATH`, which names the file
-//! every link the open followed led to) must pass the floor
+//! schemes its caller named. An open first examines the path and opens
+//! only a regular file or a folder (`open_for_judging`: a pipe, a device
+//! or a socket is refused unopened), without blocking, and judges what the
+//! descriptor holds (ADR-0360 §2): its final path (`F_GETPATH`, which names
+//! the file every link the open followed led to) must pass the floor
 //! (`runs_when_opened`), must not be a Unix executable, and must not be an
 //! application bundle, as Launch Services' `NSURLIsApplicationKey` says;
 //! only then is that final path handed on. A path is handed to Foundation
@@ -26,7 +26,7 @@ use flui_platform::launch::{LaunchError, runs_when_opened};
 use super::{ErrorCode, errno, failure};
 
 /// What the file an open opened is, as its descriptor and Launch Services
-/// say.
+/// say. Only a regular file or a folder is ever opened.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum OpenedKind {
     /// A regular file; `executable` when any of its execute bits is set,
@@ -35,8 +35,6 @@ pub(super) enum OpenedKind {
     /// A folder; `application` when Launch Services calls it an
     /// application bundle, which opening launches.
     Folder { application: bool },
-    /// Anything else (a device, a socket): nothing a document is.
-    Other,
 }
 
 /// Whether the file an open opened, at `final_path`, may be handed on: a
@@ -46,9 +44,7 @@ pub(super) fn judge(final_path: &Path, kind: OpenedKind) -> Result<(), LaunchErr
     let runs = runs_when_opened(final_path)
         || matches!(
             kind,
-            OpenedKind::Regular { executable: true }
-                | OpenedKind::Folder { application: true }
-                | OpenedKind::Other
+            OpenedKind::Regular { executable: true } | OpenedKind::Folder { application: true }
         );
     if runs {
         Err(LaunchError::NotADocument)
@@ -72,43 +68,68 @@ pub(super) fn path_error(code: ErrorCode) -> LaunchError {
 
 /// What a file an open opened is, by its type, before Launch Services is
 /// asked about a folder.
-#[cfg(unix)]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum OpenedType {
     /// A regular file, and whether any execute bit is set.
     Regular { executable: bool },
     /// A folder.
     Folder,
-    /// Anything else: a named pipe, a device, a socket.
-    Other,
 }
 
-/// Open `path` to judge what it is, following its links: read-only and
-/// non-blocking, so a named pipe with no writer is opened at once (and then
-/// refused by its type) rather than holding the work item, and its place,
-/// until a writer comes. The descriptor is never read.
-#[cfg(unix)]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+impl OpenedType {
+    /// What `metadata` says a node is; `None` for anything but a regular
+    /// file or a folder: a named pipe, a device, a socket.
+    fn of(metadata: &std::fs::Metadata) -> Option<Self> {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        if metadata.is_file() {
+            Some(Self::Regular {
+                executable: metadata.permissions().mode() & 0o111 != 0,
+            })
+        } else if metadata.is_dir() {
+            Some(Self::Folder)
+        } else {
+            None
+        }
+    }
+}
+
+/// Open the document at `path` to judge it, following its links.
+///
+/// Only a regular file or a folder is opened: the path is examined first
+/// (`stat`), and anything else is refused `NotADocument` unopened, since
+/// opening is itself an act on such a node (a named pipe's writer is let
+/// through, a tape rewinds, a modem raises its line). The open is then
+/// read-only, non-blocking and takes no controlling terminal
+/// (`O_NONBLOCK | O_NOCTTY | O_CLOEXEC`), so a node swapped in between the
+/// two calls neither holds the work item, and its place, nor becomes this
+/// process's terminal; what the descriptor holds is examined again
+/// (`fstat`), and one that is no longer the kind the path was is refused
+/// the same way. The descriptor is never read.
+///
+/// Compiled where the crate links libc: on macOS, and for the model's test
+/// on Linux.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 pub(super) fn open_for_judging(path: &Path) -> Result<(std::fs::File, OpenedType), LaunchError> {
-    use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
+    use std::os::unix::fs::OpenOptionsExt as _;
 
     let io_error =
         |error: &std::io::Error| path_error(ErrorCode::Posix(error.raw_os_error().unwrap_or(0)));
+    let examined = std::fs::metadata(path).map_err(|error| io_error(&error))?;
+    let expected = OpenedType::of(&examined).ok_or(LaunchError::NotADocument)?;
     let file = std::fs::OpenOptions::new()
         .read(true)
-        .custom_flags(libc::O_CLOEXEC | libc::O_NONBLOCK)
+        .custom_flags(libc::O_NONBLOCK | libc::O_NOCTTY | libc::O_CLOEXEC)
         .open(path)
         .map_err(|error| io_error(&error))?;
-    let metadata = file.metadata().map_err(|error| io_error(&error))?;
-    let opened = if metadata.is_file() {
-        OpenedType::Regular {
-            executable: metadata.permissions().mode() & 0o111 != 0,
-        }
-    } else if metadata.is_dir() {
-        OpenedType::Folder
-    } else {
-        OpenedType::Other
-    };
-    Ok((file, opened))
+    let held = file.metadata().map_err(|error| io_error(&error))?;
+    match (expected, OpenedType::of(&held)) {
+        (OpenedType::Regular { .. }, Some(opened @ OpenedType::Regular { .. }))
+        | (OpenedType::Folder, Some(opened @ OpenedType::Folder)) => Ok((file, opened)),
+        _ => Err(LaunchError::NotADocument),
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -134,7 +155,7 @@ mod appkit {
     use objc2_foundation::{NSArray, NSFileManager, NSNumber, NSString, NSURL};
 
     use super::super::ErrorCode;
-    use super::super::appkit::{error_code, file_url};
+    use super::super::appkit::{PATH_MAX, error_code, file_url};
     use super::super::queue::WorkQueue;
     use super::{OpenedKind, OpenedType, judge, open_for_judging, path_error};
 
@@ -172,7 +193,7 @@ mod appkit {
 
     /// The path the file `file` holds is at now, every link resolved.
     fn final_path(file: &std::fs::File) -> Result<PathBuf, LaunchError> {
-        let mut buffer = vec![0_u8; usize::try_from(libc::PATH_MAX).unwrap_or(1024)];
+        let mut buffer = [0_u8; PATH_MAX];
         // SAFETY: the descriptor is open for the call, and `F_GETPATH`
         // writes at most `PATH_MAX` bytes, a NUL included, into a buffer of
         // that size that outlives the call.
@@ -185,8 +206,9 @@ mod appkit {
             .iter()
             .position(|byte| *byte == 0)
             .unwrap_or(buffer.len());
-        buffer.truncate(length);
-        Ok(PathBuf::from(std::ffi::OsStr::from_bytes(&buffer)))
+        Ok(PathBuf::from(std::ffi::OsStr::from_bytes(
+            &buffer[..length],
+        )))
     }
 
     /// Whether Launch Services calls the folder at `url` an application.
@@ -218,7 +240,6 @@ mod appkit {
             OpenedType::Folder => OpenedKind::Folder {
                 application: is_application(&url),
             },
-            OpenedType::Other => OpenedKind::Other,
         };
         judge(&final_path, kind)?;
         let handed = hand_on(&url);
@@ -287,12 +308,16 @@ mod tests {
     use super::super::{ErrorCode, errno};
     use super::{OpenedKind, judge, path_error};
 
-    /// A named pipe nothing writes to, named like a document: the open
-    /// returns at once and the pipe is not a document. A blocking open would
-    /// wait for a writer forever, holding its work item's place.
-    #[cfg(unix)]
+    /// A named pipe a writer waits on, named like a document, is refused
+    /// without being opened: an open, even a non-blocking one, would let
+    /// the writer through, and a blocking one with no writer would hold its
+    /// work item's place forever. A device is refused the same way.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     #[test]
-    fn a_pipe_named_like_a_document_is_opened_at_once_and_refused_by_its_type() {
+    fn a_pipe_or_a_device_named_like_a_document_is_refused_without_being_opened() {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        use std::time::Duration;
+
         use super::{OpenedType, open_for_judging};
 
         let folder = std::env::temp_dir().join(format!("flui-pipe-{}", std::process::id()));
@@ -305,32 +330,62 @@ mod tests {
             .expect("mkfifo runs");
         assert!(made.success(), "the pipe was made");
 
-        let (sent, opened) = std::sync::mpsc::channel();
+        // A writer's open waits until someone opens the pipe to read.
+        let (let_through, writer_opened) = std::sync::mpsc::channel();
+        let written = pipe.clone();
+        let writer = std::thread::spawn(move || {
+            let opened = std::fs::OpenOptions::new().write(true).open(&written);
+            let _ = let_through.send(());
+            drop(opened);
+        });
+        // Time for the writer to reach its open; judging before it does
+        // would pass whatever the judging opens.
+        std::thread::sleep(Duration::from_millis(200));
+
+        let (sent, judged) = std::sync::mpsc::channel();
         let path = pipe.clone();
         std::thread::spawn(move || {
             let _ = sent.send(open_for_judging(&path).map(|(_, opened)| opened));
         });
-        let opened = opened
-            .recv_timeout(std::time::Duration::from_secs(5))
-            .expect("the open returned without a writer");
-        assert_eq!(opened, Ok(OpenedType::Other));
+        let judged = judged
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the pipe was judged without waiting on it");
+        assert_eq!(judged, Err(LaunchError::NotADocument));
         assert_eq!(
-            judge(&pipe, OpenedKind::Other),
-            Err(LaunchError::NotADocument)
+            writer_opened.recv_timeout(Duration::from_millis(300)),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout),
+            "judging the pipe opened it: its writer was let through"
         );
+        // Let the writer end: a reader that does not wait for it.
+        let reader = std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NONBLOCK)
+            .open(&pipe)
+            .expect("the pipe opens for a reader");
+        writer.join().expect("the writer ended");
+        drop(reader);
 
+        assert_eq!(
+            open_for_judging(Path::new("/dev/null")).map(|(_, opened)| opened),
+            Err(LaunchError::NotADocument),
+            "a device is no document"
+        );
         let document = folder.join("notes.txt");
         std::fs::write(&document, b"text").expect("a file");
         assert_eq!(
             open_for_judging(&document).map(|(_, opened)| opened),
             Ok(OpenedType::Regular { executable: false })
         );
+        assert_eq!(
+            open_for_judging(&folder).map(|(_, opened)| opened),
+            Ok(OpenedType::Folder)
+        );
         let _ = std::fs::remove_dir_all(&folder);
     }
 
     #[test]
     fn only_a_document_or_a_plain_folder_is_handed_on() {
-        let cases: [(&str, OpenedKind, Result<(), LaunchError>); 7] = [
+        let cases: [(&str, OpenedKind, Result<(), LaunchError>); 6] = [
             (
                 "/Users/a/report.pdf",
                 OpenedKind::Regular { executable: false },
@@ -363,11 +418,6 @@ mod tests {
             (
                 "/Users/a/Thing.bundle",
                 OpenedKind::Folder { application: true },
-                Err(LaunchError::NotADocument),
-            ),
-            (
-                "/dev/null",
-                OpenedKind::Other,
                 Err(LaunchError::NotADocument),
             ),
         ];
