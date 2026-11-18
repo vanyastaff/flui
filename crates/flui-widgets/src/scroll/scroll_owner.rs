@@ -25,10 +25,11 @@ use std::rc::{Rc, Weak};
 
 use flui_animation::simulation::{SpringDescription, SpringSimulation};
 use flui_animation::{Animation, AnimationController, AnimationRunFuture, Simulation};
+use flui_foundation::InputSequenceId;
 use flui_foundation::geometry::{Axis, Point, Vec2};
 use flui_foundation::panic::PanicRecovery;
 use flui_interaction::gesture::GestureSettingsProvider;
-use flui_interaction::{HoldEnd, InputSequenceId, RemainderHandoff};
+use flui_interaction::gesture::{HoldEnd, RemainderHandoff};
 use flui_platform::keyboard::Code;
 use flui_platform::pointer::{DeviceId, PointerKind};
 use flui_rendering::view::{OffsetWriteCause, ScrollDirection, ScrollOffsetWriter};

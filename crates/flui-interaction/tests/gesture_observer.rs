@@ -11,6 +11,7 @@ use std::{
 };
 
 use flui_foundation::geometry::Offset;
+use flui_foundation::{IdExhausted, ManualClock};
 use flui_interaction::events::{
     PointerEvent, PointerKind, make_cancel_event_for_id, make_down_event_for_id,
     make_up_event_for_id,
@@ -20,11 +21,15 @@ use flui_interaction::gesture::{
     ObservedComposition, RejectionReason,
 };
 use flui_interaction::{
-    CancelReason, GestureArena, GestureArenaMember, GestureBinding, GestureDisposition,
-    GestureObservation, HitTestEntry, HitTestResult, IdExhausted, InputSurface, InteractionLane,
-    ManualClock, ObserverHandle, PointerId, RenderId,
+    binding::GestureBinding,
+    gesture::{
+        GestureArena, GestureArenaMember, GestureDisposition, GestureObservation, ObserverHandle,
+    },
+    ids::{InputSurface, PointerId},
+    pointer::{HitTestEntry, HitTestResult, InteractionLane, RenderId},
 };
 use flui_platform::EventTime;
+use flui_platform::pointer::CancelReason;
 
 fn run_rows(rows: &[(&str, fn())]) {
     for &(name, row) in rows {

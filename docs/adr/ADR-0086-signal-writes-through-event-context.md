@@ -188,7 +188,7 @@ or widen write authority.
 action table behind `SemanticsConfiguration` — is registered in the UI runtime's interaction lane
 as an untyped payload (`RenderObjectContext::register_local_payload`). The render data carries
 only the lane's `Copy`, `Send + Sync` `LocalPayloadTarget` ticket, and the dispatcher resolves
-it on the owner thread with `flui_interaction::resolve_local_payload`, inside the UI runtime's
+it on the owner thread with `flui_interaction::pointer::resolve_local_payload`, inside the UI runtime's
 entry. The payload holds the `WriterSource` its callbacks open their `EventContext` from; the ticket
 holds neither a closure nor a graph. A semantics action is advertised through one
 `Send + Sync` handler per node that holds the ticket, kept across rebuilds so the

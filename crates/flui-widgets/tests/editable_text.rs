@@ -629,7 +629,7 @@ pub(crate) mod native_actions {
             authority
                 .borrow()
                 .as_ref()
-                .is_some_and(flui_interaction::FocusAttachment::is_attached)
+                .is_some_and(flui_interaction::focus::FocusAttachment::is_attached)
         );
         assert_eq!(
             controller.text(),
@@ -3069,8 +3069,8 @@ pub(crate) fn deleting_a_separator_keeps_the_caret_after_the_joined_flag() {
     assert_eq!(controller.caret_byte_offset(), 1);
 }
 
-fn selection_contact(id: u64) -> flui_interaction::PointerId {
-    flui_interaction::PointerId::new(
+fn selection_contact(id: u64) -> flui_interaction::ids::PointerId {
+    flui_interaction::ids::PointerId::new(
         std::num::NonZeroU64::new(id).expect("nonzero fixture contact"),
     )
 }

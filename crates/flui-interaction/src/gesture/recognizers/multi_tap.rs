@@ -140,7 +140,7 @@ impl MultiTapGestureRecognizerBuilder {
 /// contact is a tap.
 ///
 /// ```rust
-/// use flui_interaction::MultiTapCount;
+/// use flui_interaction::gesture::MultiTapCount;
 ///
 /// assert_eq!(MultiTapCount::TWO.get(), 2);
 /// assert_eq!(MultiTapCount::try_from(3).map(MultiTapCount::get), Ok(3));

@@ -13,7 +13,7 @@ use crate::common::{LaidOut, lay_out, tight};
 use crate::gesture_settings::SettingsScope;
 use flui_foundation::geometry::EdgeInsets;
 use flui_interaction::events::PointerKind;
-use flui_interaction::{GestureSettings, GestureSettingsSource};
+use flui_interaction::gesture::{GestureSettings, GestureSettingsSource};
 use flui_painting::paint::TextureId;
 use flui_painting::styling::Color;
 use flui_platform::TargetPlatform;

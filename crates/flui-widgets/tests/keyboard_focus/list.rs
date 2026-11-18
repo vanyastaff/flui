@@ -5,7 +5,7 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
-use flui_interaction::KeyEventResult;
+use flui_interaction::focus::KeyEventResult;
 use flui_platform::keyboard::{Key, KeyPress, KeyState, NamedKey};
 use flui_rendering::delegates::SliverGridDelegateWithFixedCrossAxisCount;
 use flui_view::ViewExt;

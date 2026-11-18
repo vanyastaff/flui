@@ -10,7 +10,7 @@ use flui_foundation::DataTransferId;
 use flui_foundation::geometry::{
     DevicePixelRatio, DeviceSize, EdgeInsets, Offset, Point, Rect, Size, WindowMetrics,
 };
-use flui_interaction::GestureDisposition;
+use flui_interaction::gesture::GestureDisposition;
 use flui_platform::Availability;
 use flui_platform::PointerFrame;
 use flui_platform::data_transfer::{
@@ -365,7 +365,7 @@ fn sample(enumeration: &str, variant: &str) -> Option<Vec<InputRecord>> {
                 .in_sequence(Some(RecordedSequence::new(
                     NonZeroU64::new(11).expect("nonzero"),
                 )))
-                .with_member_type("flui_interaction::LongPressGestureRecognizer"),
+                .with_member_type("flui_interaction::gesture::LongPressGestureRecognizer"),
             ),
             InputRecord::Deadline(DeadlineRow::new(
                 WindowId::try_from_raw(2).expect("a nonzero window id"),

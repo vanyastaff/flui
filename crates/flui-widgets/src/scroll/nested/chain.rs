@@ -4,10 +4,11 @@
 use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
 
+use flui_foundation::InputSequenceId;
 use flui_foundation::geometry::{Offset, Point, Vec2};
 use flui_foundation::panic::PanicRecovery;
-use flui_interaction::RemainderHandoff;
-use flui_interaction::{GestureArena, InputSequenceId, Velocity};
+use flui_interaction::gesture::RemainderHandoff;
+use flui_interaction::gesture::{GestureArena, Velocity};
 use flui_platform::EventTime;
 use flui_view::{BoxedView, BuildContext, BuildContextExt, InheritedView, IntoView, View, ViewExt};
 use smallvec::SmallVec;
@@ -1306,8 +1307,9 @@ mod tests {
 
     use flui_animation::AnimationController;
     use flui_foundation::IdMint;
+    use flui_foundation::InputSequenceId;
     use flui_foundation::geometry::{Axis, Point, Vec2};
-    use flui_interaction::{GestureArena, InputSequenceId, RemainderHandoff};
+    use flui_interaction::gesture::{GestureArena, RemainderHandoff};
     use flui_platform::EventTime;
     use flui_platform::pointer::PointerKind;
 

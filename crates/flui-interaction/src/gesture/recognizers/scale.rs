@@ -215,8 +215,8 @@ impl ScaleStartMode {
 /// # Example
 ///
 /// ```rust
-/// use flui_interaction::prelude::*;
-/// use flui_interaction::GestureBinding;
+/// use flui_interaction::gesture::ScaleGestureRecognizer;
+/// use flui_interaction::binding::GestureBinding;
 ///
 /// let binding = GestureBinding::new();
 /// let recognizer = ScaleGestureRecognizer::builder(binding.arena().clone())
@@ -1826,7 +1826,7 @@ impl GestureRecognizer for ScaleGestureRecognizer {
         let event = dispatch.local;
         // Route by the event's own pointer id: a secondary finger's events
         // belong to that finger's contact.
-        let Some(pointer) = crate::PointerEventExt::pointer_id(event) else {
+        let Some(pointer) = crate::events::PointerEventExt::pointer_id(event) else {
             return;
         };
         match event {

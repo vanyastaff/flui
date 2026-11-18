@@ -14,9 +14,11 @@ use flui_interaction::pointer::{
     SmartZoomTarget,
 };
 use flui_interaction::{
-    GestureRecognizer, PanZoomEvent, PanZoomPhase, PointerDispatch, PointerTarget, RecognizerSet,
+    gesture::{GestureRecognizer, RecognizerSet},
+    pointer::{PointerDispatch, PointerTarget},
 };
 use flui_objects::RenderListener;
+use flui_platform::pointer::{PanZoomEvent, PanZoomPhase};
 use flui_rendering::hit_testing::{HitTestBehavior, PointerEvent};
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::{

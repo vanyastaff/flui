@@ -9,15 +9,19 @@ use std::{
     sync::Arc,
 };
 
+use flui_foundation::ManualClock;
 use flui_foundation::geometry::Offset;
 use flui_interaction::{
-    DragAxis, DragGestureRecognizer, GestureArena, GestureArenaMember, GestureRecognizer,
-    GestureSettings, ManualClock, PointerId,
     events::{
         PointerEvent, PointerKind, PointerMove, make_down_event_for_id, make_move_event_for_id,
         make_up_event_for_id,
     },
+    gesture::{
+        DragAxis, DragGestureRecognizer, GestureArena, GestureArenaMember, GestureRecognizer,
+        GestureSettings,
+    },
     gesture::{OneEuroTuning, ScaleGestureRecognizer, Velocity},
+    ids::PointerId,
     pointer::PointerDispatch,
 };
 use flui_platform::EventTime;

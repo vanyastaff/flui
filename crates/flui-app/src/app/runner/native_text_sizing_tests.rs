@@ -330,7 +330,7 @@ fn acquisition_without_progress_releases_document_edits(
             RuntimeTask::TestCallback(Box::new(move |runtime| {
                 runtime
                     .text_input_handle()
-                    .attach(flui_interaction::TextInputClient::new(attached))
+                    .attach(flui_interaction::text_input::TextInputClient::new(attached))
                     .expect("actual store attachment");
                 runtime
                     .attach_root_widget(&flui_widgets::Text::new("unresolved native size"))

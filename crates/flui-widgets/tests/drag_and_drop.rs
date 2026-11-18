@@ -430,7 +430,7 @@ fn press_control(laid: &mut LaidOut, label: &str, pointer: Pointer) {
             tree.window_bounds(&node)
         })
         .unwrap_or_else(|| panic!("no control {label:?}"));
-    let min_target = flui_interaction::GestureSettings::default().min_target();
+    let min_target = flui_interaction::gesture::GestureSettings::default().min_target();
     assert!(
         bounds.x1 - bounds.x0 >= min_target && bounds.y1 - bounds.y0 >= min_target,
         "the control {label:?} is {bounds:?}, under the {min_target} minimum target"
@@ -861,7 +861,7 @@ pub(crate) fn the_cursor_shows_what_a_drop_would_do() {
     );
 
     let touch = |id: u64, (x, y): (f64, f64), phase: u8| {
-        let pointer = flui_interaction::PointerId::try_from(id).expect("nonzero contact");
+        let pointer = flui_interaction::ids::PointerId::try_from(id).expect("nonzero contact");
         let position = flui_foundation::geometry::Offset::new(x, y);
         let event = match phase {
             0 => make_down_event_for_id(pointer, position, PointerKind::Touch),
@@ -921,7 +921,7 @@ pub(crate) fn a_long_press_trigger_lifts_after_the_hold() {
     shared.trigger.set(DragTrigger::LongPress);
     let mut laid = mount(&shared);
     let touch = |laid: &LaidOut, id: u64, (x, y): (f64, f64), phase: u8| {
-        let pointer = flui_interaction::PointerId::try_from(id).expect("nonzero contact");
+        let pointer = flui_interaction::ids::PointerId::try_from(id).expect("nonzero contact");
         let position = flui_foundation::geometry::Offset::new(x, y);
         let event = match phase {
             0 => make_down_event_for_id(pointer, position, PointerKind::Touch),
@@ -1073,7 +1073,7 @@ fn quiet_draggable(started: Rc<Cell<u32>>, ended: Rc<Cell<u32>>) -> Draggable {
 }
 
 fn touch(laid: &LaidOut, id: u64, y: f64, phase: u8) {
-    let pointer = flui_interaction::PointerId::try_from(id).expect("nonzero touch");
+    let pointer = flui_interaction::ids::PointerId::try_from(id).expect("nonzero touch");
     let position = flui_foundation::geometry::Offset::new(50.0, y);
     let event = match phase {
         0 => make_down_event_for_id(pointer, position, PointerKind::Touch),
@@ -1102,7 +1102,7 @@ pub(crate) fn draggable_reads_admission_profiles_and_retires_authored_owners() {
 }
 
 fn draggable_retains_down_profile_and_refreshes_next_contact() {
-    use flui_interaction::{GestureSettings, GestureSettingsSource};
+    use flui_interaction::gesture::{GestureSettings, GestureSettingsSource};
     use flui_widgets::GestureDetector;
     let profile = |slop| {
         GestureSettings::default()
@@ -1142,7 +1142,7 @@ fn draggable_retains_down_profile_and_refreshes_next_contact() {
 }
 
 fn draggable_cancels_authored_replacement_before_stale_terminal() {
-    use flui_interaction::GestureSettings;
+    use flui_interaction::gesture::GestureSettings;
     use flui_widgets::GestureDetector;
     let threshold = Rc::new(Cell::new(20.0));
     let starts = Rc::new(Cell::new(0));

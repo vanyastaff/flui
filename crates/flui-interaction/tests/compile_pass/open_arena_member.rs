@@ -1,7 +1,7 @@
 use flui_interaction::gesture::GestureContest;
 use std::rc::Rc;
 
-use flui_interaction::{GestureArena, GestureArenaMember, PointerId};
+use flui_interaction::{gesture::{GestureArena, GestureArenaMember}, ids::PointerId};
 
 struct ExternalMember;
 

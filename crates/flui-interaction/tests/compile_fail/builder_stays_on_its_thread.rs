@@ -1,6 +1,6 @@
 use std::{cell::Cell, rc::Rc};
 
-use flui_interaction::{GestureArena, TapGestureRecognizer};
+use flui_interaction::{gesture::{GestureArena, TapGestureRecognizer}};
 
 fn main() {
     let taps = Rc::new(Cell::new(0));

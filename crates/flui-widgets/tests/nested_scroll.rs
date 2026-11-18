@@ -8,10 +8,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use flui_animation::Vsync;
+use flui_foundation::InputSequenceId;
 use flui_foundation::geometry::{Axis, Offset, Point, Vec2};
-use flui_interaction::{
-    GestureProfiles, GestureSettings, GestureSettingsSource, GestureValues, InputSequenceId,
-    RemainderHandoff,
+use flui_interaction::gesture::{
+    GestureProfiles, GestureSettings, GestureSettingsSource, GestureValues, RemainderHandoff,
 };
 use flui_platform::{EventTime, TargetPlatform};
 use flui_testing::{
@@ -3200,7 +3200,7 @@ pub(crate) fn connection_defaults_take_nothing() {
             let fling = FlingStep::for_test(
                 sequence,
                 device,
-                flui_interaction::Velocity::from_components(100.0, -50.0),
+                flui_interaction::gesture::Velocity::from_components(100.0, -50.0),
             );
             assert_eq!(silent.post_fling(&fling), FlingHandoff::Declined);
         }
@@ -3333,7 +3333,7 @@ use flui_interaction::events::{Code, Key, KeyPress, KeyState, Modifiers, NamedKe
 
 /// Key events into the focus tree of a mounted tree.
 pub(crate) struct Keys {
-    manager: Rc<flui_interaction::FocusManager>,
+    manager: Rc<flui_interaction::focus::FocusManager>,
 }
 
 impl Keys {
@@ -3710,7 +3710,7 @@ impl HoveringDrag {
         drag
     }
 
-    fn path_at(laid: &LaidOut, y: f64) -> Vec<flui_interaction::HitTestEntry> {
+    fn path_at(laid: &LaidOut, y: f64) -> Vec<flui_interaction::pointer::HitTestEntry> {
         laid.hit_test_pointer(at(150.0, y), flui_platform::pointer::PointerKind::Mouse)
             .path()
             .to_vec()

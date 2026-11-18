@@ -22,9 +22,13 @@ use flui_interaction::events::{
     PointerKind, make_down_event_for_id, make_move_event_for_id, make_up_event_for_id,
 };
 use flui_interaction::{
-    GestureBinding, HitMetadata, HitTestEntry, HitTestHandle, HitTestProbe, HitTestResult,
-    InteractionDispatchError, InteractionDispatchHandle, InteractionLane, LocalPayloadTarget,
-    PenTool, PointerEvent, PointerId, PointerSource,
+    binding::GestureBinding,
+    events::PointerEvent,
+    ids::PointerId,
+    pointer::{
+        HitMetadata, HitTestEntry, HitTestHandle, HitTestProbe, HitTestResult,
+        InteractionDispatchError, InteractionDispatchHandle, InteractionLane, LocalPayloadTarget,
+    },
 };
 use flui_platform::data_transfer::{
     DataTransferOffer, DragTransport, DropFeedback, Mime, RepresentationIndex, TransferActions,
@@ -35,6 +39,7 @@ use flui_platform::drag::{
     DragRequestError, OsDragEnd, OsDragParts, OsDragRequest, OsDragStart, PlatformDragSource,
 };
 use flui_platform::pointer::PressId;
+use flui_platform::pointer::{PenTool, PointerSource};
 use flui_platform::{
     DragDropEvent, EventTime, PlatformWindow, Unsupported, UnsupportedReason, WindowId,
 };
@@ -1715,7 +1720,7 @@ fn in_window_drag_keeps_second_finger_and_pen() {
             .register_pointer(move |dispatch| {
                 log.borrow_mut().push(format!(
                     "{:?}",
-                    flui_interaction::pointer_event_kind(dispatch.local)
+                    flui_interaction::gesture::pointer_event_kind(dispatch.local)
                 ));
             })
             .expect("bystander handler");
