@@ -25087,10 +25087,13 @@ reexport flui::view::element::unified::Element => flui::view::element::Element
 pub mod flui::view::environment
 pub struct flui::view::environment::FloatingKeyboard { .. }
 impl Clone for flui::view::environment::FloatingKeyboard
+impl Copy for flui::view::environment::FloatingKeyboard
+impl PartialEq for flui::view::environment::FloatingKeyboard
 impl core::fmt::Debug for flui::view::environment::FloatingKeyboard
-impl flui::prelude::InheritedView for flui::view::environment::FloatingKeyboard { type Data = Option<flui::geometry::Rect>; }
-impl flui::prelude::View for flui::view::environment::FloatingKeyboard
-pub fn flui::view::environment::FloatingKeyboard::new(frame: Option<flui::geometry::Rect>, child: impl flui::prelude::IntoView) -> Self
+impl core::marker::StructuralPartialEq for flui::view::environment::FloatingKeyboard
+impl flui::view::ProvidedValue for flui::view::environment::FloatingKeyboard
+pub const fn flui::view::environment::FloatingKeyboard::frame(&self) -> flui::geometry::Rect
+pub const fn flui::view::environment::FloatingKeyboard::new(frame: flui::geometry::Rect) -> Self
 pub struct flui::view::environment::FocusTreeRoot { .. }
 impl Clone for flui::view::environment::FocusTreeRoot
 impl core::fmt::Debug for flui::view::environment::FocusTreeRoot
