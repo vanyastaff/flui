@@ -1541,27 +1541,6 @@ impl SemanticsOwner {
         self.full_publish_pending = true;
     }
 
-    /// Queues `message` for the next flush, which speaks it through the
-    /// announcer node of `urgency`. Use from inside a frame; application code
-    /// holds an [`Announcer`](crate::Announcer), which also requests the frame.
-    ///
-    /// # Errors
-    /// [`AnnounceError::PresentationClosed`](crate::AnnounceError::PresentationClosed)
-    /// when no announcement queue is installed: there is no node to speak
-    /// through.
-    pub fn announce(
-        &mut self,
-        message: &str,
-        urgency: crate::Urgency,
-    ) -> Result<(), crate::AnnounceError> {
-        let announcements = self
-            .announcements
-            .as_ref()
-            .ok_or(crate::AnnounceError::PresentationClosed)?;
-        announcements.enqueue(message, urgency);
-        Ok(())
-    }
-
     /// Whether an accepted announcement waits for a flush that can deliver
     /// it: the owner is enabled and has a root to publish under. A frame
     /// scheduler reads it to produce the frame an idle presentation needs.

@@ -9,8 +9,8 @@
   `GrowthDirection`, `InputRegionSink`, `SemanticsClip`, `PoisonPhase`, `DirtySendError` and the
   parent-data types a sliver cross axis takes. Each was reachable only by an internal crate path.
 - `flui::semantics`: the vocabulary `SemanticsConfiguration` takes, as Flutter's semantics
-  library exports it: tags, sort keys, hint overrides, relations, collections, states, text
-  content, custom actions and their handlers, announcements. Each was reachable only by an internal
+  library exports it: sort keys, relations, collections, states, text content, custom actions
+  and their handlers, announcements. Each was reachable only by an internal
   crate path. `flui::painting` adds `SemanticsRegionId` beside the region types that name it.
 
 ### Removed
@@ -38,9 +38,8 @@
   `MatchError`, `Link` and `Role`, and the testing kit's `PointerPhase`,
   `A11yQuery`, `A11yQueryError`, `InvokeActionError`, `RowOutcome`, `StoreHostCall` and
   `HandlerCall`.
-- Also `#[non_exhaustive]` (ADR-0329): the semantics `AccessibilityFocusBlockType`,
-  `DebugSemanticsDumpOrder`, `StringAttributeType` and `SemanticsCollectionOrigin`, and the runtime's
-  `Privacy`, `ReloadTier`, `CommandSendError` and `UiCommand`.
+- Also `#[non_exhaustive]` (ADR-0329): the semantics `SemanticsCollectionOrigin`, and the
+  runtime's `Privacy`, `ReloadTier`, `CommandSendError` and `UiCommand`.
 - Also `#[non_exhaustive]` (ADR-0329): the rendering `UsageByParent`, `SemanticsClip`, `DrawKind`
   and `ParentDataSeed`, and the engine's raster-executor commands, slot states, health, failures and
   errors (`RasterCommand`, `SlotTarget`, `SlotChange`, `SlotVisibility`, `SlotPhase`, `SlotFailure`,

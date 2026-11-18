@@ -156,55 +156,14 @@ pub use owner::{
 // ============================================================================
 // RE-EXPORTS - Property Types
 // ============================================================================
-pub use properties::{
-    AttributedString, HeadingLevel, SemanticsHintOverrides, SemanticsSortKey, SemanticsTag,
-    StringAttribute, StringAttributeType, TextDirection,
-};
+pub use properties::{HeadingLevel, SemanticsSortKey, TextDirection};
 // ============================================================================
 // RE-EXPORTS - Role Types
 // ============================================================================
 pub use document_selection::{DocumentPosition, DocumentSelection};
 pub use relation::{SemanticsAnchor, SemanticsRelation};
-pub use role::{
-    AccessibilityFocusBlockType, DebugSemanticsDumpOrder, LiveSetting, SemanticsRole, Urgency,
-};
+pub use role::{LiveSetting, SemanticsRole, Urgency};
 // ============================================================================
 // RE-EXPORTS - Attributes and Tree Types
 // ============================================================================
 pub use tree::SemanticsTree;
-
-// ============================================================================
-// PRELUDE
-// ============================================================================
-
-/// The semantics prelude - commonly used types and traits.
-///
-/// ```rust,ignore
-/// use flui_semantics::prelude::*;
-/// ```
-pub mod prelude {
-    // Re-export optimized types
-    pub use rustc_hash::{FxHashMap, FxHashSet};
-    pub use smallvec::SmallVec;
-    pub use smol_str::SmolStr;
-
-    pub use crate::{
-        AccessibilityFocusBlockType, AccessibilityNodeId, ActionCall, Announcer, AttributedString,
-        DebugSemanticsDumpOrder, HeadingLevel, LiveSetting, NumericRange, NumericRangeError,
-        SemanticsAction, SemanticsActionError, SemanticsActionHandler, SemanticsActionInvocation,
-        SemanticsActionRequest, SemanticsAnchor, SemanticsConfiguration, SemanticsId,
-        SemanticsNode, SemanticsOwner, SemanticsRelation, SemanticsRole, SemanticsTag,
-        SemanticsTree, States, TextDirection, Toggled, Urgency,
-    };
-}
-
-// ============================================================================
-// VERSION INFO
-// ============================================================================
-
-/// The version of the flui-semantics crate.
-pub const VERSION: &str = env!("CARGO_PKG_VERSION");
-
-// ============================================================================
-// TESTS
-// ============================================================================
