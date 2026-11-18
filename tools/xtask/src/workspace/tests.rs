@@ -595,6 +595,11 @@ fn a_capability_crates_build_script_is_reported() {
         ),
         ("build = false\n", "crates/a/build.rs", None),
         ("links = \"a_native\"\n", "crates/a/build.rs", None),
+        (
+            "links = \"\"\n",
+            "crates/a/build.rs",
+            Some("build script crates/a/build.rs"),
+        ),
     ];
     for (key, script, expected) in cases {
         let fixture = Fixture::new();

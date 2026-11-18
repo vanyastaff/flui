@@ -5393,10 +5393,11 @@ GPU-память простаивающего или невидимого окн
   правило kind. Версию с поездом держит общее правило поезда (`links = "flui_train"`), своего у
   kind нет. Сборочный скрипт крейта возможности (ADR-0154 решение 6: `links` и `build.rs` —
   только у крейта, экспортирующего глобальный нативный символ): kind-правило
-  (`CapabilityBuildScript`) отказывает крейту возможности без `links`, для которого Cargo
+  (`CapabilityBuildScript`) отказывает крейту возможности без `links` или с пустым `links`
+  (Cargo принимает `links = ""`), для которого Cargo
   сообщает `custom-build`-цель (корневой `build.rs`, не выключенный `build = false`, или любой
   `build = "<путь>"`); исходники не разбираются. Держится ровно собственный скрипт крейта без
-  `links`. Не проверяются: что запускает скрипт крейта с `links` (держат `deny.toml` и ревью),
+  `links`. Не проверяются: что запускает скрипт крейта с `links` (держит ревью),
   сборочные скрипты сторонних зависимостей крейта возможности (kind-правило их допускает:
   `robius-location`, чей `build.rs` запускает `javac`, проходит и `workspace`, и `deps`) и
   скрипты крейтов фреймворка — всё это пункт ADR-0255 решения 21 и ADR-0154 решения 5 в
@@ -5404,14 +5405,16 @@ GPU-память простаивающего или невидимого окн
   только `rustc`. `deny.toml` запрещает `android-build` и `swift-rs`, которые запускают эти
   инструменты из сборочного скрипта. Строки подтверждения ADR-0154 и ADR-0255, называвшие
   `android-dex`, теперь называют то, что держит правило; столбец проверки R5.11 — гейт вместо
-  `rg`. `workspace --self-test` сажает `cap-build` (корневой `build.rs`) и `cap-build-path`
-  (`build = "gen.rs"`); молчат `cap-links` (крейт возможности с `links` и скриптом), узел
+  `rg`. `workspace --self-test` сажает `cap-build` (корневой `build.rs`), `cap-build-path`
+  (`build = "gen.rs"`) и `cap-links-empty` (`links` из пробела); молчат `cap-links` (крейт возможности с `links` и скриптом), узел
   `flui-foundation` (скрипт при `links` поезда) и `k1` (скрипт крейта kind `internal`). Без
-  проверки самотест печатает `MISSED` на обе посадки, без условия kind — `FALSE POSITIVE` на
-  `k1`, без исключения `links` — `FALSE POSITIVE` на `cap-links`. `build = false` держит тест
-  на `cargo metadata`: `a_capability_crates_build_script_is_reported` (корневой `build.rs` и
-  `build = "gen.rs"` найдены; `build.rs` при `build = false`, при `links` и скрипт крейта kind
-  `internal` — нет; без проверки падает). `a_build_script_outside_the_repository_is_read`:
+  проверки самотест печатает `MISSED` на все посадки, без условия kind — `FALSE POSITIVE` на
+  `k1`, без исключения `links` — `FALSE POSITIVE` на `cap-links`, с проверкой только
+  `is_none()` — `MISSED` на `cap-links-empty`. `build = false` держит тест на `cargo metadata`:
+  `a_capability_crates_build_script_is_reported` (корневой `build.rs`, `build = "gen.rs"` и
+  `build.rs` при `links = ""` найдены; `build.rs` при `build = false`, при `links` и скрипт
+  крейта kind `internal` — нет; без проверки падает, со старым `is_none()` падает строка
+  `links = ""`). `a_build_script_outside_the_repository_is_read`:
   `build = "<путь вне репозитория>"` у крейта другого kind больше не обрывает `workspace` (с
   прежним `?` падает с «is outside the repository»). Единственный крейт возможности,
   `flui-system`, скрипта не имеет. Проверки на Windows: `workspace`, `workspace --self-test`,

@@ -174,10 +174,10 @@ pub(super) enum Finding {
         rel: String,
         tier: String,
     },
-    /// A capability crate without `links` has a build script (ADR-0154 §6): a
-    /// root `build.rs` that `build = false` does not switch off, or
-    /// `build = "<path>"`. Only a crate that exports a global native symbol,
-    /// which `links` declares, needs one.
+    /// A capability crate without `links`, or with an empty one, has a build
+    /// script (ADR-0154 §6): a root `build.rs` that `build = false` does not
+    /// switch off, or `build = "<path>"`. Only a crate that exports a global
+    /// native symbol, which `links` names, needs one.
     CapabilityBuildScript { name: String, script: String },
     /// A capability crate has a normal or build dependency outside
     /// [`SDK_SURFACE`] (ADR-0154 §1).
@@ -376,7 +376,8 @@ impl fmt::Display for Finding {
             ),
             Self::CapabilityBuildScript { name, script } => write!(
                 f,
-                "{name} is a capability crate with the build script {script} and no `links`: a \
+                "{name} is a capability crate with the build script {script} and no `links` \
+                 naming a symbol: a \
                  capability crate that exports no global native symbol has no build script \
                  (ADR-0154 §6); its Java, Kotlin, Swift and Objective-C sources and its dex are \
                  built by `flui build` from the sources it declares (ADR-0154 §5). Remove the \
@@ -520,8 +521,12 @@ pub(super) fn check_tiers(members: &Members, tiers: &[String]) -> Vec<Finding> {
         }
         // `links` marks the crate that exports a global native symbol, whose
         // build script ADR-0154 §6 admits (Cargo requires one for `links`).
+        // Cargo accepts `links = ""`, which names no symbol and admits nothing.
         if member.tier_kind.as_deref() == Some(CAPABILITY)
-            && member.links.is_none()
+            && member
+                .links
+                .as_deref()
+                .is_none_or(|links| links.trim().is_empty())
             && let Some(script) = &member.build_script
         {
             findings.push(Finding::CapabilityBuildScript {
@@ -913,6 +918,7 @@ fn self_test_members() -> Members {
     let (cap_build_rel, cap_build) = krate("cap-build", "pkg", 16, CAPABILITY);
     let (cap_build_path_rel, cap_build_path) = krate("cap-build-path", "pkg", 17, CAPABILITY);
     let (cap_links_rel, cap_links) = krate("cap-links", "pkg", 18, CAPABILITY);
+    let (cap_links_empty_rel, cap_links_empty) = krate("cap-links-empty", "pkg", 19, CAPABILITY);
     let with_build_script = |mut node: Node, script: &str| {
         node.build_script = Some(script.to_owned());
         node
@@ -947,7 +953,12 @@ fn self_test_members() -> Members {
         true,
         Some("dep:cap1"),
     );
-    for capability in ["cap-build", "cap-build-path", "cap-links"] {
+    for capability in [
+        "cap-build",
+        "cap-build-path",
+        "cap-links",
+        "cap-links-empty",
+    ] {
         expose(
             &mut facade_node,
             capability,
@@ -1066,6 +1077,15 @@ fn self_test_members() -> Members {
             },
             "crates/cap-links/build.rs",
         ),
+        // planted: an empty `links`, which Cargo accepts, names no symbol
+        with_build_script(
+            {
+                let mut opted_out = node(&cap_links_empty_rel, &cap_links_empty, &[]);
+                opted_out.links = Some(" ".to_owned());
+                opted_out
+            },
+            "crates/cap-links-empty/build.rs",
+        ),
         // planted: a core crate names a capability crate (upward, and not
         // the facade)
         crate_node("k-cap", "K", 7, &[("cap1", Normal)]),
@@ -1076,7 +1096,12 @@ fn self_test_members() -> Members {
 }
 
 /// The finding each planted violation must produce, and no other.
-const EXPECTED: [(&str, &str, &str); 27] = [
+const EXPECTED: [(&str, &str, &str); 28] = [
+    (
+        "cap-links-empty",
+        "crates/cap-links-empty/build.rs",
+        "capability build script",
+    ),
     (
         "cap-build",
         "crates/cap-build/build.rs",
