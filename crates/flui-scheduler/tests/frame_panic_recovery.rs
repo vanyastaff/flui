@@ -48,9 +48,10 @@ fn armed_completion_probe(
 
 /// The invariants every site below must satisfy once a panic from a step
 /// `OwnerFrame::drive_frame` owns has been caught: the original panic
-/// text (not a secondary one), phase/timestamp/`frame_scheduled` closed,
-/// the frame counted exactly once, and the pre-registered completion
-/// waiter woken exactly once by the abort.
+/// text (not a secondary one), phase and timestamp closed, the frame
+/// counted exactly once, and the pre-registered completion waiter woken
+/// exactly once by the abort. Whether another frame is scheduled depends on
+/// the work the abort left behind, so each caller asserts it.
 #[track_caller]
 fn assert_recovered_from_panic(
     scheduler: &UpdateScheduler,
@@ -73,13 +74,6 @@ fn assert_recovered_from_panic(
     assert!(
         scheduler.current_frame().is_none(),
         "no frame timing must be left open"
-    );
-    // `handle_begin_frame` cleared the latch before the failing step ran; the
-    // abort does not re-arm it for the failure itself, which would hot-loop a
-    // deterministic panic.
-    assert!(
-        !scheduler.is_frame_scheduled(),
-        "the aborted frame does not request another for its own failure"
     );
     assert_eq!(
         scheduler.frame_count(),
@@ -180,6 +174,10 @@ fn async_future_poll_panic_closes_the_frame() {
         "the sibling is polled in ascending task-id order, after the panicking one -- \
          it must not have been reached in the frame that aborted"
     );
+    assert!(
+        scheduler.is_frame_scheduled(),
+        "the ready sibling the abort left unpolled asks for the next frame"
+    );
 
     // A later frame's async-driver step does not touch the removed slot,
     // and it polls the sibling normally -- exactly once, since one poll
@@ -201,6 +199,27 @@ fn async_future_poll_panic_closes_the_frame() {
         1,
         "the completion waiter's notifier was drained by the abort; a later, unrelated \
          clean frame must not wake it a second time"
+    );
+}
+
+/// A task that panics alone leaves nothing ready: the abort requests no frame
+/// for its own failure, so a deterministic panic does not loop.
+fn a_lone_panicking_task_requests_no_frame_after_the_abort() {
+    let scheduler = UpdateScheduler::new();
+    let owner = OwnerFrame::try_new(&scheduler).expect("the scheduler has no live owner frame");
+    let _panicking_token = owner.async_driver().spawn_local(Box::pin(PanicsOnPoll));
+
+    let _ = catch_unwind(AssertUnwindSafe(|| {
+        owner
+            .drive_frame(Instant::now(), || {}, || {})
+            .expect("live owner frame");
+    }))
+    .expect_err("the panic must propagate");
+
+    assert_eq!(scheduler.phase(), SchedulerPhase::Idle);
+    assert!(
+        !scheduler.is_frame_scheduled(),
+        "the aborted frame does not request another for its own failure"
     );
 }
 
@@ -353,6 +372,10 @@ fn frame_panic_recovery_matrix() {
             (
                 "async_future_poll_panic_closes_the_frame",
                 async_future_poll_panic_closes_the_frame as fn(),
+            ),
+            (
+                "a_lone_panicking_task_requests_no_frame_after_the_abort",
+                a_lone_panicking_task_requests_no_frame_after_the_abort as fn(),
             ),
             (
                 "post_frame_callbacks_run_in_the_clean_frame_after_a_panic",
