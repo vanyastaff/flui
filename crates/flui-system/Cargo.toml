@@ -137,6 +137,16 @@ raw-window-handle = { workspace = true }
 # A panic an AppKit callback or a dispatched block contains is logged.
 tracing = { workspace = true }
 
+# The Android providers: the crate's Java classes (`android/java`) through
+# JNI, over the Activity and the raw JNI pointers the host lends per call
+# (ADR-0154 §9); the system properties through bionic.
+[target.'cfg(target_os = "android")'.dependencies]
+jni = { workspace = true }
+libc = { workspace = true }
+# A failed JNI call of a native method, and Java classes that were not
+# reached, are logged.
+tracing = { workspace = true }
+
 # The web providers: the browser's pickers, `<dialog>`, `window.open`, the
 # Web Share API and the Badging API, reached through the canvas of the
 # acquiring widget's window. Newer APIs (the File System Access pickers,
@@ -175,6 +185,10 @@ flui-sdk = { workspace = true }
 flui-testing = { workspace = true }
 # Reads the crate's own `[package.metadata.flui.capability]` in a test.
 toml = { workspace = true }
+# The windows a provider's rules are tested in, and the panic boundary and
+# the native-call adapter, whose tests run on every host.
+raw-window-handle = { workspace = true }
+tracing = { workspace = true }
 
 # A save's file, written where a test's folder is.
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
@@ -228,6 +242,28 @@ order = 5
 globals = [
     { item = "macos::shortcuts::appkit::LAST_HOT_KEY", grant = "ADR-0097", class = "counter", reason = "Carbon hot key numbers, one domain for the process since every handler on the application event target hears every hot key; advanced by `try_update` through a reference, so the last number refuses the binding instead of reissuing one" },
 ]
+
+# What the Android providers need from the application's APK (ADR-0307).
+[package.metadata.flui.declares]
+schema = 4
+
+# The crate's Java classes (`FluiSystem`, `FluiMessageBox`, `FluiDocuments`),
+# compiled from `java` into the checked-in dex (`cargo xtask android-dex`):
+# `flui build` packs the dex into the APK and hands Gradle the sources.
+[package.metadata.flui.declares.android]
+dex = "android/classes.dex"
+java = "android/java"
+# What R8 must keep of them in a minified Gradle release: the library
+# reaches them by name through JNI, and Android the provider by the name the
+# manifest states.
+proguard = "android/proguard-rules.pro"
+
+# The content provider a view or a share hands a file through: not exported,
+# granting per URI, under `<application id>.flui.documents`
+# (`FluiDocuments.AUTHORITY_SUFFIX`).
+[[package.metadata.flui.declares.android.providers]]
+class = "dev.flui.system.FluiDocuments"
+authority = "flui.documents"
 
 # How an application registers the crate (ADR-0307 §5): `flui add system`
 # prints `.plugin(flui::services::system::SystemPlugin::default())`. The path

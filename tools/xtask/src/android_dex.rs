@@ -1,28 +1,31 @@
-//! `cargo xtask android-dex`: the dex of the Android backend's Java classes,
-//! `FluiActivity`, `FluiHost` and `FluiView` (ADR-0247, ADR-0255).
+//! `cargo xtask android-dex`: the dex of each crate's Java classes: the
+//! Android backend's (`FluiActivity`, `FluiHost`, `FluiView`; ADR-0247,
+//! ADR-0255) and `flui-system`'s (`FluiSystem`, `FluiMessageBox`,
+//! `FluiDocuments`).
 //!
-//! The Java sources live under `crates/flui-native/android/java`. Their
-//! compiled dex, `crates/flui-native/android/classes.dex`, is checked in and
-//! declared by `flui-native` (`[package.metadata.flui.declares.android] dex`),
-//! so `flui build` packs the dex of the `flui-native` an application links
-//! into its APK, and building FLUI for Android needs no JDK and no build
-//! script. `classes.dex.toml` next to it records the SHA-256 of the sources
-//! and of the dex, and the tools that compiled it.
+//! A crate's Java sources live under its `android/java`. Their compiled dex,
+//! `android/classes.dex`, is checked in and declared by the crate
+//! (`[package.metadata.flui.declares.android] dex`), so `flui build` packs
+//! the dex of each crate an application links into its APK, and building FLUI
+//! for Android needs no JDK and no build script. `classes.dex.toml` next to
+//! it records the SHA-256 of the sources and of the dex, and the tools that
+//! compiled it. Each crate's classes compile against the platform alone, so
+//! no dex depends on another's.
 //!
-//! - Without arguments (the `cargo xtask checks` step) both digests are
-//!   checked, which needs no JDK: a source edited without regenerating the
-//!   dex, or a dex replaced by hand, fails.
+//! - Without arguments (the `cargo xtask checks` step) both digests of every
+//!   crate are checked, which needs no JDK: a source edited without
+//!   regenerating the dex, or a dex replaced by hand, fails.
 //! - `--rebuild` also compiles the sources with `javac` and `d8` and requires
 //!   the checked-in bytes. It needs a JDK and the Android SDK's build tools
 //!   (`ANDROID_HOME`); `javac` output can differ between JDK releases, so a
 //!   mismatch names the recorded tools.
-//! - `--write` compiles and writes the dex and its record, with the build
+//! - `--write` compiles and writes each dex and its record, with the build
 //!   tools and platform the record names when they are installed (the newest
 //!   installed otherwise, which it says).
 //!
 //! Without a local JDK or SDK, `.github/workflows/android-dex.yml` runs
 //! `--write` on a GitHub runner for a pull request that changes the sources
-//! (and `--write` or `--rebuild` by hand on any branch) and uploads the dex
+//! (and `--write` or `--rebuild` by hand on any branch) and uploads each dex
 //! and its record as an artifact to commit.
 
 use std::fmt::Write as _;
@@ -34,16 +37,35 @@ use sha2::{Digest, Sha256};
 
 use crate::util::{ScratchDir, repo_root};
 
-/// The Java sources, relative to the repository root.
-const SOURCES: &str = "crates/flui-native/android/java";
-/// The checked-in dex.
-const DEX: &str = "crates/flui-native/android/classes.dex";
-/// Its record.
-const RECORD: &str = "crates/flui-native/android/classes.dex.toml";
+/// The `android` directory of each crate that ships Java classes, relative
+/// to the repository root: its sources under `java`, its dex and the record.
+const TREES: [&str; 2] = ["crates/flui-native/android", "crates/flui-system/android"];
 /// The oldest API level the dex runs on: FLUI's `minSdk`.
 const MIN_API: u32 = 23;
 /// The Java language level: what `d8` accepts for that API level without desugaring.
 const JAVA_RELEASE: &str = "8";
+
+/// One crate's Java classes, by the paths the task reads and writes, each
+/// relative to the repository root.
+struct Tree {
+    /// The directory of the Java sources.
+    sources: String,
+    /// The checked-in dex.
+    dex: String,
+    /// Its record.
+    record: String,
+}
+
+impl Tree {
+    /// The tree under the crate's `android` directory.
+    fn under(android: &str) -> Self {
+        Self {
+            sources: format!("{android}/java"),
+            dex: format!("{android}/classes.dex"),
+            record: format!("{android}/classes.dex.toml"),
+        }
+    }
+}
 
 /// Arguments for `cargo xtask android-dex`.
 #[derive(Debug, clap::Args)]
@@ -141,8 +163,8 @@ fn sources_digest(files: &[(String, Vec<u8>)]) -> String {
     hex(&hasher.finalize())
 }
 
-fn read_sources(root: &Path) -> anyhow::Result<Vec<(String, Vec<u8>)>> {
-    java_files(&root.join(SOURCES))?
+fn read_sources(root: &Path, tree: &Tree) -> anyhow::Result<Vec<(String, Vec<u8>)>> {
+    java_files(&root.join(&tree.sources))?
         .into_iter()
         .map(|(relative, path)| {
             let bytes =
@@ -152,22 +174,40 @@ fn read_sources(root: &Path) -> anyhow::Result<Vec<(String, Vec<u8>)>> {
         .collect()
 }
 
-/// `cargo xtask android-dex`: check (or `--write`) the `FluiView` dex.
+/// `cargo xtask android-dex`: check (or `--write`) each crate's dex.
 pub(crate) fn android_dex(args: &AndroidDexArgs) -> anyhow::Result<ExitCode> {
     let root = repo_root();
-    let sources = read_sources(&root)?;
+    let mut held = true;
+    for android in TREES {
+        held &= one_tree(&root, &Tree::under(android), args)?;
+    }
+    Ok(if held {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    })
+}
+
+/// Check (or `--write`) the dex of `tree`; whether it holds.
+fn one_tree(root: &Path, tree: &Tree, args: &AndroidDexArgs) -> anyhow::Result<bool> {
+    let Tree {
+        sources: sources_dir,
+        dex: dex_path,
+        record: record_path,
+    } = tree;
+    let sources = read_sources(root, tree)?;
     if sources.is_empty() {
-        bail!("no Java sources under {SOURCES}");
+        bail!("no Java sources under {sources_dir}");
     }
     let digest = sources_digest(&sources);
     if args.write {
         // The recorded build tools and platform when installed, so a rewrite
         // changes them only on purpose (by editing the record) and never picks
         // up a preview platform the SDK happens to have.
-        let recorded = std::fs::read_to_string(root.join(RECORD))
+        let recorded = std::fs::read_to_string(root.join(record_path))
             .ok()
             .and_then(|text| Record::parse(&text).ok());
-        let built = compile(&root, recorded.as_ref())?;
+        let built = compile(root, tree, recorded.as_ref())?;
         let record = Record {
             sources: digest,
             dex: hex(&Sha256::digest(&built.dex)),
@@ -175,37 +215,39 @@ pub(crate) fn android_dex(args: &AndroidDexArgs) -> anyhow::Result<ExitCode> {
             build_tools: built.build_tools,
             platform: built.platform,
         };
-        std::fs::write(root.join(DEX), &built.dex).with_context(|| format!("writing {DEX}"))?;
-        std::fs::write(root.join(RECORD), record.render())
-            .with_context(|| format!("writing {RECORD}"))?;
+        std::fs::write(root.join(dex_path), &built.dex)
+            .with_context(|| format!("writing {dex_path}"))?;
+        std::fs::write(root.join(record_path), record.render())
+            .with_context(|| format!("writing {record_path}"))?;
         println!(
-            "android-dex: wrote {DEX} ({} bytes) and {RECORD}",
+            "android-dex: wrote {dex_path} ({} bytes) and {record_path}",
             built.dex.len()
         );
-        return Ok(ExitCode::SUCCESS);
+        return Ok(true);
     }
     let record = Record::parse(
-        &std::fs::read_to_string(root.join(RECORD)).with_context(|| format!("reading {RECORD}"))?,
+        &std::fs::read_to_string(root.join(record_path))
+            .with_context(|| format!("reading {record_path}"))?,
     )?;
-    let dex = std::fs::read(root.join(DEX)).with_context(|| format!("reading {DEX}"))?;
+    let dex = std::fs::read(root.join(dex_path)).with_context(|| format!("reading {dex_path}"))?;
     let mut failures: Vec<String> = Vec::new();
     if record.sources != digest {
         failures.push(format!(
-            "the Java sources under {SOURCES} changed since the dex was built; \
+            "the Java sources under {sources_dir} changed since the dex was built; \
              run `cargo xtask android-dex --write`, or the `Android dex` workflow on a runner"
         ));
     }
     if record.dex != hex(&Sha256::digest(&dex)) {
         failures.push(format!(
-            "{DEX} is not the dex {RECORD} records; run `cargo xtask android-dex --write`"
+            "{dex_path} is not the dex {record_path} records; run `cargo xtask android-dex --write`"
         ));
     }
     if failures.is_empty() && args.rebuild {
-        let built = compile(&root, Some(&record))?;
+        let built = compile(root, tree, Some(&record))?;
         if built.dex != dex {
             failures.push(format!(
-                "compiling the sources with javac {} and build-tools {} does not reproduce {DEX} \
-                 (recorded: javac {}, build-tools {})",
+                "compiling the sources with javac {} and build-tools {} does not reproduce \
+                 {dex_path} (recorded: javac {}, build-tools {})",
                 built.javac, built.build_tools, record.javac, record.build_tools
             ));
         }
@@ -214,17 +256,17 @@ pub(crate) fn android_dex(args: &AndroidDexArgs) -> anyhow::Result<ExitCode> {
         eprintln!("android-dex: {failure}");
     }
     if !failures.is_empty() {
-        return Ok(ExitCode::FAILURE);
+        return Ok(false);
     }
     println!(
-        "android-dex: {DEX} is built from the sources under {SOURCES}{}",
+        "android-dex: {dex_path} is built from the sources under {sources_dir}{}",
         if args.rebuild {
             " and reproduces byte for byte"
         } else {
             " (digests)"
         }
     );
-    Ok(ExitCode::SUCCESS)
+    Ok(true)
 }
 
 /// A dex compiled here, and the tools that compiled it.
@@ -305,10 +347,11 @@ fn run(command: &mut Command) -> anyhow::Result<String> {
     ))
 }
 
-/// Compile the sources: `javac` against the platform's `android.jar`, then
-/// `d8` from the build tools, run through `java` so every host runs the same
-/// jar. `recorded` picks the recorded build tools and platform when installed.
-fn compile(root: &Path, recorded: Option<&Record>) -> anyhow::Result<Built> {
+/// Compile `tree`'s sources: `javac` against the platform's `android.jar`,
+/// then `d8` from the build tools, run through `java` so every host runs the
+/// same jar. `recorded` picks the recorded build tools and platform when
+/// installed.
+fn compile(root: &Path, tree: &Tree, recorded: Option<&Record>) -> anyhow::Result<Built> {
     let sdk = sdk_root()?;
     let (build_tools, tools_dir) = pick(
         &sdk.join("build-tools"),
@@ -332,7 +375,7 @@ fn compile(root: &Path, recorded: Option<&Record>) -> anyhow::Result<Built> {
     let out = scratch.path().join("out");
     std::fs::create_dir_all(&classes)?;
     std::fs::create_dir_all(&out)?;
-    let sources: Vec<PathBuf> = java_files(&root.join(SOURCES))?
+    let sources: Vec<PathBuf> = java_files(&root.join(&tree.sources))?
         .into_iter()
         .map(|(_, path)| path)
         .collect();

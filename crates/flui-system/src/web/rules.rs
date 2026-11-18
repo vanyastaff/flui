@@ -6,6 +6,10 @@
 
 use flui_platform::{BrowserException, Unsupported, UnsupportedReason};
 
+// A browser's file is handed over without a path: the picks' filter check
+// and the bound on what is read are the rules of every such host.
+use crate::dialog::handed_over::{admit_declared, named_after_first_filter};
+pub(crate) use crate::dialog::handed_over::{admit_picks, admit_read};
 use crate::dialog::{DialogError, FileDialogCapability, FileFilter, MessageAnswer, MessageButtons};
 use crate::share::{ShareCapability, ShareError, ShareResult};
 
@@ -111,25 +115,7 @@ fn is_picker_extension(dotted: &str) -> bool {
 /// the name has none, as a desktop save dialog names a typed file after the
 /// selected filter.
 pub(crate) fn save_name(suggested: Option<&str>, filters: &[FileFilter]) -> String {
-    let name = suggested.unwrap_or(UNNAMED_DOWNLOAD);
-    let has_extension = name
-        .rsplit_once('.')
-        .is_some_and(|(stem, extension)| !stem.is_empty() && !extension.is_empty());
-    match filters
-        .first()
-        .and_then(|filter| filter.extensions().first())
-    {
-        Some(extension) if !has_extension => {
-            // `notes.` is `notes` with an empty extension: the filter's
-            // replaces it rather than following a second dot.
-            let stem = match name.trim_end_matches('.') {
-                "" => name,
-                stem => stem,
-            };
-            format!("{stem}.{extension}")
-        }
-        _ => name.to_owned(),
-    }
+    named_after_first_filter(suggested.unwrap_or(UNNAMED_DOWNLOAD), filters)
 }
 
 /// The type a download's blob carries: the first concrete MIME type of the
@@ -160,22 +146,8 @@ pub(crate) fn admit_sizes(
         clippy::cast_sign_loss,
         reason = "a float-to-int `as` saturates, which is the bound wanted here"
     )]
-    let total = sizes
-        .into_iter()
-        .fold(0_u64, |total, size| total.saturating_add(size as u64));
-    admit_read(total, limit).map(|()| total)
-}
-
-/// Refuse `read` bytes past `limit` with [`DialogError::TooLarge`].
-pub(crate) fn admit_read(read: u64, limit: u64) -> Result<(), DialogError> {
-    if read > limit {
-        Err(DialogError::TooLarge {
-            actual: read,
-            limit,
-        })
-    } else {
-        Ok(())
-    }
+    let sizes = sizes.into_iter().map(|size| size as u64);
+    admit_declared(sizes, limit)
 }
 
 /// How a picker of the File System Access API ended without picks.
@@ -220,27 +192,6 @@ pub(crate) fn unavailable() -> DialogError {
     DialogError::Unsupported(Unsupported::of::<FileDialogCapability>(
         UnsupportedReason::Unavailable,
     ))
-}
-
-/// Admit picks, each a name and the MIME type the browser gives it, against
-/// the request's `filters`: every pick must match one where there are any
-/// ([`FileFilter::matches`]), since a file input only suggests them
-/// (ADR-0360 §4); [`DialogError::NotInFilter`] otherwise.
-pub(crate) fn admit_picks<'a>(
-    picks: impl IntoIterator<Item = (&'a str, Option<&'a str>)>,
-    filters: &[FileFilter],
-) -> Result<(), DialogError> {
-    if filters.is_empty() {
-        return Ok(());
-    }
-    let admitted = picks
-        .into_iter()
-        .all(|(name, mime_type)| filters.iter().any(|filter| filter.matches(name, mime_type)));
-    if admitted {
-        Ok(())
-    } else {
-        Err(DialogError::NotInFilter)
-    }
 }
 
 /// Where a launched URI goes in the browser.

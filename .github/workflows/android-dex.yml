@@ -1,17 +1,19 @@
 name: Android dex
 
-# Compiles the dex of the Android backend's Java classes
-# (`crates/flui-native/android/classes.dex`, ADR-0247) on a GitHub runner, so
-# changing the Java sources needs no local JDK or Android SDK. A pull request
-# that changes the sources (or this file) runs it in `write` mode, so its
-# checks carry the `android-dex` artifact to commit. Or run it by hand
-# on the branch that changed them:
+# Compiles the dex of each crate that ships Java classes (the Android backend,
+# `crates/flui-native/android/classes.dex`, ADR-0247, and `flui-system`,
+# `crates/flui-system/android/classes.dex`) on a GitHub runner, so changing
+# the Java sources needs no local JDK or Android SDK. A pull request that
+# changes the sources (or this file) runs it in `write` mode, so its checks
+# carry the `android-dex` artifact to commit. Or run it by hand on the branch
+# that changed them:
 #
 #   gh workflow run android-dex.yml --ref <branch>             # mode: write
 #   gh workflow run android-dex.yml --ref <branch> -f mode=rebuild
 #
-# `write` runs `cargo xtask android-dex --write` and uploads `classes.dex` and
-# `classes.dex.toml` as the `android-dex` artifact; commit both to the branch.
+# `write` runs `cargo xtask android-dex --write` and uploads each crate's
+# `classes.dex` and `classes.dex.toml` as the `android-dex` artifact, under
+# their paths below `crates/`; commit them to the branch.
 # `rebuild` runs `--rebuild`, which requires the checked-in dex to reproduce
 # byte for byte with the recorded build tools and platform. PR CI checks only
 # the digests (`cargo xtask checks`), which needs no JDK.
@@ -20,6 +22,7 @@ on:
   pull_request:
     paths:
       - "crates/flui-native/android/java/**"
+      - "crates/flui-system/android/java/**"
       - ".github/workflows/android-dex.yml"
   workflow_dispatch:
     inputs:
@@ -78,8 +81,8 @@ jobs:
       - name: cargo xtask android-dex --${{ env.MODE }}
         run: |
           cargo xtask android-dex "--$MODE"
-          # Whether the written dex differs from the checked-in one.
-          git diff --stat -- crates/flui-native/android/
+          # Whether a written dex differs from the checked-in one.
+          git diff --stat -- crates/flui-native/android/ crates/flui-system/android/
 
       - name: Upload the dex
         if: env.MODE == 'write'
@@ -89,5 +92,7 @@ jobs:
           path: |
             crates/flui-native/android/classes.dex
             crates/flui-native/android/classes.dex.toml
+            crates/flui-system/android/classes.dex
+            crates/flui-system/android/classes.dex.toml
           if-no-files-found: error
           retention-days: 7

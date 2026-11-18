@@ -32,18 +32,24 @@
 //! and badges an installed application's icon through the browser, and
 //! refuses autostart, global shortcuts, the user folders, the jump list and
 //! the system information with `NotOnThisPlatform`: a page has none of
-//! them. Elsewhere, and for the system information on Linux, the handle is
+//! them. Android launches through `ACTION_VIEW`, picks and saves documents
+//! through the Storage Access Framework, shows a message box, shares, names
+//! the user's public folders and says what it is, and refuses autostart,
+//! global shortcuts, the launcher entry and the jump list with
+//! `NotOnThisPlatform`. Elsewhere, and for the system information on Linux, the handle is
 //! refused with `UnsupportedReason::NotYetOnThisHost` until a platform's
 //! provider lands, never faked (ADR-0154 §10); the jump list is refused with
 //! `NotOnThisPlatform` everywhere but Windows.
 
+#[cfg(any(target_os = "android", test))]
+mod android;
 pub mod autostart;
 pub mod dialog;
 pub mod jump_list;
 #[cfg(any(target_os = "macos", test))]
 mod macos;
 pub mod os;
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(any(windows, target_os = "macos", target_os = "android", test))]
 mod owner;
 #[cfg(target_os = "linux")]
 mod portal;
@@ -62,8 +68,9 @@ use flui_platform::capability::{CapabilityRegistrar, Plugin};
 
 /// The system services' providers for the platform the application runs on:
 /// the Windows shell on Windows, AppKit and the system frameworks on macOS,
-/// the XDG desktop portal on Linux, the browser on the web, and a refusal
-/// for what a platform's provider does not have.
+/// the XDG desktop portal on Linux, the Activity's `Intent`s and document
+/// pickers on Android, the browser on the web, and a refusal for what a
+/// platform's provider does not have.
 #[derive(Clone, Copy, Debug, Default)]
 #[non_exhaustive]
 pub struct SystemPlugin;
@@ -84,16 +91,18 @@ impl Plugin for SystemPlugin {
         macos::register(registrar);
         #[cfg(target_os = "linux")]
         portal::register(registrar, None, None);
+        #[cfg(target_os = "android")]
+        android::register(registrar);
         #[cfg(target_arch = "wasm32")]
         web::register(registrar);
-        #[cfg(not(any(windows, target_arch = "wasm32")))]
+        #[cfg(not(any(windows, target_os = "android", target_arch = "wasm32")))]
         refusals::register(registrar);
     }
 }
 
-/// The refusals off Windows: the services no portal has, the jump list, and
-/// what a platform's provider does not have yet.
-#[cfg(not(any(windows, target_arch = "wasm32")))]
+/// The refusals off Windows, Android and the web: the services no portal
+/// has, the jump list, and what a platform's provider does not have yet.
+#[cfg(not(any(windows, target_os = "android", target_arch = "wasm32")))]
 mod refusals {
     use flui_platform::capability::{Capability, CapabilityRegistrar, ProviderContext};
     use flui_platform::{Unsupported, UnsupportedReason};

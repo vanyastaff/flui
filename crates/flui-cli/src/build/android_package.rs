@@ -466,6 +466,7 @@ mod tests {
     /// The manifest `aapt2` links names the package and keeps the libraries
     /// in the archive, where they are page-aligned to be mapped; a manifest
     /// that states either itself, or has nowhere to state them, is refused.
+    /// The rest, a declared content provider included, passes as written.
     #[test]
     fn the_linked_manifest_maps_the_libraries_from_the_archive() {
         let scaffolded = include_str!("../../templates/android/AndroidManifest.xml");
@@ -502,6 +503,31 @@ mod tests {
                 "accepted {refused}"
             );
         }
+
+        // A content provider the crates declare reaches `aapt2` as written.
+        let generated = super::super::android_manifest::render(
+            &super::super::android_manifest::ManifestFacts {
+                label: "Notes",
+                lib_name: "notes",
+                application_id: "com.example.notes",
+            },
+            &crate::declarations::Declarations::of_table(
+                "flui-system",
+                "schema = 4\n[[android.providers]]\nclass = \"dev.flui.system.FluiDocuments\"\n\
+                 authority = \"flui.documents\"\n",
+            ),
+        );
+        let provider = |manifest: &str| -> String {
+            let start = manifest.find("<provider").expect("a <provider> element");
+            let length = manifest[start..].find("/>").expect("an empty element") + 2;
+            manifest[start..start + length].to_owned()
+        };
+        let linked = manifest_for_aapt2(&generated, "com.example.notes").expect("linked");
+        assert_eq!(provider(&linked), provider(&generated));
+        assert!(
+            provider(&linked).contains("com.example.notes.flui.documents"),
+            "{linked}"
+        );
     }
 
     /// The APK is signed with the key the build chose, its arguments around

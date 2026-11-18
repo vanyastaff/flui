@@ -642,6 +642,7 @@ impl AndroidBuilder {
             &super::android_manifest::ManifestFacts {
                 label: config.app.shown_name(),
                 lib_name: &lib_name,
+                application_id: config.app.id.android_package(),
             },
             declarations,
         )

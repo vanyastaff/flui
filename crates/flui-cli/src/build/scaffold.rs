@@ -182,6 +182,7 @@ pub(crate) fn scaffold_platform_plan(
                     &crate::build::android_manifest::ManifestFacts {
                         label: params.app,
                         lib_name: params.lib,
+                        application_id: params.package,
                     },
                     &crate::declarations::Declarations::default(),
                 ),

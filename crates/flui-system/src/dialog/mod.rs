@@ -13,6 +13,8 @@
 //! the [`DialogHold`] its backend gave for it, and frees the window for the
 //! next one.
 
+#[cfg(any(test, target_arch = "wasm32", target_os = "android"))]
+pub(crate) mod handed_over;
 mod message;
 mod request;
 

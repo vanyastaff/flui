@@ -200,6 +200,12 @@ code names) reach a Gradle release as `-Pflui.proguardFiles`, beside the app's o
 scaffolded script have goldens (`the_generated_manifest_matches_its_golden`,
 `the_scaffolded_gradle_script_matches_its_golden`).
 
+A content provider a crate ships (`android.providers`, schema 4: a class and an authority suffix,
+checked in `declarations/provider.rs`) becomes a `<provider>` after `FluiActivity`, unexported and
+granting URI permissions, under the authority `<application id>.<suffix>`; one suffix with two
+classes, or one class with two suffixes, is refused naming both crates
+(`the_application_declares_the_providers_its_crates_ship`, `a_provider_authority_has_one_class`).
+
 The iOS bundle's `PrivacyInfo.xcprivacy` lists the required-reason APIs the graph of the device or
 simulator target declares (`apple.privacy.accessed-apis`), joined per category with the
 application's own `<project>/platforms/ios/PrivacyInfo.xcprivacy`; tracking and collected data stay the

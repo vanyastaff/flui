@@ -19,9 +19,11 @@
 //! `apple.privacy.accessed-apis`, version 2 adds `android.dex`,
 //! `android.java` and `android.proguard`: the compiled Java classes a crate
 //! ships, their sources and the R8 rules that keep what native code reaches,
-//! and version 3 adds `url-schemes`, `associated-domains` and `file-types`:
-//! what the application opens, which the operating system has to know before
-//! it hands the application a link or a file.
+//! version 3 adds `url-schemes`, `associated-domains` and `file-types`: what
+//! the application opens, which the operating system has to know before it
+//! hands the application a link or a file, and version 4 adds
+//! `android.providers`: the content providers a crate ships, which Android
+//! starts only when the manifest declares them.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{self, Display, Formatter};
@@ -34,14 +36,16 @@ use crate::build::BuiltPackage;
 use crate::build::error::{BuildError, BuildResult};
 use linked::{Edges, LinkedBuild, LinkedCrates};
 pub(crate) use opening::{AssociatedDomain, FileType, UrlScheme};
+use provider::{AndroidProvider, AuthoritySuffix, JavaClassName};
 
 pub(crate) mod capability;
 mod linked;
 pub(crate) mod opening;
+mod provider;
 pub(crate) mod verify;
 
 /// The newest `schema` this CLI reads.
-pub(crate) const SCHEMA: u32 = 3;
+pub(crate) const SCHEMA: u32 = 4;
 
 /// The key under `[package.metadata.flui]` that holds a crate's
 /// declarations.
@@ -163,6 +167,17 @@ enum CrateRole {
     Dependency,
 }
 
+/// Whether `name` is two or more `.`-separated labels, each an ASCII Java
+/// identifier (letters, digits and `_`, not led by a digit): the grammar of
+/// an Android permission name and of a Java binary class name.
+fn is_dotted_java_name(name: &str) -> bool {
+    name.split('.').count() >= 2
+        && name.split('.').all(|label| {
+            label.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
+                && label.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+        })
+}
+
 /// An Android permission a crate needs, such as
 /// `android.permission.INTERNET`: two or more `.`-separated labels, each an
 /// ASCII Java identifier.
@@ -178,13 +193,7 @@ impl AndroidPermission {
     /// Why `name` is not a permission name.
     pub(crate) fn try_new(name: impl Into<String>) -> Result<Self, String> {
         let name = name.into();
-        let mut labels = name.split('.');
-        let well_formed = name.split('.').count() >= 2
-            && labels.all(|label| {
-                label.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
-                    && label.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
-            });
-        if well_formed {
+        if is_dotted_java_name(&name) {
             Ok(Self(name))
         } else {
             Err(format!(
@@ -419,6 +428,10 @@ struct AndroidPart {
     /// (schema 2), which a minified Gradle release applies.
     #[serde(default)]
     proguard: Option<CratePath>,
+    /// Each content provider the crate ships (schema 4), which the manifest
+    /// declares inside `<application>`.
+    #[serde(default)]
+    providers: Vec<AndroidProvider>,
 }
 
 /// A path inside a crate's directory, as its declarations name it:
@@ -474,6 +487,14 @@ impl Display for CratePath {
     }
 }
 
+/// A content provider of the joined declarations: its class and the crates
+/// that declare it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DeclaredProvider {
+    class: JavaClassName,
+    crates: BTreeSet<String>,
+}
+
 /// Every declaration of the crates an application links, joined, with the
 /// crates that ask for each.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -486,6 +507,8 @@ pub(crate) struct Declarations {
     android_java: BTreeSet<(String, PathBuf)>,
     /// Each R8 rules file, by crate and then path.
     android_proguard: BTreeSet<(String, PathBuf)>,
+    /// Each content provider, by the suffix of its authority.
+    android_providers: BTreeMap<AuthoritySuffix, DeclaredProvider>,
     apple_accessed_apis: BTreeMap<PrivacyCategory, BTreeMap<PrivacyReason, BTreeSet<String>>>,
     url_schemes: BTreeMap<UrlScheme, BTreeSet<String>>,
     associated_domains: BTreeMap<AssociatedDomain, BTreeSet<String>>,
@@ -847,6 +870,7 @@ impl Declarations {
                 .or_default()
                 .insert(crate_name.to_owned());
         }
+        self.add_android_providers(crate_name, schema, &android.providers)?;
         let refused = |reason: String| {
             BuildError::invalid_config(
                 format!("{crate_name}'s [package.metadata.flui.{KEY}]"),
@@ -892,6 +916,89 @@ impl Declarations {
         Ok(())
     }
 
+    /// Add the content providers `crate_name`'s table, which states
+    /// `schema`, declares.
+    fn add_android_providers(
+        &mut self,
+        crate_name: &str,
+        schema: u32,
+        providers: &[AndroidProvider],
+    ) -> BuildResult<()> {
+        if providers.is_empty() {
+            return Ok(());
+        }
+        let refused = |reason: String| {
+            BuildError::invalid_config(
+                format!("{crate_name}'s [package.metadata.flui.{KEY}]"),
+                reason,
+            )
+        };
+        if schema < 4 {
+            return Err(refused(
+                "declares android.providers, which schema 4 introduced; state `schema = 4`"
+                    .to_owned(),
+            ));
+        }
+        for provider in providers {
+            self.add_android_provider(
+                provider.authority.clone(),
+                provider.class.clone(),
+                [crate_name.to_owned()],
+            )
+            .map_err(refused)?;
+        }
+        Ok(())
+    }
+
+    /// Add the provider `class` under the authority suffix `authority`,
+    /// declared by `crates`. Android registers one provider per authority
+    /// and the manifest merger one element per class, so a suffix another
+    /// class holds, or a class another suffix holds, is refused; the same
+    /// pair again joins its declarers.
+    ///
+    /// # Errors
+    ///
+    /// Why the provider is refused, naming the suffix, both classes or both
+    /// suffixes, and the crates that declared the one already held.
+    fn add_android_provider(
+        &mut self,
+        authority: AuthoritySuffix,
+        class: JavaClassName,
+        crates: impl IntoIterator<Item = String>,
+    ) -> Result<(), String> {
+        let named =
+            |crates: &BTreeSet<String>| crates.iter().cloned().collect::<Vec<_>>().join(", ");
+        if let Some(held) = self.android_providers.get(&authority)
+            && held.class != class
+        {
+            return Err(format!(
+                "declares {class} as the provider of `{authority}`, and {} declares {} as it",
+                named(&held.crates),
+                held.class
+            ));
+        }
+        if let Some((other, held)) = self
+            .android_providers
+            .iter()
+            .find(|(other, held)| held.class == class && **other != authority)
+        {
+            return Err(format!(
+                "declares {class} as the provider of `{authority}`, and {} declares it as the \
+                 provider of `{other}`: one class is one provider",
+                named(&held.crates)
+            ));
+        }
+        self.android_providers
+            .entry(authority)
+            .or_insert_with(|| DeclaredProvider {
+                class,
+                crates: BTreeSet::new(),
+            })
+            .crates
+            .extend(crates);
+        Ok(())
+    }
+
     /// Add what `other`, the declarations of another target's build (or of
     /// another manifest's crates), says.
     ///
@@ -914,6 +1021,21 @@ impl Declarations {
                 .entry(permission)
                 .or_default()
                 .extend(crates);
+        }
+        for (authority, provider) in other.android_providers {
+            let declarers = provider
+                .crates
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", ");
+            self.add_android_provider(authority, provider.class, provider.crates)
+                .map_err(|reason| {
+                    BuildError::invalid_config(
+                        format!("{declarers}'s [package.metadata.flui.{KEY}]"),
+                        format!("{reason}, for another target of the build"),
+                    )
+                })?;
         }
         self.android_dex.extend(other.android_dex);
         self.android_java.extend(other.android_java);
@@ -941,7 +1063,8 @@ impl Declarations {
 
     /// What one crate's `[package.metadata.flui.declares]`, given as TOML,
     /// declares of the parts no crate directory resolves: what the
-    /// application opens and its accessed APIs. The crate is the application.
+    /// application opens, its accessed APIs and its Android content
+    /// providers. The crate is the application.
     #[cfg(test)]
     pub(crate) fn of_table(crate_name: &str, table: &str) -> Self {
         Self::of_table_as(crate_name, CrateRole::Application, table)
@@ -969,6 +1092,9 @@ impl Declarations {
                 Opening::of_declares(&declares),
             )
             .expect("BUG: a test's opened types are well formed");
+        declarations
+            .add_android_providers(crate_name, declares.schema, &declares.android.providers)
+            .expect("BUG: a test's providers are well formed");
         declarations
     }
 
@@ -1074,6 +1200,16 @@ impl Declarations {
             .map(|(crate_name, path)| (crate_name.as_str(), path.as_path()))
     }
 
+    /// Every Android content provider declared, in order of its authority
+    /// suffix, with its class and the crates that declare it.
+    pub(crate) fn android_providers(
+        &self,
+    ) -> impl Iterator<Item = (&AuthoritySuffix, &JavaClassName, &BTreeSet<String>)> {
+        self.android_providers
+            .iter()
+            .map(|(authority, provider)| (authority, &provider.class, &provider.crates))
+    }
+
     /// Every required-reason API category declared, in order, with each of
     /// its reasons and the crates that give it.
     pub(crate) fn apple_accessed_apis(
@@ -1087,6 +1223,7 @@ impl Declarations {
 
 #[cfg(test)]
 mod tests {
+    use std::fmt::Write as _;
     use std::path::Path;
 
     use super::{AndroidPermission, Build, Declarations, PrivacyReason, Selection};
@@ -1119,6 +1256,37 @@ mod tests {
                 )
             })
             .collect()
+    }
+
+    /// Each provider as (authority suffix, class, declaring crates).
+    fn providers(declarations: &Declarations) -> Vec<(String, String, Vec<String>)> {
+        declarations
+            .android_providers()
+            .map(|(authority, class, crates)| {
+                (
+                    authority.to_string(),
+                    class.to_string(),
+                    crates.iter().cloned().collect(),
+                )
+            })
+            .collect()
+    }
+
+    /// The entries of a crate's manifest that declare each
+    /// `(class, authority)` of `declared` as a provider under `table` of its
+    /// `[package.metadata.flui.declares]`, such as `android` or
+    /// `features.extra.android`.
+    fn provider_entries(table: &str, declared: &[(&str, &str)]) -> String {
+        let mut entries = String::new();
+        for (class, authority) in declared {
+            writeln!(
+                entries,
+                "[[package.metadata.flui.declares.{table}.providers]]\nclass = \"{class}\"\n\
+                 authority = \"{authority}\""
+            )
+            .expect("BUG: writing to a String cannot fail");
+        }
+        entries
     }
 
     type Reasons = Vec<(String, Vec<String>)>;
@@ -1957,12 +2125,151 @@ mod tests {
         );
     }
 
+    /// A content provider joins by its authority suffix: a feature's counts
+    /// only while the build enables the feature, and one (class, suffix)
+    /// pair declared by a crate and its feature, or by two crates, is one
+    /// provider with every declarer.
+    #[test]
+    fn a_provider_is_joined_by_its_authority() {
+        let header = "[package.metadata.flui.declares]\nschema = 4\n";
+        let documents = ("dev.docs.Documents", "docs.files");
+        let project = fixture(&[
+            (
+                "app",
+                &manifest(
+                    "app",
+                    "[workspace]\n[features]\nextra = [\"docs/extra\"]\n\
+                     [dependencies]\ndocs = { path = \"../docs\" }\n\
+                     mirror = { path = \"../mirror\" }\n",
+                ),
+            ),
+            (
+                "docs",
+                &manifest(
+                    "docs",
+                    &format!(
+                        "[features]\nextra = []\n{header}{}{}",
+                        provider_entries("android", &[documents]),
+                        provider_entries(
+                            "features.extra.android",
+                            &[documents, ("dev.docs.Extra", "docs.extra")]
+                        ),
+                    ),
+                ),
+            ),
+            (
+                "mirror",
+                &manifest(
+                    "mirror",
+                    &format!("{header}{}", provider_entries("android", &[documents])),
+                ),
+            ),
+        ]);
+        let app = project.path().join("app");
+        let target = ["aarch64-linux-android"];
+        let files = (
+            "docs.files".to_owned(),
+            "dev.docs.Documents".to_owned(),
+            vec!["docs".to_owned(), "mirror".to_owned()],
+        );
+        let defaults = Declarations::collect(Build::at(&app), &target).expect("declarations");
+        assert_eq!(providers(&defaults), std::slice::from_ref(&files));
+        let extra = Declarations::collect(Build::at(&app).features(&["extra".to_owned()]), &target)
+            .expect("declarations");
+        assert_eq!(
+            providers(&extra),
+            [
+                (
+                    "docs.extra".to_owned(),
+                    "dev.docs.Extra".to_owned(),
+                    vec!["docs".to_owned()]
+                ),
+                files,
+            ]
+        );
+    }
+
+    /// Android registers one provider per authority and the manifest merger
+    /// one element per class: two crates giving one suffix two classes, or
+    /// one class two suffixes, are refused naming both crates, as are two
+    /// targets of one build that disagree.
+    #[test]
+    fn a_provider_authority_has_one_class() {
+        let header = "[package.metadata.flui.declares]\nschema = 4\n";
+        for (beta, expected) in [
+            (
+                ("dev.beta.Shared", "shared"),
+                "beta's [package.metadata.flui.declares]': declares dev.beta.Shared as the \
+                 provider of `shared`, and alpha declares dev.alpha.Shared as it",
+            ),
+            (
+                ("dev.alpha.Shared", "other"),
+                "beta's [package.metadata.flui.declares]': declares dev.alpha.Shared as the \
+                 provider of `other`, and alpha declares it as the provider of `shared`",
+            ),
+        ] {
+            let project = fixture(&[
+                (
+                    "app",
+                    &manifest(
+                        "app",
+                        "[workspace]\n[dependencies]\nalpha = { path = \"../alpha\" }\n\
+                         beta = { path = \"../beta\" }\n",
+                    ),
+                ),
+                (
+                    "alpha",
+                    &manifest(
+                        "alpha",
+                        &format!(
+                            "{header}{}",
+                            provider_entries("android", &[("dev.alpha.Shared", "shared")])
+                        ),
+                    ),
+                ),
+                (
+                    "beta",
+                    &manifest(
+                        "beta",
+                        &format!("{header}{}", provider_entries("android", &[beta])),
+                    ),
+                ),
+            ]);
+            let refused = collect(&project.path().join("app"), "aarch64-linux-android")
+                .expect_err("one authority, two classes");
+            assert!(refused.contains(expected), "{refused}");
+        }
+
+        let provider = |crate_name: &str, class: &str| {
+            Declarations::of_dependency_table(
+                crate_name,
+                &format!(
+                    "schema = 4\n[[android.providers]]\nclass = \"{class}\"\n\
+                     authority = \"shared\"\n"
+                ),
+            )
+        };
+        let mut joined = provider("alpha", "dev.alpha.Shared");
+        let refused = joined
+            .join(provider("beta", "dev.beta.Shared"))
+            .expect_err("two classes for `shared`");
+        assert!(
+            refused.to_string().contains(
+                "beta's [package.metadata.flui.declares]': declares dev.beta.Shared as the \
+                 provider of `shared`, and alpha declares dev.alpha.Shared as it, for another \
+                 target of the build"
+            ),
+            "{refused}"
+        );
+    }
+
     /// A malformed table is refused naming the crate and what is wrong: an
     /// unknown key, a missing or newer schema, a key newer than the schema
     /// the crate states, a path outside the crate or naming nothing, a feature
     /// the crate does not have, a permission that is not a name, a
     /// required-reason category Apple does not define, an accessed API without
-    /// a reason or with a malformed one.
+    /// a reason or with a malformed one, a provider whose class is not a Java
+    /// class name or whose authority suffix is malformed or too long.
     #[test]
     fn a_malformed_declaration_is_refused_by_crate() {
         let cases = [
@@ -1978,7 +2285,10 @@ mod tests {
                 "[package.metadata.flui.declares.android]\npermissions = [\"a.B\"]\n",
                 "missing field `schema`",
             ),
-            ("schema = 4\n", "states schema 4"),
+            (
+                "schema = 5\n",
+                "states schema 5, and this flui-cli reads schema 1 to 4",
+            ),
             (
                 "schema = 2\nurl-schemes = [\"notes\"]\n",
                 "which schema 3 introduced",
@@ -2056,8 +2366,47 @@ mod tests {
                 "unknown field `accessed_apis`",
             ),
         ];
+        // A provider, each value a TOML literal string so that it may hold `"`.
+        let provider = |schema: u32, class: &str, authority: &str| {
+            format!(
+                "schema = {schema}\n[[package.metadata.flui.declares.android.providers]]\n\
+                 class = '{class}'\nauthority = '{authority}'\n"
+            )
+        };
+        const CLASS: &str = "dev.flui.system.FluiDocuments";
+        const NOT_A_CLASS: &str = "is not a Java class name";
+        const NOT_A_SUFFIX: &str = "is not a provider authority suffix";
+        let over_long = format!("a{}", "0".repeat(64));
+        let provider_cases = [
+            (
+                provider(3, CLASS, "flui.documents"),
+                "declares android.providers, which schema 4 introduced; state `schema = 4`",
+            ),
+            (
+                format!("{}exported = true\n", provider(4, CLASS, "flui.documents")),
+                "unknown field `exported`",
+            ),
+            (provider(4, "FluiDocuments", "flui.documents"), NOT_A_CLASS),
+            (provider(4, "dev..x", "flui.documents"), NOT_A_CLASS),
+            (
+                provider(4, "dev.flui.Flui Documents", "flui.documents"),
+                NOT_A_CLASS,
+            ),
+            (provider(4, "dev.flui.\"x", "flui.documents"), NOT_A_CLASS),
+            (provider(4, CLASS, ""), NOT_A_SUFFIX),
+            (provider(4, CLASS, "Flui.documents"), NOT_A_SUFFIX),
+            (provider(4, CLASS, "flui..documents"), NOT_A_SUFFIX),
+            (provider(4, CLASS, "1flui"), NOT_A_SUFFIX),
+            (provider(4, CLASS, "flui\".documents"), NOT_A_SUFFIX),
+            (provider(4, CLASS, "flui/documents"), NOT_A_SUFFIX),
+            (provider(4, CLASS, &over_long), NOT_A_SUFFIX),
+        ];
         let mut failures = Vec::new();
-        for (table, expected) in cases {
+        for (table, expected) in cases
+            .into_iter()
+            .map(|(table, expected)| (table.to_owned(), expected))
+            .chain(provider_cases)
+        {
             let project = fixture(&[(
                 "lib",
                 &manifest(

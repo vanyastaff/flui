@@ -80,7 +80,7 @@ permissions = ["android.permission.VIBRATE"]
 permissions = ["android.permission.INTERNET"]
 ```
 
-### 2. Version 1, strict, keys with their first consumer
+### 2. Versioned, strict, keys with their first consumer
 
 - `schema` is required. A value the CLI does not read is refused with the crate's name and "update
   flui-cli"; a key the CLI does not know is refused with the crate's name and the key. The reader's
@@ -148,6 +148,28 @@ mime = "application/x-notes-note"
 name = "Note"
 ```
 
+- Version 4 adds `android.providers`, at the top and under `features.<feature>.android`: the
+  content providers a crate ships, each a `class` (two or more dot-separated ASCII Java
+  identifiers, the grammar of a permission) and an `authority`, the suffix of the authority it
+  serves under (one or more dot-separated parts of lower-case ASCII letters and digits, each
+  starting with a letter, at most 64 bytes). The authority Android registers is the application's
+  Android package (the `applicationId`), a `.` and the suffix, so two applications on one device
+  never claim one. The element is always `android:exported="false"` with
+  `android:grantUriPermissions="true"`: a declared provider serves only the URIs its crate grants
+  per intent, and neither attribute has a key. Two crates that give one suffix two classes, or one
+  class two suffixes, are refused by name, since Android registers one provider per authority and
+  the manifest merger one element per class; one pair declared twice joins. Without the element
+  Android never starts the provider, so a crate that uses the key states `schema = 4`.
+
+```toml
+[package.metadata.flui.declares]
+schema = 4
+
+[[package.metadata.flui.declares.android.providers]]
+class = "dev.flui.system.FluiDocuments"
+authority = "flui.documents"
+```
+
 - A key arrives with the first crate that needs it. A key an older CLI could safely ignore needs no
   new version; one whose absence would build a wrong app raises `schema`.
 - `features.<name>` must name a feature of the crate.
@@ -196,6 +218,10 @@ each entry (`flui build -v` names them).
   for the `https` links of the associated domains, a `<data android:host>` each, which Android
   verifies against each domain's `/.well-known/assetlinks.json`; and one `VIEW` filter with a
   `<data android:mimeType>` per file type.
+  Each declared content provider (`android.providers`) is a `<provider>` inside `<application>`,
+  after `FluiActivity`, with its class, the authority `<application id>.<suffix>`,
+  `android:exported="false"` and `android:grantUriPermissions="true"`; `flui build -v` names the
+  crates that declare it. Both packagers read it from the generated file unchanged.
 - **Apple, what the application opens.** Both bundles' `Info.plist`, the iOS packager's and the
   macOS `.app`'s, take the same keys from one function (`build::apple_opening`): `CFBundleURLTypes`
   with the URL schemes, and per file type a uniform type the bundle exports as
@@ -250,7 +276,9 @@ each entry (`flui build -v` names them).
   opens is checked in both: an Android `VIEW` filter's `mimeType`, a `BROWSABLE` one's schemes and
   a verified one's `https` hosts, an `Info.plist`'s `CFBundleURLTypes` schemes and the extensions of
   the types its `CFBundleDocumentTypes` list; the associated domains of an Apple bundle are an
-  entitlement the property list does not carry.
+  entitlement the property list does not carry. A declared content provider counts when a
+  `<provider>` of its class inside `<application>` lists an authority ending in `.<suffix>`, so a
+  literal package and Gradle's `${applicationId}` both count.
 - **The files on an associated domain.** `apple-app-site-association` and `assetlinks.json` live
   with the domain's owner, so the CLI does not write them. `flui doctor --domains` fetches them,
   which is the only network the command touches and why it runs only when asked: for each domain
@@ -384,6 +412,20 @@ a key arrives with its first consumer.
   (flui-macros), `runner_open::the_entry_functions_manifest_declares_what_a_run_opens` (flui-app)
   and `cli_create::generated_basic_project_compiles` (an entry whose manifest and feature declare
   links compiles with the feature off and on).
+- Content providers: `declarations::provider::tests::a_provider_names_a_java_class_and_an_authority_suffix`
+  (class names and suffixes, the 64-byte bound, the authority under a package);
+  `declarations::tests::a_provider_is_joined_by_its_authority` (a feature's provider only while it
+  is on, one pair from a crate and its feature or from two crates joined with both declarers);
+  `declarations::tests::a_provider_authority_has_one_class` (one suffix with two classes, one
+  class with two suffixes, two targets that disagree, each refused naming both crates); the
+  malformed cases include `android.providers` under `schema = 3`, an unknown provider key, and
+  classes and suffixes that are malformed, hold `"` or `/`, or exceed 64 bytes;
+  `android_manifest::tests::the_application_declares_the_providers_its_crates_ship` (the element
+  after `</activity>` under `com.example.notes.flui.documents`, none without a declaration);
+  `android_manifest::tests::the_doctor_finds_what_the_manifest_carries` (a provider under
+  `${applicationId}` counts, one removed by the merger, of another class or another suffix does
+  not); `android_package::tests::the_linked_manifest_maps_the_libraries_from_the_archive` (the
+  provider reaches `aapt2` as written).
 
 ## Pros and cons of the options
 
@@ -420,6 +462,8 @@ a key arrives with its first consumer.
 5. Done: version 2, `android.dex`, `android.java` and `android.proguard`, declared by `flui-native`
    for `FluiActivity`,
    `FluiHost` and `FluiView` (ADR-0255 decisions 1 and 4).
+6. Done: version 4, `android.providers`, declared by `flui-system` for
+   `dev.flui.system.FluiDocuments` under `flui.documents`.
 
 ## More information
 
