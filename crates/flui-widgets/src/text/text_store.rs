@@ -61,7 +61,8 @@ use flui_interaction::text_input::{
 use flui_objects::{RenderEditable, SubtreeAnchor};
 use flui_painting::text_boundaries::graphemes;
 use flui_platform::text_store::{
-    CommitGate, Composition, LockGrant, LockOutcome, LockTiming, OwnerCalls, PointMode, RangeRect,
+    CommitGate, Composition, EditCommand, LockGrant, LockOutcome, LockTiming, OwnerCalls,
+    PointMode, RangeRect,
     Selection, TextChange, TextInputOptions, TextStore, TextStoreChange, TextStoreEdit,
     TextStoreError, TextStoreObserver, TextStoreRead, TextStoreStatus, Utf16Offset, Utf16Range,
     utf16,
@@ -69,7 +70,7 @@ use flui_platform::text_store::{
 use flui_rendering::pipeline::PipelineCell;
 
 use super::controller::{self, ComposingState, SessionWrite, TextEditingController};
-use super::editable_text::{EditObserver, TextChanged, bounds_from_rect, obscure};
+use super::editable_text::{EditObserver, FieldCommands, TextChanged, bounds_from_rect, obscure};
 
 /// The committed `RenderEditable` under `inner_anchor` and its transform to
 /// the render root, handed to `f`; `None` when the field is not mounted or
@@ -248,6 +249,8 @@ pub(super) struct EditableTextStore {
     text_input: Rc<Cell<TextInputOptions>>,
     obscuring_character: Rc<Cell<char>>,
     edits: EditObserver,
+    /// What a platform's edit menu asks of the field.
+    commands: FieldCommands,
 }
 
 impl Drop for EditableTextStore {
@@ -285,6 +288,7 @@ pub(super) struct FieldParts {
     pub(super) text_input: Rc<Cell<TextInputOptions>>,
     pub(super) obscuring_character: Rc<Cell<char>>,
     pub(super) edits: EditObserver,
+    pub(super) commands: FieldCommands,
 }
 
 impl EditableTextStore {
@@ -309,6 +313,7 @@ impl EditableTextStore {
             text_input: parts.text_input,
             obscuring_character: parts.obscuring_character,
             edits: parts.edits,
+            commands: parts.commands,
         })
     }
 
@@ -878,6 +883,27 @@ impl TextStore for EditableTextStore {
 
     fn screen_moved(&self) {
         self.layout_changed();
+    }
+
+    /// The field's own copy, cut, paste and select-all rules decide; a
+    /// disposed field or one inside a lock performs nothing.
+    fn edit_command_enabled(&self, command: EditCommand) -> bool {
+        self.alive.get()
+            && matches!(*self.publication.borrow(), Publication::Idle)
+            && self.commands.is_enabled(command)
+    }
+
+    /// The edit reaches the observer at once, as a key edit does: a select
+    /// all, a cut the clipboard answered at once. A paste or a cut answered
+    /// later reaches it at the next lock request or frame, as any other
+    /// application edit.
+    fn perform_edit_command(&self, command: EditCommand) -> bool {
+        if !self.edit_command_enabled(command) {
+            return false;
+        }
+        let performed = self.commands.perform(command);
+        self.controller_changed();
+        performed
     }
 }
 

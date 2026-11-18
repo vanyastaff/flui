@@ -35,9 +35,11 @@ use flui_foundation::panic::FirstPanic;
 use flui_platform::text_store::utf16::{Utf16Offset, Utf16Range};
 use flui_platform::text_store::{
     Composition, CompositionEnd, LockGrant, LockTiming, OwnerCalls, PointMode, Selection,
-    TextChange, TextStore, TextStoreChange, TextStoreEdit, TextStoreHost, TextStoreHostError,
-    TextStoreObserver, TextStoreRead, TextStoreStatus,
+    SelectionUi, TextChange, TextStore, TextStoreChange, TextStoreEdit, TextStoreHost,
+    TextStoreHostError, TextStoreObserver, TextStoreRead, TextStoreStatus,
 };
+#[cfg(any(target_os = "ios", test))]
+use flui_platform::text_store::EditCommand;
 
 use crate::owner::panic_boundary::contain_owner_callback;
 use crate::text::host_queue::{HostQueue, MirrorHostOp};
@@ -127,6 +129,9 @@ pub(crate) struct TextClient {
     /// The requests made while the client is inside a call into a store.
     queue: HostQueue<MirrorHostOp>,
     retired: Cell<bool>,
+    /// Who draws the selection UI of the fields this client serves: UIKit's
+    /// text interaction on iOS, the field on macOS.
+    selection_ui: SelectionUi,
     this: Weak<Self>,
 }
 
@@ -242,7 +247,20 @@ fn selection_in(change: TextChange, selected: Utf16Range) -> Selection {
 }
 
 impl TextClient {
+    /// AppKit's client: the field draws its own selection UI.
     pub(crate) fn new() -> Rc<Self> {
+        Self::with_selection_ui(SelectionUi::Field)
+    }
+
+    /// UIKit's client: the responder's `UITextInteraction` draws the served
+    /// field's selection UI, and its edit menu reaches the field as edit
+    /// commands.
+    #[cfg(any(target_os = "ios", test))]
+    pub(crate) fn for_uikit() -> Rc<Self> {
+        Self::with_selection_ui(SelectionUi::Platform)
+    }
+
+    fn with_selection_ui(selection_ui: SelectionUi) -> Rc<Self> {
         Rc::new_cyclic(|this| Self {
             focused: RefCell::new(None),
             context: RefCell::new(None),
@@ -250,6 +268,7 @@ impl TextClient {
             marked: Cell::new(false),
             queue: HostQueue::new(),
             retired: Cell::new(false),
+            selection_ui,
             this: this.clone(),
         })
     }
@@ -793,6 +812,44 @@ impl TextClient {
             .flatten()
     }
 
+    /// `canPerformAction:withSender:` for an edit-menu item: whether the
+    /// focused field would perform `command` now; `false` without one.
+    #[cfg(any(target_os = "ios", test))]
+    pub(crate) fn edit_command_enabled(&self, command: EditCommand) -> bool {
+        self.call_focused(|store| store.edit_command_enabled(command))
+    }
+
+    /// `cut:`, `copy:`, `paste:` and `selectAll:` from the edit menu: the
+    /// focused field performs `command` as its own menu would, as a call
+    /// into its store, so a host operation its code asks for (a paste ending
+    /// the composition, a focus move) waits for it to return. Whether the
+    /// field took it; `false` without one.
+    #[cfg(any(target_os = "ios", test))]
+    pub(crate) fn perform_edit_command(&self, command: EditCommand) -> bool {
+        self.call_focused(|store| store.perform_edit_command(command))
+    }
+
+    /// Run `call` on the focused store as a call into it, with no borrow
+    /// held; `false` when no field has focus or the call panicked, whose
+    /// failure is resumed once the requests it queued have run.
+    #[cfg(any(target_os = "ios", test))]
+    fn call_focused(&self, call: impl FnOnce(&dyn TextStore) -> bool) -> bool {
+        let Some(store) = self.focused() else {
+            return false;
+        };
+        let mut failure = FirstPanic::new();
+        let answer = failure
+            .contain(|| {
+                let _entered = self.queue.enter();
+                call(&*store)
+            })
+            .unwrap_or(false);
+        self.drain_after(&mut failure);
+        failure.contain(|| drop(store));
+        failure.resume();
+        answer
+    }
+
     /// The scalar under a point in the focused field.
     #[cfg(any(target_os = "ios", test))]
     pub(crate) fn character_range_at_point(&self, point: Point<f64>) -> Option<Utf16Range> {
@@ -908,6 +965,10 @@ impl TextStoreHost for TextClient {
     /// first responder, which the focused field's responder stays while it
     /// has the input.
     fn show_keyboard(&self, _: &Rc<dyn TextStore>) {}
+
+    fn selection_ui(&self) -> SelectionUi {
+        self.selection_ui
+    }
 }
 
 /// What the focused store tells the client when the application changes the

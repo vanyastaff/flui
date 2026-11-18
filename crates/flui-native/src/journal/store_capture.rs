@@ -22,8 +22,9 @@ use flui_foundation::IdMint;
 use flui_foundation::geometry::{Bounds, Point};
 use flui_foundation::panic::FirstPanic;
 use flui_platform::text_store::{
-    CommitGate, Composition, CompositionEnd, LockGrant, LockKind, LockOutcome, LockTiming,
-    OwnerCalls, PointMode, RangeRect, Selection, TextChange, TextStore, TextStoreChange,
+    CommitGate, Composition, CompositionEnd, EditCommand, LockGrant, LockKind, LockOutcome,
+    LockTiming, OwnerCalls, PointMode, RangeRect, Selection, SelectionUi, TextChange, TextStore,
+    TextStoreChange,
     TextStoreEdit, TextStoreError, TextStoreHost, TextStoreHostError, TextStoreObserver,
     TextStoreRead, TextStoreStatus, Utf16Offset, Utf16Range,
 };
@@ -177,6 +178,10 @@ impl TextStoreHost for JournaledHost {
         };
         self.inner.show_keyboard(&served);
     }
+
+    fn selection_ui(&self) -> SelectionUi {
+        self.inner.selection_ui()
+    }
 }
 
 /// What the recording holds of a journaled store's document.
@@ -304,6 +309,16 @@ impl TextStore for JournaledStore {
 
     fn screen_moved(&self) {
         self.inner.screen_moved();
+    }
+
+    /// Unrecorded: an edit command's effect on the document reaches the
+    /// recording as the application edit it is.
+    fn edit_command_enabled(&self, command: EditCommand) -> bool {
+        self.inner.edit_command_enabled(command)
+    }
+
+    fn perform_edit_command(&self, command: EditCommand) -> bool {
+        self.inner.perform_edit_command(command)
     }
 }
 

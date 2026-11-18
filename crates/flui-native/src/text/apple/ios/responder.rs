@@ -26,11 +26,11 @@ use flui_foundation::TextDirection;
 use flui_foundation::geometry::{Bounds, Point};
 use flui_platform::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, NamedKey};
 use flui_platform::text_store::utf16::{Utf16Offset, Utf16Range};
-use flui_platform::text_store::{Autofill, TextStoreStatus};
+use flui_platform::text_store::{Autofill, EditCommand, TextStoreStatus};
 use flui_platform::{EventTime, PlatformInput};
 use objc2::rc::{Retained, Weak as ObjcWeak};
-use objc2::runtime::ProtocolObject;
-use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send};
+use objc2::runtime::{AnyObject, ProtocolObject, Sel};
+use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send, sel};
 
 use objc2_foundation::{
     NSArray, NSAttributedStringKey, NSComparisonResult, NSDictionary, NSInteger, NSObject,
@@ -55,10 +55,12 @@ use crate::owner::window_delivery::WindowDelivery;
 /// What the target of the keyboard's log lines is.
 const LOG: &str = "flui.text.ios";
 
-/// How far around the focused field, in points, UIKit's selection gestures
-/// still begin: half of the 44-point touch target Apple's Human Interface
-/// Guidelines ask for, so a touch on a selection handle's knob, which UIKit
-/// draws just outside the line it ends, still reaches the handle.
+/// How far around the edge a selection handle stands on, in points, UIKit's
+/// selection gestures still begin: half of the 44-point touch target Apple's
+/// Human Interface Guidelines ask for, so a touch on the handle's knob, which
+/// UIKit draws past the line it ends and may lie outside the field's box,
+/// still reaches the handle. Only around the handles: a band around the whole
+/// field would take a tap on a control beside it.
 const HANDLE_REACH: f64 = 22.0;
 
 define_class!(
@@ -229,6 +231,49 @@ define_class!(
         #[unsafe(method(canBecomeFirstResponder))]
         fn can_become_first_responder(&self) -> bool {
             true
+        }
+
+        /// The edit menu's Cut, Copy, Paste and Select All, offered when the
+        /// focused field would perform them; any other action is UIKit's to
+        /// answer.
+        #[unsafe(method(canPerformAction:withSender:))]
+        fn can_perform_action(&self, action: Sel, sender: Option<&AnyObject>) -> bool {
+            os_entry("FluiTextInputView canPerformAction:withSender:", (), AfterPanic::Answer(|()| false), || {
+                match edit_command(action) {
+                    Some(command) => self.client().edit_command_enabled(command),
+                    // SAFETY: UIResponder's `canPerformAction:withSender:`,
+                    // with the selector and sender UIKit passed.
+                    None => unsafe { msg_send![super(self), canPerformAction: action, withSender: sender] },
+                }
+            })
+        }
+
+        #[unsafe(method(cut:))]
+        fn cut(&self, _sender: Option<&AnyObject>) {
+            os_entry("FluiTextInputView cut:", (), AfterPanic::Answer(|()| ()), || {
+                self.client().perform_edit_command(EditCommand::Cut);
+            });
+        }
+
+        #[unsafe(method(copy:))]
+        fn copy(&self, _sender: Option<&AnyObject>) {
+            os_entry("FluiTextInputView copy:", (), AfterPanic::Answer(|()| ()), || {
+                self.client().perform_edit_command(EditCommand::Copy);
+            });
+        }
+
+        #[unsafe(method(paste:))]
+        fn paste(&self, _sender: Option<&AnyObject>) {
+            os_entry("FluiTextInputView paste:", (), AfterPanic::Answer(|()| ()), || {
+                self.client().perform_edit_command(EditCommand::Paste);
+            });
+        }
+
+        #[unsafe(method(selectAll:))]
+        fn select_all(&self, _sender: Option<&AnyObject>) {
+            os_entry("FluiTextInputView selectAll:", (), AfterPanic::Answer(|()| ()), || {
+                self.client().perform_edit_command(EditCommand::SelectAll);
+            });
         }
     }
 
@@ -629,15 +674,14 @@ define_class!(
     // this protocol and runs on the main thread, where UIKit calls it.
     unsafe impl UITextInteractionDelegate for TextInputView {
         /// The interaction sits on the window's view, so its gestures begin
-        /// only over the focused field, and as far around it as a selection
-        /// handle reaches: anywhere else the touch is the application's.
-        /// `point` is in the window's view, whose coordinates the store's are.
+        /// only over the focused field and on its selection's handles:
+        /// anywhere else, a control beside the field included, the touch is
+        /// the application's. `point` is in the window's view, whose
+        /// coordinates the store's are.
         #[unsafe(method(interactionShouldBegin:atPoint:))]
         fn interaction_should_begin(&self, _interaction: &UITextInteraction, point: CGPoint) -> bool {
             os_entry("FluiTextInputView interactionShouldBegin:atPoint:", (), AfterPanic::Answer(|()| false), || {
-                self.client().document_bounds().is_some_and(|field| {
-                    field.dilate(HANDLE_REACH).contains(&Point::new(point.x, point.y))
-                })
+                self.begins_at(Point::new(point.x, point.y))
             })
         }
     }
@@ -647,7 +691,7 @@ impl TextInputView {
     /// A responder serving the field the window's store host focuses, which
     /// tells `delivery`'s window the Return and Backspace presses.
     pub(super) fn new(mtm: MainThreadMarker, delivery: Weak<WindowDelivery>) -> Retained<Self> {
-        let client = TextClient::new();
+        let client = TextClient::for_uikit();
         let this = Self::alloc(mtm).set_ivars(ContainedIvars::new(ResponderIvars {
             client: Rc::clone(&client),
             delivery,
@@ -773,6 +817,25 @@ impl TextInputView {
         }
     }
 
+    /// Whether UIKit's selection gestures begin at `point`: inside the
+    /// focused field's box, or within a handle's reach of the edge a
+    /// selection handle stands on, whose knob UIKit draws past the line.
+    fn begins_at(&self, point: Point<f64>) -> bool {
+        let client = self.client();
+        if client
+            .document_bounds()
+            .is_some_and(|field| field.contains(&point))
+        {
+            return true;
+        }
+        let Some(selection) = client.selected_range().filter(|range| !range.is_empty()) else {
+            return false;
+        };
+        let rects = client.selection_rects(selection);
+        SelectionRect::handle_edges(&rects)
+            .any(|edge| edge.dilate(HANDLE_REACH).contains(&point))
+    }
+
     /// Put UIKit's text interaction on the window's view, the view the
     /// touches land on, unless it is there already: the view's own frame is
     /// empty, so no touch would reach a gesture on it.
@@ -892,6 +955,19 @@ fn cg_rect(bounds: Bounds<f64>) -> CGRect {
         CGPoint::new(origin.x, origin.y),
         CGSize::new(size.width, size.height),
     )
+}
+
+/// The edit command an edit-menu action asks the field for; `None` for an
+/// action that is not one of the field's.
+fn edit_command(action: Sel) -> Option<EditCommand> {
+    [
+        (sel!(cut:), EditCommand::Cut),
+        (sel!(copy:), EditCommand::Copy),
+        (sel!(paste:), EditCommand::Paste),
+        (sel!(selectAll:), EditCommand::SelectAll),
+    ]
+    .into_iter()
+    .find_map(|(selector, command)| (selector == action).then_some(command))
 }
 
 /// The range of one of this view's ranges; `None` for one UIKit made.

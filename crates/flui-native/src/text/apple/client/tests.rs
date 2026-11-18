@@ -8,8 +8,9 @@ use flui_foundation::TextDirection;
 use flui_foundation::geometry::{Bounds, Point, Size};
 use flui_platform::text_store::utf16::{Utf16Offset, Utf16Range};
 use flui_platform::text_store::{
-    CommitGate, Composition, CompositionEnd, Selection, TextStore, TextStoreHost,
-    TextStoreHostError, TextStoreObserver, TextStoreStatus, commit_composition_in_place,
+    CommitGate, Composition, CompositionEnd, EditCommand, Selection, SelectionUi, TextStore,
+    TextStoreHost, TextStoreHostError, TextStoreObserver, TextStoreStatus,
+    commit_composition_in_place,
 };
 use flui_testing::text_store_kit::InMemoryTextStore;
 
@@ -1491,4 +1492,104 @@ fn an_application_commit_with_identical_text_still_ends_marked_text() {
     );
     assert_eq!(context.discards.get(), 1);
     assert!(client.reports_key_release());
+}
+
+/// The reference store as a field that performs the edit commands it is
+/// told to enable, running `on_perform` inside the command, as an
+/// application's paste handler may move the focus there.
+struct FieldWithCommands {
+    inner: Rc<InMemoryTextStore>,
+    enabled: Vec<EditCommand>,
+    performed: RefCell<Vec<EditCommand>>,
+    on_perform: RefCell<Option<Box<dyn FnOnce()>>>,
+}
+
+impl TextStore for FieldWithCommands {
+    fn status(&self) -> TextStoreStatus {
+        self.inner.status()
+    }
+
+    fn request_lock(
+        &self,
+        grant: flui_platform::text_store::LockGrant,
+        timing: flui_platform::text_store::LockTiming,
+    ) -> Result<flui_platform::text_store::LockOutcome, flui_platform::text_store::TextStoreError>
+    {
+        self.inner.request_lock(grant, timing)
+    }
+
+    fn run_deferred_grants(&self) -> usize {
+        self.inner.run_deferred_grants()
+    }
+
+    fn set_commit_gate(&self, gate: CommitGate) {
+        self.inner.set_commit_gate(gate);
+    }
+
+    fn set_observer(&self, observer: Option<Rc<dyn TextStoreObserver>>) {
+        self.inner.set_observer(observer);
+    }
+
+    fn edit_command_enabled(&self, command: EditCommand) -> bool {
+        self.enabled.contains(&command)
+    }
+
+    fn perform_edit_command(&self, command: EditCommand) -> bool {
+        if !self.enabled.contains(&command) {
+            return false;
+        }
+        self.performed.borrow_mut().push(command);
+        let on_perform = self.on_perform.borrow_mut().take();
+        if let Some(on_perform) = on_perform {
+            on_perform();
+        }
+        true
+    }
+}
+
+#[test]
+fn uikit_edit_commands_reach_the_focused_field() {
+    let client = TextClient::for_uikit();
+    let context = Rc::new(Context::default());
+    client.bind(Rc::clone(&context) as Rc<dyn InputContext>);
+    assert_eq!(client.selection_ui(), SelectionUi::Platform);
+    assert_eq!(TextClient::new().selection_ui(), SelectionUi::Field);
+    assert!(
+        !client.edit_command_enabled(EditCommand::Copy),
+        "no field has focus"
+    );
+    assert!(!client.perform_edit_command(EditCommand::Copy));
+
+    let field = Rc::new(FieldWithCommands {
+        inner: InMemoryTextStore::new("abc"),
+        enabled: vec![EditCommand::Copy, EditCommand::SelectAll],
+        performed: RefCell::new(Vec::new()),
+        on_perform: RefCell::new(None),
+    });
+    client.focus_store(Some(Rc::clone(&field) as Rc<dyn TextStore>));
+    assert!(client.edit_command_enabled(EditCommand::Copy));
+    assert!(!client.edit_command_enabled(EditCommand::Paste));
+    assert!(client.perform_edit_command(EditCommand::SelectAll));
+    assert!(!client.perform_edit_command(EditCommand::Paste));
+    assert_eq!(*field.performed.borrow(), [EditCommand::SelectAll]);
+
+    // A focus move the field's own code asks for inside the command waits
+    // for the command to return.
+    *field.on_perform.borrow_mut() = Some(Box::new({
+        let client = Rc::clone(&client);
+        move || {
+            client.focus_store(None);
+            assert_eq!(
+                client.document_len(),
+                Some(Utf16Offset::new(3)),
+                "the field still has focus inside its command"
+            );
+        }
+    }));
+    assert!(client.perform_edit_command(EditCommand::Copy));
+    assert_eq!(
+        client.document_len(),
+        None,
+        "the queued focus move ran after it"
+    );
 }

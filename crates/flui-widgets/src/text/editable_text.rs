@@ -56,9 +56,14 @@ use crate::{DefaultSelectionControls, DotHandles, SelectionHandles};
 
 mod clipboard;
 mod cursor_area;
+mod edit_commands;
 mod handles;
 mod input_requests;
 mod menu;
+mod platform_selection;
+pub(super) use edit_commands::FieldCommands;
+use edit_commands::SelectAllTextAction;
+use platform_selection::PlatformSelection;
 use crate::text::{MagnifierChoice, MenuSettings, ShowSelectionMenu};
 use cursor_area::CursorAreaLoop;
 use input_requests::{CompositionCommit, KeyboardRequest};
@@ -938,6 +943,9 @@ pub struct EditableTextState {
     platform: Rc<Cell<TargetPlatform>>,
     /// The touch long press that selects a word and shows its handles.
     long_press: FieldLongPress,
+    /// Whether the host serving the field draws its selection UI, which the
+    /// field then draws and recognizes none of.
+    platform_selection: Rc<PlatformSelection>,
 }
 
 impl std::fmt::Debug for EditableTextState {
@@ -981,6 +989,7 @@ impl StatefulView for EditableText {
             touch_handles: FieldHandles::new(),
             platform: Rc::new(Cell::new(TargetPlatform::Unknown)),
             long_press: FieldLongPress::new(),
+            platform_selection: Rc::new(PlatformSelection::new(ctx.rebuild_handle())),
             on_submitted: Rc::new(RefCell::new(self.on_submitted.clone())),
             on_changed: Rc::new(RefCell::new(self.on_changed.clone())),
             reports_edits: Rc::new(Cell::new(true)),
@@ -1436,6 +1445,14 @@ impl EditableTextState {
         }
     }
 
+    /// This field's select-all.
+    fn select_all_action(&self) -> SelectAllTextAction {
+        SelectAllTextAction {
+            controller: Rc::clone(&self.controller),
+            focus_node: Rc::clone(&self.observed_focus_node),
+        }
+    }
+
     /// The listener this field adds to its controller: a change rebuilds
     /// the field, and the selection it leaves is claimed as the primary
     /// selection, or let go when empty.
@@ -1490,10 +1507,7 @@ impl EditableTextState {
             Rc::new(vec![
                 erased_action::<CopySelectionTextIntent>(action.clone()),
                 erased_action::<PasteTextIntent>(action),
-                erased_action::<SelectAllTextIntent>(SelectAllTextAction {
-                    controller: Rc::clone(&self.controller),
-                    focus_node: Rc::clone(&self.observed_focus_node),
-                }),
+                erased_action::<SelectAllTextIntent>(self.select_all_action()),
                 erased_action::<ActivateIntent>(KeptByTheField),
                 erased_action::<ActivationPressIntent>(KeptByTheField),
                 erased_action::<DismissIntent>(KeptByTheField),
@@ -1538,13 +1552,6 @@ impl Action<DismissIntent> for KeptByTheField {
     fn invoke(&self, _ctx: &mut EventContext<'_>, _intent: &DismissIntent) -> ActionOutcome {
         ActionOutcome::Performed
     }
-}
-
-/// Selection does not need a clipboard and never reports a text edit.
-#[derive(Clone)]
-struct SelectAllTextAction {
-    controller: Rc<RefCell<TextEditingController>>,
-    focus_node: Rc<RefCell<Rc<FocusNode>>>,
 }
 
 /// Accessibility edits use the same current document and notification path as
@@ -1641,18 +1648,6 @@ impl FieldSemanticsActions {
             }
         }
         calls.resume();
-    }
-}
-
-impl Action<SelectAllTextIntent> for SelectAllTextAction {
-    fn is_enabled(&self, _intent: &SelectAllTextIntent) -> bool {
-        self.focus_node.borrow().can_request_focus() && !self.controller.borrow().is_composing()
-    }
-
-    fn invoke(&self, _ctx: &mut EventContext<'_>, _intent: &SelectAllTextIntent) -> ActionOutcome {
-        let controller = self.controller.borrow().clone();
-        controller.set_selection(0, controller.text().len());
-        ActionOutcome::Performed
     }
 }
 
@@ -1753,6 +1748,10 @@ impl ViewState<EditableText> for EditableTextState {
         //     so the focus-listener closure below and `dispose` reach them.
         self.ime_handle = ctx.text_input_handle();
         self.pipeline_owner = ctx.pipeline_owner();
+        // The clipboard first: the store performs a platform's edit commands
+        // through the field's clipboard actions.
+        self.clipboard = ctx.capability::<ClipboardCapability>().ok();
+        self.primary = Rc::new(PrimarySelectionOwner::acquire(ctx));
         self.text_store = Some(EditableTextStore::new(FieldParts {
             controller: Rc::clone(&self.controller),
             handle: self.ime_handle.clone(),
@@ -1762,6 +1761,10 @@ impl ViewState<EditableText> for EditableTextState {
             text_input: Rc::clone(&self.text_input),
             obscuring_character: Rc::clone(&self.obscuring_character),
             edits: self.edit_observer(),
+            commands: FieldCommands {
+                clipboard: self.clipboard_action(),
+                select_all: self.select_all_action(),
+            },
         }));
 
         // 2. Install the key handler on the node itself. It only fires when
@@ -1777,8 +1780,6 @@ impl ViewState<EditableText> for EditableTextState {
         // 2b. The clipboard actions, recorded on the node beside the key
         //     handler: a clipboard chord the handler leaves unconsumed
         //     reaches the `Shortcuts` above, which resolves it here.
-        self.clipboard = ctx.capability::<ClipboardCapability>().ok();
-        self.primary = Rc::new(PrimarySelectionOwner::acquire(ctx));
         self.record_action_chain(ctx);
 
         // 3. Forward controller change events into the rebuild notifier so the

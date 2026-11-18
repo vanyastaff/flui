@@ -61,6 +61,37 @@ pub trait TextStoreHost {
     /// [`Self::complete_composition`] compares). Called with no borrow
     /// held, after the window's gesture arena gave the tap to the field.
     fn show_keyboard(&self, store: &Rc<dyn TextStore>);
+
+    /// Who draws the selection UI of the field this host serves and owns the
+    /// gestures that make a selection in it. One answer for the host's life:
+    /// iOS's host puts a `UITextInteraction` over every field it serves.
+    ///
+    /// The default is [`SelectionUi::Field`]: the platform draws nothing over
+    /// the field.
+    fn selection_ui(&self) -> SelectionUi {
+        SelectionUi::Field
+    }
+}
+
+/// Who draws a focused field's caret, selection highlight, selection handles,
+/// magnifier and edit menu, and recognizes the taps, long presses and drags
+/// that place its caret and make its selection
+/// ([`TextStoreHost::selection_ui`]).
+///
+/// The field always draws its text and its composition's underline.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "the selection UI is the field's or the platform's: there is no third party to draw it"
+)]
+pub enum SelectionUi {
+    /// The field, as on every platform whose input method draws nothing
+    /// over it.
+    Field,
+    /// The platform: the field draws none of it and recognizes none of those
+    /// gestures while it holds the input, and the platform's edit menu
+    /// reaches it through [`TextStore::perform_edit_command`].
+    Platform,
 }
 
 /// How [`TextStoreHost::complete_composition`] ended the composition.

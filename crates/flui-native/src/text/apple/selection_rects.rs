@@ -14,7 +14,7 @@
 //! sit at the start of the later line, as the field's carets do.
 
 use flui_foundation::TextDirection;
-use flui_foundation::geometry::Bounds;
+use flui_foundation::geometry::{Bounds, Point, Size};
 use flui_platform::text_store::utf16::{OffsetError, Utf16Offset, Utf16Range};
 use flui_platform::text_store::{TextStoreError, TextStoreRead};
 
@@ -38,6 +38,34 @@ pub(crate) struct SelectionRect {
     pub(crate) contains_start: bool,
     /// Whether the line holds the range's end.
     pub(crate) contains_end: bool,
+}
+
+impl SelectionRect {
+    /// The edges UIKit stands the selection's handles on, as zero-wide
+    /// rectangles as tall as their lines: the leading edge of the rectangle
+    /// that holds the start and the trailing edge of the one that holds the
+    /// end, leading being left for left-to-right text and right for
+    /// right-to-left.
+    pub(crate) fn handle_edges(rects: &[Self]) -> impl Iterator<Item = Bounds<f64>> + '_ {
+        let edge = |rect: &Self, leading: bool| {
+            let left = (rect.direction == TextDirection::Ltr) == leading;
+            let x = if left {
+                rect.bounds.left()
+            } else {
+                rect.bounds.right()
+            };
+            Bounds::new(
+                Point::new(x, rect.bounds.top()),
+                Size::new(0.0, rect.bounds.size.height),
+            )
+        };
+        let start = rects.iter().find(|rect| rect.contains_start);
+        let end = rects.iter().rev().find(|rect| rect.contains_end);
+        start
+            .map(|rect| edge(rect, true))
+            .into_iter()
+            .chain(end.map(|rect| edge(rect, false)))
+    }
 }
 
 /// The rectangles of `range`, an offset range inside `session`'s document,
@@ -417,6 +445,37 @@ mod tests {
         ];
         for (case, layout, range, expected) in rows {
             assert_eq!(selection_rects(&layout, range), expected, "{case}");
+        }
+    }
+
+    #[test]
+    fn the_handles_stand_on_the_starts_leading_and_the_ends_trailing_edge() {
+        use TextDirection::{Ltr, Rtl};
+        let edge = |x: f64, y: f64| Bounds::new(Point::new(x, y), Size::new(0.0, LINE));
+        let rows: [(&str, LaidOutLines, Utf16Range, Vec<Bounds<f64>>); 3] = [
+            (
+                "one left-to-right line",
+                LaidOutLines::new("hello world", &[(0, Ltr)]),
+                span(6, 11),
+                vec![edge(60.0, 0.0), edge(110.0, 0.0)],
+            ),
+            (
+                "one right-to-left line",
+                LaidOutLines::new("abc def", &[(0, Rtl)]),
+                span(1, 3),
+                vec![edge(WIDTH - 10.0, 0.0), edge(WIDTH - 30.0, 0.0)],
+            ),
+            (
+                "from a left-to-right line into a right-to-left one",
+                LaidOutLines::new("abc def", &[(0, Ltr), (4, Rtl)]),
+                span(2, 6),
+                vec![edge(20.0, 0.0), edge(WIDTH - 20.0, LINE)],
+            ),
+        ];
+        for (case, layout, range, expected) in rows {
+            let rects = selection_rects(&layout, range);
+            let edges: Vec<Bounds<f64>> = SelectionRect::handle_edges(&rects).collect();
+            assert_eq!(edges, expected, "{case}");
         }
     }
 }

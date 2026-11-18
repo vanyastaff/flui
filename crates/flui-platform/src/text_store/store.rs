@@ -66,6 +66,48 @@ pub trait TextStore {
     /// The default reports nothing: a store without screen geometry of its
     /// own has no layout to report.
     fn screen_moved(&self) {}
+
+    /// Whether the field would perform `command` now, as its own menu would
+    /// offer it: a platform shows the command in its edit menu only when it
+    /// would. Called on the owner thread with no borrow held, outside a lock.
+    ///
+    /// The default performs none: a store that is not a field's has no
+    /// clipboard or selection behaviour of its own.
+    fn edit_command_enabled(&self, command: EditCommand) -> bool {
+        let _ = command;
+        false
+    }
+
+    /// Perform `command` as the field's own menu or shortcut performs it,
+    /// with the same rules (a protected field copies nothing, a cut deletes
+    /// only what the clipboard took, a paste ends the composition first), and
+    /// answer whether the field took it. What the edit changes reaches the
+    /// observer as an application edit, which the platform did not make
+    /// through a session. Called on the owner thread with no borrow held,
+    /// outside a lock and outside a frame transaction, as a key press is.
+    ///
+    /// The default performs none.
+    fn perform_edit_command(&self, command: EditCommand) -> bool {
+        let _ = command;
+        false
+    }
+}
+
+/// An edit the platform's own text UI asks the focused field for: an item of
+/// iOS's edit menu, which `UITextInteraction` shows over the field
+/// (`cut:`, `copy:`, `paste:`, `selectAll:`). The field performs it with its
+/// own clipboard and selection rules ([`TextStore::perform_edit_command`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum EditCommand {
+    /// Copy the selection to the clipboard and delete it.
+    Cut,
+    /// Copy the selection to the clipboard.
+    Copy,
+    /// Replace the selection with the clipboard's text.
+    Paste,
+    /// Select the whole text.
+    SelectAll,
 }
 
 /// An application change about to become visible to the input method.
