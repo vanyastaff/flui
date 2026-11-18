@@ -748,8 +748,7 @@ tree costs more than 5% over the small one: a frame that clears a table the
 mount grew or walks the whole tree for what a few nodes report is caught there,
 while every counter of its work stays put. The budget assertions run with
 flui-widgets' suite on every PR; the `perf-gates` job runs `perf --check` and
-`perf --instructions --check` in the `full` lane, and `perf --check` alone on a pull request
-whose diff reaches code that runs for every node of a frame (`perf_required`, below).
+`perf --instructions --check` in the `full` lane, which main runs.
 
 The perf targets of flui-widgets and flui-material also hold the heap level:
 `flui_testing::heap::assert_rounds_plateau`
@@ -789,9 +788,9 @@ so a change that adds a package to an application's default graph runs
 `perf --size --bless` in the same PR and says why. A binary grows with every
 change to the code it links, so a size fails only past 2% over its baseline,
 and `--bless` on a fresh `main` moves it. The baseline is Linux x86_64's. The
-`size` job runs the builds on `main` and on a pull request whose diff reaches a
-manifest, `Cargo.lock`, the toolchain, `.cargo/`, the `flui create` templates
-or the baseline. That 2% is cumulative, so on `main` each push also compares its
+`size` job runs the builds on `main` (ADR-0375); a change to a manifest, `Cargo.lock`,
+the toolchain, `.cargo/`, the `flui create` templates or the baseline runs
+`cargo xtask perf --size --check` before its PR. That 2% is cumulative, so on `main` each push also compares its
 sizes with the commit before it (`--previous`, from a cache entry each push
 saves under its commit with `--record`): one push may grow a binary by 0.5%,
 and a push past that fails with both commits and the delta, for its author to
@@ -1215,7 +1214,7 @@ zizmor .                                                      # workflow securit
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo xtask feature-matrix --slice 1/5                        # feature-matrix job: cargo-hack per-feature clippy, shards 1/5..5/5 (--partition)
 cargo xtask feature-matrix --slice combinations               # same job: each facade feature combination built in isolation
-cargo xtask feature-matrix --packages "<hack_args>"           # feature-scope job: the same per-feature clippy over the packages `affected` names in `hack_args`
+cargo xtask feature-matrix --packages "-p <crate>"            # no job: the same per-feature clippy over the crates you changed, before a PR
 cargo check --workspace --locked --target wasm32-unknown-unknown --exclude ...                   # wasm-capable set — cargo xtask wasm-check
 cargo clippy --workspace --lib --bins --locked --target wasm32-unknown-unknown --exclude ... -- -D warnings  # the only lint pass over the wasm32-only web backend — cargo xtask wasm-check
 cargo test -p flui-foundation --locked --target wasm32-unknown-unknown --test wasm32              # the only step that EXECUTES wasm — cargo xtask wasm-test
@@ -1254,12 +1253,12 @@ runs `checks`, `plan` and the `ci` aggregator:
 |---|---|---|
 | `docs` | a pull request that changes only documentation | nothing |
 | `tooling` | a pull request that changes only repository tooling | `deps` |
-| `wide` | a pull request that compiles anything | `deps` and the pull-request gate (`HEAVY_JOBS`: `clippy`, `test`, `public-api`) over the whole workspace on Linux, and the on-demand jobs its diff asks for (below) |
-| `full` | a push to `main`, the merge queue, a manual `workflow_dispatch` run | `wide` plus `FULL_JOBS`: `feature-matrix`, `doc-test`, `test-nested`, `test-features`, `doc`, `wasm-check`, `cross-typecheck`, and `test-trybuild`, `api-contracts`, `miri` and `perf-gates` always; in `clippy` and `test` it also turns on the `native-features`, `gpu-test --backend gl` and `build-all-targets` steps |
+| `wide` | a pull request that compiles anything | `deps` and the pull-request gate (`HEAVY_JOBS`: `clippy`, `test`) over the whole workspace on Linux |
+| `full` | a push to `main`, the merge queue, a manual `workflow_dispatch` run | `wide` plus `FULL_JOBS`: `feature-matrix`, `doc-test`, `test-nested`, `test-features`, `doc`, `wasm-check`, `cross-typecheck`, `test-trybuild`, `size`, `miri`, `perf-gates` and `test-without-agent`; in `clippy` and `test` it also turns on the `native-features`, `gpu-test --backend gl` and `build-all-targets` steps |
 
 - **Wide lane**: every pull request that compiles anything runs the Linux
   gate, in parallel, over the whole workspace, and compiles for no other
-  target (ADR-0370). The three jobs start once `plan` has picked the lane,
+  target (ADR-0375). Both jobs start once `plan` has picked the lane,
   beside `checks`. One serial job over the
   changed crates and their dependents was slower (35 min median, against 18
   for parallel jobs, over the runs of 2026-09-30). The
@@ -1278,8 +1277,8 @@ runs `checks`, `plan` and the `ci` aggregator:
   you changed one command at a time (AGENTS.md, "Checking a change"), and
   their dependents' clippy when you changed a public API. CI runs the rest:
   the dependents' tests on the pull request, and the feature matrix, wasm32,
-  cross-typecheck, rustdoc and doctests on main, with trybuild there and on a
-  pull request whose diff asks for it (below). On a pull request
+  cross-typecheck, rustdoc, doctests, trybuild, the sizes, perf and miri on
+  main. On a pull request
   `flui-native`'s suite runs only on Linux and no other backend is compiled;
   main type-checks the Windows, macOS, iOS and Android backends and the
   nightly platform runs reach them after the merge, so a change to one of
@@ -1296,57 +1295,6 @@ runs `checks`, `plan` and the `ci` aggregator:
   A red run on main opens (or comments on) the "CI is red on main" issue,
   and the next green run on main closes it. The rule is fix forward within
   the hour, or revert.
-**On demand** (ADR-0303 §9). A wide-lane pull request also runs a main-only check when its diff
-reaches what the check reads. `plan` decides this in its outputs, and each job is a row of
-`ON_DEMAND` (`tools/xtask/src/change_scope/aggregator.rs`):
-
-- `test-trybuild` runs when `trybuild_required` is set. That happens when the diff touches one of
-  these:
-  - a file that a tracked `*.stderr` cites in a `--> path` or `::: path` line (the fixture, or the declaration of
-    a type the compiler names);
-  - a file in a case directory: beside an expectation, or in a directory a runner's `pass` or
-    `compile_fail` path names;
-  - a runner of the suites;
-  - the source of a workspace procedural macro (its diagnostics are copied into expectations);
-  - a changed line, in a crate a suite compiles, that writes a message the compiler copies: a
-    line of a diagnostic attribute (`#[diagnostic::on_unimplemented]`, `#[deprecated]`, its
-    `message`, `label` or `note`), a `compile_error!`, or prose an expectation quotes;
-  - the toolchain file, `Cargo.lock` or `.config/nextest.toml`.
-
-  The cited files are read from the expectations on each run.
-- `feature-scope` runs feature-matrix's per-feature clippy (`--packages`) over `hack_args`: the
-  changed crates that have features and the crates whose manifest changed. A dependent's
-  feature-gated edge is left to `feature-matrix`.
-- `api-contracts` runs `send-positions` alone when `send_positions_required` is set. That
-  happens when a changed library line, in a crate the facade reaches, does one of these:
-  - names `Send` or `Sync`;
-  - declares a `pub use` or `pub mod`, or sits inside a multi-line `pub use`;
-  - names a segment of a listed item's path, in the file that defines that item.
-
-  A change to the list, `tools/xtask/src/send_positions.rs` or the rustdoc JSON loader
-  (`api_closure`) sets it too. The list is read from `tools/xtask/allowlists/send-positions.toml` on each run.
-
-- `miri` runs when `miri_required` is set: a changed file under a source the job interprets whole
-  (`crates/flui-foundation/src/`, `crates/flui-log/src/`, `crates/flui-rendering/src/storage/`),
-  or a change to its plan (`tools/xtask/src/tasks.rs`) or this rule
-  (`tools/xtask/src/change_scope/miri_scope.rs`). A change that reaches only the job's narrower
-  filters is left to main.
-- `perf-gates` runs its baseline comparison (`cargo xtask perf --check`) when `perf_required` is
-  set: a changed file under a source that runs for every node of a frame
-  (`crates/flui-view/src/tree/`, `crates/flui-view/src/owner/`, `crates/flui-rendering/src/storage/`,
-  `crates/flui-rendering/src/pipeline/`, `crates/flui-layer/src/`, `crates/flui-semantics/src/`),
-  where one more allocation is a rise in every scenario, or a change to the baseline
-  (`crates/flui-widgets/perf/baseline/`), the scenarios (`crates/flui-widgets/tests/perf.rs`),
-  what counts for them (`crates/flui-testing/src/heap.rs`, `crates/flui-testing/src/control_cost.rs`),
-  the task (`tools/xtask/src/perf.rs`) or this rule
-  (`tools/xtask/src/change_scope/perf_scope.rs`). A rise that comes from anywhere else, and the
-  callgrind half of the job, are left to main.
-- `test-without-agent` runs flui-app's agent tests in the dev profile with debug assertions off,
-  the only build that leaves the driver agent out (ADR-0288 §7), when `without_agent_required`
-  is set: a changed file under `crates/flui-app/src/app/agent/`, flui-app's `build.rs`, or this
-  rule (`tools/xtask/src/change_scope/without_agent_scope.rs`).
-
-A pull request that reaches none of them skips all of them.
 
 
 **Only `full` checks these**, so a pull request can merge green and still
@@ -1354,10 +1302,10 @@ turn main red: the per-feature matrix (`feature-matrix`), miri and the
 doctests (`doc-test`) — over 171 runs
 of 2026-09-26..30 none of them failed where `clippy` and `test` passed, so
 they run after the merge and a break is fixed forward. The same holds for
-the rest of `FULL_JOBS` (the table above; ADR-0370 has the measurements):
-of those, `wasm-check` and `cross-typecheck` are the ones that fail alone,
-so a change to the web or a native backend is the one to check by hand
-before its pull request. Native application
+the rest of `FULL_JOBS` (the table above; ADR-0370 and ADR-0375 have the
+measurements): of those, `wasm-check` and `cross-typecheck` are the ones
+that fail alone, so a change to the web or a native backend is the one to
+check by hand before its pull request. Native application
 Windows/macOS and GPU runtime checks are local commands; no labels enable
 them in CI. The host tool is covered separately: `xtask-native.yml` runs
 strict xtask Clippy and the complete xtask test suite on Windows and macOS
@@ -1366,8 +1314,8 @@ the suite and `clippy` lints xtask on every pull request). This
 includes native cache-key, host-lock and platform driver regressions; it
 does not replace application or device runtime validation.
 
-The `ci` aggregator recomputes which jobs the lane runs from `plan`'s `lane`, its on-demand outputs
-and its lists `HEAVY_JOBS`, `FULL_JOBS` and `ON_DEMAND`. It fails on any
+The `ci` aggregator recomputes which jobs the lane runs from `plan`'s `lane` and its lists
+`HEAVY_JOBS` and `FULL_JOBS`. It fails on any
 other skip, and on a job that ran where it should have skipped.
 
 Locally, the pre-PR checks are the few commands in AGENTS.md's "Checking a change". `cargo xtask ci` is
@@ -1385,12 +1333,10 @@ what it needs. One row per job in `.github/workflows/ci.yml`:
 | `test-trybuild` | `cargo xtask test --nested --nested-group trybuild --trybuild-shard <shard>` (`facade`, `core` or `view`) | compile-fail suites in three shards on three runners, because every trybuild project builds under Cargo's lock on `target/tests/trybuild` and suites on one runner wait for each other; each shard builds only its own test targets with the whole run's features; without `--trybuild-shard` the command runs every suite, and plain `--nested` still runs both groups |
 | `test-features` | the job's `cargo nextest run` lines (`ci-full` runs them) | — |
 | `doc` | `cargo xtask doc-strict` (in `gate`) | — |
-| `public-api` | `cargo xtask public-api` | nightly (rustdoc JSON); `cargo xtask public-api --write` restates `api/flui.txt` when a change to the facade's API is meant (ADR-0324) |
 | `deps` | `cargo xtask deps` | CI runs `--only policy` and `--only advisories` as two steps, with `--strict` (a missing cargo-deny fails instead of being skipped); an unused or misplaced dependency is not this job's: cargo's `unused_dependencies` lint fails every build under `CARGO_BUILD_WARNINGS=deny`; every lane but `docs` runs it; the advisories step blocks on main and on a pull request whose change is workspace-wide or touches `deny.toml`, and only reports on other pull requests, because a new RustSec entry can fail a commit that passed the day before; `advisories.yml` runs the same step against main every day |
 | `doc-test` | `cargo test --workspace --locked --doc --features flui/testing,flui/material,flui/cupertino` (in `cargo xtask ci`) | — |
 | `miri` | `cargo xtask miri` | nightly + miri |
 | `feature-matrix` | `cargo xtask feature-matrix` (runs `facade-combos` too) | CI runs `--slice 1/5` to `5/5` and `combinations` in parallel; locally it is one run over the workspace |
-| `feature-scope` | `cargo xtask feature-matrix --packages "<hack_args>"` | CI runs `--slice 1/3` to `3/3` in parallel: a pull request's per-feature clippy over its changed crates that have features and its changed manifests; runs when `hack_args` names one |
 | `wasm-check` | `cargo xtask wasm-check`, `cargo xtask wasm-link`, `cargo xtask wasm-test` | `wasm-test` needs the `wasm-bindgen-cli` version `Cargo.lock` pins (`cargo xtask doctor full` names it) |
 | `cross-typecheck` | `cargo xtask cross-typecheck --target <triple>`, then the same command with `--all-features` (omit the filter for every target) | needs Rust target standard libraries and native C tools; see below |
 | `ci` | — | CI only: the single check a ruleset would require. `cargo xtask ci-verify` verifies that every gated job ran and passed, and that the jobs which skipped are exactly those the lane skips |
@@ -1398,8 +1344,8 @@ what it needs. One row per job in `.github/workflows/ci.yml`:
 
 `expectations.yml` runs `cargo xtask expectations --body` on every pull request
 and again when its body is edited: it lists the expectations the diff edits
-(lines gone from `api/flui.txt`, a changed `*.stderr`, `*.snap` or protocol
-schema, a raised perf baseline, a grown allowlist, fewer tests, a new
+(a changed `*.stderr`, `*.snap` or protocol
+schema, a raised perf baseline, fewer tests, a new
 `#[ignore]`, a new `deny.toml` or `typos.toml` value) and fails unless the
 body's `## Expectations` section names each path with its reason (ADR-0331).
 Locally, `cargo xtask expectations` prints the list against `origin/main`, and
