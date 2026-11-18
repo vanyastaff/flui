@@ -2,6 +2,9 @@
 
 - **Status:** Accepted (2026-11-12)
 - **Date:** 2026-11-12
+- **Revised:** 2026-11-18 — §3 measures `public-api` against `test` alone: `test-nested` and
+  `cross-typecheck` no longer run beside it on a pull request
+  ([ADR-0370](ADR-0370-a-pull-request-compiles-for-linux-and-every-other-target-is-mains.md)).
 - **Related:** [ADR-0089](ADR-0089-upstream-types-in-stable-signatures.md) (every item the facade
   reaches carries the Stable promise; this record lists them); [ADR-0136](ADR-0136-owner-local-ui-surfaces.md)
   §3 (`send-positions`, which walks the same surface); [ADR-0303](ADR-0303-a-rule-takes-the-first-rung-that-states-it-and-an-xtask-gate-is-the-last.md)
@@ -97,7 +100,7 @@ the core host for every target, stays in the main-only `api-contracts` job.
 The job runs on every such pull request because it does not lengthen one: it is admitted only while
 it finishes before the longest job it runs beside. Measured on the pull request that added it
 (run 43157158790, 4-core `ubuntu-latest`, uncached), `public-api` took 10 min 26 s, against
-17 min 26 s for `test`, 12 min for `test-nested` and 8–9 min for each `cross-typecheck` target. If
+17 min 26 s for `test`, the longest job of the pull-request gate (ADR-0370 §1). If
 it ever outgrows `test`, it moves to an `ON_DEMAND` row of the change-scope aggregator (ADR-0303
 §9), decided by a diff that reaches a crate the facade re-exports, and keeps its full run on main.
 

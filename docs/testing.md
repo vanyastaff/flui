@@ -1278,7 +1278,8 @@ runs `checks`, `plan` and the `ci` aggregator:
   you changed one command at a time (AGENTS.md, "Checking a change"), and
   their dependents' clippy when you changed a public API. CI runs the rest:
   the dependents' tests on the pull request, and the feature matrix, wasm32,
-  cross-typecheck, rustdoc, doctests and trybuild on main. On a pull request
+  cross-typecheck, rustdoc and doctests on main, with trybuild there and on a
+  pull request whose diff asks for it (below). On a pull request
   `flui-native`'s suite runs only on Linux and no other backend is compiled;
   main type-checks the Windows, macOS, iOS and Android backends and the
   nightly platform runs reach them after the merge, so a change to one of
@@ -1353,11 +1354,10 @@ turn main red: the per-feature matrix (`feature-matrix`), miri and the
 doctests (`doc-test`) — over 171 runs
 of 2026-09-26..30 none of them failed where `clippy` and `test` passed, so
 they run after the merge and a break is fixed forward. The same holds for
-`test-nested`, `test-features`, `doc`, `wasm-check` and `cross-typecheck`
-(ADR-0370): over the 61 pull-request runs of 2026-11-18 `doc` and
-`test-features` failed none alone and `test-nested` one, while `wasm-check`
-and `cross-typecheck` were the only failure of ten, so a change to the web
-or a native backend is the one to check by hand before its pull request. Native application
+the rest of `FULL_JOBS` (the table above; ADR-0370 has the measurements):
+of those, `wasm-check` and `cross-typecheck` are the ones that fail alone,
+so a change to the web or a native backend is the one to check by hand
+before its pull request. Native application
 Windows/macOS and GPU runtime checks are local commands; no labels enable
 them in CI. The host tool is covered separately: `xtask-native.yml` runs
 strict xtask Clippy and the complete xtask test suite on Windows and macOS

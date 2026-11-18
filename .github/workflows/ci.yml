@@ -3,8 +3,8 @@ name: CI
 # Runtime CI runs on Linux. A pull request that compiles anything runs the
 # Linux gate (clippy, test, public-api) and the on-demand jobs its diff asks
 # for; main, the merge queue and a manual run add every other check: the nested
-# and feature-gated suites, rustdoc, wasm32 and the platform typechecks. No
-# other target is compiled for a pull request: what a change breaks there
+# and feature-gated suites, rustdoc, wasm32 and the platform typechecks. This
+# workflow compiles no other target for a pull request: what a change breaks there
 # shows on main, and nightly-platforms.yml runs each host's suites.
 # There is no scheduled run: advisories.yml checks the RustSec database daily,
 # and nothing else changes without a commit.
@@ -298,9 +298,9 @@ jobs:
   # clippy — workspace lint with -D warnings. Split out of `checks` so it runs
   # in PARALLEL with test/doc instead of gating them: clippy
   # compiles the whole workspace (minutes); the rest of `checks` is seconds.
-  # The pull-request gate (clippy, test, public-api) waits for `plan` alone:
-  # behind `checks` each started three to eight minutes later, and a pull
-  # request `checks` fails is pushed again, which cancels the run.
+  # The pull-request gate (clippy, test, public-api) waits for `plan` alone,
+  # beside `checks`: a pull request `checks` fails is pushed again, which
+  # cancels the run, and `ci` is red for it either way.
   # ─────────────────────────────────────────────────────────────────────────
   clippy:
     name: clippy
@@ -345,9 +345,9 @@ jobs:
   # links the examples and benches with the same packages and features, so it compiles
   # nothing twice (a target whose `required-features` the test scope leaves
   # off is compiled per feature by `feature-matrix`, not linked). A pull
-  # request leaves the link to main: `clippy --all-targets` has type-checked
-  # the same examples and benches. The nested-cargo group runs on main in `test-nested`.
-  # No job touches the AppKit/Win32/Android backends on a pull request:
+  # request leaves that link to main.
+  # The nested-cargo group runs on main in `test-nested`.
+  # No job of this workflow touches the AppKit/Win32/Android backends on a pull request:
   # `cross-typecheck` type-checks them on main.
   # ─────────────────────────────────────────────────────────────────────────
   test:
@@ -373,14 +373,16 @@ jobs:
       # The full-workspace build, examples and benches included, outgrew the
       # ubuntu-26.04 runner's free disk (a link failed with "No space left on
       # device"). The same reclaim as weekly.yml, started here and left
-      # running: it took over two minutes in the foreground, and the disk
-      # peak is the last build of the job, minutes after it ends.
+      # running beside the build: the disk peak is the job's last build,
+      # minutes after the reclaim ends. A pull request skips that last build
+      # and runs the reclaim all the same: the suite's own build is not known
+      # to fit without it. "Disk usage after build" prints what it freed.
       - name: Free disk space (ubuntu), in the background
         run: |
+          df -h /
           nohup sudo sh -c 'rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
             /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/local/share/boost; \
             docker image prune --all --force' > "$RUNNER_TEMP/free-disk.log" 2>&1 &
-          df -h /
 
       - name: Install pinned Rust
         uses: ./.github/actions/rust-toolchain
@@ -505,10 +507,13 @@ jobs:
         if: needs.plan.outputs.lane == 'full'
         run: cargo xtask build-all-targets
 
-      # The disk peak is the build above; the reclaim before the build is what
-      # keeps it above 0 (it failed without one on 2026-10-30).
+      # The disk peak is the build above; the reclaim beside the builds is what
+      # keeps it above 0 (it failed without one on 2026-10-30). Its log is
+      # printed here: a reclaim that failed shows nowhere else.
       - name: Disk usage after build
-        run: df -h /
+        run: |
+          cat "$RUNNER_TEMP/free-disk.log" || true
+          df -h /
 
       # insta writes `<name>.snap.new` next to a mismatched snapshot, under CI
       # too because .config/insta.yaml sets `update: new` (its default writes
@@ -733,9 +738,8 @@ jobs:
   #
   # The workspace has no rustdoc warning (intra-doc-link qualifications,
   # HTML-tag escaping of bare generics, private-leak rewrites, bare-URL
-  # autolink conversions), and a new one turns main red. It runs on main
-  # only: over the pull-request runs of 2026-11-18 it failed none that
-  # `clippy` and `test` passed.
+  # autolink conversions), and a new one turns main red: the job runs on
+  # main only (ADR-0370).
   # ─────────────────────────────────────────────────────────────────────────
   doc:
     name: doc

@@ -3,11 +3,10 @@
 - **Status:** Accepted (2026-11-18)
 - **Date:** 2026-11-18
 - **Supersedes:** [ADR-0303](ADR-0303-a-rule-takes-the-first-rung-that-states-it-and-an-xtask-gate-is-the-last.md)
-  §9 only, for five jobs: `test-nested`, `test-features`, `doc`, `wasm-check` and `cross-typecheck`
-  run on main with no narrow form on a pull request. Unchanged: the `ON_DEMAND` rows and how
-  `plan` decides them.
+  §9 only, for the five jobs §2 moves to main: they run there with no narrow form on a pull
+  request. Unchanged: the `ON_DEMAND` rows and how `plan` decides them.
 - **Related:** [ADR-0324](ADR-0324-the-facade-api-is-a-committed-snapshot.md) (`public-api` stays
-  in the pull-request gate, as its §3 decides).
+  in the pull-request gate under its §3, which also says when it leaves).
 
 ## Context and problem statement
 
@@ -54,34 +53,38 @@ keeps the one platform CI can execute in front of every merge.
 A pull request that compiles anything (lane `wide`) runs `checks`, `plan`, `deps` and
 `HEAVY_JOBS`, which is `clippy`, `test` and `public-api`, then the `ON_DEMAND` jobs its diff asks
 for. The three `HEAVY_JOBS` wait for `plan` alone, not for `checks`. In `test` the build that links
-the examples and benches is a `full`-lane step: `clippy --all-targets` type-checks the same
-targets on the pull request.
+the examples and benches is a `full`-lane step.
 
 ### §2. What main adds
 
-Lane `full` (a push to main, the merge queue, a manual run) adds `FULL_JOBS`: `feature-matrix`,
-`doc-test`, `test-nested`, `test-features`, `doc`, `wasm-check` and `cross-typecheck`. No job
-compiles for wasm32, Windows, macOS, iOS or Android on a pull request. A change that breaks one
-of them is found by main's run and fixed forward or reverted, as AGENTS.md says of a red main.
+Lane `full` (a push to main, the merge queue, a manual run) adds `FULL_JOBS`: `feature-matrix`
+and `doc-test`, which it ran before, and the five this record moves there: `test-nested`,
+`test-features`, `doc`, `wasm-check` and `cross-typecheck`. No job of `ci.yml` compiles for
+wasm32, Windows, macOS, iOS or Android on a pull request. A change that breaks one of them is
+found by main's run and fixed forward or reverted, as AGENTS.md says of a red main.
+
+Two other workflows still start a native host for a pull request, each by its own `paths`:
+`xtask-native.yml` when xtask, its workflow or the toolchain changes, and `nightly-platforms.yml`
+when the workflow or its live scenario changes.
 
 ### §3. A job added later
 
 A job added to `FULL_JOBS` after this record still gets its `ON_DEMAND` row when a pull request
-can break it (ADR-0303 §9). The five jobs above are the exception this record makes, and a narrow
+can break it (ADR-0303 §9). The five jobs of §2 are the exception this record makes, and a narrow
 form for one of them is a new row, not a return to `HEAVY_JOBS`.
 
 ### Consequences
 
-- Good, because a pull request runs 7 jobs instead of 21 and no macOS runner, about 45
-  job-minutes by the same runs' averages.
+- Good, because in `ci.yml` a pull request runs 7 jobs instead of 21 and no macOS runner, about
+  45 job-minutes by the same runs' averages.
 - Good, because main's run is unchanged: every job still runs on every push.
 - Bad, because a pull request can merge green and break the wasm32 or a native build, a nested
   suite, a feature-gated test or a rustdoc link. In the sample one run in six carried a break
   only `wasm-check` or `cross-typecheck` saw.
 - Bad, because the author of that break learns of it from main, after the merge, and the next
   author works on a red main until it is fixed.
-- Neutral, because `public-api` (13 minutes by the same averages) is now as long as `test`, the
-  condition under which ADR-0324 §3 moves it to an `ON_DEMAND` row.
+- Neutral, because `public-api` and `test` are now the two longest jobs of the gate, and
+  ADR-0324 §3 moves `public-api` to an `ON_DEMAND` row once a run shows it outgrowing `test`.
 
 ### Confirmation
 
