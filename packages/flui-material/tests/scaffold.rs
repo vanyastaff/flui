@@ -112,7 +112,7 @@ fn painted_text_style(laid: &common::LaidOut, text: &str) -> (Color, f32) {
         let run = paragraph.runs().next().expect("painted run");
         let key = registry.prepare_run(&run).expect("painted face");
         let glyph = run
-            .placed_glyphs(key, (0.0, 0.0), 1.0)
+            .placed_glyphs(key, (0.0, 0.0), (0.0, 0.0), 1.0)
             .next()
             .expect("painted glyph");
         return (glyph.color.unwrap_or(color), glyph.key.size());
