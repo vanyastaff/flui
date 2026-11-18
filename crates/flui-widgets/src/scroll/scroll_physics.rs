@@ -19,7 +19,7 @@
 
 use std::rc::Rc;
 
-use flui_animation::simulation::{
+use flui_animation::{
     BouncingScrollSimulation, BoundedFrictionSimulation, FrictionSimulation, Simulation,
     SimulationBounds, SpringDescription, SpringSimulation, Tolerance,
 };

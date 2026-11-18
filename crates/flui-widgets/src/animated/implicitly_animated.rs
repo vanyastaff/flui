@@ -3,7 +3,7 @@
 
 use std::time::Duration;
 
-use flui_animation::curve::Curve;
+use flui_animation::Curve;
 use flui_animation::{
     Animatable, AnimatedValue, AnimatedValueView, MotionSpec, SpringDescription, Tween,
     TwoWayConverter,
@@ -86,7 +86,9 @@ impl<T: TwoWayConverter + 'static> ImplicitMotion<T> {
             .iter()
             .all(|component| component.is_finite());
         let start = if finite { initial } else { fallback };
-        let owner = AnimatedValue::with_debug_label(label, start, motion.clone(), None)
+        let owner = AnimatedValue::builder(start, motion.clone())
+            .debug_label(label)
+            .build_on(None)
             .expect("BUG: an implicit widget starts from a finite value");
         Self { label, owner }
     }

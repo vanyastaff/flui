@@ -32,7 +32,7 @@ pub use spring::SpringCurve;
 /// # Examples
 ///
 /// ```
-/// use flui_animation::curve::Curve;
+/// use flui_animation::Curve;
 ///
 /// struct MyCurve;
 ///

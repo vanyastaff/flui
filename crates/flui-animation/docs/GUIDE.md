@@ -108,8 +108,8 @@ controller.forward()?;
 controller.reverse()?;
 
 // From specific value
-controller.forward_from(Some(0.5))?;
-controller.reverse_from(Some(0.8))?;
+controller.forward_from(0.5)?;
+controller.reverse_from(0.8)?;
 
 // Stop at current position
 controller.stop()?;
@@ -186,7 +186,7 @@ controller.fling(-1.0)?;  // toward lower_bound
 
 // Custom spring (fling refuses an oscillating spring)
 let spring = SpringDescription::with_damping_ratio(1.0, 500.0, 1.0).expect("valid spring");
-controller.fling_with(1.0, Some(spring))?;
+controller.fling_with(1.0, spring)?;
 
 // Arbitrary simulation
 let sim = SpringSimulation::try_new(spring, 0.0, 1.0, 0.0, flui_animation::Tolerance::DEFAULT)?;
@@ -395,7 +395,7 @@ use flui_painting::styling::{BorderRadius, BorderRadiusExt, Color};
 // Numeric
 let _ = Tween::new(0.0, 100.0);
 let _ = IntTween::new(0, 255); // nearest, halves toward +inf
-let _ = IntTween::new(0, 10).with_rounding(Rounding::Floor); // steps
+let _ = IntTween::new(0, 10).rounding(Rounding::Floor); // steps
 
 // Color
 let _ = Tween::new(Color::RED, Color::BLUE);
@@ -605,7 +605,7 @@ position and `is_done` stays `true`.
 ### SpringDescription
 
 ```rust
-use flui_animation::simulation::{SimulationError, SpringDescription};
+use flui_animation::{SimulationError, SpringDescription};
 use std::time::Duration;
 
 # fn main() -> Result<(), SimulationError> {
@@ -622,9 +622,9 @@ let critical = SpringDescription::with_damping_ratio(1.0, 500.0, 1.0)?;
 ### SpringSimulation
 
 ```rust
-use flui_animation::simulation::{Simulation, SpringDescription, SpringSimulation, Tolerance};
+use flui_animation::{Simulation, SpringDescription, SpringSimulation, Tolerance};
 
-# fn main() -> Result<(), flui_animation::simulation::SimulationError> {
+# fn main() -> Result<(), flui_animation::SimulationError> {
 let spring = SpringDescription::with_damping_ratio(1.0, 500.0, 0.7)?;
 let sim = SpringSimulation::try_new(spring, 0.0, 1.0, 0.0, Tolerance::DEFAULT)?;
 assert!(sim.dx(0.1).is_finite()); // velocity at t = 0.1 s
@@ -637,9 +637,9 @@ assert_eq!(sim.x(5.0), 1.0);
 ### FrictionSimulation
 
 ```rust
-use flui_animation::simulation::{FrictionSimulation, Simulation, Tolerance};
+use flui_animation::{FrictionSimulation, Simulation, Tolerance};
 
-# fn main() -> Result<(), flui_animation::simulation::SimulationError> {
+# fn main() -> Result<(), flui_animation::SimulationError> {
 // drag in (0, 1), position, velocity
 let sim = FrictionSimulation::try_new(0.05, 0.0, 100.0, Tolerance::DEFAULT)?;
 let resting = sim.x(f64::INFINITY);

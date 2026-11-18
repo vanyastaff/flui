@@ -2,10 +2,8 @@
 
 use crate::child_process;
 use flui_animation::{
-    Animation, AnimationController, AnimationStatus, AnimationSwitch, ConstantAnimation,
-    CurvedAnimation, DrivenController, ProxyAnimation, Vsync,
-    curve::{Curve, Split},
-    simulation::Simulation,
+    Animation, AnimationController, AnimationStatus, AnimationSwitch, ConstantAnimation, Curve,
+    CurvedAnimation, DrivenController, ProxyAnimation, Simulation, Split, Vsync,
 };
 use flui_animation::{AnimationRunFuture, RunCanceled};
 use flui_foundation::{IdMint, Listenable, ListenerCallback, ListenerId};
@@ -864,7 +862,7 @@ fn terminal_fixture(
                 )),
                 TerminalCurve(first),
             )
-            .with_reverse_curve(TerminalCurve(second)),
+            .reverse_curve(TerminalCurve(second)),
         ),
         TerminalOwner::Switch => {
             let switch = AnimationSwitch::new(
@@ -1254,7 +1252,7 @@ fn parent_subscriptions_detach_all_after_failure() {
         );
     }
     let parent = terminal_parent(false);
-    let curved = CurvedAnimation::new(parent.clone(), flui_animation::curve::Linear);
+    let curved = CurvedAnimation::new(parent.clone(), flui_animation::Linear);
     let alias = curved.clone();
     drop(curved);
     assert!(parent.removed.lock().expect("curved aliases").is_empty());
