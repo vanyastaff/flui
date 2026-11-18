@@ -1,4 +1,4 @@
-use flui_interaction::TapGestureRecognizer;
+use flui_interaction::gesture::TapGestureRecognizer;
 
 fn assert_send<T: Send>() {}
 

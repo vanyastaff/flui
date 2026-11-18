@@ -1,12 +1,9 @@
 use flui_foundation::geometry::Offset;
-use flui_interaction::{
-    ForcePressDetails, LongPressEndDetails, LongPressMoveUpdateDetails, PointerId, PointerKind,
-    TapDownDetails, TapUpDetails, Velocity,
-    gesture::{
+use flui_interaction::{gesture::{ForcePressDetails, LongPressEndDetails, LongPressMoveUpdateDetails, TapDownDetails, TapUpDetails, Velocity}, ids::PointerId, gesture::{
         DoubleTapDetails, LongPressDetails, LongPressDownDetails, LongPressStartDetails,
         MultiDragEndDetails, MultiDragUpdateDetails, MultiTapDetails, TapDetails,
-    },
-};
+    }};
+use flui_platform::pointer::PointerKind;
 
 fn main() {
     let _ = TapDetails {

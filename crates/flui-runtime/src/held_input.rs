@@ -4,7 +4,10 @@ use std::cell::RefCell;
 use std::collections::VecDeque;
 
 use flui_foundation::PresentationId;
-use flui_interaction::{InputSurface, PointerEvent, PointerEventExt, PointerId};
+use flui_interaction::{
+    events::{PointerEvent, PointerEventExt},
+    ids::{InputSurface, PointerId},
+};
 
 use crate::input_tap::HeldInputRow;
 
@@ -1166,7 +1169,7 @@ mod tests {
         PointerEventExt as _, make_cancel_event_for_id, make_down_event_for_id,
         make_move_event_for_id, make_up_event_for_id,
     };
-    use flui_interaction::{PointerEvent, PointerId};
+    use flui_interaction::{events::PointerEvent, ids::PointerId};
 
     use super::{HELD_POINTER_CAPACITY, HeldPointerQueue, HeldPointerReplay};
 
@@ -1264,7 +1267,7 @@ mod tests {
         assert_eq!(events.len(), 1);
         assert!(matches!(events[0], PointerEvent::Up(_)));
         assert_eq!(
-            flui_interaction::PointerEventExt::pointer_id(&events[0]),
+            flui_interaction::events::PointerEventExt::pointer_id(&events[0]),
             Some(active_route)
         );
     }
@@ -1307,7 +1310,7 @@ mod tests {
         let restored = drain(&queue);
         let restored_ids: Vec<_> = restored
             .iter()
-            .map(flui_interaction::PointerEventExt::pointer_id)
+            .map(flui_interaction::events::PointerEventExt::pointer_id)
             .collect();
         assert_eq!(
             restored_ids,
@@ -1333,7 +1336,10 @@ mod tests {
         }
 
         assert!(queue.borrow().is_empty());
-        assert_eq!(drain(&queue), [] as [flui_interaction::PointerEvent; 0]);
+        assert_eq!(
+            drain(&queue),
+            [] as [flui_interaction::events::PointerEvent; 0]
+        );
     }
 
     fn dropping_open_sequences_mid_replay_keeps_only_complete_epochs() {
@@ -1360,7 +1366,7 @@ mod tests {
 
         let ids: Vec<_> = rest
             .iter()
-            .map(flui_interaction::PointerEventExt::pointer_id)
+            .map(flui_interaction::events::PointerEventExt::pointer_id)
             .collect();
         assert_eq!(ids, vec![Some(complete), Some(complete)]);
         assert!(matches!(rest[0], PointerEvent::Down(_)));
@@ -1372,7 +1378,7 @@ mod tests {
     /// embedded surface began while the tree was uncommitted stays its own.
     fn held_events_replay_to_the_surface_they_addressed() {
         let queue = queue();
-        let embedded = flui_interaction::GestureBinding::new()
+        let embedded = flui_interaction::binding::GestureBinding::new()
             .embed_surface()
             .expect("a surface identity");
         queue
@@ -1392,7 +1398,10 @@ mod tests {
             replayed,
             [
                 (embedded, Some(pointer(2))),
-                (flui_interaction::InputSurface::Window, Some(pointer(3))),
+                (
+                    flui_interaction::ids::InputSurface::Window,
+                    Some(pointer(3))
+                ),
                 (embedded, Some(pointer(2))),
             ]
         );

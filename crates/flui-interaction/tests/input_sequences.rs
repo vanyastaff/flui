@@ -8,14 +8,17 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use flui_foundation::geometry::Offset;
+use flui_foundation::{IdExhausted, InputSequenceId};
 use flui_interaction::events::{
     PointerEvent, PointerKind, make_down_event_for_id, make_move_event_for_id, make_scroll_event,
     make_up_event_for_id,
 };
 use flui_interaction::haptics::HapticsHost;
 use flui_interaction::{
-    ContactlessSource, EventPropagation, GestureBinding, HitTestEntry, HitTestResult, IdExhausted,
-    InputSequenceId, InputSurface, InteractionLane, PointerId, RenderId, ScrollLatchEnd,
+    binding::{ContactlessSource, GestureBinding},
+    gesture::ScrollLatchEnd,
+    ids::{InputSurface, PointerId},
+    pointer::{EventPropagation, HitTestEntry, HitTestResult, InteractionLane, RenderId},
 };
 use flui_platform::haptics::{HapticRequest, HapticTiming};
 use flui_platform::pointer::{DeviceId, ScrollPhase};

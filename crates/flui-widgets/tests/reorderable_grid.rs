@@ -238,7 +238,7 @@ fn mouse_drag(laid: &mut LaidOut, from: (f64, f64), to: (f64, f64)) {
 }
 
 fn touch(laid: &LaidOut, id: u64, (x, y): (f64, f64), phase: u8) {
-    let pointer = flui_interaction::PointerId::try_from(id).expect("nonzero contact");
+    let pointer = flui_interaction::ids::PointerId::try_from(id).expect("nonzero contact");
     let position = Offset::new(x, y);
     let event = match phase {
         0 => make_down_event_for_id(pointer, position, PointerKind::Touch),

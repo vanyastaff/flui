@@ -139,7 +139,7 @@ pub(crate) fn presentation_window(
     crate::app::presentation::PresentationWindow::new(host, accessibility)
         .with_text_store_host(text_store_host)
         .with_platform(platform)
-        .with_gesture_profiles(flui_interaction::GestureProfiles::preset(platform))
+        .with_gesture_profiles(flui_interaction::gesture::GestureProfiles::preset(platform))
 }
 
 /// The window a deferred open built, taken on the owner thread, which is the
@@ -796,7 +796,7 @@ mod tests {
                 let store = flui_interaction::testing::InMemoryTextStore::new("");
                 let _token = ui_runtime
                     .text_input_handle()
-                    .attach(flui_interaction::TextInputClient::new(store))
+                    .attach(flui_interaction::text_input::TextInputClient::new(store))
                     .expect("the presentation takes text input");
                 Ok(())
             }))

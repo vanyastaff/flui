@@ -29,7 +29,7 @@ capability, the client contract a text field implements, how the composing
 region renders, and how the candidate window follows it.
 
 Who *owns* a text-input session — the presentation, through
-`flui_interaction::TextInputOwner` — is ADR-0037 §5. This record states the
+`flui_interaction::text_input::TextInputOwner` — is ADR-0037 §5. This record states the
 behavior that ownership must deliver. The macOS `NSTextInputClient` contract is
 ADR-0069.
 

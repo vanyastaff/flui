@@ -8,7 +8,7 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use crate::common::{lay_out, tight};
-use flui_interaction::PointerDispatch;
+use flui_interaction::pointer::PointerDispatch;
 use flui_view::EventContext;
 use flui_widgets::prelude::HitTestBehavior;
 use flui_widgets::{Listener, SizedBox};
@@ -219,7 +219,7 @@ pub(crate) fn listener_routes_down_and_up_to_their_own_callbacks() {
 }
 
 pub(crate) fn listener_capture_retains_one_target_and_drop_delivers_loss() {
-    use flui_interaction::PointerCapture;
+    use flui_interaction::pointer::PointerCapture;
     use flui_platform::pointer::{CancelReason, PointerEvent};
     use std::cell::RefCell;
 
@@ -291,7 +291,7 @@ pub(crate) fn listener_capture_retains_one_target_and_drop_delivers_loss() {
 }
 
 pub(crate) fn listener_unmount_preserves_one_captured_contact_terminal() {
-    use flui_interaction::PointerCapture;
+    use flui_interaction::pointer::PointerCapture;
     use flui_platform::pointer::{CancelReason, PointerEvent};
     use std::cell::RefCell;
 
@@ -399,7 +399,9 @@ pub(crate) fn listener_unmount_preserves_one_captured_contact_terminal() {
 }
 
 pub(crate) fn listener_admission_keeps_terminal_delivery_and_weak_ownership() {
-    use flui_interaction::{CancelOutcome, GestureArenaMember, GestureContest, GestureRecognizer};
+    use flui_interaction::gesture::{
+        CancelOutcome, GestureArenaMember, GestureContest, GestureRecognizer,
+    };
     use std::cell::RefCell;
 
     struct ContactObserver(Rc<RefCell<Vec<&'static str>>>);
@@ -454,7 +456,9 @@ pub(crate) fn listener_admission_keeps_terminal_delivery_and_weak_ownership() {
 }
 
 pub(crate) fn listener_raw_observer_panic_still_delivers_the_recognizer_event() {
-    use flui_interaction::{CancelOutcome, GestureArenaMember, GestureContest, GestureRecognizer};
+    use flui_interaction::gesture::{
+        CancelOutcome, GestureArenaMember, GestureContest, GestureRecognizer,
+    };
     struct Observer(Rc<Cell<usize>>);
     impl GestureArenaMember for Observer {
         fn accept_gesture(&self, _: GestureContest) {}
@@ -503,7 +507,7 @@ pub(crate) fn listener_raw_observer_panic_still_delivers_the_recognizer_event() 
 }
 
 pub(crate) fn custom_recognizer_competes_through_a_listener() {
-    use flui_interaction::{
+    use flui_interaction::gesture::{
         ArenaMembership, CancelOutcome, ContactEnd, GestureArenaMember, GestureContest,
         GestureRecognizer, GestureSettings, PrimaryContact, TapGestureRecognizer,
     };

@@ -58,7 +58,7 @@ not require consumers to construct an exhaustive struct literal. The
 `trybuild_ui` family pins both rejected literals and supported constructors.
 
 ```rust
-use flui_interaction::{GestureArena, TapGestureRecognizer};
+use flui_interaction::gesture::{GestureArena, TapGestureRecognizer};
 
 let tap = TapGestureRecognizer::builder(GestureArena::new())
     .on_tap_down(|_| { /* contact */ })
@@ -137,15 +137,15 @@ predicted samples do not contribute, and a stationary release tail yields zero.
 Callbacks run outside state borrows and revalidate the exact contact after user
 clock calls. A failed clock or end callback cannot strand the next contact.
 
-Import these payloads from `flui_interaction` or `flui::interaction`. Callback
-argument annotations using the old generic snapshot for Down, Up or end must
-name the corresponding phase payload instead. Destructure with `..`, since
-these payloads are non-exhaustive.
+Import these payloads from `flui_interaction::gesture`, or from `flui::interaction`
+in an application. A callback argument annotation names the phase
+payload (Down, Up or end). Destructure with `..`, since these payloads are
+non-exhaustive.
 
 ```rust
-use flui_interaction::{
-    GestureArena, LongPressGestureRecognizer, LongPressMoveUpdateDetails,
-    LongPressEndDetails, TapGestureRecognizer, TapDownDetails, TapUpDetails,
+use flui_interaction::gesture::{
+    GestureArena, LongPressEndDetails, LongPressGestureRecognizer, LongPressMoveUpdateDetails,
+    TapDownDetails, TapGestureRecognizer, TapUpDetails,
 };
 
 let arena = GestureArena::new();
@@ -219,7 +219,7 @@ The default `ScaleStartMode::Scale` requires two contacts. Choose
 contacts join or leave:
 
 ```rust
-use flui_interaction::{GestureArena, ScaleGestureRecognizer};
+use flui_interaction::gesture::{GestureArena, ScaleGestureRecognizer};
 use flui_interaction::gesture::ScaleStartMode;
 
 let recognizer = ScaleGestureRecognizer::builder(GestureArena::new())
@@ -358,7 +358,8 @@ nothing more of that contact.
 ```rust
 use web_time::Instant;
 use flui_foundation::geometry::Offset;
-use flui_interaction::{PointerKind, Velocity, VelocityTracker};
+use flui_interaction::gesture::{Velocity, VelocityTracker};
+use flui_platform::pointer::PointerKind;
 
 let mut tracker = VelocityTracker::with_kind(PointerKind::Touch);
 let now = Instant::now();

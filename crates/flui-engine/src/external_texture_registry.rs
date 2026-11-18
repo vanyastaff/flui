@@ -523,6 +523,16 @@ impl KeptTextures {
         first_error.map_or(Ok(()), Err)
     }
 
+    /// Whether [`Self::prepare`] would write to `domain`'s queue: there are
+    /// allocations to make on this device or waiting images to upload.
+    pub(crate) fn would_write(&self, domain: &Arc<DeviceDomain>) -> bool {
+        let on_device = self
+            .registry
+            .as_ref()
+            .is_some_and(|registry| registry.is_on(domain));
+        !on_device || !self.waiting.is_empty()
+    }
+
     /// Put the textures on `domain`'s device for a draw, and answer whether
     /// it wrote to the queue, which the draw's submission, or a flush when
     /// the draw submits nothing, then carries.
@@ -532,13 +542,13 @@ impl KeptTextures {
     /// refuses (one past a new device's texture limit) leaves its texture's
     /// previous image, reported as a warning.
     pub(crate) fn prepare(&mut self, domain: &Arc<DeviceDomain>) -> bool {
+        if !self.would_write(domain) {
+            return false;
+        }
         let fresh = !self
             .registry
             .as_ref()
             .is_some_and(|registry| registry.is_on(domain));
-        if !fresh && self.waiting.is_empty() {
-            return false;
-        }
         let Self {
             registry,
             drawn,

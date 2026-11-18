@@ -298,12 +298,12 @@ pub(crate) fn a_held_embedded_hover_replays_to_its_surface() {
         .embed_surface()
         .expect("a surface identity");
     let mut hover = flui_interaction::events::make_move_event_for_id(
-        flui_interaction::PointerId::try_from(3_u64).expect("nonzero"),
+        flui_interaction::ids::PointerId::try_from(3_u64).expect("nonzero"),
         Offset::new(4.0, 6.0),
         PointerKind::Mouse,
     )
     .expect("finite test position");
-    let flui_interaction::PointerEvent::Move(update) = &mut hover else {
+    let flui_interaction::events::PointerEvent::Move(update) = &mut hover else {
         unreachable!("the move helper builds a move")
     };
     update.buttons = flui_interaction::events::pointer::PointerButtons::NONE;

@@ -13,8 +13,8 @@
 
 use flui_foundation::Single;
 use flui_foundation::geometry::{EdgeInsets, Point, Rect, Size};
-use flui_interaction::GestureSettingsProvider;
 use flui_interaction::events::PointerKind;
+use flui_interaction::gesture::GestureSettingsProvider;
 use flui_rendering::{RenderUpdateImpact, parent_data::BoxParentData, traits::RenderBox};
 
 /// Where a [`RenderHitSlop`] reads its minimum target side.

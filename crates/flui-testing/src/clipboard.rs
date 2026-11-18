@@ -38,7 +38,7 @@ use std::collections::{BTreeMap, VecDeque};
 use std::{cell::RefCell, fmt, rc::Rc, sync::Arc};
 
 use flui_foundation::panic::FirstPanic;
-use flui_interaction::{ClipboardBackend, ClipboardCapability, ClipboardHandle};
+use flui_interaction::text_input::{ClipboardBackend, ClipboardCapability, ClipboardHandle};
 use flui_platform::{
     ClipboardError, ClipboardRead, ClipboardWrite, ClipboardWritten, Concealment, ExpiryClearing,
     Unsupported,

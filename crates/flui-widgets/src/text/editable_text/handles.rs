@@ -17,12 +17,11 @@ use flui_foundation::TextDirection;
 use flui_foundation::geometry::Offset;
 use flui_foundation::panic::FirstPanic;
 use flui_foundation::{ChangeNotifier, Listenable};
-use flui_interaction::HapticsHandle;
-use flui_interaction::{
-    GestureEndReason, GestureRecognizer, LongPressGestureRecognizer, PointerKindSet,
-};
+use flui_interaction::gesture::{GestureEndReason, GestureRecognizer, LongPressGestureRecognizer};
+use flui_interaction::haptics::HapticsHandle;
 use flui_painting::typography::TextPosition;
 use flui_platform::TargetPlatform;
+use flui_platform::input_capabilities::PointerKindSet;
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_rendering::layer::LayerLink;
 use flui_rendering::pipeline::{LeaderWatch, PipelineCell};

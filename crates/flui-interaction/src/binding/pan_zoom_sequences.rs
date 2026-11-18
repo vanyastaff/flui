@@ -6,9 +6,9 @@
 //! edge permits the next fresh source to choose a different target.
 
 use crate::containment::keep_first;
+use rustc_hash::FxHashMap;
 use std::{
     cell::{Cell, RefCell},
-    collections::HashMap,
     rc::Rc,
 };
 
@@ -88,7 +88,7 @@ pub(super) enum PanZoomAdmission {
 
 #[derive(Default)]
 pub(super) struct PanZoomSequences {
-    sessions: RefCell<HashMap<(InputSurface, SignalSource), Rc<PanZoomSequence>>>,
+    sessions: RefCell<FxHashMap<(InputSurface, SignalSource), Rc<PanZoomSequence>>>,
 }
 
 impl PanZoomSequences {

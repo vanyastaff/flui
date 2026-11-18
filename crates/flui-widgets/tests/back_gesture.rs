@@ -183,7 +183,10 @@ pub(crate) fn mounted_back_swipe_reads_retained_admission_settings() {
     use flui_interaction::events::{
         PointerKind, make_cancel_event_for_id, make_down_event_for_id, make_move_event_for_id,
     };
-    use flui_interaction::{GestureSettings, GestureSettingsSource, PointerId};
+    use flui_interaction::{
+        gesture::{GestureSettings, GestureSettingsSource},
+        ids::PointerId,
+    };
     use flui_painting::styling::Color;
     use flui_view::environment::VsyncScope;
     use flui_widgets::{ColoredBox, GestureDetector};
@@ -275,7 +278,7 @@ pub(crate) fn replacing_authored_back_swipe_policy_cancels_the_outgoing_contact(
     use flui_interaction::events::{
         PointerKind, make_down_event_for_id, make_move_event_for_id, make_up_event_for_id,
     };
-    use flui_interaction::{GestureSettings, PointerId};
+    use flui_interaction::{gesture::GestureSettings, ids::PointerId};
     use flui_painting::styling::Color;
     use flui_view::environment::VsyncScope;
     use flui_widgets::{ColoredBox, GestureDetector};
@@ -408,7 +411,7 @@ pub(crate) fn mounted_back_swipe_settle_uses_the_admitted_fling_bound() {
     use crate::gesture_settings::SettingsScope;
     use flui_animation::Vsync;
     use flui_foundation::geometry::Point;
-    use flui_interaction::{GestureSettings, GestureSettingsSource};
+    use flui_interaction::gesture::{GestureSettings, GestureSettingsSource};
     use flui_painting::styling::Color;
     use flui_platform::{
         EventTime,

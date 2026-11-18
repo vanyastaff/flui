@@ -40,7 +40,7 @@
 //! themselves:
 //!
 //! ```rust
-//! use flui_interaction::{GestureArena, GestureDisposition, PointerId, TapGestureRecognizer};
+//! use flui_interaction::{gesture::{GestureArena, GestureDisposition, TapGestureRecognizer}, ids::PointerId};
 //! let arena = GestureArena::new();
 //! let pointer = PointerId::try_from(1_u64)?;
 //! let my_recognizer = TapGestureRecognizer::builder(arena.clone()).build();
@@ -255,7 +255,7 @@ impl GestureDisposition {
 /// use flui_interaction::gesture::{
 ///     GestureArena, GestureArenaEntry, GestureArenaMember, GestureContest, GestureDisposition,
 /// };
-/// use flui_interaction::PointerId;
+/// use flui_interaction::ids::PointerId;
 ///
 /// #[derive(Default)]
 /// struct MyRecognizer {
@@ -1050,7 +1050,7 @@ impl GestureArena {
     /// ```rust
     /// use std::{cell::RefCell, rc::Rc};
     /// use flui_interaction::gesture::{GestureArena, GestureObservation};
-    /// use flui_interaction::{GestureArenaMember, GestureContest, PointerId};
+    /// use flui_interaction::{gesture::{GestureArenaMember, GestureContest}, ids::PointerId};
     ///
     /// struct Member;
     /// impl GestureArenaMember for Member {
@@ -1072,7 +1072,7 @@ impl GestureArena {
     /// arena.close(pointer);
     /// arena.drain_deferred_resolutions();
     /// assert_eq!(*wins.borrow(), 1);
-    /// # Ok::<(), flui_interaction::IdExhausted>(())
+    /// # Ok::<(), flui_foundation::IdExhausted>(())
     /// ```
     ///
     /// # Errors
@@ -1658,7 +1658,7 @@ impl GestureArena {
     /// exact contact lifecycle around routing each pointer event. On Up it
     /// detaches the contact before callbacks and sweeps that detached generation;
     /// on Cancel it abandons that generation without granting a winner. Composed
-    /// standalone drivers use [`crate::GestureBinding`] too, rather than finishing
+    /// standalone drivers use [`crate::binding::GestureBinding`] too, rather than finishing
     /// an event by its reusable pointer ID after callbacks. This is the arena a
     /// `GestureBinding` hands down to a subtree.
     #[inline]

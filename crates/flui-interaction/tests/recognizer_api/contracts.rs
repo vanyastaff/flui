@@ -15,13 +15,17 @@ use std::{
 use flui_foundation::MonotonicClock;
 use flui_foundation::geometry::Offset;
 use flui_interaction::{
-    ArenaMembership, BeginContactError, CancelOutcome, DoubleTapGestureRecognizer, GestureArena,
-    GestureArenaMember, GestureRecognizer, GestureSettings, MultiTapGestureRecognizer, PointerId,
-    PrimaryContact, RecognizerSet, ScaleGestureRecognizer, cancel_all,
     events::{
         PointerButton, PointerEvent, PointerKind, make_down_event_for_id,
         make_down_event_for_id_with_button, make_move_event_for_id, make_up_event_for_id,
     },
+    gesture::{
+        ArenaMembership, BeginContactError, CancelOutcome, DoubleTapGestureRecognizer,
+        GestureArena, GestureArenaMember, GestureRecognizer, GestureSettings,
+        MultiTapGestureRecognizer, PrimaryContact, RecognizerSet, ScaleGestureRecognizer,
+        cancel_all,
+    },
+    ids::PointerId,
     pointer::PointerDispatch,
 };
 
@@ -621,7 +625,8 @@ fn double_tap_drop_releases_a_pending_sweep_without_inline_notifications() {
 fn multi_tap_drop_releases_a_pending_sweep_without_inline_notifications() {
     held_recognizer_drop_releases_pending_sweep(
         |arena| {
-            MultiTapGestureRecognizer::builder(arena, flui_interaction::MultiTapCount::TWO).build()
+            MultiTapGestureRecognizer::builder(arena, flui_interaction::gesture::MultiTapCount::TWO)
+                .build()
         },
         true,
     );
@@ -631,7 +636,7 @@ fn held_recognizer_drop_releases_pending_sweep(
     make_owner: fn(GestureArena) -> Rc<dyn GestureRecognizer>,
     second_contact: bool,
 ) {
-    let arena = GestureArena::binding_driven(Arc::new(flui_interaction::ManualClock::new()));
+    let arena = GestureArena::binding_driven(Arc::new(flui_foundation::ManualClock::new()));
     let owner = make_owner(arena.clone());
     let first_log = Log::default();
     let second_log = Log::default();

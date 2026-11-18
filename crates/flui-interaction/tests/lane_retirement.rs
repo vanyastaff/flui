@@ -9,7 +9,7 @@ use flui_interaction::events::{PointerKind, make_down_event};
 use flui_interaction::pointer::{
     EventPropagation, MouseRegionCallbacks, MouseTracker, MouseTrackerAnnotation, PointerMotionKind,
 };
-use flui_interaction::{
+use flui_interaction::pointer::{
     HitTestEntry, InteractionDispatchError, InteractionDispatchHandle, InteractionLane, RenderId,
 };
 use flui_painting::paint::{Path, Shader};
@@ -652,8 +652,8 @@ fn saved_routes_are_stale_after_exceptional_retirement() {
 }
 
 fn cached_mouse_exit_cannot_outlive_its_lane() {
-    use flui_interaction::HitTestResult;
     use flui_interaction::events::make_move_event;
+    use flui_interaction::pointer::HitTestResult;
     for under_surviving_lane in [false, true] {
         let lane = InteractionLane::try_new().expect("lane");
         let survivor = InteractionLane::try_new().expect("survivor");
@@ -691,8 +691,8 @@ fn cached_mouse_exit_cannot_outlive_its_lane() {
 }
 
 fn snapshotted_mouse_exits_recheck_lane_after_reentry() {
-    use flui_interaction::HitTestResult;
     use flui_interaction::events::make_move_event;
+    use flui_interaction::pointer::HitTestResult;
     let owner = Rc::new(RefCell::new(Some(
         InteractionLane::try_new().expect("lane"),
     )));

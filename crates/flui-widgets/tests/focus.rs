@@ -26,7 +26,9 @@ fn traversal_field(node: &Rc<FocusNode>, x: f64, y: f64) -> BoxedView {
 
 pub(crate) fn traversal_groups_order_blocks_without_creating_focus_scopes() {
     use flui_foundation::TextDirection;
-    use flui_interaction::{FocusTraversalPolicy, ReadingOrderPolicy, TraversalEdgeBehavior};
+    use flui_interaction::focus::{
+        FocusTraversalPolicy, ReadingOrderPolicy, TraversalEdgeBehavior,
+    };
     use flui_widgets::interaction::FocusTraversalGroup;
     #[derive(Debug)]
     struct Reverse;
@@ -76,7 +78,7 @@ pub(crate) fn traversal_groups_order_blocks_without_creating_focus_scopes() {
 
 pub(crate) fn nested_scope_edges_visit_the_containing_group_and_reuse_policy_order() {
     use flui_foundation::TextDirection;
-    use flui_interaction::{
+    use flui_interaction::focus::{
         FocusTraversalPolicy, KeyEventResult, ReadingOrderPolicy, TraversalEdgeBehavior,
     };
     use flui_widgets::interaction::FocusTraversalGroup;
@@ -138,7 +140,7 @@ pub(crate) fn nested_scope_edges_visit_the_containing_group_and_reuse_policy_ord
 }
 
 pub(crate) fn typed_focus_overrides_fall_back_after_target_invalidation() {
-    use flui_interaction::FocusTraversalOverrides;
+    use flui_interaction::focus::FocusTraversalOverrides;
     let nodes = [FocusNode::new(), FocusNode::new(), FocusNode::new()];
     let scope = FocusScopeNode::new();
     let first = Positioned::new(
@@ -175,7 +177,7 @@ pub(crate) fn typed_focus_overrides_fall_back_after_target_invalidation() {
         "disabled override falls back to policy"
     );
     let foreign = FocusNode::new();
-    let foreign_manager = flui_interaction::FocusManager::new();
+    let foreign_manager = flui_interaction::focus::FocusManager::new();
     let _attachment = foreign_manager
         .root_scope()
         .attach_node(&foreign)
@@ -192,7 +194,7 @@ pub(crate) fn typed_focus_overrides_fall_back_after_target_invalidation() {
 }
 
 pub(crate) fn arrow_traversal_prefers_the_beam_and_respects_group_edges() {
-    use flui_interaction::{KeyEventResult, TraversalEdgeBehavior};
+    use flui_interaction::focus::{KeyEventResult, TraversalEdgeBehavior};
     use flui_platform::{
         EventTime,
         keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, NamedKey},
@@ -244,7 +246,7 @@ pub(crate) fn arrow_traversal_prefers_the_beam_and_respects_group_edges() {
 }
 
 pub(crate) fn widget_scope_edge_configuration_reaches_the_tab_path() {
-    use flui_interaction::{KeyEventResult, TraversalEdgeBehavior};
+    use flui_interaction::focus::{KeyEventResult, TraversalEdgeBehavior};
     for edge in [
         TraversalEdgeBehavior::Stop,
         TraversalEdgeBehavior::LeaveView,

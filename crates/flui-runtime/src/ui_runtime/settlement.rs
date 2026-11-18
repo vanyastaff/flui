@@ -6,7 +6,7 @@ use std::rc::Rc;
 
 use flui_foundation::FrameEpoch;
 use flui_foundation::panic::FirstPanic;
-use flui_interaction::HapticCut;
+use flui_interaction::haptics::HapticCut;
 use flui_layer::SceneVersionId;
 use flui_platform::SystemUiOverlayStyle;
 use flui_platform::input_regions::InputRegion;

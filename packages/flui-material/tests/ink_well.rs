@@ -11,8 +11,8 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use common::{LaidOut, lay_out, tight};
-use flui_interaction::KeyEventResult;
 use flui_interaction::events::{Code, Key, KeyEvent, NamedKey};
+use flui_interaction::focus::KeyEventResult;
 use flui_interaction::testing::input::KeyEventBuilder;
 use flui_material::{Checkbox, InkWell, Theme, ThemeData};
 use flui_painting::DrawOp;
