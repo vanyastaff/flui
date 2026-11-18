@@ -56,8 +56,14 @@ pub use window::{
     WindowState,
 };
 
-/// The native recording format's major version.
-pub const FORMAT_VERSION: u32 = 3;
+/// The native recording format's major version, the one a writer writes.
+pub const FORMAT_VERSION: u32 = 4;
+
+/// The oldest major version a reader still reads. Version 4 changed no field and no shape: it
+/// bounds every device pixel ratio a row holds to `1/32..=32`, the range a screen can have,
+/// which version 3 hosts already wrote. A reader reads a version 3 recording row by row and
+/// refuses only a row whose ratio is outside that range.
+pub const OLDEST_READABLE_VERSION: u32 = 3;
 
 /// The header field that names the format and its major version.
 pub const VERSION_KEY: &str = "flui_native_recording";

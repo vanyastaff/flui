@@ -75,6 +75,10 @@ pub enum WireError {
     /// A value the vocabulary's validating constructor refuses.
     #[error("invalid value: {0}")]
     Invalid(String),
+    /// A device pixel ratio no screen has: zero, negative, or outside
+    /// `DevicePixelRatio::MIN..=MAX`.
+    #[error("a device pixel ratio no screen has: {0}")]
+    Ratio(f64),
     /// The vocabulary grew a variant of this type the wire form does not
     /// mirror yet: it is added to `flui_protocol::input_recording` and to the
     /// generated variant table.
@@ -1416,7 +1420,7 @@ impl TryConvert<rec::WindowObservation> for WindowObservation {
             } => Self::Metrics(
                 WindowMetrics::try_new(
                     flui_foundation::geometry::DeviceSize::new(width, height),
-                    scale_factor,
+                    pixel_ratio(scale_factor)?,
                 )
                 .map_err(invalid)?,
             ),
@@ -1874,8 +1878,9 @@ fn regional_from_wire(wire: Option<Box<wire::Regional>>) -> Result<RegionalParts
     })
 }
 
+/// The device pixel ratio a row holds, refused as [`WireError::Ratio`] when no screen has it.
 fn pixel_ratio(value: f64) -> Result<DevicePixelRatio> {
-    DevicePixelRatio::try_new(value).ok_or_else(|| invalid(format!("pixel ratio {value}")))
+    DevicePixelRatio::try_new(value).ok_or(WireError::Ratio(value))
 }
 
 /// The preferences `wire` describes, validated as the `with_*` methods

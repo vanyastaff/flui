@@ -22,7 +22,7 @@ fn controller(ms: u64) -> (DrivenController, AnimationController) {
 
 fn forward_from_mid_scales_run_duration() {
     let (_owner, c) = controller(100);
-    c.forward_from(Some(0.5)).unwrap();
+    c.forward_from(0.5).unwrap();
     c.tick_at(Duration::from_millis(25));
     assert!(
         (c.value() - 0.75).abs() < 1e-3,
@@ -59,13 +59,9 @@ fn small_remaining_distance_runs_until_its_scaled_deadline() {
     for reverse in [false, true] {
         let (_owner, c) = controller(1000);
         let (from, target, run) = if reverse {
-            (0.5e-6, 0.0, c.reverse_from(Some(0.5e-6)).unwrap())
+            (0.5e-6, 0.0, c.reverse_from(0.5e-6).unwrap())
         } else {
-            (
-                1.0 - 0.5e-6,
-                1.0,
-                c.forward_from(Some(1.0 - 0.5e-6)).unwrap(),
-            )
+            (1.0 - 0.5e-6, 1.0, c.forward_from(1.0 - 0.5e-6).unwrap())
         };
         assert_eq!(c.value(), from, "remaining distance is nonzero");
         assert!(run.is_pending());
@@ -89,9 +85,9 @@ fn small_from_jumps_notify_their_exact_value() {
         let listener = c.listen(Rc::new(move || observed.borrow_mut().push(source.value())));
         let from = if reverse { 1.0 - 0.5e-6 } else { 0.5e-6 };
         let run = if reverse {
-            c.reverse_from(Some(from))
+            c.reverse_from(from)
         } else {
-            c.forward_from(Some(from))
+            c.forward_from(from)
         }
         .unwrap();
         assert_eq!(
@@ -193,14 +189,14 @@ fn bounded_controller_clamps_infinite_target_and_from_to_the_pointed_at_bound() 
     c.tick_at(Duration::from_millis(100));
     assert_eq!(c.value(), 1.0);
     let (_owner, c) = controller(100);
-    c.forward_from(Some(f64::INFINITY)).unwrap();
+    c.forward_from(f64::INFINITY).unwrap();
     assert_eq!(
         c.value(),
         1.0,
         "clamped from equals the forward target synchronously"
     );
     let (_owner, c) = controller(100);
-    c.reverse_from(Some(f64::NEG_INFINITY)).unwrap();
+    c.reverse_from(f64::NEG_INFINITY).unwrap();
     assert_eq!(
         c.value(),
         0.0,

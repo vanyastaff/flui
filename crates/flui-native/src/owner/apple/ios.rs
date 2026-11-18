@@ -1107,6 +1107,12 @@ impl host::Preferences<IOSLoop> for IOSLoop {
         })?;
         owner.preferences.get(marker).sample()
     }
+
+    fn delivered(owner: &IOSLoop, values: &SystemPreferences) {
+        if let Some(marker) = MainThreadMarker::new() {
+            owner.preferences.get(marker).delivered(values);
+        }
+    }
 }
 
 /// UIKit tells the application delegate, which is the loop's, that the process

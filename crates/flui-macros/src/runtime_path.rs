@@ -9,6 +9,9 @@ use syn::Path;
 pub(crate) enum Runtime {
     View,
     Foundation,
+    /// `flui-foundation`'s `geometry` module, which the facade and the SDK
+    /// re-export under the same name.
+    Geometry,
     Animation,
     Widgets,
     App,
@@ -29,6 +32,7 @@ impl Runtime {
         let (package, module) = match self {
             Self::View => ("flui-view", "view"),
             Self::Foundation => ("flui-foundation", "foundation"),
+            Self::Geometry => ("flui-foundation", "geometry"),
             Self::Animation => ("flui-animation", "animation"),
             Self::Widgets => ("flui-widgets", "widgets"),
             Self::App => ("flui-app", "app"),
@@ -41,7 +45,12 @@ impl Runtime {
             return module_path(found, "flui-sdk", module, span);
         }
         if let Ok(found) = crate_name(package) {
-            return absolute_path(found, package, span);
+            let path = absolute_path(found, package, span)?;
+            return Ok(if matches!(self, Self::Geometry) {
+                append(path, module, span)
+            } else {
+                path
+            });
         }
         if let Ok(found) = crate_name("flui") {
             return module_path(found, "flui", module, span);
@@ -65,10 +74,14 @@ impl Runtime {
 /// `::<crate>::<module>` for a crate that re-exports the runtime crates as
 /// modules: the facade and the SDK.
 fn module_path(found: FoundCrate, package: &str, module: &str, span: Span) -> syn::Result<Path> {
-    let mut path = absolute_path(found, package, span)?;
+    Ok(append(absolute_path(found, package, span)?, module, span))
+}
+
+/// `path::module`.
+fn append(mut path: Path, module: &str, span: Span) -> Path {
     path.segments
         .push(syn::PathSegment::from(syn::Ident::new(module, span)));
-    Ok(path)
+    path
 }
 
 fn absolute_path(found: FoundCrate, package: &str, span: Span) -> syn::Result<Path> {

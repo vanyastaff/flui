@@ -1254,12 +1254,16 @@ pub mod manipulation {
             let time = contacts.clock().stamp(frame.time, ClockChoice::Counter)?;
             let scale = frame.scale;
             let position = PointerPosition::try_new(Point::new(
-                frame.position.0 / scale,
-                frame.position.1 / scale,
+                scale.to_logical(frame.position.0),
+                scale.to_logical(frame.position.1),
             ))
             .ok()?;
-            let delta = ScrollDelta::try_new(ScrollUnit::Pixels, dx / scale, dy / scale)
-                .unwrap_or_else(|_| ScrollDelta::zero(ScrollUnit::Pixels));
+            let delta = ScrollDelta::try_new(
+                ScrollUnit::Pixels,
+                scale.to_logical(dx),
+                scale.to_logical(dy),
+            )
+            .unwrap_or_else(|_| ScrollDelta::zero(ScrollUnit::Pixels));
             Some(PlatformInput::Pointer(PointerEvent::Scroll(
                 ScrollEvent::new(primary_mouse_info(), time, position, delta)
                     .with_precision(ScrollPrecision::Precise)

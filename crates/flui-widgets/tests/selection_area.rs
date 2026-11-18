@@ -1293,7 +1293,7 @@ pub(crate) fn a_clipped_link_leaves_its_runs_with_the_text() {
     let live = std::sync::Arc::new(std::sync::Mutex::new(consumer(&laid)));
     let delivered = std::sync::Arc::clone(&live);
     laid.pipeline_owner().with_mut(|owner| {
-        owner.set_semantics_update_callback(std::sync::Arc::new(move |packet| {
+        owner.set_semantics_update_callback(Rc::new(move |packet| {
             delivered
                 .lock()
                 .expect("consumer lock")

@@ -121,11 +121,8 @@ impl MoveBatch {
 
 fn position(reading: &NativeReading) -> Result<PointerPosition, DecodeFault> {
     let raw = reading.position.ok_or(DecodeFault::MissingPosition)?;
-    if !(reading.scale.is_finite() && reading.scale > 0.0) {
-        return Err(DecodeFault::Scale(reading.scale));
-    }
     Ok(PointerPosition::try_new(Point::new(
-        raw.x / reading.scale,
-        raw.y / reading.scale,
+        reading.scale.to_logical(raw.x),
+        reading.scale.to_logical(raw.y),
     ))?)
 }

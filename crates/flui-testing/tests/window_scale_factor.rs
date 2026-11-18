@@ -102,40 +102,23 @@ fn rescaling_one_window_leaves_the_other(
     );
 }
 
-/// A scale the window cannot have metrics at is answered, typed, and leaves
-/// the window as it was: no silent return at the old scale.
-pub(crate) fn a_scale_no_window_can_have_is_answered_and_changes_nothing() {
-    use flui_foundation::geometry::InvalidMetrics;
-
+/// The largest ratio a screen can have is a scale the window takes: its
+/// metrics stay finite and its bounds follow. A ratio outside that range is
+/// not a `DevicePixelRatio`, so no window is asked for one.
+pub(crate) fn the_largest_ratio_a_screen_can_have_is_a_scale_the_window_takes() {
     let (mut host, window, _) = two_windows();
     host.set_scale_factor(
         window,
         flui_foundation::geometry::DevicePixelRatio::try_new(2.0).expect("a ratio in range"),
     );
     let _ = host.pump(Duration::from_millis(16));
-    let at_two = A11yRect::new(0.0, 0.0, 80.0, 48.0);
-    assert_eq!(probe_bounds(&host, window), at_two);
-    for refused in [64.0, 1.0 / 64.0, 0.0, f64::NAN] {
-        assert!(
-            matches!(
-                host.try_set_scale_factor(window, refused),
-                Err(InvalidMetrics::InvalidScale(_))
-            ),
-            "{refused}"
-        );
-    }
-    let _ = host.pump(Duration::from_millis(16));
     assert_eq!(
         probe_bounds(&host, window),
-        at_two,
-        "the window keeps the scale it had"
+        A11yRect::new(0.0, 0.0, 80.0, 48.0)
     );
     assert!(
-        host.try_set_scale_factor(
-            window,
-            flui_foundation::geometry::DevicePixelRatio::MAX.get()
-        )
-        .is_ok(),
+        host.try_set_scale_factor(window, flui_foundation::geometry::DevicePixelRatio::MAX)
+            .is_ok(),
         "the largest ratio is one"
     );
     let _ = host.pump(Duration::from_millis(16));

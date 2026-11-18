@@ -392,8 +392,8 @@ impl TextServices {
     }
 
     /// The window's scale, as the documents answer layout queries at it.
-    pub(crate) fn scale(&self) -> f64 {
-        self.scale.scale()
+    pub(crate) fn scale(&self) -> flui_foundation::geometry::DevicePixelRatio {
+        self.scale.ratio()
     }
 
     /// The window moved, or its DPI changed: the focused field's text sits

@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
 use std::time::{Duration, Instant};
 
-use flui_foundation::geometry::Point;
+use flui_foundation::geometry::{DevicePixelRatio, Point};
 use flui_foundation::{DataTransferId, DragSessionId, UiRuntimeId};
 use flui_platform::data_transfer::{
     DragTransport as _, DropFeedback, Mime, RepresentationDescriptor, RepresentationIndex,
@@ -485,7 +485,10 @@ impl Target {
                 Rc::clone(&handler) as _,
                 InputCapabilities::UNAVAILABLE,
             )),
-            scale: WindowScale::new(scale),
+            scale: WindowScale::new(
+                DevicePixelRatio::try_new(scale)
+                    .expect("a test window at a ratio a screen can have"),
+            ),
         });
         xcb.flush().expect("the requests are sent");
         Some(Self {

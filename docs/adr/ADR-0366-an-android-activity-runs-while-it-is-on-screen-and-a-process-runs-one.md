@@ -92,7 +92,7 @@ application the activities it started for results.
   `onPause` on even before its focus report, as Flutter's lifecycle channel reads it.
 
 The loop and the window share the standing as one atomic byte (`ActivityFlags`). The loop asks
-`gate()` for its frame gate, its input drain, its preference cadence and `poll_timeout`, and the
+`gate()` for its frame gate, its input drain, its own preference reads and `poll_timeout`, and the
 window for its execution state and its redraw; `Stop` releases
 the surface (after recording the suspension, before telling the window) and `Start` asks for it
 again; `Pause` ends the input contacts and changes nothing else. While the Activity is off screen

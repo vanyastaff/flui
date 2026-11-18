@@ -52,7 +52,8 @@ pub struct MouseGeometry {
     pub double_click_area: [i32; 2],
     /// The drag threshold, horizontal and vertical.
     pub drag_tolerance: [i32; 2],
-    /// The device pixel ratio the values were sampled at.
+    /// The device pixel ratio the values were sampled at, within `1/32..=32`: the range a
+    /// screen can have, and a reader refuses a row outside it.
     pub pixel_ratio: f64,
 }
 
@@ -69,7 +70,8 @@ pub struct TouchGeometry {
     pub min_fling: i32,
     /// The fastest fling, per second.
     pub max_fling: i32,
-    /// The device pixel ratio the values were sampled at.
+    /// The device pixel ratio the values were sampled at, within `1/32..=32`: the range a
+    /// screen can have, and a reader refuses a row outside it.
     pub pixel_ratio: f64,
 }
 

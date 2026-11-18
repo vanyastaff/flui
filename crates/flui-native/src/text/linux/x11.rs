@@ -306,7 +306,7 @@ fn locate(
 ) -> Locate {
     Box::new(move |rect: Bounds<f64>| {
         let scale = scale.get();
-        let pixels = |value: f64| whole(value * scale);
+        let pixels = |value: f64| whole(scale.to_device(value));
         let (x, y) = (pixels(rect.origin.x), pixels(rect.origin.y));
         let (width, height) = (
             pixels(rect.size.width).max(0),

@@ -468,7 +468,7 @@ impl WindowsWindow {
             // scale from this one value.
             let scale =
                 crate::owner::windows::WindowScale::at_open(GetDpiForWindow(hwnd), scale_factor);
-            let scale_factor = scale.scale();
+            let scale_factor = scale.ratio();
             let mut client = RECT::default();
             let initial_size = if GetClientRect(hwnd, &raw mut client).is_ok() {
                 Size::new(client.right - client.left, client.bottom - client.top)
@@ -482,15 +482,15 @@ impl WindowsWindow {
             let state = Rc::new(Cell::new(WindowRecord {
                 bounds: Bounds {
                     origin: Point::new(
-                        origin.x as f64 / scale_factor,
-                        origin.y as f64 / scale_factor,
+                        scale_factor.to_logical(origin.x as f64),
+                        scale_factor.to_logical(origin.y as f64),
                     ),
                     size: Size::new(
-                        initial_size.width as f64 / scale_factor,
-                        initial_size.height as f64 / scale_factor,
+                        scale_factor.to_logical(initial_size.width as f64),
+                        scale_factor.to_logical(initial_size.height as f64),
                     ),
                 },
-                scale_factor: scale.ratio(),
+                scale_factor,
                 visible: options.visible,
                 focused: false,
             }));
@@ -1457,7 +1457,7 @@ impl PlatformWindow for WindowsWindow {
         // here; any other window under the point is another application's.
         let Some((window, target_scale)) =
             super::proc::with_window_context(root, "window_at", |context| {
-                (context.window_id, context.scale.scale())
+                (context.window_id, context.scale.ratio())
             })
         else {
             return WindowAt::Outside;
@@ -1478,8 +1478,8 @@ impl PlatformWindow for WindowsWindow {
         WindowAt::Window {
             window,
             position: Point::new(
-                f64::from(point.x) / target_scale,
-                f64::from(point.y) / target_scale,
+                target_scale.to_logical(f64::from(point.x)),
+                target_scale.to_logical(f64::from(point.y)),
             ),
         }
     }

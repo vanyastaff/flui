@@ -60,7 +60,6 @@ src/
 │
 ├── keyframes.rs      # Keyframes, KeyframesBuilder, KeyframesError
 ├── stagger.rs        # Stagger, StaggerOrigin
-├── prelude.rs        # common motion and observation imports
 ├── error.rs          # AnimationError
 └── test_cases.rs     # table-test runner (cfg(test))
 ```
@@ -501,13 +500,12 @@ sampled the current frame, preserving local-time continuity.
 
 ### Public imports preserve ownership and type identity
 
-The root is the canonical type interface. Implementation files are private;
-`curve`, `curves` and `simulation` remain explicit domain namespaces. The
-focused `prelude` contains common owners, observers and mapping traits, while
-frame stamps, registry publication and recovery relays require explicit imports.
-The SDK's whole-crate alias exposes these identical items; it adds no adapter.
+The root is the one path to every public item, and implementation modules are
+private. `curves` is the only public module: it is the namespace of the easing
+presets (`curves::EASE_IN`). There is no prelude. The SDK's whole-crate alias
+exposes these identical items; it adds no adapter.
 `the_re_exports_are_the_facades_types` pins owner/view/run/track identity, and
-the SDK's `nested_motion` compiler fixture resolves the derive through its prelude.
+the SDK's `nested_motion` compiler fixture resolves the derive from the root.
 
 `Animatable::animate` supplies method composition directly. `Tween<T>` replaces
 per-value aliases without changing geometry, color or matrix interpolation.
@@ -779,17 +777,17 @@ public controller commands in both directions.
 
 It also notifies value listeners only when the value actually moved,
 measured against the value at METHOD ENTRY, before
-`forward_from(Some(x))`/`reverse_from(Some(x))` apply `from`. A settle-time
+`forward_from(x)`/`reverse_from(x)` apply `from`. A settle-time
 comparison against the post-`from` value would miss a jump:
-`forward_from(Some(1.0))` from `0.3` lands exactly on the target it was told
+`forward_from(1.0)` from `0.3` lands exactly on the target it was told
 to jump to, so comparing the post-`from` value to the target always reads
 "unchanged" there.
 
 **The same entry-value rule extends to the NON-settling path.** A real run
-that still applies `from` (`forward_from(Some(x))`/`reverse_from(Some(x))`
+that still applies `from` (`forward_from(x)`/`reverse_from(x)`
 when the resulting distance and duration are both nonzero) notifies iff
 `from` actually moved the value, and never notifies unconditionally. One case is worth naming
-because it looks surprising at first: `forward_from(Some(0.0))` from `1.0`
+because it looks surprising at first: `forward_from(0.0)` from `1.0`
 with a Duration::ZERO base ends at `1.0` (a Forward run settles at the
 UPPER bound, never at `from`) and fires NO value notification at all — net
 unchanged; an observer reads `1.0` before and after the call.

@@ -62,6 +62,16 @@ pub enum RecordingError {
         /// Every row the tap lost.
         lost_rows: u64,
     },
+    /// Line `line` holds a device pixel ratio no screen has (zero, negative,
+    /// or outside `DevicePixelRatio::MIN..=MAX`): a window's scale, a metrics
+    /// observation's, or the system's mouse or touch geometry's.
+    #[error("line {line} holds a device pixel ratio no screen has: {ratio}")]
+    Ratio {
+        /// The 1-based line.
+        line: u64,
+        /// The ratio the row holds.
+        ratio: f64,
+    },
     /// The value for line `line` holds a variant of `what` this format does
     /// not mirror yet: the vocabulary grew, and the recording DTO and its
     /// generated variant table have to follow.
@@ -290,12 +300,7 @@ fn header_from_wire(header: rec::Header, line: u64) -> Result<RecordingHeader, R
                     scale_factor: flui_foundation::geometry::DevicePixelRatio::try_new(
                         window.scale_factor,
                     )
-                    .ok_or_else(|| {
-                        WireError::Invalid(format!(
-                            "window {} scale {}",
-                            window.window, window.scale_factor
-                        ))
-                    })?,
+                    .ok_or(WireError::Ratio(window.scale_factor))?,
                     title: window.title,
                     gesture_profiles: window.gestures.map(profiles_from_wire).transpose()?,
                 })
@@ -528,6 +533,7 @@ fn wire_error(line: u64, error: WireError) -> RecordingError {
             source: <serde_json::Error as serde::de::Error>::custom(what),
         },
         WireError::Unmirrored(what) => RecordingError::Unmirrored { line, what },
+        WireError::Ratio(ratio) => RecordingError::Ratio { line, ratio },
         // A refusal a later `flui-runtime` adds: the row is malformed all the same.
         other => RecordingError::Json {
             line,

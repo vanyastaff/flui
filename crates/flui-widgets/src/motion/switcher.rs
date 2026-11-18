@@ -25,11 +25,11 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::Duration;
 
-use flui_animation::curve::{Curve, SharedCurve};
 use flui_animation::{
     Animation, AnimationController, AnimationStatus, CurvedAnimation, DrivenController, Vsync,
     VsyncUpdate, curves,
 };
+use flui_animation::{Curve, SharedCurve};
 use flui_painting::Alignment;
 use flui_view::prelude::{BuildContext, LifecycleContext, StatefulView, StatelessView};
 use flui_view::{BoxedView, IntoView, RebuildHandle, ValueKey, View, ViewExt, ViewState};
@@ -382,9 +382,8 @@ impl ChildEntry {
         }
         let parent: std::rc::Rc<dyn Animation<f64>> =
             std::rc::Rc::new(controller.controller().clone());
-        let animation: Rc<dyn Animation<f64>> = Rc::new(
-            CurvedAnimation::new(parent, switch_in_curve).with_reverse_curve(switch_out_curve),
-        );
+        let animation: Rc<dyn Animation<f64>> =
+            Rc::new(CurvedAnimation::new(parent, switch_in_curve).reverse_curve(switch_out_curve));
         let animation = Terminal::new(animation);
 
         if animate {

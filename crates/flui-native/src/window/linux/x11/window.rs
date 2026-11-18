@@ -857,7 +857,7 @@ impl X11Window {
         let scale = window_scale(display, record.scale);
         record.hints_rescaled |= record.scale != scale;
         record.scale = scale;
-        self.input_scale.set(scale.get());
+        self.input_scale.set(scale);
         // Remembered for a window whose platform is gone.
         record.support = support;
         // Shown while mapped, waiting for its first frame to be, or iconic: a
@@ -897,7 +897,7 @@ impl X11Window {
         {
             windows.frame_inset.record(frame.added());
         }
-        let metrics = WindowMetrics::try_new(read.content, scale.get()).ok();
+        let metrics = WindowMetrics::try_new(read.content, scale).ok();
         Sample::read(geometry, |state| {
             let state = state
                 .with_mode(mode)
@@ -2552,7 +2552,7 @@ impl X11Windows {
             input,
             drag: Arc::clone(owner.drag()),
             text: Rc::clone(owner.text()),
-            input_scale: WindowScale::new(scale.get()),
+            input_scale: WindowScale::new(scale),
             record: RefCell::new(Record {
                 title: options.title.clone(),
                 constraints,

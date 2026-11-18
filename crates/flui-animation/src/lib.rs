@@ -13,12 +13,12 @@
 //! - [`Curve`] - Easing curve trait with predefined curves in [`curves`]
 //!   (CSS easing presets, polynomial-style approximations, elastic and bounce
 //!   formulas, [`ThreePointCubic`] emphasized easing and [`Split`])
-//! - [`Tween`] - Maps progress to any `Lerp` value, including color in Oklab
+//! - [`Tween`] - Maps progress to any [`Lerp`] value, including color in Oklab
 //!   with premultiplied alpha
 //! - [`Keyframes`] - A value as a pure function of time: segments timed by
 //!   `Duration`, eased, cubic, held or jumping; [`Stagger`] offsets one
 //!   track per index
-//! - [`simulation`] - Validated physics: springs, friction and a bouncing
+//! - [`Simulation`] - Validated physics: [`SpringSimulation`], friction and a bouncing
 //!   scroll fling that rest at a precomputed time
 //! - [`AnimatedValue`] - An owned value driven by [`MotionSpec`], with
 //!   velocity-preserving retargeting (`#[derive(TwoWayConverter)]` for custom types)
@@ -83,6 +83,7 @@
 //! [`Tween`]: crate::Tween
 //! [`Listenable`]: flui_foundation::Listenable
 //! [`Rc`]: std::rc::Rc
+//! [`Lerp`]: flui_foundation::geometry::Lerp
 
 #![cfg_attr(
     test,
@@ -137,7 +138,7 @@ mod repeat;
 mod retarget;
 mod reverse;
 mod run_future;
-pub mod simulation;
+mod simulation;
 mod stagger;
 mod switch;
 mod tween;
@@ -146,16 +147,15 @@ mod vsync;
 mod vsync_update;
 
 // Data types
-pub mod curve;
+mod curve;
 #[doc(alias = "Curves")]
 pub mod curves;
-pub mod prelude;
 mod status;
 mod status_subscription;
 mod tween_types;
 
 // Re-exports from animation modules
-pub use animated_value::{AnimatedValue, AnimatedValueView, MotionUpdate};
+pub use animated_value::{AnimatedValue, AnimatedValueBuilder, AnimatedValueView, MotionUpdate};
 pub use animation::{Animation, StatusCallback, StatusObserver};
 pub use builder::{AnimationControllerBuilder, ValueRange};
 pub use constant::{ConstantAnimation, UNIT_END_ANIMATION, UNIT_START_ANIMATION};
@@ -183,11 +183,10 @@ pub use stagger::{Stagger, StaggerOrigin};
 pub use status_subscription::StatusSubscription;
 pub use value_conversion::{AnimationVector, TwoWayConverter};
 pub use vsync_update::{VsyncPublication, VsyncUpdate};
-// `#[derive(TwoWayConverter)]` generates `TwoWayConverter` and `Lerp` impls. It
-// shares the trait's name but lives in the macro namespace (the serde
-// `Serialize` trait+derive pattern), so one `use flui_animation::TwoWayConverter`
+// `#[derive(TwoWayConverter)]` writes `TwoWayConverter` and the geometry
+// `Lerp`. It shares the trait's name in the macro namespace (the serde
+// `Serialize` trait and derive), so one `use flui_animation::TwoWayConverter`
 // brings in both.
-pub use flui_foundation::geometry::Lerp;
 pub use flui_macros::TwoWayConverter;
 pub use switch::AnimationSwitch;
 pub use tween::TweenAnimation;

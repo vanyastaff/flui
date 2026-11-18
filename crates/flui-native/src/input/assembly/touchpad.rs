@@ -5,6 +5,7 @@
 //! assembler; a native recording journals the readings, and Linux CI replays
 //! them through the same decoder.
 
+use flui_foundation::geometry::DevicePixelRatio;
 use flui_platform::keyboard::Modifiers;
 
 use super::ReadingTime;
@@ -127,7 +128,7 @@ pub struct TouchpadFrame {
     /// manipulates what is under the cursor.
     pub position: (f64, f64),
     /// Device pixels per logical pixel.
-    pub scale: f64,
+    pub scale: DevicePixelRatio,
     /// The modifiers held.
     pub modifiers: Modifiers,
 }

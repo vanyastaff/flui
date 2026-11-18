@@ -1,226 +1,469 @@
-//! Native sampling admission shared by the bounded owner samplers.
+//! How the AppKit and Android preference sources read the system and wake
+//! their owner: told, never polled (ADR-0378).
+//!
+//! [`NoticedPreferences`] is the one model both sources are. What differs per
+//! system sits behind [`SystemReads`]: the read itself, the clock, and how a
+//! failed read is retried ([`Retrying`]). A change reaches the source as a
+//! notice (an AppKit notification through
+//! [`NoticedPreferences::notice_handler`]; `FluiView`'s report, a configuration
+//! change or `Start` through the Android loop, which calls
+//! [`NoticedPreferences::notice`] and reads), and the owner's application turn
+//! reads it and delivers it.
+//!
+//! The owner wakes once per change and never while idle:
+//!
+//! - a healthy source names no instant it needs the owner at, so nothing in it
+//!   runs between notices;
+//! - the system is asked only after a notice or at a retry; every other read
+//!   (the application's turn reads on every wake) returns the latest answer
+//!   as it is;
+//! - the source counts a value as accepted only once its caller confirms the
+//!   delivery of the latest read ([`NoticedPreferences::delivered`]; one of an
+//!   older read, which a re-entrant delivery overtook, is ignored). A change
+//!   read inside the application's turn is owed to that turn: delivered
+//!   there, it costs no further wake; dropped there, the turn's end wakes the
+//!   owner once more for it. A change read anywhere else (the Android loop on a notice, the
+//!   first read, an owner-work turn) wakes the owner;
+//! - a read that fails or panics is retried on [`READ_RETRIES`]; once the
+//!   retries are spent, or the application is where a retry may not wake it,
+//!   nothing reads until the next change notice.
+//!
+//! A read is refused, changing nothing, off the owner thread.
 
-use crate::PlatformError;
-use parking_lot::Mutex;
+use std::sync::{Arc, Weak};
 use std::time::Duration;
 
-const RETRY_INTERVAL: Duration = Duration::from_millis(500);
+use flui_foundation::panic::{FirstPanic, discard_payload, payload_text};
+use flui_platform::SystemPreferences;
+use parking_lot::Mutex;
 
-#[derive(Default)]
-pub(crate) struct ReadAdmission {
-    state: Mutex<State>,
-    accepted: Mutex<Option<flui_platform::SystemPreferences>>,
+use crate::PlatformError;
+use crate::owner::signal::OwnerSignal;
+use crate::owner::sources::SystemPreferenceSource;
+use crate::preferences::retries::Retries;
+
+/// The pause before the first retry of a failed read.
+const FIRST_RETRY: Duration = Duration::from_millis(500);
+
+/// The retries of a read that failed or panicked: 0.5 to 16 s apart, then
+/// none until the next change notice.
+const READ_RETRIES: Retries = Retries::new(FIRST_RETRY, 6);
+
+/// What a system gives [`NoticedPreferences`]. Every method runs on the
+/// owner thread.
+pub(crate) trait SystemReads {
+    /// Every preference the system reports now.
+    ///
+    /// # Errors
+    /// [`PlatformError::Preferences`] when the system cannot be read.
+    fn read(&self) -> Result<SystemPreferences, PlatformError>;
+
+    /// The instant the source is at.
+    fn now(&self) -> web_time::Instant;
+
+    /// How the system's failed reads are retried.
+    fn retrying(&self) -> Retrying<'_>;
 }
 
-#[derive(Clone, Copy, Default)]
-enum State {
+/// How a failed read is retried.
+pub(crate) enum Retrying<'a> {
+    /// The owner's loop blocks no longer than
+    /// [`NoticedPreferences::retry_deadline`] and reads then; it gates its
+    /// own reads on the application running (the Android loop).
+    #[cfg_attr(
+        not(any(target_os = "android", test)),
+        expect(dead_code, reason = "only the Android loop retries at its deadline")
+    )]
+    AtLoopDeadline,
+    /// A timer wakes the owner, armed only while the application is active
+    /// (AppKit).
+    #[cfg_attr(
+        not(any(target_os = "macos", test)),
+        expect(dead_code, reason = "only AppKit retries on a timer")
+    )]
+    OnTimer(&'a dyn RetryTimer),
+}
+
+/// The timer a [`Retrying::OnTimer`] system retries on.
+pub(crate) trait RetryTimer {
+    /// Whether a timer may wake the application now. Where it may not, the
+    /// retry waits for the next change notice (on AppKit, the activation
+    /// notification).
+    fn application_active(&self) -> bool;
+
+    /// Wake the owner behind `signal` once, `delay` from now.
+    fn arm(&self, delay: Duration, signal: Weak<OwnerSignal>);
+}
+
+/// A preference source that is told of changes and reads when told: the
+/// system's reads under one admission, and the owner they wake.
+pub(crate) struct NoticedPreferences<S> {
+    system: S,
+    signal: Weak<OwnerSignal>,
+    admission: ReadAdmission,
+}
+
+impl<S> std::fmt::Debug for NoticedPreferences<S> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NoticedPreferences").finish_non_exhaustive()
+    }
+}
+
+impl<S: SystemReads> NoticedPreferences<S> {
+    /// A source reading `system` that wakes the owner behind `signal`.
+    pub(crate) fn new(system: S, signal: &Arc<OwnerSignal>) -> Self {
+        Self {
+            system,
+            signal: Arc::downgrade(signal),
+            admission: ReadAdmission::default(),
+        }
+    }
+
+    /// The system the source reads.
+    #[cfg(any(target_os = "android", test))]
+    pub(crate) fn system(&self) -> &S {
+        &self.system
+    }
+
+    /// When the retry a failed read owes is due; `None` for a healthy source
+    /// and for one waiting for a notice. The Android loop blocks no longer
+    /// than this.
+    #[cfg(any(target_os = "android", test))]
+    pub(crate) fn retry_deadline(&self) -> Option<web_time::Instant> {
+        self.admission.retry_deadline()
+    }
+
+    /// A change notice arrived: a source whose retries ran out, or whose
+    /// retry the application's state held, may read again. The turn the
+    /// notice brings reads whatever is not delivered yet, a change an earlier
+    /// turn dropped included. A retry still pending keeps its
+    /// pause, so a burst of notices never reads a failing system faster than
+    /// [`READ_RETRIES`].
+    pub(crate) fn notice(&self) {
+        self.admission.notice();
+    }
+
+    /// Arm the retry a failed read left owed, or let it wait for a notice
+    /// where the application's state holds it.
+    fn arm_retry(&self) {
+        let Some(deadline) = self.admission.retry_deadline() else {
+            return;
+        };
+        match self.system.retrying() {
+            Retrying::AtLoopDeadline => {}
+            Retrying::OnTimer(timer) if timer.application_active() => {
+                let delay = deadline.saturating_duration_since(self.system.now());
+                timer.arm(delay, self.signal.clone());
+            }
+            Retrying::OnTimer(_) => self.admission.await_notice(),
+        }
+    }
+}
+
+#[cfg(any(target_os = "macos", test))]
+impl<S: SystemReads + Send + Sync + 'static> NoticedPreferences<S> {
+    /// What a change notification runs, on any thread: [`notice`](Self::notice),
+    /// then wake the owner, whose turn reads. It holds the source weakly, so
+    /// a notification that outlives the source does nothing.
+    pub(crate) fn notice_handler(self: &Arc<Self>) -> impl Fn() + Send + Sync + 'static {
+        let source = Arc::downgrade(self);
+        move || {
+            if let Some(source) = source.upgrade() {
+                source.notice();
+                if let Some(signal) = source.signal.upgrade() {
+                    // A failed post leaves the wake owed in the signal.
+                    let _ = signal.wake();
+                }
+            }
+        }
+    }
+}
+
+impl<S: SystemReads> SystemPreferenceSource for NoticedPreferences<S> {
+    /// Read the system under the source's admission and return what it
+    /// reports. A change is owed to the application's turn the read runs in,
+    /// or wakes the owner outside one. A failed or panicking read arms its
+    /// retry and is an error; a read off the owner thread is refused before
+    /// the admission and changes nothing.
+    fn sample(&self) -> Result<SystemPreferences, PlatformError> {
+        let Some(signal) = self.signal.upgrade().filter(|signal| signal.accepting()) else {
+            return Err(PlatformError::Preferences {
+                message: "the preference owner has stopped".into(),
+            });
+        };
+        if signal.owner() != std::thread::current().id() {
+            return Err(PlatformError::Preferences {
+                message: "system preferences are read on the owner thread".into(),
+            });
+        }
+        let mut caught = FirstPanic::new();
+        let read = caught.contain(|| {
+            self.admission
+                .read_observation(self.system.now(), || self.system.read())
+        });
+        match read {
+            Some(Ok((current, Change::Unchanged))) => Ok(current),
+            Some(Ok((current, Change::New | Change::OwedBefore)))
+                if !signal.in_application_turn() =>
+            {
+                // OwnerSignal keeps the wake owed while no turn callback is
+                // registered yet.
+                let _ = signal.wake();
+                Ok(current)
+            }
+            Some(Ok((current, Change::New))) => {
+                // Delivered in this turn it costs nothing more; dropped, the
+                // turn's end wakes the owner once for it.
+                self.admission.owe(&current);
+                signal.owe_delivery();
+                Ok(current)
+            }
+            Some(Ok((current, Change::OwedBefore))) => {
+                // A turn dropped this value and its one wake is spent: this
+                // turn tries it again, and nothing more wakes for it until a
+                // notice.
+                Ok(current)
+            }
+            Some(Err(PlatformError::PreferencesDeferred)) => {
+                Err(PlatformError::PreferencesDeferred)
+            }
+            Some(Err(error)) => {
+                self.arm_retry();
+                Err(error)
+            }
+            None => {
+                // The read's panic is counted as a failed read and retried
+                // like one; nobody resumes it.
+                let message = caught
+                    .held()
+                    .and_then(payload_text)
+                    .unwrap_or("non-string panic payload")
+                    .to_owned();
+                if let Some(payload) = caught.into_payload() {
+                    discard_payload(payload);
+                }
+                self.arm_retry();
+                Err(PlatformError::Preferences {
+                    message: format!("the system preference read panicked: {message}"),
+                })
+            }
+        }
+    }
+
+    /// The caller delivered `values`: when they are the latest read's answer
+    /// they are the source's accepted value and the delivery the turn owed is
+    /// settled; a confirmation of an older read changes nothing.
+    fn delivered(&self, values: &SystemPreferences) {
+        if self.admission.confirm(values)
+            && let Some(signal) = self.signal.upgrade()
+        {
+            signal.confirm_delivery();
+        }
+    }
+}
+
+/// What a read found against the value last delivered.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Change {
+    /// The value delivered last.
+    Unchanged,
+    /// A value not delivered yet.
+    New,
+    /// A value an application turn was owed and has not confirmed: its one
+    /// wake is spent.
+    OwedBefore,
+}
+
+/// The admission of the source's reads: one at a time, a failed one retried
+/// on [`READ_RETRIES`], and the value last delivered.
+#[derive(Default)]
+struct ReadAdmission {
+    state: Mutex<Admission>,
+}
+
+#[derive(Default)]
+struct Admission {
+    stage: Stage,
+    /// Reads that failed in a row since the last one that answered.
+    failures: u32,
+    /// The value the owner's caller last confirmed it delivered; `None` on
+    /// a cold source.
+    delivered: Option<SystemPreferences>,
+    /// What the latest read that answered returned. Only a delivery of it
+    /// is confirmed: a confirmation of an older read (a delivery that
+    /// re-entered the owner, which read and delivered a newer value) is
+    /// ignored.
+    latest: Option<SystemPreferences>,
+    /// The latest answer still holds: no notice came since it, and no read
+    /// failed since. While it holds, a read returns it without asking the
+    /// system.
+    current: bool,
+    /// A notice came while a read ran.
+    noticed_while_reading: bool,
+    /// A changed value an application turn was owed, which no delivery
+    /// confirmed since; reading it again in a turn owes nothing more until a
+    /// notice.
+    owed: Option<SystemPreferences>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum Stage {
+    /// A read may run.
     #[default]
     Ready,
+    /// A read runs.
     Reading,
+    /// A read failed; the next may run at this instant.
     RetryAt(web_time::Instant),
+    /// The retries are spent, or a retry was held: the next change notice
+    /// lets a read run.
+    AwaitingNotice,
 }
 
 impl ReadAdmission {
-    /// Read and commit a native observation before outgoing notification. A
-    /// cold source has no accepted value; errors never manufacture one or return
-    /// an older accepted value as a successful refresh. The returned flag
-    /// requests owner delivery after either a changed observation or a recovered
-    /// read obligation; healthy unchanged reads remain quiet.
-    pub(crate) fn read_observation(
+    /// Read the system and compare it with what was delivered. A cold source
+    /// has nothing delivered; an error never manufactures a value or returns
+    /// an older one as a successful refresh. Nothing is accepted here: only
+    /// a confirmed delivery is ([`Self::confirm`]).
+    fn read_observation(
         &self,
         now: web_time::Instant,
-        sample: impl FnOnce() -> Result<flui_platform::SystemPreferences, PlatformError>,
-    ) -> Result<(flui_platform::SystemPreferences, bool), PlatformError> {
+        sample: impl FnOnce() -> Result<SystemPreferences, PlatformError>,
+    ) -> Result<(SystemPreferences, Change), PlatformError> {
+        // Every application turn reads; while the latest answer still holds
+        // (no notice, failure or retry since) it is the answer, and the
+        // system is not asked.
+        {
+            let state = self.state.lock();
+            if state.current
+                && state.stage == Stage::Ready
+                && let Some(latest) = &state.latest
+            {
+                return Ok((latest.clone(), state.change_of(latest)));
+            }
+        }
         let attempt = self.begin(now)?;
-        let recovering = attempt.recovering;
         let current = sample()?;
-        let changed = {
-            let mut accepted = self.accepted.lock();
-            let changed = accepted.as_ref() != Some(&current);
-            *accepted = Some(current.clone());
-            changed
-        };
-        attempt.accept();
-        Ok((current, changed || recovering))
+        let change = attempt.answered(&current);
+        Ok((current, change))
     }
 
-    /// When the read a failure postponed may run, while one is owed. A source
-    /// that has no timer of its own wakes its owner then.
-    pub(crate) fn retry_deadline(&self) -> Option<web_time::Instant> {
-        let state = *self.state.lock();
-        match state {
-            State::RetryAt(deadline) => Some(deadline),
-            State::Ready | State::Reading => None,
+    /// An application turn is owed `values`.
+    fn owe(&self, values: &SystemPreferences) {
+        self.state.lock().owed = Some(values.clone());
+    }
+
+    /// The caller delivered `values`. Accepted when they are the latest
+    /// answer; a confirmation of an older read is ignored. Returns whether it
+    /// was accepted.
+    fn confirm(&self, values: &SystemPreferences) -> bool {
+        let mut state = self.state.lock();
+        if state.latest.as_ref() != Some(values) {
+            return false;
+        }
+        state.delivered = Some(values.clone());
+        state.owed = None;
+        true
+    }
+
+    fn retry_deadline(&self) -> Option<web_time::Instant> {
+        let stage = self.state.lock().stage;
+        match stage {
+            Stage::RetryAt(deadline) => Some(deadline),
+            Stage::Ready | Stage::Reading | Stage::AwaitingNotice => None,
         }
     }
 
-    pub(crate) fn begin(&self, now: web_time::Instant) -> Result<ReadAttempt<'_>, PlatformError> {
+    fn notice(&self) {
         let mut state = self.state.lock();
-        match *state {
-            State::Reading => return Err(PlatformError::PreferencesDeferred),
-            State::RetryAt(deadline) if now < deadline => {
+        match state.stage {
+            Stage::AwaitingNotice => state.stage = Stage::Ready,
+            Stage::Reading => state.noticed_while_reading = true,
+            Stage::Ready | Stage::RetryAt(_) => {}
+        }
+        state.current = false;
+    }
+
+    fn await_notice(&self) {
+        let mut state = self.state.lock();
+        if matches!(state.stage, Stage::RetryAt(_)) {
+            state.stage = Stage::AwaitingNotice;
+        }
+    }
+
+    fn begin(&self, now: web_time::Instant) -> Result<ReadAttempt<'_>, PlatformError> {
+        let mut state = self.state.lock();
+        match state.stage {
+            Stage::Reading | Stage::AwaitingNotice => {
                 return Err(PlatformError::PreferencesDeferred);
             }
-            State::Ready | State::RetryAt(_) => {}
+            Stage::RetryAt(deadline) if now < deadline => {
+                return Err(PlatformError::PreferencesDeferred);
+            }
+            Stage::Ready | Stage::RetryAt(_) => {}
         }
-        let recovering = matches!(*state, State::RetryAt(_));
-        *state = State::Reading;
+        state.stage = Stage::Reading;
         Ok(ReadAttempt {
             admission: self,
             now,
-            accepted: false,
-            recovering,
+            answered: false,
         })
     }
 }
 
-pub(crate) struct ReadAttempt<'a> {
+/// One admitted read. Dropped unanswered (an error, a panic) it records the
+/// failure and the retry it owes.
+struct ReadAttempt<'a> {
     admission: &'a ReadAdmission,
     now: web_time::Instant,
-    accepted: bool,
-    recovering: bool,
+    answered: bool,
 }
 
 impl ReadAttempt<'_> {
-    /// Commit the successful read before invoking any outgoing wake or callback.
-    pub(crate) fn accept(mut self) {
-        self.accepted = true;
+    /// The system answered `current`: the admission is ready again, and the
+    /// answer is compared with what was delivered.
+    fn answered(mut self, current: &SystemPreferences) -> Change {
+        self.answered = true;
+        let mut state = self.admission.state.lock();
+        state.stage = Stage::Ready;
+        state.failures = 0;
+        // A notice that came while the system was read may postdate the
+        // answer: the next read asks again.
+        state.current = !std::mem::take(&mut state.noticed_while_reading);
+        state.latest = Some(current.clone());
+        state.change_of(current)
+    }
+}
+
+impl Admission {
+    /// What `answer` is against the value delivered and the one owed.
+    fn change_of(&self, answer: &SystemPreferences) -> Change {
+        if self.delivered.as_ref() == Some(answer) {
+            Change::Unchanged
+        } else if self.owed.as_ref() == Some(answer) {
+            Change::OwedBefore
+        } else {
+            Change::New
+        }
     }
 }
 
 impl Drop for ReadAttempt<'_> {
     fn drop(&mut self) {
+        if self.answered {
+            return;
+        }
         let mut state = self.admission.state.lock();
-        *state = if self.accepted {
-            State::Ready
-        } else {
-            State::RetryAt(self.now + RETRY_INTERVAL)
-        };
+        state.current = false;
+        state.noticed_while_reading = false;
+        let spent = state.failures;
+        state.failures = spent.saturating_add(1);
+        state.stage = READ_RETRIES
+            .pause(spent)
+            .and_then(|pause| self.now.checked_add(pause))
+            .map_or(Stage::AwaitingNotice, Stage::RetryAt);
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn cold_native_observation_recovers_without_forged_defaults() {
-        let now = web_time::Instant::now();
-        let cold = ReadAdmission::default();
-        let (_, needs_delivery) = cold
-            .read_observation(now, || Ok(flui_platform::SystemPreferences::default()))
-            .expect("first legitimate unknown observation");
-        assert!(
-            needs_delivery,
-            "an unknown observation is accepted only after the first successful query"
-        );
-        let reader = ReadAdmission::default();
-        let failed = reader.read_observation(now, || {
-            Err(PlatformError::Preferences {
-                message: "initial getter failure".into(),
-            })
-        });
-        assert!(matches!(failed, Err(PlatformError::Preferences { .. })));
-        assert!(matches!(
-            reader.read_observation(now, || panic!("early native retry")),
-            Err(PlatformError::PreferencesDeferred)
-        ));
-        let observation = flui_platform::SystemPreferences::default().with_gestures(
-            flui_platform::GesturePreferences::default()
-                .with_double_click_interval(Duration::from_millis(700)),
-        );
-        let (accepted, needs_delivery) = reader
-            .read_observation(now + RETRY_INTERVAL, || Ok(observation.clone()))
-            .expect("first accepted native observation");
-        assert_eq!(accepted, observation);
-        assert!(
-            needs_delivery,
-            "cold source must notify its first accepted observation"
-        );
-        let failed = reader.read_observation(now + RETRY_INTERVAL, || {
-            Err(PlatformError::Preferences {
-                message: "later getter failure".into(),
-            })
-        });
-        assert!(
-            matches!(failed, Err(PlatformError::Preferences { .. })),
-            "failure cannot publish a stale success"
-        );
-        let (accepted, needs_delivery) = reader
-            .read_observation(now + RETRY_INTERVAL * 2, || Ok(observation.clone()))
-            .expect("recovered native observation");
-        assert_eq!(accepted, observation);
-        assert!(
-            needs_delivery,
-            "successful recovery must retry owner delivery even for an unchanged observation"
-        );
-        let (_, needs_delivery) = reader
-            .read_observation(now + RETRY_INTERVAL * 2, || Ok(observation))
-            .expect("healthy unchanged observation");
-        assert!(
-            !needs_delivery,
-            "healthy unchanged observations remain quiet"
-        );
-    }
-
-    #[test]
-    fn bounded_native_read_admission() {
-        let admission = ReadAdmission::default();
-        let now = web_time::Instant::now();
-        let failed = admission.begin(now).expect("first admission");
-        assert!(matches!(
-            admission.begin(now),
-            Err(PlatformError::PreferencesDeferred)
-        ));
-        assert_eq!(
-            admission.retry_deadline(),
-            None,
-            "a read in flight owes nothing yet"
-        );
-        drop(failed);
-        assert_eq!(
-            admission.retry_deadline(),
-            Some(now + RETRY_INTERVAL),
-            "a failed read owes a retry"
-        );
-        for elapsed in [0, 10, 100, 499] {
-            assert!(matches!(
-                admission.begin(now + Duration::from_millis(elapsed)),
-                Err(PlatformError::PreferencesDeferred)
-            ));
-        }
-        admission
-            .begin(now + RETRY_INTERVAL)
-            .expect("bounded retry")
-            .accept();
-        assert_eq!(
-            admission.retry_deadline(),
-            None,
-            "an accepted read owes nothing"
-        );
-        admission
-            .begin(now + RETRY_INTERVAL)
-            .expect("healthy reads remain admitted")
-            .accept();
-        let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _attempt = admission
-                .begin(now + RETRY_INTERVAL)
-                .expect("unwind admission");
-            panic!("native sampling panic");
-        }));
-        assert!(failure.is_err());
-        assert_eq!(
-            admission.retry_deadline(),
-            Some(now + RETRY_INTERVAL * 2),
-            "an unwound read owes a retry too"
-        );
-        assert!(matches!(
-            admission.begin(now + RETRY_INTERVAL),
-            Err(PlatformError::PreferencesDeferred)
-        ));
-        admission
-            .begin(now + RETRY_INTERVAL * 2)
-            .expect("recovery after unwind")
-            .accept();
-    }
-}
+mod tests;

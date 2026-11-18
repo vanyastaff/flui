@@ -505,7 +505,7 @@ impl CarouselState {
             if shared.controller.borrow().is_paused() {
                 let _ = timer.stop();
             } else if shared.autoplays.get() && !timer.is_animating() {
-                let _ = timer.forward_from(Some(0.0));
+                let _ = timer.forward_from(0.0);
             }
         }));
         self.pause_listener = Some(subscription);
@@ -544,7 +544,7 @@ impl CarouselState {
         }
         self.shared.autoplays.set(true);
         if !self.shared.controller.borrow().is_paused() && !self.timer.controller().is_animating() {
-            let _ = self.timer.controller().forward_from(Some(0.0));
+            let _ = self.timer.controller().forward_from(0.0);
         }
     }
 }
@@ -626,7 +626,7 @@ impl ViewState<Carousel> for CarouselState {
                         return;
                     }
                     shared.step();
-                    let _ = timer.forward_from(Some(0.0));
+                    let _ = timer.forward_from(0.0);
                 });
             },
         )));

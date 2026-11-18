@@ -4,8 +4,9 @@
 //!
 //! The model is what two or more hosts share:
 //!
-//! - `read`: the admission of a bounded native read, which the Android and
-//!   AppKit sources take before they ask the system again;
+//! - `read`: the source the Android and AppKit hosts both are, told of
+//!   changes and never polled, with its bounded retries;
+//! - `retries`: the bounded retry schedule of a read that came to nothing;
 //! - `locales`: the preferred languages from the forms the systems spell them
 //!   in;
 //! - `regional`: the regional formats (ADR-0278) from the values the hosts
@@ -41,7 +42,7 @@ pub(crate) mod read;
     test
 ))]
 pub(crate) mod regional;
-#[cfg(any(windows, linux_host, test))]
+#[cfg(any(windows, linux_host, target_os = "android", target_os = "macos", test))]
 pub(crate) mod retries;
 
 #[cfg(any(target_os = "android", test))]

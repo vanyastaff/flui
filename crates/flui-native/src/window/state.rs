@@ -1444,8 +1444,11 @@ mod tests {
     }
 
     fn metrics(scale: f64) -> flui_foundation::geometry::WindowMetrics {
-        flui_foundation::geometry::WindowMetrics::try_new(Size::new(200, 100), scale)
-            .expect("drawable metrics")
+        flui_foundation::geometry::WindowMetrics::try_new(
+            Size::new(200, 100),
+            flui_foundation::geometry::DevicePixelRatio::try_new(scale).expect("a ratio in range"),
+        )
+        .expect("drawable metrics")
     }
 
     /// The drawable metrics go with the geometry: a refused read whose own
