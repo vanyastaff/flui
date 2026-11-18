@@ -506,7 +506,7 @@ jobs:
       # in the next step, and the compiler guards in test-trybuild.
       - name: cargo nextest run -p flui-native (headless and X11, under Xvfb)
         run: >-
-          WAYLAND_DISPLAY= FLUI_HEADLESS=1
+          WAYLAND_DISPLAY='' FLUI_HEADLESS=1
           xvfb-run -a -s '-screen 0 1280x1024x24 -noreset'
           cargo nextest run -p flui-native --locked --all-features --no-fail-fast
           -E 'not (group(trybuild) | test(/^wayland_window::/))'
