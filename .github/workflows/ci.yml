@@ -42,7 +42,7 @@ env:
   # installs, so a new stable release or runner image no longer turns every
   # Rust cache cold while the workspace still builds with the same compiler.
   RUSTUP_HOME: ${{ github.workspace }}/../flui-rustup
-  # Strict workspace-wide; matches the local `cargo xtask ci`.
+  # Strict workspace-wide; a local run sets the same (docs/testing.md).
   #
   # `build.warnings` (Cargo 1.97+) rather than `RUSTFLAGS: -D warnings`:
   # RUSTFLAGS is part of the rustc fingerprint, so every job that needs a
@@ -327,23 +327,34 @@ jobs:
       - name: cargo clippy flui-engine --features testing
         run: cargo clippy -p flui-engine --all-targets --locked --features testing -- -D warnings
 
-      # Each flui-native backend alone: the workspace pass above builds it with
-      # `desktop` (Wayland and X11 together), which hides a `cfg` gap in any
-      # one backend. Main only, like the rest of `feature-matrix`: it adds
-      # 5 minutes to a pull request's slowest jobs, and a gap shows as a red
-      # main. Locally: `cargo xtask native-features`.
-      - name: cargo xtask native-features
+      # Each flui-native backend alone, default features off: the workspace
+      # pass above builds it with `desktop` (Wayland and X11 together), which
+      # hides a `cfg` gap in any one backend. Libs and bins as a downstream
+      # crate builds them, then every target (a dev-dependency can turn on a
+      # feature the library lacks). Every build runs before the step fails, so
+      # one run names each broken one. Main only, like the rest of
+      # `feature-matrix`: it adds 5 minutes to a pull request's slowest jobs,
+      # and a gap shows as a red main.
+      - name: cargo clippy flui-native, one feature at a time
         if: needs.plan.outputs.lane == 'full'
-        run: cargo xtask native-features
+        run: |
+          status=0
+          for features in "" x11 wayland testing; do
+            for targets in "" --all-targets; do
+              cargo clippy -p flui-native --locked --no-default-features \
+                ${features:+--features "$features"} ${targets:+"$targets"} -- -D warnings || status=1
+            done
+          done
+          exit "$status"
 
   # ─────────────────────────────────────────────────────────────────────────
-  # test — the workspace suite on Linux (`cargo xtask test --fast`: nextest
-  # over TEST_SCOPE, then flui-native under Xvfb, then its Wayland tests
-  # against a headless Weston), then, on main, the build that
-  # links the examples and benches with the same packages and features, so it compiles
-  # nothing twice (a target whose `required-features` the test scope leaves
-  # off is compiled per feature by `feature-matrix`, not linked). A pull
-  # request leaves that link to main.
+  # test — the workspace suite on Linux: nextest over the workspace but
+  # flui-native and the nested tests, then flui-native under Xvfb, then its
+  # Wayland tests against a headless Weston and a headless sway, then the GPU
+  # readbacks; on main, the build that links the examples and benches with the
+  # same packages and features, so it compiles nothing twice (a target whose
+  # `required-features` TEST_FEATURES leaves off is compiled per feature by
+  # `feature-matrix`, not linked). A pull request leaves that link to main.
   # The nested-cargo group runs on main in `test-nested`.
   # No job of this workflow touches the AppKit/Win32/Android backends on a pull request:
   # `cross-typecheck` type-checks them on main.
@@ -365,8 +376,16 @@ jobs:
     # at 0. The tests themselves run slower at 0, and the slowest one sets
     # the floor (.config/nextest.toml). Locally the dev profile stays at
     # opt-level 1, which incremental builds amortize.
+    #
+    # TEST_FEATURES: the facade turns no catalog on by default, so both are
+    # named rather than left to whichever member enables one through feature
+    # unification, and `flui/native` (off by default, Evolving) runs the
+    # facade's `surface` test and the `native` fixtures of its compile-fail
+    # suite (ADR-0254 §8). The facade with no feature is linted by
+    # `feature-matrix`, and the doctests run it without `native`.
     env:
       CARGO_PROFILE_DEV_OPT_LEVEL: 0
+      TEST_FEATURES: flui/material,flui/cupertino,flui/native
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -406,7 +425,7 @@ jobs:
         with:
           tool: cargo-nextest@0.9
 
-      # flui-native's suite runs under Xvfb (see `cargo xtask test`):
+      # flui-native's suite runs under Xvfb (its step below):
       # `FLUI_HEADLESS=1` routes `current_platform()` to the headless mock, and
       # the native X11 host's suites that open windows on the run's X server
       # need a real (if virtual) one. Unconditional install: a preinstalled
@@ -435,8 +454,8 @@ jobs:
       - name: Require the AT-SPI bus
         run: echo "FLUI_REQUIRE_ATSPI=1" >> "$GITHUB_ENV"
 
-      # The native Wayland host's tests (`cargo xtask test` runs them apart
-      # from the Xvfb suite) need a compositor: a headless Weston on a socket
+      # The native Wayland host's tests (a step apart from the Xvfb suite)
+      # need a compositor: a headless Weston on a socket
       # of its own. `FLUI_REQUIRE_WAYLAND` turns a missing compositor into a
       # failure instead of a skip, as `FLUI_REQUIRE_GPU` does for the GPU
       # suites. Weston loads libwayland, which the host dlopens too. The
@@ -460,25 +479,61 @@ jobs:
             echo "FLUI_REQUIRE_WAYLAND=1"
           } >> "$GITHUB_ENV"
 
-      # The local command, so CI and a local run cannot drift. nextest gives
-      # each test its own process, so a test that mutates a genuinely
-      # process-global resource needs a lock scoped to its module
-      # (AGENTS.md). Native runtime suites remain local commands.
-      - name: cargo xtask test --fast
-        run: cargo xtask test --fast
+      # The hot-reload lifecycle tests load this fixture's cdylib from Cargo's
+      # artifact directory, where a test dependency alone may not put it.
+      - name: cargo build (the hot-reload fixture)
+        run: cargo build -p flui-hot-reload-lifecycle-fixture --lib --locked
+
+      # `--lib --bins --tests` builds and runs what has tests without linking
+      # the ~60 examples, which the last step links on main. The nested tests
+      # (groups `nested-cargo` and `trybuild` in .config/nextest.toml) run on
+      # main in test-nested and test-trybuild. nextest gives each test its own
+      # process, so a test that mutates a genuinely process-global resource
+      # needs a lock scoped to its module (AGENTS.md).
+      - name: cargo nextest run (the workspace but flui-native)
+        run: >-
+          cargo nextest run --workspace --exclude flui-native --locked --no-fail-fast
+          --lib --bins --tests --features "$TEST_FEATURES"
+          -E 'not (group(nested-cargo) | group(trybuild))'
+
+      # flui-native with every feature (the test kits and the native capture
+      # are off under `default = ["desktop"]`). The Xvfb runs with
+      # `-noreset`: by default it resets when its last client leaves and drops
+      # a client still in its handshake, and with one process per test that is
+      # a test failing with ECONNRESET when another's process exits. The X11
+      # tests lay their windows out on the 1280x1024 screen. `WAYLAND_DISPLAY`
+      # is cleared so these tests take the X11 display; the Wayland tests run
+      # in the next step, and the compiler guards in test-trybuild.
+      - name: cargo nextest run -p flui-native (headless and X11, under Xvfb)
+        run: >-
+          WAYLAND_DISPLAY= FLUI_HEADLESS=1
+          xvfb-run -a -s '-screen 0 1280x1024x24 -noreset'
+          cargo nextest run -p flui-native --locked --all-features --no-fail-fast
+          -E 'not (group(trybuild) | test(/^wayland_window::/))'
+
+      # Each case's output is shown at the end: a case whose subject the
+      # compositor lacks says there what it skipped.
+      - name: cargo nextest run -p flui-native (Wayland, against the Weston)
+        run: >-
+          cargo nextest run -p flui-native --locked --all-features --no-fail-fast
+          --success-output final -E 'test(/^wayland_window::/)'
 
       # Weston 13 has no xdg-decoration, wp_fractional_scale_v1, xdg-foreign
       # or xdg-activation, and headless it has no seat: the cases of the
       # Wayland suite about them (`wayland_window::optional`) said above what
-      # they skipped. A headless sway offers all of them, so the task runs
+      # they skipped. A headless sway offers all of them, so this step runs
       # those cases again against it and requires them
-      # (`FLUI_REQUIRE_COMPOSITOR`): none passes on a skip. Its outputs are
+      # (`FLUI_REQUIRE_COMPOSITOR` lists what sway offers): none passes on a
+      # skip. One case at a time: a tiling compositor resizes a window as
+      # another opens. Its outputs are
       # scaled 1.5, which makes a surface's preferred scale a fraction, and
       # the window titled "a floating frame" floats, where sway honours a
       # request for the client's own frame. The backend and the renderer are
       # named, and the job's `WAYLAND_DISPLAY` is kept from it: that is the
       # Weston's, which wlroots would nest under.
-      - name: cargo xtask wayland-optional (the cases Weston cannot run, under a headless sway)
+      - name: cargo nextest run -p flui-native (the cases Weston cannot run, under a headless sway)
+        env:
+          FLUI_REQUIRE_COMPOSITOR: foreign-toplevel,fractional-scale,seat,xdg-activation,xdg-decoration,xdg-foreign
         run: |
           runtime_dir="$RUNNER_TEMP/sway-runtime"
           mkdir -p "$runtime_dir"
@@ -495,21 +550,43 @@ jobs:
             sleep 0.1
           done
           [ -n "$socket" ] || { cat "$RUNNER_TEMP/sway.log"; exit 1; }
-          XDG_RUNTIME_DIR="$runtime_dir" WAYLAND_DISPLAY="$socket" cargo xtask wayland-optional
+          XDG_RUNTIME_DIR="$runtime_dir" WAYLAND_DISPLAY="$socket" \
+            cargo nextest run -p flui-native --locked --all-features --no-fail-fast \
+            --test-threads 1 --success-output final -E 'test(/^wayland_window::optional::/)'
 
       # The GPU readback suites once per backend the Linux renderer can pick:
       # Vulkan first, then the GLES fallback it takes without one. The
       # fallback runs on main only: pull requests take the Vulkan pass.
-      - name: cargo xtask gpu-test --backend vulkan
-        run: cargo xtask gpu-test --backend vulkan
+      # `FLUI_REQUIRE_GPU` turns a missing adapter into a failure. The
+      # engine's readbacks and path-recording allocations, then the facade's
+      # composited-layer readback, which needs the render pipeline and the
+      # headless renderer together and is `#[ignore]`d in runs without an
+      # adapter. One test at a time: each builds its own `wgpu::Device`, and a
+      # software rasterizer serializes submission.
+      - name: GPU readbacks on Vulkan
+        env:
+          FLUI_REQUIRE_GPU: "1"
+          WGPU_BACKEND: vulkan
+        run: |
+          cargo nextest run -p flui-engine --features testing --lib --test painter_warm_path_allocation \
+            --locked --no-fail-fast --test-threads 1
+          cargo nextest run -p flui --no-default-features --run-ignored all \
+            --test composited_layer_update_readback --locked --no-fail-fast --test-threads 1
 
-      - name: cargo xtask gpu-test --backend gl
+      - name: GPU readbacks on GL
         if: needs.plan.outputs.lane == 'full'
-        run: cargo xtask gpu-test --backend gl
+        env:
+          FLUI_REQUIRE_GPU: "1"
+          WGPU_BACKEND: gl
+        run: |
+          cargo nextest run -p flui-engine --features testing --lib --test painter_warm_path_allocation \
+            --locked --no-fail-fast --test-threads 1
+          cargo nextest run -p flui --no-default-features --run-ignored all \
+            --test composited_layer_update_readback --locked --no-fail-fast --test-threads 1
 
-      - name: cargo xtask build-all-targets (links the examples and benches)
+      - name: cargo build --all-targets (links the examples and benches)
         if: needs.plan.outputs.lane == 'full'
-        run: cargo xtask build-all-targets
+        run: cargo build --workspace --exclude flui-native --all-targets --locked --features "$TEST_FEATURES"
 
       # On main the disk peak is the build above, which a pull request skips;
       # the reclaim beside the builds is what keeps it above 0 (it failed
@@ -573,8 +650,8 @@ jobs:
           cache-bin: false
           cache-on-failure: true
           # v2: the job builds only the packages that hold the nested-cargo
-          # group (`cargo xtask test --nested --nested-group native`), so the
-          # v1 entry (~4 GB of every test binary's dependencies) is not reused.
+          # group, so the v1 entry (~4 GB of every test binary's
+          # dependencies) is not reused.
           shared-key: workspace-nested-v2
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
@@ -583,20 +660,31 @@ jobs:
         with:
           tool: cargo-nextest@0.9
 
-      - name: cargo xtask test --nested --nested-group native
-        run: cargo xtask test --nested --nested-group native
+      # Built from the packages whose binaries the group's filter in
+      # .config/nextest.toml names (flui, flui-cli): over the whole workspace
+      # nextest would build and link about a hundred test binaries to run the
+      # group's fourteen tests. The features are the `test` job's, so the
+      # facade the tests link is the one the full run links.
+      - name: cargo nextest run (group nested-cargo)
+        run: >-
+          cargo nextest run -p flui -p flui-cli --locked --no-fail-fast
+          --lib --bins --tests --features flui/material,flui/cupertino,flui/native
+          -E 'group(nested-cargo)'
 
   # The compile-fail suites, on main. Locally a changed crate's
-  # `cargo nextest run` still runs its suite, and
-  # `cargo xtask test --nested --nested-group trybuild` runs them all.
+  # `cargo nextest run` still runs its suite.
   #
-  # Three shards on three runners (`TrybuildShard` in tools/xtask/src/tasks.rs
-  # lists each one's suites): every trybuild project builds into the one
+  # Three shards on three runners: every trybuild project builds into the one
   # directory target/tests/trybuild under Cargo's lock on it, so suites
   # started together on one runner wait for each other, and one job ran them
   # one after another past its 40 minutes. Each shard builds only its own test
-  # targets, with the whole run's packages and features, and keeps its own
-  # cache entry, saved on main.
+  # targets (`--test` limits the targets, not the feature resolution), with
+  # the whole run's packages and features, and keeps its own cache entry,
+  # saved on main. A target name two packages share is built in both; the
+  # filter runs only the shard's binaries. Together the shards' binaries are
+  # the `trybuild` group's filter in .config/nextest.toml: a suite added there
+  # goes into one of them. The `view` shard also runs flui-native's compiler
+  # guards, which need a build of flui-native it has room for.
   test-trybuild:
     name: test-trybuild (${{ matrix.shard }})
     needs: [checks, plan]
@@ -606,7 +694,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [facade, core, view]
+        include:
+          - shard: facade
+            targets: --test thread_boundary_ui --test compiler_guards --test routable_ui --test nested_scroll_ui
+            binaries: binary_id(flui::thread_boundary_ui) | binary_id(flui-sdk::compiler_guards) | binary_id(flui-widgets::routable_ui) | binary_id(flui-widgets::nested_scroll_ui)
+          - shard: core
+            targets: --test compile_fail --test painting_it
+            binaries: binary_id(flui-interaction::compile_fail) | binary_id(flui-platform::compile_fail) | binary_id(flui-engine::compile_fail) | binary_id(flui-painting::painting_it)
+          - shard: view
+            targets: --test compile_fail --test compiler_guards --test view_it
+            binaries: binary_id(flui-rendering::compile_fail) | binary_id(flui-runtime::compiler_guards) | binary_id(flui-view::view_it)
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -634,10 +731,20 @@ jobs:
         with:
           tool: cargo-nextest@0.9
 
-      - name: cargo xtask test --nested --nested-group trybuild --trybuild-shard
+      # TARGETS is split into words on purpose: it is `--test <name>` pairs.
+      - name: cargo nextest run (group trybuild, this shard's binaries)
         env:
-          SHARD: ${{ matrix.shard }}
-        run: cargo xtask test --nested --nested-group trybuild --trybuild-shard "$SHARD"
+          TARGETS: ${{ matrix.targets }}
+          BINARIES: ${{ matrix.binaries }}
+        run: |
+          # shellcheck disable=SC2086
+          cargo nextest run --workspace --exclude flui-native --locked --no-fail-fast \
+            $TARGETS --features flui/material,flui/cupertino,flui/native \
+            -E "group(trybuild) & ($BINARIES)"
+
+      - name: cargo nextest run -p flui-native --test compiler_guards
+        if: matrix.shard == 'view'
+        run: cargo nextest run -p flui-native --test compiler_guards --locked --no-fail-fast
 
       - name: Upload trybuild output on failure
         if: failure()
@@ -720,7 +827,7 @@ jobs:
         run: cargo nextest run -p flui-painting --locked --no-fail-fast --features serde --test painting_it -E 'test(=value_contract)'
 
       # The facade's non-default catalogs need no run here:
-      # the `test` job's TEST_SCOPE turns `flui/material,flui/cupertino` on.
+      # the `test` job's TEST_FEATURES turns `flui/material,flui/cupertino` on.
 
       # A snapshot assertion in these suites fails with a `.snap.new` beside
       # it; upload them as `test` does, or the diff is only a log tail.
@@ -759,8 +866,20 @@ jobs:
         uses: ./.github/actions/rust-toolchain
 
 
+      # Private items included, and every package's `testing` feature on: a
+      # test-support module compiles only under
+      # `cfg(any(test, feature = "testing"))`, and flui-rendering, flui-layer
+      # and flui-widgets turn theirs on only through dev-dependencies, which
+      # `cargo doc` ignores, so a broken link in them would never be rendered.
+      # The list comes from `cargo metadata`, so a package that grows a
+      # `testing` feature is covered the day it does.
       - name: cargo doc --no-deps (every `testing` feature on)
-        run: cargo xtask doc-strict
+        run: |
+          features=$(cargo metadata --locked --no-deps --format-version 1 \
+            | jq -r '[.packages[] | select(.features | has("testing")) | .name + "/testing"] | join(",")')
+          [ -n "$features" ] || { echo "no package declares a testing feature"; exit 1; }
+          echo "testing features on: $features"
+          cargo doc --workspace --no-deps --locked --document-private-items --features "$features"
 
       # The contract rides the release train until cargo-semver-checks shows it
       # stable for two trains in a row (ADR-0153). A report, not a gate: before
@@ -907,9 +1026,12 @@ jobs:
           key: size-step-${{ github.sha }}
 
   # ─────────────────────────────────────────────────────────────────────────
-  # deps — `cargo xtask deps`: cargo-deny over every workspace member (bans,
-  # licenses and sources against deny.toml, advisories against RustSec).
-  # Nothing compiles but xtask. A dependency no code uses, a test-only one
+  # deps — cargo-deny over every workspace member (bans, licenses and sources
+  # against deny.toml, advisories against RustSec; `--workspace` because the
+  # root manifest is the `flui` package, whose graph alone misses flui-cli, the
+  # examples and the tools). Its advisories read the same RustSec database
+  # cargo-audit does, so cargo-audit is not run beside it. Nothing compiles
+  # but xtask, for the graph step. A dependency no code uses, a test-only one
   # declared as a normal one and a [workspace.dependencies] entry nothing
   # inherits are cargo's `unused_dependencies` lint, which CARGO_BUILD_WARNINGS
   # above makes fatal in every job that builds. Two steps, split by what
@@ -946,19 +1068,19 @@ jobs:
         with:
           tool: cargo-deny@0.20
 
+      - name: cargo deny check bans licenses sources
+        run: cargo deny --workspace --locked check bans licenses sources
+
+      - name: cargo deny check advisories
+        continue-on-error: ${{ github.event_name == 'pull_request' }}
+        run: cargo deny --workspace --locked check advisories
+
       - name: Rust cache (xtask)
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           cache-bin: false
           shared-key: xtask
           save-if: false
-
-      - name: cargo xtask deps --only policy
-        run: cargo xtask deps --strict --only policy
-
-      - name: cargo xtask deps --only advisories
-        continue-on-error: ${{ github.event_name == 'pull_request' }}
-        run: cargo xtask deps --strict --only advisories
 
       # The packages of the facade's default graph on each target, against
       # perf/size.toml (`cargo tree` only, nothing builds). A pull request that
@@ -1003,8 +1125,8 @@ jobs:
   # flui-foundation and flui-log whole, the rendering storage arena,
   # rendering owner failure/publishing families, public GlobalKey migration,
   # surface-before-target destruction and cancellation of renderer construction.
-  # It runs on main. The same scopes are used by `cargo xtask miri`; they are
-  # not a full workspace memory-safety audit.
+  # It runs on main. These scopes are not a full workspace memory-safety
+  # audit.
   # ─────────────────────────────────────────────────────────────────────────
   miri:
     name: miri

@@ -38,8 +38,8 @@
 
 // The sanctioned `unsafe` island for the layout walk (see module docs above).
 // The opt-out is scoped to this file; every block carries a `// SAFETY:`
-// comment, and the invariants are machine-checked by the miri CI job /
-// `cargo xtask miri`, which runs this module's tests as part of a wider
+// comment, and the invariants are machine-checked by the miri CI job,
+// which runs this module's tests as part of a wider
 // `pipeline::owner` sweep (cell.rs's PipelineCell checkout tests and the
 // rest of the owner module's unit tests ride along in the same filter).
 #![expect(unsafe_code)]
@@ -2544,8 +2544,8 @@ mod tests {
 
     // ========================================================================
     // Reentrant layout — a mid-layout child-request against the checked-out
-    // owner (miri coverage widened alongside the two walks above; `cargo
-    // xtask miri` runs it).
+    // owner (miri coverage widened alongside the two walks above; CI's
+    // `miri` job runs it).
     // ========================================================================
     //
     // `RenderSliverList`'s request-strategy seam

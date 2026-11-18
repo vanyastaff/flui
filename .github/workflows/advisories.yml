@@ -5,8 +5,9 @@ name: Advisories
 # day no run on main would notice. This workflow runs the same advisories
 # step against main once a day and keeps one tracking issue: a finding opens
 # (or comments on) "RustSec advisory on main", and a clean run closes it.
-# Runs at 03:17 UTC, off the :00/:30 herd marks. Not a merge gate: a pull
-# request that is workspace-wide still blocks on advisories in `deps`.
+# Runs at 03:17 UTC, off the :00/:30 herd marks. Not a merge gate: on a pull
+# request `deps` reports advisories without failing, and main's run blocks on
+# them (ADR-0376).
 
 on:
   schedule:
@@ -20,18 +21,10 @@ concurrency:
   group: ${{ github.workflow }}
   cancel-in-progress: false
 
-# The same env as ci.yml, so this run restores the `xtask` cache ci.yml's
-# `checks` job saves on main: rust-cache hashes every CARGO_* and RUST* value
-# into its key.
+# Nothing compiles: cargo-deny reads `cargo metadata`.
 env:
   CARGO_TERM_COLOR: always
-  RUST_BACKTRACE: 1
   RUSTUP_HOME: ${{ github.workspace }}/../flui-rustup
-  CARGO_BUILD_WARNINGS: deny
-  RUSTDOCFLAGS: -D warnings
-  CARGO_INCREMENTAL: 0
-  CARGO_PROFILE_DEV_DEBUG: line-tables-only
-  CARGO_PROFILE_TEST_DEBUG: line-tables-only
 
 jobs:
   advisories:
@@ -54,18 +47,11 @@ jobs:
         with:
           tool: cargo-deny@0.20
 
-      - name: Rust cache (xtask)
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          cache-bin: false
-          shared-key: xtask
-          save-if: false
-
       # The outcome feeds the tracking issue below, then fails the run.
       - id: deny
-        name: cargo xtask deps --only advisories
+        name: cargo deny check advisories
         continue-on-error: true
-        run: cargo xtask deps --strict --only advisories
+        run: cargo deny --workspace --locked check advisories
 
       # Only a run of main's own tree may touch the issue: a manual run from
       # another ref (`workflow_dispatch --ref`) checks out that ref, whose
@@ -80,7 +66,7 @@ jobs:
           title: RustSec advisory on main
           outcome: ${{ steps.deny.outcome }}
           body: |
-            `cargo xtask deps --only advisories` failed on main: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+            `cargo deny check advisories` failed on main: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
             Bump the dependency, or add an `ignore` with its reason to deny.toml. The next clean run closes this issue.
 
       - name: Fail the run on an open advisory

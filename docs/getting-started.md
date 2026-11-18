@@ -18,8 +18,9 @@ This page covers prerequisites, the first build, and how to run the bundled exam
 
 Repository tasks run as `cargo xtask <command>` (`cargo xtask --help` lists
 them); there is no other task runner to install. `cargo xtask doctor` checks
-every tool `cargo xtask ci` needs and prints the install command for each
-missing one (`cargo xtask doctor full` adds what `cargo xtask ci-full` needs).
+the tools the everyday local checks need and prints the install command for each
+missing one (`cargo xtask doctor full` adds what the heavier CI jobs need: the
+cross-target and wasm checks, the feature matrix, cargo-deny and Miri).
 
 The GPU dependency version is defined by `wgpu` in `[workspace.dependencies]`
 in `Cargo.toml`; consult that manifest when checking driver or backend requirements.

@@ -37,7 +37,7 @@ it, for every way the suite is started, without code in each test?
 ## Decision drivers
 
 - Every way the suite is started here starts it on that desktop: `cargo heli nextest run`,
-  `cargo nextest run`, `cargo xtask test`, `platform-test`, `gpu-test`.
+  `cargo nextest run`, and a `cargo xtask` task that runs nextest.
 - No code in each test: a new test cannot be left on the user's desktop.
 - A crashed run leaks nothing, and parallel tests do not each take a desktop (the desktop heap is
   a limited resource of the session).
@@ -50,7 +50,7 @@ it, for every way the suite is started, without code in each test?
 
 1. A nextest wrapper script that starts each test process on the run's desktop.
 2. A Cargo target runner for Windows that does the same.
-3. `cargo xtask test` starting nextest on the desktop.
+3. A `cargo xtask` task starting nextest on the desktop.
 4. Each test moving itself to the desktop through a fixture.
 
 ## Decision
@@ -184,7 +184,7 @@ leaves its windows open (`no_case_leaves_a_window_shown` in `drag::windows::test
 - Bad, because `target.<triple>.runner` also runs every `cargo run` of an application, which would
   open the application on a desktop nobody sees.
 
-### 3. `cargo xtask test` starting nextest on the desktop
+### 3. A `cargo xtask` task starting nextest on the desktop
 
 - Good, because it needs no nextest feature: every process nextest starts inherits the desktop.
 - Bad, because a direct `cargo nextest run` or `cargo heli nextest run`, the way most runs start

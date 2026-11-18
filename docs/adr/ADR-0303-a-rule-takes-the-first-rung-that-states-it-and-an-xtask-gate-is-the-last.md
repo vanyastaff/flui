@@ -19,6 +19,10 @@
   [ADR-0376](ADR-0376-ci-decides-its-lane-in-the-workflow-and-a-pull-request-names-no-expectations.md)
   for §1 only for the CI lanes and change scope (`plan`, `affected`, `ci-verify`, `paths-filter`):
   CI decides its lane and judges its run in shell steps of the workflow.
+  [ADR-0382](ADR-0382-ci-runs-the-standard-tools-directly-and-xtask-does-not-wrap-them.md) for §1
+  only for the command lines that must match between a contributor and CI (`test`, `clippy`,
+  `miri`): a workflow step calls the tool, and xtask keeps `cross-typecheck`, `feature-matrix`
+  and the `wasm-*` steps until a later record moves them.
 - **Related:** [ADR-0081](ADR-0081-workspace-tiers-and-reach-facts.md) (the tier gate, a rule only
   a gate can hold); [ADR-0097](ADR-0097-no-process-global-state-gate.md) (an allowlist entry that
   names its grant); [ADR-0151](ADR-0151-platform-layer-boundary-and-names.md) §16 (the OS entry

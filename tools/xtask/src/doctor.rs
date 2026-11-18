@@ -1,10 +1,12 @@
-//! Tools the local gates need, with install hints.
+//! Tools the local checks need, with install hints.
 //!
-//! `cargo xtask doctor` checks what `cargo xtask ci` needs; `cargo xtask
-//! doctor full` also what `cargo xtask ci-full` needs. Exit 1 if any required
-//! tool is missing. It only looks: it installs nothing and changes no
-//! configuration. The toolchain itself is not a row: `rust-toolchain.toml`
-//! pins it, and rustup has already resolved it by the time xtask runs.
+//! `cargo xtask doctor` checks what the everyday local checks need (`checks`,
+//! nextest, clippy); `cargo xtask doctor full` also what the heavier jobs need
+//! (the cross-target and wasm checks, the feature matrix, cargo-deny, Miri and
+//! the workflow linters). Exit 1 if any required tool is missing. It only
+//! looks: it installs nothing and changes no configuration. The toolchain
+//! itself is not a row: `rust-toolchain.toml` pins it, and rustup has already
+//! resolved it by the time xtask runs.
 
 use std::ffi::OsStr;
 use std::io::Write as _;
@@ -12,25 +14,24 @@ use std::process::{Command, ExitCode, Stdio};
 
 use crate::docs_links;
 use crate::fonts::find_python;
-use crate::tasks;
 use crate::util::repo_root;
 use crate::wasm::repo_locked_version;
 
-/// Which command's needs are required.
+/// Which set of tools is required.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub(crate) enum Mode {
-    /// What `cargo xtask ci` needs.
+    /// What the everyday local checks need.
     Ci,
-    /// Also what `cargo xtask ci-full` needs.
+    /// Also what the heavier jobs need.
     Full,
 }
 
 impl Mode {
-    /// The xtask command whose needs this mode checks.
-    fn command(self) -> &'static str {
+    /// What the summary names as the reason a tool is needed.
+    fn needed_for(self) -> &'static str {
         match self {
-            Mode::Ci => "ci",
-            Mode::Full => "ci-full",
+            Mode::Ci => "the local checks",
+            Mode::Full => "the full local checks",
         }
     }
 }
@@ -38,8 +39,8 @@ impl Mode {
 /// Arguments for `cargo xtask doctor`.
 #[derive(Debug, clap::Args)]
 pub(crate) struct DoctorArgs {
-    /// `ci` checks what `cargo xtask ci` needs; `full` also what
-    /// `cargo xtask ci-full` needs.
+    /// `ci` checks what the everyday local checks need; `full` also what the
+    /// heavier jobs need.
     #[arg(value_enum, default_value_t = Mode::Ci)]
     mode: Mode,
 }
@@ -47,11 +48,11 @@ pub(crate) struct DoctorArgs {
 /// Who needs a row.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Scope {
-    /// `cargo xtask ci`.
+    /// The everyday local checks.
     Ci,
-    /// Only `cargo xtask ci-full`.
+    /// Only the heavier jobs.
     Full,
-    /// No command; reported for information.
+    /// No check; reported for information.
     Info,
 }
 
@@ -170,24 +171,24 @@ impl Doctor {
 
     /// The closing line: what is missing, for which command.
     fn summary(&self) -> String {
-        let command = self.mode.command();
+        let needed_for = self.mode.needed_for();
         if self.missing_required > 0 {
             format!(
-                "doctor: {} missing for `cargo xtask {command}` -- install commands above.",
+                "doctor: {} missing for {needed_for} -- install commands above.",
                 self.missing_required
             )
         } else if self.missing_optional > 0 {
             let full = if self.mode == Mode::Ci {
-                " (`cargo xtask doctor full` also checks ci-full)"
+                " (`cargo xtask doctor full` also checks the heavier jobs)"
             } else {
                 ""
             };
             format!(
-                "doctor: everything `cargo xtask {command}` needs is here; {} optional item(s) missing{full}.",
+                "doctor: everything {needed_for} need is here; {} optional item(s) missing{full}.",
                 self.missing_optional
             )
         } else {
-            format!("doctor: everything `cargo xtask {command}` needs is here.")
+            format!("doctor: everything {needed_for} need is here.")
         }
     }
 
@@ -304,19 +305,12 @@ fn output_lines(program: &str, args: &[&str]) -> Vec<String> {
         })
 }
 
-/// The cargo subcommands only `cargo xtask ci-full` runs, each with its
-/// install command: cargo-hack for the feature matrix, and every tool
-/// `cargo xtask deps` runs.
-fn ci_full_cargo_subs() -> Vec<(&'static str, String)> {
-    let mut subs = vec![("hack", "cargo install --locked cargo-hack".to_owned())];
-    subs.extend(
-        tasks::deps_tools()
-            .map(|(sub, install)| (sub, format!("cargo install --locked {install}"))),
-    );
-    subs
-}
+/// The cargo subcommands only the heavier jobs run, each with the crate that
+/// installs it: cargo-hack for the feature matrix and cargo-deny for the
+/// dependency graph (`cargo deny --workspace --locked check`).
+const HEAVY_CARGO_SUBS: [(&str, &str); 2] = [("hack", "cargo-hack"), ("deny", "cargo-deny")];
 
-/// `cargo xtask doctor`: list missing tools for `cargo xtask ci` / `ci-full`.
+/// `cargo xtask doctor`: list missing tools for the local checks.
 #[expect(
     clippy::unnecessary_wraps,
     reason = "every command shares the dispatch signature in main.rs"
@@ -361,7 +355,7 @@ pub(crate) fn doctor(args: &DoctorArgs) -> anyhow::Result<ExitCode> {
         );
     }
 
-    // `cargo xtask ci`
+    // The everyday local checks.
     doctor.check_bin(
         Scope::Ci,
         "cargo",
@@ -388,7 +382,7 @@ pub(crate) fn doctor(args: &DoctorArgs) -> anyhow::Result<ExitCode> {
         &["--version"],
     );
 
-    // `cargo xtask ci-full`
+    // The heavier jobs.
     doctor.check_android_ndk(&android_tool("CC", "clang"), &android_tool("AR", "llvm-ar"));
     if os != "windows" {
         doctor.check_cargo_sub(Scope::Full, "xwin", "cargo install --locked cargo-xwin --version 0.23.1 (also needs clang/LLVM and MSVC SDK/CRT provisioning)");
@@ -409,8 +403,8 @@ pub(crate) fn doctor(args: &DoctorArgs) -> anyhow::Result<ExitCode> {
         );
         doctor.check_bin(Scope::Full, "zig", "install Zig 0.17.0 (macOS cross C headers); iOS checks require a genuine Apple SDK on macOS", &["version"]);
     }
-    for (sub, install) in ci_full_cargo_subs() {
-        doctor.check_cargo_sub(Scope::Full, sub, &install);
+    for (sub, krate) in HEAVY_CARGO_SUBS {
+        doctor.check_cargo_sub(Scope::Full, sub, &format!("cargo install --locked {krate}"));
     }
     let want = repo_locked_version("wasm-bindgen").ok().flatten();
     let have = succeeded_first_line("wasm-bindgen", &["--version"])
@@ -525,16 +519,6 @@ mod tests {
         assert_eq!((full.missing_required, full.missing_optional), (1, 1));
     }
 
-    fn full_mode_checks_every_tool_the_deps_gate_runs() {
-        let subs = ci_full_cargo_subs();
-        for (sub, install) in tasks::deps_tools() {
-            assert!(
-                subs.contains(&(sub, format!("cargo install --locked {install}"))),
-                "`cargo xtask doctor full` does not check cargo {sub}: {subs:?}"
-            );
-        }
-    }
-
     fn a_failing_binary_probe_is_not_an_available_tool() {
         let mut report = doctor(Mode::Ci);
         report.check_bin(
@@ -543,13 +527,13 @@ mod tests {
             "install cargo",
             &["--no-such-flag-xtask"],
         );
-        assert!(report.summary().contains("1 missing for `cargo xtask ci`"));
+        assert!(report.summary().contains("1 missing for the local checks"));
         let mut healthy = doctor(Mode::Ci);
         healthy.check_bin(Scope::Ci, "cargo", "install cargo", &["--version"]);
         assert!(
             healthy
                 .summary()
-                .contains("everything `cargo xtask ci` needs is here")
+                .contains("everything the local checks need is here")
         );
     }
 
@@ -558,7 +542,7 @@ mod tests {
         full.check_android_ndk(OsStr::new("cargo"), OsStr::new("cargo"));
         assert!(
             full.summary()
-                .contains("1 missing for `cargo xtask ci-full`")
+                .contains("1 missing for the full local checks")
         );
     }
 
@@ -598,10 +582,6 @@ mod tests {
                 (
                     "full_rows_are_required_only_in_full_mode",
                     full_rows_are_required_only_in_full_mode as fn(),
-                ),
-                (
-                    "full_mode_checks_every_tool_the_deps_gate_runs",
-                    full_mode_checks_every_tool_the_deps_gate_runs as fn(),
                 ),
             ],
         );
