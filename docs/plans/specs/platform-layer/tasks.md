@@ -8787,6 +8787,68 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
   Dex пересобран и воспроизводится (`android-dex --rebuild`). Должно на устройстве (строка «Deep
   links»): share при работающем и неработающем FLUI, чтение документа и кнопка лаунчера после.
 
+- [x] **LY140** — ветка `native/android-accessibility-activation`. Проверено на `main` @
+  `59a808aeb` чтением и тестами. Подтвердились обе находки: у `notify_activation(false)` на
+  Android не было вызова, а `FluiView` не слушал состояния доступности, так что после первого
+  вопроса любого сервиса мост оставался активным до конца процесса и каждый кадр строил и слал
+  обновление семантики; `NodeProvider` ловил повторный вход через `Mutex::try_lock`. Решение
+  (ADR его не решают; правило записано в `crates/flui-native/ARCHITECTURE.md`): дерево
+  начинается с первого вопроса сервиса через провайдер узлов (активация AccessKit, как прежде), а
+  кончается, когда `AccessibilityManager.isEnabled()` становится ложным:
+  `AccessibilityStateChangeListener` регистрируется вместе с наблюдателями настроек и спрашивает
+  менеджер в момент уведомления, а не верит его аргументу (запоздавшее уведомление не гасит
+  работающий сервис), регистрация — до первого вопроса. `TouchExplorationStateChangeListener` из
+  строки не нужен: конец исследования касанием не значит, что дерево никто не читает (Switch
+  Access, Select to Speak, сервисы автозаполнения). Flutter 3.50.0 (`AccessibilityBridge`)
+  включает семантику по `isEnabled()` сразу, читает его до регистрации слушателя и верит
+  аргументу; здесь включение ленивое, а оба края закрыты. Построено: модель
+  `accessibility::provided_tree::ProvidedTree<A>` над `ProvidedAdapter` (компилируется и
+  тестируется на всех хостах) держит адаптер в `RefCell`, вызов изнутри другого отвечает `Busy`.
+  Факт «сервис включён» пишет только `services_changed`: `FluiView` сообщает ответ менеджера
+  (`nativeAccessibilityServices(long, boolean)` через `jni_native`) при уведомлении, при входе в
+  окно и при появлении моста. Пока сервиса нет, обработчик активации адаптера
+  (`ServiceActivation`) отвечает без дерева и никому не говорит, так что вопрос не от сервиса
+  (Assist structure, режим совместимости автозаполнения, наведение, отправленное до
+  уведомления) получает заглушку, которая сбрасывается до возврата вызова. Без сервиса адаптер
+  сбрасывается в начальное состояние (дерева нет, обновления отбрасываются), заимствование
+  снимается, и только потом `BridgeShared::deactivate` говорит корню композиции; остановка во
+  время вызова в адаптер ждёт его возврата. Заглушка принимает только целое дерево: фрагмент
+  отбрасывается, и у корня снова просят всё дерево (`request_whole_tree`). `BridgeShared` держит
+  типизированное присоединение (ещё нет, присоединено, закончено); `deactivate` (им же пользуются
+  AT-SPI и iOS) под одним замком помечает конец и отбрасывает удержанное дерево, так что
+  публикация после конца ничего не оставляет, и говорит слушателю всегда: корень, чей слушатель
+  упал посреди активации, держит то, что успел записать. Android-мост держит
+  `ProvidedTree<accesskit_android::Adapter>` в `OwnerSlot` главного потока Java, созданном первым
+  дошедшим вызовом, вместо `Mutex`; `PROTOCOL` 7 → 8, dex пересобран здесь инструментами записи
+  (javac 21.0.12.1, build-tools 35.0.0, android-35) и воспроизводится (`android-dex --rebuild`).
+  Остановленная Activity кадров не строит, слушатель остаётся зарегистрированным, пока вид в окне;
+  пересозданная получает новый вид и новый мост, неактивный до первого вопроса. Паритет: новая
+  строка `the-tree-ends-when-no-assistive-technology-listens` (Windows, macOS, Web — ❌), её держит
+  таблица по хостам `each_native_adapter_ends_its_tree_when_its_platform_says_nobody_listens`;
+  сигналы Windows (`UiaClientsAreListening`, `SPI_GETSCREENREADER`) и macOS
+  (`isVoiceOverEnabled`, `isSwitchControlEnabled`) неполны и не читаются — запись `docs/gaps.md`
+  «A Windows or macOS window builds its accessibility tree for its life». Тесты, в скобках
+  результат с откатом: `the_last_service_stopping_ends_the_tree_and_tells_the_root_once`,
+  `the_root_is_told_once_the_tree_ended_and_the_adapter_is_free`,
+  `a_stop_during_a_call_into_the_adapter_ends_the_tree_as_the_call_returns`,
+  `a_service_starting_again_gets_the_whole_tree_built_for_it` и таблица (без `deactivate` в
+  остановке — падают; без сброса адаптера — падают); `a_hover_posted_before_the_last_service_stopped_starts_nothing`,
+  `a_question_with_no_service_enabled_tells_nobody_and_keeps_nothing` (активация, говорящая корню
+  без сервиса, — оба и `a_fragment_never_reaches_a_placeholder` падают);
+  `a_fragment_never_reaches_a_placeholder` (фрагмент в заглушку — двойник паникует, как
+  `accesskit_consumer`); `a_deactivation_reaches_a_root_that_half_took_the_activation`,
+  `a_stop_reaches_a_root_that_failed_to_take_a_change_whole` (сообщение только активному мосту —
+  оба падают); `nothing_is_retained_after_the_last_assistive_technology_left` (удержание при любом
+  присоединении — падает); `a_call_from_inside_the_adapter_answers_busy`;
+  `fluiview_reports_what_the_manager_says_now` держит Java к решению;
+  `semantics_stop_with_the_last_listener_and_restart_whole` (`flui-runtime`, headless, через
+  `FakeAccessibility`, который теперь считает всё отправленное) считает работу корня: после ухода
+  ни одного обновления, после возврата одно — всё дерево. Прогнано: на Windows clippy
+  `--all-targets --all-features -D warnings` `flui-native` и `flui-runtime`, nextest; в WSL
+  `cargo +nightly check` для `aarch64-linux-android` и `wasm32-unknown-unknown` (с тестами),
+  clippy и тесты доступности на Linux. Должно на устройстве Android (заметка строки паритета):
+  TalkBack выключить и включить, считая работу семантики в кадрах.
+
 ## Чего нет в этой серии
 
 Часть функций из закрытого списка ядра (R1.4) на части ОС ещё отсутствует. Каждая — отдельная
