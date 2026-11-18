@@ -163,7 +163,9 @@ mod tests {
         let tests = scratch.path().join("tests");
         std::fs::create_dir_all(&tests).expect("mkdir");
         for (name, text) in files {
-            std::fs::write(tests.join(name), text).expect("write");
+            let file = tests.join(name);
+            std::fs::create_dir_all(file.parent().expect("a parent directory")).expect("mkdir");
+            std::fs::write(file, text).expect("write");
         }
         let declared: BTreeSet<PathBuf> = targets
             .iter()
@@ -223,6 +225,24 @@ mod tests {
         );
     }
 
+    fn a_path_through_a_parent_directory_mounts_its_file() {
+        let files = [
+            (
+                "main.rs",
+                "#[path = \"sub/../elsewhere.rs\"]\nmod renamed;\n",
+            ),
+            ("elsewhere.rs", ""),
+        ];
+        assert_eq!(left_unmounted(&files, &["main.rs"]), [] as [&str; 0]);
+    }
+
+    /// Only the top level of `tests/` is listed: a file below it is a module of whatever mounts
+    /// its directory, and is not this check's.
+    fn a_file_in_a_subdirectory_is_not_listed() {
+        let files = [("main.rs", ""), ("sub/inner.rs", "")];
+        assert_eq!(left_unmounted(&files, &["main.rs"]), [] as [&str; 0]);
+    }
+
     #[test]
     fn unmounted_tests_contract() {
         crate::table_test::run_table(
@@ -243,6 +263,14 @@ mod tests {
                 (
                     "a_comment_or_a_string_mounts_nothing",
                     a_comment_or_a_string_mounts_nothing as fn(),
+                ),
+                (
+                    "a_path_through_a_parent_directory_mounts_its_file",
+                    a_path_through_a_parent_directory_mounts_its_file as fn(),
+                ),
+                (
+                    "a_file_in_a_subdirectory_is_not_listed",
+                    a_file_in_a_subdirectory_is_not_listed as fn(),
                 ),
             ],
         );

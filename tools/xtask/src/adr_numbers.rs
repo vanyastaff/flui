@@ -72,6 +72,6 @@ mod tests {
             duplicates(&files),
             ["ADR-0001 is used by ADR-0001-first.md, ADR-0001-second.md"]
         );
-        assert_eq!(duplicates(&files[1..2]), [] as [&str; 0]);
+        assert_eq!(duplicates(&files[1..]), [] as [&str; 0]);
     }
 }

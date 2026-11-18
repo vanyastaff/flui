@@ -7,10 +7,10 @@
   and `panic-messages` is no longer one). For the gate each names, in the section its own
   `Superseded-by` line cites, where the rule stands and its reader confirms it:
   ADR-0027, ADR-0028, ADR-0047, ADR-0078, ADR-0081, ADR-0082, ADR-0083, ADR-0088, ADR-0092,
-  ADR-0095, ADR-0097, ADR-0136, ADR-0151, ADR-0153, ADR-0154, ADR-0217, ADR-0238, ADR-0243,
-  ADR-0255, ADR-0258, ADR-0259, ADR-0264, ADR-0266, ADR-0269, ADR-0272, ADR-0279, ADR-0304,
-  ADR-0305, ADR-0306, ADR-0307, ADR-0311, ADR-0323, ADR-0325, ADR-0327, ADR-0340, ADR-0341,
-  ADR-0369.
+  ADR-0095, ADR-0097, ADR-0136, ADR-0151, ADR-0152, ADR-0153, ADR-0154, ADR-0217, ADR-0238,
+  ADR-0243, ADR-0255, ADR-0258, ADR-0259, ADR-0264, ADR-0266, ADR-0269, ADR-0272, ADR-0279,
+  ADR-0304, ADR-0305, ADR-0306, ADR-0307, ADR-0311, ADR-0323, ADR-0325, ADR-0327, ADR-0340,
+  ADR-0341, ADR-0369.
 - **Related:** [ADR-0370](ADR-0370-a-pull-request-compiles-for-linux-and-every-other-target-is-mains.md)
   (the pull-request gate this shortens); [ADR-0081](ADR-0081-workspace-tiers-and-reach-facts.md)
   (the tiers, which stay written in each manifest).
