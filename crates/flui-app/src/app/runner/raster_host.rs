@@ -504,6 +504,10 @@ struct Placed {
     /// The windows a raster thread's settlement wakes: every attached
     /// window's redraw requester, read by the thread's wake.
     redraws: Redraws,
+    /// The `RetryDevice` commands sent, each with a probed device: while
+    /// more are sent than the executor served, a retry is on its way and no
+    /// second device is probed.
+    retries_sent: u64,
 }
 
 /// The executor as the owner holds it in each placement (ADR-0305 §10).
@@ -1464,14 +1468,20 @@ impl RasterHost {
     }
 
     /// Give the executor a device probed in fresh instances in place of one
-    /// it gave up on (ADR-0305 §8, ADR-0267).
-    pub(crate) fn retry_device(&mut self) {
+    /// it gave up on (ADR-0305 §8, ADR-0267), on `address`'s behalf: a full
+    /// lifecycle queue is turned for that window's slot and sent to again.
+    fn retry_device(&mut self, address: PresentationAddress) -> device_retry::Retry {
         let Some(placed) = self.placed.as_mut() else {
-            return;
+            return device_retry::Retry::NotGivenUp;
         };
-        let _sent = device_retry::retry_given_up(&self.factory, placed, |placed, command| {
-            placed.sender.send(command)
+        let mut caught = FirstPanic::new();
+        let retry = device_retry::retry_given_up(&self.factory, placed, |placed, command| {
+            Self::send_with_room(placed, address, command, &mut caught)
         });
+        // The turn that made room ran under the window's frame: its panic is
+        // the frame's to report, resumed here as any turn's is.
+        resume_unless_unwinding(caught);
+        retry
     }
 
     /// The first panic of `address`'s frames since the last one was taken.
@@ -1768,10 +1778,10 @@ impl RasterHost {
             // A given-up device is replaced before the surface is made: a
             // restore configured on the given-up device would be refused, and
             // the surface is made with the factory of the device's instance.
-            let retried = device_retry::retry_given_up(&self.factory, placed, |placed, command| {
+            let retry = device_retry::retry_given_up(&self.factory, placed, |placed, command| {
                 Self::send_with_room(placed, address, command, caught)
             });
-            if retried {
+            if retry == device_retry::Retry::Sent {
                 let _turned = caught.contain(|| Self::turn_for(placed, address));
             }
             Self::restore_surface(placed, address, Instant::now())
@@ -1871,25 +1881,25 @@ impl RasterHost {
     }
 
     /// What `address`'s window does before its frame at `now`, with no
-    /// frame of its own: a rebuild of a given-up device the application
+    /// frame of its own: a retry of a given-up device the application
     /// asked for (`retry`), a surface it is owed whose pace is due, the
     /// colour of the display it is on, and a turn of the executor, which
-    /// rebuilds a lost device that is due. Answers whether the window's
-    /// surface came back or its display changed, which repaints it in full.
+    /// rebuilds a lost device that is due. Answers what came of it ([`BeforeFrame`]).
     fn before_frame(
         &mut self,
         address: PresentationAddress,
         now: Instant,
         display: Option<DisplayColor>,
         retry: bool,
-    ) -> bool {
-        if retry {
-            self.retry_device();
-        }
+    ) -> BeforeFrame {
+        let retry_failed = retry && self.retry_device(address) == device_retry::Retry::Failed;
         let restored = self.restore_due(address, now);
         let changed = self.follow_display(address, display);
         self.service(address);
-        changed | restored
+        BeforeFrame {
+            repaint: changed | restored,
+            retry_failed,
+        }
     }
 
     /// The loop's next wake for raster work: the earliest
@@ -2448,8 +2458,21 @@ impl Placed {
             slots: rustc_hash::FxHashMap::default(),
             settlements: Vec::new(),
             redraws,
+            retries_sent: 0,
         }
     }
+}
+
+/// What a window's work before its frame came to
+/// ([`RasterHost::before_frame`]).
+#[derive(Debug, Clone, Copy)]
+struct BeforeFrame {
+    /// The window's surface came back or its display changed: the frame
+    /// repaints in full.
+    repaint: bool,
+    /// The application's retry of a given-up device found no device: the
+    /// device stays given up, which the window tells its runtime again.
+    retry_failed: bool,
 }
 
 /// Why `send` refused a command, for a log line.
@@ -2778,8 +2801,9 @@ impl RasterSlot {
     /// Run the window's frame at `now` through its slot and answer whether it
     /// presented.
     ///
-    /// Before the frame: a rebuild of a given-up device the application
-    /// asked for, a surface the window is owed whose pace is due
+    /// Before the frame: a probe for a device to replace a given-up one,
+    /// when the application asked for it (a probe that answers none tells
+    /// the application the device is given up again), a surface the window is owed whose pace is due
     /// ([`RasterHost::restore_due`]), the colour of the display the window is
     /// on (`display`; a changed profile sets the surface up again, ADR-0256
     /// §6), and a turn of the executor, which rebuilds a lost device that is
@@ -2799,11 +2823,24 @@ impl RasterSlot {
         let retry = self.device_retry_asked(ui_runtime);
         // A host already turning is asked again on the next wake: the
         // device stays given up and the runtime's request stands.
-        let display_changed = self
+        let before = self
             .host
-            .try_with(|host| host.before_frame(address, now, display, retry))
-            .unwrap_or(false);
-        if display_changed | self.settle_device(ui_runtime) {
+            .try_with(|host| host.before_frame(address, now, display, retry));
+        if let (
+            Some(BeforeFrame {
+                retry_failed: true, ..
+            }),
+            DeviceHealth::GivenUp { attempts },
+        ) = (before, self.device)
+        {
+            // The request is answered: the device is given up again, and
+            // the next frame probes nothing until the application asks.
+            ui_runtime.note_primary_device_recovery(Some(
+                flui_runtime::frame_failure::DeviceRecovery::Abandoned { attempts },
+            ));
+        }
+        let repaint = before.is_some_and(|before| before.repaint);
+        if repaint | self.settle_device(ui_runtime) {
             ui_runtime.mark_primary_needs_full_repaint();
         }
         let mut sink = self.frame();

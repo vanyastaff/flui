@@ -17,22 +17,41 @@ use flui_platform::SurfaceTarget;
 
 use super::{Placed, RasterFactory};
 
+/// What a retry of a given-up device came to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Retry {
+    /// The device is not given up: the executor renders on it or rebuilds
+    /// it on its backoff, and nothing was probed.
+    NotGivenUp,
+    /// A retry sent earlier is not served yet: it answers this request too.
+    InFlight,
+    /// A probed device was sent; the executor adopts it on its next turn.
+    Sent,
+    /// The probe answered no device, or the executor refused the send: the
+    /// device stays given up, and the application is told so again.
+    Failed,
+}
+
 /// Probe for a device in fresh instances and send it to `placed`'s executor,
-/// with `send`, when the executor gave its device up; answers whether it
-/// sent one. From that send on, the windows' surfaces are made with the
-/// probe's factory. A device that renders, or whose rebuild is still paced,
-/// is left to the executor: nothing is probed.
+/// with `send`, when the executor gave its device up and holds no retry of
+/// the owner's unserved. From that send on, the windows' surfaces are made
+/// with the probe's factory.
 ///
 /// The probe blocks the owner thread for as long as the drivers take; it
-/// logs how long that was. A probe that answers no device is logged, and
-/// the device stays given up for the application's next retry.
+/// logs how long that was. A probe that answers no device is logged.
 pub(super) fn retry_given_up(
     factory: &RasterFactory,
     placed: &mut Placed,
     send: impl FnOnce(&mut Placed, RasterCommand) -> Result<SendReceipt, RasterSendError>,
-) -> bool {
+) -> Retry {
+    // Read before the health: a retry served after this read is counted as
+    // unserved, and waited for, rather than probed for twice.
+    let served = placed.sender.retries_served();
     if !matches!(placed.sender.device_health(), DeviceHealth::GivenUp { .. }) {
-        return false;
+        return Retry::NotGivenUp;
+    }
+    if placed.retries_sent > served {
+        return Retry::InFlight;
     }
     let over = placed
         .slots
@@ -48,7 +67,7 @@ pub(super) fn retry_given_up(
         Ok(probe) => probe,
         Err(error) => {
             tracing::warn!(%error, "raster host: no GPU device answered the retry");
-            return false;
+            return Retry::Failed;
         }
     };
     // The window's surface is made again by its restore, once the executor
@@ -57,11 +76,12 @@ pub(super) fn retry_given_up(
     match send(placed, RasterCommand::RetryDevice { device }) {
         Ok(_) => {
             placed.surfaces = surfaces;
-            true
+            placed.retries_sent += 1;
+            Retry::Sent
         }
         Err(error) => {
             tracing::warn!(%error, "raster host: a device retry was refused");
-            false
+            Retry::Failed
         }
     }
 }
@@ -80,7 +100,13 @@ fn probe(
         ))]
         RasterFactory::StandIn(_) => Ok(noop_probe()),
         #[cfg(all(test, feature = "testing"))]
-        RasterFactory::Scripted(_) => Ok(noop_probe()),
+        RasterFactory::Scripted(slots) => {
+            if slots.probe() {
+                Ok(noop_probe())
+            } else {
+                Err(EngineError::GpuUnavailable)
+            }
+        }
     }
 }
 

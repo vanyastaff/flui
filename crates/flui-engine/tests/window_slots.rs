@@ -635,6 +635,7 @@ fn a_probed_device_drops_every_window_surface_for_the_owner_to_replace() {
         });
         let _ = rig.executor.turn();
         assert_eq!(rig.sender.device_health(), DeviceHealth::Healthy);
+        assert_eq!(rig.sender.retries_served(), 1, "the retry is served");
         assert!(
             rig.sender.take_failure(slot).is_none(),
             "a surface the retry dropped is no failure"
@@ -980,6 +981,46 @@ fn a_rebuilt_device_answers_the_size_the_one_before_it_refused() {
     }
 }
 
+/// An adoption that panics part way still drops every window surface: the
+/// surfaces were made on the old instance, so the records ask the owner for
+/// new ones, the retry counts as served, and the panic is resumed.
+///
+/// Red-check: mark `SurfaceDropped` only after an adoption that returned,
+/// and the record says `Held` over a surface of the old instance.
+#[test]
+fn a_panicked_adoption_still_asks_every_window_for_a_surface() {
+    let mut rig = rig();
+    let (slot, _) = rig.sized_window();
+    // Where the executor cannot rebuild, it gives the device up at once.
+    rig.backend.cannot_rebuild_inline();
+    rig.backend.lose_device();
+    let _ = rig.executor.turn();
+    assert!(matches!(
+        rig.sender.device_health(),
+        DeviceHealth::GivenUp { .. }
+    ));
+    rig.backend.can_rebuild_inline();
+    let _given_up = rig.sender.take_device_failure();
+
+    rig.backend.script_rebuild(ScriptedAnswer::Panic);
+    let probe = noop_probe(Arc::new(FakeDisplay));
+    rig.factory = probe.factory;
+    let _ = rig.send(RasterCommand::RetryDevice {
+        device: probe.device,
+    });
+    let mut caught = flui_foundation::panic::FirstPanic::new();
+    let turn = caught.contain(|| rig.executor.turn());
+    assert!(
+        turn.is_none() && caught.into_payload().is_some(),
+        "the adoption's panic is resumed"
+    );
+    assert_eq!(rig.sender.retries_served(), 1);
+    assert_eq!(
+        rig.sender.record(slot).expect("held").surface.hold,
+        SurfaceHold::Wanted,
+        "the owner makes a surface on the new instance"
+    );
+}
 /// One step of a row of [`each_surface_event_reaches_the_record`].
 enum Step {
     /// The owner sends this size.

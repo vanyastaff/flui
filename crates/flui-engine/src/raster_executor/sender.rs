@@ -92,6 +92,9 @@ pub(crate) struct DeviceRecord {
     pub(crate) next_attempt_at: Option<Instant>,
     /// Why the last rebuild failed, until the owner takes it.
     pub(crate) failure: Option<EngineError>,
+    /// How many `RetryDevice` commands the executor served, adopted or not:
+    /// a retry the owner sent past this count is still on its way.
+    pub(crate) retries_served: u64,
 }
 
 /// What the owner and the executor share: the lifecycle queue, the coalesced
@@ -592,6 +595,14 @@ impl RasterSender {
     #[must_use]
     pub fn take_device_failure(&self) -> Option<EngineError> {
         self.shared.device().failure.take()
+    }
+
+    /// How many `RetryDevice` commands the executor has served, adopted or
+    /// not: a retry the owner sent past this count is still on its way, so
+    /// the owner probes no second device for it.
+    #[must_use]
+    pub fn retries_served(&self) -> u64 {
+        self.shared.device().retries_served
     }
 
     /// Why the raster thread stopped serving, or a turn of it failed, once:

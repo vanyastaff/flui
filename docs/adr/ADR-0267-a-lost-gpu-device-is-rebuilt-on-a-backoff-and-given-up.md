@@ -10,8 +10,9 @@
   [ADR-0305](ADR-0305-one-gpu-context-serves-every-surface-through-a-raster-executor.md) §8: the
   rebuild is the `GpuContext`'s, once per context for every window, run where the raster executor
   runs; it keeps the instance and the surfaces. After `Abandoned` nothing retries on its own; the
-  application's request to try again is the executor's `RetryDevice` command, which runs the
-  backend probe again in fresh instances. The backoff, the ceiling and the states are unchanged.
+  application's request to try again has the owner run the backend probe again in fresh
+  instances and send the device it answers in the executor's `RetryDevice` command. The
+  backoff, the ceiling and the states are unchanged.
 - **Related:** [ADR-0258](ADR-0258-owner-turn-panic-boundary-and-terminal-exit.md) §6 (the
   dropped-frame backoff a device-lost frame now takes), [ADR-0083](ADR-0083-one-frame-transaction-in-flui-runtime.md)
   (no GPU edge in `flui-runtime`, which is why the rebuild is reported in the runtime's own terms),
@@ -149,9 +150,9 @@ request.
 - §1, §2: `a_frame_dropped_on_a_lost_device_waits_out_the_backoff`,
   `a_failed_rebuild_is_reported_with_the_dropped_frame` (`flui-runtime`, `tests/contracts/device_loss.rs`).
 - §3: `a_given_up_rebuild_holds_frames_until_the_application_asks_again` (`flui-runtime`), and
-  `a_given_up_rebuild_holds_until_the_owner_sends_retry_device` (`flui-engine`).
-- §4 on Android and iOS: `a_window_given_back_retries_a_given_up_device` (`flui-app`'s raster
-  host, over scripted slots).
+  `a_given_up_rebuild_holds_until_the_owner_sends_a_probed_device` (`flui-engine`).
+- §4 on Android and iOS: `a_window_given_back_adopts_a_probed_device_before_its_surface`
+  (`flui-app`'s raster host, over scripted slots).
 - §1, §3, §4 through the runner: the `runner_close` rows
   `a_lost_device_waits_out_its_rebuild_backoff` (one rebuild per turn and a wake deadline in the
   future; the old code never returned from the turn) and

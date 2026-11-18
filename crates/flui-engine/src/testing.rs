@@ -108,6 +108,10 @@ struct Script {
     device_lost: bool,
     lose_in_next_render: bool,
     no_inline_rebuild: bool,
+    /// How many of the owner's next probes answer no device.
+    refused_probes: u32,
+    /// The owner's probes run so far.
+    probes: usize,
     /// The clock each rebuild advances, and by how much.
     rebuild_takes: Option<(ManualClock, Duration)>,
     /// What the next render waits on before it answers.
@@ -250,6 +254,32 @@ impl ScriptedSlots {
     /// while a frame records.
     pub fn lose_device_in_next_render(&self) {
         self.script.lock().lose_in_next_render = true;
+    }
+
+    /// Make the owner's next probe for a retried device answer no device,
+    /// as when every backend's adapter is still gone after a driver reset. A
+    /// host over these slots asks [`Self::probe`] before it probes.
+    pub fn refuse_next_probe(&self) {
+        self.script.lock().refused_probes += 1;
+    }
+
+    /// Count a probe the owner runs for a retried device, and answer
+    /// whether it finds a device.
+    #[must_use]
+    pub fn probe(&self) -> bool {
+        let mut script = self.script.lock();
+        script.probes += 1;
+        if script.refused_probes > 0 {
+            script.refused_probes -= 1;
+            return false;
+        }
+        true
+    }
+
+    /// The owner's probes for a retried device run so far.
+    #[must_use]
+    pub fn probes(&self) -> usize {
+        self.script.lock().probes
     }
 
     /// Answer that no device rebuild can succeed where the executor runs, as
