@@ -1356,12 +1356,11 @@ fn on_the_input_desktop() -> bool {
 /// loop: the window is entered, answers, gets the drop and fetches the data,
 /// and the source hears the action.
 ///
-/// Runs on the desktop that takes input. Which window `DoDragDrop` finds
-/// under the pointer is the Windows build's: on Windows 11 build 26300 it is
-/// the one under the position of the posted move, on Windows Server 2025
-/// (build 26100) one under a point the move does not set, so off the input
-/// desktop, where a test can place neither the cursor nor that point, only a
-/// window covering the whole screen is entered there.
+/// Runs on the desktop that takes input (ADR-0355 §4). Woken by the posted
+/// moves, `DoDragDrop`'s loop enters the window under their position on
+/// Windows 11 build 26300 on either desktop, and on Windows Server 2025
+/// (build 26100) only on the input desktop: on the test desktop there it
+/// entered only a window covering the whole screen.
 fn a_drag_into_a_window_of_this_process_drops_through_the_loop() {
     if !on_the_input_desktop() {
         assert!(

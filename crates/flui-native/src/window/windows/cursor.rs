@@ -20,9 +20,10 @@ use windows::Win32::{
         Input::{RAWINPUTDEVICE, RAWINPUTDEVICE_FLAGS, RIDEV_REMOVE, RegisterRawInputDevices},
         WindowsAndMessaging::{
             ClipCursor, CreateIconIndirect, DestroyIcon, GetClientRect, GetCursor, GetCursorPos,
-            HCURSOR, HICON, ICONINFO, IDC_APPSTARTING, IDC_ARROW, IDC_CROSS, IDC_HAND, IDC_IBEAM,
-            IDC_NO, IDC_SIZEALL, IDC_SIZENESW, IDC_SIZENS, IDC_SIZENWSE, IDC_SIZEWE, IDC_WAIT,
-            LoadCursorW, SetCursor,
+            GetSystemMetrics, HCURSOR, HICON, ICONINFO, IDC_APPSTARTING, IDC_ARROW, IDC_CROSS,
+            IDC_HAND, IDC_IBEAM, IDC_NO, IDC_SIZEALL, IDC_SIZENESW, IDC_SIZENS, IDC_SIZENWSE,
+            IDC_SIZEWE, IDC_WAIT, LoadCursorW, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN,
+            SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SetCursor,
         },
     },
 };
@@ -271,8 +272,10 @@ pub(crate) fn hold(hwnd: HWND, locked: bool) -> Result<Held, PlatformFailure> {
 
 /// Clip the pointer as `held` says, where `hwnd`'s client area is now: what a
 /// window holding the pointer does after it moved, resized or changed scale.
-/// A lock point the client area no longer reaches is moved to its nearest
-/// pixel, so the pointer never rests over another window.
+/// A lock point the client area no longer reaches, or that lies off the
+/// screen, is moved to the nearest pixel of the client area on the screen, so
+/// the pointer never rests over another window: the desktop clamps a clip to
+/// the virtual screen, and a pixel it clamps is no pixel of the client.
 ///
 /// # Errors
 /// [`PlatformFailure::Failed`] when Win32 refuses the clip.
@@ -281,14 +284,15 @@ pub(crate) fn clip(hwnd: HWND, held: Held) -> Result<(), PlatformFailure> {
     let rect = match held {
         Held::Confined => client,
         Held::Locked(at) => {
+            let reach = on_the_screen(client).unwrap_or(client);
             let x = client
                 .left
                 .saturating_add(at.x)
-                .clamp(client.left, (client.right - 1).max(client.left));
+                .clamp(reach.left, (reach.right - 1).max(reach.left));
             let y = client
                 .top
                 .saturating_add(at.y)
-                .clamp(client.top, (client.bottom - 1).max(client.top));
+                .clamp(reach.top, (reach.bottom - 1).max(reach.top));
             RECT {
                 left: x,
                 top: y,
@@ -299,6 +303,27 @@ pub(crate) fn clip(hwnd: HWND, held: Held) -> Result<(), PlatformFailure> {
     };
     // SAFETY: the rectangle is a live local the call reads.
     unsafe { ClipCursor(Some(&raw const rect)) }.map_err(failed)
+}
+
+/// The part of `rect` on the virtual screen, the bounds of every display;
+/// `None` when none of it is.
+fn on_the_screen(rect: RECT) -> Option<RECT> {
+    // SAFETY: metric queries by value.
+    let (left, top, width, height) = unsafe {
+        (
+            GetSystemMetrics(SM_XVIRTUALSCREEN),
+            GetSystemMetrics(SM_YVIRTUALSCREEN),
+            GetSystemMetrics(SM_CXVIRTUALSCREEN),
+            GetSystemMetrics(SM_CYVIRTUALSCREEN),
+        )
+    };
+    let visible = RECT {
+        left: rect.left.max(left),
+        top: rect.top.max(top),
+        right: rect.right.min(left.saturating_add(width)),
+        bottom: rect.bottom.min(top.saturating_add(height)),
+    };
+    (visible.left < visible.right && visible.top < visible.bottom).then_some(visible)
 }
 
 /// Let the pointer go: no clip, and no raw input once a lock held it.

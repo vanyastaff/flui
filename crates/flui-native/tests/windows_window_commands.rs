@@ -2917,6 +2917,43 @@ fn take_foreground(hwnd: HWND) -> bool {
     }
 }
 
+/// Where in `hwnd`'s client area the desktop's cursor clip locks the pointer:
+/// the clip's one pixel, relative to the client's origin; `None` when the clip
+/// is no single pixel.
+fn locked_pixel(hwnd: HWND) -> Option<POINT> {
+    use windows::Win32::UI::WindowsAndMessaging::GetClipCursor;
+    let mut clip = RECT::default();
+    let mut origin = POINT::default();
+    // SAFETY: plain queries into live locals.
+    let read = unsafe {
+        GetClipCursor(&raw mut clip).is_ok() && ClientToScreen(hwnd, &raw mut origin).as_bool()
+    };
+    (read && clip.right - clip.left == 1 && clip.bottom - clip.top == 1).then(|| POINT {
+        x: clip.left - origin.x,
+        y: clip.top - origin.y,
+    })
+}
+
+/// The logical size of the display `window` is on.
+fn display_extent(window: &Rc<dyn HostWindow>) -> (f64, f64) {
+    // SAFETY: plain queries of the live window's monitor into a stack local
+    // with `cbSize` set.
+    let monitor = unsafe {
+        let monitor = MonitorFromWindow(hwnd_of(window), MONITOR_DEFAULTTONEAREST);
+        let mut info = MONITORINFO {
+            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+            ..Default::default()
+        };
+        assert!(GetMonitorInfoW(monitor, &raw mut info).as_bool());
+        info.rcMonitor
+    };
+    let (_, scale) = monitor_frame(window);
+    (
+        f64::from(monitor.right - monitor.left) / scale,
+        f64::from(monitor.bottom - monitor.top) / scale,
+    )
+}
+
 /// The grab the desktop's cursor clip holds for `hwnd`: its client area is a
 /// confined pointer, one pixel of it a locked one, anything else none.
 fn cursor_clip_of(hwnd: HWND) -> flui_platform::CursorGrab {
@@ -2983,25 +3020,33 @@ fn a_grab_is_held_while_focused_and_let_go_with_the_focus() {
         assert_eq!(cursor_clip_of(hwnd), grab, "{grab:?} held by the desktop");
     }
     // A lock keeps its pixel of the client area when the window moves and
-    // resizes, never an old screen pixel over another window. The move keeps
-    // the window on a 1024x768 display (a CI runner's): the desktop clamps a
-    // cursor clip to the screen, so a locked pixel moved off it is no pixel of
-    // the client. It is a real move, away from where the window opened.
-    let opened_at = window.state().outer.position().expect("a position").at();
-    let (x, y) = if opened_at.x < 200.0 {
-        (300.0, 250.0)
-    } else {
-        (40.0, 40.0)
+    // resizes, never an old screen pixel over another window.
+    let pixel = locked_pixel(hwnd).expect("a lock clips the pointer to one pixel");
+    let on_screen = |window: &Rc<dyn HostWindow>| {
+        WindowCommand::SetPosition(on_its_display(window, 300.0, 250.0))
     };
+    apply(&window, on_screen(&window));
+    settle();
+    assert_eq!(locked_pixel(hwnd), Some(pixel), "the lock follows a move");
+    // Moved mostly off its display, the lock is the nearest pixel of the
+    // client area still on the screen, and its own pixel again once back.
+    let (width, height) = display_extent(&window);
     apply(
         &window,
-        WindowCommand::SetPosition(on_its_display(&window, x, y)),
+        WindowCommand::SetPosition(on_its_display(&window, width - 200.0, height - 150.0)),
     );
     settle();
     assert_eq!(
         cursor_clip_of(hwnd),
         CursorGrab::Locked,
-        "the lock follows a move"
+        "the lock stays on the part of the client on the screen"
+    );
+    apply(&window, on_screen(&window));
+    settle();
+    assert_eq!(
+        locked_pixel(hwnd),
+        Some(pixel),
+        "the lock is its own pixel again"
     );
     apply(&window, WindowCommand::SetSize(extent(200.0, 150.0)));
     settle();

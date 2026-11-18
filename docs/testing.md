@@ -167,7 +167,8 @@ Xvfb and a Weston on its X11 backend of its own and drives them through XTest;
 it skips itself without `Xvfb` or `weston`, and fails then under
 `FLUI_REQUIRE_WAYLAND`. Which compositor runs which Wayland case is in
 [its own section](#which-compositor-runs-which-wayland-case). On Windows the Win32 window
-tests and the contract's share the run's desktop and which window is active on it, and on
+tests, the contract's and flui-native's OLE drag table share the run's desktop and which window is
+active on it, and on
 macOS the AppKit window cases share the desktop's foreground and its Spaces: each set runs one
 at a time (test group `desktop-foreground`).
 
@@ -257,7 +258,7 @@ and gone once nothing holds it: every test of the run has exited, crashed or not
 process a test started. A process a test leaves behind keeps the desktop and runs on it unseen;
 Task Manager's Details tab lists it under the test binary's name, and ending it frees the desktop.
 A window there is never shown and no mouse or keyboard reaches it, while activation, focus,
-messages, hooks, DPI, the monitors, DWM, DXGI presentation, OLE drag and drop and the text
+messages, hooks, DPI, the monitors, DWM, DXGI presentation, OLE's drop targets and the text
 services work as on the user's desktop. No window there is in the foreground: the system moves
 the activation among a process's shown windows when one of them enters a modal loop, so a case
 that counts what ran during an idle modal loop runs in a process with no other shown window
@@ -282,7 +283,7 @@ and returns, which nextest reports as a pass; `FLUI_REQUIRE_INPUT_DESKTOP=1` mak
 |------|-------|
 | `windows_foreground::an_activation_takes_the_foreground_only_when_it_is_handed_over` | the foreground lock between two processes, the shell's flash notice, `SendInput` |
 | the contract rows in `NEED_THE_INPUT_DESKTOP` (`crates/flui-native/tests/contract.rs`) | a window brought to the foreground, then injected touch, pen, mouse or wheel input and the cursor |
-| `a_drag_into_a_window_of_this_process_drops_through_the_loop`, a row of `drag::windows::tests::ole_drag_and_drop_on_real_windows` | the window OLE's `DoDragDrop` loop finds under the pointer: on Windows Server 2025 it is not the one under the posted move's position, and elsewhere a test cannot place the cursor |
+| `a_drag_into_a_window_of_this_process_drops_through_the_loop`, a row of `drag::windows::tests::ole_drag_and_drop_on_real_windows` | the window OLE's `DoDragDrop` loop finds under the pointer: off the input desktop on Windows Server 2025 the loop enters no window under the posted move's position, which it does on the input desktop and on Windows 11 build 26300 |
 
 They run with `FLUI_TEST_VISIBLE_DESKTOP=1`, and every night on the Windows runner, which has no
 user, under `FLUI_REQUIRE_INPUT_DESKTOP=1` (`nightly-platforms.yml`). A test that reads the cursor only to have a position is handed one
