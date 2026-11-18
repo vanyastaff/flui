@@ -1,5 +1,6 @@
 //! Complete owner turns, including admission and outgoing ownership custody.
 
+use flui_foundation::panic::FirstPanic;
 use std::cell::{Cell, RefCell};
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::sync::atomic::Ordering;
@@ -147,35 +148,28 @@ impl Drop for ExecutionPermit<'_> {
 
 struct Recovery<'a> {
     owner: &'a OwnerCleanup,
-    first: Option<RetirePanic>,
+    first: FirstPanic,
 }
 
 impl<'a> Recovery<'a> {
     fn new(owner: &'a OwnerCleanup) -> Self {
-        Self { owner, first: None }
+        Self {
+            owner,
+            first: FirstPanic::new(),
+        }
     }
 
     fn keep(&mut self, payload: RetirePanic) {
         self.owner.record_execution_failure();
-        if self.first.is_none() {
-            self.first = Some(payload);
-        } else {
-            flui_foundation::panic::discard_payload(payload);
-        }
+        self.first.record(payload);
     }
 
     fn attempt<T>(&mut self, action: impl FnOnce() -> T) -> Option<T> {
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: an owner-turn action runs contained; the first failure is kept"
-        )]
-        match catch_unwind(AssertUnwindSafe(action)) {
-            Ok(value) => Some(value),
-            Err(payload) => {
-                self.keep(payload);
-                None
-            }
+        let value = self.first.contain(action);
+        if value.is_none() {
+            self.owner.record_execution_failure();
         }
+        value
     }
 
     fn retire<T>(&mut self, value: T) {
@@ -202,10 +196,12 @@ impl<'a> Recovery<'a> {
         }
     }
 
-    fn finish(mut self) {
-        if let Some(payload) = self.first.take() {
-            resume_unwind(payload);
-        }
+    fn into_failure(self) -> Option<RetirePanic> {
+        self.first.into_payload()
+    }
+
+    fn finish(self) {
+        self.first.resume();
     }
 }
 
@@ -230,7 +226,7 @@ impl OwnerCleanup {
         }
         drop(failure_scope);
         drop(permit);
-        recovery.first.take()
+        recovery.into_failure()
     }
 
     fn bind_failure_scope<'a>(&'a self, scheduler: Option<&UpdateScheduler>) -> FailureScope<'a> {
@@ -272,7 +268,7 @@ impl OwnerCleanup {
         scheduler.release_owner_frame();
         let mut recovery = Recovery::new(self);
         recovery.release_scheduler(scheduler);
-        recovery.first.take()
+        recovery.into_failure()
     }
 }
 
@@ -296,7 +292,7 @@ impl OwnerFrame {
         let failure = self.with_cleanup_custody(|| {
             let mut recovery = Recovery::new(&self.cleanup);
             recovery.retire(envelope);
-            recovery.first.take()
+            recovery.into_failure()
         });
         if let Some(payload) = failure {
             resume_unwind(payload);
@@ -308,7 +304,7 @@ impl OwnerFrame {
             let mut recovery = Recovery::new(&self.cleanup);
             recovery.retire(prepare);
             recovery.retire(pipeline);
-            recovery.first.take()
+            recovery.into_failure()
         });
         if let Some(payload) = failure {
             resume_unwind(payload);
@@ -370,7 +366,9 @@ impl OwnerFrame {
         let mut recovery = Recovery::new(&self.cleanup);
         let mut output = None;
         recovery.attempt(&mut prepare);
-        let span = if recovery.first.is_none() {
+        let span = if recovery.first.is_held() {
+            None
+        } else {
             recovery.attempt(|| {
                 tracing::debug_span!(
                     target: "flui.frame",
@@ -380,13 +378,11 @@ impl OwnerFrame {
                     runtime = tracing::field::Empty
                 )
             })
-        } else {
-            None
         };
         if let Some(span) = span.as_ref() {
             // Whose frame this is is known before the first callback runs: a callback that
             // panics still leaves a frame that names its runtime.
-            if recovery.first.is_none()
+            if !recovery.first.is_held()
                 && let Some(runtime) = self.trace_runtime()
             {
                 recovery.attempt(|| {
@@ -394,7 +390,7 @@ impl OwnerFrame {
                 });
             }
             let entered = recovery.attempt(|| span.enter());
-            if recovery.first.is_none() {
+            if !recovery.first.is_held() {
                 recovery.attempt(|| {
                     let id = scheduler.handle_begin_frame(timestamp, self);
                     span.record("id", tracing::field::debug(id));
@@ -405,10 +401,10 @@ impl OwnerFrame {
                     output = Some(pipeline());
                 });
             }
-            if recovery.first.is_none() {
+            if !recovery.first.is_held() {
                 recovery.attempt(|| scheduler.end_frame(self));
             }
-            if recovery.first.is_some()
+            if recovery.first.is_held()
                 && (scheduler.inner.frame.current_frame.borrow().is_some()
                     || scheduler.phase() != SchedulerPhase::Idle)
             {
@@ -437,7 +433,7 @@ impl OwnerFrame {
             recovery.attempt(|| drop(span));
         }
         recovery.release_scheduler(scheduler);
-        if recovery.first.is_some()
+        if recovery.first.is_held()
             && let Some(value) = output.take()
         {
             recovery.retire(value);
@@ -492,7 +488,7 @@ impl OwnerFrame {
             polled = self.poll_ready();
         });
         recovery.retire(prepare);
-        if recovery.first.is_some()
+        if recovery.first.is_held()
             && (self.ready_task_count() != 0 || scheduler.is_frame_scheduled())
         {
             recovery.attempt(|| {
