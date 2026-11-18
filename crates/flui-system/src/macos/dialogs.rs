@@ -611,7 +611,8 @@ mod appkit {
         use super::{MacDialogs, Panels};
         use crate::apple::version::MacOSVersion;
         use crate::dialog::{
-            DialogError, FileDialogCapability, FileDialogs, OpenRequest, SaveRequest,
+            DialogError, FileDialogCapability, FileDialogs, OpenRequest, OpenResult, SaveRequest,
+            SaveResult,
         };
         use crate::testing::owner::TestOwner;
         use crate::testing::window::window;
@@ -662,7 +663,7 @@ mod appkit {
                 UnsupportedReason::Unavailable
             )));
 
-            let opened = Rc::default();
+            let opened: Rc<RefCell<Option<Result<OpenResult, Abandoned>>>> = Rc::default();
             let into = Rc::clone(&opened);
             dialogs
                 .open(OpenRequest::files())
@@ -674,7 +675,7 @@ mod appkit {
             );
 
             // The window is free for the next dialog.
-            let saved = Rc::default();
+            let saved: Rc<RefCell<Option<Result<SaveResult, Abandoned>>>> = Rc::default();
             let into = Rc::clone(&saved);
             dialogs
                 .save(SaveRequest::new())

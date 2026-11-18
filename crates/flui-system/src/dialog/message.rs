@@ -157,7 +157,7 @@ impl ButtonLabels {
 /// | no title | an empty caption, never the system's "Error" | no heading: the message is the alert's message text | no title | no heading |
 /// | detail | below the message, after an empty line | the informative text, below the title and message | below the message, after an empty line | a paragraph below the message |
 /// | default button | `MB_DEFBUTTON` of its position | the button Return presses | the preferred action | the button that takes focus |
-/// | button label | refused: [`Unsupported`](flui_platform::Unsupported) with `NotYetOnThisHost` | the button's title | the action's title | the button's text |
+/// | button label | refused: [`Unsupported`] with `NotYetOnThisHost` | the button's title | the action's title | the button's text |
 ///
 /// `MessageBoxW` cannot label a button, so a Windows box whose request
 /// labels one is refused before anything is shown rather than shown with

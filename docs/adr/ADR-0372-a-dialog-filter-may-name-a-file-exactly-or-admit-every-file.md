@@ -61,9 +61,12 @@ every host: Windows, the portal's globs and macOS's content types do not agree o
 is why ADR-0360 excluded them. Option 4 leaves both needs unmet.
 
 §1. **A filter of every file.** `FileFilter::all_files(name)` builds a filter that matches every
-file; `FileFilter::is_all_files` says so. It holds no pattern, and `with_extension`,
-`with_file_name` and `with_mime_type` leave it as it is. It is checked as any filter is for its
-name, and is not `EmptyFilter`. A request that offers one admits every pick, whichever filter was
+file; `FileFilter::is_all_files` says so. Its kind is its own (`FileFilter`'s private
+`Kind::EveryFile`, beside `Kind::Patterns`), so it holds no pattern: `with_extension`,
+`with_file_name` or `with_mime_type` on it keeps no pattern and records that one was given, and a
+request offering it is refused with `MalformedRequest::PatternOnAllFiles` rather than dropping
+what its author wrote. It is checked as any filter is for its name, and is not `EmptyFilter`. A
+request that offers one admits every pick, whichever filter was
 selected on accept: the request offered every file, and no host reports the selection of an open
 dialog.
 
@@ -89,10 +92,12 @@ among its filters, is not checked by name, as ADR-0360 §4 has it for MIME types
 | Windows | the pattern `*.*`, which Windows matches against a name with no dot too | the name as its own pattern (`Makefile`), matched whole and ignoring case |
 | The portal | the glob `*` | a glob of the name as written, in lower and in upper case; another mix of cases is not shown on a case-sensitive file system, as for an extension |
 | macOS | no allowed types: a panel has no filter menu, so every file beside the other filters is every file | no allowed types, since no content type is a name; an open panel's delegate enables what the request's filters name or type, and a save panel takes any name and appends none |
+| iOS | the picker of every document: it has no filter menu either | the picker of every document (`public.item`); each pick is held to the request's rule before it is read |
+| A browser | the picker keeps its own entry of every file (`excludeAcceptAllOption: false`) and gets no type for this filter; a file input's `accept` is empty, every file | the picker keeps its entry of every file and gets a type of the filter's extensions and MIME types, if it has any; a file input's `accept` is empty |
 
-A host whose dialog can express neither (a browser's picker takes MIME types and extensions) shows
-every file for such a request, and the handle's check of each pick's name holds the answer to the
-filters.
+macOS and iOS share the mapping (`apple::content_types`). Where a host can only show every file
+for a filter (a file name in a browser, on macOS and iOS), the handle's check of each pick's name
+holds the answer to the filters.
 
 ### Consequences
 
@@ -104,23 +109,25 @@ filters.
   filters: the application that offers it takes any file.
 - Bad, because on macOS a save panel whose request names a file exactly appends no extension to
   any typed name, since the panel is given no types.
-- Neutral, because `FileFilter` gains a third kind of pattern and a flag, and each provider's
-  mapping reads both.
+- Neutral, because `FileFilter` gains a third kind of pattern and a kind of its own for every
+  file, and each provider's mapping reads both.
 
 ### Confirmation
 
 - The compiler: a filter of every file is built by `FileFilter::all_files` only, and a file name
-  by `with_file_name` only.
+  by `with_file_name` only; the filter's kind is private, so no caller builds one of every file
+  that holds a pattern.
 - Tests in `flui-system`'s `system_it`:
   `a_pick_whose_name_ends_in_no_extension_of_the_filters_refuses_the_whole_answer` (rows for a
   filter of every file and for file names), `a_filter_means_a_files_name_or_its_type_ignoring_ascii_case`,
   `a_filter_keeps_each_pattern_once_as_the_dialog_compares_it` and
-  `a_malformed_request_is_refused_without_showing_a_dialog` (the `FileName` rows).
+  `a_malformed_request_is_refused_without_showing_a_dialog` (the `FileName` and
+  `PatternOnAllFiles` rows).
 - Per host: Windows' `a_filter_becomes_the_dialogs_name_patterns_and_the_first_starts_selected`;
   the portal's `a_file_name_is_its_own_glob_and_every_file_is_one_star` and, against the stand-in
-  portal, `a_portal_save_without_an_extension_is_named_after_the_selected_filter`; macOS's
-  `a_filter_of_every_file_frees_the_panel_and_a_named_file_leaves_it_to_the_delegate`, a model on
-  every host.
+  portal, `a_portal_save_without_an_extension_is_named_after_the_selected_filter`; macOS's and
+  iOS's `a_filter_of_every_file_frees_the_dialog_and_a_named_file_leaves_it_to_the_rule`, a model
+  on every host; the web's `every_file_and_a_named_file_keep_the_browsers_entry_of_every_file`.
 
 ## Pros and cons of the options
 
@@ -155,4 +162,3 @@ filters.
 - [rfd#211](https://github.com/PolyMeilex/rfd/issues/211),
   [rfd#215](https://github.com/PolyMeilex/rfd/issues/215),
   [rfd#158](https://github.com/PolyMeilex/rfd/issues/158).
-- The web provider maps neither kind yet; `docs/gaps.md` says what a browser shows for them.
