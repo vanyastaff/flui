@@ -68,8 +68,15 @@ struct ShownBox {
     dialog: HtmlDialogElement,
     buttons: MessageButtons,
     answer: Cell<Option<Resolver<MessageBoxResult>>>,
-    /// The `close` and `cancel` listeners, kept while the box is up.
-    listeners: RefCell<Option<[Closure<dyn FnMut(Event)>; 2]>>,
+    /// Alive until the box itself drops, since one may be running.
+    listeners: RefCell<Option<BoxListeners>>,
+}
+
+/// The listeners a box keeps while it is up: its `close`, and its `cancel`,
+/// which keeps Escape from a box with no way out but an answer.
+struct BoxListeners {
+    close: Closure<dyn FnMut(Event)>,
+    cancel: Closure<dyn FnMut(Event)>,
 }
 
 /// A box that could not be shown: the answer to give, and why.
@@ -122,7 +129,7 @@ impl ShownBox {
         let _ = shown
             .dialog
             .add_event_listener_with_callback("cancel", cancel.as_ref().unchecked_ref());
-        *shown.listeners.borrow_mut() = Some([close, cancel]);
+        *shown.listeners.borrow_mut() = Some(BoxListeners { close, cancel });
         if let Err(thrown) = shown.dialog.show_modal() {
             let answer = shown.answer.take();
             shown.take_down();
@@ -137,27 +144,24 @@ impl ShownBox {
     /// again when closing is no answer for its buttons.
     fn closed(&self) {
         let value = self.dialog.return_value();
-        match rules::box_answer(self.buttons, &value) {
-            Some(chosen) => {
-                if let Some(answer) = self.answer.take() {
-                    self.take_down();
-                    // A retired owner has nobody left to answer.
-                    let _ = answer.resolve(Ok(chosen));
-                }
+        if let Some(chosen) = rules::box_answer(self.buttons, &value) {
+            if let Some(answer) = self.answer.take() {
+                self.take_down();
+                // A retired owner has nobody left to answer.
+                let _ = answer.resolve(Ok(chosen));
             }
-            None => {
-                self.dialog.set_return_value("");
-                if self.dialog.show_modal().is_err()
-                    && let Some(answer) = self.answer.take()
-                {
-                    self.take_down();
-                    // The box could not be shown again, and no answer it
-                    // admits was given: the system failed.
-                    let _ = answer.resolve(Err(DialogError::Failed(
-                        flui_platform::SystemFailure::MalformedAnswer,
-                    )));
-                }
-            }
+            return;
+        }
+        self.dialog.set_return_value("");
+        if self.dialog.show_modal().is_err()
+            && let Some(answer) = self.answer.take()
+        {
+            self.take_down();
+            // The box could not be shown again, and no answer it admits was
+            // given: the system failed.
+            let _ = answer.resolve(Err(DialogError::Failed(
+                flui_platform::SystemFailure::MalformedAnswer,
+            )));
         }
     }
 
@@ -165,13 +169,15 @@ impl ShownBox {
     /// the page. The listeners stay alive until the box drops, since one
     /// may be running.
     fn take_down(&self) {
-        if let Some([close, cancel]) = self.listeners.borrow().as_ref() {
-            let _ = self
-                .dialog
-                .remove_event_listener_with_callback("close", close.as_ref().unchecked_ref());
-            let _ = self
-                .dialog
-                .remove_event_listener_with_callback("cancel", cancel.as_ref().unchecked_ref());
+        if let Some(listeners) = self.listeners.borrow().as_ref() {
+            let _ = self.dialog.remove_event_listener_with_callback(
+                "close",
+                listeners.close.as_ref().unchecked_ref(),
+            );
+            let _ = self.dialog.remove_event_listener_with_callback(
+                "cancel",
+                listeners.cancel.as_ref().unchecked_ref(),
+            );
         }
         if self.dialog.open() {
             self.dialog.close();
