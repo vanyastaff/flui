@@ -1,7 +1,7 @@
 //! Notification ownership and recovery, exercised through the public API.
 
 use flui_foundation::{
-    ChangeNotifier, Listenable, ListenerId, Notifier, Subscription, ValueListenable, ValueNotifier,
+    ChangeNotifier, Listenable, Notifier, Subscription, ValueListenable, ValueNotifier,
 };
 use std::cell::RefCell;
 use std::io::Read;
@@ -25,7 +25,7 @@ fn non_clone_argument() {
     let notifier = Notifier::<Argument>::new();
     let observed = Arc::new(Mutex::new(String::new()));
     let listener_observed = Arc::clone(&observed);
-    let id = notifier.add(std::rc::Rc::new(move |argument| {
+    let subscription = notifier.subscribe(std::rc::Rc::new(move |argument| {
         listener_observed
             .lock()
             .expect("observation")
@@ -35,9 +35,9 @@ fn non_clone_argument() {
     let cloned = notifier.clone();
     cloned.notify(&argument);
     assert_eq!(*observed.lock().expect("observation"), argument.0);
-    notifier.remove(id);
+    subscription.detach();
     observed.lock().expect("observation").clear();
-    cloned.notify(&argument);
+    notifier.notify(&argument);
     assert!(observed.lock().expect("observation").is_empty());
 }
 
@@ -49,7 +49,9 @@ fn borrowed_argument_type_accepts_a_non_static_reference() {
     let notifier = Notifier::<&str>::new();
     let observed = Arc::new(Mutex::new(String::new()));
     let listener_observed = Arc::clone(&observed);
-    notifier.add(std::rc::Rc::new(move |argument| {
+    // A subscription needs `Arg: 'static`; a borrowed argument registers
+    // through the custody form, which lives as long as the channel.
+    let _id = notifier.add_with_recovery(std::rc::Rc::new(move |argument, _recovery| {
         listener_observed
             .lock()
             .expect("observation")
@@ -116,18 +118,18 @@ fn retirement_competition() {
     let notifier = Notifier::<()>::new();
     let drops = Arc::new(AtomicUsize::new(0));
     for message in ["first retirement", "second retirement"] {
-        let self_id = Arc::new(Mutex::new(None::<ListenerId>));
-        let callback_id = Arc::clone(&self_id);
-        let callback_notifier = notifier.clone();
+        let own = std::rc::Rc::new(RefCell::new(None::<Subscription>));
+        let detach_own = std::rc::Rc::clone(&own);
         let capture = Bomb {
             drops: Arc::clone(&drops),
             message,
         };
-        let id = notifier.add(std::rc::Rc::new(move |&()| {
+        let subscription = notifier.subscribe(std::rc::Rc::new(move |&()| {
             let _capture = &capture;
-            callback_notifier.remove(callback_id.lock().expect("listener id").expect("installed"));
+            let taken = detach_own.borrow_mut().take();
+            taken.expect("installed").detach();
         }));
-        *self_id.lock().expect("listener id") = Some(id);
+        *own.borrow_mut() = Some(subscription);
     }
     let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| notifier.notify(&())))
         .expect_err("ordinary retirement propagates its first failure");
@@ -143,7 +145,7 @@ fn retirement_competition() {
     assert!(notifier.is_empty());
     let later = Arc::new(AtomicUsize::new(0));
     let listener_later = Arc::clone(&later);
-    notifier.add(std::rc::Rc::new(move |&()| {
+    let _later = notifier.subscribe(std::rc::Rc::new(move |&()| {
         listener_later.fetch_add(1, Ordering::SeqCst);
     }));
     notifier.notify(&());
@@ -152,19 +154,25 @@ fn retirement_competition() {
 
 /// One panicking capture, then one that only counts: a second destructor that
 /// panicked while the first unwinds would abort, as in std (ADR-0281).
-fn install_retirement_captures(notifier: &Notifier<()>, drops: &Arc<AtomicUsize>) -> ListenerId {
+/// The subscriptions hold the registrations; the channel retires them first
+/// when it is dropped, cleared or disposed, and the subscriptions then detach
+/// quietly.
+fn install_retirement_captures(
+    notifier: &Notifier<()>,
+    drops: &Arc<AtomicUsize>,
+) -> [Subscription; 2] {
     let capture = Bomb {
         drops: Arc::clone(drops),
         message: "first terminal retirement",
     };
-    let first = notifier.add(std::rc::Rc::new(move |&()| {
+    let first = notifier.subscribe(std::rc::Rc::new(move |&()| {
         let _capture = &capture;
     }));
     let capture = Counted(Arc::clone(drops));
-    notifier.add(std::rc::Rc::new(move |&()| {
+    let second = notifier.subscribe(std::rc::Rc::new(move |&()| {
         let _capture = &capture;
     }));
-    first
+    [first, second]
 }
 
 fn assert_first_terminal_failure(failure: Box<dyn std::any::Any + Send>, drops: &AtomicUsize) {
@@ -183,7 +191,7 @@ fn assert_first_terminal_failure(failure: Box<dyn std::any::Any + Send>, drops: 
 fn terminal_retirement_competition() {
     let notifier = Notifier::<()>::new();
     let drops = Arc::new(AtomicUsize::new(0));
-    install_retirement_captures(&notifier, &drops);
+    let _held = install_retirement_captures(&notifier, &drops);
     let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(notifier)))
         .expect_err("final physical owner propagates first retirement failure");
     assert_first_terminal_failure(failure, &drops);
@@ -208,7 +216,7 @@ fn terminal_retirement_competition() {
     for dispose in [false, true] {
         let notifier = Notifier::<()>::new();
         let drops = Arc::new(AtomicUsize::new(0));
-        install_retirement_captures(&notifier, &drops);
+        let _held = install_retirement_captures(&notifier, &drops);
         let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             if dispose {
                 notifier.dispose();
@@ -225,7 +233,7 @@ fn terminal_retirement_competition() {
         } else {
             let calls = Arc::new(AtomicUsize::new(0));
             let observed = Arc::clone(&calls);
-            notifier.add(std::rc::Rc::new(move |&()| {
+            let _next = notifier.subscribe(std::rc::Rc::new(move |&()| {
                 observed.fetch_add(1, Ordering::SeqCst);
             }));
             notifier.notify(&());
@@ -239,41 +247,52 @@ fn terminal_retirement_during_unwind_destroys_captures() {
         FinalOwner,
         Clear,
         Dispose,
-        Remove(ListenerId),
+        Detach(Option<Subscription>),
     }
+    /// Fields drop in order after `drop` runs: the channel first, so its
+    /// registrations retire during the unwind, then the subscriptions, which
+    /// detach from a gone channel quietly.
     struct Owner {
         notifier: Notifier<()>,
         cleanup: Cleanup,
+        _held: Vec<Subscription>,
     }
     impl Drop for Owner {
         fn drop(&mut self) {
-            match self.cleanup {
+            match &mut self.cleanup {
                 Cleanup::FinalOwner => {}
                 Cleanup::Clear => self.notifier.remove_all(),
                 Cleanup::Dispose => self.notifier.dispose(),
-                Cleanup::Remove(id) => self.notifier.remove(id),
+                Cleanup::Detach(subscription) => {
+                    if let Some(subscription) = subscription.take() {
+                        subscription.detach();
+                    }
+                }
             }
         }
     }
     for operation in 0..4 {
         let notifier = Notifier::<()>::new();
         let drops = Arc::new(AtomicUsize::new(0));
-        let mut first = None;
-        for _ in 0..2 {
-            let capture = Counted(Arc::clone(&drops));
-            let id = notifier.add(std::rc::Rc::new(move |&()| {
-                let _capture = &capture;
-            }));
-            first.get_or_insert(id);
-        }
-        let first = first.expect("two installed callbacks");
+        let mut held: Vec<Subscription> = (0..2)
+            .map(|_| {
+                let capture = Counted(Arc::clone(&drops));
+                notifier.subscribe(std::rc::Rc::new(move |&()| {
+                    let _capture = &capture;
+                }))
+            })
+            .collect();
         let cleanup = match operation {
             0 => Cleanup::FinalOwner,
             1 => Cleanup::Clear,
             2 => Cleanup::Dispose,
-            _ => Cleanup::Remove(first),
+            _ => Cleanup::Detach(Some(held.remove(0))),
         };
-        let owner = Owner { notifier, cleanup };
+        let owner = Owner {
+            notifier,
+            cleanup,
+            _held: held,
+        };
         let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
             let _owner = owner;
             panic!("incoming failure");
@@ -304,15 +323,17 @@ fn healthy_terminal_retirement_waits_for_the_last_owner() {
     }
     let notifier = Notifier::<()>::new();
     let order = Arc::new(Mutex::new(Vec::new()));
-    for index in 0..3 {
-        let capture = Capture {
-            order: Arc::clone(&order),
-            index,
-        };
-        notifier.add(std::rc::Rc::new(move |&()| {
-            let _capture = &capture;
-        }));
-    }
+    let _held: Vec<Subscription> = (0..3)
+        .map(|index| {
+            let capture = Capture {
+                order: Arc::clone(&order),
+                index,
+            };
+            notifier.subscribe(std::rc::Rc::new(move |&()| {
+                let _capture = &capture;
+            }))
+        })
+        .collect();
     let last_owner = notifier.clone();
     drop(notifier);
     assert!(order.lock().expect("drop order").is_empty());
@@ -523,9 +544,10 @@ fn healthy_value_extraction_preserves_reentry_and_shared_channel_disposal() {
 fn failure_propagates_after_healthy_tail() {
     let notifier = Notifier::<()>::new();
     let calls = std::rc::Rc::new(std::cell::Cell::new(0));
-    let first = notifier.add(std::rc::Rc::new(|()| panic!("first listener failure")));
+    let first = notifier.subscribe(std::rc::Rc::new(|()| panic!("first listener failure")));
     let observed = calls.clone();
-    notifier.add(std::rc::Rc::new(move |()| observed.set(observed.get() + 1)));
+    let _counting =
+        notifier.subscribe(std::rc::Rc::new(move |()| observed.set(observed.get() + 1)));
     let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| notifier.notify(&())))
         .expect_err("notification propagates its first failure after the healthy tail");
     assert_eq!(
@@ -533,7 +555,7 @@ fn failure_propagates_after_healthy_tail() {
         Some("first listener failure")
     );
     assert_eq!(calls.get(), 1);
-    notifier.remove(first);
+    first.detach();
     notifier.notify(&());
     assert_eq!(calls.get(), 2, "the next round makes progress");
 }
@@ -593,23 +615,24 @@ fn disposal_silences_the_snapshot_tail() {
 
 fn caught_failure_preserves_reentrant_retirement() {
     let notifier = Notifier::<()>::new();
-    let first = notifier.add(std::rc::Rc::new(|()| panic!("first listener failure")));
+    let first = notifier.subscribe(std::rc::Rc::new(|()| panic!("first listener failure")));
     let alias = notifier.clone();
     let drops = Arc::new(AtomicUsize::new(0));
     let callback_drops = drops.clone();
-    let late = notifier.add(std::rc::Rc::new(move |()| {
+    let late = notifier.subscribe(std::rc::Rc::new(move |()| {
         let probe = Bomb {
             drops: callback_drops.clone(),
             message: "late capture failure",
         };
-        let id = alias.add(std::rc::Rc::new(move |()| {
+        let probing = alias.subscribe(std::rc::Rc::new(move |()| {
             let _ = &probe;
         }));
-        alias.remove(id);
+        probing.detach();
     }));
     let calls = std::rc::Rc::new(std::cell::Cell::new(0));
     let observed = calls.clone();
-    notifier.add(std::rc::Rc::new(move |()| observed.set(observed.get() + 1)));
+    let _counting =
+        notifier.subscribe(std::rc::Rc::new(move |()| observed.set(observed.get() + 1)));
     let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| notifier.notify(&())))
         .expect_err("first failure propagates");
     assert_eq!(
@@ -622,8 +645,8 @@ fn caught_failure_preserves_reentrant_retirement() {
         "the late capture is destroyed under containment after a caught failure"
     );
     assert_eq!(calls.get(), 1);
-    notifier.remove(first);
-    notifier.remove(late);
+    first.detach();
+    late.detach();
     notifier.notify(&());
     assert_eq!(calls.get(), 2);
 }
@@ -856,6 +879,28 @@ fn a_subscription_detaches_only_its_own_channel() {
         10,
         "the detached listener no longer fires"
     );
+}
+
+/// A subscription to an argument-taking channel hands each round's value to
+/// its listener while it is held, and detaches when it drops.
+#[test]
+fn a_value_subscription_reads_each_round_until_it_drops() {
+    let notifier = Notifier::<u32>::new();
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let subscription = notifier.subscribe(Rc::new({
+        let seen = Rc::clone(&seen);
+        move |value: &u32| seen.borrow_mut().push(*value)
+    }));
+    notifier.notify(&1);
+    notifier.notify(&2);
+    drop(subscription);
+    notifier.notify(&3);
+    assert_eq!(
+        *seen.borrow(),
+        vec![1, 2],
+        "the dropped subscription hears nothing"
+    );
+    assert!(notifier.is_empty(), "the drop removed the registration");
 }
 
 /// The subscription detaches idempotently: an explicit `detach` and the drop

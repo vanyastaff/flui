@@ -13,9 +13,9 @@
 //!    `if:`. Every lane runs `checks` and `plan`; then:
 //!    - `docs`: nothing else;
 //!    - `tooling`: `deps`;
-//!    - `wide`: `deps` and the `HEAVY_JOBS` list (every Linux job), and
+//!    - `wide`: `deps` and the `HEAVY_JOBS` list (the Linux pull-request gate), and
 //!      no native host jobs; an on-demand job when its output is `true`;
-//!    - `full`: `wide` plus `FULL_JOBS` (additional Linux checks) and the
+//!    - `full`: `wide` plus `FULL_JOBS` (every other check, ADR-0370) and the
 //!      on-demand jobs marked `in_full`.
 //!
 //!    Every other declared job must skip. Any other skip (a drifted `if:`, a

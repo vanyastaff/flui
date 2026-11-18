@@ -51,7 +51,7 @@ move or borrow its value.
    `Subscription::inert()`. No id-based registration or withdrawal is a
    `Listenable` method at all: the id is the channel's own identity, its
    removal machinery the concrete channel's (`ChangeNotifier::take_listener`, `take_listeners`,
-   `Notifier::add`/`add_with_recovery`), and the concrete owner clears its
+   `Notifier::take_callback`, and the custody registrations `add_with_recovery`), and the concrete owner clears its
    channel with `dispose`. Sources that refuse a registration hand back the
    inert form; an unmounted or closed source's listen checks its gate before
    the channel's disposed state can answer.

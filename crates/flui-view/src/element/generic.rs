@@ -648,7 +648,7 @@ where
     ///
     /// ```rust,ignore
     /// let mark_dirty = core.create_mark_dirty_callback(RebuildReason::AnimationTick);
-    /// animation.add_listener(mark_dirty);
+    /// let _subscription = animation.listen(mark_dirty);
     /// ```
     pub fn create_mark_dirty_callback(&self, reason: crate::RebuildReason) -> ListenerCallback {
         self.state.create_mark_dirty_callback(reason)

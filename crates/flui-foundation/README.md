@@ -36,7 +36,7 @@ let element_id = ElementId::new(1); // .index() == 0, .generation() == 1
 
 // Observable values for reactive UI
 let notifier = ChangeNotifier::new();
-let _listener_id = notifier.add_listener(Rc::new(|| {
+let _subscription = notifier.listen(Rc::new(|| {
     println!("Value changed!");
 }));
 
@@ -133,13 +133,13 @@ use std::rc::Rc;
 
 // Basic change notification
 let notifier = ChangeNotifier::new();
-let id = notifier.add_listener(Rc::new(|| println!("Changed!")));
+let subscription = notifier.listen(Rc::new(|| println!("Changed!")));
 notifier.notify_listeners();
-notifier.remove_listener(id);
+subscription.detach();
 
 // Value-holding notifier
 let mut value = ValueNotifier::new(42);
-value.add_listener(Rc::new(|| println!("Value updated!")));
+let _value_subscription = value.listen(Rc::new(|| println!("Value updated!")));
 
 value.set_value(100);        // Notifies only if value changed
 value.set_value_force(100);  // Always notifies

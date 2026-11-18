@@ -91,7 +91,8 @@ fn assert_no_scheduler_lock_held(scheduler: &UpdateScheduler) {
     let CallbackState {
         id_mint: _,
         post_frame,
-        lifecycle_listeners,
+        // A `Notifier` lends no borrow of its list to a listener it runs.
+        lifecycle_listeners: _,
     } = callbacks;
     assert!(
         post_frame.try_borrow_mut().is_ok(),
@@ -103,10 +104,6 @@ fn assert_no_scheduler_lock_held(scheduler: &UpdateScheduler) {
             "post-frame lane state is borrowed during a callback"
         );
     }
-    assert!(
-        lifecycle_listeners.try_borrow_mut().is_ok(),
-        "lifecycle_listeners is locked during a callback"
-    );
 
     let BindingState {
         lifecycle_state: _,
