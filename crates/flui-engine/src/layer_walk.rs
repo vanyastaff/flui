@@ -30,7 +30,6 @@ use flui_layer::{
     Entry, EntryAddress, EntryIndex, Layer, LayerTree, OffsetLayer, SceneContent, SceneNodeId,
     SceneVersion,
 };
-use flui_painting::display_list::DisplayList;
 use smallvec::SmallVec;
 
 /// What a visitor wants the walk to do after a node is visited.
@@ -50,8 +49,9 @@ pub(crate) enum Item<'a> {
     Layer(&'a Layer),
     /// A version's node, at its placement.
     Placed(OffsetLayer),
-    /// A version's chunk: its recording.
-    Chunk(&'a DisplayList),
+    /// A version's chunk: its recording, with the content version and
+    /// bounds a recording of it is keyed by.
+    Chunk(&'a flui_layer::Chunk),
 }
 
 /// Where a visited item stands, for what is resolved against the scene
@@ -284,7 +284,7 @@ fn walk_version<V: SceneVisitor>(
                             }) {
                                 continue;
                             }
-                            let item = Item::Chunk(chunk.commands());
+                            let item = Item::Chunk(chunk);
                             if visitor.enter(Site::Entry(version, at), &item) == Step::Descend {
                                 visitor.exit(Site::Entry(version, at), &item);
                             }
@@ -344,11 +344,13 @@ fn close_until<V: SceneVisitor>(
 }
 
 /// Record every consumer through the same layer semantics; GPU effects remain
-/// ordered IR. A partial frame passes its damage as `cull`. Answers what the
+/// ordered IR. A partial frame passes its damage as `cull`; `reads` says
+/// whether a chunk may replay its kept recording. Answers what the
 /// walk and the recording did.
 pub(crate) fn record_scene(
     scene: SceneContent<'_>,
     cull: Option<Rect<f64>>,
+    reads: crate::recording_cache::CacheReads,
     backend: &mut crate::layer_dispatcher::LayerDispatcher<'_>,
 ) -> crate::EngineResult<crate::frame_protocol::RasterCounters> {
     struct Recorder<'a, 'b> {
@@ -356,6 +358,7 @@ pub(crate) fn record_scene(
         error: Option<crate::EngineError>,
         followers: Vec<SiteKey>,
         counters: crate::frame_protocol::RasterCounters,
+        reads: crate::recording_cache::CacheReads,
     }
     impl Recorder<'_, '_> {
         fn enter_layer(&mut self, site: Site<'_>, layer: &Layer) -> Step {
@@ -445,9 +448,22 @@ pub(crate) fn record_scene(
                     offset.render(self.backend);
                     Step::Descend
                 }
-                Item::Chunk(commands) => {
-                    self.counters.chunks_recorded = self.counters.chunks_recorded.saturating_add(1);
-                    crate::dispatch::dispatch_commands(*commands, self.backend);
+                Item::Chunk(chunk) => {
+                    use crate::painter::ChunkStart;
+                    match self.backend.painter_mut().begin_chunk(chunk, self.reads) {
+                        ChunkStart::Replayed => {
+                            self.counters.recording_cache_hits =
+                                self.counters.recording_cache_hits.saturating_add(1);
+                        }
+                        ChunkStart::Record(entry) => {
+                            self.counters.chunks_recorded =
+                                self.counters.chunks_recorded.saturating_add(1);
+                            crate::dispatch::dispatch_commands(chunk.commands(), self.backend);
+                            if let Some(entry) = entry {
+                                self.backend.painter_mut().end_chunk(entry);
+                            }
+                        }
+                    }
                     Step::Descend
                 }
             };
@@ -479,6 +495,7 @@ pub(crate) fn record_scene(
         error: None,
         followers: Vec::new(),
         counters: crate::frame_protocol::RasterCounters::default(),
+        reads,
     };
     let cull_tests = walk_scene(scene, cull, &mut recorder);
     if let Some(error) = recorder.error {
@@ -584,7 +601,7 @@ mod tests {
                 Item::Placed(offset) | Item::Layer(flui_layer::Layer::Offset(offset)) => {
                     format!("offset {:?}", offset.offset())
                 }
-                Item::Chunk(commands) => format!("chunk {:p}", *commands),
+                Item::Chunk(chunk) => format!("chunk {:p}", chunk.commands()),
                 Item::Layer(flui_layer::Layer::Picture(picture)) => {
                     format!("chunk {:p}", picture.picture())
                 }
@@ -795,7 +812,7 @@ mod tests {
             };
             let mut next = (ctm, clip, hidden);
             let commands = match item {
-                Item::Chunk(commands) => Some(*commands),
+                Item::Chunk(chunk) => Some(chunk.commands()),
                 Item::Layer(Layer::Picture(picture)) => Some(picture.picture()),
                 _ => None,
             };
@@ -846,8 +863,8 @@ mod tests {
 
     impl SceneVisitor for Entered {
         fn enter(&mut self, _site: Site<'_>, item: &Item<'_>) -> Step {
-            if let Item::Chunk(commands) = item {
-                self.0.push(std::ptr::from_ref(*commands));
+            if let Item::Chunk(chunk) = item {
+                self.0.push(std::ptr::from_ref(chunk.commands()));
             }
             Step::Descend
         }

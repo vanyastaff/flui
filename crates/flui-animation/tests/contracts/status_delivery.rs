@@ -1741,9 +1741,11 @@ impl Animation<f64> for SwitchReader {
         &self,
         observer: flui_animation::StatusObserver,
     ) -> flui_animation::StatusSubscription {
-        let id = self.statuses.add_listener(std::rc::Rc::new(move || {
-            let _keep = &observer;
-        }));
+        let id = self
+            .statuses
+            .add_with_recovery(std::rc::Rc::new(move |_recovery| {
+                let _keep = &observer;
+            }));
         flui_animation::StatusSubscription::new(&self.statuses, id, |source, id, recovery| {
             source.inherit_failure(recovery);
             source.take_listener(id)

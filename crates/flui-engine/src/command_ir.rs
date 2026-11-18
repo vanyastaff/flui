@@ -747,8 +747,6 @@ pub(crate) struct DrawSegment {
     pub(crate) glyph_batch: InstanceBatch<GlyphInstance>,
     /// Scissor regions for the glyph batch.
     pub(crate) glyph_scissors: crate::recording_budget::BudgetVec<ScissorRegion>,
-    /// Current pipeline key (for batching draws with same pipeline)
-    pub(crate) current_pipeline_key: Option<PipelineKey>,
     /// Scissor regions for rect instanced batch
     pub(crate) rect_scissors: crate::recording_budget::BudgetVec<ScissorRegion>,
     /// Scissor regions for circle instanced batch
@@ -865,7 +863,6 @@ impl DrawSegment {
             vertices: crate::recording_budget::BudgetVec::new(),
             indices: crate::recording_budget::BudgetVec::new(),
             tess_batches: crate::recording_budget::BudgetVec::new(),
-            current_pipeline_key: None,
             rect_scissors: crate::recording_budget::BudgetVec::new(),
             circle_scissors: crate::recording_budget::BudgetVec::new(),
             arc_scissors: crate::recording_budget::BudgetVec::new(),
@@ -1050,6 +1047,40 @@ impl DrawSegment {
         }
     }
 
+    /// Appends a tessellated batch whose indices follow the segment's last,
+    /// extending that batch instead when it is the last run, under the same
+    /// clip chain, and draws with the same pipeline, scissor and clip: two
+    /// rounded clips can share one bounding scissor (same rect, different
+    /// radii), and a batch's clip is what its draw binds.
+    pub(crate) fn push_tess_batch(
+        &mut self,
+        batch: TessellatedBatch,
+        chain: crate::clip_chain::ClipChain,
+    ) {
+        let batch_index = self.tess_batches.len();
+        let adjacent = self.runs.last().is_some_and(|run| {
+            run.clip == chain
+                && matches!(&run.kind, DrawRun::Tess(range) if range.end == batch_index)
+        });
+        let merged = adjacent
+            && self.tess_batches.last_mut().is_some_and(|last| {
+                if last.pipeline_key == batch.pipeline_key
+                    && last.scissor == batch.scissor
+                    && last.clip == batch.clip
+                    && last.index_start.checked_add(last.index_count) == Some(batch.index_start)
+                    && let Some(count) = last.index_count.checked_add(batch.index_count)
+                {
+                    last.index_count = count;
+                    return true;
+                }
+                false
+            });
+        if !merged {
+            self.tess_batches.push(batch);
+            self.record_run(DrawRun::Tess(batch_index..batch_index + 1), chain);
+        }
+    }
+
     pub(crate) fn record_limit(&mut self, resource: &'static str, requested: usize, limit: usize) {
         self.budget.record_error(RecordError::Limit {
             resource,
@@ -1067,19 +1098,29 @@ impl DrawSegment {
         regions: &mut crate::recording_budget::BudgetVec<ScissorRegion>,
         scissor: ScissorRect,
     ) {
+        Self::push_scissor_span(regions, scissor, 1);
+    }
+
+    /// [`Self::push_scissor_region`] for `count` instances at once: the one
+    /// merge rule a recording and a replayed recording both follow.
+    pub(crate) fn push_scissor_span(
+        regions: &mut crate::recording_budget::BudgetVec<ScissorRegion>,
+        scissor: ScissorRect,
+        count: u32,
+    ) {
         if regions.failed() {
             return;
         }
         if let Some(last) = regions.last_mut()
             && last.scissor == scissor
         {
-            last.count += 1;
+            last.count += count;
             return;
         }
         regions.push(ScissorRegion {
             scissor,
             start: regions.last().map_or(0, |r| r.start + r.count),
-            count: 1,
+            count,
         });
     }
 
@@ -1096,6 +1137,19 @@ impl DrawSegment {
         blend: BlendMode,
         mesh: Option<std::ops::Range<u32>>,
     ) {
+        Self::push_gradient_span(runs, scissor, blend, 1, mesh);
+    }
+
+    /// [`Self::push_gradient_run`] for `count` instances at once (one for a
+    /// mesh run): the one merge rule a recording and a replayed recording
+    /// both follow.
+    pub(crate) fn push_gradient_span(
+        runs: &mut crate::recording_budget::BudgetVec<GradientRun>,
+        scissor: ScissorRect,
+        blend: BlendMode,
+        count: u32,
+        mesh: Option<std::ops::Range<u32>>,
+    ) {
         if runs.failed() {
             return;
         }
@@ -1105,14 +1159,14 @@ impl DrawSegment {
             && last.scissor == scissor
             && last.blend == blend
         {
-            last.count += 1;
+            last.count += count;
             return;
         }
         runs.push(GradientRun {
             scissor,
             blend,
             start: runs.last().map_or(0, |r| r.start + r.count),
-            count: 1,
+            count,
             mesh,
         });
     }

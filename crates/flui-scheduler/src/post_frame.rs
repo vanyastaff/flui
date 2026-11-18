@@ -21,8 +21,8 @@
 //! frame drive drains an owner frame by receiving it as an explicit
 //! parameter, never by reading ambient state.
 
+use flui_foundation::panic::FirstPanic;
 use std::cell::{Cell, RefCell};
-use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::{Rc, Weak};
 
 use crate::async_driver::{RetirePanic, TaskStore};
@@ -385,31 +385,17 @@ impl OwnerCleanup {
             .tasks
             .upgrade()
             .map(|tasks| tasks.detach_for_retirement());
-        let mut first: Option<RetirePanic> = None;
-        for entry in callbacks {
-            #[expect(
-                clippy::disallowed_methods,
-                reason = "ADR-0287: a retired callback's drop runs contained; the rest still drop"
-            )]
-            if let Err(payload) = catch_unwind(AssertUnwindSafe(move || drop(entry))) {
-                self.record_execution_failure();
-                if held {
-                    flui_foundation::panic::discard_payload(payload);
-                } else {
-                    keep_first(&mut first, payload);
-                }
-            }
-        }
+        let mut first = retire_entries(self, callbacks, held);
         if let Some(tasks) = tasks
             && let Some(payload) = tasks.retire_preserving_failure(
-                held || first.is_some(),
+                held || first.is_held(),
                 &self.execution_failure_signal(),
             )
         {
             self.record_execution_failure();
-            keep_first(&mut first, payload);
+            first.record(payload);
         }
-        first
+        first.into_payload()
     }
 }
 
@@ -524,11 +510,22 @@ impl OwnerFrame {
     }
 }
 
-fn keep_first(first: &mut Option<RetirePanic>, payload: RetirePanic) {
-    if first.is_none() {
-        *first = Some(payload);
+/// Destroy `entries` contained, each failure recorded on `cleanup`. The first
+/// is returned unless the owner already `held` one before any destructor ran:
+/// that one stays first, and these are discarded (ADR-0281 §3).
+fn retire_entries(cleanup: &OwnerCleanup, entries: Vec<PostFrameEntry>, held: bool) -> FirstPanic {
+    let mut first = FirstPanic::new();
+    for entry in entries {
+        if first.contain(move || drop(entry)).is_none() {
+            cleanup.record_execution_failure();
+        }
+    }
+    if held {
+        // Dropping the collector destroys its payload under containment.
+        drop(first);
+        FirstPanic::new()
     } else {
-        flui_foundation::panic::discard_payload(payload);
+        first
     }
 }
 
@@ -538,19 +535,25 @@ impl Drop for OwnerFrame {
             let mut first = self.cleanup.retire_impl();
             // Freed only after retirement: a destructor retirement runs cannot
             // mint a second owner while this one still holds tasks.
-            if let Some(payload) = self.cleanup.release_scheduler_after_retirement() {
-                keep_first(&mut first, payload);
-            }
+            FirstPanic::fold(
+                &mut first,
+                self.cleanup.release_scheduler_after_retirement(),
+            );
             first
         });
-        if let Some(payload) = first {
-            if std::thread::panicking() {
-                flui_foundation::panic::discard_payload(payload);
-            } else {
-                std::panic::resume_unwind(payload);
-            }
-        }
+        resume_first(first);
     }
+}
+
+/// Raise a destructor's first retirement failure, unless the thread is
+/// already unwinding: that unwind stays the failure, and this one is
+/// discarded (ADR-0281).
+fn resume_first(failure: Option<RetirePanic>) {
+    let mut first = FirstPanic::new();
+    if let Some(payload) = failure {
+        first.record(payload);
+    }
+    first.resume();
 }
 
 impl std::fmt::Debug for OwnerFrame {
@@ -849,22 +852,7 @@ impl PresentationFrameScope {
         // first: a destructor panic is then discarded, not returned to be
         // raised (ADR-0281 §3).
         let held = cleanup.preserving_execution_failure();
-        let mut first = None;
-        for entry in retired {
-            #[expect(
-                clippy::disallowed_methods,
-                reason = "ADR-0287: a retired callback's drop runs contained; the rest still drop"
-            )]
-            if let Err(payload) = catch_unwind(AssertUnwindSafe(move || drop(entry))) {
-                cleanup.record_execution_failure();
-                if held {
-                    flui_foundation::panic::discard_payload(payload);
-                } else {
-                    keep_first(&mut first, payload);
-                }
-            }
-        }
-        first
+        retire_entries(cleanup, retired, held).into_payload()
     }
 
     /// Revoke and destroy only this scope's callbacks when the enclosing owner
@@ -909,13 +897,7 @@ impl PresentationFrameScope {
 
 impl Drop for PresentationFrameScope {
     fn drop(&mut self) {
-        if let Some(payload) = self.close() {
-            if std::thread::panicking() {
-                flui_foundation::panic::discard_payload(payload);
-            } else {
-                std::panic::resume_unwind(payload);
-            }
-        }
+        resume_first(self.close());
     }
 }
 

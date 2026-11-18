@@ -5,7 +5,7 @@
 //! VSync → BeginFrame → Build → Layout → Paint → EndFrame → Present
 //! ```
 
-use std::{fmt, num::NonZeroU64, rc::Rc};
+use std::{fmt, num::NonZeroU64};
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
@@ -281,9 +281,6 @@ impl fmt::Display for AppLifecycleState {
         }
     }
 }
-
-/// Listener for application lifecycle state changes, invoked on the UI owner.
-pub type LifecycleStateCallback = Rc<dyn Fn(AppLifecycleState)>;
 
 /// Frame phase - which part of the render pipeline is executing
 ///

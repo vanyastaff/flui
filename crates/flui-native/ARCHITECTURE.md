@@ -6379,8 +6379,83 @@ placed the window (ADR-0343 §2) and no placement is written as the user's. Test
 `a_fullscreen_window_maximized_again_never_reads_normal`,
 `a_minimized_fullscreen_window_leaves_in_one_step` (Win32 window commands table),
 `a_rectangle_comes_back_inside_a_monitor_that_is_there` (the fitting rule),
-`leaving_fullscreen_returns_to_the_state_it_left_in_one_step` (headless window state table). X11,
-Wayland and AppKit still publish a mode in between ([gaps](../../docs/gaps.md#leaving-fullscreen-publishes-a-mode-in-between-on-appkit-x11-and-wayland)).
+`leaving_fullscreen_returns_to_the_state_it_left_in_one_step` (headless window state table).
+
+**A mode change the window system answers in steps is published once.** X11's window manager
+answers each `_NET_WM_STATE` request with a property change of its own (openbox, leaving
+fullscreen for maximized, reads normal three times on the way; leaving it for normal on a window
+maximized before, reads normal at the screen's size, maximizes the window again and only then
+leaves maximized), a Wayland compositor may answer `set_maximized` or `unset_fullscreen` in
+several configures (Weston restores the maximized mode a window had before fullscreen), and
+AppKit animates a full-screen transition and a zoom, and puts the frame the window had before
+full screen back only after `windowDidExitFullScreen:`.
+
+So a host tells the window's state cell of every request it makes that changes or leaves a mode
+(`WindowStateCell::expect_mode`), one for the mode the window is in too: each request replaces
+the wait of the one before, whose answers may still be coming. The requests are `SetMode`, a
+`SetSize` of a maximized or fullscreen window (X11 `resize`, Wayland `leave_compositor_modes`),
+the maximize toggle and the buttons of a title bar or frame the window draws itself, and on
+AppKit every zoom and full-screen transition, the user's included (`windowShouldZoom:toFrame:`,
+`windowWill{Enter,Exit}FullScreen:`). A request nothing answers ends the wait instead
+(`end_mode_wait`): a Wayland minimize, which no compositor reports, a mode an unmapped X11 window
+writes into its own properties, and a frame AppKit gives a zoomed window at once (a size, a
+position, limits, a style).
+
+Until the wait ends, a read is published by its mode:
+
+- **In the mode asked:** as read. From the first such read the window waits only `MODE_SETTLE`
+  more, against a step the window system had still to take.
+- **In another of normal, maximized and fullscreen:** it is a step. The snapshot keeps the mode
+  it has and names, as its `normal_geometry`, the rectangle the window returned to as the change
+  began (the published one, or the outer rectangle of a window that was normal); every other
+  fact (the geometry, the metrics the renderer draws at, the focus) is as read.
+- **Minimized, or of a window published minimized:** as read. A window shown again is drawn at
+  once and no snapshot says minimized of a window on screen, so a window asked out of minimized
+  into maximized or fullscreen publishes the modes it passes through (openbox: normal, then
+  maximized). This is the one case where a step's mode is published.
+
+A snapshot in normal mode names no rectangle of its own, and `WindowPlacement::from_state` takes
+its outer rectangle for the window's place. So a normal read of a window on its way into normal
+mode from elsewhere (its snapshot was in another mode as the change began, a request before this
+one was still being answered, or a read since found another mode) names the rectangle the change
+began with too, until the wait ends: openbox's first normal read out of fullscreen is still
+screen-sized. A window asked for the mode it is settled in was nowhere else, so its reads are
+published as read: the request publishes no revision, and a window the user moves meanwhile is
+remembered where it is. A window moved within `MODE_SETTLE` of arriving in normal mode from
+another mode names the old rectangle until the wait ends, and its own from then on.
+
+The snapshot holds the last settled mode; it never names a transition. Past `MODE_ANSWER_LIMIT`
+(AppKit: its animation limit while a step animates, then `MODE_ANSWER_LIMIT` after the
+transition's end, for a wait that had not ended before it) the window publishes what it reads, so
+a change the window system refused or the user overtook is published then. Each host reads the
+window again when the wait ends with nothing heard: the X11 loop wakes for it and has the window
+read itself (`LoopWindows::mode_deadline`), the Wayland loop wakes for it (`LoopWindow::mode_due`)
+and every turn reads its windows, and an AppKit window keeps one timer on the owner lane armed
+for the instant the wait ends now (`WaitEndRead`), armed again when a request, a read or a
+transition's end moves that instant. X11 records the rectangle a window returns to only from a
+read in the mode its change asked for, so a normal-mode step on the way to maximized is no place
+it returns to; and a command acts on the mode the server said (`mode_now`), not the one the
+snapshot holds.
+
+AppKit's full-screen transition the user starts (the green button, the system's shortcut) is the
+user's request through the system's own chrome, carried out and reported, as a window manager's
+maximize button is on Linux; it lands in full screen or, as it leaves, in the zoomed state or
+normal mode the window entered from (`ModeSequence::fullscreen_transition`).
+
+Tests: `a_fullscreen_window_changes_mode_in_one_step`,
+`a_mode_change_another_client_overtakes_is_published_when_the_wait_ends`,
+`a_command_during_a_mode_wait_acts_on_the_mode_the_server_says` and
+`a_request_for_the_mode_the_window_is_in_publishes_nothing` (X11 under openbox),
+`a_mode_the_compositor_reaches_in_two_configures_is_published_once` and
+`a_mode_the_compositor_does_not_carry_out_is_published_when_the_wait_ends` (Wayland, scripted
+compositor), `a_mode_change_in_flight_publishes_its_steps_in_the_mode_the_window_left` and
+`a_mode_wait_settles_waits_longer_and_ends` (the cell),
+`a_fullscreen_transition_lands_where_it_heads_or_where_it_came_from` and
+`one_timer_reads_a_window_at_the_end_of_its_wait` (AppKit's models),
+`from_state_remembers_the_normal_bounds_relative_to_the_usable_area` (the placement). What is
+left open, a window system slower than these waits and the modes published on the way out of
+minimized, is in
+[gaps](../../docs/gaps.md#a-window-system-slower-than-the-mode-wait-publishes-its-steps).
 
 `WINDOWPLACEMENT` rectangles are workspace coordinates; a task bar on the top or left edge
 moves the work area, so they are converted with the monitor's work-area offset.

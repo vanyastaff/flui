@@ -65,6 +65,13 @@ pub(super) struct GpuStateStack {
     ///
     /// Identity is `[1, 0, 0, 1, 0, 0]`.
     current_clip_inv: [f32; 6],
+
+    /// Whether a scissor, an SDF clip, a clip link or a clip group was
+    /// installed since [`Self::take_clip_opened`] last read it: a chunk that
+    /// opened none recorded every draw under the clip it was entered with,
+    /// which is what the recording cache replays it under. A `restore` opens
+    /// nothing; it returns to a state already seen.
+    clip_opened: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -114,6 +121,7 @@ impl GpuStateStack {
     /// Separate inherited coverage and culling from the child-local suffix.
     /// This stack is independent of canvas Save/Restore and never changes CTM.
     pub(super) fn begin_clip_group(&mut self) -> crate::clip_chain::ClipChain {
+        self.clip_opened = true;
         let parent = std::mem::take(&mut self.current_clip_chain);
         self.clip_groups.push(SavedState {
             clip_chain: parent.clone(),
@@ -137,12 +145,14 @@ impl GpuStateStack {
     /// changes nothing where it composites): the scissor, a partial frame's
     /// damage, cuts them as it would cut the group.
     pub(super) fn keep_group_scissor(&mut self) {
+        self.clip_opened = true;
         if let Some(parent) = self.clip_groups.last() {
             self.current_scissor = parent.scissor;
         }
     }
 
     pub(super) fn end_clip_group(&mut self) {
+        self.clip_opened = true;
         if let Some(parent) = self.clip_groups.pop() {
             self.current_clip_chain = parent.clip_chain;
             self.current_scissor = parent.scissor;
@@ -157,6 +167,11 @@ impl GpuStateStack {
         self.current_clip_chain.clone()
     }
 
+    /// Whether a clip was installed since the last call, which clears it.
+    pub(super) fn take_clip_opened(&mut self) -> bool {
+        std::mem::take(&mut self.clip_opened)
+    }
+
     pub(super) fn append_clip(
         &mut self,
         shape: crate::clip_geometry::ValidatedClip,
@@ -164,6 +179,7 @@ impl GpuStateStack {
         hard: bool,
         budget: &std::sync::Arc<crate::recording_budget::RecordingBudget>,
     ) -> Result<(), crate::command_ir::RecordError> {
+        self.clip_opened = true;
         let affine = crate::clip_geometry::ValidatedAffine::try_new(self.current_transform)
             .map_err(crate::command_ir::RecordError::Geometry)?;
         self.current_clip_chain = self
@@ -185,6 +201,7 @@ impl GpuStateStack {
             current_clip_hard: false,
             current_rsuperellipse_clip: [0.0; 12],
             current_clip_inv: CLIP_INV_IDENTITY,
+            clip_opened: false,
         }
     }
 
@@ -598,6 +615,7 @@ impl GpuStateStack {
             scissor
         };
         self.current_scissor = Some(new_scissor);
+        self.clip_opened = true;
         #[cfg(debug_assertions)]
         tracing::trace!(?rect, ?new_scissor, "Recorded device scissor");
         #[cfg(not(debug_assertions))]
@@ -609,6 +627,7 @@ impl GpuStateStack {
     ///
     /// Also applies a bounding-box `clip_rect` for early rasterizer rejection.
     pub(super) fn clip_rrect(&mut self, rrect: RRect, surface_size: (u32, u32), hard: bool) {
+        self.clip_opened = true;
         let resolved = self.resolve_rrect_clip(rrect, hard);
         self.current_clip_hard = hard;
         self.current_rrect_clip = resolved.rrect;
@@ -732,6 +751,7 @@ impl GpuStateStack {
         self.current_clip_hard = hard;
         let rect = rse.outer_rect();
 
+        self.clip_opened = true;
         self.current_rsuperellipse_clip = Self::rsuperellipse_slots(rse);
         self.current_clip_inv = Self::device_to_local(self.current_transform());
         // Clear the rrect clip to prevent `apply_active_clip` from falling

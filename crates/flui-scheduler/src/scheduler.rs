@@ -47,13 +47,14 @@ use std::{
 };
 
 use flui_foundation::IdMint;
+use flui_foundation::panic::FirstPanic;
 use parking_lot::Mutex;
 use web_time::{Duration, Instant};
 
-use flui_foundation::FrameCallbackId;
+use flui_foundation::{FrameCallbackId, Notifier, Subscription};
 
 use crate::{
-    frame::{AppLifecycleState, FrameId, FrameTiming, LifecycleStateCallback, SchedulerPhase},
+    frame::{AppLifecycleState, FrameId, FrameTiming, SchedulerPhase},
     frame_clock::ClockSource,
 };
 
@@ -66,12 +67,6 @@ mod teardown;
 /// The display period a scheduler labels frames with until the runtime sets
 /// the real one: 60 Hz, the refresh most displays run at.
 const DEFAULT_DISPLAY_PERIOD: Duration = Duration::from_nanos(16_666_667);
-
-/// Lifecycle state listener with ID for removal
-struct LifecycleListener {
-    id: FrameCallbackId,
-    callback: LifecycleStateCallback,
-}
 
 /// How a frame that an [`end_of_frame`](UpdateScheduler::end_of_frame) waiter
 /// was pending for finished.
@@ -627,8 +622,8 @@ struct CallbackState {
     id_mint: IdMint<FrameCallbackId>,
     /// Post-frame callbacks (after frame completes)
     post_frame: RefCell<crate::post_frame::PostFrameStorage>,
-    /// Lifecycle state change listeners
-    lifecycle_listeners: RefCell<Vec<LifecycleListener>>,
+    /// Lifecycle state change listeners, each held by its `Subscription`
+    lifecycle_listeners: Notifier<AppLifecycleState>,
 }
 
 impl CallbackState {
@@ -897,7 +892,7 @@ impl UpdateScheduler {
             callbacks: CallbackState {
                 id_mint: IdMint::new(),
                 post_frame: RefCell::new(crate::post_frame::PostFrameStorage::new()),
-                lifecycle_listeners: RefCell::new(Vec::new()),
+                lifecycle_listeners: Notifier::new(),
             },
             binding: BindingState {
                 lifecycle_state: Cell::new(AppLifecycleState::Resumed),
@@ -1078,54 +1073,34 @@ impl UpdateScheduler {
             // `FrameCallbackId`s — meaningless in this scheduler's sequence —
             // would corrupt the sort below. On a mismatch the take traces the
             // error and the owner-local queue is left untouched.
-            let callback_result = self.dispatch_post_frame_callbacks(owner, &timing);
-            if callback_result.is_err() {
+            // The post-frame callbacks' panic comes first in the frame's own
+            // order, so it is the one a caller observes when both panicked.
+            let mut first = FirstPanic::new();
+            if let Err(payload) = self.dispatch_post_frame_callbacks(owner, &timing) {
                 owner.record_execution_failure();
+                first.record(payload);
             }
 
-            // Notify frame completion futures. Caught here, alongside
-            // `callback_result`, rather than left to propagate bare: a
-            // panicking waker would otherwise escape straight past the phase
-            // reset below and leave the scheduler stuck at `PostFrame`
-            // with `current_vsync_time` still set, reachable through
-            // `drive_frame`'s `Ok` arm rather than its `Err` one.
-            #[expect(
-                clippy::disallowed_methods,
-                reason = "ADR-0287: frame-completion wakers run contained before the phase reset"
-            )]
-            let notify_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            // Frame-completion wakers run contained: a panicking waker would
+            // otherwise escape past the phase reset below and leave the
+            // scheduler at `PostFrame` with `current_vsync_time` still set.
+            // `notify_frame_completion` traces its own panic, so one
+            // discarded behind the callbacks' is not lost.
+            let _notified = first.contain(|| {
                 self.notify_frame_completion(
                     FrameOutcome::Completed { timing },
                     Some(&owner.execution_failure_signal()),
                 );
-            }));
+            });
 
-            if callback_result.is_err() || notify_result.is_err() {
+            if first.is_held() {
                 self.inner
                     .wake
                     .scheduler_phase
                     .store(SchedulerPhase::Idle as u8, Ordering::Release);
                 *self.inner.frame.current_vsync_time.borrow_mut() = None;
             }
-            // The post-frame callback's panic happened first in this frame's
-            // own order, so it is what a caller observes when both panicked;
-            // `notify_frame_completion` already traced its own panic via
-            // `tracing::error!` above, so a discarded notify payload here is
-            // not silently lost, only not the one that propagates. Matching
-            // on both `Result`s (rather than `Option::or`-ing their errors
-            // together) is what routes the DISCARDED side through
-            // `discard_payload` instead of an uncontained `drop` --
-            // the payload can itself be a type whose own `Drop` panics.
-            match (callback_result, notify_result) {
-                (Ok(()), Ok(())) => {}
-                (Err(payload), Ok(())) | (Ok(()), Err(payload)) => {
-                    std::panic::resume_unwind(payload);
-                }
-                (Err(callback_payload), Err(notify_payload)) => {
-                    flui_foundation::panic::discard_payload(notify_payload);
-                    std::panic::resume_unwind(callback_payload);
-                }
-            }
+            first.resume();
         }
 
         // Return to idle
@@ -1497,60 +1472,34 @@ impl UpdateScheduler {
         }
     }
 
-    /// Add a lifecycle state change listener
+    /// Hear every lifecycle state the scheduler commits, in order, for as
+    /// long as the returned [`Subscription`] is held.
     ///
-    /// Returns a `FrameCallbackId` that can be used to remove the listener.
+    /// A change that walks several states (ADR-0345) reaches the listener
+    /// once per state. A listener's panic does not stop the others; the first
+    /// is raised once every listener has heard the state.
     ///
     /// # Example
     ///
     /// ```rust
-    /// use std::rc::Rc;
-    ///
     /// use flui_scheduler::{AppLifecycleState, UpdateScheduler};
     ///
     /// let scheduler = UpdateScheduler::new();
-    ///
-    /// let id = scheduler.add_lifecycle_state_listener(Rc::new(|state| {
-    ///     println!("App lifecycle changed to: {}", state);
-    /// }));
-    ///
-    /// // Later, remove the listener
-    /// scheduler.remove_lifecycle_state_listener(id);
+    /// let subscription = scheduler.listen_lifecycle_state(|state| {
+    ///     println!("App lifecycle changed to: {state}");
+    /// });
+    /// scheduler.handle_app_lifecycle_state_change(AppLifecycleState::Inactive);
+    /// // Dropping the subscription detaches the listener.
+    /// drop(subscription);
     /// ```
-    pub fn add_lifecycle_state_listener(
+    pub fn listen_lifecycle_state(
         &self,
-        callback: LifecycleStateCallback,
-    ) -> FrameCallbackId {
-        let id = self.inner.callbacks.mint_id();
+        listener: impl Fn(AppLifecycleState) + 'static,
+    ) -> Subscription {
         self.inner
             .callbacks
             .lifecycle_listeners
-            .borrow_mut()
-            .push(LifecycleListener { id, callback });
-        id
-    }
-
-    /// Remove a lifecycle state change listener by ID
-    ///
-    /// Returns `true` if the listener was found and removed.
-    pub fn remove_lifecycle_state_listener(&self, id: FrameCallbackId) -> bool {
-        // Retire the removed listener only after the storage borrow ends:
-        // its captures may reenter this scheduler during Drop.
-        // `position` + `remove` finds the single
-        // matching entry (ids are unique) with no allocation and no full-Vec
-        // move on the common no-match path, and the removed value is
-        // dropped only after the guard falls.
-        let removed = {
-            let mut listeners = self.inner.callbacks.lifecycle_listeners.borrow_mut();
-            listeners
-                .iter()
-                .position(|listener| listener.id == id)
-                .map(|index| listeners.remove(index))
-        };
-
-        let found = removed.is_some();
-        execution::retire_with_execution_custody(&self.inner.execution_failure, removed);
-        found
+            .subscribe(Rc::new(move |state: &AppLifecycleState| listener(*state)))
     }
 
     // =========================================================================

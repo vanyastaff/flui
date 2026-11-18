@@ -94,6 +94,7 @@
 //! destroyed; everything else names the window by its identity.
 
 mod manager_hints;
+mod mode_wait;
 mod sync;
 
 use std::cell::{Cell, RefCell};
@@ -160,7 +161,7 @@ use crate::window::desktop::DisplayFrame;
 use crate::window::linux::class::AppClass;
 use crate::window::plan::{FrameInset, OpenPlan};
 use crate::window::state::{
-    ReportedFacts, Sample, SampledGeometry, WindowStateCell, mode_of, not_carried_out,
+    Published, ReportedFacts, Sample, SampledGeometry, WindowStateCell, mode_of, not_carried_out,
 };
 
 /// `_NET_WM_STATE` and `WM_STATE` are read this far, in 4-byte units.
@@ -445,6 +446,10 @@ struct Record {
     outer_to_fit: Option<Size<f64>>,
     /// The last visibility the server reported: fully covered.
     obscured: bool,
+    /// The mode the server's properties said at the last read, which a
+    /// command acts on: the snapshot keeps the mode the window left while the
+    /// window manager answers a mode change in steps.
+    mode: WindowMode,
     /// The rectangle the window returns to from another mode: the outer
     /// geometry it had the last time it was in normal mode.
     normal_geometry: Option<WindowGeometry>,
@@ -591,11 +596,11 @@ impl X11Window {
         Publication::Held
     }
 
-    /// The window a command acts on: as it is now, read from the server if
-    /// an event marked the window since its last snapshot. A command that
-    /// went by the last snapshot would act on what the window was a turn
-    /// ago (leave an iconic window unmapped, say, or ask a window manager
-    /// that is gone for a mode).
+    /// Read the window from the server if an event marked it since its last
+    /// snapshot, so a command acts on the window as it is now. A command
+    /// that went by the last snapshot would act on what the window was a
+    /// turn ago (leave an iconic window unmapped, say, or ask a window
+    /// manager that is gone for a mode).
     ///
     /// Nobody is told of a revision this read publishes: the command is half
     /// way through, with its own state not committed yet, and a handler that
@@ -604,7 +609,7 @@ impl X11Window {
     /// command's own at its end, or the next turn's, which the read asks for
     /// so that a command that ends early (refused, failed, unwound) leaves
     /// nobody waiting for something else to wake the loop.
-    fn state_now(&self) -> WindowState {
+    fn read_if_stale(&self) -> Published {
         let published = self.cell.read_unannounced(&self.delivery, || self.sample());
         if published.changed {
             self.unannounced.set(true);
@@ -614,12 +619,23 @@ impl X11Window {
             // descriptor, and then no turn is left to announce anything.
             let _: Result<(), crate::PlatformError> = self.doorbell.ring();
         }
-        published.state
+        published
     }
 
-    /// The mode a command acts on: [`state_now`](Self::state_now)'s.
+    /// The snapshot a command is opened against: the one
+    /// [`read_if_stale`](Self::read_if_stale) leaves published.
+    fn state_now(&self) -> WindowState {
+        self.read_if_stale().state
+    }
+
+    /// The mode a command acts on: the one the server's properties say,
+    /// read again if an event marked the window
+    /// ([`read_if_stale`](Self::read_if_stale)). It is the record's and not
+    /// the snapshot's, which keeps the mode the window left while the window
+    /// manager answers a mode change in steps.
     fn mode_now(&self) -> WindowMode {
-        self.state_now().mode
+        self.read_if_stale();
+        self.record.borrow().mode
     }
 
     /// The loop has the window follow its state at the turn's read.
@@ -823,6 +839,8 @@ impl X11Window {
         // What a window manager wrote on the window stands while one runs.
         let frame = support.kept(read.frame);
         let mode = mode_of(support.kept(mode_flags(read.wm_state, read.net_state)));
+        record.mode = mode;
+        let settled = self.settles_in(mode, Instant::now());
         let level = support.kept(read.level);
         let cursor_grab = self.input.pointer_grab(self.window_ref());
         let outer = outer_bounds(read.origin, read.content, frame);
@@ -859,7 +877,9 @@ impl X11Window {
             ))?;
             let normal = match mode {
                 WindowMode::Normal => {
-                    record.normal_geometry = Some(geometry);
+                    if settled {
+                        record.normal_geometry = Some(geometry);
+                    }
                     None
                 }
                 _ => record.normal_geometry,
@@ -1238,11 +1258,14 @@ impl X11Window {
         }
         if self.unmapped() {
             self.record.borrow_mut().minimize_on_map = mode == WindowMode::Minimized;
+            self.end_mode_wait();
             self.seed_mode(mode);
             return Ok(());
         }
         let states = self.atoms.states;
-        let minimized = self.mode_now() == WindowMode::Minimized;
+        let current = self.mode_now();
+        self.expect_mode(mode);
+        let minimized = current == WindowMode::Minimized;
         match mode {
             WindowMode::Minimized => self.send_to_root(ClientMessageEvent::new(
                 32,
@@ -1477,6 +1500,7 @@ impl X11Window {
         };
         let mode = self.mode_now();
         if !self.unmapped() && matches!(mode, WindowMode::Maximized | WindowMode::Fullscreen) {
+            self.expect_mode(WindowMode::Normal);
             let states = self.atoms.states;
             self.send_state(StateAction::Remove, states.fullscreen, 0);
             self.send_state(
@@ -2544,6 +2568,7 @@ impl X11Windows {
                     .filter(|_| plan.unmapped_until_shown())
                     .map(WindowGeometry::size),
                 obscured: false,
+                mode: opens_in,
                 normal_geometry: plan.normal_geometry,
                 content: None,
                 focus_told: false,
@@ -2803,6 +2828,7 @@ impl LoopWindows for X11Windows {
     fn read_stale(&self) {
         // Read now if no window asked for it in this turn.
         let _: WindowManagerSupport = self.support();
+        self.mark_waits_over(Instant::now());
         if !self.unread.take() {
             return;
         }
@@ -2822,6 +2848,10 @@ impl LoopWindows for X11Windows {
             });
         }
         failure.resume();
+    }
+
+    fn mode_deadline(&self) -> Option<Instant> {
+        self.earliest_mode_deadline()
     }
 
     fn chrome_event(&self, event: &Event) -> bool {
