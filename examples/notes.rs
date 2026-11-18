@@ -3,18 +3,16 @@
 //! of notes, a page per note whose deletion is confirmed in a dialog, and a
 //! Material theme that follows the platform's brightness.
 //!
-//! The note's page pops with whether it was deleted, and the row that opened
-//! it removes the note, so the page never shows a note that is gone while it
-//! leaves.
+//! A note's page deletes its note as it leaves, and keeps showing the note
+//! until it is gone.
 //!
 //! Run with: cargo run --example notes --features material
 
 use std::cell::RefCell;
-use std::rc::Rc;
 
 use flui::prelude::*;
+use flui::view::SignalError;
 use flui::view::key::ValueKey;
-use flui::view::{AsyncDriver, SignalError, TaskToken, WriterSource};
 
 #[derive(Clone, Default)]
 struct Notes {
@@ -136,7 +134,6 @@ impl ViewState<NoteList> for NoteListState {
                             NoteRow {
                                 key: ValueKey::new(note.id),
                                 note: note.clone(),
-                                notes,
                             }
                             .boxed(),
                         )
@@ -146,66 +143,27 @@ impl ViewState<NoteList> for NoteListState {
     }
 }
 
-/// One note in the list. Pressing it opens the note's page and waits for
-/// the page's answer, which belongs to this note: the key keeps the wait
-/// with its note when others are added or removed.
-#[derive(Clone, StatefulView)]
+/// One note in the list; pressing it opens the note's page.
+#[derive(Clone, StatelessView)]
 struct NoteRow {
     #[view(key)]
     key: ValueKey<u64>,
     note: Note,
-    notes: Signal<Notes>,
 }
 
-struct NoteRowState {
-    writer: WriterSource,
-    driver: Option<AsyncDriver>,
-    /// The task awaiting the open page's answer; dropping it cancels it.
-    waiting: Rc<RefCell<Option<TaskToken>>>,
-}
-
-impl StatefulView for NoteRow {
-    type State = NoteRowState;
-
-    fn create_state(&self, ctx: &dyn LifecycleContext) -> NoteRowState {
-        NoteRowState {
-            writer: ctx.writer_source(),
-            driver: ctx.async_driver(),
-            waiting: Rc::default(),
-        }
-    }
-}
-
-impl ViewState<NoteRow> for NoteRowState {
-    fn build(&self, view: &NoteRow, ctx: &dyn BuildContext) -> impl IntoView {
+impl StatelessView for NoteRow {
+    fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
         let router = Router::<NotesRoute>::of(ctx).expect("BUG: the list is a page of the Router");
-        let (id, notes) = (view.note.id, view.notes);
-        let (writer, driver) = (self.writer.clone(), self.driver.clone());
-        let waiting = Rc::clone(&self.waiting);
-        TextButton::new(Text::new(view.note.title.clone())).on_pressed(move |_ctx| {
+        let id = self.note.id;
+        TextButton::new(Text::new(self.note.title.clone())).on_pressed(move |_ctx| {
             // Refused only once the list has left its navigator.
-            let (Ok(answer), Some(driver)) = (
-                router.push_for_result::<bool>(NotesRoute::Note { id }),
-                &driver,
-            ) else {
-                return;
-            };
-            let writer = writer.clone();
-            let task = driver.spawn_local(Box::pin(async move {
-                if let Ok(Some(true)) = answer.await {
-                    // Refused only once the UI runtime has closed.
-                    let _ = writer.write(|ctx| {
-                        notes.update(ctx, |list| list.items.retain(|note| note.id != id))
-                    });
-                }
-            }));
-            *waiting.borrow_mut() = Some(task);
+            let _ = router.push(NotesRoute::Note { id });
         })
     }
 }
 
 /// A note's page: back to the list, or delete the note after a
-/// confirmation, popping with `true`.
+/// confirmation.
 #[derive(Clone, StatefulView)]
 struct NotePage {
     id: u64,
@@ -213,8 +171,8 @@ struct NotePage {
 }
 
 struct NotePageState {
-    /// The note as the page last found it: the list removes the note as the
-    /// page starts to leave, and the page shows it until it is gone.
+    /// The note as the page last found it: the note is removed as the page
+    /// starts to leave, and the page shows it until it is gone.
     shown: RefCell<Option<Note>>,
 }
 
@@ -231,14 +189,8 @@ impl StatefulView for NotePage {
 impl ViewState<NotePage> for NotePageState {
     fn build(&self, view: &NotePage, ctx: &dyn BuildContext) -> impl IntoView {
         let page = PageHandle::of(ctx).expect("BUG: a note is a page of the Router");
-        let id = view.id;
-        if let Some(note) = view
-            .notes
-            .get(ctx)
-            .items
-            .into_iter()
-            .find(|note| note.id == id)
-        {
+        let (id, notes) = (view.id, view.notes);
+        if let Some(note) = notes.get(ctx).items.into_iter().find(|note| note.id == id) {
             *self.shown.borrow_mut() = Some(note);
         }
         let found = self.shown.borrow().clone();
@@ -266,12 +218,15 @@ impl ViewState<NotePage> for NotePageState {
                             })
                             .boxed(),
                         TextButton::new(Text::new("Delete note"))
-                            .on_pressed(move |_ctx| {
-                                // The page answers only when the dialog's pop
-                                // was taken, so a second press answers nothing.
+                            .on_pressed(move |ctx| {
+                                // Only the press whose pop closed the dialog
+                                // deletes, so a second press does nothing; a
+                                // refused write leaves the page open.
                                 if let Ok(true) = dialog.pop() {
-                                    let _ = note_page.pop_with(true);
+                                    notes.update(ctx, |list| list.items.retain(|n| n.id != id))?;
+                                    let _ = note_page.pop();
                                 }
+                                Ok::<(), SignalError>(())
                             })
                             .boxed(),
                     ])
