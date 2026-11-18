@@ -76,8 +76,9 @@ impl TextRunSelection {
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub struct TextRunParts {
-    /// The run's text: the mask, for a field that hides its input.
-    pub text: SmolStr,
+    /// The run's text: the mask, for a field that hides its input. Read
+    /// through [`TextRun::text`] once the run is built.
+    pub(crate) text: SmolStr,
     /// Where the run starts in the field's value, in bytes.
     pub start: usize,
     /// The visual line the run lies on, from 0.
@@ -102,14 +103,14 @@ impl TextRunParts {
     /// `line`, with no characters described yet.
     #[must_use]
     pub fn new(
-        text: impl Into<SmolStr>,
+        text: impl AsRef<str>,
         start: usize,
         line: usize,
         direction: TextDirection,
         rect: Rect<f64>,
     ) -> Self {
         Self {
-            text: text.into(),
+            text: SmolStr::new(text),
             start,
             line,
             direction,

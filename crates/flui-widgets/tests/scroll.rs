@@ -5379,7 +5379,7 @@ pub(crate) fn content_painted_in_view_from_a_row_past_the_edge_stays_in_reach() 
             .child(
                 flui_widgets::Semantics::new()
                     .container(true)
-                    .label(label.to_owned())
+                    .label(label)
                     .child(SizedBox::new(100.0, 10.0)),
             )
             .boxed()

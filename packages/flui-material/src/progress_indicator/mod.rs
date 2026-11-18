@@ -77,7 +77,7 @@ impl Fraction {
 /// indicator is determinate, no value when it is not.
 fn progress_semantics(label: &str, fraction: Option<f64>) -> Semantics {
     let semantics = Semantics::new()
-        .label(label.to_owned())
+        .label(label)
         .role(SemanticsRole::ProgressBar);
     let Some(fraction) = fraction else {
         return semantics;

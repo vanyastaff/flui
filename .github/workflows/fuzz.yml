@@ -25,35 +25,23 @@ name: Fuzz
 # found it, and its fix adds the input's case to the owning crate's tests
 # (docs/testing.md, "Fuzzing").
 #
-# A pull request that edits what a target is built from (this file, the task,
-# a target, its seeds, the property it shares with its crate's tests, a
-# manifest that names it) runs each target for a minute, enough to see that
-# it builds and starts. A change that reaches the build only through
-# `Cargo.lock` is first seen by the night's run. A red run on main keeps the
+# No pull request runs it (ADR-0376): a change to a target, its seeds or what it
+# is built from runs `cargo xtask fuzz <target>` locally, and the night's run
+# sees every other change.
+# A red run on main keeps the
 # "Fuzzing failed on main" issue open, and a green one closes it.
 
 on:
   schedule:
     - cron: "23 2 * * *"
   workflow_dispatch:
-  pull_request:
-    paths:
-      - ".github/workflows/fuzz.yml"
-      - "tools/xtask/src/tasks/fuzz.rs"
-      - "Cargo.toml"
-      - "crates/flui-painting/Cargo.toml"
-      - "crates/flui-runtime/Cargo.toml"
-      - "crates/*/fuzz/**"
-      - "crates/flui-painting/tests/support/foreign_image.rs"
-      - "crates/flui-painting/tests/fixtures/**"
-      - "crates/flui-runtime/tests/support/agent_wire.rs"
 
 permissions:
   contents: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: false
 
 env:
   CARGO_TERM_COLOR: always
@@ -61,8 +49,8 @@ env:
   CARGO_PROFILE_DEV_DEBUG: line-tables-only
   RUST_BACKTRACE: 1
   RUSTUP_HOME: ${{ github.workspace }}/../flui-fuzz-rustup
-  # Seconds a target runs: ten minutes a night, one on a pull request.
-  FUZZ_SECONDS: ${{ github.event_name == 'pull_request' && '60' || '600' }}
+  # Seconds a target runs a night.
+  FUZZ_SECONDS: 600
 
 jobs:
   fuzz:
@@ -110,7 +98,7 @@ jobs:
         run: cargo xtask fuzz "$FUZZ_TARGET" --seconds "$FUZZ_SECONDS"
 
       - name: Save the corpus
-        if: always() && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        if: always() && github.ref == 'refs/heads/main'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: target/fuzz/${{ matrix.target }}/corpus
@@ -128,7 +116,7 @@ jobs:
   report:
     name: report
     needs: [fuzz]
-    if: ${{ always() && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
+    if: ${{ always() && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-26.04
     timeout-minutes: 5
     permissions:

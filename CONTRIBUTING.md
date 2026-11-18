@@ -42,7 +42,7 @@ incomplete.
   when the maintainer explicitly asks.
 - The repository ships no git hook: CI is the gate. For the answer before a push, run
   `cargo fmt --all`, then clippy and nextest on the crates you changed, one at a time (AGENTS.md,
-  "Checking a change"); `cargo xtask affected --worktree` lists the crates a change reaches, and
+  "Checking a change"), and
   `cargo xtask ci` reproduces CI locally when you need it.
 - `.gitignore` covers what this repository's own builds and workflows write, plus the most
   common editor and OS files. Your own tools stay on your machine: an agent runtime's state goes

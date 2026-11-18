@@ -91,7 +91,7 @@ impl fmt::Display for StepGrowth {
 /// Every byte counter of `current` that grew past the step tolerance over
 /// `previous`. A counter on one side only is not compared (the baseline
 /// comparison reports it), and neither is one whose baseline was restated
-/// between the two: that bless named the growth under `## Expectations`.
+/// between the two: that bless said in its pull request why the counter grew.
 pub(super) fn grown(previous: &Measurement, current: &Measurement) -> Vec<StepGrowth> {
     current
         .bytes
