@@ -8756,8 +8756,11 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
   («Pointer and keyboard gaps»), поэтому строка не отмечена. Тесты, в скобках результат с
   откатом: столбец первого клика в `a_left_press_on_the_bar_moves_the_window_and_a_second_click_asks_the_setting`
   (с `first_mouse`, всегда отвечающим `Activates`, падают строки области перемещения);
-  `an_explicit_quit_fences_a_reopen_already_accepted` — прежний тест `LoopControl`, перенесённый на
-  модель; `a_reopen_during_a_drain_waits_for_it_to_end`, `evaluations_coalesce_and_stop_with_the_loop`,
+  `an_explicit_quit_fences_a_reopen_already_accepted` (без проверки флага выхода в `begin_drain` —
+  падает); `an_explicit_quit_fences_the_signal_and_the_application_hears_no_reopen` (прежний тест
+  `LoopControl` на `LoopRequests`: без `signal.fence()` — падает); строки другой кнопки в той же
+  таблице держат проводку `press_of` (без проверки левой кнопки — падают);
+  `a_drain_tells_each_owed_reopen_then_queues_the_rest`, `a_reopen_during_a_drain_waits_for_it_to_end`, `evaluations_coalesce_and_stop_with_the_loop`,
   `a_quit_before_the_loop_runs_keeps_it_from_starting`, `the_launch_ends_when_appkit_says_it_finished`
   держат переходы модели. Прогнано: на Windows clippy `-p flui-native --all-targets --all-features
   -D warnings`, `cargo heli nextest` по моделям, `xtask doc-strict`, `xtask checks`; в WSL

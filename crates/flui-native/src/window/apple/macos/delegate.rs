@@ -154,32 +154,32 @@ define_class!(
         // The six below end the step that was animating.
         #[unsafe(method(windowDidMiniaturize:))]
         fn window_did_miniaturize(&self, _notification: &NSNotification) {
-            Self::notice(self, "windowDidMiniaturize:", |window| window.handle_transition_ended());
+            Self::notice(self, "windowDidMiniaturize:", MacOSWindow::handle_transition_ended);
         }
 
         #[unsafe(method(windowDidDeminiaturize:))]
         fn window_did_deminiaturize(&self, _notification: &NSNotification) {
-            Self::notice(self, "windowDidDeminiaturize:", |window| window.handle_transition_ended());
+            Self::notice(self, "windowDidDeminiaturize:", MacOSWindow::handle_transition_ended);
         }
 
         #[unsafe(method(windowDidEnterFullScreen:))]
         fn window_did_enter_full_screen(&self, _notification: &NSNotification) {
-            Self::notice(self, "windowDidEnterFullScreen:", |window| window.handle_transition_ended());
+            Self::notice(self, "windowDidEnterFullScreen:", MacOSWindow::handle_transition_ended);
         }
 
         #[unsafe(method(windowDidExitFullScreen:))]
         fn window_did_exit_full_screen(&self, _notification: &NSNotification) {
-            Self::notice(self, "windowDidExitFullScreen:", |window| window.handle_transition_ended());
+            Self::notice(self, "windowDidExitFullScreen:", MacOSWindow::handle_transition_ended);
         }
 
         #[unsafe(method(windowDidFailToEnterFullScreen:))]
         fn window_did_fail_to_enter_full_screen(&self, _window: &NSWindow) {
-            Self::notice(self, "windowDidFailToEnterFullScreen:", |window| window.handle_transition_ended());
+            Self::notice(self, "windowDidFailToEnterFullScreen:", MacOSWindow::handle_transition_ended);
         }
 
         #[unsafe(method(windowDidFailToExitFullScreen:))]
         fn window_did_fail_to_exit_full_screen(&self, _window: &NSWindow) {
-            Self::notice(self, "windowDidFailToExitFullScreen:", |window| window.handle_transition_ended());
+            Self::notice(self, "windowDidFailToExitFullScreen:", MacOSWindow::handle_transition_ended);
         }
 
         // A close request whose handling panicked is refused: the window
@@ -291,32 +291,35 @@ impl MacOSWindow {
         self.apply_level(fullscreen);
         self.publish_state();
         let window = crate::owner::slot::OwnerWeak::new(self);
-        crate::owner::apple::macos::exec_async_on_owner(self.owner, move || {
-            let Some(window) = window.upgrade() else {
-                return;
-            };
-            // The held mode first, then the held commands in arrival order: a
-            // fixed size meant for the normal window the held mode leads to
-            // lands after it, held again if that mode set off another step.
-            let after = window.state.borrow_mut().sequence.take_after_step();
-            if let Some(mode) = after.mode
-                && let Err(error) = window.change_mode(mode)
-            {
-                tracing::debug!(%error, "a window could not finish changing mode");
-            }
-            for command in after.commands {
-                match command {
-                    HeldCommand::FixedSize => {
-                        match window.set_style_bit(NSWindowStyleMask::Resizable, false) {
-                            Ok(()) => window.publish_state(),
-                            Err(error) => {
-                                tracing::debug!(%error, "a window could not be made fixed-size");
+        crate::owner::apple::macos::exec_async_on_owner(
+            crate::owner::apple::macos::owner_queue(),
+            move || {
+                let Some(window) = window.upgrade() else {
+                    return;
+                };
+                // The held mode first, then the held commands in arrival order: a
+                // fixed size meant for the normal window the held mode leads to
+                // lands after it, held again if that mode set off another step.
+                let after = window.state.borrow_mut().sequence.take_after_step();
+                if let Some(mode) = after.mode
+                    && let Err(error) = window.change_mode(mode)
+                {
+                    tracing::debug!(%error, "a window could not finish changing mode");
+                }
+                for command in after.commands {
+                    match command {
+                        HeldCommand::FixedSize => {
+                            match window.set_style_bit(NSWindowStyleMask::Resizable, false) {
+                                Ok(()) => window.publish_state(),
+                                Err(error) => {
+                                    tracing::debug!(%error, "a window could not be made fixed-size");
+                                }
                             }
                         }
                     }
                 }
-            }
-        });
+            },
+        );
     }
 
     /// Handle window resize event
@@ -414,7 +417,7 @@ impl MacOSWindow {
         let raw = self.ns_window.occlusionState().0 as u64;
         let visible = crate::window::apple::geometry::surface::occlusion_state_is_visible(raw);
         self.state.borrow_mut().occlusion_visible = visible;
-        // Published outside the state lock, like every other handler here.
+        // Published with the state not borrowed, like every other handler here.
         self.publish_state();
     }
 

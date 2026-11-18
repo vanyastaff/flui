@@ -177,9 +177,10 @@ impl MacosDisplays {
             };
             // The screen's scale by the hosts' one rule; a refusal is
             // reported with nothing borrowed.
+            let backing_scale = screen.backingScaleFactor();
             let (ratio, refused) = self.scale_streak.get(mtm).borrow_mut().read(
                 id,
-                screen.backingScaleFactor(),
+                backing_scale,
                 "NSScreen backingScaleFactor",
             );
             if let Some(refused) = refused {

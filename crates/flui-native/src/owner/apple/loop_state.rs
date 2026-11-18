@@ -13,6 +13,9 @@
 
 #![forbid(unsafe_code)]
 
+use crate::owner::app_delivery::AppDelivery;
+use crate::owner::signal::OwnerSignal;
+
 /// Where the loop is in its life.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Phase {
@@ -134,9 +137,11 @@ impl LoopState {
     }
 
     /// The active drain takes the next reopen: `true` when one is to be told
-    /// to the application now.
+    /// to the application now. An explicit quit needs no check here: it
+    /// empties the owed reopens ([`request`](Self::request)) and refuses new
+    /// ones ([`accept_reopen`](Self::accept_reopen)).
     pub(crate) fn take_reopen(&mut self, accepting: bool) -> bool {
-        if self.phase != Phase::Running || self.explicit_quit || !accepting {
+        if self.phase != Phase::Running || !accepting {
             self.pending_reopens = 0;
             return false;
         }
@@ -232,6 +237,108 @@ impl LoopState {
     }
 }
 
+/// The loop's state with the owner signal and the application around it: an
+/// explicit quit fences the signal before the state takes it, and a drain
+/// tells the application each reopen it owes, its state stored first.
+///
+/// What it decides is the loop control's to schedule: a `true` from
+/// [`request`](Self::request) or [`accept_reopen`](Self::accept_reopen) asks
+/// for a turn on the main queue.
+#[derive(Debug)]
+pub(crate) struct LoopRequests {
+    state: std::cell::Cell<LoopState>,
+}
+
+impl LoopRequests {
+    /// A loop made and not yet installed.
+    pub(crate) const fn new() -> Self {
+        Self {
+            state: std::cell::Cell::new(LoopState::new()),
+        }
+    }
+
+    /// The state as it is now.
+    pub(crate) fn get(&self) -> LoopState {
+        self.state.get()
+    }
+
+    /// Store what `transition` makes of the state and answer what it
+    /// answers. The transition runs on a copy and runs no code of anyone
+    /// else's, so no write to the state can happen while it runs.
+    pub(crate) fn update<R>(&self, transition: impl FnOnce(&mut LoopState) -> R) -> R {
+        let mut state = self.state.get();
+        let answer = transition(&mut state);
+        self.state.set(state);
+        answer
+    }
+
+    /// Whether a window may open now.
+    pub(crate) fn admits_windows(&self, signal: &OwnerSignal) -> bool {
+        self.get().admits_windows(signal.accepting())
+    }
+
+    /// An exit evaluation is asked for: an explicit quit fences the owner
+    /// signal first, so nothing it admits after reaches the application.
+    /// `true` when the evaluation is to be queued now.
+    pub(crate) fn request(&self, signal: &OwnerSignal, explicit_quit: bool) -> bool {
+        if explicit_quit {
+            signal.fence();
+        }
+        self.update(|state| state.request(explicit_quit))
+    }
+
+    /// AppKit reported a reopen: `true` when a drain is to be queued now.
+    pub(crate) fn accept_reopen(&self, signal: &OwnerSignal) -> bool {
+        let accepting = signal.accepting();
+        self.update(|state| state.accept_reopen(accepting)) && self.queue_reopens(signal)
+    }
+
+    /// Whether a drain of the owed reopens is to be queued now.
+    pub(crate) fn queue_reopens(&self, signal: &OwnerSignal) -> bool {
+        let accepting = signal.accepting();
+        self.update(|state| state.queue_reopens(accepting))
+    }
+
+    /// The queued drain: tell `app` each reopen owed while the loop runs and
+    /// accepts, then, the drain's callback and its captures dropped (either
+    /// can pump a nested AppKit loop that reports another reopen), run
+    /// `after`, which queues what arrived meanwhile. A drain that does not
+    /// begin runs nothing.
+    pub(crate) fn drain_reopens(
+        &self,
+        signal: &OwnerSignal,
+        app: &AppDelivery,
+        after: impl FnOnce(),
+    ) {
+        if !self.update(|state| state.begin_drain(signal.accepting())) {
+            return;
+        }
+        let _active = ActiveDrain {
+            requests: self,
+            after: Some(after),
+        };
+        while self.update(|state| state.take_reopen(signal.accepting())) {
+            app.reopen().or_contain((), "the application's reopen");
+        }
+    }
+}
+
+/// The drain that runs, until it ends or unwinds: then the state says so,
+/// and what follows it runs.
+struct ActiveDrain<'a, F: FnOnce()> {
+    requests: &'a LoopRequests,
+    after: Option<F>,
+}
+
+impl<F: FnOnce()> Drop for ActiveDrain<'_, F> {
+    fn drop(&mut self) {
+        self.requests.update(LoopState::end_drain);
+        if let Some(after) = self.after.take() {
+            after();
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -244,25 +351,90 @@ mod tests {
         state
     }
 
-    /// An explicit quit fences a reopen already accepted: the drain tells the
-    /// application nothing, and no window is admitted after.
+    /// The quit flag alone fences the reopens, with the owner signal still
+    /// admitting work: a drain queued before the quit does not begin, and one
+    /// already running takes no reopen after it.
     #[test]
     fn an_explicit_quit_fences_a_reopen_already_accepted() {
         let mut state = LoopState::new();
         assert!(state.accept_reopen(true));
         // Not running yet: queued as the loop starts, not now.
         assert!(!state.request(true));
-        // The quit fences the owner signal before the control is asked again.
-        assert!(!state.admits_windows(false));
         assert!(
             !state.admits_windows(true),
             "an explicit quit admits no window"
         );
         state.install();
         assert_eq!(state.start(), Some(true));
-        assert!(!state.begin_drain(false));
-        assert!(!state.take_reopen(false));
+        assert!(!state.begin_drain(true), "the quit flag fences the drain");
         assert_eq!(state.pending_reopens(), 0);
+
+        let mut state = running();
+        assert!(state.accept_reopen(true));
+        assert!(state.accept_reopen(true));
+        assert!(state.queue_reopens(true));
+        assert!(state.begin_drain(true));
+        assert!(state.take_reopen(true));
+        // The application's reopen asks to quit.
+        assert!(state.request(true));
+        assert!(!state.take_reopen(true), "the quit flag fences the rest");
+        assert_eq!(state.pending_reopens(), 0);
+    }
+
+    /// An explicit quit fences the owner signal and a reopen already
+    /// accepted: the application never hears it, and no window is admitted
+    /// after.
+    #[test]
+    fn an_explicit_quit_fences_the_signal_and_the_application_hears_no_reopen() {
+        use crate::owner::app_delivery::testing::{AppCall, AppLog, bound};
+
+        let signal = OwnerSignal::new(std::sync::Arc::new(|| Ok(())));
+        let handler = AppLog::new();
+        let run = bound(handler.clone());
+        let app = &run.delivery;
+        let requests = LoopRequests::new();
+        requests.update(LoopState::install);
+        assert_eq!(requests.update(LoopState::start), Some(false));
+        assert!(requests.accept_reopen(&signal), "a drain is queued");
+        // The quit arrives before the queued drain runs.
+        assert!(requests.request(&signal, true));
+        assert!(!signal.accepting(), "an explicit quit fences the signal");
+        assert!(!requests.admits_windows(&signal));
+        let mut after = false;
+        requests.drain_reopens(&signal, app, || after = true);
+        assert!(
+            !handler.calls().contains(&AppCall::Reopen),
+            "a quit-fenced reopen reached the application"
+        );
+        assert!(!after, "a drain that does not begin queues nothing");
+        assert_eq!(requests.get().pending_reopens(), 0);
+    }
+
+    /// A drain tells the application each reopen it owes, then runs what
+    /// queues the reopens reported meanwhile.
+    #[test]
+    fn a_drain_tells_each_owed_reopen_then_queues_the_rest() {
+        use crate::owner::app_delivery::testing::{AppCall, AppLog, bound};
+
+        let signal = OwnerSignal::new(std::sync::Arc::new(|| Ok(())));
+        let handler = AppLog::new();
+        let run = bound(handler.clone());
+        let app = &run.delivery;
+        let requests = LoopRequests::new();
+        requests.update(LoopState::install);
+        assert_eq!(requests.update(LoopState::start), Some(false));
+        assert!(requests.accept_reopen(&signal));
+        assert!(!requests.accept_reopen(&signal), "one drain is queued");
+        let mut after = false;
+        requests.drain_reopens(&signal, app, || after = true);
+        let reopens = handler
+            .calls()
+            .iter()
+            .filter(|call| **call == AppCall::Reopen)
+            .count();
+        assert_eq!(reopens, 2);
+        assert!(after);
+        assert!(requests.accept_reopen(&signal), "the drain has ended");
     }
 
     /// A reopen AppKit reports while the application is hearing one waits for

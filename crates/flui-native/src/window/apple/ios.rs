@@ -745,8 +745,8 @@ impl FluiView {
 
     /// The scene is gone: this window names no screen until it is attached
     /// again. Its link's measurement on the old screen is forgotten and, if
-    /// the identity was set, the owner is told the display changed. No lock or
-    /// borrow is held across the callback.
+    /// the identity was set, the owner is told the display changed. No borrow
+    /// is held across the callback.
     fn detach_screen(&self) {
         let moved = self.ivars().displays.move_window(
             MainThreadMarker::from(self),
@@ -1134,6 +1134,9 @@ static_assertions::assert_not_impl_any!(IOSWindow: Send, Sync);
 /// raw handle borrowed by a retained renderer. Native access/release is main-only.
 pub struct IOSWindow {
     native: NativeOwner<NativeWindow>,
+    /// The proof that the window is on the main thread, which made it: the
+    /// window is neither `Send` nor `Sync`.
+    main: MainThreadMarker,
     /// The status-bar style its content asks for, reported by the root
     /// controller of each attachment.
     status_bar: Arc<status_bar::StatusBar>,
@@ -1239,6 +1242,7 @@ impl IOSWindow {
                 },
                 mtm,
             ),
+            main: mtm,
             status_bar,
             redraw,
             delivery,
@@ -1275,9 +1279,9 @@ impl SceneWindow for IOSWindow {
             .ivars()
             .sampling
             .set(SamplingAdmission::Constructing);
-        let controller = self
-            .status_bar
-            .attach_controller(marker, rect_edge(self.input_regions.borrow().1));
+        // Copied out first: no borrow is held across the controller's `init`.
+        let edges = self.input_regions.borrow().1;
+        let controller = self.status_bar.attach_controller(marker, rect_edge(edges));
         controller.setView(Some(&native.view));
         let window = UIWindow::initWithWindowScene(marker.alloc(), scene);
         window.setRootViewController(Some(&controller));
@@ -1929,14 +1933,24 @@ impl PlatformWindow for IOSWindow {
             (size, metrics.scale)
         };
         // Projected with nothing borrowed: a dropped region is reported
-        // through `tracing`, whose subscriber is the application's code.
-        let (mut projection, previous) = std::mem::take(&mut *self.input_regions.borrow_mut());
-        let changed = projection.update(regions, scale, None).map(|sent| {
-            crate::window::apple::geometry::screen_edges::DeferredEdges::of(sent, size)
-        });
-        *self.input_regions.borrow_mut() = (projection, changed.unwrap_or(previous));
+        // through `tracing`, whose subscriber is the application's code. The
+        // set last sent stays in place meanwhile, so a call made from there
+        // projects against it, and the commit below is the last word.
+        let mut projected = self.input_regions.borrow_mut().0.take_buffer();
+        crate::input::regions::ProjectedInputRegions::project_into(&mut projected, regions, scale);
+        let changed = {
+            let mut state = self.input_regions.borrow_mut();
+            let (projection, edges) = &mut *state;
+            let changed = projection.commit(projected, scale, None).map(|sent| {
+                crate::window::apple::geometry::screen_edges::DeferredEdges::of(sent, size)
+            });
+            if let Some(changed) = changed {
+                *edges = changed;
+            }
+            changed
+        };
         if let Some(edges) = changed {
-            self.status_bar.defer_edges(rect_edge(edges));
+            self.status_bar.defer_edges(self.main, rect_edge(edges));
         }
         Ok(())
     }
@@ -2356,7 +2370,7 @@ pub(crate) mod status_bar {
     use std::cell::{Cell, RefCell};
     use std::sync::{
         Arc,
-        atomic::{AtomicU8, AtomicUsize, Ordering},
+        atomic::{AtomicU8, Ordering},
     };
 
     use dispatch2::DispatchQueue;
@@ -2476,9 +2490,6 @@ pub(crate) mod status_bar {
     /// the controller reporting both.
     pub(super) struct StatusBar {
         style: Arc<AtomicU8>,
-        /// The `UIRectEdge` bits the window last asked to defer; the
-        /// controller reads the newest whenever it is refreshed.
-        deferred_edges: AtomicUsize,
         controller: NativeOwner<RefCell<Option<Retained<FluiViewController>>>>,
     }
 
@@ -2486,38 +2497,14 @@ pub(crate) mod status_bar {
         pub(super) fn new(mtm: MainThreadMarker) -> Arc<Self> {
             Arc::new(Self {
                 style: Arc::new(AtomicU8::new(UNSET)),
-                deferred_edges: AtomicUsize::new(UIRectEdge::empty().bits()),
                 controller: NativeOwner::new(RefCell::new(None), mtm),
             })
         }
 
-        /// Defer `edges` from now on. On the main thread the controller hears
-        /// it at once; from any other thread the main queue refreshes it, and
-        /// reads the newest edges then, so a refresh queued earlier never
-        /// brings back edges a later call replaced.
-        pub(super) fn defer_edges(self: &Arc<Self>, edges: UIRectEdge) {
-            self.deferred_edges.store(edges.bits(), Ordering::Release);
-            if let Some(mtm) = MainThreadMarker::new() {
-                self.refresh_edges(mtm);
-                return;
-            }
-            let status_bar = Arc::clone(self);
-            DispatchQueue::main().exec_async(move || {
-                os_entry(
-                    "the deferred screen edges' refresh",
-                    (),
-                    AfterPanic::Answer(|()| ()),
-                    move || {
-                        let mtm = MainThreadMarker::new()
-                            .expect("BUG: the main queue runs on the main thread");
-                        status_bar.refresh_edges(mtm);
-                    },
-                );
-            });
-        }
-
-        fn refresh_edges(&self, mtm: MainThreadMarker) {
-            let edges = UIRectEdge::from_bits_retain(self.deferred_edges.load(Ordering::Acquire));
+        /// Defer `edges` from now on, on the main thread `mtm` proves, where
+        /// the window that asks lives: the attached controller hears it at
+        /// once, and the window hands the next one it attaches the same edges.
+        pub(super) fn defer_edges(&self, mtm: MainThreadMarker, edges: UIRectEdge) {
             let controller = self.controller.get(mtm).borrow().clone();
             if let Some(controller) = controller {
                 controller.defer_edges(edges);

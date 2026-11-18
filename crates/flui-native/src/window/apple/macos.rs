@@ -161,24 +161,13 @@ pub struct MacOSWindow {
     /// `TextInput`) and may be dropped or asked anywhere, though each reads
     /// the flag only on the main thread.
     closed: Arc<AtomicBool>,
-    loop_control: OnceLock<std::sync::Weak<crate::owner::apple::macos::LoopControl>>,
+    loop_control: OnceCell<std::sync::Weak<crate::owner::apple::macos::LoopControl>>,
 
     /// The window's `NSWindowDelegate`, which AppKit holds only weakly: the
     /// window keeps it from right after it is made until its drop detaches
     /// it from the `NSWindow` and hands it to the autorelease pool, so a
     /// delegate method on the stack outlives the drop it caused.
     delegate: OnceCell<Retained<delegate::WindowDelegate>>,
-
-    /// The window's owner lane (see `owner::apple::macos::owner_lane`): the
-    /// AppKit main queue, which runs on the thread the window lives on. What
-    /// reaches the window later or from another thread — a deferred redraw, a
-    /// held mode change, the features beside it — is queued here.
-    owner: &'static dispatch2::DispatchQueue,
-
-    /// True when `owner` is the main queue, so "on the main thread" is
-    /// equivalent to "on the owner lane" for
-    /// [`crate::owner::apple::macos::on_owner_thread`].
-    owner_is_main: bool,
 
     /// Why the machine's display tells this window nothing of its frames
     /// reaching the screen; the platform's, copied at open.
@@ -199,7 +188,7 @@ pub struct MacOSWindow {
     /// screen into a [`DisplayId`]. A `OnceLock` filled once by
     /// the window position's `open` right after construction, like the wake
     /// pump; a window built without a platform names no display.
-    displays: OnceLock<Arc<dyn HostDisplays>>,
+    displays: OnceCell<Arc<dyn HostDisplays>>,
 
     /// The published window state (ADR-0237). Seeded from the creation
     /// options; the first read replaces it with what AppKit reports.
@@ -222,9 +211,8 @@ struct MacOSWindowState {
     scale_streak: crate::display::scale::ScaleStreak,
 
     /// The display this window is on. Cached, not queried per call: reading it
-    /// messages the window's screen, which is AppKit traffic this backend keeps
-    /// on the owner lane, while `PlatformWindow::state` is a plain `&self`
-    /// accessor any thread may call. Refreshed wherever `scale_factor` is —
+    /// messages the window's screen, and `PlatformWindow::state` reads it on
+    /// every snapshot. Refreshed wherever `scale_factor` is —
     /// `windowDidChangeScreen:` and `windowDidChangeBackingProperties:`.
     display: Option<DisplayId>,
 
@@ -381,7 +369,7 @@ impl MacOSWindow {
 
     /// Clear the deferred-first-reveal flag, returning whether it was set:
     /// the one call that decides which caller performs the reveal. The state
-    /// lock is released before the caller sends any AppKit message, so it is
+    /// borrow ends before the caller sends any AppKit message, so it is
     /// never held across one.
     fn take_pending_first_reveal(&self) -> Option<MacOSWindowAlpha> {
         let mut state = self.state.borrow_mut();
@@ -694,9 +682,6 @@ impl MacOSWindow {
         if first_reveal_pending {
             ns_window.setAlphaValue(0.0);
         }
-        if options.visible {
-            ns_window.makeKeyAndOrderFront(None);
-        }
 
         let delivery = Arc::new(WindowDelivery::new(
             handler,
@@ -754,14 +739,12 @@ impl MacOSWindow {
             windows_map: Arc::clone(&windows_map),
             delivery,
             closed,
-            loop_control: OnceLock::new(),
+            loop_control: OnceCell::new(),
             delegate: OnceCell::new(),
-            owner,
-            owner_is_main,
             presentation: windows.presentation,
             facets,
             redraw: OnceCell::new(),
-            displays: OnceLock::new(),
+            displays: OnceCell::new(),
             snapshot: Arc::new(WindowStateCell::new(
                 WindowState::new(WindowGeometry::unplaced(content), content)
                     .with_title(Some(options.title.clone()))
@@ -803,12 +786,20 @@ impl MacOSWindow {
             .setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
         let _ = window.delegate.set(delegate);
 
+        // Ordered front only now, its delegate set: the key status it takes
+        // reaches the delegate (`windowDidBecomeKey:`).
+        if options.visible {
+            window.ns_window.makeKeyAndOrderFront(None);
+        }
+
         // Store in windows map, which the owner thread alone reaches: the
         // window is made there.
         let tracked: Rc<dyn HostWindow> = Rc::clone(&window) as _;
-        if windows_map.insert(window.native_key(), tracked).is_err() {
-            tracing::error!("a macOS window was made off its owner thread and is not tracked");
-        }
+        let inserted = windows_map.insert(window.native_key(), tracked);
+        assert!(
+            inserted.is_ok(),
+            "BUG: a window is made on the main thread, which reaches the window map"
+        );
 
         // The rectangle the window returns to is what it has now, placed
         // as asked; then it enters the mode it opens in. A hidden window
@@ -896,15 +887,8 @@ impl MacOSWindow {
     /// re-armed itself and was discarded" is what this whole path exists to
     /// make observable.
     ///
-    /// Owner lane only: `ns_window` and its content view are thread-affine
-    /// AppKit objects. A window is neither `Send` nor `Sync`, so whoever holds
-    /// `&self` is on the thread that made it; the `debug_assert` below checks
-    /// that this thread is the lane's.
+    /// Main thread only, which the window being neither `Send` nor `Sync` proves.
     fn set_needs_display(&self, deferred: bool) {
-        debug_assert!(
-            on_owner_thread(self.owner, self.owner_is_main),
-            "BUG: set_needs_display must run on the window's owner lane"
-        );
         // The frame this asks for carries the display's current refresh: a
         // rate change since the last frame is a new snapshot revision.
         self.sync_layer_refresh();
@@ -955,7 +939,13 @@ impl MacOSWindow {
             // The deferral runs a lane turn later, after this call has
             // returned, so it carries the window's weak handle rather than a
             // borrow of it.
-            || defer_redraw(self.owner, Arc::clone(handle), 0),
+            || {
+                defer_redraw(
+                    crate::owner::apple::macos::owner_queue(),
+                    Arc::clone(handle),
+                    0,
+                )
+            },
             || self.set_needs_display(false),
         );
     }
@@ -1967,12 +1957,6 @@ impl MacOSWindow {
 
 impl Drop for MacOSWindow {
     fn drop(&mut self) {
-        // A window is dropped where it lives: it is neither `Send` nor
-        // `Sync`, and is made on the AppKit main thread.
-        debug_assert!(
-            on_owner_thread(self.owner, self.owner_is_main),
-            "BUG: a macOS window is dropped on its owner thread"
-        );
         tracing::debug!(handle = ?self.ns_window(), "window closing");
 
         // The window's surface targets and the features beside it outlive
@@ -2419,15 +2403,27 @@ impl MacOSWindow {
         let Some(container) = container else {
             return;
         };
+        // Read before the state is borrowed: no borrow is held across an
+        // AppKit message.
+        let unread = self.state.borrow().system_controls.is_none();
+        let read = unread.then(|| ControlsLayout {
+            bar_height: container.frame().size.height,
+            buttons: buttons.each_ref().map(|button| {
+                let frame = button.frame();
+                Point::new(frame.origin.x, frame.origin.y)
+            }),
+        });
         let (system, frame) = {
             let mut state = self.state.borrow_mut();
-            let system = *state.system_controls.get_or_insert_with(|| ControlsLayout {
-                bar_height: container.frame().size.height,
-                buttons: buttons.each_ref().map(|button| {
-                    let frame = button.frame();
-                    Point::new(frame.origin.x, frame.origin.y)
-                }),
-            });
+            let system = match read {
+                // The first read the window had stays: AppKit's layout before
+                // anything moved the traffic lights.
+                Some(read) => *state.system_controls.get_or_insert(read),
+                None => match state.system_controls {
+                    Some(system) => system,
+                    None => return,
+                },
+            };
             (system, state.frame)
         };
         let direction = self.ns_window.windowTitlebarLayoutDirection();
@@ -2483,19 +2479,23 @@ impl MacOSWindow {
     /// a command admitted under the old one is superseded, not failed.
     fn read_again_when_the_step_gives_up(&self) {
         let window = Arc::clone(&self.redraw().window);
-        crate::owner::apple::macos::exec_after_on_owner(self.owner, ANIMATION_LIMIT, move || {
-            let Some(window) = window.upgrade() else {
-                return;
-            };
-            let gave_up = window
-                .state
-                .borrow_mut()
-                .sequence
-                .expire(std::time::Instant::now());
-            if gave_up {
-                window.publish_state();
-            }
-        });
+        crate::owner::apple::macos::exec_after_on_owner(
+            crate::owner::apple::macos::owner_queue(),
+            ANIMATION_LIMIT,
+            move || {
+                let Some(window) = window.upgrade() else {
+                    return;
+                };
+                let gave_up = window
+                    .state
+                    .borrow_mut()
+                    .sequence
+                    .expire(std::time::Instant::now());
+                if gave_up {
+                    window.publish_state();
+                }
+            },
+        );
     }
 
     fn change_mode(&self, mode: WindowMode) -> Result<(), ApplyError> {

@@ -750,7 +750,7 @@ impl FluiContentView {
     /// inside the panic boundary.
     fn input(&self, selector: &'static str, event: &NSEvent) {
         os_entry(selector, (), AfterPanic::Answer(|()| ()), || {
-            self.deliver(event)
+            self.deliver(event);
         });
     }
 

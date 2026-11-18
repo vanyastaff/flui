@@ -48,9 +48,41 @@ impl ProjectedInputRegions {
         ratio: DevicePixelRatio,
         display: Option<DisplayId>,
     ) -> Option<&[DeviceInputRegion]> {
-        self.scratch.clear();
-        self.scratch
-            .extend(regions.iter().filter_map(|region| project(*region, ratio)));
+        let mut projected = self.take_buffer();
+        Self::project_into(&mut projected, regions, ratio);
+        self.commit(projected, ratio, display)
+    }
+
+    /// The buffer a projection is made in, taken out so that
+    /// [`project_into`](Self::project_into), which reports a dropped region
+    /// through `tracing` (the application's code), runs with the projection
+    /// not borrowed; [`commit`](Self::commit) gives it back. A projection made
+    /// meanwhile finds what was last sent, and an empty buffer.
+    pub(crate) fn take_buffer(&mut self) -> Vec<DeviceInputRegion> {
+        std::mem::take(&mut self.scratch)
+    }
+
+    /// `regions` (window-logical) projected to device pixels at `ratio` into
+    /// `buffer`, as [`update`](Self::update) describes.
+    pub(crate) fn project_into(
+        buffer: &mut Vec<DeviceInputRegion>,
+        regions: &[InputRegion],
+        ratio: DevicePixelRatio,
+    ) {
+        buffer.clear();
+        buffer.extend(regions.iter().filter_map(|region| project(*region, ratio)));
+    }
+
+    /// Take `projected`, made at `ratio` for a window on `display`, as the
+    /// set the OS holds: the set to hand it when it differs from the last
+    /// one, `None` when the OS already holds it. Runs no code but its own.
+    pub(crate) fn commit(
+        &mut self,
+        projected: Vec<DeviceInputRegion>,
+        ratio: DevicePixelRatio,
+        display: Option<DisplayId>,
+    ) -> Option<&[DeviceInputRegion]> {
+        self.scratch = projected;
         let key = Some((ratio.get().to_bits(), display));
         let unchanged = if self.key.is_none() {
             self.scratch.is_empty()

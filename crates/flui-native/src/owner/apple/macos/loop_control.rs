@@ -28,7 +28,7 @@ use crate::{
     error::PlatformError,
     owner::app_delivery::AppDelivery,
     owner::apple::NativeOwner,
-    owner::apple::loop_state::LoopState,
+    owner::apple::loop_state::{LoopRequests, LoopState},
     owner::apple::terminate_gate::ANNOUNCEMENT_LIFETIME,
     owner::apple::terminate_gate::DEFERRAL_LIMIT,
     owner::apple::terminate_gate::TerminateGate,
@@ -70,8 +70,9 @@ pub(crate) struct LoopControl {
 /// only after the new state is stored, so a callback that re-enters the
 /// control reads it, and nothing is ever found busy.
 struct OwnerPart {
-    /// Where the loop is in its life and the reopens it owes.
-    state: Cell<LoopState>,
+    /// Where the loop is in its life and the reopens it owes, with the
+    /// owner signal and the application around it.
+    requests: LoopRequests,
     /// Connects the session-end announcement to the terminate request that
     /// follows it.
     terminate_gate: Cell<TerminateGate>,
@@ -102,7 +103,7 @@ impl LoopControl {
 
     /// Run `body` on the loop's state and store the result.
     fn update<R>(&self, main: MainThreadMarker, body: impl FnOnce(&mut LoopState) -> R) -> R {
-        transition(&self.owner(main).state, body)
+        self.owner(main).requests.update(body)
     }
 
     /// Run `body` on the terminate gate and store the result.
@@ -152,7 +153,7 @@ impl LoopControl {
                 app,
                 owner: NativeOwner::new(
                     OwnerPart {
-                        state: Cell::new(LoopState::new()),
+                        requests: LoopRequests::new(),
                         terminate_gate: Cell::new(TerminateGate::new()),
                         turn: Rc::default(),
                         turn_timer: Cell::default(),
@@ -340,7 +341,7 @@ impl LoopControl {
     /// quits itself once its windows let it. A loop already stopping asks
     /// nothing.
     fn quit_asked(self: &Arc<Self>, main: MainThreadMarker) {
-        if self.owner(main).state.get().stopping() {
+        if self.owner(main).requests.get().stopping() {
             return;
         }
         let answer = self
@@ -375,7 +376,7 @@ impl LoopControl {
     /// absolute strings of AppKit's `NSURL`s, open, as its launch until
     /// `applicationDidFinishLaunching:` and as reaching it running after.
     fn opened_urls(&self, main: MainThreadMarker, urls: Vec<String>) {
-        let launch = if self.owner(main).state.get().launched() {
+        let launch = if self.owner(main).requests.get().launched() {
             Launch::Running
         } else {
             Launch::Cold
@@ -392,57 +393,53 @@ impl LoopControl {
 
     /// Whether a window may open now: the loop is not quitting.
     pub(crate) fn accepts_windows(&self, main: MainThreadMarker) -> bool {
-        self.owner(main)
-            .state
-            .get()
-            .admits_windows(self.owner_signal.accepting())
+        self.owner(main).requests.admits_windows(&self.owner_signal)
     }
 
     fn request_reopen(self: &Arc<Self>, main: MainThreadMarker) {
-        let accepting = self.owner_signal.accepting();
-        if self.update(main, |state| state.accept_reopen(accepting)) {
-            self.schedule_reopens(main);
+        if self.owner(main).requests.accept_reopen(&self.owner_signal) {
+            self.queue_drain();
         }
     }
 
     fn schedule_reopens(self: &Arc<Self>, main: MainThreadMarker) {
-        let accepting = self.owner_signal.accepting();
-        if self.update(main, |state| state.queue_reopens(accepting)) {
-            let weak = Arc::downgrade(self);
-            exec_async_on_owner(owner_queue(), move || {
-                cleanup_step(|| {
-                    let main = MainThreadMarker::new()
-                        .expect("BUG: the owner queue is the AppKit main queue");
-                    if let Some(control) = weak.upgrade() {
-                        control.drain_reopens(main);
-                    }
-                });
-            });
+        if self.owner(main).requests.queue_reopens(&self.owner_signal) {
+            self.queue_drain();
         }
+    }
+
+    /// Queue a drain of the owed reopens on the main queue.
+    fn queue_drain(self: &Arc<Self>) {
+        let weak = Arc::downgrade(self);
+        exec_async_on_owner(owner_queue(), move || {
+            cleanup_step(|| {
+                let main =
+                    MainThreadMarker::new().expect("BUG: the owner queue is the AppKit main queue");
+                if let Some(control) = weak.upgrade() {
+                    control.drain_reopens(main);
+                }
+            });
+        });
     }
 
     fn drain_reopens(self: &Arc<Self>, main: MainThreadMarker) {
-        if !self.update(main, |state| {
-            state.begin_drain(self.owner_signal.accepting())
-        }) {
-            return;
-        }
-        // Active includes callback destruction: either can pump a nested AppKit
-        // loop. Such signals stay pending until this callback lease has ended.
-        let _active = ReopenDrain(self, main);
-        while self.update(main, |state| {
-            state.take_reopen(self.owner_signal.accepting())
-        }) {
-            self.app.reopen().or_contain((), "the application's reopen");
-        }
+        // What arrived while the drain ran is queued once it, and its
+        // callback's captures, are gone.
+        self.owner(main)
+            .requests
+            .drain_reopens(&self.owner_signal, &self.app, || {
+                cleanup_step(|| self.schedule_reopens(main));
+            });
     }
 
-    /// Always deferred: reentrant requests cannot observe an absent leased hook.
+    /// Always deferred: reentrant requests cannot observe an absent leased
+    /// hook. An explicit quit fences the owner signal first.
     pub(crate) fn request(self: &Arc<Self>, main: MainThreadMarker, explicit_quit: bool) {
-        if explicit_quit {
-            self.owner_signal.fence();
-        }
-        if self.update(main, |state| state.request(explicit_quit)) {
+        if self
+            .owner(main)
+            .requests
+            .request(&self.owner_signal, explicit_quit)
+        {
             let weak = Arc::downgrade(self);
             exec_async_on_owner(owner_queue(), move || {
                 let main =
@@ -486,7 +483,7 @@ impl LoopControl {
                 "the application's exit policy",
             )
             .ends_loop(true);
-        if allowed && self.owner(main).state.get().running() && self.windows.is_empty() {
+        if allowed && self.owner(main).requests.get().running() && self.windows.is_empty() {
             self.quit(main);
         }
     }
@@ -539,18 +536,6 @@ impl LoopControl {
             .or_contain((), "the application's quit");
         self.app.release();
         self.update(main, LoopState::stopped);
-    }
-}
-
-/// The reopen drain that runs, until its callback and the callback's captures
-/// are dropped: a reopen reported meanwhile is queued after it.
-struct ReopenDrain<'a>(&'a Arc<LoopControl>, MainThreadMarker);
-
-impl Drop for ReopenDrain<'_> {
-    fn drop(&mut self) {
-        let Self(control, main) = *self;
-        control.update(main, LoopState::end_drain);
-        cleanup_step(|| control.schedule_reopens(main));
     }
 }
 
@@ -763,7 +748,7 @@ impl Drop for LoopOwnership {
             reason = "ADR-0287: loop detachment finishes and the phase is set even if finish panics"
         )]
         let cleanup = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            self.control.finish(self.main)
+            self.control.finish(self.main);
         }));
         self.control.update(self.main, LoopState::stopped);
         if let Err(payload) = cleanup {

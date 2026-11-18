@@ -140,9 +140,10 @@ impl IosDisplays {
             };
             // The screen's scale by the hosts' one rule; a refusal is
             // reported once the ledger is let go.
+            let native_scale = screen.nativeScale();
             let (ratio, refused) = self.scale_streak.get(marker).borrow_mut().read(
                 id,
-                screen.nativeScale(),
+                native_scale,
                 "UIScreen nativeScale",
             );
             refusals.extend(refused);
