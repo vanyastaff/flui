@@ -23,7 +23,10 @@ use accesskit::{NodeId, TreeId};
 use accesskit_consumer::{FilterResult, NodeRef, TreeState, common_filter};
 use flui_foundation::RenderId;
 use flui_foundation::geometry::Rect as Bounds;
-use flui_protocol::{Actionability, ElementRef, LogicalPoint, LogicalRect, TreeRevision, outline};
+use flui_protocol::{
+    act::Actionability, geometry::LogicalPoint, geometry::LogicalRect, tree::ElementRef,
+    tree::TreeRevision, tree::outline,
+};
 
 use super::{Placement, WireReadError, element_id, logical_bounds, wire_node};
 use crate::owner::SemanticsOwner;

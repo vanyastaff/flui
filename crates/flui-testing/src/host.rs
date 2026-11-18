@@ -2173,8 +2173,8 @@ impl HeadlessHost {
     }
 
     /// Report whether the platform lets `window` run, as a phone's host
-    /// reports its activity or scene pausing and resuming (Android's
-    /// `onPause`/`onResume`, a UIKit scene entering the background, a page
+    /// reports its activity or scene stopping and starting (Android's
+    /// `onStop`/`onStart`, a UIKit scene entering the background, a page
     /// frozen by the browser): the window's state says so, and the host
     /// delivers `WindowObservation::Execution(execution)`, which suspends
     /// (`Paused`) or resumes the window's lifecycle. Its focus and visibility

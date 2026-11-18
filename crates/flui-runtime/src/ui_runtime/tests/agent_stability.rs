@@ -2,7 +2,7 @@
 //! compare only once a frame has run since they were read, or while nothing is
 //! pending that could still move the element.
 
-use flui_protocol::{ElementId, ElementRef, LogicalRect, WindowId};
+use flui_protocol::{geometry::LogicalRect, tree::ElementId, tree::ElementRef, tree::WindowId};
 
 use crate::epoch::TreeRevision;
 use crate::ui_runtime::AgentStability;

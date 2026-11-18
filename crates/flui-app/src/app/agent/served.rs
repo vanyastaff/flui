@@ -49,7 +49,7 @@ pub(crate) fn install(
 ) {
     let agent = DriverAgent::new(
         launch,
-        app_info(&config.title),
+        app_description(&config.title),
         std::sync::Arc::clone(disconnect),
         records_native,
     );
@@ -60,15 +60,16 @@ pub(crate) fn install(
 }
 
 /// What the hello says of the app titled `title`: its system, and its process where it has one.
-fn app_info(title: &str) -> flui_protocol::AppInfo {
+fn app_description(title: &str) -> flui_protocol::session::AppDescription {
     #[cfg(target_arch = "wasm32")]
     {
         // A page has no process ID to give.
-        flui_protocol::AppInfo::new(title, "web")
+        flui_protocol::session::AppDescription::new(title, "web")
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        flui_protocol::AppInfo::new(title, std::env::consts::OS).with_pid(std::process::id())
+        flui_protocol::session::AppDescription::new(title, std::env::consts::OS)
+            .with_pid(std::process::id())
     }
 }
 

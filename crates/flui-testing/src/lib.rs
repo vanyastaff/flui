@@ -120,8 +120,9 @@ pub use clipboard::ScriptedClipboard;
 pub use drop_ledger::{DropLedger, DropSentinel};
 pub use flui_platform::testing::{ScriptedHttp, ScriptedResponse};
 pub use flui_protocol::{
-    InspectField, InspectNode, InspectReading, InspectValue, Locator, LogicalPoint, LogicalRect,
-    Match, Node, Pick, Role, StateFilter, TextMatch, Tree,
+    geometry::LogicalPoint, geometry::LogicalRect, inspect::InspectField, inspect::InspectNode,
+    inspect::InspectReading, inspect::InspectValue, locator::Locator, locator::Match,
+    locator::Pick, locator::StateFilter, locator::TextMatch, tree::Node, tree::Tree, wire::Role,
 };
 pub use flui_runtime::presentation::{PointerResampling, PointerResamplingError};
 pub use gesture_alternatives::{

@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 
 use flui_foundation::geometry::Rect as LogicalRect;
 use flui_foundation::{RenderId, SemanticsId};
-use flui_protocol::outline;
+use flui_protocol::tree::outline;
 
 use super::*;
 use crate::accesskit_translation::resolve_role;
@@ -74,7 +74,7 @@ impl Fixture {
     }
 
     fn only(&self, element: ElementId) -> Node {
-        let tree = self.read(&ReadQuery::new().with_root(element));
+        let tree = self.read(&ReadQuery::new().root(element));
         tree.roots.into_iter().next().expect("one root")
     }
 }
@@ -404,8 +404,7 @@ fn generic_containers_are_lifted_and_hidden_subtrees_dropped() {
     assert_eq!((tree.count, tree.truncated), (2, false));
     assert_eq!(tree.roots[0].native_role, "Window");
     assert_eq!(
-        f.owner
-            .read_wire(&ReadQuery::new().with_root(e(2)), placement()),
+        f.owner.read_wire(&ReadQuery::new().root(e(2)), placement()),
         Err(WireReadError::NotFound { element: e(2) }),
         "a lifted container has no handle of its own"
     );
@@ -958,15 +957,15 @@ fn read_honours_max_depth_and_max_nodes_and_says_truncated() {
     let whole = f.read(&ReadQuery::new());
     assert_eq!((whole.count, whole.truncated), (6, false));
 
-    let shallow = f.read(&ReadQuery::new().with_max_depth(0));
+    let shallow = f.read(&ReadQuery::new().max_depth(0));
     assert_eq!((shallow.count, shallow.truncated), (1, true));
     assert_eq!(shallow.roots[0].omitted_children, Some(3));
 
-    let one_level = f.read(&ReadQuery::new().with_max_depth(1));
+    let one_level = f.read(&ReadQuery::new().max_depth(1));
     assert_eq!((one_level.count, one_level.truncated), (4, true));
     assert_eq!(one_level.roots[0].children[0].omitted_children, Some(2));
 
-    let budget = f.read(&ReadQuery::new().with_max_nodes(3));
+    let budget = f.read(&ReadQuery::new().max_nodes(3));
     assert_eq!((budget.count, budget.truncated), (3, true));
     assert_eq!(
         outline(&budget.roots),
@@ -980,7 +979,7 @@ fn read_honours_max_depth_and_max_nodes_and_says_truncated() {
         )
     );
 
-    let scoped = f.read(&ReadQuery::new().with_root(e(2)));
+    let scoped = f.read(&ReadQuery::new().root(e(2)));
     assert_eq!(scoped.count, 3);
     assert_eq!(
         scoped.roots[0].window, None,
@@ -1006,7 +1005,7 @@ fn a_read_tree_round_trips_through_json() {
     let json = serde_json::to_value(&tree).expect("a tree serializes");
     assert_eq!(
         json["protocol"],
-        flui_protocol::PROTOCOL_VERSION.to_string()
+        flui_protocol::version::PROTOCOL_VERSION.to_string()
     );
     assert_eq!(
         json["roots"][0]["children"][0],

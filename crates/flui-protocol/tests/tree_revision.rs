@@ -1,6 +1,6 @@
 //! A tree's revision only grows: two different publishes never read as one revision.
 
-use flui_protocol::TreeRevision;
+use flui_protocol::tree::TreeRevision;
 
 #[test]
 fn each_revision_follows_the_one_before() {

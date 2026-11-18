@@ -1,7 +1,7 @@
 //! How a byte transport frames the protocol (ADR-0238 §2): newline-delimited JSON lines of at
 //! most [`MAX_LINE`] bytes, and binary payloads as frames of their own.
 //!
-//! A result that carries a payload announces it with a [`BlobRef`](crate::BlobRef); right
+//! A result that carries a payload announces it with a [`BlobRef`](crate::capture::BlobRef); right
 //! after that result's line the payload follows as one frame: a [`BlobHeader`] of
 //! [`BlobHeader::SIZE`] bytes, then exactly `len` bytes. A reader checks `len` against its own
 //! limit before reading or allocating. The BiDi transport has no binary frame and carries the

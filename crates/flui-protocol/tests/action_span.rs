@@ -6,8 +6,8 @@ use std::time::Duration;
 
 use flui_protocol::method::Addressed;
 use flui_protocol::{
-    ActionSequence, InputParams, InputSource, KeyAction, LogicalPoint, PointerAction,
-    PointerDevice, WindowId,
+    geometry::LogicalPoint, input::ActionSequence, input::InputParams, input::InputSource,
+    input::KeyAction, input::PointerAction, input::PointerDevice, tree::WindowId,
 };
 
 fn pointer(actions: Vec<PointerAction>) -> InputSource {

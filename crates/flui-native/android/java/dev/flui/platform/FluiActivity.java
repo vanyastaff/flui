@@ -4,6 +4,7 @@ import android.app.NativeActivity;
 import android.content.Intent;
 import android.os.Build;
 import android.os.Bundle;
+import android.util.Log;
 import android.view.View;
 import android.view.Window;
 
@@ -15,7 +16,9 @@ import android.view.Window;
  * the manifest, with {@code android:hasCode="true"}, puts FLUI's classes in
  * the APK, where the Activity's class loader finds them, and gives FLUI the
  * callbacks only an Activity subclass receives, which it forwards to the
- * queue in {@link FluiHost}.
+ * queue in {@link FluiHost}. A process runs one, in a task of its own
+ * application: another instance forwards what it was opened with there and
+ * finishes (ADR-0366).
  *
  * <p>The request codes {@link FluiHost#FIRST_HOST_CODE} to
  * {@link FluiHost#LAST_HOST_CODE} are the host's: capability providers start
@@ -46,13 +49,24 @@ public class FluiActivity extends NativeActivity {
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
-        // Before `NativeActivity.onCreate` starts `android_main`: a provider
-        // that asks whether an earlier answer is still to come finds the
-        // requests the saved state names.
-        if (savedInstanceState != null) {
+        Intent received = getIntent();
+        // Before `NativeActivity.onCreate` starts `android_main`, whose
+        // application runs only over the Activity that owns the host's
+        // queues: a process runs one FLUI platform, in a task of its own
+        // application (ADR-0366).
+        int admission =
+                FluiHost.admit(this, isTaskRoot(), FluiHost.isForwarded(received));
+        // Also before `android_main`: a provider that asks whether an earlier
+        // answer is still to come finds the requests the saved state names.
+        // Only the owner's: no other instance answers them.
+        if (admission == FluiHost.OWN && savedInstanceState != null) {
             FluiHost.restore(savedInstanceState);
         }
         super.onCreate(savedInstanceState);
+        if (admission != FluiHost.OWN) {
+            leave(admission, received, savedInstanceState == null);
+            return;
+        }
         // `NativeActivity.onCreate` has just set this same mode
         // (`SOFT_INPUT_STATE_UNSPECIFIED | SOFT_INPUT_ADJUST_RESIZE`). It is
         // set again here, beside the edge-to-edge setup that relies on it, so
@@ -73,6 +87,47 @@ public class FluiActivity extends NativeActivity {
             FluiHost.opened(intent, true);
         }
     }
+
+    /**
+     * An instance that does not run FLUI leaves ({@link FluiHost#admit}). One
+     * that would run it in another application's task, or beside a live
+     * owner, starts this Activity again in its own application's task with
+     * what it was opened with ({@link FluiHost#FORWARD}): the start grants
+     * the running instance the URIs this one was granted, and reaches it
+     * through {@code onNewIntent}. One that was already forwarded and still
+     * finds a live owner queues what it was opened with for the owner and
+     * brings the owner's task to the front ({@link FluiHost#HAND_OVER}).
+     */
+    private void leave(int admission, Intent received, boolean fresh) {
+        // A recreated instance, and one Recents starts again, carry the intent
+        // that opened before: they bring the application forward with nothing.
+        boolean opens = fresh
+                && received != null
+                && (received.getFlags() & Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY) == 0;
+        if (admission == FluiHost.FORWARD) {
+            try {
+                startActivity(FluiHost.forwarded(this, opens ? received : null));
+            } catch (RuntimeException error) {
+                // A URI this instance may not grant (`SecurityException`):
+                // the owner reads it as far as the grant reaches.
+                Log.w(TAG, "the intent could not be forwarded; it is handed over", error);
+                handOver(opens ? received : null);
+            }
+        } else {
+            handOver(opens ? received : null);
+        }
+        finish();
+    }
+
+    /** {@code received}, if any, waits for the owner, whose task comes forward. */
+    private void handOver(Intent received) {
+        if (received != null) {
+            FluiHost.opened(received, false);
+        }
+        FluiHost.showOwner(this);
+    }
+
+    private static final String TAG = "flui";
 
     /** Below API 30: the layout flags, added to the decor view's. */
     @SuppressWarnings("deprecation")

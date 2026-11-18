@@ -17,7 +17,7 @@
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 
-use flui_protocol::{AnnouncementJournal, TreeRevision};
+use flui_protocol::{events::AnnouncementJournal, tree::TreeRevision};
 
 use crate::identity::AccessibilityNodeId;
 use crate::regions::SemanticsRegionId;
@@ -71,7 +71,7 @@ const JOURNAL_CAPACITY: usize = 256;
 /// an agent reads the messages.
 #[derive(Debug, Default)]
 struct Journal {
-    entries: VecDeque<flui_protocol::Announcement>,
+    entries: VecDeque<flui_protocol::events::Announcement>,
     /// The sequence number the last delivered announcement took.
     last_seq: u64,
 }
@@ -82,15 +82,16 @@ impl Journal {
         if self.entries.len() == JOURNAL_CAPACITY {
             self.entries.pop_front();
         }
-        self.entries.push_back(flui_protocol::Announcement::new(
-            self.last_seq,
-            match urgency {
-                Urgency::Polite => flui_protocol::AnnouncementUrgency::Polite,
-                Urgency::Assertive => flui_protocol::AnnouncementUrgency::Assertive,
-            },
-            message,
-            revision,
-        ));
+        self.entries
+            .push_back(flui_protocol::events::Announcement::new(
+                self.last_seq,
+                match urgency {
+                    Urgency::Polite => flui_protocol::events::AnnouncementUrgency::Polite,
+                    Urgency::Assertive => flui_protocol::events::AnnouncementUrgency::Assertive,
+                },
+                message,
+                revision,
+            ));
     }
 
     fn read(&self, since: Option<u64>, max_entries: Option<u32>) -> AnnouncementJournal {

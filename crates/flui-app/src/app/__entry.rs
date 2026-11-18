@@ -155,6 +155,19 @@ impl<E: std::fmt::Display> EntryOutcome for Result<(), E> {
 /// `entry` returns, so a later `android_main` starts clean.
 #[cfg(target_os = "android")]
 pub fn android<R: EntryOutcome>(app: AndroidApp, entry: fn() -> R) {
+    // An instance that does not run FLUI forwards what it was opened with to
+    // the one that does and finishes (ADR-0366): none of the application
+    // starts for it, and its destruction, which waits for this function to
+    // return, waits for nothing.
+    if flui_native::android_hands_over(&app) {
+        let _installation =
+            crate::app::logging::init_managed_logging(&crate::app::AppConfig::default());
+        tracing::info!(
+            "this Activity instance forwards its intent to the one that runs FLUI; nothing starts \
+             for it"
+        );
+        return;
+    }
     crate::app::runner::hand_android_entry(app);
     let outcome = entry();
     // Whatever the run left: an entry that never ran one does not leak the

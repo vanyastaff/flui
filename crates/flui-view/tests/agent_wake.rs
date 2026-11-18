@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::task::Waker;
 
 use flui_foundation::testing::{CountingWaker, panicking_waker};
-use flui_protocol::ErrorCode;
+use flui_protocol::error::ErrorCode;
 use flui_view::__runtime::reply_pair;
 
 #[test]

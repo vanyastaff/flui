@@ -2,7 +2,7 @@
 //! API's own names map onto it. The vocabulary itself (`Role`, `ActionName`,
 //! `Checked`) is flui-protocol's.
 
-use flui_protocol::Role;
+use flui_protocol::wire::Role;
 
 /// Distinctions erased by UIA control types in AccessKit's Windows adapter
 /// (accesskit_windows 0.35.0, node.rs::aria_role). Other ARIA values retain

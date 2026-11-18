@@ -8,7 +8,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use flui_protocol::{ReadParams, method};
+use flui_protocol::{method, tree::ReadParams};
 use parking_lot::Mutex;
 
 use super::*;

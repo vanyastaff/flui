@@ -154,7 +154,7 @@ impl Effect {
 
     /// The effect, saying what went out.
     #[must_use]
-    pub fn with_detail(mut self, detail: impl Into<String>) -> Self {
+    pub fn detail(mut self, detail: impl Into<String>) -> Self {
         self.detail = Some(detail.into());
         self
     }

@@ -82,9 +82,15 @@ impl BlobRef {
 /// What a capture answers; the pixels are the blob.
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+// The schema keeps the definition name it published as `CaptureMeta`: renaming a definition is a
+// break, and the bytes on the wire are the same.
+#[cfg_attr(
+    feature = "schemars",
+    derive(schemars::JsonSchema),
+    schemars(rename = "CaptureMeta")
+)]
 #[non_exhaustive]
-pub struct CaptureMeta {
+pub struct Screenshot {
     /// Where the pixels came from: `rendered` whenever they were not the presented texture.
     pub source: CaptureSource,
     /// Width in device pixels.

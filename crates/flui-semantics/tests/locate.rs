@@ -3,7 +3,8 @@
 //! folding, and what a failed resolution lists.
 
 use flui_protocol::{
-    Checked, ElementRef, LocateParams, Locator, Pick, Role, StateFilter, TextMatch,
+    locator::LocateParams, locator::Locator, locator::Pick, locator::StateFilter,
+    locator::TextMatch, tree::ElementRef, wire::Checked, wire::Role,
 };
 use flui_semantics::{SemanticsRole, Toggled, WireLocateError};
 
@@ -346,7 +347,7 @@ fn a_locator_matches_what_it_describes_and_nothing_else() {
 #[test]
 fn a_locator_for_another_window_matches_nothing() {
     let f = mail();
-    let other = flui_protocol::WindowId::from_u64(2).expect("non-zero");
+    let other = flui_protocol::tree::WindowId::from_u64(2).expect("non-zero");
     assert_eq!(
         located(&f, Locator::named("Save").in_window(other)),
         Vec::<u32>::new()

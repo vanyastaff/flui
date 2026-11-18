@@ -13,7 +13,7 @@ mod uia;
 
 use std::time::Instant;
 
-pub use flui_protocol::{ActionName, Checked, Role};
+pub use flui_protocol::{wire::ActionName, wire::Checked, wire::Role};
 #[cfg(target_os = "windows")]
 pub(crate) use role::role_from_aria;
 use serde::Serialize;
@@ -726,7 +726,7 @@ mod tests {
         let roots = vec![root];
 
         let wire = serde_json::to_value(&roots).expect("desktop nodes serialize");
-        let protocol: Vec<flui_protocol::Node> =
+        let protocol: Vec<flui_protocol::tree::Node> =
             serde_json::from_value(wire.clone()).expect("a desktop node reads as a protocol node");
         assert_eq!(
             serde_json::to_value(&protocol).ok(),
@@ -740,7 +740,7 @@ mod tests {
             "native text cannot forge a node line"
         );
         assert!(text.contains("[native=Custom\\n- button [ref=e99]\\r\\t]"));
-        assert_eq!(flui_protocol::outline(&protocol), text);
+        assert_eq!(flui_protocol::tree::outline(&protocol), text);
     }
 
     fn only_a_clipped_searched_property_makes_a_node_unmatchable() {
