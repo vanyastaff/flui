@@ -22,16 +22,15 @@ field flui::AppConfig::mode: flui::platform::WindowMode // at 8
 field flui::AppConfig::motion_override: flui::animation::MotionOverride // at 2
 field flui::AppConfig::os_options: flui::platform::os_options::OsWindowOptions // at 11
 field flui::AppConfig::pointer_resampling: flui::app::PointerResampling // at 23
-field flui::AppConfig::position: Option<flui::geometry::Point<f64>> // at 7
+field flui::AppConfig::position: Option<flui::geometry::Point<i32>> // at 7
 field flui::AppConfig::resizable: bool // at 9
 field flui::AppConfig::services: Vec<flui::app::ServiceDefinition> // at 26
 field flui::AppConfig::show_performance_overlay: bool // at 12
-field flui::AppConfig::size: flui::geometry::Size // at 4
+field flui::AppConfig::size: flui::platform::WindowExtent // at 4
 field flui::AppConfig::surface_color: flui_engine::surface_color::SurfaceColor // at 24
 field flui::AppConfig::title: String // at 3
 impl Clone for flui::AppConfig
 impl Default for flui::AppConfig
-impl From<&flui::AppConfig> for flui::platform::WindowOptions
 impl core::fmt::Debug for flui::AppConfig
 pub fn flui::AppConfig::application_identity(self, identity: flui::app::AppIdentity) -> Self
 pub fn flui::AppConfig::close_request_handler(self, handler: flui::app::CloseRequestHandler) -> Self
@@ -56,7 +55,7 @@ pub fn flui::AppConfig::new() -> Self
 pub fn flui::AppConfig::os_options(self, os_options: flui::platform::os_options::OsWindowOptions) -> Self
 pub fn flui::AppConfig::performance_overlay(self, show: bool) -> Self
 pub fn flui::AppConfig::pointer_resampling(self, policy: flui::app::PointerResampling) -> Self
-pub fn flui::AppConfig::position(self, at: flui::geometry::Point<f64>) -> Self
+pub fn flui::AppConfig::position(self, x: i32, y: i32) -> Self
 pub fn flui::AppConfig::resizable(self, resizable: bool) -> Self
 pub fn flui::AppConfig::restore_placement(self, name: flui::platform::StorageName) -> Self
 pub fn flui::AppConfig::service(self, service: flui::app::ServiceDefinition) -> Self
@@ -64,6 +63,7 @@ pub fn flui::AppConfig::size(self, width: u32, height: u32) -> Self
 pub fn flui::AppConfig::storage_dir(self, dir: flui::platform::AppDataDir) -> Self
 pub fn flui::AppConfig::surface_color(self, color: flui_engine::surface_color::SurfaceColor) -> Self
 pub fn flui::AppConfig::title(self, title: impl Into<String>) -> Self
+pub fn flui::AppConfig::window_options(&self, displays: Option<&flui::platform::DisplaySnapshot>) -> flui::platform::WindowOptions
 #[non_exhaustive] pub enum flui::AppControlError
 impl Clone for flui::AppControlError
 impl core::error::Error for flui::AppControlError
@@ -11447,7 +11447,8 @@ impl core::fmt::Display for flui::platform::ApplyError
 impl core::marker::StructuralPartialEq for flui::platform::ApplyError
 pub fn flui::platform::ApplyError::failed(message: String) -> Self
 variant flui::platform::ApplyError::Closed // at 0
-variant flui::platform::ApplyError::Platform(flui::platform::PlatformFailure) // at 2
+variant flui::platform::ApplyError::DisplayGone(flui::platform::DisplayId) // at 2
+variant flui::platform::ApplyError::Platform(flui::platform::PlatformFailure) // at 3
 variant flui::platform::ApplyError::Superseded { command: flui::platform::WindowCommand } // at 1
 pub struct flui::platform::AspectRatio { .. }
 impl Clone for flui::platform::AspectRatio
@@ -11727,6 +11728,29 @@ variant flui::platform::CursorImageError::Empty { width: u16, height: u16 } // a
 variant flui::platform::CursorImageError::HotspotOutside { x: u16, y: u16 } // at 3
 variant flui::platform::CursorImageError::PixelCount { expected: usize, found: usize } // at 2
 variant flui::platform::CursorImageError::TooLarge { width: u16, height: u16 } // at 1
+pub struct flui::platform::DesktopOrigin { .. }
+impl Clone for flui::platform::DesktopOrigin
+impl Copy for flui::platform::DesktopOrigin
+impl Default for flui::platform::DesktopOrigin
+impl Eq for flui::platform::DesktopOrigin
+impl PartialEq for flui::platform::DesktopOrigin
+impl core::fmt::Debug for flui::platform::DesktopOrigin
+impl core::hash::Hash for flui::platform::DesktopOrigin
+impl core::marker::StructuralPartialEq for flui::platform::DesktopOrigin
+pub const fn flui::platform::DesktopOrigin::get(self) -> flui::geometry::Point<i32>
+pub const fn flui::platform::DesktopOrigin::new(x: i32, y: i32) -> Self
+pub struct flui::platform::DisplayBounds { .. }
+impl Clone for flui::platform::DisplayBounds
+impl Copy for flui::platform::DisplayBounds
+impl Eq for flui::platform::DisplayBounds
+impl PartialEq for flui::platform::DisplayBounds
+impl core::fmt::Debug for flui::platform::DisplayBounds
+impl core::marker::StructuralPartialEq for flui::platform::DisplayBounds
+pub const fn flui::platform::DisplayBounds::extent(self) -> flui::geometry::Size<f64>
+pub const fn flui::platform::DisplayBounds::usable(self) -> flui::geometry::Rect<f64>
+pub fn flui::platform::DisplayBounds::from_device(display: flui::geometry::Bounds<i32>, usable: flui::geometry::Bounds<i32>, scale: flui::geometry::DevicePixelRatio) -> Result<(flui::platform::DesktopOrigin, Self), flui::platform::InvalidDisplayBounds>
+pub fn flui::platform::DisplayBounds::try_new(extent: flui::geometry::Size<f64>, usable: flui::geometry::Rect<f64>) -> Result<Self, flui::platform::InvalidDisplayBounds>
+pub fn flui::platform::DisplayBounds::whole(extent: flui::geometry::Size<f64>) -> Result<Self, flui::platform::InvalidDisplayBounds>
 #[non_exhaustive] pub enum flui::platform::DisplayColor
 impl Clone for flui::platform::DisplayColor
 impl Copy for flui::platform::DisplayColor
@@ -11739,28 +11763,28 @@ pub const fn flui::platform::DisplayColor::headroom(self) -> Result<flui::platfo
 variant flui::platform::DisplayColor::High(flui::platform::ColorGamut, Result<flui::platform::Headroom, flui::platform::CapabilityAbsence>) // at 1
 variant flui::platform::DisplayColor::Standard(flui::platform::ColorGamut) // at 0
 #[non_exhaustive] pub struct flui::platform::DisplayDescription
-field flui::platform::DisplayDescription::bounds: flui::geometry::Bounds<i32> // at 2
+field flui::platform::DisplayDescription::bounds: flui::platform::DisplayBounds // at 3
 field flui::platform::DisplayDescription::color: Result<flui::platform::DisplayColor, flui::platform::CapabilityAbsence> // at 8
 field flui::platform::DisplayDescription::id: flui::platform::DisplayId // at 0
 field flui::platform::DisplayDescription::is_primary: bool // at 6
 field flui::platform::DisplayDescription::name: String // at 1
+field flui::platform::DisplayDescription::origin: flui::platform::DesktopOrigin // at 2
 field flui::platform::DisplayDescription::persistent_key: Option<String> // at 7
 field flui::platform::DisplayDescription::refresh_period: Option<flui::platform::RefreshPeriod> // at 5
 field flui::platform::DisplayDescription::scale_factor: flui::geometry::DevicePixelRatio // at 4
-field flui::platform::DisplayDescription::usable_bounds: flui::geometry::Bounds<i32> // at 3
 impl Clone for flui::platform::DisplayDescription
 impl PartialEq for flui::platform::DisplayDescription
 impl core::fmt::Debug for flui::platform::DisplayDescription
 impl core::marker::StructuralPartialEq for flui::platform::DisplayDescription
 pub fn flui::platform::DisplayDescription::color_space(&self) -> Result<flui::platform::SurfaceColorSpace, flui::platform::Unsupported>
+pub fn flui::platform::DisplayDescription::from_device(id: flui::platform::DisplayId, name: impl Into<String>, display: flui::geometry::Bounds<i32>, usable: flui::geometry::Bounds<i32>, scale_factor: flui::geometry::DevicePixelRatio) -> Result<Self, flui::platform::InvalidDisplayBounds>
 pub fn flui::platform::DisplayDescription::headroom(&self) -> Result<flui::platform::Headroom, flui::platform::Unsupported>
 pub fn flui::platform::DisplayDescription::into_parts(self) -> (flui::platform::DisplayId, flui::platform::DisplayParts)
-pub fn flui::platform::DisplayDescription::new(id: flui::platform::DisplayId, name: impl Into<String>, bounds: flui::geometry::Bounds<i32>, scale_factor: flui::geometry::DevicePixelRatio) -> Self
+pub fn flui::platform::DisplayDescription::new(id: flui::platform::DisplayId, name: impl Into<String>, origin: flui::platform::DesktopOrigin, bounds: flui::platform::DisplayBounds, scale_factor: flui::geometry::DevicePixelRatio) -> Self
 pub fn flui::platform::DisplayDescription::with_color(self, color: Result<flui::platform::DisplayColor, flui::platform::CapabilityAbsence>) -> Self
 pub fn flui::platform::DisplayDescription::with_persistent_key(self, key: impl Into<String>) -> Self
 pub fn flui::platform::DisplayDescription::with_primary(self, is_primary: bool) -> Self
 pub fn flui::platform::DisplayDescription::with_refresh_period(self, period: core::time::Duration) -> Self
-pub fn flui::platform::DisplayDescription::with_usable_bounds(self, usable_bounds: flui::geometry::Bounds<i32>) -> Self
 pub struct flui::platform::DisplayId { .. }
 impl Clone for flui::platform::DisplayId
 impl Copy for flui::platform::DisplayId
@@ -11771,14 +11795,14 @@ impl core::hash::Hash for flui::platform::DisplayId
 impl core::marker::StructuralPartialEq for flui::platform::DisplayId
 pub const fn flui::platform::DisplayId::get(self) -> u64
 pub struct flui::platform::DisplayParts
-field flui::platform::DisplayParts::bounds: flui::geometry::Bounds<i32> // at 1
+field flui::platform::DisplayParts::bounds: flui::platform::DisplayBounds // at 2
 field flui::platform::DisplayParts::color: Result<flui::platform::DisplayColor, flui::platform::CapabilityAbsence> // at 7
 field flui::platform::DisplayParts::is_primary: bool // at 5
 field flui::platform::DisplayParts::name: String // at 0
+field flui::platform::DisplayParts::origin: flui::platform::DesktopOrigin // at 1
 field flui::platform::DisplayParts::persistent_key: Option<String> // at 6
 field flui::platform::DisplayParts::refresh_period: Option<flui::platform::RefreshPeriod> // at 4
 field flui::platform::DisplayParts::scale_factor: flui::geometry::DevicePixelRatio // at 3
-field flui::platform::DisplayParts::usable_bounds: flui::geometry::Bounds<i32> // at 2
 impl Clone for flui::platform::DisplayParts
 impl PartialEq for flui::platform::DisplayParts
 impl core::fmt::Debug for flui::platform::DisplayParts
@@ -12147,6 +12171,16 @@ impl core::error::Error for flui::platform::InvalidControlsOffset
 impl core::fmt::Debug for flui::platform::InvalidControlsOffset
 impl core::fmt::Display for flui::platform::InvalidControlsOffset
 impl core::marker::StructuralPartialEq for flui::platform::InvalidControlsOffset
+pub struct flui::platform::InvalidDisplayBounds
+field flui::platform::InvalidDisplayBounds::extent: flui::geometry::Size<f64> // at 0
+field flui::platform::InvalidDisplayBounds::usable: flui::geometry::Rect<f64> // at 1
+impl Clone for flui::platform::InvalidDisplayBounds
+impl Copy for flui::platform::InvalidDisplayBounds
+impl Eq for flui::platform::InvalidDisplayBounds
+impl PartialEq for flui::platform::InvalidDisplayBounds
+impl core::error::Error for flui::platform::InvalidDisplayBounds
+impl core::fmt::Debug for flui::platform::InvalidDisplayBounds
+impl core::fmt::Display for flui::platform::InvalidDisplayBounds
 #[non_exhaustive] pub enum flui::platform::InvalidGeometry
 impl Clone for flui::platform::InvalidGeometry
 impl Copy for flui::platform::InvalidGeometry
@@ -12393,9 +12427,10 @@ pub const fn flui::platform::OpenedOverflow::is_empty(self) -> bool
 #[non_exhaustive] pub struct flui::platform::OpeningGeometry
 field flui::platform::OpeningGeometry::constraints: flui::platform::SizeConstraints // at 1
 field flui::platform::OpeningGeometry::content: flui::platform::WindowExtent // at 0
-field flui::platform::OpeningGeometry::position: Option<flui::geometry::Point<f64>> // at 2
+field flui::platform::OpeningGeometry::position: Option<flui::platform::WindowPosition> // at 2
 impl Clone for flui::platform::OpeningGeometry
 impl Copy for flui::platform::OpeningGeometry
+impl Eq for flui::platform::OpeningGeometry
 impl PartialEq for flui::platform::OpeningGeometry
 impl core::fmt::Debug for flui::platform::OpeningGeometry
 impl core::marker::StructuralPartialEq for flui::platform::OpeningGeometry
@@ -12420,6 +12455,15 @@ impl core::marker::StructuralPartialEq for flui::platform::PlacementError
 variant flui::platform::PlacementError::Malformed { field: &'static str } // at 2
 variant flui::platform::PlacementError::Truncated // at 0
 variant flui::platform::PlacementError::UnsupportedVersion // at 1
+pub struct flui::platform::PlacementOffset(_)
+impl Clone for flui::platform::PlacementOffset
+impl Copy for flui::platform::PlacementOffset
+impl Eq for flui::platform::PlacementOffset
+impl PartialEq for flui::platform::PlacementOffset
+impl core::fmt::Debug for flui::platform::PlacementOffset
+impl core::marker::StructuralPartialEq for flui::platform::PlacementOffset
+pub const fn flui::platform::PlacementOffset::get(self) -> flui::geometry::Point<f64>
+pub fn flui::platform::PlacementOffset::try_new(at: flui::geometry::Point<f64>) -> Result<Self, flui::platform::InvalidGeometry>
 #[non_exhaustive] pub enum flui::platform::PlatformFailure
 impl Clone for flui::platform::PlatformFailure
 impl Eq for flui::platform::PlatformFailure
@@ -12584,15 +12628,15 @@ impl PartialEq for flui::platform::RegionalParts
 impl core::fmt::Debug for flui::platform::RegionalParts
 impl core::marker::StructuralPartialEq for flui::platform::RegionalParts
 pub fn flui::platform::RegionalParts::into_formats(self) -> flui::platform::RegionalFormats
-#[non_exhaustive] pub struct flui::platform::ResolvedPlacement
+#[non_exhaustive] pub struct flui::platform::ResolvedPlacement { .. }
 field flui::platform::ResolvedPlacement::display: flui::platform::DisplayId // at 0
 field flui::platform::ResolvedPlacement::mode: flui::platform::WindowMode // at 3
-field flui::platform::ResolvedPlacement::offset_in_display: Option<flui::geometry::Point<f64>> // at 1
-field flui::platform::ResolvedPlacement::size: flui::geometry::Size<f64> // at 2
+field flui::platform::ResolvedPlacement::size: flui::platform::WindowExtent // at 2
 impl Clone for flui::platform::ResolvedPlacement
 impl PartialEq for flui::platform::ResolvedPlacement
 impl core::fmt::Debug for flui::platform::ResolvedPlacement
 impl core::marker::StructuralPartialEq for flui::platform::ResolvedPlacement
+pub fn flui::platform::ResolvedPlacement::position(&self) -> Option<flui::platform::WindowPosition>
 pub struct flui::platform::ScrollBarParts
 field flui::platform::ScrollBarParts::track_click: Option<flui::platform::ScrollTrackClick> // at 1
 field flui::platform::ScrollBarParts::visibility: Option<flui::platform::ScrollBarVisibility> // at 0
@@ -12678,6 +12722,7 @@ field flui::platform::SizeConstraints::min: Option<flui::platform::WindowExtent>
 impl Clone for flui::platform::SizeConstraints
 impl Copy for flui::platform::SizeConstraints
 impl Default for flui::platform::SizeConstraints
+impl Eq for flui::platform::SizeConstraints
 impl PartialEq for flui::platform::SizeConstraints
 impl core::fmt::Debug for flui::platform::SizeConstraints
 impl core::marker::StructuralPartialEq for flui::platform::SizeConstraints
@@ -13083,10 +13128,10 @@ variant flui::platform::WindowCommand::SetFrame(flui::platform::WindowFrame) // 
 variant flui::platform::WindowCommand::SetLevel(flui::platform::WindowLevel) // at 13
 variant flui::platform::WindowCommand::SetMaterial(flui::platform::WindowMaterial) // at 11
 variant flui::platform::WindowCommand::SetMode(flui::platform::WindowMode) // at 6
-variant flui::platform::WindowCommand::SetPosition(flui::geometry::Point<f64>) // at 1
+variant flui::platform::WindowCommand::SetPosition(flui::platform::WindowPosition) // at 1
 variant flui::platform::WindowCommand::SetResizable(bool) // at 4
 variant flui::platform::WindowCommand::SetResizeIncrements(Option<flui::platform::WindowExtent>) // at 14
-variant flui::platform::WindowCommand::SetSize(flui::geometry::Size<f64>) // at 2
+variant flui::platform::WindowCommand::SetSize(flui::platform::WindowExtent) // at 2
 variant flui::platform::WindowCommand::SetTitle(String) // at 0
 variant flui::platform::WindowCommand::Show // at 7
 #[non_exhaustive] pub struct flui::platform::WindowDisplay
@@ -13126,8 +13171,8 @@ impl core::marker::StructuralPartialEq for flui::platform::WindowExtent
 pub const flui::platform::WindowExtent::ZERO: Self = _
 pub const fn flui::platform::WindowExtent::get(self) -> flui::geometry::Size<f64>
 pub const fn flui::platform::WindowExtent::height(self) -> f64
+pub const fn flui::platform::WindowExtent::try_new(size: flui::geometry::Size<f64>) -> Result<Self, flui::platform::InvalidGeometry>
 pub const fn flui::platform::WindowExtent::width(self) -> f64
-pub fn flui::platform::WindowExtent::try_new(size: flui::geometry::Size<f64>) -> Result<Self, flui::platform::InvalidGeometry>
 pub enum flui::platform::WindowFocus
 impl Clone for flui::platform::WindowFocus
 impl Copy for flui::platform::WindowFocus
@@ -13163,12 +13208,12 @@ impl PartialEq for flui::platform::WindowGeometry
 impl core::fmt::Debug for flui::platform::WindowGeometry
 impl core::marker::StructuralPartialEq for flui::platform::WindowGeometry
 pub const flui::platform::WindowGeometry::EMPTY: Self = _
+pub const fn flui::platform::WindowGeometry::at(self, position: Option<flui::platform::WindowPosition>) -> Self
 pub const fn flui::platform::WindowGeometry::extent(self) -> flui::platform::WindowExtent
-pub const fn flui::platform::WindowGeometry::position(self) -> Option<flui::geometry::Point<f64>>
+pub const fn flui::platform::WindowGeometry::position(self) -> Option<flui::platform::WindowPosition>
 pub const fn flui::platform::WindowGeometry::size(self) -> flui::geometry::Size<f64>
+pub const fn flui::platform::WindowGeometry::try_new(position: Option<flui::platform::WindowPosition>, size: flui::geometry::Size<f64>) -> Result<Self, flui::platform::InvalidGeometry>
 pub const fn flui::platform::WindowGeometry::unplaced(extent: flui::platform::WindowExtent) -> Self
-pub fn flui::platform::WindowGeometry::at(self, position: Option<flui::geometry::Point<f64>>) -> Result<Self, flui::platform::InvalidGeometry>
-pub fn flui::platform::WindowGeometry::try_new(position: Option<flui::geometry::Point<f64>>, size: flui::geometry::Size<f64>) -> Result<Self, flui::platform::InvalidGeometry>
 pub struct flui::platform::WindowId(_)
 impl Clone for flui::platform::WindowId
 impl Copy for flui::platform::WindowId
@@ -13256,37 +13301,34 @@ impl core::marker::StructuralPartialEq for flui::platform::WindowOption
 variant flui::platform::WindowOption::Limits // at 3
 variant flui::platform::WindowOption::MaxSize // at 2
 variant flui::platform::WindowOption::MinSize // at 1
-variant flui::platform::WindowOption::Position // at 4
 variant flui::platform::WindowOption::Size // at 0
 #[non_exhaustive] pub struct flui::platform::WindowOptions
-field flui::platform::WindowOptions::display: Option<flui::platform::DisplayId> // at 8
 field flui::platform::WindowOptions::frame: flui::platform::WindowFrame // at 5
-field flui::platform::WindowOptions::input_latency: flui::platform::InputLatency // at 12
+field flui::platform::WindowOptions::input_latency: flui::platform::InputLatency // at 11
 field flui::platform::WindowOptions::max_size: Option<flui::platform::WindowExtent> // at 7
 field flui::platform::WindowOptions::min_size: Option<flui::platform::WindowExtent> // at 6
-field flui::platform::WindowOptions::mode: flui::platform::WindowMode // at 10
-field flui::platform::WindowOptions::normal_geometry: Option<flui::platform::WindowGeometry> // at 11
-field flui::platform::WindowOptions::os_options: flui::platform::os_options::OsWindowOptions // at 13
-field flui::platform::WindowOptions::position: Option<flui::geometry::Point<f64>> // at 9
+field flui::platform::WindowOptions::mode: flui::platform::WindowMode // at 9
+field flui::platform::WindowOptions::normal_geometry: Option<flui::platform::WindowGeometry> // at 10
+field flui::platform::WindowOptions::os_options: flui::platform::os_options::OsWindowOptions // at 12
+field flui::platform::WindowOptions::position: Option<flui::platform::WindowPosition> // at 8
 field flui::platform::WindowOptions::resizable: bool // at 2
 field flui::platform::WindowOptions::reveal: flui::platform::WindowReveal // at 4
-field flui::platform::WindowOptions::size: flui::geometry::Size<f64> // at 1
+field flui::platform::WindowOptions::size: flui::platform::WindowExtent // at 1
 field flui::platform::WindowOptions::title: String // at 0
 field flui::platform::WindowOptions::visible: bool // at 3
 impl Clone for flui::platform::WindowOptions
 impl Default for flui::platform::WindowOptions
 impl core::fmt::Debug for flui::platform::WindowOptions
-pub const fn flui::platform::WindowOptions::display(self, display: Option<flui::platform::DisplayId>) -> Self
 pub const fn flui::platform::WindowOptions::frame(self, frame: flui::platform::WindowFrame) -> Self
 pub const fn flui::platform::WindowOptions::input_latency(self, input_latency: flui::platform::InputLatency) -> Self
 pub const fn flui::platform::WindowOptions::max_size(self, max_size: Option<flui::platform::WindowExtent>) -> Self
 pub const fn flui::platform::WindowOptions::min_size(self, min_size: Option<flui::platform::WindowExtent>) -> Self
 pub const fn flui::platform::WindowOptions::mode(self, mode: flui::platform::WindowMode) -> Self
 pub const fn flui::platform::WindowOptions::normal_geometry(self, normal_geometry: Option<flui::platform::WindowGeometry>) -> Self
-pub const fn flui::platform::WindowOptions::position(self, position: Option<flui::geometry::Point<f64>>) -> Self
+pub const fn flui::platform::WindowOptions::position(self, position: Option<flui::platform::WindowPosition>) -> Self
 pub const fn flui::platform::WindowOptions::resizable(self, resizable: bool) -> Self
 pub const fn flui::platform::WindowOptions::reveal(self, reveal: flui::platform::WindowReveal) -> Self
-pub const fn flui::platform::WindowOptions::size(self, size: flui::geometry::Size<f64>) -> Self
+pub const fn flui::platform::WindowOptions::size(self, size: flui::platform::WindowExtent) -> Self
 pub const fn flui::platform::WindowOptions::visible(self, visible: bool) -> Self
 pub fn flui::platform::WindowOptions::geometry(&self) -> Result<flui::platform::OpeningGeometry, flui::platform::InvalidWindowOption>
 pub fn flui::platform::WindowOptions::os_options(self, os_options: flui::platform::os_options::OsWindowOptions) -> Self
@@ -13295,19 +13337,29 @@ pub fn flui::platform::WindowOptions::title(self, title: impl Into<String>) -> S
 field flui::platform::WindowPlacement::display: Option<String> // at 0
 field flui::platform::WindowPlacement::maximized_before_minimize: bool // at 5
 field flui::platform::WindowPlacement::mode: flui::platform::WindowMode // at 3
-field flui::platform::WindowPlacement::offset: Option<flui::geometry::Point<f64>> // at 1
-field flui::platform::WindowPlacement::scale: f64 // at 4
-field flui::platform::WindowPlacement::size: flui::geometry::Size<f64> // at 2
+field flui::platform::WindowPlacement::offset: Option<flui::platform::PlacementOffset> // at 1
+field flui::platform::WindowPlacement::scale: flui::geometry::DevicePixelRatio // at 4
+field flui::platform::WindowPlacement::size: flui::platform::WindowExtent // at 2
 impl Clone for flui::platform::WindowPlacement
 impl PartialEq for flui::platform::WindowPlacement
 impl core::fmt::Debug for flui::platform::WindowPlacement
 impl core::marker::StructuralPartialEq for flui::platform::WindowPlacement
-pub const fn flui::platform::WindowPlacement::new(display: Option<String>, offset: Option<flui::geometry::Point<f64>>, size: flui::geometry::Size<f64>, mode: flui::platform::WindowMode, scale: f64) -> Self
+pub const fn flui::platform::WindowPlacement::new(display: Option<String>, offset: Option<flui::platform::PlacementOffset>, size: flui::platform::WindowExtent, mode: flui::platform::WindowMode, scale: flui::geometry::DevicePixelRatio) -> Self
 pub const fn flui::platform::WindowPlacement::with_maximized_before_minimize(self, maximized: bool) -> Self
 pub fn flui::platform::WindowPlacement::from_bytes(bytes: &[u8]) -> Result<Self, flui::platform::PlacementError>
 pub fn flui::platform::WindowPlacement::from_state(state: &flui::platform::WindowState, displays: &flui::platform::DisplaySnapshot, maximized_before_minimize: bool) -> Option<Self>
 pub fn flui::platform::WindowPlacement::resolve(&self, displays: &flui::platform::DisplaySnapshot, capabilities: &flui::platform::WindowCapabilities, frame: flui::geometry::Size<f64>) -> Option<flui::platform::ResolvedPlacement>
 pub fn flui::platform::WindowPlacement::to_bytes(&self) -> Vec<u8>
+pub struct flui::platform::WindowPosition { .. }
+impl Clone for flui::platform::WindowPosition
+impl Copy for flui::platform::WindowPosition
+impl Eq for flui::platform::WindowPosition
+impl PartialEq for flui::platform::WindowPosition
+impl core::fmt::Debug for flui::platform::WindowPosition
+impl core::marker::StructuralPartialEq for flui::platform::WindowPosition
+pub const fn flui::platform::WindowPosition::at(self) -> flui::geometry::Point<f64>
+pub const fn flui::platform::WindowPosition::display(self) -> flui::platform::DisplayId
+pub const fn flui::platform::WindowPosition::try_new(display: flui::platform::DisplayId, at: flui::geometry::Point<f64>) -> Result<Self, flui::platform::InvalidGeometry>
 #[non_exhaustive] pub enum flui::platform::WindowReveal
 impl Clone for flui::platform::WindowReveal
 impl Copy for flui::platform::WindowReveal
@@ -24380,10 +24432,10 @@ pub fn flui::view::WindowHandle::set_frame(&self, frame: flui::platform::WindowF
 pub fn flui::view::WindowHandle::set_level(&self, level: flui::platform::WindowLevel) -> Result<(), flui::platform::SubmitError>
 pub fn flui::view::WindowHandle::set_material(&self, material: flui::platform::WindowMaterial) -> Result<(), flui::platform::SubmitError>
 pub fn flui::view::WindowHandle::set_mode(&self, mode: flui::platform::WindowMode) -> Result<(), flui::platform::SubmitError>
-pub fn flui::view::WindowHandle::set_position(&self, at: flui::geometry::Point<f64>) -> Result<(), flui::platform::SubmitError>
+pub fn flui::view::WindowHandle::set_position(&self, at: flui::platform::WindowPosition) -> Result<(), flui::platform::SubmitError>
 pub fn flui::view::WindowHandle::set_resizable(&self, on: bool) -> Result<(), flui::platform::SubmitError>
 pub fn flui::view::WindowHandle::set_resize_increments(&self, step: Option<flui::platform::WindowExtent>) -> Result<(), flui::platform::SubmitError>
-pub fn flui::view::WindowHandle::set_size(&self, size: flui::geometry::Size<f64>) -> Result<(), flui::platform::SubmitError>
+pub fn flui::view::WindowHandle::set_size(&self, size: flui::platform::WindowExtent) -> Result<(), flui::platform::SubmitError>
 pub fn flui::view::WindowHandle::set_title(&self, title: impl Into<String>) -> Result<(), flui::platform::SubmitError>
 pub fn flui::view::WindowHandle::show(&self) -> Result<(), flui::platform::SubmitError>
 pub fn flui::view::WindowHandle::state(&self) -> Result<flui::platform::WindowState, flui::view::WindowClosed>
@@ -32984,15 +33036,16 @@ impl schemars::JsonSchema for flui_protocol::native_recording::display::Color
 impl serde_core::ser::Serialize for flui_protocol::native_recording::display::Color
 impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::native_recording::display::Color
 pub struct flui_protocol::native_recording::display::Display
-field flui_protocol::native_recording::display::Display::bounds: [i32; 4] // at 2
-field flui_protocol::native_recording::display::Display::color: flui_protocol::native_recording::display::DisplayColor // at 8
+field flui_protocol::native_recording::display::Display::color: flui_protocol::native_recording::display::DisplayColor // at 9
+field flui_protocol::native_recording::display::Display::extent: [f64; 2] // at 3
 field flui_protocol::native_recording::display::Display::label: u64 // at 0
 field flui_protocol::native_recording::display::Display::name: String // at 1
-field flui_protocol::native_recording::display::Display::persistent_key: Option<String> // at 7
-field flui_protocol::native_recording::display::Display::primary: bool // at 6
-field flui_protocol::native_recording::display::Display::refresh_period_ns: Option<u64> // at 5
-field flui_protocol::native_recording::display::Display::scale_factor: f64 // at 4
-field flui_protocol::native_recording::display::Display::usable_bounds: [i32; 4] // at 3
+field flui_protocol::native_recording::display::Display::origin: [i32; 2] // at 2
+field flui_protocol::native_recording::display::Display::persistent_key: Option<String> // at 8
+field flui_protocol::native_recording::display::Display::primary: bool // at 7
+field flui_protocol::native_recording::display::Display::refresh_period_ns: Option<u64> // at 6
+field flui_protocol::native_recording::display::Display::scale_factor: f64 // at 5
+field flui_protocol::native_recording::display::Display::usable: [f64; 4] // at 4
 impl Clone for flui_protocol::native_recording::display::Display
 impl PartialEq for flui_protocol::native_recording::display::Display
 impl core::fmt::Debug for flui_protocol::native_recording::display::Display
@@ -34035,7 +34088,7 @@ variant flui_protocol::native_recording::window::WindowFrame::AppTitleBar { syst
 variant flui_protocol::native_recording::window::WindowFrame::None // at 2
 variant flui_protocol::native_recording::window::WindowFrame::System // at 0
 pub struct flui_protocol::native_recording::window::WindowGeometry
-field flui_protocol::native_recording::window::WindowGeometry::position: Option<[f64; 2]> // at 0
+field flui_protocol::native_recording::window::WindowGeometry::position: Option<flui_protocol::native_recording::window::WindowPosition> // at 0
 field flui_protocol::native_recording::window::WindowGeometry::size: [f64; 2] // at 1
 impl Clone for flui_protocol::native_recording::window::WindowGeometry
 impl Copy for flui_protocol::native_recording::window::WindowGeometry
@@ -34088,6 +34141,17 @@ variant flui_protocol::native_recording::window::WindowMode::Fullscreen // at 3
 variant flui_protocol::native_recording::window::WindowMode::Maximized // at 2
 variant flui_protocol::native_recording::window::WindowMode::Minimized // at 1
 variant flui_protocol::native_recording::window::WindowMode::Normal // at 0
+pub struct flui_protocol::native_recording::window::WindowPosition
+field flui_protocol::native_recording::window::WindowPosition::at: [f64; 2] // at 1
+field flui_protocol::native_recording::window::WindowPosition::display: u64 // at 0
+impl Clone for flui_protocol::native_recording::window::WindowPosition
+impl Copy for flui_protocol::native_recording::window::WindowPosition
+impl PartialEq for flui_protocol::native_recording::window::WindowPosition
+impl core::fmt::Debug for flui_protocol::native_recording::window::WindowPosition
+impl core::marker::StructuralPartialEq for flui_protocol::native_recording::window::WindowPosition
+impl schemars::JsonSchema for flui_protocol::native_recording::window::WindowPosition
+impl serde_core::ser::Serialize for flui_protocol::native_recording::window::WindowPosition
+impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::native_recording::window::WindowPosition
 pub struct flui_protocol::native_recording::window::WindowState
 field flui_protocol::native_recording::window::WindowState::active: bool // at 20
 field flui_protocol::native_recording::window::WindowState::appearance: flui_protocol::native_recording::window::Appearance // at 14

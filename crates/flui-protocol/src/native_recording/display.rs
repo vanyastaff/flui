@@ -102,10 +102,14 @@ pub struct Display {
     pub label: u64,
     /// Its name, a label, never an identity.
     pub name: String,
-    /// Its bounds in global device pixels: x, y, width, height.
-    pub bounds: [i32; 4],
-    /// The area windows can occupy: x, y, width, height.
-    pub usable_bounds: [i32; 4],
+    /// Where its top-left corner sits in the window system's desktop, in that window system's
+    /// own units: x, y. It orders the displays and is never a logical position.
+    pub origin: [i32; 2],
+    /// Its extent in its own logical pixels: width, height.
+    pub extent: [f64; 2],
+    /// The area windows can occupy, in its own logical pixels from its top-left corner: left,
+    /// top, right, bottom.
+    pub usable: [f64; 4],
     /// Device pixels per logical pixel.
     pub scale_factor: f64,
     /// The period of its mode, in nanoseconds, when known.

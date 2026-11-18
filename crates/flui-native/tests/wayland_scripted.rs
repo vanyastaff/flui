@@ -88,6 +88,10 @@ mod cases {
                 an_output_removed_under_a_window_leaves_it_on_the_others,
             ),
             (
+                "two_outputs_of_different_scales_are_each_their_own_logical_pixels",
+                two_outputs_of_different_scales_are_each_their_own_logical_pixels,
+            ),
+            (
                 "a_configure_storm_settles_on_the_last_configure",
                 a_configure_storm_settles_on_the_last_configure,
             ),
@@ -333,9 +337,9 @@ mod cases {
         ));
         let session = Session::open(
             offer,
-            WindowOptions::default()
-                .title("bounded")
-                .size(Size::new(1600.0, 1000.0)),
+            WindowOptions::default().title("bounded").size(
+                flui_platform::WindowExtent::try_new(Size::new(1600.0, 1000.0)).expect("an extent"),
+            ),
         );
         session.turn_until("the window's first frame", |session| {
             session.compositor.heard().frames > 0
@@ -828,6 +832,77 @@ mod cases {
             !session.window.state().occluded,
             "the window is still on an output; it reported {report:?}"
         );
+    }
+
+    /// Two outputs of different scales are each measured in their own
+    /// logical pixels: an output's extent is its mode over its own scale, its
+    /// whole area usable (Wayland reports no work area), its origin the
+    /// compositor's arrangement. Wayland tells no window where it is, so the
+    /// window publishes no position on either output, nor once the one under
+    /// it goes.
+    fn two_outputs_of_different_scales_are_each_their_own_logical_pixels() {
+        use flui_foundation::geometry::{Rect, Size};
+
+        let offer = Offer::default().compositor(5).outputs([
+            OutputOffer::new(1920, 1080, 1),
+            OutputOffer::new(2560, 1440, 2),
+        ]);
+        let session = Session::open(offer, WindowOptions::default().title("two scales"));
+        let displays = |session: &Session| {
+            session
+                .platform
+                .display_snapshot()
+                .map_or_else(|_| Vec::new(), |snapshot| snapshot.displays().to_vec())
+        };
+        session.turn_until("both outputs in the snapshot", |session| {
+            displays(session).len() == 2
+        });
+        let mut extents: Vec<(Size<f64>, f64, Rect<f64>)> = displays(&session)
+            .iter()
+            .map(|display| {
+                (
+                    display.bounds.extent(),
+                    display.scale_factor.get(),
+                    display.bounds.usable(),
+                )
+            })
+            .collect();
+        extents.sort_by(|a, b| a.1.total_cmp(&b.1));
+        assert_eq!(
+            extents,
+            [
+                (
+                    Size::new(1920.0, 1080.0),
+                    1.0,
+                    Rect::from_ltrb(0.0, 0.0, 1920.0, 1080.0)
+                ),
+                (
+                    Size::new(1280.0, 720.0),
+                    2.0,
+                    Rect::from_ltrb(0.0, 0.0, 1280.0, 720.0)
+                ),
+            ],
+            "each output in its own logical pixels, all of it usable"
+        );
+        session.compositor.play(Step::Enter(0));
+        session.compositor.play(Step::Enter(1));
+        session.turn_until("the window on both outputs", |session| {
+            compositor_report(session.window.as_ref())
+                .is_some_and(|report| report.outputs.len() == 2)
+        });
+        assert_eq!(
+            session.window.state().outer.position(),
+            None,
+            "a Wayland window publishes no position"
+        );
+
+        // The output under the window goes: the window is on the other, and
+        // still publishes no position.
+        session.compositor.play(Step::RemoveOutput(1));
+        session.turn_until("the window back at scale 1", |session| {
+            session.scale() == Some(1.0)
+        });
+        assert_eq!(session.window.state().outer.position(), None);
     }
 
     /// A burst of configures, each of another size, sent before the loop

@@ -61,24 +61,54 @@ pub(crate) mod screen {
         key
     }
 
-    /// A macOS screen's frame in the display snapshot's terms: device pixels of
-    /// that screen, measured from the top-left of the primary screen. AppKit
-    /// measures from the bottom-left corner of the primary screen, whose height is
-    /// `primary_height`, in points.
+    /// A macOS screen in the display snapshot's terms: where its top-left
+    /// corner sits in AppKit's desktop, in points from the top-left of the
+    /// primary screen (the desktop AppKit lays out, flipped), and its extent
+    /// and usable area (`visible`) in its own logical pixels, which are
+    /// points. AppKit measures from the bottom-left corner of the primary
+    /// screen, whose height is `primary_height`, in points.
+    ///
+    /// `None` for a frame with no area or numbers that are not finite. A
+    /// visible frame that reaches past the frame leaves the screen usable as
+    /// a whole.
     #[cfg(any(target_os = "macos", test))]
-    pub(crate) fn device_bounds_of_screen(
+    pub(crate) fn screen_bounds(
         frame: flui_foundation::geometry::Bounds<f64>,
+        visible: flui_foundation::geometry::Bounds<f64>,
         primary_height: f64,
-        scale: f64,
-    ) -> flui_foundation::geometry::Bounds<i32> {
-        use flui_foundation::geometry::{Bounds, Point, Size};
+    ) -> Option<(flui_platform::DesktopOrigin, flui_platform::DisplayBounds)> {
+        use flui_foundation::geometry::Rect;
+        use flui_platform::{DesktopOrigin, DisplayBounds};
 
-        let top = primary_height - (frame.origin.y + frame.size.height);
-        let device = |points: f64| (points * scale).round() as i32;
-        Bounds {
-            origin: Point::new(device(frame.origin.x), device(top)),
-            size: Size::new(device(frame.size.width), device(frame.size.height)),
-        }
+        let top_of = |rect: flui_foundation::geometry::Bounds<f64>| {
+            primary_height - (rect.origin.y + rect.size.height)
+        };
+        let (left, top) = (frame.origin.x, top_of(frame));
+        let whole = DisplayBounds::whole(frame.size).ok()?;
+        let usable = DisplayBounds::try_new(
+            frame.size,
+            Rect::from_ltwh(
+                visible.origin.x - left,
+                top_of(visible) - top,
+                visible.size.width,
+                visible.size.height,
+            ),
+        )
+        .unwrap_or(whole);
+        // AppKit lays screens out at whole points; one past the `i32` range
+        // is no screen.
+        let point = |value: f64| {
+            let value = value.round();
+            (value >= f64::from(i32::MIN) && value <= f64::from(i32::MAX)).then(|| {
+                #[expect(
+                    clippy::cast_possible_truncation,
+                    reason = "a whole number checked inside the i32 range just above"
+                )]
+                let value = value as i32;
+                value
+            })
+        };
+        Some((DesktopOrigin::new(point(left)?, point(top)?), usable))
     }
 
     /// `-[NSScreen maximumPotentialExtendedDynamicRangeColorComponentValue]`
@@ -215,8 +245,8 @@ pub(crate) mod screen {
         #[cfg(not(target_arch = "aarch64"))]
         use super::MacosPotentialHeadroom;
         use super::{
-            IosPotentialHeadroom, SameObject, ScreenLedger, change_screen, device_bounds_of_screen,
-            macos_display_key, macos_display_persistent_key, screen_color,
+            IosPotentialHeadroom, SameObject, ScreenLedger, change_screen, macos_display_key,
+            macos_display_persistent_key, screen_bounds, screen_color,
         };
 
         /// Each screen report Apple gives, to the display colour it means.
@@ -287,46 +317,71 @@ pub(crate) mod screen {
         const UUID_B: [u8; 16] = [0xB0; 16];
 
         #[test]
-        fn a_screen_is_published_in_device_pixels_from_the_top_left() {
+        fn a_screen_is_published_in_its_own_points_from_the_top_left() {
             const PRIMARY: f64 = 900.0;
             let frame = |x, y, width, height| Bounds {
                 origin: Point::new(x, y),
                 size: Size::new(width, height),
             };
-            // (name, cocoa frame, scale, device bounds as (x, y, width, height))
+            // (name, cocoa frame, cocoa visible frame, origin in flipped
+            // points, extent, usable area as left, top, right, bottom)
             let rows = [
                 (
-                    "the primary screen at 2x",
+                    "the primary screen, a menu bar and a dock",
                     frame(0.0, 0.0, 1440.0, 900.0),
-                    2.0,
-                    (0, 0, 2880, 1800),
+                    frame(0.0, 70.0, 1440.0, 805.0),
+                    (0, 0),
+                    (1440.0, 900.0),
+                    (0.0, 25.0, 1440.0, 830.0),
                 ),
                 (
-                    "a 1x screen above the primary",
+                    "a screen above the primary",
                     frame(0.0, 900.0, 1920.0, 1080.0),
-                    1.0,
-                    (0, -1080, 1920, 1080),
+                    frame(0.0, 900.0, 1920.0, 1080.0),
+                    (0, -1080),
+                    (1920.0, 1080.0),
+                    (0.0, 0.0, 1920.0, 1080.0),
                 ),
                 (
-                    "a 2x screen right of the primary",
+                    "a screen right of the primary, lower",
                     frame(1440.0, 0.0, 1280.0, 720.0),
-                    2.0,
-                    (2880, 360, 2560, 1440),
+                    frame(1440.0, 0.0, 1280.0, 720.0),
+                    (1440, 180),
+                    (1280.0, 720.0),
+                    (0.0, 0.0, 1280.0, 720.0),
+                ),
+                (
+                    "a visible frame past the screen leaves it whole",
+                    frame(0.0, 0.0, 1440.0, 900.0),
+                    frame(-10.0, 0.0, 1440.0, 900.0),
+                    (0, 0),
+                    (1440.0, 900.0),
+                    (0.0, 0.0, 1440.0, 900.0),
                 ),
             ];
-            for (name, input, scale, (x, y, width, height)) in rows {
-                let bounds = device_bounds_of_screen(input, PRIMARY, scale);
+            for (name, screen, visible, origin, extent, usable) in rows {
+                let (placed, bounds) =
+                    screen_bounds(screen, visible, PRIMARY).expect("a screen with an area");
+                let area = bounds.usable();
                 assert_eq!(
                     (
-                        bounds.origin.x,
-                        bounds.origin.y,
-                        bounds.size.width,
-                        bounds.size.height
+                        (placed.get().x, placed.get().y),
+                        (bounds.extent().width, bounds.extent().height),
+                        (area.left(), area.top(), area.right(), area.bottom())
                     ),
-                    (x, y, width, height),
+                    (origin, extent, usable),
                     "{name}"
                 );
             }
+            assert_eq!(
+                screen_bounds(
+                    frame(0.0, 0.0, 0.0, 900.0),
+                    frame(0.0, 0.0, 0.0, 900.0),
+                    PRIMARY
+                ),
+                None,
+                "a screen with no area"
+            );
         }
 
         #[test]

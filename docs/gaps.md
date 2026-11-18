@@ -154,7 +154,7 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 
 > **Environments:** desktop · **Who it hurts:** Every desktop app · **Parity:** [Windows](platform-parity.md#windows)
 
-- **Runs:** title, mode, fullscreen, position, size and constraint commands with a state readback ship on every desktop host ([ADR-0237](adr/ADR-0237-window-state-and-host-notices.md)).
+- **Runs:** title, mode, fullscreen, position, size and constraint commands with a state readback ship on every desktop host ([ADR-0237](adr/ADR-0237-window-state-and-host-notices.md)). A position is a point of the display it names ([ADR-0364](adr/ADR-0364-a-window-position-names-its-display-and-commands-carry-checked-geometry.md)); its conversion through two monitors of different DPI has run only as a pure table on Windows and X11, never on two real monitors, and a monitor unplugged under a window has not run on any host ([parity](platform-parity.md#windows)).
 - **macOS:** the AppKit window conformance kit passes on an M1, macOS 27.0, 2026-10-27 (nextest flui-native 233/233); the fixture after review: appkit_window 3/3, nextest flui-native 237/237, 2026-10-27. A hand run on the same Mac, 2026-10-28, one display: every command and opening option, a title-bar drag (the position follows, y grows downward, the top stops under the menu bar at y = 30), the green button (full screen) and Option-click (zoom and back), the yellow button, a Dock click (`reopen`, then `Show` brings the window back), a corner resize held to the constraints, the title-bar close of one of two windows, a borderless window taking keys, a quit Apple Event ([#1736](https://github.com/vanyastaff/flui/issues/1736)). A minimized window read `visible: false` and `SetSize` went below the minimum; both are fixed. Still owed: a second display; sleep, lock and memory-pressure notices; session end.
   - **A window at its maximum size reads `Maximized`.** AppKit's `isZoomed` holds for any frame equal to the standard frame, which the window's maximum size bounds, so a window resized by hand or by `SetSize` to its constraints' maximum (900×700 on a 3440×1320 usable area) publishes `Maximized` with a `normal_geometry`, though it does not fill the usable area. Win32's `IsZoomed` stays false for a window dragged to its maximum. Telling a zoom from a frame that equals the standard one needs a decision on what the backend tracks.
   - **`normal_geometry` after a macOS tile is stale.** Dragging a window to the top edge fills the screen through the system's tiling, which no delegate method reports; the window reads `Maximized` with the `normal_geometry` recorded before its last move, while AppKit returns it to where it was dragged from.
@@ -169,6 +169,14 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 
   What no run covers: on a desktop X11 window manager (the native X11 host hears a covering as `VisibilityNotify`, run with a full-screen window of another client over it on Xvfb, `a_covered_window_reads_occluded_and_shown`, which the conformance cannot read back), and on AppKit by hand; Cmd-H on macOS takes `isVisible` from the application's windows, so a hidden application reads as hidden, not occluded.
 - Placement restore ran only on Windows; live resize is not audited.
+- **A snapshot names its display twice.** `WindowState::display` and the display its outer
+  position names are two public fields, kept equal only by `WindowState::successor`: a state
+  built with `WindowState::new` and `with_display` can name one display in the field and
+  another in the position. The field is the only fact a host without positions has (Wayland,
+  Android, iOS, the web), so it cannot go; deriving it from the position where there is one
+  makes `display` a method over a private field, a change to every reader of the snapshot
+  (sixteen files across the hosts, the runtime and the engine), to `WindowStateParts` and to
+  the native recording's window state.
 - **The snapshot against the window system** (`window_conformance`'s `the_snapshot_agrees_with_the_window_system`: metrics, focus, activation, visibility and capabilities read back by the fixture's own means) ran on headless, on Win32, on AppKit (an M1, macOS 27.0, 2026-10-27), and on the native Linux hosts in CI, the X11 host under openbox on Xvfb and the Wayland host on Weston.
   - UIKit: not run, type-checked only, queued in [#1840](https://github.com/vanyastaff/flui/issues/1840).
   - Web: not run; the browser suite has no fixture that reads the canvas back apart from the window.

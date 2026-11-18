@@ -25,9 +25,7 @@ use std::{
 };
 
 use flui_foundation::geometry::{Bounds, Point, Size};
-use flui_platform::{
-    Brightness, SizeConstraints, WindowExtent, WindowGeometry, WindowId, WindowMode,
-};
+use flui_platform::{Brightness, SizeConstraints, WindowExtent, WindowId, WindowMode};
 use windows::Win32::{
     Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, SIZE, WPARAM},
     Graphics::{
@@ -50,6 +48,7 @@ use windows::Win32::{
 };
 
 use super::frame_timing::{RefreshTiming, refresh_timing};
+use super::geometry::{DeviceRects, sampled_geometry, window_display};
 use super::mode::NativeMode;
 use super::record::WindowRecord;
 use super::set::{WindowSet, checked_logical_to_device, restore_rectangle};
@@ -66,9 +65,7 @@ use crate::owner::windows::{
     WindowChrome, WindowHooks, WindowIdentity, WindowMessages, WindowStep, window_step,
 };
 use crate::owner::windows::{get_x_lparam, get_y_lparam};
-use crate::window::state::{
-    ReportedFacts, Sample, SampledGeometry, WindowStateCell, mode_of, reported_frame,
-};
+use crate::window::state::{ReportedFacts, Sample, WindowStateCell, mode_of, reported_frame};
 
 /// Posted to a window nothing paints, so its frame still runs: a hidden window
 /// never receives `WM_PAINT`. It names the window's identity ([`FramePost`]).
@@ -543,11 +540,13 @@ impl WindowContext {
 
     /// What this context knows of the window beyond what Win32 reports.
     pub(crate) fn tracking(&self, hwnd: HWND) -> OwnerTracking {
+        let (display, desktop) = window_display(&*self.displays, hwnd);
         OwnerTracking {
             mode: self.mode.get(),
             restore_style: self.restore_style.get(),
             constraints: self.constraints.get(),
-            display: self.displays.display_of_window(hwnd),
+            display,
+            desktop,
             occluded: self.visibility.occluded(),
             appearance: self.appearance.get(),
             active: self.active.get(),
@@ -1694,12 +1693,15 @@ fn hiword(value: u32) -> u16 {
 /// mode it tracks from `WM_SIZE` and its own fullscreen toggle, the style a
 /// fullscreen window returns to, the limits the app set and the display the
 /// window is on.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub(crate) struct OwnerTracking {
     pub(crate) mode: NativeMode,
     pub(crate) restore_style: u32,
     pub(crate) constraints: SizeConstraints,
     pub(crate) display: Option<flui_platform::DisplayId>,
+    /// The displays as last published: what the window's position, and the
+    /// position of the rectangle it returns to, are measured on.
+    pub(crate) desktop: flui_platform::DisplaySnapshot,
     /// Whether a cloak or a locked session hides the window from the screen.
     pub(crate) occluded: bool,
     /// The user's theme as `WM_SETTINGCHANGE` last read it: never the
@@ -1795,6 +1797,7 @@ pub(crate) fn sample_state(hwnd: HWND, record: WindowRecord, tracking: OwnerTrac
         restore_style,
         constraints,
         display,
+        desktop,
         occluded,
         appearance,
         active,
@@ -1841,14 +1844,6 @@ pub(crate) fn sample_state(hwnd: HWND, record: WindowRecord, tracking: OwnerTrac
             },
         )
     };
-    let content = if have_client {
-        Size::new(
-            f64::from(client.right - client.left) / scale,
-            f64::from(client.bottom - client.top) / scale,
-        )
-    } else {
-        cached
-    };
     // The rectangle the window returns to: Win32's own for a maximized or
     // minimized window (`rcNormalPosition`), and for a fullscreen one the
     // rectangle it was given on entering, taken from the same source.
@@ -1860,42 +1855,18 @@ pub(crate) fn sample_state(hwnd: HWND, record: WindowRecord, tracking: OwnerTrac
         NativeMode::Maximized | NativeMode::Minimized { .. } => restore_rectangle(hwnd),
         NativeMode::Normal => None,
     };
-    let geometry = (|| {
-        let content = WindowExtent::try_new(if mode.is_minimized() { cached } else { content })?;
-        let outer = if have_window && !mode.is_minimized() {
-            WindowGeometry::try_new(
-                Some(Point::new(
-                    f64::from(window.left) / scale,
-                    f64::from(window.top) / scale,
-                )),
-                Size::new(
-                    f64::from(window.right - window.left) / scale,
-                    f64::from(window.bottom - window.top) / scale,
-                ),
-            )?
-        } else {
-            WindowGeometry::unplaced(content)
-        };
-        let normal = restore
-            .map(|bounds| {
-                WindowGeometry::try_new(
-                    Some(Point::new(
-                        f64::from(bounds.origin.x) / scale,
-                        f64::from(bounds.origin.y) / scale,
-                    )),
-                    Size::new(
-                        f64::from(bounds.size.width) / scale,
-                        f64::from(bounds.size.height) / scale,
-                    ),
-                )
-            })
-            .transpose()?;
-        Ok(SampledGeometry {
-            outer,
-            content,
-            normal,
-        })
-    })();
+    let geometry = sampled_geometry(
+        DeviceRects {
+            window: (have_window && !mode.is_minimized()).then_some(window),
+            client: have_client.then_some(client),
+            restore,
+            cached,
+            minimized: mode.is_minimized(),
+            scale: scale_factor,
+        },
+        display,
+        &desktop,
+    );
     Sample::read(geometry, |state| {
         let state = state
             .with_mode(mode_of(mode.flags()))
@@ -1911,7 +1882,10 @@ pub(crate) fn sample_state(hwnd: HWND, record: WindowRecord, tracking: OwnerTrac
             metrics: have_client
                 .then(|| {
                     flui_foundation::geometry::WindowMetrics::try_new(
-                        Size::new(client.right - client.left, client.bottom - client.top),
+                        Size::new(
+                            client.right.checked_sub(client.left)?,
+                            client.bottom.checked_sub(client.top)?,
+                        ),
                         scale,
                     )
                     .ok()

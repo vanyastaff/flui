@@ -8447,6 +8447,68 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
   типов, документ облачного провайдера; на этой машине у закреплённого toolchain 1.100.0 нет
   цели Android, а `rustup` не запускается.
 
+- [x] **LY115** — ветка `platform/window-coordinate-space`, решение — ADR-0364 (заменяет
+  глобальную позицию ADR-0237 решения 2, опцию дисплея решения 6 и границы ADR-0236 решения 1).
+  Находки подтверждены на `main` @ `2d32298db` чтением кода: Win32 делил угол окна на масштаб
+  окна и умножал на него `SetPosition`; macOS публиковал границы экрана как точки, умноженные на
+  масштаб каждого экрана (два экрана перекрывались в этом «пространстве устройства»), а
+  размещение делило их обратно масштабом дисплея; `SetSize`, `SetPosition`, `size` и `position`
+  опций были сырыми числами со второй проверкой. Построено: `WindowPosition { display, at }`
+  (`try_new` отказывает нечисловым координатам) — единственная форма места окна в снимке
+  (`outer`, `normal_geometry`), команде, опциях и `ResolvedPlacement`; отсчёт — от угла дисплея,
+  не от его рабочей области (рабочая область меняется вместе с панелью задач, и окно сдвигалось бы
+  в снимке, не двигаясь; формат размещения хранит смещение от рабочей области, как прежде).
+  `successor` делает дисплей окна дисплеем позиции. `WindowOptions::display` и
+  `WindowOption::Position` удалены. Дисплей несёт `DisplayBounds` (протяжённость и рабочая
+  область в собственных логических пикселях, `try_new` держит рабочую область внутри) и
+  `DesktopOrigin` (место в рабочем столе в единицах оконной системы, только для порядка).
+  `SetSize` и `WindowOptions::size` — `WindowExtent` с проверкой площади при допуске, как шаги
+  изменения размера ADR-0354 (второго newtype не заведено). Хосты: общий `DisplayFrame` Win32 и
+  X11 (`origin + snap(at × scale)`, отказ за пределами диапазона как `OutOfRange`, обратно —
+  `(pixel − origin) / scale`), `display_of_rect` в 128 битах; AppKit — угол экрана в точках;
+  headless держит позицию на своём дисплее; позиция на дисплее, которого снимок не держит, —
+  `ApplyError::DisplayGone`, при открытии — место выбирает система. `AppConfig::position(x, y)` —
+  целые логические пиксели основного дисплея; `AppConfig::window_options(displays)` — единственный
+  способ построить опции окна (преобразование `From<&AppConfig>` удалено), им открываются главное
+  окно, `run_direct`, вторичное окно, Android и web. Окно Win32 на мониторе, которого нет в
+  снимке, перечитывает мониторы до публикации (`window_display`); геометрия выборки Win32 —
+  чистая `sampled_geometry` (стороны — точная разность в `f64`, прямоугольник возврата в масштабе
+  своего дисплея); первый снимок X11 — место, где окно создано (`OpenPlan::placed`), или никакого;
+  размещение не пишется из состояния без позиции у хоста, который позиции наблюдает; смещение
+  размещения — `PlacementOffset`; `ResolvedPlacement::position()` строится на его `display`. Протокол 0.25
+  (разрыв, `Break::required` для полей, заменивших удалённые), формат нативной записи 3. Тесты (в
+  скобках — откат, который их роняет): `a_position_set_on_a_normal_window_moves_it` (Win32,
+  настоящее окно, угол против `GetMonitorInfoW`/`GetDpiForMonitor`; без подачи `DisplayFrame` в
+  `sample_state` позиции нет и падают пять строк `native_window_commands`);
+  `a_position_on_a_display_the_host_does_not_hold_is_refused` (Win32);
+  `a_position_lands_on_the_display_it_names` (headless; без отказа `DisplayGone` команда
+  принимается); `a_configured_position_opens_on_the_primary_display` (`flui-app`; без
+  `window_options` окно открывается в (0, 0)); `the_position_is_kept` (`flui-app`; без позиции в
+  `window_options` — `None`); `sampled_geometry` (Win32, три монитора разного масштаба и
+  отрицательное начало; деление пикселя на масштаб окна роняет каждую строку);
+  `window_display` (Win32; без перечитывания дисплея нет);
+  `a_position_names_the_display_the_window_is_on`,
+  `display_bounds_are_logical_pixels_of_the_display`,
+  `a_panel_along_the_top_moves_the_offset_not_the_position`,
+  `from_state_remembers_nothing_on_a_display_the_snapshot_lacks`,
+  `from_state_remembers_nothing_a_placing_host_could_not_place` (`flui-platform`);
+  `a_position_converts_through_its_own_display`,
+  `a_window_spanning_two_displays_has_one_pixel_and_two_names`,
+  `a_rectangle_is_on_the_display_holding_most_of_it`, `open_geometry`,
+  `open_plan_places_by_display_origin_and_scale`, `a_window_is_on_the_display_it_overlaps_most`,
+  `a_position_on_a_display_becomes_a_global_one` (AppKit),
+  `two_outputs_of_different_scales_are_each_their_own_logical_pixels` (сценарный композитор
+  Wayland). Прогнано: Windows `cargo heli nextest` по `flui-platform`, `flui-native`, `flui-app`,
+  `flui-view`, `flui-testing`, `flui-runtime`, `flui-protocol` (два падения не из этой ветки:
+  `an_intent_opens_its_link_or_documents` читает путь `file:` по-windows,
+  `the_driver_agent_contains_every_failure` застаёт прежнего драйвера); WSL: набор X11 и headless
+  под Xvfb с openbox (1144), окна Wayland на Weston (20), сценарный композитор (15);
+  проверка типов macOS, Android и wasm32 на nightly. iOS — только CI. Тест начала экрана web в CSS
+  (`web_lists_screens_only_with_granted_permission`) — только CI (в WSL нет wasm-bindgen).
+  Открыто в `docs/gaps.md`: `WindowState::display` и дисплей позиции — два поля. Должно на устройствах (в
+  строке `position-size-move-and-resize-events`): два монитора разного DPI на Windows, отключение
+  монитора под окном, второй экран macOS.
+
 - [x] **LY152** — ветка `platform/concealed-clipboard-expiry`, решение — ADR-0363. Находка
   подтверждена на `main` @ `b68c2ddfa` чтением: `ClipboardWrite::concealed` только держал запись
   вне истории, ничто её не стирало (`rg -i 'expir|clear' crates/flui-native/src/clipboard`

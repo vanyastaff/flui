@@ -1871,7 +1871,7 @@ mod toplevel {
                     let leave = {
                         let mut applied = self.applied.borrow_mut();
                         let constraints = applied.constraints;
-                        applied.sizing.request(size, constraints)
+                        applied.sizing.request(size.get(), constraints)
                     };
                     if leave {
                         self.leave_compositor_modes();

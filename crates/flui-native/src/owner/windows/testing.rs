@@ -210,6 +210,10 @@ impl HostDisplays for NoDisplays {
 
     fn invalidate(&self) {}
 
+    fn published(&self) -> DisplaySnapshot {
+        DisplaySnapshot::empty()
+    }
+
     fn display_of_window(&self, _: HWND) -> Option<DisplayId> {
         None
     }
