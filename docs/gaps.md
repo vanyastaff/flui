@@ -581,8 +581,8 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 > **Environments:** Web · **Who it hurts:** Web apps whose frame was dropped · **Parity:** [Quality bar](platform-parity.md#quality-bar)
 
 - The native owners arm a timer on the deadline `AppHandler::wake_deadline` reports (`AppRuntime::next_wake`, which includes the backoff deadline, `crates/flui-native/src/owner/wake_deadline.rs`); the web owner (`crates/flui-native/src/owner/web.rs`) asks for none, and its animation-frame loop stops when no frame is asked for.
-- So a page whose frame failed, with no post-frame callback waiting, waits past the end of the dropped-frame backoff (ADR-0334 §1) until input or another frame wakes it, and the input its presentation holds waits with it.
-- Only the commit anchor's re-arm of completion demand (`PresentationState::rearm_completion`) keeps a page with a post-frame callback waiting going: it asks for a frame at every owner turn of the backoff, each refused by the backoff gate, so every host spins through the wait instead of sleeping until it. Gating that re-arm on the backoff needs the web wake first, or the page would stall until input.
+- So a page whose frame failed, with no completion demand standing (a callback of the failed frame, or a `PostFrameHandle::schedule_frame` request), waits past the end of the dropped-frame backoff (ADR-0334 §1) until input or another frame wakes it, and the input its presentation holds waits with it.
+- Only the commit anchor's re-arm of completion demand (`PresentationState::rearm_completion`) keeps a page with such demand going: it asks for a frame at every owner turn of the backoff, each refused by the backoff gate, so every host spins through the wait instead of sleeping until it. Gating that re-arm on the backoff needs the web wake first, or the page would stall until input.
 - The check is a browser run in which a sink answers `Failed` once and the page presents its tree within the backoff with no input.
 
 ### Images decode on the UI thread without background lanes

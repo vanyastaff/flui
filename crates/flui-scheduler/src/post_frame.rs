@@ -739,7 +739,9 @@ impl PresentationFrameScope {
         Ok(())
     }
 
-    /// Accepted successor callbacks need a coherent completion even when the
+    /// A requested frame (`PostFrameHandle::schedule_frame`), a callback an
+    /// aborted frame left waiting, or one registered while a retained segment
+    /// waits to resume, needs a coherent completion even when the
     /// presentation has no dirty tree work. Runtime admission must also check
     /// host eligibility and existing coherent geometry before entering it.
     #[must_use]
@@ -975,6 +977,16 @@ impl PostFrameHandle {
     /// the successor segment. Self-registration therefore never runs twice in
     /// one completion batch.
     ///
+    /// Registering asks for no frame (ADR-0367): the callback runs after the next frame
+    /// that completes its segment, whatever asked for that frame. A caller
+    /// whose callback waits on a frame nothing else asks for calls
+    /// [`schedule_frame`](Self::schedule_frame); a scheduler-wide frame request
+    /// alone does not complete a clean presentation. A registration made while
+    /// a retained segment waits to resume (suspended or servicing) asks for the
+    /// successor segment itself, since resuming completes only the retained one.
+    /// A loop that re-registers from its own callback therefore runs once per
+    /// frame while frames run and costs nothing while the presentation is idle.
+    ///
     /// The callback may capture `Rc`/`RefCell` state. On error (the owning
     /// UI runtime is gone or retired) the callback is never invoked; it is
     /// dropped under containment, and a panic from its destructor propagates
@@ -983,6 +995,14 @@ impl PostFrameHandle {
     ///
     /// Eligible registrations run in callback identity order. A blocked
     /// presentation never holds back a completed sibling or runtime callback.
+    ///
+    /// # Panics
+    ///
+    /// A registration made while a retained segment waits to resume asks for
+    /// its successor frame, which runs the scheduler's frame-scheduled hook;
+    /// a panic from that hook propagates after the callback is queued and its
+    /// successor's demand committed, so the callback still runs. Outside a
+    /// retained segment registering runs no host code.
     pub fn schedule(
         &self,
         callback: impl FnOnce(&FrameTiming) + 'static,
@@ -1014,6 +1034,11 @@ impl PostFrameHandle {
     /// # Errors
     ///
     /// [`PostFrameRejection`] when the owning UI runtime is gone or retired.
+    ///
+    /// # Panics
+    ///
+    /// As [`schedule`](Self::schedule): a panic from the frame-scheduled hook
+    /// propagates after `value` is queued, so `run` still receives it.
     pub fn schedule_or_return<T: 'static>(
         &self,
         value: T,
@@ -1023,6 +1048,40 @@ impl PostFrameHandle {
             Ok(()) => Ok(()),
             Err((value, _)) => Err(PostFrameRejection::Returned(value)),
         }
+    }
+
+    /// Ask for a frame of this handle's presentation, as Flutter's
+    /// `scheduleFrame`: the frame completes the presentation's next segment,
+    /// so the callbacks waiting for it run, without rebuilding its tree or
+    /// submitting a scene when nothing in it changed. The request stands
+    /// until that segment completes; a hidden presentation keeps it until it
+    /// is shown. An unscoped handle asks its scheduler for a frame.
+    ///
+    /// # Errors
+    ///
+    /// [`PostFrameScheduleError::Closed`] when the owning UI runtime or the
+    /// presentation is gone or retired.
+    pub fn schedule_frame(&self) -> Result<(), PostFrameScheduleError> {
+        let (Some(lane), Some(scheduler)) = (self.lane.upgrade(), self.scheduler.upgrade()) else {
+            return Err(PostFrameScheduleError::Closed);
+        };
+        if lane.closed.get() {
+            return Err(PostFrameScheduleError::Closed);
+        }
+        if let Some(scope) = &self.scope {
+            let Some(scope) = scope.upgrade().filter(|scope| !scope.closed.get()) else {
+                return Err(PostFrameScheduleError::Closed);
+            };
+            // A running segment completes in the frame under way. Otherwise
+            // the demand is committed before the wake, which runs host code:
+            // a wake that fails leaves the request standing.
+            if scope.phase.get() == SegmentPhase::Running {
+                return Ok(());
+            }
+            scope.next_demand.set(true);
+        }
+        scheduler.request_frame();
+        Ok(())
     }
 
     /// Queue `into_entry(value)`, or hand `value` back, unwrapped, with the
@@ -1042,16 +1101,20 @@ impl PostFrameHandle {
         let Some(scheduler) = self.scheduler.upgrade() else {
             return Err((value, Some(lane)));
         };
-        let mut successor_scope = None;
+        let mut owed_successor: Option<Rc<PresentationScopeState>> = None;
         let target = if let Some(scope) = &self.scope {
             let Some(scope) = scope.upgrade().filter(|scope| !scope.closed.get()) else {
                 return Err((value, Some(lane)));
             };
-            let epoch = if scope.phase.get() == SegmentPhase::Running {
-                scope.current.borrow().clone()
-            } else {
-                successor_scope = Some(scope.clone());
-                scope.next.borrow().clone()
+            let epoch = match scope.phase.get() {
+                SegmentPhase::Running => scope.current.borrow().clone(),
+                // Resuming a retained segment completes only that segment, so
+                // the successor this callback joins is asked for here.
+                SegmentPhase::Suspended | SegmentPhase::Servicing => {
+                    owed_successor = Some(Rc::clone(&scope));
+                    scope.next.borrow().clone()
+                }
+                SegmentPhase::Idle | SegmentPhase::Completing => scope.next.borrow().clone(),
             };
             CallbackTarget::Presentation {
                 scope: Rc::downgrade(&scope),
@@ -1067,11 +1130,11 @@ impl PostFrameHandle {
                 callback,
                 target,
             });
-            if let Some(scope) = &successor_scope {
+            if let Some(scope) = &owed_successor {
                 scope.next_demand.set(true);
             }
         });
-        if successor_scope.is_some() {
+        if owed_successor.is_some() {
             scheduler.request_frame();
         }
         Ok(())

@@ -349,6 +349,8 @@ fn headless_frame_driver_matrix() {
             ("mount_bootstrap::the_mount_frame_installs_the_render_root_at_the_window_size_and_paints", mount_bootstrap::the_mount_frame_installs_the_render_root_at_the_window_size_and_paints as fn()),
             ("mount_bootstrap::a_frame_with_no_work_submits_nothing_and_keeps_the_committed_geometry", mount_bootstrap::a_frame_with_no_work_submits_nothing_and_keeps_the_committed_geometry as fn()),
             ("self_rescheduling_local_post_frame::self_rescheduling_local_post_frame_callback_fires_exactly_once_per_pumped_frame", self_rescheduling_local_post_frame::self_rescheduling_local_post_frame_callback_fires_exactly_once_per_pumped_frame as fn()),
+            ("self_rescheduling_local_post_frame::a_focused_text_field_settles_after_typing", self_rescheduling_local_post_frame::a_focused_text_field_settles_after_typing as fn()),
+            ("self_rescheduling_local_post_frame::a_focused_text_field_runs_no_frame_while_idle", self_rescheduling_local_post_frame::a_focused_text_field_runs_no_frame_while_idle as fn()),
             ("controller_restart::starting_an_idle_bound_controller_requests_its_first_frame", controller_restart::starting_an_idle_bound_controller_requests_its_first_frame as fn()),
             ("controller_restart::adopting_a_registry_revokes_the_previous_driver_binding", controller_restart::adopting_a_registry_revokes_the_previous_driver_binding as fn()),
             ("controller_restart::second_run_ticks_from_its_own_start_not_a_stale_anchor", controller_restart::second_run_ticks_from_its_own_start_not_a_stale_anchor as fn()),

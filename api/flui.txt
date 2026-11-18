@@ -24580,6 +24580,7 @@ impl Clone for flui::view::PostFrameHandle
 impl core::fmt::Debug for flui::view::PostFrameHandle
 pub fn flui::view::PostFrameHandle::new(scheduler: &flui::view::UpdateScheduler) -> Self
 pub fn flui::view::PostFrameHandle::schedule(&self, callback: impl FnOnce(&flui::view::FrameTiming) + 'static) -> Result<(), flui::view::PostFrameScheduleError>
+pub fn flui::view::PostFrameHandle::schedule_frame(&self) -> Result<(), flui::view::PostFrameScheduleError>
 pub fn flui::view::PostFrameHandle::schedule_or_return<T: 'static>(&self, value: T, run: fn(_: T, _: &flui::view::FrameTiming)) -> Result<(), flui_scheduler::post_frame::PostFrameRejection<T>>
 pub fn flui::view::PostFrameHandle::targets_same_scheduler(&self, other: &flui::view::UpdateScheduler) -> bool
 #[non_exhaustive] pub enum flui::view::PostFrameScheduleError
