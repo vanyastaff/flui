@@ -192,9 +192,14 @@ the chunk (`AmbientKey`: the scissor relative to the chunk's `PixelOrigin` or
 `Covers`, the inherited opacity, and the target's size, which a fill of the
 whole target records) and the painter's `ResourceEpoch`. The whole pixels of
 the translation are the `PixelOrigin` a recording keeps: a chunk moved by whole
-device pixels hits, and the splice adds the difference to every device
-position the recording holds (`pixel_shift.rs`, one exhaustive destructure per
-instance type and for tessellated vertices). A scissor that cuts the chunk
+device pixels hits when the fraction of its translation keeps its bits, as a
+translation on a dyadic grid (whole or quarter pixels) does at every magnitude
+below 2^23; a non-dyadic fraction can round to other bits as the translation
+crosses a power of two, and that move records again. The splice adds the
+difference to every device position the recording holds (`pixel_shift.rs`, one
+exhaustive destructure per instance type and for tessellated vertices), and
+text matches a fresh recording because glyph placement depends on the
+origin's fraction alone (`ShapedRun::placed_glyphs`). A scissor that cuts the chunk
 moves with it only when its clip does, so a chunk moved under a fixed clip that
 cuts it records again. A recording holds no clip chain or scissor: the splice
 gives it the entry's clip and scissor, rebases every arena offset onto the
