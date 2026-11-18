@@ -267,10 +267,20 @@ a relative path the system's contract excludes is `MalformedAnswer`.
   up (no frames, owner turns or network callbacks), the page cannot close them when the caller
   drops the dialog or its window closes (ADR-0344), and they offer no Yes, No and Cancel. Escape
   closes the box with what closing means for its buttons; a Yes or No box keeps Escape from
-  closing it and is shown again if the browser closes it anyway.
-- **Sharing** is `navigator.share` (a title, text and a link) while the page handles a gesture; a
-  browser without the API answers `NotOnThisDevice`, a share of files `NotOnThisPlatform` (a page
-  has no files at paths), and a dismissed sheet is not reported.
+  closing it and is shown again if the browser closes it anyway. `showModal` makes the rest of
+  the document inert, so the box is modal to the page, every canvas window of it, where the
+  contract says modal to its window, and two windows' boxes stack. The box is named by its title
+  (its message when it has none) and described by its message (`aria-labelledby`,
+  `aria-describedby`, ids made of the window's id), and styled through each element's style
+  object, which a content security policy without `'unsafe-inline'` styles leaves in force.
+- **Sharing** is `navigator.share` (a title, text and a link of the web) while the page handles a
+  gesture. A browser without the API is refused at acquisition with `NotOnThisDevice`, as the
+  badge is; a share of files, or of a link off the web, answers `NotOnThisPlatform` (a page has no
+  files at paths, and the API takes `http` and `https` links only) before the browser is asked. A
+  refusal while the browser itself said the gesture was there is the frame lacking the
+  `web-share` permissions policy, which only its embedder grants (`NotDeclared`); without that
+  word it is `Unavailable`. A share while one is still showing has no busy answer in the contract
+  and is the browser's `InvalidStateError` (`Failed`). A dismissed sheet is not reported.
 - Autostart, global shortcuts, the user folders, the jump list and the system information answer
   `NotOnThisPlatform`.
 

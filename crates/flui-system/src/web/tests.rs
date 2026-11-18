@@ -54,7 +54,7 @@ use crate::dialog::{
 };
 use crate::jump_list::JumpListCapability;
 use crate::os::OsCapability;
-use crate::share::{Share, ShareCapability, ShareError, ShareRequest};
+use crate::share::{Share, ShareBackend as _, ShareCapability, ShareError, ShareRequest};
 use crate::shortcuts::GlobalShortcutCapability;
 use crate::taskbar::{EntryState, Honoured, Progress, TaskbarEntry};
 use crate::user_dirs::UserDirCapability;
@@ -1167,9 +1167,30 @@ async fn a_message_box_is_a_modal_dialog_answering_the_button_pressed() {
     let dialog = the_box(&window);
     assert!(dialog.open(), "the box is shown");
     assert_eq!(dialog.get_attribute("role").as_deref(), Some("alertdialog"));
+    let named_by = |attribute: &str| {
+        dialog
+            .get_attribute(attribute)
+            .and_then(|id| dialog.query_selector(&format!("#{id}")).ok().flatten())
+            .and_then(|element| element.text_content())
+    };
     assert_eq!(
-        dialog.get_attribute("aria-label").as_deref(),
+        named_by("aria-labelledby").as_deref(),
         Some("Unsaved changes")
+    );
+    assert_eq!(
+        named_by("aria-describedby").as_deref(),
+        Some("Save the changes?\nThey are lost otherwise.")
+    );
+    let message = dialog
+        .query_selector("p")
+        .ok()
+        .flatten()
+        .expect("the message")
+        .unchecked_into::<web_sys::HtmlElement>();
+    assert_eq!(
+        message.style().get_property_value("white-space").as_deref(),
+        Ok("pre-wrap"),
+        "the message keeps its line breaks through its style object"
     );
     let labels: Vec<String> = (0..3)
         .filter_map(|at| {
@@ -1193,6 +1214,18 @@ async fn a_message_box_is_a_modal_dialog_answering_the_button_pressed() {
 
     assert_eq!(*answered.borrow(), Some(Ok(Ok(MessageAnswer::No))));
     assert!(window.find("dialog").is_none(), "the box left the page");
+}
+
+#[wasm_bindgen_test]
+async fn a_box_with_no_title_is_named_by_its_message() {
+    let owner = TestOwner::new();
+    let window = CanvasWindow::new(&owner);
+    let shown = message_boxes(&owner, &window).show(MessageBoxRequest::new("Saved."));
+    let dialog = the_box(&window);
+    let labelled_by = dialog.get_attribute("aria-labelledby");
+    assert!(labelled_by.is_some(), "the box has a name");
+    assert_eq!(labelled_by, dialog.get_attribute("aria-describedby"));
+    drop(shown);
 }
 
 #[wasm_bindgen_test]
@@ -1250,9 +1283,61 @@ fn a_dropped_box_is_closed_and_taken_down() {
     assert!(window.find("dialog").is_none());
 }
 
+#[wasm_bindgen_test]
+async fn a_box_whose_window_closes_is_taken_down_and_answers_so() {
+    let owner = TestOwner::new();
+    let window = CanvasWindow::new(&owner);
+    let answered = land(message_boxes(&owner, &window).show(MessageBoxRequest::new("Working…")));
+    assert!(the_box(&window).open());
+    window.closer.close();
+    owner.until_landed(&answered).await;
+    assert_eq!(*answered.borrow(), Some(Ok(Err(DialogError::WindowClosed))));
+    assert!(window.find("dialog").is_none(), "the box left the page");
+}
+
+/// A stand-in for `navigator.share`, recording what each call shares and
+/// answering from `answers` (an exception's name, `None` for a share taken),
+/// last first, until the guard drops.
+struct ShareStandIn {
+    shared: Rc<RefCell<Vec<(Option<String>, Option<String>)>>>,
+    _share: Closure<dyn FnMut(JsValue) -> JsValue>,
+    _replaced: Replaced,
+}
+
+impl ShareStandIn {
+    fn install(answers: Vec<Option<&'static str>>) -> Self {
+        let shared: Rc<RefCell<Vec<(Option<String>, Option<String>)>>> = Rc::default();
+        let seen = Rc::clone(&shared);
+        let answers = RefCell::new(answers);
+        let share = Closure::<dyn FnMut(JsValue) -> JsValue>::new(move |data: JsValue| {
+            let read = |name: &str| {
+                Reflect::get(&data, &JsValue::from_str(name))
+                    .ok()
+                    .and_then(|value| value.as_string())
+            };
+            seen.borrow_mut().push((read("text"), read("url")));
+            match answers.borrow_mut().pop().flatten() {
+                None => Promise::resolve(&JsValue::UNDEFINED).into(),
+                Some(name) => {
+                    let error = js_sys::Error::new("refused");
+                    error.set_name(name);
+                    Promise::reject(&error).into()
+                }
+            }
+        });
+        let navigator: JsValue = the_view().navigator().into();
+        let replaced = Replaced::new(&navigator, "share", share.as_ref());
+        Self {
+            shared,
+            _share: share,
+            _replaced: replaced,
+        }
+    }
+}
+
 fn share(owner: &TestOwner, window: &CanvasWindow, active: bool) -> Share {
     Share::try_new(
-        WebShare::new(window.page(active)),
+        WebShare::try_new(window.page(active)).expect("the page has a share sheet"),
         &owner.ctx(&window.window),
     )
     .expect("a window has a share sheet")
@@ -1262,35 +1347,7 @@ fn share(owner: &TestOwner, window: &CanvasWindow, active: bool) -> Share {
 async fn a_share_reaches_the_web_share_api_and_a_dismissed_sheet_is_not_reported() {
     let owner = TestOwner::new();
     let window = CanvasWindow::new(&owner);
-    let shared: Rc<RefCell<Vec<(Option<String>, Option<String>)>>> = Rc::default();
-    let seen = Rc::clone(&shared);
-    let answers: Rc<RefCell<Vec<Option<&'static str>>>> = Rc::new(RefCell::new(vec![
-        Some("NotAllowedError"),
-        Some("AbortError"),
-        None,
-    ]));
-    let next = Rc::clone(&answers);
-    let stand_in = Closure::<dyn FnMut(JsValue) -> JsValue>::new(move |data: JsValue| {
-        let read = |name: &str| {
-            Reflect::get(&data, &JsValue::from_str(name))
-                .ok()
-                .and_then(|value| value.as_string())
-        };
-        seen.borrow_mut().push((read("text"), read("url")));
-        match next.borrow_mut().pop().flatten() {
-            None => Promise::resolve(&JsValue::UNDEFINED).into(),
-            Some(name) => {
-                let error = js_sys::Error::new("refused");
-                error.set_name(name);
-                Promise::reject(&error).into()
-            }
-        }
-    });
-    let navigator: JsValue = web_sys::window()
-        .expect("the test runs in a page")
-        .navigator()
-        .into();
-    let _replaced = Replaced::new(&navigator, "share", stand_in.as_ref());
+    let browser = ShareStandIn::install(vec![Some("NotAllowedError"), Some("AbortError"), None]);
     let share = share(&owner, &window, true);
     let request = || {
         ShareRequest::new()
@@ -1312,12 +1369,14 @@ async fn a_share_reaches_the_web_share_api_and_a_dismissed_sheet_is_not_reported
         Some(Ok(Err(ShareError::Unsupported(Unsupported::of::<
             ShareCapability,
         >(
-            UnsupportedReason::Unavailable
+            UnsupportedReason::NotDeclared {
+                what: super::rules::SHARE_POLICY
+            }
         ))))),
-        "the browser's refusal of the gesture is the provider's own answer"
+        "refused while the browser said the gesture was there: the frame lacks the policy"
     );
     assert_eq!(
-        shared.borrow()[0],
+        browser.shared.borrow()[0],
         (
             Some("Look".to_owned()),
             Some("https://example.org/".to_owned())
@@ -1326,11 +1385,24 @@ async fn a_share_reaches_the_web_share_api_and_a_dismissed_sheet_is_not_reported
 }
 
 #[wasm_bindgen_test]
-async fn a_share_of_files_or_outside_a_gesture_is_refused_before_the_browser_is_asked() {
+async fn a_share_of_files_a_link_off_the_web_or_outside_a_gesture_never_asks_the_browser() {
     let owner = TestOwner::new();
     let window = CanvasWindow::new(&owner);
-    let files =
-        landed(share(&owner, &window, true).share(ShareRequest::new().file("/home/me/a.txt")));
+    let browser = ShareStandIn::install(Vec::new());
+    let mail =
+        ExternalUri::try_new("mailto:someone@example.org", &[Scheme::MAILTO]).expect("a mail link");
+    // The contract refuses a path wasm32's `Path` calls relative before a
+    // backend hears it; the backend's own answer is asked for directly.
+    let (asked, answer) = owner.completions.pending();
+    WebShare::try_new(window.page(true))
+        .expect("the stand-in is the page's share sheet")
+        .share(
+            &window.window,
+            ShareRequest::new().file("/home/me/a.txt"),
+            answer,
+        );
+    let files = landed(asked);
+    let off_the_web = landed(share(&owner, &window, true).share(ShareRequest::new().uri(mail)));
     let outside = landed(share(&owner, &window, false).share(ShareRequest::new().text("Look")));
     owner.until_landed(&outside).await;
     let refused = |reason| {
@@ -1342,28 +1414,29 @@ async fn a_share_of_files_or_outside_a_gesture_is_refused_before_the_browser_is_
         *files.borrow(),
         refused(UnsupportedReason::NotOnThisPlatform)
     );
+    assert_eq!(
+        *off_the_web.borrow(),
+        refused(UnsupportedReason::NotOnThisPlatform)
+    );
     assert_eq!(*outside.borrow(), refused(UnsupportedReason::Unavailable));
+    assert!(
+        browser.shared.borrow().is_empty(),
+        "the browser was never asked"
+    );
 }
 
 #[wasm_bindgen_test]
-async fn a_browser_without_web_share_has_no_share_sheet() {
+fn a_browser_without_web_share_has_no_share_sheet() {
     let owner = TestOwner::new();
     let window = CanvasWindow::new(&owner);
-    let navigator: JsValue = web_sys::window()
-        .expect("the test runs in a page")
-        .navigator()
-        .into();
+    let navigator: JsValue = the_view().navigator().into();
     // Hide the API where the browser has it, as a browser without it is.
     let _replaced = Replaced::new(&navigator, "share", &JsValue::UNDEFINED);
-    let answer = landed(share(&owner, &window, true).share(ShareRequest::new().text("Look")));
-    owner.until_landed(&answer).await;
     assert_eq!(
-        *answer.borrow(),
-        Some(Ok(Err(ShareError::Unsupported(Unsupported::of::<
-            ShareCapability,
-        >(
+        WebShare::try_new(window.page(true)).err(),
+        Some(Unsupported::of::<ShareCapability>(
             UnsupportedReason::NotOnThisDevice
-        )))))
+        ))
     );
 }
 
@@ -1422,6 +1495,9 @@ async fn the_web_providers_keep_the_system_services_contract() {
     let owner = TestOwner::new();
     let window = CanvasWindow::new(&owner);
     let page = &window.window;
+    // The Web Share API where the test's browser may lack it; nothing here
+    // reaches it.
+    let browser = ShareStandIn::install(Vec::new());
 
     // Each service is provided, or refused for a lasting reason.
     assert_eq!(acquisition::<LauncherCapability>(&owner, page), Ok(()));
@@ -1503,4 +1579,8 @@ async fn the_web_providers_keep_the_system_services_contract() {
     assert_eq!(*shown.borrow(), Some(Ok(Err(DialogError::WindowClosed))));
     assert_eq!(*shared.borrow(), Some(Ok(Err(ShareError::WindowClosed))));
     assert!(window.find("dialog, input").is_none(), "nothing was shown");
+    assert!(
+        browser.shared.borrow().is_empty(),
+        "no row asked the browser to share"
+    );
 }

@@ -95,6 +95,7 @@ web-sys = { version = "0.3", features = [
     "File",
     "FileList",
     "HtmlAnchorElement",
+    "CssStyleDeclaration",
     "HtmlCanvasElement",
     "HtmlDialogElement",
     "HtmlElement",

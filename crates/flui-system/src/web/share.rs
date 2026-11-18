@@ -1,14 +1,16 @@
 //! The share sheet of a page: the Web Share API (`navigator.share`).
 //!
 //! Browsers that have it (on phones, and some desktops) show it only in a
-//! secure context and while the page handles a user's gesture. A page has
-//! no files at paths to share, so a request with files is refused.
+//! secure context and while the page handles a user's gesture; a browser
+//! without it has no share sheet, and the handle is refused when it is
+//! acquired. A page has no files at paths to share, and shares a link of the
+//! web only (`http`, `https`).
 
 use std::rc::Rc;
 
 use flui_platform::capability::{Resolver, WindowRef};
 use flui_platform::{Unsupported, UnsupportedReason};
-use js_sys::Object;
+use js_sys::{Function, Object};
 use wasm_bindgen::JsValue;
 use wasm_bindgen_futures::JsFuture;
 
@@ -16,14 +18,31 @@ use super::page::{Page, call_promise, exception, method, set};
 use super::rules;
 use crate::share::{ShareBackend, ShareCapability, ShareError, ShareRequest, ShareResult};
 
-/// A page's share sheet.
+/// A page's share sheet, over the browser's `navigator.share`.
 pub(crate) struct WebShare {
     page: Rc<Page>,
+    navigator: JsValue,
+    share: Function,
 }
 
 impl WebShare {
-    pub(crate) fn new(page: Rc<Page>) -> Self {
-        Self { page }
+    /// The share sheet of `page`'s browser.
+    ///
+    /// # Errors
+    ///
+    /// `NotOnThisDevice` for a browser without the Web Share API (Firefox on
+    /// a desktop, any browser in an insecure context), as the badge is
+    /// refused without the Badging API: a later call could not change it.
+    pub(crate) fn try_new(page: Rc<Page>) -> Result<Self, Unsupported> {
+        let navigator: JsValue = page.navigator().into();
+        let share = method(&navigator, "share").ok_or(Unsupported::of::<ShareCapability>(
+            UnsupportedReason::NotOnThisDevice,
+        ))?;
+        Ok(Self {
+            page,
+            navigator,
+            share,
+        })
     }
 }
 
@@ -34,44 +53,44 @@ fn unsupported(reason: UnsupportedReason) -> ShareError {
 
 impl ShareBackend for WebShare {
     fn share(&self, _: &WindowRef, request: ShareRequest, answer: Resolver<ShareResult>) {
-        let navigator: JsValue = self.page.navigator().into();
         let refusal = if !request.files.is_empty() {
+            Some(unsupported(UnsupportedReason::NotOnThisPlatform))
+        } else if request
+            .uri
+            .as_ref()
+            .is_some_and(|uri| !rules::is_shareable_link(uri.scheme()))
+        {
+            // The Web Share API takes a link of the web only.
             Some(unsupported(UnsupportedReason::NotOnThisPlatform))
         } else if !self.page.is_activated() {
             Some(unsupported(UnsupportedReason::Unavailable))
         } else {
             None
         };
-        let share = method(&navigator, "share");
-        // The share's promise, or its answer when there is none to wait for.
-        let started: Result<js_sys::Promise, ShareResult> = match (refusal, share) {
-            (Some(refusal), _) => Err(Err(refusal)),
-            // No Web Share API in this browser, or not in an insecure
-            // context.
-            (None, None) => Err(Err(unsupported(UnsupportedReason::NotOnThisDevice))),
-            (None, Some(share)) => {
-                let data = Object::new();
-                if let Some(title) = &request.title {
-                    set(&data, "title", &JsValue::from_str(title));
-                }
-                if let Some(text) = &request.text {
-                    set(&data, "text", &JsValue::from_str(text));
-                }
-                if let Some(uri) = &request.uri {
-                    set(&data, "url", &JsValue::from_str(uri.as_str()));
-                }
-                call_promise(&share, &navigator, &data).map_err(rules::share_rejection)
-            }
-        };
-        match started {
-            Err(result) => {
-                // A retired owner has nobody left to answer.
-                let _ = answer.resolve(result);
-            }
+        if let Some(refusal) = refusal {
+            // A retired owner has nobody left to answer.
+            let _ = answer.resolve(Err(refusal));
+            return;
+        }
+        // Whether the browser itself said the page handles a gesture, which
+        // makes its refusal one a later gesture would not change.
+        let saw_activation = self.page.reported_activation() == Some(true);
+        let data = Object::new();
+        if let Some(title) = &request.title {
+            set(&data, "title", &JsValue::from_str(title));
+        }
+        if let Some(text) = &request.text {
+            set(&data, "text", &JsValue::from_str(text));
+        }
+        if let Some(uri) = &request.uri {
+            set(&data, "url", &JsValue::from_str(uri.as_str()));
+        }
+        match call_promise(&self.share, &self.navigator, &data) {
+            Err(thrown) => drop(answer.resolve(rules::share_rejection(thrown, saw_activation))),
             Ok(promise) => wasm_bindgen_futures::spawn_local(async move {
                 let result = match JsFuture::from(promise).await {
                     Ok(_) => Ok(()),
-                    Err(rejection) => rules::share_rejection(exception(&rejection)),
+                    Err(rejection) => rules::share_rejection(exception(&rejection), saw_activation),
                 };
                 let _ = answer.resolve(result);
             }),

@@ -272,18 +272,42 @@ pub(crate) fn launch_route(scheme: &str) -> LaunchRoute {
     }
 }
 
-/// What a share's rejection means: the user closing the share sheet
-/// (`AbortError`) is not reported, as on every system that does not tell
-/// (`ShareResult`); a refusal for want of a gesture or of an allowed
-/// document is [`Unavailable`](UnsupportedReason::Unavailable), as the
-/// provider's own check answers it; anything else is the failure the
-/// browser named.
-pub(crate) fn share_rejection(exception: BrowserException) -> ShareResult {
+/// What the page's frame lacks when the browser refuses a share made while
+/// it said the page handled a gesture: the Web Share permissions policy,
+/// which a cross-origin frame has only when its embedder grants it.
+pub(crate) const SHARE_POLICY: &str = "the `web-share` permissions policy (`allow=\"web-share\"`)";
+
+/// Whether the Web Share API takes a link of `scheme`: one of the web.
+pub(crate) fn is_shareable_link(scheme: &str) -> bool {
+    scheme.eq_ignore_ascii_case("https") || scheme.eq_ignore_ascii_case("http")
+}
+
+/// What a share's rejection means, `saw_activation` saying whether the
+/// browser itself reported that the page handled a gesture at the call.
+///
+/// - The user closing the share sheet (`AbortError`) is not reported, as on
+///   every system that does not tell (`ShareResult`).
+/// - A refusal for want of a gesture or an allowed document is
+///   [`NotDeclared`](UnsupportedReason::NotDeclared) ([`SHARE_POLICY`]) when
+///   the browser had said the gesture was there: only the embedder can grant
+///   the frame the policy, and no retry changes it. Without that word it is
+///   [`Unavailable`](UnsupportedReason::Unavailable), as the provider's own
+///   check answers: a later gesture may succeed.
+/// - A share while one is still showing (`InvalidStateError`) has no busy
+///   answer in the contract; it is the failure the browser named, as is
+///   anything else.
+pub(crate) fn share_rejection(exception: BrowserException, saw_activation: bool) -> ShareResult {
+    let refused = |reason| {
+        Err(ShareError::Unsupported(Unsupported::of::<ShareCapability>(
+            reason,
+        )))
+    };
     match exception {
         BrowserException::Abort => Ok(()),
-        refusal if is_activation_refusal(refusal) => Err(ShareError::Unsupported(
-            Unsupported::of::<ShareCapability>(UnsupportedReason::Unavailable),
-        )),
+        refusal if is_activation_refusal(refusal) && saw_activation => {
+            refused(UnsupportedReason::NotDeclared { what: SHARE_POLICY })
+        }
+        refusal if is_activation_refusal(refusal) => refused(UnsupportedReason::Unavailable),
         other => Err(ShareError::Failed(other.into())),
     }
 }
@@ -363,21 +387,59 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_dismissed_share_sheet_is_not_reported_and_a_refused_gesture_is_one_answer() {
-        assert_eq!(share_rejection(BrowserException::Abort), Ok(()));
-        for refusal in [BrowserException::NotAllowed, BrowserException::Security] {
+    fn a_share_rejection_is_not_reported_retryable_lasting_or_the_browsers_failure() {
+        let refused = |reason| {
+            Err(ShareError::Unsupported(Unsupported::of::<ShareCapability>(
+                reason,
+            )))
+        };
+        let policy = UnsupportedReason::NotDeclared { what: SHARE_POLICY };
+        let cases = [
+            (BrowserException::Abort, true, Ok(())),
+            (BrowserException::Abort, false, Ok(())),
+            (BrowserException::NotAllowed, true, refused(policy)),
+            (BrowserException::Security, true, refused(policy)),
+            (
+                BrowserException::NotAllowed,
+                false,
+                refused(UnsupportedReason::Unavailable),
+            ),
+            (
+                BrowserException::Security,
+                false,
+                refused(UnsupportedReason::Unavailable),
+            ),
+            (
+                BrowserException::InvalidState,
+                true,
+                Err(ShareError::Failed(BrowserException::InvalidState.into())),
+            ),
+            (
+                BrowserException::Type,
+                true,
+                Err(ShareError::Failed(BrowserException::Type.into())),
+            ),
+        ];
+        for (exception, saw_activation, answer) in cases {
             assert_eq!(
-                share_rejection(refusal),
-                Err(ShareError::Unsupported(Unsupported::of::<ShareCapability>(
-                    UnsupportedReason::Unavailable
-                ))),
-                "{refusal}"
+                share_rejection(exception, saw_activation),
+                answer,
+                "{exception} with the gesture reported: {saw_activation}"
             );
         }
-        assert_eq!(
-            share_rejection(BrowserException::Data),
-            Err(ShareError::Failed(BrowserException::Data.into()))
-        );
+    }
+
+    #[test]
+    fn a_page_shares_a_link_of_the_web_only() {
+        for (scheme, shareable) in [
+            ("https", true),
+            ("HTTP", true),
+            ("mailto", false),
+            ("tel", false),
+            ("myapp", false),
+        ] {
+            assert_eq!(is_shareable_link(scheme), shareable, "{scheme}");
+        }
     }
 
     #[test]

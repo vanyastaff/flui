@@ -67,13 +67,19 @@ impl Page {
     /// engines): the call is made, and the browser refuses it itself if it
     /// must.
     pub(crate) fn is_activated(&self) -> bool {
+        self.reported_activation().unwrap_or(true)
+    }
+
+    /// What the browser says of the page's transient activation:
+    /// `navigator.userActivation.isActive`, or `None` where the browser has
+    /// no `navigator.userActivation`.
+    pub(crate) fn reported_activation(&self) -> Option<bool> {
         match &self.activation {
             Activation::Browser => property(&self.navigator(), "userActivation")
                 .and_then(|activation| property(&activation, "isActive"))
-                .and_then(|active| active.as_bool())
-                .unwrap_or(true),
+                .and_then(|active| active.as_bool()),
             #[cfg(test)]
-            Activation::Stated(active) => active.get(),
+            Activation::Stated(active) => Some(active.get()),
         }
     }
 

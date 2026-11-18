@@ -114,7 +114,7 @@ mod registration {
             )
         });
         registrar.provide::<ShareCapability>(|ctx: &ProviderContext<'_>| {
-            Share::try_new(WebShare::new(page::<ShareCapability>(ctx)?), ctx)
+            Share::try_new(WebShare::try_new(page::<ShareCapability>(ctx)?)?, ctx)
         });
         registrar.provide::<TaskbarCapability>(|ctx: &ProviderContext<'_>| {
             Ok::<_, Unsupported>(TaskbarEntry::new(
