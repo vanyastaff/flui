@@ -2,6 +2,9 @@
 
 - **Status:** Accepted (2026-09-26)
 - **Date:** 2026-09-25
+- **Revised:** 2026-11-18 — §2 no longer names `Task`, `BackgroundExecutor` and
+  `prompt_for_paths` as what a Stable `Platform` would carry: they are gone (ADR-0151 §9,
+  ADR-0327 §3).
 - **Superseded-by:** [ADR-0151](ADR-0151-platform-layer-boundary-and-names.md) for §1 (what the
   contract crate holds), §2 (the crates' names and what the core host keeps) and §5's Linux row
   (winit as the Linux host), and for §4 step 2 jointly with
@@ -153,8 +156,9 @@ through a contract crate, when it is accepted.
 
 `Platform` stays effectively sealed, as ADR-0039 §1 describes: an out-of-crate backend cannot mint
 the `OwnerPlatform` its `run()` hands to `on_ready`. This record does not open that minting seam;
-it stays with #560. Keeping `Platform` out of the Stable crate is what keeps `Task`,
-`BackgroundExecutor` and `prompt_for_paths` (ADR-0039 §2) out of the Stable surface.
+it stays with #560. Keeping `Platform` out of the Stable crate keeps the core host's own vocabulary
+(its `NativeExecutor`, ADR-0327 §3) out of the Stable surface; the file prompts and `Task` have
+left `Platform` altogether (ADR-0151 §9).
 
 ### 3. Move the contracts in two changes, re-exporting them
 

@@ -1,36 +1,5 @@
-//! Physics simulations for animation.
-//!
-//! A [`Simulation`] is a one-dimensional motion: a position [`x`](Simulation::x)
-//! and velocity [`dx`](Simulation::dx) at a time `t` in seconds since the
-//! simulation began, and a monotonic [`is_done`](Simulation::is_done).
-//!
-//! Every simulation here is an immutable value with no locks and no callbacks;
-//! share one as `Arc<dyn Simulation>`. Constructors validate their input and
-//! return [`SimulationError`]: a simulation that was built never publishes a
-//! non-finite position or velocity.
-//!
-//! Rest is a moment, not a sample. Each simulation computes at construction
-//! the time after which it is guaranteed to stay within its [`Tolerance`]; from
-//! that time on `x` is exactly the resting position and `dx` is `0.0`, so
-//! `is_done` never flickers and does not depend on how time is sampled.
-//!
-//! # Examples
-//!
-//! ```
-//! use flui_animation::simulation::{Simulation, SpringDescription, SpringSimulation, Tolerance};
-//! use std::time::Duration;
-//!
-//! # fn main() -> Result<(), flui_animation::simulation::SimulationError> {
-//! let spring = SpringDescription::with_duration_and_bounce(Duration::from_millis(500), 0.2)?;
-//! let sim = SpringSimulation::try_new(spring, 0.0, 1.0, 0.0, Tolerance::DEFAULT)?;
-//!
-//! assert_eq!(sim.x(0.0), 0.0);
-//! assert!(sim.x(0.1) > 0.0);
-//! assert!(sim.is_done(10.0));
-//! assert_eq!(sim.x(10.0), 1.0); // exactly the target once at rest
-//! # Ok(())
-//! # }
-//! ```
+//! Physics simulations: springs, friction and scroll flings that rest at a
+//! precomputed time.
 
 use std::f64::consts::TAU;
 use std::fmt;
@@ -43,7 +12,6 @@ use std::time::Duration;
 /// The input a [`SimulationError::NonFinite`] or [`SimulationError::OutOfRange`]
 /// refers to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub enum SimulationParameter {
     /// A spring's mass.
@@ -121,7 +89,6 @@ impl fmt::Display for SimulationParameter {
 
 /// Why a simulation, spring, tolerance or bounds value could not be built.
 #[derive(Debug, Clone, Copy, PartialEq, thiserror::Error)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub enum SimulationError {
     /// One input is NaN or infinite where only finite values are admitted.
@@ -136,7 +103,6 @@ pub enum SimulationError {
         /// The refused input.
         parameter: SimulationParameter,
         /// The refused numeric value; duration inputs are expressed in seconds.
-        #[cfg_attr(feature = "serde", serde(with = "crate::error::diagnostic_number"))]
         value: f64,
     },
     /// Every input is in range, but a constant derived from them is not a
@@ -148,10 +114,8 @@ pub enum SimulationError {
     #[error("bounds must be finite and ordered, got [{min}, {max}]")]
     InvalidBounds {
         /// The refused lower bound.
-        #[cfg_attr(feature = "serde", serde(with = "crate::error::diagnostic_number"))]
         min: f64,
         /// The refused upper bound.
-        #[cfg_attr(feature = "serde", serde(with = "crate::error::diagnostic_number"))]
         max: f64,
     },
 }
@@ -211,14 +175,14 @@ fn before_start(time: f64) -> bool {
 /// # Examples
 ///
 /// ```
-/// use flui_animation::simulation::{SpeedLimit, Tolerance};
+/// use flui_animation::{SpeedLimit, Tolerance};
 ///
 /// let screen = Tolerance::try_new(0.25, SpeedLimit::Derived)?;
 /// let precise = Tolerance::try_new(1e-4, SpeedLimit::AtMost(1e-4))?;
 /// assert_eq!(screen, Tolerance::for_device_pixel_ratio(2.0)?);
 /// assert_ne!(precise, screen);
 /// assert!(Tolerance::try_new(0.25, SpeedLimit::AtMost(f64::INFINITY)).is_err());
-/// # Ok::<(), flui_animation::simulation::SimulationError>(())
+/// # Ok::<(), flui_animation::SimulationError>(())
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
@@ -239,13 +203,13 @@ pub enum SpeedLimit {
 /// # Examples
 ///
 /// ```
-/// use flui_animation::simulation::{SpeedLimit, Tolerance};
+/// use flui_animation::{SpeedLimit, Tolerance};
 ///
 /// let precise = Tolerance::try_new(1e-4, SpeedLimit::AtMost(1e-4))?;
 /// let screen = Tolerance::for_device_pixel_ratio(2.0)?; // a quarter logical pixel
 /// assert_ne!(precise, screen);
 /// assert!(Tolerance::try_new(f64::NAN, SpeedLimit::AtMost(1.0)).is_err());
-/// # Ok::<(), flui_animation::simulation::SimulationError>(())
+/// # Ok::<(), flui_animation::SimulationError>(())
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Tolerance {
@@ -275,7 +239,7 @@ impl Tolerance {
     /// # Examples
     ///
     /// ```
-    /// use flui_animation::simulation::{SpeedLimit, Tolerance};
+    /// use flui_animation::{SpeedLimit, Tolerance};
     ///
     /// assert!(Tolerance::try_new(0.5, SpeedLimit::Derived).is_ok());
     /// assert!(Tolerance::try_new(0.0, SpeedLimit::AtMost(1.0)).is_err());
@@ -303,13 +267,13 @@ impl Tolerance {
     /// # Examples
     ///
     /// ```
-    /// use flui_animation::simulation::{SpeedLimit, Tolerance};
+    /// use flui_animation::{SpeedLimit, Tolerance};
     ///
     /// assert_eq!(
     ///     Tolerance::for_device_pixel_ratio(2.0)?,
     ///     Tolerance::try_new(0.25, SpeedLimit::Derived)?,
     /// );
-    /// # Ok::<(), flui_animation::simulation::SimulationError>(())
+    /// # Ok::<(), flui_animation::SimulationError>(())
     /// ```
     pub fn for_device_pixel_ratio(device_pixel_ratio: f64) -> Result<Self, SimulationError> {
         let ratio = positive(SimulationParameter::DevicePixelRatio, device_pixel_ratio)?;
@@ -336,11 +300,41 @@ impl Default for Tolerance {
 // Simulation
 // ---------------------------------------------------------------------------
 
-/// A one-dimensional motion sampled at `time` seconds since it began.
+/// A one-dimensional motion sampled at `time` seconds since it began: a
+/// position [`x`](Self::x), a velocity [`dx`](Self::dx) and a monotonic
+/// [`is_done`](Self::is_done).
 ///
 /// Implementations used by the framework guarantee: `x` and `dx` are finite
 /// for every `time`; a `time` before the start (negative or NaN) yields the
 /// initial state; `is_done` is monotonic in `time`.
+///
+/// Every simulation this crate defines is an immutable value with no
+/// callbacks; share one as `Rc<dyn Simulation>`. Constructors validate their
+/// input and return [`SimulationError`], so a simulation that was built never
+/// publishes a non-finite position or velocity.
+///
+/// Rest is a moment, not a sample. Each of them computes at construction the
+/// time after which it is guaranteed to stay within its [`Tolerance`]; from
+/// that time on `x` is exactly the resting position and `dx` is `0.0`, so
+/// `is_done` never flickers and does not depend on how time is sampled.
+///
+/// # Examples
+///
+/// ```
+/// use flui_animation::{Simulation, SpringDescription, SpringSimulation, Tolerance};
+/// use std::time::Duration;
+///
+/// # fn main() -> Result<(), flui_animation::SimulationError> {
+/// let spring = SpringDescription::with_duration_and_bounce(Duration::from_millis(500), 0.2)?;
+/// let sim = SpringSimulation::try_new(spring, 0.0, 1.0, 0.0, Tolerance::DEFAULT)?;
+///
+/// assert_eq!(sim.x(0.0), 0.0);
+/// assert!(sim.x(0.1) > 0.0);
+/// assert!(sim.is_done(10.0));
+/// assert_eq!(sim.x(10.0), 1.0); // exactly the target once at rest
+/// # Ok(())
+/// # }
+/// ```
 pub trait Simulation {
     /// The position at `time` seconds.
     fn x(&self, time: f64) -> f64;
@@ -385,7 +379,7 @@ impl<S: Simulation + ?Sized> Simulation for Box<S> {
 /// it never comes to rest.
 ///
 /// ```compile_fail
-/// use flui_animation::simulation::SpringDescription;
+/// use flui_animation::SpringDescription;
 ///
 /// let spring = SpringDescription { omega: 10.0, zeta: -1.0 };
 /// ```
@@ -393,7 +387,7 @@ impl<S: Simulation + ?Sized> Simulation for Box<S> {
 /// Construction through the validated public constructor compiles:
 ///
 /// ```
-/// use flui_animation::simulation::SpringDescription;
+/// use flui_animation::SpringDescription;
 ///
 /// let spring = SpringDescription::try_new(1.0, 100.0, 20.0).unwrap();
 /// ```
@@ -417,12 +411,12 @@ impl SpringDescription {
     /// # Examples
     ///
     /// ```
-    /// use flui_animation::simulation::{SpringDescription, SpringType};
+    /// use flui_animation::{SpringDescription, SpringType};
     ///
     /// let spring = SpringDescription::try_new(1.0, 100.0, 20.0)?;
     /// assert_eq!(spring.spring_type(), SpringType::CriticallyDamped);
     /// assert!(SpringDescription::try_new(1.0, 100.0, 0.0).is_err());
-    /// # Ok::<(), flui_animation::simulation::SimulationError>(())
+    /// # Ok::<(), flui_animation::SimulationError>(())
     /// ```
     pub fn try_new(mass: f64, stiffness: f64, damping: f64) -> Result<Self, SimulationError> {
         let mass = positive(SimulationParameter::Mass, mass)?.sqrt();
@@ -445,11 +439,11 @@ impl SpringDescription {
     /// # Examples
     ///
     /// ```
-    /// use flui_animation::simulation::{SpringDescription, SpringType};
+    /// use flui_animation::{SpringDescription, SpringType};
     ///
     /// let spring = SpringDescription::with_damping_ratio(1.0, 500.0, 1.0)?;
     /// assert_eq!(spring.spring_type(), SpringType::CriticallyDamped);
-    /// # Ok::<(), flui_animation::simulation::SimulationError>(())
+    /// # Ok::<(), flui_animation::SimulationError>(())
     /// ```
     pub fn with_damping_ratio(
         mass: f64,
@@ -481,12 +475,12 @@ impl SpringDescription {
     /// # Examples
     ///
     /// ```
-    /// use flui_animation::simulation::{SpringDescription, SpringType};
+    /// use flui_animation::{SpringDescription, SpringType};
     /// use std::time::Duration;
     ///
     /// let spring = SpringDescription::with_duration_and_bounce(Duration::from_millis(500), 0.3)?;
     /// assert_eq!(spring.spring_type(), SpringType::Underdamped);
-    /// # Ok::<(), flui_animation::simulation::SimulationError>(())
+    /// # Ok::<(), flui_animation::SimulationError>(())
     /// ```
     pub fn with_duration_and_bounce(
         duration: Duration,
@@ -520,13 +514,13 @@ impl SpringDescription {
     /// # Examples
     ///
     /// ```
-    /// use flui_animation::simulation::SpringDescription;
+    /// use flui_animation::SpringDescription;
     /// use std::time::Duration;
     ///
     /// let spring = SpringDescription::with_response_and_damping(Duration::from_millis(300), 0.8)?;
     /// assert!(SpringDescription::with_response_and_damping(Duration::ZERO, 0.8).is_err());
     /// # let _ = spring;
-    /// # Ok::<(), flui_animation::simulation::SimulationError>(())
+    /// # Ok::<(), flui_animation::SimulationError>(())
     /// ```
     pub fn with_response_and_damping(
         response: Duration,
@@ -660,13 +654,13 @@ impl SpringSimulation {
     /// # Examples
     ///
     /// ```
-    /// use flui_animation::simulation::{Simulation, SpeedLimit, SpringDescription, SpringSimulation, Tolerance};
+    /// use flui_animation::{Simulation, SpeedLimit, SpringDescription, SpringSimulation, Tolerance};
     ///
     /// let spring = SpringDescription::try_new(1.0, 100.0, 10.0)?;
     /// let sim = SpringSimulation::try_new(spring, 0.0, 100.0, 0.0, Tolerance::try_new(0.5, SpeedLimit::Derived)?)?;
     /// assert!(!sim.is_done(0.1));
     /// assert!(SpringSimulation::try_new(spring, f64::NAN, 1.0, 0.0, Tolerance::DEFAULT).is_err());
-    /// # Ok::<(), flui_animation::simulation::SimulationError>(())
+    /// # Ok::<(), flui_animation::SimulationError>(())
     /// ```
     pub fn try_new(
         spring: SpringDescription,
@@ -1128,7 +1122,7 @@ impl FrictionSimulation {
     /// # Examples
     ///
     /// ```
-    /// use flui_animation::simulation::{FrictionSimulation, Simulation, SpeedLimit, Tolerance};
+    /// use flui_animation::{FrictionSimulation, Simulation, SpeedLimit, Tolerance};
     ///
     /// let sim = FrictionSimulation::try_new(0.135, 0.0, 1000.0, Tolerance::try_new(0.5, SpeedLimit::Derived)?)?;
     /// let resting = sim.x(f64::INFINITY);
@@ -1136,7 +1130,7 @@ impl FrictionSimulation {
     /// assert!(sim.is_done(10.0));
     /// assert_eq!(sim.x(10.0), resting);
     /// assert!(FrictionSimulation::try_new(1.0, 0.0, 1.0, Tolerance::DEFAULT).is_err());
-    /// # Ok::<(), flui_animation::simulation::SimulationError>(())
+    /// # Ok::<(), flui_animation::SimulationError>(())
     /// ```
     pub fn try_new(
         drag: f64,
@@ -1237,7 +1231,7 @@ impl Simulation for FrictionSimulation {
 /// # Examples
 ///
 /// ```
-/// use flui_animation::simulation::SimulationBounds;
+/// use flui_animation::SimulationBounds;
 ///
 /// assert!(SimulationBounds::try_new(0.0, 100.0).is_ok());
 /// assert!(SimulationBounds::try_new(100.0, 0.0).is_err());
@@ -1293,13 +1287,13 @@ impl BoundedFrictionSimulation {
     /// # Examples
     ///
     /// ```
-    /// use flui_animation::simulation::{BoundedFrictionSimulation, Simulation, SimulationBounds, Tolerance};
+    /// use flui_animation::{BoundedFrictionSimulation, Simulation, SimulationBounds, Tolerance};
     ///
     /// let bounds = SimulationBounds::try_new(0.0, 100.0)?;
     /// let sim = BoundedFrictionSimulation::try_new(0.135, 50.0, 8000.0, bounds, Tolerance::DEFAULT)?;
     /// assert!(sim.is_done(1.0));
     /// assert_eq!(sim.x(1.0), 100.0);
-    /// # Ok::<(), flui_animation::simulation::SimulationError>(())
+    /// # Ok::<(), flui_animation::SimulationError>(())
     /// ```
     pub fn try_new(
         drag: f64,
@@ -1407,7 +1401,7 @@ impl BouncingScrollSimulation {
     /// # Examples
     ///
     /// ```
-    /// use flui_animation::simulation::{
+    /// use flui_animation::{
     ///     BouncingScrollSimulation, Simulation, SimulationBounds, SpringDescription, Tolerance,
     /// };
     ///
@@ -1418,7 +1412,7 @@ impl BouncingScrollSimulation {
     /// assert!(overscroll > 100.0);
     /// assert!(sim.is_done(10.0));
     /// assert_eq!(sim.x(10.0), 100.0);
-    /// # Ok::<(), flui_animation::simulation::SimulationError>(())
+    /// # Ok::<(), flui_animation::SimulationError>(())
     /// ```
     pub fn try_new(
         spring: SpringDescription,

@@ -2,10 +2,8 @@
 
 use crate::child_process;
 use flui_animation::{
-    Animation, AnimationController, AnimationStatus, AnimationSwitch, ConstantAnimation,
-    CurvedAnimation, DrivenController, ProxyAnimation, Vsync,
-    curve::{Curve, Split},
-    simulation::Simulation,
+    Animation, AnimationController, AnimationStatus, AnimationSwitch, ConstantAnimation, Curve,
+    CurvedAnimation, DrivenController, ProxyAnimation, Simulation, Split, Vsync,
 };
 use flui_animation::{AnimationRunFuture, RunCanceled};
 use flui_foundation::{IdMint, Listenable, ListenerCallback, ListenerId};
@@ -379,7 +377,7 @@ fn failed_source_is_dropped(status_fails: bool, retarget: bool) {
         )
         .expect("live curve");
     let callback = status_fails
-        .then(|| controller.subscribe_status(Rc::new(|_| panic!("authoritative status failure"))));
+        .then(|| controller.listen_status(Rc::new(|_| panic!("authoritative status failure"))));
     let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         if retarget {
             let _run = controller
@@ -627,7 +625,7 @@ fn callback_retirement_may_reenter() {
         controller: controller.clone(),
         drops: drops.clone(),
     };
-    let id = controller.subscribe_status(std::rc::Rc::new(move |_| {
+    let id = controller.listen_status(std::rc::Rc::new(move |_| {
         let _owned = &probe;
     }));
     drop(id);
@@ -637,10 +635,10 @@ fn callback_retirement_may_reenter() {
         drops: drops.clone(),
     };
     controller
-        .subscribe_status(std::rc::Rc::new(move |_| {
+        .listen_status(std::rc::Rc::new(move |_| {
             let _owned = &probe;
         }))
-        .detach();
+        .forget();
     lifecycle.dispose();
     assert_eq!(drops.load(Ordering::SeqCst), 2);
 }
@@ -665,7 +663,7 @@ fn status_failure_drops_retired_source_and_callback() {
     let callback_id_read = callback_id.clone();
     let first = CountedDrop(drops.clone());
     let second = CountedDrop(drops.clone());
-    let id = controller.subscribe_status(std::rc::Rc::new(move |_| {
+    let id = controller.listen_status(std::rc::Rc::new(move |_| {
         let _opaque = (&first, &second);
         let id = callback_id_read
             .lock()
@@ -759,10 +757,10 @@ fn retirement_failure_drops_later_callback_envelope() {
     let first = CountedDrop(drops.clone());
     let second = CountedDrop(drops.clone());
     controller
-        .subscribe_status(std::rc::Rc::new(move |_| {
+        .listen_status(std::rc::Rc::new(move |_| {
             let _opaque = (&first, &second);
         }))
-        .detach();
+        .forget();
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| owner.dispose()));
     let payload = outcome.expect_err("source retirement fails");
     assert_eq!(
@@ -828,15 +826,15 @@ fn terminal_fixture(
         TerminalOwner::Controller => {
             let controller = AnimationController::builder(Duration::from_secs(1)).build();
             controller
-                .subscribe_status(std::rc::Rc::new(move |_| {
+                .listen_status(std::rc::Rc::new(move |_| {
                     let _capture = &first;
                 }))
-                .detach();
+                .forget();
             controller
-                .subscribe_status(std::rc::Rc::new(move |_| {
+                .listen_status(std::rc::Rc::new(move |_| {
                     let _capture = &second;
                 }))
-                .detach();
+                .forget();
             Box::new(controller)
         }
         TerminalOwner::Proxy => {
@@ -845,15 +843,15 @@ fn terminal_fixture(
                 AnimationStatus::ForwardSettled,
             )));
             proxy
-                .subscribe_status(std::rc::Rc::new(move |_| {
+                .listen_status(std::rc::Rc::new(move |_| {
                     let _capture = &first;
                 }))
-                .detach();
+                .forget();
             proxy
-                .subscribe_status(std::rc::Rc::new(move |_| {
+                .listen_status(std::rc::Rc::new(move |_| {
                     let _capture = &second;
                 }))
-                .detach();
+                .forget();
             Box::new(proxy)
         }
         TerminalOwner::Curved => Box::new(
@@ -864,7 +862,7 @@ fn terminal_fixture(
                 )),
                 TerminalCurve(first),
             )
-            .with_reverse_curve(TerminalCurve(second)),
+            .reverse_curve(TerminalCurve(second)),
         ),
         TerminalOwner::Switch => {
             let switch = AnimationSwitch::new(
@@ -878,15 +876,15 @@ fn terminal_fixture(
                 ))),
             );
             switch
-                .subscribe_status(std::rc::Rc::new(move |_| {
+                .listen_status(std::rc::Rc::new(move |_| {
                     let _capture = &first;
                 }))
-                .detach();
+                .forget();
             switch
-                .subscribe_status(std::rc::Rc::new(move |_| {
+                .listen_status(std::rc::Rc::new(move |_| {
                     let _capture = &second;
                 }))
-                .detach();
+                .forget();
             Box::new(switch)
         }
     }
@@ -959,10 +957,10 @@ fn shared_terminal_owners_keep_independent_aliases_live() {
         panics: false,
     };
     controller
-        .subscribe_status(std::rc::Rc::new(move |_| {
+        .listen_status(std::rc::Rc::new(move |_| {
             let _capture = &probe;
         }))
-        .detach();
+        .forget();
     drop(controller);
     assert!(drops.lock().expect("alias observations").is_empty());
     alias.forward().expect("surviving controller");
@@ -980,10 +978,10 @@ fn shared_terminal_owners_keep_independent_aliases_live() {
     let observed = Rc::new(AtomicUsize::new(0));
     let callback_observed = observed.clone();
     alias
-        .subscribe_status(std::rc::Rc::new(move |_| {
+        .listen_status(std::rc::Rc::new(move |_| {
             callback_observed.fetch_add(1, Ordering::SeqCst);
         }))
-        .detach();
+        .forget();
     drop(proxy);
     let _run = parent.forward().expect("parent run");
     assert_eq!(observed.load(Ordering::SeqCst), 1);
@@ -1007,10 +1005,10 @@ fn driven_terminal_cancels_before_retiring_callback() {
     let driven = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&vsync));
     driven
         .controller()
-        .subscribe_status(std::rc::Rc::new(move |_| {
+        .listen_status(std::rc::Rc::new(move |_| {
             let _capture = &probe;
         }))
-        .detach();
+        .forget();
     let observer = driven.controller().clone();
     let run = observer.forward().expect("live driven run");
     let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(driven)))
@@ -1117,7 +1115,7 @@ impl TerminalParentState {
         assert!(!self.fail_removal, "{}", kind);
     }
 }
-impl TerminalParent {
+impl TerminalParentState {
     /// The test's own ledger: a registration runs through `register`'s hooks.
     fn admit(&self, callback: ListenerCallback) -> flui_foundation::ListenerId {
         self.register();
@@ -1156,14 +1154,9 @@ impl Listenable for TerminalParent {
         let id = self.admit(Rc::new(move || {
             flui_foundation::panic::RecoveryScope::boundary(|recovery| relay(recovery));
         }));
-        // The test's own ledger withdraws this one; the owned subscription
-        // carries the removal the way ADR-0180's status guard does.
-        let state = Rc::clone(&self.state);
-        flui_foundation::Subscription::for_removal(move || {
-            TerminalParent {
-                state: Rc::clone(&state),
-            }
-            .withdraw(id);
+        // The test's own ledger withdraws this one, through its own removal.
+        flui_foundation::Subscription::for_source(&self.state, id, |state, id, _recovery| {
+            state.withdraw(id);
         })
     }
 }
@@ -1172,10 +1165,10 @@ impl Animation<f64> for TerminalParent {
         false
     }
 
-    fn observe_status(
+    fn listen_status_with_recovery(
         &self,
         observer: flui_animation::StatusObserver,
-    ) -> flui_animation::StatusSubscription {
+    ) -> flui_foundation::Subscription {
         self.register();
         let id = {
             let mut statuses = self.statuses.lock().expect("parent statuses");
@@ -1183,7 +1176,7 @@ impl Animation<f64> for TerminalParent {
             statuses.push((id, observer));
             id
         };
-        flui_animation::StatusSubscription::new(&self.state, id, |source, id, recovery| {
+        flui_foundation::Subscription::for_source(&self.state, id, |source, id, recovery| {
             let removed = {
                 let mut statuses = source.statuses.lock().expect("parent statuses");
                 statuses
@@ -1254,7 +1247,7 @@ fn parent_subscriptions_detach_all_after_failure() {
         );
     }
     let parent = terminal_parent(false);
-    let curved = CurvedAnimation::new(parent.clone(), flui_animation::curve::Linear);
+    let curved = CurvedAnimation::new(parent.clone(), flui_animation::Linear);
     let alias = curved.clone();
     drop(curved);
     assert!(parent.removed.lock().expect("curved aliases").is_empty());

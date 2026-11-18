@@ -1000,7 +1000,7 @@ mod event_loop {
     use std::cell::{Cell, RefCell};
     use std::collections::hash_map::Entry;
     use std::os::fd::OwnedFd;
-    use std::path::{Path, PathBuf};
+    use std::path::Path;
     use std::rc::Rc;
     use std::sync::atomic::AtomicU64;
     use std::sync::{Arc, Weak};
@@ -1055,7 +1055,7 @@ mod event_loop {
     use crate::owner::app_delivery::AppDelivery;
     use crate::owner::call_point::Called;
     use crate::owner::linux::single_instance::FirstInstance;
-    use crate::owner::linux::{LinuxNotices, LinuxPreferences, PortalSlot, SessionLoop, xdg_open};
+    use crate::owner::linux::{LinuxNotices, LinuxPreferences, PortalSlot, SessionLoop};
     use crate::owner::notices::{LifecycleHooks, NoticeChannel, StaleOnWake};
     use crate::owner::panic_boundary::contain_owner_callback;
     use crate::owner::signal::{OwnerSignal, OwnerTurnSlot};
@@ -2454,12 +2454,6 @@ mod event_loop {
         }
     }
 
-    /// What a file prompt answers on this host: the file chooser portal is
-    /// not spoken here yet.
-    fn no_file_prompt() -> PlatformError {
-        flui_platform::Unsupported::new(flui_platform::UnsupportedReason::NotYetOnThisHost).into()
-    }
-
     /// `duration` as `poll` takes it.
     fn timespec(duration: Duration) -> Timespec {
         Timespec {
@@ -2609,8 +2603,8 @@ mod event_loop {
                 notices: H::notices(&app),
                 app,
                 // The variable stays set: unsetting it races every thread
-                // reading the environment, and the opener started for a link
-                // leaves it out (`xdg_open`).
+                // reading the environment. A process the application starts
+                // inherits it, though the first window has used it up.
                 windows: Rc::new(WindowTable::new(launch_token(std::env::var_os(
                     LAUNCH_TOKEN_VARIABLE,
                 )))),
@@ -3165,7 +3159,7 @@ mod event_loop {
         }
     }
 
-    impl host::Services for WaylandLoop {
+    impl host::Launch for WaylandLoop {
         /// Only a page has an origin.
         fn page_origin(&self) -> Option<String> {
             None
@@ -3173,49 +3167,6 @@ mod event_loop {
 
         fn launch_value(&self, key: flui_platform::LaunchKey) -> Option<String> {
             host::environment_launch_value(key)
-        }
-
-        fn app_path(&self) -> Result<PathBuf, PlatformError> {
-            std::env::current_exe().map_err(|error| PlatformError::AppPath {
-                message: error.to_string(),
-            })
-        }
-
-        fn open_url(&self, url: &str) {
-            xdg_open(url.as_ref());
-        }
-
-        fn reveal_path(&self, path: &Path) {
-            // The extension, not the path: the name is the user's data.
-            tracing::info!(extension = ?path.extension(), "revealing a path");
-            if let Some(parent) = path.parent() {
-                xdg_open(parent.as_os_str());
-            }
-        }
-
-        fn open_path(&self, path: &Path) {
-            tracing::info!(extension = ?path.extension(), "opening a path");
-            xdg_open(path.as_os_str());
-        }
-
-        /// The file chooser portal is the system capability crate's
-        /// (ADR-0151 §3): this host has none, and says so.
-        fn prompt_for_paths(
-            &self,
-            options: crate::PathPromptOptions,
-        ) -> crate::Task<Result<Option<Vec<PathBuf>>, PlatformError>> {
-            let _ = options;
-            crate::Task::ready(Err(no_file_prompt()))
-        }
-
-        /// See [`Self::prompt_for_paths`].
-        fn prompt_for_new_path(
-            &self,
-            directory: &Path,
-            suggested_name: Option<&str>,
-        ) -> crate::Task<Result<Option<PathBuf>, PlatformError>> {
-            let _ = (directory, suggested_name);
-            crate::Task::ready(Err(no_file_prompt()))
         }
     }
 
@@ -3282,6 +3233,12 @@ mod event_loop {
                 .source()
                 .ok_or(PlatformError::PreferencesDeferred)?
                 .sample()
+        }
+
+        fn delivered(owner: &WaylandLoop, values: &flui_platform::SystemPreferences) {
+            if let Some(source) = owner.portal.source() {
+                source.delivered(values);
+            }
         }
     }
 

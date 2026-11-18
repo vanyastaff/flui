@@ -6,6 +6,8 @@
   mobile crates ship platform services (sources below): the carve-out for handles that framework
   widgets name, the native-code tiers, declarations, the host bridge, testing, the line between the
   core host and capability crates, and the first crate's contents.
+- **Revised:** 2026-11-18 — §11 no longer moves `app_path` into `flui-system`: it left `Platform`
+  for `std::env::current_exe` (ADR-0151 §9).
 - **Supersedes:** [ADR-0081](ADR-0081-workspace-tiers-and-reach-facts.md) §3 in part (the kinds
   gain `capability`) and §2 in part (the reach table gains its row);
   [ADR-0088](ADR-0088-official-packages-sdk-and-facade.md) in part (official packages keep their
@@ -342,8 +344,9 @@ core host's closed list leaves out:
 - OS paths and OS information;
 - the tray, which enters together with the menu feature (decision 4).
 
-`open_url`, `reveal_path`, `open_path`, `prompt_for_paths`, `prompt_for_new_path` and `app_path`
-leave the core host's `Platform` for it.
+`open_url`, `reveal_path`, `open_path`, `prompt_for_paths` and `prompt_for_new_path` leave the core
+host's `Platform` for it. `app_path` leaves `Platform` with no FLUI form: the executable is
+`std::env::current_exe`, and the OS paths it provides are the user's folders.
 
 `flui-notify`, `flui-device`, `flui-vault` and `flui-location` follow as later crates, each by its
 own ADR (notifications, device state and sensors, secure storage and biometrics, location).

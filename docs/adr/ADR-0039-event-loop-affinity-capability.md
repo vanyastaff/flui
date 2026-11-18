@@ -16,7 +16,11 @@
   [ADR-0327](ADR-0327-the-native-host-is-owner-local-and-runs-its-io-on-the-runtime-its-creator-hands-it.md) for §2 only (`Platform` is owner-local; `data_transfer` moves to `OwnerPlatform`), and for §1's `shared()`, which ADR-0327 §2 removes; and
   [ADR-0151](ADR-0151-platform-layer-boundary-and-names.md) §9 for §1's `active_window` and
   `keyboard_layout` entries only (nothing above the host read them: `active_window` is gone, and
-  the keyboard layout stays inside the core host until the menu feature publishes it).
+  the keyboard layout stays inside the core host until the menu feature publishes it); and
+  [ADR-0151](ADR-0151-platform-layer-boundary-and-names.md) §9 for §2's `app_path`, its shell
+  dispatches (`open_url`, `reveal_path`, `open_path`) and its file prompts only (they left
+  `Platform`: `flui_platform::launch` and `flui-system` provide them, and `flui_native::Task` went
+  with the prompts).
 - **Superseded-by:** [ADR-0368](ADR-0368-a-frame-polls-its-tasks-runs-its-pipeline-then-its-post-frame-callbacks.md) for the phase names of the scoped-access rule only: `with_owner_platform` refuses to run during `SchedulerPhase::Frame`.
 
 ## Context

@@ -108,7 +108,7 @@ pub(crate) fn metrics(content: Size<f64>, scale: BufferScale) -> Option<WindowMe
         }
     };
     let content = Size::new(side(content.width), side(content.height));
-    let metrics = WindowMetrics::from_logical(content, scale.get()).ok()?;
+    let metrics = WindowMetrics::from_logical(content, scale.ratio()).ok()?;
     let physical = metrics.physical();
     let fits = |side: i32| u32::try_from(side).is_ok_and(|side| side <= MAX_SURFACE_EXTENT);
     (fits(physical.width) && fits(physical.height)).then_some(metrics)
@@ -474,14 +474,17 @@ mod tests {
         for (case, metrics, header, outer, content) in [
             (
                 "no title bar of its own",
-                WindowMetrics::from_logical(Size::new(400.0, 300.0), 1.0),
+                WindowMetrics::from_logical(Size::new(400.0, 300.0), DevicePixelRatio::ONE),
                 0.0,
                 bounds(0, 0, 400, 300),
                 bounds(0, 0, 400, 300),
             ),
             (
                 "its own title bar at a fractional scale",
-                WindowMetrics::from_logical(Size::new(400.0, 300.0), 1.5),
+                WindowMetrics::from_logical(
+                    Size::new(400.0, 300.0),
+                    DevicePixelRatio::try_new(1.5).expect("a ratio in range"),
+                ),
                 37.0,
                 bounds(0, 0, 600, 506),
                 bounds(0, 56, 600, 450),

@@ -804,17 +804,15 @@ impl ContactRegistry {
             .stamp(reading.time, choice)
             .ok_or(DecodeFault::Time)?;
         let time = floor.map_or(time, |floor| time.max(floor));
-        let needs_scale = reading.position.is_some()
-            || reading.sensors.contact_size.is_some()
-            || matches!(reading.action, ReadingAction::Swipe(_));
-        if needs_scale && !(reading.scale.is_finite() && reading.scale > 0.0) {
-            return Err(DecodeFault::Scale(reading.scale));
-        }
+        let scale = reading.scale;
         let position = reading
             .position
             .map(|raw| {
-                PointerPosition::try_new(Point::new(raw.x / reading.scale, raw.y / reading.scale))
-                    .map(|position| (position, raw))
+                PointerPosition::try_new(Point::new(
+                    scale.to_logical(raw.x),
+                    scale.to_logical(raw.y),
+                ))
+                .map(|position| (position, raw))
             })
             .transpose()?
             .or(fallback);
@@ -1268,7 +1266,10 @@ impl ContactRegistry {
                         ) => {
                             // A step that would take the travel past the
                             // finite range keeps the travel it had.
-                            let step = Offset::new(swipe.dx, swipe.dy) / reading.scale;
+                            let step = Offset::new(
+                                reading.scale.to_logical(swipe.dx),
+                                reading.scale.to_logical(swipe.dy),
+                            );
                             if let Ok(next) = SwipeOffset::try_new(travel.get() + step) {
                                 *travel = next;
                             }
@@ -1343,8 +1344,8 @@ pub(super) fn sample(
     }
     if let Some((width, height)) = sensors.contact_size {
         sample = sample.with_contact_size(ContactSize::try_new(Size::new(
-            width / reading.scale,
-            height / reading.scale,
+            reading.scale.to_logical(width),
+            reading.scale.to_logical(height),
         ))?);
     }
     Ok(sample)

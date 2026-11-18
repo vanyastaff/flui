@@ -13,4 +13,4 @@
   this change; it leaves together with the manual pairings in the
   subscriptions theme's next step, which hoists `listen` onto the trait and
   folds the remaining per-source guard types (the animation status
-  subscription's, ADR-0180) into this one.
+  subscription's, ADR-0379) into this one.

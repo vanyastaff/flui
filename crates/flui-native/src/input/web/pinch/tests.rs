@@ -13,6 +13,7 @@ use crate::input::assembly::{
 use crate::input::web::pinch::{
     CtrlWheel, GestureEventKind, GestureTracker, PINCH_GAP, WheelRoute, WheelStep,
 };
+use flui_foundation::geometry::DevicePixelRatio;
 use flui_platform::EventTime;
 use flui_platform::PlatformInput;
 use flui_platform::pointer::{PanZoomPhase, PointerEvent, PointerKind};
@@ -21,13 +22,17 @@ fn at(millis: u64) -> EventTime {
     EventTime::from_nanos(millis * 1_000_000)
 }
 
+fn device_ratio(ratio: f64) -> DevicePixelRatio {
+    DevicePixelRatio::try_new(ratio).expect("a test page at a ratio a screen can have")
+}
+
 fn wheel(ctrl: bool, dy: f64, millis: u64) -> WheelStep {
     WheelStep {
         ctrl,
         mode: 0,
         dx: 0.0,
         dy,
-        scale: 1.0,
+        scale: DevicePixelRatio::ONE,
         time: at(millis),
     }
 }
@@ -51,7 +56,7 @@ fn a_mouse_detent_at_a_page_zoom_stays_a_scroll() {
         ("an accelerated wheel", 4.000_244, 1.0, WheelRoute::Scroll),
     ] {
         let step = WheelStep {
-            scale,
+            scale: device_ratio(scale),
             ..wheel(true, dy, 10)
         };
         assert_eq!(CtrlWheel::default().route(step), expected, "{name}");
@@ -59,7 +64,7 @@ fn a_mouse_detent_at_a_page_zoom_stays_a_scroll() {
     let pinch = -100.0 * 1.07_f64.ln();
     for ratio in [1.0, 1.1, 2.0, 2.2] {
         let step = WheelStep {
-            scale: ratio,
+            scale: device_ratio(ratio),
             ..wheel(true, pinch, 10)
         };
         assert_eq!(

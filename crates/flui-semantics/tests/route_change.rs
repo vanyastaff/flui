@@ -3,6 +3,7 @@
 //! where it has a native notice, or as a polite announcement where it has
 //! none.
 
+use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -33,7 +34,7 @@ impl Routes {
         let updates: Arc<Mutex<Vec<TreeUpdate>>> = Arc::default();
         let failing = Arc::new(AtomicBool::new(false));
         let (sink, fail) = (Arc::clone(&updates), Arc::clone(&failing));
-        let mut owner = SemanticsOwner::new(Arc::new(move |update: &TreeUpdate| {
+        let mut owner = SemanticsOwner::new(Rc::new(move |update: &TreeUpdate| {
             assert!(
                 !fail.load(Ordering::SeqCst),
                 "the adapter rejects the update"
@@ -43,7 +44,7 @@ impl Routes {
         let told: Arc<Mutex<Vec<RouteChange>>> = Arc::default();
         if native {
             let told = Arc::clone(&told);
-            owner.set_route_change_sink(Some(Arc::new(move |change| told.lock().push(change))));
+            owner.set_route_change_sink(Some(Rc::new(move |change| told.lock().push(change))));
         }
         let ids = SemanticsIdentitySource::default()
             .allocate(2)
@@ -339,7 +340,7 @@ fn a_failed_sink_or_delivery_loses_no_change_and_speaks_once() {
     let log = Arc::clone(&calls);
     routes
         .owner
-        .set_route_change_sink(Some(Arc::new(move |change: RouteChange| {
+        .set_route_change_sink(Some(Rc::new(move |change: RouteChange| {
             log.lock().push(change.name().map(str::to_owned));
             let calls = log.lock().len();
             assert!(
@@ -384,7 +385,7 @@ fn a_new_adapter_hears_changes_from_the_route_it_was_handed() {
     let updates = Arc::clone(&routes.updates);
     routes
         .owner
-        .set_callback(Arc::new(move |update: &TreeUpdate| {
+        .set_callback(Rc::new(move |update: &TreeUpdate| {
             updates.lock().push(update.clone());
         }));
     assert_eq!(routes.told(), [], "the tree handed over raises nothing");

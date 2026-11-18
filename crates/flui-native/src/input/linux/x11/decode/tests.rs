@@ -1,3 +1,4 @@
+use flui_foundation::geometry::DevicePixelRatio;
 use flui_platform::EventTime;
 use flui_platform::PlatformInput;
 use flui_platform::input_capabilities::PointerKindSet;
@@ -156,7 +157,7 @@ fn feed(pointers: &mut X11Pointers, events: &[XiEvent]) -> Vec<PointerEvent> {
     pointer_events(
         events
             .iter()
-            .flat_map(|event| pointers.event(SURFACE, 1.0, event).inputs)
+            .flat_map(|event| pointers.event(SURFACE, DevicePixelRatio::ONE, event).inputs)
             .collect(),
     )
 }
@@ -420,7 +421,7 @@ fn devices_come_and_go_with_the_hierarchy() {
         detail: 1,
         ..event(XiAction::ButtonPress, STYLUS, (3.0, 3.0))
     };
-    let _ = pointers.event(SURFACE, 1.0, &down);
+    let _ = pointers.event(SURFACE, DevicePixelRatio::ONE, &down);
     let unplugged = pointers.devices(
         &[master(), device(XTEST, "Virtual core XTEST pointer")],
         time,
@@ -651,8 +652,12 @@ fn a_removed_master_pointer_ends_its_press() {
         detail: 1,
         ..event(action, XTEST, (3.0, 3.0))
     };
-    let _ = pointers.event(SURFACE, 1.0, &on_second(XiAction::Enter));
-    let _ = pointers.event(SURFACE, 1.0, &on_second(XiAction::ButtonPress));
+    let _ = pointers.event(SURFACE, DevicePixelRatio::ONE, &on_second(XiAction::Enter));
+    let _ = pointers.event(
+        SURFACE,
+        DevicePixelRatio::ONE,
+        &on_second(XiAction::ButtonPress),
+    );
     let removed = pointers.hierarchy(
         &[info(SECOND_MASTER, NO_USE, HierarchyInfo::MASTER_REMOVED)],
         |_| None,
@@ -689,7 +694,9 @@ fn a_pen_plugged_back_in_under_its_id_is_a_new_pen() {
         })
     };
     let first = down(&pointer_events(
-        pointers.event(SURFACE, 1.0, &pressed).inputs,
+        pointers
+            .event(SURFACE, DevicePixelRatio::ONE, &pressed)
+            .inputs,
     ))
     .expect("the pen's press");
     let time = EventTime::from_nanos(9);
@@ -724,7 +731,9 @@ fn a_pen_plugged_back_in_under_its_id_is_a_new_pen() {
     );
     // The pen's next press is the new device's: a new pointer.
     let again = down(&pointer_events(
-        pointers.event(SURFACE, 1.0, &pressed).inputs,
+        pointers
+            .event(SURFACE, DevicePixelRatio::ONE, &pressed)
+            .inputs,
     ))
     .expect("the new pen's press");
     assert_ne!(again.id, first.id);
@@ -740,7 +749,7 @@ fn a_window_losing_the_focus_leaves_another_windows_pen_alone() {
     let window_a = NativeSurface(1);
     let window_b = NativeSurface(2);
     let pen = event(XiAction::Motion, STYLUS, (40.0, 40.0));
-    let _ = pointers.event(window_b, 1.0, &pen);
+    let _ = pointers.event(window_b, DevicePixelRatio::ONE, &pen);
     let cancelled =
         pointers.cancel_surface(window_a, NativeCancel::FocusLost, EventTime::from_nanos(2));
     assert!(
@@ -748,7 +757,11 @@ fn a_window_losing_the_focus_leaves_another_windows_pen_alone() {
         "nothing moved on window A: {cancelled:?}"
     );
     let mouse = event(XiAction::Motion, XTEST, (5.0, 5.0));
-    let events = pointer_events(pointers.event(window_b, 1.0, &mouse).inputs);
+    let events = pointer_events(
+        pointers
+            .event(window_b, DevicePixelRatio::ONE, &mouse)
+            .inputs,
+    );
     assert!(
         matches!(
             events.first(),
@@ -762,7 +775,11 @@ fn a_window_losing_the_focus_leaves_another_windows_pen_alone() {
 #[test]
 fn a_touch_screens_crossing_is_no_contact() {
     let mut pointers = pointers();
-    let decoded = pointers.event(SURFACE, 1.0, &event(XiAction::Enter, SCREEN, (1.0, 1.0)));
+    let decoded = pointers.event(
+        SURFACE,
+        DevicePixelRatio::ONE,
+        &event(XiAction::Enter, SCREEN, (1.0, 1.0)),
+    );
     assert!(decoded.inputs.is_empty(), "{:?}", decoded.inputs);
     assert_eq!(decoded.hover, None);
 }
@@ -869,6 +886,10 @@ fn a_touchpad_pinch_is_one_pan_zoom() {
 #[test]
 fn a_touchpad_swipe_is_one_gesture_of_its_fingers() {
     use flui_platform::pointer::TouchpadSwipePhase;
+    const TWO: DevicePixelRatio = match DevicePixelRatio::try_new(2.0) {
+        Some(ratio) => ratio,
+        None => panic!("BUG: 2 is a ratio a screen can have"),
+    };
     let mut pointers = pointers();
     let at = (60.0, 40.0);
     let swipe = |action| event(action, TOUCHPAD, at);
@@ -885,7 +906,7 @@ fn a_touchpad_swipe_is_one_gesture_of_its_fingers() {
         swipe(XiAction::SwipeEnd { cancelled: false }),
     ]
     .iter()
-    .flat_map(|event| pointer_events(pointers.event(SURFACE, 2.0, event).inputs))
+    .flat_map(|event| pointer_events(pointers.event(SURFACE, TWO, event).inputs))
     .collect();
     let swiped: Vec<String> = events
         .iter()
@@ -946,7 +967,11 @@ fn a_swipe_ended_on_another_window_is_cancelled_on_its_own() {
             event(XiAction::SwipeUpdate { dx: 2.0, dy: 0.0 }, TOUCHPAD, at),
         ),
     ] {
-        for input in pointer_events(pointers.event(surface, 1.0, &event).inputs) {
+        for input in pointer_events(
+            pointers
+                .event(surface, DevicePixelRatio::ONE, &event)
+                .inputs,
+        ) {
             if let PointerEvent::TouchpadSwipe(swipe) = input {
                 let phase = match swipe.phase {
                     TouchpadSwipePhase::Update(travel) => format!("travel {}", travel.get().dx),
@@ -1200,21 +1225,22 @@ fn a_run_of_motions_is_one_move_through_them() {
                 scrolled(0.0, 100.0),
             ],
         );
-        let heard: Vec<Heard> = pointer_events(pointers.motions(SURFACE, 1.0, &run))
-            .into_iter()
-            .map(|event| match event {
-                PointerEvent::Move(movement) => Heard::Move(
-                    movement.current().position.get().x,
-                    movement
-                        .coalesced()
-                        .iter()
-                        .map(|sample| sample.position.get().x)
-                        .collect(),
-                ),
-                PointerEvent::Scroll(scroll) => Heard::Scroll(scroll.delta.y()),
-                other => panic!("{case}: neither a move nor a scroll: {other:?}"),
-            })
-            .collect();
+        let heard: Vec<Heard> =
+            pointer_events(pointers.motions(SURFACE, DevicePixelRatio::ONE, &run))
+                .into_iter()
+                .map(|event| match event {
+                    PointerEvent::Move(movement) => Heard::Move(
+                        movement.current().position.get().x,
+                        movement
+                            .coalesced()
+                            .iter()
+                            .map(|sample| sample.position.get().x)
+                            .collect(),
+                    ),
+                    PointerEvent::Scroll(scroll) => Heard::Scroll(scroll.delta.y()),
+                    other => panic!("{case}: neither a move nor a scroll: {other:?}"),
+                })
+                .collect();
         assert_eq!(heard, expected, "{case}");
     }
 }

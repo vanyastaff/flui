@@ -9,12 +9,19 @@ use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 use std::hint::black_box;
 
+use flui_foundation::geometry::DevicePixelRatio;
 use flui_native::input::assembly::{
     ContactRegistry, GestureComponent, GestureDelta, GesturePhase, GestureReading, MoveBatch,
     NativeClock, NativeContact, NativeReading, ReadingAction, ReadingTime, decode,
 };
 use flui_platform::EventTime;
 use flui_platform::pointer::{PointerButton, PointerKind};
+
+/// Two device pixels per logical pixel.
+const TWO: DevicePixelRatio = match DevicePixelRatio::try_new(2.0) {
+    Some(ratio) => ratio,
+    None => panic!("BUG: 2 is a ratio a screen can have"),
+};
 
 thread_local! {
     #[cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
@@ -56,7 +63,7 @@ fn reading(contact: u64, kind: PointerKind, action: ReadingAction, ms: u64) -> N
         action,
         ReadingTime::epoch(EventTime::from_nanos(ms * 1_000_000)),
     )
-    .at_device(4.0, 8.0, 2.0)
+    .at_device(4.0, 8.0, TWO)
 }
 
 fn scale(phase: GesturePhase) -> ReadingAction {
@@ -144,7 +151,7 @@ fn pointer_assembly_allocates_nothing_per_event() {
                 .decode(
                     &mut contacts,
                     &reading(5, PointerKind::Touch, ReadingAction::Move, 20_002)
-                        .at_device(6.0, 8.0, 2.0),
+                        .at_device(6.0, 8.0, TWO),
                 )
                 .expect("decodes"),
         );

@@ -17,12 +17,10 @@ fn exhausted_run_identities_refuse_without_displacing_the_last_run() {
     for (name, start) in [
         (
             "forward",
-            (|c: &AnimationController| c.forward_from(Some(0.1)))
+            (|c: &AnimationController| c.forward_from(0.1))
                 as fn(&AnimationController) -> Result<AnimationRunFuture, AnimationError>,
         ),
-        ("reverse", |c: &AnimationController| {
-            c.reverse_from(Some(0.9))
-        }),
+        ("reverse", |c: &AnimationController| c.reverse_from(0.9)),
         ("target", |c: &AnimationController| c.animate_to(0.9, None)),
         ("repeat", |c: &AnimationController| {
             c.repeat(RepeatMode::Restart)
@@ -70,7 +68,7 @@ fn disposed_status_admission_is_inert() {
             self.0.set(self.0.get() + 1);
         }
     }
-    let subscription = c.subscribe_status({
+    let subscription = c.listen_status({
         let capture = Capture(Rc::clone(&drops), c.clone());
         Rc::new(move |_| {
             let _keep = &capture;

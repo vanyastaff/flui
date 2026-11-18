@@ -136,6 +136,7 @@ pub(crate) mod pinch {
 
     use std::time::Duration;
 
+    use flui_foundation::geometry::DevicePixelRatio;
     use flui_platform::EventTime;
 
     use crate::input::assembly::{GestureComponent, GestureDelta, GesturePhase, GestureReading};
@@ -160,7 +161,7 @@ pub(crate) mod pinch {
         /// `deltaY`.
         pub dy: f64,
         /// `devicePixelRatio`: device pixels per CSS pixel, page zoom included.
-        pub scale: f64,
+        pub scale: DevicePixelRatio,
         /// `timeStamp` on the event timeline.
         pub time: EventTime,
     }
@@ -313,12 +314,12 @@ pub(crate) mod pinch {
     /// 90.909…, 100 device pixels), and an accelerated wheel lands within single
     /// precision of a whole number (4.000244).
     fn classify(step: WheelStep) -> Sequence {
-        let device = step.dy * step.scale;
+        let device = step.scale.to_device(step.dy);
         if step.mode == DOM_DELTA_PIXEL
             && step.dx == 0.0
             && step.dy.is_finite()
             && !is_whole(step.dy)
-            && !(device.is_finite() && step.scale > 0.0 && is_whole(device))
+            && !(device.is_finite() && is_whole(device))
         {
             Sequence::Pinch
         } else {
@@ -451,7 +452,7 @@ pub(crate) mod events {
         sync::Arc,
     };
 
-    use flui_foundation::geometry::Point;
+    use flui_foundation::geometry::{DevicePixelRatio, Point};
     use flui_platform::{
         EventTime,
         keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, Modifiers, NamedKey},
@@ -503,6 +504,7 @@ pub(crate) mod events {
             canvas: &web_sys::HtmlCanvasElement,
             delivery: &Arc<WindowDelivery>,
             latency: flui_platform::InputLatency,
+            pixel_ratio: Rc<dyn Fn() -> DevicePixelRatio>,
             registration: &mut dyn CanvasRegistration,
         ) -> Result<Rc<dyn CanvasKeys>, crate::OpenWindowError> {
             let accepting = registration.accepting();
@@ -550,7 +552,7 @@ pub(crate) mod events {
             register_keyboard_events(canvas, &keys, registration)?;
             register_loss_events(canvas, &loss, registration)?;
             register_hover_events(canvas, delivery, registration)?;
-            register_wheel_events(canvas, delivery, &pinch, registration)?;
+            register_wheel_events(canvas, delivery, &pinch, pixel_ratio, registration)?;
             register_gesture_events(canvas, &pinch, registration)?;
             register_context_menu(canvas, &menu, registration)?;
             Ok(keys)
@@ -1187,6 +1189,7 @@ pub(crate) mod events {
         canvas: &web_sys::HtmlCanvasElement,
         delivery: &Arc<WindowDelivery>,
         pinch: &Rc<Pinch>,
+        pixel_ratio: Rc<dyn Fn() -> DevicePixelRatio>,
         registration: &mut dyn CanvasRegistration,
     ) -> Result<(), crate::OpenWindowError> {
         let timer = {
@@ -1215,7 +1218,7 @@ pub(crate) mod events {
                     mode: we.delta_mode(),
                     dx: we.delta_x(),
                     dy: we.delta_y(),
-                    scale: web_sys::window().map_or(1.0, |window| window.device_pixel_ratio()),
+                    scale: pixel_ratio(),
                     time: event_time(we.time_stamp()),
                 };
                 let ended = {

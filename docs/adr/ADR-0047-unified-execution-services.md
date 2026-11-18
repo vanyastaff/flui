@@ -2,6 +2,8 @@
 
 - **Status:** Accepted (2026-08-18)
 - **Date:** 2026-08-18
+- **Revised:** 2026-11-18 — the per-platform `BackgroundExecutor`, `Priority` and
+  `flui_native::Task` are recorded as deleted, not as a follow-up.
 - **Superseded-by:** [ADR-0371](ADR-0371-before-the-first-release-no-xtask-gate-holds-a-rule-about-the-sources.md)
   for the `xtask workspace` gate only (One owner, no ambient reach): the rule stands and its reader
   confirms it.
@@ -56,7 +58,7 @@ Both lanes count in-flight work against a cap; a full lane refuses with `SpawnEr
 
 ### The platform executor is defanged ahead of removal
 
-`BackgroundExecutor` (already slated for removal under #557) no longer claims a full-core pool per platform instance: construction starts zero threads (lazy `OnceLock`), and the pool that starts on first *use* is a small fixed size (2 workers). FLUI-managed runs never use it, so they never start it. Its deletion — together with `flui_native::Task`/`Priority` — is the follow-up slice, not this one: those surfaces are only lint-gated on Windows/macOS and their internal consumers (prompt marshaling) deserve their own change.
+`BackgroundExecutor` (already slated for removal under #557) no longer claims a full-core pool per platform instance: construction starts zero threads (lazy `OnceLock`), and the pool that starts on first *use* is a small fixed size (2 workers). FLUI-managed runs never use it, so they never start it. It is deleted since: the host's own IO runs on the `NativeExecutor` its creator hands it ([ADR-0327](ADR-0327-the-native-host-is-owner-local-and-runs-its-io-on-the-runtime-its-creator-hands-it.md) §3), `Priority` is gone, and `flui_native::Task` left with its last consumer, the file prompts, when they left `Platform` ([ADR-0151](ADR-0151-platform-layer-boundary-and-names.md) §9).
 
 ## Alternatives considered
 
@@ -70,5 +72,5 @@ Both lanes count in-flight work against a cap; a full lane refuses with `SpawnEr
 
 - A managed desktop run now materializes **zero** background worker threads until the first background spawn, instead of `num_cpus` per platform instance at init.
 - Issues #558 (Task/Worker/Service lifecycles, per-task handles, versioned results, owner-lifetime cancellation) and #559 (raster lane) build on these lanes; until they land the spawn lanes have no shipped production caller — an `expect(dead_code)` in `execution.rs` errors the moment one appears, forcing that attribute's removal. (ADR-0049's lifecycle layer became that caller and retired the attribute; since ADR-0083 the services are `pub` in `flui-runtime` and carry no `expect(dead_code)`.) A breaking reshape of the seam when those consumers prove it wrong is expected and preferred over shims.
-- Named residuals: flui-assets' bridged decode path still lazily starts its own single-worker runtime when no handle is injected (1 thread, not full-core; wiring it to the IO lane needs a flui-app → flui-assets edge decision — follow-up under #557); `Priority`/`Task`/`BackgroundExecutor` remain public removal-targets until the follow-up slice.
+- Named residuals: flui-assets' bridged decode path still lazily starts its own single-worker runtime when no handle is injected (1 thread, not full-core; wiring it to the IO lane needs a flui-app → flui-assets edge decision — follow-up under #557). `Priority`, `Task` and `BackgroundExecutor` are deleted (ADR-0327 §3, ADR-0151 §9).
 - `tokio-util` (default features, `CancellationToken` only) enters the workspace with this — its sanctioned first owning work per the adoption guide.

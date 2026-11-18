@@ -75,6 +75,7 @@ pub struct InputCapabilities {
     window_move: Availability,
     window_resize: Availability,
     caption_buttons: Availability,
+    first_click: Availability,
     outgoing_drag: Availability,
     present: PointerKindSet,
 }
@@ -92,6 +93,7 @@ impl InputCapabilities {
         window_move: Availability::Unavailable,
         window_resize: Availability::Unavailable,
         caption_buttons: Availability::Unavailable,
+        first_click: Availability::Unavailable,
         outgoing_drag: Availability::Unavailable,
         present: PointerKindSet::empty(),
     };
@@ -145,10 +147,15 @@ impl InputCapabilities {
     /// Whether the OS honours `kind` regions: [`PlatformWindow::set_input_regions`](crate::PlatformWindow::set_input_regions)
     /// hands it the regions of the kinds available here and drops the rest. A
     /// [`WindowContent`](InputRegionKind::WindowContent) region takes its availability from
-    /// the move and resize regions it is cut out of: it is honoured where either is.
+    /// the move and resize regions it is cut out of: it is honoured where either is. A
+    /// [`FirstClick`](InputRegionKind::FirstClick) region is honoured where the host reads
+    /// the regions to decide whether the click that activates a window is delivered, and
+    /// marks that press (AppKit); elsewhere FLUI delivers the activating click unmarked and
+    /// the region changes nothing.
     #[must_use]
     pub const fn input_region(&self, kind: InputRegionKind) -> Availability {
         match kind {
+            InputRegionKind::FirstClick => self.first_click,
             InputRegionKind::SystemGestureExclusion => self.system_gesture_exclusion,
             InputRegionKind::WindowMove => self.window_move,
             InputRegionKind::WindowResize(_) => self.window_resize,
@@ -172,6 +179,7 @@ impl InputCapabilities {
             || self.window_move.is_available()
             || self.window_resize.is_available()
             || self.caption_buttons.is_available()
+            || self.first_click.is_available()
     }
 
     /// Starting a drag that leaves the application for the OS. This is the one authoritative
@@ -279,6 +287,14 @@ impl InputCapabilitiesBuilder {
     pub const fn caption_buttons(self, availability: Availability) -> Self {
         Self(InputCapabilities {
             caption_buttons: availability,
+            ..self.0
+        })
+    }
+
+    /// [`InputRegionKind::FirstClick`] regions.
+    pub const fn first_click(self, availability: Availability) -> Self {
+        Self(InputCapabilities {
+            first_click: availability,
             ..self.0
         })
     }

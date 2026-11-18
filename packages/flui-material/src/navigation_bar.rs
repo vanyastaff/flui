@@ -725,13 +725,11 @@ impl StatefulView for SelectionIndicator {
     type State = SelectionIndicatorState;
 
     fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
-        let fraction = AnimatedValue::with_debug_label(
-            "NavigationBar indicator",
-            selection_fraction(self.selected),
-            self.motion.clone(),
-            None,
-        )
-        .expect("BUG: a selection fraction is 0 or 1, always finite");
+        let fraction =
+            AnimatedValue::builder(selection_fraction(self.selected), self.motion.clone())
+                .debug_label("NavigationBar indicator")
+                .build_on(None)
+                .expect("BUG: a selection fraction is 0 or 1, always finite");
         SelectionIndicatorState { fraction }
     }
 }

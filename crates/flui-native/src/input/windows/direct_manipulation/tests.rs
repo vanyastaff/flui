@@ -67,7 +67,7 @@ fn describe(input: &PlatformInput, scale: f64) -> Option<String> {
 }
 
 fn scale_of(hwnd: HWND) -> f64 {
-    input(hwnd).scale_factor()
+    input(hwnd).scale_factor().get()
 }
 
 /// What the input keeps of the fixture's window.

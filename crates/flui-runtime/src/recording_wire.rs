@@ -75,6 +75,10 @@ pub enum WireError {
     /// A value the vocabulary's validating constructor refuses.
     #[error("invalid value: {0}")]
     Invalid(String),
+    /// A device pixel ratio no screen has: zero, negative, or outside
+    /// `DevicePixelRatio::MIN..=MAX`.
+    #[error("a device pixel ratio no screen has: {0}")]
+    Ratio(f64),
     /// The vocabulary grew a variant of this type the wire form does not
     /// mirror yet: it is added to `flui_protocol::input_recording` and to the
     /// generated variant table.
@@ -628,9 +632,21 @@ impl<D: flui_platform::pointer::ButtonDirection> TryConvert<&PointerButtonEvent<
             buttons: buttons_dto(event.buttons()),
             modifiers: modifiers_dto(event.modifiers),
             click_count: event.click_count.map(NonZeroU8::get),
+            first_click: event.is_first_click(),
             sample: (&event.sample).convert_into(),
         })
     }
+}
+
+/// The press `stored` records, with its first-click mark.
+fn press_event(stored: rec::ButtonEvent) -> Result<flui_platform::pointer::PointerPress> {
+    let first_click = stored.first_click;
+    let press = button_event::<flui_platform::pointer::Press>(stored)?;
+    Ok(if first_click {
+        press.with_first_click()
+    } else {
+        press
+    })
 }
 
 /// The button event `event` records, in the direction `D` names.
@@ -644,6 +660,9 @@ fn button_event<D: flui_platform::pointer::ButtonDirection>(
         stored.sample.try_convert_into()?,
     )
     .with_modifiers(modifiers(&stored.modifiers)?);
+    if stored.first_click && !D::PRESSED {
+        return Err(invalid("a release marked as a first click"));
+    }
     if let Some(count) = stored.click_count {
         event =
             event.with_click_count(NonZeroU8::new(count).ok_or_else(|| invalid("click count 0"))?);
@@ -873,9 +892,9 @@ impl TryConvert<&PointerEvent> for rec::PointerEvent {
 impl TryConvert<rec::PointerEvent> for PointerEvent {
     fn try_convert(event: rec::PointerEvent) -> Result<Self> {
         Ok(match event {
-            rec::PointerEvent::Down(press) => Self::Down(button_event(press)?),
+            rec::PointerEvent::Down(press) => Self::Down(press_event(press)?),
             rec::PointerEvent::ButtonPressed(press) => {
-                Self::ButtonChange(ButtonChange::Pressed(button_event(press)?))
+                Self::ButtonChange(ButtonChange::Pressed(press_event(press)?))
             }
             rec::PointerEvent::ButtonReleased(release) => {
                 Self::ButtonChange(ButtonChange::Released(button_event(release)?))
@@ -1311,6 +1330,7 @@ impl Convert<&InputCapabilities> for rec::Capabilities {
             window_move: region(InputRegionKind::WindowMove),
             window_resize: region(InputRegionKind::WindowResize(ResizeEdge::Top)),
             caption_buttons: region(InputRegionKind::CaptionButton(CaptionButton::Close)),
+            first_click: region(InputRegionKind::FirstClick),
             outgoing_drag: rec::Availability::convert(capabilities.outgoing_drag()),
             present: PRESENT_KINDS
                 .iter()
@@ -1339,6 +1359,7 @@ impl Convert<rec::Capabilities> for InputCapabilities {
             .window_move(Availability::convert(capabilities.window_move))
             .window_resize(Availability::convert(capabilities.window_resize))
             .caption_buttons(Availability::convert(capabilities.caption_buttons))
+            .first_click(Availability::convert(capabilities.first_click))
             .outgoing_drag(Availability::convert(capabilities.outgoing_drag))
             .present(present)
             .build()
@@ -1416,7 +1437,7 @@ impl TryConvert<rec::WindowObservation> for WindowObservation {
             } => Self::Metrics(
                 WindowMetrics::try_new(
                     flui_foundation::geometry::DeviceSize::new(width, height),
-                    scale_factor,
+                    pixel_ratio(scale_factor)?,
                 )
                 .map_err(invalid)?,
             ),
@@ -1874,8 +1895,9 @@ fn regional_from_wire(wire: Option<Box<wire::Regional>>) -> Result<RegionalParts
     })
 }
 
+/// The device pixel ratio a row holds, refused as [`WireError::Ratio`] when no screen has it.
 fn pixel_ratio(value: f64) -> Result<DevicePixelRatio> {
-    DevicePixelRatio::try_new(value).ok_or_else(|| invalid(format!("pixel ratio {value}")))
+    DevicePixelRatio::try_new(value).ok_or(WireError::Ratio(value))
 }
 
 /// The preferences `wire` describes, validated as the `with_*` methods

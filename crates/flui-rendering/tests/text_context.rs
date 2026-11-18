@@ -710,7 +710,7 @@ fn rejected_viewport_resize_preserves_the_fractional_page() {
 }
 
 fn rejected_tight_text_layout_does_not_stop_the_size_controller() {
-    use flui_animation::{MotionClock, Vsync, curve::SharedCurve, curves};
+    use flui_animation::{MotionClock, SharedCurve, Vsync, curves};
     use flui_objects::{RenderAnimatedSize, SizeMotion};
     use flui_painting::{Alignment, paint::Clip};
     use std::time::Duration;

@@ -31,7 +31,7 @@
 // the flui-view and flui-testing benches carry the same allow).
 
 use std::hint::black_box;
-use std::sync::Arc;
+use std::rc::Rc;
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use flui_foundation::RenderId;
@@ -61,7 +61,7 @@ fn node(index: u32) -> SemanticsNode {
 /// Flat rather than deep on purpose — the costs under measurement are per-node
 /// (a scan and a translation), so depth would only add noise.
 fn owner_with(count: u32) -> SemanticsOwner {
-    let mut owner = SemanticsOwner::new(Arc::new(|_| {}));
+    let mut owner = SemanticsOwner::new(Rc::new(|_| {}));
     let root = owner.insert(node(0));
     for index in 1..count {
         let child = owner.insert(node(index));
@@ -80,7 +80,7 @@ fn owner_with(count: u32) -> SemanticsOwner {
 fn selection_owner_with(count: u32) -> SemanticsOwner {
     let mut identities = SemanticsIdentitySource::default();
     let anchors: Vec<SemanticsAnchor> = (1..count).map(|_| SemanticsAnchor::new()).collect();
-    let mut owner = SemanticsOwner::new(Arc::new(|_| {}));
+    let mut owner = SemanticsOwner::new(Rc::new(|_| {}));
     let mut root = node(0);
     root.config_mut().set_role(SemanticsRole::Document);
     root.config_mut().set_merge_boundary(true);

@@ -983,6 +983,9 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         let hit_node = |result: &mut crate::hit_testing::HitTestResult,
                         walk: &mut HitWalk,
                         position: Offset| {
+            // Entries already on the path: a node that joins the hits below it
+            // joins when its subtree added any, blocking or not.
+            let entries_before = result.len();
             let mut hit_child = |index: usize,
                                  override_pos: Option<Offset>,
                                  local_transform: Option<Matrix4>|
@@ -1066,7 +1069,9 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
 
             let hit =
                 render_object.hit_test_raw(position, children.len(), own_size, &mut hit_child);
-            if hit.add_self {
+            let joins_below =
+                !hit.add_self && render_object.joins_hits_below() && result.len() > entries_before;
+            if hit.add_self || joins_below {
                 // Leaf-first path: children pushed their entries during
                 // the callback above; the ancestor follows. The transform
                 // is still on the stack, so this entry captures it.
@@ -1077,7 +1082,8 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
                 // other render object returns `None`, leaving a target-less entry.
                 // A hit that chose its own target and cursor (a paragraph's
                 // link) overrides the node-wide ones.
-                let entry = crate::hit_testing::HitTestEntry::new(id);
+                let entry = crate::hit_testing::HitTestEntry::new(id)
+                    .subtree_entries(result.len() - entries_before);
                 let entry = match hit
                     .pointer_target
                     .or_else(|| render_object.pointer_target())
@@ -2368,7 +2374,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
 /// semantics types — which is what keeps `flui-native` (layer 2) free of a
 /// dependency on `flui-semantics` (layer 3).
 fn no_op_semantics_update_callback() -> flui_semantics::SemanticsUpdateCallback {
-    std::sync::Arc::new(|_update: &flui_semantics::TreeUpdate| {})
+    std::rc::Rc::new(|_update: &flui_semantics::TreeUpdate| {})
 }
 
 /// Visits one node of a hit walk with its user code contained.

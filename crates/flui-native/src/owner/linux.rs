@@ -1,7 +1,7 @@
 //! The Linux hosts' loops: Wayland's, over the compositor's connection
 //! (`wayland`), and X11's, over the X server's (`x11`); and what both keep
-//! of the session in the same shape: the Settings portal's preferences, the
-//! sources of the host's notices, and the desktop's opener.
+//! of the session in the same shape: the Settings portal's preferences and the
+//! sources of the host's notices.
 //!
 //! The session's sources are the preference and lifecycle features'
 //! (`preferences::linux`, `lifecycle::linux`); a loop holds them through the
@@ -16,7 +16,7 @@ pub(crate) mod wayland;
 pub(crate) mod x11;
 
 #[cfg(any(wayland_host, x11_host))]
-pub(crate) use session::{LinuxNotices, LinuxPreferences, PortalSlot, SessionLoop, xdg_open};
+pub(crate) use session::{LinuxNotices, LinuxPreferences, PortalSlot, SessionLoop};
 
 #[cfg(any(wayland_host, x11_host))]
 mod session {
@@ -75,81 +75,6 @@ mod session {
         /// The loop started `source`, or stopped it with `None`.
         pub(crate) fn set(&self, source: Option<&Arc<dyn LinuxPreferences>>) {
             *self.0.lock() = source.map(Arc::downgrade);
-        }
-    }
-
-    /// Hand `target` (a URL or a path) to the desktop's opener, `xdg-open`,
-    /// and reap it on a thread of its own, so no exited child is left behind.
-    /// Every Linux host opens through it. A failure is logged: the services
-    /// answer nothing.
-    pub(crate) fn xdg_open(target: &std::ffi::OsStr) {
-        let _ = spawn_reaped(&mut opener(target));
-    }
-
-    /// The opener's command for `target`. The activation token the process
-    /// was launched with is its own first window's, used up once that window
-    /// activates; the handler the opener starts is not handed it.
-    fn opener(target: &std::ffi::OsStr) -> std::process::Command {
-        let mut command = std::process::Command::new("xdg-open");
-        command.arg(target).env_remove("XDG_ACTIVATION_TOKEN");
-        command
-    }
-
-    /// Start `command` and wait for it on a thread of its own; its process
-    /// id, or `None` when it could not start.
-    fn spawn_reaped(command: &mut std::process::Command) -> Option<u32> {
-        let child = match command.spawn() {
-            Ok(child) => child,
-            Err(error) => {
-                tracing::warn!(%error, "the desktop's opener could not start");
-                return None;
-            }
-        };
-        let id = child.id();
-        let reaped = std::thread::Builder::new()
-            .name("flui-xdg-open".into())
-            .spawn(move || {
-                let mut child = child;
-                if let Err(error) = child.wait() {
-                    tracing::warn!(%error, "the desktop's opener could not be waited for");
-                }
-            });
-        if let Err(error) = reaped {
-            tracing::warn!(%error, "the opener's reaper could not start; it stays unreaped");
-        }
-        Some(id)
-    }
-
-    #[cfg(test)]
-    mod tests {
-        /// The opener is not handed the launcher's activation token, which
-        /// is this process's first window's.
-        #[test]
-        fn the_opener_is_not_handed_the_launch_token() {
-            let opener = super::opener(std::ffi::OsStr::new("https://example.org"));
-            assert!(
-                opener
-                    .get_envs()
-                    .any(|(name, value)| name == "XDG_ACTIVATION_TOKEN" && value.is_none()),
-                "the variable is removed from the opener's environment"
-            );
-        }
-
-        /// A process the desktop's opener started is reaped once it exits: no
-        /// zombie is left in the process table.
-        #[test]
-        fn an_opener_that_exited_leaves_no_zombie() {
-            let id = super::spawn_reaped(&mut std::process::Command::new("true"))
-                .expect("`true` starts");
-            let entry = std::path::PathBuf::from(format!("/proc/{id}"));
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-            while entry.exists() && std::time::Instant::now() < deadline {
-                std::thread::sleep(std::time::Duration::from_millis(10));
-            }
-            assert!(
-                !entry.exists(),
-                "the exited opener {id} is still in the process table"
-            );
         }
     }
 }

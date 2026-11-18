@@ -725,7 +725,7 @@ mod tests {
         let sink = std::sync::Arc::clone(&captured);
 
         let mut owner = PipelineOwner::new(crate::pipeline::TextContextHandle::standalone());
-        owner.set_semantics_update_callback(std::sync::Arc::new(
+        owner.set_semantics_update_callback(std::rc::Rc::new(
             move |update: &flui_semantics::TreeUpdate| {
                 sink.lock()
                     .expect("BUG: capture mutex is uncontended in this single-threaded test")
@@ -776,7 +776,7 @@ mod tests {
         let captured = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let sink = std::sync::Arc::clone(&captured);
         let mut owner = PipelineOwner::new(crate::pipeline::TextContextHandle::standalone());
-        owner.set_semantics_update_callback(std::sync::Arc::new(
+        owner.set_semantics_update_callback(std::rc::Rc::new(
             move |update: &flui_semantics::TreeUpdate| {
                 sink.lock()
                     .expect("BUG: capture mutex is uncontended in this single-threaded test")
@@ -856,9 +856,7 @@ mod tests {
     /// the nested merger's subtree, not the whole tree.
     fn a_change_inside_a_nested_merger_reassembles_only_that_merger() {
         let mut owner = PipelineOwner::new(crate::pipeline::TextContextHandle::standalone());
-        owner.set_semantics_update_callback(std::sync::Arc::new(
-            |_: &flui_semantics::TreeUpdate| {},
-        ));
+        owner.set_semantics_update_callback(std::rc::Rc::new(|_: &flui_semantics::TreeUpdate| {}));
         let root = owner.set_root_render_object(Box::new(SemanticBox::empty()));
         owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(10.0, 10.0))));
         let card = owner

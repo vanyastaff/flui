@@ -563,9 +563,7 @@ impl MessengerCore {
             // Forward/Reverse carry no further consequence here — the
             // controller's own `status()` already IS the observable state
             // (see the module docs' "The drain state machine" section).
-            // `AnimationStatus` is `#[non_exhaustive]`; every variant it has
-            // today is handled above.
-            _ => {}
+            AnimationStatus::Forward | AnimationStatus::Reverse => {}
         }
     }
 
@@ -682,10 +680,10 @@ impl MessengerCore {
         if self.attached.get() {
             let core = self.this.clone();
             controller
-                .subscribe_status(Rc::new(move |_status| {
+                .listen_status(Rc::new(move |_status| {
                     MessengerCore::reconcile_from_tick(&core);
                 }))
-                .detach();
+                .forget();
         }
         self.last_duration_status
             .set(AnimationStatus::ReverseSettled);
@@ -826,10 +824,10 @@ impl ScaffoldMessengerHandle {
         let core = Rc::downgrade(&self.shared);
         self.shared
             .entry_controller
-            .subscribe_status(Rc::new(move |_status| {
+            .listen_status(Rc::new(move |_status| {
                 MessengerCore::reconcile_from_tick(&core);
             }))
-            .detach();
+            .forget();
         *self.shared.post_frame.borrow_mut() = ctx.post_frame_handle();
 
         self.rebind(ctx);

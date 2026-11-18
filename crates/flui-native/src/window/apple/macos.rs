@@ -1699,7 +1699,7 @@ impl PlatformWindow for MacOSWindow {
     fn set_cursor(&self, cursor: &Cursor) -> Result<(), CursorError> {
         let (kept, scale) = {
             let state = self.state.borrow();
-            let scale = state.scale_factor.get();
+            let scale = state.scale_factor;
             (state.cursor.shows(cursor, scale), scale)
         };
         // Made with the state let go: AppKit is messaged.
@@ -1715,8 +1715,7 @@ impl PlatformWindow for MacOSWindow {
             (shown, replaced)
         };
         if let Some(shown) = shown {
-            let shown = shown.ns_cursor()?;
-            cursor::set(&shown);
+            shown.ns_cursor().set();
         }
         drop(replaced);
         Ok(())
@@ -1804,7 +1803,7 @@ impl MacOSWindow {
             state.lock_at = at;
         }
         content_view::set_pointer_locked(&self.view, true);
-        cursor::set(&blank);
+        blank.set();
         self.keep_lock_point();
         Ok(())
     }
@@ -1881,10 +1880,7 @@ impl MacOSWindow {
             tracing::warn!(%error, "the mouse could not be attached to the cursor again");
         }
         content_view::set_pointer_locked(&self.view, false);
-        match shown.ns_cursor() {
-            Ok(shown) => cursor::set(&shown),
-            Err(error) => tracing::debug!(%error, "the window's cursor could not be shown again"),
-        }
+        shown.ns_cursor().set();
         true
     }
 
@@ -1972,7 +1968,7 @@ impl MacOSWindow {
     fn rescale_cursor(&self) {
         let (made, scale) = {
             let state = self.state.borrow();
-            (state.cursor.clone(), state.scale_factor.get())
+            (state.cursor.clone(), state.scale_factor)
         };
         let next = match made.rescaled(scale) {
             Some(Ok(next)) => next,
@@ -1988,8 +1984,8 @@ impl MacOSWindow {
             let shown = (state.cursor_grab != CursorGrab::Locked).then(|| state.cursor.clone());
             (shown, replaced)
         };
-        if let Some(Ok(shown)) = shown.map(|shown| shown.ns_cursor()) {
-            cursor::set(&shown);
+        if let Some(shown) = shown {
+            shown.ns_cursor().set();
         }
         drop((made, replaced));
     }
@@ -2154,7 +2150,7 @@ impl MacOSWindow {
             (
                 state.display,
                 state.normal,
-                state.scale_factor.get(),
+                state.scale_factor,
                 state.occlusion_visible,
                 state.sequence.heading(std::time::Instant::now()),
                 state.frame,

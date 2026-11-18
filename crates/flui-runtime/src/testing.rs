@@ -32,7 +32,7 @@ use crate::sink::{FrameSink, SubmitVerdict};
 /// `Rc<dyn PlatformWindow>` is needed.
 pub struct TestWindow {
     id: WindowId,
-    scale_factor: f64,
+    scale_factor: flui_foundation::geometry::DevicePixelRatio,
     physical_size: Size<i32>,
     logical_size: flui_platform::WindowExtent,
     focused: bool,
@@ -92,7 +92,7 @@ impl TestWindow {
             id: WindowIdMint::new()
                 .next()
                 .expect("BUG: a fresh mint issues its first id"),
-            scale_factor: 1.0,
+            scale_factor: flui_foundation::geometry::DevicePixelRatio::ONE,
             physical_size: Size::default(),
             logical_size: flui_platform::WindowExtent::ZERO,
             focused: false,
@@ -118,7 +118,10 @@ impl TestWindow {
 
     /// Report the scale `scale_factor` in the snapshot's metrics.
     #[must_use]
-    pub fn with_scale_factor(mut self, scale_factor: f64) -> Self {
+    pub fn with_scale_factor(
+        mut self,
+        scale_factor: flui_foundation::geometry::DevicePixelRatio,
+    ) -> Self {
         self.scale_factor = scale_factor;
         self
     }

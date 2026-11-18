@@ -3,7 +3,7 @@
 use std::ops::Add;
 use std::time::Duration;
 
-use flui_animation::curve::{Curve, SharedCurve};
+use flui_animation::{Curve, SharedCurve};
 use flui_animation::{MotionSpec, curves};
 use flui_objects::TranslationFraction;
 use flui_painting::Alignment;

@@ -1,7 +1,7 @@
 //! Friction, bounds and the bouncing scroll fling.
 
 use crate::motion_trace::AnimatedValue;
-use flui_animation::simulation::{
+use flui_animation::{
     BouncingScrollSimulation, BoundedFrictionSimulation, FrictionSimulation, Simulation,
     SimulationBounds, SimulationError, SimulationParameter, SpeedLimit, SpringDescription,
     Tolerance,

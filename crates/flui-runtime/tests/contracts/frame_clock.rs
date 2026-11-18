@@ -819,7 +819,7 @@ fn delivery_case(delivery: Delivery) {
         }
     }));
     let fail_once = Rc::clone(&armed);
-    let status_listener = primary.controller.subscribe_status(Rc::new(move |status| {
+    let status_listener = primary.controller.listen_status(Rc::new(move |status| {
         if delivery == Delivery::FinalStatus
             && status == flui_animation::AnimationStatus::ForwardSettled
             && fail_once.replace(false)
@@ -997,7 +997,7 @@ struct FailingSimulation {
     armed: Cell<bool>,
 }
 
-impl flui_animation::simulation::Simulation for FailingSimulation {
+impl flui_animation::Simulation for FailingSimulation {
     fn x(&self, time: f64) -> f64 {
         if !self.completion && time > 0.0 && self.armed.replace(false) {
             std::panic::panic_any("simulation position computation");

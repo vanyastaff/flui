@@ -1,11 +1,11 @@
+use flui_foundation::Subscription;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::Duration;
 
 use flui_animation::{
     Animation, AnimationController, AnimationStatus, AnimationSwitch, CurvedAnimation, MotionClock,
-    ProxyAnimation, ReverseAnimation, StatusCallback, StatusSubscription, Tween, TweenAnimation,
-    Vsync, curves,
+    ProxyAnimation, ReverseAnimation, StatusCallback, Tween, TweenAnimation, Vsync, curves,
 };
 use flui_foundation::{Listenable, ListenerCallback, ListenerId, Notifier};
 
@@ -16,11 +16,11 @@ fn dropping_one_subscription_preserves_independent_sources_and_channels() {
     let a_calls = Rc::new(Cell::new(0));
     let b_calls = Rc::new(Cell::new(0));
     let values = Rc::new(Cell::new(0));
-    let a_subscription = a.controller().subscribe_status({
+    let a_subscription = a.controller().listen_status({
         let calls = Rc::clone(&a_calls);
         Rc::new(move |_| calls.set(calls.get() + 1))
     });
-    let _b_subscription = b.controller().subscribe_status({
+    let _b_subscription = b.controller().listen_status({
         let calls = Rc::clone(&b_calls);
         Rc::new(move |_| calls.set(calls.get() + 1))
     });
@@ -45,15 +45,15 @@ fn dropping_one_subscription_preserves_independent_sources_and_channels() {
 fn dropping_a_later_subscription_during_delivery_skips_it() {
     let controller = AnimationController::builder(Duration::from_secs(1)).build();
     let later = Rc::new(RefCell::new(None));
-    let _first = controller.subscribe_status({
+    let _first = controller.listen_status({
         let later = Rc::clone(&later);
         Rc::new(move |_| {
-            let removed: Option<StatusSubscription> = later.borrow_mut().take();
+            let removed: Option<Subscription> = later.borrow_mut().take();
             drop(removed);
         })
     });
     let calls = Rc::new(Cell::new(0));
-    *later.borrow_mut() = Some(controller.subscribe_status({
+    *later.borrow_mut() = Some(controller.listen_status({
         let calls = Rc::clone(&calls);
         Rc::new(move |_| calls.set(calls.get() + 1))
     }));
@@ -69,14 +69,14 @@ impl Drop for Capture {
     }
 }
 
-fn detach_keeps_the_callback_until_owner_teardown() {
+fn forget_keeps_the_callback_until_owner_teardown() {
     let registry = Vsync::new();
     let owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&registry));
     let calls = Rc::new(Cell::new(0));
     let drops = Rc::new(Cell::new(0));
     owner
         .controller()
-        .subscribe_status({
+        .listen_status({
             let calls = Rc::clone(&calls);
             let capture = Capture(Rc::clone(&drops));
             Rc::new(move |_| {
@@ -84,7 +84,7 @@ fn detach_keeps_the_callback_until_owner_teardown() {
                 calls.set(calls.get() + 1);
             })
         })
-        .detach();
+        .forget();
     let _run = owner.controller().forward().unwrap();
     assert_eq!(calls.get(), 1);
     assert_eq!(drops.get(), 0);
@@ -93,11 +93,33 @@ fn detach_keeps_the_callback_until_owner_teardown() {
     assert!(registry.is_empty());
 }
 
+/// `detach` means what it means on every other `Subscription`: the callback
+/// leaves the source now and its captures are destroyed, while the source
+/// keeps running.
+fn detach_removes_the_callback_at_once() {
+    let registry = Vsync::new();
+    let owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&registry));
+    let calls = Rc::new(Cell::new(0));
+    let drops = Rc::new(Cell::new(0));
+    let subscription = owner.controller().listen_status({
+        let calls = Rc::clone(&calls);
+        let capture = Capture(Rc::clone(&drops));
+        Rc::new(move |_| {
+            let _keep = &capture;
+            calls.set(calls.get() + 1);
+        })
+    });
+    subscription.detach();
+    assert_eq!(drops.get(), 1, "detach destroys the callback's captures");
+    let _run = owner.controller().forward().unwrap();
+    assert_eq!(calls.get(), 0, "a detached callback hears no status");
+}
+
 fn a_surviving_guard_does_not_keep_the_source_alive() {
     let registry = Vsync::new();
     let owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&registry));
     let drops = Rc::new(Cell::new(0));
-    let subscription = owner.controller().subscribe_status({
+    let subscription = owner.controller().listen_status({
         let capture = Capture(Rc::clone(&drops));
         Rc::new(move |_| {
             let _keep = &capture;
@@ -129,7 +151,7 @@ fn custom_sources_can_construct_removal_authority() {
             calls.set(calls.get() + 1);
         })
     });
-    let subscription = StatusSubscription::new(&source, token, remove);
+    let subscription = Subscription::for_source(&source, token, remove);
     source.notify(&AnimationStatus::Forward);
     assert_eq!(calls.get(), 1);
     drop(subscription);
@@ -167,11 +189,14 @@ impl Animation<f64> for ChannelSource {
     fn is_animating(&self) -> bool {
         false
     }
-    fn observe_status(&self, observer: flui_animation::StatusObserver) -> StatusSubscription {
+    fn listen_status_with_recovery(
+        &self,
+        observer: flui_animation::StatusObserver,
+    ) -> Subscription {
         let id = self
             .statuses
             .add_with_recovery(Rc::new(move |status, recovery| observer(*status, recovery)));
-        StatusSubscription::new(&self.statuses, id, |source, id, recovery| {
+        Subscription::for_source(&self.statuses, id, |source, id, recovery| {
             source.inherit_failure(recovery);
             source.take_callback(id)
         })
@@ -185,10 +210,10 @@ fn a_custom_source_lends_its_delivery_scope_to_wrappers() {
         statuses: Rc::new(Notifier::new()),
         values: flui_foundation::ChangeNotifier::new(),
     });
-    let _first = source.subscribe_status(Rc::new(|_| panic!("first status listener")));
+    let _first = source.listen_status(Rc::new(|_| panic!("first status listener")));
     let curved = CurvedAnimation::new(source.clone(), curves::LINEAR);
     let seen = Rc::new(Cell::new(None));
-    let _relay = curved.observe_status({
+    let _relay = curved.listen_status_with_recovery({
         let seen = Rc::clone(&seen);
         Rc::new(move |_, recovery| seen.set(Some(recovery.has_failure())))
     });
@@ -219,7 +244,7 @@ impl Drop for ReentrantCapture {
 fn callback_retirement_can_reenter_the_same_source() {
     let controller = AnimationController::builder(Duration::from_secs(1)).build();
     let drops = Rc::new(Cell::new(0));
-    let subscription = controller.subscribe_status({
+    let subscription = controller.listen_status({
         let capture = ReentrantCapture {
             controller: controller.clone(),
             drops: Rc::clone(&drops),
@@ -243,7 +268,7 @@ impl Drop for FailingCapture {
 
 fn a_failed_retirement_withdraws_before_the_next_subscription() {
     let controller = AnimationController::builder(Duration::from_secs(1)).build();
-    let subscription = controller.subscribe_status({
+    let subscription = controller.listen_status({
         let capture = FailingCapture;
         Rc::new(move |_| {
             let _keep = &capture;
@@ -256,7 +281,7 @@ fn a_failed_retirement_withdraws_before_the_next_subscription() {
         Some(&"status capture retirement failed")
     );
     let calls = Rc::new(Cell::new(0));
-    let _next = controller.subscribe_status({
+    let _next = controller.listen_status({
         let calls = Rc::clone(&calls);
         Rc::new(move |_| calls.set(calls.get() + 1))
     });
@@ -267,20 +292,20 @@ fn a_failed_retirement_withdraws_before_the_next_subscription() {
 
 fn removal_during_a_failed_round_preserves_failure_and_progress() {
     let controller = AnimationController::builder(Duration::from_secs(1)).build();
-    let _first = controller.subscribe_status(Rc::new(|status| {
+    let _first = controller.listen_status(Rc::new(|status| {
         assert!(status != AnimationStatus::Forward, "first status failure");
     }));
     let later = Rc::new(RefCell::new(None));
-    let _remover = controller.subscribe_status({
+    let _remover = controller.listen_status({
         let later = Rc::clone(&later);
         Rc::new(move |_| {
-            let subscription: Option<StatusSubscription> = later.borrow_mut().take();
+            let subscription: Option<Subscription> = later.borrow_mut().take();
             drop(subscription);
         })
     });
     let removed_calls = Rc::new(Cell::new(0));
     let drops = Rc::new(Cell::new(0));
-    *later.borrow_mut() = Some(controller.subscribe_status({
+    *later.borrow_mut() = Some(controller.listen_status({
         let calls = Rc::clone(&removed_calls);
         let capture = Capture(Rc::clone(&drops));
         Rc::new(move |_| {
@@ -289,7 +314,7 @@ fn removal_during_a_failed_round_preserves_failure_and_progress() {
         })
     }));
     let tail_calls = Rc::new(Cell::new(0));
-    let _tail = controller.subscribe_status({
+    let _tail = controller.listen_status({
         let calls = Rc::clone(&tail_calls);
         Rc::new(move |_| calls.set(calls.get() + 1))
     });
@@ -311,12 +336,12 @@ fn a_subscription_can_withdraw_itself_during_delivery() {
     let controller = AnimationController::builder(Duration::from_secs(1)).build();
     let own = Rc::new(RefCell::new(None));
     let calls = Rc::new(Cell::new(0));
-    *own.borrow_mut() = Some(controller.subscribe_status({
+    *own.borrow_mut() = Some(controller.listen_status({
         let own = Rc::clone(&own);
         let calls = Rc::clone(&calls);
         Rc::new(move |_| {
             calls.set(calls.get() + 1);
-            let removed: Option<StatusSubscription> = own.borrow_mut().take();
+            let removed: Option<Subscription> = own.borrow_mut().take();
             drop(removed);
         })
     }));
@@ -329,11 +354,11 @@ fn a_subscription_can_withdraw_itself_during_delivery() {
 fn a_closed_sources_guard_cannot_remove_a_new_owners_callback() {
     let registry = Vsync::new();
     let mut old = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&registry));
-    let old_subscription = old.controller().subscribe_status(Rc::new(|_| {}));
+    let old_subscription = old.controller().listen_status(Rc::new(|_| {}));
     old.dispose();
     let next = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&registry));
     let calls = Rc::new(Cell::new(0));
-    let _next_subscription = next.controller().subscribe_status({
+    let _next_subscription = next.controller().listen_status({
         let calls = Rc::clone(&calls);
         Rc::new(move |_| calls.set(calls.get() + 1))
     });
@@ -347,7 +372,7 @@ fn admission_after_disposal_retires_captures_outside_the_state_borrow() {
     let mut owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&registry));
     owner.dispose();
     let drops = Rc::new(Cell::new(0));
-    let subscription = owner.controller().subscribe_status({
+    let subscription = owner.controller().listen_status({
         let capture = ReentrantCapture {
             controller: owner.controller().clone(),
             drops: Rc::clone(&drops),
@@ -378,7 +403,7 @@ fn disposed_switch_admission_retires_captures_before_returning() {
     let source = AnimationSwitch::new(parent.clone(), None);
     source.dispose();
     let drops = Rc::new(Cell::new(0));
-    let subscription = source.subscribe_status({
+    let subscription = source.listen_status({
         let capture = Reenter {
             source: source.clone(),
             drops: Rc::clone(&drops),
@@ -424,7 +449,7 @@ fn capture_retirement_releasing_the_last_wrapper_silences_reentry() {
         let parent = Rc::new(AnimationController::builder(Duration::from_secs(1)).build());
         let adapter = wrap(parent.clone());
         let owner = Rc::new(RefCell::new(Some(adapter.clone())));
-        let subscription = adapter.subscribe_status({
+        let subscription = adapter.listen_status({
             let capture = ReleaseAndNotify {
                 owner: Rc::clone(&owner),
                 parent: Rc::clone(&parent),
@@ -435,11 +460,11 @@ fn capture_retirement_releasing_the_last_wrapper_silences_reentry() {
         });
         let calls = Rc::new(Cell::new(0));
         adapter
-            .subscribe_status({
+            .listen_status({
                 let calls = Rc::clone(&calls);
                 Rc::new(move |_| calls.set(calls.get() + 1))
             })
-            .detach();
+            .forget();
         drop(adapter);
         drop(subscription);
         assert!(owner.borrow().is_none());
@@ -454,7 +479,7 @@ fn capture_retirement_releasing_the_last_wrapper_silences_reentry() {
 fn enclosing_cleanup_preserves_its_first_failure() {
     let controller = AnimationController::builder(Duration::from_secs(1)).build();
     let drops = Rc::new(Cell::new(0));
-    let mut subscription = controller.subscribe_status({
+    let subscription = controller.listen_status({
         let capture = Capture(Rc::clone(&drops));
         Rc::new(move |_| {
             let _keep = &capture;
@@ -462,11 +487,10 @@ fn enclosing_cleanup_preserves_its_first_failure() {
     });
     let mut recovery = flui_foundation::panic::PanicRecovery::new();
     recovery.run(|| panic!("enclosing cleanup failure"));
-    subscription.cancel_with_recovery(&mut recovery.scope());
+    subscription.detach_with_recovery(&mut recovery.scope());
     assert_eq!(drops.get(), 1, "a failed cleanup still drops its captures");
-    drop(subscription);
     let calls = Rc::new(Cell::new(0));
-    let _next = controller.subscribe_status({
+    let _next = controller.listen_status({
         let calls = Rc::clone(&calls);
         Rc::new(move |_| calls.set(calls.get() + 1))
     });
@@ -485,7 +509,7 @@ fn proxy_subscription_survives_parent_replacement() {
     let next = Rc::new(AnimationController::builder(Duration::from_secs(1)).build());
     let proxy = ProxyAnimation::new(first.clone());
     let statuses = Rc::new(RefCell::new(Vec::new()));
-    let subscription = proxy.subscribe_status({
+    let subscription = proxy.listen_status({
         let statuses = Rc::clone(&statuses);
         Rc::new(move |status| statuses.borrow_mut().push(status))
     });
@@ -513,7 +537,7 @@ fn switch_subscription_survives_the_active_parent_hop() {
     next.set_value(0.3).expect("no build is running");
     let switch = AnimationSwitch::new(first.clone(), Some(next.clone()));
     let statuses = Rc::new(RefCell::new(Vec::new()));
-    let subscription = switch.subscribe_status({
+    let subscription = switch.listen_status({
         let statuses = Rc::clone(&statuses);
         Rc::new(move |status| statuses.borrow_mut().push(status))
     });
@@ -546,10 +570,12 @@ fn subscribe<A: Animation<T>, T: Clone + 'static>(
     source: &A,
     form: Form,
     callback: StatusCallback,
-) -> StatusSubscription {
+) -> Subscription {
     match form {
-        Form::Callback => source.subscribe_status(callback),
-        Form::Observer => source.observe_status(Rc::new(move |status, _| callback(status))),
+        Form::Callback => source.listen_status(callback),
+        Form::Observer => {
+            source.listen_status_with_recovery(Rc::new(move |status, _| callback(status)))
+        }
     }
 }
 
@@ -703,8 +729,12 @@ fn owning_status_subscription_contract() {
             dropping_a_later_subscription_during_delivery_skips_it,
         ),
         (
-            "detach until source closes",
-            detach_keeps_the_callback_until_owner_teardown,
+            "forget until source closes",
+            forget_keeps_the_callback_until_owner_teardown,
+        ),
+        (
+            "detach removes at once",
+            detach_removes_the_callback_at_once,
         ),
         (
             "weak source ownership",

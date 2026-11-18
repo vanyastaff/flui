@@ -107,7 +107,7 @@ fn reduced_motion_settles_normal_runs_on_the_next_tick() {
         let recorded = Rc::clone(&statuses);
         let _subscription = normal
             .controller()
-            .subscribe_status(Rc::new(move |status| recorded.borrow_mut().push(status)));
+            .listen_status(Rc::new(move |status| recorded.borrow_mut().push(status)));
         let mut completed = normal.controller().forward().expect("normal run");
         let mut continuing = preserve.controller().forward().expect("preserved run");
         let mut clock = MotionClock::new();
@@ -282,7 +282,7 @@ fn settle_simulation(source: impl flui_animation::Simulation + 'static, expected
     let run = controller.animate_with(source).expect("simulation run");
     let delivered = Rc::new(Cell::new(0));
     let count = Rc::clone(&delivered);
-    let _listener = controller.subscribe_status(Rc::new(move |status| {
+    let _listener = controller.listen_status(Rc::new(move |status| {
         assert_eq!(status, AnimationStatus::ForwardSettled);
         count.set(count.get() + 1);
     }));
@@ -303,7 +303,7 @@ fn settle_simulation(source: impl flui_animation::Simulation + 'static, expected
 }
 
 fn reduced_friction_reaches_its_analytic_rest() {
-    use flui_animation::simulation::{FrictionSimulation, Tolerance};
+    use flui_animation::{FrictionSimulation, Tolerance};
     settle_simulation(
         FrictionSimulation::try_new(0.135, 5.0, 300.0, Tolerance::DEFAULT).expect("friction"),
         5.0 - 300.0 / 0.135_f64.ln(),
@@ -311,7 +311,7 @@ fn reduced_friction_reaches_its_analytic_rest() {
 }
 
 fn reduced_spring_reaches_its_exact_endpoint() {
-    use flui_animation::simulation::{SpringDescription, SpringSimulation, Tolerance};
+    use flui_animation::{SpringDescription, SpringSimulation, Tolerance};
     settle_simulation(
         SpringSimulation::try_new(
             SpringDescription::try_new(1.0, 100.0, 20.0).expect("spring description"),
@@ -363,7 +363,7 @@ fn reduced_non_finite_simulation_keeps_the_published_value() {
 }
 
 fn fling_settlement_reaches_its_declared_bound() {
-    use flui_animation::simulation::SpringDescription;
+    use flui_animation::SpringDescription;
     use flui_animation::{AnimationStatus, MotionOverride, Vsync};
     use std::{cell::Cell, rc::Rc};
 
@@ -380,7 +380,7 @@ fn fling_settlement_reaches_its_declared_bound() {
             let completions = Rc::new(Cell::new(0));
             let delivered = Rc::clone(&completions);
             let observed = controller.clone();
-            let subscription = controller.subscribe_status(Rc::new(move |phase| {
+            let subscription = controller.listen_status(Rc::new(move |phase| {
                 if phase == status {
                     assert_eq!(observed.value(), endpoint, "endpoint precedes delivery");
                     assert!(!observed.is_animating());
@@ -390,7 +390,7 @@ fn fling_settlement_reaches_its_declared_bound() {
             let spring = SpringDescription::with_damping_ratio(1.0, 1e-12, 1.0)
                 .expect("a finite slow spring");
             let run = controller
-                .fling_with(velocity, Some(spring))
+                .fling_with(velocity, spring)
                 .expect("a finite bound-directed fling");
             let mut clock = MotionClock::new();
             if mode == "reduced motion" {
@@ -489,7 +489,7 @@ fn reduced_settle_retires_simulation_sources_after_delivery() {
             assert_eq!(self.controller.value(), 0.25);
             *self.restarted.borrow_mut() = Some(
                 self.controller
-                    .forward_from(Some(0.0))
+                    .forward_from(0.0)
                     .expect("restart from Drop"),
             );
             assert!(!self.panic_on_drop, "simulation retirement panic");
@@ -517,7 +517,7 @@ fn reduced_settle_retires_simulation_sources_after_delivery() {
         let peer_run = peer.controller().forward().expect("peer run");
         let completions = Rc::new(Cell::new(0));
         let observed = Rc::clone(&completions);
-        let _listener = owner.controller().subscribe_status(Rc::new(move |status| {
+        let _listener = owner.controller().listen_status(Rc::new(move |status| {
             if status == AnimationStatus::ForwardSettled {
                 observed.set(observed.get() + 1);
                 assert!(
@@ -708,7 +708,7 @@ fn reduced_settle_preserves_peer_delivery_and_reentrant_runs() {
         let _seat = registry.attach_child(&child).expect("nested registry");
         let first = AnimationController::builder(ms(1000)).build_on(Some(&child));
         let peer = AnimationController::builder(ms(1000)).build_on(Some(&registry));
-        let _peer_subscription = peer.controller().subscribe_status(Rc::new(move |status| {
+        let _peer_subscription = peer.controller().listen_status(Rc::new(move |status| {
             if status == AnimationStatus::ForwardSettled {
                 assert!(!panic_peer, "peer settle callback panic");
             }
@@ -718,12 +718,11 @@ fn reduced_settle_preserves_peer_delivery_and_reentrant_runs() {
         let source = first.controller().clone();
         let restart = Rc::clone(&restarted);
         let count = Rc::clone(&calls);
-        let _subscription = first.controller().subscribe_status(Rc::new(move |status| {
+        let _subscription = first.controller().listen_status(Rc::new(move |status| {
             if status == AnimationStatus::ForwardSettled {
                 count.set(count.get() + 1);
                 if count.get() == 1 {
-                    *restart.borrow_mut() =
-                        Some(source.forward_from(Some(0.0)).expect("reentrant run"));
+                    *restart.borrow_mut() = Some(source.forward_from(0.0).expect("reentrant run"));
                     assert!(!panic_first, "first settle callback panic");
                 }
             }
@@ -834,7 +833,7 @@ fn reduced_motion_settles_finite_and_paused_runs_once() {
             }
             let delivered = Rc::new(Cell::new(0));
             let count = Rc::clone(&delivered);
-            let _subscription = controller.subscribe_status(Rc::new(move |received| {
+            let _subscription = controller.listen_status(Rc::new(move |received| {
                 assert_eq!(received, status);
                 count.set(count.get() + 1);
             }));
@@ -1088,7 +1087,7 @@ fn tiny_scale_saturates_and_completes_once() {
         preserve.controller().forward().expect("preserved run");
         let delivered = Rc::new(Cell::new(0));
         let count = Rc::clone(&delivered);
-        let _subscription = owner.controller().subscribe_status(Rc::new(move |status| {
+        let _subscription = owner.controller().listen_status(Rc::new(move |status| {
             if status == flui_animation::AnimationStatus::ForwardSettled {
                 count.set(count.get() + 1);
             }
@@ -1105,7 +1104,7 @@ fn tiny_scale_saturates_and_completes_once() {
         assert_eq!(delivered.get(), 1);
         owner
             .controller()
-            .forward_from(Some(0.0))
+            .forward_from(0.0)
             .expect("next finite run after saturation");
         registry.tick_all(&clock.frame(ms(3)));
         assert_eq!(
@@ -1372,7 +1371,7 @@ fn controller_rate_spring() {
 
 fn rate_change_mid_run_keeps_value_continuous(kind: &str) {
     use flui_animation::curves;
-    use flui_animation::simulation::{SpringDescription, SpringSimulation, Tolerance};
+    use flui_animation::{SpringDescription, SpringSimulation, Tolerance};
 
     let controller = AnimationController::builder(Duration::from_secs(1)).build();
     let run = match kind {
@@ -1505,7 +1504,7 @@ fn finite_run_completes_once_after_gap(gap: Duration, playback: PlaybackRate) {
     let owner = AnimationController::builder(ms(1000)).build_on(Some(&registry));
     let statuses = Rc::new(RefCell::new(Vec::new()));
     let recorded = Rc::clone(&statuses);
-    let _subscription = owner.controller().subscribe_status(Rc::new(move |status| {
+    let _subscription = owner.controller().listen_status(Rc::new(move |status| {
         recorded.borrow_mut().push(status);
     }));
     let completions = Rc::new(RefCell::new(Vec::new()));
