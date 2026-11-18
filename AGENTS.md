@@ -300,8 +300,15 @@ with an answer you can point to in the code; the reviewers ask the same ones.
    own normalization.
 9. **Arithmetic.** No overflow in intermediate values, no non-finite geometry published, units,
    clocks and 0- versus 1-based indexes match.
-10. **The test fails without the fix.** Take the fix out (a WIP commit, then the fix reverted in
-    the working tree), run the new test, see it fail; it goes through the public API.
+10. **The test fails without the change.** Each changed line of Rust is broken on purpose and
+    some test must notice: in a checkout nobody edits while it runs (it rewrites the sources in
+    place and restores them), save the diff as `<dir>/change.diff` and run
+    `cargo heli exec -- cargo mutants --workspace --in-diff <dir>/change.diff --in-place
+    --test-tool nextest --test-package <each changed crate> -o <dir>`. A mutant it reports missed
+    is a line no test pins: add the test through the public API, or show from the code that the
+    mutation changes nothing. `<dir>` goes to the review as the workflow's `mutants`. A fix of a
+    regression is also taken out by hand (a WIP commit, then the fix reverted in the working
+    tree) to see its new test fail.
 11. **Repository rules.** A generic-return call names its target type, a new `pub` item has a
     production caller or a named follow-up, no requirement or task IDs in code, `docs/gaps.md`
     and `crates/flui-native/platform-parity.toml` updated with a platform change.
@@ -339,6 +346,9 @@ change read it to break it, all at once, and a judge decides what the author mus
 - **One job.** A reader assumes the change has a defect of its kinds and looks for the input,
   the order of events or the state that shows it, in the code around the diff as much as in the
   changed lines. It does not fix, does not build, and does not sum up what is good.
+- **The mutation run is evidence beside them.** Each mutant of item 10 that no test caught goes
+  to the judge as a finding, when the run was made over this exact diff; the readers' tests lens
+  looks for what a one-line mutation cannot show.
 - **A finding is a failure scenario**, in the form [`REVIEW.md`](REVIEW.md) asks for: the state,
   the operation, the wrong result, the `file:line`. A reader that finds none names the scenarios
   it tried.

@@ -18,6 +18,9 @@ export const meta = {
 //   head      the reviewed commit (default: HEAD)
 //   since     the head an earlier read covered; this read starts from the fix after it
 //   unread    lenses the earlier read could not run; they read the whole change, not the fix
+//   mutants   the directory a cargo-mutants run wrote with `-o` (AGENTS.md "Before each push"
+//             item 10): its `change.diff` is the diff the run took with `--in-diff`, and its
+//             `mutants.out/` the results; each mutant no test caught is a finding
 const opts = args || {}
 const checkout = opts.checkout || '.'
 const notes = []
@@ -70,6 +73,28 @@ const FINDINGS_SCHEMA = {
 }
 
 const SOURCES = { type: 'array', items: { type: 'integer' }, description: 'the numbers of the reported findings this entry accounts for' }
+
+const MUTANT = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    file: { type: 'string' },
+    line: { type: 'integer' },
+    mutation: { type: 'string', description: 'the text after "file:line:col: ", e.g. "replace + with * in SceneSlot::totals"' },
+  },
+  required: ['file', 'line', 'mutation'],
+}
+
+const MUTANTS_SCHEMA = {
+  type: 'object',
+  properties: {
+    diff_matches: { type: 'boolean', description: 'whether the run was made over exactly this change' },
+    missed: { type: 'array', items: MUTANT },
+    timeout: { type: 'array', items: MUTANT },
+    error: { type: 'string', description: 'a file or command that failed, and its error, or empty' },
+  },
+  required: ['diff_matches', 'missed', 'timeout', 'error'],
+}
 
 const VERDICT_SCHEMA = {
   type: 'object',
@@ -150,7 +175,9 @@ const LENSES = [
   skips the step, a warm cache or an assumed environment (a GPU, a display size, a fixed order)
   decide it?
 - New behaviour, a new branch or a new guard with no test through the public API under tests/.
-- A perf or bench row whose bound a regression could not cross, or whose warm-up measures nothing.`,
+- A perf or bench row whose bound a regression could not cross, or whose warm-up measures nothing.
+- What a mutation run cannot see, since it changes one line at a time: a scenario no test builds,
+  an assertion that holds on an all-zero or empty result, a check whose bound is too loose to fail.`,
   },
   {
     key: 'obligations',
@@ -275,6 +302,9 @@ for (const [name, value] of [['base', baseRef], ['head', headRef], ['since', sin
     return unavailable(`the ${name} ref ${JSON.stringify(value)} cannot be passed to git safely (not a string, a quote, a line break, or a leading dash)`)
   }
 }
+if (opts.mutants !== undefined && (typeof opts.mutants !== 'string' || !QUOTABLE.test(opts.mutants))) {
+  return unavailable(`the mutants path ${JSON.stringify(opts.mutants)} is not a string or holds a quote or a line break`)
+}
 if (typeof checkout !== 'string' || !QUOTABLE.test(checkout)) {
   return unavailable(`the checkout path ${JSON.stringify(checkout)} is not a string or holds a quote or a line break`)
 }
@@ -346,6 +376,17 @@ Your lens: ${lens.focus}`
 }
 
 phase('Read')
+// The mutation run is read beside the readers. It counts only when it was made over this exact
+// change: a run over another diff would report lines this head may not have.
+const mutantsRead = opts.mutants
+  ? attempt(
+      `Read the results of a cargo-mutants run. Run only these commands, each exactly as written.
+1. diff_matches: whether \`git -C ${dir} diff ${scope.base} ${scope.head} | cmp -s - '${opts.mutants}/change.diff'\` exits 0 (1 is false, an answer; any other exit is an error).
+2. missed: every line of '${opts.mutants}/mutants.out/missed.txt'; timeout: every line of '${opts.mutants}/mutants.out/timeout.txt' (a missing timeout.txt is an empty list). Each line reads "<file>:<line>:<col>: <mutation>".
+When change.diff or missed.txt cannot be read, or cmp fails, put the path or command and its error in "error".`,
+      { phase: 'Read', label: 'read:mutants', schema: MUTANTS_SCHEMA, model: 'haiku', effort: 'low' },
+    )
+  : null
 const reads = await parallel(
   LENSES.map((lens) => async () => {
     const options = { phase: 'Read', label: `read:${lens.key}`, schema: FINDINGS_SCHEMA, model: lens.model, effort: 'high' }
@@ -376,12 +417,48 @@ notes.push(
   ...failed.map((f) => `Not read through the ${f.lens} lens (${f.error}). The author reads the diff through it (AGENTS.md, "Before a merge"), and the next read passes it in "unread".`),
   ...done.filter((r) => r.first).map((r) => `The ${r.lens} lens was read again on ${r.model} after ${r.first}.`),
 )
-if (!done.length) {
+// A mutant no test caught is a line of the change whose behaviour every test is blind to.
+let mutation = 'none supplied'
+const mutantFindings = []
+if (!opts.mutants) {
+  notes.push('No mutation run was supplied (AGENTS.md "Before each push" item 10).')
+} else {
+  const m = await mutantsRead
+  if (m.error || m.value.error) {
+    mutation = 'unreadable'
+    notes.push(`The mutation run at ${opts.mutants} could not be read: ${m.error || m.value.error}.`)
+  } else if (!m.value.diff_matches) {
+    mutation = 'over another diff'
+    notes.push(`The mutation run at ${opts.mutants} was made over another diff than ${scope.base.slice(0, 9)}..${scope.head.slice(0, 9)}; its results were left out.`)
+  } else {
+    mutation = `${m.value.missed.length} missed`
+    for (const x of m.value.missed) {
+      mutantFindings.push({
+        title: `No test notices \`${x.mutation}\``,
+        file: x.file,
+        line: x.line,
+        state: `the change's line ${x.file}:${x.line} mutated: ${x.mutation}`,
+        operation: 'the test packages of the mutation run ran',
+        wrong_result: 'every test passed (cargo-mutants: missed)',
+        evidence: `${opts.mutants}/missed.txt`,
+      })
+    }
+    if (m.value.timeout.length) {
+      notes.push(`Mutants the tests timed out on, neither caught nor missed: ${m.value.timeout.map((x) => `${x.file}:${x.line} ${x.mutation}`).join('; ')}.`)
+    }
+  }
+}
+
+// With no reader back, a mutation run's findings still go to the judge; with neither, nothing
+// was read.
+if (!done.length && !mutantFindings.length) {
   return unavailable(`no reader returned (${failed.map((f) => `${f.lens}: ${f.error}`).join('; ')})`, { missing: failed })
 }
 // The script's number and lens come last, so nothing a reader returns can replace them.
-const reported = done.flatMap((r) => r.findings.map((f) => ({ ...f, lens: r.lens })))
-  .map((f, i) => ({ ...f, n: i + 1 }))
+const reported = [
+  ...done.flatMap((r) => r.findings.map((f) => ({ ...f, lens: r.lens }))),
+  ...mutantFindings.map((f) => ({ ...f, lens: 'mutants' })),
+].map((f, i) => ({ ...f, n: i + 1 }))
 log(`${reported.length} findings from ${done.length} of ${LENSES.length} readers`)
 
 phase('Judge')
@@ -392,6 +469,8 @@ For each finding:
 1. Merge it with the others that share its root cause; keep the clearest scenario and list every lens that reported it.
 2. Verify it in the source at the reviewed head: open the cited lines and follow the scenario. It is rejected only when a line or a test shows the scenario cannot happen; name that line. That it seems unlikely is not a rejection.
 3. Rank it by REVIEW.md "What Important means here": important, or nit. Keep at most five nits, each with the better shape; put the other verified nits in "not_kept".
+
+A finding from the "mutants" lens is a change cargo-mutants made to one line of the diff that every test passed with. Verify it like the others: confirm it as a missing test, or reject it only when the mutation cannot change what the code does (an equivalent mutant), and say why from the code.
 
 Every finding is numbered ("n"). Each entry of "confirmed", "rejected" and "not_kept" lists in "sources" the numbers it accounts for, and every number appears in one of them.
 
@@ -422,7 +501,7 @@ if (judged.error) {
   }
 }
 
-const lensLine = `Lenses read: ${done.map((r) => `${r.lens} (${r.model})`).join(', ')}${failed.length ? `; not read: ${failed.map((f) => f.lens).join(', ')}` : ''}. Judge: ${judge || 'none'}.`
+const lensLine = `Lenses read: ${done.map((r) => `${r.lens} (${r.model})`).join(', ')}${failed.length ? `; not read: ${failed.map((f) => f.lens).join(', ')}` : ''}. Mutation run: ${mutation}. Judge: ${judge || 'none'}.`
 // Reader findings keep the readers' numbers, labelled so they never read as the judge's list.
 const readerFindingLine = (f) => `- reader finding ${f.n}: **${f.title}** — ${f.state}; ${f.operation}; ${f.wrong_result}. \`${f.file}:${f.line}\` (${f.lens})`
 const nothingFound = done

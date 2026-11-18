@@ -130,4 +130,34 @@ for (const since of ['', null]) {
   assert.deepEqual(result.confirmed[0].lenses, ['tests'])
   assert.deepEqual(result.not_kept.map((e) => e.title), ['nit 6'])
 }
+
+// 9. A mutation run over this diff turns each missed mutant into a finding the judge sees, even
+//    when no reader returned; a run over another diff is left out and says so.
+{
+  const mutant = { file: 'crates/a/src/lib.rs', line: 7, mutation: 'replace - with + in f' }
+  let judgePrompt = ''
+  const { result } = await run({ mutants: 'D:/m/mutants.out' }, (p, o) => {
+    if (o.label === 'scope') return scope()
+    if (o.label === 'read:mutants') return { diff_matches: true, missed: [mutant], timeout: [], error: '' }
+    if (o.label.startsWith('read:')) return null
+    judgePrompt = p
+    return { confirmed: [{ sources: [1], title: 't', severity: 'important', class: 'c', file: mutant.file, line: 7, scenario: 's', verified: 'v', lenses: [] }], rejected: [], not_kept: [] }
+  })
+  assert.equal(result.unavailable, undefined)
+  assert.deepEqual(result.findings.map((f) => [f.n, f.lens, f.line]), [[1, 'mutants', 7]])
+  assert.match(judgePrompt, /No test notices `replace - with \+ in f`/)
+  assert.deepEqual(result.confirmed[0].lenses, ['mutants'])
+  assert.match(result.markdown, /Mutation run: 1 missed\./)
+}
+{
+  const { result } = await run({ mutants: 'D:/m/mutants.out' }, (p, o) => {
+    if (o.label === 'scope') return scope()
+    if (o.label === 'read:mutants') return { diff_matches: false, missed: [{ file: 'x.rs', line: 1, mutation: 'm' }], timeout: [], error: '' }
+    if (o.label.startsWith('read:')) return { findings: [], tried: ['t'] }
+    return { confirmed: [], rejected: [], not_kept: [] }
+  })
+  assert.equal(result.findings.length, 0)
+  assert.match(result.markdown, /made over another diff .*left out/)
+  assert.match(result.markdown, /Mutation run: over another diff\./)
+}
 console.log('all branches behave')

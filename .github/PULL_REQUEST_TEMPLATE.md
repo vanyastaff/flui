@@ -12,7 +12,8 @@ Describe the change and why it belongs in FLUI.
 
 ## Review
 
-The head the readers and the judge read (AGENTS.md, "Before a merge"), each finding the judge
+The head the readers and the judge read and the mutation run beside them (AGENTS.md, "Before
+each push" item 10 and "Before a merge"), each finding the judge
 confirmed or left unaccounted for (every reader's finding when no judge started) and what became
 of it: fixed, with its class, or refuted by a line or a test; the same for each later read of a
 fix. A lens that could not be started, with its reason and what the author's own read through
