@@ -55,3 +55,60 @@ and a backend trait in this crate, a provider per platform, and a scripted backe
   `application://<id>.desktop`; an application with no id has none (`NotDeclared`). One task per
   UI runtime sends it, taking the newest state each time it is free, so a burst of changes ends
   on the last one.
+
+## Picks and saves without a path
+
+- A pick is a `PickedFile`, not a path, because not every system answers one. A desktop dialog
+  answers where the file is (`PickedFile::path`); a browser answers a file a page may read but
+  never a path, which the pick carries as its name and contents (`PickedFile::contents`), read
+  when the dialog answers. Reading is bounded by the request (`OpenRequest::max_bytes`, by
+  default `TransferLimits`' default, a drop's bound): the picks' declared sizes are checked
+  before a byte is read and the bytes read are counted again, and more is
+  `DialogError::TooLarge`.
+- A save may carry the contents it writes (`SaveRequest::contents`), the one way to save where
+  the system gives a page no file to write later. The handle writes them to a path the user
+  chose on a thread of its own and answers once they are written (a failed write answers the
+  system's code); a backend that hands over no path writes them itself and answers the file it
+  wrote. A save without contents answers where to save, and on the web, which has no path to
+  answer, is refused with `NotOnThisPlatform`.
+
+## The web providers (`web`)
+
+- Each provider reaches its page through the acquiring widget's window, from the canvas its raw
+  handle names (`web::page::Page`), never through the browser's globals; a widget in no window,
+  or in one that is not a canvas, is refused with `NoWindow`. `ProviderContext::app_id` and
+  `WindowRef::portal_parent` mean nothing to a page and are not read.
+- What the providers decide without the DOM (the filters' mapping, a save's name, a launch's
+  target, what an exception means) is `web::rules`, tested on every host; the DOM side is
+  `web::tests`, the lib test on wasm32 in headless Chrome (CI's `wasm-check` job), with user
+  activation stated by the test and `window.open` and the Badging API replaced, so no picker or
+  window opens.
+- **User activation.** A browser shows a picker or a new window only while the page handles a
+  user's gesture. A call outside one is refused with `Unavailable` before the browser is asked
+  (the browser would refuse it, or a file input and a popup blocker would drop it silently), as
+  `flui-native`'s web vibration is; a browser without `navigator.userActivation` is asked and
+  refuses itself. A save outside a gesture downloads, which needs none.
+- **Open.** The File System Access picker where the browser has it (Chromium, in a secure
+  context) and can express the filters (each extension of ASCII letters, digits, `+` and `.`, at
+  most 16 characters with its dot, Chromium's `VerifyIsValidExtension`); `<input type=file>`
+  otherwise, its `accept` the filters' union. A dismissed picker answers `AbortError`, a dismissed
+  input its `cancel` event (Chromium 113, Firefox 91, Safari 16.4). No focus-return heuristic
+  stands in for an engine without the event: a pick whose `change` arrives after the window
+  regains focus would be answered as a cancel. A folder dialog answers `NotYetOnThisHost`.
+- **Save.** The save picker writes the request's contents through a writable stream, aborted on
+  a failure; without a picker (or a gesture) the contents are downloaded under the suggested
+  name, given the first filter's extension when it has none, from an object URL revoked a minute
+  later. The answer reports no filter: the browser says none was selected, and a download
+  cannot say where it went.
+- **One picker per page.** A page cannot close a browser's picker, and the browser shows one at
+  a time; the runtime's `PagePicker` refuses a second with `Busy` until the browser answers the
+  first, whichever window asked. Dropping a dialog stops its answer and takes an input down.
+- **Launching.** `http` and `https` open in a new browsing context with `noopener,noreferrer`;
+  any other allowed scheme is handed to the system's handler from the page's own context, which
+  the HTML standard does without unloading the page. With `noopener` the browser reports nothing
+  back, so a launch answers `Ok` once the browser has the URI. A page has no paths to open,
+  reveal or trash.
+- **The launcher entry** is the Badging API's count (`setAppBadge`, `clearAppBadge`), honouring
+  the count alone and never confirmed: a browser badges only an installed application and does
+  not say whether it did. A browser without the API answers `NotOnThisDevice`.
+- Autostart, global shortcuts and the user folders answer `NotOnThisPlatform`.

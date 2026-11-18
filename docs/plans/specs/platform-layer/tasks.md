@@ -5517,6 +5517,60 @@ GPU-память простаивающего или невидимого окн
   порталов GNOME и KDE (внутри и вне Flatpak), док KDE/Dash to Dock для сигнала — в строках parity
   «Open a URL», «Open, save and folder dialogs», «Taskbar and Dock progress, badge», «Global
   shortcuts», «Launch at login», «User folders».
+- [ ] **LY60** (не закрыта: запуск, файловые диалоги и значок сделаны веткой
+  `system/web-providers`; message box и share ждут своих контрактов из LY57, диалог папок
+  остаётся; прогоны в Chrome, Firefox и Safari — заметки строк parity) — модуль
+  `crates/flui-system/src/web/`. Страница достаётся через окно виджета: канвас, на который
+  указывает `WebCanvasWindowHandle` его `WindowRef` (`web::page::Page`), не через глобальные
+  объекты браузера; виджет без окна или в окне не-канвасе — `NoWindow`; `ProviderContext::app_id`
+  и `WindowRef::portal_parent` странице ничего не значат и не читаются. Пикер и новое окно вне
+  жеста пользователя (`navigator.userActivation.isActive`) отказываются `Unavailable` до
+  обращения к браузеру, как вибрация страницы. Файловые диалоги: открытие — `showOpenFilePicker`,
+  где он есть (Chromium, безопасный контекст) и выражает фильтры (расширение из ASCII букв,
+  цифр, `+` и `.`, не длиннее 16 символов с точкой, правило `VerifyIsValidExtension` Chromium),
+  иначе `<input type=file>` с объединением фильтров в `accept`; отмена — `AbortError` пикера и
+  событие `cancel` ввода (Chromium 113, Firefox 91, Safari 16.4), эвристики возврата фокуса нет
+  (поздний `change` она объявила бы отменой); выбор — `PickedFile` с именем и содержимым,
+  прочитанным в пределах `OpenRequest::max_bytes` (по умолчанию граница `TransferLimits`,
+  объявленные размеры проверяются до чтения, прочитанное — снова, иначе `DialogError::TooLarge`).
+  Сохранение несёт содержимое (`SaveRequest::contents`): `showSaveFilePicker` с записью через
+  поток (сбой — `abort`), без пикера или без жеста — загрузка под предложенным именем
+  (расширение первого фильтра, если имени его не хватает), object URL отзывается через минуту;
+  фильтр в ответе — `None`. Страница не закрывает пикер браузера: сброс `Dialog` прекращает
+  только ответ и снимает ввод, а `PagePicker` рантайма держит страницу занятой (`Busy`), пока
+  браузер не ответит. Запуск: `http(s)` — `window.open` с `_blank` и `noopener,noreferrer`,
+  другие разрешённые схемы — передача обработчику из своего контекста (`_self`, страница не
+  выгружается); с `noopener` браузер ничего не сообщает, поэтому ответ — `Ok`; пути —
+  `NotOnThisPlatform`. Значок (`TaskbarEntry`) — счёт Badging API (`setAppBadge`,
+  `clearAppBadge`), без прогресса и без подтверждения; без API — `NotOnThisDevice`. Автозапуск,
+  глобальные сочетания и папки пользователя — `NotOnThisPlatform`. На всех хостах:
+  `PickedFile::path` возвращает `Option<&Path>`, `PickedFile::try_from_contents`, `contents`,
+  `file_name`; сохранение с содержимым пишет его на своём потоке в выбранный путь и отвечает
+  после записи (сбой — код системы); `SystemFailure::Browser(BrowserException)` в контракте.
+  Тесты: чистые правила — `web::rules::tests` на каждом хосте
+  (`the_accept_attribute_is_the_union_of_the_filters`,
+  `a_picker_type_keeps_each_filter_and_puts_extensions_under_a_type`,
+  `an_extension_the_picker_refuses_sends_the_request_to_the_input`,
+  `a_save_is_named_after_the_first_filter_when_its_name_has_no_extension`,
+  `a_download_is_typed_after_the_first_concrete_type_of_the_first_filter`,
+  `the_picks_are_refused_past_the_limit_before_they_are_read`,
+  `a_dismissed_picker_is_a_cancel_and_other_rejections_are_failures`,
+  `a_page_opens_apart_and_any_other_scheme_is_handed_off`);
+  `a_browser_exception_is_read_from_its_name_and_shown_by_it` во `flui-platform`; через публичный
+  API (`tests/dialogs.rs`): `a_save_with_contents_answers_once_they_are_written_where_the_user_chose`,
+  `a_save_whose_write_fails_answers_the_systems_failure` (обе красные без записи в handle),
+  `a_save_the_system_wrote_itself_answers_the_file_it_wrote`,
+  `a_file_handed_over_without_a_path_carries_its_name_and_contents`; DOM — `web::tests`, lib-тест
+  на wasm32 в headless Chrome, новый шаг задания `wasm-check` CI (здесь только проверка типов
+  `cargo +nightly check -p flui-system --lib --tests --target wasm32-unknown-unknown` в WSL:
+  раннера wasm-bindgen-test нет) — ввод отвечает выбранными файлами с содержимым, отменой,
+  `TooLarge`, сброшенный диалог снимает ввод, одна страница — один пикер, вне жеста и для папок —
+  отказ до браузера, отказ браузера в пикере без настоящего жеста — ответ диалога, загрузка
+  (щелчок перехвачен), сохранение без содержимого, запуск в замещённый `window.open`, значок в
+  замещённый Badging API и браузер без него. Остаётся: message box и share (контракты придут с
+  LY57), диалог папок (`NotYetOnThisHost`: браузер может отдать папку, но выбор не несёт её
+  дерево), записан в `docs/gaps.md`; conformance-таблица на wasm32 не идёт (окна
+  headless-хоста — не канвасы, веб-провайдеры отвечают им `NoWindow`).
 - [ ] **LY61** (не закрыта: исполнитель ушёл, сервисы остаются на `Platform`) — #2300
   (`dacf540dc`) удалил `Platform::background_executor`, `PlatformExecutor` и его реализации в
   хостах; #2487 (`89adcc532`) удалил `BackgroundExecutor`: хост ведёт своё IO на runtime, который

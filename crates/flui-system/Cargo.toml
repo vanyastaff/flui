@@ -29,12 +29,58 @@ serde = { workspace = true }
 zbus = { workspace = true }
 zruntime = { version = "0.2", default-features = false, features = ["runtime", "event", "unblock"] }
 
+# The web providers: the browser's pickers, `<dialog>`, `window.open` and the
+# Web Share API, reached through the canvas of the acquiring widget's window.
+# Newer APIs (the File System Access pickers, `navigator.share`,
+# `navigator.userActivation`) are read through `Reflect`, which also detects
+# a browser without them.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+js-sys = { workspace = true }
+raw-window-handle = { workspace = true }
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = { workspace = true }
+web-sys = { version = "0.3", features = [
+    "Blob",
+    "BlobPropertyBag",
+    "Document",
+    "Element",
+    "Event",
+    "EventTarget",
+    "File",
+    "FileList",
+    "HtmlAnchorElement",
+    "HtmlCanvasElement",
+    "HtmlDialogElement",
+    "HtmlElement",
+    "HtmlInputElement",
+    "Navigator",
+    "Node",
+    "Url",
+    "Window",
+] }
+
 [dev-dependencies]
 flui-platform = { workspace = true, features = ["testing"] }
 flui-sdk = { workspace = true }
 flui-testing = { workspace = true }
 # Reads the crate's own `[package.metadata.flui.capability]` in a test.
 toml = { workspace = true }
+
+# A save's file, written where a test's folder is.
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+tempfile = { workspace = true }
+
+# The web providers' tests, in a browser (`web::tests`).
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-test = { workspace = true }
+# What a test sets an input's files with, and dispatches events by.
+web-sys = { version = "0.3", features = [
+    "DataTransfer",
+    "DataTransferItem",
+    "DataTransferItemList",
+    "EventInit",
+    "NodeList",
+] }
 
 # The stand-in desktop portal the Linux providers' tests serve on a private
 # bus.

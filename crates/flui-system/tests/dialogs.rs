@@ -4,7 +4,9 @@
 //! seam.
 
 use std::cell::RefCell;
+use std::ffi::OsStr;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use flui_platform::capability::{
     Abandoned, CapabilityRegistrar, Plugin, ProviderContext, Resolver, WindowRef,
@@ -720,5 +722,129 @@ fn a_dialog_error_carries_its_unsupported() {
     assert_eq!(
         failed.to_string(),
         "the system failed: the desktop portal ended the request with response 2"
+    );
+}
+
+/// Turn until `slot` holds an outcome, or panic after ten seconds: a save's
+/// write answers from a thread of its own.
+#[cfg(not(target_arch = "wasm32"))]
+fn turn_until_landed<T>(host: &mut HeadlessHost, slot: &Slot<T>) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while slot.borrow().is_none() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the save did not answer in ten seconds"
+        );
+        turn(host);
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+}
+
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn a_save_with_contents_answers_once_they_are_written_where_the_user_chose() {
+    let (dialogs, plugin) = scripted();
+    let (mut host, handle) = acquire::<FileDialogCapability>(&plugin);
+    let handle = handle.expect("the scripted plugin provides dialogs");
+    let folder = tempfile::tempdir().expect("a test folder");
+    let chosen = SaveLocation::new(
+        PickedFile::try_new(folder.path().join("notes.txt")).expect("an absolute path"),
+        Some(0),
+    );
+    dialogs.answer_next_save(Ok(Some(chosen.clone())));
+
+    let answered = land(
+        handle.save(
+            SaveRequest::new()
+                .filter(FileFilter::new("Text").with_extension("txt"))
+                .contents(b"written".to_vec()),
+        ),
+    );
+    turn_until_landed(&mut host, &answered);
+
+    assert_eq!(*answered.borrow(), Some(Ok(Ok(Some(chosen)))));
+    assert_eq!(
+        std::fs::read(folder.path().join("notes.txt")).expect("the file was written"),
+        b"written"
+    );
+}
+
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn a_save_whose_write_fails_answers_the_systems_failure() {
+    let (dialogs, plugin) = scripted();
+    let (mut host, handle) = acquire::<FileDialogCapability>(&plugin);
+    let handle = handle.expect("the scripted plugin provides dialogs");
+    let folder = tempfile::tempdir().expect("a test folder");
+    let unwritable = folder.path().join("missing").join("notes.txt");
+    dialogs.answer_next_save(Ok(Some(SaveLocation::new(
+        PickedFile::try_new(&unwritable).expect("an absolute path"),
+        None,
+    ))));
+
+    let answered = land(handle.save(SaveRequest::new().contents(b"lost".to_vec())));
+    turn_until_landed(&mut host, &answered);
+
+    let failure = match answered.borrow_mut().take() {
+        Some(Ok(Err(DialogError::Failed(failure)))) => failure,
+        other => panic!("the write's failure: {other:?}"),
+    };
+    assert!(
+        matches!(failure, SystemFailure::Os(code) if code != 0),
+        "the system's code: {failure:?}"
+    );
+    assert!(!unwritable.exists());
+}
+
+#[test]
+fn a_save_the_system_wrote_itself_answers_the_file_it_wrote() {
+    let (dialogs, plugin) = scripted();
+    let (mut host, handle) = acquire::<FileDialogCapability>(&plugin);
+    let handle = handle.expect("the scripted plugin provides dialogs");
+    let written = SaveLocation::new(
+        PickedFile::try_from_contents("notes.txt", Arc::from(&b"written"[..]))
+            .expect("a file name"),
+        None,
+    );
+    dialogs.answer_next_save(Ok(Some(written.clone())));
+
+    let answered = land(handle.save(SaveRequest::new().contents(b"written".to_vec())));
+    turn(&mut host);
+    turn(&mut host);
+
+    assert_eq!(*answered.borrow(), Some(Ok(Ok(Some(written)))));
+}
+
+#[test]
+fn a_file_handed_over_without_a_path_carries_its_name_and_contents() {
+    let contents: Arc<[u8]> = Arc::from(&b"private words"[..]);
+    let handed =
+        PickedFile::try_from_contents("notes.txt", Arc::clone(&contents)).expect("a file name");
+    assert_eq!(handed.path(), None);
+    assert_eq!(handed.contents(), Some(&b"private words"[..]));
+    assert_eq!(handed.file_name(), Some(OsStr::new("notes.txt")));
+    let shown = format!("{handed:?}");
+    assert!(
+        shown.contains("notes.txt") && shown.contains("13") && !shown.contains("private"),
+        "a pick shows its name and length, never its contents: {shown}"
+    );
+    for name in ["", " ", ".", "..", "a/b", "a\\b", "a\nb"] {
+        assert_eq!(
+            PickedFile::try_from_contents(name, Arc::clone(&contents)),
+            None,
+            "{name:?} is not a file name"
+        );
+    }
+
+    let at_path = file("notes.txt");
+    assert_eq!(at_path.contents(), None);
+    assert_eq!(at_path.file_name(), Some(OsStr::new("notes.txt")));
+    let request = format!(
+        "{:?}",
+        SaveRequest::new().contents(b"private words".to_vec())
+    );
+    assert!(
+        request.contains("13") && !request.contains("112"),
+        "a request shows its contents' length, never its bytes: {request}"
     );
 }

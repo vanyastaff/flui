@@ -14,6 +14,10 @@
 
 mod request;
 
+use std::path::PathBuf;
+use std::sync::Arc;
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::Mutex;
 use std::{any::Any, cell::Cell, cell::RefCell, fmt, future::Future, rc::Rc, rc::Weak};
 
 use flui_platform::capability::{
@@ -66,6 +70,17 @@ pub enum DialogError {
     /// handle cannot hand out.
     #[error("the pick is not a local file")]
     NotAFile,
+    /// The picks hold more than the request's
+    /// [`max_bytes`](OpenRequest::max_bytes), on a system that hands over a
+    /// pick's contents (a browser). Nothing was read past the check.
+    #[error("the picks hold {actual} bytes, more than the {limit} the request reads")]
+    TooLarge {
+        /// The picks' size, as the system declared it or as far as it was
+        /// read.
+        actual: u64,
+        /// The request's [`max_bytes`](OpenRequest::max_bytes).
+        limit: u64,
+    },
     /// The system failed in a way the handle does not name; the
     /// [`SystemFailure`] says where the failure came from, for diagnostics.
     #[error("the system failed: {0}")]
@@ -82,6 +97,7 @@ impl DialogError {
             | Self::InvalidRequest(_)
             | Self::WindowClosed
             | Self::NotAFile
+            | Self::TooLarge { .. }
             | Self::Failed(_) => None,
         }
     }
@@ -269,10 +285,21 @@ impl FileDialogs {
     ///
     /// A backend that names a selected filter the request does not have
     /// answers [`SystemFailure::MalformedAnswer`].
+    ///
+    /// A request that carries [`contents`](SaveRequest::contents) answers
+    /// once they are written: a backend that hands over no path (a browser)
+    /// writes them itself and answers the file it wrote; to a path the user
+    /// chose, the handle writes them on a thread of its own, since no file
+    /// system call runs on the owner thread (ADR-0360 §2), and a failed
+    /// write answers [`DialogError::Failed`] with the system's code. The
+    /// window is free for the next dialog once the user has chosen; the
+    /// write itself cannot be called back, so dropping the [`Dialog`] while
+    /// it runs drops only the answer.
     pub fn save(&self, request: SaveRequest) -> Dialog<SaveResult> {
         let checked = request.check();
         let filters = request.filters.len();
-        self.show(
+        let contents = request.contents_to_write().cloned();
+        let chosen = self.show(
             checked,
             |backend, window, answer| backend.save(window, request, answer),
             move |result| match result {
@@ -281,7 +308,46 @@ impl FileDialogs {
                 }
                 result => result,
             },
-        )
+        );
+        match contents {
+            Some(contents) => self.write_where_chosen(chosen, contents),
+            None => chosen,
+        }
+    }
+
+    /// `chosen`'s answer, after `contents` are written to the path it chose;
+    /// a location without a path was written by the backend.
+    fn write_where_chosen(
+        &self,
+        chosen: Dialog<SaveResult>,
+        contents: Arc<[u8]>,
+    ) -> Dialog<SaveResult> {
+        let Dialog {
+            completion: chosen,
+            guard,
+        } = chosen;
+        let completions = self.completions.clone();
+        let (completion, caller) = completions.pending();
+        let mut waiting = Some((caller, contents));
+        chosen.on_complete(move |outcome| {
+            let Some((caller, contents)) = waiting.take() else {
+                return;
+            };
+            match outcome {
+                Ok(Ok(Some(location))) => match location.file().path() {
+                    Some(path) => {
+                        write_file(&completions, path.to_path_buf(), contents, location, caller);
+                    }
+                    // The backend wrote the contents itself (a browser).
+                    None => drop(caller.resolve(Ok(Some(location)))),
+                },
+                // A retired owner has nobody left to answer.
+                Ok(unwritten) => drop(caller.resolve(unwritten)),
+                // The backend dropped its answer: so does the handle.
+                Err(_) => drop(caller),
+            }
+        });
+        Dialog { completion, guard }
     }
 
     /// Ask `backend` through `ask` when the request `checked` well formed,
@@ -398,6 +464,85 @@ impl fmt::Debug for FileDialogs {
             .field("window", &self.window.id())
             .finish_non_exhaustive()
     }
+}
+
+/// Write `contents` to `path` on a thread of its own, then answer `caller`
+/// with `location`, or with the failure of the write.
+#[cfg(not(target_arch = "wasm32"))]
+fn write_file(
+    completions: &CompletionSource,
+    path: PathBuf,
+    contents: Arc<[u8]>,
+    location: SaveLocation,
+    caller: Resolver<SaveResult>,
+) {
+    let (written, answer) = completions.pending::<Result<(), DialogError>>();
+    let mut waiting = Some((caller, location));
+    written.on_complete(move |outcome| {
+        let Some((caller, location)) = waiting.take() else {
+            return;
+        };
+        match outcome {
+            Ok(Ok(())) => drop(caller.resolve(Ok(Some(location)))),
+            Ok(Err(error)) => drop(caller.resolve(Err(error))),
+            Err(_) => drop(caller),
+        }
+    });
+    // The thread answers through the slot; a thread that cannot start leaves
+    // the resolver there, and the failure is answered here.
+    let slot = Arc::new(Mutex::new(Some(answer)));
+    let writer = Arc::clone(&slot);
+    let started = std::thread::Builder::new()
+        .name("flui-system-save".to_owned())
+        .spawn(move || {
+            let written = std::fs::write(&path, &contents).map_err(|error| write_failure(&error));
+            let answer = writer
+                .lock()
+                .expect("BUG: the save slot's holders run no code under its lock")
+                .take();
+            if let Some(answer) = answer {
+                // A retired owner has nobody left to answer.
+                let _ = answer.resolve(written);
+            }
+        });
+    if let Err(error) = started {
+        let answer = slot
+            .lock()
+            .expect("BUG: the save slot's holders run no code under its lock")
+            .take();
+        if let Some(answer) = answer {
+            let _ = answer.resolve(Err(write_failure(&error)));
+        }
+    }
+}
+
+/// A save to a path on a system with no file system of its own: a backend
+/// of this platform hands over no path, so only a stand-in answers one.
+#[cfg(target_arch = "wasm32")]
+fn write_file(
+    _: &CompletionSource,
+    _: PathBuf,
+    _: Arc<[u8]>,
+    _: SaveLocation,
+    caller: Resolver<SaveResult>,
+) {
+    // A retired owner has nobody left to answer.
+    let _ = caller.resolve(Err(DialogError::Unsupported(Unsupported::of::<
+        FileDialogCapability,
+    >(
+        UnsupportedReason::NotOnThisPlatform,
+    ))));
+}
+
+/// The failure a write reports: the system's code, or a write that took no
+/// bytes without one ([`SystemFailure::MalformedAnswer`]).
+#[cfg(not(target_arch = "wasm32"))]
+fn write_failure(error: &std::io::Error) -> DialogError {
+    DialogError::Failed(
+        error
+            .raw_os_error()
+            .map_or(SystemFailure::MalformedAnswer, SystemFailure::Os),
+    )
 }
 
 /// Dismisses its dialog when dropped, unless the dialog ended first.

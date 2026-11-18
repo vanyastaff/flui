@@ -21,9 +21,12 @@
 //!
 //! Linux reaches them through the XDG desktop portal on the session bus,
 //! the launcher entry through its session-bus signal, and the user folders
-//! through the XDG user directories. Elsewhere, until a platform's provider
-//! lands, the handles are refused with `UnsupportedReason::NotYetOnThisHost`,
-//! never faked (ADR-0154 §10).
+//! through the XDG user directories. A web page launches URIs, picks and
+//! saves files and badges an installed application's icon through the
+//! browser, and refuses autostart, global shortcuts and the user folders
+//! with `UnsupportedReason::NotOnThisPlatform`: a page has none of them.
+//! Elsewhere, until a platform's provider lands, the handles are refused
+//! with `UnsupportedReason::NotYetOnThisHost`, never faked (ADR-0154 §10).
 
 pub mod autostart;
 pub mod dialog;
@@ -34,12 +37,14 @@ pub mod taskbar;
 #[cfg(feature = "testing")]
 pub mod testing;
 pub mod user_dirs;
+#[cfg(any(test, target_arch = "wasm32"))]
+mod web;
 
 use flui_platform::capability::{CapabilityRegistrar, Plugin};
 
 /// The system services' providers for the platform the application runs on:
-/// the XDG desktop portal on Linux; elsewhere, until a platform's provider
-/// lands, a refusal.
+/// the XDG desktop portal on Linux, the browser on the web; elsewhere, until
+/// a platform's provider lands, a refusal.
 #[derive(Clone, Copy, Debug, Default)]
 #[non_exhaustive]
 pub struct SystemPlugin;
@@ -56,13 +61,15 @@ impl Plugin for SystemPlugin {
     fn register(&self, registrar: &mut CapabilityRegistrar) {
         #[cfg(target_os = "linux")]
         portal::register(registrar, None, None);
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(target_arch = "wasm32")]
+        web::register(registrar);
+        #[cfg(not(any(target_os = "linux", target_arch = "wasm32")))]
         not_yet::register(registrar);
     }
 }
 
 /// The refusals of a platform with no provider yet.
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_arch = "wasm32")))]
 mod not_yet {
     use flui_platform::capability::{Capability, CapabilityRegistrar, ProviderContext};
     use flui_platform::launch::LauncherCapability;
