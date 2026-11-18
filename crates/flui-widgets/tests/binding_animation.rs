@@ -11,6 +11,7 @@
 //! ticked inside the frame, or if the tick ran *after* `build_scope` (the dirty
 //! entry would miss this frame's drain — a one-frame lag).
 
+use flui_foundation::Subscription;
 use std::time::Duration;
 
 use crate::common::tight;
@@ -18,7 +19,7 @@ use flui_animation::{Animation, AnimationController, AnimationStatus};
 use flui_widgets::{FadeTransition, SizedBox};
 
 pub(crate) fn fade_source_replacement_retries_after_status_failure() {
-    use flui_animation::{StatusObserver, StatusSubscription};
+    use flui_animation::StatusObserver;
     use flui_foundation::{Listenable, ListenerCallback, ListenerObserver};
     use std::{cell::Cell, rc::Rc};
 
@@ -46,8 +47,8 @@ pub(crate) fn fade_source_replacement_retries_after_status_failure() {
         fn is_animating(&self) -> bool {
             self.controller.is_animating()
         }
-        fn observe_status(&self, observer: StatusObserver) -> StatusSubscription {
-            self.controller.observe_status(observer)
+        fn listen_status_with_recovery(&self, observer: StatusObserver) -> Subscription {
+            self.controller.listen_status_with_recovery(observer)
         }
     }
     let first = AnimationController::builder(Duration::from_millis(100)).build();

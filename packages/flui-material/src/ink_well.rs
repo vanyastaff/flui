@@ -389,7 +389,7 @@ impl Core {
         let rebuild = self.rebuild.clone();
         // This callback lives until its owned timer is canceled or retired.
         controller
-            .subscribe_status(Rc::new(move |status| {
+            .listen_status(Rc::new(move |status| {
                 if status == AnimationStatus::ForwardSettled {
                     if let Some(core) = core.upgrade() {
                         core.release_press_hold();
@@ -397,7 +397,7 @@ impl Core {
                     rebuild.schedule(flui_sdk::view::RebuildReason::AnimationTick);
                 }
             }))
-            .detach();
+            .forget();
 
         if let Err(error) = controller.forward_from(0.0) {
             tracing::debug!(?error, "InkWell press-deactivation timer failed to start");

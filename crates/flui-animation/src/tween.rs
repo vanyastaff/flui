@@ -1,4 +1,4 @@
-﻿//! `TweenAnimation` - maps f64 animations to any type T.
+//! `TweenAnimation` - maps f64 animations to any type T.
 
 use crate::animation::{Animation, ParentLinks, Retirement, Terminal};
 use crate::status::AnimationStatus;
@@ -114,8 +114,11 @@ where
         self.links.parent.is_animating()
     }
 
-    fn observe_status(&self, observer: crate::StatusObserver) -> crate::StatusSubscription {
-        self.links.observe_status(observer)
+    fn listen_status_with_recovery(
+        &self,
+        observer: crate::StatusObserver,
+    ) -> flui_foundation::Subscription {
+        self.links.listen_status_with_recovery(observer)
     }
 }
 

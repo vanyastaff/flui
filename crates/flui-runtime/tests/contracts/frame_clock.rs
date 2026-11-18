@@ -819,7 +819,7 @@ fn delivery_case(delivery: Delivery) {
         }
     }));
     let fail_once = Rc::clone(&armed);
-    let status_listener = primary.controller.subscribe_status(Rc::new(move |status| {
+    let status_listener = primary.controller.listen_status(Rc::new(move |status| {
         if delivery == Delivery::FinalStatus
             && status == flui_animation::AnimationStatus::ForwardSettled
             && fail_once.replace(false)

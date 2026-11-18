@@ -1021,7 +1021,7 @@ mod tests {
                 let mut clock = crate::MotionClock::new();
                 root.tick_all(&clock.frame(Duration::ZERO));
                 let changing_root = root.clone();
-                let _subscription = trigger.controller().subscribe_status(Rc::new(move |_| {
+                let _subscription = trigger.controller().listen_status(Rc::new(move |_| {
                     if mute {
                         changing_root.set_muted(true);
                     } else {
@@ -1158,10 +1158,10 @@ mod tests {
             let probe = RejectedCapture(drops.clone());
             rejected
                 .controller()
-                .subscribe_status(Rc::new(move |_| {
+                .listen_status(Rc::new(move |_| {
                     let _capture = &probe;
                 }))
-                .detach();
+                .forget();
             assert_eq!(
                 rejected.rebind(Some(&registry)),
                 Err(VsyncRegistrationError::Exhausted)

@@ -506,6 +506,13 @@ pub struct ButtonEvent {
         serde(default, skip_serializing_if = "Option::is_none")
     )]
     pub click_count: Option<u8>,
+    /// A press that brought its window forward (the host's first-click mark); never set on
+    /// a release.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "std::ops::Not::not")
+    )]
+    pub first_click: bool,
     /// The pointer's sample at the change.
     pub sample: Sample,
 }
@@ -1284,6 +1291,9 @@ pub struct Capabilities {
     pub window_resize: Availability,
     /// Caption button regions.
     pub caption_buttons: Availability,
+    /// First-click regions: where the host delivers the click that activates a window.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub first_click: Availability,
     /// Outgoing drags.
     pub outgoing_drag: Availability,
     /// The pointer kinds present.
