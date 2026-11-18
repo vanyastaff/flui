@@ -508,6 +508,9 @@ struct Placed {
     /// more are sent than the executor served, a retry is on its way and no
     /// second device is probed.
     retries_sent: u64,
+    /// The executor's count of unadopted retries when the owner last read
+    /// it: one more since is a retry whose adoption panicked, answered once.
+    retries_unadopted: u64,
 }
 
 /// The executor as the owner holds it in each placement (ADR-0305 §10).
@@ -2459,6 +2462,7 @@ impl Placed {
             settlements: Vec::new(),
             redraws,
             retries_sent: 0,
+            retries_unadopted: 0,
         }
     }
 }

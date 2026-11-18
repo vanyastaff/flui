@@ -623,16 +623,10 @@ fn a_retry_asked_again_waits_for_the_device_already_sent() {
     assert_eq!(adoptions, 1);
 }
 
-/// A retry whose probe answers no device tells the application the device
-/// is given up again, and the window's next frames probe nothing until the
-/// application asks once more; a probe that answers then is adopted.
-///
-/// Red-check: drop the re-noted `Abandoned` from `RasterSlot::pump` and
-/// every frame probes again.
-#[test]
-fn a_retry_whose_probe_answers_no_device_gives_the_device_up_again() {
-    use flui_runtime::frame_failure::DeviceRecovery;
-
+/// A window drawn through a slot of an inline host over scripted slots,
+/// whose device the executor gave up on and whose application was told so.
+fn window_over_a_given_up_device() -> (crate::app::ui_runtime::UiRuntime, RasterSlot, ScriptedSlots)
+{
     let mut ui_runtime = crate::app::ui_runtime::UiRuntime::for_test();
     ui_runtime
         .attach_root_widget(&flui_widgets::SizedBox::new(20.0, 20.0))
@@ -666,12 +660,8 @@ fn a_retry_whose_probe_answers_no_device_gives_the_device_up_again() {
         device: DeviceHealth::Healthy,
         renderer_dead: false,
     };
-    let frame = |slot: &mut RasterSlot, ui_runtime: &mut crate::app::ui_runtime::UiRuntime| {
-        ui_runtime.mark_primary_needs_full_repaint();
-        slot.pump(ui_runtime, web_time::Instant::now(), None)
-    };
     assert!(
-        frame(&mut slot, &mut ui_runtime),
+        window_frame(&mut slot, &mut ui_runtime),
         "the first frame presents"
     );
     // The executor gives the device up at once where it cannot rebuild; the
@@ -679,37 +669,73 @@ fn a_retry_whose_probe_answers_no_device_gives_the_device_up_again() {
     // application's to retry rather than the owner's to replace.
     slots.cannot_rebuild_inline();
     slots.lose_device();
-    let _ = frame(&mut slot, &mut ui_runtime);
+    let _ = window_frame(&mut slot, &mut ui_runtime);
     slots.can_rebuild_inline();
-    let _ = frame(&mut slot, &mut ui_runtime);
+    let _ = window_frame(&mut slot, &mut ui_runtime);
     assert!(matches!(slot.device, DeviceHealth::GivenUp { .. }));
     assert!(
         ui_runtime
             .primary_device_recovery()
-            .is_some_and(DeviceRecovery::is_abandoned)
+            .is_some_and(flui_runtime::frame_failure::DeviceRecovery::is_abandoned)
     );
+    (ui_runtime, slot, slots)
+}
 
-    assert!(ui_runtime.retry_render_device());
-    slots.refuse_next_probe();
-    let _ = frame(&mut slot, &mut ui_runtime);
-    assert_eq!(slots.probes(), 1);
-    assert!(
-        ui_runtime
-            .primary_device_recovery()
-            .is_some_and(DeviceRecovery::is_abandoned),
-        "the application is told the device is given up again"
-    );
-    let _ = frame(&mut slot, &mut ui_runtime);
-    assert_eq!(
-        slots.probes(),
-        1,
-        "no frame probes until the application asks"
-    );
+/// One frame of `slot`'s window, in full; a panic it resumes (a scripted
+/// one) is dropped. Answers whether it presented.
+fn window_frame(slot: &mut RasterSlot, ui_runtime: &mut crate::app::ui_runtime::UiRuntime) -> bool {
+    let mut caught = flui_foundation::panic::FirstPanic::new();
+    let presented = caught.contain(|| {
+        ui_runtime.mark_primary_needs_full_repaint();
+        slot.pump(ui_runtime, web_time::Instant::now(), None)
+    });
+    if let Some(payload) = caught.into_payload() {
+        flui_foundation::panic::discard_payload(payload);
+    }
+    presented == Some(true)
+}
 
-    assert!(ui_runtime.retry_render_device());
-    let _ = frame(&mut slot, &mut ui_runtime);
-    assert_eq!(slots.probes(), 2);
-    assert_eq!(slot.device, DeviceHealth::Healthy);
+/// A retry whose probe answers no device, or whose device's adoption
+/// panics, tells the application the device is given up again, and the
+/// window's next frames probe nothing until the application asks once
+/// more; a probe that answers then is adopted.
+///
+/// Red-check: drop the re-noted `Abandoned` from `RasterSlot::pump`, or the
+/// unadopted answer from `retry_given_up`, and every frame probes again.
+#[test]
+fn a_retry_that_brings_no_device_gives_the_device_up_again() {
+    for adoption_panics in [false, true] {
+        let (mut ui_runtime, mut slot, slots) = window_over_a_given_up_device();
+        assert!(ui_runtime.retry_render_device());
+        if adoption_panics {
+            slots.script_rebuild(ScriptedAnswer::Panic);
+        } else {
+            slots.refuse_next_probe();
+        }
+        // A refused probe is answered by the frame that probes; a panicked
+        // adoption by the next, which reads the retry served unadopted.
+        let _ = window_frame(&mut slot, &mut ui_runtime);
+        let _ = window_frame(&mut slot, &mut ui_runtime);
+        assert_eq!(slots.probes(), 1, "adoption panics: {adoption_panics}");
+        assert!(
+            ui_runtime
+                .primary_device_recovery()
+                .is_some_and(flui_runtime::frame_failure::DeviceRecovery::is_abandoned),
+            "the application is told the device is given up again \
+             (adoption panics: {adoption_panics})"
+        );
+        let _ = window_frame(&mut slot, &mut ui_runtime);
+        assert_eq!(
+            slots.probes(),
+            1,
+            "no frame probes until the application asks (adoption panics: {adoption_panics})"
+        );
+
+        assert!(ui_runtime.retry_render_device());
+        let _ = window_frame(&mut slot, &mut ui_runtime);
+        assert_eq!(slots.probes(), 2);
+        assert_eq!(slot.device, DeviceHealth::Healthy);
+    }
 }
 /// A surface owed to a window whose pace has run out is made by the wake
 /// the pace's deadline schedules, with no frame to draw: the attempt moves

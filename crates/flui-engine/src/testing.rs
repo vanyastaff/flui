@@ -554,17 +554,14 @@ impl RasterBackend for ScriptedSlots {
 
     fn adopt_device(&mut self, device: crate::ProbedDevice) -> Vec<(SlotId, EngineError)> {
         drop(device);
-        let answer = self.answer(SlotCall::AdoptDevice);
-        let mut script = self.script.lock();
-        // The new device is in place before a scripted panic unwinds, as in
-        // a rebuild.
-        script.device_lost = false;
-        let refused = std::mem::take(&mut script.rebuild_refusals);
-        drop(script);
-        if let Some(ScriptedAnswer::Panic) = answer {
+        // A scripted panic unwinds before the device is in place: the
+        // adoption the owner's retry must answer leaves the device lost.
+        if let Some(ScriptedAnswer::Panic) = self.answer(SlotCall::AdoptDevice) {
             panic!("scripted device adoption panic");
         }
-        refused
+        let mut script = self.script.lock();
+        script.device_lost = false;
+        std::mem::take(&mut script.rebuild_refusals)
     }
 
     fn rebuilds_inline(&self) -> bool {

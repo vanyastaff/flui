@@ -509,10 +509,10 @@ pub use raster::PresentDisposition;
 #[cfg(not(target_arch = "wasm32"))]
 pub use raster_executor::ExecutorHandle;
 pub use raster_executor::{
-    DETACH_DEADLINE, DeviceHealth, ExecutorFailure, ExecutorHealth, RasterBackend, RasterCommand,
-    RasterExecutor, RasterPlacement, RasterSendError, RasterSender, RasterVerdict, SendReceipt,
-    SlotChange, SlotConfig, SlotFailure, SlotId, SlotPhase, SlotRecord, SlotSettlement, SlotSize,
-    SlotSurface, SlotTarget, SlotVisibility, SurfaceHold, TurnOutcome,
+    DETACH_DEADLINE, DeviceHealth, DeviceRetries, ExecutorFailure, ExecutorHealth, RasterBackend,
+    RasterCommand, RasterExecutor, RasterPlacement, RasterSendError, RasterSender, RasterVerdict,
+    SendReceipt, SlotChange, SlotConfig, SlotFailure, SlotId, SlotPhase, SlotRecord,
+    SlotSettlement, SlotSize, SlotSurface, SlotTarget, SlotVisibility, SurfaceHold, TurnOutcome,
 };
 // Windowless capture (golden-image / screenshot tooling).
 pub use headless::HeadlessRenderer;

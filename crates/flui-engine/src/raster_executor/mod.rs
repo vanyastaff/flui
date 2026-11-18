@@ -54,7 +54,7 @@ pub use command::{
 };
 pub use device_health::DeviceHealth;
 pub use inbox::{SlotFailure, SlotPhase, SlotRecord};
-pub use sender::RasterSender;
+pub use sender::{DeviceRetries, RasterSender};
 pub(crate) use slot::SlotMint;
 pub use slot::{SlotDomain, SlotId};
 use surface::SurfaceEvent;
@@ -499,22 +499,23 @@ impl<B: RasterBackend> RasterExecutor<B> {
     }
 
     /// Adopt `device`, the owner's probe's answer to a retry (ADR-0305 §8);
-    /// answers whether the device's health moved, which wakes the owner.
+    /// answers `true`, which wakes the owner: the retry is served and every
+    /// window wants a surface, whether or not the adoption returned.
     ///
     /// Every device sent is adopted, in the order sent, whatever the health
     /// it meets: the owner makes its windows' surfaces with the factory of
     /// the last device it sent, so the context's instance has to be that
     /// device's. The owner sends one only for a device it read given up and
-    /// with no retry of its own still unserved (ADR-0267), which the count
-    /// of served retries in the device's record tells it.
+    /// with no retry of its own still unserved (ADR-0267), which the
+    /// device's record counts ([`DeviceRetries`]).
     ///
     /// Adopting drops every window's surface, made on the instance the
     /// device's replaces, so each window slot asks its owner for another;
     /// an adoption that panics part way asks the same, since what surfaces
     /// it left are not the ones the owner's factory now makes. Its device
-    /// stays lost: a streak given up stays given up, for the application's
-    /// request, which still stands, to probe again, and any other is rebuilt
-    /// on the backoff.
+    /// stays lost and the retry is counted unadopted: a streak given up
+    /// stays given up, and the owner tells the application so, and any
+    /// other is rebuilt on the backoff.
     fn adopt_device(&mut self, device: crate::ProbedDevice, first: &mut FirstPanic) -> bool {
         let adopted = first.contain(|| self.backend.adopt_device(device));
         let was_adopted = adopted.is_some();
@@ -531,9 +532,15 @@ impl<B: RasterBackend> RasterExecutor<B> {
             // reading it.
             self.after_rebuild(refused, first);
         }
-        self.shared.device().retries_served += 1;
         let now = self.now(first);
         let _published = self.publish_device(None, now, first);
+        // Counted after the health is published, which an owner reading the
+        // count first then reads (`RasterSender::device_retries`).
+        {
+            let mut record = self.shared.device();
+            record.retries.served += 1;
+            record.retries.unadopted += u64::from(!was_adopted);
+        }
         if was_adopted {
             report(Report::DeviceRebuilt, first);
         }

@@ -84,6 +84,19 @@ impl Lifecycle {
     }
 }
 
+/// The `RetryDevice` commands an executor served (ADR-0305 §8), as its owner
+/// reads them in one read: a retry the owner sent past `served` is still on
+/// its way, and one served without the device it carried being adopted
+/// (its adoption panicked) left the device given up.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct DeviceRetries {
+    /// Every retry served, adopted or not.
+    pub served: u64,
+    /// The retries served whose device was not adopted.
+    pub unadopted: u64,
+}
+
 /// The context's device as the executor last published it.
 #[derive(Default)]
 pub(crate) struct DeviceRecord {
@@ -92,9 +105,10 @@ pub(crate) struct DeviceRecord {
     pub(crate) next_attempt_at: Option<Instant>,
     /// Why the last rebuild failed, until the owner takes it.
     pub(crate) failure: Option<EngineError>,
-    /// How many `RetryDevice` commands the executor served, adopted or not:
-    /// a retry the owner sent past this count is still on its way.
-    pub(crate) retries_served: u64,
+    /// The `RetryDevice` commands the executor served, counted after the
+    /// health their adoption left is published: an owner that reads these
+    /// before the health never reads a served retry with the health before it.
+    pub(crate) retries: DeviceRetries,
 }
 
 /// What the owner and the executor share: the lifecycle queue, the coalesced
@@ -597,12 +611,12 @@ impl RasterSender {
         self.shared.device().failure.take()
     }
 
-    /// How many `RetryDevice` commands the executor has served, adopted or
-    /// not: a retry the owner sent past this count is still on its way, so
-    /// the owner probes no second device for it.
+    /// The `RetryDevice` commands the executor has served (ADR-0305 §8). Read
+    /// it before [`Self::device_health`]: a retry it counts as served has
+    /// published the health its adoption left.
     #[must_use]
-    pub fn retries_served(&self) -> u64 {
-        self.shared.device().retries_served
+    pub fn device_retries(&self) -> DeviceRetries {
+        self.shared.device().retries
     }
 
     /// Why the raster thread stopped serving, or a turn of it failed, once:

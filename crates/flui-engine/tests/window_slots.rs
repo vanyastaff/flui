@@ -635,7 +635,7 @@ fn a_probed_device_drops_every_window_surface_for_the_owner_to_replace() {
         });
         let _ = rig.executor.turn();
         assert_eq!(rig.sender.device_health(), DeviceHealth::Healthy);
-        assert_eq!(rig.sender.retries_served(), 1, "the retry is served");
+        assert_eq!(rig.sender.device_retries().served, 1, "the retry is served");
         assert!(
             rig.sender.take_failure(slot).is_none(),
             "a surface the retry dropped is no failure"
@@ -1014,7 +1014,8 @@ fn a_panicked_adoption_still_asks_every_window_for_a_surface() {
         turn.is_none() && caught.into_payload().is_some(),
         "the adoption's panic is resumed"
     );
-    assert_eq!(rig.sender.retries_served(), 1);
+    let retries = rig.sender.device_retries();
+    assert_eq!((retries.served, retries.unadopted), (1, 1));
     assert_eq!(
         rig.sender.record(slot).expect("held").surface.hold,
         SurfaceHold::Wanted,

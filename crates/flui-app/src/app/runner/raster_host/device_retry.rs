@@ -27,8 +27,9 @@ pub(super) enum Retry {
     InFlight,
     /// A probed device was sent; the executor adopts it on its next turn.
     Sent,
-    /// The probe answered no device, or the executor refused the send: the
-    /// device stays given up, and the application is told so again.
+    /// The probe answered no device, the executor refused the send, or the
+    /// device the last retry sent was not adopted: the device stays given
+    /// up, and the application is told so again.
     Failed,
 }
 
@@ -44,14 +45,23 @@ pub(super) fn retry_given_up(
     placed: &mut Placed,
     send: impl FnOnce(&mut Placed, RasterCommand) -> Result<SendReceipt, RasterSendError>,
 ) -> Retry {
-    // Read before the health: a retry served after this read is counted as
-    // unserved, and waited for, rather than probed for twice.
-    let served = placed.sender.retries_served();
+    // Read before the health: a retry counted as served has published the
+    // health its adoption left, so a retry served after this read is waited
+    // for, not probed for twice.
+    let retries = placed.sender.device_retries();
+    let unadopted = retries.unadopted > placed.retries_unadopted;
+    placed.retries_unadopted = retries.unadopted;
     if !matches!(placed.sender.device_health(), DeviceHealth::GivenUp { .. }) {
         return Retry::NotGivenUp;
     }
-    if placed.retries_sent > served {
+    if placed.retries_sent > retries.served {
         return Retry::InFlight;
+    }
+    if unadopted {
+        // The device the last retry sent was not adopted (its adoption
+        // panicked): that is this request's answer, rather than a probe on
+        // each frame the request still stands for.
+        return Retry::Failed;
     }
     let over = placed
         .slots
