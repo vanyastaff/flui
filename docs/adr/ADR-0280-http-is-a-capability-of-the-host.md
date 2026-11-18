@@ -8,7 +8,7 @@
   registry as the authority of a response only (§5–§6); [ADR-0107](ADR-0107-asset-byte-sources-and-decoding.md),
   its network bridge only: `NetworkLoader`, `reqwest` and the `network` and `network-images`
   features (§5).
-- **Superseded-by:** [ADR-0374](ADR-0374-before-the-first-release-a-pull-request-runs-a-fixed-gate-and-no-api-contract-gate.md)
+- **Superseded-by:** [ADR-0375](ADR-0375-before-the-first-release-a-pull-request-runs-a-fixed-gate-and-no-api-contract-gate.md)
   for the `xtask send-positions` gate only (Confirmation): the rule stands and its reader confirms
   it.
 - **Related:** [ADR-0152](ADR-0152-capability-seam-revised.md) (the seam the capability travels

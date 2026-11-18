@@ -2,7 +2,7 @@
 
 - **Status:** Accepted (2026-11-13)
 - **Date:** 2026-11-13
-- **Superseded-by:** [ADR-0374](ADR-0374-before-the-first-release-a-pull-request-runs-a-fixed-gate-and-no-api-contract-gate.md)
+- **Superseded-by:** [ADR-0375](ADR-0375-before-the-first-release-a-pull-request-runs-a-fixed-gate-and-no-api-contract-gate.md)
   for the `api/flui.txt` snapshot only (Consequences, Confirmation): the rule stands and its reader
   confirms it.
 - **Related:** [ADR-0151](ADR-0151-platform-layer-boundary-and-names.md) §5 (the rule in the

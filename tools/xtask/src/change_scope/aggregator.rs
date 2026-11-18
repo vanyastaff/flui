@@ -14,7 +14,7 @@
 //!    - `tooling`: `deps`;
 //!    - `wide`: `deps` and the `HEAVY_JOBS` list (the Linux pull-request gate), and
 //!      no native host jobs;
-//!    - `full`: `wide` plus `FULL_JOBS` (every other check, ADR-0370, ADR-0374).
+//!    - `full`: `wide` plus `FULL_JOBS` (every other check, ADR-0370, ADR-0375).
 //!
 //!    Every other declared job must skip. Any other skip (a drifted `if:`, a
 //!    cancellation) or a job that ran where it should have skipped fails the

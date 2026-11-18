@@ -5,7 +5,7 @@
 - **Superseded-by:** [ADR-0371](ADR-0371-before-the-first-release-no-xtask-gate-holds-a-rule-about-the-sources.md)
   for the `xtask globals`, `xtask reach` and `xtask workspace` gates only (Decision, Confirmation):
   the rule stands and its reader confirms it.
-  [ADR-0374](ADR-0374-before-the-first-release-a-pull-request-runs-a-fixed-gate-and-no-api-contract-gate.md)
+  [ADR-0375](ADR-0375-before-the-first-release-a-pull-request-runs-a-fixed-gate-and-no-api-contract-gate.md)
   for the `xtask send-positions` gate only (Confirmation): the rule stands and its reader confirms
   it.
 - **Related:** [ADR-0094](ADR-0094-hot-reload-through-subsecond.md) (the rejected Subsecond

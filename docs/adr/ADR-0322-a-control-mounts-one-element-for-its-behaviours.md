@@ -2,7 +2,7 @@
 
 - **Status:** Accepted (2026-11-11)
 - **Date:** 2026-11-11
-- **Superseded-by:** [ADR-0374](ADR-0374-before-the-first-release-a-pull-request-runs-a-fixed-gate-and-no-api-contract-gate.md)
+- **Superseded-by:** [ADR-0375](ADR-0375-before-the-first-release-a-pull-request-runs-a-fixed-gate-and-no-api-contract-gate.md)
   for the facade's public-API snapshot only (Confirmation): the module's absence from the facade
   is read in the code.
 - **Related:** [ADR-0023](ADR-0023-actions-shortcuts-seam.md) (the action chain a focused node

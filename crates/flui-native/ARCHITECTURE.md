@@ -133,7 +133,7 @@ trait depends on `flui-platform` instead.
   `android_activity` Activity; and
   `NativeExecutor::from_tokio` borrows the application's `tokio` runtime
   (ADR-0327 §3). No program checks the list before the first release
-  (ADR-0374): an OS binding a dependency brings is a finding of the reader.
+  (ADR-0375): an OS binding a dependency brings is a finding of the reader.
   The windows a
   host builds are crate-private: the platform hands out `Rc<dyn HostWindow>`,
   a raw window or display handle leaves through the window's `SurfaceTarget`,

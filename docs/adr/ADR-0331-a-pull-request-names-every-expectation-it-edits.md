@@ -2,7 +2,7 @@
 
 - **Status:** Accepted (2026-11-13)
 - **Date:** 2026-11-13
-- **Superseded-by:** [ADR-0374](ADR-0374-before-the-first-release-a-pull-request-runs-a-fixed-gate-and-no-api-contract-gate.md)
+- **Superseded-by:** [ADR-0375](ADR-0375-before-the-first-release-a-pull-request-runs-a-fixed-gate-and-no-api-contract-gate.md)
   for the `api/flui.txt` row of §1's table only: the facade's API has no committed snapshot before
   the first release.
 - **Related:** [ADR-0303](ADR-0303-a-rule-takes-the-first-rung-that-states-it-and-an-xtask-gate-is-the-last.md)
