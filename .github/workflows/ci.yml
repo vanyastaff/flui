@@ -507,11 +507,12 @@ jobs:
         if: needs.plan.outputs.lane == 'full'
         run: cargo xtask build-all-targets
 
-      # The disk peak is the build above; the reclaim beside the builds is what
-      # keeps it above 0 (it failed without one on 2026-10-30). Its log is
-      # printed here: a reclaim that failed shows nowhere else.
+      # On main the disk peak is the build above, which a pull request skips;
+      # the reclaim beside the builds is what keeps it above 0 (it failed
+      # without one on 2026-10-30). Its log is printed here, after a failed
+      # step too: a reclaim that failed shows nowhere else.
       - name: Disk usage after build
-        if: always()
+        if: ${{ !cancelled() }}
         run: |
           cat "$RUNNER_TEMP/free-disk.log" || true
           df -h /
