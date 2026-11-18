@@ -5566,15 +5566,29 @@ GPU-память простаивающего или невидимого окн
   отставлен) закрывает лист `endSheet:returnCode:`, и обработчик никому не отвечает (ADR-0344).
   Фильтры (ADR-0360 §3, §4): расширение — `UTType` его последней части, MIME — его тип, семейство
   (`image/*`, `audio/*`, `video/*`, `text/*`, `font/*`) — системный тип, иное семейство —
-  `NotOnThisPlatform`; многочастное расширение (`tar.gz`) открывающая панель проверяет по имени
-  делегатом (`panel:shouldEnableURL:`); меню фильтров нет, сохранение не сообщает выбранный
-  фильтр. Лаунчер — `NSWorkspace` вне главного потока (очередь GCD, не больше
-  `WorkQueue::MAX_IN_FLIGHT` на runtime): документ открывается, итоговый путь (`F_GETPATH`)
-  судится полом имён, битом исполнения и `NSURLIsApplicationKey`, затем `openURL:` по нему;
-  reveal — `activateFileViewerSelectingURLs:`, trash — `trashItemAtURL:`. Автозапуск —
+  `NotOnThisPlatform`; делегат открывающей панели (`panel:shouldEnableURL:`) держит каждый
+  элемент правилом контракта: сначала имя (ничего не читая), затем тип против MIME-шаблонов, и
+  судит то, что панель ответит, — цель псевдонима или ссылки, она же и выдаётся; меню фильтров
+  нет, сохранение не сообщает выбранный фильтр. Имя каждого выбора сверяет с фильтрами сама ручка
+  на всех ОС (`FileDialogs::open`: фильтры только из расширений, имя не оканчивается ни одним —
+  весь ответ `DialogError::NotInFilter`); тип ручке неизвестен, поэтому при MIME-шаблоне судит
+  провайдер: на macOS выбор, не прошедший ни по имени, ни по прочитанному типу, — тот же
+  `NotInFilter`, а непрочитанный тип отказом не служит. Лаунчер — `NSWorkspace` вне главного
+  потока (очередь GCD, не больше `WorkQueue::MAX_IN_FLIGHT` на runtime): путь сначала
+  осматривается (`stat`), открывается только обычный файл или папка (канал, устройство и сокет
+  отклоняются неоткрытыми), без блокировки и без управляющего терминала
+  (`O_NONBLOCK | O_NOCTTY | O_CLOEXEC`), дескриптор осматривается снова (`fstat`), итоговый путь
+  (`F_GETPATH`) судится полом имён, битом исполнения и `NSURLIsApplicationKey`, затем `openURL:`
+  по нему; reveal — `activateFileViewerSelectingURLs:`, trash — `trashItemAtURL:`. Автозапуск —
   `SMAppService.mainAppService` (macOS 13; ниже — `NotOnThisDevice`), выключение пользователем
   (`requiresApproval`) не перезаписывается: включение отвечает `Disabled`. Глобальные сочетания
-  — Carbon `RegisterEventHotKey`, исключительная регистрация (нажатие и отпускание; буква — клавиша текущей раскладки через `UCKeyTranslate`; номер уникален в процессе и не переиспользуется). Запись
+  — Carbon `RegisterEventHotKey`, исключительная регистрация, нажатие и отпускание; буква или
+  цифра — клавиша основного блока (не цифровой), которая печатает её на текущей раскладке при
+  Shift и Command сочетания (`UCKeyTranslate`), иначе её место ANSI; runtime слушает
+  `kTISNotifySelectedKeyboardInputSourceChanged` и переносит каждое сочетание, чья клавиша
+  сменилась (сначала все снимаются, потом регистрируются: две могут поменяться местами),
+  привязка слышит `Changed`, когда сочетание выпало на занятый аккорд или вернулось; номер
+  уникален в процессе, не переиспользуется, а исчерпание завершает привязку `Exhausted`. Запись
   лаунчера — плитка Dock (значок и полоса, неопределённый прогресс не показывается). Папки —
   `URLsForDirectory:inDomains:`, сведения об ОС — `NSProcessInfo` и Rosetta. Ворота версий —
   `macos::version` той же формы, что в `flui-native` (до него ёмкостный крейт не дотягивается),
@@ -5594,27 +5608,39 @@ GPU-память простаивающего или невидимого окн
   `enabling_registers_once_and_the_users_switch_off_stands`,
   `disabling_unregisters_what_is_registered_and_nothing_else`,
   `a_refusal_and_a_failure_are_named_and_an_unbundled_application_has_no_item`,
-  `a_shortcut_is_bound_to_its_preferred_chord_or_left_out_and_numbers_are_never_reused`,
+  `a_shortcut_is_bound_to_its_preferred_chord_or_left_out_and_a_number_is_never_reused`,
   `a_trigger_is_its_key_code_and_flags_and_is_shown_as_macos_writes_it`,
   `the_tile_shows_the_count_and_a_known_extent_and_says_so`,
   `each_folder_is_the_one_foundation_keeps_and_templates_none`,
   `the_system_is_macos_at_its_version_on_the_machines_processor`,
   `a_runtime_holds_a_bounded_number_of_places_and_each_comes_back_when_dropped`,
-  `a_pipe_named_like_a_document_is_opened_at_once_and_refused_by_its_type` (Linux),
-  `a_letter_is_the_key_that_types_it_on_the_current_layout`,
+  `a_pipe_or_a_device_named_like_a_document_is_refused_without_being_opened` (Linux),
+  `an_items_name_admits_it_before_anything_of_it_is_read`,
+  `a_letter_or_digit_is_the_main_block_key_that_types_it_under_the_chords_shift_and_command`,
+  `a_layout_switch_moves_each_shortcut_to_the_key_that_types_it_now`,
+  `a_process_out_of_hot_key_numbers_binds_nothing_more`,
   `two_runtimes_never_take_each_others_hot_keys`,
-  `a_number_names_one_hot_key_in_the_process_and_survives_carbon_unchanged`, ворота
+  `a_number_names_one_hot_key_in_the_process_and_survives_carbon_unchanged`, через публичный API
+  `a_pick_whose_name_ends_in_no_extension_of_the_filters_refuses_the_whole_answer`, ворота
   `the_login_item_is_there_from_macos_13_on`, `content_types_are_there_from_macos_11_on`,
   `a_gate_opens_from_its_version_on_and_never_for_an_unknown_one`. Проверено: модели на Windows и
-  Linux (WSL), проверка типов `aarch64-apple-darwin` на nightly в WSL; clippy для macOS — только
-  CI. Не запускалось: ни одна панель, лист, запуск, сочетание, вход в систему, плитка Dock на
-  Mac; цель `x86_64-apple-darwin` (ворота `UTType`) не проверялась здесь. Чего macOS не достаёт
-  до контракта (английские подписи кнопок, суффикс многочастного расширения при сохранении,
-  плитка Dock процесса при двух runtime, стоящий том держит место запроса) — `docs/gaps.md`.
-  После независимого чтения: открытие без блокировки (FIFO отказывается по типу), фильтр
-  открывающей панели всегда сверяется по имени делегатом и в ответе, `setAllowedFileTypes:` ниже
-  macOS 11 на Intel, пути байтами файловой системы. С откатом `O_NONBLOCK` красный
-  `a_pipe_named_like_a_document_is_opened_at_once_and_refused_by_its_type` (истёк срок ожидания).
+  Linux (WSL), проверка типов `aarch64-apple-darwin`, `aarch64-apple-ios`, `aarch64-linux-android`
+  и `wasm32-unknown-unknown` на nightly в WSL; clippy для macOS — только CI. С откатом своей
+  правки красные: открытие до осмотра пути —
+  `a_pipe_or_a_device_named_like_a_document_is_refused_without_being_opened` (писатель канала
+  пропущен); поиск по всем кодам клавиш или без модификаторов сочетания —
+  `a_letter_or_digit_is_the_main_block_key_…` (`⌘1` на AZERTY — клавиша цифрового блока; `⌘S` на
+  Dvorak – QWERTY ⌘ — место Dvorak); перенос без действия или в один проход —
+  `a_layout_switch_moves_each_shortcut_…` (`⌘A` выпадает, пока `⌘Q` держит её новую клавишу);
+  счётчик с переполнением — `a_process_out_of_hot_key_numbers_binds_nothing_more`; чтение типа
+  до имени — `an_items_name_admits_it_before_anything_of_it_is_read`; без сверки в ручке —
+  `a_pick_whose_name_ends_in_no_extension_of_the_filters_refuses_the_whole_answer`. Не
+  запускалось: ни одна панель, лист, запуск, сочетание, смена раскладки, вход в систему, плитка
+  Dock на Mac; цель `x86_64-apple-darwin` (ворота `UTType`) не проверялась здесь. Чего macOS не
+  достаёт до контракта (английские подписи кнопок, суффикс многочастного расширения при
+  сохранении, плитка Dock процесса при двух runtime, сочетания двух runtime при смене раскладки,
+  стоящий том держит место запроса) — `docs/gaps.md`; там же: лаунчер Linux открывает любой узел
+  до суждения.
 - [x] **LY59** (закрыта веткой `system/linux-portals`: порталы, родитель окна и поправка
   ADR-0152 построены; прогоны на рабочем столе записаны в parity) — #2158 (`bb618a7f7`), zbus на
   своём runtime #2155, `PortalParent` окна Wayland #1934. `crates/flui-system/src/portal/`
