@@ -66,8 +66,6 @@ use objc2_ui_kit::{
     UISceneSession, UIWindowScene,
 };
 
-use parking_lot::Mutex;
-
 use crate::error::PlatformError;
 use crate::host;
 use crate::owner::app_delivery::AppDelivery;
@@ -237,8 +235,9 @@ pub(crate) trait HostDisplays: Send + Sync {
     /// it differed, for which the window owes a display-changed notification.
     fn move_window(
         &self,
+        marker: MainThreadMarker,
         window: WindowId,
-        slot: &Mutex<ScreenIdentity>,
+        slot: &std::cell::Cell<ScreenIdentity>,
         next: ScreenIdentity,
     ) -> bool;
 
@@ -249,6 +248,7 @@ pub(crate) trait HostDisplays: Send + Sync {
     /// display-changed notification.
     fn observe_link(
         &self,
+        marker: MainThreadMarker,
         window: WindowId,
         number: Option<ScreenNumber>,
         interval_seconds: f64,
@@ -257,7 +257,7 @@ pub(crate) trait HostDisplays: Send + Sync {
     /// `window`'s display link is gone: what it measured on the screen
     /// numbered `number` is forgotten, and the snapshot is marked stale when
     /// that screen had a period from it.
-    fn forget_link(&self, window: WindowId, number: Option<ScreenNumber>);
+    fn forget_link(&self, marker: MainThreadMarker, window: WindowId, number: Option<ScreenNumber>);
 
     /// Ask `link` for the rate `hint` names: the best rate `screen` sustains on
     /// the version the platform runs on, or no preference.

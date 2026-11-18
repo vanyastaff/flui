@@ -1205,9 +1205,10 @@ impl UpdateScheduler {
     /// which the runtime admits through its own gates; the scheduler asks no
     /// frame for them (`OwnerFrame::settle_aborted_segments`). Re-arming for the
     /// failure itself would hot-loop a caller that keeps re-driving a
-    /// deterministically panicking frame; a caller that catches the resumed
-    /// panic and wants another frame calls [`request_frame`](Self::request_frame)
-    /// itself.
+    /// deterministically panicking frame. Ready tasks a panicking poll left
+    /// unpolled request their own frame from the task pump. A caller that
+    /// catches the resumed panic and wants another frame calls
+    /// [`request_frame`](Self::request_frame) itself.
     ///
     /// Idempotent: a no-op when no frame is open.
     fn abort_frame_impl(&self) {

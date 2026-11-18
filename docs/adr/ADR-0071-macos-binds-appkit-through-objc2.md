@@ -7,6 +7,8 @@
   every method itself, the `NSTextInputClient` ones included, dispatching them to the input and
   the text input each view keeps.
 - **Absorbs:** ADR-0070
+- **Superseded-by:** [ADR-0369](ADR-0369-the-macos-host-binds-appkit-through-typed-objc2.md) §2 only
+  (the raw `msg_send!` shape and the `ClassBuilder` classes of the macOS window)
 
 ## Context
 

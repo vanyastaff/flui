@@ -197,8 +197,9 @@ impl BridgeShared {
     /// The state is stored **before** the listener runs: the listener's
     /// natural response to "attached" is to enable semantics and publish,
     /// and a publish that consulted a stale state would be dropped by the
-    /// adapter it was meant to initialize. Telling `false` is
-    /// [`Self::deactivate`]'s.
+    /// adapter it was meant to initialize. Telling `false` is the job of
+    /// `deactivate`, which exists only on hosts whose bridge can be
+    /// deactivated.
     pub(crate) fn notify_activation(&self, active: bool) {
         let to = if active {
             Attachment::Attached
