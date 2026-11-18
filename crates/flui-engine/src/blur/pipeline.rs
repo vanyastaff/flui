@@ -98,7 +98,11 @@ impl BlurPipeline {
     ///
     /// WGSL shader compilation happens here; a wgpu validation error surfaces
     /// at this call site, which the GPU construction test exercises.
-    pub(crate) fn new(device: &wgpu::Device, surface_format: wgpu::TextureFormat) -> Self {
+    pub(crate) fn new(
+        gpu: crate::pipeline_device::PipelineDevice<'_>,
+        surface_format: wgpu::TextureFormat,
+    ) -> Self {
+        let device = gpu.device();
         // The bind-group layout is sourced from the generated bindings, which derive
         // it directly from the WGSL source — no hand-maintained descriptor.
         let bind_group_layout = blur::WgpuBindGroup0::get_bind_group_layout(device);
@@ -151,7 +155,7 @@ impl BlurPipeline {
                 alpha_to_coverage_enabled: false,
             },
             multiview_mask: None,
-            cache: None,
+            cache: gpu.cache(),
         });
 
         Self { pipeline }

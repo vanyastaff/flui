@@ -75,6 +75,7 @@ use crate::{
     mode::ModePipeline,
     morphology::MorphologyPipeline,
     pipeline_cache::{PipelineCache, blend_state_for},
+    pipeline_device::PipelineDevice,
     resample::ResamplePipeline,
     ssaa::SsaaDownsamplePipeline,
 };
@@ -273,9 +274,21 @@ pub(crate) struct PipelineSet {
     ///
     /// Populated lazily on the first encounter of each tile-safe non-SrcOver mode.
     texture_composite_cache: FxHashMap<BlendMode, wgpu::RenderPipeline>,
+
+    /// The driver's pipeline cache this set's device was given, which the
+    /// pipelines built on first use are created through as the eager ones
+    /// were.
+    driver_cache: Option<wgpu::PipelineCache>,
 }
 
 impl PipelineSet {
+    /// `device`, the device this set's pipelines are on, with the pipeline
+    /// cache they are created through: for a pipeline built on first use
+    /// outside the set (the replay's clip mask).
+    pub(crate) fn pipeline_device<'a>(&'a self, device: &'a wgpu::Device) -> PipelineDevice<'a> {
+        PipelineDevice::new(device, self.driver_cache.as_ref())
+    }
+
     pub(crate) fn image_isolation(
         &mut self,
         device: &wgpu::Device,
@@ -302,7 +315,7 @@ impl PipelineSet {
             });
             let targets = crate::pipeline_cache::isolation_targets(self.ssaa_tile_surface_format);
             let pipeline = create_unit_quad_pipeline_with_targets(
-                device,
+                PipelineDevice::new(device, self.driver_cache.as_ref()),
                 &layout,
                 &QuadPipelineSpec {
                     shader_label: "Image isolation shader",
@@ -340,7 +353,7 @@ impl PipelineSet {
     ) -> &crate::portable_coverage::PortableCoveragePipeline {
         self.portable_coverage.get_or_insert_with(|| {
             crate::portable_coverage::PortableCoveragePipeline::new(
-                device,
+                PipelineDevice::new(device, self.driver_cache.as_ref()),
                 self.ssaa_tile_surface_format,
             )
         })
@@ -357,10 +370,11 @@ impl PipelineSet {
     /// Every subsequent pipeline layout in this function borrows it via
     /// [`Self::viewport_bind_group_layout`], ensuring a single shared object —
     /// see the module-level hazard note.
-    pub(crate) fn new(device: &wgpu::Device, surface_format: wgpu::TextureFormat) -> Self {
+    pub(crate) fn new(gpu: PipelineDevice<'_>, surface_format: wgpu::TextureFormat) -> Self {
+        let device = gpu.device();
         // ── Shape pipeline cache (also creates the viewport bind-group layout) ──
         let shape_cache = PipelineCache::new(
-            device,
+            gpu,
             crate::shaders::SHAPE,
             surface_format,
             create_viewport_bind_group_layout(device),
@@ -378,11 +392,11 @@ impl PipelineSet {
             });
 
         let instanced_rect =
-            create_instanced_rect_pipeline(device, surface_format, &instanced_shape_layout);
+            create_instanced_rect_pipeline(gpu, surface_format, &instanced_shape_layout);
         let instanced_circle =
-            create_instanced_circle_pipeline(device, surface_format, &instanced_shape_layout);
+            create_instanced_circle_pipeline(gpu, surface_format, &instanced_shape_layout);
         let instanced_arc =
-            create_instanced_arc_pipeline(device, surface_format, &instanced_shape_layout);
+            create_instanced_arc_pipeline(gpu, surface_format, &instanced_shape_layout);
 
         // ── Texture pipelines ─────────────────────────────────────────────────
         let texture_bind_group_layout = create_texture_bind_group_layout(device);
@@ -397,12 +411,9 @@ impl PipelineSet {
             });
 
         let instanced_texture =
-            create_instanced_texture_pipeline(device, surface_format, &texture_pipeline_layout);
-        let instanced_texture_premul = create_instanced_texture_premul_pipeline(
-            device,
-            surface_format,
-            &texture_pipeline_layout,
-        );
+            create_instanced_texture_pipeline(gpu, surface_format, &texture_pipeline_layout);
+        let instanced_texture_premul =
+            create_instanced_texture_premul_pipeline(gpu, surface_format, &texture_pipeline_layout);
 
         // ── Glyph pipeline ────────────────────────────────────────────────────
         let glyph_atlas_bind_group_layout = create_glyph_atlas_bind_group_layout(device);
@@ -416,7 +427,7 @@ impl PipelineSet {
                 immediate_size: 0,
             });
         let instanced_glyph = create_unit_quad_pipeline(
-            device,
+            gpu,
             surface_format,
             &glyph_pipeline_layout,
             &QuadPipelineSpec {
@@ -433,30 +444,30 @@ impl PipelineSet {
         let gradient_bind_group_layout =
             crate::effects_pipeline::create_gradient_bind_group_layout(device);
         let gradients = GradientPipelines::new(
-            device,
+            gpu,
             surface_format,
             shape_cache.viewport_bind_group_layout(),
             &gradient_bind_group_layout,
         );
 
         let shadow = crate::effects_pipeline::create_shadow_pipeline(
-            device,
+            gpu,
             surface_format,
             shape_cache.viewport_bind_group_layout(),
         );
 
         let advanced_blend = AdvancedBlendPipeline::new(
-            device,
+            gpu,
             surface_format,
             shape_cache.viewport_bind_group_layout(),
         );
-        let color_matrix = ColorMatrixPipeline::new(device, surface_format);
-        let morphology = MorphologyPipeline::new(device, surface_format);
-        let resample = ResamplePipeline::new(device, surface_format);
-        let blur = BlurPipeline::new(device, surface_format);
-        let mode = ModePipeline::new(device, surface_format);
-        let gamma = GammaPipeline::new(device, surface_format);
-        let ssaa_downsample = SsaaDownsamplePipeline::new(device, surface_format);
+        let color_matrix = ColorMatrixPipeline::new(gpu, surface_format);
+        let morphology = MorphologyPipeline::new(gpu, surface_format);
+        let resample = ResamplePipeline::new(gpu, surface_format);
+        let blur = BlurPipeline::new(gpu, surface_format);
+        let mode = ModePipeline::new(gpu, surface_format);
+        let gamma = GammaPipeline::new(gpu, surface_format);
+        let ssaa_downsample = SsaaDownsamplePipeline::new(gpu, surface_format);
 
         // ── SSAA tile composite: shared layout + lazy pipeline cache ──────────
         //
@@ -502,6 +513,7 @@ impl PipelineSet {
             image_filter_layout: crate::image_source_filter::layout(device),
             filtered_texture_composite_cache: FxHashMap::default(),
             texture_composite_cache: FxHashMap::default(),
+            driver_cache: gpu.owned_cache(),
         }
     }
 
@@ -608,7 +620,7 @@ impl PipelineSet {
         self.texture_composite_cache.entry(mode).or_insert_with(|| {
             let blend_state = blend_state_for(mode);
             create_instanced_texture_with_blend_state(
-                device,
+                PipelineDevice::new(device, self.driver_cache.as_ref()),
                 self.ssaa_tile_surface_format,
                 &self.ssaa_tile_composite_layout,
                 blend_state,
@@ -658,7 +670,7 @@ impl PipelineSet {
                     immediate_size: 0,
                 });
                 create_unit_quad_pipeline(
-                    device,
+                    PipelineDevice::new(device, self.driver_cache.as_ref()),
                     self.ssaa_tile_surface_format,
                     &layout,
                     &QuadPipelineSpec {
@@ -701,21 +713,24 @@ pub(crate) struct PipelineLibrary {
 }
 
 impl PipelineLibrary {
-    /// A library holding the set for `format`.
-    pub(crate) fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
+    /// A library holding the set for `format`, its pipelines and those of
+    /// every later set created through `gpu`'s cache.
+    pub(crate) fn new(gpu: PipelineDevice<'_>, format: wgpu::TextureFormat) -> Self {
         Self {
-            sets: vec![(format, PipelineSet::new(device, format))],
+            sets: vec![(format, PipelineSet::new(gpu, format))],
             current: 0,
         }
     }
 
-    /// Draw with `format`'s set from now on, building it the first time.
+    /// Draw with `format`'s set from now on, building it the first time
+    /// through the cache the first set was built with.
     pub(crate) fn select(&mut self, device: &wgpu::Device, format: wgpu::TextureFormat) {
         if let Some(index) = self.sets.iter().position(|(built, _)| *built == format) {
             self.current = index;
             return;
         }
-        self.sets.push((format, PipelineSet::new(device, format)));
+        let set = PipelineSet::new(self.sets[0].1.pipeline_device(device), format);
+        self.sets.push((format, set));
         self.current = self.sets.len() - 1;
     }
 
@@ -911,7 +926,7 @@ pub(super) struct QuadPipelineSpec<'a> {
 /// The one true unit-quad pipeline constructor: single-sample, no depth,
 /// triangle-list, unit-quad + instance vertex buffers, one color target.
 pub(super) fn create_unit_quad_pipeline(
-    device: &wgpu::Device,
+    gpu: PipelineDevice<'_>,
     surface_format: wgpu::TextureFormat,
     layout: &wgpu::PipelineLayout,
     spec: &QuadPipelineSpec<'_>,
@@ -921,56 +936,59 @@ pub(super) fn create_unit_quad_pipeline(
         blend: Some(spec.blend),
         write_mask: wgpu::ColorWrites::ALL,
     })];
-    create_unit_quad_pipeline_with_targets(device, layout, spec, &targets, "vs_main")
+    create_unit_quad_pipeline_with_targets(gpu, layout, spec, &targets, "vs_main")
 }
 
 pub(super) fn create_unit_quad_pipeline_with_targets(
-    device: &wgpu::Device,
+    gpu: PipelineDevice<'_>,
     layout: &wgpu::PipelineLayout,
     spec: &QuadPipelineSpec<'_>,
     targets: &[Option<wgpu::ColorTargetState>],
     vertex_entry: &'static str,
 ) -> wgpu::RenderPipeline {
-    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some(spec.shader_label),
-        source: wgpu::ShaderSource::Wgsl(spec.shader_source.into()),
-    });
-    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some(spec.pipeline_label),
-        layout: Some(layout),
-        vertex: wgpu::VertexState {
-            module: &shader,
-            entry_point: Some(vertex_entry),
-            buffers: &[
-                Some(unit_quad_vertex_buffer_layout()),
-                Some(spec.instance_layout.clone()),
-            ],
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
-        },
-        fragment: Some(wgpu::FragmentState {
-            module: &shader,
-            entry_point: Some("fs_main"),
-            targets,
-            compilation_options: wgpu::PipelineCompilationOptions {
-                constants: spec.constants,
-                ..Default::default()
+    let shader = gpu
+        .device()
+        .create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some(spec.shader_label),
+            source: wgpu::ShaderSource::Wgsl(spec.shader_source.into()),
+        });
+    gpu.device()
+        .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some(spec.pipeline_label),
+            layout: Some(layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some(vertex_entry),
+                buffers: &[
+                    Some(unit_quad_vertex_buffer_layout()),
+                    Some(spec.instance_layout.clone()),
+                ],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
             },
-        }),
-        primitive: instanced_quad_primitive_state(),
-        depth_stencil: None,
-        multisample: single_sample_multisample_state(),
-        multiview_mask: None,
-        cache: None,
-    })
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_main"),
+                targets,
+                compilation_options: wgpu::PipelineCompilationOptions {
+                    constants: spec.constants,
+                    ..Default::default()
+                },
+            }),
+            primitive: instanced_quad_primitive_state(),
+            depth_stencil: None,
+            multisample: single_sample_multisample_state(),
+            multiview_mask: None,
+            cache: gpu.cache(),
+        })
 }
 
 fn create_instanced_rect_pipeline(
-    device: &wgpu::Device,
+    gpu: PipelineDevice<'_>,
     surface_format: wgpu::TextureFormat,
     layout: &wgpu::PipelineLayout,
 ) -> wgpu::RenderPipeline {
     create_unit_quad_pipeline(
-        device,
+        gpu,
         surface_format,
         layout,
         &QuadPipelineSpec {
@@ -985,12 +1003,12 @@ fn create_instanced_rect_pipeline(
 }
 
 fn create_instanced_circle_pipeline(
-    device: &wgpu::Device,
+    gpu: PipelineDevice<'_>,
     surface_format: wgpu::TextureFormat,
     layout: &wgpu::PipelineLayout,
 ) -> wgpu::RenderPipeline {
     create_unit_quad_pipeline(
-        device,
+        gpu,
         surface_format,
         layout,
         &QuadPipelineSpec {
@@ -1005,12 +1023,12 @@ fn create_instanced_circle_pipeline(
 }
 
 fn create_instanced_arc_pipeline(
-    device: &wgpu::Device,
+    gpu: PipelineDevice<'_>,
     surface_format: wgpu::TextureFormat,
     layout: &wgpu::PipelineLayout,
 ) -> wgpu::RenderPipeline {
     create_unit_quad_pipeline(
-        device,
+        gpu,
         surface_format,
         layout,
         &QuadPipelineSpec {
@@ -1106,7 +1124,7 @@ impl TextureSourceAlpha {
 /// Takes the source-alpha kind rather than a blend state so the blend and the
 /// shader constant cannot disagree — see [`TextureSourceAlpha`].
 fn create_instanced_texture_pipeline_for(
-    device: &wgpu::Device,
+    gpu: PipelineDevice<'_>,
     surface_format: wgpu::TextureFormat,
     layout: &wgpu::PipelineLayout,
     shader_label: &str,
@@ -1114,7 +1132,7 @@ fn create_instanced_texture_pipeline_for(
     source: TextureSourceAlpha,
 ) -> wgpu::RenderPipeline {
     create_unit_quad_pipeline(
-        device,
+        gpu,
         surface_format,
         layout,
         &QuadPipelineSpec {
@@ -1129,12 +1147,12 @@ fn create_instanced_texture_pipeline_for(
 }
 
 fn create_instanced_texture_pipeline(
-    device: &wgpu::Device,
+    gpu: PipelineDevice<'_>,
     surface_format: wgpu::TextureFormat,
     layout: &wgpu::PipelineLayout,
 ) -> wgpu::RenderPipeline {
     create_instanced_texture_pipeline_for(
-        device,
+        gpu,
         surface_format,
         layout,
         "Instanced Texture Shader",
@@ -1153,12 +1171,12 @@ fn create_instanced_texture_pipeline(
 /// [`PipelineSet::instanced_texture_premul`] for the full rationale. Do not
 /// change the source kind here.
 fn create_instanced_texture_premul_pipeline(
-    device: &wgpu::Device,
+    gpu: PipelineDevice<'_>,
     surface_format: wgpu::TextureFormat,
     layout: &wgpu::PipelineLayout,
 ) -> wgpu::RenderPipeline {
     create_instanced_texture_pipeline_for(
-        device,
+        gpu,
         surface_format,
         layout,
         "Instanced Texture Premultiplied Shader",
@@ -1186,14 +1204,14 @@ fn create_instanced_texture_premul_pipeline(
 /// ever asks for modes that keep the destination, so its transparent border
 /// is still discarded.
 fn create_instanced_texture_with_blend_state(
-    device: &wgpu::Device,
+    gpu: PipelineDevice<'_>,
     surface_format: wgpu::TextureFormat,
     layout: &wgpu::PipelineLayout,
     blend_state: wgpu::BlendState,
     replaces_destination: bool,
 ) -> wgpu::RenderPipeline {
     create_instanced_texture_pipeline_for(
-        device,
+        gpu,
         surface_format,
         layout,
         "SSAA Tile Composite Shader",
