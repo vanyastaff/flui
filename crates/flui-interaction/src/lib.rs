@@ -6,12 +6,12 @@
 //! drive it.
 //!
 //! - [`GestureBinding`] takes a presentation's pointer stream, hit-tests each
-//!   new contact through an [`InteractionLane`](pointer::InteractionLane) and
+//!   new contact through an [`InteractionLane`] and
 //!   delivers the sequence along that route.
 //! - [`FocusManager`] owns a presentation's focus tree: [`FocusNode`]s attached
 //!   under [`FocusScopeNode`]s, with traversal order from a
-//!   [`FocusTraversalPolicy`](focus::FocusTraversalPolicy).
-//! - The [`gesture`] recognizers compete in a [`GestureArena`](gesture::GestureArena),
+//!   [`FocusTraversalPolicy`].
+//! - The [`gesture`] recognizers compete in a [`GestureArena`],
 //!   which grants each pointer to one winner; a recognizer outside this crate
 //!   implements the same traits as the built-in ones.
 //!
