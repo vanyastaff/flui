@@ -5,6 +5,7 @@
 //! preserves its consumer through old-session cancellation; only a terminal
 //! edge permits the next fresh source to choose a different target.
 
+use crate::containment::keep_first;
 use std::{
     cell::{Cell, RefCell},
     collections::HashMap,
@@ -16,7 +17,7 @@ use flui_platform::pointer::{PanZoomEvent, PanZoomPhase};
 
 use super::{SignalSource, pointer_sequences::MAX_SIMULTANEOUS_POINTERS};
 use crate::{
-    containment::RoutePanic,
+    containment::{FirstPanic, caught},
     events::PointerSource,
     ids::{InputSurface, PointerId},
     pointer::{HitTestResult, PanZoomRetirement, PanZoomRoute},
@@ -253,17 +254,17 @@ impl PanZoomSequences {
 /// Retire `tickets`, recording a caught failure in `preserving_failure` and
 /// resuming it after every ticket ran.
 pub(super) fn retire_tickets(tickets: Vec<StagedTicket>, preserving_failure: &Cell<bool>) {
-    let mut first = None;
+    let mut first = FirstPanic::new();
     retire_tickets_capturing_panic(tickets, &mut first, preserving_failure.get());
-    if let Some(failure) = first {
+    if first.is_held() {
         preserving_failure.set(true);
-        failure.resume();
     }
+    first.resume();
 }
 
 pub(super) fn retire_tickets_capturing_panic(
     tickets: Vec<StagedTicket>,
-    first: &mut Option<RoutePanic>,
+    first: &mut FirstPanic,
     preserving_failure: bool,
 ) {
     for (_, ticket) in tickets {
@@ -274,9 +275,9 @@ pub(super) fn retire_tickets_capturing_panic(
             continue;
         }
         // Required quiescence still runs after a caught earlier failure.
-        RoutePanic::preserve_first(
+        keep_first(
             first,
-            RoutePanic::capture(|| (ticket.0)()),
+            caught(|| (ticket.0)()),
             "native admission retirement",
         );
         if preserving_failure {
@@ -284,9 +285,9 @@ pub(super) fn retire_tickets_capturing_panic(
             // here is discarded behind it.
             crate::containment::drop_contained(ticket.0);
         } else {
-            RoutePanic::preserve_first(
+            keep_first(
                 first,
-                RoutePanic::capture(|| drop(ticket.0)),
+                caught(|| drop(ticket.0)),
                 "native admission capture retirement",
             );
         }
@@ -294,10 +295,7 @@ pub(super) fn retire_tickets_capturing_panic(
 }
 
 /// Retire whatever `sequences` still stage.
-pub(super) fn retire_sequences(
-    sequences: Vec<Rc<PanZoomSequence>>,
-    first: &mut Option<RoutePanic>,
-) {
+pub(super) fn retire_sequences(sequences: Vec<Rc<PanZoomSequence>>, first: &mut FirstPanic) {
     let tickets = sequences
         .into_iter()
         .flat_map(|sequence| sequence.take_staged())

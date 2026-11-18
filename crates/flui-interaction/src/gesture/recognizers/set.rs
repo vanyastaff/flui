@@ -3,8 +3,9 @@ use super::{
     callback_containment::finish_containment,
     recognizer::{GestureRecognizer, admits_device},
 };
+use crate::containment::keep_first;
 use crate::{
-    containment::RoutePanic,
+    containment::{FirstPanic, caught},
     events::{PointerEvent, TouchpadSwipePhase},
     pointer::PointerDispatch,
 };
@@ -65,12 +66,12 @@ impl RecognizerSet {
         if incoming_failure {
             return;
         }
-        let mut first = None;
+        let mut first = FirstPanic::new();
         for entry in &self.entries {
             let Some(recognizer) = entry.recognizer.upgrade() else {
                 continue;
             };
-            let candidate = RoutePanic::capture(|| match dispatch.local {
+            let candidate = caught(|| match dispatch.local {
                 PointerEvent::Down(down) => {
                     if admits_device(recognizer.allowed_devices(), down.pointer.kind)
                         && entry.admit.as_ref().is_none_or(|admit| admit(dispatch))
@@ -87,9 +88,9 @@ impl RecognizerSet {
                 }
                 _ => recognizer.handle_event(dispatch),
             });
-            RoutePanic::preserve_first(&mut first, candidate, "recognizer attachment");
-            let candidate = RoutePanic::capture(|| drop(recognizer));
-            RoutePanic::preserve_first(&mut first, candidate, "recognizer attachment retirement");
+            keep_first(&mut first, candidate, "recognizer attachment");
+            let candidate = caught(|| drop(recognizer));
+            keep_first(&mut first, candidate, "recognizer attachment retirement");
         }
         finish_containment(first, incoming_failure);
     }
@@ -112,7 +113,7 @@ impl RecognizerSet {
 
 impl Drop for RecognizerSet {
     fn drop(&mut self) {
-        let mut first = None;
+        let mut first = FirstPanic::new();
         let incoming_failure = std::thread::panicking();
         for entry in &mut self.entries {
             super::callback_containment::retire_callback(entry.admit.take(), &mut first);

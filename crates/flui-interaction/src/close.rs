@@ -4,9 +4,9 @@
 //! [`CloseTombstone`] outlives its owner to carry that policy to later
 //! rejections; [`ClosePanic`] owns one close's first failure.
 
+use flui_foundation::panic::FirstPanic;
 use std::{
     any::Any,
-    panic::{AssertUnwindSafe, catch_unwind, resume_unwind},
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -79,7 +79,7 @@ impl CloseTombstone {
 
 /// One close owns its first failure and decides retirement before calling Drop.
 pub(crate) struct ClosePanic {
-    first: Option<Box<dyn Any + Send>>,
+    first: FirstPanic,
     preserving: bool,
     terminal: Option<CloseTombstone>,
 }
@@ -87,7 +87,7 @@ pub(crate) struct ClosePanic {
 impl ClosePanic {
     pub(crate) fn new() -> Self {
         Self {
-            first: None,
+            first: FirstPanic::new(),
             preserving: std::thread::panicking(),
             terminal: None,
         }
@@ -102,7 +102,7 @@ impl ClosePanic {
         }
         terminal.enter_close();
         Self {
-            first: None,
+            first: FirstPanic::new(),
             preserving,
             terminal: Some(terminal),
         }
@@ -126,7 +126,7 @@ impl ClosePanic {
     }
 
     pub(crate) fn preserving(&self) -> bool {
-        self.preserving || self.first.is_some()
+        self.preserving || self.first.is_held()
     }
 
     pub(crate) fn run(&mut self, run: impl FnOnce()) {
@@ -137,30 +137,31 @@ impl ClosePanic {
 
     /// Required quiescence may run during recovery; its ownership stays outside this catch.
     pub(crate) fn invoke<T>(&mut self, run: impl FnOnce() -> T) -> Option<T> {
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: required quiescence runs contained; the first failure is kept"
-        )]
-        match catch_unwind(AssertUnwindSafe(run)) {
-            Ok(value) => Some(value),
-            Err(payload) => {
-                self.keep_caught(payload);
-                None
-            }
+        let mut failure = FirstPanic::new();
+        let value = failure.contain(run);
+        if failure.is_held() {
+            self.keep(failure);
         }
+        value
     }
 
     /// Keep `payload`, a failure of this close's own code the caller caught
     /// (in the order its own containment decided), as [`Self::invoke`] keeps
     /// one: the first is raised by an ordinary close, the rest discarded.
     pub(crate) fn keep_caught(&mut self, payload: Box<dyn Any + Send>) {
+        let mut failure = FirstPanic::new();
+        failure.record(payload);
+        self.keep(failure);
+    }
+
+    /// Keep `failure` as this close's first unless the close preserves an
+    /// earlier one; a failure not kept is destroyed under containment.
+    fn keep(&mut self, failure: FirstPanic) {
         if let Some(terminal) = &self.terminal {
             terminal.preserve();
         }
-        if self.preserving() {
-            flui_foundation::panic::discard_payload(payload);
-        } else {
-            self.first = Some(payload);
+        if !self.preserving() {
+            self.first.absorb(failure);
         }
     }
 
@@ -179,21 +180,18 @@ impl ClosePanic {
             flui_foundation::panic::discard_payload(payload);
             return;
         }
-        if let Some(later) = self.first.replace(payload) {
-            flui_foundation::panic::discard_payload(later);
-        }
+        let mut earlier = FirstPanic::new();
+        earlier.record(payload);
+        earlier.absorb(std::mem::take(&mut self.first));
+        self.first = earlier;
     }
 
     pub(crate) fn finish(mut self) {
-        if let Some(payload) = self.first.take() {
-            resume_unwind(payload);
-        }
+        std::mem::take(&mut self.first).resume();
     }
 
     pub(crate) fn finish_contained(mut self) {
-        if let Some(payload) = self.first.take() {
-            flui_foundation::panic::discard_payload(payload);
-        }
+        drop(std::mem::take(&mut self.first));
     }
 
     /// Hand `value` back after an ordinary close; a preserving close destroys

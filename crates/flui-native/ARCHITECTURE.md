@@ -4324,7 +4324,7 @@ The view observes `UIKeyboardWillChangeFrameNotification`,
 (`window::keyboard::Note`): the frame the keyboard goes to, in screen
 coordinates, or that it left its dock and where it then came to rest. Each
 metrics sample converts that frame into the view as it lies then and publishes
-the keyboard's placement (ADR-0372). What a notification makes of the note
+the keyboard's placement (ADR-0373). What a notification makes of the note
 standing is `Heard::kept`'s rule and which placement a frame names is
 `window::keyboard::placement`'s, both pure and tested on every host
 (`the_notifications_heard_name_where_the_keyboard_rests`,
