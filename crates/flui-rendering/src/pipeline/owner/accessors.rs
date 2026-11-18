@@ -750,9 +750,9 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         // the owner as boundaries come and go. Their nodes are retired by the
         // paint that republishes the parent naming them.
         for id in subtree.members() {
-            if let Some(record) = self.boundary_records.remove(id) {
+            if let Some(node) = self.take_boundary_record(*id) {
                 self.follower_boundaries.remove(id);
-                self.orphaned_nodes.push(record.node());
+                self.orphaned_nodes.push(node);
             }
         }
 

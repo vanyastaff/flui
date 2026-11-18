@@ -28,7 +28,9 @@ use super::{PipelineOwner, counters::PaintCounts, rebind_phase, subtree_arena::e
 
 mod kept_chunks;
 
-use kept_chunks::{ChunkSource, PreviousChunks, RecordingInputs};
+use kept_chunks::{
+    ChunkIndex, ChunkSource, PreviousChunks, RecordedChunks, RecordingInputs, SpareChunkLists,
+};
 
 // ============================================================================
 // Paint phase: run_paint + helpers
@@ -215,6 +217,7 @@ impl PipelineOwner<PaintPhase> {
                 dirty_ids,
                 layer_updates,
                 composer: work,
+                spare_chunks: _,
             } = &mut *scratch;
             dirty_ids.extend(self.scheduler.nodes_needing_paint().iter().map(|d| d.id));
             // Boundaries queued only to have some node's own effect layers
@@ -405,7 +408,7 @@ impl PipelineOwner<PaintPhase> {
         let previous = self
             .scene_frame
             .as_ref()
-            .and_then(|frame| composer.previous_chunks(&frame.content, frame.chunks.as_ref()));
+            .map(|frame| (&frame.content, &frame.chunks));
         composer.begin_boundary(None, previous);
         let root_layer =
             if self.device_pixel_ratio == flui_foundation::geometry::DevicePixelRatio::ONE {
@@ -1232,7 +1235,7 @@ impl PipelineOwner<PaintPhase> {
         // from clean ones and none is kept.
         let previous = committed
             .filter(|record| !record.stale)
-            .and_then(|record| composer.previous_chunks(&record.content, record.chunks.as_ref()));
+            .map(|record| (&record.content, &record.chunks));
         composer.begin_boundary(Some(id), previous);
         let painted = self.paint_subtree(composer, id, Offset::ZERO, region_anchor, inputs);
         let build = composer.end_boundary();
@@ -1273,9 +1276,9 @@ pub(super) struct BoundaryRecord {
     /// The boundaries the content slots.
     children: SmallVec<[(RenderId, SceneNodeId); 4]>,
     /// The content's chunks, for the next repaint to keep the unchanged
-    /// ones of; `None` when it has none. A composited-layer update shares
-    /// the content's stream, so they describe its patched content too.
-    chunks: Option<Arc<[ChunkSource]>>,
+    /// ones of. A composited-layer update shares the content's stream, so
+    /// they describe its patched content too.
+    chunks: RecordedChunks,
     /// Dropped by the residue scan: a paint was owed and never made, so the
     /// next frame that reaches the boundary repaints it into the same node.
     stale: bool,
@@ -1299,6 +1302,10 @@ impl BoundaryRecord {
 /// composited-layer update at its placement, which keeps every other field
 /// of that record.
 #[derive(Debug)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "a repaint is the common variant, and boxing its record would allocate once per repainted boundary; the map holding these is kept between passes"
+)]
 pub(super) enum Refreshed {
     /// Painted afresh: the record replaces the committed one.
     Repainted(BoundaryRecord),
@@ -1367,7 +1374,7 @@ pub(super) struct FrameRecord {
     /// The content published at `node`, and its chunks, as a boundary's
     /// record holds them.
     content: Arc<BoundaryContent>,
-    chunks: Option<Arc<[ChunkSource]>>,
+    chunks: RecordedChunks,
 }
 
 impl FrameRecord {
@@ -1394,6 +1401,9 @@ pub(super) struct StagedScene {
     /// How many entries of the owner's orphan list the pass read; a
     /// removal after the pass adds its nodes after them.
     orphans_read: usize,
+    /// The chunks of every content the pass built, each record's at the
+    /// range its [`RecordedChunks::Staged`] names.
+    chunks: Vec<ChunkSource>,
     /// Operations the pass buffered.
     pub(super) ops: u64,
 }
@@ -1424,12 +1434,24 @@ impl<Phase: crate::pipeline::PipelinePhase> PipelineOwner<Phase> {
             frame,
             mut orphans,
             orphans_read,
+            chunks,
             ops: _,
         } = staged;
         // Boundaries removed since the pass read the owner's list left their
         // nodes after the entries it read: they wait for a later pass.
         if let Some(late) = self.orphaned_nodes.get(orphans_read..) {
             orphans.extend_from_slice(late);
+        }
+        // The records the pass dropped go first, so the lists they held
+        // serve the records it adds.
+        let spares = &mut self
+            .paint_scratch
+            .get_or_insert_with(Box::default)
+            .spare_chunks;
+        for (id, _) in records.iter().filter(|(_, refreshed)| refreshed.is_none()) {
+            if let Some(dropped) = self.boundary_records.remove(id) {
+                spares.keep(dropped.chunks, KEPT_CAPACITY);
+            }
         }
         for (id, refreshed) in records.drain() {
             match refreshed {
@@ -1440,12 +1462,19 @@ impl<Phase: crate::pipeline::PipelinePhase> PipelineOwner<Phase> {
                 Some(Refreshed::Repainted(record)) if self.render_tree.get(id).is_none() => {
                     orphans.push(record.node);
                 }
-                Some(Refreshed::Repainted(record)) => {
+                Some(Refreshed::Repainted(mut record)) => {
                     if record.followers.is_empty() {
                         self.follower_boundaries.remove(&id);
                     } else {
                         self.follower_boundaries.insert(id);
                     }
+                    let replaced = self.boundary_records.remove(&id);
+                    record.chunks.commit(
+                        &chunks,
+                        replaced.map(|replaced| replaced.chunks),
+                        spares,
+                        KEPT_CAPACITY,
+                    );
                     self.boundary_records.insert(id, record);
                 }
                 // A boundary removed since the pass took its record with it;
@@ -1473,14 +1502,22 @@ impl<Phase: crate::pipeline::PipelinePhase> PipelineOwner<Phase> {
             }
         }
         let previous_orphans = std::mem::replace(&mut self.orphaned_nodes, orphans);
-        if let Some(scratch) = self.paint_scratch.as_mut() {
-            scratch.recycle_staged(records, placed, stale, previous_orphans);
-        }
-        if let Some(frame) = frame {
+        if let Some(mut frame) = frame {
+            let replaced = self.scene_frame.take().map(|replaced| replaced.chunks);
+            let spares = &mut self
+                .paint_scratch
+                .get_or_insert_with(Box::default)
+                .spare_chunks;
+            frame
+                .chunks
+                .commit(&chunks, replaced, spares, KEPT_CAPACITY);
             self.scene_frame = Some(frame);
             // A patch with a frame retired every abandoned node it could
             // still find.
             self.abandoned_nodes.clear();
+        }
+        if let Some(scratch) = self.paint_scratch.as_mut() {
+            scratch.recycle_staged(records, placed, stale, previous_orphans, chunks);
         }
 
         // Follower hit-testing: each follower's composite-resolved transform,
@@ -1533,13 +1570,14 @@ impl<Phase: crate::pipeline::PipelinePhase> PipelineOwner<Phase> {
             placed,
             stale,
             orphans,
+            chunks,
             ..
         } = staged;
         for refreshed in records.drain().filter_map(|(_, refreshed)| refreshed) {
             writer.discard(refreshed.into_content());
         }
         if let Some(scratch) = self.paint_scratch.as_mut() {
-            scratch.recycle_staged(records, placed, stale, orphans);
+            scratch.recycle_staged(records, placed, stale, orphans, chunks);
         }
     }
 
@@ -1558,6 +1596,17 @@ impl<Phase: crate::pipeline::PipelinePhase> PipelineOwner<Phase> {
     #[must_use]
     pub fn scene_staged(&self) -> bool {
         self.staged_scene.is_some()
+    }
+
+    /// Takes the record of `id`, a boundary that left the tree, and returns
+    /// the node it was published at; its chunks' list is kept for a record
+    /// that arrives.
+    pub(super) fn take_boundary_record(&mut self, id: RenderId) -> Option<SceneNodeId> {
+        let record = self.boundary_records.remove(&id)?;
+        if let Some(scratch) = self.paint_scratch.as_mut() {
+            scratch.spare_chunks.keep(record.chunks, KEPT_CAPACITY);
+        }
+        Some(record.node)
     }
 
     /// Drops every record of the scene: the next paint repaints from the
@@ -1695,12 +1744,20 @@ struct BoundaryBuild {
     children: SmallVec<[(RenderId, SceneNodeId); 4]>,
     /// What the boundary published before, when its chunks may be kept.
     previous: Option<PreviousChunks>,
-    /// The chunks sealed so far, in paint order.
-    chunks: Vec<ChunkSource>,
+    /// Where its chunks start in the pass's list of the open contents'
+    /// chunks.
+    sealed_from: usize,
+    /// Its chunks once it ended: where they sit in the staged patch.
+    chunks: RecordedChunks,
 }
 
 impl BoundaryBuild {
-    fn new(boundary: Option<RenderId>, serial: u64, previous: Option<PreviousChunks>) -> Self {
+    fn new(
+        boundary: Option<RenderId>,
+        serial: u64,
+        previous: Option<PreviousChunks>,
+        sealed_from: usize,
+    ) -> Self {
         Self {
             boundary,
             serial,
@@ -1711,19 +1768,13 @@ impl BoundaryBuild {
             followers: SmallVec::new(),
             children: SmallVec::new(),
             previous,
-            chunks: Vec::new(),
+            sealed_from,
+            chunks: RecordedChunks::Staged(0..0),
         }
     }
 
-    /// The chunks sealed, for the record; `None` when there are none.
-    fn take_chunks(&mut self) -> Option<Arc<[ChunkSource]>> {
-        (!self.chunks.is_empty())
-            .then(|| Arc::<[ChunkSource]>::from(std::mem::take(&mut self.chunks)))
-    }
-
     /// The record of the content built, published at `node`.
-    fn into_record(mut self, node: SceneNodeId, placed: Placed) -> BoundaryRecord {
-        let chunks = self.take_chunks();
+    fn into_record(self, node: SceneNodeId, placed: Placed) -> BoundaryRecord {
         BoundaryRecord {
             node,
             content: Arc::new(self.builder.finish()),
@@ -1732,7 +1783,7 @@ impl BoundaryBuild {
                 .then(|| self.effect_slots.into_boxed_slice()),
             followers: self.followers,
             children: self.children,
-            chunks,
+            chunks: self.chunks,
             stale: false,
         }
     }
@@ -1785,6 +1836,8 @@ pub(super) struct PaintScratch {
     /// The boundaries queued only for composited-layer updates.
     layer_updates: FxHashMap<RenderId, SmallVec<[RenderId; 2]>>,
     composer: ComposerScratch,
+    /// The chunk lists of records that left, for records that arrive.
+    spare_chunks: SpareChunkLists,
 }
 
 impl PaintScratch {
@@ -1815,6 +1868,8 @@ impl PaintScratch {
         recycle_vec(&mut composer.stale);
         recycle_vec(&mut composer.orphans);
         recycle_vec(&mut composer.own_effects);
+        recycle_vec_keeping_room(&mut composer.sealed_chunks);
+        composer.chunk_index.recycle(KEPT_CAPACITY);
         let peak = std::mem::take(&mut composer.fragment_peak);
         let kept = composer.fragment_room.after_pass(peak);
         let ops = composer.recorder.0.ops_mut();
@@ -1830,16 +1885,19 @@ impl PaintScratch {
         mut placed: FxHashMap<RenderId, Placed>,
         mut stale: Vec<RenderId>,
         mut orphans: Vec<SceneNodeId>,
+        mut chunks: Vec<ChunkSource>,
     ) {
         recycle_map(&mut records);
         recycle_map(&mut placed);
         recycle_vec(&mut stale);
         recycle_vec(&mut orphans);
+        recycle_vec_keeping_room(&mut chunks);
         let composer = &mut self.composer;
         composer.records = records;
         composer.placed = placed;
         composer.stale = stale;
         composer.orphans = orphans;
+        composer.staged_chunks = chunks;
     }
 }
 
@@ -1934,6 +1992,13 @@ fn recycle_vec<T>(vec: &mut Vec<T>) {
     }
 }
 
+/// Empties `vec` down to room for [`KEPT_CAPACITY`] entries at most, so the
+/// pass after a large one finds room without allocating.
+fn recycle_vec_keeping_room<T>(vec: &mut Vec<T>) {
+    vec.clear();
+    vec.shrink_to(KEPT_CAPACITY);
+}
+
 /// What [`FragmentComposer`] works in, between passes.
 #[derive(Debug, Default)]
 struct ComposerScratch {
@@ -1974,6 +2039,14 @@ struct ComposerScratch {
     /// inside its paint's containment and pushed before its children paint:
     /// empty between nodes.
     own_effects: Vec<Layer>,
+    /// The chunks of the open contents, innermost last: a content moves its
+    /// own into the staged patch when it ends.
+    sealed_chunks: Vec<ChunkSource>,
+    /// The previous chunks of the open contents that were looked up out of
+    /// order.
+    chunk_index: ChunkIndex,
+    /// The staged patch's chunk list, handed back by `scene_applied`.
+    staged_chunks: Vec<ChunkSource>,
 }
 
 /// The recorder a pass reuses from node to node, in place: moving it per node
@@ -2011,6 +2084,9 @@ impl ComposerScratch {
         self.stale.clear();
         self.recorder.0.reset();
         self.own_effects.clear();
+        self.sealed_chunks.clear();
+        self.staged_chunks.clear();
+        self.chunk_index.recycle(KEPT_CAPACITY);
     }
 }
 
@@ -2065,6 +2141,7 @@ impl<'w, 'o, 's> FragmentComposer<'w, 'o, 's> {
             placed: std::mem::take(&mut work.placed),
             stale: std::mem::take(&mut work.stale),
             orphans: std::mem::take(&mut work.orphans),
+            chunks: std::mem::take(&mut work.staged_chunks),
             ..StagedScene::default()
         };
         Self {
@@ -2097,17 +2174,6 @@ impl<'w, 'o, 's> FragmentComposer<'w, 'o, 's> {
         }
     }
 
-    /// What a repaint of a content may keep of `content`, published before
-    /// with `chunks`; `None` when this pass keeps nothing.
-    fn previous_chunks(
-        &self,
-        content: &Arc<BoundaryContent>,
-        chunks: Option<&Arc<[ChunkSource]>>,
-    ) -> Option<PreviousChunks> {
-        let chunks = chunks.filter(|_| self.keep_chunks)?;
-        Some(PreviousChunks::new(Arc::clone(content), Arc::clone(chunks)))
-    }
-
     fn build(&mut self) -> &mut BoundaryBuild {
         self.work
             .builds
@@ -2120,23 +2186,44 @@ impl<'w, 'o, 's> FragmentComposer<'w, 'o, 's> {
         self.work.builds.last().and_then(|build| build.boundary)
     }
 
-    fn begin_boundary(&mut self, boundary: Option<RenderId>, previous: Option<PreviousChunks>) {
+    /// Begins the content of `boundary`, `None` for the frame node, over
+    /// the content it published before and that content's chunks, whose
+    /// unchanged ones it keeps unless this pass keeps none.
+    fn begin_boundary(
+        &mut self,
+        boundary: Option<RenderId>,
+        previous: Option<(&Arc<BoundaryContent>, &RecordedChunks)>,
+    ) {
         let serial = self.next_serial;
         self.next_serial = serial
             .checked_add(1)
             .expect("BUG: a pass begins fewer than 2^64 contents");
+        let previous = previous
+            .filter(|_| self.keep_chunks)
+            .and_then(|(content, chunks)| PreviousChunks::new(serial, content, chunks));
+        let sealed_from = self.work.sealed_chunks.len();
         self.work
             .builds
-            .push(BoundaryBuild::new(boundary, serial, previous));
+            .push(BoundaryBuild::new(boundary, serial, previous, sealed_from));
     }
 
-    /// Ends the innermost content, its open run sealed.
+    /// Ends the innermost content, its open run sealed and its chunks moved
+    /// into the staged patch. It lets go of the previous chunks, so applying
+    /// the patch writes into their list.
     fn end_boundary(&mut self) -> BoundaryBuild {
         self.seal_picture();
-        self.work
+        let mut build = self
+            .work
             .builds
             .pop()
-            .expect("BUG: a boundary's content ends after it began")
+            .expect("BUG: a boundary's content ends after it began");
+        build.previous = None;
+        let staged = &mut self.staged.chunks;
+        let start = staged.len();
+        let from = build.sealed_from.min(self.work.sealed_chunks.len());
+        staged.extend(self.work.sealed_chunks.drain(from..));
+        build.chunks = RecordedChunks::Staged(start..staged.len());
+        build
     }
 
     fn served(&self, id: RenderId) -> bool {
@@ -2270,9 +2357,10 @@ impl<'w, 'o, 's> FragmentComposer<'w, 'o, 's> {
             .filter(|_| ordinals.first_chunk_visit == open.visit);
         let lineage = self.writer.current().id().lineage();
         let kept = match (&mut build.previous, &inputs) {
-            (Some(previous), Some(inputs)) if open.clean => {
-                previous.kept(open.owner, ordinal, inputs, lineage)
-            }
+            (Some(previous), Some(inputs)) if open.clean => self
+                .work
+                .chunk_index
+                .kept(previous, open.owner, ordinal, inputs, lineage),
             _ => None,
         };
         let chunk = if let Some(chunk) = kept {
@@ -2295,7 +2383,7 @@ impl<'w, 'o, 's> FragmentComposer<'w, 'o, 's> {
         };
         ordinals.chunks += 1;
         let entry = build.builder.chunk(chunk);
-        build.chunks.push(ChunkSource {
+        self.work.sealed_chunks.push(ChunkSource {
             entry,
             owner: open.owner,
             ordinal,
@@ -2375,13 +2463,12 @@ impl<'w, 'o, 's> FragmentComposer<'w, 'o, 's> {
         root: RenderId,
         root_is_boundary: bool,
     ) {
-        let mut build = self.end_boundary();
+        let build = self.end_boundary();
         let lineage = self.writer.current().id().lineage();
         let node = match &owner.scene_frame {
             Some(frame) if frame.node.lineage() == lineage => frame.node,
             _ => self.mint_node(),
         };
-        let chunks = build.take_chunks();
         let content = Arc::new(build.builder.finish());
         self.publish(node, Arc::clone(&content));
         self.staged.frame = Some(FrameRecord {
@@ -2391,7 +2478,7 @@ impl<'w, 'o, 's> FragmentComposer<'w, 'o, 's> {
             followers: build.followers,
             children: build.children,
             content,
-            chunks,
+            chunks: build.chunks,
         });
     }
 

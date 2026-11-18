@@ -17,13 +17,22 @@
 //! paint of their owner, its first that sealed a chunk in the content: a
 //! chunk holding runs of two paints, or of a paint after the owner's first,
 //! is recorded as one that cannot be kept.
+//!
+//! The lists cost no allocation once a content has been painted twice: a
+//! pass seals the new list into its staged patch while it reads the previous
+//! one through a shared handle it lets go of when the content ends, and
+//! applying the patch writes the new list into the room of the list it
+//! replaces ([`RecordedChunks::commit`]), or of one a record that left kept
+//! ([`SpareChunkLists`]).
 
+use std::ops::Range;
 use std::sync::Arc;
 
 use flui_foundation::RenderId;
 use flui_foundation::geometry::Offset;
 use flui_layer::{BoundaryContent, Chunk, Entry, EntryIndex, Lineage};
 use rustc_hash::FxHashMap;
+use smallvec::SmallVec;
 
 use crate::context::PaintAnchor;
 
@@ -78,45 +87,166 @@ pub(super) struct ChunkSource {
     pub(super) inputs: Option<RecordingInputs>,
 }
 
+/// The chunks of a content a record holds, in paint order.
+#[derive(Clone, Debug)]
+pub(super) enum RecordedChunks {
+    /// Sealed by a pass whose patch is not applied yet: the range of the
+    /// staged patch's list they sit at.
+    Staged(Range<usize>),
+    /// None or one, the chunks of most boundaries, held in the record.
+    Inline(Option<ChunkSource>),
+    /// Two or more, in the record's own list, shared with the pass that
+    /// repaints the content while it builds over them.
+    Shared(Arc<Vec<ChunkSource>>),
+}
+
+impl RecordedChunks {
+    /// The chunks once the patch that staged them is applied; none before.
+    fn committed(&self) -> &[ChunkSource] {
+        match self {
+            Self::Inline(chunk) => chunk.as_slice(),
+            Self::Shared(list) => list,
+            Self::Staged(_) => {
+                debug_assert!(false, "BUG: a committed record holds its chunks");
+                &[]
+            }
+        }
+    }
+
+    /// Makes a staged list the record's own, from the patch's `staged`
+    /// list: in the record when it holds one chunk at most, else in the
+    /// room of the list of the record it replaces or of a spare one. The
+    /// pass that built over the replaced list let go of it when its content
+    /// ended, so the list is the record's alone.
+    pub(super) fn commit(
+        &mut self,
+        staged: &[ChunkSource],
+        replaced: Option<Self>,
+        spares: &mut SpareChunkLists,
+        kept_capacity: usize,
+    ) {
+        let Self::Staged(range) = self else {
+            return;
+        };
+        let staged = staged.get(range.clone()).unwrap_or_default();
+        if let [] | [_] = staged {
+            *self = Self::Inline(staged.first().copied());
+            if let Some(replaced) = replaced {
+                spares.keep(replaced, kept_capacity);
+            }
+            return;
+        }
+        let mut list = match replaced {
+            Some(Self::Shared(list)) => list,
+            _ => spares.take(staged.len()),
+        };
+        if let Some(room) = Arc::get_mut(&mut list) {
+            room.clear();
+            room.extend_from_slice(staged);
+        } else {
+            list = Arc::new(staged.to_vec());
+        }
+        *self = Self::Shared(list);
+    }
+}
+
+/// How many lists [`SpareChunkLists`] keeps, inline.
+const SPARE_LISTS: usize = 64;
+
+/// The lists of records that left, for records that arrive to be written
+/// into: a list scrolled out of view serves one scrolled in. Bounded by
+/// count and by each list's room.
+#[derive(Debug, Default)]
+pub(super) struct SpareChunkLists(SmallVec<[Arc<Vec<ChunkSource>>; SPARE_LISTS]>);
+
+impl SpareChunkLists {
+    /// Keeps the list of a record that left, if it is the record's alone
+    /// and there is room for it.
+    pub(super) fn keep(&mut self, chunks: RecordedChunks, kept_capacity: usize) {
+        let RecordedChunks::Shared(mut list) = chunks else {
+            return;
+        };
+        let Some(room) = Arc::get_mut(&mut list) else {
+            return;
+        };
+        if room.capacity() == 0 || room.capacity() > kept_capacity || self.0.len() >= SPARE_LISTS {
+            return;
+        }
+        room.clear();
+        self.0.push(list);
+    }
+
+    /// A spare list with room for `len` sources, or a new one.
+    fn take(&mut self, len: usize) -> Arc<Vec<ChunkSource>> {
+        self.0
+            .iter()
+            .position(|list| list.capacity() >= len)
+            .map_or_else(Arc::default, |at| self.0.swap_remove(at))
+    }
+}
+
 /// The content a boundary published before the pass that repaints it, and
 /// its chunks, for that pass to keep the unchanged ones of.
 #[derive(Debug)]
 pub(super) struct PreviousChunks {
     content: Arc<BoundaryContent>,
-    sources: Arc<[ChunkSource]>,
+    sources: RecordedChunks,
+    /// The serial of the content being built over it, which keys its
+    /// entries in [`ChunkIndex`].
+    serial: u64,
     /// Where the next lookup starts: chunks come back in the order they were
     /// recorded unless a parent reordered its children.
     cursor: usize,
-    /// Each source by its key, built the first time a lookup misses the
-    /// forward scan, so a reordered content costs one pass over it.
-    by_key: Option<FxHashMap<(RenderId, u32), usize>>,
+    /// Whether [`ChunkIndex`] holds this list, which the first lookup that
+    /// misses the forward scan builds, so a reordered content costs one
+    /// pass over it.
+    indexed: bool,
 }
 
 impl PreviousChunks {
-    pub(super) fn new(content: Arc<BoundaryContent>, sources: Arc<[ChunkSource]>) -> Self {
-        Self {
-            content,
-            sources,
-            cursor: 0,
-            by_key: None,
+    /// The content `serial` builds over `content`, published before with
+    /// `chunks`; `None` when it has no chunk to keep.
+    pub(super) fn new(
+        serial: u64,
+        content: &Arc<BoundaryContent>,
+        chunks: &RecordedChunks,
+    ) -> Option<Self> {
+        if chunks.committed().is_empty() {
+            return None;
         }
+        Some(Self {
+            content: Arc::clone(content),
+            sources: chunks.clone(),
+            serial,
+            cursor: 0,
+            indexed: false,
+        })
     }
+}
 
-    /// The previous chunk `owner` recorded at `ordinal` from `inputs`, if
-    /// there is one of `lineage` that can be kept.
+/// The chunks of the contents a pass builds that were looked up out of
+/// order, by content serial, owner and ordinal. A pass's working
+/// collection, kept between passes so it allocates only when outgrown.
+#[derive(Debug, Default)]
+pub(super) struct ChunkIndex(FxHashMap<(u64, RenderId, u32), usize>);
+
+impl ChunkIndex {
+    /// The chunk of `previous` that `owner` recorded at `ordinal` from
+    /// `inputs`, if there is one of `lineage` that can be kept.
     pub(super) fn kept(
         &mut self,
+        previous: &mut PreviousChunks,
         owner: RenderId,
         ordinal: u32,
         inputs: &RecordingInputs,
         lineage: Lineage,
     ) -> Option<Arc<Chunk>> {
-        let at = self.position(owner, ordinal)?;
-        let source = self.sources.get(at)?;
+        let at = self.position(previous, owner, ordinal)?;
+        let source = previous.sources.committed().get(at)?;
         if !source.inputs.is_some_and(|recorded| recorded.same(inputs)) {
             return None;
         }
-        match self.content.entries().get(source.entry.get()) {
+        match previous.content.entries().get(source.entry.get()) {
             Some(Entry::Chunk { chunk, .. })
                 if chunk.owner() == owner
                     && chunk.ordinal() == ordinal
@@ -134,32 +264,49 @@ impl PreviousChunks {
         }
     }
 
-    fn position(&mut self, owner: RenderId, ordinal: u32) -> Option<usize> {
+    /// Empties the index, keeping room for `kept_capacity` entries at most:
+    /// a pass after a large one finds room without allocating.
+    pub(super) fn recycle(&mut self, kept_capacity: usize) {
+        self.0.clear();
+        self.0.shrink_to(kept_capacity);
+    }
+
+    /// Where `owner`'s chunk of `ordinal` sits in `previous`'s list: found
+    /// by a forward scan from the cursor until one misses, then by the
+    /// index that miss builds.
+    fn position(
+        &mut self,
+        previous: &mut PreviousChunks,
+        owner: RenderId,
+        ordinal: u32,
+    ) -> Option<usize> {
         let matches = |source: &ChunkSource| source.owner == owner && source.ordinal == ordinal;
-        let at = if let Some(by_key) = &self.by_key {
-            if self.sources.get(self.cursor).is_some_and(matches) {
-                Some(self.cursor)
+        let sources = previous.sources.committed();
+        let cursor = previous.cursor;
+        let found = if previous.indexed {
+            if sources.get(cursor).is_some_and(matches) {
+                Some(cursor)
             } else {
-                by_key.get(&(owner, ordinal)).copied()
+                self.0.get(&(previous.serial, owner, ordinal)).copied()
             }
+        } else if let Some(offset) = sources
+            .get(cursor..)
+            .and_then(|rest| rest.iter().position(matches))
+        {
+            Some(cursor + offset)
         } else {
-            let scanned = self
-                .sources
-                .get(self.cursor..)
-                .and_then(|rest| rest.iter().position(matches))
-                .map(|offset| self.cursor + offset);
-            scanned.or_else(|| {
-                let by_key = self.by_key.insert(
-                    self.sources
-                        .iter()
-                        .enumerate()
-                        .map(|(at, source)| ((source.owner, source.ordinal), at))
-                        .collect::<FxHashMap<(RenderId, u32), usize>>(),
-                );
-                by_key.get(&(owner, ordinal)).copied()
-            })
-        }?;
-        self.cursor = at + 1;
+            previous.indexed = true;
+            let serial = previous.serial;
+            self.0.extend(
+                sources
+                    .iter()
+                    .enumerate()
+                    .map(|(at, source)| ((serial, source.owner, source.ordinal), at)),
+            );
+            self.0.get(&(serial, owner, ordinal)).copied()
+        };
+        let at = found?;
+        previous.cursor = at + 1;
         Some(at)
     }
 }
@@ -177,7 +324,7 @@ mod tests {
     };
 
     /// A content of one chunk for each of four render objects, in order,
-    /// with its chunk sources.
+    /// as a repaint builds over it.
     fn previous(owner: &mut SceneOwner) -> (PreviousChunks, Vec<Arc<Chunk>>, Lineage) {
         let mut writer = owner.writer();
         let lineage = writer.current().id().lineage();
@@ -202,11 +349,9 @@ mod tests {
             chunks.push(chunk);
         }
         let content = Arc::new(builder.finish());
-        (
-            PreviousChunks::new(content, Arc::<[ChunkSource]>::from(sources)),
-            chunks,
-            lineage,
-        )
+        let recorded = RecordedChunks::Shared(Arc::new(sources));
+        let previous = PreviousChunks::new(1, &content, &recorded).expect("four chunks");
+        (previous, chunks, lineage)
     }
 
     /// Chunks looked up in another order than they were recorded in are
@@ -215,12 +360,13 @@ mod tests {
     #[test]
     fn a_reordered_content_finds_every_chunk() {
         let mut owner = SceneOwner::new();
+        let mut index = ChunkIndex::default();
         let (mut previous, chunks, lineage) = previous(&mut owner);
         for at in [3, 0, 2, 1] {
-            let kept = previous
-                .kept(chunks[at].owner(), 0, &AT_ORIGIN, lineage)
+            let found = index
+                .kept(&mut previous, chunks[at].owner(), 0, &AT_ORIGIN, lineage)
                 .expect("the chunk is found");
-            assert!(Arc::ptr_eq(&kept, &chunks[at]), "chunk {at}");
+            assert!(Arc::ptr_eq(&found, &chunks[at]), "chunk {at}");
         }
     }
 
@@ -229,6 +375,7 @@ mod tests {
     #[test]
     fn a_chunk_of_other_inputs_or_ordinal_is_not_kept() {
         let mut owner = SceneOwner::new();
+        let mut index = ChunkIndex::default();
         let (mut previous, chunks, lineage) = previous(&mut owner);
         let moved = RecordingInputs {
             origin: Offset::new(0.5, 0.0),
@@ -238,25 +385,61 @@ mod tests {
             origin: Offset::new(-0.0, 0.0),
             anchor: None,
         };
-        assert!(
-            previous
-                .kept(chunks[0].owner(), 0, &moved, lineage)
-                .is_none()
-        );
-        assert!(
-            previous
-                .kept(chunks[1].owner(), 0, &negative_zero, lineage)
-                .is_none()
-        );
-        assert!(
-            previous
-                .kept(chunks[2].owner(), 1, &AT_ORIGIN, lineage)
-                .is_none()
-        );
-        assert!(
-            previous
-                .kept(chunks[3].owner(), 0, &AT_ORIGIN, lineage)
+        let mut found = |at: usize, ordinal: u32, inputs: &RecordingInputs| {
+            index
+                .kept(&mut previous, chunks[at].owner(), ordinal, inputs, lineage)
                 .is_some()
+        };
+        assert!(!found(0, 0, &moved));
+        assert!(!found(1, 0, &negative_zero));
+        assert!(!found(2, 1, &AT_ORIGIN));
+        assert!(found(3, 0, &AT_ORIGIN));
+    }
+
+    /// A list committed over a replaced record's holds the staged range, in
+    /// the replaced list's room while nothing else holds it, and in a list
+    /// of its own when the replaced one is still shared.
+    #[test]
+    fn a_committed_list_takes_the_replaced_lists_room_when_it_is_alone() {
+        let source = |slot: usize| ChunkSource {
+            entry: EntryIndex::try_from(0usize).expect("index 0"),
+            owner: RenderId::new(slot),
+            ordinal: 0,
+            inputs: None,
+        };
+        let staged = [source(1), source(2), source(3)];
+        let commit = |replaced: Arc<Vec<ChunkSource>>| {
+            let mut chunks = RecordedChunks::Staged(1..3);
+            chunks.commit(
+                &staged,
+                Some(RecordedChunks::Shared(replaced)),
+                &mut SpareChunkLists::default(),
+                usize::MAX,
+            );
+            let RecordedChunks::Shared(list) = chunks else {
+                panic!("two chunks are a shared list: {chunks:?}");
+            };
+            assert_eq!(list.len(), 2);
+            assert_eq!(list[0].owner, RenderId::new(2));
+            list
+        };
+        let mut alone = Vec::with_capacity(8);
+        alone.push(source(9));
+        let alone = Arc::new(alone);
+        let room = Arc::as_ptr(&alone);
+        let written = commit(alone);
+        assert_eq!(
+            Arc::as_ptr(&written),
+            room,
+            "written in the replaced list's room"
         );
+
+        let shared = Arc::new(vec![source(9)]);
+        let written = commit(Arc::clone(&shared));
+        assert!(
+            !Arc::ptr_eq(&written, &shared),
+            "a shared list is not written"
+        );
+        assert_eq!(shared[0].owner, RenderId::new(9), "nor changed");
     }
 }
