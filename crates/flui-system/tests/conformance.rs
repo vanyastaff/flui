@@ -17,7 +17,8 @@
 //! changes nothing. Each provider's own behaviour is tested beside it,
 //! behind its OS seam, with the system's answers as inputs (`win32::*::tests`
 //! on Windows, the portal's tests on a private bus on Linux, `macos::*::tests`
-//! as a model on every host).
+//! and `android::*::tests` as models on every host, the Android dialogs over
+//! a stand-in Activity).
 //!
 //! The web providers reach their page through a canvas window, which the
 //! headless host does not make, and this harness waits on threads a page

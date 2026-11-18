@@ -13,6 +13,8 @@
 //! nobody wrote.
 
 #[cfg(test)]
+pub(crate) mod android;
+#[cfg(test)]
 pub(crate) mod owner;
 #[cfg(all(test, windows))]
 #[expect(
@@ -20,7 +22,7 @@ pub(crate) mod owner;
     reason = "a raw window handle naming a window no test reaches, a message pump"
 )]
 pub(crate) mod win32;
-#[cfg(all(test, any(windows, target_os = "macos")))]
+#[cfg(test)]
 pub(crate) mod window;
 
 use std::{cell::Cell, cell::RefCell, fmt, rc::Rc};

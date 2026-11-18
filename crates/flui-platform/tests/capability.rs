@@ -15,10 +15,10 @@ use flui_platform::{
     capability::{
         Abandoned, Activity, ActivityBridge, Capability, CapabilityId, CapabilityProvider,
         CapabilityRegistrar, CompletionSource, DataRefused, HostBridge, IntentFrame,
-        InvalidResultKey, JniFrame, MAX_RESULT_KEY_LEN, OwnerJob, OwnerPoster, OwnerRetired,
-        OwnerScope, PendingCompletions, ProviderContext, RequestKey, Resolver, ResultCode,
-        ResultIntent, ResultKey, ResultMint, ResultOutcome, ResultRefused, ResultRequest,
-        ResultTicketHold, ResultToken, ResultTokenMint, RuntimeLocals,
+        InvalidResultKey, JniFrame, MAX_RESULT_KEY_LEN, MainThreadRefused, OwnerJob, OwnerPoster,
+        OwnerRetired, OwnerScope, PendingCompletions, PostedWork, ProviderContext, RequestKey,
+        Resolver, ResultCode, ResultIntent, ResultKey, ResultMint, ResultOutcome, ResultRefused,
+        ResultRequest, ResultTicketHold, ResultToken, ResultTokenMint, RuntimeLocals,
     },
 };
 
@@ -622,6 +622,8 @@ struct BridgeCalls {
     launched: RefCell<Vec<(RequestKey, ResultToken)>>,
     resolvers: RefCell<Vec<Resolver<ResultOutcome>>>,
     tickets: RefCell<Vec<ResultTicketHold>>,
+    /// The work handed to Android's main thread, with its refusal, in order.
+    posted: RefCell<Vec<PostedWork>>,
 }
 
 impl BridgeCalls {
@@ -674,6 +676,10 @@ impl ActivityBridge for BridgeCalls {
 
     fn lend(&self, _f: &mut dyn FnMut(JniFrame)) -> bool {
         false
+    }
+
+    fn post(&self, work: PostedWork) {
+        self.posted.borrow_mut().push(work);
     }
 }
 
@@ -773,6 +779,57 @@ fn a_provider_reaches_the_activity_the_host_offers() {
         "the host takes it back"
     );
     assert!(reach(0).is_none());
+}
+
+/// Work a provider hands to Android's main thread goes through the host,
+/// and its completion settles at an owner turn, once: with what the work
+/// answered, with the host's refusal, or, for work the host dropped without
+/// either, as a hand-off that failed.
+#[test]
+fn work_for_the_main_thread_answers_through_the_host() {
+    let owner = Owner::new();
+    let locals = RuntimeLocals::new();
+    let host = HostBridge::new();
+    let mut registrar = CapabilityRegistrar::new();
+    registrar.provide::<Files>(|ctx: &ProviderContext<'_>| Ok(ctx.activity()));
+    let entries = registrar.into_entries();
+    let context = ProviderContext::new(owner.source.poster(), &owner.source, &locals, &host, None);
+    let bridge = Rc::new(BridgeCalls::default());
+    drop(host.install_activity(Some(Rc::clone(&bridge) as Rc<dyn ActivityBridge>)));
+    let activity = entries[0]
+        .provide(&context)
+        .expect("provided")
+        .downcast::<Option<Activity>>()
+        .expect("the handle")
+        .expect("the host offers its Activity");
+    let nothing = std::ptr::NonNull::dangling();
+    let frame = || JniFrame::new(nothing, nothing, nothing);
+
+    let mut ran = activity.on_main_thread(&owner.source, |_frame| 7_u32);
+    let mut refused = activity.on_main_thread(&owner.source, |_frame| 8_u32);
+    let mut dropped = activity.on_main_thread(&owner.source, |_frame| 9_u32);
+    let mut posted = bridge.posted.take().into_iter();
+    posted
+        .next()
+        .expect("the first work reached the host")
+        .run(frame());
+    posted
+        .next()
+        .expect("the second work reached the host")
+        .refuse(MainThreadRefused::ActivityEnded);
+    drop(posted.next().expect("the third work reached the host"));
+    assert!(ran.poll().is_none(), "settles at the owner's turn");
+    owner.turn();
+    assert_eq!(ran.poll(), Some(Ok(Ok(7))));
+    assert_eq!(
+        refused.poll(),
+        Some(Ok(Err(MainThreadRefused::ActivityEnded)))
+    );
+    assert_eq!(
+        dropped.poll(),
+        Some(Ok(Err(MainThreadRefused::HandOffFailed))),
+        "work a host drops unended is refused, never left waiting"
+    );
 }
 
 /// A result key is a short printable name, checked where it is written; a

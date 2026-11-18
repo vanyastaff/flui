@@ -322,6 +322,14 @@ pub enum Line {
     schemars(rename = "NativeRow")
 )]
 #[non_exhaustive]
+#[cfg_attr(
+    target_arch = "wasm32",
+    expect(
+        clippy::large_enum_variant,
+        reason = "with 4-byte pointers the window-state row outweighs the others past the lint's \
+                  ratio; rows are decoded and written one at a time, never held in bulk"
+    )
+)]
 pub enum Row {
     /// One reading, decoded.
     Reading {
