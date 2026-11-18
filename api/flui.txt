@@ -15414,7 +15414,6 @@ impl Copy for flui::prelude::AppLifecycleState
 impl Default for flui::prelude::AppLifecycleState
 impl Eq for flui::prelude::AppLifecycleState
 impl PartialEq for flui::prelude::AppLifecycleState
-impl TryFrom<u8> for flui::prelude::AppLifecycleState { type Error = u8; }
 impl core::fmt::Debug for flui::prelude::AppLifecycleState
 impl core::fmt::Display for flui::prelude::AppLifecycleState
 impl core::hash::Hash for flui::prelude::AppLifecycleState
@@ -15422,16 +15421,8 @@ impl core::marker::StructuralPartialEq for flui::prelude::AppLifecycleState
 impl serde_core::ser::Serialize for flui::prelude::AppLifecycleState
 impl<'de> serde_core::de::Deserialize<'de> for flui::prelude::AppLifecycleState
 pub const flui::prelude::AppLifecycleState::ALL: [flui::prelude::AppLifecycleState; 5] = _
-pub const fn flui::prelude::AppLifecycleState::can_animate(self) -> bool
-pub const fn flui::prelude::AppLifecycleState::can_transition_to(self, next: Self) -> bool
-pub const fn flui::prelude::AppLifecycleState::description(self) -> &'static str
 pub const fn flui::prelude::AppLifecycleState::is_focused(self) -> bool
 pub const fn flui::prelude::AppLifecycleState::is_visible(self) -> bool
-pub const fn flui::prelude::AppLifecycleState::should_animate(self) -> bool
-pub const fn flui::prelude::AppLifecycleState::should_release_resources(self) -> bool
-pub const fn flui::prelude::AppLifecycleState::should_render(self) -> bool
-pub const fn flui::prelude::AppLifecycleState::should_save_state(self) -> bool
-pub const fn flui::prelude::AppLifecycleState::try_from_u8(value: u8) -> Option<Self>
 pub fn flui::prelude::AppLifecycleState::most_active(states: impl IntoIterator<Item = Self>) -> Self
 variant flui::prelude::AppLifecycleState::Detached = 4 // at 4
 variant flui::prelude::AppLifecycleState::Hidden = 2 // at 2
@@ -23937,25 +23928,6 @@ pub fn flui::view::BoxedElement::into_inner(self) -> flui::view::element::Elemen
 pub fn flui::view::BoxedElement::new<T: flui::view::IntoElement>(value: T) -> Self
 pub type flui::view::BoxedTask = core::pin::Pin<Box<dyn core::future::future::Future<Output = ()> + 'static>>
 reexport flui::view::BoxedView => flui::prelude::BoxedView
-pub struct flui::view::BudgetPercentage(_)
-impl Clone for flui::view::BudgetPercentage
-impl Copy for flui::view::BudgetPercentage
-impl Default for flui::view::BudgetPercentage
-impl From<f64> for flui::view::BudgetPercentage
-impl PartialEq for flui::view::BudgetPercentage
-impl PartialOrd for flui::view::BudgetPercentage
-impl core::fmt::Debug for flui::view::BudgetPercentage
-impl core::fmt::Display for flui::view::BudgetPercentage
-impl core::marker::StructuralPartialEq for flui::view::BudgetPercentage
-impl serde_core::ser::Serialize for flui::view::BudgetPercentage
-impl<'de> serde_core::de::Deserialize<'de> for flui::view::BudgetPercentage
-pub const flui::view::BudgetPercentage::HUNDRED: Self = _
-pub const flui::view::BudgetPercentage::ZERO: Self = _
-pub const fn flui::view::BudgetPercentage::new(percent: f64) -> Self
-pub const fn flui::view::BudgetPercentage::value(self) -> f64
-pub fn flui::view::BudgetPercentage::as_ratio(self) -> f64
-pub fn flui::view::BudgetPercentage::clamped(self) -> Self
-pub fn flui::view::BudgetPercentage::from_ratio(ratio: f64) -> Self
 reexport flui::view::BuildContext => flui::prelude::BuildContext
 reexport flui::view::BuildContextExt => flui::prelude::BuildContextExt
 pub struct flui::view::BuildInProgress { .. }
@@ -24151,28 +24123,6 @@ impl PartialEq for flui::view::FrameBuildReport
 impl core::fmt::Debug for flui::view::FrameBuildReport
 impl core::marker::StructuralPartialEq for flui::view::FrameBuildReport
 pub fn flui::view::FrameBuildReport::count(&self, reason: flui::foundation::RebuildReason) -> usize
-pub struct flui::view::FrameDuration { .. }
-impl Clone for flui::view::FrameDuration
-impl Copy for flui::view::FrameDuration
-impl PartialEq for flui::view::FrameDuration
-impl PartialOrd for flui::view::FrameDuration
-impl core::fmt::Debug for flui::view::FrameDuration
-impl core::fmt::Display for flui::view::FrameDuration
-impl core::marker::StructuralPartialEq for flui::view::FrameDuration
-pub const flui::view::FrameDuration::FPS_120: Self = _
-pub const flui::view::FrameDuration::FPS_144: Self = _
-pub const flui::view::FrameDuration::FPS_30: Self = _
-pub fn flui::view::FrameDuration::as_micros(self) -> u64
-pub fn flui::view::FrameDuration::as_ms(self) -> flui::view::Milliseconds
-pub fn flui::view::FrameDuration::as_seconds(self) -> flui::view::Seconds
-pub fn flui::view::FrameDuration::fps(self) -> f64
-pub fn flui::view::FrameDuration::is_deadline_near(self, elapsed: flui::view::Milliseconds) -> bool
-pub fn flui::view::FrameDuration::is_janky(self, elapsed: flui::view::Milliseconds) -> bool
-pub fn flui::view::FrameDuration::is_over_budget(self, elapsed: flui::view::Milliseconds) -> bool
-pub fn flui::view::FrameDuration::remaining(self, elapsed: flui::view::Milliseconds) -> flui::view::Milliseconds
-pub fn flui::view::FrameDuration::try_from_fps(fps: u32) -> Result<Self, flui::view::InvalidDurationConfig>
-pub fn flui::view::FrameDuration::try_from_period(period: core::time::Duration) -> Result<Self, flui::view::InvalidDurationConfig>
-pub fn flui::view::FrameDuration::utilization(self, elapsed: flui::view::Milliseconds) -> f64
 pub struct flui::view::FrameId(_)
 impl Clone for flui::view::FrameId
 impl Copy for flui::view::FrameId
@@ -24194,7 +24144,6 @@ impl Copy for flui::view::FramePhase
 impl Default for flui::view::FramePhase
 impl Eq for flui::view::FramePhase
 impl PartialEq for flui::view::FramePhase
-impl TryFrom<u8> for flui::view::FramePhase { type Error = u8; }
 impl core::fmt::Debug for flui::view::FramePhase
 impl core::fmt::Display for flui::view::FramePhase
 impl core::hash::Hash for flui::view::FramePhase
@@ -24202,30 +24151,17 @@ impl core::marker::StructuralPartialEq for flui::view::FramePhase
 impl serde_core::ser::Serialize for flui::view::FramePhase
 impl<'de> serde_core::de::Deserialize<'de> for flui::view::FramePhase
 pub const flui::view::FramePhase::ALL: [flui::view::FramePhase; 5] = _
-pub const fn flui::view::FramePhase::as_index(self) -> usize
-pub const fn flui::view::FramePhase::is_rendering(self) -> bool
-pub const fn flui::view::FramePhase::next(self) -> Option<Self>
-pub const fn flui::view::FramePhase::prev(self) -> Option<Self>
 variant flui::view::FramePhase::Build = 1 // at 1
 variant flui::view::FramePhase::Composite = 4 // at 4
 variant flui::view::FramePhase::Idle = 0 // at 0
 variant flui::view::FramePhase::Layout = 2 // at 2
 variant flui::view::FramePhase::Paint = 3 // at 3
 #[non_exhaustive] pub struct flui::view::FrameTiming
-field flui::view::FrameTiming::frame_duration: flui::view::FrameDuration // at 2
 field flui::view::FrameTiming::id: flui::view::FrameId // at 0
 field flui::view::FrameTiming::start_time: std::time::Instant // at 1
 impl Clone for flui::view::FrameTiming
 impl Copy for flui::view::FrameTiming
 impl core::fmt::Debug for flui::view::FrameTiming
-pub fn flui::view::FrameTiming::elapsed_at(&self, now: std::time::Instant) -> flui::view::Milliseconds
-pub fn flui::view::FrameTiming::is_deadline_near_at(&self, now: std::time::Instant) -> bool
-pub fn flui::view::FrameTiming::is_janky_at(&self, now: std::time::Instant) -> bool
-pub fn flui::view::FrameTiming::is_over_budget_at(&self, now: std::time::Instant) -> bool
-pub fn flui::view::FrameTiming::remaining_at(&self, now: std::time::Instant) -> flui::view::Milliseconds
-pub fn flui::view::FrameTiming::target_duration_ms(&self) -> f64
-pub fn flui::view::FrameTiming::target_fps(&self) -> u32
-pub fn flui::view::FrameTiming::utilization_at(&self, now: std::time::Instant) -> flui::view::BudgetPercentage
 pub struct flui::view::FrameWaker { .. }
 impl Clone for flui::view::FrameWaker
 impl core::fmt::Debug for flui::view::FrameWaker
@@ -24271,17 +24207,6 @@ fn flui::view::IntoElement::into_element(self) -> flui::view::element::ElementKi
 impl flui::view::IntoElement for Box<dyn flui::prelude::View>
 impl<V: flui::prelude::View> flui::view::IntoElement for V
 reexport flui::view::IntoView => flui::prelude::IntoView
-#[non_exhaustive] pub enum flui::view::InvalidDurationConfig
-impl Clone for flui::view::InvalidDurationConfig
-impl Copy for flui::view::InvalidDurationConfig
-impl Eq for flui::view::InvalidDurationConfig
-impl PartialEq for flui::view::InvalidDurationConfig
-impl core::error::Error for flui::view::InvalidDurationConfig
-impl core::fmt::Debug for flui::view::InvalidDurationConfig
-impl core::fmt::Display for flui::view::InvalidDurationConfig
-impl core::marker::StructuralPartialEq for flui::view::InvalidDurationConfig
-variant flui::view::InvalidDurationConfig::ZeroFps // at 0
-variant flui::view::InvalidDurationConfig::ZeroPeriod // at 1
 pub struct flui::view::KeepAliveNotification
 field flui::view::KeepAliveNotification::keep_alive: bool // at 0
 impl Clone for flui::view::KeepAliveNotification
@@ -24321,67 +24246,6 @@ reexport flui::view::LifecycleHook => flui::app::LifecycleHook
 pub struct flui::view::LifecycleSubscription { .. }
 impl core::fmt::Debug for flui::view::LifecycleSubscription
 reexport flui::view::Memo => flui::prelude::Memo
-pub struct flui::view::Microseconds(_)
-impl Clone for flui::view::Microseconds
-impl Copy for flui::view::Microseconds
-impl Default for flui::view::Microseconds
-impl Eq for flui::view::Microseconds
-impl From<core::time::Duration> for flui::view::Microseconds
-impl From<flui::view::Microseconds> for core::time::Duration
-impl From<flui::view::Microseconds> for flui::view::Milliseconds
-impl From<u64> for flui::view::Microseconds
-impl Ord for flui::view::Microseconds
-impl PartialEq for flui::view::Microseconds
-impl PartialOrd for flui::view::Microseconds
-impl core::fmt::Debug for flui::view::Microseconds
-impl core::fmt::Display for flui::view::Microseconds
-impl core::hash::Hash for flui::view::Microseconds
-impl core::marker::StructuralPartialEq for flui::view::Microseconds
-impl serde_core::ser::Serialize for flui::view::Microseconds
-impl<'de> serde_core::de::Deserialize<'de> for flui::view::Microseconds
-pub const flui::view::Microseconds::ONE: Self = _
-pub const flui::view::Microseconds::ZERO: Self = _
-pub const fn flui::view::Microseconds::new(us: u64) -> Self
-pub const fn flui::view::Microseconds::saturating_sub(self, other: Self) -> Self
-pub const fn flui::view::Microseconds::to_std_duration(self) -> core::time::Duration
-pub const fn flui::view::Microseconds::value(self) -> u64
-pub fn flui::view::Microseconds::to_ms(self) -> flui::view::Milliseconds
-pub struct flui::view::Milliseconds(_)
-impl Clone for flui::view::Milliseconds
-impl Copy for flui::view::Milliseconds
-impl Default for flui::view::Milliseconds
-impl From<core::time::Duration> for flui::view::Milliseconds
-impl From<f64> for flui::view::Milliseconds
-impl From<flui::view::Microseconds> for flui::view::Milliseconds
-impl From<flui::view::Milliseconds> for flui::view::Seconds
-impl From<flui::view::Seconds> for flui::view::Milliseconds
-impl PartialEq for flui::view::Milliseconds
-impl PartialOrd for flui::view::Milliseconds
-impl TryFrom<flui::view::Milliseconds> for core::time::Duration { type Error = core::time::TryFromFloatSecsError; }
-impl core::fmt::Debug for flui::view::Milliseconds
-impl core::fmt::Display for flui::view::Milliseconds
-impl core::marker::StructuralPartialEq for flui::view::Milliseconds
-impl core::ops::arith::Add for flui::view::Milliseconds { type Output = flui::view::Milliseconds; }
-impl core::ops::arith::AddAssign for flui::view::Milliseconds
-impl core::ops::arith::Div<f64> for flui::view::Milliseconds { type Output = flui::view::Milliseconds; }
-impl core::ops::arith::DivAssign<f64> for flui::view::Milliseconds
-impl core::ops::arith::Mul<f64> for flui::view::Milliseconds { type Output = flui::view::Milliseconds; }
-impl core::ops::arith::MulAssign<f64> for flui::view::Milliseconds
-impl core::ops::arith::Sub for flui::view::Milliseconds { type Output = flui::view::Milliseconds; }
-impl core::ops::arith::SubAssign for flui::view::Milliseconds
-impl serde_core::ser::Serialize for flui::view::Milliseconds
-impl<'de> serde_core::de::Deserialize<'de> for flui::view::Milliseconds
-pub const flui::view::Milliseconds::ONE: Self = _
-pub const flui::view::Milliseconds::ZERO: Self = _
-pub const fn flui::view::Milliseconds::new(ms: f64) -> Self
-pub const fn flui::view::Milliseconds::value(self) -> f64
-pub fn flui::view::Milliseconds::clamp(self, min: Self, max: Self) -> Self
-pub fn flui::view::Milliseconds::is_zero(self) -> bool
-pub fn flui::view::Milliseconds::max(self, other: Self) -> Self
-pub fn flui::view::Milliseconds::min(self, other: Self) -> Self
-pub fn flui::view::Milliseconds::saturating_sub(self, other: Self) -> Self
-pub fn flui::view::Milliseconds::to_micros(self) -> flui::view::Microseconds
-pub fn flui::view::Milliseconds::to_seconds(self) -> flui::view::Seconds
 reexport flui::view::NotifiableElement => flui::prelude::NotifiableElement
 reexport flui::view::Notification => flui::prelude::Notification
 reexport flui::view::ObjectKey => flui::prelude::ObjectKey
@@ -24531,34 +24395,6 @@ field flui::view::ScrollNotification::offset: f64 // at 0
 impl Clone for flui::view::ScrollNotification
 impl core::fmt::Debug for flui::view::ScrollNotification
 impl flui::prelude::Notification for flui::view::ScrollNotification
-pub struct flui::view::Seconds(_)
-impl Clone for flui::view::Seconds
-impl Copy for flui::view::Seconds
-impl Default for flui::view::Seconds
-impl From<core::time::Duration> for flui::view::Seconds
-impl From<f64> for flui::view::Seconds
-impl From<flui::view::Milliseconds> for flui::view::Seconds
-impl From<flui::view::Seconds> for flui::view::Milliseconds
-impl PartialEq for flui::view::Seconds
-impl PartialOrd for flui::view::Seconds
-impl TryFrom<flui::view::Seconds> for core::time::Duration { type Error = core::time::TryFromFloatSecsError; }
-impl core::fmt::Debug for flui::view::Seconds
-impl core::fmt::Display for flui::view::Seconds
-impl core::marker::StructuralPartialEq for flui::view::Seconds
-impl core::ops::arith::Add for flui::view::Seconds { type Output = flui::view::Seconds; }
-impl core::ops::arith::AddAssign for flui::view::Seconds
-impl core::ops::arith::Div<f64> for flui::view::Seconds { type Output = flui::view::Seconds; }
-impl core::ops::arith::Mul<f64> for flui::view::Seconds { type Output = flui::view::Seconds; }
-impl core::ops::arith::Sub for flui::view::Seconds { type Output = flui::view::Seconds; }
-impl core::ops::arith::SubAssign for flui::view::Seconds
-impl serde_core::ser::Serialize for flui::view::Seconds
-impl<'de> serde_core::de::Deserialize<'de> for flui::view::Seconds
-pub const flui::view::Seconds::ONE: Self = _
-pub const flui::view::Seconds::ZERO: Self = _
-pub const fn flui::view::Seconds::new(secs: f64) -> Self
-pub const fn flui::view::Seconds::value(self) -> f64
-pub fn flui::view::Seconds::is_zero(self) -> bool
-pub fn flui::view::Seconds::to_ms(self) -> flui::view::Milliseconds
 reexport flui::view::Signal => flui::prelude::Signal
 #[non_exhaustive] pub enum flui::view::SignalError
 impl Clone for flui::view::SignalError
@@ -24672,14 +24508,12 @@ pub fn flui::view::UpdateScheduler::add_persistent_frame_callback(&self, callbac
 pub fn flui::view::UpdateScheduler::add_post_frame_callback(&self, callback: flui_scheduler::frame::PostFrameCallback)
 pub fn flui::view::UpdateScheduler::add_task(&self, priority: flui_scheduler::task::Priority, callback: impl FnOnce() + 'static)
 pub fn flui::view::UpdateScheduler::add_timings_callback(&self, callback: flui_scheduler::config::TimingsCallback)
-pub fn flui::view::UpdateScheduler::avg_fps(&self) -> f64
-pub fn flui::view::UpdateScheduler::budget_snapshot(&self) -> flui_scheduler::budget::FrameBudget
 pub fn flui::view::UpdateScheduler::cancel_frame_callback(&self, id: flui_scheduler::id::CallbackId) -> bool
-pub fn flui::view::UpdateScheduler::clear_jank_stats(&self)
 pub fn flui::view::UpdateScheduler::current_frame(&self) -> Option<flui::view::FrameTiming>
 pub fn flui::view::UpdateScheduler::current_system_frame_time_stamp(&self) -> std::time::Instant
 pub fn flui::view::UpdateScheduler::current_vsync_time(&self) -> Option<std::time::Instant>
 pub fn flui::view::UpdateScheduler::debug_assert_no_transient_callbacks(&self, _reason: &str) -> bool
+pub fn flui::view::UpdateScheduler::display_period(&self) -> core::time::Duration
 pub fn flui::view::UpdateScheduler::downgrade(&self) -> flui_scheduler::scheduler::WeakUpdateScheduler
 pub fn flui::view::UpdateScheduler::end_of_frame(&self) -> flui_scheduler::scheduler::FrameCompletionFuture
 pub fn flui::view::UpdateScheduler::ensure_visual_update(&self) -> bool
@@ -24687,19 +24521,12 @@ pub fn flui::view::UpdateScheduler::frame_count(&self) -> u64
 pub fn flui::view::UpdateScheduler::frame_waker(&self) -> flui::view::FrameWaker
 pub fn flui::view::UpdateScheduler::frames_enabled(&self) -> bool
 pub fn flui::view::UpdateScheduler::handle_app_lifecycle_state_change(&self, new_state: flui::prelude::AppLifecycleState)
-pub fn flui::view::UpdateScheduler::is_deadline_near(&self) -> bool
 pub fn flui::view::UpdateScheduler::is_frame_scheduled(&self) -> bool
 pub fn flui::view::UpdateScheduler::is_in_frame(&self) -> bool
-pub fn flui::view::UpdateScheduler::is_janky(&self) -> bool
-pub fn flui::view::UpdateScheduler::is_over_budget(&self) -> bool
 pub fn flui::view::UpdateScheduler::is_same_instance(&self, other: &Self) -> bool
-pub fn flui::view::UpdateScheduler::jank_rate(&self) -> f64
-pub fn flui::view::UpdateScheduler::janky_frame_count(&self) -> u64
 pub fn flui::view::UpdateScheduler::lifecycle_state(&self) -> flui::prelude::AppLifecycleState
 pub fn flui::view::UpdateScheduler::new() -> Self
 pub fn flui::view::UpdateScheduler::phase(&self) -> flui_scheduler::frame::SchedulerPhase
-pub fn flui::view::UpdateScheduler::remaining_budget(&self) -> flui::view::Milliseconds
-pub fn flui::view::UpdateScheduler::remaining_budget_ms(&self) -> f64
 pub fn flui::view::UpdateScheduler::remove_lifecycle_state_listener(&self, id: flui_scheduler::id::CallbackId) -> bool
 pub fn flui::view::UpdateScheduler::remove_timings_callback(&self, callback: &flui_scheduler::config::TimingsCallback)
 pub fn flui::view::UpdateScheduler::report_timings(&self) -> usize
@@ -24708,7 +24535,7 @@ pub fn flui::view::UpdateScheduler::schedule_forced_frame(&self)
 pub fn flui::view::UpdateScheduler::schedule_frame_callback(&self, callback: flui_scheduler::frame::OneShotFrameCallback) -> flui_scheduler::id::CallbackId
 pub fn flui::view::UpdateScheduler::schedule_frame_if_enabled(&self) -> bool
 pub fn flui::view::UpdateScheduler::schedule_microtask(&self, task: Box<dyn FnOnce()>)
-pub fn flui::view::UpdateScheduler::set_budget_frame_duration(&self, frame_duration: flui::view::FrameDuration)
+pub fn flui::view::UpdateScheduler::set_display_period(&self, period: core::time::Duration)
 pub fn flui::view::UpdateScheduler::set_frames_enabled(&mut self, enabled: bool)
 pub fn flui::view::UpdateScheduler::set_on_frame_scheduled(&self, hook: Option<alloc::rcs::arc::Arc<dyn Fn() + Send + Sync>>)
 pub fn flui::view::UpdateScheduler::should_schedule_frame(&self) -> bool
@@ -36289,91 +36116,6 @@ impl core::fmt::Debug for flui_runtime::ui_runtime::text_preparation::TextSizing
 pub fn flui_runtime::ui_runtime::text_preparation::TextSizingWork::presentation(&self) -> flui::foundation::PresentationId
 pub fn flui_runtime::ui_runtime::text_preparation::TextSizingWork::requests(&self) -> &[flui::foundation::TextSizeRequest]
 pub fn flui_runtime::ui_runtime::text_preparation::TextSizingWork::source(&self) -> &flui_painting::text_painter::sizing::TextSizingSource
-pub struct flui_scheduler::budget::AllPhaseStats
-field flui_scheduler::budget::AllPhaseStats::build: flui_scheduler::budget::PhaseStats // at 0
-field flui_scheduler::budget::AllPhaseStats::composite: flui_scheduler::budget::PhaseStats // at 3
-field flui_scheduler::budget::AllPhaseStats::layout: flui_scheduler::budget::PhaseStats // at 1
-field flui_scheduler::budget::AllPhaseStats::paint: flui_scheduler::budget::PhaseStats // at 2
-impl Clone for flui_scheduler::budget::AllPhaseStats
-impl Copy for flui_scheduler::budget::AllPhaseStats
-impl Default for flui_scheduler::budget::AllPhaseStats
-impl core::fmt::Debug for flui_scheduler::budget::AllPhaseStats
-impl serde_core::ser::Serialize for flui_scheduler::budget::AllPhaseStats
-impl<'de> serde_core::de::Deserialize<'de> for flui_scheduler::budget::AllPhaseStats
-pub fn flui_scheduler::budget::AllPhaseStats::total_budget_percent(&self) -> flui::view::BudgetPercentage
-pub fn flui_scheduler::budget::AllPhaseStats::total_duration(&self) -> flui::view::Milliseconds
-#[non_exhaustive] #[repr(u8)] pub enum flui_scheduler::budget::BudgetPolicy
-impl Clone for flui_scheduler::budget::BudgetPolicy
-impl Copy for flui_scheduler::budget::BudgetPolicy
-impl Default for flui_scheduler::budget::BudgetPolicy
-impl Eq for flui_scheduler::budget::BudgetPolicy
-impl PartialEq for flui_scheduler::budget::BudgetPolicy
-impl core::fmt::Debug for flui_scheduler::budget::BudgetPolicy
-impl core::hash::Hash for flui_scheduler::budget::BudgetPolicy
-impl core::marker::StructuralPartialEq for flui_scheduler::budget::BudgetPolicy
-impl serde_core::ser::Serialize for flui_scheduler::budget::BudgetPolicy
-impl<'de> serde_core::de::Deserialize<'de> for flui_scheduler::budget::BudgetPolicy
-pub const flui_scheduler::budget::BudgetPolicy::ALL: [flui_scheduler::budget::BudgetPolicy; 4] = _
-pub const fn flui_scheduler::budget::BudgetPolicy::less_restrictive(self) -> Option<Self>
-pub const fn flui_scheduler::budget::BudgetPolicy::more_restrictive(self) -> Option<Self>
-variant flui_scheduler::budget::BudgetPolicy::Continue = 0 // at 0
-variant flui_scheduler::budget::BudgetPolicy::SkipIdle = 1 // at 1
-variant flui_scheduler::budget::BudgetPolicy::SkipIdleAndBuild = 2 // at 2
-variant flui_scheduler::budget::BudgetPolicy::StopAll = 3 // at 3
-pub struct flui_scheduler::budget::FrameBudget { .. }
-impl Clone for flui_scheduler::budget::FrameBudget
-impl core::fmt::Debug for flui_scheduler::budget::FrameBudget
-pub fn flui_scheduler::budget::FrameBudget::all_phase_stats(&self) -> flui_scheduler::budget::AllPhaseStats
-pub fn flui_scheduler::budget::FrameBudget::avg_fps(&self) -> f64
-pub fn flui_scheduler::budget::FrameBudget::avg_frame_time(&self) -> flui::view::Milliseconds
-pub fn flui_scheduler::budget::FrameBudget::avg_frame_time_ms(&self) -> f64
-pub fn flui_scheduler::budget::FrameBudget::build_stats(&self) -> flui_scheduler::budget::PhaseStats
-pub fn flui_scheduler::budget::FrameBudget::composite_stats(&self) -> flui_scheduler::budget::PhaseStats
-pub fn flui_scheduler::budget::FrameBudget::elapsed(&self, now: std::time::Instant) -> flui::view::Milliseconds
-pub fn flui_scheduler::budget::FrameBudget::finish_frame(&mut self, now: std::time::Instant)
-pub fn flui_scheduler::budget::FrameBudget::frame_count(&self) -> u64
-pub fn flui_scheduler::budget::FrameBudget::frame_duration(&self) -> flui::view::FrameDuration
-pub fn flui_scheduler::budget::FrameBudget::frame_time_variance(&self) -> f64
-pub fn flui_scheduler::budget::FrameBudget::is_deadline_near(&self, now: std::time::Instant) -> bool
-pub fn flui_scheduler::budget::FrameBudget::is_janky(&self) -> bool
-pub fn flui_scheduler::budget::FrameBudget::is_over_budget(&self, now: std::time::Instant) -> bool
-pub fn flui_scheduler::budget::FrameBudget::jank_count(&self) -> usize
-pub fn flui_scheduler::budget::FrameBudget::jank_percentage(&self) -> flui::view::BudgetPercentage
-pub fn flui_scheduler::budget::FrameBudget::last_frame_time(&self) -> flui::view::Milliseconds
-pub fn flui_scheduler::budget::FrameBudget::last_frame_time_ms(&self) -> f64
-pub fn flui_scheduler::budget::FrameBudget::layout_stats(&self) -> flui_scheduler::budget::PhaseStats
-pub fn flui_scheduler::budget::FrameBudget::new(target_fps: core::num::nonzero::NonZeroU32) -> Self
-pub fn flui_scheduler::budget::FrameBudget::paint_stats(&self) -> flui_scheduler::budget::PhaseStats
-pub fn flui_scheduler::budget::FrameBudget::phase_stats(&self, phase: flui::view::FramePhase) -> flui_scheduler::budget::PhaseStats
-pub fn flui_scheduler::budget::FrameBudget::policy(&self) -> flui_scheduler::budget::BudgetPolicy
-pub fn flui_scheduler::budget::FrameBudget::record_build_duration(&mut self, duration: flui::view::Milliseconds)
-pub fn flui_scheduler::budget::FrameBudget::record_composite_duration(&mut self, duration: flui::view::Milliseconds)
-pub fn flui_scheduler::budget::FrameBudget::record_frame_duration(&mut self, total: flui::view::Milliseconds) -> bool
-pub fn flui_scheduler::budget::FrameBudget::record_layout_duration(&mut self, duration: flui::view::Milliseconds)
-pub fn flui_scheduler::budget::FrameBudget::record_paint_duration(&mut self, duration: flui::view::Milliseconds)
-pub fn flui_scheduler::budget::FrameBudget::record_phase_duration(&mut self, phase: flui::view::FramePhase, duration: flui::view::Milliseconds)
-pub fn flui_scheduler::budget::FrameBudget::remaining(&self, now: std::time::Instant) -> flui::view::Milliseconds
-pub fn flui_scheduler::budget::FrameBudget::reset(&mut self, now: std::time::Instant)
-pub fn flui_scheduler::budget::FrameBudget::set_frame_duration(&mut self, frame_duration: flui::view::FrameDuration)
-pub fn flui_scheduler::budget::FrameBudget::set_policy(&mut self, policy: flui_scheduler::budget::BudgetPolicy)
-pub fn flui_scheduler::budget::FrameBudget::set_target_fps(&mut self, target_fps: core::num::nonzero::NonZeroU32)
-pub fn flui_scheduler::budget::FrameBudget::target_duration(&self) -> flui::view::Milliseconds
-pub fn flui_scheduler::budget::FrameBudget::target_duration_ms(&self) -> f64
-pub fn flui_scheduler::budget::FrameBudget::target_fps(&self) -> u32
-pub fn flui_scheduler::budget::FrameBudget::utilization(&self, now: std::time::Instant) -> f64
-pub fn flui_scheduler::budget::FrameBudget::utilization_percent(&self, now: std::time::Instant) -> flui::view::BudgetPercentage
-pub fn flui_scheduler::budget::FrameBudget::with_duration(frame_duration: flui::view::FrameDuration) -> Self
-pub struct flui_scheduler::budget::PhaseStats
-field flui_scheduler::budget::PhaseStats::budget_percent: flui::view::BudgetPercentage // at 1
-field flui_scheduler::budget::PhaseStats::duration: flui::view::Milliseconds // at 0
-impl Clone for flui_scheduler::budget::PhaseStats
-impl Copy for flui_scheduler::budget::PhaseStats
-impl Default for flui_scheduler::budget::PhaseStats
-impl core::fmt::Debug for flui_scheduler::budget::PhaseStats
-impl serde_core::ser::Serialize for flui_scheduler::budget::PhaseStats
-impl<'de> serde_core::de::Deserialize<'de> for flui_scheduler::budget::PhaseStats
-pub fn flui_scheduler::budget::PhaseStats::duration_ms(&self) -> f64
-pub fn flui_scheduler::budget::PhaseStats::new(duration: flui::view::Milliseconds, budget_percent: flui::view::BudgetPercentage) -> Self
 pub type flui_scheduler::config::TimingsCallback = alloc::rcs::rc::Rc<dyn Fn(&[flui::view::FrameTiming])>
 pub type flui_scheduler::frame::LifecycleStateCallback = alloc::rcs::rc::Rc<dyn Fn(flui::prelude::AppLifecycleState)>
 pub type flui_scheduler::frame::OneShotFrameCallback = Box<dyn FnOnce(std::time::Instant)>
@@ -36385,7 +36127,6 @@ impl Copy for flui_scheduler::frame::SchedulerPhase
 impl Default for flui_scheduler::frame::SchedulerPhase
 impl Eq for flui_scheduler::frame::SchedulerPhase
 impl PartialEq for flui_scheduler::frame::SchedulerPhase
-impl TryFrom<u8> for flui_scheduler::frame::SchedulerPhase { type Error = u8; }
 impl core::fmt::Debug for flui_scheduler::frame::SchedulerPhase
 impl core::fmt::Display for flui_scheduler::frame::SchedulerPhase
 impl core::hash::Hash for flui_scheduler::frame::SchedulerPhase
@@ -36393,12 +36134,7 @@ impl core::marker::StructuralPartialEq for flui_scheduler::frame::SchedulerPhase
 impl serde_core::ser::Serialize for flui_scheduler::frame::SchedulerPhase
 impl<'de> serde_core::de::Deserialize<'de> for flui_scheduler::frame::SchedulerPhase
 pub const flui_scheduler::frame::SchedulerPhase::ALL: [flui_scheduler::frame::SchedulerPhase; 5] = _
-pub const fn flui_scheduler::frame::SchedulerPhase::can_transition_to(self, next: Self) -> bool
-pub const fn flui_scheduler::frame::SchedulerPhase::is_animating(self) -> bool
 pub const fn flui_scheduler::frame::SchedulerPhase::is_in_frame(self) -> bool
-pub const fn flui_scheduler::frame::SchedulerPhase::is_rendering(self) -> bool
-pub const fn flui_scheduler::frame::SchedulerPhase::next(self) -> Option<Self>
-pub const fn flui_scheduler::frame::SchedulerPhase::try_from_u8(value: u8) -> Option<Self>
 variant flui_scheduler::frame::SchedulerPhase::Idle = 0 // at 0
 variant flui_scheduler::frame::SchedulerPhase::MidFrameMicrotasks = 2 // at 2
 variant flui_scheduler::frame::SchedulerPhase::PersistentCallbacks = 3 // at 3
