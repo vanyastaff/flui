@@ -793,10 +793,11 @@ fn recycle(spare: &mut Vec<AsyncTaskId>, mut buf: Vec<AsyncTaskId>) {
 ///
 /// If a poll panics, this guard's `Drop` removes the slot whose future was
 /// taken for that poll and restores every id the pump has not yet reached
-/// (`remaining[cursor..]`) into `ready`, so the next pump still indexes them.
-/// The slot it removes holds `future: None` (taken before the poll), so the
-/// removal runs no user code: only framework-owned waker and flag
-/// reference-count decrements.
+/// (`remaining[cursor..]`) into `ready` and requests a frame for them, so the
+/// next frame polls them. The slot it removes holds `future: None` (taken
+/// before the poll), so the removal runs no user code: only framework-owned
+/// waker and flag reference-count decrements. The frame request runs the
+/// platform's wake hook under containment.
 struct PumpGuard<'a> {
     store: &'a TaskStore,
     /// This pump's whole ready batch, sorted and deduplicated, consumed
@@ -824,7 +825,17 @@ impl Drop for PumpGuard<'_> {
             &mut self.store.spare.borrow_mut(),
             mem::take(&mut self.remaining),
         );
+        let stranded = !tail.is_empty();
         self.store.shared.ready.lock().append(&mut tail);
+        // The drain consumed the frame demand that woke these ids, and the
+        // panic aborts the frame that would have polled them: without a fresh
+        // request they wait for a frame someone else asks for. Only the
+        // siblings ask; the panicking task is gone, so a deterministic panic
+        // does not loop. The hook runs while this thread unwinds, so its own
+        // panic is contained.
+        if stranded {
+            self.store.shared.request_frame_from_waker(true);
+        }
     }
 }
 
