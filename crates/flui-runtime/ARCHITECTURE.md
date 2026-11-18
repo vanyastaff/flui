@@ -260,7 +260,7 @@ host.
   from a mounted consumer. The headless host's `set_scale_factor` sends the same
   observation. The pipeline holds its ratio as a `DevicePixelRatio`, so no reader
   checks it again. The source also holds the frame of a keyboard floating over
-  the window (ADR-0372), which its root wrapper's element publishes as a
+  the window (ADR-0373), which its root wrapper's element publishes as a
   provided `FloatingKeyboard` while one floats, and not as a field of
   `MediaQueryData`: a `MediaQuery` a widget nests copies the data, and the
   frame is the window's alone. While none floats the root publishes nothing,

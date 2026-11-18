@@ -8,13 +8,17 @@
 //! event told it and joins the frame; when the outermost frame ends, every
 //! joined recognizer settles once.
 
+use crate::containment::keep_first;
 use std::{
     cell::{Cell, RefCell},
     rc::Weak,
 };
 
 use super::GestureArena;
-use crate::{containment::RoutePanic, gesture::recognizers::GestureRecognizer};
+use crate::{
+    containment::{FirstPanic, caught},
+    gesture::recognizers::GestureRecognizer,
+};
 
 /// The frames open on one arena, and the recognizers waiting on them.
 #[derive(Default)]
@@ -59,13 +63,13 @@ impl GestureArena {
     /// joined, in the order they joined, and returns the first failure after
     /// all of them ran. A recognizer that joins while they settle is settled
     /// in the same pass.
-    pub(crate) fn end_pointer_frame(&self) -> Option<RoutePanic> {
+    pub(crate) fn end_pointer_frame(&self) -> FirstPanic {
         let frames = &self.shared.frames;
         if frames.depth.get() > 1 {
             frames.depth.set(frames.depth.get() - 1);
-            return None;
+            return FirstPanic::new();
         }
-        let mut first = None;
+        let mut first = FirstPanic::new();
         loop {
             let batch = std::mem::take(&mut *frames.joined.borrow_mut());
             if batch.is_empty() {
@@ -75,8 +79,8 @@ impl GestureArena {
                 let Some(member) = member.upgrade() else {
                     continue;
                 };
-                let settled = RoutePanic::capture(|| member.pointer_frame_end());
-                RoutePanic::preserve_first(&mut first, settled, "pointer frame end");
+                let settled = caught(|| member.pointer_frame_end());
+                keep_first(&mut first, settled, "pointer frame end");
             }
         }
         frames.depth.set(0);

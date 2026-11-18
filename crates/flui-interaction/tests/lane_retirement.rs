@@ -158,6 +158,7 @@ fn assert_surviving_lane(lane: &InteractionLane) {
             handle
                 .invoke_pointer_route(token, &event)
                 .expect("dispatch")
+                .held()
                 .is_none()
         );
         assert_eq!(delivered.get(), 1);

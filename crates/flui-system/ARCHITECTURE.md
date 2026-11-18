@@ -122,7 +122,7 @@ Reveal is `SHOpenFolderAndSelectItems`; trash is `IFileOperation` with `FOFX_REC
 `FOF_WANTNUKEWARNING`, so an item the recycle bin cannot take asks the user before it goes for good.
 
 A file dialog's filter becomes the dialog's patterns, which it matches ignoring case and to the end
-of the name, as the contract does (ADR-0360 §3, ADR-0372): `*.ext` for an extension, the name itself
+of the name, as the contract does (ADR-0360 §3, ADR-0374): `*.ext` for an extension, the name itself
 for a file name (`Makefile`), `*.*` for a filter of every file. It filters by name only, so a MIME
 type is refused with `NotOnThisPlatform` rather than dropped (ADR-0360 §4). A save names a typed
 file without an extension after the selected filter (`SetDefaultExtension` with the first filter's
@@ -238,7 +238,7 @@ pick whose type cannot be read is not refused for that. A save's pick names a fi
 is not checked. A panel has no filter menu, so every filter is allowed at once and a save reports
 no selected filter. For the same reason a filter of every file leaves the panel with no allowed
 types, as a request without filters does. A filter that names a file exactly has no content type,
-so the panel is given no allowed types then either (ADR-0372 §4): the open panel's delegate enables
+so the panel is given no allowed types then either (ADR-0374 §4): the open panel's delegate enables
 what the request's filters name or type, and a save panel takes any name and appends no extension.
 A request that asks for hidden files sets `showsHiddenFiles`. `openPanel` and `savePanel` answer nil
 where the process may not show a panel (an App Sandbox without the user-selected-file entitlement)
@@ -375,7 +375,7 @@ An open is `UIDocumentPickerViewController` opening documents in place, filtered
 as on macOS from iOS 14 (`UTType`, looked up at run time; a type the application's bundle declares
 is found by its extension, ADR-0361); below it an open without filters shows every document and
 one with filters answers `NotOnThisDevice`. A filter of every file, or one that names a file
-exactly, which no type expresses, shows every document (ADR-0372 §4). The picker shows no title,
+exactly, which no type expresses, shows every document (ADR-0374 §4). The picker shows no title,
 no accept label and has no option for hidden files. Nothing
 is read, and nothing downloaded, for an answer the request will not get: under the picks'
 security-scoped access, which is started before a document is judged and stopped after it is
@@ -425,7 +425,7 @@ container's, and the folders a container does not hold none. The system's name i
   window, or a closed one, names none.
 - Every object path is the one the portal will give (`request::object_path`), so each
   subscription is in place before the call that could answer it.
-- A file dialog's filter is globs and MIME types (ADR-0360 §4, ADR-0372 §4): an extension in lower
+- A file dialog's filter is globs and MIME types (ADR-0360 §4, ADR-0374 §4): an extension in lower
   and in upper case, a file name as written and in both cases, `*` for a filter of every file. The
   folder a dialog opens in is a hint the portal may not use, and the file chooser has no option
   for hidden files, so a request that asks for them keeps the user's own toggle.
@@ -498,7 +498,7 @@ container's, and the folders a container does not hold none. The system's name i
   judges the pick by its type (`FileFilter::matches` with the browser's type on the web, type
   conformance on macOS and iOS). An iOS pick is judged before it is read, so one the filters do
   not mean is never read. A request that offers a filter of every file admits every pick
-  (ADR-0372 §3).
+  (ADR-0374 §3).
 - A save may carry the contents it writes (`SaveRequest::contents`), the one way to save where
   the system hands over no file to write later (a page, iOS). The handle writes them to a path the
   user chose on a thread of its own (`dialog::write`) and answers once they are written (a failed write
@@ -550,7 +550,7 @@ container's, and the folders a container does not hold none. The system's name i
   otherwise, its `accept` the filters' union. A filter of every file, or one that names a file
   exactly, keeps the picker's own entry of every file (`excludeAcceptAllOption` false) and empties
   the input's `accept`, since neither names a file by its whole name; the picker's types are the
-  filters that have an extension or a MIME type (ADR-0372 §4), and the handle holds each pick to
+  filters that have an extension or a MIME type (ADR-0374 §4), and the handle holds each pick to
   the filters. A picker the document may not show (`SecurityError`:
   a cross-origin frame, which may show an input) hands over to the input while the page still
   handles the gesture, and answers `Unavailable` once the gesture is spent. A dismissed picker

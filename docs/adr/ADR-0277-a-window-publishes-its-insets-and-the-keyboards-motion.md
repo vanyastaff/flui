@@ -4,7 +4,7 @@
 - **Date:** 2026-10-30
 - **Supersedes:** [ADR-0254](ADR-0254-window-contract.md) decision 1 only for the snapshot field
   `safe_area`, which becomes `insets: WindowInsets`.
-- **Superseded-by:** [ADR-0372](ADR-0372-a-window-publishes-where-the-keyboard-rests-and-the-layout-decides.md)
+- **Superseded-by:** [ADR-0373](ADR-0373-a-window-publishes-where-the-keyboard-rests-and-the-layout-decides.md)
   for `KeyboardInset` in §1 (it is `SoftKeyboard`, and its target becomes a placement), what
   applying a keyboard writes in §3, the iOS and Web keyboard cells of §4 and
   `HeadlessHost::move_keyboard`'s target in §5

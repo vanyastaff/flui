@@ -64,7 +64,6 @@
 use std::{
     cell::{Cell, RefCell},
     collections::{BTreeMap, VecDeque},
-    panic::{AssertUnwindSafe, catch_unwind, resume_unwind},
     rc::{Rc, Weak},
     sync::Arc,
 };
@@ -103,6 +102,7 @@ use recovery::ArenaRecovery;
 use crate::gesture::settings::GestureSettingsProvider;
 use crate::pointer::pointer_capture::ContactFeeder;
 use flui_foundation::geometry::Offset;
+use flui_foundation::panic::FirstPanic;
 
 /// What a joining recognizer tells the arena about one admission.
 #[derive(Clone, Default)]
@@ -448,21 +448,16 @@ impl ArenaSlot {
 /// operation preceded it, so a kept clock failure, stamped before the
 /// operation began or inside it, precedes the operation's own failure.
 fn observe_after(observers: &ObserverHub, operation: impl FnOnce()) {
-    let earlier = observers.take_clock_failure();
+    let mut first = observers.take_clock_failure();
     let hold = observers.hold();
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "ADR-0287: an arena operation runs contained so observers still deliver"
-    )]
-    let outcome = catch_unwind(AssertUnwindSafe(operation));
+    // The operation runs contained so observers still deliver.
+    let mut failed = FirstPanic::new();
+    let _: Option<()> = failed.contain(operation);
     drop(hold);
     observers.deliver();
-    let during = observers.take_clock_failure();
-    let mut failures = earlier.into_iter().chain(during).chain(outcome.err());
-    if let Some(first) = failures.next() {
-        failures.for_each(flui_foundation::panic::discard_payload);
-        resume_unwind(first);
-    }
+    first.absorb(observers.take_clock_failure());
+    first.absorb(failed);
+    first.resume();
 }
 
 /// Queue a contest's cancellation and the rejections it committed.
