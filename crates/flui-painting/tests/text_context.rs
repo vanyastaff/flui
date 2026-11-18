@@ -6,9 +6,10 @@
 use std::sync::Barrier;
 use std::thread;
 
+use flui_foundation::TextDirection;
 use flui_painting::parley_text::{ParagraphLayout, ParagraphSpec};
 use flui_painting::testing::font_collection_holders;
-use flui_painting::typography::{FontWeight, TextDirection, TextStyle};
+use flui_painting::typography::{FontWeight, TextStyle};
 use flui_painting::{FontCollection, TextContext, TextLayoutResult};
 
 const PROBE_MONO: &[u8] = include_bytes!("../assets/fonts/probe-mono-100.ttf");

@@ -13,13 +13,13 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::time::Duration;
 
+use flui_foundation::TextDirection;
 use flui_interaction::drag::{
     AllowedActions, DragItem, DragOutcome, DragPoint, DragTrigger, SpringLoading,
 };
 use flui_interaction::events::{
     PointerKind, make_down_event_for_id, make_move_event_for_id, make_up_event_for_id,
 };
-use flui_painting::typography::TextDirection;
 use flui_platform::data_transfer::{TransferActions, TransferFormat};
 use flui_platform::drag::OsDragEnd;
 use flui_platform::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, NamedKey};

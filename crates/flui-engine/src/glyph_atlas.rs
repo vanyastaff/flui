@@ -37,7 +37,7 @@ use std::sync::Arc;
 
 use etagere::{AllocId, BucketedAtlasAllocator, size2};
 use flui_painting::glyphs::SwashRasterizer;
-use flui_painting::{GlyphContent, GlyphImage, GlyphRasterizer};
+use flui_painting::{glyphs::GlyphContent, glyphs::GlyphImage, glyphs::GlyphRasterizer};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 /// Where a glyph's bitmap sits in the atlas, and how it hangs off its origin.
@@ -646,7 +646,7 @@ mod rasterizer_tests {
     use std::sync::Arc;
 
     use flui_painting::glyphs::{FaceKey, GlyphKey, SubpixelBin, SwashRasterizer};
-    use flui_painting::{GlyphContent, GlyphImage, GlyphRasterizer};
+    use flui_painting::{glyphs::GlyphContent, glyphs::GlyphImage, glyphs::GlyphRasterizer};
 
     use super::GlyphAtlas;
 

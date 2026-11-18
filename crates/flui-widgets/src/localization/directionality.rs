@@ -1,7 +1,7 @@
 //! [`Directionality`] — the ambient text/layout direction for a subtree.
 
+use flui_foundation::TextDirection;
 use flui_foundation::geometry::Axis;
-use flui_painting::typography::TextDirection;
 use flui_rendering::constraints::AxisDirection;
 use flui_view::prelude::*;
 use flui_view::{BoxedView, InheritedView, impl_inherited_view};

@@ -49,7 +49,7 @@ use flui_foundation::geometry::{EdgeInsets, Matrix4, Offset, Point, Rect, Size};
 use flui_painting::Alignment;
 use flui_painting::styling::BoxDecoration;
 use flui_painting::styling::Color;
-use flui_painting::{DecorationPaintOptions, Paint, box_decoration_hit_test, paint_box_decoration};
+use flui_painting::{paint::Paint, styling::DecorationPaintOptions};
 
 use flui_rendering::{
     RenderUpdateImpact,
@@ -694,12 +694,7 @@ impl RenderBox for RenderContainer {
         );
 
         if let Some(decoration) = &self.decoration {
-            paint_box_decoration(
-                ctx.canvas(),
-                rect,
-                decoration,
-                DecorationPaintOptions::default(),
-            );
+            decoration.paint(ctx.canvas(), rect, DecorationPaintOptions::default());
         }
         if let Some(color) = self.color {
             ctx.canvas().draw_rect(rect, &Paint::fill(color));
@@ -853,7 +848,7 @@ impl RenderBox for RenderContainer {
             return false;
         }
         if let Some(decoration) = &self.decoration
-            && box_decoration_hit_test(rect, decoration, position)
+            && decoration.hit_test(rect, position)
         {
             return true;
         }

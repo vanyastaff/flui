@@ -29,11 +29,11 @@ use flui_animation::{
     Animation, AnimationStatus, ConstantAnimation, ProxyAnimation, SharedCurve, StatusObserver,
     StatusSubscription,
 };
+use flui_foundation::TextDirection;
 use flui_foundation::geometry::{Axis, Offset, Vec2};
 use flui_foundation::panic::PanicRecovery;
 use flui_foundation::{ChangeNotifier, Listenable, ListenerObserver, Subscription};
 use flui_interaction::{HapticsHandle, InputSequenceId, PointerKindSet};
-use flui_painting::typography::TextDirection;
 use flui_platform::HapticFeedback;
 use flui_platform::haptics::{HapticRequest, HapticTiming};
 use flui_rendering::constraints::AxisDirection;

@@ -110,7 +110,7 @@ pub(crate) trait LayerStateStack {
     fn pop_color_filter(&mut self);
 
     /// Push an image filter onto the effect stack
-    fn push_image_filter(&mut self, filter: &flui_painting::paint::effects::ImageFilter);
+    fn push_image_filter(&mut self, filter: &flui_painting::paint::ImageFilter);
 
     /// Pop the most recent image filter from the effect stack
     fn pop_image_filter(&mut self);

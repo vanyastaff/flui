@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use flui_animation::{ConstantAnimation, MotionOverride, Vsync};
 use flui_foundation::geometry::Matrix4;
-use flui_painting::display_list::DrawOp;
+use flui_painting::DrawOp;
 use flui_view::View;
 use flui_view::environment::VsyncScope;
 use flui_widgets::{

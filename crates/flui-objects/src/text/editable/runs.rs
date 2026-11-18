@@ -1,8 +1,8 @@
 //! The field's text as runs for assistive technology, built by the shared
 //! [`text_runs`], with the selection.
 
+use flui_foundation::TextDirection;
 use flui_foundation::geometry::{Point, Rect, Size};
-use flui_painting::typography::TextDirection;
 use flui_rendering::semantics::{TextContent, TextRunError, TextRunSelection};
 
 use super::RenderEditable;

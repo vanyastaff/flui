@@ -17,7 +17,7 @@ use flui_layer::{
 };
 use flui_painting::paint::{BlendMode, Clip, ImageFilter, ImageSampling, ImageTransform};
 use flui_painting::styling::Color;
-use flui_painting::{Canvas, Paint};
+use flui_painting::{Canvas, paint::Paint};
 
 const SURFACE: SurfaceKey = SurfaceKey {
     size: (800, 600),

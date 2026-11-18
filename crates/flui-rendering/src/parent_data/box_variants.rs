@@ -4,8 +4,8 @@ use std::hash::{Hash, Hasher};
 
 // Re-export RenderId for convenience
 use flui_foundation::RenderId;
+use flui_foundation::TextDirection;
 use flui_foundation::geometry::{Matrix4, Offset, canonical_bits_f64};
-use flui_painting::typography::TextDirection;
 
 use super::{base::ParentData, container_mixin::ContainerParentDataMixin};
 

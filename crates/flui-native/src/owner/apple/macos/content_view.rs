@@ -41,7 +41,7 @@ use objc2::{ClassType, DefinedClass, MainThreadMarker, MainThreadOnly, define_cl
 use objc2_app_kit::{
     NSAppearanceCustomization, NSAppearanceNameAqua, NSAppearanceNameDarkAqua, NSEvent,
     NSResponder, NSTextInputClient, NSTrackingArea, NSTrackingAreaOptions, NSView,
-    NSViewLayerContentsRedrawPolicy,
+    NSViewLayerContentsPlacement, NSViewLayerContentsRedrawPolicy,
 };
 use objc2_foundation::{
     NSArray, NSAttributedString, NSAttributedStringKey, NSNotFound, NSObject, NSObjectProtocol,
@@ -886,6 +886,15 @@ pub(crate) fn create(
     // (`NSViewLayerContentsRedrawDuringViewResize`), as a `drawRect:` view is.
     view.setWantsLayer(true);
     view.setLayerContentsRedrawPolicy(NSViewLayerContentsRedrawPolicy::DuringViewResize);
+    // A drawable of another size than the layer (a frame not drawn in time
+    // for a step of a live resize) keeps its own size at the view's top-left
+    // corner, clipped or with a strip beside it, where AppKit's default
+    // stretches it to the layer and the next frame snaps it back. The
+    // placement is AppKit's name for the backing layer's `contentsGravity`,
+    // which it owns on a layer-backed view. Contents that are not stretched
+    // are laid out by the layer's `contentsScale`, which the window keeps at
+    // its backing scale (`set_layer_contents_scale`).
+    view.setLayerContentsPlacement(NSViewLayerContentsPlacement::TopLeft);
     if let (Some(feedback), Some(reports)) = (
         view.backing_layer().as_deref().and_then(feedback_of),
         reports,
@@ -943,6 +952,26 @@ pub(crate) fn layer_presenting(view: &FluiContentView, frame: Option<flui_founda
 pub(crate) fn set_layer_refresh(view: &FluiContentView, refresh: Option<std::time::Duration>) {
     if let Some(feedback) = view.backing_layer().as_deref().and_then(feedback_of) {
         feedback.set_refresh(refresh);
+    }
+}
+
+/// Lay the contents of `view`'s layer out at `scale`, the scale its window's
+/// drawables are sized by: device pixels per point.
+///
+/// The layer places its contents at their own size (`create`), which is the
+/// drawable's pixels over this scale; at another scale a frame would show
+/// larger or smaller than the view. The window calls this when it is made and
+/// whenever its backing scale changes; wgpu sizes the drawable and leaves the
+/// scale of a view's own layer alone.
+pub(crate) fn set_layer_contents_scale(
+    view: &FluiContentView,
+    scale: flui_foundation::geometry::DevicePixelRatio,
+) {
+    if let Some(layer) = view
+        .backing_layer()
+        .and_then(|layer| layer.downcast::<FluiMetalLayer>().ok())
+    {
+        layer.setContentsScale(scale.get());
     }
 }
 

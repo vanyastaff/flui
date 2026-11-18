@@ -21,7 +21,7 @@ use flui_foundation::Variable;
 use flui_foundation::geometry::{Offset, Point, Rect, Size};
 use flui_layer::{Layer, LayerTree};
 use flui_objects::{RenderClipRect, RenderColoredBox, RenderPadding, RenderRepaintBoundary};
-use flui_painting::{Paint, styling::Color};
+use flui_painting::{paint::Paint, styling::Color};
 use flui_rendering::{
     constraints::BoxConstraints,
     context::{BoxHitTestContext, BoxLayoutContext, PaintContext},

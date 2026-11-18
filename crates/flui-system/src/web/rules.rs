@@ -6,7 +6,10 @@
 
 use flui_platform::{BrowserException, Unsupported, UnsupportedReason};
 
-use crate::dialog::{DialogError, FileDialogCapability, FileFilter, MessageAnswer, MessageButtons};
+use crate::dialog::{
+    DialogError, FileDialogCapability, FileFilter, MessageAnswer, MessageButtons, admit_read,
+    save_file_name,
+};
 use crate::share::{ShareCapability, ShareError, ShareResult};
 
 /// The longest extension, with its leading `.`, the File System Access API
@@ -107,29 +110,10 @@ fn is_picker_extension(dotted: &str) -> bool {
 }
 
 /// The name a save's file is given: the suggested name, or
-/// [`UNNAMED_DOWNLOAD`], with the first filter's first extension added when
-/// the name has none, as a desktop save dialog names a typed file after the
-/// selected filter.
+/// [`UNNAMED_DOWNLOAD`], named after the first filter as
+/// `dialog::save_file_name` says.
 pub(crate) fn save_name(suggested: Option<&str>, filters: &[FileFilter]) -> String {
-    let name = suggested.unwrap_or(UNNAMED_DOWNLOAD);
-    let has_extension = name
-        .rsplit_once('.')
-        .is_some_and(|(stem, extension)| !stem.is_empty() && !extension.is_empty());
-    match filters
-        .first()
-        .and_then(|filter| filter.extensions().first())
-    {
-        Some(extension) if !has_extension => {
-            // `notes.` is `notes` with an empty extension: the filter's
-            // replaces it rather than following a second dot.
-            let stem = match name.trim_end_matches('.') {
-                "" => name,
-                stem => stem,
-            };
-            format!("{stem}.{extension}")
-        }
-        _ => name.to_owned(),
-    }
+    save_file_name(suggested, filters, UNNAMED_DOWNLOAD)
 }
 
 /// The type a download's blob carries: the first concrete MIME type of the
@@ -164,18 +148,6 @@ pub(crate) fn admit_sizes(
         .into_iter()
         .fold(0_u64, |total, size| total.saturating_add(size as u64));
     admit_read(total, limit).map(|()| total)
-}
-
-/// Refuse `read` bytes past `limit` with [`DialogError::TooLarge`].
-pub(crate) fn admit_read(read: u64, limit: u64) -> Result<(), DialogError> {
-    if read > limit {
-        Err(DialogError::TooLarge {
-            actual: read,
-            limit,
-        })
-    } else {
-        Ok(())
-    }
 }
 
 /// How a picker of the File System Access API ended without picks.

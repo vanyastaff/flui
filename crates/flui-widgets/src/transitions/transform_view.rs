@@ -2,8 +2,8 @@
 //! [`RenderAnimatedTransform`] per transition, created once and updated in
 //! place, so an animation tick never rebuilds the element tree.
 
+use flui_foundation::TextDirection;
 use flui_objects::{RenderAnimatedTransform, TransformMotion};
-use flui_painting::typography::TextDirection;
 use flui_rendering::RenderUpdateImpact;
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::{Child, RenderObjectContext, RenderView, impl_render_view};

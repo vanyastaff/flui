@@ -480,9 +480,9 @@ fn directional_navigation_enters_a_scope_with_nothing_focused() {
 }
 
 fn weak_traversal_links_revalidate_groups_and_registration_generations() {
+    use flui_foundation::TextDirection;
     use flui_foundation::geometry::Rect;
     use flui_interaction::{FocusTraversalOverrides, ReadingOrderPolicy, TraversalEdgeBehavior};
-    use flui_painting::typography::TextDirection;
     let manager = FocusManager::new();
     let group = FocusNode::new();
     group.set_can_request_focus(false);
@@ -618,9 +618,9 @@ fn directional_provider_failure_preserves_first_failure_and_recovery() {
 }
 
 fn group_policy_replacement_preserves_failure_and_future_traversal() {
+    use flui_foundation::TextDirection;
     use flui_foundation::geometry::Rect;
     use flui_interaction::{FocusNodeRegistration, ReadingOrderPolicy, TraversalEdgeBehavior};
-    use flui_painting::typography::TextDirection;
     #[derive(Debug)]
     struct ReplacingPolicy {
         group: Weak<FocusNode>,
@@ -1069,7 +1069,7 @@ fn closing_dispatch_leaves_shared_payloads_with_their_caller() {
 struct PanickingPolicy(#[expect(dead_code, reason = "held for its lifetime")] Rc<()>);
 
 impl FocusTraversalPolicy for PanickingPolicy {
-    fn order(&self, _: &mut [Rc<FocusNode>], _: flui_painting::typography::TextDirection) {
+    fn order(&self, _: &mut [Rc<FocusNode>], _: flui_foundation::TextDirection) {
         panic!("traversal policy");
     }
 }

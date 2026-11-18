@@ -7,8 +7,9 @@ use std::sync::Arc;
 
 use flui_foundation::geometry::Offset;
 
+use flui_foundation::TextDirection;
 use flui_painting::glyphs::FaceKey;
-use flui_painting::typography::{FontWeight, TextDirection, TextSpan, TextStyle};
+use flui_painting::typography::{FontWeight, TextSpan, TextStyle};
 use flui_painting::{
     Canvas, DrawOp, FontCollection, HostFonts, ShapedParagraph, TextContext, TextPainter,
 };

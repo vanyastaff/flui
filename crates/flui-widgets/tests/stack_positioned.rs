@@ -4,7 +4,7 @@
 //! family end-to-end (offsets and resolved sizes).
 
 use crate::common::{lay_out, offset, size, tight};
-use flui_painting::typography::TextDirection;
+use flui_foundation::TextDirection;
 use flui_widgets::{Directionality, Positioned, SizedBox, Stack};
 
 pub(crate) fn positioned_places_child_at_explicit_edges() {

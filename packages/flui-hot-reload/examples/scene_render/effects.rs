@@ -8,7 +8,10 @@ use flui_layer::{
     OffsetLayer, PictureLayer, Scene, ShaderMaskLayer, TransformLayer,
 };
 use flui_painting::{
-    BlendMode, Canvas, Paint, Shader,
+    Canvas,
+    paint::BlendMode,
+    paint::Paint,
+    paint::Shader,
     paint::{ImageFilter, TileMode},
     styling::Color,
 };
