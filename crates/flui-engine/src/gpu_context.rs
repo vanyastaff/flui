@@ -1224,7 +1224,7 @@ impl GpuContext {
     /// Put this context on a fresh domain over the same device whose ledger
     /// admits at most `submissions` unretired submissions: zero refuses every
     /// frame and every flush, as a GPU that retires nothing does.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "testing"))]
     pub(crate) fn limit_submissions(&mut self, submissions: usize) {
         let limits = crate::device_domain::PreparedIrLimits {
             submissions,
