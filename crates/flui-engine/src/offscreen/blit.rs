@@ -195,7 +195,7 @@ impl OffscreenRenderer {
                     depth_stencil: None,
                     multisample: wgpu::MultisampleState::default(),
                     multiview_mask: None,
-                    cache: None,
+                    cache: self.driver_cache.as_ref(),
                 });
 
             // Cache the sampler and vertex buffer: both are frame-invariant
