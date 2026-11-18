@@ -389,7 +389,7 @@ pub(crate) fn container_property_motion_settles_and_unmounts_independently() {
 }
 
 fn assert_refused_container_motion_preserves_the_admitted_run(accepted_slopes: usize) {
-    use flui_animation::curve::Curve;
+    use flui_animation::Curve;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     struct RefusingCurve {

@@ -27,23 +27,19 @@ use crate::{
 // CALLBACK TYPE
 // ============================================================================
 
-/// Callback for semantics updates.
+/// Receives each update the owner publishes, on the owner thread, inside
+/// [`SemanticsOwner::flush`].
 ///
-/// Called when the semantics tree changes and needs to be sent to the platform.
+/// The payload is the [`TreeUpdate`](crate::TreeUpdate) a platform
+/// accessibility adapter consumes, keyed by the stable
+/// [`AccessibilityNodeId`] an adapter publishes and routes actions back
+/// through, never by [`SemanticsId`](flui_foundation::SemanticsId), an arena
+/// position in a tree the pipeline rebuilds every pass. See
+/// [`crate::tree_to_update`].
 ///
-/// The payload is a [`TreeUpdate`](crate::TreeUpdate) — the shape a platform
-/// accessibility adapter consumes directly — rather than FLUI's own node type.
-/// Two reasons, and the second is structural:
-///
-/// - The platform capability speaks accesskit types only, because
-///   `flui-native` (layer 2) cannot depend on `flui-semantics` (layer 3).
-///   Translating on the producing side is what keeps that edge absent.
-/// - The payload must be keyed by the stable `AccessibilityNodeId` an adapter
-///   publishes and routes actions back through — never by `SemanticsId`,
-///   which is an arena position in a tree the pipeline rebuilds every pass.
-///   (A per-node payload keyed on `SemanticsId` used to live here and was
-///   removed for exactly that reason.) See [`crate::tree_to_update`].
-pub type SemanticsUpdateCallback = Arc<dyn Fn(&crate::TreeUpdate) + Send + Sync>;
+/// The owner is not `Send`, so neither is its callback: one that forwards to
+/// another thread captures a handle that is.
+pub type SemanticsUpdateCallback = Rc<dyn Fn(&crate::TreeUpdate)>;
 
 // ============================================================================
 // ACTION RESOLUTION
@@ -230,7 +226,7 @@ impl SemanticsActionInvocation {
 /// # Example
 ///
 /// ```rust
-/// use std::sync::Arc;
+/// use std::rc::Rc;
 ///
 /// use flui_foundation::RenderId;
 /// use flui_semantics::{
@@ -238,7 +234,7 @@ impl SemanticsActionInvocation {
 /// };
 ///
 /// // The platform callback receives each translated update.
-/// let mut owner = SemanticsOwner::new(Arc::new(|update: &TreeUpdate| {
+/// let mut owner = SemanticsOwner::new(Rc::new(|update: &TreeUpdate| {
 ///     assert!(!update.nodes.is_empty());
 /// }));
 ///
@@ -1858,10 +1854,9 @@ impl SemanticsOwner {
             return None;
         };
 
-        // Clone-and-release: cloning the `Arc` out of `self.callback`
-        // decouples the invocation from any lock the owner may hold, so the
-        // callback never runs while one is held.
-        let callback = self.callback.as_ref().map(Arc::clone);
+        // Cloned out of `self.callback`, so the call holds no borrow of the
+        // owner.
+        let callback = self.callback.as_ref().map(Rc::clone);
         if let Some(callback) = callback {
             callback(&update);
         }
@@ -2225,7 +2220,7 @@ impl SemanticsOwner {
             focus,
         };
 
-        let callback = self.callback.as_ref().map(Arc::clone);
+        let callback = self.callback.as_ref().map(Rc::clone);
         if let Some(callback) = callback {
             callback(&update);
         }
@@ -2424,7 +2419,7 @@ mod tests {
     /// doing O(anchors + sources) work cannot report O(dirty).
     #[test]
     fn an_incremental_flush_counts_the_relation_work_it_does() {
-        let mut owner = SemanticsOwner::new(Arc::new(|_: &crate::TreeUpdate| {}));
+        let mut owner = SemanticsOwner::new(Rc::new(|_: &crate::TreeUpdate| {}));
         let root = owner.insert(SemanticsNode::new().with_source_render_id(RenderId::new(1)));
         let anchor = crate::SemanticsAnchor::new();
         let mut title = SemanticsNode::new().with_source_render_id(RenderId::new(2));
@@ -2461,7 +2456,7 @@ mod tests {
     /// later flush that does not touch it.
     #[test]
     fn an_inapplicable_attribute_is_reported_once_per_change() {
-        let mut owner = SemanticsOwner::new(Arc::new(|_: &crate::TreeUpdate| {}));
+        let mut owner = SemanticsOwner::new(Rc::new(|_: &crate::TreeUpdate| {}));
         let render = RenderId::new(3);
         let button = |label: &str| {
             let mut node = SemanticsNode::new().with_source_render_id(render);
@@ -2518,7 +2513,7 @@ mod tests {
     fn a_state_the_role_does_not_support_routes_no_action() {
         let clicks = Arc::new(parking_lot::Mutex::new(0_u32));
         let counter = Arc::clone(&clicks);
-        let mut owner = SemanticsOwner::new(Arc::new(|_: &crate::TreeUpdate| {}));
+        let mut owner = SemanticsOwner::new(Rc::new(|_: &crate::TreeUpdate| {}));
         let render = RenderId::new(3);
         let node = |role| {
             let mut node = SemanticsNode::new().with_source_render_id(render);
@@ -2556,7 +2551,7 @@ mod tests {
     /// queued and the same finding from a newer change are two reports.
     #[test]
     fn a_queued_diagnostic_and_a_newer_change_are_two_reports() {
-        let mut owner = SemanticsOwner::new(Arc::new(|_: &crate::TreeUpdate| {}));
+        let mut owner = SemanticsOwner::new(Rc::new(|_: &crate::TreeUpdate| {}));
         let selected_button = |index: usize| {
             let mut node = SemanticsNode::new().with_source_render_id(RenderId::new(index));
             node.config_mut().set_role(crate::SemanticsRole::Button);
@@ -2604,7 +2599,7 @@ mod tests {
             let ran = Arc::clone(&ran);
             Rc::new(move |_| ran.lock().push(name))
         };
-        let mut owner = SemanticsOwner::new(Arc::new(|_: &crate::TreeUpdate| {}));
+        let mut owner = SemanticsOwner::new(Rc::new(|_: &crate::TreeUpdate| {}));
         let render = RenderId::new(3);
         let mut node = SemanticsNode::new().with_source_render_id(render);
         let archive = node

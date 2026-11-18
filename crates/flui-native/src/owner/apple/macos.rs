@@ -446,6 +446,10 @@ impl host::Preferences<MacOSLoop> for MacOSLoop {
     fn sample(owner: &MacOSLoop) -> Result<SystemPreferences, PlatformError> {
         owner.preferences.sample()
     }
+
+    fn delivered(owner: &MacOSLoop, values: &SystemPreferences) {
+        owner.preferences.delivered(values);
+    }
 }
 
 /// AppKit tells the application delegate, which is the loop's, that the user

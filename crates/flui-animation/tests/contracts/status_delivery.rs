@@ -17,22 +17,21 @@ use std::time::Duration;
 
 use crate::child_process;
 use flui_animation::{
-    Animation, AnimationController, AnimationStatus, AnimationSwitch, ConstantAnimation,
-    DrivenController, ProxyAnimation, StatusCallback, StatusSubscription, Vsync, curve::Curve,
+    Animation, AnimationController, AnimationStatus, AnimationSwitch, ConstantAnimation, Curve,
+    DrivenController, ProxyAnimation, StatusCallback, Vsync,
 };
 use flui_foundation::testing::CountingWaker;
 use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback};
 enum Subscription {
     Value(flui_foundation::Subscription),
-    Status(StatusSubscription),
+    Status(flui_foundation::Subscription),
 }
 
 impl Subscription {
     fn remove(self, source: &dyn Animation<f64>) {
         let _ = source;
         match self {
-            Self::Value(subscription) => drop(subscription),
-            Self::Status(subscription) => drop(subscription),
+            Self::Value(subscription) | Self::Status(subscription) => drop(subscription),
         }
     }
 }
@@ -112,12 +111,12 @@ fn running(registry: &Vsync, panic: Option<&'static str>) -> DrivenController {
 fn panicking_status_listener_does_not_starve_later_listeners() {
     let controller = controller();
     controller
-        .subscribe_status(std::rc::Rc::new(|_| panic_any("status listener")))
-        .detach();
+        .listen_status(std::rc::Rc::new(|_| panic_any("status listener")))
+        .forget();
     let (second, listener) = recorder();
-    controller.subscribe_status(listener).detach();
+    controller.listen_status(listener).forget();
     let (third, listener) = recorder();
-    controller.subscribe_status(listener).detach();
+    controller.listen_status(listener).forget();
 
     let started = catch_unwind(AssertUnwindSafe(|| controller.forward()));
 
@@ -145,13 +144,13 @@ fn panicking_status_listener_does_not_starve_later_listeners() {
 fn competing_status_listener_panics_re_raise_the_first() {
     let controller = controller();
     controller
-        .subscribe_status(std::rc::Rc::new(|_| panic_any("first")))
-        .detach();
+        .listen_status(std::rc::Rc::new(|_| panic_any("first")))
+        .forget();
     controller
-        .subscribe_status(std::rc::Rc::new(|_| panic_any("second")))
-        .detach();
+        .listen_status(std::rc::Rc::new(|_| panic_any("second")))
+        .forget();
     let (last, listener) = recorder();
-    controller.subscribe_status(listener).detach();
+    controller.listen_status(listener).forget();
 
     let started = catch_unwind(AssertUnwindSafe(|| controller.forward()));
 
@@ -257,13 +256,13 @@ fn panicking_status_listener_leaves_the_next_frame_ticking() {
     let (log, record) = recorder();
     let armed = AtomicBool::new(true);
     controller
-        .subscribe_status(std::rc::Rc::new(move |status| {
+        .listen_status(std::rc::Rc::new(move |status| {
             if armed.swap(false, Ordering::SeqCst) {
                 panic_any("first status");
             }
             record(status);
         }))
-        .detach();
+        .forget();
 
     let _ = catch_unwind(AssertUnwindSafe(|| controller.forward()));
     controller.tick_at(std::time::Duration::from_secs_f64(0.5));
@@ -369,16 +368,16 @@ fn vsync_walk_after_a_panic_ticks_every_controller() {
 
 fn status_listener_removed_by_an_earlier_listener_is_skipped() {
     let controller = controller();
-    let target: std::rc::Rc<Mutex<Option<StatusSubscription>>> = std::rc::Rc::default();
+    let target: std::rc::Rc<Mutex<Option<flui_foundation::Subscription>>> = std::rc::Rc::default();
     let pending = std::rc::Rc::clone(&target);
     controller
-        .subscribe_status(std::rc::Rc::new(move |_| {
+        .listen_status(std::rc::Rc::new(move |_| {
             let removal = pending.lock().expect("removal slot").take();
             drop(removal);
         }))
-        .detach();
+        .forget();
     let (removed, listener) = recorder();
-    let id = controller.subscribe_status(listener);
+    let id = controller.listen_status(listener);
     *target.lock().expect("removal slot") = Some(id);
 
     let _run = controller.forward().expect("run starts");
@@ -397,15 +396,15 @@ fn controller_disposed_mid_fan_out_calls_no_further_listener() {
     let slot: std::rc::Rc<Mutex<Option<DrivenController>>> = std::rc::Rc::default();
     let pending = std::rc::Rc::clone(&slot);
     controller
-        .subscribe_status(std::rc::Rc::new(move |_| {
+        .listen_status(std::rc::Rc::new(move |_| {
             let owner = pending.lock().expect("dispose slot").take();
             if let Some(mut owner) = owner {
                 owner.dispose();
             }
         }))
-        .detach();
+        .forget();
     let (later, listener) = recorder();
-    controller.subscribe_status(listener).detach();
+    controller.listen_status(listener).forget();
     *slot.lock().expect("dispose slot") = Some(owner);
 
     let _run = controller.forward().expect("run starts");
@@ -432,7 +431,7 @@ fn reversing_on_completed_keeps_commit_order() {
     let slot: std::rc::Rc<Mutex<Option<AnimationController>>> = std::rc::Rc::default();
     let pending = std::rc::Rc::clone(&slot);
     controller
-        .subscribe_status(std::rc::Rc::new(move |status| {
+        .listen_status(std::rc::Rc::new(move |status| {
             if status == ForwardSettled {
                 let owner = pending.lock().expect("reverse slot").take();
                 if let Some(controller) = owner {
@@ -440,9 +439,9 @@ fn reversing_on_completed_keeps_commit_order() {
                 }
             }
         }))
-        .detach();
+        .forget();
     let (observer, listener) = recorder();
-    controller.subscribe_status(listener).detach();
+    controller.listen_status(listener).forget();
     *slot.lock().expect("reverse slot") = Some(controller.clone());
 
     let _run = controller.forward().expect("run starts");
@@ -464,21 +463,21 @@ fn reentrant_transitions_keep_the_return_to_the_original_status() {
     let pending = std::rc::Rc::clone(&slot);
     let (late, late_listener) = recorder();
     controller
-        .subscribe_status(std::rc::Rc::new(move |status| {
+        .listen_status(std::rc::Rc::new(move |status| {
             if status == Forward {
                 let owner = pending.lock().expect("reentrant owner").take();
                 if let Some(owner) = owner {
                     owner
-                        .subscribe_status(std::rc::Rc::clone(&late_listener))
-                        .detach();
-                    let _reverse = owner.reverse_from(Some(0.5)).expect("nested reverse");
+                        .listen_status(std::rc::Rc::clone(&late_listener))
+                        .forget();
+                    let _reverse = owner.reverse_from(0.5).expect("nested reverse");
                     let _forward = owner.forward().expect("nested forward");
                 }
             }
         }))
-        .detach();
+        .forget();
     let (observer, listener) = recorder();
-    controller.subscribe_status(listener).detach();
+    controller.listen_status(listener).forget();
 
     let _run = controller.forward().expect("outer forward");
 
@@ -506,7 +505,7 @@ fn reentrant_completion_delivers_its_outcome_before_the_next_status() {
     let order = Arc::new(Mutex::new(Vec::new()));
     let slot = std::rc::Rc::new(Mutex::new(Some(controller.clone())));
     controller
-        .subscribe_status(std::rc::Rc::new(move |status| {
+        .listen_status(std::rc::Rc::new(move |status| {
             if status == ForwardSettled {
                 let owner = slot.lock().expect("reverse owner").take();
                 if let Some(owner) = owner {
@@ -515,18 +514,18 @@ fn reentrant_completion_delivers_its_outcome_before_the_next_status() {
                 }
             }
         }))
-        .detach();
+        .forget();
     let sink = Arc::clone(&order);
     controller
-        .subscribe_status(std::rc::Rc::new(move |status| {
+        .listen_status(std::rc::Rc::new(move |status| {
             sink.lock().expect("delivery order").push(match status {
                 ForwardSettled => "completed status",
                 Reverse => "reverse status",
                 ReverseSettled => "dismissed status",
-                _ => "unexpected status",
+                Forward => "forward status",
             });
         }))
-        .detach();
+        .forget();
     let sink = Arc::clone(&order);
     run.when_complete_or_cancel(move |outcome| {
         assert!(outcome.is_ok(), "replacement cannot cancel a completed run");
@@ -583,18 +582,18 @@ fn status_failure_drops_removed_captures_and_competing_payloads() {
     let drops = Arc::new(AtomicUsize::new(0));
     let armed = AtomicBool::new(true);
     controller
-        .subscribe_status(std::rc::Rc::new(move |_| {
+        .listen_status(std::rc::Rc::new(move |_| {
             if armed.swap(false, Ordering::SeqCst) {
                 panic_any("first status failure");
             }
         }))
-        .detach();
+        .forget();
     let capture = Captures {
         _first: DropCount(Arc::clone(&drops)),
         _second: DropCount(Arc::clone(&drops)),
     };
     let payload_drops = Arc::clone(&drops);
-    let failed = controller.subscribe_status(std::rc::Rc::new(move |_| {
+    let failed = controller.listen_status(std::rc::Rc::new(move |_| {
         let _ = &capture;
         panic_any(Captures {
             _first: DropCount(Arc::clone(&payload_drops)),
@@ -604,22 +603,22 @@ fn status_failure_drops_removed_captures_and_competing_payloads() {
     let removal = std::rc::Rc::new(Mutex::new(None));
     let pending = std::rc::Rc::clone(&removal);
     controller
-        .subscribe_status(std::rc::Rc::new(move |_| {
+        .listen_status(std::rc::Rc::new(move |_| {
             let removal = pending.lock().expect("capture removal").take();
             drop(removal);
         }))
-        .detach();
+        .forget();
     let capture = Captures {
         _first: DropCount(Arc::clone(&drops)),
         _second: DropCount(Arc::clone(&drops)),
     };
-    let removed = controller.subscribe_status(std::rc::Rc::new(move |_| {
+    let removed = controller.listen_status(std::rc::Rc::new(move |_| {
         let _ = &capture;
         panic_any("removed listener must be skipped");
     }));
     *removal.lock().expect("capture removal") = Some((failed, removed));
     let (tail, listener) = recorder();
-    controller.subscribe_status(listener).detach();
+    controller.listen_status(listener).forget();
 
     let failure = catch_unwind(AssertUnwindSafe(|| controller.forward()))
         .expect_err("first failure resumes after the healthy tail");
@@ -783,7 +782,7 @@ fn make_wrapper(
         "reverse" => std::rc::Rc::new(flui_animation::ReverseAnimation::new(source)),
         "curved" => std::rc::Rc::new(flui_animation::CurvedAnimation::new(
             source,
-            flui_animation::curve::Linear,
+            flui_animation::Linear,
         )),
         "tween" => std::rc::Rc::new(flui_animation::TweenAnimation::new(
             flui_animation::Tween::new(0.0, 10.0),
@@ -793,7 +792,7 @@ fn make_wrapper(
         "switch" => std::rc::Rc::new(flui_animation::AnimationSwitch::new(source, None)),
         "nested" => std::rc::Rc::new(flui_animation::ReverseAnimation::new(std::rc::Rc::new(
             flui_animation::ProxyAnimation::new(std::rc::Rc::new(
-                flui_animation::CurvedAnimation::new(source, flui_animation::curve::Linear),
+                flui_animation::CurvedAnimation::new(source, flui_animation::Linear),
             )),
         ))),
         _ => panic!("unknown wrapper case"),
@@ -806,18 +805,18 @@ fn dropping_wrapper_silences_its_tail(kind: &str) {
             let mut lifecycle =
                 AnimationController::builder(Duration::from_secs(1)).build_on(Some(&Vsync::new()));
             let parent = lifecycle.controller().clone();
-            let failure_id =
-                failed.then(|| {
-                    if status {
-                        Subscription::Status(parent.subscribe_status(std::rc::Rc::new(|_| {
-                            panic_any("first parent failure")
-                        })))
-                    } else {
-                        Subscription::Value(
-                            parent.listen(std::rc::Rc::new(|| panic_any("first parent failure"))),
-                        )
-                    }
-                });
+            let failure_id = failed.then(|| {
+                if status {
+                    Subscription::Status(
+                        parent
+                            .listen_status(std::rc::Rc::new(|_| panic_any("first parent failure"))),
+                    )
+                } else {
+                    Subscription::Value(
+                        parent.listen(std::rc::Rc::new(|| panic_any("first parent failure"))),
+                    )
+                }
+            });
             let wrapper = make_wrapper(std::rc::Rc::new(parent.clone()), kind);
             let owner = std::rc::Rc::new(std::cell::RefCell::new(None));
             let retire = owner.clone();
@@ -828,10 +827,10 @@ fn dropping_wrapper_silences_its_tail(kind: &str) {
             let mut held = Vec::new();
             if status {
                 wrapper
-                    .subscribe_status(std::rc::Rc::new(move |_| {
+                    .listen_status(std::rc::Rc::new(move |_| {
                         drop(retire.borrow_mut().take());
                     }))
-                    .detach();
+                    .forget();
             } else {
                 held.push(wrapper.listen(std::rc::Rc::new(move || {
                     drop(retire.borrow_mut().take());
@@ -846,11 +845,11 @@ fn dropping_wrapper_silences_its_tail(kind: &str) {
             let observed = tail.clone();
             if status {
                 wrapper
-                    .subscribe_status(std::rc::Rc::new(move |_| {
+                    .listen_status(std::rc::Rc::new(move |_| {
                         let _ = &captures;
                         observed.set(observed.get() + 1);
                     }))
-                    .detach();
+                    .forget();
             } else {
                 held.push(wrapper.listen(std::rc::Rc::new(move || {
                     let _ = &captures;
@@ -902,7 +901,7 @@ fn wrapper_keeps_parent_failure_custody(status: bool, kind: &str) {
     let parent = lifecycle.controller().clone();
     let failure_id = if status {
         Subscription::Status(
-            parent.subscribe_status(std::rc::Rc::new(|_| panic_any("first parent failure"))),
+            parent.listen_status(std::rc::Rc::new(|_| panic_any("first parent failure"))),
         )
     } else {
         Subscription::Value(parent.listen(std::rc::Rc::new(|| panic_any("first parent failure"))))
@@ -919,7 +918,7 @@ fn wrapper_keeps_parent_failure_custody(status: bool, kind: &str) {
             _second: DropCount(captures.clone()),
         };
         if status {
-            let id = wrapper.subscribe_status(std::rc::Rc::new(move |_| {
+            let id = wrapper.listen_status(std::rc::Rc::new(move |_| {
                 let _ = &capture;
             }));
             drop(id);
@@ -930,7 +929,7 @@ fn wrapper_keeps_parent_failure_custody(status: bool, kind: &str) {
         }
     };
     let removal_id = if status {
-        Subscription::Status(wrapper.subscribe_status(std::rc::Rc::new(move |_| retire())))
+        Subscription::Status(wrapper.listen_status(std::rc::Rc::new(move |_| retire())))
     } else {
         Subscription::Value(wrapper.listen(std::rc::Rc::new(retire)))
     };
@@ -943,8 +942,8 @@ fn wrapper_keeps_parent_failure_custody(status: bool, kind: &str) {
     let mut held = Vec::new();
     if status {
         wrapper
-            .subscribe_status(std::rc::Rc::new(move |_| observed.set(observed.get() + 1)))
-            .detach();
+            .listen_status(std::rc::Rc::new(move |_| observed.set(observed.get() + 1)))
+            .forget();
     } else {
         held.push(wrapper.listen(std::rc::Rc::new(move || {
             observed.set(observed.get() + 1);
@@ -1016,7 +1015,7 @@ fn relay_retirement_case(inside_child: bool, kind: &str, status: bool, competing
         }
     });
     // Registrations abandoned in place, as the id form did: the subscriptions
-    // live to the end of the round; only the status twins `.detach()` their
+    // live to the end of the round; only the status twins `.forget()` their
     // guard.
     #[expect(
         clippy::collection_is_never_read,
@@ -1025,8 +1024,8 @@ fn relay_retirement_case(inside_child: bool, kind: &str, status: bool, competing
     let mut held = Vec::new();
     if status {
         child
-            .subscribe_status(std::rc::Rc::new(move |_| fail()))
-            .detach();
+            .listen_status(std::rc::Rc::new(move |_| fail()))
+            .forget();
     } else {
         held.push(child.listen(fail));
     }
@@ -1049,8 +1048,8 @@ fn relay_retirement_case(inside_child: bool, kind: &str, status: bool, competing
     });
     if status {
         removal_source
-            .subscribe_status(std::rc::Rc::new(move |_| retire()))
-            .detach();
+            .listen_status(std::rc::Rc::new(move |_| retire()))
+            .forget();
     } else {
         held.push(removal_source.listen(retire));
     }
@@ -1063,8 +1062,8 @@ fn relay_retirement_case(inside_child: bool, kind: &str, status: bool, competing
         });
         if status {
             parent
-                .subscribe_status(std::rc::Rc::new(move |_| second_failure()))
-                .detach();
+                .listen_status(std::rc::Rc::new(move |_| second_failure()))
+                .forget();
         } else {
             held.push(parent.listen(second_failure));
         }
@@ -1074,8 +1073,8 @@ fn relay_retirement_case(inside_child: bool, kind: &str, status: bool, competing
     let tail = std::rc::Rc::new(move || observed.set(observed.get() + 1));
     if status {
         parent
-            .subscribe_status(std::rc::Rc::new(move |_| tail()))
-            .detach();
+            .listen_status(std::rc::Rc::new(move |_| tail()))
+            .forget();
     } else {
         held.push(parent.listen(tail));
     }
@@ -1158,11 +1157,10 @@ fn removed_value_capture_custody(mode: &str) {
     // form's `Subscription::Value(id)` did; the retire listener stays
     // registered for good (the id form's abandoned registration).
     let (failure_id, _retire_held) = if mode == "status" {
-        let id =
-            controller.subscribe_status(std::rc::Rc::new(|_| panic_any("first status failure")));
+        let id = controller.listen_status(std::rc::Rc::new(|_| panic_any("first status failure")));
         controller
-            .subscribe_status(std::rc::Rc::new(move |_| retire()))
-            .detach();
+            .listen_status(std::rc::Rc::new(move |_| retire()))
+            .forget();
         (Subscription::Status(id), None)
     } else {
         let failure_subscription =
@@ -1243,31 +1241,31 @@ fn status_failure_drops_a_reentrantly_removed_new_subscription() {
     let drops = Arc::new(AtomicUsize::new(0));
     let armed = AtomicBool::new(true);
     controller
-        .subscribe_status(std::rc::Rc::new(move |_| {
+        .listen_status(std::rc::Rc::new(move |_| {
             if armed.swap(false, Ordering::SeqCst) {
                 panic_any("first status failure");
             }
         }))
-        .detach();
+        .forget();
     let owner = std::rc::Rc::new(Mutex::new(Some(controller.clone())));
     let captures = Arc::clone(&drops);
     controller
-        .subscribe_status(std::rc::Rc::new(move |_| {
+        .listen_status(std::rc::Rc::new(move |_| {
             let owner = owner.lock().expect("late subscription owner").take();
             if let Some(owner) = owner {
                 let capture = Captures {
                     _first: DropCount(Arc::clone(&captures)),
                     _second: DropCount(Arc::clone(&captures)),
                 };
-                let id = owner.subscribe_status(std::rc::Rc::new(move |_| {
+                let id = owner.listen_status(std::rc::Rc::new(move |_| {
                     let _ = &capture;
                 }));
                 drop(id);
             }
         }))
-        .detach();
+        .forget();
     let (tail, listener) = recorder();
-    controller.subscribe_status(listener).detach();
+    controller.listen_status(listener).forget();
     let failure =
         catch_unwind(AssertUnwindSafe(|| controller.forward())).expect_err("status failure");
     assert_eq!(payload_text(failure.as_ref()), Some("first status failure"));
@@ -1301,12 +1299,12 @@ fn install_capturing_continuation(
 
 fn fail_on_completion(controller: &AnimationController) {
     controller
-        .subscribe_status(std::rc::Rc::new(|status| {
+        .listen_status(std::rc::Rc::new(|status| {
             if status == ForwardSettled {
                 panic_any("first status failure");
             }
         }))
-        .detach();
+        .forget();
 }
 
 fn status_failure_drops_completed_run_captures() {
@@ -1321,7 +1319,7 @@ fn completed_run_capture_custody(explicit: bool) {
     fail_on_completion(&controller);
     let calls = install_capturing_continuation(&controller, &drops);
     let (tail, listener) = recorder();
-    controller.subscribe_status(listener).detach();
+    controller.listen_status(listener).forget();
     let failure = catch_unwind(AssertUnwindSafe(|| {
         if explicit {
             controller.finish().expect("finite run finishes");
@@ -1543,14 +1541,17 @@ impl Animation<f64> for ObservedTrain {
         Forward
     }
 
-    fn observe_status(&self, observer: flui_animation::StatusObserver) -> StatusSubscription {
+    fn listen_status_with_recovery(
+        &self,
+        observer: flui_animation::StatusObserver,
+    ) -> flui_foundation::Subscription {
         self.status_callbacks
             .borrow_mut()
             .push(Rc::downgrade(&observer));
         let id = self
             .statuses
             .add_with_recovery(Rc::new(move |recovery| observer(Forward, recovery)));
-        StatusSubscription::new(&self.statuses, id, |source, id, recovery| {
+        flui_foundation::Subscription::for_source(&self.statuses, id, |source, id, recovery| {
             source.inherit_failure(recovery);
             source.take_listener(id)
         })
@@ -1737,16 +1738,16 @@ impl Animation<f64> for SwitchReader {
         Forward
     }
 
-    fn observe_status(
+    fn listen_status_with_recovery(
         &self,
         observer: flui_animation::StatusObserver,
-    ) -> flui_animation::StatusSubscription {
+    ) -> flui_foundation::Subscription {
         let id = self
             .statuses
             .add_with_recovery(std::rc::Rc::new(move |_recovery| {
                 let _keep = &observer;
             }));
-        flui_animation::StatusSubscription::new(&self.statuses, id, |source, id, recovery| {
+        flui_foundation::Subscription::for_source(&self.statuses, id, |source, id, recovery| {
             source.inherit_failure(recovery);
             source.take_listener(id)
         })
@@ -1798,7 +1799,7 @@ fn switch_hop_announces_the_new_train_status() {
         ))),
     );
     let (log, listener) = recorder();
-    switch.subscribe_status(listener).detach();
+    switch.listen_status(listener).forget();
 
     train.set_value(0.6).expect("no build is running");
 
@@ -1856,7 +1857,7 @@ fn set_parent_moves_every_notification_to_the_new_parent_once() {
     let proxy = ProxyAnimation::new(std::rc::Rc::new(a.clone()));
     let (values, _listening) = counter(&proxy);
     let (log, listener) = recorder();
-    proxy.subscribe_status(listener).detach();
+    proxy.listen_status(listener).forget();
 
     proxy.set_parent(std::rc::Rc::new(b.clone()));
     assert_eq!(count(&values), 1, "one value notification per set_parent");
@@ -1901,7 +1902,7 @@ fn reentrant_set_parent_last_commit_wins() {
     }));
     let (values, _counting) = counter(&proxy);
     let (log, listener) = recorder();
-    proxy.subscribe_status(listener).detach();
+    proxy.listen_status(listener).forget();
     *slot.lock().expect("swap slot") = Some((proxy.clone(), c.clone()));
     proxy.set_parent(std::rc::Rc::new(b.clone()));
 

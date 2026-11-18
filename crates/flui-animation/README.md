@@ -33,14 +33,12 @@ Observation can lose data on failure, but does not own animation outcomes.
 
 ### Imports and ownership
 
-Use `flui_animation::prelude::*` for common motion, observation and mapping.
-The SDK exposes exactly the same types at `flui_sdk::animation::prelude`.
-Specialized curves, physical models and frame/registry protocols use explicit
-root imports; the prelude introduces no wrapper or additional owner.
+Every public item has one path, the crate root, and `curves` holds the easing
+presets. The facade exposes the crate as `flui::animation` and the SDK as
+`flui_sdk::animation`.
 
 ```rust
-use flui_animation::prelude::*;
-use flui_animation::Vsync;
+use flui_animation::{Animatable, Animation, AnimationController, Tween, Vsync};
 use std::time::Duration;
 
 let registry = Vsync::new();
@@ -168,8 +166,8 @@ return `Result<(), AnimationError>` and give no future.
 # let controller = AnimationController::builder(Duration::from_millis(300)).build();
 controller.forward()?;                // Animate to upper_bound
 controller.reverse()?;                // Animate to lower_bound
-controller.forward_from(Some(0.5))?;  // Jump to 0.5, then animate forward
-controller.reverse_from(Some(0.8))?;  // Jump to 0.8, then animate backward
+controller.forward_from(0.5)?;  // Jump to 0.5, then animate forward
+controller.reverse_from(0.8)?;  // Jump to 0.8, then animate backward
 controller.animate_to(0.6, None)?;    // Animate to a value over the forward duration
 controller.stop()?;                   // Stop at current value
 controller.reset()?;                  // Jump to lower_bound, status = ReverseSettled
@@ -240,7 +238,7 @@ controller.fling(-1.0)?;  // velocity toward lower_bound
 
 // Custom spring: fling needs a non-oscillating (ratio >= 1) spring
 let spring = SpringDescription::with_damping_ratio(1.0, 500.0, 1.0).expect("valid spring");
-controller.fling_with(1.0, Some(spring))?;
+controller.fling_with(1.0, spring)?;
 
 // Arbitrary simulation, oscillating springs included
 let bouncy = SpringDescription::with_damping_ratio(1.0, 500.0, 0.7).expect("valid spring");
@@ -255,8 +253,9 @@ controller.animate_with(sim)?;
 
 Value listeners come from `flui_foundation::Listenable` and return the channel's
 owned `Subscription`, which withdraws the listener when dropped. Status
-subscriptions come from `Animation` and return a `StatusSubscription` that
-removes the callback when dropped. Both take an `Rc`'d callback.
+subscriptions come from `Animation::listen_status` and return the same
+`Subscription`, bound to the animation that admitted the callback. Both take
+an `Rc`'d callback.
 
 ```rust
 # use std::rc::Rc;
@@ -270,7 +269,7 @@ let value_listening = controller.listen(Rc::new(|| println!("value changed")));
 drop(value_listening);
 
 // Status changes
-let subscription = controller.subscribe_status(Rc::new(|status| {
+let subscription = controller.listen_status(Rc::new(|status| {
     if status == AnimationStatus::ForwardSettled {
         println!("forward phase settled");
     }
@@ -429,7 +428,7 @@ use flui_painting::styling::{BorderRadius, BorderRadiusExt, Color};
 // Numeric
 let _ = Tween::new(0.0, 100.0);
 let _ = IntTween::new(0, 255);  // Rounds to nearest (halves toward +inf)
-let _ = IntTween::new(0, 10).with_rounding(Rounding::Floor);  // Steps
+let _ = IntTween::new(0, 10).rounding(Rounding::Floor);  // Steps
 
 // Geometric
 let _ = Tween::new(Color::RED, Color::BLUE);
@@ -641,8 +640,8 @@ declaration order. Interpolation delegates to each field, so a color keeps its
 premultiplied Oklab behavior rather than becoming four independent channel tweens.
 
 ```rust
-use flui_animation::{Lerp, TwoWayConverter};
-use flui_foundation::geometry::Offset;
+use flui_animation::TwoWayConverter;
+use flui_foundation::geometry::{Lerp, Offset};
 use flui_painting::styling::Color;
 
 #[derive(Clone, TwoWayConverter)]
@@ -691,7 +690,7 @@ A spring is stored as its natural frequency `ω` and damping ratio `ζ`; the
 fields are private, so an undamped or non-finite spring cannot be written down.
 
 ```rust
-use flui_animation::simulation::{SimulationError, SpringDescription, SpringType};
+use flui_animation::{SimulationError, SpringDescription, SpringType};
 use std::time::Duration;
 
 # fn main() -> Result<(), SimulationError> {
@@ -715,9 +714,9 @@ assert!(SpringDescription::try_new(1.0, 500.0, 0.0).is_err()); // never rests
 ### SpringSimulation
 
 ```rust
-use flui_animation::simulation::{Simulation, SpringDescription, SpringSimulation, Tolerance};
+use flui_animation::{Simulation, SpringDescription, SpringSimulation, Tolerance};
 
-# fn main() -> Result<(), flui_animation::simulation::SimulationError> {
+# fn main() -> Result<(), flui_animation::SimulationError> {
 let spring = SpringDescription::with_damping_ratio(1.0, 500.0, 0.7)?;
 let sim = SpringSimulation::try_new(spring, 0.0, 1.0, 0.0, Tolerance::DEFAULT)?;
 
@@ -739,9 +738,9 @@ consumer test `friction_preserves_small_decay_and_position_time_roundtrips`
 constant-velocity limit, round trips and unreachable queries.
 
 ```rust
-use flui_animation::simulation::{FrictionSimulation, Simulation, Tolerance};
+use flui_animation::{FrictionSimulation, Simulation, Tolerance};
 
-# fn main() -> Result<(), flui_animation::simulation::SimulationError> {
+# fn main() -> Result<(), flui_animation::SimulationError> {
 // drag in (0, 1): the fraction of velocity kept per second.
 let sim = FrictionSimulation::try_new(0.135, 0.0, 1000.0, Tolerance::DEFAULT)?;
 let rest = sim.x(f64::INFINITY);
@@ -759,11 +758,11 @@ spring there with the same position and velocity, overshoots and returns to
 rest exactly on the edge.
 
 ```rust
-use flui_animation::simulation::{
+use flui_animation::{
     BouncingScrollSimulation, Simulation, SimulationBounds, SpringDescription, Tolerance,
 };
 
-# fn main() -> Result<(), flui_animation::simulation::SimulationError> {
+# fn main() -> Result<(), flui_animation::SimulationError> {
 let bounds = SimulationBounds::try_new(0.0, 100.0)?;
 let spring = SpringDescription::with_damping_ratio(1.0, 500.0, 0.75)?;
 let sim = BouncingScrollSimulation::try_new(spring, 0.135, 90.0, 2000.0, bounds, Tolerance::DEFAULT)?;
@@ -777,9 +776,9 @@ assert!(SimulationBounds::try_new(1.0, 0.0).is_err());
 ### Tolerance
 
 ```rust
-use flui_animation::simulation::{SpeedLimit, Tolerance};
+use flui_animation::{SpeedLimit, Tolerance};
 
-# fn main() -> Result<(), flui_animation::simulation::SimulationError> {
+# fn main() -> Result<(), flui_animation::SimulationError> {
 // Distance and speed limits, in the simulation's units.
 let precise = Tolerance::try_new(1e-4, SpeedLimit::AtMost(1e-4))?;
 // Half a device pixel at a ratio of 2, with a speed limit derived from

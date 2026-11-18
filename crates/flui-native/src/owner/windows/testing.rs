@@ -152,6 +152,9 @@ impl SystemPreferenceSource for NoPreferences {
     fn sample(&self) -> Result<SystemPreferences, PlatformError> {
         Ok(SystemPreferences::default())
     }
+
+    /// Nothing changes, so nothing waits for a delivery.
+    fn delivered(&self, _: &SystemPreferences) {}
 }
 
 impl Subscriber for NoPreferences {

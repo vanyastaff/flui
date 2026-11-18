@@ -60,7 +60,6 @@ src/
 │
 ├── keyframes.rs      # Keyframes, KeyframesBuilder, KeyframesError
 ├── stagger.rs        # Stagger, StaggerOrigin
-├── prelude.rs        # common motion and observation imports
 ├── error.rs          # AnimationError
 └── test_cases.rs     # table-test runner (cfg(test))
 ```
@@ -249,21 +248,23 @@ or overlapping reentrant walks.
 
 ### Source-bound status removal
 
-`StatusSubscription` holds weak source ownership, a `Copy` registration token and
-a removal function pointer. Dropping it withdraws that registration; `detach`
-disables removal without touching the source's callback. Custom sources construct
-the same guard and receive the borrowed recovery context during withdrawal. The
+A status registration is a `flui_foundation::Subscription` built with
+`Subscription::for_source`: weak source ownership, a `Copy` registration token
+and a removal function pointer (ADR-0379). Dropping or detaching it withdraws
+that registration; `forget` gives up the right to remove it, and the source's
+disposal or retirement removes the callback. Custom sources build the same
+subscription and receive the borrowed recovery context during withdrawal. The
 remover returns outgoing callback custody after committing membership changes.
-The guard releases its temporary source reference before retiring that custody
-through the context. Capture destruction can therefore release the last owner
-and reenter only after its channels close. Deferred delivery custody stays in
-the source's existing queue. The private guard envelope contains no user captures.
+The subscription releases its temporary source reference before retiring that
+custody through the context. Capture destruction can therefore release the last
+owner and reenter only after its channels close. Deferred delivery custody stays
+in the source's existing queue. The removal envelope contains no user captures.
 
-`Animation<T>::observe_status` exposes that ownership contract through the
+`Animation<T>::listen_status_with_recovery` exposes that ownership contract through the
 common observation surface and borrows the current delivery recovery context;
-`subscribe_status` is its provided adapter for callbacks that ignore it. Parent links and switch hops retain status guards;
-they cancel them through that same context after releasing state borrows.
-Framework owners in higher layers use `cancel_with_recovery` when status cleanup
+`listen_status` is its provided adapter for callbacks that ignore it. Parent links and switch hops retain status subscriptions;
+they detach them through that same context after releasing state borrows.
+Framework owners in higher layers use `Subscription::detach_with_recovery` when status cleanup
 belongs to an already-started retirement round. This preserves its first failure
 and opaque capture policy rather than starting independent cleanup.
 
@@ -378,10 +379,10 @@ where
     fn is_animating(&self) -> bool;
     
     /// Observe status changes inside the notifying delivery's recovery scope
-    fn observe_status(&self, observer: StatusObserver) -> StatusSubscription;
+    fn listen_status_with_recovery(&self, observer: StatusObserver) -> Subscription;
 
     /// Provided: a callback that ignores the scope
-    fn subscribe_status(&self, callback: StatusCallback) -> StatusSubscription { .. }
+    fn listen_status(&self, callback: StatusCallback) -> Subscription { .. }
 }
 ```
 
@@ -501,13 +502,12 @@ sampled the current frame, preserving local-time continuity.
 
 ### Public imports preserve ownership and type identity
 
-The root is the canonical type interface. Implementation files are private;
-`curve`, `curves` and `simulation` remain explicit domain namespaces. The
-focused `prelude` contains common owners, observers and mapping traits, while
-frame stamps, registry publication and recovery relays require explicit imports.
-The SDK's whole-crate alias exposes these identical items; it adds no adapter.
+The root is the one path to every public item, and implementation modules are
+private. `curves` is the only public module: it is the namespace of the easing
+presets (`curves::EASE_IN`). There is no prelude. The SDK's whole-crate alias
+exposes these identical items; it adds no adapter.
 `the_re_exports_are_the_facades_types` pins owner/view/run/track identity, and
-the SDK's `nested_motion` compiler fixture resolves the derive through its prelude.
+the SDK's `nested_motion` compiler fixture resolves the derive from the root.
 
 `Animatable::animate` supplies method composition directly. `Tween<T>` replaces
 per-value aliases without changing geometry, color or matrix interpolation.
@@ -555,7 +555,7 @@ listener id is opaque and only a listener list's own mint issues one, so a
 source with no list has no id to hand out and none to collide with.
 No process counter, callback storage or wrap/reissue path is needed for a source
 that cannot notify. Value IDs otherwise remain source-scoped; status removal
-authority is bound to its source by `StatusSubscription`.
+authority is bound to its source by `Subscription::for_source`.
 `constant_listener_tokens_never_withdraw_live_callbacks` observes callback
 retirement and later notifications from a real `ChangeNotifier`; the previous
 counter token collided with its first live listener and fails that assertion.
@@ -779,17 +779,17 @@ public controller commands in both directions.
 
 It also notifies value listeners only when the value actually moved,
 measured against the value at METHOD ENTRY, before
-`forward_from(Some(x))`/`reverse_from(Some(x))` apply `from`. A settle-time
+`forward_from(x)`/`reverse_from(x)` apply `from`. A settle-time
 comparison against the post-`from` value would miss a jump:
-`forward_from(Some(1.0))` from `0.3` lands exactly on the target it was told
+`forward_from(1.0)` from `0.3` lands exactly on the target it was told
 to jump to, so comparing the post-`from` value to the target always reads
 "unchanged" there.
 
 **The same entry-value rule extends to the NON-settling path.** A real run
-that still applies `from` (`forward_from(Some(x))`/`reverse_from(Some(x))`
+that still applies `from` (`forward_from(x)`/`reverse_from(x)`
 when the resulting distance and duration are both nonzero) notifies iff
 `from` actually moved the value, and never notifies unconditionally. One case is worth naming
-because it looks surprising at first: `forward_from(Some(0.0))` from `1.0`
+because it looks surprising at first: `forward_from(0.0)` from `1.0`
 with a Duration::ZERO base ends at `1.0` (a Forward run settles at the
 UPPER bound, never at `from`) and fires NO value notification at all — net
 unchanged; an observer reads `1.0` before and after the call.

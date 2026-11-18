@@ -40,13 +40,13 @@ fn reads_inside_a_status_listener_see_the_commit() {
     let sink = Arc::clone(&observed);
     let reader = controller.clone();
     controller
-        .subscribe_status(std::rc::Rc::new(move |status| {
+        .listen_status(std::rc::Rc::new(move |status| {
             if status == AnimationStatus::ForwardSettled {
                 *sink.lock().expect("observed read") =
                     Some((reader.value(), reader.status(), format!("{reader:?}")));
             }
         }))
-        .detach();
+        .forget();
     let _run = controller.forward().expect("run starts");
     controller.tick_at(std::time::Duration::from_secs_f64(1.0));
 
@@ -65,7 +65,7 @@ fn nested_commit_is_not_overwritten() {
     let sink = Arc::clone(&nested);
     let slot = std::rc::Rc::new(Mutex::new(Some(controller.clone())));
     controller
-        .subscribe_status(std::rc::Rc::new(move |status| {
+        .listen_status(std::rc::Rc::new(move |status| {
             if status != AnimationStatus::ForwardSettled {
                 return;
             }
@@ -77,7 +77,7 @@ fn nested_commit_is_not_overwritten() {
                 *sink.lock().expect("nested commit") = Some(controller.status());
             }
         }))
-        .detach();
+        .forget();
     let _run = controller.forward().expect("run starts");
 
     controller.tick_at(std::time::Duration::from_secs_f64(1.0));
@@ -158,14 +158,14 @@ fn last_owner_released_from_its_own_listener_mid_walk() {
 
     let owners = std::rc::Rc::new(Mutex::new(Some(vec![first_owner, second_owner])));
     first
-        .subscribe_status(std::rc::Rc::new(move |status| {
+        .listen_status(std::rc::Rc::new(move |status| {
             if status != AnimationStatus::ForwardSettled {
                 return;
             }
             let released = owners.lock().expect("owners").take();
             drop(released);
         }))
-        .detach();
+        .forget();
     drop(first);
 
     vsync.tick_all(

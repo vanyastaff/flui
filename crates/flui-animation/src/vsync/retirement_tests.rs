@@ -83,10 +83,10 @@ fn vsync_retirement_reentry(removal: VsyncRemoval) {
             panics,
         };
         owner
-            .subscribe_status(std::rc::Rc::new(move |_| {
+            .listen_status(std::rc::Rc::new(move |_| {
                 let _capture = &probe;
             }))
-            .detach();
+            .forget();
 
         let child_order = Rc::new(Mutex::new(Vec::new()));
         let mut sibling_children = Vec::new();
@@ -97,12 +97,12 @@ fn vsync_retirement_reentry(removal: VsyncRemoval) {
             let animation = AnimationController::builder(Duration::from_secs(1)).build();
             let order = child_order.clone();
             animation
-                .subscribe_status(std::rc::Rc::new(move |status| {
+                .listen_status(std::rc::Rc::new(move |status| {
                     if status == AnimationStatus::ForwardSettled {
                         order.lock().expect("child tick order").push(label);
                     }
                 }))
-                .detach();
+                .forget();
             animation.forward().expect("child sibling runs");
             child
                 .try_register_resuming(&animation, Duration::ZERO)

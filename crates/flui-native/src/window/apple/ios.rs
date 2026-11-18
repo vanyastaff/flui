@@ -23,10 +23,7 @@
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::rc::Rc;
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
-};
+use std::sync::Arc;
 
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
@@ -1140,13 +1137,32 @@ impl FluiView {
     }
 }
 
+/// The scene lifecycle a window keeps on the main thread: what the scene last
+/// said of its focus and visibility, the generation that tells a stale
+/// observation, and the observations queued while one is applied.
 struct IOSLifecycle {
-    execution: WindowExecutionState,
     focused: bool,
     visible: bool,
     generation: u64,
     pending: VecDeque<(LifecycleObservation, u64)>,
     dispatching: bool,
+}
+
+/// What a window's surface targets ask before they hand out a handle, on the
+/// main thread: whether the window closed for good, and what its scene lets
+/// it run (a detached window has no surface). The window writes both; its
+/// targets, which are `Send + Sync` by contract, read them through a
+/// [`NativeOwner`], so neither crosses a thread.
+struct SurfaceAdmission {
+    closed: Cell<bool>,
+    execution: Cell<WindowExecutionState>,
+}
+
+impl SurfaceAdmission {
+    /// Whether a surface may be made from the window now.
+    fn admits(&self) -> bool {
+        !self.closed.get() && self.execution.get() != WindowExecutionState::Detached
+    }
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -1213,15 +1229,14 @@ pub struct IOSWindow {
     /// How any thread asks the window for a frame.
     redraw: Arc<IOSRedraw>,
     delivery: Arc<WindowDelivery>,
-    /// Set once the window closes for good, and by its [`Drop`] before the
-    /// view is released; shared with its surface targets.
-    closed: Arc<AtomicBool>,
+    /// Whether the window closed for good, set by its close and by its
+    /// [`Drop`] before the view is released, and what its scene lets it run;
+    /// shared with its surface targets.
+    admission: Rc<SurfaceAdmission>,
     /// The last read found a safe area FLUI cannot publish: a run of them is
     /// said once.
     refusing_safe_area: Cell<bool>,
-    /// Shared with the window's surface targets, which hand out no handle
-    /// while the window is detached from a scene.
-    lifecycle: Arc<parking_lot::Mutex<IOSLifecycle>>,
+    lifecycle: RefCell<IOSLifecycle>,
     metrics: Rc<RefCell<WindowMetrics>>,
     /// Shared with the view, which samples it on the main thread.
     dark: Rc<Cell<bool>>,
@@ -1326,16 +1341,18 @@ impl IOSWindow {
                 WindowGeometry::EMPTY,
                 flui_platform::WindowExtent::ZERO,
             )),
-            closed: Arc::new(AtomicBool::new(false)),
+            admission: Rc::new(SurfaceAdmission {
+                closed: Cell::new(false),
+                execution: Cell::new(WindowExecutionState::Detached),
+            }),
             refusing_safe_area: Cell::new(false),
-            lifecycle: Arc::new(parking_lot::Mutex::new(IOSLifecycle {
-                execution: WindowExecutionState::Detached,
+            lifecycle: RefCell::new(IOSLifecycle {
                 focused: false,
                 visible: false,
                 generation: 0,
                 pending: VecDeque::new(),
                 dispatching: false,
-            })),
+            }),
         }
     }
 }
@@ -1368,7 +1385,9 @@ impl SceneWindow for IOSWindow {
         });
         window.layoutIfNeeded();
         native.view.sample_metrics();
-        self.lifecycle.lock().execution = WindowExecutionState::Suspended;
+        self.admission
+            .execution
+            .set(WindowExecutionState::Suspended);
         native.view.start_display_link(&scene.screen());
         native.view.set_display_link_paused(true);
     }
@@ -1400,11 +1419,11 @@ impl SceneWindow for IOSWindow {
     }
 
     fn resource_generation(&self) -> u64 {
-        self.lifecycle.lock().generation
+        self.lifecycle.borrow().generation
     }
 
     fn attachment_matches(&self, token: IOSSceneAttachmentId, marker: MainThreadMarker) -> bool {
-        !self.closed.load(Ordering::SeqCst)
+        !self.admission.closed.get()
             && self
                 .native
                 .get(marker)
@@ -1431,7 +1450,7 @@ impl SceneWindow for IOSWindow {
     /// Serialize native observations independently of the input/frame FIFO.
     fn observe_lifecycle(&self, observation: LifecycleObservation) {
         use LifecycleObservation::{Background, Detached, Foreground};
-        if self.closed.load(Ordering::SeqCst) {
+        if self.admission.closed.get() {
             return;
         }
         // A callback may pump a nested UIKit run loop before our queue drains.
@@ -1440,7 +1459,7 @@ impl SceneWindow for IOSWindow {
             self.set_frame_tick_paused(true);
         }
         {
-            let mut state = self.lifecycle.lock();
+            let mut state = self.lifecycle.borrow_mut();
             if matches!(observation, Background | Foreground | Detached) {
                 state.generation = state.generation.wrapping_add(1);
             }
@@ -1451,10 +1470,12 @@ impl SceneWindow for IOSWindow {
             }
             state.dispatching = true;
         }
-        struct Drain<'a>(&'a parking_lot::Mutex<IOSLifecycle>);
+        // Each borrow below ends within its statement: an observation
+        // applied runs the application's code, which may observe another.
+        struct Drain<'a>(&'a RefCell<IOSLifecycle>);
         impl Drop for Drain<'_> {
             fn drop(&mut self) {
-                self.0.lock().dispatching = false;
+                self.0.borrow_mut().dispatching = false;
             }
         }
         let drain = Drain(&self.lifecycle);
@@ -1463,12 +1484,12 @@ impl SceneWindow for IOSWindow {
         // whenever no drain runs, and the first panic resumes once it is.
         let mut failure = flui_foundation::panic::FirstPanic::new();
         loop {
-            let next = self.lifecycle.lock().pending.pop_front();
+            let next = self.lifecycle.borrow_mut().pending.pop_front();
             let Some((observation, generation)) = next else {
                 break;
             };
-            if self.closed.load(Ordering::SeqCst) {
-                self.lifecycle.lock().pending.clear();
+            if self.admission.closed.get() {
+                self.lifecycle.borrow_mut().pending.clear();
                 break;
             }
             failure.contain(|| self.apply_lifecycle(observation, generation));
@@ -1504,7 +1525,7 @@ impl SceneWindow for IOSWindow {
     }
 
     fn close_for_good(&self) {
-        if self.closed.swap(true, Ordering::SeqCst) {
+        if self.admission.closed.replace(true) {
             return;
         }
         // Every step below runs whichever one before it panics (the state
@@ -1540,10 +1561,10 @@ impl IOSWindow {
     /// What the scene's lifecycle lets the window run now; a closed window is
     /// detached. Read without publishing, as the snapshot reads it.
     fn execution_now(&self) -> WindowExecutionState {
-        if self.closed.load(Ordering::SeqCst) {
+        if self.admission.closed.get() {
             WindowExecutionState::Detached
         } else {
-            self.lifecycle.lock().execution
+            self.admission.execution.get()
         }
     }
 
@@ -1552,9 +1573,9 @@ impl IOSWindow {
     /// are no extent costs the sample its geometry and nothing else.
     fn sample_state(&self) -> Sample {
         let metrics = *self.metrics.borrow();
-        let closed = self.closed.load(Ordering::SeqCst);
+        let closed = self.admission.closed.get();
         let (focused, foreground) = {
-            let lifecycle = self.lifecycle.lock();
+            let lifecycle = self.lifecycle.borrow();
             (lifecycle.focused && !closed, lifecycle.visible)
         };
         let geometry =
@@ -1678,7 +1699,8 @@ impl IOSWindow {
     fn apply_lifecycle(&self, observation: LifecycleObservation, generation: u64) {
         use LifecycleObservation::{Active, Background, Detached, Foreground, Inactive};
         {
-            let mut state = self.lifecycle.lock();
+            let execution = &self.admission.execution;
+            let mut state = self.lifecycle.borrow_mut();
             if matches!(observation, Background | Foreground | Detached)
                 && state.generation != generation
             {
@@ -1686,24 +1708,24 @@ impl IOSWindow {
             }
             match observation {
                 Active => {
-                    if state.execution != WindowExecutionState::Running {
+                    if execution.get() != WindowExecutionState::Running {
                         return;
                     }
                     state.focused = true;
                 }
                 Inactive => state.focused = false,
                 Background | Detached => {
-                    state.execution = if matches!(observation, Detached) {
+                    execution.set(if matches!(observation, Detached) {
                         WindowExecutionState::Detached
                     } else {
                         WindowExecutionState::Suspended
-                    };
+                    });
                     state.visible = false;
                     state.focused = false;
                 }
                 Foreground => {
                     state.visible = true;
-                    if state.execution != WindowExecutionState::Running {
+                    if execution.get() != WindowExecutionState::Running {
                         state.focused = false;
                     }
                 }
@@ -1717,9 +1739,8 @@ impl IOSWindow {
         let mut failure = flui_foundation::panic::FirstPanic::new();
         // Execution, visibility and focus are published in one revision.
         failure.contain(|| self.delivery.publish_state());
-        let current = || {
-            !self.closed.load(Ordering::SeqCst) && self.lifecycle.lock().generation == generation
-        };
+        let current =
+            || !self.admission.closed.get() && self.lifecycle.borrow().generation == generation;
         match observation {
             Inactive => {}
             Active => {
@@ -1754,7 +1775,7 @@ impl IOSWindow {
                     failure.record(rebuilt.into_payload());
                 }
                 if current() {
-                    self.lifecycle.lock().execution = WindowExecutionState::Running;
+                    self.admission.execution.set(WindowExecutionState::Running);
                     failure.contain(|| self.delivery.publish_state());
                     if current() {
                         self.set_frame_tick_paused(false);
@@ -1771,7 +1792,7 @@ impl std::fmt::Debug for IOSWindow {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("IOSWindow")
             .field("id", &self.id)
-            .field("closed", &self.closed.load(Ordering::SeqCst))
+            .field("closed", &self.admission.closed.get())
             .finish_non_exhaustive()
     }
 }
@@ -1876,7 +1897,7 @@ impl crate::host_window::HostWindow for IOSWindow {
         _owner: crate::host_window::OwnerThreadToken,
     ) -> Result<crate::TextSizingCaptureState, crate::TextSizingCaptureError> {
         let marker = MainThreadMarker::new().ok_or(crate::TextSizingCaptureError::WrongThread)?;
-        if self.closed.load(Ordering::Acquire) {
+        if self.admission.closed.get() {
             return Err(crate::TextSizingCaptureError::Unavailable);
         }
         self.native.get(marker).view.capture_text_sizing()
@@ -1964,8 +1985,7 @@ impl PlatformWindow for IOSWindow {
                         .cast(),
                 )
             },
-            closed: Arc::clone(&self.closed),
-            lifecycle: Arc::clone(&self.lifecycle),
+            admission: NativeOwner::new(Rc::clone(&self.admission), marker),
             retirement: self.delivery.retirement(),
         })
     }
@@ -1994,7 +2014,7 @@ impl PlatformWindow for IOSWindow {
         &self,
         regions: &[flui_platform::input_regions::InputRegion],
     ) -> Result<(), flui_platform::Unsupported> {
-        if self.closed.load(Ordering::SeqCst) {
+        if self.admission.closed.get() {
             return Err(flui_platform::Unsupported::new(
                 flui_platform::UnsupportedReason::NoWindow,
             ));
@@ -2041,7 +2061,7 @@ impl PlatformWindow for IOSWindow {
         &self,
         hint: flui_platform::FrameRateHint,
     ) -> Result<(), flui_platform::Unsupported> {
-        if self.closed.load(Ordering::SeqCst) {
+        if self.admission.closed.get() {
             return Err(flui_platform::Unsupported::new(
                 flui_platform::UnsupportedReason::NoWindow,
             ));
@@ -2072,7 +2092,7 @@ impl PlatformWindow for IOSWindow {
     }
 
     fn apply(&self, command: AdmittedCommand) -> Result<(), ApplyError> {
-        if self.closed.load(Ordering::SeqCst) {
+        if self.admission.closed.get() {
             return Err(ApplyError::Closed);
         }
         // The system owns the surface: admission refuses every command but a
@@ -2112,7 +2132,7 @@ impl Drop for IOSWindow {
     /// dropped without its close lets go of its handler here, and its fate
     /// settles once the handler let go.
     fn drop(&mut self) {
-        if !self.closed.swap(true, Ordering::SeqCst) {
+        if !self.admission.closed.replace(true) {
             // A handler method queued ahead of the release may panic: the
             // drop still finishes.
             crate::owner::panic_boundary::contain_owner_callback(|| self.clear_then_keep_if_kept());
@@ -2172,10 +2192,9 @@ impl RedrawRequester for IOSRedraw {
 struct IOSSurface {
     /// The window's `FluiView`.
     view: super::MainRetainedView,
-    /// The window's closed flag.
-    closed: Arc<AtomicBool>,
-    /// The window's lifecycle: a detached window hands out no handle.
-    lifecycle: Arc<parking_lot::Mutex<IOSLifecycle>>,
+    /// Whether the window closed and what its scene lets it run, read on the
+    /// main thread, where the window writes them.
+    admission: NativeOwner<Rc<SurfaceAdmission>>,
     /// Whether the window's native retirement has started.
     retirement: Retirement,
 }
@@ -2183,10 +2202,8 @@ struct IOSSurface {
 impl IOSSurface {
     /// Whether the window has no surface to hand out: closed, retired, or
     /// detached from its scene.
-    fn is_unavailable(&self) -> bool {
-        self.closed.load(Ordering::SeqCst)
-            || self.retirement.is_retired()
-            || self.lifecycle.lock().execution == WindowExecutionState::Detached
+    fn is_unavailable(&self, main: MainThreadMarker) -> bool {
+        !self.admission.get(main).admits() || self.retirement.is_retired()
     }
 }
 
@@ -2195,7 +2212,7 @@ impl raw_window_handle::HasWindowHandle for IOSSurface {
         &self,
     ) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
         let main = MainThreadMarker::new().ok_or(raw_window_handle::HandleError::Unavailable)?;
-        if self.is_unavailable() {
+        if self.is_unavailable(main) {
             return Err(raw_window_handle::HandleError::Unavailable);
         }
         let view = self
@@ -2219,7 +2236,8 @@ impl raw_window_handle::HasDisplayHandle for IOSSurface {
     fn display_handle(
         &self,
     ) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
-        if MainThreadMarker::new().is_none() || self.is_unavailable() {
+        let main = MainThreadMarker::new().ok_or(raw_window_handle::HandleError::Unavailable)?;
+        if self.is_unavailable(main) {
             return Err(raw_window_handle::HandleError::Unavailable);
         }
         let handle = raw_window_handle::UiKitDisplayHandle::new();

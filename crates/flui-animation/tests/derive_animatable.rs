@@ -7,7 +7,8 @@
 // Scalar round-trip assertions use exactly representable f64 values.
 // Color conversion has its own representation and precision contract.
 
-use flui_animation::{Keyframes, Lerp, Linear, TwoWayConverter};
+use flui_animation::{Keyframes, Linear, TwoWayConverter};
+use flui_foundation::geometry::Lerp;
 use flui_foundation::geometry::Offset;
 use flui_painting::styling::Color;
 

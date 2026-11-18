@@ -16,7 +16,6 @@
 //! snap policies scrollables settle through, the anchored drag built on them,
 //! the theme-free context menu the design systems style, and the collapsing
 //! header the scroll channel moves.
-//! Animation prelude imports also pin the shared package-author entry point.
 //! The typed inspection model the flui-driver spec places in the SDK (ADR-0242 §4) follows:
 //! the trait with its derive, the snapshot a package's tests read, the diff and the renderer.
 //! `custom_recognizer` proves the extension surface with a recognizer written
@@ -38,11 +37,6 @@ mod package_capability;
     reason = "each import only has to resolve; nothing here is used"
 )]
 mod measured {
-    use flui_sdk::animation::prelude::{
-        Animatable as _, AnimatedValue as _, Animation as _, AnimationController as _,
-        AnimationStatus as _, Curve as _, DrivenController as _, Keyframes as _, Listenable as _,
-        MotionSpec as _, SharedCurve as _, Tween as _, TwoWayConverter as _,
-    };
     use flui_sdk::animation::{
         Animatable as _, AnimatedValue as _, AnimatedValueView as _, Animation as _,
         AnimationBehavior as _, AnimationController as _, AnimationError as _, AnimationInput as _,
@@ -50,10 +44,10 @@ mod measured {
         ConstantAnimation as _, Cubic as _, Curve as _, CurvedAnimation as _,
         DrivenController as _, Interval as _, JumpAt as _, Keyframes as _, MotionPolicy as _,
         MotionSpec as _, MotionUpdate as _, PlaybackRate as _, RangeDefect as _, RepeatMode as _,
-        RunCanceled as _, SharedCurve as _, Stagger as _, StaggerOrigin as _,
-        StatusSubscription as _, Steps as _, Tween as _, TwoWayConverter as _, ValueRange as _,
-        Vsync as _, VsyncPublication as _, VsyncRegistration as _, VsyncRegistrationError as _,
-        VsyncRetirement as _, VsyncUpdate as _, curves as _,
+        RunCanceled as _, SharedCurve as _, Stagger as _, StaggerOrigin as _, Steps as _,
+        Tween as _, TwoWayConverter as _, ValueRange as _, Vsync as _, VsyncPublication as _,
+        VsyncRegistration as _, VsyncRegistrationError as _, VsyncRetirement as _,
+        VsyncUpdate as _, curves as _,
     };
     // The spring a loading indicator's morph follows.
     use flui_sdk::animation::{
@@ -314,20 +308,16 @@ mod measured {
 fn the_re_exports_are_the_facades_types() {
     let _: fn(flui::animation::AnimationController) -> flui_sdk::animation::AnimationController =
         |x| x;
-    let _: fn(flui::animation::DrivenController) -> flui_sdk::animation::prelude::DrivenController =
+    let _: fn(flui::animation::DrivenController) -> flui_sdk::animation::DrivenController = |x| x;
+    let _: fn(flui::animation::AnimatedValue<f64>) -> flui_sdk::animation::AnimatedValue<f64> =
         |x| x;
-    let _: fn(
-        flui::animation::AnimatedValue<f64>,
-    ) -> flui_sdk::animation::prelude::AnimatedValue<f64> = |x| x;
     let _: fn(
         flui::animation::AnimatedValueView<f64>,
-    ) -> flui_sdk::animation::prelude::AnimatedValueView<f64> = |x| x;
-    let _: fn(
-        flui::animation::AnimationRunFuture,
-    ) -> flui_sdk::animation::prelude::AnimationRunFuture = |x| x;
-    let _: fn(flui::animation::MotionSpec) -> flui_sdk::animation::prelude::MotionSpec = |x| x;
-    let _: fn(flui::animation::Keyframes<f64>) -> flui_sdk::animation::prelude::Keyframes<f64> =
+    ) -> flui_sdk::animation::AnimatedValueView<f64> = |x| x;
+    let _: fn(flui::animation::AnimationRunFuture) -> flui_sdk::animation::AnimationRunFuture =
         |x| x;
+    let _: fn(flui::animation::MotionSpec) -> flui_sdk::animation::MotionSpec = |x| x;
+    let _: fn(flui::animation::Keyframes<f64>) -> flui_sdk::animation::Keyframes<f64> = |x| x;
     let _: fn(flui::foundation::ElementId) -> flui_sdk::foundation::ElementId = |x| x;
     let _: fn(flui::geometry::Rect) -> flui_sdk::geometry::Rect = |x| x;
     let _: fn(flui::painting::styling::Color) -> flui_sdk::painting::Color = |x| x;

@@ -1690,6 +1690,12 @@ impl host::Preferences<WindowsLoop> for WindowsLoop {
             .preferences
             .sample()
     }
+
+    fn delivered(owner: &WindowsLoop, values: &flui_platform::SystemPreferences) {
+        if let Ok(shares) = owner.owner_control.shares("confirm a preference delivery") {
+            shares.preferences.delivered(values);
+        }
+    }
 }
 
 /// The lifecycle position is the loop's: the broadcast receiver tells the

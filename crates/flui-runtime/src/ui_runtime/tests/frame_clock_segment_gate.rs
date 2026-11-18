@@ -312,8 +312,8 @@ pub(crate) fn agent_playback_resumes_a_paused_stepped_run_at_normal_speed() {
 }
 
 pub(crate) fn gated_presentations_hold_samples_then_catch_up_when_visible() {
-    use flui_animation::simulation::{SpringDescription, SpringSimulation, Tolerance};
     use flui_animation::{Animation as _, AnimationController, AnimationStatus};
+    use flui_animation::{SpringDescription, SpringSimulation, Tolerance};
     use std::cell::{Cell, RefCell};
     use std::rc::Rc;
     use std::time::Duration;
@@ -354,7 +354,7 @@ pub(crate) fn gated_presentations_hold_samples_then_catch_up_when_visible() {
             move |outcome| outcomes.borrow_mut().push(outcome)
         });
         let completions = Rc::new(Cell::new(0));
-        let _subscription = controller.subscribe_status(Rc::new({
+        let _subscription = controller.listen_status(Rc::new({
             let completions = Rc::clone(&completions);
             move |status| {
                 if status == AnimationStatus::ForwardSettled {

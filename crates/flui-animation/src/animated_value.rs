@@ -5,7 +5,9 @@
 //! the owner's lifetime. Motion changes and registry changes commit through the
 //! corresponding update types before delivering notifications.
 
+mod builder;
 mod motion_update;
+pub use builder::AnimatedValueBuilder;
 pub use motion_update::MotionUpdate;
 
 use std::cell::{Cell, RefCell};
@@ -242,27 +244,18 @@ impl<T: TwoWayConverter + 'static> AnimatedValue<T> {
         motion: MotionSpec,
         vsync: Option<&Vsync>,
     ) -> Result<Self, AnimationError> {
-        Self::construct(None, initial, motion, vsync)
+        Self::construct("AnimatedValue::try_new", None, initial, motion, vsync)
     }
 
-    /// Like [`try_new`](Self::try_new), naming the owner's controller `label` in
-    /// diagnostics (see
-    /// [`AnimationControllerBuilder::debug_label`](crate::AnimationControllerBuilder::debug_label)).
-    ///
-    /// # Errors
-    /// Refuses a non-finite initial component before constructing the owner.
-    #[track_caller]
-    pub fn with_debug_label(
-        label: impl Into<std::borrow::Cow<'static, str>>,
-        initial: T,
-        motion: MotionSpec,
-        vsync: Option<&Vsync>,
-    ) -> Result<Self, AnimationError> {
-        Self::construct(Some(label.into()), initial, motion, vsync)
+    /// Configure a value that starts at rest at `initial`, for a debug label;
+    /// [`try_new`](Self::try_new) builds one without.
+    pub fn builder(initial: T, motion: MotionSpec) -> AnimatedValueBuilder<T> {
+        AnimatedValueBuilder::new(initial, motion)
     }
 
     #[track_caller]
-    fn construct(
+    pub(super) fn construct(
+        operation: &'static str,
         label: Option<std::borrow::Cow<'static, str>>,
         initial: T,
         motion: MotionSpec,
@@ -272,7 +265,7 @@ impl<T: TwoWayConverter + 'static> AnimatedValue<T> {
         let motion = Terminal::new(motion);
         let vector = initial.to_vector();
         crate::refusal::report(
-            "AnimatedValue::try_new",
+            operation,
             || None,
             validate(&vector, crate::AnimationInput::InitialValue),
         )?;
@@ -750,8 +743,11 @@ impl<T: TwoWayConverter + 'static> Animation<T> for AnimatedValueView<T> {
         self.controller.is_animating()
     }
 
-    fn observe_status(&self, observer: StatusObserver) -> crate::StatusSubscription {
-        self.controller.observe_status(observer)
+    fn listen_status_with_recovery(
+        &self,
+        observer: StatusObserver,
+    ) -> flui_foundation::Subscription {
+        self.controller.listen_status_with_recovery(observer)
     }
 }
 

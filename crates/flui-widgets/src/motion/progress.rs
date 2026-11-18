@@ -1,13 +1,12 @@
-﻿//! [`Progress`] â€” what an `Animate`'s stages read: one parent animation and
+//! [`Progress`] â€” what an `Animate`'s stages read: one parent animation and
 //! the side of a transition, either of which changes the pose.
 
+use flui_foundation::Subscription;
 use std::cell::Cell;
 use std::fmt;
 use std::rc::{Rc, Weak};
 
-use flui_animation::{
-    Animation, AnimationStatus, ProxyAnimation, StatusObserver, StatusSubscription,
-};
+use flui_animation::{Animation, AnimationStatus, ProxyAnimation, StatusObserver};
 use flui_foundation::panic::RecoveryScope;
 use flui_foundation::{ChangeNotifier, Listenable, ListenerObserver};
 
@@ -105,7 +104,7 @@ impl Animation<f64> for Progress {
         self.proxy.is_animating()
     }
 
-    fn observe_status(&self, observer: StatusObserver) -> StatusSubscription {
-        self.proxy.observe_status(observer)
+    fn listen_status_with_recovery(&self, observer: StatusObserver) -> Subscription {
+        self.proxy.listen_status_with_recovery(observer)
     }
 }

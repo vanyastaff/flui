@@ -706,7 +706,7 @@ controller.forward()?;
 # use flui_animation::{Animation, AnimationController, AnimationStatus};
 # let controller = AnimationController::builder(Duration::from_millis(300)).build();
 // React to the transition once instead of reading status every frame
-let _subscription = controller.subscribe_status(Rc::new(|status| {
+let _subscription = controller.listen_status(Rc::new(|status| {
     if status == AnimationStatus::ForwardSettled { /* ... */ }
 }));
 # drop(controller);

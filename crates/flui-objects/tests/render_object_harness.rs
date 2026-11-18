@@ -132,7 +132,7 @@ mod harness_snapshot;
 
 use std::{any::Any, cell::Cell, collections::HashMap, rc::Rc, sync::Arc, time::Duration};
 
-use flui_animation::curve::SharedCurve;
+use flui_animation::SharedCurve;
 use flui_animation::{
     Animation, AnimationController, MotionClock, MotionSpec, ProxyAnimation, Vsync, curves,
 };
@@ -418,6 +418,7 @@ impl RenderBox for RenderTestBox {
 #[derive(Debug)]
 struct RemovalNotifierState {
     source: flui_foundation::ChangeNotifier,
+    held: std::cell::RefCell<Vec<Option<flui_foundation::Subscription>>>,
     fail: Rc<Cell<bool>>,
     before: Rc<Cell<bool>>,
     fail_add: Rc<Cell<bool>>,
@@ -447,6 +448,7 @@ impl RemovalNotifier {
         Rc::new(Self {
             state: Rc::new(RemovalNotifierState {
                 source: flui_foundation::ChangeNotifier::new(),
+                held: std::cell::RefCell::new(Vec::new()),
                 fail: Rc::new(Cell::new(fail)),
                 before: Rc::new(Cell::new(false)),
                 fail_add: Rc::new(Cell::new(false)),
@@ -455,6 +457,23 @@ impl RemovalNotifier {
         })
     }
 
+    /// Hand out a subscription whose removal runs this source's own
+    /// machinery: the inner channel subscription stays in the source, named
+    /// by its slot.
+    fn hold(&self, inner: flui_foundation::Subscription) -> flui_foundation::Subscription {
+        let slot = {
+            let mut held = self.state.held.borrow_mut();
+            held.push(Some(inner));
+            held.len() - 1
+        };
+        flui_foundation::Subscription::for_source(&self.state, slot, |state, slot, _recovery| {
+            let inner = state.held.borrow_mut()[slot].take();
+            state.withdraw(inner);
+        })
+    }
+}
+
+impl RemovalNotifierState {
     fn withdraw(&self, subscription: Option<flui_foundation::Subscription>) {
         assert!(!self.before.replace(false), "{} removal", self.name);
         if let Some(subscription) = subscription {
@@ -470,31 +489,13 @@ impl flui_foundation::Listenable for RemovalNotifier {
         // anything; the caller holds the closure and never gets a
         // subscription.
         assert!(!self.fail_add.replace(false), "{} registration", self.name);
-        let inner = Cell::new(Some(self.source.listen(listener)));
-        // The removals run the source's own machinery; the subscription
-        // carries it the way ADR-0180's status guard does.
-        let state = Rc::clone(&self.state);
-        flui_foundation::Subscription::for_removal(move || {
-            RemovalNotifier {
-                state: Rc::clone(&state),
-            }
-            .withdraw(inner.take());
-        })
+        self.hold(self.source.listen(listener))
     }
     fn listen_with_recovery(
         &self,
         relay: flui_foundation::ListenerObserver,
     ) -> flui_foundation::Subscription {
-        let inner = Cell::new(Some(self.source.listen_with_recovery(relay)));
-        // The removals run the source's own machinery; the subscription
-        // carries it the way ADR-0180's status guard does.
-        let state = Rc::clone(&self.state);
-        flui_foundation::Subscription::for_removal(move || {
-            RemovalNotifier {
-                state: Rc::clone(&state),
-            }
-            .withdraw(inner.take());
-        })
+        self.hold(self.source.listen_with_recovery(relay))
     }
 }
 
@@ -4804,11 +4805,11 @@ impl Animation<f64> for ScriptedAnimation {
         self.controller.is_animating()
     }
 
-    fn observe_status(
+    fn listen_status_with_recovery(
         &self,
         observer: flui_animation::StatusObserver,
-    ) -> flui_animation::StatusSubscription {
-        self.controller.observe_status(observer)
+    ) -> flui_foundation::Subscription {
+        self.controller.listen_status_with_recovery(observer)
     }
     fn value(&self) -> f64 {
         *self.value.lock().expect("unpoisoned")
@@ -4911,11 +4912,11 @@ impl Animation<f64> for CountingAnimation {
         self.controller.is_animating()
     }
 
-    fn observe_status(
+    fn listen_status_with_recovery(
         &self,
         observer: flui_animation::StatusObserver,
-    ) -> flui_animation::StatusSubscription {
-        self.controller.observe_status(observer)
+    ) -> flui_foundation::Subscription {
+        self.controller.listen_status_with_recovery(observer)
     }
     fn value(&self) -> f64 {
         self.reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -7121,7 +7122,7 @@ fn harness_custom_paint_regions_project_clip_and_rebind_owner() {
     let foreign_id = foreign_source.allocate(1).unwrap()[0];
     let updates = Arc::new(std::sync::Mutex::new(Vec::new()));
     let delivered = updates.clone();
-    let mut owner = SemanticsOwner::new(Arc::new(move |update| {
+    let mut owner = SemanticsOwner::new(Rc::new(move |update| {
         delivered.lock().expect("update log").push(update.clone());
     }));
     let node = owner.insert(
@@ -12741,7 +12742,7 @@ fn harness_render_animated_size_rests_without_a_frame_loop() {
 /// A curve that panics once when evaluated.
 struct ArmedCurve(Arc<std::sync::atomic::AtomicBool>);
 
-impl flui_animation::curve::Curve for ArmedCurve {
+impl flui_animation::Curve for ArmedCurve {
     fn transform(&self, t: f64) -> f64 {
         assert!(
             !self.0.swap(false, std::sync::atomic::Ordering::SeqCst),

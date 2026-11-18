@@ -10,9 +10,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use flui_animation::{
-    Animation, AnimationController, AnimationStatus, AnimationSwitch, CurvedAnimation,
-    DrivenController, ProxyAnimation, RepeatMode, ReverseAnimation, Tween, TweenAnimation, Vsync,
-    curve::{Curve, Linear},
+    Animation, AnimationController, AnimationStatus, AnimationSwitch, Curve, CurvedAnimation,
+    DrivenController, Linear, ProxyAnimation, RepeatMode, ReverseAnimation, Tween, TweenAnimation,
+    Vsync,
 };
 use flui_foundation::Listenable;
 
@@ -429,10 +429,10 @@ fn disposed_controller_drops_a_late_status_listener() {
     let probe = Arc::new(());
     let capture = Arc::clone(&probe);
     controller
-        .subscribe_status(std::rc::Rc::new(move |_| {
+        .listen_status(std::rc::Rc::new(move |_| {
             let _ = &capture;
         }))
-        .detach();
+        .forget();
     assert_eq!(
         Arc::strong_count(&probe),
         1,
@@ -521,10 +521,10 @@ fn repeated_frame_time_announces_completion_once() {
     let statuses = Arc::new(Mutex::new(Vec::new()));
     let sink = Arc::clone(&statuses);
     controller
-        .subscribe_status(std::rc::Rc::new(move |status| {
+        .listen_status(std::rc::Rc::new(move |status| {
             sink.lock().expect("status log").push(status);
         }))
-        .detach();
+        .forget();
     vsync.tick_all(
         &flui_animation::MotionClock::new().frame(std::time::Duration::from_secs_f64(0.0)),
     );
@@ -593,7 +593,7 @@ fn explicit_finish_completes_the_original_finite_run() {
             } else {
                 AnimationStatus::ForwardSettled
             };
-            let subscription = controller.subscribe_status(Rc::new(move |status| {
+            let subscription = controller.listen_status(Rc::new(move |status| {
                 assert_eq!(
                     observed.value(),
                     target,
@@ -654,7 +654,7 @@ fn explicit_finish_uses_the_last_repeat_leg() {
 }
 
 fn explicit_finish_refuses_an_undeclared_endpoint_without_sampling() {
-    use flui_animation::simulation::Simulation;
+    use flui_animation::Simulation;
     use std::{cell::Cell, rc::Rc};
 
     struct UnknownEnd(Rc<Cell<usize>>);
@@ -721,7 +721,7 @@ fn explicit_finish_reaches_native_physical_endpoints() {
             .initial_value(0.4)
             .build();
         let run = if fling {
-            controller.fling_with(input, Some(slow))
+            controller.fling_with(input, slow)
         } else {
             controller.retarget(input, &MotionSpec::Spring(slow))
         }
@@ -793,7 +793,7 @@ fn explicit_finish_preserves_a_reentrant_replacement() {
             (channel == "value").then(|| controller.listen(Rc::clone(&action)));
         let status_subscription = (channel == "status").then(|| {
             let action = Rc::clone(&action);
-            controller.subscribe_status(Rc::new(move |status| {
+            controller.listen_status(Rc::new(move |status| {
                 if status == AnimationStatus::ForwardSettled {
                     action();
                 }
@@ -893,7 +893,7 @@ fn explicit_finish_retires_sources_with_failure_custody() {
             });
         let status_subscription = mode.contains("status").then(|| {
             let armed = Cell::new(true);
-            controller.subscribe_status(Rc::new(move |status| {
+            controller.listen_status(Rc::new(move |status| {
                 if status == AnimationStatus::ForwardSettled {
                     assert!(!armed.replace(false), "status delivery failure");
                 }
@@ -1066,8 +1066,8 @@ fn explicit_finish_allows_owner_release_during_delivery() {
         } else if channel == "status" {
             let release = Rc::clone(&release);
             controller
-                .subscribe_status(Rc::new(move |_| release()))
-                .detach();
+                .listen_status(Rc::new(move |_| release()))
+                .forget();
         } else {
             let release = Rc::clone(&release);
             run.when_complete_or_cancel(move |outcome| {
@@ -1135,7 +1135,7 @@ fn typed_refusals_preserve_the_original_run() {
             controller.animate_to(f64::NAN, None)
         }),
         (AnimationInput::From, |controller| {
-            controller.forward_from(Some(f64::NAN))
+            controller.forward_from(f64::NAN)
         }),
         (AnimationInput::Velocity, |controller| {
             controller.fling(f64::NAN)

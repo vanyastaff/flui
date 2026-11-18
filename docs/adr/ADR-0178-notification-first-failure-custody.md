@@ -58,7 +58,7 @@ stack-local link. Nesting does not grow a heap collection; the borrow checker
 prevents a scope or signal reference from escaping its synchronous delivery.
 
 Framework relays borrow this same context through `Listenable::listen_with_recovery`
-and an animation's relays through `Animation::observe_status`. User listeners
+and an animation's relays through `Animation::listen_status_with_recovery`. User listeners
 retain their ordinary callback signature and hold the owned `Subscription` the
 required registration returns ([ADR-0109](ADR-0109-notification-channel-surface.md)
 decision 5 states the trait's method surface; [ADR-0219](
@@ -127,7 +127,7 @@ immediately while placing outgoing custody into its existing delivery FIFO.
 Disposed controllers refuse later mutations and listener admission.
 
 Framework cleanup rounds also lend this custody to subscription cancellation.
-`StatusSubscription::cancel_with_recovery` withdraws its removal authority before
+`Subscription::detach_with_recovery` on a source-bound subscription withdraws its removal authority before
 calling the source. A value listener's owned `Subscription` withdraws through
 its own channel: inside a round the withdrawn callback joins that round's
 retirement, so its outgoing capture retires with the round's containment, and

@@ -513,7 +513,7 @@ mod cases {
             let accessibility = window
                 .accessibility()
                 .expect("a Linux window is accessible");
-            let owner = SemanticsOwner::new(Arc::new(move |update: &TreeUpdate| {
+            let owner = SemanticsOwner::new(Rc::new(move |update: &TreeUpdate| {
                 accessibility.publish(update.clone());
             }));
             let mut fixture = Self {

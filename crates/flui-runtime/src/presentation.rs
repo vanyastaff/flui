@@ -718,7 +718,7 @@ impl PresentationState {
 
         let publish_bridge = Arc::downgrade(bridge);
         pipeline.with_mut(|owner| {
-            owner.set_semantics_update_callback(Arc::new(
+            owner.set_semantics_update_callback(Rc::new(
                 move |update: &flui_semantics::TreeUpdate| {
                     if let Some(bridge) = publish_bridge.upgrade() {
                         bridge.publish(update.clone());
@@ -731,7 +731,7 @@ impl PresentationState {
                 == flui_semantics::platform::RouteChangeSupport::Native)
                 .then(|| {
                     let bridge = Arc::downgrade(bridge);
-                    Arc::new(move |change: flui_semantics::platform::RouteChange| {
+                    Rc::new(move |change: flui_semantics::platform::RouteChange| {
                         if let Some(bridge) = bridge.upgrade() {
                             bridge.route_changed(change);
                         }
