@@ -5,8 +5,8 @@
   text field and its `TextEditingController`, a lazily built `ListView` whose keyed rows keep
   their state, pages and a dialog through a typed `Router`, a Material theme, a `Tester` test of
   the screen, and a widget that follows `PlatformConvention`. Every sample compiles, and the
-  ones that do not open a window run. `cargo run --example notes --features material` runs the
-  application the tutorial builds, in one program.
+  ones that do not open a window run. `cargo run --example notes --features material` puts the
+  tutorial's list, pages and theme together in one window.
 - `flui::testing::Tester`, the application test API: `Tester::mount` mounts a view as `run_app`
   does, `flui::testing::find` builds the driver's `Locator`s over the semantics tree, `tap`,
   `long_press`, `drag` and `enter_text` act through the window's input path after the
