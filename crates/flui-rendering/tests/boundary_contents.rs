@@ -703,11 +703,11 @@ fn a_repaint_keeps_the_chunks_of_the_render_objects_that_owe_no_paint() {
 }
 
 /// A render object that laid out, or that owes no paint but moved in its
-/// boundary, records its chunk again: layout leaves it unmarked, and its
-/// origin is a recording input (ADR-0304 §2).
+/// boundary, records its chunk again: layout leaves it unmarked, and the
+/// parent that moved it laid out (ADR-0304 §2).
 ///
-/// Red-check: keep an unmarked render object's chunk whether it laid out, or
-/// whatever its origin.
+/// Red-check: keep an unmarked render object's chunk whether it or its
+/// parent laid out.
 #[test]
 fn a_chunk_that_moved_in_its_boundary_is_a_new_recording() {
     let (owner, root, [a, b, c]) = three_leaves();
@@ -729,6 +729,120 @@ fn a_chunk_that_moved_in_its_boundary_is_a_new_recording() {
             "a chunk recorded at another origin is a new recording"
         );
     }
+}
+
+/// A render object its parent paints at another offset, with no layout,
+/// records its chunk again: the parent was marked for its own paint, which
+/// placed the child (ADR-0304 §2).
+///
+/// Red-check: let only a parent's layout move its children.
+#[test]
+fn a_chunk_its_parent_paints_elsewhere_is_a_new_recording() {
+    let dx = Arc::new(std::sync::atomic::AtomicU64::new(0.0_f64.to_bits()));
+    let (owner, registry) = mount(
+        box_node(RenderRepaintBoundary::new()).label("root").child(
+            box_node(PaintsChildAt(Arc::clone(&dx)))
+                .label("parent")
+                .child(leaf().label("child")),
+        ),
+    );
+    let root = registry.get("root").expect("labelled");
+    let parent = registry.get("parent").expect("labelled");
+    let child = registry.get("child").expect("labelled");
+    let mut scene = SceneHost::new();
+    let mut owner = frame(&mut scene, owner);
+    let before = chunk_version(&content(&scene, &owner, root), child);
+
+    dx.store(20.0_f64.to_bits(), std::sync::atomic::Ordering::Relaxed);
+    owner.mark_needs_paint(parent);
+    let owner = frame(&mut scene, owner);
+    assert_ne!(
+        chunk_version(&content(&scene, &owner, root), child),
+        before,
+        "a chunk painted at another origin is a new recording"
+    );
+}
+
+/// A leaf that draws a box at the origin of its paint anchor.
+#[derive(Debug)]
+struct DrawsAtItsAnchor;
+
+impl flui_foundation::inspect::Inspect for DrawsAtItsAnchor {
+    fn kind(&self) -> &'static str {
+        "DrawsAtItsAnchor"
+    }
+
+    fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+}
+
+impl flui_rendering::traits::RenderBox for DrawsAtItsAnchor {
+    type Arity = flui_foundation::Leaf;
+    type ParentData = flui_rendering::parent_data::BoxParentData;
+
+    fn perform_layout(
+        &mut self,
+        ctx: &mut flui_rendering::context::BoxLayoutContext<'_, Self::Arity, Self::ParentData>,
+    ) -> flui_rendering::RenderResult<Size> {
+        Ok(ctx.constrain(Size::new(10.0, 10.0)))
+    }
+
+    fn paint(&self, ctx: &mut flui_rendering::context::PaintContext<'_, flui_foundation::Leaf>) {
+        let at = ctx
+            .paint_anchor()
+            .map_or(flui_foundation::geometry::Point::ZERO, |anchor| {
+                flui_foundation::geometry::Point::new(-anchor.offset.dx, -anchor.offset.dy)
+            });
+        let rect = flui_foundation::geometry::Rect::from_origin_size(at, ctx.size());
+        ctx.canvas().draw_rect(
+            rect,
+            &flui_painting::paint::Paint::fill(flui_painting::styling::Color::from_rgba_f32_array(
+                [1.0, 0.0, 0.0, 1.0],
+            )),
+        );
+    }
+}
+
+/// A render object that read its paint anchor records its chunk again when
+/// its boundary repaints: the anchor lies outside the boundary, and nothing
+/// in it marks a move of the boundary against the anchor (ADR-0304 §2).
+///
+/// Red-check: keep the chunk of a paint that read its anchor.
+#[test]
+fn a_chunk_that_read_its_paint_anchor_is_a_new_recording() {
+    let dx = Arc::new(std::sync::atomic::AtomicU64::new(0.0_f64.to_bits()));
+    let (owner, registry) = mount(
+        box_node(flui_objects::RenderPaintAnchor::new()).child(
+            box_node(PaintsChildAt(Arc::clone(&dx)))
+                .label("mover")
+                .child(
+                    box_node(RenderRepaintBoundary::new())
+                        .label("boundary")
+                        .child(
+                            box_node(RenderFlex::row())
+                                .child(box_node(DrawsAtItsAnchor).label("reader"))
+                                .child(leaf().label("sibling")),
+                        ),
+                ),
+        ),
+    );
+    let get = |name| registry.get(name).expect("labelled");
+    let (mover, boundary, reader) = (get("mover"), get("boundary"), get("reader"));
+    let mut scene = SceneHost::new();
+    let mut owner = frame(&mut scene, owner);
+    let before = chunk_version(&content(&scene, &owner, boundary), reader);
+
+    // The boundary moves against the anchor, and repaints for its sibling.
+    dx.store(20.0_f64.to_bits(), std::sync::atomic::Ordering::Relaxed);
+    owner.mark_needs_paint(mover);
+    update_render_object::<RenderColoredBox, _>(&mut owner, get("sibling"), |leaf| {
+        leaf.set_color([0.0, 0.0, 1.0, 1.0])
+    });
+    let owner = frame(&mut scene, owner);
+    assert_ne!(
+        chunk_version(&content(&scene, &owner, boundary), reader),
+        before,
+        "a chunk drawn from the moved anchor is a new recording"
+    );
 }
 
 /// A paint pass that fails after painting a changed render object clears its
@@ -774,88 +888,90 @@ fn the_pass_after_a_failed_one_keeps_no_chunk() {
     );
 }
 
-/// A parent that paints its one child at its origin, and once more beside it
-/// while the flag it holds is set.
+/// A parent that paints its children, in the order and at the offsets it
+/// holds, and lays each out loosely.
 #[derive(Debug)]
-struct PaintsChildTwiceWhen(std::rc::Rc<std::cell::Cell<bool>>);
+struct PaintsChildrenAt(Vec<(usize, flui_foundation::geometry::Offset)>);
 
-impl flui_foundation::inspect::Inspect for PaintsChildTwiceWhen {
+impl flui_foundation::inspect::Inspect for PaintsChildrenAt {
     fn kind(&self) -> &'static str {
-        "PaintsChildTwiceWhen"
+        "PaintsChildrenAt"
     }
 
     fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
 }
 
-impl flui_rendering::traits::RenderBox for PaintsChildTwiceWhen {
-    type Arity = flui_foundation::Single;
+impl flui_rendering::traits::RenderBox for PaintsChildrenAt {
+    type Arity = flui_foundation::Variable;
     type ParentData = flui_rendering::parent_data::BoxParentData;
 
     fn perform_layout(
         &mut self,
-        ctx: &mut flui_rendering::context::BoxLayoutContext<
-            '_,
-            flui_foundation::Single,
-            flui_rendering::parent_data::BoxParentData,
-        >,
+        ctx: &mut flui_rendering::context::BoxLayoutContext<'_, Self::Arity, Self::ParentData>,
     ) -> flui_rendering::RenderResult<Size> {
         let constraints = *ctx.constraints();
-        ctx.layout_child(0, constraints.loosen())?;
+        for index in 0..ctx.child_count() {
+            ctx.layout_child(index, constraints.loosen())?;
+        }
         Ok(constraints.biggest())
     }
 
-    flui_rendering::forward_single_child_box_queries!();
-
-    fn paint(&self, ctx: &mut flui_rendering::context::PaintContext<'_, flui_foundation::Single>) {
-        ctx.paint_child_at(flui_foundation::geometry::Offset::ZERO);
-        if self.0.get() {
-            ctx.paint_child_at(flui_foundation::geometry::Offset::new(20.0, 0.0));
-        }
-    }
-
-    fn hit_test(
+    fn paint(
         &self,
-        _ctx: &mut flui_rendering::context::BoxHitTestContext<
-            '_,
-            flui_foundation::Single,
-            flui_rendering::parent_data::BoxParentData,
-        >,
-    ) -> bool {
-        false
+        ctx: &mut flui_rendering::context::PaintContext<'_, flui_foundation::Variable>,
+    ) {
+        for &(index, offset) in &self.0 {
+            ctx.paint_child_at(index, offset);
+        }
     }
 }
 
-/// A render object painted twice in a row by its parent leaves one chunk
-/// holding both paints: its first paint's inputs are not the chunk's, so a
-/// chunk the first paint alone recorded before is not kept for it.
+/// A render object its parent paints twice with nothing between leaves a
+/// chunk for each paint, so a chunk the first paint recorded is the one the
+/// next frame's first paint records, whatever comes to lie between them.
 ///
-/// Red-check: let a run of another paint of the owner join the open chunk
-/// with its inputs kept.
+/// Red-check: let a run of another paint of the owner join the open chunk.
 #[test]
-fn a_chunk_holding_two_paints_of_its_render_object_is_a_new_recording() {
-    let twice = std::rc::Rc::new(std::cell::Cell::new(false));
+fn a_chunk_holds_one_paint_of_its_render_object() {
+    let color = std::rc::Rc::new(std::cell::Cell::new([0.0, 0.0, 1.0, 1.0]));
     let (owner, registry) = mount(
         box_node(RenderRepaintBoundary::new()).label("root").child(
-            box_node(PaintsChildTwiceWhen(std::rc::Rc::clone(&twice)))
-                .label("parent")
-                .child(leaf().label("child")),
+            box_node(PaintsChildrenAt(vec![
+                (0, flui_foundation::geometry::Offset::ZERO),
+                (1, flui_foundation::geometry::Offset::ZERO),
+                (0, flui_foundation::geometry::Offset::new(20.0, 0.0)),
+            ]))
+            .child(leaf().label("twice"))
+            .child(
+                box_node(DrawsEverySecondPaint {
+                    color: std::rc::Rc::clone(&color),
+                    paints: std::cell::Cell::new(0),
+                })
+                .label("between"),
+            ),
         ),
     );
     let root = registry.get("root").expect("labelled");
-    let parent = registry.get("parent").expect("labelled");
-    let child = registry.get("child").expect("labelled");
+    let twice = registry.get("twice").expect("labelled");
+    let between = registry.get("between").expect("labelled");
     let mut scene = SceneHost::new();
     let mut owner = frame(&mut scene, owner);
-    let before = chunk_version(&content(&scene, &owner, root), child);
 
-    twice.set(true);
-    owner.mark_needs_paint(parent);
+    // "between" drew nothing on its first paint and draws on its second.
+    owner.mark_needs_paint(between);
     let owner = frame(&mut scene, owner);
-    assert_ne!(
-        chunk_version(&content(&scene, &owner, root), child),
-        before,
-        "the chunk that now draws the child twice is a new recording"
-    );
+    let content = content(&scene, &owner, root);
+    let drawn: usize = content
+        .entries()
+        .iter()
+        .filter_map(|entry| match entry {
+            flui_layer::Entry::Chunk { chunk, .. } if chunk.owner() == twice => {
+                Some(chunk.commands().len())
+            }
+            _ => None,
+        })
+        .sum();
+    assert_eq!(drawn, 2, "the content draws \"twice\" once for each paint");
 }
 
 /// A leaf that draws a box of the colour it holds on every second paint,
@@ -916,19 +1032,20 @@ impl flui_rendering::traits::RenderBox for DrawsEverySecondPaint {
 }
 
 /// A render object that owed paint and is painted twice in one content
-/// owes it on both paints, though the first cleared its mark: its chunk,
-/// sealed by the second paint, is a new recording.
+/// is not placed as before on its second paint, whose marks the first one
+/// cleared: its chunk, sealed by the second paint, is a new recording.
 ///
-/// Red-check: read whether a paint of the render object is owed from its
-/// flags alone.
+/// Red-check: read whether a second paint of the render object is placed as
+/// before from its parent alone.
 #[test]
 fn a_render_object_painted_twice_owes_paint_on_both_paints() {
     let color = std::rc::Rc::new(std::cell::Cell::new([1.0, 0.0, 0.0, 1.0]));
     let (owner, registry) = mount(
         box_node(RenderRepaintBoundary::new()).label("root").child(
-            box_node(PaintsChildTwiceWhen(std::rc::Rc::new(
-                std::cell::Cell::new(true),
-            )))
+            box_node(PaintsChildrenAt(vec![
+                (0, flui_foundation::geometry::Offset::ZERO),
+                (0, flui_foundation::geometry::Offset::new(20.0, 0.0)),
+            ]))
             .child(
                 box_node(DrawsEverySecondPaint {
                     color: std::rc::Rc::clone(&color),

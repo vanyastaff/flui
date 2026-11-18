@@ -143,7 +143,8 @@ bitflags! {
     /// Bit 12: GEOMETRY_DEGRADED
     /// Bit 13: NEEDS_COMPOSITED_LAYER_UPDATE
     /// Bit 14: LAID_OUT_SINCE_PAINT
-    /// Bits 15-31: Reserved for future use
+    /// Bit 15: PAINT_CHANGED
+    /// Bits 16-31: Reserved for future use
     /// ```
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
     pub struct RenderFlags: u32 {
@@ -287,8 +288,18 @@ bitflags! {
         /// change what it paints with [`Self::NEEDS_PAINT`] clear. Set by the
         /// layout walk on every node it lays out rather than serves from its
         /// cache, and taken by the paint walk on every node it reaches: a
-        /// node carrying it records its chunks again (ADR-0304 §2).
+        /// node carrying it records its chunks again (ADR-0304 §2), and so
+        /// do its descendants, which it may have moved.
         const LAID_OUT_SINCE_PAINT = 1 << 14;
+
+        /// The node itself was marked for paint since its last paint.
+        ///
+        /// [`Self::NEEDS_PAINT`] is also set on every ancestor a mark walks
+        /// up through; this one only on the node the mark names, whose own
+        /// paint changed and with it, perhaps, where it paints its children.
+        /// Taken by the paint walk on every node it reaches: the descendants
+        /// of a node carrying it record their chunks again (ADR-0304 §2).
+        const PAINT_CHANGED = 1 << 15;
     }
 }
 
@@ -765,6 +776,19 @@ impl AtomicRenderFlags {
     #[inline]
     pub fn take_laid_out_since_paint(&self) -> bool {
         let bit = RenderFlags::LAID_OUT_SINCE_PAINT.bits();
+        self.bits.fetch_and(!bit, Ordering::AcqRel) & bit != 0
+    }
+
+    /// Records that the render object itself was marked for paint.
+    #[inline]
+    pub fn mark_paint_changed(&self) {
+        self.set(RenderFlags::PAINT_CHANGED);
+    }
+
+    /// Clears the paint-changed flag and answers whether it was set.
+    #[inline]
+    pub fn take_paint_changed(&self) -> bool {
+        let bit = RenderFlags::PAINT_CHANGED.bits();
         self.bits.fetch_and(!bit, Ordering::AcqRel) & bit != 0
     }
 

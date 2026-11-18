@@ -142,7 +142,7 @@ impl PipelineOwner<Layout> {
                     {
                         *paint_queued |= self
                             .scheduler
-                            .commit_needs_paint(&self.render_tree, entry.id);
+                            .commit_laid_out_paint(&self.render_tree, entry.id);
                     }
                     self.scheduler
                         .retain_layout_batch(&dirty_nodes[next..], false);
@@ -378,7 +378,7 @@ impl PipelineOwner<Layout> {
             // its previous layers would show the stale pixels.
             *paint_queued |= self
                 .scheduler
-                .commit_needs_paint(&self.render_tree, dirty_node.id);
+                .commit_laid_out_paint(&self.render_tree, dirty_node.id);
 
             // A poison report that panicked goes on only now, with the root's
             // own success recorded and its paint committed. The span closes
@@ -746,7 +746,7 @@ impl PipelineOwner<Layout> {
         // walk to exactly the boundaries that reached layout. Anything else is
         // covered by `mark_needs_paint` finding its enclosing boundary.
         for id in laid_out {
-            *queued |= self.scheduler.commit_needs_paint(&self.render_tree, id);
+            *queued |= self.scheduler.commit_laid_out_paint(&self.render_tree, id);
         }
 
         // A node that lays out re-publishes its semantics geometry. Without
