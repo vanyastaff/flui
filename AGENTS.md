@@ -159,25 +159,13 @@ conversation:
 - **A sweep starts with one.** A workspace-wide change is carried through one crate first, with
   its features, examples, shaders and tooling and its checks green, and then repeated across
   the rest.
-- Commits are `area: what changed`. On a pull request `ci.yml` compiles and executes Linux only
-  (ADR-0370): main checks wasm32 and type-checks the Windows, macOS, iOS and Android backends,
+- Commits are `area: what changed`. On a pull request `ci.yml` runs one fixed gate, `clippy` and
+  `test` on Linux (ADR-0375): main checks wasm32, type-checks the Windows, macOS, iOS and Android
+  backends and runs the nested, compile-fail and feature-gated suites, the sizes, perf and miri,
   and Windows, macOS, the iOS Simulator and an Android emulator run nightly on main
-  (`nightly-platforms.yml`), so native and GPU changes are run locally before the PR. A red
-  `main` is fixed forward within the hour or reverted.
-- A job only main runs has a narrow form, which a pull request runs when its diff reaches what the
-  job reads: a row of `ON_DEMAND` in `tools/xtask/src/change_scope/aggregator.rs`, decided by
-  `cargo xtask affected` (ADR-0303 §9). `test-trybuild` runs when the diff touches a file a
-  `*.stderr` cites, a case, a runner, a procedural macro or a message an expectation copies,
-  `feature-scope` runs over the changed crates' features, `size` runs when the diff reaches a
-  manifest, `Cargo.lock`, the toolchain, a `flui create` template or `perf/size.toml`,
-  `send-positions` runs when a changed line of the facade's crates names `Send`, `Sync`, a
-  `pub use`/`pub mod` or a listed item, `miri` runs when a changed file sits under a source
-  it interprets whole, `perf-gates` compares the baseline when a changed file sits under a
-  source that runs for every node of a frame (the element tree and its owners, render storage,
-  the pipeline owner's passes, the layer crate, the semantics model), and
-  `test-without-agent` runs when the diff reaches flui-app's agent module or its build script.
-  A new main-only job that a pull request can break gets such a row; the jobs ADR-0370 §2 moves
-  to main run there without one.
+  (`nightly-platforms.yml`). So a change to a native backend, a shader, a trybuild case or a
+  size is run locally before the PR, a size on a Linux x86_64 host, the baseline's. A red `main`
+  is fixed forward within the hour or reverted.
 - No process markers (`Cycle N`, `PR #NNN review`, `Phase B`, slice labels) in code or docs.
   Archival roots are exempt (`docs/plans`). That root holds the live specs, and their task IDs
   are what a spec tracks.
@@ -216,19 +204,17 @@ host change needs `cargo heli nextest run -p flui-native` by hand.
 | No bare `unwrap()` in production: `expect("BUG: <invariant>")`, `thiserror` in libraries, `anyhow` in apps ([`docs/PANIC-POLICY.md`](docs/PANIC-POLICY.md)) | clippy |
 | A public enum is `#[non_exhaustive]` unless its closure is a decision, stated by `#[expect(clippy::exhaustive_enums, reason = "…")]` on it | clippy `exhaustive_enums` (ADR-0329) |
 | A caught panic payload nobody resumes goes to `discard_payload`; `mem::forget` is a deliberate leak with its reason at the call | clippy `mem_forget` |
-| A Stable crate's public API names upstream types only as ADR-0089 §2 allows | `xtask api-closure` (CI `api-contracts` job, nightly rustdoc JSON; lane `full` only: `main` and the merge queue, not a pull request) |
-| Every item the facade reaches is in `api/flui.txt`, so a pull request that changes the facade's API carries the diff (`--write` restates it) | `xtask public-api` (CI `public-api` job, nightly rustdoc JSON; ADR-0324) |
-| A pull request that edits an expectation (the API snapshot, a `*.stderr`, a `*.snap`, a protocol schema, a perf baseline, an allowlist, a test, a `deny.toml` or `typos.toml` value) names each path and its reason under `## Expectations` in its body | `xtask expectations --body` (`expectations.yml`, on every pull request and every edit of its body; ADR-0331) |
+| A pull request that edits an expectation (a `*.stderr`, a `*.snap`, a protocol schema, a perf baseline, a test, a `deny.toml` or `typos.toml` value) names each path and its reason under `## Expectations` in its body | `xtask expectations --body` (`expectations.yml`, on every pull request and every edit of its body; ADR-0331) |
 | `docs/platform-parity.md` is the render of `crates/flui-native/platform-parity.toml` (`FLUI_OVERWRITE=1` restates it), and a row of a position a host fills with `Absent` claims no support there | flui-native's `parity_document_matches_its_source` and `absent_positions_claim_no_support` (ADR-0303 §2) |
 | Every `tests/*.rs` file of a crate that sets `autotests = false` is a test target or a module of one: a file that is neither never compiles | `xtask unmounted-tests` (in `xtask checks`; ADR-0371 §3) |
 | No two records in `docs/adr/` share a number | `xtask adr-numbers` (in `xtask checks`; ADR-0371 §3) |
-| A value crosses a thread because the compiler proves it may: `send_wrapper`-style crates are banned; every `Send`/`Sync` position an author wrote in the facade's API is listed under ADR-0323 §3 | `deny.toml`, `xtask send-positions` (CI `api-contracts` job, nightly rustdoc JSON) |
+| A value crosses a thread because the compiler proves it may: `send_wrapper`-style crates are banned | `deny.toml` (ADR-0323 §3) |
 | User code runs through `flui_foundation::panic` (`commit`, `FirstPanic`) and an OS entry through `os_entry`: `std::panic::catch_unwind` is a disallowed method, and a site that still catches by hand carries `#[expect(clippy::disallowed_methods, reason = "ADR-0287: …")]` on its statement or function (ADR-0303 §6) | clippy (`disallowed-methods`) |
 
 ### Rules a reader holds
 
-No program checks these before the first release (ADR-0371). The author follows them and the
-reader of "Before a merge" looks for a change that breaks one:
+No program checks these before the first release (ADR-0371, ADR-0375). The author follows them
+and the reader of "Before a merge" looks for a change that breaks one:
 
 - Dependencies point down the tiers. A manifest's `[package.metadata.flui]` states the crate's
   `tier`, `order`, `reach-forbid` and `allowed-dependents`, and an exception names the ADR that
@@ -241,7 +227,11 @@ reader of "Before a merge" looks for a change that breaks one:
 - Every OS entry into `flui-native` (an `extern` fn, an Objective-C or COM method, an AccessKit
   handler, a closure handed to the OS) is a constant or one call of
   `owner::panic_boundary::os_entry`, or of an adapter of its file that is (ADR-0151 §16).
-- No new `unsafe impl Send` or `Sync` (ADR-0136 §3).
+- No new `unsafe impl Send` or `Sync` (ADR-0323 §3), and a `Send` or `Sync` position in the
+  facade's API is one of the seven kinds of value ADR-0323 §2 lets cross a thread.
+- A Stable crate's public API names an upstream type only as ADR-0089 §2 allows, and the core
+  host's public paths name no OS binding, on any target it builds a host for (ADR-0151 §8). A
+  change to the facade's surface is read in the code diff: no snapshot lists it.
 - A WGSL derivative (`dpdx`, `dpdy`, `fwidth`, an implicit-LOD `textureSample`) is taken in
   uniform control flow, before the first branch on a per-fragment value; a branch on a uniform
   value above one carries a `// wgsl-uniformity: uniform` comment saying why. Native naga
@@ -322,9 +312,8 @@ with an answer you can point to in the code; the reviewers ask the same ones.
     code and documents, and point to zero users left, or to the deprecation and its
     `docs/gaps.md` entry. Does any new line use a form from the "Not" column of "Current forms"?
 14. **Expectations.** `cargo xtask expectations` lists what the diff edits of what the checks
-    compare against: lines gone from `api/flui.txt`, a changed `*.stderr`, `*.snap` or protocol
-    schema, a raised perf baseline, a grown allowlist, fewer tests, a new `#[ignore]`, a new
-    `deny.toml` or `typos.toml` value. For each, was the old expectation wrong, or is the code?
+    compare against: a changed `*.stderr`, `*.snap` or protocol schema, a raised perf baseline,
+    fewer tests, a new `#[ignore]`, a new `deny.toml` or `typos.toml` value. For each, was the old expectation wrong, or is the code?
     An expectation moved to turn a check green is the defect the check was there to find. The
     pull request's body names each path under `## Expectations` with that answer (ADR-0331).
 
