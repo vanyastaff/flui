@@ -108,6 +108,12 @@ mod message_clock_contract {
 mod native_pointer_contracts {
     use super::super::*;
     use flui_platform::pointer::{PointerEvent, PointerRole, PointerSample, Pressure};
+
+    /// Two device pixels per logical pixel.
+    const TWO: DevicePixelRatio = match DevicePixelRatio::try_new(2.0) {
+        Some(ratio) => ratio,
+        None => panic!("BUG: 2 is a ratio a screen can have"),
+    };
     use windows::Win32::{
         Foundation::HANDLE,
         UI::{
@@ -151,7 +157,7 @@ mod native_pointer_contracts {
             packets,
             message,
             POINT { x: -100, y: -200 },
-            2.0,
+            TWO,
             0,
             KeyboardModifiers::NONE,
         )
@@ -371,23 +377,21 @@ mod native_pointer_contracts {
         assert_eq!(absent.sample.contact_size, None);
     }
 
-    fn invalid_native_sensor_and_scale_are_refused() {
-        for (pressure, scale) in [(1025, 1.0), (0, 0.0), (0, f64::NAN)] {
-            let packet = pen(POINTER_PEN_INFO {
-                penMask: PEN_MASK_PRESSURE,
-                pressure,
-                ..Default::default()
-            });
-            let reading = pointer_reading(
-                packet,
-                WM_POINTERUPDATE,
-                POINT::default(),
-                scale,
-                0,
-                KeyboardModifiers::NONE,
-            );
-            assert!(decode(&mut registry(), &reading).is_err());
-        }
+    fn invalid_native_sensor_is_refused() {
+        let packet = pen(POINTER_PEN_INFO {
+            penMask: PEN_MASK_PRESSURE,
+            pressure: 1025,
+            ..Default::default()
+        });
+        let reading = pointer_reading(
+            packet,
+            WM_POINTERUPDATE,
+            POINT::default(),
+            DevicePixelRatio::ONE,
+            0,
+            KeyboardModifiers::NONE,
+        );
+        assert!(decode(&mut registry(), &reading).is_err());
         let (_, sample) = sampled(pen(POINTER_PEN_INFO {
             penMask: PEN_MASK_PRESSURE,
             pressure: 0,
@@ -535,7 +539,7 @@ mod native_pointer_contracts {
             &[start],
             WM_POINTERDOWN,
             POINT { x: -100, y: -200 },
-            2.0,
+            TWO,
             5_020,
             KeyboardModifiers::NONE,
         );
@@ -550,7 +554,7 @@ mod native_pointer_contracts {
             &burst,
             WM_POINTERUPDATE,
             POINT { x: -100, y: -200 },
-            2.0,
+            TWO,
             5_020,
             KeyboardModifiers::NONE,
         );
@@ -599,7 +603,7 @@ mod native_pointer_contracts {
             &[packet],
             WM_POINTERDOWN,
             POINT::default(),
-            1.0,
+            DevicePixelRatio::ONE,
             5_020,
             KeyboardModifiers::NONE,
         );
@@ -636,7 +640,7 @@ mod native_pointer_contracts {
             native_pen_masks_preserve_sensor_presence,
             native_pen_position_keeps_himetric_precision,
             native_touch_contact_and_pressure_are_measured,
-            invalid_native_sensor_and_scale_are_refused,
+            invalid_native_sensor_is_refused,
             native_terminal_identity_survives_callback_readmission,
             enter_after_native_down_is_not_another_button_press,
             native_enter_before_down_preserves_first_contact_admission,

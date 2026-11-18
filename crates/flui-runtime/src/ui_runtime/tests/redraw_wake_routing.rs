@@ -249,7 +249,10 @@ pub(crate) fn a_secondary_presentation_is_laid_out_at_its_own_size() {
     let window: Rc<dyn PlatformWindow> = Rc::new(
         crate::testing::TestWindow::new()
             .focused(false)
-            .with_scale_factor(2.0)
+            .with_scale_factor(
+                flui_foundation::geometry::DevicePixelRatio::try_new(2.0)
+                    .expect("a ratio in range"),
+            )
             .with_sizes(
                 Size::new(600, 400),
                 flui_platform::WindowExtent::try_new(Size::new(300.0, 200.0)).expect("an extent"),

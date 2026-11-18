@@ -944,7 +944,7 @@ fn sample_window_state(model: &HeadlessHostWindowState, hovered: bool) -> Sample
         ReportedFacts {
             metrics: flui_foundation::geometry::WindowMetrics::from_logical(
                 model.size,
-                model.scale_factor.get(),
+                model.scale_factor,
             )
             .ok(),
             brightness: model.brightness,
@@ -1288,7 +1288,7 @@ impl HeadlessHostWindow {
             material: state.materials.last().copied().unwrap_or_default(),
             metrics: flui_foundation::geometry::WindowMetrics::from_logical(
                 state.size,
-                state.scale_factor.get(),
+                state.scale_factor,
             )
             .ok(),
             focused: state.focused,

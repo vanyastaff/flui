@@ -790,8 +790,7 @@ fn activate_profile(
 /// The window's scale and client origin.
 fn frame(hwnd: HWND) -> (DevicePixelRatio, DevicePoint) {
     let scale =
-        crate::window::windows::proc::with_window_context(hwnd, "probe", |c| c.scale.scale())
-            .and_then(DevicePixelRatio::try_new)
+        crate::window::windows::proc::with_window_context(hwnd, "probe", |c| c.scale.ratio())
             .unwrap_or_default();
     let mut origin = POINT::default();
     // SAFETY: a live local.

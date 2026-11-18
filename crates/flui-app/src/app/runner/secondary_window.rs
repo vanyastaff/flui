@@ -1402,7 +1402,7 @@ mod tests {
                             prepared.observe(WindowObservation::Metrics(
                                 flui_foundation::geometry::WindowMetrics::from_logical(
                                     flui_foundation::geometry::Size::new(20.0, 30.0),
-                                    1.0,
+                                    flui_foundation::geometry::DevicePixelRatio::ONE,
                                 )
                                 .expect("valid metrics"),
                             ));

@@ -443,8 +443,11 @@ impl WindowDropTarget {
             unsafe { ScreenToClient(hwnd, &raw mut point) }
                 .as_bool()
                 .then(|| {
-                    let scale = self.scale.scale();
-                    Point::new(f64::from(point.x) / scale, f64::from(point.y) / scale)
+                    let scale = self.scale.ratio();
+                    Point::new(
+                        scale.to_logical(f64::from(point.x)),
+                        scale.to_logical(f64::from(point.y)),
+                    )
                 })
         });
         // Dispatch is the window's own: it queues behind a callback already
@@ -464,8 +467,8 @@ impl WindowDropTarget {
 
     /// The scale the target reports positions at.
     #[cfg(test)]
-    pub(super) fn scale(&self) -> f64 {
-        self.scale.scale()
+    pub(super) fn scale(&self) -> flui_foundation::geometry::DevicePixelRatio {
+        self.scale.ratio()
     }
 
     /// The window is destroyed and OLE no longer offers it drags: a drag

@@ -566,7 +566,7 @@ impl PlatformWindow for HeadlessWindow {
         .with_metrics(
             flui_foundation::geometry::WindowMetrics::from_logical(
                 extent.get(),
-                self.scale_factor.lock().get(),
+                *self.scale_factor.lock(),
             )
             .ok(),
         );
@@ -2049,8 +2049,9 @@ impl HeadlessHost {
     /// one); [`try_set_scale_factor`](Self::try_set_scale_factor) answers that
     /// instead.
     pub fn set_scale_factor(&mut self, window: HeadlessWindowId, scale_factor: DevicePixelRatio) {
-        self.try_set_scale_factor(window, scale_factor.get())
-            .expect("a scale the window's size has metrics at; try_set_scale_factor answers one it has not");
+        self.try_set_scale_factor(window, scale_factor).expect(
+            "a scale the window's size has metrics at; try_set_scale_factor answers one it has not",
+        );
     }
 
     /// [`set_scale_factor`](Self::set_scale_factor) for a scale that may make
@@ -2059,9 +2060,8 @@ impl HeadlessHost {
     /// # Errors
     ///
     /// The [`InvalidMetrics`](flui_foundation::geometry::InvalidMetrics) the
-    /// window's logical size at `scale_factor` makes: `InvalidScale` for a
-    /// ratio outside the range a screen can have, `Overflow` or `EmptyExtent`
-    /// for a size that does not fit at it. Nothing changes.
+    /// window's logical size at `scale_factor` makes: `Overflow` or
+    /// `EmptyExtent` for a size that does not fit at it. Nothing changes.
     ///
     /// # Panics
     ///
@@ -2069,7 +2069,7 @@ impl HeadlessHost {
     pub fn try_set_scale_factor(
         &mut self,
         window: HeadlessWindowId,
-        scale_factor: f64,
+        scale_factor: DevicePixelRatio,
     ) -> Result<(), flui_foundation::geometry::InvalidMetrics> {
         // The runner's path: a metrics observation of the window, which a
         // recording sees as the `Metrics` row it is.
