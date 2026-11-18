@@ -514,7 +514,6 @@ use flui::view::{
     AsyncDriver, BoxedTask, FrameId, FrameTiming, Instant, PostFrameHandle,
     PostFrameScheduleError, TaskToken,
 };
-};
 use std::cell::RefCell;
 use std::rc::Rc;
 
