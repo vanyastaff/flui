@@ -68,11 +68,11 @@ pub(super) enum Lane {
     Docs,
     /// Repository tooling: `deps` too.
     Tooling,
-    /// A pull request that compiles anything: every Linux job over the whole
+    /// A pull request that compiles anything: the Linux gate over the whole
     /// workspace (`HEAVY_JOBS`).
     Wide,
-    /// `main`, the merge queue and a manual run: `wide` plus additional Linux
-    /// jobs (`FULL_JOBS`).
+    /// `main`, the merge queue and a manual run: `wide` plus every other
+    /// job (`FULL_JOBS`).
     Full,
 }
 
@@ -414,7 +414,7 @@ mod tests {
     }
 
     fn whole_workspace_pr_takes_the_wide_lane() {
-        // the lane machinery is a workspace-wide input: every Linux job runs
+        // the lane machinery is a workspace-wide input: the whole gate runs
         let a = args(&["tools/xtask/src/change_scope/classify.rs"]);
         assert_eq!((a.lane, a.mode.as_str()), (Lane::Wide, "full"));
         assert!(

@@ -1,13 +1,17 @@
 name: CI
 
-# Runtime CI runs on Linux. Ordinary PRs take docs/tooling/wide lanes; main, the
-# merge queue and a manual run add Linux full checks. There is no scheduled run:
-# advisories.yml checks the RustSec database daily, and nothing else changes
-# without a commit.
+# Runtime CI runs on Linux. A pull request that compiles anything runs the
+# Linux gate (clippy, test, public-api) and the on-demand jobs its diff asks
+# for; main, the merge queue and a manual run add every other check: the nested
+# and feature-gated suites, rustdoc, wasm32 and the platform typechecks. No
+# other target is compiled for a pull request: what a change breaks there
+# shows on main, and nightly-platforms.yml runs each host's suites.
+# There is no scheduled run: advisories.yml checks the RustSec database daily,
+# and nothing else changes without a commit.
 # No label enables native application Windows/macOS or GPU jobs. Platform typechecking
 # uses Linux cross tools and macOS SDK legs; OS runtime checks are local commands.
 # Native host-tool tests live separately in xtask-native.yml.
-# test-nested and test-trybuild (main only) run independently, each with its own cache.
+# test-nested and test-trybuild run independently, each with its own cache.
 # All jobs except the notification are gated by the ci aggregator.
 
 on:
@@ -294,11 +298,13 @@ jobs:
   # clippy — workspace lint with -D warnings. Split out of `checks` so it runs
   # in PARALLEL with test/doc instead of gating them: clippy
   # compiles the whole workspace (minutes); the rest of `checks` is seconds.
-  # Gated on `checks` so a malformed PR fails cheap before this build starts.
+  # The pull-request gate (clippy, test, public-api) waits for `plan` alone:
+  # behind `checks` each started three to eight minutes later, and a pull
+  # request `checks` fails is pushed again, which cancels the run.
   # ─────────────────────────────────────────────────────────────────────────
   clippy:
     name: clippy
-    needs: [checks, plan]
+    needs: [plan]
     if: contains(fromJSON('["wide","full"]'), needs.plan.outputs.lane)
     runs-on: ubuntu-26.04
     timeout-minutes: 25
@@ -335,16 +341,18 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────────
   # test — the workspace suite on Linux (`cargo xtask test --fast`: nextest
   # over TEST_SCOPE, then flui-native under Xvfb, then its Wayland tests
-  # against a headless Weston), then the build that
+  # against a headless Weston), then, on main, the build that
   # links the examples and benches with the same packages and features, so it compiles
   # nothing twice (a target whose `required-features` the test scope leaves
-  # off is compiled per feature by `feature-matrix`, not linked). The nested-cargo group runs beside it in `test-nested`.
-  # `cross-typecheck` is the only job touching the AppKit/Win32/Android
-  # backends on a pull request, and it only type-checks them.
+  # off is compiled per feature by `feature-matrix`, not linked). A pull
+  # request leaves the link to main: `clippy --all-targets` has type-checked
+  # the same examples and benches. The nested-cargo group runs on main in `test-nested`.
+  # No job touches the AppKit/Win32/Android backends on a pull request:
+  # `cross-typecheck` type-checks them on main.
   # ─────────────────────────────────────────────────────────────────────────
   test:
     name: test
-    needs: [checks, plan]
+    needs: [plan]
     if: contains(fromJSON('["wide","full"]'), needs.plan.outputs.lane)
     runs-on: ubuntu-26.04
     timeout-minutes: 40
@@ -364,12 +372,14 @@ jobs:
 
       # The full-workspace build, examples and benches included, outgrew the
       # ubuntu-26.04 runner's free disk (a link failed with "No space left on
-      # device"). The same reclaim as weekly.yml, before the cache restores.
-      - name: Free disk space (ubuntu)
+      # device"). The same reclaim as weekly.yml, started here and left
+      # running: it took over two minutes in the foreground, and the disk
+      # peak is the last build of the job, minutes after it ends.
+      - name: Free disk space (ubuntu), in the background
         run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
-            /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
-          sudo docker image prune --all --force || true
+          nohup sudo sh -c 'rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/local/share/boost; \
+            docker image prune --all --force' > "$RUNNER_TEMP/free-disk.log" 2>&1 &
           df -h /
 
       - name: Install pinned Rust
@@ -492,6 +502,7 @@ jobs:
         run: cargo xtask gpu-test --backend gl
 
       - name: cargo xtask build-all-targets (links the examples and benches)
+        if: needs.plan.outputs.lane == 'full'
         run: cargo xtask build-all-targets
 
       # The disk peak is the build above; the reclaim before the build is what
@@ -524,7 +535,7 @@ jobs:
   test-nested:
     name: test-nested
     needs: [checks, plan]
-    if: contains(fromJSON('["wide","full"]'), needs.plan.outputs.lane)
+    if: needs.plan.outputs.lane == 'full'
     runs-on: ubuntu-26.04
     timeout-minutes: 40
     steps:
@@ -642,7 +653,7 @@ jobs:
   test-features:
     name: test-features
     needs: [checks, plan]
-    if: contains(fromJSON('["wide","full"]'), needs.plan.outputs.lane)
+    if: needs.plan.outputs.lane == 'full'
     runs-on: ubuntu-26.04
     timeout-minutes: 30
     steps:
@@ -720,16 +731,16 @@ jobs:
   # doc — RUSTDOCFLAGS=-D warnings enforces zero new doc warnings. Gated on
   # `checks`. Ubuntu only — docs are platform-agnostic.
   #
-  # Hard-gate as of the workspace rustdoc cleanup sweep (feat/rustdoc-cleanup):
-  # all 108 pre-existing rustdoc errors across 11 crates were resolved
-  # (intra-doc-link qualifications, HTML-tag escaping of bare generics,
-  # private-leak rewrites, bare-URL autolink conversions). A regression
-  # here MUST block merge — the cleanup is the bar to keep.
+  # The workspace has no rustdoc warning (intra-doc-link qualifications,
+  # HTML-tag escaping of bare generics, private-leak rewrites, bare-URL
+  # autolink conversions), and a new one turns main red. It runs on main
+  # only: over the pull-request runs of 2026-11-18 it failed none that
+  # `clippy` and `test` passed.
   # ─────────────────────────────────────────────────────────────────────────
   doc:
     name: doc
     needs: [checks, plan]
-    if: contains(fromJSON('["wide","full"]'), needs.plan.outputs.lane)
+    if: needs.plan.outputs.lane == 'full'
     runs-on: ubuntu-26.04
     timeout-minutes: 25
     steps:
@@ -832,7 +843,7 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────────
   public-api:
     name: public-api
-    needs: [checks, plan]
+    needs: [plan]
     if: contains(fromJSON('["wide","full"]'), needs.plan.outputs.lane)
     runs-on: ubuntu-26.04
     timeout-minutes: 30
@@ -1327,7 +1338,7 @@ jobs:
   wasm-check:
     name: wasm-check
     needs: [checks, plan]
-    if: contains(fromJSON('["wide","full"]'), needs.plan.outputs.lane)
+    if: needs.plan.outputs.lane == 'full'
     runs-on: ubuntu-26.04
     timeout-minutes: 30
     steps:
@@ -1423,7 +1434,7 @@ jobs:
   cross-typecheck:
     name: cross-typecheck (${{ matrix.target }})
     needs: [checks, plan]
-    if: contains(fromJSON('["wide","full"]'), needs.plan.outputs.lane)
+    if: needs.plan.outputs.lane == 'full'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
@@ -1555,7 +1566,8 @@ jobs:
       #      docs      nothing else
       #      tooling   deps
       #      wide      deps + HEAVY_JOBS (the Linux PR gate)
-      #      full      wide + FULL_JOBS (additional Linux checks) + test-trybuild
+      #      full      wide + FULL_JOBS (the nested and feature-gated suites,
+      #                rustdoc, wasm32, the platform typechecks) + test-trybuild
       #                + size + api-contracts + miri + perf-gates + test-without-agent
       #    and a wide pull request adds test-trybuild when `trybuild_required`,
       #    size when `size_required`, feature-scope when `features_required`,
@@ -1570,9 +1582,9 @@ jobs:
         env:
           NEEDS: ${{ toJSON(needs) }}
           HEAVY_JOBS: >-
-            clippy wasm-check cross-typecheck test test-nested doc test-features public-api
+            clippy test public-api
           FULL_JOBS: >-
-            feature-matrix doc-test
+            feature-matrix doc-test test-nested test-features doc wasm-check cross-typecheck
           LANE: ${{ needs.plan.outputs.lane }}
           TRYBUILD_REQUIRED: ${{ needs.plan.outputs.trybuild_required }}
           SIZE_REQUIRED: ${{ needs.plan.outputs.size_required }}

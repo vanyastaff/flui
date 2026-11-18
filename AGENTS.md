@@ -140,7 +140,8 @@ conversation:
 - **A sweep starts with one.** A workspace-wide change is carried through one crate first, with
   its features, examples, shaders and tooling and its checks green, and then repeated across
   the rest.
-- Commits are `area: what changed`. Pull-request CI executes Linux and wasm32 only; Windows,
+- Commits are `area: what changed`. Pull-request CI compiles and executes Linux only (ADR-0370):
+  main checks wasm32 and type-checks the Windows, macOS, iOS and Android backends, and Windows,
   macOS, the iOS Simulator and an Android emulator run nightly on main
   (`nightly-platforms.yml`), so native and GPU changes are run locally before the PR. A red
   `main` is fixed forward within the hour or reverted.
@@ -156,7 +157,8 @@ conversation:
   source that runs for every node of a frame (the element tree and its owners, render storage,
   the pipeline owner's passes, the layer crate, the semantics model), and
   `test-without-agent` runs when the diff reaches flui-app's agent module or its build script.
-  A new main-only job that a pull request can break gets such a row.
+  A new main-only job that a pull request can break gets such a row; `test-nested`,
+  `test-features`, `doc`, `wasm-check` and `cross-typecheck` run on main without one (ADR-0370).
 - No process markers (`Cycle N`, `PR #NNN review`, `Phase B`, slice labels) in code or docs.
   Archival roots are exempt (`docs/plans`). That root holds the live specs, and their task IDs
   are what a spec tracks.
@@ -361,6 +363,6 @@ would be embarrassed by, with the better shape. What this repository keeps getti
 - a document that records a change by appending to a record instead of rewriting its rule, or a
   reversal that leaves other records teaching the old rule.
 
-Not a finding: a native or GPU path not yet run on its platform. PR CI runs Linux and wasm32 only;
+Not a finding: a native or GPU path not yet run on its platform. PR CI runs Linux only;
 the PR body names the platforms the change still needs a run on, and the owner runs them from a
 device list.

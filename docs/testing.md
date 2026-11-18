@@ -1254,14 +1254,15 @@ runs `checks`, `plan` and the `ci` aggregator:
 |---|---|---|
 | `docs` | a pull request that changes only documentation | nothing |
 | `tooling` | a pull request that changes only repository tooling | `deps` |
-| `wide` | a pull request that compiles anything | `deps` and the pull-request gate (`HEAVY_JOBS`: `clippy`, `cross-typecheck`, `test`, `test-nested`, `doc`, `wasm-check`, `test-features`, `public-api`) over the whole workspace, and the on-demand jobs its diff asks for (below) |
-| `full` | a push to `main`, the merge queue, a manual `workflow_dispatch` run | `wide` plus `FULL_JOBS`: `feature-matrix`, `doc-test` (both Linux), and `test-trybuild`, `api-contracts`, `miri` and `perf-gates` always; in `clippy` and `test` it also turns on the `native-features` and `gpu-test --backend gl` steps |
+| `wide` | a pull request that compiles anything | `deps` and the pull-request gate (`HEAVY_JOBS`: `clippy`, `test`, `public-api`) over the whole workspace on Linux, and the on-demand jobs its diff asks for (below) |
+| `full` | a push to `main`, the merge queue, a manual `workflow_dispatch` run | `wide` plus `FULL_JOBS`: `feature-matrix`, `doc-test`, `test-nested`, `test-features`, `doc`, `wasm-check`, `cross-typecheck`, and `test-trybuild`, `api-contracts`, `miri` and `perf-gates` always; in `clippy` and `test` it also turns on the `native-features`, `gpu-test --backend gl` and `build-all-targets` steps |
 
-- **Wide lane**: every pull request that compiles anything runs every Linux
-  job, in parallel, over the whole workspace. One serial job over the
+- **Wide lane**: every pull request that compiles anything runs the Linux
+  gate, in parallel, over the whole workspace, and compiles for no other
+  target (ADR-0370). The three jobs start once `plan` has picked the lane,
+  beside `checks`. One serial job over the
   changed crates and their dependents was slower (35 min median, against 18
-  for these parallel jobs, over the runs of 2026-09-30), and hosted runners
-  do not queue for this repository, so scoping bought nothing in CI. The
+  for parallel jobs, over the runs of 2026-09-30). The
   scope still decides whether `deps` advisories block: they block when the change is
   workspace-wide (`mode` full: `Cargo.lock`, the root `Cargo.toml`,
   `.cargo/`, the toolchain file, a workflow, the lane's own code in
@@ -1275,13 +1276,15 @@ runs `checks`, `plan` and the `ci` aggregator:
   target-specific dependencies included; normal and build edges
   transitively, a dev edge as the last hop). Before a PR, check the crates
   you changed one command at a time (AGENTS.md, "Checking a change"), and
-  their dependents' clippy when you changed a public API. CI runs the rest
-  — the dependents' tests, the feature matrix, wasm32, cross-typecheck,
-  rustdoc, doctests, trybuild — and is the proof. On a pull request
-  `flui-native`'s suite runs only on Linux and the Windows and macOS
-  backends are only type-checked; the nightly platform runs reach them
-  after the merge, so a Windows or macOS backend change still needs
-  `cargo nextest run -p flui-native` by hand before it.
+  their dependents' clippy when you changed a public API. CI runs the rest:
+  the dependents' tests on the pull request, and the feature matrix, wasm32,
+  cross-typecheck, rustdoc, doctests and trybuild on main. On a pull request
+  `flui-native`'s suite runs only on Linux and no other backend is compiled;
+  main type-checks the Windows, macOS, iOS and Android backends and the
+  nightly platform runs reach them after the merge, so a change to one of
+  them needs `cargo xtask cross-typecheck --target <triple>` by hand before
+  it, and a Windows or macOS backend change `cargo nextest run -p flui-native`
+  on that host.
 - **Tooling lane**: nothing in the workspace compiles; `checks` and `deps`
   cover the change.
 - **Full lane**: main, the merge queue and manual runs add the remaining
@@ -1349,7 +1352,12 @@ A pull request that reaches none of them skips all of them.
 turn main red: the per-feature matrix (`feature-matrix`), miri and the
 doctests (`doc-test`) — over 171 runs
 of 2026-09-26..30 none of them failed where `clippy` and `test` passed, so
-they run after the merge and a break is fixed forward. Native application
+they run after the merge and a break is fixed forward. The same holds for
+`test-nested`, `test-features`, `doc`, `wasm-check` and `cross-typecheck`
+(ADR-0370): over the 61 pull-request runs of 2026-11-18 `doc` and
+`test-features` failed none alone and `test-nested` one, while `wasm-check`
+and `cross-typecheck` were the only failure of ten, so a change to the web
+or a native backend is the one to check by hand before its pull request. Native application
 Windows/macOS and GPU runtime checks are local commands; no labels enable
 them in CI. The host tool is covered separately: `xtask-native.yml` runs
 strict xtask Clippy and the complete xtask test suite on Windows and macOS
@@ -1372,8 +1380,8 @@ what it needs. One row per job in `.github/workflows/ci.yml`:
 | `checks` | `cargo xtask checks` + `cargo test -p xtask`, then `actionlint` and `zizmor .` (`ci-full` runs both, skipping one that is not installed) | CI passes `--strict`: a missing typos, taplo or lychee fails there instead of being skipped with a message |
 | `plan` | `cargo xtask affected --worktree` | decides the lane and the affected packages; CI passes `--event` and the PR's base SHA, the local run diffs against `origin/main` (or `--base`) and `--worktree` adds uncommitted files |
 | `clippy` | `cargo xtask lint` (in `gate`), then, on main only, `cargo xtask native-features` | `native-features` lints flui-native with default features off, once each for none, `x11`, `wayland` and `testing`, with and without `--all-targets`: part of `feature-matrix`; from a Windows or macOS checkout pass `--target x86_64-unknown-linux-gnu` |
-| `test` | `cargo xtask test --fast`, `cargo xtask wayland-optional` (under a headless sway the step starts), `cargo xtask gpu-test --backend vulkan`, `cargo xtask gpu-test --backend gl` (main only), then `cargo xtask build-all-targets` | the same commands; the gpu-test steps render on Mesa's lavapipe and llvmpipe, which the job installs; the all-targets build uses the test scope's packages and features, so it links the examples and benches without rebuilding the rest (a target whose `required-features` it leaves off is compiled by `feature-matrix`, not linked) (the facade's default feature set is linted by `feature-matrix`, not built here); the flui-native leg needs `xvfb-run` (Linux) and also links flui-native's examples, which the all-targets build leaves out with the rest of flui-native |
-| `test-nested` | `cargo xtask test --nested --nested-group native` | generated projects and facade consumers, beside `test` and `test-trybuild` |
+| `test` | `cargo xtask test --fast`, `cargo xtask wayland-optional` (under a headless sway the step starts), `cargo xtask gpu-test --backend vulkan`, `cargo xtask gpu-test --backend gl` (main only), then `cargo xtask build-all-targets` (main only) | the same commands; the gpu-test steps render on Mesa's lavapipe and llvmpipe, which the job installs; the all-targets build uses the test scope's packages and features, so it links the examples and benches without rebuilding the rest (a target whose `required-features` it leaves off is compiled by `feature-matrix`, not linked) (the facade's default feature set is linted by `feature-matrix`, not built here); the flui-native leg needs `xvfb-run` (Linux) and also links flui-native's examples, which the all-targets build leaves out with the rest of flui-native |
+| `test-nested` | `cargo xtask test --nested --nested-group native` | generated projects and facade consumers, beside `test` and `test-trybuild`; main only |
 | `test-trybuild` | `cargo xtask test --nested --nested-group trybuild --trybuild-shard <shard>` (`facade`, `core` or `view`) | compile-fail suites in three shards on three runners, because every trybuild project builds under Cargo's lock on `target/tests/trybuild` and suites on one runner wait for each other; each shard builds only its own test targets with the whole run's features; without `--trybuild-shard` the command runs every suite, and plain `--nested` still runs both groups |
 | `test-features` | the job's `cargo nextest run` lines (`ci-full` runs them) | — |
 | `doc` | `cargo xtask doc-strict` (in `gate`) | — |

@@ -8,6 +8,9 @@
   [ADR-0287](ADR-0287-owner-state-is-committed-before-user-code-runs.md) Confirmation, the last
   bullet: the hand-written `catch_unwind` calls are a `clippy.toml` entry with an expectation at
   each site, not a counting gate (§6).
+- **Superseded-by:** [ADR-0370](ADR-0370-a-pull-request-compiles-for-linux-and-every-other-target-is-mains.md)
+  for §9 only, for five jobs (`test-nested`, `test-features`, `doc`, `wasm-check`,
+  `cross-typecheck`), which run on main with no narrow form.
 - **Related:** [ADR-0081](ADR-0081-workspace-tiers-and-reach-facts.md) (the tier gate, a rule only
   a gate can hold); [ADR-0097](ADR-0097-no-process-global-state-gate.md) (an allowlist entry that
   names its grant); [ADR-0151](ADR-0151-platform-layer-boundary-and-names.md) §16 (the OS entry
@@ -191,7 +194,8 @@ When a pull request cannot see the break, `main` goes red one merge later, and t
 pays for it. So a check that runs only on main has a narrow form that a wide-lane pull request
 runs when its diff reaches what the check reads. The narrow form is worked out by
 `cargo xtask affected` in the `plan` job, the tool that already picks the lane. It is not a gate
-of its own.
+of its own. Five jobs run on main without one: `test-nested`, `test-features`, `doc`, `wasm-check`
+and `cross-typecheck` (ADR-0370).
 
 - **What the check reads comes from its own expectations.** A trybuild expectation quotes, in its
   `--> path` and `::: path` lines, every file of the error chain: the fixture, and the declaration
