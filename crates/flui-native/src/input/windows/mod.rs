@@ -312,7 +312,7 @@ impl WindowMessages for InputWindows {
                 input.locked.set(locked);
                 input.raw_absolute.set(None);
             }
-            WindowStep::ScaleApplied | WindowStep::SessionLocked(_) | WindowStep::Closed => {}
+            WindowStep::ScaleApplied | WindowStep::Session(_) | WindowStep::Closed => {}
         }
     }
 

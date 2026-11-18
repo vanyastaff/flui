@@ -12,7 +12,9 @@
 //!   boundary of its own, changes colour; the bench fails unless the window
 //!   slot draws it in region passes (the engine's partial-damage path);
 //! - **update, no boundary**: the same change to a cell that paints into the
-//!   grid's one picture, which the slot draws in full.
+//!   grid's content without a boundary of its own: the content repaints, every
+//!   other cell keeps its chunk (ADR-0304 §2), and the slot draws the changed
+//!   cell in region passes too.
 //!
 //! The frame is the UI runtime's frame transaction (`UiRuntime::pump`) over a
 //! sink that hands each publication to an inline [`RasterExecutor`] on the
@@ -176,7 +178,7 @@ mod grid {
             );
             let grid = Grid::new(n, Isolation::None);
             let updates = update_frames(&mut sink, &fonts, grid);
-            report(n, "update, no boundary", Drawn::Full, &updates);
+            report(n, "update, no boundary", Drawn::Partial, &updates);
         }
         println!();
         println!(

@@ -175,9 +175,20 @@ its child node, so attaching, detaching or moving a boundary between parents is 
 of the parents' content, which their paint already produces. Bounds that are not finite are
 `Bounds::Unbounded`.
 
-A chunk keeps its `ContentVersion` while its render object owes no paint work (it is absent from
-the paint queue, ADR-0062) and its recording inputs, the device pixel ratio and its origin in the
-boundary, are unchanged; otherwise it gets the next one. A composited-layer update republishes the
+A chunk of a repainted boundary keeps its `ContentVersion` when the paint that seals it records
+what the boundary's previous paint recorded there; otherwise it gets the next one. The paint walk
+decides that from flags, and nothing beside the published content is stored for it. The paint
+keeps its chunks when its render object owes no paint work (`NEEDS_PAINT`,
+`NEEDS_COMPOSITED_LAYER_UPDATE`, `PAINT_CHANGED`, or `LAID_OUT_SINCE_PAINT`, since layout marks
+paint only on a dirty root and on a boundary), when it reads no paint anchor, and when the render
+object is painted where it was: no ancestor in the boundary laid out or was marked for its own
+paint since (`PAINT_CHANGED` is set on the node a mark names, not on the ancestors the mark walks
+through), and this is its first paint in the content. A run of another paint seals the open
+chunk, so a chunk is matched to the previous one by owner and ordinal. A change of the device
+pixel ratio drops every record first, and no chunk keeps its version in the pass after one that
+failed or unwound, which cleared marks without committing what it painted. A render object that
+changes what it paints without marking itself keeps its old recording when its boundary repaints
+for another reason, so a missing mark shows on screen. A composited-layer update republishes the
 boundary's content with the new effect and the same chunks. `seq` comes from the scene owner's
 `IdMint<NonZeroU64>` (`crates/flui-foundation/src/sequence.rs:118-186`), which never wraps, and
 `SceneVersionId` draws from the same mint. `Lineage(NonZeroU64)` comes from a non-`pub`

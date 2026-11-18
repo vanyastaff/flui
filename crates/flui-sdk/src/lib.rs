@@ -35,7 +35,26 @@
 )]
 extern crate self as flui_sdk;
 
-pub use flui_animation as animation;
+/// The animation layer (`flui-animation`): every public item of the crate, at
+/// the SDK's path, as the same items.
+///
+/// A glob module rather than a whole-crate alias, so that it can shadow
+/// `flui_animation::__runtime`, the frame driver's seam (ADR-0382), which is
+/// not package-author surface: a package receives a `Vsync` handle from its
+/// tree and never ticks or closes a registry.
+///
+/// ```compile_fail,E0603
+/// use flui_sdk::animation::__runtime::VsyncDriver;
+/// ```
+pub mod animation {
+    pub use flui_animation::*;
+    #[expect(
+        hidden_glob_reexports,
+        reason = "shadows the glob's `__runtime` (ADR-0382): the frame driver's seam is not SDK surface"
+    )]
+    mod __runtime {}
+}
+
 pub use flui_foundation as foundation;
 pub use flui_foundation::geometry;
 pub use flui_widgets as widgets;

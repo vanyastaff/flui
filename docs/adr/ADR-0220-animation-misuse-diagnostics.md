@@ -69,7 +69,7 @@ alive. Timed runs and finite repeats settle by construction, and an infinite
 repeat is meant to run forever, so neither is watched.
 
 There is no report of seats still registered when a registry closes. A
-presentation closes its registry (`Vsync::prepare_close`) before it tears
+presentation closes its registry (`VsyncDriver::prepare_close`) before it tears
 down its element tree, so every widget's controller is still seated then and
 a close-time report would fire on every window close; and `prepare_close`
 disposes every seated controller, so no seat outlives its registry or keeps

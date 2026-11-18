@@ -130,6 +130,8 @@ mod input_tap;
 mod io_runtime;
 #[path = "contracts/numeric_text_answers.rs"]
 mod numeric_text_answers;
+#[path = "contracts/occluded_frame.rs"]
+mod occluded_frame;
 #[path = "contracts/owner_close.rs"]
 mod owner_close;
 #[path = "contracts/owner_delivery.rs"]

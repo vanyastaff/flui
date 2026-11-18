@@ -167,6 +167,10 @@ impl HostWindow for OutsideWindow {
     fn accessibility(&self) -> Option<Arc<dyn PlatformAccessibility>> {
         None
     }
+
+    fn occluded_surface(&self) -> flui_platform::OccludedSurface {
+        flui_platform::OccludedSurface::Discarded
+    }
 }
 
 fn main() {}

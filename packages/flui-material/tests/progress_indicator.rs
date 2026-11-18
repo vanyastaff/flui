@@ -3,6 +3,7 @@
 //! and 900 ms, running 1000, 1000, 850 and 850 ms with emphasized-accelerate
 //! easing), and the switch to a determinate fraction.
 
+use flui_animation::__runtime::VsyncDriver;
 use std::time::Duration;
 
 use flui_sdk::animation::{Cubic, Curve, Vsync};
@@ -124,9 +125,10 @@ pub fn indeterminate_bars_follow_the_published_timing() {
     }
     assert_eq!(mounted.vsync.len(), 1);
 
-    let next = Vsync::new();
+    let driver = VsyncDriver::new();
+    let next = driver.vsync().clone();
     mounted.laid.pump_widget(VsyncScope::new(
-        next.clone(),
+        next,
         Directionality::new(
             TextDirection::Ltr,
             Theme::new(ThemeData::light(), LinearProgressIndicator::new()),
@@ -136,12 +138,12 @@ pub fn indeterminate_bars_follow_the_published_timing() {
     assert_bars(&mounted, 200);
     // A new registry may have a different clock origin. Its first tick
     // preserves the painted phase; subsequent ticks advance from there.
-    next.tick_all(
+    driver.tick_all(
         &flui_sdk::animation::MotionClock::new().frame(std::time::Duration::from_secs_f64(50.0)),
     );
     mounted.laid.pump_for(Duration::ZERO);
     assert_bars(&mounted, 200);
-    next.tick_all(
+    driver.tick_all(
         &flui_sdk::animation::MotionClock::new().frame(std::time::Duration::from_secs_f64(50.25)),
     );
     mounted.laid.pump_for(Duration::ZERO);

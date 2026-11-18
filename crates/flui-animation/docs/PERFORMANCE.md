@@ -458,7 +458,7 @@ run the current colour cases in `animation_bench` to measure the new paths.
 
 ## Vsync registry indexing (#1060)
 
-`Vsync::tick_all` resolves each registration through a `BTreeMap` keyed by
+`VsyncDriver::tick_all` resolves each registration through a `BTreeMap` keyed by
 registration id instead of a linear `Vec` scan; see `vsync.rs`'s `tick_all`
 doc for the cursor-walk design. Measured with the committed Criterion bench
 (`benches/vsync_registry.rs`); run `cargo bench -p flui-animation --bench

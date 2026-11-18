@@ -1,6 +1,7 @@
 //! Dismissible release: cancellation restores a dragged card, a fling keeps
 //! the finger's speed.
 use crate::common::{LaidOut, lay_out_animated, tight};
+use flui_animation::__runtime::VsyncDriver;
 use flui_animation::Vsync;
 use flui_foundation::geometry::Offset;
 use flui_painting::styling::Color;
@@ -926,10 +927,11 @@ fn exercise_collapse_registry(migrate: bool, fail_wake: bool) {
             "the collapse is genuinely in flight: {before}"
         );
         assert!(vsync.has_running());
-        let next = Vsync::new();
+        let driver = VsyncDriver::new();
+        let next = driver.vsync().clone();
         let woke = Rc::new(Cell::new(false));
         if fail_wake {
-            next.set_frame_requester(Some(Rc::new({
+            driver.set_frame_requester(Some(Rc::new({
                 let woke = woke.clone();
                 move || {
                     woke.set(true);
@@ -947,7 +949,7 @@ fn exercise_collapse_registry(migrate: bool, fail_wake: bool) {
                 Some("collapse migration wake failed")
             );
         }
-        next.set_frame_requester(None);
+        driver.set_frame_requester(None);
         if fail_wake {
             assert!(woke.get(), "migration reaches the failing hook");
             assert!(
@@ -1040,7 +1042,8 @@ pub(crate) fn resize_delivery_keeps_accepted_ticks_before_completion() {
                 .boxed()
             })
         };
-        let vsync = Vsync::new();
+        let driver = VsyncDriver::new();
+        let vsync = driver.vsync().clone();
         // A new root view is how the scope hands its probe to build again.
         let root = || VsyncScope::new(vsync.clone(), probe.view());
         let mut laid = lay_out_animated(root(), tight(150.0, 100.0), vsync.clone());
@@ -1063,7 +1066,7 @@ pub(crate) fn resize_delivery_keeps_accepted_ticks_before_completion() {
         // build consume the intervening notifications.
         let mut clock = MotionClock::new();
         for millis in [170, 220, 470] {
-            vsync.tick_all(&clock.frame(Duration::from_millis(millis)));
+            driver.tick_all(&clock.frame(Duration::from_millis(millis)));
         }
         assert!(
             delivered.borrow().is_empty(),

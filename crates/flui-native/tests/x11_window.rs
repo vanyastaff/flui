@@ -159,6 +159,10 @@ mod cases {
             a_window_manager_without_ewmh_is_followed,
         ),
         (
+            "a_compositing_manager_that_goes_gives_the_covering_report_back",
+            a_compositing_manager_that_goes_gives_the_covering_report_back,
+        ),
+        (
             "a_minimized_window_that_is_hidden_reads_hidden",
             a_minimized_window_that_is_hidden_reads_hidden,
         ),
@@ -2202,6 +2206,105 @@ mod cases {
         );
         drop(started_again);
         fixture.settle();
+    }
+
+    /// A compositing manager owns the screen's `_NET_WM_CM_S0` while it runs,
+    /// and under it the server reads every window unobscured, so a window
+    /// stops telling a covering. One that gives the selection up, or whose
+    /// client goes, announces nothing: the window tells a covering again from
+    /// the next turn, not from the next time the window manager's support
+    /// happens to be read. A client of the test stands in for the manager,
+    /// taking the selection and announcing it with `MANAGER` as one does.
+    /// Red-check: hear no change of the selection's owner, and the window
+    /// keeps saying it cannot tell a covering after each way of going.
+    fn a_compositing_manager_that_goes_gives_the_covering_report_back() {
+        use flui_platform::WindowCapability;
+        const UNAVAILABLE: WindowCapability =
+            WindowCapability::Absent(flui_platform::CapabilityAbsence::NOT_ON_THIS_DEVICE);
+
+        let mut fixture = X11Fixture::open("composited");
+        let root = fixture.root();
+        let selection = atom(&fixture.server, "_NET_WM_CM_S0");
+        fixture.settle();
+        assert_eq!(
+            fixture.window.state().capabilities.reports_occlusion(),
+            WindowCapability::Native,
+            "no compositing manager runs: the server reads a covering"
+        );
+        let take = |stand_in: &RustConnection| {
+            let owner = stand_in.generate_id().expect("an id");
+            stand_in
+                .create_window(
+                    x11rb::COPY_DEPTH_FROM_PARENT,
+                    owner,
+                    root,
+                    -1,
+                    -1,
+                    1,
+                    1,
+                    0,
+                    WindowClass::INPUT_OUTPUT,
+                    x11rb::COPY_FROM_PARENT,
+                    &CreateWindowAux::new(),
+                )
+                .expect("request");
+            stand_in
+                .set_selection_owner(owner, selection, x11rb::CURRENT_TIME)
+                .expect("request");
+            stand_in
+                .send_event(
+                    false,
+                    root,
+                    EventMask::STRUCTURE_NOTIFY,
+                    ClientMessageEvent::new(
+                        32,
+                        root,
+                        atom(stand_in, "MANAGER"),
+                        [x11rb::CURRENT_TIME, selection, owner, 0, 0],
+                    ),
+                )
+                .expect("request");
+            stand_in.flush().expect("flush");
+        };
+        let connect = || {
+            RustConnection::connect(None)
+                .expect("the X server answers")
+                .0
+        };
+
+        // (case, whether the manager's client stays connected after it goes:
+        // it gives the selection up and keeps its window, or its client goes)
+        let table = [
+            ("it gives the selection up", true),
+            ("its client goes", false),
+        ];
+        for (case, gives_up) in table {
+            let stand_in = connect();
+            take(&stand_in);
+            fixture.settle();
+            assert_eq!(
+                fixture.window.state().capabilities.reports_occlusion(),
+                UNAVAILABLE,
+                "{case}: a running compositing manager takes the report away"
+            );
+            let kept = if gives_up {
+                stand_in
+                    .set_selection_owner(x11rb::NONE, selection, x11rb::CURRENT_TIME)
+                    .expect("request");
+                stand_in.flush().expect("flush");
+                Some(stand_in)
+            } else {
+                drop(stand_in);
+                None
+            };
+            fixture.settle();
+            assert_eq!(
+                fixture.window.state().capabilities.reports_occlusion(),
+                WindowCapability::Native,
+                "{case}: the report is back once the manager goes"
+            );
+            drop(kept);
+        }
     }
 
     /// Hiding withdraws a window, iconic or not: a minimized window the

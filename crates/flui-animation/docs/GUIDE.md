@@ -37,22 +37,25 @@ controller state rather than a synchronous sample during configuration.
 ```rust
 use std::time::Duration;
 use flui_animation::{Animation, AnimationBehavior, AnimationController,
-    MotionClock, MotionOverride, Vsync};
+    MotionClock, MotionOverride};
+use flui_animation::__runtime::VsyncDriver;
 
-let vsync = Vsync::new();
+// The driver a presentation owns: it ticks the registry its tree registers on.
+let driver = VsyncDriver::new();
+let vsync = driver.vsync();
 let mut clock = MotionClock::new();
 clock.set_override(MotionOverride::Reduce);
 let transition = AnimationController::builder(Duration::from_secs(1))
-    .build_on(Some(&vsync));
+    .build_on(Some(vsync));
 let timer = AnimationController::builder(Duration::from_secs(3))
     .behavior(AnimationBehavior::Preserve)
-    .build_on(Some(&vsync));
+    .build_on(Some(vsync));
 let _ = transition.controller().forward().expect("live transition");
 let _ = timer.controller().forward().expect("live timer");
-vsync.tick_all(&clock.frame(Duration::ZERO));
+driver.tick_all(&clock.frame(Duration::ZERO));
 assert_eq!(transition.controller().value(), 1.0);
 assert_eq!(timer.controller().value(), 0.0);
-vsync.tick_all(&clock.frame(Duration::from_secs(1)));
+driver.tick_all(&clock.frame(Duration::from_secs(1)));
 assert!((timer.controller().value() - 1.0 / 3.0).abs() < 1e-9);
 ```
 

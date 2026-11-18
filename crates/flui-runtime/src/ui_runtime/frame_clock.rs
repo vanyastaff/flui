@@ -146,7 +146,11 @@ impl UiRuntime {
     }
 
     pub(super) fn request_redraw_for(&self, presentation: &PresentationState) {
-        self.needs_redraw.store(true, Ordering::Relaxed);
+        // A presentation that cannot be seen asks for no frame: its mark waits for it to be seen
+        // (`set_presentation_hidden`) or for the frame it owes a kept surface (ADR-0357).
+        if !presentation.clock().is_hidden() {
+            self.needs_redraw.store(true, Ordering::Relaxed);
+        }
         presentation.mark_redraw_pending();
         // The flags alone are inert while the event loop is parked: nothing
         // converts them into a frame until SOMETHING pokes the platform.
@@ -529,14 +533,17 @@ impl UiRuntime {
     /// Whether a presentation's tree waits for a frame: a pending build, a
     /// dirty render node, or a completion the next frame takes. A
     /// presentation waiting out a dropped frame's backoff, one whose sink
-    /// holds as many frames as it may and one whose device rebuild was given
-    /// up have none: the backoff's deadline is
-    /// [due work](Self::has_pending_due_work), and a settlement or a new
-    /// rebuild asks for the frame. A frame that showed nothing and left tree
-    /// work behind is what a runner paces (ADR-0353 decision 4).
+    /// holds as many frames as it may, one whose device rebuild was given
+    /// up and one that cannot be seen have none: the backoff's deadline and
+    /// the frame an unseen window owes its surface are
+    /// [due work](Self::has_pending_due_work), a settlement or a new
+    /// rebuild asks for the frame, and a window seen again asks for its own.
+    /// A frame that showed nothing and left tree work behind is what a runner
+    /// paces (ADR-0353 decision 4).
     pub fn has_pending_tree_work(&self) -> bool {
         self.presentations.iter().any(|presentation| {
-            presentation.failure_retry_at().is_none()
+            !presentation.clock().is_hidden()
+                && presentation.failure_retry_at().is_none()
                 && !presentation.frames_in_flight().is_saturated()
                 && !presentation.device_abandoned()
                 && (presentation.has_pending_work_snapshot()
@@ -558,10 +565,11 @@ impl UiRuntime {
     }
 
     /// Whether work is due now, at an instant of its own: a due task deadline,
-    /// a dropped frame whose backoff is over, a gesture deadline that came
-    /// due, a haptic delivery, or a frame-rate hold that ran out. A runner
-    /// serves it on the wake its deadline brings, never behind a pacing
-    /// deferral (ADR-0353 decision 4).
+    /// a dropped frame whose backoff is over (a seen window's), the frame a
+    /// covered window owes its surface, a gesture deadline that came due, a
+    /// haptic delivery, or a frame-rate hold that ran out. A runner serves it
+    /// on the wake its deadline brings, never behind a pacing deferral
+    /// (ADR-0353 decision 4).
     pub fn has_pending_due_work(&self) -> bool {
         // A deadline a task sleeps until is owner work once it is due.
         let deadline_due = self
@@ -569,11 +577,14 @@ impl UiRuntime {
             .next_deadline()
             .is_some_and(|due| flui_foundation::MonotonicClock::now(&self.clock) >= due);
         deadline_due
+            || self.owes_occluded_frame()
             || self.presentations.iter().any(|presentation| {
                 // A sink at its in-flight limit or a given-up device asks for
-                // no frame until a settlement or a new rebuild does.
+                // no frame until a settlement or a new rebuild does, and an
+                // unseen window retries its dropped frame once it is seen.
                 let retry_due = !presentation.frames_in_flight().is_saturated()
                     && !presentation.device_abandoned()
+                    && !presentation.clock().is_hidden()
                     && presentation
                         .failure_retry_at()
                         .is_some_and(|at| presentation.clock().now() >= at);
@@ -584,6 +595,26 @@ impl UiRuntime {
                         .frame_rate_hold()
                         .is_some_and(|due| presentation.clock().now() >= due)
             })
+    }
+
+    /// Whether a wake of this runtime runs a frame rather than a background
+    /// turn ([`Self::pump_background`](crate::ui_runtime::UiRuntime::pump_background)):
+    /// frames are enabled (some window is seen), or a covered window whose
+    /// surface is kept has its owed frame due, which runs while no window is
+    /// seen (ADR-0357). Every runner's wake gate and the headless host ask
+    /// this, not the scheduler, so none can leave the owed frame out.
+    #[must_use]
+    pub fn runs_frames(&self) -> bool {
+        self.scheduler.frames_enabled() || self.owes_occluded_frame()
+    }
+
+    /// Whether a covered window's owed frame is due now (ADR-0357).
+    fn owes_occluded_frame(&self) -> bool {
+        self.presentations.iter().any(|presentation| {
+            presentation
+                .occluded_frame_at()
+                .is_some_and(|at| presentation.clock().now() >= at)
+        })
     }
 
     /// Whether `presentation`'s earliest armed gesture deadline (a long
@@ -690,12 +721,16 @@ impl UiRuntime {
                     presentation.text_preparation.borrow().next_wake(),
                     presentation.haptics().next_wake(),
                     presentation.frame_rate_hold(),
+                    // The frame an unseen window owes its surface (ADR-0357).
+                    presentation.occluded_frame_at(),
                     // A presentation at its in-flight limit attempts no frame when its backoff
                     // ends; the settlement that frees a place wakes it, and the in-flight floor
-                    // bounds the sleep until then (ADR-0305 §5).
-                    presentation
-                        .failure_retry_at()
-                        .filter(|_| !presentation.frames_in_flight().is_saturated()),
+                    // bounds the sleep until then (ADR-0305 §5). An unseen one retries once it
+                    // is seen, which wakes it.
+                    presentation.failure_retry_at().filter(|_| {
+                        !presentation.frames_in_flight().is_saturated()
+                            && !presentation.clock().is_hidden()
+                    }),
                     presentation.in_flight_floor().filter(|_| {
                         floor_owed(PresentationAddress {
                             ui_runtime_id,

@@ -12,6 +12,7 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 
+use flui_animation::__runtime::{VsyncDriver, VsyncRetirement};
 use flui_animation::{FrameTick, MotionClock, Vsync};
 use flui_foundation::{PresentationId, panic::FirstPanic};
 use flui_interaction::{
@@ -45,6 +46,7 @@ use web_time::{Duration, Instant};
 use crate::epoch::{FrameCommitState, TreeRevision};
 use crate::frame_failure::SegmentPhase;
 use crate::held_input::HeldPointerQueue;
+use crate::occluded_frame::{OccludedFrame, Session, Sight};
 use crate::renderer_binding::RenderingBinding;
 use crate::semantics_host::SemanticsHost;
 use crate::ui_runtime::text_preparation::TextPreparation;
@@ -157,6 +159,7 @@ pub struct PresentationWindow {
     pointer_resampling: PointerResampling,
     gesture_profiles: flui_interaction::gesture::GestureProfiles,
     platform: flui_platform::TargetPlatform,
+    occluded_surface: flui_platform::OccludedSurface,
 }
 
 impl std::fmt::Debug for PresentationWindow {
@@ -168,6 +171,7 @@ impl std::fmt::Debug for PresentationWindow {
             .field("text_store_host", &self.text_store_host.is_some())
             .field("gesture_profiles", &self.gesture_profiles)
             .field("platform", &self.platform)
+            .field("occluded_surface", &self.occluded_surface)
             .finish()
     }
 }
@@ -187,7 +191,18 @@ impl PresentationWindow {
                 flui_platform::TargetPlatform::Unknown,
             ),
             platform: flui_platform::TargetPlatform::Unknown,
+            occluded_surface: flui_platform::OccludedSurface::Discarded,
         }
+    }
+
+    /// What the window system does with the window's last frame while it
+    /// keeps the window off the screen, as the host names it; discarded by
+    /// default. Only a window whose surface is kept owes a frame while it is
+    /// covered ([`OccludedSurface`](flui_platform::OccludedSurface), ADR-0357).
+    #[must_use]
+    pub fn with_occluded_surface(mut self, surface: flui_platform::OccludedSurface) -> Self {
+        self.occluded_surface = surface;
+        self
     }
 
     /// The platform whose conventions this presentation's tree follows: the
@@ -546,6 +561,12 @@ pub struct PresentationState {
     /// ([`Self::first_withdrawal_past_budget`]): once per presentation, so a
     /// window covered again and again does not repeat it.
     withheld_reported: Cell<bool>,
+    /// Whether this presentation owes its surface a frame while it cannot be
+    /// seen, and since when it has drawn none ([`OccludedFrame`]).
+    occluded_frame: Cell<OccludedFrame>,
+    /// What the window system does with the window's last frame while it
+    /// keeps the window off the screen, as the host named it.
+    occluded_surface: flui_platform::OccludedSurface,
     /// Whether the performance overlay is drawn. Its numbers come from the
     /// clock's frame history, which is kept either way.
     performance_overlay: Cell<bool>,
@@ -570,13 +591,13 @@ pub struct PresentationState {
     /// Set by the first platform redraw request this presentation makes for
     /// the next frame; reopened when a pump samples the presentation.
     redraw_poked: Arc<AtomicBool>,
-    /// This presentation's controller registry. Handles share owner-local state;
-    /// the presentation keeps its driver binding for its whole lifetime.
-    vsync: Vsync,
+    /// The driver of this presentation's controller registry; its tree holds
+    /// only handles, and the presentation keeps the binding for its whole lifetime.
+    vsync_driver: VsyncDriver,
     /// Kernels close before any teardown callout; delivery outlives opaque trees.
-    animation_retirement: RefCell<Option<flui_animation::VsyncRetirement>>,
+    animation_retirement: RefCell<Option<VsyncRetirement>>,
     /// This presentation's animation clock: maps the UI runtime's raw frame time
-    /// to the monotonic animation time [`Self::vsync`] is ticked with.
+    /// to the monotonic animation time [`Self::vsync_driver`] ticks with.
     /// Borrowed only inside [`Self::motion_tick`], never across user code.
     motion_clock: RefCell<MotionClock>,
     /// This presentation's own physical-time produce-gate state machine
@@ -885,6 +906,7 @@ impl PresentationState {
             pointer_resampling,
             gesture_profiles,
             platform,
+            occluded_surface,
         } = window.into();
         let pipeline = PipelineCell::new(PipelineOwner::new(capabilities.text));
         pipeline.withdraw_layout();
@@ -1000,14 +1022,14 @@ impl PresentationState {
                 redraw_window.request_redraw();
             }
         });
-        let vsync = Vsync::new();
+        let vsync_driver = VsyncDriver::new();
         // Controllers ticked here refuse mutation while this runtime builds.
-        vsync.set_build_phase(Some(
+        vsync_driver.set_build_phase(Some(
             widgets.with_build_owner(flui_view::BuildOwner::build_phase),
         ));
         let request_animation_frame = Arc::clone(&request_frame);
         let animation_owner = Rc::downgrade(&alive);
-        vsync.set_frame_requester(Some(Rc::new(move || {
+        vsync_driver.set_frame_requester(Some(Rc::new(move || {
             if animation_owner.upgrade().is_some() {
                 request_animation_frame();
             }
@@ -1149,11 +1171,13 @@ impl PresentationState {
             frames_dropped: Cell::new(0),
             not_shown_streak: Cell::new(0),
             withheld_reported: Cell::new(false),
+            occluded_frame: Cell::new(OccludedFrame::NotOwed),
+            occluded_surface,
             performance_overlay: Cell::new(false),
             redraw_pending: Cell::new(false),
             redraw_requests: Cell::new(0),
             redraw_requests_watched: Cell::new(0),
-            vsync,
+            vsync_driver,
             animation_retirement: RefCell::new(None),
             motion_clock: RefCell::new(MotionClock::new()),
             clock: frame_clock,
@@ -1173,6 +1197,9 @@ impl PresentationState {
         };
         state.attach_surface();
         state.clock.set_hidden(!state.window_visible.get());
+        // A window opened covered owes its surface from the start; a runtime that installs the
+        // presentation reads it again in its own session.
+        state.follow_sight(Session::default(), state.clock.now());
         state
     }
 
@@ -1299,11 +1326,13 @@ impl PresentationState {
             frames_dropped: Cell::new(0),
             not_shown_streak: Cell::new(0),
             withheld_reported: Cell::new(false),
+            occluded_frame: Cell::new(OccludedFrame::NotOwed),
+            occluded_surface: flui_platform::OccludedSurface::Discarded,
             performance_overlay: Cell::new(false),
             redraw_pending: Cell::new(false),
             redraw_requests: Cell::new(0),
             redraw_requests_watched: Cell::new(0),
-            vsync: Vsync::new(),
+            vsync_driver: VsyncDriver::new(),
             animation_retirement: RefCell::new(None),
             motion_clock: RefCell::new(MotionClock::new()),
             clock: FrameClock::new(),
@@ -1443,14 +1472,19 @@ impl PresentationState {
         &self.held_pointer_input
     }
 
-    /// A clone of this presentation's own implicit-animation controller
-    /// registry. `Vsync` is owner-local `Rc`-backed state, so this is cheap and every clone
-    /// observes the same registry — the same handle shape
-    /// `UiRuntime::vsync()` used to hand out from its own UI runtime-level slot
-    /// (issue #556: the registry moved here, one per presentation).
+    /// A handle on this presentation's controller registry, for its tree's
+    /// `VsyncScope`. Every clone observes the same registry; only
+    /// [`Self::vsync_driver`] ticks or closes it (ADR-0382).
     #[must_use]
     pub(crate) fn vsync(&self) -> Vsync {
-        self.vsync.clone()
+        self.vsync_driver.vsync().clone()
+    }
+
+    /// The driver of this presentation's controller registry: the frame path
+    /// ticks it, and retirement closes it.
+    #[must_use]
+    pub(crate) fn vsync_driver(&self) -> &VsyncDriver {
+        &self.vsync_driver
     }
 
     /// This frame's animation tick for the UI runtime's raw frame time `raw`
@@ -1458,7 +1492,7 @@ impl PresentationState {
     /// or repeated `raw` repeats the previous tick.
     ///
     /// The clock's borrow ends inside this call, before the caller hands the
-    /// tick to [`Vsync::tick_all`], which runs controller and listener code.
+    /// tick to [`VsyncDriver::tick_all`], which runs controller and listener code.
     ///
     /// The borrow ends before registry delivery invokes user code.
     pub(crate) fn motion_tick(&self, raw: Duration) -> FrameTick {
@@ -1475,7 +1509,7 @@ impl PresentationState {
     pub(crate) fn animation_running(&self, frames_enabled: bool) -> bool {
         frames_enabled
             && !self.clock.is_hidden()
-            && self.vsync.has_running()
+            && self.vsync_driver.vsync().has_running()
             && !self.motion_is_paused()
     }
 
@@ -1759,6 +1793,91 @@ impl PresentationState {
     /// burst (ADR-0335 §2).
     pub(crate) fn clear_not_shown_streak(&self) {
         self.not_shown_streak.set(0);
+    }
+
+    /// What a frame of this presentation would reach while it is unseen,
+    /// from its window's state now; `None` once the window is gone.
+    fn occluded_sight(&self, session: Session) -> Option<Sight> {
+        self.with_window(|window| Sight::of(&window.state(), self.occluded_surface, session))
+    }
+
+    /// Re-read at `now` what the presentation owes its surface: called when
+    /// it is built, when it stops or starts being seen, on every new snapshot
+    /// of its window (minimized, restored, hidden, shown, covered: a change of
+    /// sight that leaves it unseen changes no visibility) and when its session
+    /// locks, unlocks, sleeps or wakes. A seen presentation owes nothing; an
+    /// unseen one follows [`OccludedFrame::follow`].
+    pub(crate) fn follow_sight(&self, session: Session, now: Instant) {
+        let next = if self.clock.is_hidden() {
+            self.occluded_sight(session)
+                .map_or(OccludedFrame::NotOwed, |sight| {
+                    self.occluded_frame.get().follow(sight, now)
+                })
+        } else {
+            OccludedFrame::NotOwed
+        };
+        self.occluded_frame.set(next);
+    }
+
+    /// The surface refused or dropped the frame this presentation drew while
+    /// unseen, the frame it owed (the settlement matches the frame, not
+    /// whatever settles while the window is unseen): nothing more is owed
+    /// until it is seen again, however its content changes.
+    pub(crate) fn refuse_occluded_frame(&self) {
+        if self.clock.is_hidden() {
+            self.occluded_frame.set(OccludedFrame::Refused);
+        }
+    }
+
+    /// The owed frame ran at `now`: the next quiet period starts.
+    pub(crate) fn occluded_frame_drawn(&self, now: Instant) {
+        if self.clock.is_hidden()
+            && matches!(self.occluded_frame.get(), OccludedFrame::QuietSince(_))
+        {
+            self.occluded_frame.set(OccludedFrame::QuietSince(now));
+        }
+    }
+
+    /// Whether frame work waits on this presentation: a demand its clock
+    /// keeps, a redraw mark, or tree work.
+    pub(crate) fn has_retained_frame_work(&self) -> bool {
+        !self.clock.demand_mask().is_empty()
+            || self.redraw_pending.get()
+            || self.has_pending_work_snapshot()
+    }
+
+    /// When this presentation, unseen with frame work waiting, draws the
+    /// frame it owes its surface: the end of its quiet period, not before its
+    /// dropped-frame retry. It stays due until the frame runs, however late;
+    /// `None` when the presentation is seen, owes none or has no work, and
+    /// while its sink holds as many frames as it may (the settlement that
+    /// frees a place wakes it).
+    pub(crate) fn occluded_frame_at(&self) -> Option<Instant> {
+        if !self.clock.is_hidden()
+            || self.closing_requested.get()
+            || self.frames_in_flight().is_saturated()
+        {
+            return None;
+        }
+        let due = self.occluded_frame.get().due_at(self.failure_retry_at())?;
+        self.has_retained_frame_work().then_some(due)
+    }
+
+    /// At `now`, grant the owed frame of a presentation whose frame is due,
+    /// if it would still be shown (the window may have been locked since,
+    /// which only its sight says): the clock produces it at the first poll
+    /// that can. A hold before then (text preparation, a full sink) leaves it
+    /// due; the quiet period starts again only when it runs
+    /// ([`Self::occluded_frame_drawn`]).
+    pub(crate) fn grant_occluded_frame(&self, session: Session, now: Instant) {
+        if self.occluded_frame_at().is_none_or(|due| now < due) {
+            return;
+        }
+        if self.occluded_sight(session).is_some_and(Sight::owes) {
+            self.clock.grant_hidden_frame();
+        } else {
+            self.occluded_frame.set(OccludedFrame::NotOwed);
+        }
     }
 
     /// Whether this is the first time the presentation's surface withheld
@@ -2656,7 +2775,7 @@ impl PresentationState {
 
     fn withdraw_animation(&self) {
         if self.animation_retirement.borrow().is_none() {
-            let retirement = self.vsync.prepare_close();
+            let retirement = self.vsync_driver.prepare_close();
             self.animation_retirement.replace(Some(retirement));
         }
     }
