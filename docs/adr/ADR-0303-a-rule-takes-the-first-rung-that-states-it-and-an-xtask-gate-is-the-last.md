@@ -10,13 +10,14 @@
   each site, not a counting gate (§6).
 - **Superseded-by:** [ADR-0370](ADR-0370-a-pull-request-compiles-for-linux-and-every-other-target-is-mains.md)
   for §9 only, for the five jobs its §2 moves to main, which run there with no narrow form.
-- **Revised:** 2026-11-18 — §9 names the jobs that run on main without a narrow form (ADR-0370).
 - **Related:** [ADR-0081](ADR-0081-workspace-tiers-and-reach-facts.md) (the tier gate, a rule only
   a gate can hold); [ADR-0097](ADR-0097-no-process-global-state-gate.md) (an allowlist entry that
   names its grant); [ADR-0151](ADR-0151-platform-layer-boundary-and-names.md) §16 (the OS entry
   boundary); [ADR-0242](ADR-0242-typed-inspect-and-tracing-conventions.md) (`inspect`'s `Debug` escape
   hatch); [ADR-0244](ADR-0244-os-version-floors-and-gates.md) (the
   `clippy.toml` entries that gate OS versions)
+- **Revised:** 2026-11-18 — §9 refers to ADR-0370 §2 for the jobs that run on main without a
+  narrow form.
 
 ## Context and problem statement
 

@@ -63,9 +63,8 @@ and `doc-test`, which it ran before, and the five this record moves there: `test
 wasm32, Windows, macOS, iOS or Android on a pull request. A change that breaks one of them is
 found by main's run and fixed forward or reverted, as AGENTS.md says of a red main.
 
-Two other workflows still start a native host for a pull request, each by its own `paths`:
-`xtask-native.yml` when xtask, its workflow or the toolchain changes, and `nightly-platforms.yml`
-when the workflow or its live scenario changes.
+Two other workflows still start a native host for a pull request that touches the `paths` each
+names in its own file: `xtask-native.yml` and `nightly-platforms.yml`.
 
 ### §3. A job added later
 

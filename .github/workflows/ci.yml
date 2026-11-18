@@ -511,6 +511,7 @@ jobs:
       # keeps it above 0 (it failed without one on 2026-10-30). Its log is
       # printed here: a reclaim that failed shows nowhere else.
       - name: Disk usage after build
+        if: always()
         run: |
           cat "$RUNNER_TEMP/free-disk.log" || true
           df -h /
