@@ -70,11 +70,15 @@ pub mod view {
 pub mod platform {
     pub use flui_platform::AdmissionError;
     pub use flui_platform::Brightness;
+    pub use flui_platform::ClipboardEntryId;
     pub use flui_platform::ClipboardError;
+    pub use flui_platform::ClipboardExpiry;
+    pub use flui_platform::ClipboardExpiryError;
     pub use flui_platform::ClipboardRead;
     pub use flui_platform::ClipboardWrite;
     pub use flui_platform::Concealment;
     pub use flui_platform::DurationScale;
+    pub use flui_platform::ExpiryClearing;
     pub use flui_platform::GesturePreferences;
     pub use flui_platform::HapticFeedback;
     pub use flui_platform::HostNotice;

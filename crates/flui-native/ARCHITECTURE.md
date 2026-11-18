@@ -3025,6 +3025,53 @@ file list, the locale), never forcing another owner's delayed rendering of
 anything else and never setting OLE's private formats again; a restore that
 fails is reported, never panicked on.
 
+### A host clears an expiring entry only while the system still shows it
+
+`NativeClipboard::clear_expired` clears the clipboard for an expiring write's
+entry (`ClipboardWrite::expires_after`) only while the clipboard still holds it
+(ADR-0363 §3); when to ask is the composition root's rule, not a host's. A
+clear is served in order with the writes, so one asked after a write is
+checked against what that write left (the X11 thread holds a clear behind a
+write that waits for its timestamp). When an expiring write lands the host
+records its entry with the system's token; any other write that lands forgets
+it; an entry whose token no longer matches is forgotten for good
+(`host::clipboard::ExpiringRecord`, the part Win32, AppKit, UIKit, Android and
+the in-memory clipboard share).
+
+- **Win32.** The token is the sequence number with the owner, read after the
+  write's session closed, since closing a session that changed the clipboard
+  moves the number once more; a clipboard the thread's window no longer owns by
+  then lost the entry, and nothing is recorded. The owner is read before the
+  number, so a copy landing between the two reads moves the number past any
+  stamp that could equal it. The clear reads the stamp and empties the
+  clipboard inside one session, which no other process can change.
+- **AppKit and UIKit.** The change count, which moves when the pasteboard
+  changes hands. The check and `clearContents` (`setItems:` on UIKit) are two
+  calls: a copy made between them is cleared too. UIKit also sets
+  `UIPasteboardOptionExpirationDate`, so the system removes the item at its time
+  after the process too.
+- **Android.** A writer mark (the process's random hash seed) and the entry's
+  number in the clip description's extras; the clear reads the description and
+  clears in a second binder call. Without input focus the system hands no
+  description: `ExpiredClear::Unseen`, which the composition root asks again when
+  the application is next in front (`ExpiryClearing::AtTimeOrInFront`).
+- **X11.** The window gives the selection up at the time it took it, which the
+  server ignores once another client took it later: one step of the server.
+- **Wayland.** The entry's source is destroyed; the compositor serves requests
+  in order, so a selection another client set first already cancelled it.
+- **The loop's end.** Win32 queues the clear and waits for it within the bound
+  it is given, since the window station's clipboard outlives the process;
+  AppKit, UIKit and Android clear at once; X11 and Wayland answer `NotHeld`,
+  since the selection ends with the connection the loop releases.
+
+Tests: `an_expiring_entry_is_cleared_only_under_its_stamp` and
+`an_expiring_entry_clears_only_while_the_clipboard_still_holds_it` (Win32, the
+second on the real clipboard, saved and put back),
+`an_expiring_entry_is_given_up_only_while_the_clipboard_still_holds_it` (X11),
+the expiring step of `wayland_clipboard`'s `the_selection_crosses_between_clients`,
+`an_expiring_entry_is_cleared_only_while_it_is_still_there` and
+`a_record_forgets_an_entry_its_token_no_longer_matches`.
+
 ### Win32 callbacks live in the window's owner-thread context
 
 `WindowsPlatform`, `WindowsLoop` and `WindowsWindow` are neither `Send` nor

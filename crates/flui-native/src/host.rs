@@ -43,7 +43,11 @@ pub(crate) use clipboard::MAX_TEXT;
 pub(crate) use clipboard::owned_text;
 #[cfg(windows)]
 pub(crate) use clipboard::text_fits;
-pub use clipboard::{MemoryClipboard, NativeClipboard, NativePrimarySelection};
+#[cfg(any(windows, target_os = "android", target_os = "macos", target_os = "ios"))]
+pub(crate) use clipboard::{ClearDecision, ExpiringRecord};
+pub use clipboard::{
+    ExpiredClear, ExpiredEntry, MemoryClipboard, NativeClipboard, NativePrimarySelection,
+};
 pub(crate) use clipboard::{SharedClipboard, SyncClipboard};
 #[cfg(any(
     windows,
@@ -720,6 +724,17 @@ impl SyncClipboard for Absent<position::Clipboard> {
     /// A refused write is kept nowhere, so nothing can keep a history of it.
     fn concealment(&self) -> flui_platform::Concealment {
         flui_platform::Concealment::Honored
+    }
+
+    /// A refused write is kept nowhere, so nothing outlives its time.
+    fn expiry_clearing(&self) -> flui_platform::ExpiryClearing {
+        flui_platform::ExpiryClearing::AtTimeAndLock
+    }
+
+    /// No write ever lands, so the clipboard holds no entry of this
+    /// application's.
+    fn clear_expired_now(&self, _: clipboard::ExpiredEntry) -> clipboard::ExpiredClear {
+        clipboard::ExpiredClear::NotHeld
     }
 }
 

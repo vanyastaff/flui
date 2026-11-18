@@ -109,3 +109,5 @@ impl StatelessView for NotePage {
   its way out gets `Gone`, which needs nothing done, so these callbacks drop the result. The
   dialog pops the note only when its own `pop` was taken, so a second press on a dialog already
   leaving does not pop the page under it.
+
+Next, [Theming](theme.md) gives the application its colours.

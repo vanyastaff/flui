@@ -40,7 +40,8 @@ use std::{cell::RefCell, fmt, rc::Rc, sync::Arc};
 use flui_foundation::panic::FirstPanic;
 use flui_interaction::{ClipboardBackend, ClipboardCapability, ClipboardHandle};
 use flui_platform::{
-    ClipboardError, ClipboardRead, ClipboardWrite, ClipboardWritten, Concealment, Unsupported,
+    ClipboardError, ClipboardRead, ClipboardWrite, ClipboardWritten, Concealment, ExpiryClearing,
+    Unsupported,
     capability::scripted::{Scenario, Script, ServiceState, Track},
     capability::{
         CapabilityProvider, CapabilityRegistrar, CompletionSource, ProviderContext, Resolver,
@@ -85,6 +86,9 @@ struct Contents {
     /// What the host does with a concealed write; `None` is
     /// [`Concealment::Honored`].
     concealment: Option<Concealment>,
+    /// What the host does with an expiring write; `None` is
+    /// [`ExpiryClearing::AtTimeAndLock`].
+    expiry_clearing: Option<ExpiryClearing>,
     failure: Option<ClipboardError>,
     /// What the standing answer refuses a write with; `None` takes it.
     write_failure: Option<ClipboardError>,
@@ -249,6 +253,14 @@ impl ScriptedClipboard {
     /// with a concealed write; [`Concealment::Honored`] until set.
     pub fn answer_concealment(&self, concealment: Concealment) {
         self.contents.borrow_mut().concealment = Some(concealment);
+    }
+
+    /// Answer `clearing` to every handle that asks what this host does with
+    /// an expiring write; [`ExpiryClearing::AtTimeAndLock`] until set. The
+    /// scripted clipboard clears nothing itself: a test reads the expiry a
+    /// write asked for from its [`WriteRequest`].
+    pub fn answer_expiry_clearing(&self, clearing: ExpiryClearing) {
+        self.contents.borrow_mut().expiry_clearing = Some(clearing);
     }
 
     /// Keep every later read unanswered until
@@ -561,5 +573,13 @@ impl ClipboardBackend for Backend {
             .borrow()
             .concealment
             .unwrap_or(Concealment::Honored)
+    }
+
+    fn expiry_clearing(&self) -> ExpiryClearing {
+        self.clipboard
+            .contents
+            .borrow()
+            .expiry_clearing
+            .unwrap_or(ExpiryClearing::AtTimeAndLock)
     }
 }

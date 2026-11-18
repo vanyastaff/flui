@@ -19,7 +19,8 @@ use flui_platform::capability::{
     Plugin, ProviderContext, Resolver,
 };
 use flui_platform::{
-    ClipboardError, ClipboardRead, ClipboardWrite, Concealment, Unsupported, UnsupportedReason,
+    ClipboardError, ClipboardExpiry, ClipboardRead, ClipboardWrite, Concealment, ExpiryClearing,
+    Unsupported, UnsupportedReason,
 };
 use flui_runtime::capability::{CapabilityConflict, CapabilityRegistry, ProviderTier};
 use flui_testing::{HeadlessHost, HeadlessWindow, ScriptedClipboard};
@@ -364,6 +365,15 @@ pub(crate) fn a_concealed_write_reaches_the_host_marked() {
 
     drop(clipboard.write_text("plain"));
     assert!(!scripted.is_concealed(), "an ordinary write is unmarked");
+
+    // An expiring write is a concealed one, and the handle answers what the
+    // host does with its time (ADR-0363).
+    assert_eq!(clipboard.expiry_clearing(), ExpiryClearing::AtTimeAndLock);
+    scripted.answer_expiry_clearing(ExpiryClearing::Unavailable);
+    assert_eq!(clipboard.expiry_clearing(), ExpiryClearing::Unavailable);
+    let thirty = ClipboardExpiry::try_new(Duration::from_secs(30)).expect("a valid expiry");
+    drop(clipboard.write(ClipboardWrite::text("token").expires_after(thirty)));
+    assert!(scripted.is_concealed(), "an expiring write is concealed");
 }
 
 /// Answers every read from a thread of its own, as an OS callback does.
@@ -392,6 +402,10 @@ impl ClipboardBackend for OtherThreadBackend {
 
     fn concealment(&self) -> flui_platform::Concealment {
         flui_platform::Concealment::Unavailable
+    }
+
+    fn expiry_clearing(&self) -> ExpiryClearing {
+        ExpiryClearing::Unavailable
     }
 }
 

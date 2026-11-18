@@ -22,13 +22,13 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use flui_platform::{
-    ClipboardError, ClipboardRead, ClipboardWrite, ClipboardWritten, Concealment,
+    ClipboardError, ClipboardRead, ClipboardWrite, ClipboardWritten, Concealment, ExpiryClearing,
     capability::Resolver,
 };
 use wasm_bindgen_futures::JsFuture;
 
 use crate::clipboard::page::PageClipboard;
-use crate::host::{NativeClipboard, admit_text, host_text};
+use crate::host::{ExpiredClear, ExpiredEntry, NativeClipboard, admit_text, host_text};
 
 pub struct WebClipboard {
     /// What this page holds: the answer to a read the browser refuses, and
@@ -152,6 +152,24 @@ impl NativeClipboard for WebClipboard {
     /// an ordinary one, kept by whatever clipboard history the system has.
     fn concealment(&self) -> Concealment {
         Concealment::Unavailable
+    }
+
+    /// The Clipboard API can neither tell whether the clipboard still holds
+    /// an entry without reading it (a read the browser may refuse or prompt
+    /// for, and a later copy of the same text reads alike) nor clear it but
+    /// by a write that replaces whatever is there: an expiring write is a
+    /// concealed one that stays until something replaces it.
+    fn expiry_clearing(&self) -> ExpiryClearing {
+        ExpiryClearing::Unavailable
+    }
+
+    fn clear_expired(&self, _entry: ExpiredEntry, answer: Resolver<ExpiredClear>) {
+        // A retired owner has nobody left to answer.
+        let _ = answer.resolve(ExpiredClear::Unsupported);
+    }
+
+    fn clear_expired_before_exit(&self, _within: std::time::Duration) -> ExpiredClear {
+        ExpiredClear::Unsupported
     }
 }
 
