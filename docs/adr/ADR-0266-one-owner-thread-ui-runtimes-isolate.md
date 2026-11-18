@@ -9,6 +9,7 @@
   (the ownership levels, the `!Send` model and the rest of §1 stand);
   [ADR-0091](ADR-0091-one-owner-thread-isolated-realms-raster-thread.md) §1 (its `!Send` flip has
   landed; its per-runtime owner-thread spike and `OwnerExecutor` trait are withdrawn)
+- **Superseded-by:** [ADR-0368](ADR-0368-a-frame-polls-its-tasks-runs-its-pipeline-then-its-post-frame-callbacks.md) for §3 the `TimingsCallback` sentence only: the scheduler keeps no timings lane.
 - **Related:** [ADR-0043](ADR-0043-presentation-bundled-trees-and-realm-globalkey-scope.md) (the
   `GlobalKey` scope a UI runtime owns), [ADR-0092](ADR-0092-per-realm-text-over-parley.md) (text
   per UI runtime), [ADR-0097](ADR-0097-no-process-global-state-gate.md) (the host's `APP_RUNTIME`

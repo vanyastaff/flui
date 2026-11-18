@@ -1425,11 +1425,11 @@ mod tests {
         assert_eq!(layout.partition().presentation(), None);
     }
 
-    /// A frame whose callback panics before the pipeline runs still says whose frame it was.
+    /// A frame whose task panics before the pipeline runs still says whose frame it was.
     #[test]
-    fn a_frame_whose_callback_panics_still_names_its_runtime() {
+    fn a_frame_whose_task_panics_still_names_its_runtime() {
         use flui_scheduler::__runtime::DriveFrame as _;
-        use flui_scheduler::{IdleDeadline, OwnerFrame, UpdateScheduler};
+        use flui_scheduler::{OwnerFrame, UpdateScheduler};
 
         let capture = Capture::new();
         let subscriber = tracing_subscriber::registry().with(capture.layer());
@@ -1437,20 +1437,17 @@ mod tests {
         let scheduler = UpdateScheduler::new();
         let owner = OwnerFrame::try_new(&scheduler).expect("a fresh scheduler has no owner frame");
         owner.set_trace_runtime(runtime(7).as_u64());
-        scheduler.add_persistent_frame_callback(std::rc::Rc::new(|_| panic!("a callback fails")));
+        let _task = owner
+            .async_driver()
+            .spawn_local(Box::pin(async { panic!("a task fails") }));
 
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             tracing::dispatcher::with_default(&Dispatch::new(subscriber), || {
-                let _ = owner.drive_frame(
-                    Instant::now(),
-                    IdleDeadline::far_future(Instant::now()),
-                    || {},
-                    || {},
-                );
+                let _ = owner.drive_frame(Instant::now(), || {}, || {});
             });
         }));
 
-        assert!(outcome.is_err(), "the callback's panic surfaces");
+        assert!(outcome.is_err(), "the task's panic surfaces");
         assert_eq!(capture.runtimes(), [Some(runtime(7))]);
     }
 }

@@ -5,7 +5,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Weak};
 
-use super::{IdleDeadline, UpdateScheduler, request_frame_impl_preserving_failure};
+use super::{UpdateScheduler, request_frame_impl_preserving_failure};
 use crate::async_driver::RetirePanic;
 use crate::post_frame::OwnerCleanup;
 use crate::wake_delivery::FailureSignal;
@@ -342,7 +342,6 @@ impl OwnerFrame {
     pub(crate) fn drive_frame<R>(
         &self,
         timestamp: Instant,
-        deadline: IdleDeadline,
         mut prepare: impl FnMut(),
         mut pipeline: impl FnMut() -> R,
     ) -> Result<R, ExecutionError> {
@@ -397,19 +396,15 @@ impl OwnerFrame {
             let entered = recovery.attempt(|| span.enter());
             if recovery.first.is_none() {
                 recovery.attempt(|| {
-                    *scheduler.inner.frame.idle_deadline.borrow_mut() = Some(deadline.0);
                     let id = scheduler.handle_begin_frame(timestamp, self);
                     span.record("id", tracing::field::debug(id));
                     span.record(
                         "period_us",
                         u64::try_from(scheduler.display_period().as_micros()).unwrap_or(u64::MAX),
                     );
-                    scheduler.handle_draw_frame();
-                    *scheduler.inner.frame.idle_deadline.borrow_mut() = None;
                     output = Some(pipeline());
                 });
             }
-            *scheduler.inner.frame.idle_deadline.borrow_mut() = None;
             if recovery.first.is_none() {
                 recovery.attempt(|| scheduler.end_frame(self));
             }

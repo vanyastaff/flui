@@ -8,6 +8,7 @@
   [ADR-0244](ADR-0244-os-version-floors-and-gates.md) §4 (gates are types, and an API above the floor
   is found with `dlsym`), [ADR-0268](ADR-0268-the-ios-display-link-paces-the-backgrounded-pump.md)
   (the iOS display link)
+- **Revised:** 2026-11-18 — the target present time bounds no idle work, since a frame has none to bound ([ADR-0368](ADR-0368-a-frame-polls-its-tasks-runs-its-pipeline-then-its-post-frame-callbacks.md)).
 
 ## Context and problem statement
 
@@ -93,8 +94,8 @@ API 24 post is kept for 64-bit processes, where its `long` is the same 64 bits a
 
 ### Consequences
 
-- Good, because Android frame requests carry the display's vsync, and from API 33 a target present
-  time that bounds idle work (ADR-0347 decision 3).
+- Good, because Android frame requests carry the display's vsync, and from API 33 the time the
+  frame will be shown (`target_present`), which a recording keeps.
 - Good, because frames start on the display's frame and not at whatever point the loop turn reached.
 - Bad, because a frame owed after idle waits up to one refresh.
 - Bad, because with the screen off the choreographer sends no callback, so an owed frame waits for

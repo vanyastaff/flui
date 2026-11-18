@@ -35,7 +35,7 @@ fn wake_in_flight_releases_owner_storage() {
     let _owner = install_owner(&scheduler);
     let drops = Arc::new(AtomicUsize::new(0));
     let capture = Capture(drops.clone());
-    scheduler.schedule_frame_callback(Box::new(move |_| {
+    let _listener = scheduler.add_lifecycle_state_listener(std::rc::Rc::new(move |_| {
         let _ = &capture;
     }));
     pump_owner();

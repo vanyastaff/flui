@@ -24504,15 +24504,8 @@ impl Clone for flui::view::UpdateScheduler
 impl Default for flui::view::UpdateScheduler
 impl core::fmt::Debug for flui::view::UpdateScheduler
 pub fn flui::view::UpdateScheduler::add_lifecycle_state_listener(&self, callback: flui_scheduler::frame::LifecycleStateCallback) -> flui_scheduler::id::CallbackId
-pub fn flui::view::UpdateScheduler::add_persistent_frame_callback(&self, callback: flui_scheduler::frame::RecurringFrameCallback)
 pub fn flui::view::UpdateScheduler::add_post_frame_callback(&self, callback: flui_scheduler::frame::PostFrameCallback)
-pub fn flui::view::UpdateScheduler::add_task(&self, priority: flui_scheduler::task::Priority, callback: impl FnOnce() + 'static)
-pub fn flui::view::UpdateScheduler::add_timings_callback(&self, callback: flui_scheduler::config::TimingsCallback)
-pub fn flui::view::UpdateScheduler::cancel_frame_callback(&self, id: flui_scheduler::id::CallbackId) -> bool
 pub fn flui::view::UpdateScheduler::current_frame(&self) -> Option<flui::view::FrameTiming>
-pub fn flui::view::UpdateScheduler::current_system_frame_time_stamp(&self) -> std::time::Instant
-pub fn flui::view::UpdateScheduler::current_vsync_time(&self) -> Option<std::time::Instant>
-pub fn flui::view::UpdateScheduler::debug_assert_no_transient_callbacks(&self, _reason: &str) -> bool
 pub fn flui::view::UpdateScheduler::display_period(&self) -> core::time::Duration
 pub fn flui::view::UpdateScheduler::downgrade(&self) -> flui_scheduler::scheduler::WeakUpdateScheduler
 pub fn flui::view::UpdateScheduler::end_of_frame(&self) -> flui_scheduler::scheduler::FrameCompletionFuture
@@ -24522,26 +24515,15 @@ pub fn flui::view::UpdateScheduler::frame_waker(&self) -> flui::view::FrameWaker
 pub fn flui::view::UpdateScheduler::frames_enabled(&self) -> bool
 pub fn flui::view::UpdateScheduler::handle_app_lifecycle_state_change(&self, new_state: flui::prelude::AppLifecycleState)
 pub fn flui::view::UpdateScheduler::is_frame_scheduled(&self) -> bool
-pub fn flui::view::UpdateScheduler::is_in_frame(&self) -> bool
 pub fn flui::view::UpdateScheduler::is_same_instance(&self, other: &Self) -> bool
 pub fn flui::view::UpdateScheduler::lifecycle_state(&self) -> flui::prelude::AppLifecycleState
 pub fn flui::view::UpdateScheduler::new() -> Self
 pub fn flui::view::UpdateScheduler::phase(&self) -> flui_scheduler::frame::SchedulerPhase
 pub fn flui::view::UpdateScheduler::remove_lifecycle_state_listener(&self, id: flui_scheduler::id::CallbackId) -> bool
-pub fn flui::view::UpdateScheduler::remove_timings_callback(&self, callback: &flui_scheduler::config::TimingsCallback)
-pub fn flui::view::UpdateScheduler::report_timings(&self) -> usize
 pub fn flui::view::UpdateScheduler::request_frame(&self)
-pub fn flui::view::UpdateScheduler::schedule_forced_frame(&self)
-pub fn flui::view::UpdateScheduler::schedule_frame_callback(&self, callback: flui_scheduler::frame::OneShotFrameCallback) -> flui_scheduler::id::CallbackId
-pub fn flui::view::UpdateScheduler::schedule_frame_if_enabled(&self) -> bool
-pub fn flui::view::UpdateScheduler::schedule_microtask(&self, task: Box<dyn FnOnce()>)
 pub fn flui::view::UpdateScheduler::set_display_period(&self, period: core::time::Duration)
-pub fn flui::view::UpdateScheduler::set_frames_enabled(&mut self, enabled: bool)
 pub fn flui::view::UpdateScheduler::set_on_frame_scheduled(&self, hook: Option<alloc::rcs::arc::Arc<dyn Fn() + Send + Sync>>)
-pub fn flui::view::UpdateScheduler::should_schedule_frame(&self) -> bool
 pub fn flui::view::UpdateScheduler::take_late_visual_update(&self) -> bool
-pub fn flui::view::UpdateScheduler::time_since_last_timings_report(&self) -> core::time::Duration
-pub fn flui::view::UpdateScheduler::transient_callback_count(&self) -> usize
 reexport flui::view::ValueKey => flui::foundation::ValueKey
 reexport flui::view::View => flui::prelude::View
 reexport flui::view::ViewExt => flui::prelude::ViewExt
@@ -35835,7 +35817,6 @@ pub fn flui_runtime::presentation::PresentationWindow::with_pointer_resampling(s
 pub fn flui_runtime::presentation::PresentationWindow::with_text_store_host(self, text_store_host: Option<alloc::rcs::rc::Rc<dyn flui::platform::text_store::TextStoreHost>>) -> Self
 pub trait flui_runtime::pump::FrameClockSource
 fn flui_runtime::pump::FrameClockSource::frame_time(&mut self) -> std::time::Instant
-fn flui_runtime::pump::FrameClockSource::idle_deadline(&mut self, frame_time: std::time::Instant) -> flui_scheduler::scheduler::IdleDeadline { .. }
 impl flui_runtime::pump::FrameClockSource for flui::foundation::ManualClock
 pub struct flui_runtime::pump::FrameOutcome { .. }
 impl Clone for flui_runtime::pump::FrameOutcome
@@ -36116,11 +36097,8 @@ impl core::fmt::Debug for flui_runtime::ui_runtime::text_preparation::TextSizing
 pub fn flui_runtime::ui_runtime::text_preparation::TextSizingWork::presentation(&self) -> flui::foundation::PresentationId
 pub fn flui_runtime::ui_runtime::text_preparation::TextSizingWork::requests(&self) -> &[flui::foundation::TextSizeRequest]
 pub fn flui_runtime::ui_runtime::text_preparation::TextSizingWork::source(&self) -> &flui_painting::text_painter::sizing::TextSizingSource
-pub type flui_scheduler::config::TimingsCallback = alloc::rcs::rc::Rc<dyn Fn(&[flui::view::FrameTiming])>
 pub type flui_scheduler::frame::LifecycleStateCallback = alloc::rcs::rc::Rc<dyn Fn(flui::prelude::AppLifecycleState)>
-pub type flui_scheduler::frame::OneShotFrameCallback = Box<dyn FnOnce(std::time::Instant)>
 pub type flui_scheduler::frame::PostFrameCallback = Box<dyn FnOnce(&flui::view::FrameTiming)>
-pub type flui_scheduler::frame::RecurringFrameCallback = alloc::rcs::rc::Rc<dyn Fn(&flui::view::FrameTiming)>
 #[non_exhaustive] #[repr(u8)] pub enum flui_scheduler::frame::SchedulerPhase
 impl Clone for flui_scheduler::frame::SchedulerPhase
 impl Copy for flui_scheduler::frame::SchedulerPhase
@@ -36133,13 +36111,11 @@ impl core::hash::Hash for flui_scheduler::frame::SchedulerPhase
 impl core::marker::StructuralPartialEq for flui_scheduler::frame::SchedulerPhase
 impl serde_core::ser::Serialize for flui_scheduler::frame::SchedulerPhase
 impl<'de> serde_core::de::Deserialize<'de> for flui_scheduler::frame::SchedulerPhase
-pub const flui_scheduler::frame::SchedulerPhase::ALL: [flui_scheduler::frame::SchedulerPhase; 5] = _
+pub const flui_scheduler::frame::SchedulerPhase::ALL: [flui_scheduler::frame::SchedulerPhase; 3] = _
 pub const fn flui_scheduler::frame::SchedulerPhase::is_in_frame(self) -> bool
+variant flui_scheduler::frame::SchedulerPhase::Frame = 1 // at 1
 variant flui_scheduler::frame::SchedulerPhase::Idle = 0 // at 0
-variant flui_scheduler::frame::SchedulerPhase::MidFrameMicrotasks = 2 // at 2
-variant flui_scheduler::frame::SchedulerPhase::PersistentCallbacks = 3 // at 3
-variant flui_scheduler::frame::SchedulerPhase::PostFrameCallbacks = 4 // at 4
-variant flui_scheduler::frame::SchedulerPhase::TransientCallbacks = 1 // at 1
+variant flui_scheduler::frame::SchedulerPhase::PostFrame = 2 // at 2
 #[non_exhaustive] pub enum flui_scheduler::frame_clock::ClockSource
 impl Clone for flui_scheduler::frame_clock::ClockSource
 impl Default for flui_scheduler::frame_clock::ClockSource
@@ -36247,17 +36223,6 @@ impl Clone for flui_scheduler::scheduler::FrameOutcome
 impl Copy for flui_scheduler::scheduler::FrameOutcome
 impl core::fmt::Debug for flui_scheduler::scheduler::FrameOutcome
 pub fn flui_scheduler::scheduler::FrameOutcome::timing(&self) -> flui::view::FrameTiming
-pub struct flui_scheduler::scheduler::IdleDeadline(std::time::Instant)
-impl Clone for flui_scheduler::scheduler::IdleDeadline
-impl Copy for flui_scheduler::scheduler::IdleDeadline
-impl Eq for flui_scheduler::scheduler::IdleDeadline
-impl From<std::time::Instant> for flui_scheduler::scheduler::IdleDeadline
-impl Ord for flui_scheduler::scheduler::IdleDeadline
-impl PartialEq for flui_scheduler::scheduler::IdleDeadline
-impl PartialOrd for flui_scheduler::scheduler::IdleDeadline
-impl core::fmt::Debug for flui_scheduler::scheduler::IdleDeadline
-impl core::marker::StructuralPartialEq for flui_scheduler::scheduler::IdleDeadline
-pub fn flui_scheduler::scheduler::IdleDeadline::far_future(now: std::time::Instant) -> Self
 pub struct flui_scheduler::scheduler::SchedulerClosed;
 impl Clone for flui_scheduler::scheduler::SchedulerClosed
 impl Copy for flui_scheduler::scheduler::SchedulerClosed
@@ -36283,33 +36248,6 @@ impl core::marker::StructuralPartialEq for flui_scheduler::scheduler::execution:
 variant flui_scheduler::scheduler::execution::ExecutionError::AlreadyExecuting // at 0
 variant flui_scheduler::scheduler::execution::ExecutionError::Retired // at 1
 variant flui_scheduler::scheduler::execution::ExecutionError::SchedulerClosed // at 2
-#[non_exhaustive] #[repr(u8)] pub enum flui_scheduler::task::Priority
-impl Clone for flui_scheduler::task::Priority
-impl Copy for flui_scheduler::task::Priority
-impl Default for flui_scheduler::task::Priority
-impl Eq for flui_scheduler::task::Priority
-impl Ord for flui_scheduler::task::Priority
-impl PartialEq for flui_scheduler::task::Priority
-impl PartialOrd for flui_scheduler::task::Priority
-impl TryFrom<u8> for flui_scheduler::task::Priority { type Error = u8; }
-impl core::fmt::Debug for flui_scheduler::task::Priority
-impl core::fmt::Display for flui_scheduler::task::Priority
-impl core::hash::Hash for flui_scheduler::task::Priority
-impl core::marker::StructuralPartialEq for flui_scheduler::task::Priority
-impl serde_core::ser::Serialize for flui_scheduler::task::Priority
-impl<'de> serde_core::de::Deserialize<'de> for flui_scheduler::task::Priority
-pub const flui_scheduler::task::Priority::ALL: [flui_scheduler::task::Priority; 4] = _
-pub const fn flui_scheduler::task::Priority::as_u8(self) -> u8
-pub const fn flui_scheduler::task::Priority::from_u8(value: u8) -> Option<Self>
-pub const fn flui_scheduler::task::Priority::higher(self) -> Option<Self>
-pub const fn flui_scheduler::task::Priority::is_highest(self) -> bool
-pub const fn flui_scheduler::task::Priority::is_lowest(self) -> bool
-pub const fn flui_scheduler::task::Priority::lower(self) -> Option<Self>
-pub const fn flui_scheduler::task::Priority::numeric_value(self) -> u32
-variant flui_scheduler::task::Priority::Animation = 2 // at 2
-variant flui_scheduler::task::Priority::Build = 1 // at 1
-variant flui_scheduler::task::Priority::Idle = 0 // at 0
-variant flui_scheduler::task::Priority::UserInput = 3 // at 3
 #[non_exhaustive] pub enum flui_semantics::action::ActionDecodeError
 impl Clone for flui_semantics::action::ActionDecodeError
 impl Copy for flui_semantics::action::ActionDecodeError

@@ -13,6 +13,7 @@
 - **Revised:** 2026-10-11 — the current animation clock and complete-turn owner APIs are distinguished from migration-era scheduler signatures.
 - **Supersedes:** [ADR-0041](ADR-0041-workspace-topology-contract.md)
   for the paragraph "No `flui-runtime` without two consumers" only
+- **Superseded-by:** [ADR-0368](ADR-0368-a-frame-polls-its-tasks-runs-its-pipeline-then-its-post-frame-callbacks.md) for §1 the scheduler phases inside the transaction only: the frame polls its tasks, runs the pipeline, then its post-frame callbacks.
 - **Amends:** [ADR-0027](ADR-0027-owner-affine-ui-realms.md) §9 (the public
   UI runtime/runtime surface); [ADR-0037](ADR-0037-presentation-ownership-domains.md) §1 and §4 (the
   composition and `PresentationState` leave `flui-app`) and §12 (the two-production-consumer
