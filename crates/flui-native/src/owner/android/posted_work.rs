@@ -200,8 +200,6 @@ pub(crate) fn refuse_unrun<W: Work<F>, F>(slot: &Slot<W>) {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::RefCell;
-    use std::rc::Rc;
     use std::sync::Arc;
     use std::time::Duration;
 
@@ -214,19 +212,15 @@ mod tests {
     const LIMIT: Duration = Duration::from_secs(10);
 
     /// A piece of work that records how it ended.
-    struct Recorded(&'static str, Rc<RefCell<Vec<String>>>);
+    struct Recorded(&'static str, Arc<Mutex<Vec<String>>>);
 
     impl Work<u8> for Recorded {
         fn run(self, frame: u8) {
-            self.1
-                .borrow_mut()
-                .push(format!("{} ran in {frame}", self.0));
+            self.1.lock().push(format!("{} ran in {frame}", self.0));
         }
 
         fn refuse(self, reason: MainThreadRefused) {
-            self.1
-                .borrow_mut()
-                .push(format!("{} refused {reason:?}", self.0));
+            self.1.lock().push(format!("{} refused {reason:?}", self.0));
         }
     }
 
@@ -311,8 +305,8 @@ mod tests {
     /// and the failure path refuses only a work still in its slot.
     #[test]
     fn the_main_thread_runs_the_work_it_reaches_and_refuses_the_rest() {
-        let log = Rc::new(RefCell::new(Vec::new()));
-        let slot = |name| Arc::new(Mutex::new(Some(Recorded(name, Rc::clone(&log)))));
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let slot = |name| Arc::new(Mutex::new(Some(Recorded(name, Arc::clone(&log)))));
 
         let lent = slot("lent");
         assert_eq!(
@@ -347,7 +341,7 @@ mod tests {
         let dropped = slot("dropped");
         refuse_unrun(&dropped);
         assert_eq!(
-            *log.borrow(),
+            *log.lock(),
             [
                 "lent ran in 7",
                 "unlent refused HandOffFailed",
