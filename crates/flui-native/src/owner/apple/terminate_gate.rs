@@ -59,7 +59,7 @@ pub(crate) enum Termination {
 }
 
 /// The state between a power-off notification and the terminate request.
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub(crate) struct TerminateGate {
     state: State,
     last_epoch: u64,

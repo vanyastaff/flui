@@ -215,9 +215,12 @@ issue #1162 shaped it this way.
 **The `frame_scheduled` contract for a catcher:** `handle_begin_frame`
 cleared `frame_scheduled` before the frame's tasks were polled. Abort cleanup
 does not re-arm it for the failure itself, which would hot-loop a caller that
-keeps re-driving a deterministically panicking frame; a failed post-frame batch
-re-arms it only for its queued tail, which was promised a frame that nothing
-else asks for once the caller resumes the panic. A caller that catches the
+keeps re-driving a deterministically panicking frame. Two kinds of work behind
+the failure re-arm it, because each was promised a frame that nothing else asks
+for once the caller resumes the panic: a failed post-frame batch's queued tail,
+and the ready tasks a panicking task's poll left unpolled (the pump's guard
+restores them to `ready` and requests the frame; the panicking task is gone, so
+this does not loop). A caller that catches the
 resumed panic and wants another frame calls `request_frame()` itself. See the
 contract of the frame drive (`__runtime::DriveFrame::drive_frame`).
 

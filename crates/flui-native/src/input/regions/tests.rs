@@ -6,6 +6,8 @@ use flui_foundation::geometry::{DevicePixelRatio, DevicePoint, DeviceRect, Rect}
 use flui_platform::input_regions::{DeviceInputRegion, InputRegion, InputRegionKind};
 use flui_platform::{DisplayKey, DisplayRegistry};
 
+use std::rc::Rc;
+
 use super::ProjectedInputRegions;
 use crate::table_test::run_table;
 
@@ -177,5 +179,76 @@ fn input_region_projection() {
                 a_scale_or_display_change_resends_equal_pixels,
             ),
         ],
+    );
+}
+
+thread_local! {
+    /// What the next event reaching [`ReentersOnce`] runs, once.
+    static ON_EVENT: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// A subscriber that runs this thread's [`ON_EVENT`] when an event reaches it:
+/// the application's code, re-entering from inside a `tracing` report.
+struct ReentersOnce;
+
+impl tracing::Subscriber for ReentersOnce {
+    fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+        true
+    }
+    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+    fn event(&self, _: &tracing::Event<'_>) {
+        if let Some(on_event) = ON_EVENT.with(|slot| slot.borrow_mut().take()) {
+            on_event();
+        }
+    }
+    fn enter(&self, _: &tracing::span::Id) {}
+    fn exit(&self, _: &tracing::span::Id) {}
+}
+
+/// Update the projection in `cell` with `regions` at scale one.
+fn update_in(cell: &std::cell::RefCell<ProjectedInputRegions>, regions: &[InputRegion]) -> bool {
+    ProjectedInputRegions::update_in(cell, |projection| projection, regions, ratio(1.0), None)
+}
+
+/// An update made from the `tracing` report of a dropped region, while
+/// another update of the same projection runs: it finds what was last sent,
+/// its commit lands, and the outer commit, the later one, is the last word.
+#[test]
+fn an_update_made_while_a_dropped_region_is_reported_finds_what_was_sent() {
+    let cell = Rc::new(std::cell::RefCell::new(ProjectedInputRegions::default()));
+    assert!(update_in(&cell, &[region(0.0, 0.0, 10.0, 10.0)]));
+
+    let inner_ran = Rc::new(std::cell::Cell::new(false));
+    let inner = {
+        let (cell, inner_ran) = (Rc::clone(&cell), Rc::clone(&inner_ran));
+        move || {
+            assert_eq!(
+                cell.borrow().sent(),
+                [device(0, 0, 10, 10)],
+                "the set last sent stays in place while the outer update projects"
+            );
+            assert!(update_in(&cell, &[region(0.0, 0.0, 20.0, 20.0)]));
+            assert_eq!(cell.borrow().sent(), [device(0, 0, 20, 20)]);
+            inner_ran.set(true);
+        }
+    };
+    ON_EVENT.with(|slot| *slot.borrow_mut() = Some(Box::new(inner)));
+    // The second region's edges are past `i32`: it is dropped and reported.
+    let outer = [
+        region(0.0, 0.0, 30.0, 30.0),
+        region(0.0, 0.0, MAX * 4.0, 1.0),
+    ];
+    let changed = tracing::subscriber::with_default(ReentersOnce, || update_in(&cell, &outer));
+    assert!(inner_ran.get(), "the report ran the inner update");
+    assert!(changed);
+    assert_eq!(
+        cell.borrow().sent(),
+        [device(0, 0, 30, 30)],
+        "the outer commit is the last word"
     );
 }

@@ -182,8 +182,10 @@ static_assertions::assert_not_impl_any!(IOSPlatform: Send, Sync);
 
 #[cfg(target_os = "macos")]
 impl MacosHost for Apple {
-    fn displays() -> Arc<dyn crate::owner::apple::macos::HostDisplays> {
-        Arc::new(MacosDisplays::new())
+    fn displays(
+        main: objc2::MainThreadMarker,
+    ) -> Arc<dyn crate::owner::apple::macos::HostDisplays> {
+        Arc::new(MacosDisplays::new(main))
     }
 
     fn preferences(signal: &Arc<OwnerSignal>) -> Box<dyn SystemPreferenceSource> {
