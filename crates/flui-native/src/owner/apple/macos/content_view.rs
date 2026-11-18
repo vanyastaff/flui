@@ -41,7 +41,7 @@ use objc2::{ClassType, DefinedClass, MainThreadMarker, MainThreadOnly, define_cl
 use objc2_app_kit::{
     NSAppearanceCustomization, NSAppearanceNameAqua, NSAppearanceNameDarkAqua, NSEvent,
     NSResponder, NSTextInputClient, NSTrackingArea, NSTrackingAreaOptions, NSView,
-    NSViewLayerContentsRedrawPolicy,
+    NSViewLayerContentsPlacement, NSViewLayerContentsRedrawPolicy,
 };
 use objc2_foundation::{
     NSArray, NSAttributedString, NSAttributedStringKey, NSNotFound, NSObject, NSObjectProtocol,
@@ -886,6 +886,13 @@ pub(crate) fn create(
     // (`NSViewLayerContentsRedrawDuringViewResize`), as a `drawRect:` view is.
     view.setWantsLayer(true);
     view.setLayerContentsRedrawPolicy(NSViewLayerContentsRedrawPolicy::DuringViewResize);
+    // A drawable of another size than the layer (a frame not drawn in time
+    // for a step of a live resize) keeps its own size at the view's top-left
+    // corner, clipped or with a strip beside it, where AppKit's default
+    // stretches it to the layer and the next frame snaps it back. The
+    // placement is AppKit's name for the backing layer's `contentsGravity`,
+    // which it owns on a layer-backed view.
+    view.setLayerContentsPlacement(NSViewLayerContentsPlacement::TopLeft);
     if let (Some(feedback), Some(reports)) = (
         view.backing_layer().as_deref().and_then(feedback_of),
         reports,

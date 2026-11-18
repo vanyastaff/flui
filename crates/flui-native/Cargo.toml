@@ -247,7 +247,8 @@ objc2-app-kit = { workspace = true, features = [
 dispatch2.workspace = true
 # CoreGraphics, for the display properties Cocoa does not expose: the refresh
 # rate of the display's *current* mode (`CGDisplayModeGetRefreshRate`), which
-# is what `PlatformWindow::refresh_period` needs, and the cursor warp and mouse
+# is what `PlatformWindow::refresh_period` needs, whether a display is the
+# machine's own panel (`CGDisplayIsBuiltin`), and the cursor warp and mouse
 # association of a locked pointer. NSScreen has no current-mode rate — its
 # `maximumFramesPerSecond` is the hardware *maximum* (it over-reports on a
 # ProMotion panel running a 60 Hz mode) and is macOS 12+, above this crate's

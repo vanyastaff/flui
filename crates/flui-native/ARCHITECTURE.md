@@ -3641,7 +3641,15 @@ wgpu draws into directly and whose drawables report when they were shown, and
 a `drawRect:` view's bitmap would cover the drawable after every pass. Such a
 view draws through `updateLayer` (`wantsUpdateLayer`), with the redraw policy
 set to `DuringViewResize`, the one a `drawRect:` view has: a view that makes
-its own backing layer is otherwise never redrawn. AppKit's own backing layers
+its own backing layer is otherwise never redrawn. Its contents placement is
+`TopLeft` (`layerContentsPlacement`, which AppKit maps to the backing layer's
+`contentsGravity`, a property it owns on a layer-backed view): a drawable that
+is not the layer's size, as a frame not drawn in time for a step of a live
+resize is, keeps its own size at the view's top-left corner, where the default
+placement stretches it to the layer until the next frame. Qt's `QNSView`
+answers the same placement for its Metal layer; Rune sets the gravity on the
+sublayer wgpu makes under winit's view. Type-checked only: no resize was looked
+at by eye. AppKit's own backing layers
 hand their `display` to the view; `CAMetalLayer`'s does nothing, and the view
 answers no `displayLayer:`, so `FluiMetalLayer::display` calls the view's
 `updateLayer` itself. The in-pass `setNeedsDisplay:` measurement below was
@@ -3759,23 +3767,35 @@ measurement window with the deferral branch removed. Both runs' marker lines
 (§4 of its `plan.md`) and the raw run logs are kept with the
 [pacing evidence](https://github.com/vanyastaff/flui/tree/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/.rust-studio/specs/macos-native-vsync-pacing-evidence).
 
-### macOS reports its display period as the current mode's rate, in the display snapshot
+### macOS reports the period its display paces at, in the display snapshot
 
 **Rule:** a backend that can tell an embedder the display's refresh period should
-report the rate of the mode that display is *in* — not a capability of the panel
+report the cadence that display is *running* — not a capability of the panel
 and not a generic default. The value is a floor for pacing ("never produce faster
 than this", the display snapshot's `refresh_period`), so a rate that is too high paces
 against a cadence the display is not running, and a rate that cannot be
 determined must be reported as unknown rather than guessed at.
 
-**Choice:** `Platform::display_snapshot` carries, for every `NSScreen`, a period
-from `CGDisplayModeGetRefreshRate` over the display's *current* mode
-(`display/apple/macos.rs::refresh_rate_of_screen`, made a period by
-`RefreshPeriod::from_hz`), reached from the
-screen via `NSScreenNumber` — the same display id `display.rs` reads for its
-bounds. A rate of 0 is `None`: CoreGraphics reports 0 for modes it cannot
-describe and some displays do, and a 0 turned into a period is infinite. The
-window names its display in its state snapshot, **cached** in
+**Choice:** `Platform::display_snapshot` carries, for every `NSScreen`, the
+period `display::apple::screen_cadence::refresh_period` decides from three
+reports, each reached from the screen via `NSScreenNumber`:
+
+- the rate of the display's *current* mode (`CGDisplayModeGetRefreshRate`),
+  made a period by `RefreshPeriod::from_hz`, where it names a cadence;
+- where it does not (CoreGraphics reports 0 for a mode it cannot describe, which
+  some built-in panels are in, and a 0 turned into a period is infinite), the
+  nominal period of a `CVDisplayLink` on that display
+  (`CVDisplayLinkGetNominalOutputVideoRefreshPeriod`, a `CVTime` handed to
+  `RefreshPeriod::from_ratio`), from a link made for the question and released
+  unstarted; `None` when that is indefinite too;
+- Low Power Mode (`NSProcessInfo.isLowPowerModeEnabled`, macOS 12, behind the
+  `ProcessPowerState` gate): while it is on, the built-in panel
+  (`CGDisplayIsBuiltin`) has the period of 60 Hz when its own is shorter. A
+  ProMotion panel refreshes at 60 Hz there while its mode and its display link
+  still say 120, and frames produced at 120 queue behind it. An external
+  monitor is not held.
+
+The window names its display in its state snapshot, **cached** in
 `MacOSWindowState` beside `scale_factor`: re-read in the handler that already
 updates the scale (`handle_backing_properties_changed`, reached from
 `handle_screen_changed`), which then publishes the window's state, and seeded when
@@ -3786,9 +3806,8 @@ this diverges from the winit implementation it otherwise mirrors: winit queries
 the monitor per call, but here every snapshot reads the display, so it is read
 from AppKit only where it can change, and a change invalidates the snapshot. The
 window binds the registry before it is shown (`UnshownWindow::show`), so its
-first snapshot, published from `windowDidBecomeKey:`, names its display. The screen key is the
-`CGDirectDisplayID` (a label, stable while the display stays attached), a stopgap
-the display-UUID source replaces.
+first snapshot, published from `windowDidBecomeKey:`, names its display. A screen
+is keyed by the UUID of its display (`CGDisplayCreateUUIDFromDisplayID`).
 
 **Alternatives considered:**
 - `NSScreen.maximumFramesPerSecond` — rejected twice over. It is macOS 12+, above
@@ -3797,47 +3816,109 @@ the display-UUID source replaces.
   ProMotion display running a 60 Hz mode — exactly the too-high rate the rule
   above forbids. winit does not use it.
 - Querying per call, the way winit does — rejected here for lane safety, above.
-- A `CVDisplayLink` fallback for displays whose mode reports 0 (winit has one) —
-  **deferred, not dropped**: it needs a `core-video` dependency, and CVDisplayLink
-  is this backend's intended produce signal anyway (ADR-0044), so it belongs with
-  that tick source rather than ahead of it. Until then `None` is honest and
-  observable: `flui-app`'s runner logs `reported=false` and paces against its
-  documented default.
+- The `objc2-core-video` bindings for the display link — not taken: the three
+  functions the fallback calls are declared beside `CGDisplayCreateUUIDFromDisplayID`
+  in `display/apple/macos.rs`, and the crate would add a second CoreGraphics
+  binding family (`objc2-core-graphics`) next to `core-graphics`.
+- Linking `NSProcessInfoPowerStateDidChangeNotification` — not taken: the
+  constant is macOS 12's, and a binary that names it would not load on the
+  releases below it. Its address is looked up by name
+  (`power_state_notification`), as `fonts/apple.rs` looks up a CoreText
+  function.
+- Measuring the cadence from a running display link, as the iOS host does —
+  not taken: Rune reads a ProMotion panel's link at 120 Hz under Low Power Mode,
+  so a measurement would not find the 60 Hz either.
 
 **Market lineage:** winit 0.30.13's macOS `MonitorHandle::refresh_rate_millihertz`
 (`src/platform_impl/macos/monitor.rs:260`) reads `CGDisplayCopyDisplayMode` →
 `CGDisplayModeGetRefreshRate`, returns it when it is `> 0.0`, and only then falls
-back to `CVDisplayLinkGetNominalOutputVideoRefreshPeriod`. That is the source
-read here and the reason for the `> 0` guard. Read at the version pinned in this
-workspace's `Cargo.lock`, not recalled.
+back to `CVDisplayLinkGetNominalOutputVideoRefreshPeriod`. That is the order
+taken here. Read at the version pinned in this workspace's `Cargo.lock`, not
+recalled. The Low Power Mode rule is Rune's
+(`crates/rune/src/platform/display_link.rs`, branch `dev`, read 2026-11-18):
+`CGDisplayIsBuiltin` and `isLowPowerModeEnabled`, and the link's period held at
+1/60 s. Rune reads the flag at each change of display; this host also reads it
+again when Foundation posts the power-state notification.
 
 **Trade-off:** the cached display follows the window across screens and backing
 changes. A mode change that leaves the window where it is (a user switching
-refresh rate in System Settings) is observed too: `ScreenObserver`
+refresh rate in System Settings) is observed too: `DisplayObservers`
 (`display/apple/macos.rs`) marks the snapshot stale on
-`NSApplicationDidChangeScreenParametersNotification` and wakes the owner, and the
-host derives every window's display again on that wake. What stays open is a
-display whose current mode reports 0 Hz, which some built-in panels do: its period
-is unknown and the host paces at its 60 Hz default, because the
-`CVDisplayLinkGetNominalOutputVideoRefreshPeriod` fallback winit takes is not
-written ([Most implemented rows never ran on their environment](../../docs/gaps.md#most-implemented-rows-never-ran-on-their-environment)). Neither a live refresh switch nor
-such a panel ran: the display this was measured on has one fixed mode.
+`NSApplicationDidChangeScreenParametersNotification`, and from macOS 12 on
+Foundation's power-state notification, and wakes the owner; the next sample
+publishes a new revision when a period changed, and each window pushes the
+period of its display to its layer's presentation reports at its next frame
+request (`sync_layer_refresh`). A display whose mode reports 0 Hz makes a display
+link at every sample that follows an invalidation, not at every wake. None of
+this ran on a Mac: not a live refresh switch, not a 0 Hz panel, not Low Power
+Mode on a ProMotion panel
+([Most implemented rows never ran on their environment](../../docs/gaps.md#most-implemented-rows-never-ran-on-their-environment),
+[Power-aware pacing and throttling](../../docs/gaps.md#power-aware-pacing-and-throttling)).
+The display the rate was measured on has one fixed mode.
 
-**Replacement coverage:** the arithmetic is free-standing and AppKit-free
-(`RefreshPeriod::from_hz`, the contract's constructor the macOS source hands
-CoreGraphics' rate to), pinned by `refresh_value_classification_table`
-(non-cadence inputs — zero, negative, NaN, ±infinity — are unknown rather
-than an infinite or panicking period) and by
-`macos_shim_keeps_the_period_it_reports_today`, which holds the common panel
-rates to the value this backend reported before the snapshot. The read
-itself is FFI, so `every_display_source_reads_a_cadence_alike` has no macOS
-column. The live path is
+**Replacement coverage:** the rule is free-standing and AppKit-free.
+`a_macos_screen_paces_at_its_mode_its_link_or_the_low_power_rate` holds its
+table: a 120 Hz built-in panel under Low Power Mode paces at 60 Hz, an external
+one and a slower one keep their periods, a 0 Hz mode takes the link's nominal
+period, and an indefinite, zero or negative one is no period;
+`a_mode_with_a_rate_asks_no_display_link` holds that a link is made only for a
+mode that names no cadence. The macOS column of
+`every_display_source_reads_a_cadence_alike` holds the mode's rate to the same
+period every other source reads (non-cadence inputs — zero, negative, NaN,
+±infinity — are unknown rather than an infinite or panicking period), and
+`macos_shim_keeps_the_period_it_reports_today` holds the common panel rates to
+the value this backend reported before the snapshot. The reads themselves are
+FFI. The live path is
 pinned behaviourally by the same manual run that pins the frame pump,
 which reported the refresh period from
 the real backend on the real display: measured 2026-09-17 as `period_us=10000
 hz=100.0`, matching the independent AppKit probe's `CGDisplayModeGetRefreshRate`
 of 100.000 Hz on the same panel. Like every macOS-gated test here, these run
 locally only — CI has no macOS test job and `cross-typecheck` is lint-only.
+
+### A macOS window's safe area is what its screen's camera housing covers of it
+
+**Rule:** the safe area of the window snapshot (`WindowInsets::safe_area`,
+ADR-0277) is measured against the window's content, so a host publishes how far
+an unsafe band reaches into that content, not the band's size.
+
+**Choice:** a screen reports the band its camera housing takes as
+`NSScreen.safeAreaInsets` (macOS 12, behind the `ScreenSafeArea` gate; below it
+a window has no safe area). At every sample the window reads its screen's frame
+and insets with its content rectangle, and
+`window::apple::geometry::frame::safe_area_on_screen` intersects them through
+`window::safe_area::within`, the rule the Web host reads its viewport's bands
+by. A window that covers its screen has the screen's top inset; a window the
+system keeps below the housing, and any window under the menu bar, has none.
+The mode is not consulted: a borderless window laid over the whole screen is
+under the housing as much as a full-screen one is. The screen is read at the
+sample and not cached beside the window's display: the inset is a function of
+the content rectangle, which the same sample reads, and a window is sampled
+when it is resized or moved, changes screen or backing scale, and ends a
+full-screen transition.
+
+**Alternatives considered:**
+- An inset by mode (a full-screen window gets the screen's top inset) — not
+  taken: where the system keeps a full-screen window below the housing it
+  would pad the window a second time, and it would miss a borderless window
+  laid over the screen.
+- `NSView.safeAreaInsets` (macOS 11), the view-level value the iOS host reads —
+  not taken: on a window whose content fills the frame it counts the title bar
+  as unsafe, which is where an application draws its own
+  (`WindowFrame`'s application title bar).
+
+**Trade-off:** `auxiliaryTopLeftArea` and `auxiliaryTopRightArea`, the strips
+beside the housing a title bar may still use, are not read: the whole band is
+unsafe. A change of the screen's insets that comes with no resize, move, screen
+change or transition of the window is not seen until the next of those.
+Nothing ran on a Mac with a housing, and whether AppKit's full screen puts a
+window under the band there or below it was not observed
+([Mobile system UI](../../docs/gaps.md#mobile-system-ui)).
+
+**Replacement coverage:**
+`a_window_under_the_camera_housing_has_its_band_as_a_safe_area` holds the
+intersection against stand-in insets, and `screen_safe_area_gate_table` the
+version floor; the AppKit reads are type-checked only.
 
 ### AppKit's input method is a route for a `keyDown:`, not a second producer of one
 

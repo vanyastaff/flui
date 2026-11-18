@@ -22,12 +22,58 @@ pub(crate) mod frame {
     //! desktop ([`DisplayDescription::origin`]), so a position on it is the desktop
     //! point less the corner, with no scale between them.
 
-    use flui_foundation::geometry::{Bounds, Point, Size};
+    use flui_foundation::geometry::{Bounds, EdgeInsets, Point, Size};
     use flui_platform::{DisplayDescription, SizeConstraints, WindowExtent, WindowPosition};
+
+    use crate::version::gate::{Gate, apple::MacOSVersion};
+    use crate::window::safe_area;
 
     /// Any content limit at or beyond this counts as AppKit's "no limit"
     /// (`contentMaxSize` defaults to `CGFLOAT_MAX`, or `FLT_MAX` on older systems).
     const UNLIMITED_FROM: f64 = 1.0e30;
+
+    /// `NSScreen.safeAreaInsets` (macOS 12): the bands of a screen its camera
+    /// housing takes. Before it a screen reports none, and a window has no
+    /// safe area.
+    #[derive(Debug, Clone, Copy)]
+    pub(crate) struct ScreenSafeArea;
+
+    impl Gate for ScreenSafeArea {
+        type Version = MacOSVersion;
+        const SINCE: u64 = MacOSVersion::new(12, 0, 0).rank();
+    }
+
+    /// The safe area of a window whose content AppKit reports at `content`,
+    /// on the screen whose frame is `screen` and whose `safeAreaInsets` are
+    /// `unsafe_edges`, both rectangles in AppKit's desktop: how far each
+    /// unsafe band of the screen reaches into the content, in the content's
+    /// logical pixels, which are points.
+    ///
+    /// A window that covers its screen, as a full-screen window does where
+    /// the system does not keep it below the camera housing, has the
+    /// screen's insets; one that lies clear of the bands, as a window under
+    /// the menu bar does, has none. Numbers that are not finite and a
+    /// content with no area give no inset.
+    pub(crate) fn safe_area_on_screen(
+        content: Bounds<f64>,
+        screen: Bounds<f64>,
+        unsafe_edges: EdgeInsets,
+    ) -> EdgeInsets {
+        // AppKit measures up from the bottom; the bands are measured in from
+        // each edge, so the content is placed from the screen's top-left.
+        let top_of = |rect: Bounds<f64>| rect.origin.y + rect.size.height;
+        safe_area::within(
+            screen.size,
+            unsafe_edges,
+            safe_area::Placement {
+                x: content.origin.x - screen.origin.x,
+                y: top_of(screen) - top_of(content),
+                width: content.size.width,
+                height: content.size.height,
+            },
+            content.size,
+        )
+    }
 
     /// The outer top-left of a window whose frame AppKit reports as `frame`, as
     /// a point of AppKit's flipped desktop: points from the primary screen's
@@ -373,6 +419,93 @@ pub(crate) mod frame {
                     "{name}: round trip"
                 );
             }
+        }
+
+        /// Each row: the screen's frame, its `safeAreaInsets` (stand-ins for
+        /// a panel with a camera housing), the window's content rectangle,
+        /// and the safe area the window has.
+        #[test]
+        fn a_window_under_the_camera_housing_has_its_band_as_a_safe_area() {
+            let panel = frame(0.0, 0.0, 1512.0, 982.0);
+            let housing = EdgeInsets::new(32.0, 0.0, 0.0, 0.0);
+            let top = |inset: f64| EdgeInsets::new(inset, 0.0, 0.0, 0.0);
+            let beside = frame(-1512.0, 300.0, 1512.0, 982.0);
+            let rows = [
+                (
+                    "a window that covers the screen has the screen's inset",
+                    panel,
+                    housing,
+                    panel,
+                    top(32.0),
+                ),
+                (
+                    "a full-screen window the system keeps below the housing has none",
+                    panel,
+                    housing,
+                    frame(0.0, 0.0, 1512.0, 950.0),
+                    EdgeInsets::ZERO,
+                ),
+                (
+                    "a window partly under the band has the part over it",
+                    panel,
+                    housing,
+                    frame(100.0, 400.0, 800.0, 570.0),
+                    top(20.0),
+                ),
+                (
+                    "a window under the menu bar has none",
+                    panel,
+                    housing,
+                    frame(100.0, 100.0, 800.0, 500.0),
+                    EdgeInsets::ZERO,
+                ),
+                (
+                    "a screen with no housing gives none",
+                    panel,
+                    EdgeInsets::ZERO,
+                    panel,
+                    EdgeInsets::ZERO,
+                ),
+                (
+                    "a screen beside the primary is measured from its own corner",
+                    beside,
+                    EdgeInsets::new(32.0, 0.0, 0.0, 10.0),
+                    frame(-1508.0, 300.0, 1000.0, 982.0),
+                    EdgeInsets::new(32.0, 0.0, 0.0, 6.0),
+                ),
+                (
+                    "a content rectangle that is no number has none",
+                    panel,
+                    housing,
+                    frame(0.0, f64::NAN, 1512.0, 982.0),
+                    EdgeInsets::ZERO,
+                ),
+                (
+                    "an inset that is no number is none",
+                    panel,
+                    top(f64::INFINITY),
+                    panel,
+                    EdgeInsets::ZERO,
+                ),
+            ];
+            for (name, screen, unsafe_edges, content, expected) in rows {
+                assert_eq!(
+                    safe_area_on_screen(content, screen, unsafe_edges),
+                    expected,
+                    "{name}"
+                );
+            }
+        }
+
+        #[test]
+        fn screen_safe_area_gate_table() {
+            let failures = crate::version::gate::testing::row::<ScreenSafeArea>(
+                "ScreenSafeArea",
+                MacOSVersion::new(11, 99, 99),
+                MacOSVersion::new(12, 0, 0),
+                MacOSVersion::UNKNOWN,
+            );
+            assert!(failures.is_empty(), "{failures:#?}");
         }
     }
 }

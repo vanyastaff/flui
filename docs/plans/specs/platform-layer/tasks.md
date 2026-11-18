@@ -9138,6 +9138,59 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
   clippy и тесты доступности на Linux. Должно на устройстве Android (заметка строки паритета):
   TalkBack выключить и включить, считая работу семантики в кадрах.
 
+- [x] **LY149** — ветка `native/macos-pacing-and-notch`. Проверено на `main` @ `88ea4d03a`
+  чтением и тестами модели; на Mac не запускалось ничего, и это сказано у каждой находки.
+  Подтверждено кодом: период экрана был частотой текущего режима и больше ничем
+  (`refresh_rate_of_screen`), 0 Гц `RefreshPeriod::from_hz` отвергал, так что у такого дисплея
+  периода не было; `sample_state` окна публиковал `WindowInsets::ZERO`; ни слою, ни виду не
+  задавалось, как лежит несовпавшее содержимое. Не подтверждено и не опровергнуто (нужен Mac):
+  что панель ProMotion в Low Power Mode обновляется на 60 Гц при режиме и display link на 120
+  (взято из исходника Rune, `crates/rune/src/platform/display_link.rs`, ветка `dev`); что
+  несовпавший drawable при живом resize был виден растянутым. Решения (ADR их не решают; правила
+  записаны в `crates/flui-native/ARCHITECTURE.md`, таблица §4 ADR-0277 говорит, что публикует
+  macOS). Период: чистое правило `display::apple::screen_cadence::refresh_period` — частота
+  режима, где она называет темп; иначе номинальный период `CVDisplayLink` этого дисплея
+  (`CVTime` идёт в `RefreshPeriod::from_ratio`, link создаётся ради одного вопроса и
+  освобождается незапущенным, три функции CoreVideo объявлены рядом с ColorSync, без нового
+  крейта); встроенная панель (`CGDisplayIsBuiltin`) при Low Power Mode — не короче периода
+  60 Гц, внешний монитор не трогается. `isLowPowerModeEnabled` и уведомление — macOS 12, за
+  гейтом `ProcessPowerState`; имя уведомления ищется через `dlsym`, а не линкуется: бинарник со
+  ссылкой на константу macOS 12 не загрузился бы на 11. Наблюдатели дисплеев —
+  `DisplayObservers` из двух `Observation` (параметры экранов и состояние питания), своя копия
+  наблюдателя с блоком удалена; смена режима питания помечает снимок устаревшим и будит
+  владельца, новая ревизия выходит, когда период изменился. Вырез: чистое правило
+  `window::apple::geometry::frame::safe_area_on_screen` пересекает полосу
+  `NSScreen.safeAreaInsets` (macOS 12, гейт `ScreenSafeArea`) с прямоугольником содержимого
+  через `window::safe_area::within` — то же правило, которым Web читает полосы viewport, и та же
+  величина снимка, что у iOS (`WindowInsets::safe_area`), новой формы нет. Режим окна не
+  спрашивается: окно, закрывающее весь экран, получает верхнюю вставку экрана; окно, которое
+  система держит ниже выреза (так, по описаниям, AppKit ставит свой полноэкранный режим), и окно
+  под строкой меню — ноль. Строка требовала «у полноэкранного окна верхняя вставка из
+  `safeAreaInsets.top`»; вставка по режиму удвоила бы отступ там, где система уже опустила окно,
+  поэтому публикуется перекрытие. Экран читается при каждом чтении окна (resize, перемещение,
+  смена экрана и масштаба, конец полноэкранного перехода), а не кэшируется: вставка — функция
+  прямоугольника, который читается тем же чтением. Gravity: `layerContentsPlacement = TopLeft` у
+  вида, а не `contentsGravity` у слоя: у layer-backed вида гравитацией слоя владеет AppKit и
+  выставляет её из placement (так же делает `QNSView` в Qt; Rune задаёт gravity подслою, который
+  wgpu создаёт под видом winit). Глазами не оценено. Тесты, в скобках результат с откатом:
+  `a_macos_screen_paces_at_its_mode_its_link_or_the_low_power_rate` (без `max` с периодом 60 Гц —
+  строка «ProMotion под Low Power» даёт 8,33 мс вместо 16,67; без запасного пути — строка «0 Гц»
+  даёт `None` вместо 16,683 мс), `a_mode_with_a_rate_asks_no_display_link`,
+  `process_power_state_gate_table`, `screen_safe_area_gate_table`,
+  `a_window_under_the_camera_housing_has_its_band_as_a_safe_area` (с отсчётом от нижнего края
+  экрана вместо верхнего — окно ниже выреза получает 32 вместо 0); у
+  `every_display_source_reads_a_cadence_alike` появилась колонка macOS, и
+  `macos_shim_keeps_the_period_it_reports_today` идёт через то же правило. Прогнано: тесты
+  модели в WSL (Linux) и на Windows через nextest; в WSL `cargo +nightly check -p flui-native
+  --target aarch64-apple-darwin --all-targets --locked` и `build --lib` той же цели (проверка
+  порогов гейтов) без предупреждений; clippy `--all-targets -D warnings` `flui-native` на
+  Windows. Должно на Mac (заметки строк «Refresh rate and frame pacing», «Safe area», «Live resize
+  without jitter» и «Power-aware pacing» в `platform-parity.toml`, записи `docs/gaps.md`):
+  ProMotion с включением и выключением Low Power Mode (период в снимке и очередь drawable),
+  панель с режимом 0 Гц, Mac с вырезом в полноэкранном режиме и с окном без рамки на весь экран,
+  живой resize глазами. Не построено и записано в `docs/gaps.md`: `auxiliaryTopLeftArea` и
+  `auxiliaryTopRightArea` (полосы рядом с вырезом), тепловое состояние и пауза фоновой работы.
+
 ## Чего нет в этой серии
 
 Часть функций из закрытого списка ядра (R1.4) на части ОС ещё отсутствует. Каждая — отдельная
