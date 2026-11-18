@@ -392,6 +392,8 @@ mod surface_factory;
 mod surface_lease;
 mod surface_pacing;
 mod surface_present;
+/// A hash map that counts, in tests, the entries each access touches.
+mod tallied_map;
 mod tessellator;
 pub(crate) mod texture_cache;
 mod texture_pool;
