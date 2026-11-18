@@ -39,10 +39,10 @@ use std::time::Duration;
 use flui_animation::{
     Animatable, Animation, Curve, CurvedAnimation, MotionPolicy, SharedCurve, Tween, curves,
 };
+use flui_foundation::TextDirection;
 use flui_foundation::geometry::Offset;
 use flui_objects::TranslationFraction;
 use flui_painting::styling::{BoxDecoration, BoxShadow, Color};
-use flui_painting::typography::TextDirection;
 use flui_view::{BoxedView, BuildContext, ViewExt};
 
 use super::navigator::NavigatorHandle;

@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use crate::common::{LaidOut, lay_out_animated, loose};
 use flui_animation::{Linear, SpringDescription, Vsync};
-use flui_painting::{display_list::DrawOp, styling::Color};
+use flui_painting::{DrawOp, styling::Color};
 use flui_rendering::layer::Layer;
 use flui_view::environment::VsyncScope;
 use flui_widgets::{AnimatedContainer, AnimatedOpacity, MotionBuilder, SizedBox};

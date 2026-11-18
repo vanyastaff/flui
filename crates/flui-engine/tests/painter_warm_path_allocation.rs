@@ -83,7 +83,7 @@ fn warm_path_recording_has_no_per_draw_vertex_allocation() {
 
     use flui_engine::{WgpuPainter, wgpu};
     use flui_foundation::geometry::Point;
-    use flui_painting::{Paint, paint::path::Path, styling::Color};
+    use flui_painting::{paint::Paint, paint::Path, styling::Color};
 
     let instance =
         wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle().with_env());

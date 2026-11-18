@@ -1666,6 +1666,7 @@ fn device_extent(size: DeviceSize) -> EngineResult<(u32, u32)> {
 
 #[cfg(test)]
 mod tests {
+    use flui_foundation::TextDirection;
     use flui_foundation::{
         FrameEpoch, FrameStamp, PresentationAddress, PresentationId, SurfaceGeneration,
         UiRuntimeId,
@@ -1676,7 +1677,7 @@ mod tests {
         Canvas, TextPainter,
         paint::Paint,
         styling::Color,
-        typography::{TextDirection, TextSpan, TextStyle},
+        typography::{TextSpan, TextStyle},
     };
 
     use super::{GpuContext, INSTANCES_CREATED};

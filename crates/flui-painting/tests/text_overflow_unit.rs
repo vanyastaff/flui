@@ -7,14 +7,15 @@
 //! agree, an ellipsis shaped into the last kept line — and baselines come
 //! from the shaped lines.
 
+use flui_foundation::TextDirection;
 use flui_painting::ShapedParagraph;
-use flui_painting::text_painter::TextPainter;
-use flui_painting::typography::{TextDirection, TextSpan};
+use flui_painting::TextPainter;
+use flui_painting::typography::TextSpan;
 
 /// The rightmost device column any glyph of `paragraph` inks at scale 1 from
 /// the origin, drawn by the rasterizer the engine uses.
 fn rasterized_ink_right(paragraph: &ShapedParagraph) -> f64 {
-    use flui_painting::GlyphRasterizer;
+    use flui_painting::glyphs::GlyphRasterizer;
     use flui_painting::glyphs::SwashRasterizer;
 
     let mut rasterizer = SwashRasterizer::new();

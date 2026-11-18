@@ -8,7 +8,7 @@ use std::rc::Rc;
 use accesskit::{
     Action, ActionData, ActionRequest, NodeId, Role, TextPosition, TextSelection, TreeId,
 };
-use flui_painting::typography::TextDirection;
+use flui_foundation::TextDirection;
 use flui_rendering::semantics::ActionDecodeError;
 use flui_testing::InvokeActionError;
 use flui_widgets::{
@@ -391,7 +391,7 @@ pub(crate) fn a_document_selection_snaps_into_its_texts_or_is_withheld() {
                 "héllo",
                 0,
                 0,
-                flui_painting::typography::TextDirection::Ltr,
+                flui_foundation::TextDirection::Ltr,
                 Rect::from_origin_size(Point::ZERO, Size::new(50.0, 10.0)),
             );
             for (index, length) in [1_u8, 2, 1, 1, 1].into_iter().enumerate() {

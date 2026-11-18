@@ -16,9 +16,9 @@ use std::{
 
 use super::traversal::{FocusTraversalOverrides, GroupConfig, GroupOrderCache, GroupOrderSnapshot};
 use flui_foundation::ChangeNotifier;
+use flui_foundation::TextDirection;
 use flui_foundation::geometry::Rect;
 use flui_foundation::panic::RecoveryScope;
-use flui_painting::typography::TextDirection;
 use flui_platform::keyboard::KeyEvent;
 use thiserror::Error;
 

@@ -13,8 +13,8 @@ use flui_widgets::{DefaultTextStyle, Text};
 /// An icon's authored sizing policy applies to its box and painted glyph once.
 pub(crate) fn icon_text_sizing_keeps_box_and_glyph_together() {
     use flui_foundation::{TextScaleProfile, TextSize, TextSizeRequest};
+    use flui_painting::DrawOp;
     use flui_painting::TextSizing;
-    use flui_painting::display_list::DrawOp;
     use flui_painting::glyphs::FontRegistry;
     use flui_view::ViewExt;
     use flui_widgets::{Icon, IconData, IconTheme, IconThemeData};
@@ -216,7 +216,7 @@ pub(crate) fn icon_labels_reach_the_assembled_accessibility_tree() {
 /// clearing the observation restores the authored geometry.
 pub(crate) fn the_system_text_scale_grows_each_span_once() {
     use flui_foundation::TextSizingIntent;
-    use flui_painting::display_list::DrawOp;
+    use flui_painting::DrawOp;
     use flui_painting::glyphs::FontRegistry;
     use flui_painting::typography::TextSpan;
     use flui_platform::SystemPreferences;
@@ -516,7 +516,7 @@ fn scale_text(laid: &mut crate::common::LaidOut, scale: f64) {
 /// black's, none when out of range or not finite (ADR-0309 §1, §5).
 pub(crate) fn an_icon_theme_shadow_and_opacity_paint() {
     use flui_foundation::geometry::Offset;
-    use flui_painting::display_list::DrawOp;
+    use flui_painting::DrawOp;
     use flui_painting::styling::{Color, Shadow};
     use flui_view::ViewExt;
     use flui_widgets::{Icon, IconData, IconTheme, IconThemeData};
@@ -846,7 +846,7 @@ pub(crate) fn tab_stops_on_each_link_and_enter_opens_it() {
 /// Red-checks: drop the ring from the paragraph's paint (no band), or draw it
 /// around the paragraph's box (one band, not one per line).
 pub(crate) fn a_focused_link_rings_each_line_of_its_glyphs() {
-    use flui_painting::display_list::DrawOp;
+    use flui_painting::DrawOp;
     use flui_painting::styling::Color;
     use flui_platform::keyboard::{Key, NamedKey};
     use flui_widgets::{DefaultFocusRingStyle, FocusRingStyle};

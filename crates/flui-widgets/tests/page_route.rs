@@ -91,7 +91,7 @@ pub(crate) fn page_route_paints_its_separate_entrance_and_exit_durations() {
     use std::{rc::Rc, time::Duration};
 
     use flui_animation::Vsync;
-    use flui_painting::{display_list::DrawOp, styling::Color};
+    use flui_painting::{DrawOp, styling::Color};
     use flui_rendering::layer::Layer;
     use flui_view::environment::VsyncScope;
     use flui_widgets::{ColoredBox, FadeTransition};

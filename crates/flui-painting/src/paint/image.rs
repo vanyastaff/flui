@@ -292,9 +292,6 @@ impl PartialEq for Image {
     }
 }
 
-// Re-export BoxFit and FittedSizes from layout module (single source of truth)
-pub use crate::{BoxFit, FittedSizes};
-
 /// How to repeat an image to fill its layout bounds.
 ///
 /// # Examples

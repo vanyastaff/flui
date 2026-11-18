@@ -1,6 +1,6 @@
 //! `ColorFilterLayer` — recolours its subtree with a [`ColorFilter`].
 
-use flui_painting::paint::{ColorFilter, effects::ColorMatrix};
+use flui_painting::paint::{ColorFilter, ColorMatrix};
 
 /// Layer that applies a [`ColorFilter`] to its children.
 ///
@@ -20,7 +20,7 @@ use flui_painting::paint::{ColorFilter, effects::ColorMatrix};
 /// use flui_layer::ColorFilterLayer;
 /// use flui_painting::paint::{ColorFilter, BlendMode};
 /// use flui_painting::styling::Color;
-/// use flui_painting::paint::effects::ColorMatrix;
+/// use flui_painting::paint::ColorMatrix;
 ///
 /// // Matrix-based filter (e.g. grayscale).
 /// let layer = ColorFilterLayer::new(ColorFilter::grayscale());

@@ -42,7 +42,7 @@
 
 use flui_foundation::geometry::{Offset, RRect, Rect};
 use flui_layer::SceneBuilder;
-use flui_painting::{BlendMode, Canvas, Paint};
+use flui_painting::{Canvas, paint::BlendMode, paint::Paint};
 use flui_painting::{
     paint::{Clip, ClipOp, Shader, TileMode},
     styling::Color,

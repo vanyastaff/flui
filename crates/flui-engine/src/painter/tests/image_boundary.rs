@@ -1,7 +1,7 @@
 use super::*;
 use flui_foundation::geometry::Matrix4;
 use flui_painting::{
-    Paint,
+    paint::Paint,
     paint::{Image, ImageRepeat},
     styling::Color,
 };
@@ -503,8 +503,8 @@ fn striped() -> Image {
 pub(super) fn decoration_cover() {
     use flui_painting::{
         BoxFit,
-        decoration::{DecorationPaintOptions, paint_box_decoration},
         styling::{BoxDecoration, DecorationImage},
+        {DecorationPaintOptions, paint_box_decoration},
     };
     let rgba = draw(32, |p| {
         let mut canvas = flui_painting::Canvas::new();
@@ -528,9 +528,9 @@ pub(super) fn decoration_cover() {
 pub(super) fn decoration_filter_opacity() {
     use flui_painting::{
         BoxFit,
-        decoration::{DecorationPaintOptions, paint_box_decoration},
         paint::ColorFilter,
         styling::{BoxDecoration, DecorationImage},
+        {DecorationPaintOptions, paint_box_decoration},
     };
     let rgba = draw(32, |p| {
         let mut canvas = flui_painting::Canvas::new();
@@ -598,8 +598,8 @@ pub(super) fn render_image_natural_crop() {
 pub(super) fn decoration_repeat_phase() {
     use flui_painting::{
         BoxFit,
-        decoration::{DecorationPaintOptions, paint_box_decoration},
         styling::{BoxDecoration, DecorationImage},
+        {DecorationPaintOptions, paint_box_decoration},
     };
     let source = Image::from_rgba8(
         4,
@@ -787,8 +787,8 @@ fn decoration_cover_outside_alignment(
 ) {
     use flui_painting::{
         BoxFit,
-        decoration::{DecorationPaintOptions, paint_box_decoration},
         styling::{BoxDecoration, DecorationImage},
+        {DecorationPaintOptions, paint_box_decoration},
     };
     let (width, height) = if vertical { (4, 8) } else { (8, 4) };
     let source = Image::from_rgba8(width, height, [255, 255, 255, 255].repeat(32));
@@ -882,9 +882,9 @@ pub(super) fn decoration_cover_repeat_y_overshoot() {
 pub(super) fn decoration_none_crop_keeps_other_axis_repeat() {
     use flui_painting::{
         Alignment, BoxFit,
-        decoration::{DecorationPaintOptions, paint_box_decoration},
         paint::ImageRepeat,
         styling::{BoxDecoration, DecorationImage},
+        {DecorationPaintOptions, paint_box_decoration},
     };
     let rgba = draw(32, |p| {
         let mut canvas = flui_painting::Canvas::new();

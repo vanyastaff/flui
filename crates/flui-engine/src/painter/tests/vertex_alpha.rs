@@ -1,6 +1,6 @@
 use super::*;
 use flui_foundation::geometry::Point;
-use flui_painting::{Canvas, Paint, styling::Color};
+use flui_painting::{Canvas, paint::Paint, styling::Color};
 
 const SIZE: u32 = 32;
 const INDICES: [u16; 3] = [0, 1, 2];

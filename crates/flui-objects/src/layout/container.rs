@@ -49,7 +49,9 @@ use flui_foundation::geometry::{EdgeInsets, Matrix4, Offset, Point, Rect, Size};
 use flui_painting::Alignment;
 use flui_painting::styling::BoxDecoration;
 use flui_painting::styling::Color;
-use flui_painting::{DecorationPaintOptions, Paint, box_decoration_hit_test, paint_box_decoration};
+use flui_painting::{
+    DecorationPaintOptions, box_decoration_hit_test, paint::Paint, paint_box_decoration,
+};
 
 use flui_rendering::{
     RenderUpdateImpact,

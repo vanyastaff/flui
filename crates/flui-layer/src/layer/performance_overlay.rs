@@ -11,11 +11,11 @@
 
 use std::sync::Arc;
 
+use flui_foundation::TextDirection;
 use flui_foundation::geometry::{Offset, RRect, Radius, Rect};
 use flui_painting::parley_text::ParagraphSpec;
 use flui_painting::styling::Color;
-use flui_painting::typography::TextDirection;
-use flui_painting::{Canvas, DisplayList, Paint, TextContext};
+use flui_painting::{Canvas, DisplayList, TextContext, paint::Paint};
 
 bitflags::bitflags! {
     /// Which readouts the overlay shows.
@@ -195,10 +195,10 @@ impl PerformanceOverlayLayer {
 mod tests {
     use std::collections::BTreeSet;
 
+    use flui_foundation::TextDirection;
     use flui_foundation::geometry::{Offset, Rect};
     use flui_painting::parley_text::ParagraphSpec;
     use flui_painting::styling::Color;
-    use flui_painting::typography::TextDirection;
     use flui_painting::{DrawOp, FontCollection, TextContext};
 
     use super::{PerformanceOverlayLayer, PerformanceOverlayOption, PerformanceSample};

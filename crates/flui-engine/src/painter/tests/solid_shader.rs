@@ -2,7 +2,8 @@
 use super::*;
 use flui_foundation::geometry::{Matrix4, Point, RRect};
 use flui_painting::{
-    Canvas, Paint,
+    Canvas,
+    paint::Paint,
     paint::{Clip, Shader},
     styling::Color,
 };

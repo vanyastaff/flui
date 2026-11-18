@@ -44,7 +44,7 @@
 //! - **No new per-draw heap allocations** vs. the pre-extraction baseline.
 
 use flui_foundation::geometry::Rect;
-use flui_painting::BlendMode;
+use flui_painting::paint::BlendMode;
 
 use crate::{
     command_ir::{AdvancedShapeOp, DrawItem, DrawRun, DrawSegment, SsaaPathOp, TessellatedBatch},

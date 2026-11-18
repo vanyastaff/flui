@@ -507,7 +507,7 @@ and only if `cargo build --timings` shows shaping separates cleanly from recordi
 Each step is one PR (or a short series), leaves production shippable, and names the follow-up
 that wires what it adds.
 
-1. **Raster seam.** `flui_painting::GlyphRasterizer` (key type plus `rasterize`); the engine's
+1. **Raster seam.** `flui_painting::glyphs::GlyphRasterizer` (key type plus `rasterize`); the engine's
    `GlyphAtlas<R: GlyphRasterizer = SharedFontSystem>`, whose default keeps today's path;
    `ParleyGlyphKey`, `FontRegistry` and `SwashRasterizer` behind flui-painting's `parley`
    feature, off by default and with no production caller. *Acceptance:* the existing atlas and

@@ -2,8 +2,8 @@
 use super::*;
 use flui_painting::{
     Alignment,
-    decoration::{DecorationPaintOptions, paint_box_decoration},
     styling::{BoxDecoration, Gradient, RadialGradient},
+    {DecorationPaintOptions, paint_box_decoration},
 };
 
 fn radial(

@@ -3,12 +3,13 @@
 
 use std::sync::Arc;
 
+use flui_foundation::TextDirection;
 use flui_foundation::geometry::{Lerp, Offset, Rect};
 use flui_painting::paint::PaintStyle;
 use flui_painting::styling::Color;
 use flui_painting::typography::{
     DecorationThickness, TextBaseline, TextDecoration, TextDecorationLines, TextDecorationStyle,
-    TextDirection, TextSpan, TextStyle,
+    TextSpan, TextStyle,
 };
 use flui_painting::{
     Canvas, DisplayList, DrawOp, FontCollection, Invalidation, ShapedParagraph, TextContext,

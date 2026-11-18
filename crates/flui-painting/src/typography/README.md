@@ -11,11 +11,13 @@ font faces in [`fonts`](../fonts.rs).
 |--------|-------|
 | `text_style` | `TextStyle`, `StrutStyle`, `FontWeight`, `FontStyle`, `FontFeature`, `FontVariation` |
 | `text_spans` | `InlineSpan`, `TextSpan`, `TextLink`, `PlaceholderSpan`, `PlaceholderDimensions`, `PlaceholderAlignment` |
-| `text_alignment` | `TextAlign`, `TextAlignVertical`, `TextDirection`, `TextAffinity` |
+| `text_alignment` | `TextAlign`, `TextAlignVertical`, `TextAffinity` |
+| `text_baseline` | `TextBaseline` |
 | `text_decoration` | `TextDecoration`, `TextDecorationLines`, `TextDecorationStyle`, `DecorationThickness`, `TextOverflow`, `TextWidthBasis`, `TextHeightBehavior`, `TextLeadingDistribution` |
 | `text_metrics` | `TextPosition`, `TextRange`, `TextBox`, `GlyphInfo`, `LineMetrics` |
 
-Every item is re-exported at `flui_painting::typography`.
+The files are private: every item has the one path `flui_painting::typography::<Item>`. Text
+direction is `flui_foundation::TextDirection`.
 
 ## Styling text
 

@@ -4,10 +4,9 @@
 
 use std::sync::Arc;
 
+use flui_foundation::TextDirection;
 use flui_foundation::geometry::Offset;
-use flui_painting::typography::{
-    FontFeature, FontVariation, TextDirection, TextPosition, TextSpan, TextStyle,
-};
+use flui_painting::typography::{FontFeature, FontVariation, TextPosition, TextSpan, TextStyle};
 use flui_painting::{Canvas, DrawOp, FontCollection, ShapedParagraph, TextContext, TextPainter};
 
 fn painted_style_paragraph(painter: &TextPainter) -> Arc<ShapedParagraph> {
@@ -211,7 +210,7 @@ pub(crate) fn invalid_font_variations_do_not_replace_valid_settings() {
 
 pub(crate) fn text_weight_adjustment_shapes_once_and_restores_authored_weights() {
     use flui_painting::typography::{FontWeight, TextPosition};
-    use flui_painting::{GlyphContent, GlyphRasterizer, glyphs::SwashRasterizer};
+    use flui_painting::{glyphs::GlyphContent, glyphs::GlyphRasterizer, glyphs::SwashRasterizer};
 
     const ROBOTO: &[u8] = include_bytes!("../assets/fonts/Roboto-Regular.ttf");
     let real_fonts = FontCollection::new();
@@ -267,10 +266,10 @@ pub(crate) fn text_weight_adjustment_shapes_once_and_restores_authored_weights()
             }
         } else {
             let authored = authored.as_ref().expect("baseline rasterized first");
-            let coverage = |images: &[flui_painting::GlyphImage]| {
+            let coverage = |images: &[flui_painting::glyphs::GlyphImage]| {
                 images
                     .iter()
-                    .flat_map(flui_painting::GlyphImage::data)
+                    .flat_map(flui_painting::glyphs::GlyphImage::data)
                     .map(|value| u64::from(*value))
                     .sum::<u64>()
             };
@@ -684,7 +683,7 @@ pub(crate) fn a_rich_span_ellipsis_floors_min_intrinsic_width() {
 /// painter passes separately: a line height and a family (the probe face,
 /// whose line metrics are not Roboto's) each change the empty line too.
 pub(crate) fn an_empty_paragraph_measures_a_line_of_its_style() {
-    use flui_painting::TextBaseline;
+    use flui_painting::typography::TextBaseline;
     use flui_painting::typography::{FontWeight, TextStyle};
 
     const PROBE_MONO: &[u8] = include_bytes!("../assets/fonts/probe-mono-100.ttf");
@@ -751,8 +750,9 @@ pub(crate) fn an_empty_paragraph_measures_a_line_of_its_style() {
 /// one collection only, so a painter that measured anywhere else would never
 /// see it.
 pub(crate) mod parley_measurement {
+    use flui_foundation::TextDirection;
     use flui_painting::parley_text::ParagraphSpec;
-    use flui_painting::typography::{FontWeight, TextDirection, TextSpan, TextStyle};
+    use flui_painting::typography::{FontWeight, TextSpan, TextStyle};
     use flui_painting::{FontCollection, TextContext, TextPainter};
 
     const PROBE_MONO: &[u8] = include_bytes!("../assets/fonts/probe-mono-100.ttf");

@@ -19,7 +19,7 @@
 
 use flui_foundation::geometry::Rect;
 use flui_layer::{LayerTree, SceneBuilder};
-use flui_painting::{Canvas, Paint};
+use flui_painting::{Canvas, paint::Paint};
 use flui_painting::{paint::Clip, styling::Color};
 
 use crate::headless::HeadlessRenderer;
@@ -1151,7 +1151,7 @@ fn clip_failures_and_singular_membership_recover() {
 }
 
 fn grouped_clip_prefix_and_destructive_coverage() {
-    use flui_painting::{BlendMode, paint::ClipOp};
+    use flui_painting::{paint::BlendMode, paint::ClipOp};
     let Some(renderer) = crate::test_support::renderer_or_skip() else {
         return;
     };

@@ -2028,7 +2028,7 @@ fn scene_commands(
 #[cfg(test)]
 mod tests {
     use flui_foundation::geometry::{Matrix4, Offset, Point, Rect, Size};
-    use flui_painting::{Canvas, DrawOp, Paint, styling::Color};
+    use flui_painting::{Canvas, DrawOp, paint::Paint, styling::Color};
     use flui_rendering::layer::{
         FollowerLayer, Layer, LayerLink, LayerNode, LayerTree, LeaderLayer, OffsetLayer,
         PictureLayer,

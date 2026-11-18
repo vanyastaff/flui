@@ -202,7 +202,7 @@ pub fn paint_box_decoration(
         };
         let gradient = if let Some((raw, bounded)) = decoration.gradient_fallback.as_deref()
             && raw == gradient
-            && !crate::styling::gradient::valid_bounds(gradient, rect, shader_bounds)
+            && !crate::styling::valid_bounds(gradient, rect, shader_bounds)
         {
             bounded
         } else {

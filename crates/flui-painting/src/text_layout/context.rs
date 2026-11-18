@@ -867,7 +867,8 @@ mod tests {
     use super::super::host::{HostData, HostFaces, HostSource};
     use super::{FontCollection, FontCollectionInner, MemoryPressureLevel, TextContext};
     use crate::parley_text::ParagraphSpec;
-    use crate::typography::{TextDirection, TextStyle};
+    use crate::typography::TextStyle;
+    use flui_foundation::TextDirection;
 
     const ROBOTO: &[u8] = include_bytes!("../../assets/fonts/Roboto-Regular.ttf");
     const PROBE_MONO: &[u8] = include_bytes!("../../assets/fonts/probe-mono-100.ttf");
@@ -1487,7 +1488,8 @@ mod tests {
         use super::super::{FontCollection, FontCollectionInner, TextContext};
         use super::ROBOTO;
         use crate::parley_text::{ParagraphSpec, holds_exactly};
-        use crate::typography::{TextDirection, TextStyle};
+        use crate::typography::TextStyle;
+        use flui_foundation::TextDirection;
 
         const MATERIAL_ICONS: &[u8] =
             include_bytes!("../../assets/fonts/MaterialIcons-Regular.ttf");

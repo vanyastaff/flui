@@ -19,7 +19,7 @@ use std::sync::Arc;
 ///
 /// ```rust
 /// use flui_layer::PictureLayer;
-/// use flui_painting::{Canvas, Paint};
+/// use flui_painting::{Canvas, paint::Paint};
 /// use flui_foundation::geometry::Rect;
 /// use flui_painting::styling::Color;
 ///

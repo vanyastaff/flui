@@ -12,7 +12,7 @@ use flui_foundation::geometry::{Matrix4, Offset, Point, RRect, RSuperellipse, Ra
 
 use super::command::DrawOp;
 use super::payload::StoredPayload;
-use crate::paint::image::ColorFilter;
+use crate::paint::ColorFilter;
 use crate::paint::{ClipOp, DashPattern, ImageShader, Paint, Shader};
 
 /// How many ops a list refused because they were not finite, by reason.

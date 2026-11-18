@@ -7,7 +7,8 @@ use flui_layer::{
     ClipRectLayer, FollowerLayer, Layer, LayerLink, LayerTree, LeaderClip, LeaderLayer,
     OffsetLayer, TransformLayer, resolve_follower_transform,
 };
-use flui_painting::paint::{Alignment, Clip};
+use flui_painting::Alignment;
+use flui_painting::paint::Clip;
 
 fn offset(dx: f64, dy: f64) -> Layer {
     Layer::from(OffsetLayer::new(Offset::new(dx, dy)))

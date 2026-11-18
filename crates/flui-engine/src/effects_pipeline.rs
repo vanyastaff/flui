@@ -11,7 +11,7 @@
 
 use rustc_hash::FxHashMap;
 
-use flui_painting::BlendMode;
+use flui_painting::paint::BlendMode;
 
 use crate::pipeline_cache::{CoverageShaderSources, select_coverage_blend};
 use crate::pipeline_device::PipelineDevice;

@@ -5,8 +5,8 @@ use flui_view::LifecycleContext;
 use std::rc::Rc;
 
 use flui_animation::{Animation, ProxyAnimation};
+use flui_foundation::TextDirection;
 use flui_objects::{TransformMotion, TranslationFraction};
-use flui_painting::typography::TextDirection;
 use flui_view::prelude::{BuildContext, StatefulView};
 use flui_view::{Child, IntoView, ViewState};
 

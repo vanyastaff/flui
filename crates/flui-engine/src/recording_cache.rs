@@ -290,12 +290,12 @@ pub(crate) struct ChunkRecording {
     /// The SDF clip every instance and batch was recorded under.
     clip: ResolvedClip,
     /// The glyphs the recording placed, which a replay keeps placed.
-    glyph_keys: Vec<flui_painting::GlyphKey>,
+    glyph_keys: Vec<flui_painting::glyphs::GlyphKey>,
     bytes: usize,
 }
 
 impl ChunkRecording {
-    pub(crate) fn glyph_keys(&self) -> &[flui_painting::GlyphKey] {
+    pub(crate) fn glyph_keys(&self) -> &[flui_painting::glyphs::GlyphKey] {
         &self.glyph_keys
     }
 }
@@ -557,7 +557,7 @@ impl DrawSegment {
         &self,
         mark: &SegmentMark,
         clip: ResolvedClip,
-        glyph_keys: Vec<flui_painting::GlyphKey>,
+        glyph_keys: Vec<flui_painting::glyphs::GlyphKey>,
     ) -> Option<ChunkRecording> {
         let Self {
             budget: _,

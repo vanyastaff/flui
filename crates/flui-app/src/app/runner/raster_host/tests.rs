@@ -77,7 +77,7 @@ fn ten_by_ten_chunk(
     let mut canvas = flui_painting::Canvas::new();
     canvas.draw_rect(
         Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
-        &flui_painting::Paint::fill(flui_painting::styling::Color::RED),
+        &flui_painting::paint::Paint::fill(flui_painting::styling::Color::RED),
     );
     Arc::new(flui_layer::Chunk::new(
         flui_foundation::RenderId::new(owner_id),

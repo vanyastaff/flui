@@ -3,10 +3,10 @@
 
 use flui_foundation::geometry::{Offset, Point, RRect, Rect};
 use flui_painting::Alignment;
-use flui_painting::paint::{Path, PathCommand};
+use flui_painting::paint::{Path, PathCommand, TileMode};
 use flui_painting::styling::{
     Border, BorderRadius, BorderRadiusExt, BorderSide, BorderStyle, BoxDecoration, BoxShadow,
-    Color, Gradient, LinearGradient, RadialGradient, SweepGradient, TileMode,
+    Color, Gradient, LinearGradient, RadialGradient, SweepGradient,
 };
 use flui_painting::typography::FontWeight;
 

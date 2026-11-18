@@ -10,12 +10,12 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Duration;
 
+use flui_foundation::TextDirection;
 use flui_foundation::geometry::{Axis, Offset};
 use flui_interaction::events::{
     PointerKind, make_down_event_for_id, make_move_event_for_id, make_up_event_for_id,
 };
 use flui_painting::Alignment;
-use flui_painting::typography::TextDirection;
 use flui_platform::EventTime;
 use flui_platform::keyboard::{Code, KeyEvent, KeyPress, KeyState, NamedKey};
 use flui_testing::a11y::{A11yTree, Action, ActionData, ActionRequest, NodeId, TreeId};

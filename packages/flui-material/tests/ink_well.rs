@@ -15,7 +15,7 @@ use flui_interaction::KeyEventResult;
 use flui_interaction::events::{Code, Key, KeyEvent, NamedKey};
 use flui_interaction::testing::input::KeyEventBuilder;
 use flui_material::{Checkbox, InkWell, Theme, ThemeData};
-use flui_painting::display_list::DrawOp;
+use flui_painting::DrawOp;
 use flui_painting::styling::Color;
 use flui_sdk::geometry::Offset;
 use flui_sdk::interaction::FocusNode;

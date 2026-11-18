@@ -16,11 +16,13 @@
 //! measure the lines and height they paint, and hard breaks lay out the lines
 //! Parley gives them.
 
+use flui_foundation::TextDirection;
 use flui_foundation::geometry::Offset;
 use flui_painting::glyphs::FontRegistry;
-use flui_painting::typography::{FontWeight, TextDirection, TextSpan, TextStyle};
+use flui_painting::typography::{FontWeight, TextSpan, TextStyle};
 use flui_painting::{
-    Canvas, DrawOp, FontCollection, ShapedParagraph, TextBaseline, TextContext, TextPainter,
+    Canvas, DrawOp, FontCollection, ShapedParagraph, TextContext, TextPainter,
+    typography::TextBaseline,
 };
 
 const SCALES: [f32; 4] = [1.0, 1.25, 1.5, 2.0];

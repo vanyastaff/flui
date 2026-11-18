@@ -36,13 +36,11 @@
 
 use std::collections::HashMap;
 
+use flui_foundation::TextDirection;
 use flui_foundation::Variable;
 use flui_foundation::geometry::{Offset, Rect, Size};
+use flui_painting::styling::{BoxDecoration, TableBorder};
 use flui_painting::{DecorationPaintOptions, paint_box_decoration, paint_table_border};
-use flui_painting::{
-    styling::{BoxDecoration, TableBorder},
-    typography::TextDirection,
-};
 use flui_rendering::parent_data::TableCellVerticalAlignment;
 
 use crate::TableColumnWidth;

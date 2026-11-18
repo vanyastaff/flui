@@ -7,14 +7,14 @@ use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
 
 use flui_foundation::Listenable;
+use flui_foundation::TextDirection;
 use flui_foundation::geometry::Offset;
 use flui_foundation::panic::FirstPanic;
 use flui_interaction::{GestureEndReason, HapticsHandle};
 use flui_objects::RenderFollowerLayer;
+use flui_painting::Alignment;
 use flui_painting::BoxShape;
-use flui_painting::paint::Alignment;
 use flui_painting::styling::{BoxDecoration, Color};
-use flui_painting::typography::TextDirection;
 use flui_platform::HapticFeedback;
 use flui_platform::haptics::{HapticRequest, HapticTiming};
 use flui_rendering::hit_testing::HitTestBehavior;

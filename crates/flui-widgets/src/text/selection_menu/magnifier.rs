@@ -4,9 +4,9 @@
 
 use std::rc::Rc;
 
+use flui_foundation::TextDirection;
 use flui_foundation::geometry::{Offset, Size};
 use flui_painting::styling::{BorderSide, BorderStyle, BoxShadow, Color};
-use flui_painting::typography::TextDirection;
 use flui_platform::TargetPlatform;
 use flui_rendering::layer::LayerLink;
 use flui_view::prelude::*;

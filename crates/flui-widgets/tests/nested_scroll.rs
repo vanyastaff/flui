@@ -3546,7 +3546,7 @@ pub(crate) fn a_held_scroll_key_ends_its_sequence_when_its_release_goes_elsewher
 /// own sequence the key begins; arrows follow a horizontal axis and its
 /// reading direction (ADR-0209 C6).
 pub(crate) fn keyboard_bubbles_to_the_enclosing_scrollable_and_follows_the_axis() {
-    use flui_painting::typography::TextDirection;
+    use flui_foundation::TextDirection;
     let down = Key::Named(NamedKey::ArrowDown);
     let (outer, inner, top, vsync) = (
         ScrollController::new(),

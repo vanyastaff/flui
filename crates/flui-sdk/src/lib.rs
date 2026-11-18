@@ -305,6 +305,7 @@ pub mod interaction {
 /// `DrawOp` is here for packages' paint tests, which read back the recorded
 /// operations; no package names it outside its tests.
 pub mod painting {
+    pub use flui_foundation::TextDirection;
     pub use flui_painting::Alignment;
     pub use flui_painting::BlurSigma;
     pub use flui_painting::Canvas;
@@ -318,7 +319,7 @@ pub mod painting {
     pub use flui_painting::paint::PathCommand;
     pub use flui_painting::paint::RoundedPolygon;
     pub use flui_painting::paint::StrokeCap;
-    pub use flui_painting::paint::shapes::material_shapes;
+    pub use flui_painting::paint::material_shapes;
     pub use flui_painting::styling::Border;
     pub use flui_painting::styling::BorderRadius;
     pub use flui_painting::styling::BorderRadiusExt;
@@ -333,7 +334,6 @@ pub mod painting {
     pub use flui_painting::typography::TextDecoration;
     pub use flui_painting::typography::TextDecorationLines;
     pub use flui_painting::typography::TextDecorationStyle;
-    pub use flui_painting::typography::TextDirection;
     pub use flui_painting::typography::TextStyle;
     pub use flui_rendering::semantics::SemanticsRegion;
     pub use flui_rendering::semantics::SemanticsRegionKey;

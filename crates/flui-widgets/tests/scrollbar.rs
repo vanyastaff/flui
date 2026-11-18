@@ -7,11 +7,11 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use flui_animation::{MotionOverride, SharedCurve, Vsync, curves};
+use flui_foundation::TextDirection;
 use flui_foundation::geometry::{Axis, Rect};
 use flui_interaction::PointerKind;
-use flui_painting::display_list::DrawOp;
+use flui_painting::DrawOp;
 use flui_painting::styling::Color;
-use flui_painting::typography::TextDirection;
 use flui_platform::{
     ScrollBarPreferences, ScrollBarVisibility, ScrollTrackClick, SystemPreferences,
 };

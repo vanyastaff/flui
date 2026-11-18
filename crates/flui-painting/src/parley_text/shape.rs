@@ -10,11 +10,12 @@ use std::fmt;
 use std::sync::OnceLock;
 
 use super::caret::PlacedLine;
-use crate::display_list::paragraph::{RunData, SpanDescription};
 use crate::display_list::{FontBlob, FontFace, ShapedGlyph, ShapedParagraph};
+use crate::display_list::{RunData, SpanDescription};
 use crate::glyphs::{FaceKey, Synthesis, fake_bold_width};
 use crate::styling::Color;
-use crate::typography::{FontStyle, TextAlign, TextDirection, TextStyle};
+use crate::typography::{FontStyle, TextAlign, TextStyle};
+use flui_foundation::TextDirection;
 use flui_foundation::geometry::{Rect, Size};
 use parley::fontique::Collection;
 use parley::layout::PositionedLayoutItem;
@@ -1592,7 +1593,8 @@ fn properties(
 
 #[cfg(test)]
 mod tests {
-    use crate::typography::{TextDirection, TextStyle};
+    use crate::typography::TextStyle;
+    use flui_foundation::TextDirection;
 
     use super::{ParagraphLayout, ParagraphSpec};
     use crate::text_layout::{FontCollection, TextContext};

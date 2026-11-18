@@ -5,12 +5,8 @@
 //! [`crate::foundation::Listenable`]. These are the existing framework types,
 //! so a painter can move between a widget and a render object without adapters.
 
-pub use flui_painting::paint::{
-    BlendMode, Paint, PaintBuilder, PaintStyle, PointMode, Shader, StrokeCap, StrokeJoin,
-};
 pub use flui_painting::{
-    Alignment, AlignmentDirectional, AlignmentGeometry, BoxFit, BoxShape, FittedSizes,
-    TextBaseline, TextSizing,
+    Alignment, AlignmentDirectional, AlignmentGeometry, BoxFit, BoxShape, FittedSizes, TextSizing,
 };
 pub use flui_painting::{
     BlurSigma, Canvas, DisplayList, DrawCommand, DrawCommandBuf, DrawCommands, DrawOp,

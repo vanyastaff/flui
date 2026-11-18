@@ -1,7 +1,6 @@
 //! Gradient types for styling
 
-// Re-export TileMode from painting module
-pub use crate::paint::TileMode;
+use crate::paint::TileMode;
 use crate::{Alignment, styling::Color};
 
 /// A description of a color gradient.
