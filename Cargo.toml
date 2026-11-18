@@ -92,7 +92,7 @@ tiers = [
 tier-names = { V = "values", C = "contracts", S = "substrate", R = "render machine", K = "spine and runtime", H = "hosts", pkg = "official packages and capability crates" }
 
 # What no crate of a tier may reach in any root build, over normal and build
-# edges on every target (ADR-0081 §2), checked by `cargo xtask reach`. A tier's
+# edges on every target (ADR-0081 §2). A tier's
 # set is its `extends` set plus `forbid`; H has no table and
 # forbids nothing. A pattern is a package name or a `*` glob over the whole
 # name. A crate adds names with `reach-forbid` and is excused only by its own
@@ -329,8 +329,8 @@ tracing-oslog = "0.3"
 tracing-wasm = "0.2"
 
 # COMPOSITION-ONLY LOGGING BACKEND — sits at the substrate layer with no
-# in-workspace dependencies. Its manifest's `allowed-dependents` (checked by
-# `cargo xtask workspace`) keeps framework crates off it.
+# in-workspace dependencies. Its manifest's `allowed-dependents`
+# keeps framework crates off it.
 flui-log = { path = "crates/flui-log", version = "=0.2.0-dev" }
 
 # The remaining in-workspace crates, each declared once here and pulled by
@@ -463,7 +463,7 @@ syn = "3"
 # `flui-cli` edits a project's `Cargo.toml` and `.cargo/config.toml`. Each member names the
 # features it needs (`parse`, `display`).
 toml_edit = { version = "0.25", default-features = false }
-# Markdown events for `cargo xtask markers`: prose apart from code spans and blocks.
+# Markdown events for `cargo xtask changelog`: a fragment's headings, lists and links.
 pulldown-cmark = { version = "0.13", default-features = false }
 
 # ZIP archives: `flui-cli`'s Android package.
@@ -778,7 +778,7 @@ workspace = true
 # is unavailable to the lib target itself. Optional means an author who wants
 # neither catalog pays for neither — see `[features]` below. The facade sits
 # above the packages and the spine, so these edges point down
-# (ADR-0028, `cargo xtask workspace`).
+# (ADR-0028).
 [dependencies]
 flui-platform = { workspace = true }
 flui-foundation = { workspace = true }

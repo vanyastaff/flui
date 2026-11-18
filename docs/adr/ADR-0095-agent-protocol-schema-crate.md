@@ -2,6 +2,8 @@
 
 - **Status:** Accepted (2026-09-29)
 - **Date:** 2026-09-25
+- **Superseded-by:** [ADR-0371](ADR-0371-before-the-first-release-no-xtask-gate-holds-a-rule-about-the-sources.md)
+  for the `xtask workspace` gate only (Verification): the rule stands and its reader confirms it.
 - **Revised:** 2026-10-11 — the FLUI schema was 0.2 under ADR-0176; negotiated MCP versions are a separate protocol.
 - **Revised:** 2026-10-12 — schema 0.3 adds the `heading` wire role (ADR-0203).
 - **Revised:** 2026-10-13 — the current FLUI schema is 0.4, which adds a node's optional `description`.

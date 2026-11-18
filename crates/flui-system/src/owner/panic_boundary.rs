@@ -2,8 +2,8 @@
 //! (ADR-0151 §16): a window procedure, an enumeration callback, a WinRT
 //! delegate. A panic unwinding out of an `extern "system"` frame aborts the
 //! process; contained here, it is logged and the OS gets the entry's answer
-//! after a panic. `cargo xtask panic-boundary` holds every entry of the
-//! crate to one call of [`os_entry`], as it holds `flui-native`'s to that
+//! after a panic. Every entry of the
+//! crate is one call of [`os_entry`], as `flui-native`'s is one call of that
 //! crate's boundary of the same name and contract.
 
 use std::any::Any;

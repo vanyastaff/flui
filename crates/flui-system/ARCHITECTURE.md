@@ -63,8 +63,7 @@ the taskbar. The owed desktop runs are in the parity rows.
 Every OS entry of the crate (each window procedure, subclass, enumeration callback and WinRT
 delegate) is one call of `owner::panic_boundary::os_entry`, the crate's boundary of the same
 contract as `flui-native`'s (ADR-0151 §16): a panic is logged and contained, its payload destroyed
-under containment, and the OS gets the entry's answer after a panic. `cargo xtask panic-boundary`
-reads this crate as well as `flui-native`.
+under containment, and the OS gets the entry's answer after a panic.
 
 Threads and apartments:
 

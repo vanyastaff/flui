@@ -9,10 +9,8 @@ use anyhow::bail;
 
 use super::exec::{Cmd, Runner, installed, parsed};
 use crate::{
-    android_dex, builder_names, change_scope, changelog, context_names, docs_links, docs_paths,
-    file_length, fonts, globals, icon_import, key_vocabulary, markers, module_dag, panic_boundary,
-    panic_messages, platform_floor, recording_vocabulary, send_impls, testing, toolchain, try_new,
-    wgsl, workspace,
+    android_dex, change_scope, changelog, docs_links, fonts, icon_import, key_vocabulary,
+    platform_floor, recording_vocabulary, toolchain,
 };
 
 /// A formatter or linter that is a binary of its own, not a cargo step.
@@ -105,7 +103,7 @@ type InProcess = fn(&[&str]) -> anyhow::Result<ExitCode>;
 /// `--self-test` is not here: it is a test of this crate
 /// (`every_self_test_reports_exactly_its_planted_findings`), so
 /// `cargo test -p xtask` runs it (ADR-0303 §4).
-fn in_process(strict: bool) -> [(&'static str, InProcess); 25] {
+fn in_process(strict: bool) -> [(&'static str, InProcess); 10] {
     [
         (
             if strict {
@@ -115,27 +113,7 @@ fn in_process(strict: bool) -> [(&'static str, InProcess); 25] {
             },
             |args| docs_links::docs_links(&parsed(args)?),
         ),
-        ("docs-paths", |args| docs_paths::docs_paths(&parsed(args)?)),
-        ("workspace", |args| workspace::workspace(&parsed(args)?)),
-        ("reach", |args| workspace::reach(&parsed(args)?)),
-        ("module-dag", |args| module_dag::module_dag(&parsed(args)?)),
         ("toolchain", |args| toolchain::toolchain(&parsed(args)?)),
-        ("wgsl", |args| wgsl::wgsl(&parsed(args)?)),
-        ("globals", |args| globals::globals(&parsed(args)?)),
-        ("panic-boundary", |args| {
-            panic_boundary::panic_boundary(&parsed(args)?)
-        }),
-        ("send-impls", |args| send_impls::send_impls(&parsed(args)?)),
-        ("try-new", |args| try_new::try_new(&parsed(args)?)),
-        ("context-names", |args| {
-            context_names::context_names(&parsed(args)?)
-        }),
-        ("builder-names", |args| {
-            builder_names::builder_names(&parsed(args)?)
-        }),
-        ("panic-messages", |args| {
-            panic_messages::panic_messages(&parsed(args)?)
-        }),
         ("paths-filter", |args| {
             change_scope::paths_filter(&parsed(args)?)
         }),
@@ -148,11 +126,6 @@ fn in_process(strict: bool) -> [(&'static str, InProcess); 25] {
         ("icon-import material", |args| {
             icon_import::icon_import(&parsed(args)?)
         }),
-        ("file-length", |args| {
-            file_length::file_length(&parsed(args)?)
-        }),
-        ("markers", |args| markers::markers(&parsed(args)?)),
-        ("testing", |args| testing::testing(&parsed(args)?)),
         ("key-vocabulary", |args| {
             key_vocabulary::key_vocabulary(&parsed(args)?)
         }),
@@ -182,35 +155,11 @@ mod tests {
 
     /// Every gate's self-test: the gate run over its planted violations,
     /// failing unless exactly the planted findings come back (ADR-0078 §4).
-    const SELF_TESTS: [(&str, InProcess); 19] = [
-        ("workspace", |args| workspace::workspace(&parsed(args)?)),
-        ("reach", |args| workspace::reach(&parsed(args)?)),
-        ("module-dag", |args| module_dag::module_dag(&parsed(args)?)),
-        ("wgsl", |args| wgsl::wgsl(&parsed(args)?)),
-        ("globals", |args| globals::globals(&parsed(args)?)),
-        ("panic-boundary", |args| {
-            panic_boundary::panic_boundary(&parsed(args)?)
-        }),
-        ("send-impls", |args| send_impls::send_impls(&parsed(args)?)),
+    const SELF_TESTS: [(&str, InProcess); 5] = [
         ("send-positions", |args| {
             send_positions::send_positions(&parsed(args)?)
         }),
         ("public-api", |args| public_api::public_api(&parsed(args)?)),
-        ("try-new", |args| try_new::try_new(&parsed(args)?)),
-        ("context-names", |args| {
-            context_names::context_names(&parsed(args)?)
-        }),
-        ("builder-names", |args| {
-            builder_names::builder_names(&parsed(args)?)
-        }),
-        ("panic-messages", |args| {
-            panic_messages::panic_messages(&parsed(args)?)
-        }),
-        ("file-length", |args| {
-            file_length::file_length(&parsed(args)?)
-        }),
-        ("markers", |args| markers::markers(&parsed(args)?)),
-        ("testing", |args| testing::testing(&parsed(args)?)),
         ("key-vocabulary", |args| {
             key_vocabulary::key_vocabulary(&parsed(args)?)
         }),
@@ -256,9 +205,13 @@ mod tests {
     }
 
     fn in_process_arguments_parse_like_the_command_line() {
-        let args: wgsl::WgslArgs = parsed(["--self-test"]).expect("parses");
-        assert_eq!(wgsl::wgsl(&args).expect("runs"), ExitCode::SUCCESS);
-        let error = parsed::<wgsl::WgslArgs>(["--no-such-flag"]).expect_err("rejected");
+        let args: key_vocabulary::KeyVocabularyArgs = parsed(["--self-test"]).expect("parses");
+        assert_eq!(
+            key_vocabulary::key_vocabulary(&args).expect("runs"),
+            ExitCode::SUCCESS
+        );
+        let error =
+            parsed::<key_vocabulary::KeyVocabularyArgs>(["--no-such-flag"]).expect_err("rejected");
         assert!(error.to_string().contains("--no-such-flag"), "{error}");
     }
 
@@ -268,25 +221,10 @@ mod tests {
             lines(false),
             [
                 "docs-links",
-                "docs-paths",
-                "workspace",
-                "reach",
-                "module-dag",
                 "toolchain",
-                "wgsl",
-                "globals",
-                "panic-boundary",
-                "send-impls",
-                "try-new",
-                "context-names",
-                "builder-names",
-                "panic-messages",
                 "paths-filter",
                 "font-assets --package-list",
                 "icon-import material",
-                "file-length",
-                "markers",
-                "testing",
                 "key-vocabulary",
                 "recording-vocabulary",
                 "android-dex",

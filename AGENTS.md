@@ -14,7 +14,8 @@ What the code doesn't tell you about FLUI, an open-source declarative UI framewo
   a behaviour test, and the defects their trackers record for it: code written from a reference
   repeats the reference's known bugs unless they were on the checklist.
 - **Rules are types:** the compiler first, a clippy lint next, then a tool CI already runs or a
-  test of the owning crate; an `xtask` gate is the last rung, admitted by its ADR (ADR-0303). An
+  test of the owning crate (ADR-0303). Before the first release no program holds a rule none of
+  those states: it is written down and read for before a merge (ADR-0371). An
   exception is `#[expect(lint, reason = "…")]` at the site. A mistake made twice gets its rung
   or, where none fits, its row in "Current forms": patching each instance leaves the next
   change to repeat it.
@@ -30,7 +31,7 @@ The reader is a contributor who opens one file without the conversation that pro
 - **A module is one concept behind a small surface**, its invariant held by a type (a newtype,
   an RAII guard, a typestate) so that the wrong call does not compile. A new concept gets a
   module beside the file it grew out of: a file several features edit is where parallel changes
-  collide, long before `xtask file-length` stops it at 3000 production lines.
+  collide, long before it reaches the 3000 production lines a source file may have.
 - **A name says what the thing is or does**, in the term its field already uses (the Rust API
   Guidelines, W3C, the platform SDKs), and a new one does not repeat its module path. `util`,
   `helpers`, `common`, `kit`, `Data`, `Info` and `Wrapper` name a bag, not a thing.
@@ -197,22 +198,35 @@ host change needs `cargo heli nextest run -p flui-native` by hand.
 | No bare `unwrap()` in production: `expect("BUG: <invariant>")`, `thiserror` in libraries, `anyhow` in apps ([`docs/PANIC-POLICY.md`](docs/PANIC-POLICY.md)) | clippy |
 | A public enum is `#[non_exhaustive]` unless its closure is a decision, stated by `#[expect(clippy::exhaustive_enums, reason = "…")]` on it | clippy `exhaustive_enums` (ADR-0329) |
 | A caught panic payload nobody resumes goes to `discard_payload`; `mem::forget` is a deliberate leak with its reason at the call | clippy `mem_forget` |
-| Dependencies point down the tiers; an exception names the ADR that removes it | `xtask workspace`, `xtask reach` (ADR-0081) |
-| A crate that orders its modules in `[package.metadata.flui.modules]` imports only down that order; an exception names the ADR that removes it | `xtask module-dag` (ADR-0081 §5) |
-| A Rust source file has at most 3000 production lines; an entry that excuses a longer one carries its exact count and the ADR that removes it | `xtask file-length` (ADR-0081 §5) |
 | A Stable crate's public API names upstream types only as ADR-0089 §2 allows | `xtask api-closure` (CI `api-contracts` job, nightly rustdoc JSON; lane `full` only: `main` and the merge queue, not a pull request) |
 | Every item the facade reaches is in `api/flui.txt`, so a pull request that changes the facade's API carries the diff (`--write` restates it) | `xtask public-api` (CI `public-api` job, nightly rustdoc JSON; ADR-0324) |
 | A pull request that edits an expectation (the API snapshot, a `*.stderr`, a `*.snap`, a protocol schema, a perf baseline, an allowlist, a test, a `deny.toml` or `typos.toml` value) names each path and its reason under `## Expectations` in its body | `xtask expectations --body` (`expectations.yml`, on every pull request and every edit of its body; ADR-0331) |
 | `docs/platform-parity.md` is the render of `crates/flui-native/platform-parity.toml` (`FLUI_OVERWRITE=1` restates it), and a row of a position a host fills with `Absent` claims no support there | flui-native's `parity_document_matches_its_source` and `absent_positions_claim_no_support` (ADR-0303 §2) |
-| Every `static`/`thread_local!` outside tests has a `globals` entry (an ADR that removes it, or an ADR-0097 grant) | `xtask globals` |
-| Every OS entry into `flui-native` (an `extern` fn, an Objective-C or COM method, an AccessKit handler, a closure handed to the OS) is a constant or one call of `owner::panic_boundary::os_entry`, or of an adapter of its file that is (ADR-0151 §16) | `xtask panic-boundary` |
-| A value crosses a thread because the compiler proves it may: every `unsafe impl Send`/`Sync` is listed and the list only shrinks; `send_wrapper`-style crates are banned; every `Send`/`Sync` position an author wrote in the facade's API is listed under ADR-0323 §3 | `xtask send-impls`, `deny.toml`, `xtask send-positions` (CI `api-contracts` job, nightly rustdoc JSON) |
-| Test support is named `testing`; a hand-written `pump`/`advance`/`tick` or a `Mock*`/`Fake*`/`Scripted*`/`Recording*`/`Probe*` type in test code is in a kit or counted in the allowlist (ADR-0243) | `xtask testing` |
-| A constructor that can fail is `try_new`: every `new` returning `Result` or `Option` is listed and the list only shrinks | `xtask try-new` |
-| A context is bound as `ctx`, never `cx`, whatever its kind | `xtask context-names` (ADR-0325) |
-| A description type's builder method (a view, `Application`, a `…Config/Options/Settings/Request/Builder/Params/Spec`) has the bare name, never `with_`; the list of the ones left only shrinks | `xtask builder-names` (ADR-0325) |
-| A production `expect` or `panic!` names its invariant (`BUG: `) or its `try_` twin; the per-file counts of the ones that do not only go down | `xtask panic-messages` |
+| A value crosses a thread because the compiler proves it may: `send_wrapper`-style crates are banned; every `Send`/`Sync` position an author wrote in the facade's API is listed under ADR-0323 §3 | `deny.toml`, `xtask send-positions` (CI `api-contracts` job, nightly rustdoc JSON) |
 | User code runs through `flui_foundation::panic` (`commit`, `FirstPanic`) and an OS entry through `os_entry`: `std::panic::catch_unwind` is a disallowed method, and a site that still catches by hand carries `#[expect(clippy::disallowed_methods, reason = "ADR-0287: …")]` on its statement or function (ADR-0303 §6) | clippy (`disallowed-methods`) |
+
+### Rules a reader holds
+
+No program checks these before the first release (ADR-0371). The author follows them and the
+reader of "Before a merge" looks for a change that breaks one:
+
+- Dependencies point down the tiers. A manifest's `[package.metadata.flui]` states the crate's
+  `tier`, `order`, `reach-forbid` and `allowed-dependents`, and an exception names the ADR that
+  removes it (ADR-0081).
+- A crate's top-level modules import in one direction (ADR-0081 §5; ADR-0151 §10 for the core
+  host), and a Rust source file has at most 3000 production lines.
+- No process-global state: a `static` or `thread_local!` outside tests is immutable data, a
+  private ID counter, or granted by ADR-0097.
+- Every OS entry into `flui-native` (an `extern` fn, an Objective-C or COM method, an AccessKit
+  handler, a closure handed to the OS) is a constant or one call of
+  `owner::panic_boundary::os_entry`, or of an adapter of its file that is (ADR-0151 §16).
+- No new `unsafe impl Send` or `Sync` (ADR-0136 §3).
+- Test support is named `testing`; a hand-written `pump`/`advance`/`tick` or a
+  `Mock*`/`Fake*`/`Scripted*`/`Recording*`/`Probe*` type in test code lives in a kit (ADR-0243).
+- A constructor that can fail is `try_new`, a context is bound as `ctx`, never `cx`, and a
+  description type's builder method has the bare name, never `with_` (ADR-0325).
+- A production `expect` or `panic!` names its invariant (`BUG: `) or its `try_` twin
+  ([`docs/PANIC-POLICY.md`](docs/PANIC-POLICY.md)).
 
 ## ADR Policy
 

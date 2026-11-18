@@ -2,6 +2,9 @@
 
 - **Status:** Accepted (2026-10-30)
 - **Date:** 2026-10-30
+- **Superseded-by:** [ADR-0371](ADR-0371-before-the-first-release-no-xtask-gate-holds-a-rule-about-the-sources.md)
+  for the `xtask panic-boundary` gate only (Confirmation): the rule stands and its reader confirms
+  it.
 - **Related:** [ADR-0347](ADR-0347-a-frame-request-carries-the-hosts-frame-times-and-reports-that-name-their-frame.md) decision 1 (a frame request carries
   the host's vsync and target present time), [ADR-0249](ADR-0249-the-android-loop-blocks-until-woken.md)
   §2 (the loop has no timer of its own; this ADR adds the turn that waits for the choreographer),

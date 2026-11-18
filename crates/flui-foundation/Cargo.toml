@@ -115,8 +115,3 @@ order = 4
 reach-exceptions = [
     { to = "tracing", grant = "ADR-0151", reason = "foundation instruments its own code; the contract above it does not log, the caller of a contract function does" },
 ]
-# Process-global state, checked by `cargo xtask globals` (ADR-0097).
-globals = [
-    { item = "clock::EVENT_EPOCH", grant = "ADR-0097", class = "immutable", reason = "the process event epoch every input timestamp and the interaction clock count from (ADR-0207 §2)" },
-    { item = "key::UNIQUE_KEYS", grant = "ADR-0097", class = "counter", reason = "`UniqueKey::new` IDs, minted by an `AtomicIdMint` that refuses once exhausted" },
-]

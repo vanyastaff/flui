@@ -10,6 +10,9 @@
   each site, not a counting gate (§6).
 - **Superseded-by:** [ADR-0370](ADR-0370-a-pull-request-compiles-for-linux-and-every-other-target-is-mains.md)
   for §9 only, for the five jobs its §2 moves to main, which run there with no narrow form.
+  [ADR-0371](ADR-0371-before-the-first-release-no-xtask-gate-holds-a-rule-about-the-sources.md)
+  for §2 rung 5, §3 and §8 only: before the first release no rule about the sources is an
+  `xtask` gate, and the fifteen gates §1 of that record names are removed.
 - **Related:** [ADR-0081](ADR-0081-workspace-tiers-and-reach-facts.md) (the tier gate, a rule only
   a gate can hold); [ADR-0097](ADR-0097-no-process-global-state-gate.md) (an allowlist entry that
   names its grant); [ADR-0151](ADR-0151-platform-layer-boundary-and-names.md) §16 (the OS entry
