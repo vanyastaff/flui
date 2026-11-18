@@ -45,9 +45,6 @@ pub type BootstrapError = Box<dyn std::error::Error + Send + Sync + 'static>;
 /// * [`Bootstrap`](Self::Bootstrap) — `Platform::run` when the embedder's
 ///   `on_ready` callback returned `Err`; the embedder's own error rides
 ///   along as the `source`.
-/// * [`AppPath`](Self::AppPath) — `Platform::app_path`.
-/// * [`Dialog`](Self::Dialog) — `Platform::prompt_for_paths` /
-///   `Platform::prompt_for_new_path`.
 ///
 /// `#[non_exhaustive]`: platform backends grow capabilities (and therefore
 /// failure shapes) over time; new variants are additions, not breaks.
@@ -164,22 +161,6 @@ pub enum PlatformError {
         /// still not lost — the exact both-failed scenario the fallible
         /// `on_ready` design exists to get right.
         loop_error: Option<String>,
-    },
-
-    /// The application's executable/bundle path could not be determined.
-    #[error("could not determine the application path: {message}")]
-    AppPath {
-        /// What failed, in the backend's own words.
-        message: String,
-    },
-
-    /// A native file dialog could not be run to completion. A user
-    /// cancelling is NOT an error — the dialog methods return `Ok(None)`
-    /// for that.
-    #[error("file dialog failed: {message}")]
-    Dialog {
-        /// What failed, in the backend's own words.
-        message: String,
     },
 }
 

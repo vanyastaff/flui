@@ -25,11 +25,11 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::Duration;
 
-use flui_animation::curve::{Curve, SharedCurve};
 use flui_animation::{
     Animation, AnimationController, AnimationStatus, CurvedAnimation, DrivenController, Vsync,
     VsyncUpdate, curves,
 };
+use flui_animation::{Curve, SharedCurve};
 use flui_painting::Alignment;
 use flui_view::prelude::{BuildContext, LifecycleContext, StatefulView, StatelessView};
 use flui_view::{BoxedView, IntoView, RebuildHandle, ValueKey, View, ViewExt, ViewState};
@@ -335,7 +335,7 @@ struct ChildEntry {
     /// animates against. One handle for the entry's life, so a rebuilt
     /// transition keeps following the same progress.
     animation: Terminal<Rc<dyn Animation<f64>>>,
-    status_subscription: Option<flui_animation::StatusSubscription>,
+    status_subscription: Option<flui_foundation::Subscription>,
     /// Flipped by the status-listener callback when `controller` reaches
     /// [`AnimationStatus::ReverseSettled`] (a completed reverse run). Read — and
     /// acted on — by [`AnimatedSwitcherState::build`]'s sweep; see the
@@ -382,9 +382,8 @@ impl ChildEntry {
         }
         let parent: std::rc::Rc<dyn Animation<f64>> =
             std::rc::Rc::new(controller.controller().clone());
-        let animation: Rc<dyn Animation<f64>> = Rc::new(
-            CurvedAnimation::new(parent, switch_in_curve).with_reverse_curve(switch_out_curve),
-        );
+        let animation: Rc<dyn Animation<f64>> =
+            Rc::new(CurvedAnimation::new(parent, switch_in_curve).reverse_curve(switch_out_curve));
         let animation = Terminal::new(animation);
 
         if animate {
@@ -418,7 +417,7 @@ impl ChildEntry {
 
         let dismissed = Rc::clone(&self.dismissed);
         drop(self.status_subscription.take());
-        self.status_subscription = Some(self.controller.controller().subscribe_status(
+        self.status_subscription = Some(self.controller.controller().listen_status(
             std::rc::Rc::new(move |status| {
                 if status == AnimationStatus::ReverseSettled {
                     dismissed.set(true);

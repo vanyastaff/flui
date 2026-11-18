@@ -5,14 +5,13 @@
 //! the field's [`RenderEditable`](flui_objects::RenderEditable) publishes,
 //! and look as a [`SelectionArea`](crate::SelectionArea)'s do.
 
+use flui_foundation::Subscription;
 use std::cell::{Cell, RefCell};
 use std::ops::Range;
 use std::rc::{Rc, Weak};
 use std::time::Duration;
 
-use flui_animation::{
-    Animation, AnimationController, AnimationStatus, DrivenController, StatusSubscription, Vsync,
-};
+use flui_animation::{Animation, AnimationController, AnimationStatus, DrivenController, Vsync};
 use flui_foundation::TextDirection;
 use flui_foundation::geometry::Offset;
 use flui_foundation::panic::FirstPanic;
@@ -255,7 +254,7 @@ pub(super) struct FieldHandles {
     parts: RefCell<Option<HandleParts>>,
     /// Hides the caret handle once its time without a touch is up.
     timer: RefCell<DrivenController>,
-    timer_status: RefCell<Option<StatusSubscription>>,
+    timer_status: RefCell<Option<Subscription>>,
     vsync: RefCell<Option<Vsync>>,
     /// What a long press under way selected, which the same touch moves.
     press: RefCell<Option<Press>>,
@@ -451,37 +450,37 @@ impl FieldHandles {
             *self.watches.borrow_mut() = watches;
         }
         let handles = Rc::downgrade(self);
-        let subscription =
-            self.timer
-                .borrow()
-                .controller()
-                .subscribe_status(Rc::new(move |status| {
-                    if status != AnimationStatus::ForwardSettled {
+        let subscription = self
+            .timer
+            .borrow()
+            .controller()
+            .listen_status(Rc::new(move |status| {
+                if status != AnimationStatus::ForwardSettled {
+                    return;
+                }
+                let handles = handles.clone();
+                let hide = move |_timing: &flui_scheduler::FrameTiming| {
+                    let Some(handles) = handles.upgrade() else {
                         return;
-                    }
-                    let handles = handles.clone();
-                    let hide = move |_timing: &flui_scheduler::FrameTiming| {
-                        let Some(handles) = handles.upgrade() else {
-                            return;
-                        };
-                        // A stopped timer settles too: only one whose time
-                        // ran out, with no finger on the handle, hides it.
-                        let ran_out = handles.timer.borrow().controller().value() >= 1.0;
-                        if handles.shown.get() == Some(Shown::Caret)
-                            && handles.grip.get().is_none()
-                            && !handles.held.get()
-                            && ran_out
-                        {
-                            let mut failure = FirstPanic::new();
-                            handles.hide(&mut failure);
-                            failure.resume();
-                        }
                     };
-                    // Out of the timer's own delivery: hiding rebuilds the field.
-                    if let Some(post_frame) = &post_frame {
-                        let _ = post_frame.schedule(hide);
+                    // A stopped timer settles too: only one whose time
+                    // ran out, with no finger on the handle, hides it.
+                    let ran_out = handles.timer.borrow().controller().value() >= 1.0;
+                    if handles.shown.get() == Some(Shown::Caret)
+                        && handles.grip.get().is_none()
+                        && !handles.held.get()
+                        && ran_out
+                    {
+                        let mut failure = FirstPanic::new();
+                        handles.hide(&mut failure);
+                        failure.resume();
                     }
-                }));
+                };
+                // Out of the timer's own delivery: hiding rebuilds the field.
+                if let Some(post_frame) = &post_frame {
+                    let _ = post_frame.schedule(hide);
+                }
+            }));
         *self.timer_status.borrow_mut() = Some(subscription);
     }
 
@@ -1105,7 +1104,7 @@ impl FieldHandles {
                     && self.vsync.borrow().is_some() =>
             {
                 controller.set_duration(timeout);
-                let _ = controller.forward_from(Some(0.0));
+                let _ = controller.forward_from(0.0);
             }
             _ => {
                 let _ = controller.stop();

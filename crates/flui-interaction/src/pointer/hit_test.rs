@@ -256,6 +256,13 @@ impl HitMetadata {
     }
 }
 
+/// The hit-test payload of a box that accepts the click bringing an inactive window
+/// forward (an `InputRegionKind::FirstClick` region the box reports). The gesture binding
+/// admits a press marked first click only when its hit path carries one, so the press
+/// reaches the box's subtree and not a widget painted over it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct FirstClickTarget;
+
 impl std::fmt::Debug for HitMetadata {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // The value is `dyn Any` and has no `Debug` of its own.
@@ -326,6 +333,11 @@ pub struct HitTestEntry {
     /// Mouse-tracker annotation contributed by this target, if it wants
     /// enter/exit/hover tracking.
     pub mouse_annotation: Option<MouseTrackerAnnotation>,
+
+    /// How many entries this target's subtree put on the path, immediately before this
+    /// entry (the path is leaf-first): the hits that landed inside it. Set by the render
+    /// walk; `0` for a leaf and for an entry made by hand.
+    pub subtree_entries: usize,
 }
 
 impl std::fmt::Debug for HitTestEntry {
@@ -361,7 +373,16 @@ impl HitTestEntry {
             cursor: CursorRequest::Defer,
             mouse_annotation: None,
             metadata: None,
+            subtree_entries: 0,
         }
+    }
+
+    /// Builder: the number of entries this target's subtree put on the path just before
+    /// it ([`subtree_entries`](Self::subtree_entries)).
+    #[must_use]
+    pub fn subtree_entries(mut self, count: usize) -> Self {
+        self.subtree_entries = count;
+        self
     }
 
     /// Builder: attach an opaque payload for searchers to find.

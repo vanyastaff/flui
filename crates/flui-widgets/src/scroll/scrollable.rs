@@ -62,13 +62,12 @@
 //! `ScrollPosition` is merged into `ScrollController` (v1 restriction: one
 //! position per controller).
 
+use flui_foundation::Subscription;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::Duration;
 
-use flui_animation::{
-    Animation, AnimationController, AnimationStatus, DrivenController, StatusSubscription, Vsync,
-};
+use flui_animation::{Animation, AnimationController, AnimationStatus, DrivenController, Vsync};
 use flui_foundation::Listenable;
 use flui_foundation::geometry::{Axis, Point, Rect, Vec2};
 use flui_rendering::constraints::AxisDirection;
@@ -390,7 +389,7 @@ pub struct ScrollableState {
     /// Owning status subscription on `fling_controller` that marks the shared
     /// `ScrollPosition` idle when the ballistic run settles or is stopped.
     /// Withdrawn before controller teardown or attachment replacement.
-    fling_status_subscription: Option<StatusSubscription>,
+    fling_status_subscription: Option<Subscription>,
     /// Listener ID on the *scroll* controller that services an
     /// `animate_to`/`jump_to`-queued command
     /// (`ScrollOwner::service_pending_command`). Installed by
@@ -777,7 +776,7 @@ impl ScrollableState {
         let subscription = self
             .fling_controller
             .controller()
-            .subscribe_status(std::rc::Rc::new(move |status| {
+            .listen_status(std::rc::Rc::new(move |status| {
                 if matches!(
                     status,
                     AnimationStatus::ForwardSettled | AnimationStatus::ReverseSettled

@@ -81,9 +81,12 @@ where
         false
     }
 
-    fn observe_status(&self, observer: crate::StatusObserver) -> crate::StatusSubscription {
+    fn listen_status_with_recovery(
+        &self,
+        observer: crate::StatusObserver,
+    ) -> flui_foundation::Subscription {
         drop(observer);
-        crate::StatusSubscription::default()
+        flui_foundation::Subscription::inert()
     }
 }
 

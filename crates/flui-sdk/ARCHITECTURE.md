@@ -132,8 +132,8 @@ not SDK surface.
   which the `measured` module names.
 - **`flui-cupertino`** (`packages/flui-cupertino`) builds on this crate alone the same way: its
   normal dependencies are `flui-sdk` and `tracing`. Its animation owners and
-  observation interfaces retain the same types through `animation`, including
-  `animation::prelude`; tests reach `RenderId` as `foundation::RenderId`.
+  observation interfaces retain the same types through `animation`; tests reach `RenderId` as
+  `foundation::RenderId`.
 - **`flui-devtools`** (`packages/flui-devtools`) builds on this crate alone: its normal
   dependencies are `flui-sdk` plus `parking_lot`, `serde`, `serde_json`, `tracing`,
   `tracing-subscriber` and `web-time`. It needed one new item, `hooks::FrameSnapshot`, which

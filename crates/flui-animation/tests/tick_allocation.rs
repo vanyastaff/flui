@@ -156,10 +156,10 @@ fn a_steady_state_frame_allocates_nothing() {
         })));
     }
     controller
-        .subscribe_status(std::rc::Rc::new(|status| {
+        .listen_status(std::rc::Rc::new(|status| {
             black_box(status);
         }))
-        .detach();
+        .forget();
     let _run = controller.forward().expect("forward on a live controller");
     let mut vector = AnimatedValue::try_new(
         EdgeInsets::ZERO,
@@ -335,7 +335,7 @@ fn a_steady_state_frame_allocates_nothing() {
     );
 
     let calls_before_start = read(&ALLOC_COUNT);
-    let restarted = controller.forward_from(Some(0.0));
+    let restarted = controller.forward_from(0.0);
     let calls_after_start = read(&ALLOC_COUNT);
     assert!(restarted.is_ok());
     assert!(

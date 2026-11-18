@@ -3,6 +3,7 @@
 - **Status:** Accepted (2026-10-11)
 - **Date:** 2026-10-11
 - **Supersedes:** [ADR-0186](ADR-0186-typed-animation-rest-thresholds.md), its threshold-error variant only; converter ownership and rest distances remain unchanged.
+- **Superseded-by:** [ADR-0381](ADR-0381-animation-errors-are-not-serialized.md) for the serde wire format only; the typed causes stand.
 - **Related:** [ADR-0177](ADR-0177-controller-ordered-delivery.md), [ADR-0179](ADR-0179-controller-registration-ownership.md), [ADR-0197](ADR-0197-explicit-animation-completion.md).
 
 ## Context
@@ -70,7 +71,4 @@ fields, bounded infinity clamping, refusal state and original-future outcomes.
 `overflowing_repeat_span_preserves_the_run` fails without the span-admission check.
 The animated-value invalid-threshold contracts preserve the component's typed
 distance failure while checking grouped refusal and subsequent progress.
-`admission_error_wire_values` exercises actual refused controller admissions and
-their human-readable wire values. The invalid-threshold rows also round-trip
-actual nested simulation causes with the optional serde feature.
 Physical overflow and interruption contracts continue to verify recovery.

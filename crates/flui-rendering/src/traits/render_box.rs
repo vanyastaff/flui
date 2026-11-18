@@ -512,6 +512,12 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::inspect::Inspe
         false
     }
 
+    /// Whether this box joins the hit path whenever a descendant joined it. Default:
+    /// `false`. See [`RenderObject::joins_hits_below`].
+    fn joins_hits_below(&self) -> bool {
+        false
+    }
+
     /// The data-only pointer target this box contributes to its hit entry.
     ///
     /// Default `None`; override (e.g. `RenderListener`) to receive pointer
@@ -934,6 +940,10 @@ where
 
     fn blocks_hit_slop(&self) -> bool {
         <T as RenderBox>::blocks_hit_slop(self)
+    }
+
+    fn joins_hits_below(&self) -> bool {
+        <T as RenderBox>::joins_hits_below(self)
     }
 
     fn metadata(&self) -> Option<crate::hit_testing::HitMetadata> {

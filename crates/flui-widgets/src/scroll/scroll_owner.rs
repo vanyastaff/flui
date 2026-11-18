@@ -23,8 +23,8 @@
 use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
 
-use flui_animation::simulation::{SpringDescription, SpringSimulation};
 use flui_animation::{Animation, AnimationController, AnimationRunFuture, Simulation};
+use flui_animation::{SpringDescription, SpringSimulation};
 use flui_foundation::InputSequenceId;
 use flui_foundation::geometry::{Axis, Point, Vec2};
 use flui_foundation::panic::PanicRecovery;

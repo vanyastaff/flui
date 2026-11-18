@@ -386,7 +386,7 @@ pub struct CarouselState {
     lifecycle: Option<LifecycleSubscription>,
     rebuild: RebuildHandle,
     timer: DrivenController,
-    timer_status: Option<flui_animation::StatusSubscription>,
+    timer_status: Option<flui_foundation::Subscription>,
     vsync: Option<flui_animation::Vsync>,
     moves: bool,
     autoplay: Option<CarouselAutoplay>,
@@ -505,7 +505,7 @@ impl CarouselState {
             if shared.controller.borrow().is_paused() {
                 let _ = timer.stop();
             } else if shared.autoplays.get() && !timer.is_animating() {
-                let _ = timer.forward_from(Some(0.0));
+                let _ = timer.forward_from(0.0);
             }
         }));
         self.pause_listener = Some(subscription);
@@ -544,7 +544,7 @@ impl CarouselState {
         }
         self.shared.autoplays.set(true);
         if !self.shared.controller.borrow().is_paused() && !self.timer.controller().is_animating() {
-            let _ = self.timer.controller().forward_from(Some(0.0));
+            let _ = self.timer.controller().forward_from(0.0);
         }
     }
 }
@@ -607,29 +607,31 @@ impl ViewState<Carousel> for CarouselState {
         let shared = Rc::downgrade(&self.shared);
         let post_frame = ctx.post_frame_handle();
         let timer = self.timer.controller().clone();
-        self.timer_status = Some(self.timer.controller().subscribe_status(Rc::new(
-            move |status| {
-                if status != AnimationStatus::ForwardSettled {
-                    return;
-                }
-                let Some(post_frame) = &post_frame else {
-                    return;
-                };
-                let shared = shared.clone();
-                let timer = timer.clone();
-                // Out of the timer's own delivery: the step scrolls and the timer restarts.
-                let _ = post_frame.schedule(move |_timing| {
-                    let Some(shared) = shared.upgrade() else {
-                        return;
-                    };
-                    if !shared.autoplays.get() || shared.controller.borrow().is_paused() {
+        self.timer_status = Some(
+            self.timer
+                .controller()
+                .listen_status(Rc::new(move |status| {
+                    if status != AnimationStatus::ForwardSettled {
                         return;
                     }
-                    shared.step();
-                    let _ = timer.forward_from(Some(0.0));
-                });
-            },
-        )));
+                    let Some(post_frame) = &post_frame else {
+                        return;
+                    };
+                    let shared = shared.clone();
+                    let timer = timer.clone();
+                    // Out of the timer's own delivery: the step scrolls and the timer restarts.
+                    let _ = post_frame.schedule(move |_timing| {
+                        let Some(shared) = shared.upgrade() else {
+                            return;
+                        };
+                        if !shared.autoplays.get() || shared.controller.borrow().is_paused() {
+                            return;
+                        }
+                        shared.step();
+                        let _ = timer.forward_from(0.0);
+                    });
+                })),
+        );
         self.did_change_dependencies(ctx);
     }
 

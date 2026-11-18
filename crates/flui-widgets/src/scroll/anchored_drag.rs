@@ -27,7 +27,6 @@ use std::time::Duration;
 
 use flui_animation::{
     Animation, AnimationStatus, ConstantAnimation, ProxyAnimation, SharedCurve, StatusObserver,
-    StatusSubscription,
 };
 use flui_foundation::InputSequenceId;
 use flui_foundation::TextDirection;
@@ -960,9 +959,9 @@ impl Animation<Offset<f64>> for DragOffset {
         AnimationStatus::Forward
     }
 
-    fn observe_status(&self, observer: StatusObserver) -> StatusSubscription {
+    fn listen_status_with_recovery(&self, observer: StatusObserver) -> Subscription {
         drop(observer);
-        StatusSubscription::default()
+        Subscription::inert()
     }
 
     fn is_animating(&self) -> bool {

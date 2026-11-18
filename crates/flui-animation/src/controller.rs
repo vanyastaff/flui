@@ -1351,11 +1351,20 @@ impl Animation<f64> for AnimationController {
         self.inner.borrow().status
     }
 
-    fn observe_status(&self, observer: StatusObserver) -> crate::StatusSubscription {
-        self.register_status_listener(observer)
-            .map_or_else(crate::StatusSubscription::default, |id| {
-                crate::StatusSubscription::new(&self.inner, id, Self::withdraw_status_listener)
-            })
+    fn listen_status_with_recovery(
+        &self,
+        observer: StatusObserver,
+    ) -> flui_foundation::Subscription {
+        self.register_status_listener(observer).map_or_else(
+            flui_foundation::Subscription::inert,
+            |id| {
+                flui_foundation::Subscription::for_source(
+                    &self.inner,
+                    id,
+                    Self::withdraw_status_listener,
+                )
+            },
+        )
     }
 
     /// Whether the controller is currently driving a run.

@@ -10,9 +10,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use flui_animation::{
-    Animation, AnimationController, AnimationStatus, AnimationSwitch, CurvedAnimation,
-    DrivenController, ProxyAnimation, RepeatMode, ReverseAnimation, Tween, TweenAnimation, Vsync,
-    curve::{Curve, Linear},
+    Animation, AnimationController, AnimationStatus, AnimationSwitch, Curve, CurvedAnimation,
+    DrivenController, Linear, ProxyAnimation, RepeatMode, ReverseAnimation, Tween, TweenAnimation,
+    Vsync,
 };
 use flui_foundation::Listenable;
 
@@ -187,76 +187,6 @@ fn a_switch_tracks_activity_after_hopping_to_a_live_source() {
 }
 
 #[cfg(feature = "serde")]
-fn admission_error_wire_values() {
-    use flui_animation::{AnimationError, AnimationInput, RangeDefect};
-
-    let controller = AnimationController::builder(Duration::from_secs(1))
-        .unbounded()
-        .build();
-    for (error, expected) in [
-        (
-            controller
-                .animate_to(f64::NAN, None)
-                .expect_err("NaN target"),
-            serde_json::json!({"NonFiniteInput": {"input": "Target", "value": "NaN"}}),
-        ),
-        (
-            controller.forward().expect_err("missing upper endpoint"),
-            serde_json::json!({"UnboundedTarget": {"input": "Target", "value": "Infinity"}}),
-        ),
-        (
-            controller.reverse().expect_err("missing lower endpoint"),
-            serde_json::json!({"UnboundedTarget": {"input": "Target", "value": "-Infinity"}}),
-        ),
-    ] {
-        let wire = serde_json::to_value(&error).expect("serialize refused admission");
-        let decoded: AnimationError =
-            serde_json::from_value(wire.clone()).expect("decode refused admission");
-        assert_eq!(wire, expected);
-        match decoded {
-            AnimationError::NonFiniteInput { input, value } => {
-                assert_eq!(input, AnimationInput::Target);
-                assert!(value.is_nan());
-            }
-            AnimationError::UnboundedTarget { input, value } => {
-                assert_eq!(input, AnimationInput::Target);
-                assert!(value.is_infinite());
-                assert_eq!(
-                    value.is_sign_negative(),
-                    expected["UnboundedTarget"]["value"] == "-Infinity"
-                );
-            }
-            other => panic!("unexpected decoded refusal: {other:?}"),
-        }
-    }
-    let error = controller
-        .repeat(flui_animation::RepeatMode::Restart)
-        .expect_err("no finite range to repeat inside");
-    let wire = serde_json::to_value(&error).expect("serialize repeat refusal");
-    assert_eq!(wire["InvalidRepeatRange"]["min"], "-Infinity");
-    assert_eq!(wire["InvalidRepeatRange"]["max"], "Infinity");
-    assert_eq!(wire["InvalidRepeatRange"]["lower"], "-Infinity");
-    assert_eq!(wire["InvalidRepeatRange"]["upper"], "Infinity");
-    assert!(matches!(
-        serde_json::from_value::<AnimationError>(wire).expect("decode repeat refusal"),
-        AnimationError::InvalidRepeatRange { min, max, defect: RangeDefect::NonFinite, .. }
-            if min == f64::NEG_INFINITY && max == f64::INFINITY
-    ));
-    for rejected in [
-        serde_json::Value::Null,
-        serde_json::json!("nan"),
-        serde_json::json!("1.0"),
-    ] {
-        assert!(
-            serde_json::from_value::<AnimationError>(serde_json::json!({
-                "NonFiniteInput": {"input": "Target", "value": rejected}
-            }))
-            .is_err()
-        );
-    }
-}
-
-#[cfg(feature = "serde")]
 fn directional_phase_wire_names() {
     for (phase, wire) in [
         (AnimationStatus::Forward, "\"Forward\""),
@@ -309,7 +239,7 @@ fn curved_run_never_publishes_a_non_finite_value() {
         sink.lock().expect("published values").push(reader.value());
     }));
     let _run = controller
-        .animate_to_curved(1.0, Some(Duration::from_secs(1)), Arc::new(NanInTheMiddle))
+        .animate_to_curved(1.0, Some(Duration::from_secs(1)), NanInTheMiddle)
         .expect("curved run");
 
     controller.tick_at(std::time::Duration::from_secs_f64(0.2));
@@ -334,7 +264,7 @@ fn overshooting_curve_stays_within_bounds() {
     for (curve, bound) in [(1.5, 1.0), (-0.5, 0.0)] {
         let controller = controller();
         let _run = controller
-            .animate_to_curved(1.0, Some(Duration::from_secs(1)), Arc::new(Constant(curve)))
+            .animate_to_curved(1.0, Some(Duration::from_secs(1)), Constant(curve))
             .expect("curved run");
         controller.tick_at(std::time::Duration::from_secs_f64(0.5));
         assert_eq!(
@@ -429,10 +359,10 @@ fn disposed_controller_drops_a_late_status_listener() {
     let probe = Arc::new(());
     let capture = Arc::clone(&probe);
     controller
-        .subscribe_status(std::rc::Rc::new(move |_| {
+        .listen_status(std::rc::Rc::new(move |_| {
             let _ = &capture;
         }))
-        .detach();
+        .forget();
     assert_eq!(
         Arc::strong_count(&probe),
         1,
@@ -521,10 +451,10 @@ fn repeated_frame_time_announces_completion_once() {
     let statuses = Arc::new(Mutex::new(Vec::new()));
     let sink = Arc::clone(&statuses);
     controller
-        .subscribe_status(std::rc::Rc::new(move |status| {
+        .listen_status(std::rc::Rc::new(move |status| {
             sink.lock().expect("status log").push(status);
         }))
-        .detach();
+        .forget();
     vsync.tick_all(
         &flui_animation::MotionClock::new().frame(std::time::Duration::from_secs_f64(0.0)),
     );
@@ -593,7 +523,7 @@ fn explicit_finish_completes_the_original_finite_run() {
             } else {
                 AnimationStatus::ForwardSettled
             };
-            let subscription = controller.subscribe_status(Rc::new(move |status| {
+            let subscription = controller.listen_status(Rc::new(move |status| {
                 assert_eq!(
                     observed.value(),
                     target,
@@ -654,7 +584,7 @@ fn explicit_finish_uses_the_last_repeat_leg() {
 }
 
 fn explicit_finish_refuses_an_undeclared_endpoint_without_sampling() {
-    use flui_animation::simulation::Simulation;
+    use flui_animation::Simulation;
     use std::{cell::Cell, rc::Rc};
 
     struct UnknownEnd(Rc<Cell<usize>>);
@@ -721,7 +651,7 @@ fn explicit_finish_reaches_native_physical_endpoints() {
             .initial_value(0.4)
             .build();
         let run = if fling {
-            controller.fling_with(input, Some(slow))
+            controller.fling_with(input, slow)
         } else {
             controller.retarget(input, &MotionSpec::Spring(slow))
         }
@@ -793,7 +723,7 @@ fn explicit_finish_preserves_a_reentrant_replacement() {
             (channel == "value").then(|| controller.listen(Rc::clone(&action)));
         let status_subscription = (channel == "status").then(|| {
             let action = Rc::clone(&action);
-            controller.subscribe_status(Rc::new(move |status| {
+            controller.listen_status(Rc::new(move |status| {
                 if status == AnimationStatus::ForwardSettled {
                     action();
                 }
@@ -893,7 +823,7 @@ fn explicit_finish_retires_sources_with_failure_custody() {
             });
         let status_subscription = mode.contains("status").then(|| {
             let armed = Cell::new(true);
-            controller.subscribe_status(Rc::new(move |status| {
+            controller.listen_status(Rc::new(move |status| {
                 if status == AnimationStatus::ForwardSettled {
                     assert!(!armed.replace(false), "status delivery failure");
                 }
@@ -1001,8 +931,6 @@ fn controller_robustness_contract() {
             explicit_finish_refuses_an_undeclared_endpoint_without_sampling,
         ),
         #[cfg(feature = "serde")]
-        ("admission error wire values", admission_error_wire_values),
-        #[cfg(feature = "serde")]
         ("directional phase wire names", directional_phase_wire_names),
         (
             "a constant phase does not install a run",
@@ -1066,8 +994,8 @@ fn explicit_finish_allows_owner_release_during_delivery() {
         } else if channel == "status" {
             let release = Rc::clone(&release);
             controller
-                .subscribe_status(Rc::new(move |_| release()))
-                .detach();
+                .listen_status(Rc::new(move |_| release()))
+                .forget();
         } else {
             let release = Rc::clone(&release);
             run.when_complete_or_cancel(move |outcome| {
@@ -1135,7 +1063,7 @@ fn typed_refusals_preserve_the_original_run() {
             controller.animate_to(f64::NAN, None)
         }),
         (AnimationInput::From, |controller| {
-            controller.forward_from(Some(f64::NAN))
+            controller.forward_from(f64::NAN)
         }),
         (AnimationInput::Velocity, |controller| {
             controller.fling(f64::NAN)

@@ -7,14 +7,14 @@
 //! variant's: the linear bars, or the circular arc of
 //! [`ActivityArc`].
 
+use flui_sdk::foundation::Subscription;
 use std::any::Any;
 use std::f64::consts::TAU;
 use std::rc::Rc;
 use std::time::Duration;
 
 use flui_sdk::animation::{
-    Animation, AnimationController, AnimationStatus, DrivenController, RepeatMode,
-    StatusSubscription, Vsync,
+    Animation, AnimationController, AnimationStatus, DrivenController, RepeatMode, Vsync,
 };
 use flui_sdk::foundation::Listenable;
 use flui_sdk::geometry::{Point, Rect, Size};
@@ -162,7 +162,7 @@ struct Waves {
     target: f64,
     /// Stops the wave once a determinate amplitude has settled at zero: a flat wave needs no
     /// frames.
-    _flat: StatusSubscription,
+    _flat: Subscription,
 }
 
 impl std::fmt::Debug for Waves {
@@ -188,17 +188,15 @@ impl Waves {
             .build_on(None);
         let wave = phase.controller().clone();
         let level = amplitude.controller().clone();
-        let flat = amplitude
-            .controller()
-            .subscribe_status(Rc::new(move |status| {
-                let settled = matches!(
-                    status,
-                    AnimationStatus::ForwardSettled | AnimationStatus::ReverseSettled
-                );
-                if settled && level.value() == 0.0 {
-                    let _ = wave.stop();
-                }
-            }));
+        let flat = amplitude.controller().listen_status(Rc::new(move |status| {
+            let settled = matches!(
+                status,
+                AnimationStatus::ForwardSettled | AnimationStatus::ReverseSettled
+            );
+            if settled && level.value() == 0.0 {
+                let _ = wave.stop();
+            }
+        }));
         Self {
             phase,
             amplitude,

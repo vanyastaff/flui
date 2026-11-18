@@ -20,7 +20,6 @@
 // public API surface, so they are exempt from the crate's missing-docs lint.
 
 use std::hint::black_box;
-use std::sync::Arc;
 use std::time::Duration;
 
 use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
@@ -168,10 +167,10 @@ fn add_listeners(
     }
     for _ in 0..status_listeners {
         controller
-            .subscribe_status(std::rc::Rc::new(|status| {
+            .listen_status(std::rc::Rc::new(|status| {
                 black_box(status);
             }))
-            .detach();
+            .forget();
     }
 }
 
@@ -217,7 +216,7 @@ fn controller_tick(c: &mut Criterion) {
     // The same run eased through a cubic Bézier.
     let eased = AnimationController::builder(NEVER_ENDING).build();
     eased
-        .animate_to_curved(1.0, None, Arc::new(curves::EASE_IN_OUT))
+        .animate_to_curved(1.0, None, curves::EASE_IN_OUT)
         .unwrap();
     bench_live_tick(&mut group, "ease_in_out", &eased);
     drop(eased);
@@ -297,7 +296,7 @@ fn controller_status(c: &mut Criterion) {
         add_listeners(&controller, 0, status_listeners);
         group.bench_function(BenchmarkId::new("status_fan_out", status_listeners), |b| {
             b.iter(|| {
-                black_box(controller.forward_from(Some(0.0)).unwrap());
+                black_box(controller.forward_from(0.0).unwrap());
                 controller.tick_at(std::time::Duration::from_secs_f64(black_box(2.0)));
             });
         });

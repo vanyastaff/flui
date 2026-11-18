@@ -4,7 +4,6 @@
 //! items that take the owner thread's token, which it cannot name, so those
 //! are missing too. `PlatformWindow` stays open, so the window below is one.
 
-use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -12,7 +11,7 @@ use flui_foundation::geometry::{DevicePixelRatio, Size};
 use flui_native::storage::DataStore;
 use flui_native::{
     AppHandler, HostWindow, NativeClipboard, NativePrimarySelection, OpenWindowError,
-    PathPromptOptions, Platform, PlatformError, Task,
+    Platform, PlatformError,
 };
 use flui_platform::data_transfer::DragTransport;
 use flui_platform::{
@@ -68,27 +67,6 @@ impl Platform for OutsidePlatform {
 
     fn activate(&self, _: bool) {}
 
-    fn open_url(&self, _: &str) {}
-
-    fn reveal_path(&self, _: &Path) {}
-
-    fn open_path(&self, _: &Path) {}
-
-    fn prompt_for_paths(
-        &self,
-        _: PathPromptOptions,
-    ) -> Task<Result<Option<Vec<PathBuf>>, PlatformError>> {
-        unreachable!("the impl never compiles")
-    }
-
-    fn prompt_for_new_path(
-        &self,
-        _: &Path,
-        _: Option<&str>,
-    ) -> Task<Result<Option<PathBuf>, PlatformError>> {
-        unreachable!("the impl never compiles")
-    }
-
     fn release_session_end(&self) {}
 
     fn session_end_support(&self) -> flui_platform::SessionEndSupport {
@@ -109,10 +87,6 @@ impl Platform for OutsidePlatform {
 
     fn name(&self) -> &'static str {
         "outside"
-    }
-
-    fn app_path(&self) -> Result<PathBuf, PlatformError> {
-        Ok(PathBuf::new())
     }
 
     fn launch_value(&self, _: LaunchKey) -> Option<String> {

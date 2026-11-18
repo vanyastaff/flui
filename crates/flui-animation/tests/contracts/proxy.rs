@@ -57,7 +57,9 @@ impl ReentrantParent {
             }),
         }
     }
+}
 
+impl ReentrantParentState {
     fn withdraw(&self) {
         drop(self.value_listening.borrow_mut().take());
         if matches!(self.reentry, Reentry::Removal) {
@@ -89,15 +91,9 @@ impl Listenable for ReentrantParent {
         let listening = self.values.listen_with_recovery(relay);
         *self.value_listening.borrow_mut() = Some(listening);
         // The source's withdrawal runs its own machinery (its reenter hook);
-        // the subscription carries it the way ADR-0180's status guard does.
-        flui_foundation::Subscription::for_removal({
-            let state = Rc::clone(&self.state);
-            move || {
-                ReentrantParent {
-                    state: Rc::clone(&state),
-                }
-                .withdraw();
-            }
+        // the subscription names the source and runs that removal.
+        flui_foundation::Subscription::for_source(&self.state, (), |state, (), _recovery| {
+            state.withdraw();
         })
     }
 }
@@ -120,14 +116,14 @@ impl Animation<f64> for ReentrantParent {
         AnimationStatus::Forward
     }
 
-    fn observe_status(
+    fn listen_status_with_recovery(
         &self,
         observer: flui_animation::StatusObserver,
-    ) -> flui_animation::StatusSubscription {
+    ) -> flui_foundation::Subscription {
         let id = self.statuses.add_with_recovery(Rc::new(move |_recovery| {
             let _keep = &observer;
         }));
-        flui_animation::StatusSubscription::new(&self.statuses, id, |source, id, recovery| {
+        flui_foundation::Subscription::for_source(&self.statuses, id, |source, id, recovery| {
             source.inherit_failure(recovery);
             source.take_listener(id)
         })
@@ -174,7 +170,7 @@ fn swap_with_status_change_fires_listeners() {
     let proxy = ProxyAnimation::new(Rc::new(first.controller().clone()));
     let seen = Rc::new(RefCell::new(Vec::new()));
     let observed = Rc::clone(&seen);
-    let _subscription = proxy.subscribe_status(Rc::new(move |status| {
+    let _subscription = proxy.listen_status(Rc::new(move |status| {
         observed.borrow_mut().push(status);
     }));
     proxy.set_parent(Rc::new(second.controller().clone()));
@@ -252,10 +248,10 @@ fn old_parent_removal_keeps_committed_notification_order() {
     let statuses = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
     let observed = statuses.clone();
     proxy
-        .subscribe_status(std::rc::Rc::new(move |status| {
+        .listen_status(std::rc::Rc::new(move |status| {
             observed.borrow_mut().push(status);
         }))
-        .detach();
+        .forget();
     proxy.set_parent(std::rc::Rc::new(ConstantAnimation::with_status(
         1.0,
         AnimationStatus::ForwardSettled,

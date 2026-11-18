@@ -88,8 +88,10 @@ use std::rc::Rc;
 
 use std::time::Duration;
 
-use flui_sdk::animation::MotionPolicy;
-use flui_sdk::animation::prelude::*;
+use flui_sdk::animation::{
+    Animation, AnimationController, AnimationStatus, DrivenController, MotionPolicy,
+};
+use flui_sdk::foundation::Listenable;
 use flui_sdk::geometry::Point;
 use flui_sdk::interaction::FocusNode;
 use flui_sdk::painting::Color;
@@ -387,7 +389,7 @@ impl Core {
         let rebuild = self.rebuild.clone();
         // This callback lives until its owned timer is canceled or retired.
         controller
-            .subscribe_status(Rc::new(move |status| {
+            .listen_status(Rc::new(move |status| {
                 if status == AnimationStatus::ForwardSettled {
                     if let Some(core) = core.upgrade() {
                         core.release_press_hold();
@@ -395,9 +397,9 @@ impl Core {
                     rebuild.schedule(flui_sdk::view::RebuildReason::AnimationTick);
                 }
             }))
-            .detach();
+            .forget();
 
-        if let Err(error) = controller.forward_from(Some(0.0)) {
+        if let Err(error) = controller.forward_from(0.0) {
             tracing::debug!(?error, "InkWell press-deactivation timer failed to start");
             self.release_press_hold();
             return;

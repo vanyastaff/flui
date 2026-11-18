@@ -66,8 +66,10 @@ pub struct MacOSWindow {
 A raw `*mut AnyObject` remains only where another API takes one: the content view a feature
 reaches through `ContentViewRef`, the raw window handle, and `MacOSWindow::ns_window`. A raw
 `msg_send!` remains for `super` initializers and getters objc2-app-kit types without the feature
-the crate enables (the view's backing layer), and in `window/apple/macos/cursor.rs`, whose
-typed getters are non-null where the raw ones answer nil (listed in `docs/gaps.md`).
+the crate enables (the view's backing layer). A typed call whose return objc2 declares non-null
+is taken where AppKit's header declares it `nonnull` (the `NSCursor` getters, `-[NSImage
+initWithSize:]`); a `nullable` one stays an `Option` and becomes an error (the cursor's
+`NSBitmapImageRep` initializer).
 
 ### Consequences
 
@@ -97,5 +99,5 @@ window conformance suite (`appkit_window`) runs the windows on a Mac.
 - Good: ownership, thread kind and ivar types are the compiler's; the delegate and tracking area
   leaks are fixed by holding them as `Retained`.
 - Good: the same form as the loop delegate, the Metal layer and the iOS host.
-- Bad: a typed getter that objc2 declares non-null panics where AppKit answers nil; the cursor
-  module stays raw until each such getter is checked.
+- Bad: a typed getter that objc2 declares non-null panics where AppKit answers nil, so each
+  one is checked against AppKit's header before it replaces a raw call.

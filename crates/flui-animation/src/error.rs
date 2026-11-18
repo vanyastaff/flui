@@ -1,57 +1,11 @@
 //! Error types for the animation system.
 
-/// Wire encoding for diagnostic numbers, including refused non-finite inputs.
-/// Binary formats retain native floats; human-readable formats use numeric
-/// finite values and exact non-finite tokens. NaN payload bits are canonicalized.
-#[cfg(feature = "serde")]
-pub(crate) mod diagnostic_number {
-    use serde::{Deserialize, Deserializer, Serializer, de::Error};
-
-    pub fn serialize<S: Serializer>(value: &f64, serializer: S) -> Result<S::Ok, S::Error> {
-        if !serializer.is_human_readable() || value.is_finite() {
-            serializer.serialize_f64(*value)
-        } else {
-            serializer.serialize_str(if value.is_nan() {
-                "NaN"
-            } else if value.is_sign_negative() {
-                "-Infinity"
-            } else {
-                "Infinity"
-            })
-        }
-    }
-
-    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<f64, D::Error> {
-        if !deserializer.is_human_readable() {
-            return f64::deserialize(deserializer);
-        }
-        #[derive(Deserialize)]
-        #[serde(untagged)]
-        enum Number {
-            Finite(f64),
-            Token(String),
-        }
-        match Number::deserialize(deserializer)? {
-            Number::Finite(value) => Ok(value),
-            Number::Token(token) => match token.as_str() {
-                "NaN" => Ok(f64::NAN),
-                "Infinity" => Ok(f64::INFINITY),
-                "-Infinity" => Ok(f64::NEG_INFINITY),
-                _ => Err(D::Error::custom(
-                    "expected a number, NaN, Infinity or -Infinity",
-                )),
-            },
-        }
-    }
-}
-
 /// Why endpoints cannot form a finite, increasing [`ValueRange`](crate::ValueRange).
 ///
 /// Value construction reports only range defects, independently of controller
 /// lifetime or run admission. Non-finite endpoints take precedence over ordering;
 /// finite endpoints must be ordered before their span is checked.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub enum RangeDefect {
     /// At least one endpoint is NaN or infinite.
@@ -67,7 +21,6 @@ pub enum RangeDefect {
 
 /// The value-space input that a motion admission could not use.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub enum AnimationInput {
     /// A value supplied when creating an animated value.
@@ -119,7 +72,6 @@ impl std::fmt::Display for AnimationInput {
 /// assert!(matches!(result, Err(AnimationError::Disposed)));
 /// ```
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub enum AnimationError {
     /// The [`AnimationController`](crate::AnimationController) has been disposed.
@@ -166,16 +118,12 @@ pub enum AnimationError {
     #[error("invalid repeat range [{min}, {max}] within [{lower}, {upper}]: {defect}")]
     InvalidRepeatRange {
         /// The refused lower repeat endpoint.
-        #[cfg_attr(feature = "serde", serde(with = "diagnostic_number"))]
         min: f64,
         /// The refused upper repeat endpoint.
-        #[cfg_attr(feature = "serde", serde(with = "diagnostic_number"))]
         max: f64,
         /// The controller's lower bound.
-        #[cfg_attr(feature = "serde", serde(with = "diagnostic_number"))]
         lower: f64,
         /// The controller's upper bound.
-        #[cfg_attr(feature = "serde", serde(with = "diagnostic_number"))]
         upper: f64,
         /// The matchable reason the range is invalid.
         defect: RangeDefect,
@@ -186,7 +134,6 @@ pub enum AnimationError {
     #[error("fling requires a non-oscillating spring; damping ratio is {damping_ratio}")]
     UnderdampedFlingSpring {
         /// The admitted spring's damping ratio, below one.
-        #[cfg_attr(feature = "serde", serde(with = "diagnostic_number"))]
         damping_ratio: f64,
     },
 
@@ -202,7 +149,6 @@ pub enum AnimationError {
         /// Which input failed admission.
         input: AnimationInput,
         /// Its refused value.
-        #[cfg_attr(feature = "serde", serde(with = "diagnostic_number"))]
         value: f64,
     },
 
@@ -212,7 +158,6 @@ pub enum AnimationError {
         /// Which input selected the missing endpoint.
         input: AnimationInput,
         /// The input value or requested bound.
-        #[cfg_attr(feature = "serde", serde(with = "diagnostic_number"))]
         value: f64,
     },
 
@@ -220,10 +165,8 @@ pub enum AnimationError {
     #[error("span {from} -> {to} overflows f64")]
     SpanOverflow {
         /// The admitted starting value.
-        #[cfg_attr(feature = "serde", serde(with = "diagnostic_number"))]
         from: f64,
         /// The requested ending value.
-        #[cfg_attr(feature = "serde", serde(with = "diagnostic_number"))]
         to: f64,
     },
 
@@ -231,13 +174,10 @@ pub enum AnimationError {
     #[error("velocity {velocity} across extent {extent} and span {span} overflows f64")]
     VelocityOverflow {
         /// The velocity in gesture units per second.
-        #[cfg_attr(feature = "serde", serde(with = "diagnostic_number"))]
         velocity: f64,
         /// The positive gesture extent.
-        #[cfg_attr(feature = "serde", serde(with = "diagnostic_number"))]
         extent: f64,
         /// The finite controller span.
-        #[cfg_attr(feature = "serde", serde(with = "diagnostic_number"))]
         span: f64,
     },
 
@@ -249,7 +189,6 @@ pub enum AnimationError {
         /// Its zero-based vector component.
         component: usize,
         /// The refused component value.
-        #[cfg_attr(feature = "serde", serde(with = "diagnostic_number"))]
         value: f64,
     },
 

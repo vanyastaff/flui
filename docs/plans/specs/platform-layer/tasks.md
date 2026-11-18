@@ -1,11 +1,10 @@
 # Платформенный слой — задачи
 
 - **Статус:** редакция 3 утверждена: ADR-0151, 0152, 0153, 0154, 0254 и 0255 приняты 2026-10-21.
-  Из 134 задач серии 118 закрыты и 16 открыты (сверено с `main` @ `5b4e3202b`); записи — в разделе
-  «Ход исполнения». Прогоны на устройствах, которых ждут закрытые задачи, — строки
+  Из 134 задач серии 120 закрыты и 14 открыты (сверено с `main` @ `5b4e3202b` и закрытием
+  LY139 и LY61); записи — в разделе «Ход исполнения». Прогоны на устройствах, которых ждут
+  закрытые задачи, — строки
   `crates/flui-native/platform-parity.toml`. Открытые задачи и код, которого они ждут:
-  - LY61 — удалить сервисы `Platform`, `PathPromptOptions`, `Task` и `TaskLabel`, когда LY67 даст
-    провайдеры Android;
   - LY67 — провайдеры `flui-system` на Android (в работе);
   - LY69 — `selectionRectsForRange:` и `UITextInteraction` на iOS;
   - LY89 — тест в виртуальном времени «простой без пробуждений» на источниках macOS и Android;
@@ -18,8 +17,6 @@
   - LY102 — модули `flui-platform` по областям (не начата, после LY100);
   - LY107 — насос AppKit и цикл Android на `WakeDeadline`;
   - LY121 — захват указателя на iOS и Android, образ и скрытый курсор из виджета;
-  - LY139 — пометка первого клика с регионом, запись истечения буфера macOS и жизненный цикл окна
-    iOS без замков, курсор macOS на типизированных вызовах;
   - LY145 — шаги закрытия, выхода и конца сеанса и сборка возможностей в `flui-runtime`;
   - LY148 — долг кадра у перекрытого окна, уход композитного менеджера X11, отключённый удалённый
     сеанс Win32.
@@ -285,7 +282,7 @@ graph LR
 | **LY58** [P] | **`flui-system`: macOS** (D18). Провайдеры на objc2: `NSOpenPanel`/`NSSavePanel`, `NSWorkspace` (URL, открыть путь, reveal), trash через `NSFileManager`, `NSAlert`, `NSSharingServicePicker`, `SMAppService`, глобальные сочетания, прогресс и значок Dock, пути | LY57 | `crates/flui-system/src/macos/*` | `workspace`, `cross-typecheck` | таблица против симулятора; macOS — T | L + T; Dev: macOS |
 | **LY59** [P] | **`flui-system`: Linux** (D18, D19). Порталы через `ashpd`/`zbus`: FileChooser, OpenURI, OpenDirectory (reveal), Trash, GlobalShortcuts, Background (автозапуск); прогресс — сигнал Unity LauncherEntry; message box и share — `Unsupported` с причиной, где портала нет; пути — XDG. Родитель портала из `WindowRef`: `WindowRef` получает `portal_parent()`, его заполняют хосты (Wayland — ручка экспорта `xdg-foreign`, которую окно держит с LY81 как `PortalParent`; X11 — `x11:<XID>`); поправка к ADR-0152 (что несёт `WindowRef`) — в том же PR (решение владельца 2026-10-28: родитель портала — межплатформенное понятие, не OS-расширение) | LY57 | `crates/flui-system/src/linux/*`, `crates/flui-platform/src/capability/*` (`WindowRef`), `crates/flui-native/src/window/linux/*`, `docs/adr/ADR-0152-*` | `workspace`, `reach`, `deps` | таблица против симулятора; портал-заглушка на сессионной шине в CI | L; Dev: Linux |
 | **LY60** [P] | **`flui-system`: Web** (D18). Файловые диалоги (`showOpenFilePicker`, где есть, иначе `<input type=file>` и загрузка), `window.open`, share через `navigator.share`, message box через `<dialog>`; reveal, trash, автозапуск, глобальные сочетания, прогресс, jump list — `Unsupported(NotOnThisPlatform)`; пути — `Unsupported` | LY57 | `crates/flui-system/src/web/*` | `workspace`, `wasm-check` | таблица против симулятора; `wasm-test`; браузерные тесты | L (wasm32); Dev: Web |
-| **LY61** | **`Platform` без сервисов и исполнителя** (D12, R3.8). `open_url`, `reveal_path`, `open_path`, `prompt_for_paths`, `prompt_for_new_path`, `app_path` — удалены (живут в `flui-system`); `background_executor`, `BackgroundExecutor`, `Task`, `TaskLabel`, `PathPromptOptions`, `PlatformExecutor` — удалены, внутренние пользователи (winit, Linux notices, macOS, Windows, headless, Web, Android, iOS) переведены на собственные нити и каналы хоста. Заменяет ADR-0039 §2 | LY55, LY57, LY58, LY59, LY60, LY67, LY73 | `crates/flui-native/src/{platform.rs,executor.rs,task.rs,owner/*,lifecycle/*}` | `workspace`, `reach`, `globals` | существующие наборы; нить `flui-native-bg` исчезает из тестов | L + W + T |
+| **LY61** | **`Platform` без сервисов и исполнителя** (D12, R3.8). `open_url`, `reveal_path`, `open_path`, `prompt_for_paths`, `prompt_for_new_path`, `app_path` — удалены (первые пять живут в `flui-system`, `app_path` — `std::env::current_exe`); `background_executor`, `BackgroundExecutor`, `Task`, `TaskLabel`, `PathPromptOptions`, `PlatformExecutor` — удалены, внутренние пользователи (winit, Linux notices, macOS, Windows, headless, Web, Android, iOS) переведены на собственные нити и каналы хоста. Заменяет ADR-0039 §2 | LY55, LY57, LY58, LY59, LY60, LY67, LY73 | `crates/flui-native/src/{platform.rs,executor.rs,task.rs,owner/*,lifecycle/*}` | `workspace`, `reach`, `globals` | существующие наборы; нить `flui-native-bg` исчезает из тестов | L + W + T |
 
 ### Хосты
 
@@ -5747,17 +5744,24 @@ GPU-память простаивающего или невидимого окн
   ленивого доступа к большой папке и записи в неё нет (папка читается целиком); на движке без
   `cancel` (Chromium до 113, Safari до 16.4), а также в Firefox до 112 и Safari до 17, которые от
   него не отличить, поздний выбор ввода остаётся отменой.
-- [ ] **LY61** (открыта: ждёт LY67) — исполнителя на `Platform` нет: хост ведёт IO на runtime,
-  который одалживает создатель (`NativeExecutor`, ADR-0327 §3; нить `flui-native-bg` — его
-  собственные рабочие). Провайдеры `flui-system` есть на Windows, macOS, Linux, Web и iOS
-  (LY57–LY60, LY73); у сервисов `Platform` нет production-вызовов. Остаётся код, когда LY67 даст
-  провайдеры Android: удалить `open_url`, `reveal_path`, `open_path`, `prompt_for_paths`,
-  `prompt_for_new_path`, `app_path` из `Platform` (`crates/flui-native/src/platform.rs:412–442`,
-  `:496`, реализация `:718–773`) и из таблицы хоста (`crates/flui-native/src/host.rs:184–208`) с
-  реализациями в каждом `owner/*`; типы `PathPromptOptions`, `Task`, `TaskLabel`
-  (`crates/flui-native/src/task.rs`); фикстуры trybuild
-  `tests/ui/{platform_and_host_window_are_sealed,host_table_names_every_position}.rs` и чтение
-  `app_path` в `tests/launch_values.rs`.
+- [x] **LY61** (закрыта веткой `platform/services-leave-platform`) — исполнителя на `Platform`
+  нет: хост ведёт IO на runtime, который одалживает создатель (`NativeExecutor`, ADR-0327 §3).
+  `open_url`, `reveal_path`, `open_path`, `prompt_for_paths`, `prompt_for_new_path` и `app_path`
+  удалены из `Platform`, из таблицы хоста и из каждого `owner/*` (Windows, X11, Wayland, macOS,
+  iOS, Android, Web, headless); удалены `task.rs` (`Task`, `TaskLabel`), `PathPromptOptions`,
+  варианты `PlatformError::{AppPath, Dialog}`, оболочка Windows (`shell_open`,
+  `foreground_recipient`, STA-нить диалогов), `xdg_open` Linux и список открытых URL headless.
+  Production-вызовов не было ни в `crates/`, ни в `packages/`, `examples/`, фасаде, книге и
+  шаблонах CLI; замена — `flui_platform::launch` и провайдеры `flui-system` (передача переднего
+  плана запущенному обработчику на Windows уже в `flui-system`), `app_path` — `std::env::current_exe`
+  (у FLUI своей формы нет: вызывал её только тест; путь бандла Apple — `NSBundle`). Трейт таблицы
+  `host::Services` стал `host::Launch` (`launch_value`, `page_origin`). Фикстуры trybuild
+  `host_table_names_every_position` и `platform_and_host_window_are_sealed` переписаны без
+  удалённых методов (ожидания — те же ошибки, сдвиг строк), тест `app_path` в
+  `tests/launch_values.rs` и `ready_tasks_return_results_without_executor_bounds` удалены вместе с
+  API. ADR-0039 §2 (`app_path`, оболочка, диалоги) — `Superseded-by` ADR-0151 §9, §9 переписан
+  (`Revised`), ADR-0327 §3 без диалогов Windows; `docs/gaps.md`, строка parity «App folders and
+  storage», ARCHITECTURE ядра.
 - [x] **LY67** (закрыта веткой `system/android-providers-2`: провайдеры Android лаунчера, файловых
   диалогов, message box, share, папок пользователя и сведений о системе; прогоны на Galaxy S21 и
   эмуляторе — заметки строк parity) — модуль `crates/flui-system/src/android/`, правила — раздел
@@ -9239,31 +9243,46 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
   Dex пересобран и воспроизводится (`android-dex --rebuild`). Должно на устройстве (строка «Deep
   links»): share при работающем и неработающем FLUI, чтение документа и кнопка лаунчера после.
 
-- [ ] **LY139** (открыта: пометка первого клика и три оставшиеся формы) — решение ADR-0369, на
-  `main`. Построено: состояние окна macOS — `RefCell`, `assert_not_impl_any!(MacOSWindow: Send,
-  Sync)`; главно-поточная часть управления циклом — `Cell` за `MainThreadBound`, переходы чистые
-  (`owner::apple::loop_state`) и записываются до сообщения приложению, так что повторный вход
-  «занятым» не бывает; окно iOS — `Rc`/`RefCell`/`Cell`, `assert_not_impl_any!(IOSWindow: Send,
-  Sync)`; `FLUIWindow`, `FLUIWindowDelegate`, `FLUIContentView` — `define_class!` с
-  `ContainedIvars`; полоса владельца, буфер обмена и окно — на `dispatch2`, `dispatch` снят;
-  `acceptsFirstMouse:` следует конвенции AppKit: нажатие на область перемещения заголовка,
-  нарисованного приложением, активирует и двигает окно, нажатие на содержимое только активирует
-  (модель `input::apple::title_bar::first_mouse`). Тесты:
-  `a_left_press_on_the_bar_moves_the_window_and_a_second_click_asks_the_setting`,
+- [x] **LY139** — решение ADR-0369, ветки `native/apple-owner-thread-forms` и
+  `native/apple-first-click-and-locks`. Построено: состояние окна macOS — `RefCell`,
+  `assert_not_impl_any!(MacOSWindow: Send, Sync)`; главно-поточная часть управления циклом —
+  `Cell` за `MainThreadBound`, переходы чистые (`owner::apple::loop_state`) и записываются до
+  сообщения приложению, так что повторный вход «занятым» не бывает; окно iOS —
+  `Rc`/`RefCell`/`Cell`, `assert_not_impl_any!(IOSWindow: Send, Sync)`, его жизненный цикл —
+  `RefCell<IOSLifecycle>`, а флаг закрытия и исполнение — `Rc<SurfaceAdmission>` из `Cell`, который
+  цель поверхности (`Send + Sync` по контракту) читает через `NativeOwner` только на главном
+  потоке; запись истечения буфера обмена macOS — `Cell<ExpiringRecord<isize>>`: её копия уходит в
+  операцию полосы и возвращается решённой, на полосе запись не трогается; `FLUIWindow`,
+  `FLUIWindowDelegate`, `FLUIContentView` — `define_class!` с `ContainedIvars`; курсор macOS — на
+  типизированных вызовах objc2 (геттеры `NSCursor` и инициализаторы `NSImage`/`NSCursor` объявлены
+  `nonnull` в заголовках AppKit, инициализатор `NSBitmapImageRep` — `nullable` и остаётся
+  ошибкой); полоса владельца, буфер обмена и окно — на `dispatch2`, `dispatch` снят. Первый клик:
+  `InputRegionKind::FirstClick` (виджет `FirstClick`), пометка `PointerPress::is_first_click`;
+  `acceptsFirstMouse:` двигает окно с области перемещения заголовка, доставляет нажатие внутри
+  региона первого клика (края включены в логических единицах, как у проверки попадания) с
+  пометкой (билет по номеру и времени события, `FirstClickTicket`) и только активирует окно в
+  остальных местах; регион хоста — грубый предфильтр, а привязка жестов на каждом хосте
+  пропускает помеченное нажатие, только если путь попадания проходит через коробку `FirstClick`
+  (`FirstClickTarget`), и отдаёт его только поддереву коробки на этом пути
+  (`HitTestEntry::subtree_entries`); коробка входит в путь и тогда, когда цель внутри неё
+  прозрачна (`RenderObject::joins_hits_below`); отказанный первый клик решается до вытеснения
+  контакта на пределе и до выдачи идентификатора последовательности; запись ввода несёт пометку
+  и возможность `first_click` (протокол 0.28), отказ — весь контакт. Тесты:
+  `first_click::a_translucent_target_inside_a_first_click_box_takes_the_first_click`,
+  `first_click::a_translucent_widget_over_a_first_click_box_leaves_it_the_first_click`,
+  `a_refused_first_click_takes_no_contact_room_and_no_sequence`,
+  `every_vocabulary_variant_round_trips_through_the_recording_dto`,
+  `first_click::a_first_click_reaches_only_the_widgets_that_accept_it` (без проверки в привязке
+  падает: первый клик вне региона нажимает простой квадрат),
+  `first_click::a_widget_painted_over_a_first_click_box_does_not_take_the_first_click` (падает,
+  если привязка проверяет только прямоугольник региона: виджет поверх получает первый клик),
+  `a_left_press_on_the_bar_moves_the_window_and_a_second_click_asks_the_setting` (строки региона
+  первого клика падают без его проверки в модели), `a_first_click_is_marked_only_on_the_press_it_was_answered_for`,
   `an_explicit_quit_fences_a_reopen_already_accepted`, `a_reopen_during_a_drain_is_told_by_that_drain`.
-  Остаётся код: (1) пометка первого клика на нажатии, которую каждый распознаватель по умолчанию
-  игнорирует, и регион нового вида для элемента, принимающего этот клик (обход регионов
-  `flui-rendering`, `InputRegionKind`, проекция каждого хоста;
-  [gaps](../../../gaps.md#pointer-and-keyboard-gaps)); (2) запись истечения буфера обмена macOS
-  под `parking_lot::Mutex` (`crates/flui-native/src/clipboard/apple/macos.rs:61`), потому что её
-  модульные тесты зовут её с потоков тестовой полосы; (3) жизненный цикл окна iOS —
-  `Arc<parking_lot::Mutex<IOSLifecycle>>` и `Arc<AtomicBool>`, общие с `Send + Sync` целью
-  поверхности (`crates/flui-native/src/window/apple/ios.rs:1218`); (2) и (3) записаны в
-  [gaps](../../../gaps.md#accepted-adr-sections-not-built-yet) (ADR-0327 §1); (4) курсор macOS шлёт
-  сырой `msg_send!` (`window/apple/macos/cursor.rs`), пока каждый геттер objc2, объявленный
-  ненулевым, не проверен ([gaps](../../../gaps.md#quality-bar-partials-with-no-entry)). Должно на
-  Mac (строка parity «Frameless windows, custom title bar»): первый клик по неактивному окну и набор
-  `appkit_window`.
+  macOS и iOS только проверены типами (nightly в WSL). Записи ввода не несут пометку
+  ([gaps](../../../gaps.md#pointer-and-keyboard-gaps)). Должно на Mac (строки parity «Frameless
+  windows, custom title bar» и «Cursor shapes»): первый клик по неактивному окну, курсоры и набор
+  `appkit_window`; на iPad (строка «Suspend, resume, GPU-surface loss»): жизненный цикл сцены.
 
 - [x] **LY140** — ветка `native/android-accessibility-activation`. Проверено на `main` @
   `59a808aeb` чтением и тестами. Подтвердились обе находки: у `notify_activation(false)` на

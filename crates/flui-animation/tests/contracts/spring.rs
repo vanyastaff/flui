@@ -10,11 +10,11 @@
 #![expect(clippy::unreadable_literal, reason = "published reference values")]
 
 use crate::motion_trace::AnimatedValue;
-use flui_animation::simulation::{
+use flui_animation::{Animation, AnimationController, AnimationStatus};
+use flui_animation::{
     BouncingScrollSimulation, FrictionSimulation, Simulation, SimulationBounds, SimulationError,
     SimulationParameter, SpeedLimit, SpringDescription, SpringSimulation, SpringType, Tolerance,
 };
-use flui_animation::{Animation, AnimationController, AnimationStatus};
 use proptest::prelude::*;
 use std::f64::consts::{PI, TAU};
 use std::time::Duration;
@@ -1037,7 +1037,7 @@ fn assert_fling_refusal_preserves_run(damping_ratio: f64) {
     assert!(displayed > 1e308 && displayed < 1.1e308);
     let spring =
         SpringDescription::with_damping_ratio(1.0, 1e308, damping_ratio).expect("admitted spring");
-    let refused = controller.fling_with(1.0, Some(spring));
+    let refused = controller.fling_with(1.0, spring);
     assert!(
         refused.is_err(),
         "overflowing coefficients must refuse before replacing the live run"

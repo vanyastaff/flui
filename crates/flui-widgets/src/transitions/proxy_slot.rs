@@ -41,9 +41,7 @@ mod tests {
     use std::cell::Cell;
     use std::time::Duration;
 
-    use flui_animation::{
-        AnimationController, AnimationStatus, StatusObserver, StatusSubscription,
-    };
+    use flui_animation::{AnimationController, AnimationStatus, StatusObserver};
     use flui_foundation::ListenerObserver;
     use flui_foundation::{Listenable, ListenerCallback, Subscription};
 
@@ -80,8 +78,8 @@ mod tests {
             self.inner.is_animating()
         }
 
-        fn observe_status(&self, observer: StatusObserver) -> StatusSubscription {
-            self.inner.observe_status(observer)
+        fn listen_status_with_recovery(&self, observer: StatusObserver) -> Subscription {
+            self.inner.listen_status_with_recovery(observer)
         }
     }
 

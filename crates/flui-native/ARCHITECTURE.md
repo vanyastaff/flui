@@ -26,7 +26,7 @@ trait depends on `flui-platform` instead.
   (`platform.rs`), `HostWindow` (`host_window.rs`), the error vocabulary
   (`error.rs`), the table-test runner (`table_test.rs`), `executor.rs` (the
   runtime the Linux and Windows hosts marshal their own I/O on, not part of `Platform`),
-  `task.rs`, one OS's window extensions (`os.rs`), the process-wide calls
+  one OS's window extensions (`os.rs`), the process-wide calls
   (`process.rs`), the page's endpoint for a development agent
   (`page_export.rs`), the display connections of hosts whose window system
   has no connection object (`display_connection.rs`) and the test support
@@ -113,10 +113,12 @@ trait depends on `flui-platform` instead.
   names (`WindowsPlatform`, `HeadlessPlatform`, …) are `HostPlatform` over each
   table, and what a host offers beyond `Platform` (headless test controls, a
   scene registration) is an inherent method on `HostPlatform<H>` for the `H`
-  whose loop it is. The application path, the launch values (an
-  Android intent's extras, the environment elsewhere; ADR-0288 §7), URL and path opening,
-  the file prompts and the compositor name are no position: the loop carries
-  them (`host::Services`) until the system capability crate takes them.
+  whose loop it is. The launch values (an Android intent's extras, the
+  environment elsewhere; ADR-0288 §7) and the page's origin are no position:
+  the loop answers them (`host::Launch`). Opening a URL or a path, the file
+  dialogs and the user's folders are not the core host's at all: they are
+  `flui_platform::launch` and `flui-system`'s providers (ADR-0151 §9), and an
+  application finds its executable with `std::env::current_exe`.
   The Android host has no public platform name: it starts over the Activity
   the system hands only to `android_main`, through `android_platform(app)`.
 - **No public path names an OS type (ADR-0151 §8).** The crate's public API,
@@ -823,9 +825,8 @@ trait depends on `flui-platform` instead.
     `host_notices`, which take the executor and the signal). The native Linux
     loops share one shape for the session (`owner::linux`): the portal as
     `LinuxPreferences` behind a `PortalSlot` their windows read the colour
-    scheme from, the logind and pressure sources as `LinuxNotices`, which
-    deliver to either loop as a `SessionLoop`, and `xdg_open` for the
-    services.
+    scheme from, and the logind and pressure sources as `LinuxNotices`, which
+    deliver to either loop as a `SessionLoop`.
   - Each loop is its table's preference position, and its lifecycle position
     on every host but headless, whose position is its test handle
     (`HeadlessPreferences`, `HeadlessHostEvents`). The loops that hear the
@@ -1546,8 +1547,7 @@ trait depends on `flui-platform` instead.
   `xdg_activation_v1`. The launcher's `XDG_ACTIVATION_TOKEN` is read once by
   the loop and given to the first window its table holds (`WindowTable::register`),
   so a window that failed to open leaves it; the variable stays set, as unsetting it
-  races every thread reading the environment, and `xdg_open` leaves it out
-  of the opener it starts. `current_host` picks the native Wayland host
+  races every thread reading the environment. `current_host` picks the native Wayland host
   for a Wayland session (`choose_linux_host`).
 - **Linux host events reach the owner through an inbox, and a machine that
   waits for the application waits for delivery, not for receipt.** Two sources
@@ -2843,14 +2843,14 @@ another notification, foreign-thread refusal and reentrant capture retirement.
 Cargo/nextest protocol. These tests execute Linux D-Bus and the X11 host, but do not change a desktop's
 actual OS settings or establish live behavior of the other native platforms.
 
-Thread-safe residual handles may outlive the event-loop owner. The background
-executor's final shared owner requests nonblocking runtime shutdown, so releasing
-a retired proxy inside another async runtime or inside the executor's own task
-cannot invoke Tokio's blocking runtime destructor. This retains normal runtime
-cancellation of queued async work; already executing blocking work finishes
-independently. `background_executor_retirement` exercises both contexts through
-the public executor, and the Linux table's `late-proxy` case covers the actual
-preference source and stopped host.
+Thread-safe residual handles may outlive the event-loop owner. The last clone
+of a runtime the host owns (`NativeExecutor::own`) requests nonblocking runtime
+shutdown, so releasing a retired proxy inside another async runtime or inside
+the executor's own task cannot invoke Tokio's blocking runtime destructor. This
+retains normal runtime cancellation of queued async work; already executing
+blocking work finishes independently. `the_last_own_executor_retires_inside_a_task`
+exercises both contexts, and the Linux table's `late-proxy` case covers the
+actual preference source and stopped host.
 
 AppKit observes `NSEvent::doubleClickInterval` on the application owner lane.
 Android observes public `ViewConfiguration` timeouts and physical touch/fling
@@ -4148,8 +4148,18 @@ which `Send + Sync` surface targets and text inputs hold).
 **A click into an inactive window (`acceptsFirstMouse:`).** The content view
 asks its input, which answers by the press model (`input::apple::title_bar`):
 a press on the move area of a title bar the application draws activates the
-window and moves it at once, as the system's title bar does; a press on the
-content only activates it, AppKit's convention.
+window and moves it at once, as the system's title bar does; a press inside an
+`InputRegionKind::FirstClick` region (a `FirstClick` widget's box), its edges
+included in logical units as the hit test counts a box, activates it and is
+delivered, marked `is_first_click`; a press anywhere else only activates it,
+AppKit's convention. The region is a rough pre-filter: the gesture binding
+admits a marked press only when its hit path runs through the `FirstClick`
+box (`FirstClickTarget`), and hands it only to the box's subtree on that path
+(`HitTestEntry::subtree_entries`), so a widget painted over the box does not
+receive it. The answer issues a ticket for the press's event number and timestamp,
+read only for a press it delivers marked, and only the press with that stamp
+is marked when it arrives (`FirstClickTicket`): any press spends the ticket,
+so an answer whose press never came marks none.
 
 **Two defects the stricter macro caught.** objc2's `msg_send!` verifies return
 types against the selector encoding at run time and found `makeFirstResponder:`
@@ -4380,17 +4390,6 @@ readable without touching UIKit. A native weak-view check verified both
 retention through logical close and eventual release after a worker's final drop.
 OwnerSignal/GCD carries typed process wake/quit independently of display links;
 it grants no operating-system background execution entitlement.
-
-### A ready task imposes no executor bounds on its result
-
-`Task<T>` moves its result out and never exposes a pinned borrow to it.
-The handle is therefore `Unpin` independently of `T`, as is the native
-`JoinHandle<T>` variant. Its `Future` implementation accepts local, borrowed
-and non-`Unpin` results; `Send + 'static` belongs to executor admission,
-where work crosses threads, rather than to polling a completed value.
-Dropping a spawned handle detaches the Tokio task; it does not cancel it.
-Pinned by `ready_tasks_return_results_without_executor_bounds` through the
-public API.
 
 ### Browser display units, held buttons and callback reentry
 

@@ -351,7 +351,7 @@ mod tests {
         let owner =
             AnimationController::builder(Duration::from_millis(200)).build_on(Some(&registry));
         let observer = owner.controller().clone();
-        let mut run = observer.forward_from(Some(0.0)).expect("snap starts");
+        let mut run = observer.forward_from(0.0).expect("snap starts");
         let mut state = super::FloatingHeaderHostState {
             snap_controller: Some(owner),
             position: None,

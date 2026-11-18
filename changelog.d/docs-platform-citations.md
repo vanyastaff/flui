@@ -12,8 +12,6 @@
 
 ### Fixed
 
-- **`flui-native`**: the headless platform's `app_path` names the executable the process runs,
-  as the desktop hosts do, instead of the stand-in path `/mock/app/path`.
 - **`flui-native`**, **`flui-app`**: the application's start-up lines and the window-opening
   lines of the Win32, Web and headless hosts no longer log the window's title; a URI list that
   leaves a path out no longer logs the path, and the Linux single-instance forwarder logs a

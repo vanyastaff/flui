@@ -21,8 +21,8 @@ mod sampling_clock;
 mod wheel_preferences;
 
 pub use hit_test::{
-    CursorRequest, EventPropagation, HitMetadata, HitTestBehavior, HitTestEntry, HitTestResult,
-    RenderId, TransformGuard,
+    CursorRequest, EventPropagation, FirstClickTarget, HitMetadata, HitTestBehavior, HitTestEntry,
+    HitTestResult, RenderId, TransformGuard,
 };
 pub(crate) use hit_test::{PanZoomRoute, ScrollRoute, localize_point};
 pub(crate) use interaction_lane::OwnerLatch;

@@ -534,14 +534,14 @@ impl Animation<f64> for RemovalPanics {
         self.inner.is_animating()
     }
 
-    fn observe_status(
+    fn listen_status_with_recovery(
         &self,
         _observer: flui_animation::StatusObserver,
-    ) -> flui_animation::StatusSubscription {
+    ) -> flui_foundation::Subscription {
         fn remove(_: &(), (): (), _: &mut flui_foundation::panic::RecoveryScope<'_>) {
             panic!("status subscription removal panics");
         }
-        flui_animation::StatusSubscription::new(&self.anchor, (), remove)
+        flui_foundation::Subscription::for_source(&self.anchor, (), remove)
     }
 }
 
@@ -1109,10 +1109,10 @@ impl Animation<f64> for StatusByHand {
         false
     }
 
-    fn observe_status(
+    fn listen_status_with_recovery(
         &self,
         observer: flui_animation::StatusObserver,
-    ) -> flui_animation::StatusSubscription {
+    ) -> flui_foundation::Subscription {
         type Slots = std::cell::RefCell<Vec<Option<flui_animation::StatusObserver>>>;
         fn remove(
             slots: &Slots,
@@ -1126,7 +1126,7 @@ impl Animation<f64> for StatusByHand {
             slots.push(Some(observer));
             slots.len() - 1
         };
-        flui_animation::StatusSubscription::new(&self.observers, index, remove)
+        flui_foundation::Subscription::for_source(&self.observers, index, remove)
     }
 }
 

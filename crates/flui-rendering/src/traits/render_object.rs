@@ -642,6 +642,15 @@ pub trait RenderObject<P: Protocol>: Inspect + Downcast + 'static {
         false
     }
 
+    /// Whether this node joins the hit path whenever a descendant joined it, also when the
+    /// descendant let the hit through (a translucent target) and the node's own `hit_test`
+    /// therefore reported no blocking hit. A node whose [`metadata`](Self::metadata)
+    /// marks its whole subtree (a first-click box) needs it: its entry must ride every path
+    /// that runs through it. Default `false`.
+    fn joins_hits_below(&self) -> bool {
+        false
+    }
+
     /// The data-only pointer target this render object contributes to its hit
     /// entry, if any.
     ///

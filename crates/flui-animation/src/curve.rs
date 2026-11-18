@@ -32,7 +32,7 @@ pub use spring::SpringCurve;
 /// # Examples
 ///
 /// ```
-/// use flui_animation::curve::Curve;
+/// use flui_animation::Curve;
 ///
 /// struct MyCurve;
 ///
@@ -157,18 +157,18 @@ mod builtin {
     use super::interval::{interval_slope, interval_transform};
     use super::split::split_transform;
     use super::{Bounce, Cubic, Curve, Decelerate, Elastic, Steps, ThreePointCubic};
-    use std::sync::Arc;
+    use std::rc::Rc;
 
     /// A built-in curve's value, as returned by [`Curve::builtin`].
     ///
     /// Public only so the hidden trait method can name it; it is not
     /// reachable from outside the crate.
     #[derive(Debug, Clone, PartialEq)]
-    pub struct BuiltinCurve(Arc<Builtin>);
+    pub struct BuiltinCurve(Rc<Builtin>);
 
     impl BuiltinCurve {
         pub(super) fn new(curve: Builtin) -> Self {
-            Self(Arc::new(curve))
+            Self(Rc::new(curve))
         }
 
         pub(super) fn transform(&self, t: f64) -> f64 {
@@ -225,7 +225,7 @@ mod builtin {
     #[derive(Debug, PartialEq)]
     #[expect(
         clippy::large_enum_variant,
-        reason = "only ever allocated once, behind the Arc in BuiltinCurve"
+        reason = "only ever allocated once, behind the Rc in BuiltinCurve"
     )]
     pub(super) enum Builtin {
         Linear,
