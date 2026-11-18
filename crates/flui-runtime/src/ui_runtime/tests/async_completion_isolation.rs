@@ -138,12 +138,7 @@ pub(crate) fn async_completion_after_presentation_teardown_fails_closed_no_sibli
     // inbox.
     ui_runtime
         .owner_frame()
-        .drive_frame(
-            flui_scheduler::Instant::now(),
-            flui_scheduler::IdleDeadline::far_future(flui_scheduler::Instant::now()),
-            || {},
-            || {},
-        )
+        .drive_frame(flui_scheduler::Instant::now(), || {}, || {})
         .expect("runtime frame");
     assert!(
         ran.load(Ordering::Relaxed),

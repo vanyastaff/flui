@@ -134,8 +134,7 @@ impl UiRuntime {
                 continue;
             };
 
-            let scoped =
-                self.scheduler.phase() == flui_scheduler::SchedulerPhase::PersistentCallbacks;
+            let scoped = self.scheduler.phase() == flui_scheduler::SchedulerPhase::Frame;
             if scoped && completion && !pending && !woken && !resuming {
                 presentation.complete_segment();
                 continue;
@@ -425,7 +424,6 @@ impl UiRuntime {
     pub(crate) fn drive_frame(
         &self,
         now: Instant,
-        deadline: flui_scheduler::IdleDeadline,
         mut prepare: impl FnMut(),
         pipeline: impl FnMut() -> bool,
     ) -> bool {
@@ -435,7 +433,7 @@ impl UiRuntime {
         // it to the next owner turn (ADR-0142 item 5).
         self.anchor_owed.set(true);
         // The frames every presentation has rendered or dropped so far: a drive that unwinds
-        // having added none (a transient callback, say) had no frame to report.
+        // having added none (the begin step, say) had no frame to report.
         let frames_seen = || {
             self.presentations.iter().fold(0_u64, |seen, presentation| {
                 seen.saturating_add(presentation.frames_rendered())
@@ -450,7 +448,6 @@ impl UiRuntime {
         let result = first_panic.contain(|| {
             self.owner_frame.drive_frame(
                 now,
-                deadline,
                 move || {
                     prepare();
                     *commit_slot = Some(TextCommitsClosed::close(self));
