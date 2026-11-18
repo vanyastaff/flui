@@ -1,12 +1,15 @@
 //! What the web providers decide without a page: how a dialog's filters
-//! become the browser's, what a download is named, where a launched URI
-//! goes, which answer a message box's button is, and what a browser's
-//! exception means. Kept apart from the DOM so the rules are tested on every
-//! host.
+//! become the browser's, which folder a file input answered and whether a
+//! pick can carry it, what a download is named, where a launched URI goes,
+//! which answer a message box's button is, and what a browser's exception
+//! means. Kept apart from the DOM so the rules are tested on every host.
 
-use flui_platform::{BrowserException, Unsupported, UnsupportedReason};
+use flui_platform::{BrowserException, SystemFailure, Unsupported, UnsupportedReason};
 
-use crate::dialog::{DialogError, FileDialogCapability, FileFilter, MessageAnswer, MessageButtons};
+use crate::dialog::{
+    DialogError, FileDialogCapability, FileFilter, MessageAnswer, MessageButtons, is_file_name,
+    is_name_in_folder, is_path_in_folder,
+};
 use crate::share::{ShareCapability, ShareError, ShareResult};
 
 /// The longest extension, with its leading `.`, the File System Access API
@@ -178,6 +181,109 @@ pub(crate) fn admit_read(read: u64, limit: u64) -> Result<(), DialogError> {
     }
 }
 
+/// Refuse a folder of which `met` files and folders were met, past `limit`,
+/// with [`DialogError::TooManyEntries`]: asked as each entry is met, so a
+/// folder is walked no further than its bound.
+pub(crate) fn admit_entries(met: usize, limit: usize) -> Result<(), DialogError> {
+    if met > limit {
+        Err(DialogError::TooManyEntries { limit })
+    } else {
+        Ok(())
+    }
+}
+
+/// The dialog's answer where the browser has no folder chooser.
+pub(crate) fn no_folder_chooser() -> DialogError {
+    DialogError::Unsupported(Unsupported::of::<FileDialogCapability>(
+        UnsupportedReason::NotOnThisDevice,
+    ))
+}
+
+/// A folder as a browser handed it over, before a byte of it is read: its
+/// name, and where each of its files is under it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct FolderListing<'a> {
+    pub(crate) name: &'a str,
+    /// One per file, in the files' order, each relative to the folder.
+    pub(crate) paths: Vec<&'a str>,
+}
+
+/// The folder an `<input type=file webkitdirectory>` answered, from its
+/// files' `webkitRelativePath`s in the files' order (`Photos/2024/a.jpg`:
+/// the picked folder's name, then where the file is under it).
+///
+/// - No file is `None`, a cancel: what the input answers for a dismissed
+///   chooser, and for a folder that holds no file, which it cannot tell
+///   apart.
+/// - Files that all have an empty path were picked by a file chooser: the
+///   browser's input reflects `webkitdirectory` and shows no folder chooser
+///   (Chrome for Android before 132, Safari on iOS before 18.4), or shows
+///   one and does not say where its files are (Firefox for Android 141).
+///   That is [`no_folder_chooser`], since no later call fares better.
+/// - A path with no folder before its file, or files of two folders, is not
+///   an answer an input picking one folder has
+///   ([`SystemFailure::MalformedAnswer`]).
+pub(crate) fn input_folder<'a>(
+    relative_paths: impl IntoIterator<Item = &'a str>,
+) -> Result<Option<FolderListing<'a>>, DialogError> {
+    let malformed = DialogError::Failed(SystemFailure::MalformedAnswer);
+    let mut name: Option<&str> = None;
+    let mut paths = Vec::new();
+    let mut unplaced = 0_usize;
+    for relative_path in relative_paths {
+        if relative_path.is_empty() {
+            unplaced += 1;
+            continue;
+        }
+        let (folder, path) = relative_path.split_once('/').ok_or(malformed)?;
+        if *name.get_or_insert(folder) != folder {
+            return Err(malformed);
+        }
+        paths.push(path);
+    }
+    match (name, unplaced) {
+        (None, 0) => Ok(None),
+        (None, _) => Err(no_folder_chooser()),
+        (Some(name), 0) => Ok(Some(FolderListing { name, paths })),
+        (Some(_), _) => Err(malformed),
+    }
+}
+
+/// Where the entry named `name` is under the picked folder, in the folder
+/// at `folder_path` under it (empty for the picked folder itself): the path
+/// a walk of a directory handle gives each entry it meets.
+/// [`SystemFailure::MalformedAnswer`] for a name no folder holds, a `/` in
+/// it among them, so a path has one component per folder walked.
+pub(crate) fn entry_path(folder_path: &str, name: &str) -> Result<String, DialogError> {
+    if !is_name_in_folder(name) {
+        return Err(DialogError::Failed(SystemFailure::MalformedAnswer));
+    }
+    Ok(if folder_path.is_empty() {
+        name.to_owned()
+    } else {
+        format!("{folder_path}/{name}")
+    })
+}
+
+/// Admit a folder a browser handed over as one a pick can carry, before a
+/// byte of it is read: its name one a folder can hold, each of its files at
+/// a path under it of such names, and no two at one path
+/// ([`PickedFile::try_from_folder`](crate::dialog::PickedFile::try_from_folder),
+/// [`FolderFile::try_new`](crate::dialog::FolderFile::try_new));
+/// [`SystemFailure::MalformedAnswer`] otherwise.
+pub(crate) fn admit_folder(folder: &FolderListing<'_>) -> Result<(), DialogError> {
+    let mut sorted = folder.paths.clone();
+    sorted.sort_unstable();
+    let carried = is_name_in_folder(folder.name)
+        && sorted.iter().all(|path| is_path_in_folder(path))
+        && sorted.windows(2).all(|pair| pair[0] != pair[1]);
+    if carried {
+        Ok(())
+    } else {
+        Err(DialogError::Failed(SystemFailure::MalformedAnswer))
+    }
+}
+
 /// How a picker of the File System Access API ended without picks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PickerEnd {
@@ -222,21 +328,26 @@ pub(crate) fn unavailable() -> DialogError {
     ))
 }
 
-/// Admit picks, each a name and the MIME type the browser gives it, against
-/// the request's `filters`: every pick must match one where there are any
+/// Admit picks, each a name and the MIME type the browser gives it, before
+/// a byte of them is read. Every name must be one a pick can carry
+/// ([`PickedFile::try_from_contents`](crate::dialog::PickedFile::try_from_contents)),
+/// [`SystemFailure::MalformedAnswer`] otherwise; and every pick must match
+/// one of the request's `filters` where there are any
 /// ([`FileFilter::matches`]), since a file input only suggests them
-/// (ADR-0360 §4); [`DialogError::NotInFilter`] otherwise.
+/// (ADR-0360 §4), [`DialogError::NotInFilter`] otherwise.
 pub(crate) fn admit_picks<'a>(
     picks: impl IntoIterator<Item = (&'a str, Option<&'a str>)>,
     filters: &[FileFilter],
 ) -> Result<(), DialogError> {
-    if filters.is_empty() {
-        return Ok(());
+    let mut in_filter = true;
+    for (name, mime_type) in picks {
+        if !is_file_name(name) {
+            return Err(DialogError::Failed(SystemFailure::MalformedAnswer));
+        }
+        in_filter &=
+            filters.is_empty() || filters.iter().any(|filter| filter.matches(name, mime_type));
     }
-    let admitted = picks
-        .into_iter()
-        .all(|(name, mime_type)| filters.iter().any(|filter| filter.matches(name, mime_type)));
-    if admitted {
+    if in_filter {
         Ok(())
     } else {
         Err(DialogError::NotInFilter)
@@ -594,6 +705,87 @@ mod tests {
                 limit: 4
             })
         );
+        assert_eq!(admit_entries(2, 2), Ok(()), "a folder may fill its bound");
+        assert_eq!(
+            admit_entries(3, 2),
+            Err(DialogError::TooManyEntries { limit: 2 })
+        );
+        assert_eq!(
+            admit_entries(1, 0),
+            Err(DialogError::TooManyEntries { limit: 0 })
+        );
+    }
+
+    const MALFORMED: DialogError = DialogError::Failed(SystemFailure::MalformedAnswer);
+
+    /// What an input's files answer for a folder dialog.
+    type InputAnswer<'a> = Result<Option<FolderListing<'a>>, DialogError>;
+
+    #[test]
+    fn a_folder_input_names_one_folder_and_where_each_file_is_under_it() {
+        let cases: [(&[&str], InputAnswer<'_>); 8] = [
+            (
+                &["Project/a.txt", "Project/src/main.rs"],
+                Ok(Some(FolderListing {
+                    name: "Project",
+                    paths: vec!["a.txt", "src/main.rs"],
+                })),
+            ),
+            // A dismissed chooser, or a folder that holds no file.
+            (&[], Ok(None)),
+            // The input took `webkitdirectory` and showed a file chooser, or
+            // did not say where the folder's files are.
+            (&[""], Err(no_folder_chooser())),
+            (&["", ""], Err(no_folder_chooser())),
+            (&["a.txt"], Err(MALFORMED)),
+            (&["Project/a.txt", "Other/b.txt"], Err(MALFORMED)),
+            (&["Project/a.txt", ""], Err(MALFORMED)),
+            (&["", "Project/a.txt"], Err(MALFORMED)),
+        ];
+        for (relative_paths, folder) in cases {
+            assert_eq!(
+                input_folder(relative_paths.iter().copied()),
+                folder,
+                "{relative_paths:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_folder_a_pick_cannot_carry_is_refused_before_it_is_read() {
+        let cases: [(&str, &[&str], Result<(), DialogError>); 10] = [
+            ("Project", &["a.txt", "src/main.rs"], Ok(())),
+            ("Project", &[], Ok(())),
+            // What a file system allows: a blank name, and the carriage
+            // return macOS ends a folder's icon file with.
+            ("Project", &[" ", "docs/Icon\r"], Ok(())),
+            ("Project", &["../secret"], Err(MALFORMED)),
+            ("Project", &["src//main.rs"], Err(MALFORMED)),
+            ("Project", &["src/./main.rs"], Err(MALFORMED)),
+            ("Project", &["src\\main.rs"], Err(MALFORMED)),
+            ("Project", &["a.txt", "b.txt", "a.txt"], Err(MALFORMED)),
+            ("..", &["a.txt"], Err(MALFORMED)),
+            ("", &["a.txt"], Err(MALFORMED)),
+        ];
+        for (name, paths, admitted) in cases {
+            let folder = FolderListing {
+                name,
+                paths: paths.to_vec(),
+            };
+            assert_eq!(admit_folder(&folder), admitted, "{name:?} {paths:?}");
+        }
+    }
+
+    #[test]
+    fn a_walked_entry_is_one_name_under_its_folders_path() {
+        assert_eq!(entry_path("", "a.txt"), Ok("a.txt".to_owned()));
+        assert_eq!(
+            entry_path("src/web", "mod.rs"),
+            Ok("src/web/mod.rs".to_owned())
+        );
+        for name in ["", ".", "..", "a/b", "a\\b", "a\0b"] {
+            assert_eq!(entry_path("src", name), Err(MALFORMED), "{name:?}");
+        }
     }
 
     #[test]
@@ -660,6 +852,14 @@ mod tests {
             Ok(()),
             "no filter means every file"
         );
+        // A name no pick carries refuses the answer before the filters are
+        // asked, and before anything is read.
+        for filters in [&filters[..], &[]] {
+            assert_eq!(
+                admit_picks([("photo.png", None), ("a\nb.png", None)], filters),
+                Err(DialogError::Failed(SystemFailure::MalformedAnswer)),
+            );
+        }
     }
 
     #[test]

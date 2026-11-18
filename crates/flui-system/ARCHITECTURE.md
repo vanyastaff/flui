@@ -34,7 +34,9 @@ have them:
 - A window-bound handle (the dialogs, the message box, the share sheet) refuses a widget in no
   window with `NoWindow` and answers `WindowClosed` once its window closed, without asking. An
   answer the request cannot have (a button the box does not offer, several picks for one, a
-  filter index past the request's) is `SystemFailure::MalformedAnswer`.
+  filter index past the request's, a pick of a form the request does not ask for: a handed-over
+  folder to a file dialog or a save, a handed-over file to a folder dialog, a download to an
+  open) is `SystemFailure::MalformedAnswer`.
 - A request its caller can call off ends when its value drops: a `Dialog` (ADR-0344) and a
   `ShortcutBinding`, each through the hold its backend returned. A window shows one dialog at a
   time, whichever handle asked: `FileDialogs` and `MessageBoxes` share the runtime's
@@ -315,6 +317,19 @@ read once per runtime, and the machine's processor, Arm64 for a process Rosetta 
   picks' declared sizes are checked before a byte is read and the bytes read are counted again,
   and more is `DialogError::TooLarge`. Each file is copied once, from the browser's buffer into the
   pick's own.
+- A folder a browser hands over is `PickedForm::Folder`: its name, and the files under it at any
+  depth (`FolderFile`), each where it is under the folder and what it holds, in the order of
+  their paths. It is read whole when the dialog answers, as a handed-over file is, since a
+  browser gives a page one of two things for a folder and only a list of files is common to
+  both: a handle to walk, or the files with their paths. So files are all the form carries, and a
+  folder that holds none, at any depth, leaves no trace in it. A `FolderFile`'s path is relative,
+  each component one name (not `.` or `..`, no separator of any host, no NUL, no drive on
+  Windows), so joining it to a folder only descends from it; any other name a file system allows
+  is carried, a blank one or one with a control character among them. The folder is bounded
+  twice: by `OpenRequest::max_entries` files and folders (`DEFAULT_MAX_ENTRIES` unless the
+  request says, past it `DialogError::TooManyEntries`, the folder walked no further), and by
+  `max_bytes` for its files together. A desktop dialog answers a folder's path, which neither
+  bounds.
 - Every pick is held to the request's filters, and one that matches none refuses the whole answer
   with `DialogError::NotInFilter`: the answer is what the user chose, and it is not what the
   request asked for. A pick's name is the handle's to check, for every backend (`FileDialogs::open`):
@@ -341,8 +356,8 @@ read once per runtime, and the machine's processor, Arm64 for a process Rosetta 
 - What the providers decide without the DOM (the filters' mapping and checks, a save's name, a
   launch's route, what an exception means) is `web::rules`, tested on every host; the DOM side is
   `web::tests`, the lib test on wasm32 in headless Chrome (CI's `wasm-check` job), with user
-  activation stated by the test and `window.open`, the save picker and the Badging API replaced,
-  so no picker or window opens.
+  activation stated by the test and `window.open`, the save and directory pickers and the Badging
+  API replaced, so no picker or window opens.
 - **User activation, one answer.** A browser shows a picker or a new window only while the page
   handles a user's gesture. A call outside one is refused with `Unavailable` before the browser is
   asked (the browser would refuse it, or a file input and a popup blocker would drop it
@@ -358,8 +373,23 @@ read once per runtime, and the machine's processor, Arm64 for a process Rosetta 
   answers `AbortError`. An input ends on its `change`, its `cancel` (Chromium 113, Firefox 91,
   Safari 16.4), `pagehide`, or, where an engine has no `cancel`, the window regaining focus with
   no `change` within `web::dialogs::FOCUS_GRACE_MS`, which answers a cancel: a pick reported later than
-  that (a large file a phone copies first) is lost, the price of an end on every engine. A folder
-  dialog answers `NotYetOnThisHost`.
+  that (a large file a phone copies first) is lost, the price of an end on every engine.
+- **Folder.** The directory picker (`showDirectoryPicker`, asked to read) where the browser has
+  it, its handle walked through each folder's `values()`; `<input type=file webkitdirectory>`
+  otherwise, and in the picker's place under the rules of an open (the gesture, `SecurityError`,
+  one picker per page, the input's ends), its files' `webkitRelativePath`s naming the folder and
+  where each file is under it. Both answer one folder as `PickedForm::Folder`, whatever the
+  request allows: a browser's chooser takes one. The folder's name and its files' paths are held
+  to what a pick carries, the entries to `max_entries` as they are met and the files' declared
+  sizes to `max_bytes`, all before a byte is read. A browser with neither API answers
+  `NotOnThisDevice` before the gesture is asked about, since no later call fares better. An
+  input may take the attribute and show a file chooser all the same (Chrome for Android before
+  132, Safari on iOS before 18.4), or pick a folder without saying where its files are (Firefox
+  for Android 141): its files then all have an empty path, which is answered `NotOnThisDevice`
+  too. An input answers no file for a folder that holds none, which it cannot tell from a
+  dismissed chooser: a cancel. A folder the browser lists, or asks the user to confirm, for
+  longer than the focus bound after the window regained focus is answered as a cancel as well,
+  as a late file is.
 - **Save.** The save picker writes the request's contents through a writable stream, aborted on
   a failure, after the user chose even if the dialog was dropped: the browser has made or emptied
   the chosen file by then. Without a picker, outside a gesture (which the picker needs and a

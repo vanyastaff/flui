@@ -10,6 +10,21 @@
 //!   [`max_bytes`](crate::dialog::OpenRequest::max_bytes), before a byte is
 //!   read; the bytes read are counted again, since a file may change between
 //!   the two.
+//! - **Folder**: the directory picker (`showDirectoryPicker`) where the
+//!   browser has it, whose handle is walked for the files under it;
+//!   `<input type=file webkitdirectory>` otherwise, and in the picker's
+//!   place as for files, whose files say where they are under the folder
+//!   (`webkitRelativePath`). Either way the answer is one folder, its name
+//!   and its files at their paths under it
+//!   ([`PickedForm::Folder`](crate::dialog::PickedForm::Folder)): files are
+//!   all it carries, since the input reports nothing else. The folder is
+//!   walked no further than the request's
+//!   [`max_entries`](crate::dialog::OpenRequest::max_entries), and its
+//!   files' declared sizes are checked against `max_bytes` before a byte is
+//!   read. A browser with neither has no folder chooser
+//!   ([`NotOnThisDevice`](UnsupportedReason::NotOnThisDevice)), and so has
+//!   one whose input takes the attribute and still picks files, which shows
+//!   only in its answer.
 //! - **Save**: a request carries the contents it saves. The save picker
 //!   (`showSaveFilePicker`) writes them where the user chose, even when the
 //!   dialog was dropped after the user chose (the browser has made or
@@ -42,10 +57,10 @@ use wasm_bindgen_futures::JsFuture;
 use web_sys::{Blob, BlobPropertyBag, Event, File, HtmlAnchorElement, HtmlInputElement, Url};
 
 use super::page::{Page, call_promise, exception, method, property, set};
-use super::rules::{self, PickerEnd};
+use super::rules::{self, FolderListing, PickerEnd};
 use crate::dialog::{
-    DialogError, DialogHold, FileDialogBackend, FileDialogCapability, FileFilter, OpenRequest,
-    OpenResult, PickedFile, Picks, SaveLocation, SaveRequest, SaveResult,
+    DialogError, DialogHold, FileDialogBackend, FileDialogCapability, FileFilter, FolderFile,
+    OpenRequest, OpenResult, PickedFile, Picks, SaveLocation, SaveRequest, SaveResult,
 };
 
 /// How long a download's object URL outlives its click before it is
@@ -144,11 +159,15 @@ impl FileDialogBackend for WebDialogs {
         request: OpenRequest,
         answer: Resolver<OpenResult>,
     ) -> DialogHold {
-        if request.picks_folders() {
-            // A browser can hand a page a folder (`showDirectoryPicker`, a
-            // `webkitdirectory` input), but no pick this handle has carries
-            // a folder's tree.
-            return answered(answer, unsupported(UnsupportedReason::NotYetOnThisHost));
+        let picker = if request.picks_folders() {
+            self.page.window_method("showDirectoryPicker")
+        } else {
+            self.page.window_method("showOpenFilePicker")
+        };
+        if request.picks_folders() && picker.is_none() && !input_takes_folders(&self.page) {
+            // No gesture brings a folder chooser, so this refusal comes
+            // before the one a later call could pass.
+            return answered(answer, rules::no_folder_chooser());
         }
         if !self.page.is_activated() {
             return answered(answer, rules::unavailable());
@@ -160,23 +179,14 @@ impl FileDialogBackend for WebDialogs {
             waiting: Rc::new(Cell::new(true)),
             input: Rc::default(),
         };
-        let picker = self.page.window_method("showOpenFilePicker");
-        match (picker, rules::picker_types(&request.filters)) {
-            (Some(picker), Some(types)) => {
-                let options = Object::new();
-                set(&options, "multiple", &request.is_multiple().into());
-                set(&options, "types", &picker_types(&types));
-                set(
-                    &options,
-                    "excludeAcceptAllOption",
-                    &(!request.filters.is_empty()).into(),
-                );
-                match call_promise(&picker, self.page.view(), &options) {
-                    Ok(promise) => self.open_with_picker(promise, request, answer, &hold),
-                    Err(thrown) => self.end_picker(thrown, &request, answer, &hold),
-                }
-            }
-            _ => self.show_input(&request, answer, &hold),
+        let options = picker.and_then(|picker| Some((picker, picker_options(&request)?)));
+        let request = Rc::new(request);
+        match options {
+            Some((picker, options)) => match call_promise(&picker, self.page.view(), &options) {
+                Ok(promise) => self.open_with_picker(promise, request, answer, &hold),
+                Err(thrown) => self.end_picker(thrown, &request, answer, &hold),
+            },
+            None => self.show_input(&request, answer, &hold),
         }
         DialogHold::new(hold)
     }
@@ -226,7 +236,7 @@ impl FileDialogBackend for WebDialogs {
 
 impl WebDialogs {
     /// Show an input for `request` in the place `hold` keeps for it.
-    fn show_input(&self, request: &OpenRequest, answer: Resolver<OpenResult>, hold: &OpenHold) {
+    fn show_input(&self, request: &Rc<OpenRequest>, answer: Resolver<OpenResult>, hold: &OpenHold) {
         let shown = InputPicker::show(
             &self.page,
             &self.picker,
@@ -242,7 +252,7 @@ impl WebDialogs {
     fn end_picker(
         &self,
         thrown: BrowserException,
-        request: &OpenRequest,
+        request: &Rc<OpenRequest>,
         answer: Resolver<OpenResult>,
         hold: &OpenHold,
     ) {
@@ -259,12 +269,13 @@ impl WebDialogs {
         }
     }
 
-    /// Answer `answer` when the open picker's `promise` settles, with the
-    /// picked files checked and read, or with the input in its place.
+    /// Answer `answer` when the open or directory picker's `promise`
+    /// settles, with what was picked checked and read, or with the input in
+    /// its place.
     fn open_with_picker(
         &self,
         promise: js_sys::Promise,
-        request: OpenRequest,
+        request: Rc<OpenRequest>,
         answer: Resolver<OpenResult>,
         hold: &OpenHold,
     ) {
@@ -282,13 +293,8 @@ impl WebDialogs {
                 return;
             }
             let rejection = match settled {
-                Ok(handles) => {
-                    let result = match files_of_handles(&handles).await {
-                        Ok(files) => {
-                            read_picks(files, &request.filters, request.max_bytes, &waiting).await
-                        }
-                        Err(failure) => Err(failure),
-                    };
+                Ok(picked) => {
+                    let result = read_from_picker(&picked, &request, &waiting).await;
                     // A retired owner has nobody left to answer.
                     let _ = answer.resolve(result);
                     return;
@@ -362,6 +368,37 @@ impl WebDialogs {
     }
 }
 
+/// Whether the page's file input says it takes a folder: it reflects
+/// `webkitdirectory`. A browser may reflect the attribute and show a file
+/// chooser all the same, which only its answer tells
+/// ([`rules::input_folder`]).
+fn input_takes_folders(page: &Page) -> bool {
+    page.document()
+        .create_element("input")
+        .is_ok_and(|input| property(input.as_ref(), "webkitdirectory").is_some())
+}
+
+/// What `request`'s picker of the File System Access API is shown with: a
+/// folder to read and never write, or the files' filters as the API takes
+/// them. `None` for a filter the API cannot express, which sends the request
+/// to the input.
+fn picker_options(request: &OpenRequest) -> Option<Object> {
+    let options = Object::new();
+    if request.picks_folders() {
+        set(&options, "mode", &JsValue::from_str("read"));
+    } else {
+        let types = rules::picker_types(&request.filters)?;
+        set(&options, "multiple", &request.is_multiple().into());
+        set(&options, "types", &picker_types(&types));
+        set(
+            &options,
+            "excludeAcceptAllOption",
+            &(!request.filters.is_empty()).into(),
+        );
+    }
+    Some(options)
+}
+
 /// The `types` option of a File System Access picker.
 fn picker_types(types: &[rules::PickerType<'_>]) -> JsValue {
     let list = Array::new();
@@ -408,25 +445,172 @@ async fn files_of_handles(handles: &JsValue) -> Result<Vec<File>, DialogError> {
         .ok_or(DialogError::Failed(SystemFailure::MalformedAnswer))?;
     let mut files = Vec::new();
     for handle in handles.iter() {
-        let get_file = method(&handle, "getFile")
-            .ok_or(DialogError::Failed(SystemFailure::MalformedAnswer))?;
-        let file = settle(call_promise(&get_file, &handle, &JsValue::UNDEFINED)).await?;
-        files.push(
-            file.dyn_into::<File>()
-                .map_err(|_| DialogError::Failed(SystemFailure::MalformedAnswer))?,
-        );
+        files.push(file_of_handle(&handle).await?);
     }
     Ok(files)
 }
 
-/// The picks `files` stand for, read within `limit` together: each is
-/// checked against `filters` and their declared sizes against `limit`
-/// before anything is read, and the bytes read are counted again as they
-/// arrive, each file copied once, into the pick's own buffer. Reading stops
-/// once `waiting` clears. No file is an empty answer, which a browser gives
-/// for a dismissed picker.
-async fn read_picks(
+/// The file `handle` (a `FileSystemFileHandle`) stands for, as it is now.
+async fn file_of_handle(handle: &JsValue) -> Result<File, DialogError> {
+    let get_file =
+        method(handle, "getFile").ok_or(DialogError::Failed(SystemFailure::MalformedAnswer))?;
+    settle(call_promise(&get_file, handle, &JsValue::UNDEFINED))
+        .await?
+        .dyn_into::<File>()
+        .map_err(|_| DialogError::Failed(SystemFailure::MalformedAnswer))
+}
+
+/// What `request` answers to what its picker of the File System Access API
+/// resolved with: the picked files (a list of `FileSystemFileHandle`s) or
+/// the picked folder (a `FileSystemDirectoryHandle`), checked and read.
+async fn read_from_picker(
+    picked: &JsValue,
+    request: &OpenRequest,
+    waiting: &Cell<bool>,
+) -> OpenResult {
+    if !request.picks_folders() {
+        let files = files_of_handles(picked).await?;
+        return read_picks(&files, &request.filters, request.max_bytes, waiting).await;
+    }
+    let Some(walked) = walk_folder(picked, request.max_entries, waiting).await? else {
+        return Ok(None);
+    };
+    let folder = FolderListing {
+        name: &walked.name,
+        paths: walked
+            .paths
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<&str>>(),
+    };
+    rules::admit_folder(&folder)?;
+    let mut files = Vec::with_capacity(walked.files.len());
+    for handle in &walked.files {
+        if !waiting.get() {
+            return Ok(None);
+        }
+        files.push(file_of_handle(handle).await?);
+    }
+    read_folder(&folder, &files, request.max_bytes, waiting).await
+}
+
+/// What `request` answers to the `files` its input holds: the picked files,
+/// or the folder their `webkitRelativePath`s name, checked and read.
+async fn read_from_input(
     files: Vec<File>,
+    request: &OpenRequest,
+    waiting: &Cell<bool>,
+) -> OpenResult {
+    if !request.picks_folders() {
+        return read_picks(&files, &request.filters, request.max_bytes, waiting).await;
+    }
+    rules::admit_entries(files.len(), request.max_entries)?;
+    let relative_paths: Vec<String> = files
+        .iter()
+        .map(|file| {
+            property(file.as_ref(), "webkitRelativePath")
+                .and_then(|path| path.as_string())
+                .unwrap_or_default()
+        })
+        .collect();
+    let Some(folder) = rules::input_folder(relative_paths.iter().map(String::as_str))? else {
+        return Ok(None);
+    };
+    rules::admit_folder(&folder)?;
+    read_folder(&folder, &files, request.max_bytes, waiting).await
+}
+
+/// A folder as its directory handle was walked: its name, and where each
+/// file under it is, beside that file's handle.
+struct WalkedFolder {
+    name: String,
+    /// One per file, relative to the folder, components separated by `/`.
+    paths: Vec<String>,
+    /// The `FileSystemFileHandle` of the file at the same place in `paths`.
+    files: Vec<JsValue>,
+}
+
+/// Walk `directory` (a `FileSystemDirectoryHandle`) for the files under it,
+/// at any depth, meeting at most `max_entries` files and folders: one more
+/// is [`DialogError::TooManyEntries`], and the walk ends there. `None` once
+/// `waiting` clears. A folder is walked through its `values()`, an async
+/// iterator of the handles it holds.
+async fn walk_folder(
+    directory: &JsValue,
+    max_entries: usize,
+    waiting: &Cell<bool>,
+) -> Result<Option<WalkedFolder>, DialogError> {
+    const MALFORMED: DialogError = DialogError::Failed(SystemFailure::MalformedAnswer);
+    let text = |handle: &JsValue, name: &str| property(handle, name)?.as_string();
+    let mut walked = WalkedFolder {
+        name: text(directory, "name").ok_or(MALFORMED)?,
+        paths: Vec::new(),
+        files: Vec::new(),
+    };
+    // The folders still to walk, each with its path under the picked one.
+    let mut folders = vec![(String::new(), directory.clone())];
+    let mut met: usize = 0;
+    while let Some((folder_path, folder)) = folders.pop() {
+        let entries = method(&folder, "values")
+            .ok_or(MALFORMED)?
+            .call0(&folder)
+            .map_err(|thrown| failed(exception(&thrown)))?;
+        let next = method(&entries, "next").ok_or(MALFORMED)?;
+        loop {
+            if !waiting.get() {
+                return Ok(None);
+            }
+            let step = settle(call_promise(&next, &entries, &JsValue::UNDEFINED)).await?;
+            if property(&step, "done").is_some_and(|done| done.is_truthy()) {
+                break;
+            }
+            let entry = property(&step, "value").ok_or(MALFORMED)?;
+            met = met.saturating_add(1);
+            rules::admit_entries(met, max_entries)?;
+            let path = rules::entry_path(&folder_path, &text(&entry, "name").ok_or(MALFORMED)?)?;
+            match text(&entry, "kind").as_deref() {
+                Some("file") => {
+                    walked.paths.push(path);
+                    walked.files.push(entry);
+                }
+                Some("directory") => folders.push((path, entry)),
+                _ => return Err(MALFORMED),
+            }
+        }
+    }
+    Ok(Some(walked))
+}
+
+/// The pick `folder` stands for, `files` the files at its paths: their
+/// contents read within `limit` together, as [`read_files`] reads them.
+/// `None` once `waiting` clears.
+async fn read_folder(
+    folder: &FolderListing<'_>,
+    files: &[File],
+    limit: u64,
+    waiting: &Cell<bool>,
+) -> OpenResult {
+    let Some(contents) = read_files(files, limit, waiting).await? else {
+        return Ok(None);
+    };
+    let files = folder
+        .paths
+        .iter()
+        .zip(contents)
+        .map(|(path, contents)| FolderFile::try_new(path, contents))
+        .collect::<Option<Vec<FolderFile>>>();
+    let picked = files
+        .and_then(|files| PickedFile::try_from_folder(folder.name, files))
+        .ok_or(DialogError::Failed(SystemFailure::MalformedAnswer))?;
+    Ok(Picks::try_new(vec![picked]))
+}
+
+/// The picks `files` stand for, read within `limit` together: each is
+/// checked against `filters` before anything is read, and their contents
+/// are read as [`read_files`] reads them. No file is an empty answer, which
+/// a browser gives for a dismissed picker; `None` too once `waiting` clears.
+async fn read_picks(
+    files: &[File],
     filters: &[FileFilter],
     limit: u64,
     waiting: &Cell<bool>,
@@ -441,10 +625,32 @@ async fn read_picks(
             .map(|(name, mime_type)| (name.as_str(), Some(mime_type.as_str()))),
         filters,
     )?;
+    let Some(contents) = read_files(files, limit, waiting).await? else {
+        return Ok(None);
+    };
+    let picks = described
+        .into_iter()
+        .zip(contents)
+        .map(|((name, _), contents)| PickedFile::try_from_contents(name, contents))
+        .collect::<Option<Vec<PickedFile>>>()
+        .ok_or(DialogError::Failed(SystemFailure::MalformedAnswer))?;
+    Ok(Picks::try_new(picks))
+}
+
+/// What each of `files` holds, in their order, read within `limit` bytes
+/// together: their declared sizes are checked against it before anything is
+/// read, and the bytes read are counted again as they arrive, since a file
+/// may change between the two. Each file is copied once, into a buffer of
+/// its own. `None` once `waiting` clears, where reading stops.
+async fn read_files(
+    files: &[File],
+    limit: u64,
+    waiting: &Cell<bool>,
+) -> Result<Option<Vec<Arc<[u8]>>>, DialogError> {
     rules::admit_sizes(files.iter().map(|file| file.size()), limit)?;
     let mut read: u64 = 0;
-    let mut picks = Vec::with_capacity(files.len());
-    for (file, (name, _)) in files.into_iter().zip(described) {
+    let mut contents = Vec::with_capacity(files.len());
+    for file in files {
         if !waiting.get() {
             return Ok(None);
         }
@@ -456,16 +662,11 @@ async fn read_picks(
             actual: read,
             limit,
         })?;
-        let mut contents: Arc<[u8]> = std::iter::repeat_n(0, length).collect();
-        bytes.copy_to(
-            Arc::get_mut(&mut contents).expect("BUG: a buffer just made has no other owner"),
-        );
-        picks.push(
-            PickedFile::try_from_contents(name, contents)
-                .ok_or(DialogError::Failed(SystemFailure::MalformedAnswer))?,
-        );
+        let mut held: Arc<[u8]> = std::iter::repeat_n(0, length).collect();
+        bytes.copy_to(Arc::get_mut(&mut held).expect("BUG: a buffer just made has no other owner"));
+        contents.push(held);
     }
-    Ok(Picks::try_new(picks))
+    Ok(Some(contents))
 }
 
 /// Write `contents` through the save picker's `handle` (a
@@ -570,8 +771,8 @@ struct InputPicker {
     view: web_sys::Window,
     picker: Rc<PagePicker>,
     answer: Cell<Option<Resolver<OpenResult>>>,
-    filters: Vec<FileFilter>,
-    limit: u64,
+    /// What its files are checked and read by.
+    request: Rc<OpenRequest>,
     /// Cleared when the dialog's caller lets it go.
     waiting: Rc<Cell<bool>>,
     ended: Cell<bool>,
@@ -591,7 +792,7 @@ impl InputPicker {
     fn show(
         page: &Page,
         picker: &Rc<PagePicker>,
-        request: &OpenRequest,
+        request: &Rc<OpenRequest>,
         answer: Resolver<OpenResult>,
         focus_grace_ms: i32,
     ) -> Option<Rc<Self>> {
@@ -603,8 +804,14 @@ impl InputPicker {
             }
         };
         input.set_type("file");
-        input.set_multiple(request.is_multiple());
-        input.set_accept(&rules::accept_attribute(&request.filters));
+        if request.picks_folders() {
+            // A browser's folder chooser takes one folder, whatever the
+            // input's `multiple` says, and a folder dialog has no filters.
+            input.set_webkitdirectory(true);
+        } else {
+            input.set_multiple(request.is_multiple());
+            input.set_accept(&rules::accept_attribute(&request.filters));
+        }
         input.set_hidden(true);
         // In the document, or Safari on iOS may not fire `change`.
         let Some(host) = page.host() else {
@@ -620,8 +827,7 @@ impl InputPicker {
             view: page.view().clone(),
             picker: Rc::clone(picker),
             answer: Cell::new(Some(answer)),
-            filters: request.filters.clone(),
-            limit: request.max_bytes,
+            request: Rc::clone(request),
             waiting: Rc::new(Cell::new(true)),
             ended: Cell::new(false),
             focus_grace_ms,
@@ -704,11 +910,10 @@ impl InputPicker {
         };
         let files: Vec<File> =
             files.map_or_default(|list| (0..list.length()).filter_map(|at| list.get(at)).collect());
-        let filters = self.filters.clone();
-        let limit = self.limit;
+        let request = Rc::clone(&self.request);
         let waiting = Rc::clone(&self.waiting);
         wasm_bindgen_futures::spawn_local(async move {
-            let result = read_picks(files, &filters, limit, &waiting).await;
+            let result = read_from_input(files, &request, &waiting).await;
             if waiting.get() {
                 // A retired owner has nobody left to answer.
                 let _ = answer.resolve(result);

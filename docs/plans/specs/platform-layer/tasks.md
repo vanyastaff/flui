@@ -5689,8 +5689,8 @@ GPU-память простаивающего или невидимого окн
   порталов GNOME и KDE (внутри и вне Flatpak), док KDE/Dash to Dock для сигнала — в строках parity
   «Open a URL», «Open, save and folder dialogs», «Taskbar and Dock progress, badge», «Global
   shortcuts», «Launch at login», «User folders».
-- [ ] **LY60** (не закрыта: все службы сделаны веткой `system/web-providers` (#2765), остаётся
-  диалог папок; прогоны в Chrome, Firefox и Safari — заметки строк parity) — модуль
+- [x] **LY60** (закрыта: службы — веткой `system/web-providers` (#2765), диалог папок — веткой
+  `system/web-folder-dialog-2`; прогоны в Chrome, Firefox и Safari — заметки строк parity) — модуль
   `crates/flui-system/src/web/`, правила — раздел «The web providers» в
   `crates/flui-system/ARCHITECTURE.md`. Страница достаётся через окно виджета: канвас, на который
   указывает `WebCanvasWindowHandle` его `WindowRef` (`web::page::Page`), не через глобальные
@@ -5750,7 +5750,7 @@ GPU-память простаивающего или невидимого окн
   `cargo +nightly check -p flui-system --lib --tests --target wasm32-unknown-unknown` в WSL:
   раннера wasm-bindgen-test нет): выбор с содержимым, сверка с фильтрами, отмена, конец по фокусу
   и по `pagehide`, `TooLarge`, страница занята после сброса диалога, один пикер на страницу,
-  отказ вне жеста и для папок, передача ввода на место отказанного пикера и `Unavailable` при
+  отказ вне жеста, передача ввода на место отказанного пикера и `Unavailable` при
   истёкшем жесте, загрузка на месте отказанного пикера сохранения, запись выбранного файла после
   сброса, загрузка вне жеста (`PickedForm::Download`), сохранение без содержимого, запуск через
   пустой контекст без `opener` и с `rel=noreferrer`, заблокированное окно, ссылка `mailto:`
@@ -5761,8 +5761,47 @@ GPU-память простаивающего или невидимого окн
   служба выдана или отказана по долгой причине, окно не-канвас — `NoWindow`, отказ шва на ходу
   владельца, искажённый запрос без браузера, закрытое окно); сама таблица `tests/conformance.rs`
   идёт на headless-хосте, чьи окна — не канвасы, а обвязка ждёт потоки, поэтому на wasm32 не
-  запускается. Остаётся: диалог папок (`NotYetOnThisHost`: браузер может отдать папку, но выбор не
-  несёт её дерево), записан в `docs/gaps.md`.
+  запускается. **Диалог папок.** Контракт не мог честно нести папку страницы (у выбора были путь,
+  имя с содержимым и загрузка), поэтому он расширен для всех хостов: `PickedForm::Folder` — имя
+  папки и её файлы на любой глубине (`FolderFile`: относительный путь, каждый компонент — одно
+  имя, так что соединение с папкой только спускается в неё, и содержимое), в порядке путей,
+  прочитанные к ответу диалога; `PickedFile::try_from_folder`, `PickedFile::files`;
+  `OpenRequest::max_entries` (`DEFAULT_MAX_ENTRIES`) и `DialogError::TooManyEntries`, байты файлов
+  папки вместе ограничивает `max_bytes`; ручка отвечает `MalformedAnswer` на выбор формы, которой у
+  запроса быть не может (папка страницы — файловому диалогу или сохранению, файл страницы —
+  диалогу папок, загрузка — открытию), путь принимается как прежде, так что провайдеры Windows,
+  Linux и macOS не менялись. На странице: `showDirectoryPicker` (режим чтения), где он есть, его
+  ручка обходится по `values()` каждой папки; иначе `<input type=file webkitdirectory>`, и он же —
+  на месте пикера, отказанного `SecurityError`, пока жест длится; папку и место каждого файла
+  называют `webkitRelativePath`. Правила открытия те же: вне жеста — `Unavailable` до обращения к
+  браузеру, один пикер на страницу (`Busy`, и после сброса диалога), конец ввода по `change`,
+  `cancel`, `pagehide` или границе после возврата фокуса, диалог кончается с окном (ADR-0344), и
+  поздний выбор никто не читает. Имя папки и пути проверяются до чтения, записи считаются по мере
+  обхода (обход не идёт дальше границы), объявленные размеры — до первого байта. Браузер без обоих
+  API — `NotOnThisDevice` раньше вопроса о жесте; тот же ответ — вводу, который принял атрибут, но
+  показал выбор файлов (Chrome для Android до 132, Safari на iOS до 18.4) или не сказал, где файлы
+  папки (Firefox для Android 141): пути всех файлов пусты. Ответ — одна папка, что бы ни разрешал
+  запрос. Тесты: `web::rules::tests` на каждом хосте
+  (`a_folder_input_names_one_folder_and_where_each_file_is_under_it`,
+  `a_folder_a_pick_cannot_carry_is_refused_before_it_is_read`,
+  `a_walked_entry_is_one_name_under_its_folders_path`, строки `admit_entries` в
+  `the_picks_are_refused_past_the_limit_before_they_are_read`); через публичный API
+  (`tests/dialogs.rs`): `a_pick_of_a_form_the_request_cannot_have_is_a_malformed_answer`,
+  `a_folder_handed_over_without_a_path_carries_its_name_and_its_files_where_they_are`; DOM
+  (`web::tests`): `a_directory_picker_answers_the_folder_with_its_files_where_they_are`,
+  `a_folder_input_answers_the_folder_its_files_name`,
+  `a_folder_past_the_requests_bounds_is_refused_before_it_is_read`,
+  `a_refused_directory_picker_hands_over_to_the_folder_input_while_the_gesture_lasts`,
+  `a_dismissed_directory_picker_answers_a_cancel`,
+  `a_dropped_folder_dialog_keeps_the_page_busy_until_its_picker_settles`,
+  `a_folder_dialog_ends_with_its_window_and_its_late_pick_is_read_by_nobody`,
+  `a_browser_with_no_folder_chooser_refuses_a_folder_dialog_for_good`, и строки папки в тестах
+  ввода (отмена, фокус, `pagehide`, сброшенный диалог, один пикер на страницу, вне жеста). Что
+  каждый показывает без своей правки и где набор запускался, сказано в PR. Не сделано и записано
+  в `docs/gaps.md`: ленивого доступа к большой папке и записи в неё нет (папка читается целиком);
+  граница после возврата фокуса действует на всех движках, и папку, которую браузер перечисляет
+  или просит подтвердить дольше границы, ввод отвечает отменой — в браузере не измерено (заметка
+  строки parity «Open, save and folder dialogs»).
 - [ ] **LY61** (не закрыта: исполнитель ушёл, сервисы остаются на `Platform`) — #2300
   (`dacf540dc`) удалил `Platform::background_executor`, `PlatformExecutor` и его реализации в
   хостах; #2487 (`89adcc532`) удалил `BackgroundExecutor`: хост ведёт своё IO на runtime, который

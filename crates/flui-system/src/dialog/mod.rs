@@ -34,12 +34,16 @@ pub use message::{
     MessageBoxes, MessageButtons, MessageLevel,
 };
 pub use request::{
-    FileFilter, MAX_TEXT_LEN, MalformedRequest, OpenRequest, PickedFile, PickedForm, Picks,
-    SaveLocation, SaveRequest,
+    FileFilter, FolderFile, MAX_TEXT_LEN, MalformedRequest, OpenRequest, PickedFile, PickedForm,
+    Picks, SaveLocation, SaveRequest,
 };
 // The macOS panel's delegate holds each item it shows to the same name rule.
 #[cfg(any(target_os = "macos", test))]
 pub(crate) use request::name_ends_in;
+// The web provider holds a folder's name and its files' paths to the rules a
+// pick is built by, before it reads a byte of them.
+#[cfg(any(target_arch = "wasm32", test))]
+pub(crate) use request::{is_file_name, is_name_in_folder, is_path_in_folder};
 
 /// The file dialog capability: `ctx.capability::<FileDialogCapability>()`
 /// hands out [`FileDialogs`].
@@ -99,6 +103,16 @@ pub enum DialogError {
         /// The request's [`max_bytes`](OpenRequest::max_bytes).
         limit: u64,
     },
+    /// A picked folder holds more files and folders than the request's
+    /// [`max_entries`](OpenRequest::max_entries), on a system that hands
+    /// over a folder's files (a browser). The folder was walked no further
+    /// than the bound, so how many it holds is not known, and nothing was
+    /// read.
+    #[error("the folder holds more than the {limit} entries the request takes")]
+    TooManyEntries {
+        /// The request's [`max_entries`](OpenRequest::max_entries).
+        limit: usize,
+    },
     /// The system failed in a way the handle does not name; the
     /// [`SystemFailure`] says where the failure came from, for diagnostics.
     #[error("the system failed: {0}")]
@@ -117,6 +131,7 @@ impl DialogError {
             | Self::NotAFile
             | Self::NotInFilter
             | Self::TooLarge { .. }
+            | Self::TooManyEntries { .. }
             | Self::Failed(_) => None,
         }
     }
@@ -414,9 +429,12 @@ impl FileDialogs {
 
     /// Show an open dialog.
     ///
-    /// A backend that answers several picks to a request that allowed one
+    /// A backend that answers several picks to a request that allowed one,
+    /// or a pick of a form the request cannot have (a handed-over folder to
+    /// a file dialog, a handed-over file to a folder dialog, a download),
     /// answers [`SystemFailure::MalformedAnswer`]: its answer is not one the
-    /// request can have.
+    /// request can have. A pick at a path is taken either way: whether it
+    /// names a file or a folder is the file system's to say.
     ///
     /// Every pick is held to the request's filters by its name, on every
     /// host: a system's dialog may let the user past them (a name typed
@@ -430,12 +448,16 @@ impl FileDialogs {
     pub fn open(&self, request: OpenRequest) -> Dialog<OpenResult> {
         let checked = request.check();
         let multiple = request.is_multiple();
+        let pick = request.pick();
         let filters = request.filters.clone();
         self.scope.show(
             checked,
             |window, answer| self.backend.open(window, request, answer),
             move |result| match result {
-                Ok(Some(picks)) if !multiple && picks.len() > 1 => {
+                Ok(Some(picks))
+                    if (!multiple && picks.len() > 1)
+                        || !picks.iter().all(|picked| picked.answers_open(pick)) =>
+                {
                     Err(SystemFailure::MalformedAnswer.into())
                 }
                 Ok(Some(picks)) if !request::names_admit(&filters, &picks) => {
@@ -448,8 +470,8 @@ impl FileDialogs {
 
     /// Show a save dialog.
     ///
-    /// A backend that names a selected filter the request does not have
-    /// answers [`SystemFailure::MalformedAnswer`].
+    /// A backend that names a selected filter the request does not have, or
+    /// answers a folder, answers [`SystemFailure::MalformedAnswer`].
     ///
     /// A request that carries [`contents`](SaveRequest::contents) answers
     /// once they are written: a backend that hands over no path (a browser)
@@ -468,7 +490,10 @@ impl FileDialogs {
             checked,
             |window, answer| self.backend.save(window, request, answer),
             move |result| match result {
-                Ok(Some(location)) if location.filter().is_some_and(|index| index >= filters) => {
+                Ok(Some(location))
+                    if location.filter().is_some_and(|index| index >= filters)
+                        || !location.file().answers_save() =>
+                {
                     Err(SystemFailure::MalformedAnswer.into())
                 }
                 result => result,

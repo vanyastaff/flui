@@ -2,7 +2,7 @@
 
 use std::ffi::OsStr;
 use std::fmt;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
 use flui_platform::data_transfer::TransferLimits;
@@ -348,7 +348,7 @@ pub enum MalformedRequest {
 
 /// What an open dialog picks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Pick {
+pub(super) enum Pick {
     Files,
     Folders,
 }
@@ -363,6 +363,10 @@ pub struct OpenRequest {
     /// over a pick's contents rather than its path (a browser), as
     /// [`max_bytes`](Self::max_bytes) sets it.
     pub max_bytes: u64,
+    /// The most files and folders a picked folder may hold where the system
+    /// hands over the folder's files rather than its path (a browser), as
+    /// [`max_entries`](Self::max_entries) sets it.
+    pub max_entries: usize,
     /// The dialog's title, if set.
     pub title: Option<String>,
     /// The folder the dialog opens in, if set; it must be absolute.
@@ -374,6 +378,11 @@ pub struct OpenRequest {
 }
 
 impl OpenRequest {
+    /// The [`max_entries`](Self::max_entries) of a request that sets none:
+    /// room for a project's own files. A request that expects a folder of
+    /// dependencies or a photo library opts into more.
+    pub const DEFAULT_MAX_ENTRIES: usize = 10_000;
+
     /// Pick one existing file.
     #[must_use]
     pub fn files() -> Self {
@@ -391,6 +400,7 @@ impl OpenRequest {
             pick,
             multiple: false,
             max_bytes: TransferLimits::default().max_bytes,
+            max_entries: Self::DEFAULT_MAX_ENTRIES,
             title: None,
             directory: None,
             filters: Vec::new(),
@@ -398,7 +408,8 @@ impl OpenRequest {
         }
     }
 
-    /// Let the user pick several.
+    /// Let the user pick several. A system whose chooser takes one at a
+    /// time (a browser's folder chooser) still answers one.
     #[must_use]
     pub fn allow_multiple(mut self) -> Self {
         self.multiple = true;
@@ -436,8 +447,8 @@ impl OpenRequest {
 
     /// Read at most `max_bytes` of the picks, together, where the system
     /// hands over a pick's contents rather than its path (a browser): the
-    /// picks' sizes are checked against it before anything is read, and
-    /// more is answered with
+    /// picks' sizes, a picked folder's files among them, are checked against
+    /// it before anything is read, and more is answered with
     /// [`DialogError::TooLarge`](super::DialogError::TooLarge). The default
     /// is [`TransferLimits`]' default, the bound a drop's payload has; a
     /// request that expects larger files opts in here. A pick at a path is
@@ -448,10 +459,31 @@ impl OpenRequest {
         self
     }
 
+    /// Take a picked folder of at most `max_entries` files and folders, at
+    /// any depth, where the system hands over the folder's files rather than
+    /// its path (a browser): a folder that holds more is answered with
+    /// [`DialogError::TooManyEntries`](super::DialogError::TooManyEntries)
+    /// before any file is read, and the folder is walked no further than the
+    /// bound. Where the system reports a folder's files only (a browser's
+    /// file input), the files are what is counted. The default is
+    /// [`DEFAULT_MAX_ENTRIES`](Self::DEFAULT_MAX_ENTRIES); the files' bytes
+    /// are bounded by [`max_bytes`](Self::max_bytes). A folder at a path is
+    /// not walked by the dialog, so this bounds nothing there.
+    #[must_use]
+    pub fn max_entries(mut self, max_entries: usize) -> Self {
+        self.max_entries = max_entries;
+        self
+    }
+
     /// Whether it picks folders rather than files.
     #[must_use]
     pub fn picks_folders(&self) -> bool {
         self.pick == Pick::Folders
+    }
+
+    /// What it picks.
+    pub(super) fn pick(&self) -> Pick {
+        self.pick
     }
 
     /// Whether the user may pick several.
@@ -693,7 +725,7 @@ impl<'a> IntoIterator for &'a Picks {
 
 /// Whether `name` is a file name a dialog can hand out: not blank, not `.`
 /// or `..`, no path separator and no control character.
-fn is_file_name(name: &str) -> bool {
+pub(crate) fn is_file_name(name: &str) -> bool {
     !name.trim().is_empty()
         && !name
             .chars()
@@ -702,15 +734,44 @@ fn is_file_name(name: &str) -> bool {
         && name != ".."
 }
 
+/// Whether `name` names a file or folder inside a folder, as one component of
+/// a path under it: not empty, not `.` or `..`, without a path separator of
+/// any host (`/`, `\`) or a NUL, and read by this host's paths as one plain
+/// component, which a drive is not (`C:`, a prefix on Windows that replaces
+/// what it is joined to).
+///
+/// Wider than [`is_file_name`], which judges a name a dialog shows or
+/// suggests: a folder holds what its file system allows, a blank name and a
+/// control character among them (macOS keeps a folder's custom icon in a
+/// file named `Icon` and a carriage return).
+pub(crate) fn is_name_in_folder(name: &str) -> bool {
+    let mut components = Path::new(name).components();
+    !name.is_empty()
+        && !name.contains(['/', '\\', '\0'])
+        && matches!(
+            (components.next(), components.next()),
+            (Some(Component::Normal(_)), None)
+        )
+}
+
+/// Whether `path`, its components separated by `/`, is where a file is under
+/// a folder: every component a [name in a folder](is_name_in_folder), so
+/// joining the path to a folder only descends from it.
+pub(crate) fn is_path_in_folder(path: &str) -> bool {
+    path.split('/').all(is_name_in_folder)
+}
+
 /// A file or folder the user picked.
 ///
 /// Its own type rather than a path, since not every system answers one: a
-/// desktop dialog answers where the file is ([`path`](Self::path)), and a
-/// browser answers a file a page may read but never a path to it, which the
-/// pick carries as its name and its contents ([`contents`](Self::contents)).
-/// A later backend can carry the access a sandbox grants with a pick (a
-/// security-scoped bookmark, a document portal entry, a content URI) the
-/// same way, without changing what callers receive.
+/// desktop dialog answers where the file or folder is ([`path`](Self::path)),
+/// and a browser answers a file a page may read but never a path to it,
+/// which the pick carries as its name and its contents
+/// ([`contents`](Self::contents)), and a folder as its name and the files
+/// under it ([`files`](Self::files)). A later backend can carry the access a
+/// sandbox grants with a pick (a security-scoped bookmark, a document portal
+/// entry, a content URI) the same way, without changing what callers
+/// receive.
 #[derive(Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct PickedFile {
@@ -720,11 +781,18 @@ pub struct PickedFile {
 /// Where a pick is: what the system answered for it.
 #[derive(Clone, PartialEq, Eq)]
 enum Place {
-    /// A file at a path the application opens itself.
+    /// A file or folder at a path the application opens itself.
     Path(PathBuf),
     /// A file the browser handed over: its name, and what it holds, read
     /// when the dialog answered (an open) or written before it did (a save).
     Contents { name: String, contents: Arc<[u8]> },
+    /// A folder the browser handed over: its name, and the files under it in
+    /// the order of their paths, no two at one path, read when the dialog
+    /// answered.
+    Folder {
+        name: String,
+        files: Arc<[FolderFile]>,
+    },
     /// Contents handed to the browser as a download under this name.
     Download { name: String },
 }
@@ -744,6 +812,17 @@ pub enum PickedForm<'a> {
         name: &'a str,
         /// What it holds.
         contents: &'a [u8],
+    },
+    /// A folder a browser handed over without a path: its name, and the
+    /// files under it, read when the open dialog answered. Files are all it
+    /// carries, since a browser's file input reports nothing else: a folder
+    /// that holds no file, at any depth under the picked one, leaves no
+    /// trace here.
+    Folder {
+        /// The name the browser gave it.
+        name: &'a str,
+        /// The files under it, at any depth, in the order of their paths.
+        files: &'a [FolderFile],
     },
     /// A save's contents handed to the browser as a download under `name`.
     /// Where it was written, under which name, and whether it was written
@@ -780,6 +859,30 @@ impl PickedFile {
         })
     }
 
+    /// The folder named `name` holding `files`, as a system that hands over
+    /// no path reports it (a browser), its files put in the order of their
+    /// paths; `None` when `name` is not a name a folder can hold (empty, `.`
+    /// or `..`, or holding a path separator or a NUL), as a component of a
+    /// [`FolderFile`]'s path is judged, or when two of the files are at one
+    /// path.
+    #[must_use]
+    pub fn try_from_folder(name: impl Into<String>, mut files: Vec<FolderFile>) -> Option<Self> {
+        let name: String = name.into();
+        if !is_name_in_folder(&name) {
+            return None;
+        }
+        files.sort_unstable_by(|earlier, later| earlier.path.cmp(&later.path));
+        if files.windows(2).any(|pair| pair[0].path == pair[1].path) {
+            return None;
+        }
+        Some(Self {
+            place: Place::Folder {
+                name,
+                files: Arc::from(files),
+            },
+        })
+    }
+
     /// A save's contents handed to the browser as a download offered as
     /// `name` ([`PickedForm::Download`]); `None` when `name` is not a file
     /// name, as [`try_from_contents`](Self::try_from_contents) judges it.
@@ -797,18 +900,21 @@ impl PickedFile {
         match &self.place {
             Place::Path(path) => PickedForm::Path(path),
             Place::Contents { name, contents } => PickedForm::Contents { name, contents },
+            Place::Folder { name, files } => PickedForm::Folder { name, files },
             Place::Download { name } => PickedForm::Download { name },
         }
     }
 
-    /// Where it is; `None` for a file the system handed over without a
-    /// path (a browser's), whose [`contents`](Self::contents) the pick
-    /// holds instead, and for a download.
+    /// Where it is; `None` for a file or folder the system handed over
+    /// without a path (a browser's), whose [`contents`](Self::contents) or
+    /// [`files`](Self::files) the pick holds instead, and for a download.
     #[must_use]
     pub fn path(&self) -> Option<&Path> {
         match self.form() {
             PickedForm::Path(path) => Some(path),
-            PickedForm::Contents { .. } | PickedForm::Download { .. } => None,
+            PickedForm::Contents { .. }
+            | PickedForm::Folder { .. }
+            | PickedForm::Download { .. } => None,
         }
     }
 
@@ -819,9 +925,9 @@ impl PickedFile {
     pub fn file_name(&self) -> Option<&OsStr> {
         match self.form() {
             PickedForm::Path(path) => path.file_name(),
-            PickedForm::Contents { name, .. } | PickedForm::Download { name } => {
-                Some(OsStr::new(name))
-            }
+            PickedForm::Contents { name, .. }
+            | PickedForm::Folder { name, .. }
+            | PickedForm::Download { name } => Some(OsStr::new(name)),
         }
     }
 
@@ -829,19 +935,110 @@ impl PickedFile {
     /// path: read when an open dialog answered, within the request's
     /// [`max_bytes`](OpenRequest::max_bytes), or written before a save
     /// answered. `None` for a pick at a path, which the application reads
-    /// itself, and for a download, which nobody saw written.
+    /// itself, for a folder, whose [`files`](Self::files) hold theirs, and
+    /// for a download, which nobody saw written.
     #[must_use]
     pub fn contents(&self) -> Option<&[u8]> {
         match self.form() {
             PickedForm::Contents { contents, .. } => Some(contents),
-            PickedForm::Path(_) | PickedForm::Download { .. } => None,
+            PickedForm::Path(_) | PickedForm::Folder { .. } | PickedForm::Download { .. } => None,
+        }
+    }
+
+    /// The files under a folder the system handed over without a path, at
+    /// any depth, in the order of their paths: read when the open dialog
+    /// answered, within the request's
+    /// [`max_entries`](OpenRequest::max_entries) and
+    /// [`max_bytes`](OpenRequest::max_bytes). `None` for any other pick: a
+    /// folder at a path is the application's to read.
+    #[must_use]
+    pub fn files(&self) -> Option<&[FolderFile]> {
+        match self.form() {
+            PickedForm::Folder { files, .. } => Some(files),
+            PickedForm::Path(_) | PickedForm::Contents { .. } | PickedForm::Download { .. } => None,
+        }
+    }
+
+    /// Whether an open dialog that picks `pick` can answer it: a path either
+    /// way (whether it names a file or a folder is the file system's to
+    /// say), a handed-over file to a file dialog and a handed-over folder to
+    /// a folder dialog. A download is a save's answer.
+    pub(super) fn answers_open(&self, pick: Pick) -> bool {
+        match (&self.place, pick) {
+            (Place::Path(_), Pick::Files | Pick::Folders)
+            | (Place::Contents { .. }, Pick::Files)
+            | (Place::Folder { .. }, Pick::Folders) => true,
+            (Place::Contents { .. }, Pick::Folders)
+            | (Place::Folder { .. }, Pick::Files)
+            | (Place::Download { .. }, Pick::Files | Pick::Folders) => false,
+        }
+    }
+
+    /// Whether a save dialog can answer it: where the file is, the file the
+    /// backend wrote, or a download. A folder is nothing a save writes.
+    pub(super) fn answers_save(&self) -> bool {
+        match self.place {
+            Place::Path(_) | Place::Contents { .. } | Place::Download { .. } => true,
+            Place::Folder { .. } => false,
         }
     }
 }
 
+/// A file under a folder a browser handed over ([`PickedForm::Folder`]):
+/// where it is in the folder, and what it holds.
+#[derive(Clone, PartialEq, Eq)]
+pub struct FolderFile {
+    /// Relative to the folder, every component a name in a folder, as
+    /// `is_path_in_folder` judges it.
+    path: PathBuf,
+    contents: Arc<[u8]>,
+}
+
+impl FolderFile {
+    /// The file at `path` under its folder, holding `contents`. `path` is
+    /// relative to the folder, its components separated by `/` as a browser
+    /// reports them (a file's `webkitRelativePath` after its first
+    /// component, the folder's name). `None` when a component is empty, `.`
+    /// or `..`, holds `\` or a NUL, or is one this host's paths do not read
+    /// as a plain name (a drive on Windows), so joining a `FolderFile`'s
+    /// path to a folder only descends from it. Any other name a file system
+    /// allows is taken, a blank one or one with a control character among
+    /// them.
+    #[must_use]
+    pub fn try_new(path: &str, contents: Arc<[u8]>) -> Option<Self> {
+        is_path_in_folder(path).then(|| Self {
+            path: path.split('/').collect::<PathBuf>(),
+            contents,
+        })
+    }
+
+    /// Where it is, relative to the folder: at least one component, each a
+    /// plain name, the last the file's.
+    #[must_use]
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// What it holds.
+    #[must_use]
+    pub fn contents(&self) -> &[u8] {
+        &self.contents
+    }
+}
+
+impl fmt::Debug for FolderFile {
+    /// The path and the length: its contents are the user's.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("FolderFile")
+            .field("path", &self.path)
+            .field("len", &self.contents.len())
+            .finish()
+    }
+}
+
 impl fmt::Debug for PickedFile {
-    /// The path or the name, and a handed-over file's length: its contents
-    /// are the user's.
+    /// The path or the name, and a handed-over file's length or a folder's
+    /// count of files: what they hold is the user's.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.place {
             Place::Path(path) => f.debug_struct("PickedFile").field("path", path).finish(),
@@ -849,6 +1046,11 @@ impl fmt::Debug for PickedFile {
                 .debug_struct("PickedFile")
                 .field("name", name)
                 .field("len", &contents.len())
+                .finish(),
+            Place::Folder { name, files } => f
+                .debug_struct("PickedFile")
+                .field("folder", name)
+                .field("files", &files.len())
                 .finish(),
             Place::Download { name } => f
                 .debug_struct("PickedFile")
