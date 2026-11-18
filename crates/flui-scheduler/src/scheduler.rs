@@ -1,60 +1,41 @@
-//! Main scheduler - coordinates frame lifecycle and task execution
+//! The owner-local frame scheduler: frame demand, the frame's phases and the
+//! callbacks that observe them.
 //!
-//! The UpdateScheduler is the central orchestrator for FLUI's rendering pipeline,
-//! with proper phase separation.
-//!
-//! ## Frame Lifecycle
+//! ## Frame lifecycle
 //!
 //! ```text
-//! VSync Signal
+//! frame request (request_frame / ensure_visual_update / FrameWaker)
 //!     ↓
-//! handleBeginFrame() ─────────────────────────────────────────┐
-//!     │  Phase: TransientCallbacks                            │
-//!     │  • Animation tickers fire                             │
-//!     │  • One-time frame callbacks execute                   │
-//!     ↓                                                       │
-//! (microtasks flush)                                          │
-//!     │  Phase: MidFrameMicrotasks                            │
-//!     ↓                                                       │
-//! handleDrawFrame() ──────────────────────────────────────────┤
-//!     │  Phase: PersistentCallbacks                           │
-//!     │  • Rendering pipeline runs (build/layout/paint)       │
-//!     ↓                                                       │
-//! (post-frame cleanup)                                        │
-//!     │  Phase: PostFrameCallbacks                            │
-//!     │  • Cleanup callbacks                                  │
-//!     ↓                                                       │
-//! Phase: Idle ←───────────────────────────────────────────────┘
+//! drive_frame(now, prepare, pipeline)
+//!     │  Phase: Frame
+//!     │  • ready async tasks are polled once
+//!     │  • `prepare`, then the pipeline (build, layout, paint)
+//!     ↓
+//!     │  Phase: PostFrame
+//!     │  • post-frame callbacks observe the committed frame
+//!     │  • `end_of_frame` waiters resolve
+//!     ↓
+//! Phase: Idle
 //! ```
 //!
 //! ## Example
 //!
 //! ```rust
 //! use flui_scheduler::__runtime::DriveFrame as _;
-//! use flui_scheduler::{OwnerFrame, Priority, UpdateScheduler};
+//! use flui_scheduler::{OwnerFrame, UpdateScheduler};
 //!
 //! let scheduler = UpdateScheduler::new();
 //! let owner = OwnerFrame::try_new(&scheduler).expect("the scheduler has no live owner frame");
 //!
-//! // Schedule animation callback (fires during TransientCallbacks)
-//! scheduler.schedule_frame_callback(Box::new(|vsync_time| {
-//!     // Animation tick - all tickers get same vsync timestamp
-//! }));
-//!
-//! // Add rendering callback (fires during PersistentCallbacks)
-//! scheduler.add_persistent_frame_callback(std::rc::Rc::new(|timing| {
-//!     // Run build/layout/paint pipeline
-//! }));
-//!
-//! // Execute a frame (typically called by event loop on vsync)
+//! // Execute a frame (typically called by the event loop on vsync)
 //! let vsync_time = web_time::Instant::now();
-//! owner.drive_frame(vsync_time, flui_scheduler::IdleDeadline::far_future(vsync_time),
-//!     || {}, || {}).expect("the owner accepts the frame");
+//! owner
+//!     .drive_frame(vsync_time, || {}, || {})
+//!     .expect("the owner accepts the frame");
 //! ```
 
 use std::{
     cell::{Cell, RefCell},
-    collections::{HashSet, VecDeque},
     future::Future,
     pin::Pin,
     rc::Rc,
@@ -65,19 +46,14 @@ use std::{
     task::{Context, Poll, Waker},
 };
 
-use flui_foundation::{IdMint, MonotonicClock as _};
+use flui_foundation::IdMint;
 use parking_lot::Mutex;
 use web_time::{Duration, Instant};
 
 use crate::{
-    config::TimingsCallback,
-    frame::{
-        AppLifecycleState, FrameId, FrameTiming, LifecycleStateCallback, OneShotFrameCallback,
-        RecurringFrameCallback, SchedulerPhase,
-    },
+    frame::{AppLifecycleState, FrameId, FrameTiming, LifecycleStateCallback, SchedulerPhase},
     frame_clock::ClockSource,
     id::CallbackId,
-    task::{Priority, TaskQueue},
 };
 
 pub(crate) mod execution;
@@ -86,61 +62,9 @@ mod observer_delivery;
 mod post_frame_dispatch;
 mod teardown;
 
-// CallbackId is imported from crate::id (re-exported from flui_foundation::FrameCallbackId)
-
-/// Total `Priority::Build` drain passes — including the frame's first,
-/// non-reentrant drain — the internal frame-dispatch step runs before
-/// leaving reentrant work for the next frame and tracing a warning.
-/// Generous relative to any legitimate reentrant chain (a widget rebuild
-/// enqueuing one more rebuild is not expected to nest more than a handful of
-/// levels deep in a single frame).
-///
-/// This cap bounds reentrancy *depth*; [`task_run_budget`] bounds the work
-/// all passes do together. Each pass runs only the tasks queued when it
-/// began, so a single self-re-enqueuing `Priority::Build` task runs once per
-/// pass, plus once in the frame's final sweep, which accepts every priority
-/// and picks up the copy the last pass left queued: `MAX_BUILD_REENTRY_PASSES
-/// + 1` runs in that frame (pinned by `tests/update_scheduler_reshape.rs`'s
-/// `a_self_reenqueuing_build_task_is_bounded_by_the_reentry_cap_not_hung_forever`).
-///
-/// `#[doc(hidden)] pub` rather than crate-private: an integration test
-/// cannot otherwise reference this exact value, and a hardcoded duplicate
-/// in that test would silently drift from a change made only here.
-#[doc(hidden)]
-pub const MAX_BUILD_REENTRY_PASSES: usize = 32;
-
-/// Total outer passes [`UpdateScheduler::flush_microtasks`] runs before
-/// leaving reentrant microtasks for the next frame — see that method's own
-/// doc. Crate-private, unlike [`MAX_BUILD_REENTRY_PASSES`]: its pinning test
-/// lives in this same module.
-const MAX_MICROTASK_REENTRY_PASSES: usize = 32;
-
 /// The display period a scheduler labels frames with until the runtime sets
 /// the real one: 60 Hz, the refresh most displays run at.
 const DEFAULT_DISPLAY_PERIOD: Duration = Duration::from_nanos(16_666_667);
-
-/// How many queued closures one frame runs from a queue that held `queued`
-/// when the frame reached it: four per queued entry, and never fewer than 256.
-///
-/// Reentrant work gets a turn in the same frame, but a closure that queues
-/// two more on every run doubles the queue each pass; this budget, not the
-/// pass count, is what keeps that frame finite. The rest waits for the next
-/// frame, which the frame requests.
-fn task_run_budget(queued: usize) -> usize {
-    queued.saturating_mul(4).max(256)
-}
-
-/// Cancellable transient callback with ID
-struct CancellableTransientCallback {
-    id: CallbackId,
-    callback: OneShotFrameCallback,
-}
-
-/// Cancellable persistent callback with ID
-struct CancellablePersistentCallback {
-    id: CallbackId,
-    callback: RecurringFrameCallback,
-}
 
 /// Lifecycle state listener with ID for removal
 struct LifecycleListener {
@@ -355,8 +279,7 @@ impl Future for FrameCompletionFuture {
         // code, and any of them may re-enter this same future. `state` is a
         // non-reentrant `parking_lot::Mutex`, so a re-entrant one under the
         // guard hangs rather than returning. Same lock-then-caller-code
-        // trap as `set_on_frame_scheduled` (#1038) and
-        // `cancel_frame_callback` (#1156).
+        // trap as `set_on_frame_scheduled`.
 
         // Fast path: already resolved, or the executor re-polled with the
         // very waker already stored. Neither needs a clone, so the common
@@ -478,7 +401,7 @@ const COMPACTION_SLACK: usize = 8;
 ///
 /// **`completion_waiters` strictly before [`FrameCompletionState`], never
 /// nested, and neither held across ANY [`Waker`] operation (`clone`,
-/// `wake`, or drop) or across `schedule_frame_if_enabled()`.** Every one of
+/// `wake`, or drop) or across `request_frame_if_enabled()`.** Every one of
 /// those is a vtable call into caller code that may re-enter this
 /// scheduler, and both mutexes are non-reentrant `parking_lot` locks: a
 /// re-entry under either one hangs rather than returning.
@@ -673,35 +596,6 @@ impl FrameCompletionRegistry {
     }
 }
 
-/// The Idle-slice deadline `OwnerFrame::drive_frame` bounds
-/// `Priority::Idle` task execution by (see that method's own doc — it
-/// never gates `Priority::Animation`/`Build`, and it can never skip a
-/// frame).
-///
-/// A distinct type from `drive_frame`'s `vsync_time: Instant` parameter on
-/// purpose: two adjacent, same-typed `Instant` parameters can be silently
-/// swapped at a call site (a swap still type-checks, and inverts this
-/// method's whole deadline semantics without a compiler diagnostic).
-/// Wrapping the second one closes that hole structurally.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct IdleDeadline(pub Instant);
-
-impl IdleDeadline {
-    /// An Idle-slice deadline far enough past `now` that it never passes in
-    /// practice, for a caller without a real deadline source. Idle work
-    /// is not deferred unless the frame lasts longer than an hour.
-    #[must_use]
-    pub fn far_future(now: Instant) -> Self {
-        Self(now + std::time::Duration::from_hours(1))
-    }
-}
-
-impl From<Instant> for IdleDeadline {
-    fn from(instant: Instant) -> Self {
-        Self(instant)
-    }
-}
-
 /// Frame lifecycle and timing state (atomics + guarded fields)
 struct FrameState {
     /// Current frame timing
@@ -710,8 +604,8 @@ struct FrameState {
     current_vsync_time: RefCell<Option<Instant>>,
     /// The id the next frame takes; `None` once the sequence is exhausted.
     next_frame_id: Cell<Option<FrameId>>,
-    /// The timeline frame times come from; frame durations and the Idle
-    /// deadline are measured on it.
+    /// The timeline frame times come from; timers and the frame telemetry
+    /// are measured on it.
     clock: ClockSource,
     /// The refresh period of the display the frames are produced for, which
     /// the `frame` span reports as `period_us`. A label for profilers only:
@@ -719,14 +613,6 @@ struct FrameState {
     display_period: Cell<Duration>,
     /// Frame counter
     frame_count: AtomicU64,
-    /// The current frame's Idle-slice deadline, set by
-    /// `OwnerFrame::drive_frame` and consumed by
-    /// the internal frame-dispatch step to decide whether Idle-priority
-    /// tasks still fit. `None` (the default, and the state outside
-    /// `drive_frame`) means no active deadline. Only Idle is
-    /// ever gated this way: Animation and Build tasks run unconditionally
-    /// regardless of the deadline (see `drive_frame`'s doc).
-    idle_deadline: RefCell<Option<Instant>>,
     /// Pending frame completion futures. See
     /// [`FrameCompletionRegistry`] for the lock order this field imposes on
     /// everything that touches it.
@@ -742,36 +628,26 @@ struct FrameState {
     /// it always names the most recently opened frame's driver and is
     /// never cleared back to `None`. That is sound because it is read only
     /// from [`ensure_visual_update`](UpdateScheduler::ensure_visual_update),
-    /// and only while `phase()` reports a mid-frame phase, which itself
+    /// and only while `phase()` reports a in-frame phase, which itself
     /// implies a frame is currently in flight on the thread this field
     /// names — so a value left over from a PREVIOUS frame is never read as
     /// if it were the current one, even though the field itself is never
     /// reset between frames.
     ///
     /// Shared with the thread-safe [`FrameWaker`]. Its visual-update gate
-    /// suppresses mid-frame demand only on the thread driving that frame;
+    /// suppresses in-frame demand only on the thread driving that frame;
     /// another thread must request a frame regardless of the current phase.
     /// The owning [`UpdateScheduler`] itself remains on the UI thread.
     frame_thread: Arc<Mutex<Option<std::thread::ThreadId>>>,
 }
 
-/// Callback registration and cancellation state
+/// Callback registration state
 struct CallbackState {
-    /// One-shot frame callbacks. Entries are removed individually before
-    /// invocation, outside the storage borrow, so a failed callback leaves
-    /// the accepted tail available for delivery.
-    transient: RefCell<VecDeque<CancellableTransientCallback>>,
-    /// Cancelled callback IDs, queried before callback delivery.
-    cancelled: RefCell<HashSet<CallbackId>>,
     /// Callback identities: the minted `FrameCallbackId`s, owner-local like
     /// the rest of this state. Sticky refusal — no id is ever issued twice.
     id_mint: IdMint<CallbackId>,
-    /// Persistent frame callbacks (every frame)
-    persistent: RefCell<Vec<CancellablePersistentCallback>>,
     /// Post-frame callbacks (after frame completes)
     post_frame: RefCell<crate::post_frame::PostFrameStorage>,
-    /// Microtask queue
-    microtasks: RefCell<VecDeque<Box<dyn FnOnce()>>>,
     /// Lifecycle state change listeners
     lifecycle_listeners: RefCell<Vec<LifecycleListener>>,
 }
@@ -790,17 +666,11 @@ impl CallbackState {
     }
 }
 
-/// Application lifecycle and frame timing reporting state.
+/// Application lifecycle state.
 struct BindingState {
     /// Application lifecycle state
     lifecycle_state: AtomicU8,
     lifecycle_delivery: observer_delivery::LifecycleDelivery,
-    /// Timings callbacks for performance reporting
-    timings_callbacks: RefCell<Vec<TimingsCallback>>,
-    /// Pending frame timings awaiting report
-    pending_timings: RefCell<VecDeque<FrameTiming>>,
-    /// Last timings report time
-    last_timings_report: RefCell<Instant>,
 }
 
 /// Cross-thread demand and its platform hook contain no UI callback storage.
@@ -813,7 +683,7 @@ struct WakeShared {
     on_frame_scheduled: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
     closed: AtomicBool,
     /// Set when the frame's own thread asked for a visual update during
-    /// `PersistentCallbacks`, where the request is not delivered (see
+    /// [`SchedulerPhase::Frame`], where the request is not delivered (see
     /// [`UpdateScheduler::take_late_visual_update`]).
     late_visual_update: AtomicBool,
 }
@@ -831,8 +701,6 @@ struct SchedulerInner {
     callbacks: CallbackState,
     /// Binding integration
     binding: BindingState,
-    /// Owner-local priority task queue.
-    task_queue: TaskQueue,
     /// Set while an [OwnerFrame](crate::OwnerFrame) for this scheduler
     /// lives: a scheduler has at most one, so the owner a frame drive polls is
     /// the only one tasks can be admitted to.
@@ -844,37 +712,16 @@ struct SchedulerInner {
     execution_owner: RefCell<std::rc::Weak<crate::post_frame::OwnerCleanup>>,
 }
 
-/// Main scheduler for frame and task management
-///
-/// Implements phased scheduling:
-/// - TransientCallbacks: One-shot frame callbacks
-/// - PersistentCallbacks: Rendering pipeline
-/// - PostFrameCallbacks: Cleanup
+/// The frame scheduler of one UI runtime: it holds frame demand, runs a frame
+/// through its [`SchedulerPhase`]s around the pipeline the driver hands it,
+/// and delivers post-frame callbacks, `end_of_frame` waiters and lifecycle
+/// changes.
 ///
 /// `UpdateScheduler` is an owner-thread handle over one `Rc` allocation.
 /// It is neither `Send` nor `Sync`; use [`FrameWaker`] to request work from
 /// another thread. [`UpdateScheduler::downgrade`]
 /// vends a [`WeakUpdateScheduler`] for a handle that must not keep a dead UI runtime's
 /// scheduler alive (see that type's doc).
-///
-/// ## Callback Cancellation
-///
-/// All callback registration methods return a `CallbackId` that can be used to
-/// cancel:
-///
-/// ```rust
-/// use flui_scheduler::UpdateScheduler;
-///
-/// let scheduler = UpdateScheduler::new();
-///
-/// // Register a callback and get its ID
-/// let id = scheduler.schedule_frame_callback(Box::new(|_vsync| {
-///     println!("This might be cancelled!");
-/// }));
-///
-/// // Cancel before it fires
-/// scheduler.cancel_frame_callback(id);
-/// ```
 #[derive(Clone)]
 pub struct UpdateScheduler {
     inner: Rc<SchedulerInner>,
@@ -924,7 +771,7 @@ impl std::fmt::Debug for WeakUpdateScheduler {
 
 impl std::fmt::Debug for UpdateScheduler {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // Report scalar state only (atomics and the task count);
+        // Report scalar state only (the atomics);
         // the callback/binding state is opaque `dyn Fn` storage.
         f.debug_struct("UpdateScheduler")
             .field("phase", &self.phase())
@@ -933,7 +780,6 @@ impl std::fmt::Debug for UpdateScheduler {
                 "frame_scheduled",
                 &self.inner.wake.frame_scheduled.load(Ordering::Acquire),
             )
-            .field("task_queue", &self.inner.task_queue)
             .finish_non_exhaustive()
     }
 }
@@ -1016,17 +862,13 @@ fn ensure_visual_update_impl(wake: &WakeShared) -> bool {
     let phase = SchedulerPhase::try_from_u8(wake.scheduler_phase.load(Ordering::Acquire))
         .unwrap_or(SchedulerPhase::Idle);
     match phase {
-        SchedulerPhase::Idle | SchedulerPhase::PostFrameCallbacks => {}
-        SchedulerPhase::TransientCallbacks
-        | SchedulerPhase::MidFrameMicrotasks
-        | SchedulerPhase::PersistentCallbacks => {
+        SchedulerPhase::Idle | SchedulerPhase::PostFrame => {}
+        SchedulerPhase::Frame => {
             let frame_thread = *wake.frame_thread.lock();
             if frame_thread == Some(std::thread::current().id()) {
-                if phase == SchedulerPhase::PersistentCallbacks {
-                    // The pipeline in this slot may already have consumed
-                    // what this request is for; the frame's driver decides.
-                    wake.late_visual_update.store(true, Ordering::Release);
-                }
+                // The pipeline may already have consumed what this request
+                // is for; the frame's driver decides once it has run.
+                wake.late_visual_update.store(true, Ordering::Release);
                 return false;
             }
         }
@@ -1052,11 +894,7 @@ impl UpdateScheduler {
     }
 
     /// [`SchedulerBuilder::build`]'s constructor seam.
-    ///
-    /// Taking the queue as a parameter avoids needing mutable access to the
-    /// constructed `Arc` at all: `Arc::get_mut` fails as soon as any
-    /// [`FrameWaker`] or weak handle exists.
-    fn with_parts(task_queue: TaskQueue, clock: ClockSource) -> Self {
+    fn with_parts(clock: ClockSource) -> Self {
         let frame_thread = Arc::new(Mutex::new(None));
         let inner = Rc::new(SchedulerInner {
             wake: Arc::new(WakeShared {
@@ -1076,27 +914,18 @@ impl UpdateScheduler {
                 clock,
                 display_period: Cell::new(DEFAULT_DISPLAY_PERIOD),
                 frame_count: AtomicU64::new(0),
-                idle_deadline: RefCell::new(None),
                 completion_waiters: RefCell::new(FrameCompletionRegistry::new()),
                 frame_thread,
             },
             callbacks: CallbackState {
-                transient: RefCell::new(VecDeque::new()),
-                cancelled: RefCell::new(HashSet::new()),
                 id_mint: IdMint::new(),
-                persistent: RefCell::new(Vec::new()),
                 post_frame: RefCell::new(crate::post_frame::PostFrameStorage::new()),
-                microtasks: RefCell::new(VecDeque::new()),
                 lifecycle_listeners: RefCell::new(Vec::new()),
             },
             binding: BindingState {
                 lifecycle_state: AtomicU8::new(AppLifecycleState::Resumed as u8),
                 lifecycle_delivery: observer_delivery::LifecycleDelivery::default(),
-                timings_callbacks: RefCell::new(Vec::new()),
-                pending_timings: RefCell::new(VecDeque::new()),
-                last_timings_report: RefCell::new(Instant::now()),
             },
-            task_queue,
             owner_frame_claimed: AtomicBool::new(false),
             execution_release: RefCell::new(None),
             execution_failure: RefCell::new(None),
@@ -1167,20 +996,14 @@ impl UpdateScheduler {
         owner.bind_owner_failure_signal(receipt);
     }
 
-    /// Check if currently in a frame
-    pub fn is_in_frame(&self) -> bool {
-        self.phase().is_in_frame()
-    }
-
     // =========================================================================
-    // Frame Scheduling (begin frame / draw frame)
+    // Frame Scheduling
     // =========================================================================
 
-    /// Handle begin frame - called when vsync signal arrives
-    ///
-    /// Executes transient callbacks (animation tickers) with the vsync
-    /// timestamp, flushes microtasks, then polls `owner`'s ready async tasks
-    /// in the mid-frame slot.
+    /// Open a frame at `vsync_time`: consume the frame demand, enter
+    /// [`SchedulerPhase::Frame`] and poll `owner`'s ready async tasks once.
+    /// The caller runs its pipeline next, and [`end_frame`](Self::end_frame)
+    /// closes the frame.
     ///
     /// # Panics
     ///
@@ -1213,212 +1036,28 @@ impl UpdateScheduler {
         // is now the one driving the frame `ensure_visual_update`'s
         // same-thread arms trust (see `frame_thread`'s own doc). This store
         // MUST happen before the phase transition below takes it out of
-        // `Idle` -- a foreign thread that observes a mid-frame phase
+        // `Idle` -- a foreign thread that observes a in-frame phase
         // (`Acquire` on `scheduler_phase`) and then locks `frame_thread`
         // must already observe THIS frame's driver, never a stale one from
         // whatever frame preceded it. Reordered, a thread that drove the
-        // PREVIOUS frame could read the new mid-frame phase together with
+        // PREVIOUS frame could read the new in-frame phase together with
         // its own (now stale) id still in `frame_thread`, mistake itself
         // for the current driver, and drop a cross-thread wake for the
         // frame actually in flight.
         *self.inner.frame.frame_thread.lock() = Some(std::thread::current().id());
         self.inner.frame.frame_count.fetch_add(1, Ordering::Relaxed);
 
-        // Phase 1: TransientCallbacks (animation tickers)
-        self.set_scheduler_phase(SchedulerPhase::TransientCallbacks);
+        self.set_scheduler_phase(SchedulerPhase::Frame);
 
-        // Execute transient callbacks (animations get vsync timestamp).
-        //
-        // Pop one callback at a time and invoke it OUTSIDE the lock -- the
-        // same shape `flush_microtasks` uses -- rather than draining the
-        // whole queue into a batch before running any of it. A callback
-        // that panics then loses only itself: every callback still behind
-        // it in `transient` is untouched and runs on the NEXT
-        // `handle_begin_frame`, instead of having already been removed from
-        // the queue by this frame's own drain and lost with it (issue
-        // #1057; see `flui-scheduler/ARCHITECTURE.md`'s mapping entry).
-        //
-        // Bounded by an id WATERMARK -- the id of the last (back) entry
-        // queued at entry, read once before invoking anything -- not a
-        // remaining-iteration COUNT. `CallbackId`s come from this
-        // scheduler's own mint, in registration order, so
-        // `back().id` at entry is exactly the highest id already queued.
-        // A callback that registers another transient callback of its own
-        // from inside itself must have the new one deferred to the NEXT
-        // frame (issue #1058's reentrant-registration contract): the fresh
-        // entry always gets a strictly greater id, so `front().id <=
-        // watermark` excludes it regardless of where in the queue it lands.
-        // A remaining-COUNT bound does not survive cancellation: `A`
-        // cancelling a not-yet-run sibling `B` (`cancel_frame_callback`
-        // removes `B` from the live queue directly, #1156) and registering
-        // a fresh `C` leaves the queue's LENGTH unchanged from `A`'s own
-        // perspective, so a count budget still reaches `C` this same call
-        // even though `C`'s id exceeds the watermark (issue #1057's own
-        // regression, measured: `C` ran in the same frame it was
-        // registered in).
-        let (watermark, pending) = {
-            let cbs = self.inner.callbacks.transient.borrow_mut();
-            (cbs.back().map(|c| c.id), cbs.len())
-        };
-        if let Some(watermark) = watermark {
-            tracing::debug!(count = pending, "executing transient callbacks");
-            loop {
-                let cancellable = {
-                    let mut cbs = self.inner.callbacks.transient.borrow_mut();
-                    match cbs.front() {
-                        Some(front) if front.id <= watermark => cbs.pop_front(),
-                        _ => None,
-                    }
-                };
-                let Some(cancellable) = cancellable else {
-                    break;
-                };
-
-                // End the cancellation-set borrow before invoking user code.
-                if self
-                    .inner
-                    .callbacks
-                    .cancelled
-                    .borrow()
-                    .contains(&cancellable.id)
-                {
-                    continue;
-                }
-                (cancellable.callback)(vsync_time);
-            }
-        }
-
-        // Do not clear the cancelled set here: a cancellation requested
-        // during a transient callback (of a post-frame callback, say) must
-        // survive until delivery checks it. Delivery prunes the set
-        // (`retain_pending_post_frame_cancellations`).
-
-        // Phase 2: MidFrameMicrotasks
-        self.set_scheduler_phase(SchedulerPhase::MidFrameMicrotasks);
-        self.flush_microtasks();
-
-        // The async-driver step: exactly one poll per frame in the mid-frame
-        // microtask slot, after transient callbacks and before persistent ones in
-        // `handle_draw_frame`. A future completing here calls `RebuildHandle::schedule()`,
-        // whose id the pipeline's `build_scope` drains — so a completion lands in THIS frame.
-        //
-        // The begin frame owns the step and takes the owner frame as a parameter,
-        // so no frame driver can forget it, run it twice, or poll some other
-        // ui_runtime's tasks.
+        // Exactly one async-driver poll per frame, before the pipeline: a
+        // future completing here calls `RebuildHandle::schedule()`, whose id
+        // the pipeline's `build_scope` drains, so a completion lands in THIS
+        // frame. The begin step owns the poll and takes the owner frame as a
+        // parameter, so no frame driver can forget it, run it twice, or poll
+        // another UI runtime's tasks.
         owner.poll_ready();
 
         frame_id
-    }
-
-    /// Run the frame's **persistent callbacks** and priority task queue.
-    ///
-    /// Leaves the scheduler in [`SchedulerPhase::PersistentCallbacks`]: the caller's
-    /// **pipeline** (build → layout → compositing → paint) occupies that slot next,
-    /// and [`end_frame`](Self::end_frame) closes the frame afterwards.
-    ///
-    /// # This no longer finishes the frame
-    ///
-    /// This method now leaves the scheduler in `PersistentCallbacks` after running
-    /// persistent callbacks. Previously it also drained the post-frame queue and
-    /// returned to `Idle`, which meant every post-frame callback ran *before* the
-    /// pipeline it was supposed to observe. Use `drive_frame`,
-    /// or pair this with `end_frame`.
-    ///
-    /// # Panics
-    ///
-    /// Debug-asserts an illegal phase transition if no frame is open
-    /// (`handle_begin_frame` was not called).
-    ///
-    /// # Idle-slice gating is the only gate
-    ///
-    /// Animation and Build priority tasks always run to completion here,
-    /// unconditionally. Only `Priority::Idle` work is bounded, and only by
-    /// the deadline `drive_frame` supplies (see the
-    /// private `is_idle_deadline_passed` helper below) — a caller driving
-    /// this method directly, without going through `drive_frame`, has no
-    /// deadline set and Idle work always runs too.
-    /// A deadline can defer low-priority work; it can never skip a frame or
-    /// starve logical (Animation/Build) work.
-    fn handle_draw_frame(&self) {
-        // Phase 3: PersistentCallbacks (the pipeline's slot)
-        self.set_scheduler_phase(SchedulerPhase::PersistentCallbacks);
-
-        // Execute persistent frame callbacks. Copy FrameTiming once outside the
-        // loop to avoid re-locking per callback. Clone callbacks to release the
-        // lock before invoking (callbacks may call scheduler methods that take
-        // other locks).
-        let timing_snapshot = *self.inner.frame.current_frame.borrow_mut();
-        if let Some(timing) = timing_snapshot {
-            let persistent_callbacks: Vec<_> = {
-                let cbs = self.inner.callbacks.persistent.borrow_mut();
-                cbs.iter()
-                    .filter(|c| !self.inner.callbacks.cancelled.borrow().contains(&c.id))
-                    .map(|c| c.callback.clone())
-                    .collect()
-            };
-
-            for callback in &persistent_callbacks {
-                callback(&timing);
-            }
-        }
-
-        // Animation and Build always run — never gated. Only Idle work is
-        // deadline-bounded (see this method's own doc and `drive_frame`).
-        //
-        // A drain runs only the tasks queued when it began (see
-        // `TaskQueue::drain`), so Build-or-higher work a task queues runs in
-        // the next pass, still this frame. Two bounds keep that finite: the
-        // pass cap stops a chain that re-queues itself every pass, and one run
-        // budget fixed at entry, shared by every pass, stops a task that
-        // queues two more each run (the queue doubles every pass, so a pass
-        // cap alone bounds depth, not work). What either bound leaves queued
-        // runs next frame: the end of this method requests one.
-        let mut budget = task_run_budget(self.inner.task_queue.len());
-        let mut capped = false;
-        for pass in 1..=MAX_BUILD_REENTRY_PASSES {
-            let drain = self
-                .inner
-                .task_queue
-                .drain(Priority::Build, budget, |_| true);
-            budget -= drain.executed;
-            if drain.deferred || (pass == MAX_BUILD_REENTRY_PASSES && drain.executed != 0) {
-                capped = true;
-                break;
-            }
-            if drain.executed == 0 {
-                break;
-            }
-        }
-        if capped {
-            tracing::warn!(
-                "Priority::Build (or higher) tasks kept queueing new work past \
-                 {MAX_BUILD_REENTRY_PASSES} drain passes or the frame's run budget; \
-                 the rest runs next frame"
-            );
-        }
-
-        // The deadline is checked before each Idle task, not once: ten 5 ms
-        // tasks must not all start because the first one fit.
-        self.inner
-            .task_queue
-            .drain(Priority::Idle, budget, |priority| {
-                priority > Priority::Idle || !self.is_idle_deadline_passed()
-            });
-
-        if !self.inner.task_queue.is_empty() {
-            self.request_frame();
-        }
-    }
-
-    /// Whether the Idle-slice deadline `drive_frame` set
-    /// for the current frame has already passed, on the scheduler's clock.
-    ///
-    /// `false` (never passed, i.e. Idle work is never deferred) when no
-    /// deadline is set — the state outside a `drive_frame` call, and for a
-    /// caller driving `handle_begin_frame`/`handle_draw_frame` by hand.
-    fn is_idle_deadline_passed(&self) -> bool {
-        let deadline = *self.inner.frame.idle_deadline.borrow();
-        deadline.is_some_and(|deadline| self.inner.frame.clock.now() >= deadline)
     }
 
     /// Close the frame: run its **post-frame callbacks**, record timing, notify
@@ -1443,32 +1082,21 @@ impl UpdateScheduler {
     /// # Panics
     ///
     /// Debug-asserts an illegal phase transition unless the scheduler is in
-    /// `PersistentCallbacks` (i.e. `handle_draw_frame` ran). To finish a frame
+    /// [`SchedulerPhase::Frame`] (i.e. `handle_begin_frame` ran). To finish a frame
     /// *without* running its post-frame callbacks, use
     /// the internal frame-abort path.
     fn end_frame(&self, owner: &crate::OwnerFrame) {
-        // Phase 4: PostFrameCallbacks
-        self.set_scheduler_phase(SchedulerPhase::PostFrameCallbacks);
+        self.set_scheduler_phase(SchedulerPhase::PostFrame);
 
         let timing = self.inner.frame.current_frame.borrow_mut().take();
 
         if let Some(timing) = timing {
-            // Telemetry is opt-in and bounded even when failed frames postpone
-            // normal reporting. Retain the newest samples during recovery.
-            if !self.inner.binding.timings_callbacks.borrow().is_empty() {
-                let mut pending = self.inner.binding.pending_timings.borrow_mut();
-                if pending.len() == 128 {
-                    pending.pop_front();
-                }
-                pending.push_back(timing);
-            }
-
             // Drain BEFORE invoking: a post-frame callback that registers another
             // one must not have it run in this same frame. The owner frame's
             // queue is taken in here, inside the "a frame was actually open"
             // branch, not unconditionally at the top of this function — taking
-            // it on a no-open-frame call (no preceding `handle_begin_frame`/
-            // `handle_draw_frame`, or a second `end_frame` call with nothing
+            // it on a no-open-frame call (no preceding `handle_begin_frame`,
+            // or a second `end_frame` call with nothing
             // new to close) would silently drop every already-queued local
             // entry un-run. Keeping the take and the invoke in the same branch
             // means a queue that isn't drained this call is simply left alone
@@ -1491,7 +1119,7 @@ impl UpdateScheduler {
             // panicking waker is otherwise the exact class of bug issue
             // #1057 exists to close, just on the CLEAN path this time --
             // without this, it would escape straight past the phase reset
-            // below and leave the scheduler stuck at `PostFrameCallbacks`
+            // below and leave the scheduler stuck at `PostFrame`
             // with `current_vsync_time` still set, reachable through
             // `drive_frame`'s `Ok` arm rather than its `Err` one.
             #[expect(
@@ -1536,38 +1164,27 @@ impl UpdateScheduler {
         // Return to idle
         self.set_scheduler_phase(SchedulerPhase::Idle);
         *self.inner.frame.current_vsync_time.borrow_mut() = None;
-        let interval = if cfg!(debug_assertions) {
-            Duration::from_millis(100)
-        } else {
-            Duration::from_secs(1)
-        };
-        let due = self.inner.binding.pending_timings.borrow().len() == 128
-            || self.time_since_last_timings_report() >= interval;
-        if due {
-            self.report_timings();
-        }
     }
 
     /// Abandon the open frame: return to [`SchedulerPhase::Idle`] **without**
     /// running its post-frame callbacks.
     ///
-    /// When a persistent callback panics, the
-    /// post-frame loop is skipped but the phase is still reset. The queued
-    /// callbacks survive and run on the next completed frame.
+    /// When the begin step or the pipeline panics, the post-frame loop is
+    /// skipped but the phase is still reset. The queued callbacks survive and
+    /// run on the next completed frame.
     ///
     /// # Who calls this, and why it is not a `Drop` guard
     ///
-    /// `drive_frame` **does** catch a panic from any phase it
-    /// owns — `handle_begin_frame`, `handle_draw_frame`, or the pipeline, all three
-    /// under one `catch_unwind` — calls this, then `resume_unwind`s. So this runs
-    /// *between* the catch and the resume — the panic payload is already captured
-    /// and nothing here executes during unwinding. Producer handles cannot
-    /// open a frame or invoke this recovery path.
+    /// `drive_frame` catches a panic from any step it owns (`handle_begin_frame`
+    /// or the pipeline), calls this, then `resume_unwind`s. So this runs
+    /// *between* the catch and the resume: the panic payload is already
+    /// captured and nothing here executes during unwinding. Producer handles
+    /// cannot open a frame or invoke this recovery path.
     ///
     /// A `Drop` guard would be wrong twice. It would have to force
-    /// `PersistentCallbacks -> Idle`, which
+    /// `Frame -> Idle`, which
     /// [`can_transition_to`](crate::SchedulerPhase::can_transition_to) forbids, so
-    /// the validated setter's `debug_assert!` would fire *while already panicking* —
+    /// the validated setter's `debug_assert!` would fire *while already panicking*:
     /// a double panic, i.e. `abort`. And running any user callback during unwind is a
     /// second hazard for no benefit. Hence an explicit, non-panicking call that
     /// bypasses the phase validator by design: the one sanctioned way out of a
@@ -1576,25 +1193,21 @@ impl UpdateScheduler {
     /// Completion waiters **are** notified: an aborted frame is a frame that
     /// finished, badly. Leaving them queued would hang `end_of_frame()` forever.
     /// They resolve with [`FrameOutcome::Aborted`], distinct from
-    /// [`FrameOutcome::Completed`] — see that type's own doc for exactly what
+    /// [`FrameOutcome::Completed`]: see that type's own doc for exactly what
     /// the distinction does and does not mean, and this crate's
     /// `ARCHITECTURE.md` `## Mapping decisions` entry for the rationale.
     ///
-    /// # Only accepted work re-arms the frame
+    /// # The failure does not re-arm the frame
     ///
-    /// `handle_begin_frame` cleared `frame_scheduled` before any callback ran.
-    /// This method requests the next frame only for one-shot callbacks,
-    /// microtasks and tasks still queued behind the failed one: they were
-    /// accepted for a frame, and the failed one was already removed, so the
-    /// request cannot re-drive it. The owner's frame drive then gives the
-    /// scope of a segment the aborted frame completed or left running
-    /// completion demand for the callbacks it owes, which the runtime admits
-    /// through its own gates; the scheduler asks no frame for them
-    /// (`OwnerFrame::settle_aborted_segments`). It
-    /// does not re-arm for the failure itself, which would hot-loop a caller
-    /// that keeps re-driving a deterministically panicking frame; a caller
-    /// that catches the resumed panic and wants another frame calls
-    /// [`request_frame`](Self::request_frame) itself.
+    /// `handle_begin_frame` cleared `frame_scheduled` before the pipeline ran.
+    /// The owner's frame drive gives the scope of a segment the aborted frame
+    /// completed or left running completion demand for the callbacks it owes,
+    /// which the runtime admits through its own gates; the scheduler asks no
+    /// frame for them (`OwnerFrame::settle_aborted_segments`). Re-arming for the
+    /// failure itself would hot-loop a caller that keeps re-driving a
+    /// deterministically panicking frame; a caller that catches the resumed
+    /// panic and wants another frame calls [`request_frame`](Self::request_frame)
+    /// itself.
     ///
     /// Idempotent: a no-op when no frame is open.
     fn abort_frame_impl(&self) {
@@ -1606,102 +1219,22 @@ impl UpdateScheduler {
 
         // Raw store: this is the deliberate exception to the forward-only phase
         // machine. `set_scheduler_phase` would `debug_assert!` on
-        // `PersistentCallbacks -> Idle`.
+        // `Frame -> Idle`.
         self.inner
             .wake
             .scheduler_phase
             .store(SchedulerPhase::Idle as u8, Ordering::Release);
         *self.inner.frame.current_vsync_time.borrow_mut() = None;
-        self.retain_pending_post_frame_cancellations();
 
         if let Some(timing) = timing {
             self.notify_frame_completion(FrameOutcome::Aborted { timing }, None);
         }
-
-        // One-shot callbacks, microtasks and tasks queued behind the one that
-        // failed were accepted for a frame and still need one; nothing else
-        // asks for it once the caller resumes the panic. The failed entry was
-        // already removed, so this cannot re-drive it.
-        let accepted_work_waits = !self.inner.callbacks.transient.borrow().is_empty()
-            || !self.inner.callbacks.microtasks.borrow().is_empty()
-            || !self.inner.task_queue.is_empty();
-        if accepted_work_waits {
-            request_frame_impl_preserving_failure(&self.inner.wake, true);
-        }
-
         tracing::warn!("frame aborted; its post-frame callbacks were not run");
     }
 
     // =========================================================================
-    // Callback Registration
+    // Frame demand
     // =========================================================================
-
-    /// Schedule a transient frame callback (animation)
-    ///
-    /// The callback receives the vsync timestamp and fires during
-    /// TransientCallbacks phase. This is the correct way for tickers to
-    /// receive frame timing.
-    ///
-    /// Returns a `CallbackId` that can be used to cancel the callback before it
-    /// fires.
-    ///
-    /// # Id order is structural, not incidental
-    ///
-    /// Minting and insertion share one owner-local borrow. The deque's push
-    /// order therefore agrees with numeric ID order, which the frame's
-    /// registration watermark uses to defer callbacks accepted during delivery.
-    pub fn schedule_frame_callback(&self, callback: OneShotFrameCallback) -> CallbackId {
-        let id = {
-            let mut cbs = self.inner.callbacks.transient.borrow_mut();
-            let id = self.inner.callbacks.mint_id();
-            cbs.push_back(CancellableTransientCallback { id, callback });
-            id
-        };
-        // Registering a tick demands a frame to run it in. `request_frame`
-        // wakes the platform on the false->true transition.
-        self.request_frame();
-        tracing::debug!("schedule_frame_callback: registered callback id={:?}", id);
-        id
-    }
-
-    /// Cancel a transient frame callback by ID
-    ///
-    /// Returns `true` if the callback was found and cancelled, `false` if it
-    /// was already executed or not found.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// use flui_scheduler::UpdateScheduler;
-    ///
-    /// let scheduler = UpdateScheduler::new();
-    /// let id = scheduler.schedule_frame_callback(Box::new(|_| {
-    ///     println!("This won't be called!");
-    /// }));
-    /// scheduler.cancel_frame_callback(id);
-    /// ```
-    pub fn cancel_frame_callback(&self, id: CallbackId) -> bool {
-        // Remove without retiring captures under the storage borrow. A
-        // callback's Drop may register or cancel another callback. Unique
-        // IDs permit a single removal; a no-match cancellation allocates
-        // nothing. Outgoing ownership retires after the borrow ends.
-        let removed = {
-            let mut callbacks = self.inner.callbacks.transient.borrow_mut();
-            callbacks
-                .iter()
-                .position(|callback| callback.id == id)
-                .and_then(|index| callbacks.remove(index))
-        };
-
-        if let Some(callback) = removed {
-            execution::retire_with_execution_custody(&self.inner.execution_failure, callback);
-            return true; // Found and removed
-        }
-
-        // If not found, mark as cancelled (in case it's about to be executed)
-        self.inner.callbacks.cancelled.borrow_mut().insert(id);
-        false
-    }
 
     /// Request a frame (without callback).
     ///
@@ -1805,11 +1338,9 @@ impl UpdateScheduler {
     /// store can sit in the executing core's store buffer while a
     /// subsequent plain load on the SAME thread already executes — not
     /// merely a hypothetical one. Any single race instance touches four
-    /// accesses: this method's swap and load, plus whichever edge fired
-    /// (`set_frames_enabled`'s or `handle_app_lifecycle_state_change`'s
-    /// `frames_enabled` swap) and `request_frame_impl`'s `frame_scheduled`
-    /// swap. `SeqCst` marks all five code sites -- both edge swaps count
-    /// separately even though only one of them runs per race instance --
+    /// accesses: this method's swap and load, plus the lifecycle edge's
+    /// (`handle_app_lifecycle_state_change`) `frames_enabled` swap and
+    /// `request_frame_impl`'s `frame_scheduled` swap. `SeqCst` marks all four,
     /// which puts every access on one global total order and rules that
     /// outcome out. No single-threaded test can redden a reversion of this;
     /// only a `loom` model could prove it, and none exists yet.
@@ -1878,107 +1409,6 @@ impl UpdateScheduler {
         );
     }
 
-    /// Add a persistent frame callback.
-    ///
-    /// Fires every frame during PersistentCallbacks phase. Use for the
-    /// rendering pipeline (build/layout/paint).
-    ///
-    /// Persistent frame callbacks cannot be unregistered: once registered,
-    /// they are called for every frame for the lifetime of the application.
-    /// Returns `()` — no removal handle.
-    pub fn add_persistent_frame_callback(&self, callback: RecurringFrameCallback) {
-        let id = self.inner.callbacks.mint_id();
-        self.inner
-            .callbacks
-            .persistent
-            .borrow_mut()
-            .push(CancellablePersistentCallback { id, callback });
-    }
-
-    // =========================================================================
-    // Microtask Queue
-    // =========================================================================
-
-    /// Schedule a microtask
-    ///
-    /// Microtasks are executed during MidFrameMicrotasks phase,
-    /// after animations but before rendering. Queued outside a frame's
-    /// transient or microtask slot, it requests the frame that runs it.
-    pub fn schedule_microtask(&self, task: Box<dyn FnOnce()>) {
-        self.inner.callbacks.microtasks.borrow_mut().push_back(task);
-        if !matches!(
-            self.phase(),
-            SchedulerPhase::TransientCallbacks | SchedulerPhase::MidFrameMicrotasks
-        ) {
-            self.request_frame();
-        }
-    }
-
-    /// Flush the microtasks queued when this frame reached its microtask slot,
-    /// and the ones they queue, in passes.
-    ///
-    /// Each pass runs the microtasks queued when it began, one at a time and
-    /// outside the queue's borrow; one a microtask queues runs in the next
-    /// pass, still in this frame. [`MAX_MICROTASK_REENTRY_PASSES`] bounds the
-    /// passes and [`task_run_budget`] the runs of all passes together: a
-    /// microtask that queues two more each run doubles the queue every pass,
-    /// so the pass cap alone would allow billions of runs. Whatever either
-    /// bound leaves queued runs in the next frame, which this requests.
-    fn flush_microtasks(&self) {
-        let mut budget = task_run_budget(self.inner.callbacks.microtasks.borrow().len());
-        for _ in 0..MAX_MICROTASK_REENTRY_PASSES {
-            let mut pass = self.inner.callbacks.microtasks.borrow().len().min(budget);
-            if pass == 0 {
-                break;
-            }
-            budget -= pass;
-            while pass > 0 {
-                let task = self.inner.callbacks.microtasks.borrow_mut().pop_front();
-                let Some(task) = task else {
-                    break;
-                };
-                pass -= 1;
-                task();
-            }
-        }
-        let deferred = self.inner.callbacks.microtasks.borrow().len();
-        if deferred > 0 {
-            tracing::warn!(
-                deferred,
-                "microtasks kept queueing new work past {MAX_MICROTASK_REENTRY_PASSES} \
-                 flush passes or the frame's run budget; the rest runs next frame"
-            );
-            self.request_frame();
-        }
-    }
-
-    // =========================================================================
-    // Task Queue
-    // =========================================================================
-
-    /// Add a task with priority.
-    ///
-    /// The frame's task drain runs it; queued outside a frame's transient or
-    /// microtask slot, it requests that frame.
-    pub fn add_task(&self, priority: Priority, callback: impl FnOnce() + 'static) {
-        self.inner.task_queue.add(priority, callback);
-        if !matches!(
-            self.phase(),
-            SchedulerPhase::TransientCallbacks | SchedulerPhase::MidFrameMicrotasks
-        ) {
-            self.request_frame();
-        }
-    }
-
-    // =========================================================================
-    // Vsync Timestamp
-    // =========================================================================
-
-    /// Get current vsync timestamp (if in frame)
-    pub fn current_vsync_time(&self) -> Option<Instant> {
-        *self.inner.frame.current_vsync_time.borrow_mut()
-    }
-
     // =========================================================================
     // Frame State
     // =========================================================================
@@ -1986,14 +1416,6 @@ impl UpdateScheduler {
     /// Check if a frame is scheduled
     pub fn is_frame_scheduled(&self) -> bool {
         self.inner.wake.frame_scheduled.load(Ordering::Acquire)
-    }
-
-    /// Get the number of pending transient callbacks
-    ///
-    /// This is useful for debugging and testing to verify that
-    /// all transient callbacks have been processed.
-    pub fn transient_callback_count(&self) -> usize {
-        self.inner.callbacks.transient.borrow_mut().len()
     }
 
     /// Get current frame timing (if a frame is active)
@@ -2168,16 +1590,6 @@ impl UpdateScheduler {
         found
     }
 
-    /// Check if frames should be scheduled based on lifecycle state
-    ///
-    /// Returns `false` when the app is hidden, paused, or detached. Thin
-    /// alias over [`frames_enabled`](Self::frames_enabled) — the single
-    /// atomic `handle_app_lifecycle_state_change` already maintains, rather
-    /// than re-deriving the same fact from `lifecycle_state()`.
-    pub fn should_schedule_frame(&self) -> bool {
-        self.frames_enabled()
-    }
-
     // =========================================================================
     // Frame Completion Futures
     // =========================================================================
@@ -2217,9 +1629,9 @@ impl UpdateScheduler {
     /// wake (`request_frame`'s own false→true swap edge coalesces them).
     ///
     /// The demand honors `frames_enabled`: a scheduler whose owner disabled
-    /// frames is not forced awake, and a future registered there resolves
-    /// only once frames come back — see
-    /// [`set_frames_enabled`](Self::set_frames_enabled).
+    /// frames (the lifecycle hid the app) is not forced awake, and a future
+    /// registered there resolves only once frames come back; see
+    /// [`handle_app_lifecycle_state_change`](Self::handle_app_lifecycle_state_change).
     ///
     /// Two further consequences worth knowing before calling this:
     ///
@@ -2260,7 +1672,7 @@ impl UpdateScheduler {
             // drain the vec is empty, so the first push demands, and every
             // later push either sees a live entry whose demand postdates
             // that drain or demands itself. SURVIVAL of an issued demand is
-            // not decidable here at all -- only `set_frames_enabled`'s
+            // not decidable here at all -- only the lifecycle's
             // enable edge can re-issue one that was revoked.
             let had_live_waiter = registry.has_live_waiter();
 
@@ -2274,10 +1686,10 @@ impl UpdateScheduler {
             !had_live_waiter
         };
         // The guard is released HERE, before the demand. The hook
-        // `schedule_frame_if_enabled` can reach must find every scheduler
+        // `request_frame_if_enabled` can reach must find every scheduler
         // mutex free, `completion_waiters` included.
         if needs_demand {
-            self.schedule_frame_if_enabled();
+            self.request_frame_if_enabled();
         }
 
         future
@@ -2354,7 +1766,7 @@ impl UpdateScheduler {
     }
 
     // =========================================================================
-    // Binding Methods (formerly on SchedulerBinding trait)
+    // Frame enablement
     // =========================================================================
 
     /// Check whether frame scheduling is enabled
@@ -2362,97 +1774,41 @@ impl UpdateScheduler {
         self.inner.wake.frames_enabled.load(Ordering::Acquire)
     }
 
-    /// Enable or disable frame scheduling.
-    ///
-    /// The disabled → enabled edge re-requests a frame, as
-    /// [`handle_app_lifecycle_state_change`](Self::handle_app_lifecycle_state_change)
-    /// does. A demand issued while frames
-    /// were disabled is silently dropped by
-    /// [`schedule_frame_if_enabled`](Self::schedule_frame_if_enabled) with
-    /// nothing recording the loss, and a pending
-    /// [`end_of_frame`](Self::end_of_frame) waiter left behind that way
-    /// waits forever, because every later registration sees it still live
-    /// and stays silent. Only a frames-enabled edge can re-issue such a
-    /// demand.
-    ///
-    /// **This setter is the API-surface mirror, not the production
-    /// carrier.** It has no production callers; the edge a running app
-    /// actually crosses is `handle_app_lifecycle_state_change`'s resume
-    /// leg, which has always re-requested and is pinned by
-    /// `lifecycle_reenable_edge_schedules_exactly_one_frame`. The
-    /// re-request is here so that an embedder toggling frames through the
-    /// public setter cannot reach a stranded state the lifecycle path
-    /// recovers from.
-    pub fn set_frames_enabled(&mut self, enabled: bool) {
-        // `SeqCst`: see `finish_async_pump`'s doc for the store-buffering
-        // hazard this ordering closes against that method's own swap+load.
-        let was_enabled = self
-            .inner
-            .wake
-            .frames_enabled
-            .swap(enabled, Ordering::SeqCst);
-
-        if !was_enabled && enabled {
-            self.request_frame();
-        }
-    }
-
-    /// Schedule a frame if frames are enabled.
-    ///
-    /// Unlike `request_frame()`, this checks `frames_enabled` first. Returns
-    /// `true` iff a frame was actually requested (frames were enabled);
-    /// `false` when the demand was dropped by the enablement gate.
-    pub fn schedule_frame_if_enabled(&self) -> bool {
+    /// Request a frame if frames are enabled; demand made while the lifecycle
+    /// disables frames is dropped.
+    fn request_frame_if_enabled(&self) {
         if self.inner.wake.frames_enabled.load(Ordering::Acquire) {
             self.request_frame();
-            true
-        } else {
-            false
         }
-    }
-
-    /// Schedule a forced frame (ignores `frames_enabled`)
-    pub fn schedule_forced_frame(&self) {
-        self.request_frame();
     }
 
     /// Ensure a visual update is scheduled.
     ///
-    /// [`SchedulerPhase::Idle`] and
-    /// [`SchedulerPhase::PostFrameCallbacks`] request one, through
-    /// [`schedule_frame_if_enabled`](Self::schedule_frame_if_enabled) (which
-    /// keeps the `frames_enabled` gate); a call from `PostFrameCallbacks`
-    /// requests the NEXT frame, since this frame's own pipeline has already
-    /// run by that phase. The three mid-frame phases
-    /// ([`SchedulerPhase::TransientCallbacks`],
-    /// [`SchedulerPhase::MidFrameMicrotasks`],
-    /// [`SchedulerPhase::PersistentCallbacks`]) are a no-op **only for the
-    /// thread already driving this frame** (see `frame_thread`'s own doc).
-    /// A caller on any OTHER thread always requests, regardless of phase:
+    /// [`SchedulerPhase::Idle`] and [`SchedulerPhase::PostFrame`] request one
+    /// while frames are enabled; a call from `PostFrame` requests the NEXT
+    /// frame, since this frame's pipeline has already run by that phase.
+    /// [`SchedulerPhase::Frame`] is a no-op **only for the thread already
+    /// driving this frame** (see `frame_thread`'s own doc): the request is
+    /// recorded for [`take_late_visual_update`](Self::take_late_visual_update)
+    /// instead, because the pipeline in that phase may already have consumed
+    /// what it was for, and the frame's driver decides once the pipeline has
+    /// run. A caller on any OTHER thread always requests, regardless of phase:
     /// the shared [`FrameWaker::ensure_visual_update`] gate handles those
-    /// cross-thread calls. `UpdateScheduler` remains owner-local; only the
-    /// driving thread's later phases observe a same-thread update.
-    ///
-    /// This is not a blanket "the in-flight frame will pick up your
-    /// change" promise even for the driving thread: it holds for
-    /// `TransientCallbacks`/`MidFrameMicrotasks`, which precede the
-    /// pipeline in the frame's slot order, but not for
-    /// `PersistentCallbacks`, where the pipeline itself runs — a call made
-    /// after paint has already happened would have its demand dropped.
-    /// Complete owner execution closes an opened frame before a callback or
-    /// pipeline failure propagates, restoring this gate for the next turn.
+    /// cross-thread calls. Complete owner execution closes an opened frame
+    /// before a pipeline failure propagates, restoring this gate for the next
+    /// turn.
     ///
     /// # Return value
     ///
     /// Returns `true` iff a frame was actually requested — the phase gate
     /// passed *and* frames were enabled — and `false` iff the demand was
-    /// dropped (the same-thread mid-frame no-op, or `frames_enabled ==
+    /// dropped (the same-thread in-frame no-op, or `frames_enabled ==
     /// false`). It is **not** the `frame_scheduled` false→true edge: a
     /// caller whose demand coincides with an already-scheduled frame still
     /// gets `true`, because the gate passed. A caller that wants to poke a
     /// per-window redraw (the presentation's `set_on_need_visual_update`
     /// closure) uses this to poke only when the scheduler is actually going
-    /// to produce the frame, so a mid-frame same-thread dirty mark no longer
+    /// to produce the frame, so an in-frame same-thread dirty mark never
     /// reaches `request_redraw`.
     ///
     /// Spelled out as a `match` with every phase named, not a wildcard arm,
@@ -2463,10 +1819,10 @@ impl UpdateScheduler {
     }
 
     /// Whether the frame's own thread asked for a visual update during
-    /// [`SchedulerPhase::PersistentCallbacks`] since the last call, clearing
+    /// [`SchedulerPhase::Frame`] since the last call, clearing
     /// the record.
     ///
-    /// Such a request is not delivered: in that slot the pipeline may still
+    /// Such a request is not delivered: in that phase the pipeline may still
     /// consume what it was for. A mark made after the pipeline consumed its
     /// dirt (a hover callback run from the frame's tail, a paint-time mark)
     /// would otherwise wait for unrelated input, so the frame's driver reads
@@ -2477,108 +1833,6 @@ impl UpdateScheduler {
             .wake
             .late_visual_update
             .swap(false, Ordering::AcqRel)
-    }
-
-    /// Get the current system frame timestamp
-    pub fn current_system_frame_time_stamp(&self) -> Instant {
-        self.current_vsync_time()
-            .unwrap_or_else(|| self.inner.frame.clock.now())
-    }
-
-    /// Add a timings callback for receiving frame performance reports
-    pub fn add_timings_callback(&self, callback: TimingsCallback) {
-        self.inner
-            .binding
-            .timings_callbacks
-            .borrow_mut()
-            .push(callback);
-    }
-
-    /// Remove a timings callback
-    pub fn remove_timings_callback(&self, callback: &TimingsCallback) {
-        // Same hazard as `cancel_frame_callback`/`remove_lifecycle_state_listener`.
-        // `extract_if` (stable since Rust 1.87) removes every matching entry
-        // in one pass with no full-Vec reallocation or copy of the kept
-        // entries, and the removed callbacks are dropped only
-        // once `timings_callbacks`'s guard has already fallen, not while a
-        // reentrant Drop could conflict with that borrow. Remove-all, not
-        // remove-first: unlike the two `CallbackId`-addressed sites above,
-        // nothing here guarantees a caller registers a given callback only once.
-        let removed: Vec<_> = {
-            let mut callbacks = self.inner.binding.timings_callbacks.borrow_mut();
-            callbacks
-                .extract_if(.., |existing| Rc::ptr_eq(existing, callback))
-                .collect()
-        };
-        if self.inner.binding.timings_callbacks.borrow().is_empty() {
-            self.inner.binding.pending_timings.borrow_mut().clear();
-        }
-        execution::retire_with_execution_custody(&self.inner.execution_failure, removed);
-    }
-
-    /// Report pending frame timings to registered callbacks.
-    ///
-    /// Timings are batched and reported approximately once per second in
-    /// release mode, or every ~100ms in debug builds, at a completed frame's
-    /// idle boundary. A full batch flushes earlier. Collection requires a
-    /// subscriber and retains at most the newest 128 timings during recovery.
-    /// Call this to flush a partial batch explicitly.
-    ///
-    /// Returns the number of timings reported.
-    pub fn report_timings(&self) -> usize {
-        let timings: Vec<_> = {
-            let mut pending = self.inner.binding.pending_timings.borrow_mut();
-            if pending.is_empty() {
-                return 0;
-            }
-            pending.drain(..).collect()
-        };
-
-        let callbacks = self.inner.binding.timings_callbacks.borrow().clone();
-        let count = timings.len();
-        *self.inner.binding.last_timings_report.borrow_mut() = Instant::now();
-        let mut first = None;
-        let custody = observer_delivery::FailureCustody::new(self);
-        for callback in callbacks {
-            #[expect(
-                clippy::disallowed_methods,
-                reason = "ADR-0287: a timings callback runs contained; delivery to the rest goes on"
-            )]
-            observer_delivery::preserve_first_failure(
-                &custody,
-                &mut first,
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| callback(&timings))),
-            );
-            #[expect(
-                clippy::disallowed_methods,
-                reason = "ADR-0287: a timings callback's drop runs contained; the first failure stays"
-            )]
-            observer_delivery::preserve_first_failure(
-                &custody,
-                &mut first,
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(callback))),
-            );
-        }
-        if let Some(first) = first {
-            std::panic::resume_unwind(first);
-        }
-        count
-    }
-
-    /// Get the time since the last timings report was sent
-    pub fn time_since_last_timings_report(&self) -> Duration {
-        self.inner
-            .binding
-            .last_timings_report
-            .borrow_mut()
-            .elapsed()
-    }
-
-    /// Debug assert: no transient callbacks are pending
-    ///
-    /// Returns `true` if there are no pending transient callbacks.
-    pub fn debug_assert_no_transient_callbacks(&self, _reason: &str) -> bool {
-        self.inner.callbacks.transient.borrow_mut().is_empty()
     }
 }
 
@@ -2591,7 +1845,6 @@ impl Default for UpdateScheduler {
 /// Builder for creating a scheduler with custom configuration.
 #[derive(Debug, Clone)]
 pub struct SchedulerBuilder {
-    task_queue_capacity: Option<usize>,
     clock: ClockSource,
 }
 
@@ -2599,21 +1852,13 @@ impl SchedulerBuilder {
     /// Create a new builder
     pub fn new() -> Self {
         Self {
-            task_queue_capacity: None,
             clock: ClockSource::Platform,
         }
     }
 
-    /// Set task queue capacity
-    pub fn task_queue_capacity(mut self, capacity: usize) -> Self {
-        self.task_queue_capacity = Some(capacity);
-        self
-    }
-
     /// Read time from `clock`: the clock the frame times passed to
-    /// `OwnerFrame::drive_frame` come from,
-    /// so frame durations and the Idle deadline are measured on the
-    /// frames' own timeline. The OS clock by default.
+    /// `OwnerFrame::drive_frame` come from, so timers and frame telemetry are
+    /// measured on the frames' own timeline. The OS clock by default.
     pub fn clock(mut self, clock: ClockSource) -> Self {
         self.clock = clock;
         self
@@ -2621,11 +1866,7 @@ impl SchedulerBuilder {
 
     /// Build the scheduler
     pub fn build(self) -> UpdateScheduler {
-        let task_queue = self
-            .task_queue_capacity
-            .map_or_else(TaskQueue::new, TaskQueue::with_capacity);
-
-        UpdateScheduler::with_parts(task_queue, self.clock)
+        UpdateScheduler::with_parts(self.clock)
     }
 }
 
@@ -2669,7 +1910,7 @@ mod tests {
     /// Red-check (reverted `finish_async_pump`): `(is_frame_scheduled(),
     /// hook_fires) == (false, 1)`, not `(true, 2)`.
     fn finish_async_pump_reissues_a_stranded_live_waiters_demand() {
-        let mut scheduler = UpdateScheduler::new();
+        let scheduler = UpdateScheduler::new();
         let hook_fires = Arc::new(AtomicU64::new(0));
         let hook_fires_for_hook = Arc::clone(&hook_fires);
         scheduler.set_on_frame_scheduled(Some(Arc::new(move || {
@@ -2682,8 +1923,8 @@ mod tests {
         let _waiter = scheduler.end_of_frame();
         assert_eq!(hook_fires.load(Ordering::Relaxed), 1);
 
-        scheduler.set_frames_enabled(false);
-        scheduler.set_frames_enabled(true);
+        scheduler.handle_app_lifecycle_state_change(AppLifecycleState::Hidden);
+        scheduler.handle_app_lifecycle_state_change(AppLifecycleState::Resumed);
         assert_eq!(
             hook_fires.load(Ordering::Relaxed),
             1,
@@ -2711,7 +1952,7 @@ mod tests {
     /// The platform wake hook fires exactly once per `frame_scheduled`
     /// false→true transition: re-requesting a pending frame stays
     /// silent, and `handle_begin_frame` re-arms the edge. A ticker that
-    /// re-registers its callback during the frame therefore wakes the
+    /// asks for a frame during the frame therefore wakes the
     /// platform for the NEXT frame — the self-sustaining animation loop.
     fn frame_scheduled_hook_fires_once_per_transition() {
         use std::sync::atomic::{AtomicUsize, Ordering};
@@ -2731,84 +1972,25 @@ mod tests {
             "a pending frame must not re-wake the platform",
         );
 
-        // A frame runs; during it a ticker re-registers (transient
-        // callback) — the cleared edge fires the hook again.
+        // A frame runs; during it a ticker asks for the next one: the
+        // edge cleared at frame begin fires the hook again.
         let owner = crate::OwnerFrame::try_new(&scheduler).expect("one frame owner");
         let now = Instant::now();
         owner
             .drive_frame(
                 now,
-                IdleDeadline::far_future(now),
                 || {},
                 || {
-                    scheduler.schedule_frame_callback(Box::new(|_| {}));
+                    scheduler.request_frame();
                 },
             )
             .expect("live owner frame");
         assert_eq!(
             fired.load(Ordering::SeqCst),
             2,
-            "re-registration after begin_frame must wake the next frame",
+            "a request after begin_frame must wake the next frame",
         );
     }
-
-    /// A microtask that unconditionally re-enqueues itself must not hang the
-    /// frame: `flush_microtasks`'s outer pass loop bounds it to
-    /// `MAX_MICROTASK_REENTRY_PASSES` passes, warning once, rather than
-    /// looping until the queue empties -- which, for a chain like this one,
-    /// it never would (issue #1159). Mirrors
-    /// `a_self_reenqueuing_build_task_is_bounded_by_the_reentry_cap_not_hung_forever`
-    /// in `tests/update_scheduler_reshape.rs`, but lives here because
-    /// `MAX_MICROTASK_REENTRY_PASSES` is crate-private.
-    ///
-    /// Unlike the Build cap, the run count is exactly the cap, not
-    /// `+ 1`: `flush_microtasks` has no trailing, unconditional second sweep
-    /// the way `handle_draw_frame` does for `Priority::Idle`.
-    fn a_self_reenqueuing_microtask_is_bounded_by_the_reentry_cap_not_hung_forever() {
-        use std::sync::atomic::AtomicUsize;
-
-        let scheduler = UpdateScheduler::new();
-        let runs = Arc::new(AtomicUsize::new(0));
-
-        // A named fn, not a closure capturing itself: each execution
-        // re-enqueues one more instance of itself, unconditionally.
-        fn requeue(scheduler: UpdateScheduler, runs: Arc<AtomicUsize>) {
-            let next_scheduler = scheduler.clone();
-            let next_runs = Arc::clone(&runs);
-            scheduler.schedule_microtask(Box::new(move || {
-                next_runs.fetch_add(1, Ordering::SeqCst);
-                requeue(next_scheduler, next_runs);
-            }));
-        }
-        requeue(scheduler.clone(), Arc::clone(&runs));
-
-        let (_frame_id, log) = flui_testing::log_capture::capture(|| {
-            crate::OwnerFrame::try_new(&scheduler)
-                .expect("the scheduler has no live owner frame")
-                .drive_frame(
-                    crate::Instant::now(),
-                    crate::IdleDeadline::far_future(crate::Instant::now()),
-                    || {},
-                    || {},
-                )
-                .expect("live owner frame");
-        });
-
-        assert_eq!(
-            runs.load(Ordering::SeqCst),
-            MAX_MICROTASK_REENTRY_PASSES,
-            "the reentry cap bounds the microtask flush loop to exactly \
-             MAX_MICROTASK_REENTRY_PASSES executions -- unlike the Build cap, nothing \
-             sweeps up a trailing leftover afterward"
-        );
-        assert_eq!(
-            log.count_containing("flush passes"),
-            1,
-            "the reentry-cap warning must fire exactly once: {log}"
-        );
-    }
-
-    // Callback Cancellation Tests
 
     // Lifecycle State Tests
 
@@ -2863,12 +2045,7 @@ mod tests {
         let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             crate::OwnerFrame::try_new(&scheduler)
                 .expect("the scheduler has no live owner frame")
-                .drive_frame(
-                    crate::Instant::now(),
-                    crate::IdleDeadline::far_future(crate::Instant::now()),
-                    || {},
-                    || {},
-                )
+                .drive_frame(crate::Instant::now(), || {}, || {})
                 .expect("live owner frame");
         }));
         assert!(unwind.is_err(), "the waker's own panic must propagate");
@@ -2891,7 +2068,7 @@ mod tests {
             SchedulerPhase::Idle,
             "end_frame_impl catches notify_frame_completion's own panic alongside the \
              post-frame callback's, so the phase reset still runs on this clean-pipeline \
-             path (issue #1057) instead of leaving the scheduler stuck at PostFrameCallbacks"
+             path instead of leaving the scheduler stuck at PostFrame"
         );
     }
 
@@ -2953,12 +2130,7 @@ mod tests {
         let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             crate::OwnerFrame::try_new(&scheduler)
                 .expect("the scheduler has no live owner frame")
-                .drive_frame(
-                    crate::Instant::now(),
-                    crate::IdleDeadline::far_future(crate::Instant::now()),
-                    || {},
-                    || {},
-                )
+                .drive_frame(crate::Instant::now(), || {}, || {})
                 .expect("live owner frame");
         }));
 
@@ -2989,11 +2161,6 @@ mod tests {
                 (
                     "frame_scheduled_hook_fires_once_per_transition",
                     frame_scheduled_hook_fires_once_per_transition as fn(),
-                ),
-                (
-                    "a_self_reenqueuing_microtask_is_bounded_by_the_reentry_cap_not_hung_forever",
-                    a_self_reenqueuing_microtask_is_bounded_by_the_reentry_cap_not_hung_forever
-                        as fn(),
                 ),
                 (
                     "lifecycle_reenable_edge_schedules_exactly_one_frame",

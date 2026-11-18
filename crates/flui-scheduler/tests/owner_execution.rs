@@ -10,8 +10,7 @@ use std::task::{Context, Poll, Waker};
 
 use flui_scheduler::__runtime::DriveFrame as _;
 use flui_scheduler::{
-    ExecutionError, FrameOutcome, IdleDeadline, Instant, OwnerFrame, UpdateScheduler,
-    WeakUpdateScheduler,
+    ExecutionError, FrameOutcome, Instant, OwnerFrame, UpdateScheduler, WeakUpdateScheduler,
 };
 
 fn nested_preparation_is_refused_before_invocation() {
@@ -23,11 +22,9 @@ fn nested_preparation_is_refused_before_invocation() {
     let now = Instant::now();
     let result = owner.drive_frame(
         now,
-        IdleDeadline::far_future(now),
         || {
             let refused = owner.drive_frame(
                 now,
-                IdleDeadline::far_future(now),
                 || nested_preparation.set(true),
                 || nested_pipeline.set(true),
             );
@@ -52,9 +49,9 @@ fn failed_preparation_does_not_fabricate_a_frame() {
     let _task = owner.async_driver().spawn_local(Box::pin(async move {
         observed.set(true);
     }));
-    let transient_ran = Rc::new(Cell::new(false));
-    let observed = Rc::clone(&transient_ran);
-    scheduler.schedule_frame_callback(Box::new(move |_| observed.set(true)));
+    let post_frame_ran = Rc::new(Cell::new(false));
+    let observed = Rc::clone(&post_frame_ran);
+    scheduler.add_post_frame_callback(Box::new(move |_| observed.set(true)));
     let mut completed = pin!(scheduler.end_of_frame());
     let mut context = Context::from_waker(Waker::noop());
     assert!(completed.as_mut().poll(&mut context).is_pending());
@@ -64,7 +61,6 @@ fn failed_preparation_does_not_fabricate_a_frame() {
     let failed = catch_unwind(AssertUnwindSafe(|| {
         owner.drive_frame(
             now,
-            IdleDeadline::far_future(now),
             || panic!("preparation failed"),
             || pipeline_ran.set(true),
         )
@@ -73,17 +69,17 @@ fn failed_preparation_does_not_fabricate_a_frame() {
     assert_eq!(failed.downcast_ref::<&str>(), Some(&"preparation failed"));
     assert!(!pipeline_ran.get());
     assert!(!task_ran.get());
-    assert!(!transient_ran.get());
+    assert!(!post_frame_ran.get());
     assert!(
         scheduler.is_frame_scheduled(),
         "failed preparation keeps frame demand"
     );
     assert!(completed.as_mut().poll(&mut context).is_pending());
     owner
-        .drive_frame(now, IdleDeadline::far_future(now), || {}, || {})
+        .drive_frame(now, || {}, || {})
         .expect("recovery frame");
     assert!(task_ran.get());
-    assert!(transient_ran.get());
+    assert!(post_frame_ran.get());
     assert!(matches!(
         completed.as_mut().poll(&mut context),
         Poll::Ready(Ok(FrameOutcome::Completed { .. }))
@@ -123,7 +119,6 @@ fn callable_retirement_preserves_the_first_failure() {
         let failure = catch_unwind(AssertUnwindSafe(|| {
             owner.drive_frame(
                 now,
-                IdleDeadline::far_future(now),
                 move || {
                     std::hint::black_box(&preparation);
                 },
@@ -145,7 +140,7 @@ fn callable_retirement_preserves_the_first_failure() {
         );
         if !refused {
             owner
-                .drive_frame(now, IdleDeadline::far_future(now), || {}, || {})
+                .drive_frame(now, || {}, || {})
                 .expect("next healthy frame");
         }
     }
@@ -175,7 +170,6 @@ fn invocation_failure_destroys_both_callable_envelopes() {
         let failure = catch_unwind(AssertUnwindSafe(|| {
             owner.drive_frame(
                 now,
-                IdleDeadline::far_future(now),
                 move || {
                     std::hint::black_box(&preparation);
                     if fail_preparation {
@@ -210,7 +204,7 @@ fn invocation_failure_destroys_both_callable_envelopes() {
             "failure does not invoke the accepted tail"
         );
         owner
-            .drive_frame(now, IdleDeadline::far_future(now), || {}, || {})
+            .drive_frame(now, || {}, || {})
             .expect("next healthy frame");
         assert!(delivered.get(), "accepted tail remains deliverable");
     }
@@ -255,7 +249,7 @@ fn terminal_release_closes_authority_and_destroys_the_result() {
             drops: Rc::clone(&capture_drops),
             fail,
         };
-        scheduler.add_persistent_frame_callback(Rc::new(move |_| {
+        let _listener = scheduler.add_lifecycle_state_listener(Rc::new(move |_| {
             std::hint::black_box(&capture);
         }));
         let producer = Rc::new(RefCell::new(Some(scheduler)));
@@ -266,7 +260,6 @@ fn terminal_release_closes_authority_and_destroys_the_result() {
         let result = catch_unwind(AssertUnwindSafe(|| {
             owner.drive_frame(
                 now,
-                IdleDeadline::far_future(now),
                 || {},
                 || {
                     let last_producer = producer.borrow_mut().take();
@@ -300,7 +293,7 @@ fn terminal_release_closes_authority_and_destroys_the_result() {
         assert!(post_frame.schedule(|_| {}).is_err());
         assert_eq!(owner.pump_background(|| {}), Err(ExecutionError::Retired));
         sibling
-            .drive_frame(now, IdleDeadline::far_future(now), || {}, || {})
+            .drive_frame(now, || {}, || {})
             .expect("sibling still executes");
     }
 }

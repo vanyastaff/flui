@@ -9,15 +9,15 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::task::Poll;
 
 use flui_scheduler::__runtime::DriveFrame as _;
-use flui_scheduler::{ExecutionError, IdleDeadline, Instant, OwnerFrame, UpdateScheduler};
+use flui_scheduler::{ExecutionError, Instant, OwnerFrame, UpdateScheduler};
 
 fn background_batches_are_bounded_with_frames_disabled() {
-    let mut scheduler = UpdateScheduler::new();
+    let scheduler = UpdateScheduler::new();
     let owner = OwnerFrame::try_new(&scheduler).expect("fresh owner");
-    scheduler.set_frames_enabled(false);
+    scheduler.handle_app_lifecycle_state_change(flui_scheduler::AppLifecycleState::Hidden);
     let visual_calls = Rc::new(Cell::new(0));
     let observed = Rc::clone(&visual_calls);
-    scheduler.add_persistent_frame_callback(Rc::new(move |_| observed.set(observed.get() + 1)));
+    scheduler.add_post_frame_callback(Box::new(move |_| observed.set(observed.get() + 1)));
     let trace = Rc::new(RefCell::new(Vec::new()));
     let task_trace = Rc::clone(&trace);
     let polls = Rc::new(Cell::new(0));
@@ -226,7 +226,6 @@ fn recovery_keeps_first_failure_through_nested_refusal_and_hook_retirement() {
             assert_eq!(
                 owner.drive_frame(
                     now,
-                    IdleDeadline::far_future(now),
                     || {},
                     move || -> () {
                         let _ = &capture;
@@ -375,10 +374,10 @@ fn worker_wake_keeps_failed_receipt_across_next_healthy_turn() {
     assert_eq!(
         owner.pump_background(|| {
             let capture = HookCapture(Arc::clone(&healthy_drops));
-            let id = scheduler.schedule_frame_callback(Box::new(move |_| {
+            let id = scheduler.add_lifecycle_state_listener(Rc::new(move |_| {
                 let _ = &capture;
             }));
-            assert!(scheduler.cancel_frame_callback(id));
+            assert!(scheduler.remove_lifecycle_state_listener(id));
             let capture = HookCapture(Arc::clone(&teardown_drops));
             owner
                 .post_frame_handle()

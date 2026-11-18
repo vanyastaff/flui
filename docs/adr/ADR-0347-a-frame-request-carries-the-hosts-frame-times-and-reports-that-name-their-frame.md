@@ -10,6 +10,7 @@
   decision 0 only (the number of frames in flight is a setting whose default is 2)
 - **Superseded-by:** [ADR-0356](ADR-0356-a-surface-its-compositor-paces-presents-without-waiting-on-the-compositor.md)
   decision 5 only: a surface its compositor paces (Wayland) presents in `Mailbox`, else `Immediate`.
+- **Superseded-by:** [ADR-0368](ADR-0368-a-frame-polls-its-tasks-runs-its-pipeline-then-its-post-frame-callbacks.md) decision 3 only: no idle work is bounded, and the request's times stay data.
 - **Related:** [ADR-0305](ADR-0305-one-gpu-context-serves-every-surface-through-a-raster-executor.md)
   §4 (a frame handed to a sink is stamped with its `FrameStamp`, which its settlement names) and §5
   (the latency setting is the window slot's), [ADR-0207](ADR-0207-host-input-boundary-and-timeline.md)

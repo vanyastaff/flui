@@ -70,7 +70,7 @@ pub(super) fn rejected_nested_pump_preserves_outer_commits_and_animation_time() 
     let weak_runtime = Rc::downgrade(&runtime);
     runtime
         .scheduler
-        .add_persistent_frame_callback(Rc::new(move |_| {
+        .add_post_frame_callback(Box::new(move |_| {
             let runtime = weak_runtime.upgrade().expect("outer pump owns runtime");
             let commands = Arc::clone(&observed_commands);
             runtime
@@ -166,9 +166,9 @@ impl UiRuntime {
     ///    ([`Self::drain_owner_inbox`]), so this catches only what a worker
     ///    sent in between; the redraw request such a command raises stays
     ///    set, and the host's next gate reads it (one extra frame at most);
-    /// 2. begin frame: transient callbacks, microtasks and the one mid-frame
-    ///    async poll, at the timestamp `clock` returns;
-    /// 3. draw frame: persistent callbacks, then this UI runtime's pipeline and
+    /// 2. begin frame: the one mid-frame async poll, at the timestamp `clock`
+    ///    returns;
+    /// 3. the pipeline: this UI runtime's pipeline and
     ///    the submit through `sink` (the crate-private `render_frame`);
     /// 4. end frame: the shared post-frame queue and this UI runtime's owner-local
     ///    post-frame lane, in one total order;
@@ -242,23 +242,6 @@ impl UiRuntime {
         let request = pending.map(|(request, _)| request);
         let now = self.frame_time_for(request, sampled);
         self.last_frame_time.set(Some(now));
-        // Idle work runs until the instant the platform names for this frame's
-        // present, else until the next refresh the presentation's newest
-        // presentation report places, else until the host's deadline. The
-        // refresh is the next one after the host's own reading: the frame's
-        // time is its vsync, which the owner may reach a refresh or more
-        // late, and a refresh between the two has passed.
-        let deadline = pending
-            .and_then(|(request, presentation)| {
-                request
-                    .target_present
-                    .and_then(|shown| self.instant_of(shown))
-                    .or_else(|| presentation.clock().next_presentation_after(sampled))
-            })
-            .map_or_else(
-                || clock.idle_deadline(now),
-                flui_scheduler::IdleDeadline::from,
-            );
         let mut frame_time = None;
         let mut geometry_turn = None;
         #[expect(
@@ -271,10 +254,9 @@ impl UiRuntime {
                 // transaction, with the commit anchor after it (ADR-0027 §3).
                 let presented = ui_runtime.drive_frame(
                     now,
-                    deadline,
                     || {
                         frame_time = Some(FrameTimeGuard::publish(self, now));
-                        // Before the frame begins: it copies the budget's target.
+                        // Before the frame begins, so its span carries this frame's period.
                         ui_runtime.publish_display_period();
                         geometry_turn = Some(ui_runtime.begin_geometry_turn());
                         let report = ui_runtime.drain_commands();

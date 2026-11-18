@@ -17,7 +17,7 @@ begun, which is how a profiler that cannot be a framework dependency judges a fr
 the display (`frame_span_carries_the_display_period`). The scheduler gates nothing on it: it keeps
 no frame-rate target, budget or jank count of its own.
 
-### Lifecycle and timing observers preserve accepted delivery
+### Lifecycle observers preserve accepted delivery
 
 Lifecycle state and frame eligibility commit before notification. Reentrant
 transitions enter an owner-local FIFO; surviving listeners finish the current
@@ -29,13 +29,7 @@ post-frame retirement. Outside a frame it establishes that custody for the
 notification; nested owner execution inherits it and restores the enclosing
 receipt on return. A caught observer panic therefore cannot make subsequent
 cleanup appear healthy. The next independent operation retires normally.
-
-Frame timing collection requires a subscriber. The completed frame's idle
-boundary flushes at the reporting interval or at 128 retained samples. Recovery
-retains only the newest 128 samples; removing the last subscriber clears the
-unreported batch. Explicit `report_timings` flushes a partial batch. Reporting
-drains storage before invoking callbacks and finishes healthy listeners before
-propagating their first failure. `observer_delivery_contract` checks lifecycle
+`observer_delivery_contract` checks delivery order and containment recovery.
 order, containment recovery, opt-in collection and automatic timing delivery.
 
 ### Scheduler storage belongs to one UI owner
@@ -54,11 +48,11 @@ pins owner retirement while a platform wake hook remains in flight.
 
 ### Exhausted task identities permanently refuse admission
 
-Task identities (the process-wide `Task` allocator and each async driver's)
+An async driver's task identities
 never wrap: the integer maximum is a permanent exhaustion state, and once it is
 reached every admission panics, including after the panic is caught, tasks are
 cancelled or another driver clone is used. An accepted task therefore keeps its
-cancellation authority and its priority/FIFO position. Admission checks capacity
+cancellation authority and its FIFO position. Admission checks capacity
 before polling a future or publishing a task, and the rejected callback or
 future is destroyed under containment (ADR-0281), so a panic from its destructor
 is discarded and cannot replace the capacity failure.
@@ -72,8 +66,7 @@ The private `scheduler::post_frame_dispatch` module owns this snapshot and tail
 recovery; the frame-close path retains phase and completion bookkeeping.
 The next eligible batch sorts those IDs with newer registrations, so surviving
 eligible work precedes eligible work registered reentrantly by the failed callback.
-Cancellation records remain intact while their deferred entries exist, including
-across aborted host frames. No user callback or captured
+Deferred entries keep their IDs across aborted host frames. No user callback or captured
 destructor runs under a queue borrow.
 
 `OwnerFrame::presentation_scope` mints the exact owner-local completion authority
@@ -88,7 +81,7 @@ completing host's ordinary `FrameTiming`.
 
 Eligibility is rechecked immediately before removing an active entry: an earlier
 callback can enter and suspend a newer segment after the batch snapshot. Such an
-entry returns to the queue with its original ID and cancellation record, while
+entry returns to the queue with its original ID, while
 healthy siblings continue. An older completed epoch is also blocked while its
 presentation's current geometry is incomplete.
 
@@ -200,74 +193,14 @@ scheduler release (ADR-0182). Producer handles expose registration and demand;
 they cannot begin, draw, finish or abort execution. Frame timing is observed
 through the current frame inside callbacks or through `FrameOutcome` afterward.
 
-**Per-queue policy, so "closed" does not also mean "lossy":** every queue
-this scheduler drains before the pipeline runs now pops one entry at a time
-and invokes it OUTSIDE the queue's lock, rather than draining a whole
-matching batch into a local buffer before running any of it. Each is bounded
-at entry, before invoking anything — but by two DIFFERENT mechanisms, chosen
-per queue rather than uniformly, after review found each one wrong on the
-other's queue (see the two per-queue entries below for the measured
-regressions each direction produced):
-
-- `handle_begin_frame`'s transient-callback loop pops from the front of
-  `CallbackState::transient` (now a `VecDeque`, not a `Vec`, to make the pop
-  O(1) — the same reason `flush_microtasks` already used one), bounded by
-  an id WATERMARK: the id of the LAST (`back()`) entry queued at entry, read
-  once before invoking anything. `CallbackId`s are minted from this
-  scheduler's own `id_mint` (an owner-local `IdMint`) in registration order, so `back().id`
-  at entry is exactly the highest id already queued, in O(1) — no scan
-  needed, since a `VecDeque` already keeps registration order — but ONLY
-  because `schedule_frame_callback` mints that id INSIDE the same
-  `transient` lock acquisition as the push, making id order and push order
-  the same fact rather than two facts that could disagree. Minting the id
-  BEFORE acquiring the lock (tried first, and wrong) let two threads racing
-  this method push `[id6, id5]`: `back().id` (5) then sits BELOW
-  `front().id` (6), so the watermark loop's very first check fails and
-  NEITHER callback ever runs, every frame, until a later registration
-  happens to raise the watermark — a permanent stall from two lone tickers
-  registered concurrently, measured via a repeated two-thread race (a
-  single race is not reliably reproducible on a timer). A callback that
-  registers another transient callback of its own from inside itself must
-  still have the new one deferred to the NEXT frame (issue #1058's
-  reentrant-registration contract): the fresh entry always gets a strictly
-  greater id and is excluded by `front().id <= watermark` regardless of
-  where it lands. A remaining-COUNT bound (tried first, and wrong, for a
-  different reason) does not survive cancellation: a callback that cancels
-  a not-yet-run sibling (`cancel_frame_callback` removes it from the live
-  queue directly, #1156) and registers a fresh one in its place leaves the
-  queue's LENGTH unchanged from that callback's own perspective, so a count
-  budget still reaches the fresh entry in the SAME call — measured: it ran
-  in the same frame it was registered in.
-- [`TaskQueue`](src/task.rs) keeps one FIFO lane per priority and drains
-  them highest priority first, one task at a time, bounded by an id
-  WATERMARK per lane: each lane's newest task id at entry. Task ids grow in
-  admission order and the lanes have no mid-scan removal, so a task queued
-  during the drain is excluded by `front().id <= watermark` wherever it
-  lands, at any priority. A task that re-queues itself therefore cannot run
-  twice in one drain or take older, lower-priority tasks' turns (a count
-  budget over one heap let a re-queueing `UserInput` task starve every older
-  `Build` task, frame after frame). No side buffer exists, so a panicking
-  task loses only itself.
-- `flush_microtasks` runs passes over the microtask queue, each pass the
-  entries queued when it began, so a microtask queued by another one runs
-  one pass later, still in this frame.
-- Both the Build drain in `handle_draw_frame` and `flush_microtasks` share
-  one run budget fixed at entry (`task_run_budget`: four runs per queued
-  entry, at least 256) across all passes, beside the 32-pass caps. The pass
-  caps bound depth; the budget bounds work: an entry that queues two more on
-  every run doubles the queue each pass, and a pass cap alone allowed about
-  2^32 runs in one frame. Idle tasks are admitted one at a time against the
-  frame's deadline, on the scheduler's clock. Whatever a bound leaves queued
-  runs next frame, which the frame requests; work queued between frames
-  (`schedule_microtask`, `add_task`) requests its frame when it is queued.
-
-The result: **the panicking entry itself is consumed; every entry still
-queued behind it is preserved and runs on the next completed frame — not
-retried, not silently dropped.** Persistent callbacks need no such
-treatment at all: `handle_draw_frame` clones the registration list rather
-than draining it (they "cannot be unregistered", per their own doc), so a
-panic there costs nothing structurally — the same callback (including the
-one that panicked) simply runs again next frame, same as always.
+**What runs before the pipeline:** the frame polls its ready async tasks once
+(`OwnerFrame`'s `AsyncDriver`), then the driver's pipeline runs. A task whose
+poll panics is removed with its slot; the tasks behind it in the ready batch
+stay ready and are polled by the next frame (see "`AsyncDriver` indexes ready
+tasks instead of scanning every resident one" below). The scheduler keeps no
+other pre-pipeline queue: there is no one-shot or persistent frame-callback
+lane, no microtask queue and no priority task queue, so nothing before the
+pipeline needs a re-entry cap or a run budget.
 
 **The frame's post-frame callbacks do not run** for an aborted frame —
 see the private abort cleanup. **Completion
@@ -280,15 +213,13 @@ resolves `Err(SchedulerClosed)` entry below for the full contract and why
 issue #1162 shaped it this way.
 
 **The `frame_scheduled` contract for a catcher:** `handle_begin_frame`
-cleared `frame_scheduled` before any callback ran. Abort cleanup re-arms it
-only for work accepted behind the failure (one-shot callbacks, microtasks,
-tasks), and a failed post-frame batch only for its queued tail: that work
-was promised a frame and nothing else asks for one once the caller resumes
-the panic. The failed entry was already removed, so the request cannot
-re-drive it. It does not re-arm for the failure itself, which would hot-loop
-a caller that keeps re-driving a deterministically panicking frame; a caller
-that catches the resumed panic and wants another frame calls
-`request_frame()` itself. See the contract of the frame drive (`__runtime::DriveFrame::drive_frame`).
+cleared `frame_scheduled` before the frame's tasks were polled. Abort cleanup
+does not re-arm it for the failure itself, which would hot-loop a caller that
+keeps re-driving a deterministically panicking frame; a failed post-frame batch
+re-arms it only for its queued tail, which was promised a frame that nothing
+else asks for once the caller resumes the panic. A caller that catches the
+resumed panic and wants another frame calls `request_frame()` itself. See the
+contract of the frame drive (`__runtime::DriveFrame::drive_frame`).
 
 **The async zombie-slot fix (`AsyncDriver::poll_ready`):** a panic inside
 `future.poll` used to leave that task's slot in `Inner::tasks` holding
@@ -335,7 +266,7 @@ runs, both discovered by review after the first pass shipped:
 
 - The frame drive (`__runtime::DriveFrame::drive_frame`) catches failure and calls `abort_frame_impl`, which calls
   `notify_frame_completion` — and a panicking waker there is a second panic
-  on top of the pipeline's (or `handle_begin_frame`/`handle_draw_frame`'s)
+  on top of the pipeline's (or a task poll's)
   own. Abort cleanup runs inside its own `catch_unwind`; a
   secondary panic is traced at `error` level and the ORIGINAL payload is
   what `resume_unwind`s, always — measured before the fix: the escaped
@@ -345,7 +276,7 @@ runs, both discovered by review after the first pass shipped:
   `notify_frame_completion` OUTSIDE the post-frame callback's own
   `catch_unwind`, so a panicking waker there used to escape straight past
   the phase reset at the end of that function, leaving the scheduler stuck
-  at `PostFrameCallbacks` with `current_vsync_time` still set — the exact
+  at `PostFrame` with `current_vsync_time` still set — the exact
   class of bug this issue exists to close, just reachable from the success
   path instead of the failure one. `notify_frame_completion` is now caught
   there too, and folded into the SAME `callback_result`-or-`notify_result`
@@ -361,164 +292,75 @@ to become the one the caller observes.
 
 **Alternatives considered:**
 
-- A `Drop`-based guard around the whole `handle_begin_frame`/
-  `handle_draw_frame`/`pipeline` sequence, instead of `catch_unwind` +
-  explicit `abort_frame`. Rejected for the same reason `abort_frame`'s own
-  doc already gives for the pipeline-only boundary: forcing
-  `PersistentCallbacks -> Idle` (or `TransientCallbacks -> Idle`, or
-  `MidFrameMicrotasks -> Idle`) trips the phase validator's `debug_assert!`
-  *while already panicking* — a double panic, i.e. `abort` — and running
-  user-callback-adjacent cleanup during an unwind is a second hazard for no
-  benefit.
-- Isolating each callback family per-entry, so a panicking transient
-  callback cannot take the rest of the frame down with it. Rejected: this
-  crate's panic policy is that a panic poisons the whole operation
-  (`docs/PANIC-POLICY.md`); per-callback isolation would be a policy change
-  well beyond a bookkeeping fix.
+- A `Drop`-based guard around the whole task-poll and pipeline sequence,
+  instead of `catch_unwind` + explicit `abort_frame`. Rejected for the same
+  reason `abort_frame`'s own doc gives: forcing `Frame -> Idle` through the
+  phase machine trips its `debug_assert!` *while already panicking* — a double
+  panic, i.e. `abort` — and running user-callback-adjacent cleanup during an
+  unwind is a second hazard for no benefit.
+- Isolating each task or callback per entry, so a panicking one cannot take
+  the rest of the frame down with it. Rejected: this crate's panic policy is
+  that a panic poisons the whole operation (`docs/PANIC-POLICY.md`);
+  per-callback isolation would be a policy change well beyond a bookkeeping
+  fix.
 
-### No legacy, lock-tied frame-callback registration API
+### Callbacks run with no scheduler storage borrowed
 
-**Rule:** every callback family this scheduler owns must invoke user code
-with **no scheduler-owned storage lock held**. A callback must be free to
-call back into the scheduler, including a read-only accessor such as
-`current_frame()`.
+**Rule:** every callback family this scheduler owns (post-frame callbacks,
+lifecycle listeners, completion wakers, the `on_frame_scheduled` platform-wake
+hook) invokes user code with **no scheduler-owned borrow or lock held**. A
+callback is free to call back into the scheduler, including a read-only
+accessor such as `current_frame()`.
 
-**Conflict:** issue #1058 found one family that violated this: the retired
-`schedule_frame`/`FrameCallback` registration, paired with
-`handle_begin_frame`'s dispatch loop
-(`if let Some(timing) = self.inner.frame.current_frame.lock().as_ref() {
-callback(timing); }`), kept the `current_frame` guard alive for the whole
-call — the `if let` scrutinee's temporary lives through the block even
-under edition 2024's if-let rescoping. A registered callback that called
-`current_frame()` deadlocked on itself; a bounded reproduction timed out at
-5 seconds.
+`scheduler/lock_discipline_tests.rs`'s `assert_no_scheduler_lock_held`
+(`#[cfg(test)]`) destructures `SchedulerInner`, `FrameState`, `CallbackState`,
+`BindingState` and `WakeShared` with no trailing `..`, so a field added to any
+of them fails to compile there until it is classified, and probes every
+`RefCell` and `Mutex` a callback could observe. It runs from inside a
+post-frame callback and a frame-completion waker
+(`callbacks_run_with_no_scheduler_lock_held`). A removed lifecycle listener is
+located under the borrow (`position` + `remove`) and dropped only after the
+borrow ends, since its captures may re-enter the scheduler from `Drop`.
+**Unasserted** for the lifecycle-listener and wake-hook families: no test runs
+the oracle from inside them.
 
-**Choice:** delete the API outright rather than fix the lock scope in
-place. Transient callbacks receive the vsync `Instant`, and a second,
-"legacy" registration path carrying different timing-argument semantics
-(a `&FrameTiming` argument) next to `schedule_frame_callback` has no
-reason to exist. The retired API had no distinct
-semantics to preserve: its only production caller
-(`RenderingBinding::request_visual_update`) passed an empty
-closure, and every other caller in the crate's own doctest/examples used it
-identically to `schedule_frame_callback`. Per this crate's
-active-development posture (no shims, no deprecated aliases), the fix is
-the deletion, not a lock-scope patch that leaves a second,
-narrower-purpose registration API standing.
+### Visual updates honour the lifecycle and the frame in flight
 
-**Every remaining callback family already followed, and continues to
-follow, the no-lock-held rule.** A shared test oracle
-(`scheduler/lock_discipline_tests.rs`'s `assert_no_scheduler_lock_held`,
-`#[cfg(test)]`, exhaustively destructuring `FrameState`/`CallbackState`/
-`BindingState` plus a `TaskQueue` probe so a new lock cannot
-be added to any of them without this oracle noticing) `try_lock()`s every
-mutex a callback could legally observe and asserts each is free. It is
-invoked from inside a transient callback and a frame-completion waker
-(`callbacks_run_with_no_scheduler_lock_held`). For the persistent, shared
-post-frame, owner-local post-frame, idle, microtask, lifecycle-listener
-and timings-callback families and the `on_frame_scheduled` platform-wake
-hook, **Unasserted:** no test pins this. Three sibling sites shared a
-related but distinct hazard: `Vec::retain` drops the *removed* element
-while the collection's lock is still held, so a cancelled/removed
-callback's `Drop` could deadlock the same way if it re-entered the
-scheduler. All three were fixed the same release
-(`cancel_frame_callback`, `remove_lifecycle_state_listener`, and, for
-consistency, `remove_timings_callback`) by locating the match under the
-lock without a full-`Vec` copy (`position`+`remove` for the two
-`CallbackId`-addressed sites, `extract_if` for the `Arc::ptr_eq`-addressed
-one) and dropping it only after the guard falls. **Unasserted:** no test
-pins this.
+**Rule:** `UpdateScheduler::ensure_visual_update` requests a frame only while
+frames are enabled, which the lifecycle state decides (`Hidden`, `Paused` and
+`Detached` disable them). On the thread driving the frame it decides by phase,
+in a `match` over `phase()` with every `SchedulerPhase` variant spelled out and
+no wildcard arm:
 
-**Alternatives considered:**
+- `Idle` and `PostFrame` request a frame (from `PostFrame` that is the NEXT
+  frame, since the current frame's pipeline has already run).
+- `Frame` does not deliver the request: a visual update issued before the
+  pipeline is inside the frame that will observe it, and one issued after the
+  pipeline consumed its dirt (a hover callback run from the frame's tail, a
+  paint-time mark) is recorded instead, and the frame's driver reads
+  `take_late_visual_update` once its pipeline is done and asks for the next
+  frame when anything is still dirty.
 
-- Snapshot `FrameTiming` under the lock and release it before invoking the
-  legacy callback, keeping the API. Rejected: it does not remove the
-  question of why two registration paths exist with overlapping purpose,
-  and the active-dev policy in `AGENTS.md` prefers reshaping
-  a wrong-shaped API over patching around it when nothing depends on its
-  distinct behavior.
-- Make `current_frame`'s mutex reentrant (e.g. `parking_lot::ReentrantMutex`).
-  Rejected per the issue's own "possible direction" note: it would mask the
-  same class of bug at every other call site instead of enforcing the
-  no-lock-held discipline structurally.
+A caller on any other thread always requests, since a lost cross-thread wake
+is worse than a surplus frame (see `frame_thread`'s own doc). Animation
+continuation demand is committed by the presentation frame path and routed
+through its wake capability, independent of this phase gate.
 
-**Trade-off accepted:** none observed. The deleted API had exactly one
-production call site, itself replaced by the gated `ensure_visual_update`
-call described below, and no external consumer of this crate (pre-1.0,
-unpublished) depends on it.
+`RenderingBinding::request_visual_update` (`flui-runtime`'s
+`renderer_binding.rs`) calls `ensure_visual_update`, so a backgrounded
+application does not schedule a frame on every pipeline request; the gate is
+the scheduler's alone, never a second copy at a call site.
+**Unasserted:** no test pins the binding's route.
 
-### `request_visual_update` routes through the `frames_enabled` gate, not the raw one
+The phase gate is the dedup `request_frame_impl`'s `frame_scheduled`
+coalescing alone cannot provide: that flag says "a frame is already
+scheduled," not "a frame is already running and would observe this request
+anyway." It applies on the owning thread: `UpdateScheduler` owns thread-local
+callbacks; workers use `FrameWaker` to request a later frame.
 
-**Rule:** a caller of `UpdateScheduler::ensure_visual_update` must have its
-request honor `frames_enabled`. It calls the equally
-`frames_enabled`-gated frame request from `SchedulerPhase::Idle`/
-`PostFrameCallbacks` (a call from `PostFrameCallbacks` requests the NEXT
-frame, since the current frame's own pipeline has already run by that
-phase), and no-ops during the three mid-frame phases
-(`TransientCallbacks`, `MidFrameMicrotasks`, `PersistentCallbacks`) —
-but only for the thread already driving the frame (see `frame_thread`'s
-own doc; a caller on any other thread always requests, since a lost
-cross-thread wake is worse than a surplus frame). Even for the driving
-thread this is not a blanket guarantee that the in-flight frame observes
-the call: it holds for `.transientCallbacks`/`.midFrameMicrotasks`, which
-precede the pipeline in the frame's slot order, but not for
-`.persistentCallbacks`, where the pipeline itself runs. What keeps a
-same-thread caller's demand from being lost is not these no-op arms but
-what the demand is for: a visual update issued before the pipeline is
-inside the frame that will observe it (the transient and microtask slots
-precede the pipeline). One issued in `.persistentCallbacks` may come after
-the pipeline consumed its dirt (a hover callback run from the frame's
-tail, a paint-time mark), so that arm records it, and the frame's driver
-reads `take_late_visual_update` once its pipeline is done and asks for the
-next frame when anything is still dirty. Animation continuation demand is
-committed by the presentation frame
-path and routed through its wake capability,
-independent of this phase gate. `UpdateScheduler::ensure_visual_update`
-implements the phase switch as a `match` over `phase()`, with every
-`SchedulerPhase` variant spelled out and no wildcard arm: on the thread
-driving the frame, only `Idle`/`PostFrameCallbacks` reach the
-`frames_enabled`-gated `schedule_frame_if_enabled` call; on any other
-thread, every phase reaches it.
-
-**Conflict:** `RenderingBinding::request_visual_update`
-(`flui-runtime`'s `renderer_binding.rs`) called the retired
-`schedule_frame`, which pushed onto the (now-deleted) legacy queue and then
-called the **ungated** `request_frame()` directly. A binding whose
-scheduler had frames disabled (backgrounded app, `Hidden`/`Paused`/
-`Detached` lifecycle state) would still schedule a frame on every pipeline
-request.
-
-**Choice:** `request_visual_update` now calls
-`UpdateScheduler::ensure_visual_update()`, which already existed as the
-`frames_enabled` gate (`ensure_visual_update` calls
-`schedule_frame_if_enabled`, which calls `request_frame` only when
-`frames_enabled` is true) and needed no new code, only a caller.
-**Unasserted:** no test pins this.
-
-**Alternatives considered:**
-
-- Gate inside `request_visual_update` itself (`if scheduler.frames_enabled()
-  { scheduler.request_frame(); }`), duplicating `schedule_frame_if_enabled`'s
-  body at the call site. Rejected: the scheduler already owns this exact
-  check; a second copy in a consuming crate is the kind of drift this
-  crate's own `should_schedule_frame`/`schedule_frame_if_enabled` pair
-  exists to prevent.
-
-**Phase gate plus driving-thread requirement:** the `match` above is the
-phase-based dedup `request_frame_impl`'s `frame_scheduled` coalescing
-alone cannot provide: that flag says "a frame is already scheduled," not
-"a frame is already running and would observe this request anyway." It
-applies on the owning thread: `UpdateScheduler` owns thread-local callbacks;
-workers use `FrameWaker` to request a later frame. Scoped to
-`ensure_visual_update` alone: `schedule_frame_if_enabled` (shared with
-`end_of_frame`) and `set_frames_enabled` keep their existing, unrelated
-contracts.
-
-**`request_frame` stays intentionally ungated:** it is the "always
-schedule, don't ask" entry point every unconditional caller (tickers via
-`schedule_frame_callback`, `schedule_forced_frame`, the
-`set_frames_enabled` re-enable edge) already reaches for, and its raw,
-unconditional contract is unchanged by this phase gate.
+**`request_frame` stays intentionally ungated:** it is the "always schedule,
+don't ask" entry point for a caller that needs the next frame regardless of the
+lifecycle (an owner that resumed, a test driving frames).
 
 ### Pipeline visual updates route through `ensure_visual_update`'s phase gate
 
@@ -592,7 +434,7 @@ cancellable values rather than listeners on one shared future, which is also
 what makes the registry the natural place to keep the demand memo.
 
 **Choice:** the predicate is "no LIVE entry", evaluated on the vec already held
-under the registry guard, and the demand call is `schedule_frame_if_enabled()`
+under the registry guard, and the demand call is `request_frame_if_enabled()`
 rather than the ungated `request_frame()`. The guard is released before the demand,
 because the demand reaches the `on_frame_scheduled` hook, which must find every
 scheduler mutex, `completion_waiters` included, free. **Unasserted:** no test
@@ -630,17 +472,15 @@ That predicate has two halves, and only the first belongs to the registry:
   - **A frames-enabled edge re-issues a demand the pump left for dead while
     frames were disabled** — the case the pump's own re-check cannot reach,
     since it reads `frames_enabled` false there and stays silent on purpose.
-    **The production carrier is `handle_app_lifecycle_state_change`**, whose
-    `if !frames_were_enabled && should_render { self.request_frame(); }` leg
-    predates issue #1162 and is pinned by
+    **The carrier is `handle_app_lifecycle_state_change`**, which requests a
+    frame on exactly the disabled→enabled edge, pinned by
     `lifecycle_reenable_edge_schedules_exactly_one_frame`. That is the edge a
     real app crosses, and the sequence is reachable rather than theoretical:
     frames enabled, a demand issued, lifecycle goes `Hidden`, a `PumpBackground`
     tick revokes the latch through background preparation with no drain, later
     registrations stay silent behind the still-live waiter, and the resume
-    edge is what recovers them. `set_frames_enabled(true)` uses the same
-    re-request so the public setter mirrors the lifecycle path rather than
-    being a second way to reach the stranded state.
+    edge is what recovers them. The lifecycle is the only writer of
+    `frames_enabled`, so no second path reaches the stranded state.
 
   Both mechanisms are required: a background turn can consume demand without
   a disable/enable edge, and a disabled turn cannot deliver a visual frame.
@@ -664,7 +504,7 @@ That predicate has two halves, and only the first belongs to the registry:
   241 probes. **Unasserted:** no test pins this.
 - Gating the demand on `phase() == Idle`. Rejected: it goes silent in the post-drain window, where
   `notify_frame_completion` has already emptied the registry but the phase is
-  still `PostFrameCallbacks`, so a waiter registered from a completion waker
+  still `PostFrame`, so a waiter registered from a completion waker
   hangs. **Unasserted:** no test pins this.
 - A per-frame "a frame is already open" flag, cleared when the frame ends.
   Rejected for the same defect one level down: every candidate clear point sits
@@ -695,8 +535,8 @@ overstates it:** it bounds requests *within* one frame, not across frames. A
 caller that registers on every frame sustains the frame loop indefinitely, and
 nothing here damps it: `handle_begin_frame` clears the latch at the top of each
 frame, the registration re-demands, and that frame's own drain removes the
-entry so the next registration re-demands too. A persistent callback that drops
-an `end_of_frame()` each frame therefore keeps the scheduler awake forever. That
+entry so the next registration re-demands too. A caller that registers
+an `end_of_frame()` every frame therefore keeps the scheduler awake forever. That
 is the same standing demand an animation ticker creates, and it is what asking
 for a frame every frame means rather than a runaway; the point is that "one
 surplus frame" describes a burst, not a repeating caller.
@@ -846,10 +686,7 @@ interleaving. `SeqCst` on all four accesses this race instance touches — the
 pump's `frame_scheduled` swap AND its `frames_enabled` load; the edge's
 `frames_enabled` swap AND (via `request_frame_impl`) its `frame_scheduled`
 swap — puts them on one global total order, which rules that outcome out.
-Marked at five code sites in total, since `frames_enabled`'s swap has two
-production carriers (`set_frames_enabled` and
-`handle_app_lifecycle_state_change`) even though only one of them fires per
-race instance. No single-threaded test can redden a regression from
+Marked at each of the four sites. No single-threaded test can redden a regression from
 `SeqCst` back to `Acquire`/`Release` here; only a `loom` model could prove
 it, and none exists in this crate yet.
 
@@ -1041,51 +878,16 @@ it. Local measurement, `main` (`f2f1c4d9`) vs. this change, on a
 unchanged, as expected: it was never the O(N)-scan problem this issue fixes,
 so there is no O(N)-vs-O(R) gap for it to close.
 
-### `TaskQueue::clear` — deleted, not fixed
-
-**Rule:** an API with zero production callers and no distinct semantics from
-an existing one is deleted outright, not patched in place, per this crate's
-active-development posture (no shims, no dead surface kept "just in case").
-
-**Conflict:** a lock-drop discipline sweep found `TaskQueue::clear` dropping
-its cleared tasks while `queue`'s lock was still held — a
-statement-under-guard shape that runs arbitrary `Drop` code inside the
-critical section. Re-tracing its callers first: the only ones were its own
-definition and one test (`tests/integration_tests.rs`'s
-`test_task_queue_clear`) that existed solely to exercise the method itself,
-not any behavior a caller depended on.
-
-**Choice:** delete `TaskQueue::clear` and its test rather than move the drop
-outside the lock. This is the identical shape and identical choice as the
-retired `schedule_frame`/`current_frame()` family documented above ("No
-legacy, lock-tied frame-callback registration API"): an unused API surface
-carrying a lock-discipline hazard is not worth preserving just to fix its
-hazard — deleting it removes the hazard AND the dead surface in one motion.
-`count_by_priority`, which shares this queue, keeps its lock but now scopes
-it to the counting loop only (no hazard there — `PriorityCount` is a plain
-`Copy` struct with no significant `Drop` — but a lock held longer than the
-work it protects is still worth narrowing on its own merits). It stays,
-unlike `clear`, though it has no caller EITHER today: it is a read-only
-diagnostics accessor, and an unused QUERY costs nothing and commits an
-owner to no distinct behavior, where `clear` was an unused MUTATION whose
-only two observers — its own definition and a test built solely to
-exercise it — is precisely the shape this crate deletes on sight.
-
-**Trade-off accepted:** none. Nothing outside this crate observed `clear`'s
-existence.
-
 ### Identity exhaustion refuses reuse
 
 Every id this scheduler hands out comes from the foundation `IdMint` family;
 the crate keeps no counter of its own. Callback ids come from the scheduler's
 owner-local `IdMint<CallbackId>` and an async task's id from its `TaskStore`'s
 owner-local `IdMint`, because both are minted only on the owner thread.
-`TaskId` alone comes from the process's `AtomicIdMint`: a `Task` is created on
-whichever thread asks. `CallbackId` and `TaskId` are opaque, so no caller
-builds one from a number, and the async task id is a private type of its own
-domain. A minted id is never issued again; once the id space is exhausted,
-every later issue refuses, typed (`IdExhausted`), and stays refused
-(`exhausted_task_ids_preserve_priority_fifo`,
-`exhausted_task_ids_preserve_cancellation_and_progress`). The registration
+`CallbackId` is opaque, so no caller builds one from a number, and the async
+task id is a private type of its own domain. A minted id is never issued again;
+once the id space is exhausted, every later issue refuses, typed
+(`IdExhausted`), and stays refused
+(`exhausted_task_ids_preserve_cancellation_and_progress`). The registration
 seam turns that refusal into a panic before admitting work it cannot name,
 with the rejected callback or future destroyed under containment.

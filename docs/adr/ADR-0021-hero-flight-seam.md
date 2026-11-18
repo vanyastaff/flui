@@ -2,6 +2,7 @@
 
 - **Status:** Accepted (2026-07-09)
 - **Date:** 2026-07-09
+- **Superseded-by:** [ADR-0368](ADR-0368-a-frame-polls-its-tasks-runs-its-pipeline-then-its-post-frame-callbacks.md) for §3 the phase list only: a frame polls its tasks, runs its pipeline, then its post-frame callbacks.
 - **Superseded in part by:** ADR-0078 (capability acquisition)
 - **Amended:** 2026-11-03 — gesture-driven flights (edge swipe-back) and flights across nested navigators are implemented and stated as §9; the "not carried" entries for them are removed. §1 to §7 are unchanged, and §8's public surface lists `Hero::transition_on_user_gestures`.
 

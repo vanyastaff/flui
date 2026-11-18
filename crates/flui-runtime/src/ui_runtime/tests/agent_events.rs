@@ -344,7 +344,7 @@ fn a_frame_that_unwound_in_a_callback_is_still_reported() {
     let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         frame(&ui_runtime, &mut sink);
     }));
-    assert!(unwound.is_err(), "the callback's panic leaves the frame");
+    assert!(unwound.is_err(), "the task's panic leaves the frame");
     let events = drain(&mut stream);
     assert_eq!(
         kinds(&events),
@@ -367,14 +367,18 @@ fn a_frame_that_unwound_before_the_pipeline_counts_for_no_wait() {
         .expect("the inbox has room");
     let _report = ui_runtime.drain_commands();
     assert!(parked.try_take().is_none(), "no frame has come since");
-    ui_runtime
-        .scheduler()
-        .schedule_frame_callback(Box::new(|_| panic!("a transient callback panics")));
+    // A ready task is polled when the frame opens, before its pipeline.
+    let _task = ui_runtime
+        .owner_frame()
+        .async_driver()
+        .spawn_local(Box::pin(async {
+            panic!("a task panics before the pipeline")
+        }));
 
     let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         frame(&ui_runtime, &mut sink);
     }));
-    assert!(unwound.is_err(), "the callback's panic leaves the frame");
+    assert!(unwound.is_err(), "the task's panic leaves the frame");
     assert!(
         parked.try_take().is_none(),
         "no frame was rendered, so the wait stays parked"

@@ -101,10 +101,6 @@ path = "crates/flui-scheduler/src/frame_clock.rs"
 count = 1
 
 [[allow]]
-path = "crates/flui-scheduler/src/task.rs"
-count = 1
-
-[[allow]]
 path = "crates/flui-view/src/binding/tree_cell.rs"
 count = 3
 
