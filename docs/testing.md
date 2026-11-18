@@ -134,7 +134,7 @@ cargo xtask checks                        # fmt, typos, taplo, markdown links (d
 cargo xtask lint                          # clippy -D warnings, as the CI clippy job runs it: the workspace, then flui-engine's `testing` code
 cargo xtask doc-strict                    # cargo doc --workspace --no-deps --locked --document-private-items with every workspace `testing` feature on
 cargo xtask test                          # nextest over the local scope, flui-native headless, then the nested-cargo group (see "What `cargo xtask test` runs")
-cargo test --workspace --locked --doc     # doc-tests (flui-native included — its doctests need no display server)
+cargo test --workspace --locked --doc --features flui/testing,flui/material,flui/cupertino     # doc-tests, the book's included (flui-native included — its doctests need no display server)
 ```
 
 The reload-lifecycle fixture is a real plugin image. `test`
@@ -1218,7 +1218,7 @@ cargo xtask test --nested --nested-group native               # test-nested: gen
 cargo xtask test --nested --nested-group trybuild             # test-trybuild: compile-fail suites (CI runs each shard alone: --trybuild-shard facade, core or view)
 cargo xtask platform-test                                    # native platform suites, default and all features
 cargo xtask cli-test                                         # native CLI suite
-cargo test --workspace --locked --doc
+cargo test --workspace --locked --doc --features flui/testing,flui/material,flui/cupertino
 cargo +nightly miri test -p flui-foundation --lib             # miri job: every unit test of the
 cargo +nightly miri test -p flui-log --lib                    # two base crates, and the render-node
 cargo +nightly miri test -p flui-rendering --lib storage::    # arena; `cargo xtask miri` runs them all
@@ -1366,7 +1366,7 @@ what it needs. One row per job in `.github/workflows/ci.yml`:
 | `doc` | `cargo xtask doc-strict` (in `gate`) | — |
 | `public-api` | `cargo xtask public-api` | nightly (rustdoc JSON); `cargo xtask public-api --write` restates `api/flui.txt` when a change to the facade's API is meant (ADR-0324) |
 | `deps` | `cargo xtask deps` | CI runs `--only policy` and `--only advisories` as two steps, with `--strict` (a missing cargo-deny fails instead of being skipped); an unused or misplaced dependency is not this job's: cargo's `unused_dependencies` lint fails every build under `CARGO_BUILD_WARNINGS=deny`; every lane but `docs` runs it; the advisories step blocks on main and on a pull request whose change is workspace-wide or touches `deny.toml`, and only reports on other pull requests, because a new RustSec entry can fail a commit that passed the day before; `advisories.yml` runs the same step against main every day |
-| `doc-test` | `cargo test --workspace --locked --doc` (in `cargo xtask ci`) | — |
+| `doc-test` | `cargo test --workspace --locked --doc --features flui/testing,flui/material,flui/cupertino` (in `cargo xtask ci`) | — |
 | `miri` | `cargo xtask miri` | nightly + miri |
 | `feature-matrix` | `cargo xtask feature-matrix` (runs `facade-combos` too) | CI runs `--slice 1/5` to `5/5` and `combinations` in parallel; locally it is one run over the workspace |
 | `feature-scope` | `cargo xtask feature-matrix --packages "<hack_args>"` | CI runs `--slice 1/3` to `3/3` in parallel: a pull request's per-feature clippy over its changed crates that have features and its changed manifests; runs when `hack_args` names one |

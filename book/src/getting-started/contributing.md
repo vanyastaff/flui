@@ -42,6 +42,7 @@ reference material stay in the repository's own `docs/`, and the book links to t
 copying them.
 
 Every `rust` sample in the book compiles: `src/book.rs` makes each chapter a doctest of the `flui`
-facade, so `cargo test -p flui --features testing --doc book::` builds them all and runs the ones
-not marked `no_run`. A new chapter is listed there as well as in `SUMMARY.md`, setup a reader does
-not need goes on hidden `# ` lines, and text that is not Rust is fenced `text`, never `ignore`.
+facade, so `cargo test -p flui --features testing,material,cupertino --doc book::` builds them all
+and runs the ones not marked `no_run`. A new chapter is listed there as well as in `SUMMARY.md`,
+setup a reader does not need goes on hidden `# ` lines, and text that is not Rust is fenced
+`text`, never `ignore`.
