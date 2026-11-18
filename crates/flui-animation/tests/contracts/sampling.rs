@@ -263,7 +263,7 @@ fn terminal_delivery(stage: TerminalDelivery) {
     let controller = owner.controller();
     let mut run = controller.forward().expect("terminal run");
     let status_failure = matches!(stage, TerminalDelivery::Status).then(|| {
-        controller.subscribe_status(Rc::new(|status| {
+        controller.listen_status(Rc::new(|status| {
             if status == flui_animation::AnimationStatus::ForwardSettled {
                 std::panic::panic_any("terminal delivery");
             }
@@ -288,7 +288,7 @@ fn terminal_delivery(stage: TerminalDelivery) {
     }
     let tail_delivered = Rc::new(Cell::new(false));
     let tail = Rc::clone(&tail_delivered);
-    let tail_subscription = controller.subscribe_status(Rc::new(move |status| {
+    let tail_subscription = controller.listen_status(Rc::new(move |status| {
         if status == flui_animation::AnimationStatus::ForwardSettled {
             tail.set(true);
         }

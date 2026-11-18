@@ -68,7 +68,7 @@ fn disposed_status_admission_is_inert() {
             self.0.set(self.0.get() + 1);
         }
     }
-    let subscription = c.subscribe_status({
+    let subscription = c.listen_status({
         let capture = Capture(Rc::clone(&drops), c.clone());
         Rc::new(move |_| {
             let _keep = &capture;

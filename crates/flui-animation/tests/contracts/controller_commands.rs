@@ -263,7 +263,7 @@ fn status_callback_can_reenter_controller_without_deadlock() {
     let reentered = Arc::new(AtomicUsize::new(0));
     let source = c.clone();
     let observed = Arc::clone(&reentered);
-    let _subscription = c.subscribe_status(Rc::new(move |status| {
+    let _subscription = c.listen_status(Rc::new(move |status| {
         if status == AnimationStatus::ForwardSettled {
             let _value = source.value();
             source.reverse().unwrap();
@@ -447,8 +447,7 @@ fn a_zero_duration_run_cancels_the_displaced_run_after_its_own_status_is_observa
     let first = c.forward().unwrap();
     let order = Arc::new(Mutex::new(Vec::new()));
     let observed = Arc::clone(&order);
-    let _subscription =
-        c.subscribe_status(Rc::new(move |_| observed.lock().push("new_run_status")));
+    let _subscription = c.listen_status(Rc::new(move |_| observed.lock().push("new_run_status")));
     let observed = Arc::clone(&order);
     first.when_complete_or_cancel(move |_| observed.lock().push("displaced_run_canceled"));
     c.animate_to(1.0, Some(Duration::ZERO)).unwrap();
@@ -515,7 +514,7 @@ fn a_panicking_status_listener_leaves_the_finished_run_ok() {
     let seen = Arc::new(Mutex::new(None));
     let observed = Arc::clone(&seen);
     future.when_complete_or_cancel(move |outcome| *observed.lock() = Some(outcome));
-    let _subscription = c.subscribe_status(Rc::new(|status| {
+    let _subscription = c.listen_status(Rc::new(|status| {
         assert!(
             status != AnimationStatus::ForwardSettled,
             "status listener panics on completion"

@@ -15,12 +15,11 @@
   `remove_all_listeners` are documented channel methods for owners that
   retire through their own custody (ADR-0219), not trait protocol.
 - `ProxyAnimation` loses `remove_listener_with_recovery` with its last users;
-  a withdrawal that must join an enclosing cleanup runs the subscription's
-  drop inside `recovery.run` or through a custom source's
-  `Subscription::for_removal`.
+  a withdrawal that must join an enclosing cleanup passes its recovery scope
+  to `Subscription::detach_with_recovery`.
 
 ### Fixed
 
 - `AnimationController::listen` on a disposed controller retires the callback
   and answers an inert subscription, matching `listen_with_recovery`'s refusal
-  contract (ADR-0180), instead of registering on the disposed channel.
+  contract (ADR-0379), instead of registering on the disposed channel.

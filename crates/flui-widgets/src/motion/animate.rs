@@ -1,5 +1,6 @@
 //! [`Animate`] — plays [`Effects`] or a [`Transition`] on one child.
 
+use flui_foundation::Subscription;
 use std::cell::Cell;
 use std::fmt;
 use std::rc::Rc;
@@ -7,7 +8,7 @@ use std::time::Duration;
 
 use flui_animation::{
     Animatable, Animation, AnimationController, AnimationError, AnimationRunFuture,
-    AnimationStatus, CurvedAnimation, DrivenController, SharedCurve, StatusSubscription,
+    AnimationStatus, CurvedAnimation, DrivenController, SharedCurve,
 };
 use flui_foundation::panic::{PanicRecovery, RecoveryScope};
 use flui_objects::{ShimmerSweep, TranslationFraction};
@@ -305,7 +306,7 @@ pub struct AnimateState {
     progress: Rc<Progress>,
     stages: StageAnimations,
     /// Latches a transition's side from the caller's controller.
-    controller_phase: Option<StatusSubscription>,
+    controller_phase: Option<Subscription>,
     /// Whether the trigger plays once the clock is bound.
     plays_on_mount: bool,
 }
@@ -380,7 +381,7 @@ fn source(choreography: &Choreography, progress: &Rc<Progress>) -> Rc<Source> {
 /// Follow `controller`'s direction: a run that leaves a settled end picks the
 /// side, and a reversal mid-run keeps it. A side switch repaints the stages
 /// even when the controller's value did not change.
-fn latch_phase(controller: &Rc<dyn Animation<f64>>, progress: &Rc<Progress>) -> StatusSubscription {
+fn latch_phase(controller: &Rc<dyn Animation<f64>>, progress: &Rc<Progress>) -> Subscription {
     let status = controller.status();
     progress.set_phase(if status.is_reverse() {
         Phase::Exit
@@ -389,7 +390,7 @@ fn latch_phase(controller: &Rc<dyn Animation<f64>>, progress: &Rc<Progress>) -> 
     });
     let last = Cell::new(status);
     let progress = Rc::downgrade(progress);
-    controller.observe_status(Rc::new(
+    controller.listen_status_with_recovery(Rc::new(
         move |status: AnimationStatus, recovery: &mut RecoveryScope<'_>| {
             if !last.replace(status).is_settled() {
                 return;
@@ -477,12 +478,11 @@ impl AnimateState {
     /// commits before the previous parent's subscriptions are removed; a
     /// panicking removal there or in `outgoing` propagates only after both
     /// have been retired.
-    fn reparent(&self, parent: Rc<dyn Animation<f64>>, outgoing: Option<StatusSubscription>) {
+    fn reparent(&self, parent: Rc<dyn Animation<f64>>, outgoing: Option<Subscription>) {
         let mut recovery = PanicRecovery::new();
         recovery.run_with(|_| self.progress.set_parent(parent));
-        if let Some(mut subscription) = outgoing {
-            subscription.cancel_with_recovery(&mut recovery.scope());
-            recovery.retire(subscription);
+        if let Some(subscription) = outgoing {
+            subscription.detach_with_recovery(&mut recovery.scope());
         }
         recovery.finish();
     }
@@ -490,13 +490,12 @@ impl AnimateState {
 
 /// Remove a controller's status subscription; a panicking removal propagates
 /// once it has been retired.
-fn retire_subscription(subscription: Option<StatusSubscription>) {
-    let Some(mut subscription) = subscription else {
+fn retire_subscription(subscription: Option<Subscription>) {
+    let Some(subscription) = subscription else {
         return;
     };
     let mut recovery = PanicRecovery::new();
-    subscription.cancel_with_recovery(&mut recovery.scope());
-    recovery.retire(subscription);
+    subscription.detach_with_recovery(&mut recovery.scope());
     recovery.finish();
 }
 

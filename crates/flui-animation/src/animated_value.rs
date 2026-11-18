@@ -743,8 +743,11 @@ impl<T: TwoWayConverter + 'static> Animation<T> for AnimatedValueView<T> {
         self.controller.is_animating()
     }
 
-    fn observe_status(&self, observer: StatusObserver) -> crate::StatusSubscription {
-        self.controller.observe_status(observer)
+    fn listen_status_with_recovery(
+        &self,
+        observer: StatusObserver,
+    ) -> flui_foundation::Subscription {
+        self.controller.listen_status_with_recovery(observer)
     }
 }
 

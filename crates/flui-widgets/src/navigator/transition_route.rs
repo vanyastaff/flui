@@ -108,7 +108,7 @@ impl SecondaryParent {
 /// queued statuses through this shared owner-local state.
 struct TransitionInner {
     controller: RefCell<Option<DrivenController>>,
-    status_subscription: RefCell<Option<flui_animation::StatusSubscription>>,
+    status_subscription: RefCell<Option<flui_foundation::Subscription>>,
     disposed: Cell<bool>,
     binding: super::lifecycle::Terminal<RouteBindingSlot>,
     /// Statuses reported by the animation listener, awaiting
@@ -150,7 +150,7 @@ struct TransitionInner {
 impl Drop for TransitionInner {
     fn drop(&mut self) {
         let controller = self.controller.get_mut().take();
-        let mut subscription = self.status_subscription.get_mut().take();
+        let subscription = self.status_subscription.get_mut().take();
         let binding = self.binding.withdraw();
         let wake = super::lifecycle::Terminal::new(self.status_wake.get_mut().take());
         let secondary = self.secondary.withdraw();
@@ -160,8 +160,8 @@ impl Drop for TransitionInner {
         ));
         let completed = self.completed.withdraw();
         let mut recovery = flui_foundation::panic::PanicRecovery::new();
-        if let Some(subscription) = &mut subscription {
-            subscription.cancel_with_recovery(&mut recovery.scope());
+        if let Some(subscription) = subscription {
+            subscription.detach_with_recovery(&mut recovery.scope());
         }
         recovery.run(|| drop(controller));
         recovery.retire((binding, wake, secondary, parent, completed));
@@ -684,20 +684,20 @@ impl<T: 'static> Route for TransitionRoute<T> {
 
         let pending_statuses = Rc::clone(&self.inner.pending_statuses);
         let status_wake = self.inner.status_wake.borrow().clone();
-        let subscription = controller.subscribe_status(std::rc::Rc::new(move |status| {
+        let subscription = controller.listen_status(std::rc::Rc::new(move |status| {
             pending_statuses.borrow_mut().push(status);
             if let Some(wake) = &status_wake {
                 wake.notify_listeners();
             }
         }));
-        let mut outgoing_subscription = self
+        let outgoing_subscription = self
             .inner
             .status_subscription
             .borrow_mut()
             .replace(subscription);
         let mut recovery = flui_foundation::panic::PanicRecovery::new();
-        if let Some(subscription) = &mut outgoing_subscription {
-            subscription.cancel_with_recovery(&mut recovery.scope());
+        if let Some(subscription) = outgoing_subscription {
+            subscription.detach_with_recovery(&mut recovery.scope());
         }
 
         // Publish the primary animation so the route below can coordinate.
@@ -807,10 +807,10 @@ impl<T: 'static> Route for TransitionRoute<T> {
         self.set_secondary(SecondaryParent::Resting, unit_start_animation());
 
         let outgoing = self.inner.controller.borrow_mut().take();
-        let mut subscription = self.inner.status_subscription.borrow_mut().take();
+        let subscription = self.inner.status_subscription.borrow_mut().take();
         let mut recovery = flui_foundation::panic::PanicRecovery::new();
-        if let Some(subscription) = &mut subscription {
-            subscription.cancel_with_recovery(&mut recovery.scope());
+        if let Some(subscription) = subscription {
+            subscription.detach_with_recovery(&mut recovery.scope());
         }
         recovery.run(|| drop(outgoing));
         recovery.finish();

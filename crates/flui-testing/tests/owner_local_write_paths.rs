@@ -129,7 +129,7 @@ impl flui_view::ViewState<WriteReader> for WriteReaderState {
             }
             Trigger::Status(controller) => {
                 use flui_animation::Animation as _;
-                let subscription = controller.subscribe_status(std::rc::Rc::new(move |status| {
+                let subscription = controller.listen_status(std::rc::Rc::new(move |status| {
                     if status == flui_animation::AnimationStatus::ForwardSettled {
                         write(2);
                     }

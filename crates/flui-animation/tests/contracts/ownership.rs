@@ -438,7 +438,7 @@ fn a_withdrawn_child_waits_for_its_new_parent() {
     let outgoing = parent.clone();
     let incoming = replacement.clone();
     let moving = child;
-    let _subscription = trigger.controller().subscribe_status(Rc::new(move |_| {
+    let _subscription = trigger.controller().listen_status(Rc::new(move |_| {
         outgoing.detach_child(&seat);
         incoming.attach_child(&moving).expect("new parent");
     }));
@@ -481,7 +481,7 @@ fn ancestor_changes_stop_descendants(mute: bool) {
     let outgoing = parent.clone();
     let incoming = replacement.clone();
     let moving = middle;
-    let _subscription = trigger.controller().subscribe_status(Rc::new(move |_| {
+    let _subscription = trigger.controller().listen_status(Rc::new(move |_| {
         if mute {
             outgoing.set_muted(true);
         } else {
@@ -526,7 +526,7 @@ fn reentrant_settles_leave_the_next_run_for_a_later_entry() {
     let completions = std::rc::Rc::new(std::cell::Cell::new(0));
     let observed = completions.clone();
     controller
-        .subscribe_status(std::rc::Rc::new(move |status| match status {
+        .listen_status(std::rc::Rc::new(move |status| match status {
             AnimationStatus::ForwardSettled => {
                 observed.set(observed.get() + 1);
                 let _next = callback_controller.reverse().expect("reentrant reverse");
@@ -537,7 +537,7 @@ fn reentrant_settles_leave_the_next_run_for_a_later_entry() {
             }
             _ => {}
         }))
-        .detach();
+        .forget();
     let _run = if case == "zero repeat" {
         controller
             .repeat(RepeatMode::Restart)
@@ -813,12 +813,12 @@ fn dropping_the_last_owner_from_its_own_listener_mid_frame() {
         if channel == "status" {
             let retire = retire.clone();
             first_controller
-                .subscribe_status(Rc::new(move |status| {
+                .listen_status(Rc::new(move |status| {
                     if status == AnimationStatus::ForwardSettled {
                         retire();
                     }
                 }))
-                .detach();
+                .forget();
         } else if channel == "value" {
             let retire = retire.clone();
             let controller = first_controller.clone();
@@ -1589,19 +1589,19 @@ fn wake_failure_preserves_delivery_and_recovery() {
         })));
         owner
             .controller()
-            .subscribe_status(Rc::new(move |status| {
+            .listen_status(Rc::new(move |status| {
                 assert!(
                     !(competing && status == AnimationStatus::Forward),
                     "listener failure"
                 );
             }))
-            .detach();
+            .forget();
         let delivered = Rc::new(Cell::new(0));
         let observed = delivered.clone();
         owner
             .controller()
-            .subscribe_status(Rc::new(move |_| observed.set(observed.get() + 1)))
-            .detach();
+            .listen_status(Rc::new(move |_| observed.set(observed.get() + 1)))
+            .forget();
         let failure = catch_unwind(AssertUnwindSafe(|| owner.controller().forward()));
         let payload = failure.expect_err("wake failure propagates after delivery");
         assert_eq!(payload.downcast_ref::<&str>(), Some(&"wake failure"));
@@ -1710,10 +1710,10 @@ fn last_handle_drop_releases_a_running_controller() {
     let (drops, probe) = drop_probe();
     let controller = AnimationController::builder(Duration::from_secs(1)).build();
     controller
-        .subscribe_status(std::rc::Rc::new(move |_| {
+        .listen_status(std::rc::Rc::new(move |_| {
             let _ = &probe;
         }))
-        .detach();
+        .forget();
     let mut run = controller.forward().expect("run starts");
 
     drop(controller);
@@ -1750,11 +1750,11 @@ fn wrapper_over_a_disposed_source(wrap: fn(AnimationHandle) -> AnimationHandle) 
         panic!("a disposed source cannot notify a new wrapper");
     }));
     wrapper
-        .subscribe_status(std::rc::Rc::new(move |_| {
+        .listen_status(std::rc::Rc::new(move |_| {
             let _ = &status_probe;
             panic!("a disposed source cannot send a new status");
         }))
-        .detach();
+        .forget();
     assert_eq!(
         parent.set_value(1.0),
         Err(flui_animation::AnimationError::Disposed)
@@ -1810,10 +1810,10 @@ where
         let wrapper = wrap(std::rc::Rc::new(parent.clone()));
         let capture = Arc::clone(&probe);
         wrapper
-            .subscribe_status(std::rc::Rc::new(move |_| {
+            .listen_status(std::rc::Rc::new(move |_| {
                 let _ = &capture;
             }))
-            .detach();
+            .forget();
     }
     assert_eq!(
         Arc::strong_count(&probe),
@@ -1860,10 +1860,10 @@ fn switch_dispose_releases_callbacks() {
     });
     let listened_capture = Arc::clone(&listened);
     switch
-        .subscribe_status(std::rc::Rc::new(move |_| {
+        .listen_status(std::rc::Rc::new(move |_| {
             let _ = &listened_capture;
         }))
-        .detach();
+        .forget();
 
     switch.dispose();
 
@@ -1951,10 +1951,10 @@ fn fixed_parent_wrappers_retire_value_listeners_before_status_observers() {
         }));
         let status = StatusBomb;
         wrapper
-            .subscribe_status(Rc::new(move |_| {
+            .listen_status(Rc::new(move |_| {
                 let _keep = &status;
             }))
-            .detach();
+            .forget();
         let failure = catch_unwind(AssertUnwindSafe(|| drop(wrapper)))
             .expect_err("a failing capture propagates from the last owner");
         assert_eq!(
@@ -2075,12 +2075,12 @@ fn value_listener_removed_during_a_status_round_waits_for_the_round() {
                 let _keep = &capture;
             })));
             let weak = Rc::downgrade(&wrapper);
-            let _remove = wrapper.subscribe_status(Rc::new(move |_| {
+            let _remove = wrapper.listen_status(Rc::new(move |_| {
                 if let Some(_wrapper) = weak.upgrade() {
                     drop(std::cell::RefCell::borrow_mut(&held).take());
                 }
             }));
-            let _fail = wrapper.subscribe_status(Rc::new(move |_| {
+            let _fail = wrapper.listen_status(Rc::new(move |_| {
                 assert!(!fails, "later status failure");
             }));
             let run = catch_unwind(AssertUnwindSafe(|| parent.forward()));

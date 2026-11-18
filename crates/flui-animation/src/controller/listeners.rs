@@ -26,7 +26,7 @@ impl AnimationController {
         }
         // Admission runs with the state borrow released: the channel's
         // exhausted-mint panic reaches reentering hooks while the public
-        // source stays borrowable (ADR-0180). A dispose that lands between
+        // source stays borrowable (ADR-0379). A dispose that lands between
         // the check and the admission is answered by the channel's own
         // disposed gate, which admits nothing and names no ticket.
         drop(inner);
@@ -70,7 +70,7 @@ impl Listenable for AnimationController {
         if inner.disposed {
             // A disposed controller refuses admission: the callback retires
             // under this controller's own custody, and the caller holds the
-            // inert subscription (ADR-0180's refusal contract).
+            // inert subscription (ADR-0379's refusal contract).
             let callback = callback.take();
             let mut retired = RetiredSources::new();
             retired

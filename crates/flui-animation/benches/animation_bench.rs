@@ -168,10 +168,10 @@ fn add_listeners(
     }
     for _ in 0..status_listeners {
         controller
-            .subscribe_status(std::rc::Rc::new(|status| {
+            .listen_status(std::rc::Rc::new(|status| {
                 black_box(status);
             }))
-            .detach();
+            .forget();
     }
 }
 
