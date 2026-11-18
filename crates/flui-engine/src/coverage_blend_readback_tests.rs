@@ -88,7 +88,7 @@ fn try_blend_through_an_anti_aliased_clip(
             &Paint::fill(DESTINATION).with_anti_alias(false),
         );
         canvas.save();
-        canvas.clip_rrect_ext(
+        canvas.clip_rrect_with(
             RRect::from_rect_circular(
                 Rect::from_xywh(
                     f64::from(CLIP_LEFT),
@@ -305,7 +305,7 @@ fn portable_transparent_clear_plus_and_overlap(
         let mut canvas = Canvas::new();
         let full = Rect::from_xywh(0.0, 0.0, 8.0, 8.0);
         canvas.draw_rect(full, &Paint::fill(destination).with_anti_alias(false));
-        canvas.clip_rect_ext(
+        canvas.clip_rect_with(
             Rect::from_xywh(2.5, 0.0, 5.5, 8.0),
             ClipOp::Intersect,
             Clip::AntiAlias,
@@ -336,7 +336,7 @@ fn portable_transparent_clear_plus_and_overlap(
     let color = Color::rgb(204, 204, 204);
     let mut canvas = Canvas::new();
     canvas.draw_rect(full, &Paint::fill(color).with_anti_alias(false));
-    canvas.clip_rect_ext(
+    canvas.clip_rect_with(
         Rect::from_xywh(2.5, 0.0, 5.5, 8.0),
         ClipOp::Intersect,
         Clip::AntiAlias,
@@ -374,7 +374,7 @@ fn portable_fractional_src_gradient_preserves_destination(
     let mut canvas = Canvas::new();
     let full = Rect::from_xywh(0.0, 0.0, 8.0, 8.0);
     canvas.draw_rect(full, &Paint::fill(Color::WHITE).with_anti_alias(false));
-    canvas.clip_rect_ext(
+    canvas.clip_rect_with(
         Rect::from_xywh(2.5, 0.0, 5.5, 8.0),
         ClipOp::Intersect,
         Clip::AntiAlias,
@@ -419,7 +419,7 @@ fn portable_intrinsic_gradient_clear_ignores_source_alpha(
         let full = Rect::from_xywh(0.0, 0.0, 16.0, 16.0);
         canvas.draw_rect(full, &Paint::fill(Color::WHITE).with_anti_alias(false));
         if clipped {
-            canvas.clip_rect_ext(
+            canvas.clip_rect_with(
                 Rect::from_xywh(3.0, 3.0, 9.0, 9.0),
                 ClipOp::Intersect,
                 Clip::HardEdge,
@@ -684,7 +684,7 @@ fn cropped_fragment_clip_origin_matches_attachment(
             Rect::from_xywh(0.0, 0.0, 32.0, 32.0),
             &Paint::fill(Color::WHITE).with_anti_alias(false),
         );
-        canvas.clip_rect_ext(
+        canvas.clip_rect_with(
             Rect::from_xywh(10.5, 8.5, 8.0, 8.0),
             ClipOp::Intersect,
             Clip::AntiAlias,
@@ -751,7 +751,7 @@ fn portable_porter_duff_translucent_destination(
                     .with_blend_mode(BlendMode::Clear),
             );
             canvas.draw_rect(full, &Paint::fill(destination).with_anti_alias(false));
-            canvas.clip_rect_ext(
+            canvas.clip_rect_with(
                 Rect::from_xywh(2.5, 0.0, 5.5, 8.0),
                 ClipOp::Intersect,
                 Clip::AntiAlias,

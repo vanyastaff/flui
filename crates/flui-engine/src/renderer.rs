@@ -3307,7 +3307,7 @@ mod tests {
             let mut canvas = Canvas::new();
             if clip_case != 0 {
                 let left = if clip_case == 1 { 16.0 } else { 16.5 };
-                canvas.clip_rsuperellipse_ext(
+                canvas.clip_rsuperellipse_with(
                     RSuperellipse::from_rect_and_radius(
                         Rect::from_xywh(left, 8.0, 32.0, 48.0),
                         Radius::circular(8.0),
@@ -3320,7 +3320,7 @@ mod tests {
                     },
                 );
                 if clip_case == 3 {
-                    canvas.clip_rect_ext(
+                    canvas.clip_rect_with(
                         Rect::from_xywh(8.0, 0.0, 48.0, 64.0),
                         ClipOp::Intersect,
                         Clip::AntiAlias,

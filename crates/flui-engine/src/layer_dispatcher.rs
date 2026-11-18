@@ -223,7 +223,7 @@ impl Drop for LayerDispatcher<'_> {
 /// `None` is **not** handled here: it means "do not clip at all", and mapping
 /// it to any rounding would clip. It is filtered by [`clip_is_disabled`] before
 /// this is consulted. A render object choosing `Clip::None` pushes no clip
-/// LAYER, which is what made this look unreachable — but `Canvas::clip_rect_ext`
+/// LAYER, which is what made this look unreachable — but `Canvas::clip_rect_with`
 /// and its siblings emit a `DrawCommand` unconditionally, so the canvas path
 /// reaches it with any mode the caller passes.
 ///
@@ -265,8 +265,8 @@ const fn clip_opens_a_layer(behavior: flui_painting::paint::Clip) -> bool {
 /// Whether a clip command asks for no clipping at all.
 ///
 /// `Clip::None` reaching a clip call is not a contradiction: the layer path
-/// never emits one, but `Canvas::clip_rect_ext` / `clip_rrect_ext` /
-/// `clip_rsuperellipse_ext` push their command whatever mode they are given.
+/// never emits one, but `Canvas::clip_rect_with` / `clip_rrect_with` /
+/// `clip_rsuperellipse_with` push their command whatever mode they are given.
 /// Honouring it means applying NO clip — the alternative, treating it as the
 /// cheapest clip, clips content the caller asked to leave alone.
 const fn clip_is_disabled(behavior: flui_painting::paint::Clip) -> bool {

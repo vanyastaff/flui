@@ -627,10 +627,10 @@ fn every_canvas_clip_shape_refuses_difference_rather_than_inverting() {
 
     let shapes: [(&str, PushClip); 4] = [
         ("rect", |canvas, op, r| {
-            canvas.clip_rect_ext(r, op, Clip::AntiAlias);
+            canvas.clip_rect_with(r, op, Clip::AntiAlias);
         }),
         ("rrect", |canvas, op, r| {
-            canvas.clip_rrect_ext(
+            canvas.clip_rrect_with(
                 flui_foundation::geometry::RRect::from_rect_and_radius(
                     r,
                     flui_foundation::geometry::Radius::circular(4.0),
@@ -640,7 +640,7 @@ fn every_canvas_clip_shape_refuses_difference_rather_than_inverting() {
             );
         }),
         ("superellipse", |canvas, op, r| {
-            canvas.clip_rsuperellipse_ext(
+            canvas.clip_rsuperellipse_with(
                 flui_foundation::geometry::RSuperellipse::from_rect_and_radius(
                     r,
                     flui_foundation::geometry::Radius::circular(4.0),
@@ -652,7 +652,7 @@ fn every_canvas_clip_shape_refuses_difference_rather_than_inverting() {
         ("path", |canvas, op, r| {
             let mut path = flui_painting::paint::Path::new();
             path.add_rect(r);
-            canvas.clip_path_ext(&path, op, Clip::AntiAlias);
+            canvas.clip_path_with(&path, op, Clip::AntiAlias);
         }),
     ];
 
@@ -869,7 +869,7 @@ fn command_transform_changes_preserve_captured_clips() {
     type PushClip = fn(&mut Canvas, Rect<f64>);
     let shapes: [(&str, PushClip); 4] = [
         ("rect", |canvas, rect| {
-            canvas.clip_rect_ext(
+            canvas.clip_rect_with(
                 rect,
                 flui_painting::paint::ClipOp::Intersect,
                 Clip::HardEdge,
@@ -964,7 +964,7 @@ fn nested_exact_clip_geometry_and_coverage() {
     };
     let nested = capture(&|canvas| {
         for radius in [16.0, 2.0] {
-            canvas.clip_rrect_ext(
+            canvas.clip_rrect_with(
                 RRect::from_rect_circular(Rect::from_xywh(8.0, 8.0, 48.0, 48.0), radius),
                 ClipOp::Intersect,
                 Clip::HardEdge,
@@ -980,7 +980,7 @@ fn nested_exact_clip_geometry_and_coverage() {
     for repetitions in [1, 2] {
         let frame = capture(&|canvas| {
             for _ in 0..repetitions {
-                canvas.clip_rrect_ext(
+                canvas.clip_rrect_with(
                     RRect::from_rect_circular(Rect::from_xywh(8.25, 8.0, 48.0, 48.0), 8.0),
                     ClipOp::Intersect,
                     Clip::AntiAlias,
@@ -996,7 +996,7 @@ fn nested_exact_clip_geometry_and_coverage() {
     }
     let excluded = capture(&|canvas| {
         for operation in [ClipOp::Intersect, ClipOp::Difference] {
-            canvas.clip_rrect_ext(
+            canvas.clip_rrect_with(
                 RRect::from_rect_circular(Rect::from_xywh(8.25, 8.0, 48.0, 48.0), 8.0),
                 operation,
                 Clip::AntiAlias,
@@ -1011,7 +1011,7 @@ fn nested_exact_clip_geometry_and_coverage() {
         );
     }
     let elliptical = capture(&|canvas| {
-        canvas.clip_rrect_ext(
+        canvas.clip_rrect_with(
             RRect::from_rect_elliptical(Rect::from_xywh(0.0, 0.0, 64.0, 64.0), 32.0, 8.0),
             ClipOp::Intersect,
             Clip::HardEdge,
@@ -1024,7 +1024,7 @@ fn nested_exact_clip_geometry_and_coverage() {
     );
     assert_eq!(sample(&elliptical, 1, 1), [255, 255, 255, 255]);
     let subpixel = capture(&|canvas| {
-        canvas.clip_rect_ext(
+        canvas.clip_rect_with(
             Rect::from_xywh(8.25, 0.0, 48.0, 64.0),
             ClipOp::Intersect,
             Clip::AntiAlias,
@@ -1139,7 +1139,7 @@ fn clip_failures_and_singular_membership_recover() {
     ] {
         let tree = canvas_clip_tree(|c| {
             c.scale(0.0, 1.0);
-            c.clip_rect_ext(Rect::from_xywh(0.0, 0.0, 64.0, 64.0), op, Clip::AntiAlias);
+            c.clip_rect_with(Rect::from_xywh(0.0, 0.0, 64.0, 64.0), op, Clip::AntiAlias);
             c.set_transform(Matrix4::IDENTITY);
             full_surface(c, Color::BLUE);
         });
@@ -1167,7 +1167,7 @@ fn grouped_clip_prefix_and_destructive_coverage() {
         ] {
             let tree = canvas_clip_tree(|c| {
                 full_surface(c, Color::RED);
-                c.clip_rect_ext(
+                c.clip_rect_with(
                     Rect::from_xywh(8.25, 0.0, 48.0, 64.0),
                     ClipOp::Intersect,
                     Clip::AntiAlias,
@@ -1203,7 +1203,7 @@ fn grouped_clip_prefix_and_destructive_coverage() {
         }
     }
     let tree = canvas_clip_tree(|c| {
-        c.clip_rect_ext(
+        c.clip_rect_with(
             Rect::from_xywh(8.25, 0.0, 48.0, 64.0),
             ClipOp::Intersect,
             Clip::AntiAlias,
@@ -1239,13 +1239,13 @@ fn transformed_nested_clip_on_antialiased_path() {
     let tree = canvas_clip_tree(|c| {
         c.translate(32.0, 32.0);
         c.rotate(std::f64::consts::FRAC_PI_4);
-        c.clip_rrect_ext(
+        c.clip_rrect_with(
             RRect::from_rect_circular(Rect::from_xywh(-16.0, -16.0, 32.0, 32.0), 4.0),
             ClipOp::Intersect,
             Clip::AntiAlias,
         );
         c.set_transform(Matrix4::IDENTITY);
-        c.clip_rrect_ext(
+        c.clip_rrect_with(
             RRect::from_rect_circular(Rect::from_xywh(10.0, 10.0, 44.0, 44.0), 2.0),
             ClipOp::Intersect,
             Clip::AntiAlias,
@@ -1288,7 +1288,7 @@ fn path_clip_fill_rules_and_implicit_close() {
             let mut path = Path::with_fill_type(fill_type);
             path.add_rect(Rect::from_xywh(8.0, 8.0, 48.0, 48.0));
             path.add_rect(Rect::from_xywh(24.0, 24.0, 16.0, 16.0));
-            c.clip_path_ext(&path, ClipOp::Intersect, Clip::HardEdge);
+            c.clip_path_with(&path, ClipOp::Intersect, Clip::HardEdge);
             full_surface(c, Color::BLUE);
         });
         let frame = renderer
@@ -1315,7 +1315,7 @@ fn path_clip_fill_rules_and_implicit_close() {
         path.move_to(Point::new(8.0, 8.0));
         path.line_to(Point::new(56.0, 8.0));
         path.line_to(Point::new(8.0, 56.0));
-        c.clip_path_ext(&path, ClipOp::Intersect, Clip::HardEdge);
+        c.clip_path_with(&path, ClipOp::Intersect, Clip::HardEdge);
         full_surface(c, Color::BLUE);
     });
     let frame = renderer
@@ -1360,7 +1360,7 @@ fn an_antialiased_clip_resolves_its_interior_without_sampling() {
     for group in [false, true] {
         let tree = canvas_clip_tree(|canvas| {
             for _ in 0..16 {
-                canvas.clip_rrect_ext(window, ClipOp::Intersect, Clip::AntiAlias);
+                canvas.clip_rrect_with(window, ClipOp::Intersect, Clip::AntiAlias);
             }
             if group {
                 canvas.save_layer_alpha(None, 128);
@@ -1401,14 +1401,14 @@ fn an_antialiased_clip_resolves_its_interior_without_sampling() {
     type Scene = fn(&mut Canvas);
     let rows: [(&str, Scene); 6] = [
         ("a rounded rectangle at fractional edges", |canvas| {
-            canvas.clip_rrect_ext(
+            canvas.clip_rrect_with(
                 RRect::from_rect_circular(Rect::from_xywh(8.5, 8.25, 239.0, 238.5), 24.0),
                 ClipOp::Intersect,
                 Clip::AntiAlias,
             );
         }),
         ("a superellipse", |canvas| {
-            canvas.clip_rsuperellipse_ext(
+            canvas.clip_rsuperellipse_with(
                 RSuperellipse::from_rect_circular(Rect::from_xywh(4.75, 6.5, 240.0, 236.0), 40.0),
                 ClipOp::Intersect,
                 Clip::AntiAlias,
@@ -1417,14 +1417,14 @@ fn an_antialiased_clip_resolves_its_interior_without_sampling() {
         ("a scaled and translated rounded rectangle", |canvas| {
             canvas.translate(0.25, 0.75);
             canvas.scale(1.5, 1.25);
-            canvas.clip_rrect_ext(
+            canvas.clip_rrect_with(
                 RRect::from_rect_circular(Rect::from_xywh(4.0, 4.0, 160.0, 190.0), 12.0),
                 ClipOp::Intersect,
                 Clip::AntiAlias,
             );
         }),
         ("elliptical corners", |canvas| {
-            canvas.clip_rrect_ext(
+            canvas.clip_rrect_with(
                 RRect::from_rect_and_corners(
                     Rect::from_xywh(2.5, 3.5, 250.0, 248.0),
                     Radius::new(40.0, 8.0),
@@ -1437,24 +1437,24 @@ fn an_antialiased_clip_resolves_its_interior_without_sampling() {
             );
         }),
         ("a subtracted hole", |canvas| {
-            canvas.clip_rrect_ext(
+            canvas.clip_rrect_with(
                 RRect::from_rect_circular(Rect::from_xywh(8.5, 8.5, 239.0, 239.0), 16.0),
                 ClipOp::Intersect,
                 Clip::AntiAlias,
             );
-            canvas.clip_rect_ext(
+            canvas.clip_rect_with(
                 Rect::from_xywh(60.5, 100.25, 80.0, 40.0),
                 ClipOp::Difference,
                 Clip::AntiAlias,
             );
         }),
         ("hard and antialiased leaves", |canvas| {
-            canvas.clip_rect_ext(
+            canvas.clip_rect_with(
                 Rect::from_xywh(3.5, 3.5, 250.0, 250.0),
                 ClipOp::Intersect,
                 Clip::HardEdge,
             );
-            canvas.clip_rrect_ext(
+            canvas.clip_rrect_with(
                 RRect::from_rect_circular(Rect::from_xywh(0.25, 0.25, 255.0, 255.0), 32.0),
                 ClipOp::Intersect,
                 Clip::AntiAlias,
@@ -1470,7 +1470,7 @@ fn an_antialiased_clip_resolves_its_interior_without_sampling() {
                     around.line_to(Point::new(3000.0, -1000.0));
                     around.line_to(Point::new(-1000.0, 3000.0));
                     around.close();
-                    canvas.clip_path_ext(&around, ClipOp::Intersect, Clip::AntiAlias);
+                    canvas.clip_path_with(&around, ClipOp::Intersect, Clip::AntiAlias);
                 }
                 push(canvas);
                 canvas.draw_rect(frame_rect, &blue);
@@ -1515,7 +1515,7 @@ fn hard_clip_membership_scales_to_a_full_hd_frame() {
     let full = Rect::from_xywh(0.0, 0.0, 1920.0, 1080.0);
     let tree = canvas_clip_tree(|canvas| {
         for _ in 0..8 {
-            canvas.clip_rect_ext(
+            canvas.clip_rect_with(
                 full,
                 flui_painting::paint::ClipOp::Intersect,
                 Clip::HardEdge,

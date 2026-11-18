@@ -9239,13 +9239,13 @@ impl Default for flui::painting::Canvas
 impl core::fmt::Debug for flui::painting::Canvas
 pub fn flui::painting::Canvas::bounds(&self) -> Option<flui::geometry::Rect<f64>>
 pub fn flui::painting::Canvas::clip_path(&mut self, path: &flui::painting::paint::Path)
-pub fn flui::painting::Canvas::clip_path_ext(&mut self, path: &flui::painting::paint::Path, clip_op: flui::painting::paint::ClipOp, clip_behavior: flui::prelude::Clip)
+pub fn flui::painting::Canvas::clip_path_with(&mut self, path: &flui::painting::paint::Path, clip_op: flui::painting::paint::ClipOp, clip_behavior: flui::prelude::Clip)
 pub fn flui::painting::Canvas::clip_rect(&mut self, rect: flui::geometry::Rect<f64>)
-pub fn flui::painting::Canvas::clip_rect_ext(&mut self, rect: flui::geometry::Rect<f64>, clip_op: flui::painting::paint::ClipOp, clip_behavior: flui::prelude::Clip)
+pub fn flui::painting::Canvas::clip_rect_with(&mut self, rect: flui::geometry::Rect<f64>, clip_op: flui::painting::paint::ClipOp, clip_behavior: flui::prelude::Clip)
 pub fn flui::painting::Canvas::clip_rrect(&mut self, rrect: flui::geometry::RRect)
-pub fn flui::painting::Canvas::clip_rrect_ext(&mut self, rrect: flui::geometry::RRect, clip_op: flui::painting::paint::ClipOp, clip_behavior: flui::prelude::Clip)
+pub fn flui::painting::Canvas::clip_rrect_with(&mut self, rrect: flui::geometry::RRect, clip_op: flui::painting::paint::ClipOp, clip_behavior: flui::prelude::Clip)
 pub fn flui::painting::Canvas::clip_rsuperellipse(&mut self, rsuperellipse: flui::geometry::RSuperellipse)
-pub fn flui::painting::Canvas::clip_rsuperellipse_ext(&mut self, rsuperellipse: flui::geometry::RSuperellipse, clip_op: flui::painting::paint::ClipOp, clip_behavior: flui::prelude::Clip)
+pub fn flui::painting::Canvas::clip_rsuperellipse_with(&mut self, rsuperellipse: flui::geometry::RSuperellipse, clip_op: flui::painting::paint::ClipOp, clip_behavior: flui::prelude::Clip)
 pub fn flui::painting::Canvas::display_list(&self) -> &flui::painting::DisplayList
 pub fn flui::painting::Canvas::draw_arc(&mut self, rect: flui::geometry::Rect<f64>, start_angle: f64, sweep_angle: f64, use_center: bool, paint: &flui::painting::paint::Paint)
 pub fn flui::painting::Canvas::draw_atlas(&mut self, image: flui::painting::paint::Image, sprites: Vec<flui::geometry::Rect<f64>>, transforms: Vec<flui::geometry::Matrix4>, colors: Option<Vec<flui::prelude::Color>>, blend_mode: flui::painting::paint::BlendMode, paint: Option<&flui::painting::paint::Paint>)

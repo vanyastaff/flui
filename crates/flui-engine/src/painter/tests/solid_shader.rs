@@ -65,7 +65,7 @@ fn record(
             canvas.save();
             canvas.transform(matrix);
             if scoped {
-                canvas.clip_rect_ext(
+                canvas.clip_rect_with(
                     clip,
                     flui_painting::paint::ClipOp::Intersect,
                     Clip::HardEdge,

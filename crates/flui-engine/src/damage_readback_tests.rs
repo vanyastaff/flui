@@ -2870,7 +2870,7 @@ fn a_partial_frame_resolves_clip_coverage_only_inside_its_damage() {
         let paint = |canvas: &mut Canvas| {
             let rrect = RRect::from_rect_circular(window, 32.0);
             for _ in 0..leaves {
-                canvas.clip_rrect_ext(rrect, ClipOp::Intersect, Clip::AntiAlias);
+                canvas.clip_rrect_with(rrect, ClipOp::Intersect, Clip::AntiAlias);
             }
             draw(canvas);
         };

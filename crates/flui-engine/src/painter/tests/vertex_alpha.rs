@@ -170,7 +170,7 @@ fn opaque_under_fractional_clip(supplied_colors: bool) {
     let rgba = render(|painter| {
         let mut recording = Canvas::new();
         recording.save();
-        recording.clip_rect_ext(
+        recording.clip_rect_with(
             flui_foundation::geometry::Rect::from_xywh(10.5, 0.0, 21.5, 32.0),
             flui_painting::paint::ClipOp::Intersect,
             flui_painting::paint::Clip::AntiAlias,
