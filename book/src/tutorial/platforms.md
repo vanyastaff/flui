@@ -56,3 +56,6 @@ test names.
 
 That completes the notes application: a window, a laid-out screen, state, input, a list, pages,
 a theme, its tests and its platforms.
+
+The `notes` example in the repository puts the tutorial's list, pages and theme together in one window, with
+the catalog's `TextField`, `TextButton` and `AlertDialog`: `cargo run --example notes --features material`.

@@ -12,6 +12,7 @@ or WASM targets with their own build step.
 | **native_window** — the escape hatch from a widget: the view acquires its window as `flui::native::NativeWindowCapability` in `create_state`, and its buttons set the title bar colour and the backdrop through `win32()` on Windows, the level and the alpha through `appkit()` on macOS | `cargo run --example native_window --features native` |
 | **two_windows** — a second window beside the first, each with its own UI runtime, both drawn by the one raster executor (ADR-0305); on Wayland the raster thread draws every window | `cargo run --example two_windows --features unstable-windows` |
 | **navigation** — one typed `Router` under `MaterialApp::router`: a push, a page popped with a result, and a confirmation dialog, each reached from `build` through `Router::of(ctx)` and `PageHandle::of(ctx)` | `cargo run --example navigation --features material` |
+| **notes** — the book's tutorial (`book/src/tutorial/`) list, pages and theme in one window: a `TextField` that adds a note, a keyed `ListView` of notes, a page per note that deletes it after an `AlertDialog` confirms, and a Material theme that follows the platform's brightness | `cargo run --example notes --features material` |
 
 ## Acceptance
 
