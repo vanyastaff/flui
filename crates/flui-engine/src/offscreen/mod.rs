@@ -15,6 +15,8 @@ pub struct OffscreenRenderer {
     blit_pipelines: rustc_hash::FxHashMap<wgpu::TextureFormat, BlitPipeline>,
     transform_pipelines:
         rustc_hash::FxHashMap<wgpu::TextureFormat, transform_blit::TransformPipeline>,
+    /// The driver's pipeline cache both kinds of pipeline are created through.
+    driver_cache: Option<wgpu::PipelineCache>,
 }
 struct BlitPipeline {
     pipeline: Arc<wgpu::RenderPipeline>,
@@ -29,15 +31,21 @@ impl OffscreenRenderer {
     /// Construct the presentation helper with a shared GPU device.
     #[cfg(feature = "testing")]
     pub fn new(device: Arc<wgpu::Device>, queue: Arc<wgpu::Queue>) -> Self {
-        Self::with_domain(DeviceDomain::new(device, queue))
+        Self::with_domain(DeviceDomain::new(device, queue), None)
     }
-    pub(crate) fn with_domain(domain: Arc<DeviceDomain>) -> Self {
+    /// The presentation helper on `domain`'s device, its pipelines created
+    /// through `driver_cache`, one the device created.
+    pub(crate) fn with_domain(
+        domain: Arc<DeviceDomain>,
+        driver_cache: Option<wgpu::PipelineCache>,
+    ) -> Self {
         let device = Arc::clone(domain.device());
         Self {
             domain,
             device,
             blit_pipelines: rustc_hash::FxHashMap::default(),
             transform_pipelines: rustc_hash::FxHashMap::default(),
+            driver_cache,
         }
     }
 }

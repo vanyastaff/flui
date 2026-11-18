@@ -665,7 +665,11 @@ mod synthetic_op_tests {
         let mask_layout = clip_fixture_layout(&device);
         let disabled_mask = clip_fixture(&device, &queue, &mask_layout, None);
         let half_mask = clip_fixture(&device, &queue, &mask_layout, Some(128));
-        let pipeline = AdvancedBlendPipeline::new(&device, TEST_FORMAT, &mask_layout);
+        let pipeline = AdvancedBlendPipeline::new(
+            crate::pipeline_device::PipelineDevice::uncached(&device),
+            TEST_FORMAT,
+            &mask_layout,
+        );
         let mut pool = TexturePool::with_capacity(Arc::clone(&device), 16);
         let mut resources = GpuResources::new(crate::device_domain::DeviceDomain::new(
             Arc::clone(&device),

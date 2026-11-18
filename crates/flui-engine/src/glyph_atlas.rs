@@ -559,8 +559,10 @@ mod rasterizer_tests {
         queue: Arc<wgpu::Queue>,
         rasterizer: R,
     ) -> GlyphAtlas<R> {
-        let pipelines =
-            crate::pipeline_set::PipelineSet::new(&device, wgpu::TextureFormat::Rgba8Unorm);
+        let pipelines = crate::pipeline_set::PipelineSet::new(
+            crate::pipeline_device::PipelineDevice::uncached(&device),
+            wgpu::TextureFormat::Rgba8Unorm,
+        );
         GlyphAtlas::new(
             Arc::clone(&device),
             Arc::clone(&queue),
