@@ -22797,6 +22797,7 @@ pub fn flui::services::system::dialog::FileFilter::name(&self) -> &str
 pub fn flui::services::system::dialog::FileFilter::new(name: impl Into<String>) -> Self
 pub fn flui::services::system::dialog::FileFilter::with_extension(self, extension: impl Into<String>) -> Self
 pub fn flui::services::system::dialog::FileFilter::with_mime_type(self, mime_type: impl Into<String>) -> Self
+pub const flui::services::system::dialog::MAX_TEXT_LEN: usize = 4096
 #[non_exhaustive] pub enum flui::services::system::dialog::MalformedRequest
 impl Clone for flui::services::system::dialog::MalformedRequest
 impl Copy for flui::services::system::dialog::MalformedRequest
@@ -22809,14 +22810,79 @@ impl core::fmt::Display for flui::services::system::dialog::MalformedRequest
 impl core::marker::StructuralPartialEq for flui::services::system::dialog::MalformedRequest
 variant flui::services::system::dialog::MalformedRequest::DuplicateFilterName // at 6
 variant flui::services::system::dialog::MalformedRequest::EmptyFilter // at 1
+variant flui::services::system::dialog::MalformedRequest::EmptyMessage // at 11
 variant flui::services::system::dialog::MalformedRequest::Extension // at 4
 variant flui::services::system::dialog::MalformedRequest::FilterName // at 0
 variant flui::services::system::dialog::MalformedRequest::FiltersOnFolders // at 7
 variant flui::services::system::dialog::MalformedRequest::MimeType // at 5
 variant flui::services::system::dialog::MalformedRequest::RelativeDirectory // at 9
 variant flui::services::system::dialog::MalformedRequest::SuggestedName // at 8
+variant flui::services::system::dialog::MalformedRequest::Text // at 10
 variant flui::services::system::dialog::MalformedRequest::TooManyFilters // at 3
 variant flui::services::system::dialog::MalformedRequest::TooManyPatterns // at 2
+#[non_exhaustive] pub enum flui::services::system::dialog::MessageAnswer
+impl Clone for flui::services::system::dialog::MessageAnswer
+impl Copy for flui::services::system::dialog::MessageAnswer
+impl Eq for flui::services::system::dialog::MessageAnswer
+impl PartialEq for flui::services::system::dialog::MessageAnswer
+impl core::fmt::Debug for flui::services::system::dialog::MessageAnswer
+impl core::hash::Hash for flui::services::system::dialog::MessageAnswer
+impl core::marker::StructuralPartialEq for flui::services::system::dialog::MessageAnswer
+variant flui::services::system::dialog::MessageAnswer::Cancel // at 1
+variant flui::services::system::dialog::MessageAnswer::No // at 3
+variant flui::services::system::dialog::MessageAnswer::Ok // at 0
+variant flui::services::system::dialog::MessageAnswer::Yes // at 2
+pub trait flui::services::system::dialog::MessageBoxBackend: 'static
+fn flui::services::system::dialog::MessageBoxBackend::show(&self, window: &flui::platform::capability::WindowRef, request: flui::services::system::dialog::MessageBoxRequest, answer: flui::platform::capability::Resolver<flui::services::system::dialog::MessageBoxResult>) -> flui::services::system::dialog::DialogHold
+pub enum flui::services::system::dialog::MessageBoxCapability
+impl core::fmt::Debug for flui::services::system::dialog::MessageBoxCapability
+impl flui::platform::capability::Capability for flui::services::system::dialog::MessageBoxCapability { type Handle = flui::services::system::dialog::MessageBoxes; }
+#[non_exhaustive] pub struct flui::services::system::dialog::MessageBoxRequest
+field flui::services::system::dialog::MessageBoxRequest::buttons: flui::services::system::dialog::MessageButtons // at 3
+field flui::services::system::dialog::MessageBoxRequest::level: flui::services::system::dialog::MessageLevel // at 2
+field flui::services::system::dialog::MessageBoxRequest::message: String // at 1
+field flui::services::system::dialog::MessageBoxRequest::title: Option<String> // at 0
+impl Clone for flui::services::system::dialog::MessageBoxRequest
+impl Eq for flui::services::system::dialog::MessageBoxRequest
+impl PartialEq for flui::services::system::dialog::MessageBoxRequest
+impl core::fmt::Debug for flui::services::system::dialog::MessageBoxRequest
+impl core::marker::StructuralPartialEq for flui::services::system::dialog::MessageBoxRequest
+pub fn flui::services::system::dialog::MessageBoxRequest::buttons(self, buttons: flui::services::system::dialog::MessageButtons) -> Self
+pub fn flui::services::system::dialog::MessageBoxRequest::level(self, level: flui::services::system::dialog::MessageLevel) -> Self
+pub fn flui::services::system::dialog::MessageBoxRequest::new(message: impl Into<String>) -> Self
+pub fn flui::services::system::dialog::MessageBoxRequest::title(self, title: impl Into<String>) -> Self
+pub type flui::services::system::dialog::MessageBoxResult = Result<flui::services::system::dialog::MessageAnswer, flui::services::system::dialog::DialogError>
+pub struct flui::services::system::dialog::MessageBoxes { .. }
+impl Clone for flui::services::system::dialog::MessageBoxes
+impl core::fmt::Debug for flui::services::system::dialog::MessageBoxes
+pub fn flui::services::system::dialog::MessageBoxes::show(&self, request: flui::services::system::dialog::MessageBoxRequest) -> flui::services::system::dialog::Dialog<flui::services::system::dialog::MessageBoxResult>
+pub fn flui::services::system::dialog::MessageBoxes::try_new(backend: impl flui::services::system::dialog::MessageBoxBackend, ctx: &flui::platform::capability::ProviderContext<'_>) -> Result<Self, flui::platform::Unsupported>
+#[non_exhaustive] pub enum flui::services::system::dialog::MessageButtons
+impl Clone for flui::services::system::dialog::MessageButtons
+impl Copy for flui::services::system::dialog::MessageButtons
+impl Default for flui::services::system::dialog::MessageButtons
+impl Eq for flui::services::system::dialog::MessageButtons
+impl PartialEq for flui::services::system::dialog::MessageButtons
+impl core::fmt::Debug for flui::services::system::dialog::MessageButtons
+impl core::hash::Hash for flui::services::system::dialog::MessageButtons
+impl core::marker::StructuralPartialEq for flui::services::system::dialog::MessageButtons
+pub const fn flui::services::system::dialog::MessageButtons::admits(self, answer: flui::services::system::dialog::MessageAnswer) -> bool
+variant flui::services::system::dialog::MessageButtons::Ok // at 0
+variant flui::services::system::dialog::MessageButtons::OkCancel // at 1
+variant flui::services::system::dialog::MessageButtons::YesNo // at 2
+variant flui::services::system::dialog::MessageButtons::YesNoCancel // at 3
+#[non_exhaustive] pub enum flui::services::system::dialog::MessageLevel
+impl Clone for flui::services::system::dialog::MessageLevel
+impl Copy for flui::services::system::dialog::MessageLevel
+impl Default for flui::services::system::dialog::MessageLevel
+impl Eq for flui::services::system::dialog::MessageLevel
+impl PartialEq for flui::services::system::dialog::MessageLevel
+impl core::fmt::Debug for flui::services::system::dialog::MessageLevel
+impl core::hash::Hash for flui::services::system::dialog::MessageLevel
+impl core::marker::StructuralPartialEq for flui::services::system::dialog::MessageLevel
+variant flui::services::system::dialog::MessageLevel::Error // at 2
+variant flui::services::system::dialog::MessageLevel::Info // at 0
+variant flui::services::system::dialog::MessageLevel::Warning // at 1
 #[non_exhaustive] pub struct flui::services::system::dialog::OpenRequest { .. }
 field flui::services::system::dialog::OpenRequest::accept_label: Option<String> // at 5
 field flui::services::system::dialog::OpenRequest::directory: Option<std::path::PathBuf> // at 3
@@ -22887,6 +22953,382 @@ pub fn flui::services::system::dialog::SaveRequest::new() -> Self
 pub fn flui::services::system::dialog::SaveRequest::suggested_name(self, name: impl Into<String>) -> Self
 pub fn flui::services::system::dialog::SaveRequest::title(self, title: impl Into<String>) -> Self
 pub type flui::services::system::dialog::SaveResult = Result<Option<flui::services::system::dialog::SaveLocation>, flui::services::system::dialog::DialogError>
+pub mod flui::services::system::jump_list
+pub struct flui::services::system::jump_list::JumpList { .. }
+impl Clone for flui::services::system::jump_list::JumpList
+impl core::fmt::Debug for flui::services::system::jump_list::JumpList
+pub const flui::services::system::jump_list::JumpList::MAX_TASKS: usize = 32
+pub fn flui::services::system::jump_list::JumpList::clear(&self) -> flui::platform::capability::Completion<flui::services::system::jump_list::JumpListResult>
+pub fn flui::services::system::jump_list::JumpList::new(backend: impl flui::services::system::jump_list::JumpListBackend, ctx: &flui::platform::capability::ProviderContext<'_>) -> Self
+pub fn flui::services::system::jump_list::JumpList::set_tasks(&self, tasks: Vec<flui::services::system::jump_list::JumpListTask>) -> flui::platform::capability::Completion<flui::services::system::jump_list::JumpListResult>
+pub trait flui::services::system::jump_list::JumpListBackend: 'static
+fn flui::services::system::jump_list::JumpListBackend::set_tasks(&self, tasks: Vec<flui::services::system::jump_list::JumpListTask>, answer: flui::platform::capability::Resolver<flui::services::system::jump_list::JumpListResult>)
+pub enum flui::services::system::jump_list::JumpListCapability
+impl core::fmt::Debug for flui::services::system::jump_list::JumpListCapability
+impl flui::platform::capability::Capability for flui::services::system::jump_list::JumpListCapability { type Handle = flui::services::system::jump_list::JumpList; }
+#[non_exhaustive] pub enum flui::services::system::jump_list::JumpListError
+impl Clone for flui::services::system::jump_list::JumpListError
+impl Copy for flui::services::system::jump_list::JumpListError
+impl Eq for flui::services::system::jump_list::JumpListError
+impl From<flui::platform::SystemFailure> for flui::services::system::jump_list::JumpListError
+impl From<flui::platform::Unsupported> for flui::services::system::jump_list::JumpListError
+impl From<flui::services::system::jump_list::MalformedTask> for flui::services::system::jump_list::JumpListError
+impl PartialEq for flui::services::system::jump_list::JumpListError
+impl core::error::Error for flui::services::system::jump_list::JumpListError
+impl core::fmt::Debug for flui::services::system::jump_list::JumpListError
+impl core::fmt::Display for flui::services::system::jump_list::JumpListError
+impl core::marker::StructuralPartialEq for flui::services::system::jump_list::JumpListError
+variant flui::services::system::jump_list::JumpListError::Failed(flui::platform::SystemFailure) // at 2
+variant flui::services::system::jump_list::JumpListError::InvalidTasks(flui::services::system::jump_list::MalformedTask) // at 0
+variant flui::services::system::jump_list::JumpListError::Unsupported(flui::platform::Unsupported) // at 1
+pub type flui::services::system::jump_list::JumpListResult = Result<(), flui::services::system::jump_list::JumpListError>
+#[non_exhaustive] pub struct flui::services::system::jump_list::JumpListTask
+field flui::services::system::jump_list::JumpListTask::arguments: Vec<String> // at 1
+field flui::services::system::jump_list::JumpListTask::description: Option<String> // at 2
+field flui::services::system::jump_list::JumpListTask::title: String // at 0
+impl Clone for flui::services::system::jump_list::JumpListTask
+impl Eq for flui::services::system::jump_list::JumpListTask
+impl PartialEq for flui::services::system::jump_list::JumpListTask
+impl core::fmt::Debug for flui::services::system::jump_list::JumpListTask
+impl core::marker::StructuralPartialEq for flui::services::system::jump_list::JumpListTask
+pub const flui::services::system::jump_list::JumpListTask::MAX_ARGUMENTS: usize = 32
+pub const flui::services::system::jump_list::JumpListTask::MAX_TEXT_LEN: usize = 260
+pub fn flui::services::system::jump_list::JumpListTask::argument(self, argument: impl Into<String>) -> Self
+pub fn flui::services::system::jump_list::JumpListTask::description(self, description: impl Into<String>) -> Self
+pub fn flui::services::system::jump_list::JumpListTask::new(title: impl Into<String>) -> Self
+#[non_exhaustive] pub enum flui::services::system::jump_list::MalformedTask
+impl Clone for flui::services::system::jump_list::MalformedTask
+impl Copy for flui::services::system::jump_list::MalformedTask
+impl Eq for flui::services::system::jump_list::MalformedTask
+impl From<flui::services::system::jump_list::MalformedTask> for flui::services::system::jump_list::JumpListError
+impl PartialEq for flui::services::system::jump_list::MalformedTask
+impl core::error::Error for flui::services::system::jump_list::MalformedTask
+impl core::fmt::Debug for flui::services::system::jump_list::MalformedTask
+impl core::fmt::Display for flui::services::system::jump_list::MalformedTask
+impl core::marker::StructuralPartialEq for flui::services::system::jump_list::MalformedTask
+variant flui::services::system::jump_list::MalformedTask::Argument // at 2
+variant flui::services::system::jump_list::MalformedTask::Text // at 0
+variant flui::services::system::jump_list::MalformedTask::TooManyArguments // at 1
+variant flui::services::system::jump_list::MalformedTask::TooManyTasks // at 3
+pub mod flui::services::system::login
+pub struct flui::services::system::login::LaunchAtLogin { .. }
+impl Clone for flui::services::system::login::LaunchAtLogin
+impl core::fmt::Debug for flui::services::system::login::LaunchAtLogin
+pub fn flui::services::system::login::LaunchAtLogin::disable(&self) -> flui::platform::capability::Completion<flui::services::system::login::LoginItemResult>
+pub fn flui::services::system::login::LaunchAtLogin::enable(&self) -> flui::platform::capability::Completion<flui::services::system::login::LoginItemResult>
+pub fn flui::services::system::login::LaunchAtLogin::new(backend: impl flui::services::system::login::LaunchAtLoginBackend, ctx: &flui::platform::capability::ProviderContext<'_>) -> Self
+pub fn flui::services::system::login::LaunchAtLogin::state(&self) -> flui::platform::capability::Completion<flui::services::system::login::LoginItemResult>
+pub trait flui::services::system::login::LaunchAtLoginBackend: 'static
+fn flui::services::system::login::LaunchAtLoginBackend::ask(&self, request: flui::services::system::login::LoginItemRequest, answer: flui::platform::capability::Resolver<flui::services::system::login::LoginItemResult>)
+pub enum flui::services::system::login::LaunchAtLoginCapability
+impl core::fmt::Debug for flui::services::system::login::LaunchAtLoginCapability
+impl flui::platform::capability::Capability for flui::services::system::login::LaunchAtLoginCapability { type Handle = flui::services::system::login::LaunchAtLogin; }
+#[non_exhaustive] pub enum flui::services::system::login::LoginItemError
+impl Clone for flui::services::system::login::LoginItemError
+impl Copy for flui::services::system::login::LoginItemError
+impl Eq for flui::services::system::login::LoginItemError
+impl From<flui::platform::SystemFailure> for flui::services::system::login::LoginItemError
+impl From<flui::platform::Unsupported> for flui::services::system::login::LoginItemError
+impl PartialEq for flui::services::system::login::LoginItemError
+impl core::error::Error for flui::services::system::login::LoginItemError
+impl core::fmt::Debug for flui::services::system::login::LoginItemError
+impl core::fmt::Display for flui::services::system::login::LoginItemError
+impl core::marker::StructuralPartialEq for flui::services::system::login::LoginItemError
+variant flui::services::system::login::LoginItemError::Denied // at 0
+variant flui::services::system::login::LoginItemError::Failed(flui::platform::SystemFailure) // at 2
+variant flui::services::system::login::LoginItemError::Unsupported(flui::platform::Unsupported) // at 1
+#[non_exhaustive] pub enum flui::services::system::login::LoginItemRequest
+impl Clone for flui::services::system::login::LoginItemRequest
+impl Copy for flui::services::system::login::LoginItemRequest
+impl Eq for flui::services::system::login::LoginItemRequest
+impl PartialEq for flui::services::system::login::LoginItemRequest
+impl core::fmt::Debug for flui::services::system::login::LoginItemRequest
+impl core::hash::Hash for flui::services::system::login::LoginItemRequest
+impl core::marker::StructuralPartialEq for flui::services::system::login::LoginItemRequest
+variant flui::services::system::login::LoginItemRequest::Disable // at 2
+variant flui::services::system::login::LoginItemRequest::Enable // at 1
+variant flui::services::system::login::LoginItemRequest::Read // at 0
+pub type flui::services::system::login::LoginItemResult = Result<flui::services::system::login::LoginItemState, flui::services::system::login::LoginItemError>
+#[non_exhaustive] pub enum flui::services::system::login::LoginItemState
+impl Clone for flui::services::system::login::LoginItemState
+impl Copy for flui::services::system::login::LoginItemState
+impl Eq for flui::services::system::login::LoginItemState
+impl PartialEq for flui::services::system::login::LoginItemState
+impl core::fmt::Debug for flui::services::system::login::LoginItemState
+impl core::hash::Hash for flui::services::system::login::LoginItemState
+impl core::marker::StructuralPartialEq for flui::services::system::login::LoginItemState
+variant flui::services::system::login::LoginItemState::Disabled // at 1
+variant flui::services::system::login::LoginItemState::DisabledByUser // at 2
+variant flui::services::system::login::LoginItemState::Enabled // at 0
+pub mod flui::services::system::os
+#[non_exhaustive] pub enum flui::services::system::os::Architecture
+impl Clone for flui::services::system::os::Architecture
+impl Copy for flui::services::system::os::Architecture
+impl Eq for flui::services::system::os::Architecture
+impl PartialEq for flui::services::system::os::Architecture
+impl core::fmt::Debug for flui::services::system::os::Architecture
+impl core::hash::Hash for flui::services::system::os::Architecture
+impl core::marker::StructuralPartialEq for flui::services::system::os::Architecture
+variant flui::services::system::os::Architecture::Aarch64 // at 3
+variant flui::services::system::os::Architecture::Arm // at 2
+variant flui::services::system::os::Architecture::Other // at 4
+variant flui::services::system::os::Architecture::X86 // at 0
+variant flui::services::system::os::Architecture::X86_64 // at 1
+#[non_exhaustive] pub enum flui::services::system::os::FolderError
+impl Clone for flui::services::system::os::FolderError
+impl Copy for flui::services::system::os::FolderError
+impl Eq for flui::services::system::os::FolderError
+impl From<flui::platform::SystemFailure> for flui::services::system::os::FolderError
+impl From<flui::platform::Unsupported> for flui::services::system::os::FolderError
+impl PartialEq for flui::services::system::os::FolderError
+impl core::error::Error for flui::services::system::os::FolderError
+impl core::fmt::Debug for flui::services::system::os::FolderError
+impl core::fmt::Display for flui::services::system::os::FolderError
+impl core::marker::StructuralPartialEq for flui::services::system::os::FolderError
+variant flui::services::system::os::FolderError::Failed(flui::platform::SystemFailure) // at 2
+variant flui::services::system::os::FolderError::NotFound // at 0
+variant flui::services::system::os::FolderError::Unsupported(flui::platform::Unsupported) // at 1
+pub type flui::services::system::os::FolderResult = Result<std::path::PathBuf, flui::services::system::os::FolderError>
+#[non_exhaustive] pub enum flui::services::system::os::KnownFolder
+impl Clone for flui::services::system::os::KnownFolder
+impl Copy for flui::services::system::os::KnownFolder
+impl Eq for flui::services::system::os::KnownFolder
+impl PartialEq for flui::services::system::os::KnownFolder
+impl core::fmt::Debug for flui::services::system::os::KnownFolder
+impl core::hash::Hash for flui::services::system::os::KnownFolder
+impl core::marker::StructuralPartialEq for flui::services::system::os::KnownFolder
+variant flui::services::system::os::KnownFolder::Cache // at 9
+variant flui::services::system::os::KnownFolder::Config // at 7
+variant flui::services::system::os::KnownFolder::Data // at 8
+variant flui::services::system::os::KnownFolder::Desktop // at 1
+variant flui::services::system::os::KnownFolder::Documents // at 2
+variant flui::services::system::os::KnownFolder::Downloads // at 3
+variant flui::services::system::os::KnownFolder::Home // at 0
+variant flui::services::system::os::KnownFolder::Music // at 5
+variant flui::services::system::os::KnownFolder::Pictures // at 4
+variant flui::services::system::os::KnownFolder::Videos // at 6
+pub struct flui::services::system::os::Os { .. }
+impl Clone for flui::services::system::os::Os
+impl core::fmt::Debug for flui::services::system::os::Os
+pub fn flui::services::system::os::Os::folder(&self, folder: flui::services::system::os::KnownFolder) -> flui::platform::capability::Completion<flui::services::system::os::FolderResult>
+pub fn flui::services::system::os::Os::info(&self) -> flui::services::system::os::OsInfo
+pub fn flui::services::system::os::Os::new(backend: impl flui::services::system::os::OsBackend, ctx: &flui::platform::capability::ProviderContext<'_>) -> Self
+pub trait flui::services::system::os::OsBackend: 'static
+fn flui::services::system::os::OsBackend::folder(&self, folder: flui::services::system::os::KnownFolder, answer: flui::platform::capability::Resolver<flui::services::system::os::FolderResult>)
+fn flui::services::system::os::OsBackend::info(&self) -> flui::services::system::os::OsInfo
+pub enum flui::services::system::os::OsCapability
+impl core::fmt::Debug for flui::services::system::os::OsCapability
+impl flui::platform::capability::Capability for flui::services::system::os::OsCapability { type Handle = flui::services::system::os::Os; }
+#[non_exhaustive] pub struct flui::services::system::os::OsInfo
+field flui::services::system::os::OsInfo::architecture: flui::services::system::os::Architecture // at 2
+field flui::services::system::os::OsInfo::name: String // at 0
+field flui::services::system::os::OsInfo::version: flui::services::system::os::OsVersion // at 1
+impl Clone for flui::services::system::os::OsInfo
+impl Eq for flui::services::system::os::OsInfo
+impl PartialEq for flui::services::system::os::OsInfo
+impl core::fmt::Debug for flui::services::system::os::OsInfo
+impl core::marker::StructuralPartialEq for flui::services::system::os::OsInfo
+pub fn flui::services::system::os::OsInfo::new(name: impl Into<String>, version: flui::services::system::os::OsVersion, architecture: flui::services::system::os::Architecture) -> Self
+pub struct flui::services::system::os::OsVersion
+field flui::services::system::os::OsVersion::major: u32 // at 0
+field flui::services::system::os::OsVersion::minor: u32 // at 1
+field flui::services::system::os::OsVersion::patch: u32 // at 2
+impl Clone for flui::services::system::os::OsVersion
+impl Copy for flui::services::system::os::OsVersion
+impl Eq for flui::services::system::os::OsVersion
+impl Ord for flui::services::system::os::OsVersion
+impl PartialEq for flui::services::system::os::OsVersion
+impl PartialOrd for flui::services::system::os::OsVersion
+impl core::fmt::Debug for flui::services::system::os::OsVersion
+impl core::fmt::Display for flui::services::system::os::OsVersion
+impl core::hash::Hash for flui::services::system::os::OsVersion
+impl core::marker::StructuralPartialEq for flui::services::system::os::OsVersion
+pub mod flui::services::system::share
+#[non_exhaustive] pub enum flui::services::system::share::MalformedShare
+impl Clone for flui::services::system::share::MalformedShare
+impl Copy for flui::services::system::share::MalformedShare
+impl Eq for flui::services::system::share::MalformedShare
+impl From<flui::services::system::share::MalformedShare> for flui::services::system::share::ShareError
+impl PartialEq for flui::services::system::share::MalformedShare
+impl core::error::Error for flui::services::system::share::MalformedShare
+impl core::fmt::Debug for flui::services::system::share::MalformedShare
+impl core::fmt::Display for flui::services::system::share::MalformedShare
+impl core::marker::StructuralPartialEq for flui::services::system::share::MalformedShare
+variant flui::services::system::share::MalformedShare::Empty // at 0
+variant flui::services::system::share::MalformedShare::NotLocal // at 4
+variant flui::services::system::share::MalformedShare::RelativePath // at 3
+variant flui::services::system::share::MalformedShare::Text // at 1
+variant flui::services::system::share::MalformedShare::TooManyFiles // at 2
+pub struct flui::services::system::share::Share { .. }
+impl Clone for flui::services::system::share::Share
+impl core::fmt::Debug for flui::services::system::share::Share
+pub fn flui::services::system::share::Share::share(&self, request: flui::services::system::share::ShareRequest) -> flui::platform::capability::Completion<flui::services::system::share::ShareResult>
+pub fn flui::services::system::share::Share::try_new(backend: impl flui::services::system::share::ShareBackend, ctx: &flui::platform::capability::ProviderContext<'_>) -> Result<Self, flui::platform::Unsupported>
+pub trait flui::services::system::share::ShareBackend: 'static
+fn flui::services::system::share::ShareBackend::share(&self, window: &flui::platform::capability::WindowRef, request: flui::services::system::share::ShareRequest, answer: flui::platform::capability::Resolver<flui::services::system::share::ShareResult>)
+pub enum flui::services::system::share::ShareCapability
+impl core::fmt::Debug for flui::services::system::share::ShareCapability
+impl flui::platform::capability::Capability for flui::services::system::share::ShareCapability { type Handle = flui::services::system::share::Share; }
+#[non_exhaustive] pub enum flui::services::system::share::ShareError
+impl Clone for flui::services::system::share::ShareError
+impl Copy for flui::services::system::share::ShareError
+impl Eq for flui::services::system::share::ShareError
+impl From<flui::platform::SystemFailure> for flui::services::system::share::ShareError
+impl From<flui::platform::Unsupported> for flui::services::system::share::ShareError
+impl From<flui::services::system::share::MalformedShare> for flui::services::system::share::ShareError
+impl PartialEq for flui::services::system::share::ShareError
+impl core::error::Error for flui::services::system::share::ShareError
+impl core::fmt::Debug for flui::services::system::share::ShareError
+impl core::fmt::Display for flui::services::system::share::ShareError
+impl core::marker::StructuralPartialEq for flui::services::system::share::ShareError
+variant flui::services::system::share::ShareError::Failed(flui::platform::SystemFailure) // at 4
+variant flui::services::system::share::ShareError::InvalidRequest(flui::services::system::share::MalformedShare) // at 0
+variant flui::services::system::share::ShareError::NotFound // at 2
+variant flui::services::system::share::ShareError::Unsupported(flui::platform::Unsupported) // at 3
+variant flui::services::system::share::ShareError::WindowClosed // at 1
+#[non_exhaustive] pub struct flui::services::system::share::ShareRequest
+field flui::services::system::share::ShareRequest::files: Vec<std::path::PathBuf> // at 3
+field flui::services::system::share::ShareRequest::text: Option<String> // at 1
+field flui::services::system::share::ShareRequest::title: Option<String> // at 0
+field flui::services::system::share::ShareRequest::uri: Option<flui::platform::launch::ExternalUri> // at 2
+impl Clone for flui::services::system::share::ShareRequest
+impl Default for flui::services::system::share::ShareRequest
+impl Eq for flui::services::system::share::ShareRequest
+impl PartialEq for flui::services::system::share::ShareRequest
+impl core::fmt::Debug for flui::services::system::share::ShareRequest
+impl core::marker::StructuralPartialEq for flui::services::system::share::ShareRequest
+pub const flui::services::system::share::ShareRequest::MAX_FILES: usize = 64
+pub const flui::services::system::share::ShareRequest::MAX_TEXT_LEN: usize = _
+pub fn flui::services::system::share::ShareRequest::file(self, path: impl Into<std::path::PathBuf>) -> Self
+pub fn flui::services::system::share::ShareRequest::new() -> Self
+pub fn flui::services::system::share::ShareRequest::text(self, text: impl Into<String>) -> Self
+pub fn flui::services::system::share::ShareRequest::title(self, title: impl Into<String>) -> Self
+pub fn flui::services::system::share::ShareRequest::uri(self, uri: flui::platform::launch::ExternalUri) -> Self
+pub type flui::services::system::share::ShareResult = Result<(), flui::services::system::share::ShareError>
+pub mod flui::services::system::shortcut
+pub trait flui::services::system::shortcut::GlobalShortcutBackend: 'static
+fn flui::services::system::shortcut::GlobalShortcutBackend::register(&self, shortcut: flui::services::system::shortcut::Shortcut, presses: flui::services::system::shortcut::ShortcutPresses, answer: flui::platform::capability::Resolver<Result<(), flui::services::system::shortcut::ShortcutError>>) -> flui::services::system::shortcut::ShortcutHold
+pub enum flui::services::system::shortcut::GlobalShortcutCapability
+impl core::fmt::Debug for flui::services::system::shortcut::GlobalShortcutCapability
+impl flui::platform::capability::Capability for flui::services::system::shortcut::GlobalShortcutCapability { type Handle = flui::services::system::shortcut::GlobalShortcuts; }
+pub struct flui::services::system::shortcut::GlobalShortcuts { .. }
+impl Clone for flui::services::system::shortcut::GlobalShortcuts
+impl core::fmt::Debug for flui::services::system::shortcut::GlobalShortcuts
+pub fn flui::services::system::shortcut::GlobalShortcuts::new(backend: impl flui::services::system::shortcut::GlobalShortcutBackend, ctx: &flui::platform::capability::ProviderContext<'_>) -> Self
+pub fn flui::services::system::shortcut::GlobalShortcuts::register(&self, shortcut: flui::services::system::shortcut::Shortcut, on_press: impl FnMut() + 'static) -> flui::platform::capability::Completion<flui::services::system::shortcut::ShortcutResult>
+#[non_exhaustive] pub enum flui::services::system::shortcut::InvalidShortcut
+impl Clone for flui::services::system::shortcut::InvalidShortcut
+impl Copy for flui::services::system::shortcut::InvalidShortcut
+impl Eq for flui::services::system::shortcut::InvalidShortcut
+impl PartialEq for flui::services::system::shortcut::InvalidShortcut
+impl core::error::Error for flui::services::system::shortcut::InvalidShortcut
+impl core::fmt::Debug for flui::services::system::shortcut::InvalidShortcut
+impl core::fmt::Display for flui::services::system::shortcut::InvalidShortcut
+impl core::marker::StructuralPartialEq for flui::services::system::shortcut::InvalidShortcut
+variant flui::services::system::shortcut::InvalidShortcut::Modifier // at 0
+variant flui::services::system::shortcut::InvalidShortcut::NeedsModifier // at 1
+pub struct flui::services::system::shortcut::Shortcut { .. }
+impl Clone for flui::services::system::shortcut::Shortcut
+impl Copy for flui::services::system::shortcut::Shortcut
+impl Eq for flui::services::system::shortcut::Shortcut
+impl PartialEq for flui::services::system::shortcut::Shortcut
+impl core::fmt::Debug for flui::services::system::shortcut::Shortcut
+impl core::hash::Hash for flui::services::system::shortcut::Shortcut
+impl core::marker::StructuralPartialEq for flui::services::system::shortcut::Shortcut
+pub const flui::services::system::shortcut::Shortcut::MODIFIERS: flui::interaction::Modifiers = _
+pub const fn flui::services::system::shortcut::Shortcut::code(self) -> flui::interaction::Code
+pub const fn flui::services::system::shortcut::Shortcut::modifiers(self) -> flui::interaction::Modifiers
+pub fn flui::services::system::shortcut::Shortcut::try_new(modifiers: flui::interaction::Modifiers, code: flui::interaction::Code) -> Result<Self, flui::services::system::shortcut::InvalidShortcut>
+#[non_exhaustive] pub enum flui::services::system::shortcut::ShortcutError
+impl Clone for flui::services::system::shortcut::ShortcutError
+impl Copy for flui::services::system::shortcut::ShortcutError
+impl Eq for flui::services::system::shortcut::ShortcutError
+impl From<flui::platform::SystemFailure> for flui::services::system::shortcut::ShortcutError
+impl From<flui::platform::Unsupported> for flui::services::system::shortcut::ShortcutError
+impl PartialEq for flui::services::system::shortcut::ShortcutError
+impl core::error::Error for flui::services::system::shortcut::ShortcutError
+impl core::fmt::Debug for flui::services::system::shortcut::ShortcutError
+impl core::fmt::Display for flui::services::system::shortcut::ShortcutError
+impl core::marker::StructuralPartialEq for flui::services::system::shortcut::ShortcutError
+variant flui::services::system::shortcut::ShortcutError::Exhausted // at 2
+variant flui::services::system::shortcut::ShortcutError::Failed(flui::platform::SystemFailure) // at 4
+variant flui::services::system::shortcut::ShortcutError::KeyNotSupported // at 1
+variant flui::services::system::shortcut::ShortcutError::Taken // at 0
+variant flui::services::system::shortcut::ShortcutError::Unsupported(flui::platform::Unsupported) // at 3
+pub struct flui::services::system::shortcut::ShortcutHold(_)
+impl core::fmt::Debug for flui::services::system::shortcut::ShortcutHold
+pub fn flui::services::system::shortcut::ShortcutHold::new(keep: impl core::any::Any) -> Self
+pub struct flui::services::system::shortcut::ShortcutPresses { .. }
+impl Clone for flui::services::system::shortcut::ShortcutPresses
+impl core::fmt::Debug for flui::services::system::shortcut::ShortcutPresses
+pub fn flui::services::system::shortcut::ShortcutPresses::press(&self)
+pub struct flui::services::system::shortcut::ShortcutRegistration { .. }
+impl Drop for flui::services::system::shortcut::ShortcutRegistration
+impl core::fmt::Debug for flui::services::system::shortcut::ShortcutRegistration
+pub fn flui::services::system::shortcut::ShortcutRegistration::shortcut(&self) -> flui::services::system::shortcut::Shortcut
+pub type flui::services::system::shortcut::ShortcutResult = Result<flui::services::system::shortcut::ShortcutRegistration, flui::services::system::shortcut::ShortcutError>
+pub mod flui::services::system::taskbar
+pub struct flui::services::system::taskbar::Fraction(_)
+impl Clone for flui::services::system::taskbar::Fraction
+impl Copy for flui::services::system::taskbar::Fraction
+impl PartialEq for flui::services::system::taskbar::Fraction
+impl PartialOrd for flui::services::system::taskbar::Fraction
+impl core::fmt::Debug for flui::services::system::taskbar::Fraction
+impl core::marker::StructuralPartialEq for flui::services::system::taskbar::Fraction
+pub const flui::services::system::taskbar::Fraction::ONE: Self = _
+pub const flui::services::system::taskbar::Fraction::ZERO: Self = _
+pub const fn flui::services::system::taskbar::Fraction::get(self) -> f64
+pub fn flui::services::system::taskbar::Fraction::try_new(value: f64) -> Option<Self>
+pub struct flui::services::system::taskbar::Taskbar { .. }
+impl Clone for flui::services::system::taskbar::Taskbar
+impl core::fmt::Debug for flui::services::system::taskbar::Taskbar
+pub fn flui::services::system::taskbar::Taskbar::set_badge(&self, badge: flui::services::system::taskbar::TaskbarBadge) -> Result<(), flui::services::system::taskbar::TaskbarError>
+pub fn flui::services::system::taskbar::Taskbar::set_progress(&self, progress: flui::services::system::taskbar::TaskbarProgress) -> Result<(), flui::services::system::taskbar::TaskbarError>
+pub fn flui::services::system::taskbar::Taskbar::try_new(backend: impl flui::services::system::taskbar::TaskbarBackend, ctx: &flui::platform::capability::ProviderContext<'_>) -> Result<Self, flui::platform::Unsupported>
+pub trait flui::services::system::taskbar::TaskbarBackend: 'static
+fn flui::services::system::taskbar::TaskbarBackend::set_badge(&self, window: &flui::platform::capability::WindowRef, badge: flui::services::system::taskbar::TaskbarBadge) -> Result<(), flui::services::system::taskbar::TaskbarError>
+fn flui::services::system::taskbar::TaskbarBackend::set_progress(&self, window: &flui::platform::capability::WindowRef, progress: flui::services::system::taskbar::TaskbarProgress) -> Result<(), flui::services::system::taskbar::TaskbarError>
+#[non_exhaustive] pub enum flui::services::system::taskbar::TaskbarBadge
+impl Clone for flui::services::system::taskbar::TaskbarBadge
+impl Copy for flui::services::system::taskbar::TaskbarBadge
+impl Default for flui::services::system::taskbar::TaskbarBadge
+impl Eq for flui::services::system::taskbar::TaskbarBadge
+impl PartialEq for flui::services::system::taskbar::TaskbarBadge
+impl core::fmt::Debug for flui::services::system::taskbar::TaskbarBadge
+impl core::hash::Hash for flui::services::system::taskbar::TaskbarBadge
+impl core::marker::StructuralPartialEq for flui::services::system::taskbar::TaskbarBadge
+variant flui::services::system::taskbar::TaskbarBadge::Count(core::num::nonzero::NonZeroU32) // at 2
+variant flui::services::system::taskbar::TaskbarBadge::Dot // at 1
+variant flui::services::system::taskbar::TaskbarBadge::None // at 0
+pub enum flui::services::system::taskbar::TaskbarCapability
+impl core::fmt::Debug for flui::services::system::taskbar::TaskbarCapability
+impl flui::platform::capability::Capability for flui::services::system::taskbar::TaskbarCapability { type Handle = flui::services::system::taskbar::Taskbar; }
+#[non_exhaustive] pub enum flui::services::system::taskbar::TaskbarError
+impl Clone for flui::services::system::taskbar::TaskbarError
+impl Copy for flui::services::system::taskbar::TaskbarError
+impl Eq for flui::services::system::taskbar::TaskbarError
+impl From<flui::platform::SystemFailure> for flui::services::system::taskbar::TaskbarError
+impl From<flui::platform::Unsupported> for flui::services::system::taskbar::TaskbarError
+impl PartialEq for flui::services::system::taskbar::TaskbarError
+impl core::error::Error for flui::services::system::taskbar::TaskbarError
+impl core::fmt::Debug for flui::services::system::taskbar::TaskbarError
+impl core::fmt::Display for flui::services::system::taskbar::TaskbarError
+impl core::marker::StructuralPartialEq for flui::services::system::taskbar::TaskbarError
+variant flui::services::system::taskbar::TaskbarError::Failed(flui::platform::SystemFailure) // at 2
+variant flui::services::system::taskbar::TaskbarError::Unsupported(flui::platform::Unsupported) // at 1
+variant flui::services::system::taskbar::TaskbarError::WindowClosed // at 0
+#[non_exhaustive] pub enum flui::services::system::taskbar::TaskbarProgress
+impl Clone for flui::services::system::taskbar::TaskbarProgress
+impl Copy for flui::services::system::taskbar::TaskbarProgress
+impl Default for flui::services::system::taskbar::TaskbarProgress
+impl PartialEq for flui::services::system::taskbar::TaskbarProgress
+impl core::fmt::Debug for flui::services::system::taskbar::TaskbarProgress
+impl core::marker::StructuralPartialEq for flui::services::system::taskbar::TaskbarProgress
+variant flui::services::system::taskbar::TaskbarProgress::Error(flui::services::system::taskbar::Fraction) // at 4
+variant flui::services::system::taskbar::TaskbarProgress::Indeterminate // at 1
+variant flui::services::system::taskbar::TaskbarProgress::None // at 0
+variant flui::services::system::taskbar::TaskbarProgress::Normal(flui::services::system::taskbar::Fraction) // at 2
+variant flui::services::system::taskbar::TaskbarProgress::Paused(flui::services::system::taskbar::Fraction) // at 3
 pub mod flui::services::system::testing
 #[non_exhaustive] pub enum flui::services::system::testing::DialogRequest
 impl Clone for flui::services::system::testing::DialogRequest
@@ -22896,6 +23338,14 @@ impl core::fmt::Debug for flui::services::system::testing::DialogRequest
 impl core::marker::StructuralPartialEq for flui::services::system::testing::DialogRequest
 variant flui::services::system::testing::DialogRequest::Open { window: flui::platform::WindowId, request: flui::services::system::dialog::OpenRequest } // at 0
 variant flui::services::system::testing::DialogRequest::Save { window: flui::platform::WindowId, request: flui::services::system::dialog::SaveRequest } // at 1
+#[non_exhaustive] pub struct flui::services::system::testing::InWindow<R>
+field flui::services::system::testing::InWindow::request: R // at 1
+field flui::services::system::testing::InWindow::window: flui::platform::WindowId // at 0
+impl<R: Clone> Clone for flui::services::system::testing::InWindow<R>
+impl<R: Eq> Eq for flui::services::system::testing::InWindow<R>
+impl<R: PartialEq> PartialEq for flui::services::system::testing::InWindow<R>
+impl<R: PartialEq> core::marker::StructuralPartialEq for flui::services::system::testing::InWindow<R>
+impl<R: core::fmt::Debug> core::fmt::Debug for flui::services::system::testing::InWindow<R>
 #[non_exhaustive] pub enum flui::services::system::testing::LaunchRequest
 impl Clone for flui::services::system::testing::LaunchRequest
 impl Eq for flui::services::system::testing::LaunchRequest
@@ -22927,6 +23377,18 @@ pub fn flui::services::system::testing::ScriptedFileDialogs::release_open(&self,
 pub fn flui::services::system::testing::ScriptedFileDialogs::release_save(&self, result: flui::services::system::dialog::SaveResult) -> bool
 pub fn flui::services::system::testing::ScriptedFileDialogs::requests(&self) -> Vec<flui::services::system::testing::DialogRequest>
 pub fn flui::services::system::testing::ScriptedFileDialogs::save_script(&self) -> &flui::platform::capability::scripted::Script<flui::services::system::testing::DialogRequest, flui::services::system::dialog::SaveResult>
+pub struct flui::services::system::testing::ScriptedJumpList { .. }
+impl Clone for flui::services::system::testing::ScriptedJumpList
+impl core::fmt::Debug for flui::services::system::testing::ScriptedJumpList
+impl flui::services::system::jump_list::JumpListBackend for flui::services::system::testing::ScriptedJumpList
+pub fn flui::services::system::testing::ScriptedJumpList::on(scenario: &flui::platform::capability::scripted::Scenario) -> Self
+pub fn flui::services::system::testing::ScriptedJumpList::script(&self) -> &flui::platform::capability::scripted::Script<Vec<flui::services::system::jump_list::JumpListTask>, flui::services::system::jump_list::JumpListResult>
+pub struct flui::services::system::testing::ScriptedLaunchAtLogin { .. }
+impl Clone for flui::services::system::testing::ScriptedLaunchAtLogin
+impl core::fmt::Debug for flui::services::system::testing::ScriptedLaunchAtLogin
+impl flui::services::system::login::LaunchAtLoginBackend for flui::services::system::testing::ScriptedLaunchAtLogin
+pub fn flui::services::system::testing::ScriptedLaunchAtLogin::on(scenario: &flui::platform::capability::scripted::Scenario) -> Self
+pub fn flui::services::system::testing::ScriptedLaunchAtLogin::script(&self) -> &flui::platform::capability::scripted::Script<flui::services::system::login::LoginItemRequest, flui::services::system::login::LoginItemResult>
 pub struct flui::services::system::testing::ScriptedLauncher { .. }
 impl Clone for flui::services::system::testing::ScriptedLauncher
 impl Default for flui::services::system::testing::ScriptedLauncher
@@ -22939,15 +23401,65 @@ pub fn flui::services::system::testing::ScriptedLauncher::on(scenario: &flui::pl
 pub fn flui::services::system::testing::ScriptedLauncher::release(&self, result: flui::platform::launch::LaunchResult) -> bool
 pub fn flui::services::system::testing::ScriptedLauncher::requests(&self) -> Vec<flui::services::system::testing::LaunchRequest>
 pub fn flui::services::system::testing::ScriptedLauncher::script(&self) -> &flui::platform::capability::scripted::Script<flui::services::system::testing::LaunchRequest, flui::platform::launch::LaunchResult>
+pub struct flui::services::system::testing::ScriptedMessageBoxes { .. }
+impl Clone for flui::services::system::testing::ScriptedMessageBoxes
+impl core::fmt::Debug for flui::services::system::testing::ScriptedMessageBoxes
+impl flui::services::system::dialog::MessageBoxBackend for flui::services::system::testing::ScriptedMessageBoxes
+pub fn flui::services::system::testing::ScriptedMessageBoxes::on(scenario: &flui::platform::capability::scripted::Scenario) -> Self
+pub fn flui::services::system::testing::ScriptedMessageBoxes::script(&self) -> &flui::platform::capability::scripted::Script<flui::services::system::testing::InWindow<flui::services::system::dialog::MessageBoxRequest>, flui::services::system::dialog::MessageBoxResult>
+pub struct flui::services::system::testing::ScriptedOs { .. }
+impl Clone for flui::services::system::testing::ScriptedOs
+impl core::fmt::Debug for flui::services::system::testing::ScriptedOs
+impl flui::services::system::os::OsBackend for flui::services::system::testing::ScriptedOs
+pub fn flui::services::system::testing::ScriptedOs::folders(&self) -> &flui::platform::capability::scripted::Script<flui::services::system::os::KnownFolder, flui::services::system::os::FolderResult>
+pub fn flui::services::system::testing::ScriptedOs::on(scenario: &flui::platform::capability::scripted::Scenario) -> Self
+pub fn flui::services::system::testing::ScriptedOs::set_info(&self, info: flui::services::system::os::OsInfo)
+pub struct flui::services::system::testing::ScriptedShare { .. }
+impl Clone for flui::services::system::testing::ScriptedShare
+impl core::fmt::Debug for flui::services::system::testing::ScriptedShare
+impl flui::services::system::share::ShareBackend for flui::services::system::testing::ScriptedShare
+pub fn flui::services::system::testing::ScriptedShare::on(scenario: &flui::platform::capability::scripted::Scenario) -> Self
+pub fn flui::services::system::testing::ScriptedShare::script(&self) -> &flui::platform::capability::scripted::Script<flui::services::system::testing::InWindow<flui::services::system::share::ShareRequest>, flui::services::system::share::ShareResult>
+pub struct flui::services::system::testing::ScriptedShortcuts { .. }
+impl Clone for flui::services::system::testing::ScriptedShortcuts
+impl core::fmt::Debug for flui::services::system::testing::ScriptedShortcuts
+impl flui::services::system::shortcut::GlobalShortcutBackend for flui::services::system::testing::ScriptedShortcuts
+pub fn flui::services::system::testing::ScriptedShortcuts::held(&self) -> usize
+pub fn flui::services::system::testing::ScriptedShortcuts::on(scenario: &flui::platform::capability::scripted::Scenario) -> Self
+pub fn flui::services::system::testing::ScriptedShortcuts::press(&self, shortcut: flui::services::system::shortcut::Shortcut) -> usize
+pub fn flui::services::system::testing::ScriptedShortcuts::script(&self) -> &flui::platform::capability::scripted::Script<flui::services::system::shortcut::Shortcut, Result<(), flui::services::system::shortcut::ShortcutError>>
 pub struct flui::services::system::testing::ScriptedSystem { .. }
 impl Clone for flui::services::system::testing::ScriptedSystem
 impl Default for flui::services::system::testing::ScriptedSystem
 impl core::fmt::Debug for flui::services::system::testing::ScriptedSystem
 impl flui::platform::capability::Plugin for flui::services::system::testing::ScriptedSystem
 pub fn flui::services::system::testing::ScriptedSystem::dialogs(&self) -> &flui::services::system::testing::ScriptedFileDialogs
+pub fn flui::services::system::testing::ScriptedSystem::jump_list(&self) -> &flui::services::system::testing::ScriptedJumpList
 pub fn flui::services::system::testing::ScriptedSystem::launcher(&self) -> &flui::services::system::testing::ScriptedLauncher
+pub fn flui::services::system::testing::ScriptedSystem::login(&self) -> &flui::services::system::testing::ScriptedLaunchAtLogin
+pub fn flui::services::system::testing::ScriptedSystem::message_boxes(&self) -> &flui::services::system::testing::ScriptedMessageBoxes
 pub fn flui::services::system::testing::ScriptedSystem::new(launcher: flui::services::system::testing::ScriptedLauncher, dialogs: flui::services::system::testing::ScriptedFileDialogs) -> Self
 pub fn flui::services::system::testing::ScriptedSystem::on(scenario: &flui::platform::capability::scripted::Scenario) -> Self
+pub fn flui::services::system::testing::ScriptedSystem::os(&self) -> &flui::services::system::testing::ScriptedOs
+pub fn flui::services::system::testing::ScriptedSystem::share(&self) -> &flui::services::system::testing::ScriptedShare
+pub fn flui::services::system::testing::ScriptedSystem::shortcuts(&self) -> &flui::services::system::testing::ScriptedShortcuts
+pub fn flui::services::system::testing::ScriptedSystem::taskbar(&self) -> &flui::services::system::testing::ScriptedTaskbar
+pub struct flui::services::system::testing::ScriptedTaskbar { .. }
+impl Clone for flui::services::system::testing::ScriptedTaskbar
+impl Default for flui::services::system::testing::ScriptedTaskbar
+impl core::fmt::Debug for flui::services::system::testing::ScriptedTaskbar
+impl flui::services::system::taskbar::TaskbarBackend for flui::services::system::testing::ScriptedTaskbar
+pub fn flui::services::system::testing::ScriptedTaskbar::changes(&self) -> Vec<flui::services::system::testing::TaskbarChange>
+pub fn flui::services::system::testing::ScriptedTaskbar::new() -> Self
+pub fn flui::services::system::testing::ScriptedTaskbar::refuse(&self, error: Option<flui::services::system::taskbar::TaskbarError>)
+#[non_exhaustive] pub enum flui::services::system::testing::TaskbarChange
+impl Clone for flui::services::system::testing::TaskbarChange
+impl Copy for flui::services::system::testing::TaskbarChange
+impl PartialEq for flui::services::system::testing::TaskbarChange
+impl core::fmt::Debug for flui::services::system::testing::TaskbarChange
+impl core::marker::StructuralPartialEq for flui::services::system::testing::TaskbarChange
+variant flui::services::system::testing::TaskbarChange::Badge { window: flui::platform::WindowId, badge: flui::services::system::taskbar::TaskbarBadge } // at 1
+variant flui::services::system::testing::TaskbarChange::Progress { window: flui::platform::WindowId, progress: flui::services::system::taskbar::TaskbarProgress } // at 0
 pub mod flui::testing
 pub struct flui::testing::CommitBarrier { .. }
 impl Drop for flui::testing::CommitBarrier
