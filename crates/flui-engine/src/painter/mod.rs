@@ -123,6 +123,7 @@ pub(crate) struct ChunkEntry {
     items: usize,
     layer_depth: usize,
     clip: crate::state_stack::ResolvedClip,
+    origin: crate::pixel_shift::PixelOrigin,
 }
 
 // GPU rendering routinely converts between numeric types for pixel coordinates,
@@ -863,7 +864,7 @@ impl WgpuPainter {
         self.sync_resource_epoch();
         let ctm = self.state.current_transform_matrix();
         let scissor = self.state.current_scissor();
-        let (Some(epoch), Some(raster), Some(ambient)) = (
+        let (Some(epoch), Some((raster, origin)), Some(ambient)) = (
             self.recording_cache.epoch(),
             RasterKey::of(&ctm),
             AmbientKey::of(
@@ -893,6 +894,7 @@ impl WgpuPainter {
                         scissor,
                         clip: self.state.active_clip(),
                         chain: &chain,
+                        origin,
                     },
                 );
                 return ChunkStart::Replayed;
@@ -907,6 +909,7 @@ impl WgpuPainter {
             items: self.draw_order.len(),
             layer_depth: self.compositor.depth(),
             clip: self.state.active_clip(),
+            origin,
         }))
     }
 
@@ -934,7 +937,7 @@ impl WgpuPainter {
         }
         if let Some(recording) =
             self.current_segment
-                .capture_since(&entry.mark, entry.clip, glyph_keys)
+                .capture_since(&entry.mark, entry.clip, entry.origin, glyph_keys)
         {
             self.recording_cache.insert(entry.key, recording);
         }

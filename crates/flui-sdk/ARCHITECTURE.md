@@ -9,7 +9,7 @@ topology is not part of any package manifest.
 
 - **Host-free.** The normal dependency closure names none of `flui-app`, `flui-engine`, `wgpu`
   or the platform backends: tier K's forbid set in the root `[workspace.metadata.flui.reach]`,
-  checked by `cargo xtask reach` over this crate's default and all-features builds.
+  over this crate's default and all-features builds.
 - **Same items, not copies.** Every path is a `pub use` of the item itself: a whole crate
   (`pub use flui_widgets as widgets`) or one item (`pub use flui_painting::Canvas`). No wrapper,
   newtype or re-declared trait, so `flui_sdk::m::T` and `flui::m::T` are one type wherever the
@@ -33,12 +33,12 @@ topology is not part of any package manifest.
   snapshot devtools reads and the plugin ABI hot reload mounts, listed in `tests/surface.rs`)
   and, like every development hook, sits outside it. ADR-0088 §4 revisits the crate when its
   Evolving surface beyond the hooks passes about thirty items.
-- **Own version.** `version = "0.N"`, not the workspace's: `cargo xtask workspace` refuses an
-  evolving crate that inherits the version or leaves major 0.
+- **Own version.** `version = "0.N"`, not the workspace's: an
+  evolving crate neither inherits the version nor leaves major 0.
 - **One train per graph.** The guard is not here: `flui-foundation` declares
   `links = "flui_train"`, because the facade does not depend on this crate and a guard here
-  could not separate an application on one train from a package on another. `cargo xtask reach`
-  states that `flui-foundation` is in this crate's build and in the facade's.
+  could not separate an application on one train from a package on another.
+  `flui-foundation` is in this crate's build and in the facade's.
 - **The facade's test edge only.** `flui` is a path-only dev-dependency for the identity test;
   `cargo package` drops it, and nothing in `src/` names the facade.
 
@@ -151,9 +151,9 @@ not SDK surface.
   `hooks::TextContextHandle` of its own (`standalone()`: the host's context cannot cross the
   dlopen boundary, see the package's ARCHITECTURE). The facade names none of them.
 
-The kind rule of `cargo xtask workspace` (ADR-0081 §3, ADR-0088 §2) keeps the four
+The kind rule (ADR-0081 §3, ADR-0088 §2) keeps the four
 manifests on the SDK: an official package's normal and build dependencies are `flui-sdk` and
-the contract crates, and its self-test plants each way of leaving it.
+the contract crates.
 
 An item a package needs that is not here is added by ADR-0088 §4 (at the facade's path when the
 facade has one, otherwise in an Evolving module: `pipeline` for render internals, `hooks` for

@@ -15,8 +15,8 @@ categories = ["gui", "data-structures"]
 # The train guard (ADR-0088 §5): Cargo admits one package per `links` value in
 # a graph, and every train depends on this crate, so an application and a
 # package on different trains fail in the resolver instead of with E0308.
-# `links` needs a build script; `build.rs` does nothing else. `cargo xtask
-# workspace` requires this key here and refuses it on any other member.
+# `links` needs a build script; `build.rs` does nothing else. This crate alone
+# declares the key (ADR-0088 §5).
 links = "flui_train"
 
 # Dev-only files a `cargo package --list` sweep found leaking into the
@@ -114,9 +114,4 @@ order = 4
 # (ADR-0151 §7); this crate's emission is the path excused.
 reach-exceptions = [
     { to = "tracing", grant = "ADR-0151", reason = "foundation instruments its own code; the contract above it does not log, the caller of a contract function does" },
-]
-# Process-global state, checked by `cargo xtask globals` (ADR-0097).
-globals = [
-    { item = "clock::EVENT_EPOCH", grant = "ADR-0097", class = "immutable", reason = "the process event epoch every input timestamp and the interaction clock count from (ADR-0207 §2)" },
-    { item = "key::UNIQUE_KEYS", grant = "ADR-0097", class = "counter", reason = "`UniqueKey::new` IDs, minted by an `AtomicIdMint` that refuses once exhausted" },
 ]

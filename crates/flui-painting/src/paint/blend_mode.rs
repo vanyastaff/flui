@@ -260,16 +260,6 @@ impl BlendMode {
         }
     }
 
-    /// Returns `true` if the result depends on the destination pixels.
-    ///
-    /// Only `Clear` and `Src` ignore the destination entirely; every other
-    /// mode must read the existing pixels to compute its output.
-    #[must_use]
-    #[inline]
-    pub const fn requires_destination(&self) -> bool {
-        !matches!(self, BlendMode::Clear | BlendMode::Src)
-    }
-
     /// Returns `true` if a fully transparent source leaves the destination
     /// as it was.
     ///
@@ -294,35 +284,5 @@ impl BlendMode {
     #[inline]
     pub const fn is_advanced(&self) -> bool {
         !self.is_porter_duff()
-    }
-
-    /// Returns `true` for modes that can only lighten colors
-    /// (`Screen`, `Lighten`, `ColorDodge`, `Plus`).
-    #[must_use]
-    #[inline]
-    pub const fn can_lighten(&self) -> bool {
-        matches!(
-            self,
-            BlendMode::Screen | BlendMode::Lighten | BlendMode::ColorDodge | BlendMode::Plus
-        )
-    }
-
-    /// Returns `true` for modes that can only darken colors
-    /// (`Darken`, `ColorBurn`, `Multiply`, `Modulate`).
-    #[must_use]
-    #[inline]
-    pub const fn can_darken(&self) -> bool {
-        matches!(
-            self,
-            BlendMode::Darken | BlendMode::ColorBurn | BlendMode::Multiply | BlendMode::Modulate
-        )
-    }
-
-    /// Returns `true` if this mode is purely compositional (alpha-driven)
-    /// rather than a color blend; currently an alias for `is_porter_duff`.
-    #[must_use]
-    #[inline]
-    pub const fn is_compositional(&self) -> bool {
-        self.is_porter_duff()
     }
 }

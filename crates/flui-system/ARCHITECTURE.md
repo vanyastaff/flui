@@ -69,8 +69,7 @@ the taskbar. The owed desktop runs are in the parity rows.
 Every OS entry of the crate (each window procedure, subclass, enumeration callback and WinRT
 delegate) is one call of `owner::panic_boundary::os_entry`, the crate's boundary of the same
 contract as `flui-native`'s (ADR-0151 §16): a panic is logged and contained, its payload destroyed
-under containment, and the OS gets the entry's answer after a panic. `cargo xtask panic-boundary`
-reads this crate as well as `flui-native`.
+under containment, and the OS gets the entry's answer after a panic.
 
 Threads and apartments:
 
@@ -198,7 +197,7 @@ Threads:
 
 Every block, work item, Objective-C method and Carbon handler the system calls is one call of
 `owner::panic_boundary::os_entry`, and the one class the crate declares (the open panel's name
-check) keeps its ivars in `ContainedIvars`, which `cargo xtask panic-boundary` checks here as in
+check) keeps its ivars in `ContainedIvars`, as in
 `flui-native`.
 
 A feature newer than the floor is behind a gate of `macos::version` (ADR-0244 §4): a marker with its

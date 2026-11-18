@@ -33,10 +33,4 @@ impl TextBaseline {
     pub const fn is_alphabetic(&self) -> bool {
         matches!(self, Self::Alphabetic)
     }
-
-    /// Returns true if this is the ideographic baseline.
-    #[inline]
-    pub const fn is_ideographic(&self) -> bool {
-        matches!(self, Self::Ideographic)
-    }
 }

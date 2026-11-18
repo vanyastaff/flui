@@ -939,7 +939,7 @@ mod tests {
     }
 
     fn an_allowlist_file_counts_by_its_growth() {
-        let path = "tools/xtask/allowlists/try-new.toml";
+        let path = "tools/xtask/allowlists/send-positions.toml";
         let old = "[[allow]]\npath = \"a.rs\"\ncount = 2\n";
         let found = edits(&modified(
             path,

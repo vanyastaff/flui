@@ -640,12 +640,25 @@ bound, a payload type.
 ## Module layers
 
 The crate is one crate with a declared import direction between its top-level
-modules. `[package.metadata.flui.modules]` in `Cargo.toml` is the authority:
-`layers` lists the modules bottom to top, and non-test code of a module names
-only modules in lower layers. `cargo xtask module-dag -p flui-widgets` checks
-it, following root re-exports (`crate::SizedBox`) and the `prelude` and
-`__private` relays back to the module that owns each name.
-`cargo xtask module-dag --print-edges` lists the edges it sees.
+modules. Non-test code of a module names only modules in lower layers, and
+modules in one layer name none of each other, following root re-exports
+(`crate::SizedBox`) and the `prelude` and `__private` relays back to the module
+that owns each name. The layers, bottom to top:
+
+1. `support`, `localization`, `widget_state`, `anchored_box`
+2. `layout`, `paint`, `clip`, `semantics`, `stack`, `wrap`, `physical_model`,
+   `container`, `value_listenable_builder`, `async_builders`
+3. `flex`, `image`, `transitions`, `overlay`, `magnifier`
+4. `animated`
+5. `motion`
+6. `interaction`
+7. `controls`
+8. `text`, `scroll`, `navigator`
+9. `popup_menu`
+10. `router`, `context_menu`
+11. `swipe`, `reorderable`
+12. `icon`, `app`, `form`
+13. `__test_access`
 
 `#[cfg(test)]` code is exempt, as dev-dependencies are between crates: the
 tests build fixtures from widgets of any layer (`Column` under the overlay

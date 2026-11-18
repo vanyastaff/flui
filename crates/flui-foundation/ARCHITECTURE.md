@@ -270,8 +270,8 @@ the `flui-cli` tool have it in their normal dependency closure, while the facade
 on the SDK. A guard on the SDK alone would not separate an application on one
 `flui` train from a package on another `flui-sdk` train.
 
-Invariants, checked by `cargo xtask workspace`: this crate declares the guard and no other member
-does. `two_trains_refuse_to_resolve` in `tools/xtask` builds two copies of this crate with this
+Invariant: this crate declares the guard and no other member does.
+`two_trains_refuse_to_resolve` in `tools/xtask` builds two copies of this crate with this
 manifest's `links` value into one graph and requires the resolver to refuse it. Dropping the key,
 or moving it to a crate that not every train depends on, re-opens the E0308 failure the guard
 exists to prevent.

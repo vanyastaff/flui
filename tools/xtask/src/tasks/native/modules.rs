@@ -28,14 +28,6 @@ pub(crate) struct Module {
     pub(crate) test_only: Vec<(usize, usize)>,
 }
 
-impl Module {
-    /// Physical lines minus the lines of test-only items.
-    pub(crate) fn production_lines(&self) -> usize {
-        let excluded: usize = self.test_only.iter().map(|(a, b)| b - a + 1).sum();
-        self.lines.saturating_sub(excluded)
-    }
-}
-
 /// Something the walk could not follow.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Problem {
@@ -82,20 +74,8 @@ pub(crate) struct Tree {
     pub(crate) problems: Vec<Problem>,
 }
 
-/// Walks the module trees under `roots` (crate root files).
-pub(crate) fn walk(roots: impl IntoIterator<Item = PathBuf>) -> Tree {
-    walk_with_tests(roots, false, is_test_only)
-}
-
 /// Decides from an item's attributes whether it is compiled only for tests.
 pub(crate) type Scope = fn(&[Attribute]) -> bool;
-
-/// Walks like [`walk`] with `scope` deciding which modules are test-only: a gate whose notion of
-/// test code is wider than `cfg(test)` (ADR-0243 adds the testing features) follows its own
-/// declarations.
-pub(crate) fn walk_scoped(roots: impl IntoIterator<Item = PathBuf>, scope: Scope) -> Tree {
-    walk_with_tests(roots, false, scope)
-}
 
 /// Walk every source module, reporting unreadable or unresolved test modules
 /// too. Coverage discovery cannot silently discard a target-gated test file.

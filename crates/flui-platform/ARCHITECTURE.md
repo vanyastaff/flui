@@ -8,7 +8,7 @@ this one path (ADR-0151 §9).
 
 - **No backend types.** No OS (`windows`, `objc2-*`, `android-activity`,
   `ndk`, `web-sys`), winit, AccessKit or tokio type appears in a signature,
-  and none of those crates is a dependency. `cargo xtask reach` holds it: tier
+  and none of those crates is a dependency: tier
   C forbids the OS crates and winit, and this crate's own `reach-forbid` adds
   `accesskit` and `tokio`. `flui-native`'s `allowed-dependents` keeps the
   crates above from reaching the backends through a side door.

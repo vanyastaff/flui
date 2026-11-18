@@ -2,6 +2,8 @@
 
 - **Status:** Accepted (2026-07-16)
 - **Date:** 2026-07-16
+- **Superseded-by:** [ADR-0371](ADR-0371-before-the-first-release-no-xtask-gate-holds-a-rule-about-the-sources.md)
+  for the `xtask workspace` gate only (Decision): the rule stands and its reader confirms it.
 - **Amended:** 2026-09-23 — enforced through the design systems' own manifests
   (`allowed-dependents`, `allowed-dev-dependents`) instead of a registry.
 - **Amended by:** [ADR-0081](ADR-0081-workspace-tiers-and-reach-facts.md) (2026-09-26) —

@@ -3,6 +3,9 @@
 - **Status:** Proposed (2026-09-25)
 - **Date:** 2026-09-25
 - **Superseded-by:** [ADR-0154](ADR-0154-capability-crates.md) in part: official packages keep their rules; capability crates are a second kind of package with rules of their own.
+  [ADR-0371](ADR-0371-before-the-first-release-no-xtask-gate-holds-a-rule-about-the-sources.md)
+  for the `xtask workspace` and `xtask reach` gates only (§2, §5, Verification): the rule stands
+  and its reader confirms it.
 - **Amended by:** [ADR-0098](ADR-0098-owned-f64-geometry-values.md) (§8) — `flui-geometry` and
   `flui-types` are deleted, so the duplicate-guard list below names two crates that no longer
   exist.

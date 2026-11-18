@@ -5,11 +5,11 @@
 //! transform baked in, clips are scoped by `save`/`restore`, and nothing is
 //! rasterised here — `flui-engine` replays the list.
 //!
-//! - [`state`]     — save/restore/save_layer.
-//! - [`transform`] — translate/scale/rotate/skew/transform.
-//! - [`clipping`]  — clip_rect/clip_rrect/clip_rsuperellipse/clip_path.
-//! - [`drawing`]   — the `draw_*` methods, one per `DrawOp` variant.
-//! - [`scoped`]    — `with_*` helpers that pair a `save` with its `restore`.
+//! - `state`     — save/restore/save_layer.
+//! - `transform` — translate/scale/rotate/skew/transform.
+//! - `clipping`  — clip_rect/clip_rrect/clip_rsuperellipse/clip_path.
+//! - `drawing`   — the `draw_*` methods, one per `DrawOp` variant.
+//! - `scoped`    — `with_*` helpers that pair a `save` with its `restore`.
 
 use std::sync::Arc;
 
@@ -19,11 +19,11 @@ use flui_foundation::geometry::{Matrix4, Rect};
 
 use crate::display_list::{DisplayList, DrawOp, Paint, Payload, PayloadId, paint_finite};
 
-pub mod clipping;
-pub mod drawing;
-pub mod scoped;
-pub mod state;
-pub mod transform;
+mod clipping;
+mod drawing;
+mod scoped;
+mod state;
+mod transform;
 
 pub(crate) use state::CanvasState;
 
@@ -151,10 +151,6 @@ impl Canvas {
     /// Consumes the canvas. On unrestored save() calls, fires
     /// `debug_assert!` (caught during tests) and `tracing::warn!`
     /// (release-build observability); release builds finalise silently.
-    #[tracing::instrument(skip(self), fields(
-        commands = self.display_list.len(),
-        save_depth = self.save_stack.len(),
-    ))]
     pub fn finish(self) -> DisplayList {
         self.report_finished();
         self.display_list
@@ -168,10 +164,6 @@ impl Canvas {
     /// next recording drawing with an equal paint shares its allocation. A
     /// paint with a shader is let go, since a shader can hold a caller's
     /// image whose last drop must not wait for a later recording.
-    #[tracing::instrument(skip(self), fields(
-        commands = self.display_list.len(),
-        save_depth = self.save_stack.len(),
-    ))]
     #[must_use = "the recording is returned; dropping it discards what was drawn"]
     pub fn take_recording(&mut self) -> DisplayList {
         self.report_finished();
@@ -232,7 +224,7 @@ impl Canvas {
             );
         }
 
-        tracing::debug!(
+        tracing::trace!(
             commands = self.display_list.len(),
             bounds = ?self.display_list.bounds(),
             "Canvas finalized"
