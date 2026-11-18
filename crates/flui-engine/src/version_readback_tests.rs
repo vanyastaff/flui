@@ -2181,6 +2181,233 @@ fn a_recording_spliced_after_another_prefix_equals_one_recorded_there() {
     }
 }
 
+/// A chunk moved by whole device pixels replays its recording with every
+/// device position shifted, which is the IR recording it at the new position
+/// builds (ADR-0304 §9). Each row draws one boundary of one chunk at one
+/// offset and then at another, under a hard-edged clip when it has one: one
+/// capture reads the cache, the other draws with damage off and so records
+/// the chunk each frame. A scissor that cuts the chunk is in its key relative
+/// to the chunk's pixel origin, so a chunk cut by a clip that moves with it
+/// replays and one moved under a fixed one records again, as does a chunk
+/// moved by a fraction of a pixel.
+#[test]
+fn a_chunk_moved_by_whole_pixels_hits_the_recording_cache() {
+    use flui_foundation::geometry::{Point, RRect, Radius};
+    use flui_layer::{ClipRectLayer, FullReason, Layer};
+    use flui_painting::paint::Clip;
+    let Some(renderer) = crate::test_support::renderer_or_skip() else {
+        return;
+    };
+    type Painting = fn(&mut Canvas);
+    let text: Painting = |canvas| paint_text(canvas, "Moved", Offset::new(2.0, 2.0));
+    // A hard-edged clip of the chunk: in the root, so the chunk moves under
+    // it, or in the boundary, so it moves with the chunk.
+    #[derive(Clone, Copy)]
+    enum Cut {
+        None,
+        Fixed(Rect<f64>),
+        Moving(Rect<f64>),
+    }
+    // (row, the chunk, its clip, the boundary's offset in frame one and in
+    // frame two, whether frame two replays the chunk)
+    type Move = (f64, f64);
+    type MoveRow = (&'static str, Painting, Cut, Move, Move, bool);
+    let rows: [MoveRow; 10] = [
+        ("text", text, Cut::None, (10.0, 20.0), (13.0, 17.0), true),
+        (
+            "a rect, a rounded rect and a circle",
+            |canvas| {
+                canvas.draw_rect(
+                    Rect::from_xywh(0.0, 0.0, 20.0, 10.0),
+                    &Paint::fill(Color::RED),
+                );
+                canvas.draw_rrect(
+                    RRect::from_rect_and_radius(
+                        Rect::from_xywh(0.0, 14.0, 20.0, 10.0),
+                        Radius::circular(4.0),
+                    ),
+                    &Paint::fill(Color::BLUE),
+                );
+                canvas.draw_circle(Point::new(30.0, 10.0), 6.0, &Paint::fill(Color::GREEN));
+            },
+            Cut::None,
+            (10.0, 20.0),
+            (14.0, 25.0),
+            true,
+        ),
+        (
+            "a rotated rect and circle",
+            |canvas| {
+                canvas.save();
+                canvas.translate(8.0, 4.0);
+                canvas.rotate(0.5);
+                canvas.draw_rect(
+                    Rect::from_xywh(0.0, 0.0, 20.0, 10.0),
+                    &Paint::fill(Color::RED),
+                );
+                canvas.draw_circle(Point::new(0.0, 0.0), 4.0, &Paint::fill(Color::BLUE));
+                canvas.restore();
+            },
+            Cut::None,
+            (20.0, 20.0),
+            (17.0, 26.0),
+            true,
+        ),
+        (
+            "a gradient",
+            |canvas| {
+                paint_gradient(
+                    canvas,
+                    Rect::from_xywh(0.0, 0.0, 40.0, 8.0),
+                    [Color::RED, Color::BLUE],
+                );
+            },
+            Cut::None,
+            (10.0, 20.0),
+            (12.0, 29.0),
+            true,
+        ),
+        (
+            "a path",
+            |canvas| paint_triangle(canvas, Offset::new(2.0, 2.0)),
+            Cut::None,
+            (10.0, 20.0),
+            (7.0, 21.0),
+            true,
+        ),
+        (
+            "an image",
+            |canvas| paint_image(canvas, Rect::from_xywh(0.0, 0.0, 8.0, 8.0)),
+            Cut::None,
+            (10.0, 20.0),
+            (15.0, 18.0),
+            true,
+        ),
+        (
+            "text under a clip that holds it",
+            text,
+            Cut::Fixed(Rect::from_xywh(4.0, 4.0, 120.0, 120.0)),
+            (24.0, 20.0),
+            (27.0, 17.0),
+            true,
+        ),
+        (
+            "text a fixed clip cuts",
+            text,
+            Cut::Fixed(Rect::from_xywh(0.0, 0.0, 40.0, 128.0)),
+            (24.0, 20.0),
+            (27.0, 17.0),
+            false,
+        ),
+        (
+            "text a clip moving with it cuts",
+            text,
+            Cut::Moving(Rect::from_xywh(0.0, 0.0, 30.0, 40.0)),
+            (24.0, 20.0),
+            (27.0, 17.0),
+            true,
+        ),
+        (
+            "text moved by half a pixel",
+            text,
+            Cut::None,
+            (10.0, 20.0),
+            (10.5, 20.0),
+            false,
+        ),
+    ];
+    for (row, painting, cut, before, after, hits) in rows {
+        let place = |writer: &mut SceneWriter<'_>, node, (x, y): Move| {
+            writer.push(SceneOp::Place {
+                node,
+                placement: Placement::try_new(Offset::new(x, y)).expect("a finite offset"),
+            });
+        };
+        let clipped = |content: &mut flui_layer::ContentBuilder, rect| {
+            content.push_effect(
+                Layer::from(ClipRectLayer::new(rect, Clip::HardEdge)),
+                RenderId::new(1),
+                0,
+            );
+        };
+        let mut owner = SceneOwner::new();
+        let mut writer = owner.writer();
+        let root = writer.current().root();
+        let node = writer.mint_node();
+        let mut content = BoundaryContent::builder();
+        if let Cut::Moving(rect) = cut {
+            clipped(&mut content, rect);
+        }
+        content.chunk(chunk_of(&mut writer, 2, painting));
+        if let Cut::Moving(_) = cut {
+            content.pop_effect();
+        }
+        writer.push(SceneOp::Publish {
+            node,
+            content: Arc::new(content.finish()),
+        });
+        let mut top = BoundaryContent::builder();
+        if let Cut::Fixed(rect) = cut {
+            clipped(&mut top, rect);
+        }
+        top.slot(node);
+        if let Cut::Fixed(_) = cut {
+            top.pop_effect();
+        }
+        writer.push(SceneOp::Publish {
+            node: root,
+            content: Arc::new(top.finish()),
+        });
+        place(&mut writer, node, before);
+        owner.apply(SURFACE).expect("the boundary applies");
+        let one = owner.current().clone();
+        place(&mut owner.writer(), node, after);
+        owner.apply(SURFACE).expect("the move applies");
+        let two = owner.current().clone();
+
+        let mut cached = renderer.retained_capture((SIDE, SIDE)).expect("capture");
+        cached.keep_recorded_ir();
+        let mut recorded = renderer.retained_capture((SIDE, SIDE)).expect("capture");
+        recorded.keep_recorded_ir();
+        let cached_one = full_frame(&mut cached, &one, FullReason::FirstFrame);
+        let recorded_one = full_frame(&mut recorded, &one, FullReason::DamageOff);
+        assert!(
+            cached_one.ir == recorded_one.ir,
+            "{row}: precondition: both captures record the first frame alike"
+        );
+        let cached_two = full_frame(&mut cached, &two, FullReason::FirstFrame);
+        let recorded_two = full_frame(&mut recorded, &two, FullReason::DamageOff);
+        assert_eq!(
+            (
+                cached_two.counters.chunks_recorded,
+                cached_two.counters.recording_cache_hits
+            ),
+            if hits { (0, 1) } else { (1, 0) },
+            "{row}: the moved chunk replays only when its key holds"
+        );
+        assert_eq!(
+            recorded_two.counters.recording_cache_hits, 0,
+            "{row}: with damage off the cache is not read"
+        );
+        assert!(
+            cached_two.ir == recorded_two.ir,
+            "{row}: the replayed IR is the one recorded at the new position ({} and {} bytes)",
+            cached_two.ir.len(),
+            recorded_two.ir.len()
+        );
+        assert_eq!(
+            pixels_differing(&cached_two.pixels, &recorded_two.pixels),
+            0,
+            "{row}: the replayed frame draws as the recorded one"
+        );
+        assert_ne!(
+            pixels_differing(&cached_one.pixels, &cached_two.pixels),
+            0,
+            "{row}: precondition: the move shows"
+        );
+    }
+}
+
 /// A fill of the whole target records the target's size, so a chunk drawn
 /// at one size and then at another records again at the second and fills
 /// it, as a fresh renderer does.
