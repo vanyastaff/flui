@@ -9,7 +9,7 @@
 //! pick is held to the contract's rule before any is read, and one the
 //! request does not mean refuses the answer (`NotInFilter`). A filter of
 //! every file shows every document, and so does a request with a filter
-//! that names a file exactly, which no type expresses (ADR-0372); hidden
+//! that names a file exactly, which no type expresses (ADR-0374); hidden
 //! files are the picker's own to show or not. The picks are
 //! then read under their security-scoped access, off the main thread and
 //! within the request's `max_bytes` (`document_access`), and handed over as

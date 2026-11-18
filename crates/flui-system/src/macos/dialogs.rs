@@ -30,7 +30,7 @@
 //! A filter of every file leaves the panel as one with no filter: with no
 //! menu to select it in, offering it beside others allows every file. A
 //! filter that names a file exactly (`Makefile`) has no content type to
-//! allow, so the panel is given no allowed types at all (ADR-0372): an open
+//! allow, so the panel is given no allowed types at all (ADR-0374): an open
 //! panel's delegate then enables only what the request's filters name or
 //! type, as it does under any filter, and a save panel takes any name and
 //! appends nothing.
