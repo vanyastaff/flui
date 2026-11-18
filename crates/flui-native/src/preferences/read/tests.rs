@@ -2,23 +2,26 @@
 //! system seam by the owner signal and its turn, in virtual time.
 //!
 //! The turn reads the source as the application's turn does on both hosts
-//! (`Platform::preferences` inside the turn callback) and delivers a value
-//! that differs from the last it delivered. Each post of the signal is one
-//! turn of the loop. A notice arrives the way each host hears it: AppKit's
-//! notification runs [`NoticedPreferences::notice_handler`]; `FluiView`'s
-//! report wakes the owner, and the Android loop notices and reads after the
-//! turn; a configuration change is noticed and read by the Android loop with
-//! no turn before it. AppKit retries on a timer; the Android loop reads on its
-//! own only as [`LoopReads`] says, and blocks as [`poll_timeout`] says.
+//! (`Platform::preferences` inside the turn callback), delivers a value that
+//! differs from the last it delivered and confirms the delivery
+//! (`Platform::preferences_delivered`), unless the rig tells it to drop the
+//! delivery. Each post of the signal is one turn of the loop. A notice
+//! arrives the way each host hears it: AppKit's notification runs
+//! [`NoticedPreferences::notice_handler`]; the Android loop hears `FluiView`'s
+//! report (after the turn its wake posts), a configuration change and `Start`
+//! through [`LoopReads::hear`], as the loop does. AppKit retries on a timer;
+//! the Android loop reads on its own only as [`LoopReads`] says, and blocks as
+//! [`poll_timeout`] says. Nothing in the rig contains a read's panic: the
+//! source does.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use flui_platform::GesturePreferences;
 
 use super::*;
-use crate::owner::android::poll::{LoopReads, LoopTurn, poll_timeout};
+use crate::owner::android::poll::{LoopReads, LoopTurn, PreferenceNotice, poll_timeout};
 use crate::owner::signal::OwnerTurnSlot;
 
 /// Which host's loop the rig runs.
@@ -53,11 +56,12 @@ struct SystemState {
     reads: usize,
     /// Each AppKit retry armed: when it fires, and the owner it wakes.
     armed: Vec<(web_time::Instant, Weak<OwnerSignal>)>,
-    /// The pause of each retry the source asked for, in order.
+    /// The pause before each retry, as the source scheduled it: armed on the
+    /// AppKit timer, or left as the deadline the Android loop waits for.
     pauses: Vec<Duration>,
 }
 
-impl NativePreferences for VirtualSystem {
+impl SystemReads for VirtualSystem {
     fn read(&self) -> Result<SystemPreferences, PlatformError> {
         let (answer, values) = {
             let mut state = self.state.lock();
@@ -77,17 +81,24 @@ impl NativePreferences for VirtualSystem {
         self.state.lock().now
     }
 
-    fn retry_admitted(&self) -> bool {
+    fn retrying(&self) -> Retrying<'_> {
+        match self.state.lock().host {
+            Host::AppKit => Retrying::OnTimer(self),
+            Host::Android => Retrying::AtLoopDeadline,
+        }
+    }
+}
+
+impl RetryTimer for VirtualSystem {
+    fn application_active(&self) -> bool {
         self.state.lock().active
     }
 
-    fn arm_retry(&self, delay: Duration, signal: Weak<OwnerSignal>) {
+    fn arm(&self, delay: Duration, signal: Weak<OwnerSignal>) {
         let mut state = self.state.lock();
         state.pauses.push(delay);
-        if state.host == Host::AppKit {
-            let at = state.now + delay;
-            state.armed.push((at, signal));
-        }
+        let at = state.now + delay;
+        state.armed.push((at, signal));
     }
 }
 
@@ -108,6 +119,9 @@ struct Rig {
     /// The posts a turn of the loop ran for.
     turns_run: RefCell<usize>,
     delivered: Rc<RefCell<Vec<SystemPreferences>>>,
+    /// How many of the next turns drop what they read instead of
+    /// delivering it.
+    drops: Rc<Cell<usize>>,
     loop_reads: RefCell<LoopReads>,
 }
 
@@ -140,18 +154,30 @@ impl Rig {
             &signal,
         ));
         let delivered = Rc::new(RefCell::new(Vec::new()));
+        let drops = Rc::new(Cell::new(0));
         let slot = OwnerTurnSlot::default();
         signal
             .register_in(&slot, {
-                let (source, delivered) = (Arc::clone(&source), Rc::clone(&delivered));
+                let (source, delivered, drops) = (
+                    Arc::clone(&source),
+                    Rc::clone(&delivered),
+                    Rc::clone(&drops),
+                );
                 Box::new(move || {
-                    // The application's turn: read, and deliver what differs
-                    // from what it holds.
+                    // The application's turn: read, deliver what differs from
+                    // what it holds, and confirm the delivery; or drop it.
                     if let Ok(current) = source.sample() {
-                        let mut delivered = delivered.borrow_mut();
-                        if delivered.last() != Some(&current) {
-                            delivered.push(current);
+                        if drops.get() > 0 {
+                            drops.set(drops.get() - 1);
+                            return;
                         }
+                        {
+                            let mut delivered = delivered.borrow_mut();
+                            if delivered.last() != Some(&current) {
+                                delivered.push(current.clone());
+                            }
+                        }
+                        source.delivered(&current);
                     }
                 })
             })
@@ -163,6 +189,7 @@ impl Rig {
             posts,
             turns_run: RefCell::new(0),
             delivered,
+            drops,
             loop_reads: RefCell::new(LoopReads::first()),
         };
         // The host reads once as it starts, before any turn: AppKit as it
@@ -179,7 +206,7 @@ impl Rig {
     }
 
     fn system(&self) -> parking_lot::MutexGuard<'_, SystemState> {
-        self.source.native().state.lock()
+        self.source.system().state.lock()
     }
 
     /// The turns posted since the source settled.
@@ -195,14 +222,33 @@ impl Rig {
         }
     }
 
-    /// The Android loop reads outside a turn; a read that panics is the
-    /// rig's to contain, as the turn contains its own.
+    /// The Android loop reads outside a turn, as the looper does: nothing
+    /// around it contains a panic.
     fn loop_read(&self) {
-        let mut caught = FirstPanic::new();
-        let _ = caught.contain(|| self.source.sample());
-        if let Some(payload) = caught.into_payload() {
-            flui_foundation::panic::discard_payload(payload);
+        let before = self.source.retry_deadline();
+        let _ = self.source.sample();
+        self.note_loop_retry(before);
+    }
+
+    /// Record the pause of a retry the loop's own read scheduled.
+    fn note_loop_retry(&self, before: Option<web_time::Instant>) {
+        let after = self.source.retry_deadline();
+        let mut system = self.system();
+        if system.host == Host::Android
+            && let Some(deadline) = after
+            && after != before
+        {
+            let pause = deadline.saturating_duration_since(system.now);
+            system.pauses.push(pause);
         }
+    }
+
+    /// The Android loop hears `heard`, as `AndroidLoop::hear_preference_notice`
+    /// does.
+    fn hear(&self, heard: PreferenceNotice) {
+        let mut reads = *self.loop_reads.borrow();
+        reads.hear(heard, || self.source.notice(), || self.loop_read());
+        *self.loop_reads.borrow_mut() = reads;
     }
 
     /// Move the clock by `span`, a second at a time. Each AppKit retry due
@@ -274,19 +320,17 @@ impl Rig {
     }
 
     /// `FluiView` reports a changed setting: its report wakes the owner, and
-    /// the loop notices and reads after the turn.
+    /// the loop hears it after the turn.
     fn android_view_report(&self) {
         let _ = self.signal.wake();
         self.run_posted_turns();
-        self.source.notice();
-        self.loop_read();
+        self.hear(PreferenceNotice::SettingsReported);
         self.run_posted_turns();
     }
 
-    /// `ConfigChanged`: the loop notices and reads with no turn before it.
+    /// `ConfigChanged`: the loop hears it with no turn before it.
     fn android_configuration_change(&self) {
-        self.source.notice();
-        self.loop_read();
+        self.hear(PreferenceNotice::ConfigurationChanged);
         self.run_posted_turns();
     }
 }
@@ -464,63 +508,165 @@ fn a_recovered_read_outside_a_turn_wakes_the_owner() {
     assert_eq!(rig.delivered.borrow().last(), Some(&values(600)));
 }
 
+/// A change the application's turn reads and then drops (its host went, its
+/// delivery failed) is read again in one more turn, which delivers it; one
+/// that turn drops too waits for the next notice. Every way a change reaches
+/// the source ends in the turn's read. A `FluiView` report is heard by the
+/// loop after the turn its wake posts, so its own read wakes once more.
 #[test]
-fn cold_native_observation_recovers_without_forged_defaults() {
-    let now = web_time::Instant::now();
-    let cold = ReadAdmission::default();
-    let (_, needs_delivery) = cold
-        .read_observation(now, || Ok(SystemPreferences::default()))
-        .expect("first legitimate unknown observation");
-    assert!(
-        needs_delivery,
-        "an unknown observation is accepted only after the first successful query"
+fn a_change_a_turn_drops_is_read_again_once() {
+    for ((notice, host, deliver), turns_for_a_dropped_change) in NOTICES.into_iter().zip([2, 3, 2])
+    {
+        let rig = Rig::settled(host);
+        rig.change(values(700));
+        rig.drops.set(1);
+        deliver(&rig);
+        assert_eq!(rig.posts(), 2, "{notice}: the change and its one retry");
+        assert_eq!(
+            rig.delivered.borrow().last(),
+            Some(&values(700)),
+            "{notice}"
+        );
+
+        rig.change(values(800));
+        rig.drops.set(usize::MAX);
+        deliver(&rig);
+        assert_eq!(
+            rig.posts(),
+            2 + turns_for_a_dropped_change,
+            "{notice}: one retry, then quiet"
+        );
+        rig.idle(Duration::from_secs(60));
+        assert_eq!(
+            rig.posts(),
+            2 + turns_for_a_dropped_change,
+            "{notice}: a dropped change woke again"
+        );
+        assert_eq!(
+            rig.delivered.borrow().last(),
+            Some(&values(700)),
+            "{notice}"
+        );
+
+        // The next notice tries it again.
+        rig.drops.set(0);
+        deliver(&rig);
+        assert_eq!(
+            rig.delivered.borrow().last(),
+            Some(&values(800)),
+            "{notice}"
+        );
+    }
+}
+
+/// A read in the owner-work part of a turn (a window's work), which runs no
+/// application callback, wakes the owner for the change it finds, and the
+/// application's turn delivers it.
+#[test]
+fn a_change_read_in_owner_work_wakes_the_owner() {
+    let rig = Rig::settled(Host::AppKit);
+    rig.change(values(650));
+    let source = Arc::clone(&rig.source);
+    rig.signal.run_for_window(Arc::new(move || {
+        let _ = source.sample();
+    }));
+    rig.run_posted_turns();
+    assert_eq!(rig.delivered.borrow().last(), Some(&values(650)));
+    assert_eq!(
+        rig.posts(),
+        2,
+        "the window's work, then the application's turn"
     );
-    let reader = ReadAdmission::default();
-    let failed = reader.read_observation(now, || {
+}
+
+/// A read off the owner thread is refused and changes nothing: the next read
+/// on the owner thread reads and delivers.
+#[test]
+fn a_read_off_the_owner_thread_is_refused_and_changes_nothing() {
+    let rig = Rig::settled(Host::AppKit);
+    rig.change(values(750));
+    rig.system().answer = Answer::Error;
+    let refused = std::thread::scope(|scope| {
+        scope
+            .spawn(|| rig.source.sample())
+            .join()
+            .expect("the off-thread read returns")
+    });
+    assert!(
+        matches!(refused, Err(PlatformError::Preferences { .. })),
+        "{refused:?}"
+    );
+    assert_eq!(rig.system().reads, 0, "the system was read off the thread");
+    assert_eq!(rig.source.retry_deadline(), None);
+    assert_eq!(rig.posts(), 0);
+
+    rig.system().answer = Answer::Values;
+    rig.appkit_notification();
+    assert_eq!(rig.delivered.borrow().last(), Some(&values(750)));
+}
+
+/// A panicking read is a failed read on every path, never a panic out of
+/// the source: the Android loop's own read, which nothing contains, retries
+/// like the AppKit turn does.
+#[test]
+fn a_panicking_read_is_a_failed_read() {
+    let rig = Rig::settled(Host::Android);
+    rig.system().answer = Answer::Panic;
+    let read = rig.source.sample();
+    assert!(
+        matches!(&read, Err(PlatformError::Preferences { message }) if message.contains("the getter panicked")),
+        "{read:?}"
+    );
+    assert_eq!(
+        rig.source.retry_deadline(),
+        Some(rig.system().now + FIRST_RETRY),
+        "the panic owes a retry"
+    );
+}
+
+/// A cold source has delivered nothing: its first read is a change, and an
+/// error never manufactures a value. A value counts as delivered only once
+/// its delivery is confirmed.
+#[test]
+fn a_value_is_accepted_only_once_delivered() {
+    let now = web_time::Instant::now();
+    let admission = ReadAdmission::default();
+    let failed = admission.read_observation(now, || {
         Err(PlatformError::Preferences {
             message: "initial getter failure".into(),
         })
     });
     assert!(matches!(failed, Err(PlatformError::Preferences { .. })));
     assert!(matches!(
-        reader.read_observation(now, || panic!("early native retry")),
+        admission.read_observation(now, || panic!("early native retry")),
         Err(PlatformError::PreferencesDeferred)
     ));
     let observation = values(700);
-    let (accepted, needs_delivery) = reader
-        .read_observation(now + FIRST_RETRY, || Ok(observation.clone()))
-        .expect("first accepted native observation");
-    assert_eq!(accepted, observation);
-    assert!(
-        needs_delivery,
-        "cold source must notify its first accepted observation"
+    let read = |at| {
+        admission
+            .read_observation(at, || Ok(observation.clone()))
+            .expect("the system answers")
+            .1
+    };
+    assert_eq!(read(now + FIRST_RETRY), Change::New, "a cold source");
+    assert_eq!(read(now + FIRST_RETRY), Change::New, "read, not delivered");
+    admission.owe(&observation);
+    assert_eq!(
+        read(now + FIRST_RETRY),
+        Change::OwedBefore,
+        "owed, not delivered"
     );
-    let failed = reader.read_observation(now + FIRST_RETRY, || {
-        Err(PlatformError::Preferences {
-            message: "later getter failure".into(),
-        })
-    });
-    assert!(
-        matches!(failed, Err(PlatformError::Preferences { .. })),
-        "failure cannot publish a stale success"
-    );
-    let (accepted, needs_delivery) = reader
-        .read_observation(now + FIRST_RETRY * 2, || Ok(observation.clone()))
-        .expect("recovered native observation");
-    assert_eq!(accepted, observation);
-    assert!(
-        needs_delivery,
-        "successful recovery must retry owner delivery even for an unchanged observation"
-    );
-    let (_, needs_delivery) = reader
-        .read_observation(now + FIRST_RETRY * 2, || Ok(observation))
-        .expect("healthy unchanged observation");
-    assert!(
-        !needs_delivery,
-        "healthy unchanged observations remain quiet"
-    );
+    let other = values(900);
+    let (_, change) = admission
+        .read_observation(now + FIRST_RETRY, || Ok(other.clone()))
+        .expect("the system answers");
+    assert_eq!(change, Change::New, "another value is owed afresh");
+    admission.deliver(&observation);
+    assert_eq!(read(now + FIRST_RETRY), Change::Unchanged, "delivered");
 }
 
+/// One read at a time; a failed or unwound read owes a retry, and a read
+/// before it is due is deferred.
 #[test]
 fn bounded_native_read_admission() {
     let admission = ReadAdmission::default();
@@ -547,19 +693,16 @@ fn bounded_native_read_admission() {
             Err(PlatformError::PreferencesDeferred)
         ));
     }
-    admission
+    let answered = admission
         .begin(now + FIRST_RETRY)
         .expect("bounded retry")
-        .accept();
+        .answered(&values(500));
+    assert_eq!(answered, Change::New);
     assert_eq!(
         admission.retry_deadline(),
         None,
-        "an accepted read owes nothing"
+        "an answered read owes nothing"
     );
-    admission
-        .begin(now + FIRST_RETRY)
-        .expect("healthy reads remain admitted")
-        .accept();
     let mut caught = FirstPanic::new();
     let failure = caught.contain(|| {
         let _attempt = admission
@@ -569,7 +712,7 @@ fn bounded_native_read_admission() {
     });
     assert!(failure.is_none());
     if let Some(payload) = caught.into_payload() {
-        flui_foundation::panic::discard_payload(payload);
+        discard_payload(payload);
     }
     assert_eq!(
         admission.retry_deadline(),
@@ -580,8 +723,8 @@ fn bounded_native_read_admission() {
         admission.begin(now + FIRST_RETRY),
         Err(PlatformError::PreferencesDeferred)
     ));
-    admission
+    let _ = admission
         .begin(now + FIRST_RETRY * 2)
         .expect("recovery after unwind")
-        .accept();
+        .answered(&values(500));
 }

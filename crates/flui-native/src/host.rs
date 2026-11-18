@@ -517,6 +517,12 @@ pub trait Preferences<O> {
     /// # Errors
     /// What [`Platform::preferences`] reports.
     fn sample(owner: &O) -> Result<SystemPreferences, PlatformError>;
+
+    /// [`Platform::preferences_delivered`]. A position whose source does not
+    /// wait for a delivery ignores it.
+    fn delivered(owner: &O, values: &SystemPreferences) {
+        let _ = (owner, values);
+    }
 }
 
 /// The lifecycle position: session end, host notices, reopen and activation.

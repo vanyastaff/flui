@@ -87,16 +87,38 @@ pub(crate) struct LoopReads {
     owed: bool,
 }
 
+/// A notice the loop hears that bears on the preferences.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PreferenceNotice {
+    /// `ConfigChanged`.
+    ConfigurationChanged,
+    /// `FluiView` reported a setting or the contrast level changed.
+    SettingsReported,
+    /// The Activity started: nothing was read while it was stopped.
+    Started,
+}
+
 impl LoopReads {
     /// The reads of a loop that has not read yet: its first turn reads.
     pub(crate) const fn first() -> Self {
         Self { owed: true }
     }
 
-    /// The Activity started: nothing was read while it was stopped, so the
-    /// next turn reads.
-    pub(crate) fn started(&mut self) {
-        self.owed = true;
+    /// What the loop does on `heard`: it tells the source of the notice
+    /// (`notice`, which lets a source whose retries ran out read again), and
+    /// it reads now (`read`) for a change it is told of, or at its next turn
+    /// for a start, which runs before the Activity's frames do.
+    pub(crate) fn hear(
+        &mut self,
+        heard: PreferenceNotice,
+        notice: impl FnOnce(),
+        read: impl FnOnce(),
+    ) {
+        notice();
+        match heard {
+            PreferenceNotice::ConfigurationChanged | PreferenceNotice::SettingsReported => read(),
+            PreferenceNotice::Started => self.owed = true,
+        }
     }
 
     /// When the loop reads next: now while a read is owed, else at `retry`,
@@ -273,10 +295,34 @@ mod tests {
         assert!(!reads.take_due(retry, at(3600)), "a retry ahead waits");
         assert!(reads.take_due(retry, at(3601)), "a retry due reads");
         assert!(!reads.take_due(None, at(3601)), "and once");
-        reads.started();
+        reads.hear(PreferenceNotice::Started, || {}, || {});
         assert_eq!(reads.next(retry, at(3602)), Some(at(3601)));
         assert!(reads.take_due(None, at(3602)), "`Start` reads");
         assert!(!reads.take_due(None, at(3603)));
+    }
+
+    /// Every notice tells the source; a change the loop is told of is read
+    /// at once, a start at the loop's next turn.
+    #[test]
+    fn each_preference_notice_tells_the_source_and_reads() {
+        let now = Instant::now();
+        for (heard, reads_now, owed_after) in [
+            (PreferenceNotice::ConfigurationChanged, true, false),
+            (PreferenceNotice::SettingsReported, true, false),
+            (PreferenceNotice::Started, false, true),
+        ] {
+            let mut reads = LoopReads::first();
+            assert!(reads.take_due(None, now));
+            let (mut noticed, mut read) = (false, false);
+            reads.hear(heard, || noticed = true, || read = true);
+            assert!(noticed, "{heard:?}: the source is not told");
+            assert_eq!(read, reads_now, "{heard:?}: read now");
+            assert_eq!(
+                reads.take_due(None, now),
+                owed_after,
+                "{heard:?}: read next turn"
+            );
+        }
     }
 
     /// A deadline left behind is offered once, however many turns pass before

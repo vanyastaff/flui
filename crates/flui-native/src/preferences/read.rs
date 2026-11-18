@@ -1,31 +1,36 @@
 //! How the AppKit and Android preference sources read the system and wake
-//! their owner: told, never polled (ADR-0172).
+//! their owner: told, never polled
+//! ([ADR-0377](../../../../docs/adr/ADR-0377-preferences-arrive-by-notice-and-a-failed-read-backs-off.md)).
 //!
 //! [`NoticedPreferences`] is the one model both sources are. What differs per
-//! system sits behind [`NativePreferences`]: the read itself, the clock, the
-//! gate that says whether a retry may wake the application, and the timer
-//! that wakes it for one. A change reaches the source as a notice (an AppKit
-//! notification through [`NoticedPreferences::notice_handler`], `FluiView`'s
-//! report or a configuration change through the Android loop, which then
-//! calls [`NoticedPreferences::notice`] and reads), and the owner's turn reads
-//! it.
+//! system sits behind [`SystemReads`]: the read itself, the clock, and how a
+//! failed read is retried ([`Retrying`]). A change reaches the source as a
+//! notice (an AppKit notification through
+//! [`NoticedPreferences::notice_handler`]; `FluiView`'s report, a configuration
+//! change or `Start` through the Android loop, which calls
+//! [`NoticedPreferences::notice`] and reads), and the owner's application turn
+//! reads it and delivers it.
 //!
 //! The owner wakes once per change and never while idle:
 //!
 //! - a healthy source names no instant it needs the owner at, so nothing in it
 //!   runs between notices;
-//! - a read inside the owner's turn returns what changed to that turn's
-//!   caller, which delivers it there; only a read outside a turn (the Android
-//!   loop reading on a notice, the first read before any turn) wakes the owner
-//!   for it;
-//! - a read that fails or panics is retried on [`READ_RETRIES`], and only
-//!   while the application is where a retry may wake it; once the retries are
-//!   spent, or the gate holds one, nothing reads until the next change notice.
+//! - the source counts a value as accepted only once its caller confirms the
+//!   delivery ([`NoticedPreferences::delivered`]). A change read inside the
+//!   application's turn is owed to that turn: delivered there, it costs no
+//!   further wake; dropped there, the turn's end wakes the owner once more
+//!   for it. A change read anywhere else (the Android loop on a notice, the
+//!   first read, an owner-work turn) wakes the owner;
+//! - a read that fails or panics is retried on [`READ_RETRIES`]; once the
+//!   retries are spent, or the application is where a retry may not wake it,
+//!   nothing reads until the next change notice.
+//!
+//! A read is refused, changing nothing, off the owner thread.
 
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
-use flui_foundation::panic::FirstPanic;
+use flui_foundation::panic::{FirstPanic, discard_payload, payload_text};
 use flui_platform::SystemPreferences;
 use parking_lot::Mutex;
 
@@ -43,7 +48,7 @@ const READ_RETRIES: Retries = Retries::new(FIRST_RETRY, 6);
 
 /// What a system gives [`NoticedPreferences`]. Every method runs on the
 /// owner thread.
-pub(crate) trait NativePreferences {
+pub(crate) trait SystemReads {
     /// Every preference the system reports now.
     ///
     /// # Errors
@@ -53,38 +58,51 @@ pub(crate) trait NativePreferences {
     /// The instant the source is at.
     fn now(&self) -> web_time::Instant;
 
-    /// Whether a timer may wake the application to retry a failed read now:
-    /// AppKit's application is active. Where this says no, the retry waits
-    /// for the next change notice (on AppKit, the activation notification).
-    fn retry_admitted(&self) -> bool;
+    /// How the system's failed reads are retried.
+    fn retrying(&self) -> Retrying<'_>;
+}
 
-    /// Wake the owner behind `signal` once, `delay` from now: the retry of a
-    /// failed read. A loop that asks
-    /// [`NoticedPreferences::retry_deadline`] before it blocks arms nothing
-    /// here.
-    fn arm_retry(&self, delay: Duration, signal: Weak<OwnerSignal>);
+/// How a failed read is retried.
+pub(crate) enum Retrying<'a> {
+    /// The owner's loop blocks no longer than
+    /// [`NoticedPreferences::retry_deadline`] and reads then; it gates its
+    /// own reads on the application running (the Android loop).
+    AtLoopDeadline,
+    /// A timer wakes the owner, armed only while the application is active
+    /// (AppKit).
+    OnTimer(&'a dyn RetryTimer),
+}
+
+/// The timer a [`Retrying::OnTimer`] system retries on.
+pub(crate) trait RetryTimer {
+    /// Whether a timer may wake the application now. Where it may not, the
+    /// retry waits for the next change notice (on AppKit, the activation
+    /// notification).
+    fn application_active(&self) -> bool;
+
+    /// Wake the owner behind `signal` once, `delay` from now.
+    fn arm(&self, delay: Duration, signal: Weak<OwnerSignal>);
 }
 
 /// A preference source that is told of changes and reads when told: the
 /// system's reads under one admission, and the owner they wake.
-pub(crate) struct NoticedPreferences<N> {
-    native: N,
+pub(crate) struct NoticedPreferences<S> {
+    system: S,
     signal: Weak<OwnerSignal>,
     admission: ReadAdmission,
 }
 
-impl<N> std::fmt::Debug for NoticedPreferences<N> {
+impl<S> std::fmt::Debug for NoticedPreferences<S> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("NoticedPreferences").finish_non_exhaustive()
     }
 }
 
-impl<N: NativePreferences> NoticedPreferences<N> {
-    /// A source reading through `native` that wakes the owner behind
-    /// `signal` when a read outside its turn finds a change.
-    pub(crate) fn new(native: N, signal: &Arc<OwnerSignal>) -> Self {
+impl<S: SystemReads> NoticedPreferences<S> {
+    /// A source reading `system` that wakes the owner behind `signal`.
+    pub(crate) fn new(system: S, signal: &Arc<OwnerSignal>) -> Self {
         Self {
-            native,
+            system,
             signal: Arc::downgrade(signal),
             admission: ReadAdmission::default(),
         }
@@ -92,8 +110,8 @@ impl<N: NativePreferences> NoticedPreferences<N> {
 
     /// The system the source reads.
     #[cfg(any(target_os = "android", test))]
-    pub(crate) fn native(&self) -> &N {
-        &self.native
+    pub(crate) fn system(&self) -> &S {
+        &self.system
     }
 
     /// When the retry a failed read owes is due; `None` for a healthy source
@@ -105,7 +123,9 @@ impl<N: NativePreferences> NoticedPreferences<N> {
     }
 
     /// A change notice arrived: a source whose retries ran out, or whose
-    /// retry the gate held, may read again. A retry still pending keeps its
+    /// retry the application's state held, may read again. The turn the
+    /// notice brings reads whatever is not delivered yet, a change an earlier
+    /// turn dropped included. A retry still pending keeps its
     /// pause, so a burst of notices never reads a failing system faster than
     /// [`READ_RETRIES`].
     pub(crate) fn notice(&self) {
@@ -113,22 +133,24 @@ impl<N: NativePreferences> NoticedPreferences<N> {
     }
 
     /// Arm the retry a failed read left owed, or let it wait for a notice
-    /// where the gate holds it.
+    /// where the application's state holds it.
     fn arm_retry(&self) {
         let Some(deadline) = self.admission.retry_deadline() else {
             return;
         };
-        if self.native.retry_admitted() {
-            let delay = deadline.saturating_duration_since(self.native.now());
-            self.native.arm_retry(delay, self.signal.clone());
-        } else {
-            self.admission.await_notice();
+        match self.system.retrying() {
+            Retrying::AtLoopDeadline => {}
+            Retrying::OnTimer(timer) if timer.application_active() => {
+                let delay = deadline.saturating_duration_since(self.system.now());
+                timer.arm(delay, self.signal.clone());
+            }
+            Retrying::OnTimer(_) => self.admission.await_notice(),
         }
     }
 }
 
 #[cfg(any(target_os = "macos", test))]
-impl<N: NativePreferences + Send + Sync + 'static> NoticedPreferences<N> {
+impl<S: SystemReads + Send + Sync + 'static> NoticedPreferences<S> {
     /// What a change notification runs, on any thread: [`notice`](Self::notice),
     /// then wake the owner, whose turn reads. It holds the source weakly, so
     /// a notification that outlives the source does nothing.
@@ -146,29 +168,49 @@ impl<N: NativePreferences + Send + Sync + 'static> NoticedPreferences<N> {
     }
 }
 
-impl<N: NativePreferences> SystemPreferenceSource for NoticedPreferences<N> {
-    /// Read the system under the source's admission. Inside the owner's turn
-    /// the caller delivers what changed; outside one a change or a recovered
-    /// read wakes the owner. A failed or panicking read arms its retry before
-    /// the failure goes on.
+impl<S: SystemReads> SystemPreferenceSource for NoticedPreferences<S> {
+    /// Read the system under the source's admission and return what it
+    /// reports. A change is owed to the application's turn the read runs in,
+    /// or wakes the owner outside one. A failed or panicking read arms its
+    /// retry and is an error; a read off the owner thread is refused before
+    /// the admission and changes nothing.
     fn sample(&self) -> Result<SystemPreferences, PlatformError> {
         let Some(signal) = self.signal.upgrade().filter(|signal| signal.accepting()) else {
             return Err(PlatformError::Preferences {
                 message: "the preference owner has stopped".into(),
             });
         };
+        if signal.owner() != std::thread::current().id() {
+            return Err(PlatformError::Preferences {
+                message: "system preferences are read on the owner thread".into(),
+            });
+        }
         let mut caught = FirstPanic::new();
         let read = caught.contain(|| {
             self.admission
-                .read_observation(self.native.now(), || self.native.read())
+                .read_observation(self.system.now(), || self.system.read())
         });
         match read {
-            Some(Ok((current, needs_delivery))) => {
-                if needs_delivery && !signal.turn_active() {
-                    // OwnerSignal keeps the wake owed while no turn callback
-                    // is registered yet.
-                    let _ = signal.wake();
-                }
+            Some(Ok((current, Change::Unchanged))) => Ok(current),
+            Some(Ok((current, Change::New | Change::OwedBefore)))
+                if !signal.in_application_turn() =>
+            {
+                // OwnerSignal keeps the wake owed while no turn callback is
+                // registered yet.
+                let _ = signal.wake();
+                Ok(current)
+            }
+            Some(Ok((current, Change::New))) => {
+                // Delivered in this turn it costs nothing more; dropped, the
+                // turn's end wakes the owner once for it.
+                self.admission.owe(&current);
+                signal.owe_delivery();
+                Ok(current)
+            }
+            Some(Ok((current, Change::OwedBefore))) => {
+                // A turn dropped this value and its one wake is spent: this
+                // turn tries it again, and nothing more wakes for it until a
+                // notice.
                 Ok(current)
             }
             Some(Err(PlatformError::PreferencesDeferred)) => {
@@ -179,30 +221,65 @@ impl<N: NativePreferences> SystemPreferenceSource for NoticedPreferences<N> {
                 Err(error)
             }
             None => {
-                caught.contain(|| self.arm_retry());
-                caught.resume();
+                // The read's panic is counted as a failed read and retried
+                // like one; nobody resumes it.
+                let message = caught
+                    .held()
+                    .and_then(payload_text)
+                    .unwrap_or("non-string panic payload")
+                    .to_owned();
+                if let Some(payload) = caught.into_payload() {
+                    discard_payload(payload);
+                }
+                self.arm_retry();
                 Err(PlatformError::Preferences {
-                    message: "the system preference read panicked".into(),
+                    message: format!("the system preference read panicked: {message}"),
                 })
             }
         }
     }
+
+    /// The caller delivered `values`: they are the source's accepted value,
+    /// and the delivery the turn owed is settled.
+    fn delivered(&self, values: &SystemPreferences) {
+        self.admission.deliver(values);
+        if let Some(signal) = self.signal.upgrade() {
+            signal.confirm_delivery();
+        }
+    }
+}
+
+/// What a read found against the value last delivered.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Change {
+    /// The value delivered last.
+    Unchanged,
+    /// A value not delivered yet.
+    New,
+    /// A value an application turn was owed and has not confirmed: its one
+    /// wake is spent.
+    OwedBefore,
 }
 
 /// The admission of the source's reads: one at a time, a failed one retried
-/// on [`READ_RETRIES`], and the last accepted observation.
+/// on [`READ_RETRIES`], and the value last delivered.
 #[derive(Default)]
 struct ReadAdmission {
     state: Mutex<Admission>,
-    accepted: Mutex<Option<SystemPreferences>>,
 }
 
-#[derive(Clone, Copy, Default)]
+#[derive(Default)]
 struct Admission {
     stage: Stage,
-    /// Reads that failed in a row since the last accepted one; nonzero owes
-    /// the owner a delivery when a read recovers, changed or not.
+    /// Reads that failed in a row since the last one that answered.
     failures: u32,
+    /// The value the owner's caller last confirmed it delivered; `None` on
+    /// a cold source.
+    delivered: Option<SystemPreferences>,
+    /// A changed value an application turn was owed, which no delivery
+    /// confirmed since; reading it again in a turn owes nothing more until a
+    /// notice.
+    owed: Option<SystemPreferences>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -214,33 +291,36 @@ enum Stage {
     Reading,
     /// A read failed; the next may run at this instant.
     RetryAt(web_time::Instant),
-    /// The retries are spent, or the gate held one: the next change notice
+    /// The retries are spent, or a retry was held: the next change notice
     /// lets a read run.
     AwaitingNotice,
 }
 
 impl ReadAdmission {
-    /// Read and commit a native observation before any wake. A cold source
-    /// has no accepted value; an error never manufactures one or returns an
-    /// older accepted value as a successful refresh. The flag asks for owner
-    /// delivery after a changed observation or a recovered read; a healthy
-    /// unchanged read is quiet.
+    /// Read the system and compare it with what was delivered. A cold source
+    /// has nothing delivered; an error never manufactures a value or returns
+    /// an older one as a successful refresh. Nothing is accepted here: only
+    /// a confirmed delivery is ([`Self::deliver`]).
     fn read_observation(
         &self,
         now: web_time::Instant,
         sample: impl FnOnce() -> Result<SystemPreferences, PlatformError>,
-    ) -> Result<(SystemPreferences, bool), PlatformError> {
+    ) -> Result<(SystemPreferences, Change), PlatformError> {
         let attempt = self.begin(now)?;
-        let recovering = attempt.recovering;
         let current = sample()?;
-        let changed = {
-            let mut accepted = self.accepted.lock();
-            let changed = accepted.as_ref() != Some(&current);
-            *accepted = Some(current.clone());
-            changed
-        };
-        attempt.accept();
-        Ok((current, changed || recovering))
+        let change = attempt.answered(&current);
+        Ok((current, change))
+    }
+
+    /// An application turn is owed `values`.
+    fn owe(&self, values: &SystemPreferences) {
+        self.state.lock().owed = Some(values.clone());
+    }
+
+    fn deliver(&self, values: &SystemPreferences) {
+        let mut state = self.state.lock();
+        state.delivered = Some(values.clone());
+        state.owed = None;
     }
 
     fn retry_deadline(&self) -> Option<web_time::Instant> {
@@ -280,35 +360,43 @@ impl ReadAdmission {
         Ok(ReadAttempt {
             admission: self,
             now,
-            accepted: false,
-            recovering: state.failures > 0,
+            answered: false,
         })
     }
 }
 
-/// One admitted read. Dropped unaccepted (an error, a panic) it records the
+/// One admitted read. Dropped unanswered (an error, a panic) it records the
 /// failure and the retry it owes.
 struct ReadAttempt<'a> {
     admission: &'a ReadAdmission,
     now: web_time::Instant,
-    accepted: bool,
-    recovering: bool,
+    answered: bool,
 }
 
 impl ReadAttempt<'_> {
-    /// Commit the successful read before any wake or callback.
-    fn accept(mut self) {
-        self.accepted = true;
+    /// The system answered `current`: the admission is ready again, and the
+    /// answer is compared with what was delivered.
+    fn answered(mut self, current: &SystemPreferences) -> Change {
+        self.answered = true;
+        let mut state = self.admission.state.lock();
+        state.stage = Stage::Ready;
+        state.failures = 0;
+        if state.delivered.as_ref() == Some(current) {
+            Change::Unchanged
+        } else if state.owed.as_ref() == Some(current) {
+            Change::OwedBefore
+        } else {
+            Change::New
+        }
     }
 }
 
 impl Drop for ReadAttempt<'_> {
     fn drop(&mut self) {
-        let mut state = self.admission.state.lock();
-        if self.accepted {
-            *state = Admission::default();
+        if self.answered {
             return;
         }
+        let mut state = self.admission.state.lock();
         let spent = state.failures;
         state.failures = spent.saturating_add(1);
         state.stage = READ_RETRIES

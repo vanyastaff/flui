@@ -48,7 +48,7 @@ use crate::{
     preferences::{
         apple::regional,
         locales as preferred_locales,
-        read::{NativePreferences, NoticedPreferences},
+        read::{NoticedPreferences, RetryTimer, Retrying, SystemReads},
     },
 };
 
@@ -94,13 +94,17 @@ impl SystemPreferenceSource for AppKitPreferences {
     fn sample(&self) -> Result<SystemPreferences, PlatformError> {
         self.source.sample()
     }
+
+    fn delivered(&self, values: &SystemPreferences) {
+        self.source.delivered(values);
+    }
 }
 
-/// AppKit's side of the source: the getters on the main thread, whether the
-/// application is active, and a retry on the owner queue.
+/// AppKit's side of the source: the getters on the main thread, and a retry
+/// on the owner queue while the application is active.
 struct AppKitReads;
 
-impl NativePreferences for AppKitReads {
+impl SystemReads for AppKitReads {
     fn read(&self) -> Result<SystemPreferences, PlatformError> {
         sample()
     }
@@ -109,13 +113,19 @@ impl NativePreferences for AppKitReads {
         web_time::Instant::now()
     }
 
+    fn retrying(&self) -> Retrying<'_> {
+        Retrying::OnTimer(self)
+    }
+}
+
+impl RetryTimer for AppKitReads {
     /// An inactive application is read again on its activation notice.
-    fn retry_admitted(&self) -> bool {
+    fn application_active(&self) -> bool {
         MainThreadMarker::new()
             .is_some_and(|main_thread| NSApplication::sharedApplication(main_thread).isActive())
     }
 
-    fn arm_retry(&self, delay: Duration, signal: Weak<OwnerSignal>) {
+    fn arm(&self, delay: Duration, signal: Weak<OwnerSignal>) {
         crate::owner::apple::macos::exec_after_on_owner(
             crate::owner::apple::macos::owner_queue(),
             delay,

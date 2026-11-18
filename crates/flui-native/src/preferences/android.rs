@@ -18,11 +18,11 @@ pub(crate) use configuration::activity_preferences;
 mod configuration {
     //! Activity-context observations through public Android configuration APIs.
     //!
-    //! The host reads them again on `ConfigChanged`, on `Resume` and when
-    //! `FluiView` reports a changed setting or contrast level, even without a user
-    //! surface.
+    //! The host reads them again on `ConfigChanged`, after `Start` and when
+    //! `FluiView` reports a changed setting or contrast level, even without a
+    //! user surface (ADR-0377).
 
-    use std::sync::{Arc, Weak};
+    use std::sync::Arc;
     use std::time::Duration;
 
     use android_activity::AndroidApp;
@@ -43,7 +43,7 @@ mod configuration {
     use crate::owner::signal::OwnerSignal;
     use crate::preferences::{
         locales,
-        read::{NativePreferences, NoticedPreferences},
+        read::{NoticedPreferences, Retrying, SystemReads},
         regional,
     };
     use crate::version::gate::android::{AndroidApi, LocaleList, SystemContrast, TextWeight};
@@ -81,7 +81,7 @@ mod configuration {
         api: AndroidApi,
     }
 
-    impl NativePreferences for ActivityReads {
+    impl SystemReads for ActivityReads {
         fn read(&self) -> Result<SystemPreferences, PlatformError> {
             sample(&self.app, self.api).map_err(|error| PlatformError::Preferences {
                 message: error.to_string(),
@@ -92,15 +92,11 @@ mod configuration {
             web_time::Instant::now()
         }
 
-        /// The loop gates its reads on the Activity running and reads again
-        /// on `Start`, so the source admits every retry.
-        fn retry_admitted(&self) -> bool {
-            true
+        /// The loop blocks no longer than the source's retry deadline and
+        /// gates its own reads on the Activity running.
+        fn retrying(&self) -> Retrying<'_> {
+            Retrying::AtLoopDeadline
         }
-
-        /// The loop blocks no longer than the source's retry deadline, so
-        /// nothing is armed here.
-        fn arm_retry(&self, _delay: Duration, _signal: Weak<OwnerSignal>) {}
     }
 
     impl ActivityPreferences for AndroidPreferences {
@@ -113,15 +109,15 @@ mod configuration {
         }
 
         fn night_mode(&self) -> Result<bool, PreferenceQueryError> {
-            night_mode(&self.native().app)
+            night_mode(&self.system().app)
         }
 
         fn pixel_ratio(&self) -> Result<DevicePixelRatio, PreferenceQueryError> {
-            pixel_ratio(&self.native().app)
+            pixel_ratio(&self.system().app)
         }
 
         fn gesture_geometry(&self) -> Result<GestureGeometry, PreferenceQueryError> {
-            geometry(&self.native().app)
+            geometry(&self.system().app)
         }
     }
 
