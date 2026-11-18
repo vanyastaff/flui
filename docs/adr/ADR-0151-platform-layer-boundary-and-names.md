@@ -732,9 +732,11 @@ secrets in diagnostics) are decided by the records the table cites.
   module of the core host (the crate-level `journal/`: `owner/` names no feature, and the journal
   names the input model), written at run time under `flui-native`'s `native-capture` feature, not
   a test-only codec; `flui-protocol` declares its schema so `flui-driver` reads a recording
-  without linking the core host. As built, the reader is `flui record` in `flui-cli`, through
-  `flui-protocol`, and `flui-driver`'s reader is not written; and every build of `flui-app`
-  carries the codec, not only the builds that ask for the journal
+  without linking the core host. The journal, its codec included, is compiled only in a debug
+  build with that feature (or with `testing`): `flui-app` turns the feature on in every build,
+  since Cargo cannot tie a feature to a profile, and a release build compiles none of it. As
+  built, the reader is `flui record` in `flui-cli`, through `flui-protocol`, and `flui-driver`'s
+  reader is not written
   ([Accepted ADR sections not built yet](../gaps.md#accepted-adr-sections-not-built-yet)).
 - **One way to drive an app.** A host's conformance rows that need the OS are `flui-driver`
   scenarios (ADR-0238): the same scenario runs on the headless host in CI, in process, and

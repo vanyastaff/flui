@@ -22,6 +22,11 @@
   [ADR-0371](ADR-0371-before-the-first-release-no-xtask-gate-holds-a-rule-about-the-sources.md)
   for the `xtask workspace`, `xtask reach` and `xtask globals` gates only (§12, Confirmation): the
   rule stands and its reader confirms it.
+- **Superseded-by:** [ADR-0377](ADR-0377-non-rust-code-on-android-and-apple-is-a-leaf-by-rule.md)
+  for decision 5 items 2 and 3 only (Java that uses only framework APIs, a manifest component
+  included, ships as the crate's checked-in dex declared with its components; a Gradle library
+  module is for Java that needs a library outside the platform or resources); item 1 and the
+  paragraph against `javac`, `d8` and `swiftc` in a `build.rs` stand
 - **Related:** [ADR-0152](ADR-0152-capability-seam-revised.md) (the seam this record builds on),
   [ADR-0153](ADR-0153-release-train-and-capability-crates.md) (capability crates ship in lockstep
   with the train until the contract has its own version),

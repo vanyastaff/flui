@@ -12,7 +12,7 @@ name: CI
 # uses Linux cross tools and macOS SDK legs; OS runtime checks are local commands.
 # Native host-tool tests live separately in xtask-native.yml.
 # test-nested and test-trybuild run independently, each with its own cache.
-# All jobs except the notification are gated by the ci aggregator.
+# All jobs except the notification are gated by the `ci` job.
 
 on:
   pull_request:
@@ -67,11 +67,11 @@ env:
 jobs:
   # ─────────────────────────────────────────────────────────────────────────
   # checks — fast source gate: `cargo xtask checks --strict` (fmt, typos,
-  # Taplo, markdown links, toolchain, unmounted test files, ADR numbers, the
-  # docs-only allowlist, changelog
+  # Taplo, markdown links, toolchain, unmounted test files, ADR numbers,
+  # changelog
   # fragments, the generated files against their sources),
-  # xtask's own tests (which include each self-test, the lane classification and
-  # the `ci` aggregator's skip rule), and the workflow linters. It builds only
+  # xtask's own tests (which include each self-test), and the workflow
+  # linters. It builds only
   # xtask, never the workspace, so a malformed PR fails before any workspace
   # build starts. It has no `if:`: a docs-only PR, which skips every compile
   # job, still runs it, and the link check is what such a PR most needs.
@@ -216,27 +216,25 @@ jobs:
         run: zizmor .
 
   # ─────────────────────────────────────────────────────────────────────────
-  # plan — what this run has to build: one `lane` output, decided by
-  # `cargo xtask affected --event <event>` (the shell
-  # only reads the label, live from the API):
+  # plan — what this run has to build: one `lane` output.
   #   push, merge_group, workflow_dispatch   full
-  #   pull_request, otherwise, by the change (the classification
-  #   `cargo xtask affected` prints):
-  #     docs      only documentation changed
-  #     tooling   only repo tooling: `checks` and `deps` cover it
-  #     wide      anything that compiles: the whole workspace. `mode` says
-  #               whether the change was a set of packages (`packages`) or a
-  #               workspace-wide input (`full`: Cargo.lock, root Cargo.toml,
-  #               .cargo/, the toolchain, a workflow, the lane code)
-  # The docs-only allowlist and the triggers live in
-  # tools/xtask/src/change_scope/, once; `cargo xtask checks` proves no
-  # compiled include_str!() target falls inside it.
+  #   pull_request                           docs when every changed file is
+  #                                          documentation, otherwise wide
+  # Documentation is a root `*.md` or licence text, anything under docs/ or
+  # changelog.d/, a crate's ARCHITECTURE.md (or docs/ARCHITECTURE.md), CHANGELOG.md
+  # or licence text (LICENSE, LICENSE-APACHE, LICENSE-MIT, NOTICE),
+  # and the issue templates and CODEOWNERS. docs/gaps.md and
+  # docs/platform-parity.md are not: flui-native's tests read them. Neither is
+  # book/: the facade's unit tests check its chapters (src/book.rs; its doctests
+  # run on main, in doc-test). Renames count
+  # both paths, so a file moved into docs/ still runs the gate. A file another
+  # crate's code includes with include_str! later is not caught here, and
+  # main's run finds what the skipped jobs would have (ADR-0376).
   #
-  # Skipping is done with job-level `if:` on `plan`'s outputs, NOT with
+  # Skipping is done with job-level `if:` on `plan`'s output, NOT with
   # `on.pull_request.paths-ignore`: that would make GitHub never create the
-  # skipped jobs' check runs, leaving any required-status-check rule waiting
-  # forever. Job-level `if:` keeps every job in the run as `skipped`, and the
-  # `ci` aggregator checks that exactly the planned jobs skipped.
+  # skipped jobs' check runs, leaving the required `ci` check waiting
+  # forever. Job-level `if:` keeps every job in the run as `skipped`.
   # ─────────────────────────────────────────────────────────────────────────
   plan:
     name: plan
@@ -246,47 +244,54 @@ jobs:
       contents: read
     outputs:
       lane: ${{ steps.scope.outputs.lane }}
-      mode: ${{ steps.scope.outputs.mode }}
-      heavy_required: ${{ steps.scope.outputs.heavy_required }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          # The merge base with the PR's base branch has to be in the clone.
+          # The base of a pull request has to be in the clone.
           fetch-depth: 0
 
-      - name: Install pinned Rust
-        uses: ./.github/actions/rust-toolchain
-
-      - name: Rust cache (xtask)
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          cache-bin: false
-          shared-key: xtask
-          save-if: false
-
       - id: scope
-        name: Decide the lane and the affected packages
+        name: Decide the lane
         env:
           EVENT: ${{ github.event_name }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
-          args=(--event "$EVENT" --format github)
+          lane=full
           if [ "$EVENT" = pull_request ]; then
             # The checkout is the PR merged into its base branch's current
-            # tip, its first parent. `base.sha` stays where the base was at
-            # the PR's last push: its diff would count every later main
-            # commit as the PR's own.
+            # tip, its first parent: the diff against it is the PR's own.
+            # `base.sha` stays where the base was at the PR's last push.
+            base=$BASE_SHA
             if git rev-parse --verify --quiet HEAD^2 > /dev/null; then
-              BASE_SHA=$(git rev-parse HEAD^1)
+              base=$(git rev-parse HEAD^1)
             fi
-            args+=(--base "$BASE_SHA")
+            # Listed first, so a failure stops the step instead of leaving
+            # the most permissive lane.
+            files=$(git diff --no-renames --name-only "$base" HEAD)
+            lane=docs
+            while IFS= read -r file; do
+              [ -n "$file" ] || continue
+              case "$file" in
+                docs/gaps.md | docs/platform-parity.md) lane=wide ;;
+                docs/* | changelog.d/* | .github/ISSUE_TEMPLATE/* | .github/CODEOWNERS) ;;
+                crates/*/* | packages/*/*)
+                  # a crate's own architecture notes, changelog and licence texts
+                  case "${file#*/*/}" in
+                    ARCHITECTURE.md | docs/ARCHITECTURE.md | CHANGELOG.md) ;;
+                    LICENSE | LICENSE-APACHE | LICENSE-MIT | NOTICE) ;;
+                    *) lane=wide ;;
+                  esac
+                  ;;
+                */*) lane=wide ;;
+                *.md | LICENSE | LICENSE-APACHE | LICENSE-MIT | NOTICE) ;;
+                *) lane=wide ;;
+              esac
+            done <<< "$files"
           fi
-          cargo xtask affected "${args[@]}" > scope.txt
-          cat scope.txt >> "$GITHUB_OUTPUT"
-          echo "event=$EVENT $(grep '^lane=' scope.txt)"
-          cat scope.txt
+          echo "lane=$lane" >> "$GITHUB_OUTPUT"
+          echo "event=$EVENT lane=$lane"
 
   # clippy — workspace lint with -D warnings. Split out of `checks` so it runs
   # in PARALLEL with test/doc instead of gating them: clippy
@@ -348,7 +353,11 @@ jobs:
     needs: [plan]
     if: contains(fromJSON('["wide","full"]'), needs.plan.outputs.lane)
     runs-on: ubuntu-26.04
-    timeout-minutes: 40
+    # A cold cache and a busy runner pool can push this job past 40 min with
+    # every test passed; a warm run takes about 16 min. 60 min leaves room
+    # without hiding a hang, which nextest's per-test timeouts
+    # (.config/nextest.toml) catch first.
+    timeout-minutes: 60
     # Workspace crates unoptimized; dependencies keep the opt-level 3 of
     # `[profile.dev.package."*"]`. rust-cache never caches workspace crates,
     # so this job compiles them on every run: on 4 cores the test scope's
@@ -906,18 +915,15 @@ jobs:
   # above makes fatal in every job that builds. Two steps, split by what
   # decides the result:
   #   policy      the commit, and the std-replacement list cargo-deny fetches
-  #               for [bans.std-replacements]: blocking in every lane. A new
+  #               for [bans.std-replacements]: blocking on every run. A new
   #               entry in that list can fail a commit that passed, but only
   #               for a crate a member declares directly, and the fix is
   #               always ours to make (the std API, or an `ignore` with its
   #               reason in deny.toml), so it blocks with the rest.
   #   advisories  the RustSec database as of the run, so a commit that passed
-  #               yesterday can fail today: blocking in the wide and full
-  #               lanes on main, the merge queue, and any PR whose change is
-  #               workspace-wide or touches a heavy-job input (`mode` full,
-  #               or `heavy_required`: Cargo.lock, deny.toml, see `plan`); on
-  #               a PR that changes only packages or tooling a new advisory
-  #               is reported without failing unrelated work. Between
+  #               yesterday can fail today: blocking on main, the merge queue
+  #               and a manual run; reported without failing on a pull
+  #               request, so main is where it fails (ADR-0376). Between
   #               commits, advisories.yml runs this step daily against main
   #               and keeps the "RustSec advisory on main" issue.
   # ─────────────────────────────────────────────────────────────────────────
@@ -951,7 +957,7 @@ jobs:
         run: cargo xtask deps --strict --only policy
 
       - name: cargo xtask deps --only advisories
-        continue-on-error: ${{ needs.plan.outputs.lane == 'tooling' || (needs.plan.outputs.lane == 'wide' && needs.plan.outputs.mode == 'packages' && needs.plan.outputs.heavy_required == 'false') }}
+        continue-on-error: ${{ github.event_name == 'pull_request' }}
         run: cargo xtask deps --strict --only advisories
 
       # The packages of the facade's default graph on each target, against
@@ -987,9 +993,9 @@ jobs:
 
 
       - name: cargo test --doc
-        # `flui/testing` compiles the book's chapters that run through Tester; the
-        # catalogs are lane_args.rs FACADE_CATALOGS, the narrowed run's (keep them in step), so
-        # the theme chapter and the facade's Material-gated half compile here too (src/book.rs).
+        # `flui/testing` compiles the book's chapters that run through Tester, and
+        # the catalogs compile the theme chapter and the facade's Material-gated half
+        # (src/book.rs).
         run: cargo test --workspace --locked --doc --features flui/testing,flui/material,flui/cupertino
 
   # ─────────────────────────────────────────────────────────────────────────
@@ -1375,60 +1381,45 @@ jobs:
           XWIN_CACHE_DIR: ${{ runner.temp }}/cargo-xwin
 
   # ─────────────────────────────────────────────────────────────────────────
-  # ci — require each planned Linux job and reject unexpected skips.
+  # ci — the one required check: red when a job it needs failed or was
+  # cancelled, when a job the lane runs skipped, or when there is no lane.
+  #   docs   checks, plan
+  #   wide   checks, plan, deps, clippy, test
+  #   full   every job it needs; a run on main, the merge queue or a manual
+  #          run takes no other lane
+  # A job added to the workflow and left out of `needs` gates nothing: add it.
   ci:
     name: ci
     if: always()
     needs: [checks, plan, clippy, feature-matrix, wasm-check, cross-typecheck, test, test-nested, test-trybuild, test-features, doc, perf-gates, size, deps, doc-test, miri, test-without-agent]
     runs-on: ubuntu-26.04
-    timeout-minutes: 10
+    timeout-minutes: 5
     steps:
-      # The aggregator reads its own workflow file so it can prove the `needs`
-      # list above is complete, and builds xtask to do it (cached, so a warm
-      # run is seconds).
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: Install pinned Rust
-        uses: ./.github/actions/rust-toolchain
-
-      - name: Rust cache (xtask)
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          cache-bin: false
-          shared-key: xtask
-          save-if: false
-
-      # Two rules (tools/xtask/src/change_scope/aggregator.rs):
-      #
-      # 1. COMPLETENESS -- every job in this workflow except `ci` itself (and
-      #    `notify-main-red`, which runs after it) must appear in `needs`.
-      #    Without this, a job ADDED without editing the list above ran,
-      #    passed or failed, and gated nothing.
-      #
-      # 2. EXACTLY THE EXPECTED SKIPS -- which jobs run is decided by
-      #    `plan`'s `lane`, and the aggregator recomputes it instead of
-      #    trusting each job's `if:`. Every lane runs checks and plan; then
-      #      docs      nothing else
-      #      tooling   deps
-      #      wide      deps + HEAVY_JOBS (the Linux PR gate)
-      #      full      wide + FULL_JOBS (every other check, ADR-0375)
-      #    Every other job must skip. Any other skip (a drifted `if:`, a
-      #    cancellation) or a job that ran where it should have skipped fails
-      #    the aggregator. Each list must equal the jobs whose `if:` names its
-      #    lanes; `cargo test -p xtask` (in `checks`) pins that.
-      - name: Verify every job is gated and exactly the expected jobs skipped
+      - name: Every job it needs passed, and each the lane runs ran
         env:
           NEEDS: ${{ toJSON(needs) }}
-          HEAVY_JOBS: >-
-            clippy test
-          FULL_JOBS: >-
-            feature-matrix doc-test test-nested test-features doc wasm-check cross-typecheck
-            test-trybuild size miri perf-gates test-without-agent
           LANE: ${{ needs.plan.outputs.lane }}
           EVENT: ${{ github.event_name }}
-        run: cargo xtask ci-verify
+        run: |
+          set -euo pipefail
+          jq -r 'to_entries[] | "\(.key): \(.value.result)"' <<< "$NEEDS"
+          result() { jq -r --arg job "$1" '.[$job].result' <<< "$NEEDS"; }
+          failed=$(jq -r '[to_entries[] | select(.value.result == "failure" or .value.result == "cancelled") | .key] | join(" ")' <<< "$NEEDS")
+          if [ -n "$failed" ]; then echo "::error::failed or cancelled: $failed"; exit 1; fi
+          if [ "$EVENT" != pull_request ] && [ "$LANE" != full ]; then
+            echo "::error::a $EVENT run takes the full lane, but plan chose '$LANE'"; exit 1
+          fi
+          case "$LANE" in
+            docs) required="checks plan" ;;
+            wide) required="checks plan deps clippy test" ;;
+            full) required=$(jq -r 'keys | join(" ")' <<< "$NEEDS") ;;
+            *) echo "::error::no lane: plan $(result plan)"; exit 1 ;;
+          esac
+          for job in $required; do
+            if [ "$(result "$job")" != success ]; then
+              echo "::error::lane $LANE runs $job, which is $(result "$job")"; exit 1
+            fi
+          done
 
   # ─────────────────────────────────────────────────────────────────────────
   # notify-main-red -- a red `ci` on main opens (or comments on) one tracking

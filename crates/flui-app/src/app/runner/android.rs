@@ -42,7 +42,8 @@ where
     // plugin (`flui run --scene`); inert unless one is installed.
     let hot_reload = ScenePlugin::from_config(&config, app.internal_data_path().as_deref());
     // Before the platform, whose registries report only to a capture already installed.
-    super::begin_native_journal(flui_native::journal::codec::Backend::Android);
+    #[cfg(native_journal)]
+    super::native_journal::begin(flui_native::journal::codec::Backend::Android);
     let started =
         flui_native::android_platform(app).map_err(crate::app::LaunchError::from_platform)?;
     let platform: Box<dyn Platform> = started.platform;

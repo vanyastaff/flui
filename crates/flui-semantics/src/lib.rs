@@ -24,7 +24,9 @@
 //!   actions it requests into handler invocations.
 //! - [`SemanticsAction`] and [`ActionCall`]: the AccessKit-aligned action
 //!   vocabulary, and one action fused with exactly its payload.
-//! - [`agent`]: the in-process read of the published tree for ADR-0080 agents.
+//! - [`TreeSnapshot`] and [`WaitFacts`]: the in-process read of the published
+//!   tree for ADR-0080 agents.
+//! - [`platform`]: the contract a platform accessibility adapter implements.
 //!
 //! The rules that are not visible in the types live in the crate's
 //! `ARCHITECTURE.md`; the cross-crate ones in ADR-0203, ADR-0205 and ADR-0206.
@@ -38,64 +40,79 @@
 )]
 // Lint levels come from `[workspace.lints]` (Cargo.toml `[lints] workspace = true`).
 #![deny(missing_docs)]
+#![warn(clippy::disallowed_types)]
 
-// ============================================================================
-// MODULES
-// ============================================================================
-
-pub mod agent;
-mod applicability;
-// Private: the curated entry point is re-exported below. Publishing the module
-// would enrol its internal helpers (`to_node`, `resolve_role`) in the crate's
-// contract, and a translation detail is not something a consumer should pin.
+// Every type has one path: the crate root, except the platform adapter
+// contract, which is named from `platform`. The modules stay private so that
+// moving a type between them changes no consumer.
 mod accesskit_translation;
-pub mod action;
+mod action;
+mod agent;
 mod announce;
+mod applicability;
 mod assistive_focus;
 mod attributes;
 mod collection;
-pub mod configuration;
+mod configuration;
 mod document_selection;
-pub mod identity;
-pub mod node;
+mod identity;
+mod node;
 mod numeric_range;
-pub mod owner;
+mod owner;
 pub mod platform;
+mod properties;
 mod reading_order;
+mod regions;
+mod relation;
+mod role;
 mod route_change;
-pub use assistive_focus::{AssistiveFocus, AssistiveFocusChange};
-pub use platform::AssistiveFocusSupport;
-pub mod properties;
-pub mod regions;
-pub mod relation;
-pub mod role;
-pub mod states;
+mod states;
 mod text_content;
-pub mod tree;
+mod tree;
 
-// ============================================================================
-// RE-EXPORTS - Action Types
-// ============================================================================
-
+pub use accesskit_translation::{
+    semantics_action_for, semantics_action_request_for, tree_to_update,
+};
 pub use action::{
     ActionCall, ActionDecodeError, AssistiveFocusHandler, CustomActionId, Reveal, ScrollUnit,
     SemanticsAction, SemanticsActionHandler, SemanticsActionRequest, TextSelection, UnroutedAction,
 };
-// ============================================================================
-// RE-EXPORTS - AccessKit Translation
-// ============================================================================
-pub use accesskit_translation::{
-    semantics_action_for, semantics_action_request_for, tree_to_update,
-};
-pub use numeric_range::{NumericRange, NumericRangeError};
-pub use reading_order::reading_order;
-// ============================================================================
-// RE-EXPORTS - Agent read and act (ADR-0095)
-// ============================================================================
 pub use agent::{
     Evaluation, EventSet, Placement, TreeSnapshot, WaitFacts, WireActionError, WireLocateError,
     WireReadError, counts_frames,
 };
+pub use announce::{AnnounceError, Announcements, Announcer};
+pub use applicability::RoleAttribute;
+pub use assistive_focus::{AssistiveFocus, AssistiveFocusChange};
+pub use collection::{
+    CellPosition, SemanticsCollection, SemanticsCollectionKind, SemanticsCollectionOrigin,
+    SemanticsIndexOrigin, SetSize, SortDirection, TableShape,
+};
+pub use configuration::{DeclaredCustomAction, SemanticsConfiguration};
+pub use document_selection::{DocumentPosition, DocumentSelection};
+pub use identity::AccessibilityNodeId;
+pub use node::SemanticsNode;
+pub use numeric_range::{NumericRange, NumericRangeError};
+pub use owner::{
+    DuplicateIdentifier, InapplicableAttribute, SemanticsActionError, SemanticsActionInvocation,
+    SemanticsDiagnostic, SemanticsOwner, SemanticsUpdateCallback, TextRunsWithheld,
+    report_diagnostic,
+};
+pub use properties::{HeadingLevel, SemanticsSortKey};
+pub use reading_order::reading_order;
+pub use regions::{
+    SemanticsIdentityExhausted, SemanticsIdentitySource, SemanticsRegion, SemanticsRegionId,
+    SemanticsRegionKey, SemanticsRegions,
+};
+pub use relation::{SemanticsAnchor, SemanticsRelation};
+pub use role::{LiveSetting, SemanticsRole, Urgency};
+pub use states::{AutoComplete, Current, HasPopup, Invalid, States, Toggled};
+pub use text_content::{
+    MAX_RUN_CHARACTERS, TextContent, TextRun, TextRunError, TextRunParts, TextRunPosition,
+    TextRunSelection,
+};
+pub use tree::SemanticsTree;
+
 // `SemanticsUpdateCallback` names `TreeUpdate` in its signature, so a consumer
 // implementing that callback must be able to name it without adding accesskit
 // itself at a version that must match ours. `NodeId` comes along because
@@ -103,108 +120,3 @@ pub use agent::{
 // items only — a glob would enrol every future accesskit item into this crate's
 // contract without anyone deciding to.
 pub use accesskit::{NodeId, TreeUpdate};
-// ============================================================================
-// RE-EXPORTS - Configuration
-// ============================================================================
-pub use applicability::RoleAttribute;
-pub use configuration::{DeclaredCustomAction, SemanticsConfiguration};
-// ============================================================================
-// RE-EXPORTS - Collections
-// ============================================================================
-pub use collection::{CellPosition, SetSize, SortDirection, TableShape};
-// ============================================================================
-// RE-EXPORTS - Announcements
-// ============================================================================
-pub use announce::{AnnounceError, Announcements, Announcer};
-pub use text_content::{
-    MAX_RUN_CHARACTERS, TextContent, TextRun, TextRunError, TextRunParts, TextRunPosition,
-    TextRunSelection,
-};
-// ============================================================================
-// RE-EXPORTS - State Types
-// ============================================================================
-pub use collection::{
-    SemanticsCollection, SemanticsCollectionKind, SemanticsCollectionOrigin, SemanticsIndexOrigin,
-};
-pub use states::{AutoComplete, Current, HasPopup, Invalid, States, Toggled};
-// ============================================================================
-// RE-EXPORTS - Stable Accessibility Identity
-// ============================================================================
-pub use identity::AccessibilityNodeId;
-pub use regions::{
-    SemanticsIdentityExhausted, SemanticsIdentitySource, SemanticsRegion, SemanticsRegionId,
-    SemanticsRegionKey, SemanticsRegions,
-};
-// ============================================================================
-// RE-EXPORTS - Foundation Types
-// ============================================================================
-pub use flui_foundation::SemanticsId;
-// ============================================================================
-// RE-EXPORTS - Node Types
-// ============================================================================
-pub use node::SemanticsNode;
-// ============================================================================
-// RE-EXPORTS - Owner Types
-// ============================================================================
-pub use owner::{
-    DuplicateIdentifier, InapplicableAttribute, SemanticsDiagnostic, TextRunsWithheld,
-    report_diagnostic,
-};
-pub use owner::{
-    SemanticsActionError, SemanticsActionInvocation, SemanticsOwner, SemanticsUpdateCallback,
-};
-// ============================================================================
-// RE-EXPORTS - Property Types
-// ============================================================================
-pub use properties::{
-    AttributedString, HeadingLevel, SemanticsHintOverrides, SemanticsSortKey, SemanticsTag,
-    StringAttribute, StringAttributeType, TextDirection,
-};
-// ============================================================================
-// RE-EXPORTS - Role Types
-// ============================================================================
-pub use document_selection::{DocumentPosition, DocumentSelection};
-pub use relation::{SemanticsAnchor, SemanticsRelation};
-pub use role::{
-    AccessibilityFocusBlockType, DebugSemanticsDumpOrder, LiveSetting, SemanticsRole, Urgency,
-};
-// ============================================================================
-// RE-EXPORTS - Attributes and Tree Types
-// ============================================================================
-pub use tree::SemanticsTree;
-
-// ============================================================================
-// PRELUDE
-// ============================================================================
-
-/// The semantics prelude - commonly used types and traits.
-///
-/// ```rust,ignore
-/// use flui_semantics::prelude::*;
-/// ```
-pub mod prelude {
-    // Re-export optimized types
-    pub use rustc_hash::{FxHashMap, FxHashSet};
-    pub use smallvec::SmallVec;
-    pub use smol_str::SmolStr;
-
-    pub use crate::{
-        AccessibilityFocusBlockType, AccessibilityNodeId, ActionCall, Announcer, AttributedString,
-        DebugSemanticsDumpOrder, HeadingLevel, LiveSetting, NumericRange, NumericRangeError,
-        SemanticsAction, SemanticsActionError, SemanticsActionHandler, SemanticsActionInvocation,
-        SemanticsActionRequest, SemanticsAnchor, SemanticsConfiguration, SemanticsId,
-        SemanticsNode, SemanticsOwner, SemanticsRelation, SemanticsRole, SemanticsTag,
-        SemanticsTree, States, TextDirection, Toggled, Urgency,
-    };
-}
-
-// ============================================================================
-// VERSION INFO
-// ============================================================================
-
-/// The version of the flui-semantics crate.
-pub const VERSION: &str = env!("CARGO_PKG_VERSION");
-
-// ============================================================================
-// TESTS
-// ============================================================================

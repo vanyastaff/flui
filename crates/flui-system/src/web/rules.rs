@@ -6,9 +6,13 @@
 
 use flui_platform::{BrowserException, SystemFailure, Unsupported, UnsupportedReason};
 
+// A browser's file is handed over without a path: the picks' filter check
+// and the bound on what is read are the rules of every such host.
+use crate::dialog::handed_over::admit_declared;
+pub(crate) use crate::dialog::handed_over::admit_picks;
 use crate::dialog::{
     DialogError, FileDialogCapability, FileFilter, FolderListing, FolderPath, MessageAnswer,
-    MessageButtons, admit_read, save_file_name,
+    MessageButtons, save_file_name,
 };
 use crate::share::{ShareCapability, ShareError, ShareResult};
 
@@ -177,10 +181,8 @@ pub(crate) fn admit_sizes(
         clippy::cast_sign_loss,
         reason = "a float-to-int `as` saturates, which is the bound wanted here"
     )]
-    let total = sizes
-        .into_iter()
-        .fold(0_u64, |total, size| total.saturating_add(size as u64));
-    admit_read(total, limit).map(|()| total)
+    let sizes = sizes.into_iter().map(|size| size as u64);
+    admit_declared(sizes, limit)
 }
 
 /// Refuse a folder of which `met` files and folders were met, past `limit`,
@@ -289,27 +291,6 @@ pub(crate) fn unavailable() -> DialogError {
     DialogError::Unsupported(Unsupported::of::<FileDialogCapability>(
         UnsupportedReason::Unavailable,
     ))
-}
-
-/// Admit picks, each a name and the MIME type the browser gives it, against
-/// the request's `filters`: every pick must match one where there are any
-/// ([`FileFilter::matches`]), since a file input only suggests them
-/// (ADR-0360 §4); [`DialogError::NotInFilter`] otherwise.
-pub(crate) fn admit_picks<'a>(
-    picks: impl IntoIterator<Item = (&'a str, Option<&'a str>)>,
-    filters: &[FileFilter],
-) -> Result<(), DialogError> {
-    if filters.is_empty() {
-        return Ok(());
-    }
-    let admitted = picks
-        .into_iter()
-        .all(|(name, mime_type)| filters.iter().any(|filter| filter.matches(name, mime_type)));
-    if admitted {
-        Ok(())
-    } else {
-        Err(DialogError::NotInFilter)
-    }
 }
 
 /// Where a launched URI goes in the browser.
@@ -455,6 +436,7 @@ pub(crate) fn box_holds_escape(buttons: MessageButtons) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dialog::handed_over::admit_read;
 
     #[test]
     fn a_share_rejection_is_not_reported_retryable_lasting_or_the_browsers_failure() {

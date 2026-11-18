@@ -9,16 +9,14 @@
 use std::rc::Rc;
 use std::sync::Arc;
 
+use flui_foundation::TextDirection;
 use flui_foundation::geometry::AxisDirection;
 use smallvec::SmallVec;
 use smol_str::SmolStr;
 
 use crate::{
     collection::Collection,
-    properties::{
-        AttributedString, HeadingLevel, SemanticsHintOverrides, SemanticsSortKey, SemanticsTag,
-        TextDirection,
-    },
+    properties::{HeadingLevel, SemanticsSortKey},
     relation::{SemanticsAnchor, SemanticsRelation},
     role::{LiveSetting, SemanticsRole},
     states::States,
@@ -47,11 +45,11 @@ pub(crate) struct SemanticsAttributes {
     /// than only what changed.
     pub(crate) live_atomic: Option<bool>,
     /// The label describing this node.
-    pub(crate) label: Option<AttributedString>,
+    pub(crate) label: Option<SmolStr>,
     /// The current value of this node.
-    pub(crate) value: Option<AttributedString>,
+    pub(crate) value: Option<SmolStr>,
     /// A hint about what will happen when the node is activated.
-    pub(crate) hint: Option<AttributedString>,
+    pub(crate) hint: Option<SmolStr>,
     /// The widget author's stable identifier for tests and automation
     /// (ADR-0240): published as AccessKit `author_id`, never announced, never
     /// merged into another node.
@@ -78,10 +76,6 @@ pub(crate) struct SemanticsAttributes {
 pub(crate) struct RareAttributes {
     /// Validated native numeric-range metadata.
     pub(crate) numeric_range: Option<crate::NumericRange>,
-    /// The value when increased.
-    pub(crate) increased_value: Option<AttributedString>,
-    /// The value when decreased.
-    pub(crate) decreased_value: Option<AttributedString>,
     /// The tooltip for this node.
     pub(crate) tooltip: Option<SmolStr>,
     /// What an empty text field shows in place of a value.
@@ -97,12 +91,8 @@ pub(crate) struct RareAttributes {
     /// The labels of the node's custom actions, in id order: a custom
     /// action's `CustomActionId` is its place in this list.
     pub(crate) custom_actions: SmallVec<[SmolStr; 2]>,
-    /// Tags for this node.
-    pub(crate) tags: SmallVec<[SemanticsTag; 2]>,
     /// Sort key for ordering.
     pub(crate) sort_key: Option<SemanticsSortKey>,
-    /// Hint overrides.
-    pub(crate) hint_overrides: Option<SemanticsHintOverrides>,
     /// Scroll position.
     pub(crate) scroll_position: Option<f64>,
     /// The direction the scroll position grows in; absent, the range grows
@@ -112,14 +102,6 @@ pub(crate) struct RareAttributes {
     pub(crate) scroll_extent_max: Option<f64>,
     /// Scroll extent minimum.
     pub(crate) scroll_extent_min: Option<f64>,
-    /// The scroll index for this node.
-    pub(crate) scroll_index: Option<i32>,
-    /// Platform view ID if this represents a platform view.
-    pub(crate) platform_view_id: Option<i32>,
-    /// Maximum character count for text field.
-    pub(crate) max_value_length: Option<i32>,
-    /// Current character count for text field.
-    pub(crate) current_value_length: Option<i32>,
     /// A document's selection across the texts beneath it (ADR-0214),
     /// resolved to their runs when published.
     pub(crate) document_selection: Option<crate::DocumentSelection>,
@@ -137,8 +119,6 @@ impl RareAttributes {
     /// Every attribute undeclared: what a node that never wrote one reads.
     const EMPTY: &Self = &Self {
         numeric_range: None,
-        increased_value: None,
-        decreased_value: None,
         tooltip: None,
         placeholder: None,
         keyboard_shortcut: None,
@@ -146,17 +126,11 @@ impl RareAttributes {
         url: None,
         role_description: None,
         custom_actions: SmallVec::new_const(),
-        tags: SmallVec::new_const(),
         sort_key: None,
-        hint_overrides: None,
         scroll_position: None,
         scroll_axis_direction: None,
         scroll_extent_max: None,
         scroll_extent_min: None,
-        scroll_index: None,
-        platform_view_id: None,
-        max_value_length: None,
-        current_value_length: None,
         document_selection: None,
         hosted_runs: None,
         anchors: SmallVec::new_const(),

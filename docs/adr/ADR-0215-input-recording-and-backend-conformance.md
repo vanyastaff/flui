@@ -134,7 +134,8 @@ and put `serde` on the Stable contract crate.
    `flui-runtime`, `flui-interaction` and widget tests replay. Native recordings hold the backend's plain
    `NativeReading`s (no `windows::*` or `objc2` types), with clock frequency and anchor in the
    header; their schema is declared in `flui-protocol`, which a reader without the core reads,
-   and their codec is `flui-native`'s `journal`, built only with `native-capture` or `testing`; it
+   and their codec is `flui-native`'s `journal`, built only in a debug build with `native-capture`,
+   or with `testing`; it
    replays them through the pure decoders, so Linux CI exercises Win32 and Apple translation
    without those hosts. A window's native stream also holds its close requests with the
    handler's answer, its close with the cause, and each lock a pull-model input method held on

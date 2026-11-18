@@ -313,6 +313,9 @@ pub struct GpuContext {
     /// a slot's textures for the length of its frame. Kept from a slot's
     /// first update until it detaches, across device rebuilds.
     textures: FxHashMap<SlotId, KeptTextures>,
+    /// The lineage each slot last drew a version of: the painter's
+    /// recordings of one no slot draws any more are dropped.
+    lineages: crate::recording_cache::DrawnLineages<SlotId>,
     /// What the driver's report of a lost device wakes, besides marking the
     /// device lost: the owner that replaces the context (the web).
     loss_wake: Option<Arc<dyn Fn() + Send + Sync>>,
@@ -472,6 +475,7 @@ impl GpuContext {
             blit: None,
             slots: SlotTable::default(),
             textures: FxHashMap::default(),
+            lineages: crate::recording_cache::DrawnLineages::new(),
             loss_wake: None,
             #[cfg(test)]
             texture_flushes: Cell::new(0),
@@ -816,7 +820,25 @@ impl GpuContext {
     /// Detach `slot`; `false` for a stale id or one already detached.
     pub(crate) fn detach(&mut self, slot: SlotId) -> bool {
         self.textures.remove(&slot);
+        if let Some(dead) = self.lineages.draws(slot, None)
+            && let Some(painter) = self.painter.as_mut()
+        {
+            painter.drop_recordings_of(dead);
+        }
         self.slots.remove(slot).is_some()
+    }
+
+    /// Notes that `slot` draws `scene` with `painter`, which drops the
+    /// recordings of the lineage the slot drew before once no slot draws it.
+    fn note_lineage(
+        &mut self,
+        slot: SlotId,
+        scene: flui_layer::SceneContent<'_>,
+        painter: &mut WgpuPainter,
+    ) {
+        if let Some(dead) = self.lineages.draws(slot, Some(scene)) {
+            painter.drop_recordings_of(dead);
+        }
     }
 
     /// Apply `updates` to `slot`'s external textures.
@@ -961,6 +983,7 @@ impl GpuContext {
         let submission_scope = self.domain.begin_frame_scope()?;
         let wrote = self.prepare_textures(slot);
         let mut painter = self.after_uploads(wrote, |this| this.take_painter(format, size));
+        self.note_lineage(slot, scene, &mut painter);
         let own_textures = self.lend_textures(slot, &mut painter);
         #[cfg(test)]
         let panics = self.injected_panic();
@@ -1094,6 +1117,7 @@ impl GpuContext {
             });
             (painter, blit)
         });
+        self.note_lineage(slot, scene.content(), &mut painter);
         let own_textures = self.lend_textures(slot, &mut painter);
         let Self {
             adapter,
@@ -1248,6 +1272,15 @@ impl GpuContext {
     #[cfg(test)]
     pub(crate) fn fail_next_rebuilds(&mut self, rebuilds: u32) {
         self.rebuilds_failing = rebuilds;
+    }
+
+    /// How many recordings the shared painter's cache keeps; `None` before
+    /// a frame built the painter.
+    #[cfg(test)]
+    pub(crate) fn kept_recordings(&mut self) -> Option<usize> {
+        self.painter
+            .as_mut()
+            .map(|painter| painter.recording_cache_work().0)
     }
 
     /// Whether this frame panics, counting it off.

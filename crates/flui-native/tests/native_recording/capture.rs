@@ -90,7 +90,8 @@ pub fn shape(recording: &NativeRecording) -> Vec<String> {
             | Row::StoreLock { .. }
             | Row::CloseRequest { .. }
             | Row::Closed(_)
-            | Row::Cut(_) => {}
+            | Row::Cut(_)
+            | Row::Gap { .. } => {}
         }
     }
     super::transcript(&device.replay().expect("a registry's recording replays"))

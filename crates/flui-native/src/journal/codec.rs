@@ -57,7 +57,7 @@ use crate::input::windows::direct_manipulation::manipulation::TouchpadAssembler;
 
 pub use wire::{Backend, CloseAnswer, CloseCause, CutReason, FORMAT_VERSION, FailureKind, Stream};
 
-use super::order::{CutBudget, RowOrder, read_bounded_line};
+use super::order::{RowOrder, read_bounded_line};
 use super::store::{self, RecordedStore, StoreDivergence, StoreFocus, StoreLock};
 use crate::error::PlatformError;
 
@@ -158,6 +158,20 @@ pub enum CodecError {
         /// The type that grew.
         what: &'static str,
     },
+}
+
+impl CodecError {
+    /// Line `line` passes `overrun`'s bound.
+    fn past_bound(line: u64, overrun: wire::Overrun) -> Self {
+        let limit = overrun.limit();
+        match overrun {
+            wire::Overrun::Rows => Self::TooManyRows { line, limit },
+            wire::Overrun::RecordingBytes => Self::TooLarge { line, limit },
+            // A header too long is line 1 too long, and an overrun the
+            // format adds later is a line it cannot hold.
+            _ => Self::LineTooLong { line, limit },
+        }
+    }
 }
 
 /// What the JSON parser or writer refused on a line of a native recording.
@@ -384,6 +398,13 @@ pub enum Row {
     Cut(CutReason),
     /// The window closed (a `window` stream).
     Closed(CloseCause),
+    /// The writer lost `rows` rows here: a row longer than a line of the
+    /// recording may be, which no reader takes. Written as the format's `gap`
+    /// line; a replay stops here with [`ReplayError::Gap`] (any stream).
+    Gap {
+        /// How many.
+        rows: u64,
+    },
 }
 
 /// What one read of the system preferences returned.
@@ -649,6 +670,7 @@ impl Row {
             Self::CloseRequest { .. } => "close_request",
             Self::Closed(_) => "closed",
             Self::Cut(_) => "cut",
+            Self::Gap { .. } => "gap",
         }
     }
 }
@@ -705,6 +727,15 @@ pub enum ReplayError {
         line: u64,
         /// Why the writer cut it.
         reason: CutReason,
+    },
+    /// The writer lost `rows` rows at line `line`: replaying past the gap
+    /// would claim the rows after it followed the ones before.
+    #[error("the native recording lost {rows} rows at line {line}")]
+    Gap {
+        /// The 1-based line of the `gap`.
+        line: u64,
+        /// How many rows it lost.
+        rows: u64,
     },
     /// Line `line` was reproduced otherwise than recorded.
     #[error("line {line} (`{row}`) replayed otherwise than recorded: {divergence}")]
@@ -855,7 +886,7 @@ impl NativeRecording {
     /// [`CodecError`] for the first line that cannot be read.
     pub fn read(mut input: impl BufRead) -> Result<Self, CodecError> {
         let mut buffer = String::new();
-        let mut total = read_bounded_line(&mut input, &mut buffer, 1)?;
+        let mut budget = wire::Budget::after_header(read_bounded_line(&mut input, &mut buffer, 1)?);
         let value: serde_json::Value =
             serde_json::from_str(&buffer).map_err(|source| CodecError::Json {
                 line: 1,
@@ -886,25 +917,20 @@ impl NativeRecording {
             if read == 0 {
                 break;
             }
-            total = total.saturating_add(read);
-            if total > wire::MAX_RECORDING_BYTES {
-                return Err(CodecError::TooLarge {
-                    line,
-                    limit: wire::MAX_RECORDING_BYTES,
-                });
-            }
-            if usize::try_from(line - 1).map_or(true, |rows| rows > wire::MAX_ROWS) {
-                return Err(CodecError::TooManyRows {
-                    line,
-                    limit: wire::MAX_ROWS,
-                });
-            }
+            budget
+                .read_line(read)
+                .map_err(|overrun| CodecError::past_bound(line, overrun))?;
             if buffer.trim().is_empty() {
                 continue;
             }
-            let dto: wire::Row =
-                serde_json::from_str(&buffer).map_err(|source| json_error(line, source))?;
-            let row = row_from_wire(dto).map_err(|error| error.at(line))?;
+            let row = match serde_json::from_str::<wire::Row>(&buffer) {
+                Ok(dto) => row_from_wire(dto).map_err(|error| error.at(line))?,
+                // Not a row: a writer's `gap` line, or what the row's error says.
+                Err(source) => match serde_json::from_str::<wire::Line>(&buffer) {
+                    Ok(wire::Line::Gap { rows }) => Row::Gap { rows },
+                    _ => return Err(json_error(line, source)),
+                },
+            };
             order
                 .admit(&row)
                 .map_err(|what| CodecError::Invalid { line, what })?;
@@ -926,31 +952,40 @@ impl NativeRecording {
     }
 
     /// Write the recording, declaring in the header every device its written
-    /// rows read with the kinds they read it as. A recording past
-    /// [`wire::MAX_ROWS`] rows or [`wire::MAX_RECORDING_BYTES`] bytes is
-    /// written up to the last row that fits with room for a `cut` row after
-    /// it, which ends it: the writer never writes what its reader refuses, and
-    /// one that fits whole is written whole.
+    /// rows read with the kinds they read it as. A recording within
+    /// [`wire::MAX_ROWS`] rows and [`wire::MAX_RECORDING_BYTES`] bytes is
+    /// written whole; a longer one is written up to the last row after which
+    /// a `cut` row fits, and the cut ends it, so the writer never writes what
+    /// its reader refuses. It counts both bounds with the [`wire::Budget`]
+    /// every writer of the format keeps, holding every row, so it keeps no room
+    /// for a cut a recording within the bounds never needs.
     ///
     /// # Errors
     ///
+    /// [`CodecError::LineTooLong`] for a header declaring the rows' devices,
+    /// or a row, longer than [`wire::MAX_LINE_BYTES`] (line 1 for the header),
     /// [`CodecError::Unmirrored`] for a value this format does not mirror,
-    /// and [`CodecError::Io`] when the sink fails.
+    /// each with nothing written, and [`CodecError::Io`] when the sink fails.
     pub fn write(&self, mut out: impl Write) -> Result<(), CodecError> {
         // The header that declares every row's devices is the longest it can
         // be: what fits after it fits after the one that declares fewer.
         let longest = encode_line(1, &self.header_declaring(&self.rows)?)?.len();
-        let mut budget = CutBudget::after_header(longest);
+        let after_header = wire::Budget::for_header(longest)
+            .map_err(|overrun| CodecError::past_bound(1, overrun))?;
+        let mut budget = after_header;
         // Each row is encoded only once the rows before it fit, so nothing
         // past the cut is encoded, and no value there can fail the write.
         let mut lines: Vec<Vec<u8>> = Vec::new();
         let mut cut = None;
         for (index, row) in self.rows.iter().enumerate() {
             let number = index as u64 + 2;
-            let wire = row_to_wire(row).map_err(|error| error.at(number))?;
-            let line = encode_line(number, &wire)?;
-            let follows = index + 1 < self.rows.len();
-            if let Err(reason) = budget.admit(line.len(), follows) {
+            let line = encode_row(number, row)?;
+            if let Err(overrun) = budget.admit_row(line.len(), 0, false) {
+                // A full recording ends at a cut; a row no recording holds is
+                // refused, since its reader would refuse the whole file.
+                let Some(reason) = overrun.cut_reason() else {
+                    return Err(CodecError::past_bound(number, overrun));
+                };
                 cut = Some(reason);
                 break;
             }
@@ -959,6 +994,12 @@ impl NativeRecording {
                 // The recorder cut it already: nothing after it is written.
                 break;
             }
+        }
+        if let Some(reason) = cut {
+            // Only now is room for the cut needed: rows are taken back from
+            // the end until it fits after them.
+            let cut_line = encode_line(0, &wire::Row::Cut { reason })?.len();
+            while !cut_fits(after_header, &lines, cut_line) && lines.pop().is_some() {}
         }
         let kept = lines.len();
         let header = self.header_declaring(&self.rows[..kept])?;
@@ -1172,6 +1213,7 @@ impl NativeRecording {
                         reason: *reason,
                     });
                 }
+                Row::Gap { rows } => return Err(ReplayError::Gap { line, rows: *rows }),
                 Row::CloseRequest { answer, .. } => {
                     let replayed = target.close_request().map_err(unsupported)?;
                     let recorded = match answer {
@@ -1248,7 +1290,8 @@ fn row_devices(row: &Row) -> Vec<(NativeDevice, PointerKind)> {
         | Row::StoreLock { .. }
         | Row::CloseRequest { .. }
         | Row::Closed(_)
-        | Row::Cut(_) => Vec::new(),
+        | Row::Cut(_)
+        | Row::Gap { .. } => Vec::new(),
     };
     readings
         .into_iter()
@@ -1937,7 +1980,29 @@ fn row_to_wire(row: &Row) -> DtoResult<wire::Row> {
         },
         Row::Closed(cause) => wire::Row::Closed { cause: *cause },
         Row::Cut(reason) => wire::Row::Cut { reason: *reason },
+        // A gap is a line of its own, not a row of the schema: `encode_row`
+        // writes it as one.
+        Row::Gap { .. } => return Err(DtoError::Unmirrored("Row::Gap")),
     })
+}
+
+/// Whether `lines` and then a `cut` line of `cut` bytes fit the bounds of a
+/// recording that `budget` holds the header of.
+fn cut_fits(mut budget: wire::Budget, lines: &[Vec<u8>], cut: usize) -> bool {
+    lines
+        .iter()
+        .map(Vec::len)
+        .chain(std::iter::once(cut))
+        .all(|line| budget.admit_row(line, 0, false).is_ok())
+}
+
+/// `row` as line `line` of a recording: a row of the schema, or the `gap`
+/// line a writer leaves where it lost rows.
+fn encode_row(line: u64, row: &Row) -> Result<Vec<u8>, CodecError> {
+    match row {
+        Row::Gap { rows } => encode_line(line, &wire::Line::Gap { rows: *rows }),
+        row => encode_line(line, &row_to_wire(row).map_err(|error| error.at(line))?),
+    }
 }
 
 fn notice_to_wire(notice: SystemNotice) -> DtoResult<wire::Notice> {

@@ -318,46 +318,6 @@ pub fn debug_dump_layer_tree<B: RendererBinding + ?Sized>(binding: &B) -> String
         .join("\n\n")
 }
 
-/// Prints a textual representation of all semantics trees.
-///
-/// # Arguments
-///
-/// * `child_order` - The order to dump children
-pub fn debug_dump_semantics_tree<B: RendererBinding + ?Sized>(
-    binding: &B,
-    _child_order: flui_semantics::DebugSemanticsDumpOrder,
-) -> String {
-    let ids = binding.render_view_ids();
-    if ids.is_empty() {
-        return "No render tree root was added to the binding.".to_string();
-    }
-
-    const EXPLANATION: &str = "For performance reasons, the framework only generates semantics when asked to do so by the platform.\n\
-         Usually, platforms only ask for semantics when assistive technologies (like screen readers) are running.\n\
-         To generate semantics, try turning on an assistive technology (like VoiceOver or TalkBack) on your device.";
-
-    let mut printed_explanation = false;
-
-    ids.into_iter()
-        .map(|id| {
-            // Note: Binding-level semantics dump routing is not yet wired.
-            // This would require:
-            // 1. View to expose its PipelineOwner
-            // 2. RendererBinding to route each view id to that PipelineOwner
-            // 3. SemanticsTree to implement Debug or custom formatting
-            let mut message =
-                format!("=== SemanticsTree {id} ===\nSemantics dump not available via binding.");
-            if !printed_explanation {
-                printed_explanation = true;
-                message.push('\n');
-                message.push_str(EXPLANATION);
-            }
-            message
-        })
-        .collect::<Vec<_>>()
-        .join("\n\n")
-}
-
 /// Prints a textual representation of the pipeline owner tree.
 ///
 /// When the owner has a root, this renders its typed snapshot ([`PipelineOwner::inspect`](crate::pipeline::PipelineOwner::inspect)) as

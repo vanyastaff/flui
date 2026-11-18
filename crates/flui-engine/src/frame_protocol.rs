@@ -300,6 +300,27 @@ impl FrameProtocol {
         self.retained.release();
     }
 
+    /// The plan for a frame of `scene` on a target that owns `painter` (a
+    /// `Renderer`, or the capture that stands in for one): `lineage` notes
+    /// the scene owner it draws, and the painter's recordings of the one it
+    /// drew before are dropped; the damage is closed over the backdrop
+    /// readers at `size`. A slot of the context's shared painter notes its
+    /// lineage in the context instead, which knows every slot.
+    pub(crate) fn plan_scene(
+        &mut self,
+        painter: &mut crate::painter::WgpuPainter,
+        lineage: &mut crate::recording_cache::DrawnLineages<()>,
+        scene: &flui_layer::Scene,
+        size: (u32, u32),
+        intermediate_required: bool,
+    ) -> FramePlan {
+        if let Some(dead) = lineage.draws((), Some(scene.content())) {
+            painter.drop_recordings_of(dead);
+        }
+        self.include_backdrop_dependencies(scene, size);
+        self.plan(intermediate_required)
+    }
+
     /// The plan for the next frame, applying a pending promotion to full.
     pub(crate) fn plan(&mut self, intermediate_required: bool) -> FramePlan {
         // Every frame plans first, so a skipped or failed frame counts nothing;

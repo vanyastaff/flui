@@ -17,8 +17,8 @@ use crate::build::error::{BuildError, BuildResult};
 use crate::build::util::xml::xml_escape;
 use crate::declarations::Declarations;
 
-/// FLUI's base manifest, with `{{app_name}}`, `{{lib_name}}`, `{{activity}}`
-/// and `{{uses_permissions}}` to fill.
+/// FLUI's base manifest, with `{{app_name}}`, `{{lib_name}}`, `{{activity}}`,
+/// `{{uses_permissions}}`, `{{intent_filters}}` and `{{providers}}` to fill.
 const BASE: &str = include_str!("../../templates/android/AndroidManifest.xml");
 
 /// The Activity the base names and `flui run` starts: `flui-native`'s
@@ -56,6 +56,32 @@ pub(crate) struct ManifestFacts<'a> {
     pub(crate) label: &'a str,
     /// The native library `NativeActivity` loads, without `lib` and `.so`.
     pub(crate) lib_name: &'a str,
+    /// What leads every provider's authority: the application id as the
+    /// packager that reads the manifest knows it.
+    pub(crate) application_id: ApplicationId<'a>,
+}
+
+/// The application id as the manifest names it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ApplicationId<'a> {
+    /// The packager without Gradle links the manifest under this package,
+    /// `flui.toml`'s `[app] id`, the one the build passes to `aapt2`.
+    Written(&'a str),
+    /// Gradle's `${applicationId}`, which its manifest merger replaces with
+    /// the id of the variant it builds, an `applicationIdSuffix` included,
+    /// so a debug and a release install never claim one authority.
+    Gradle,
+}
+
+impl ApplicationId<'_> {
+    /// The text the manifest carries for it, not yet escaped.
+    #[must_use]
+    pub(crate) fn as_manifest_text(&self) -> &str {
+        match self {
+            Self::Written(package) => package,
+            Self::Gradle => "${applicationId}",
+        }
+    }
 }
 
 /// The manifest for `facts` and what the linked crates declare.
@@ -69,9 +95,37 @@ pub(crate) fn render(facts: &ManifestFacts<'_>, declarations: &Declarations) -> 
     }
     BASE.replace("{{uses_permissions}}\n", &uses_permissions)
         .replace("{{intent_filters}}\n", &intent_filters(declarations))
+        .replace(
+            "{{providers}}\n",
+            &providers(
+                &xml_escape(facts.application_id.as_manifest_text()),
+                declarations,
+            ),
+        )
         .replace("{{app_name}}", &xml_escape(facts.label))
         .replace("{{lib_name}}", &xml_escape(facts.lib_name))
         .replace("{{activity}}", ACTIVITY)
+}
+
+/// A `<provider>` per content provider the linked crates declare, under the
+/// authority `<application_id>.<suffix>` (`application_id` already the
+/// manifest's text: a package, or Gradle's placeholder): unexported and granting URI
+/// permissions, so it serves only the URIs its crate grants per intent. The
+/// class and the suffix were checked when they were read
+/// (`declarations::provider`), so neither needs escaping.
+fn providers(application_id: &str, declarations: &Declarations) -> String {
+    let mut elements = String::new();
+    for (authority, class, _) in declarations.android_providers() {
+        elements.push_str("        <provider\n            android:name=\"");
+        elements.push_str(class.as_str());
+        elements.push_str("\"\n            android:authorities=\"");
+        elements.push_str(&authority.authority(application_id));
+        elements.push_str(
+            "\"\n            android:exported=\"false\"\n            \
+             android:grantUriPermissions=\"true\" />\n",
+        );
+    }
+    elements
 }
 
 /// The Activity's intent filters for what the application opens: one
@@ -171,6 +225,13 @@ pub(crate) fn write(
             crates.iter().cloned().collect::<Vec<_>>().join(", ")
         ));
     }
+    for (authority, class, crates) in declarations.android_providers() {
+        crate::ui::debug(format!(
+            "AndroidManifest.xml: provider {class} for {}, declared by {}",
+            authority.authority(facts.application_id.as_manifest_text()),
+            crates.iter().cloned().collect::<Vec<_>>().join(", ")
+        ));
+    }
     std::fs::write(path, manifest)?;
     Ok(())
 }
@@ -179,12 +240,13 @@ pub(crate) fn write(
 mod tests {
     use std::path::Path;
 
-    use super::{ACTIVITY, ManifestFacts, render, write};
+    use super::{ACTIVITY, ApplicationId, ManifestFacts, render, write};
     use crate::declarations::{Build, Declarations};
 
     const FACTS: ManifestFacts<'static> = ManifestFacts {
         label: "R&D <Notes>",
         lib_name: "notes",
+        application_id: ApplicationId::Written("com.example.notes"),
     };
 
     /// The declarations of the `flui` facade built for Android, as an
@@ -337,6 +399,48 @@ mod tests {
         assert_eq!(plain.matches("<intent-filter").count(), 1, "{plain}");
     }
 
+    /// A content provider a crate declares is declared inside
+    /// `<application>`, after the Activity, under the application's package
+    /// followed by the crate's suffix (Gradle's `${applicationId}` when Gradle
+    /// packs the APK), unexported and granting URI permissions. An
+    /// application whose crates declare none has no `<provider>`.
+    #[test]
+    fn the_application_declares_the_providers_its_crates_ship() {
+        const ELEMENT: &str = "        </activity>\n        <provider\n            \
+             android:name=\"dev.flui.system.FluiDocuments\"\n            \
+             android:authorities=\"com.example.notes.flui.documents\"\n            \
+             android:exported=\"false\"\n            \
+             android:grantUriPermissions=\"true\" />\n    </application>\n";
+        let declarations = Declarations::of_table(
+            "flui-system",
+            "schema = 4\n[[android.providers]]\nclass = \"dev.flui.system.FluiDocuments\"\n\
+             authority = \"flui.documents\"\n",
+        );
+        let manifest = render(&FACTS, &declarations);
+        assert_eq!(manifest.matches(ELEMENT).count(), 1, "{manifest}");
+        assert_eq!(manifest.matches("<provider").count(), 1, "{manifest}");
+        roxmltree::Document::parse(&manifest).expect("the manifest is XML");
+        let plain = render(&FACTS, &Declarations::default());
+        assert!(!plain.contains("<provider"), "{plain}");
+
+        // Gradle names the variant's id itself, its suffix included.
+        let gradle = render(
+            &ManifestFacts {
+                application_id: ApplicationId::Gradle,
+                ..FACTS
+            },
+            &declarations,
+        );
+        assert!(
+            gradle.contains("android:authorities=\"${applicationId}.flui.documents\""),
+            "{gradle}"
+        );
+        assert!(
+            !gradle.contains("com.example.notes.flui.documents"),
+            "{gradle}"
+        );
+    }
+
     /// The manifest a FLUI application that turns on `http` gets on
     /// Android, whole: a change to the base or to what the framework's
     /// crates declare shows up here.
@@ -451,17 +555,21 @@ mod tests {
 
     /// `flui doctor` reads back what the build writes: the manifest it
     /// renders lacks nothing the crates declare, and one rendered without
-    /// what the application opens lacks each scheme, domain and file type.
+    /// them lacks each scheme, domain, file type and content provider. A
+    /// hand-written provider under Gradle's `${applicationId}` counts; one
+    /// the merger removes, or one of another class, does not.
     #[test]
     fn the_doctor_finds_what_the_manifest_carries() {
         use crate::declarations::verify::Manifest;
 
         let declarations = Declarations::of_table(
             "notes",
-            "schema = 3\nurl-schemes = [\"notes\"]\n\
+            "schema = 4\nurl-schemes = [\"notes\"]\n\
              associated-domains = [\"notes.example.com\", \"example.org\"]\n\
              [[file-types]]\nextension = \"note\"\nmime = \"application/x-notes-note\"\n\
-             name = \"Note\"\n",
+             name = \"Note\"\n\
+             [[android.providers]]\nclass = \"dev.flui.system.FluiDocuments\"\n\
+             authority = \"flui.documents\"\n",
         );
         let written = Manifest::parse(render(&FACTS, &declarations).as_bytes())
             .expect("the manifest reads back");
@@ -480,7 +588,45 @@ mod tests {
                 "associated domain example.org",
                 "associated domain notes.example.com",
                 "file type .note (application/x-notes-note)",
+                "content provider dev.flui.system.FluiDocuments for `flui.documents`",
             ]
         );
+        let providers_missing = |provider: &str| -> usize {
+            let manifest = render(&FACTS, &Declarations::default()).replace(
+                "    </application>",
+                &format!("        {provider}\n    </application>"),
+            );
+            Manifest::parse(manifest.as_bytes())
+                .expect("a hand-written manifest reads back")
+                .missing(&declarations)
+                .iter()
+                .filter(|missing| missing.entry.starts_with("content provider"))
+                .count()
+        };
+        for (provider, missing) in [
+            (
+                "<provider android:name=\"dev.flui.system.FluiDocuments\" \
+                 android:authorities=\"other.a;${applicationId}.flui.documents\" />",
+                0,
+            ),
+            (
+                "<provider xmlns:tools=\"http://schemas.android.com/tools\" \
+                 tools:node=\"remove\" android:name=\"dev.flui.system.FluiDocuments\" \
+                 android:authorities=\"${applicationId}.flui.documents\" />",
+                1,
+            ),
+            (
+                "<provider android:name=\"dev.flui.system.Other\" \
+                 android:authorities=\"${applicationId}.flui.documents\" />",
+                1,
+            ),
+            (
+                "<provider android:name=\"dev.flui.system.FluiDocuments\" \
+                 android:authorities=\"${applicationId}.flui.documentsx\" />",
+                1,
+            ),
+        ] {
+            assert_eq!(providers_missing(provider), missing, "{provider}");
+        }
     }
 }

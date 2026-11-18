@@ -26,7 +26,7 @@ use std::{cell::Cell, ffi::c_void, fmt, num::NonZeroU64, ptr::NonNull, rc::Rc};
 
 use flui_foundation::{IdExhausted, IdMint};
 
-use super::{Completion, CompletionSource};
+use super::{Completion, CompletionSource, MainThreadRefused, PostedWork, Resolver};
 
 /// The identity of one request an [`Activity`] took, minted by the host per
 /// call.
@@ -731,6 +731,12 @@ pub trait ActivityBridge: 'static {
     /// does not run, when the Activity has ended or the thread cannot
     /// attach.
     fn lend(&self, f: &mut dyn FnMut(JniFrame)) -> bool;
+
+    /// Run `work` on Android's main thread with the Activity lent in the
+    /// frame ([`PostedWork::run`]), or refuse it with the reason it does not
+    /// run ([`PostedWork::refuse`]); the type ends it exactly once, a drop
+    /// included. See [`Activity::on_main_thread`].
+    fn post(&self, work: PostedWork);
 }
 
 /// The running Android Activity, as one capability's provider reaches it.
@@ -849,6 +855,35 @@ impl Activity {
             }
         });
         answer
+    }
+
+    /// Run `work` once on Android's main thread, with the Activity and that
+    /// thread's environment lent in the frame, and hear what it answered
+    /// through the returned completion: starting an activity, showing a
+    /// dialog, any call Android wants on that thread.
+    ///
+    /// The owner never waits for the main thread. The host runs `work`
+    /// inside its panic boundary and clears a Java exception it leaves
+    /// pending. The completion settles at an owner turn, once: with `work`'s
+    /// answer, or with the [`MainThreadRefused`] that says why there is
+    /// none: the Activity has ended, [`MAX_POSTED_WORK`](super::MAX_POSTED_WORK)
+    /// pieces wait, or the main thread did not take it within the host's
+    /// limit (the work then never runs). Work that panics there ends the
+    /// completion as [`ProviderDropped`](super::Abandoned::ProviderDropped).
+    /// Work that does not run is dropped on whichever thread refused it.
+    pub fn on_main_thread<T: Send + 'static>(
+        &self,
+        completions: &CompletionSource,
+        work: impl FnOnce(JniFrame) -> T + Send + 'static,
+    ) -> Completion<Result<T, MainThreadRefused>> {
+        let (completion, resolver): (_, Resolver<Result<T, MainThreadRefused>>) =
+            completions.pending();
+        self.bridge.post(PostedWork::new(move |lent| {
+            let answer = lent.map(work);
+            // The owner retiring first leaves nothing waiting.
+            let _ = resolver.resolve(answer);
+        }));
+        completion
     }
 }
 
