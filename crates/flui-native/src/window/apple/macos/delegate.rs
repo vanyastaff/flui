@@ -543,7 +543,7 @@ impl MacOSWindow {
     /// A step that animates has started, from this backend or from the user.
     fn handle_transition_started(&self) {
         self.state
-            .lock()
+            .borrow_mut()
             .sequence
             .step_started(std::time::Instant::now());
     }
@@ -559,7 +559,7 @@ impl MacOSWindow {
     /// since a subscriber that runs in it may command a newer one. A window
     /// dropped before that turn has no mode left to take.
     fn handle_transition_ended(self: &Rc<Self>) {
-        self.state.lock().sequence.step_ended();
+        self.state.borrow_mut().sequence.step_ended();
         // A window that left full screen, or failed to enter it, stands at
         // its own level again; one still full screen stays at the normal one.
         // SAFETY: `ns_window` is alive for the lifetime of `self`, on the
@@ -575,7 +575,7 @@ impl MacOSWindow {
             // The held mode first, then the held commands in arrival order: a
             // fixed size meant for the normal window the held mode leads to
             // lands after it, held again if that mode set off another step.
-            let after = window.state.lock().sequence.take_after_step();
+            let after = window.state.borrow_mut().sequence.take_after_step();
             if let Some(mode) = after.mode
                 && let Err(error) = window.change_mode(mode)
             {
@@ -609,7 +609,7 @@ impl MacOSWindow {
             );
 
             let moved_controls = {
-                let mut state = self.state.lock();
+                let mut state = self.state.borrow_mut();
                 state.bounds.size = new_size;
                 state.moves_system_controls()
             };
@@ -641,7 +641,7 @@ impl MacOSWindow {
 
             // Update state
             {
-                let mut state = self.state.lock();
+                let mut state = self.state.borrow_mut();
                 state.bounds.origin = new_origin;
             }
 
@@ -712,7 +712,7 @@ impl MacOSWindow {
             state as u64
         };
         let visible = crate::window::apple::geometry::surface::occlusion_state_is_visible(raw);
-        self.state.lock().occlusion_visible = visible;
+        self.state.borrow_mut().occlusion_visible = visible;
         // Published outside the state lock, like every other handler here.
         self.publish_state();
     }
@@ -800,7 +800,9 @@ impl MacOSWindow {
             let _: () = msg_send![self.ns_window, setDelegate: NIL];
         }
         if let Some(control) = self.loop_control.get().and_then(std::sync::Weak::upgrade) {
-            failure.contain(|| control.request(false));
+            let main = objc2::MainThreadMarker::new()
+                .expect("BUG: AppKit closes a window on the main thread");
+            failure.contain(|| control.request(main, false));
         }
         failure.resume();
     }
@@ -815,7 +817,7 @@ impl MacOSWindow {
             // Update window state, by the hosts' one rule; the refusal and
             // the change are reported once the state is let go.
             let (changed, new_scale, refused) = {
-                let mut state = self.state.lock();
+                let mut state = self.state.borrow_mut();
                 let (new_scale, refused) = state
                     .scale_streak
                     .read(reported, "NSWindow backingScaleFactor");

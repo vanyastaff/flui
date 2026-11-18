@@ -38,7 +38,7 @@ pub use ext::{
     MacOSWindowLevel, TabJoinError,
 };
 
-use std::cell::OnceCell;
+use std::cell::{OnceCell, RefCell};
 use std::mem::ManuallyDrop;
 use std::rc::Rc;
 use std::sync::{
@@ -70,7 +70,6 @@ use crate::window::apple::geometry::{
 use crate::window::capabilities::{
     appkit_presentation, appkit_window_capabilities, frame_rate_absence,
 };
-use parking_lot::Mutex;
 use raw_window_handle::{
     AppKitDisplayHandle, AppKitWindowHandle, HasDisplayHandle, HasWindowHandle, RawDisplayHandle,
     RawWindowHandle,
@@ -96,8 +95,8 @@ use crate::owner::apple::MacOSLoop;
 use crate::owner::apple::macos::content_view::{self, ViewHooks};
 use crate::owner::apple::macos::display_pass;
 use crate::owner::apple::macos::{
-    ContentViewRef, HostDisplays, WeakWakePump, WindowRegistry, debug_assert_appkit_main_thread,
-    exec_async_on_owner, on_owner_thread,
+    ContentViewRef, HostDisplays, WeakWakePump, WindowRegistry, exec_async_on_owner,
+    on_owner_thread,
 };
 use crate::owner::apple::metal_layer::{LayerRefresh, NewRefresh};
 
@@ -141,8 +140,12 @@ pub struct MacOSWindow {
     /// releasing the NSWindow, or keeps it if a detach failed.
     view: ManuallyDrop<Retained<AnyObject>>,
 
-    /// Window state
-    state: Mutex<MacOSWindowState>,
+    /// What the window keeps of itself between AppKit's notifications. Only
+    /// the main thread reaches it, through the window (neither `Send` nor
+    /// `Sync`) or its delegate (a main-thread class). No borrow is held across
+    /// an AppKit message or a callback into the application, so a delegate
+    /// method AppKit sends from inside one finds it free.
+    state: RefCell<MacOSWindowState>,
 
     /// Reference to all windows
     windows_map: WindowRegistry,
@@ -158,6 +161,11 @@ pub struct MacOSWindow {
     /// longer deallocates `ns_window`, so its view stays answerable long after
     /// the window is meaningless to hand a GPU handle for, and only this flag
     /// (not a nil check) can tell the two apart.
+    ///
+    /// Atomic because its holders cross threads: the surface target and the
+    /// text input are `Send + Sync` by their contracts (`SurfaceTarget`,
+    /// `TextInput`) and may be dropped or asked anywhere, though each reads
+    /// the flag only on the main thread.
     closed: Arc<AtomicBool>,
     loop_control: OnceLock<std::sync::Weak<crate::owner::apple::macos::LoopControl>>,
 
@@ -165,7 +173,7 @@ pub struct MacOSWindow {
     /// AppKit main queue, which runs on the thread the window lives on. What
     /// reaches the window later or from another thread — a deferred redraw, a
     /// held mode change, the features beside it — is queued here.
-    owner: &'static dispatch::Queue,
+    owner: &'static dispatch2::DispatchQueue,
 
     /// True when `owner` is the main queue, so "on the main thread" is
     /// equivalent to "on the owner lane" for
@@ -198,7 +206,11 @@ pub struct MacOSWindow {
     snapshot: Arc<WindowStateCell>,
 }
 
-/// Mutable window state
+// Owner-local (ADR-0254 §5): the window's state is a `RefCell` because no
+// other thread can hold the window.
+static_assertions::assert_not_impl_any!(MacOSWindow: Send, Sync);
+
+/// What a window keeps of itself between AppKit's notifications.
 struct MacOSWindowState {
     /// Current window bounds (logical pixels)
     bounds: Bounds<f64>,
@@ -366,7 +378,7 @@ impl MacOSWindow {
     /// lock is released before the caller sends any AppKit message, so it is
     /// never held across one.
     fn take_pending_first_reveal(&self) -> Option<MacOSWindowAlpha> {
-        let mut state = self.state.lock();
+        let mut state = self.state.borrow_mut();
         std::mem::replace(&mut state.first_reveal_pending, false).then_some(state.alpha)
     }
 
@@ -374,7 +386,7 @@ impl MacOSWindow {
     /// `alphaValue` takes it now: not while a first reveal is pending, which
     /// reveals the window at it.
     fn keep_alpha(&self, alpha: MacOSWindowAlpha) -> bool {
-        let mut state = self.state.lock();
+        let mut state = self.state.borrow_mut();
         state.alpha = alpha;
         !state.first_reveal_pending
     }
@@ -435,7 +447,7 @@ impl MacOSWindow {
             let screen: ObjcId = msg_send![self.ns_window, screen];
             display_of_screen(displays.as_ref(), screen)
         };
-        let mut state = self.state.lock();
+        let mut state = self.state.borrow_mut();
         let changed = state.display != id;
         state.display = id;
         changed
@@ -455,7 +467,7 @@ impl MacOSWindow {
             return;
         };
         let push = {
-            let mut state = self.state.lock();
+            let mut state = self.state.borrow_mut();
             let display = state.display;
             state.layer_refresh.update(&snapshot, display)
         };
@@ -718,7 +730,7 @@ impl MacOSWindow {
                 ns_window,
                 id,
                 view: ManuallyDrop::new(content_view),
-                state: Mutex::new(MacOSWindowState {
+                state: RefCell::new(MacOSWindowState {
                     bounds: Bounds {
                         origin: Point::new(frame.origin.x, frame.origin.y),
                         size: content_size,
@@ -801,14 +813,18 @@ impl MacOSWindow {
             // The rectangle the window returns to is what it has now, placed
             // as asked; then it enters the mode it opens in. A hidden window
             // enters it when it is first shown.
-            window.state.lock().normal = window.outer_geometry();
+            window.state.borrow_mut().normal = window.outer_geometry();
             if options.mode != WindowMode::Normal {
                 if options.visible {
                     // A window that cannot take the mode opens normal, as the
                     // options document; its first snapshot says so.
                     let _ = window.change_mode(options.mode);
                 } else {
-                    window.state.lock().sequence.enter_when_shown(options.mode);
+                    window
+                        .state
+                        .borrow_mut()
+                        .sequence
+                        .enter_when_shown(options.mode);
                 }
             }
 
@@ -991,7 +1007,11 @@ impl MacOSWindow {
 ///
 /// `hop` counts the turns this request has already taken; see the re-check
 /// below for why it exists and [`MAX_DEFER_HOPS`] for why it is bounded.
-fn defer_redraw(owner: &'static dispatch::Queue, window: Arc<OwnerWeak<MacOSWindow>>, hop: u8) {
+fn defer_redraw(
+    owner: &'static dispatch2::DispatchQueue,
+    window: Arc<OwnerWeak<MacOSWindow>>,
+    hop: u8,
+) {
     exec_async_on_owner(owner, move || {
         // This turn is supposed to run after the pass has unwound, and that is
         // what a lane turn normally is: the run loop services the lane at its
@@ -1060,7 +1080,7 @@ struct MacOSRedraw {
     /// The window, on its owner thread while it lives.
     window: Arc<OwnerWeak<MacOSWindow>>,
     /// The window's owner lane.
-    owner: &'static dispatch::Queue,
+    owner: &'static dispatch2::DispatchQueue,
     /// Whether `owner` is the main queue.
     owner_is_main: bool,
     /// The platform's wake pump. `Weak`, and a `OnceLock`: the pump is
@@ -1319,11 +1339,7 @@ impl host::Window<MacOSLoop> for MacOSWindow {
         options: WindowOptions,
         handler: Rc<dyn WindowHandler>,
     ) -> Result<Rc<dyn HostWindow>, OpenWindowError> {
-        owner
-            .affinity
-            .debug_assert_owner("MacOSPlatform::open_window");
-        debug_assert_appkit_main_thread("MacOSPlatform::open_window");
-        if !owner.loop_control.accepts_windows() {
+        if !owner.loop_control.accepts_windows(owner.main) {
             return Err(OpenWindowError::OwnerGone {
                 rejected: Some(Box::new(options)),
             });
@@ -1388,15 +1404,8 @@ impl host::Window<MacOSLoop> for MacOSWindow {
         _: &MacOSWindows,
         _scale_factor: flui_foundation::geometry::DevicePixelRatio,
     ) -> Size<f64> {
-        owner
-            .affinity
-            .debug_assert_owner("MacOSPlatform::window_frame_inset");
-        debug_assert_appkit_main_thread("MacOSPlatform::window_frame_inset");
         // AppKit measures a frame in points, so the scale does not enter.
-        let main = MainThreadMarker::new().expect(
-            "BUG: the owner thread is the AppKit main thread, which the assertions above check",
-        );
-        decorated_frame_inset(main)
+        decorated_frame_inset(owner.main)
     }
 
     /// AppKit's display handle, which carries no pointer.
@@ -1632,12 +1641,12 @@ impl PlatformWindow for MacOSWindow {
             // What the user's resize keeps is held by AppKit, and is no fact
             // of the snapshot: nothing to publish.
             WindowCommand::SetResizeIncrements(step) => {
-                self.state.lock().resize_increments = step;
+                self.state.borrow_mut().resize_increments = step;
                 self.apply_resize_rules();
                 return Ok(());
             }
             WindowCommand::SetAspectRatio(ratio) => {
-                self.state.lock().aspect_ratio = ratio;
+                self.state.borrow_mut().aspect_ratio = ratio;
                 self.apply_resize_rules();
                 return Ok(());
             }
@@ -1698,7 +1707,7 @@ impl PlatformWindow for MacOSWindow {
                 flui_platform::UnsupportedReason::NoWindow,
             ));
         }
-        let scale = self.state.lock().scale_factor;
+        let scale = self.state.borrow().scale_factor;
         content_view::set_input_regions(&self.view, regions, scale);
         Ok(())
     }
@@ -1710,7 +1719,7 @@ impl PlatformWindow for MacOSWindow {
     /// and the cursor asked for shows when the lock is let go.
     fn set_cursor(&self, cursor: &Cursor) -> Result<(), CursorError> {
         let (kept, scale) = {
-            let state = self.state.lock();
+            let state = self.state.borrow();
             let scale = state.scale_factor.get();
             (state.cursor.shows(cursor, scale), scale)
         };
@@ -1721,7 +1730,7 @@ impl PlatformWindow for MacOSWindow {
             Some(cursor::NativeCursor::of(cursor, scale)?)
         };
         let (shown, replaced) = {
-            let mut state = self.state.lock();
+            let mut state = self.state.borrow_mut();
             let replaced = made.map(|made| std::mem::replace(&mut state.cursor, made));
             let shown = (state.cursor_grab != CursorGrab::Locked).then(|| state.cursor.clone());
             (shown, replaced)
@@ -1810,7 +1819,7 @@ impl MacOSWindow {
         if !key
             || !flags.on_screen
             || flags.miniaturized
-            || self.state.lock().cursor_grab == CursorGrab::Locked
+            || self.state.borrow().cursor_grab == CursorGrab::Locked
         {
             return Ok(());
         }
@@ -1827,7 +1836,7 @@ impl MacOSWindow {
         // Committed before anything else is told: the view's input reads
         // motion from the next mouse event on.
         {
-            let mut state = self.state.lock();
+            let mut state = self.state.borrow_mut();
             state.cursor_grab = CursorGrab::Locked;
             state.lock_at = at;
         }
@@ -1874,7 +1883,7 @@ impl MacOSWindow {
     /// it when the content shrank, and the snapshot stays `Locked`. A window
     /// that holds no lock warps nothing.
     fn keep_lock_point(&self) {
-        let Some(at) = self.state.lock().lock_at else {
+        let Some(at) = self.state.borrow().lock_at else {
             return;
         };
         let view = self.view_ptr();
@@ -1914,7 +1923,7 @@ impl MacOSWindow {
     /// Answers whether it let a lock go, which the caller publishes.
     fn let_pointer_go(&self) -> bool {
         let shown = {
-            let mut state = self.state.lock();
+            let mut state = self.state.borrow_mut();
             state.lock_at = None;
             if std::mem::replace(&mut state.cursor_grab, CursorGrab::None) != CursorGrab::Locked {
                 return false;
@@ -1954,7 +1963,7 @@ impl MacOSWindow {
         if !unsafe { self.read_flags() }.fullscreen {
             self.send_level(value);
         }
-        self.state.lock().level = value;
+        self.state.borrow_mut().level = value;
     }
 
     /// Send AppKit the level the window stands at now: the normal level while
@@ -1966,7 +1975,7 @@ impl MacOSWindow {
         let value = if fullscreen {
             objc2_app_kit::NSNormalWindowLevel
         } else {
-            self.state.lock().level
+            self.state.borrow().level
         };
         self.send_level(value);
     }
@@ -1990,7 +1999,7 @@ impl MacOSWindow {
     /// cleared (an aspect ratio of zero, steps of one point).
     fn apply_resize_rules(&self) {
         let (step, ratio) = {
-            let state = self.state.lock();
+            let state = self.state.borrow();
             (state.resize_increments, state.aspect_ratio)
         };
         // SAFETY: see the note above these bodies; both setters take an
@@ -2016,7 +2025,7 @@ impl MacOSWindow {
     /// (`windowWillStartLiveResize:`, `windowDidEndLiveResize:`): the
     /// snapshot's interaction says so.
     fn handle_live_resize(&self, resizing: bool) {
-        self.state.lock().live_resize = resizing;
+        self.state.borrow_mut().live_resize = resizing;
         self.publish_state();
     }
 
@@ -2025,7 +2034,7 @@ impl MacOSWindow {
     /// unless the pointer is locked under the transparent cursor.
     fn rescale_cursor(&self) {
         let (made, scale) = {
-            let state = self.state.lock();
+            let state = self.state.borrow();
             (state.cursor.clone(), state.scale_factor.get())
         };
         let next = match made.rescaled(scale) {
@@ -2037,7 +2046,7 @@ impl MacOSWindow {
             None => return,
         };
         let (shown, replaced) = {
-            let mut state = self.state.lock();
+            let mut state = self.state.borrow_mut();
             let replaced = std::mem::replace(&mut state.cursor, next);
             let shown = (state.cursor_grab != CursorGrab::Locked).then(|| state.cursor.clone());
             (shown, replaced)
@@ -2175,7 +2184,7 @@ impl MacOSWindow {
         // stands at outside full screen, which a full-screen window keeps
         // published while AppKit shows it at the normal level.
         let (display, normal, scale, occlusion_visible, heading, asked_frame, held) = {
-            let state = self.state.lock();
+            let state = self.state.borrow();
             (
                 state.display,
                 state.normal,
@@ -2337,7 +2346,7 @@ impl MacOSWindow {
     /// The window's outer rectangle now, its position on the screen it is
     /// on; `None` for a frame that describes no window.
     fn outer_geometry(&self) -> Option<WindowGeometry> {
-        let display = self.state.lock().display;
+        let display = self.state.borrow().display;
         // SAFETY: see the note above these bodies.
         unsafe {
             let frame: NSRect = msg_send![self.ns_window, frame];
@@ -2369,7 +2378,7 @@ impl MacOSWindow {
         if is_normal(unsafe { self.read_flags() })
             && let Some(outer) = self.outer_geometry()
         {
-            self.state.lock().normal = Some(outer);
+            self.state.borrow_mut().normal = Some(outer);
         }
     }
 
@@ -2467,7 +2476,7 @@ impl MacOSWindow {
             let flags = self.read_flags();
             if bit == NSWindowStyleMask::Resizable {
                 let decision = {
-                    let mut state = self.state.lock();
+                    let mut state = self.state.borrow_mut();
                     let sequence = &mut state.sequence;
                     if on {
                         sequence.make_resizable();
@@ -2531,7 +2540,7 @@ impl MacOSWindow {
                 NSWindowStyleMask::FullSizeContentView,
                 style.app_title_bar,
             );
-            self.state.lock().frame = frame;
+            self.state.borrow_mut().frame = frame;
             self.restyle(mask, wanted);
             style_title_bar(self.ns_window, style.app_title_bar);
         }
@@ -2579,7 +2588,7 @@ impl MacOSWindow {
                 return;
             }
             let (system, frame) = {
-                let mut state = self.state.lock();
+                let mut state = self.state.borrow_mut();
                 let system = *state.system_controls.get_or_insert_with(|| {
                     let bar: NSRect = msg_send![container, frame];
                     ControlsLayout {
@@ -2652,7 +2661,7 @@ impl MacOSWindow {
             };
             let gave_up = window
                 .state
-                .lock()
+                .borrow_mut()
                 .sequence
                 .expire(std::time::Instant::now());
             if gave_up {
@@ -2671,7 +2680,7 @@ impl MacOSWindow {
         }
         let now = std::time::Instant::now();
         let (steps, heading) = {
-            let mut state = self.state.lock();
+            let mut state = self.state.borrow_mut();
             let steps = state.sequence.command(now, flags, mode);
             (steps, state.sequence.heading(now))
         };
@@ -2707,7 +2716,7 @@ impl MacOSWindow {
     /// A window that opened hidden enters the mode it opened in now that it
     /// is shown.
     fn enter_mode_when_shown(&self) {
-        let waiting = self.state.lock().sequence.take_when_shown();
+        let waiting = self.state.borrow_mut().sequence.take_when_shown();
         if let Some(mode) = waiting
             && let Err(error) = self.change_mode(mode)
         {

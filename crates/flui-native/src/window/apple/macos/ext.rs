@@ -455,7 +455,7 @@ impl<'a> AppKitWindow<'a> {
     /// `WindowLevel::AlwaysOnBottom` sets).
     pub fn window_level(self) -> Result<MacOSWindowLevel, AppKitWindowError> {
         let window = self.open()?;
-        let value: NSWindowLevel = window.state.lock().level;
+        let value: NSWindowLevel = window.state.borrow().level;
         MacOSWindowLevel::from_appkit(value).ok_or(AppKitWindowError::UnnamedLevel)
     }
 
@@ -518,7 +518,7 @@ impl<'a> AppKitWindow<'a> {
     /// # Errors
     /// [`AppKitWindowError`]: the window is closed.
     pub fn alpha(self) -> Result<MacOSWindowAlpha, AppKitWindowError> {
-        Ok(self.open()?.state.lock().alpha)
+        Ok(self.open()?.state.borrow().alpha)
     }
 }
 
