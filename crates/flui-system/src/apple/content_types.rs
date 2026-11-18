@@ -22,7 +22,7 @@
 
 use flui_platform::{Unsupported, UnsupportedReason};
 
-use crate::dialog::{DialogError, FileDialogCapability, FileFilter, name_ends_in};
+use crate::dialog::{DialogError, FileDialogCapability, FileFilter};
 
 /// What a filter pattern asks the system to allow.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -41,8 +41,9 @@ pub(crate) enum ContentType {
 pub(crate) struct ContentFilter {
     /// The content types the dialog allows, each once.
     pub(crate) types: Vec<ContentType>,
-    /// Every extension of the request, for the name check.
-    pub(crate) extensions: Vec<String>,
+    /// The request's filters, whose own rule a pick's name is held to
+    /// (`FileFilter::names`): the one the handle checks a pick by.
+    pub(crate) filters: Vec<FileFilter>,
 }
 
 impl ContentFilter {
@@ -92,7 +93,7 @@ pub(crate) fn content_filter(filters: &[FileFilter]) -> Result<Option<ContentFil
     }
     let mut filter = ContentFilter {
         types: Vec::new(),
-        extensions: Vec::new(),
+        filters: filters.to_vec(),
     };
     let allow = |content_type: ContentType, types: &mut Vec<ContentType>| {
         if !types.contains(&content_type) {
@@ -103,9 +104,6 @@ pub(crate) fn content_filter(filters: &[FileFilter]) -> Result<Option<ContentFil
         for extension in requested.extensions() {
             let (_, last) = extension.rsplit_once('.').unwrap_or(("", extension));
             allow(ContentType::Extension(last.to_owned()), &mut filter.types);
-            if !filter.extensions.contains(extension) {
-                filter.extensions.push(extension.clone());
-            }
         }
         for mime_type in requested.mime_types() {
             allow(mime_content_type(mime_type)?, &mut filter.types);
@@ -114,19 +112,11 @@ pub(crate) fn content_filter(filters: &[FileFilter]) -> Result<Option<ContentFil
     Ok(Some(filter))
 }
 
-/// Whether a file named `name` is one `extensions` name: the contract's
-/// rule for a name (ADR-0360 §3), the one the handle checks a pick by.
-pub(crate) fn name_matches(name: &[u8], extensions: &[String]) -> bool {
-    extensions
-        .iter()
-        .any(|extension| name_ends_in(name, extension))
-}
-
 /// What the contract's rule makes of one item a dialog shows or answers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Judged {
-    /// Its name ends in one of the extensions, or its type is one of the
-    /// MIME patterns'.
+    /// One of the filters names it (`FileFilter::names`, ADR-0360 §3), or
+    /// its type is one of the MIME patterns'.
     Admitted,
     /// Neither, and its type was read.
     Refused,
@@ -135,16 +125,16 @@ pub(crate) enum Judged {
 }
 
 /// Judge an item named `name` (`None` for one with no name, a root) by the
-/// request's `extensions`, and by its type only when its name does not
+/// request's `filters`, and by its type only when its name does not
 /// admit it: `conforms` reads whether its type is one of the MIME patterns',
 /// `None` when the file system does not say. A name that admits the item
 /// reads nothing, so a file that cannot be read is never refused for it.
 pub(crate) fn judge_item(
     name: Option<&[u8]>,
-    extensions: &[String],
+    filters: &[FileFilter],
     conforms: impl FnOnce() -> Option<bool>,
 ) -> Judged {
-    if name.is_some_and(|name| name_matches(name, extensions)) {
+    if name.is_some_and(|name| filters.iter().any(|filter| filter.names(name))) {
         return Judged::Admitted;
     }
     match conforms() {
@@ -192,6 +182,7 @@ mod foundation {
 
     use super::super::url_path;
     use super::{ContentFilter, ContentType, Judged, judge_item};
+    use crate::dialog::FileFilter;
 
     /// Evidence that the running system has `UTType` and its dialogs'
     /// content types; made from the system's version alone.
@@ -261,7 +252,7 @@ mod foundation {
     /// patterns (none without the evidence, where such a request is
     /// refused).
     pub(crate) struct NameRule {
-        extensions: Vec<String>,
+        filters: Vec<FileFilter>,
         mime_types: Vec<Retained<AnyObject>>,
     }
 
@@ -278,7 +269,7 @@ mod foundation {
                     .collect::<Vec<Retained<AnyObject>>>()
             });
             Self {
-                extensions: filter.extensions.clone(),
+                filters: filter.filters.clone(),
                 mime_types,
             }
         }
@@ -306,7 +297,7 @@ mod foundation {
                 .as_deref()
                 .and_then(std::path::Path::file_name)
                 .map(std::ffi::OsStr::as_bytes);
-            judge_item(name, &self.extensions, conforms)
+            judge_item(name, &self.filters, conforms)
         }
 
         /// Whether a file of the type `identifier` is one of the rule's
@@ -361,7 +352,7 @@ mod foundation {
 mod tests {
     use flui_platform::{Unsupported, UnsupportedReason};
 
-    use super::{ContentType, Judged, content_filter, judge_item, name_matches};
+    use super::{ContentType, Judged, content_filter, judge_item};
     use crate::dialog::{DialogError, FileDialogCapability, FileFilter};
 
     fn extensions(list: &[&str]) -> Vec<String> {
@@ -395,7 +386,10 @@ mod tests {
                 ContentType::Mime("image/webp".to_owned()),
             ]
         );
-        assert_eq!(filter.extensions, extensions(&["tar.gz", "zip", "png"]));
+        assert_eq!(
+            filter.filters, filters,
+            "a pick's name is held to the request's own filters"
+        );
         assert_eq!(filter.file_types(), None, "a MIME pattern needs a type");
 
         let plain = content_filter(&[FileFilter::new("Archives").with_extension("tar.gz")])
@@ -429,7 +423,14 @@ mod tests {
 
     #[test]
     fn a_name_matches_as_the_contract_says() {
-        let rule = extensions(&["tar.gz", "png", "txt", "zip"]);
+        let rule = [
+            FileFilter::new("Archives")
+                .with_extension("tar.gz")
+                .with_extension("zip"),
+            FileFilter::new("Pictures and text")
+                .with_extension("png")
+                .with_extension("txt"),
+        ];
         let cases: [(&[u8], bool); 13] = [
             (b"backup.tar.gz", true),
             (b"BACKUP.TAR.GZ", true),
@@ -450,7 +451,7 @@ mod tests {
         ];
         for (name, matches) in cases {
             assert_eq!(
-                name_matches(name, &rule),
+                judge_item(Some(name), &rule, || Some(false)) == Judged::Admitted,
                 matches,
                 "{}",
                 String::from_utf8_lossy(name)
@@ -460,7 +461,9 @@ mod tests {
 
     #[test]
     fn an_items_name_admits_it_before_anything_of_it_is_read() {
-        let rule = extensions(&["png", "tar.gz"]);
+        let rule = [FileFilter::new("Pictures and archives")
+            .with_extension("png")
+            .with_extension("tar.gz")];
         assert_eq!(
             judge_item(Some(b"photo.PNG"), &rule, || panic!(
                 "a name that admits its file reads nothing of it"

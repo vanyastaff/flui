@@ -299,7 +299,11 @@ presents nothing and calls nobody: a chain with a controller still being dismiss
 (the share sheet `Unavailable`), and every presentation is checked right after it was asked for,
 so one UIKit did not take answers `Busy` at once. Whatever is presented with a popover (an iPad's
 share sheet) has it anchored in the middle of the presenter's view, with no arrow, since a request
-names no control to point at and an unanchored popover raises an exception.
+names no control to point at and an unanchored popover raises an exception. UIKit reports a
+controller it cannot make or present by raising an Objective-C exception, which would end the
+process from inside a widget's call: each call that makes, presents or dismisses a controller runs
+where the exception is caught (`ios::presenter::guarded`) and answers
+`SystemFailure::MalformedAnswer`, and an initializer that answers no picker answers the same.
 
 UIKit tells nobody when other code dismisses a presented controller, so the controller owns what
 answers it: an alert its actions' handlers, a picker its delegate, held as an associated object

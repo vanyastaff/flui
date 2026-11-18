@@ -213,7 +213,7 @@ impl FileFilter {
 /// ASCII case: the one rule a name is matched by (ADR-0360 §3). `name` is a
 /// file name in the bytes its system keeps it in; an extension is ASCII, so
 /// the rule reads no character of a name that is not UTF-8.
-pub(crate) fn name_ends_in(name: &[u8], extension: &str) -> bool {
+fn name_ends_in(name: &[u8], extension: &str) -> bool {
     let extension = extension.as_bytes();
     name.len()
         .checked_sub(extension.len())

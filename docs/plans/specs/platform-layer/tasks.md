@@ -5831,7 +5831,9 @@ GPU-память простаивающего или невидимого окн
   (`apple::share`), папки и сведения об ОС. Показ (`ios::presenter`): от корневого контроллера
   окна виджета по цепочке `presentedViewController` до последнего; уходящий контроллер в цепочке
   — `Busy`; после `presentViewController:` проверяется, что UIKit взял контроллер, иначе ответ
-  сразу; поповер (share на iPad) привязан к середине вида без стрелки. Конец диалога
+  сразу; поповер (share на iPad) привязан к середине вида без стрелки; исключение Objective-C
+  при создании, показе или закрытии контроллера ловится (`guarded`, `objc2::exception::catch`) и
+  отвечает `SystemFailure::MalformedAnswer`, а не роняет процесс. Конец диалога
   (ADR-0344): UIKit никому не сообщает, когда контроллер закрыл чужой код, поэтому
   обработчики, а с ними резолвер вызывающего, держит сам контроллер (действия алерта; делегат
   пикера — связанным объектом, оба свойства делегата слабые), удержание хранит только слабые
@@ -5840,7 +5842,8 @@ GPU-память простаивающего или невидимого окн
   Открытие — `UIDocumentPickerViewController` на месте: фильтры как на macOS с iOS 14 (`UTType`
   ищется во время выполнения, тип из деклараций приложения находится по расширению, ADR-0361),
   на iOS 13 открытие с фильтрами — `NotOnThisDevice`; каждый выбор до чтения судится правилом
-  контракта (имя, затем тип против MIME-шаблонов), отказ — `NotInFilter`; чтение — под
+  контракта (имя — правилом самих фильтров запроса, `FileFilter::names`, затем тип против
+  MIME-шаблонов), отказ — `NotInFilter`; чтение — под
   security-scoped доступом (начат до суждения, снят после чтения), через `NSFileCoordinator`,
   вне главного потока, в пределах `OpenRequest::max_bytes` (размер проверяется до чтения, читается
   не больше объявленного размера, одна копия); выбор отдаётся именем и содержимым, не путём
@@ -5860,6 +5863,7 @@ GPU-память простаивающего или невидимого окн
   всех ОС (`ios::*::tests`, `apple::*::tests`):
   `a_presentation_starts_from_the_last_controller_and_waits_for_one_leaving`,
   `a_popover_is_anchored_at_a_finite_point_in_the_middle_of_the_view`,
+  `a_controller_uikit_cannot_show_answers_a_typed_refusal`,
   `a_controller_that_goes_away_unanswered_ends_its_callers_completion`,
   `a_pick_that_settles_later_keeps_a_cancel_and_a_dismissal_from_answering`,
   `the_picks_are_read_within_the_requests_bound_and_refused_past_it`,

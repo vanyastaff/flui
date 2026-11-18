@@ -70,20 +70,18 @@ mod uikit {
 
     use block2::RcBlock;
     use flui_platform::capability::{Resolver, WindowRef};
-    use flui_platform::{Unsupported, UnsupportedReason};
     use objc2::MainThreadMarker;
-    use objc2::rc::Weak;
+    use objc2::rc::{Retained, Weak};
     use objc2_foundation::NSString;
     use objc2_ui_kit::{
         UIAlertAction, UIAlertActionStyle, UIAlertController, UIAlertControllerStyle,
     };
 
-    use super::super::presenter::{Refusal, dismiss, present, presenter};
+    use super::super::presenter::{dismiss, guarded, present, presenter};
     use super::{ActionStyle, actions};
     use crate::apple::modal::{Pending, WeakPending};
     use crate::dialog::{
-        DialogError, DialogHold, MessageBoxBackend, MessageBoxCapability, MessageBoxRequest,
-        MessageBoxResult,
+        DialogHold, MessageBoxBackend, MessageBoxCapability, MessageBoxRequest, MessageBoxResult,
     };
     use crate::owner::panic_boundary::{AfterPanic, os_entry};
 
@@ -116,8 +114,46 @@ mod uikit {
         }
     }
 
-    fn refused(reason: UnsupportedReason) -> DialogError {
-        DialogError::Unsupported(Unsupported::of::<MessageBoxCapability>(reason))
+    /// The alert of `request`, each of its buttons an action that answers
+    /// `pending`.
+    fn build_alert(
+        mtm: MainThreadMarker,
+        request: &MessageBoxRequest,
+        pending: &Pending<MessageBoxResult>,
+    ) -> Retained<UIAlertController> {
+        let alert = UIAlertController::alertControllerWithTitle_message_preferredStyle(
+            request.title.as_deref().map(NSString::from_str).as_deref(),
+            Some(&NSString::from_str(&request.message)),
+            UIAlertControllerStyle::Alert,
+            mtm,
+        );
+        for (index, button) in actions(request.buttons).iter().enumerate() {
+            let handler_pending = pending.clone();
+            let given = button.answer;
+            let handler = RcBlock::new(move |_action: NonNull<UIAlertAction>| {
+                os_entry(
+                    "UIAlertAction handler",
+                    (),
+                    AfterPanic::Answer(|()| ()),
+                    || handler_pending.answer(|| Ok(given)),
+                );
+            });
+            let style = match button.style {
+                ActionStyle::Default => UIAlertActionStyle::Default,
+                ActionStyle::Cancel => UIAlertActionStyle::Cancel,
+            };
+            let action = UIAlertAction::actionWithTitle_style_handler(
+                Some(&NSString::from_str(button.title)),
+                style,
+                Some(&handler),
+                mtm,
+            );
+            alert.addAction(&action);
+            if index == 0 {
+                alert.setPreferredAction(Some(&action));
+            }
+        }
+        alert
     }
 
     impl MessageBoxBackend for IOSMessageBoxes {
@@ -127,60 +163,23 @@ mod uikit {
             request: MessageBoxRequest,
             answer: Resolver<MessageBoxResult>,
         ) -> DialogHold {
-            let from = match presenter(window, self.mtm) {
-                Ok(from) => from,
-                Err(refusal) => {
-                    let error = match refusal {
-                        Refusal::NoWindow => refused(UnsupportedReason::NoWindow),
-                        Refusal::Busy => DialogError::Busy,
-                    };
-                    // The owner retiring first leaves nothing waiting.
-                    let _ = answer.resolve(Err(error));
-                    return DialogHold::new(());
-                }
-            };
-            let alert = UIAlertController::alertControllerWithTitle_message_preferredStyle(
-                request.title.as_deref().map(NSString::from_str).as_deref(),
-                Some(&NSString::from_str(&request.message)),
-                UIAlertControllerStyle::Alert,
-                self.mtm,
-            );
             let pending = Pending::new(answer);
-            for (index, button) in actions(request.buttons).iter().enumerate() {
-                let handler_pending = pending.clone();
-                let given = button.answer;
-                let handler = RcBlock::new(move |_action: NonNull<UIAlertAction>| {
-                    os_entry(
-                        "UIAlertAction handler",
-                        (),
-                        AfterPanic::Answer(|()| ()),
-                        || handler_pending.answer(|| Ok(given)),
-                    );
-                });
-                let style = match button.style {
-                    ActionStyle::Default => UIAlertActionStyle::Default,
-                    ActionStyle::Cancel => UIAlertActionStyle::Cancel,
-                };
-                let action = UIAlertAction::actionWithTitle_style_handler(
-                    Some(&NSString::from_str(button.title)),
-                    style,
-                    Some(&handler),
-                    self.mtm,
-                );
-                alert.addAction(&action);
-                if index == 0 {
-                    alert.setPreferredAction(Some(&action));
+            let shown = presenter(window, self.mtm).and_then(|from| {
+                let alert = guarded(|| build_alert(self.mtm, &request, &pending))?;
+                present(&from, &alert)?;
+                Ok(alert)
+            });
+            match shown {
+                Ok(alert) => DialogHold::new(AlertHold {
+                    pending: pending.downgrade(),
+                    alert: Weak::from_retained(&alert),
+                }),
+                Err(refusal) => {
+                    // UIKit shows nothing: no handler will run.
+                    pending.answer(|| Err(refusal.dialog_error::<MessageBoxCapability>()));
+                    DialogHold::new(())
                 }
             }
-            if !present(&from, &alert) {
-                // UIKit took nothing: no handler will run.
-                pending.answer(|| Err(DialogError::Busy));
-                return DialogHold::new(());
-            }
-            DialogHold::new(AlertHold {
-                pending: pending.downgrade(),
-                alert: Weak::from_retained(&alert),
-            })
         }
     }
 }

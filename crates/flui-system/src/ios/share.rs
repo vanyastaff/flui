@@ -33,7 +33,7 @@ mod uikit {
     use objc2_foundation::{NSArray, NSError};
     use objc2_ui_kit::{UIActivityType, UIActivityViewController};
 
-    use super::super::presenter::{Refusal, dismiss, present, presenter};
+    use super::super::presenter::{Refusal, dismiss, guarded, present, presenter};
     use crate::apple::queue::WorkQueue;
     use crate::apple::share::{ShareItem, check_files, items, objects};
     use crate::owner::panic_boundary::{AfterPanic, os_entry};
@@ -67,20 +67,20 @@ mod uikit {
     /// Present the sheet with `items` over `window`, dismissed when the
     /// window closes while it is up.
     fn show(mtm: MainThreadMarker, window: &WindowRef, items: &[ShareItem]) -> ShareResult {
-        let from = presenter(window, mtm).map_err(|refusal| match refusal {
-            Refusal::NoWindow => refused(UnsupportedReason::NoWindow),
-            Refusal::Busy => refused(UnsupportedReason::Unavailable),
-        })?;
+        let from = presenter(window, mtm).map_err(Refusal::share_error)?;
         let objects = objects(items).ok_or(ShareError::NotFound)?;
-        // SAFETY: the items are strings and URLs, which the sheet takes, and
-        // the controller is made on the main thread.
-        let sheet = unsafe {
-            UIActivityViewController::initWithActivityItems_applicationActivities(
-                UIActivityViewController::alloc(mtm),
-                &objects,
-                None,
-            )
-        };
+        let sheet = guarded(|| {
+            // SAFETY: the items are strings and URLs, which the sheet takes,
+            // and the controller is made on the main thread.
+            unsafe {
+                UIActivityViewController::initWithActivityItems_applicationActivities(
+                    UIActivityViewController::alloc(mtm),
+                    &objects,
+                    None,
+                )
+            }
+        })
+        .map_err(Refusal::share_error)?;
         let closing = Weak::from_retained(&sheet);
         let watch = window.lifetime().on_close(move || {
             if let Some(sheet) = closing.load() {
@@ -105,13 +105,9 @@ mod uikit {
         );
         // SAFETY: the block is valid for the call, and the sheet copies it.
         unsafe { sheet.setCompletionWithItemsHandler(RcBlock::as_ptr(&completion)) };
-        if present(&from, &sheet) {
-            Ok(())
-        } else {
-            // UIKit presented nothing: the top controller was no longer one
-            // to present from.
-            Err(refused(UnsupportedReason::Unavailable))
-        }
+        // A sheet UIKit did not take is released here, and its watch with
+        // it.
+        present(&from, &sheet).map_err(Refusal::share_error)
     }
 
     impl ShareBackend for IOSShare {

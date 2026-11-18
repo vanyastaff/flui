@@ -116,7 +116,7 @@ mod uikit {
 
     use super::super::document_access::read_picks;
     use super::super::export::ExportFile;
-    use super::super::presenter::{Refusal, dismiss, present, presenter};
+    use super::super::presenter::{Refusal, dismiss, guarded, present, presenter};
     use super::{ExportInitializer, export_of, exported, refused_open};
     use crate::apple::content_types::{
         ContentFilter, ContentType, HasContentTypes, content_filter, unsupported, ut_type,
@@ -126,8 +126,8 @@ mod uikit {
     use crate::apple::queue::WorkQueue;
     use crate::apple::version::{IOSVersion, Since};
     use crate::dialog::{
-        DialogError, DialogHold, FileDialogBackend, OpenRequest, OpenResult, SaveRequest,
-        SaveResult,
+        DialogError, DialogHold, FileDialogBackend, FileDialogCapability, OpenRequest, OpenResult,
+        SaveRequest, SaveResult,
     };
     use crate::owner::panic_boundary::{AfterPanic, ContainedIvars, os_entry};
 
@@ -278,12 +278,9 @@ mod uikit {
         completions: CompletionSource,
     }
 
-    /// The refusal of a dialog whose window has nothing to present from.
-    fn presentation_refused(refusal: Refusal) -> DialogError {
-        match refusal {
-            Refusal::NoWindow => unsupported(UnsupportedReason::NoWindow),
-            Refusal::Busy => DialogError::Busy,
-        }
+    /// What a file dialog answers when nothing was presented.
+    fn not_presented(refusal: Refusal) -> DialogError {
+        refusal.dialog_error::<FileDialogCapability>()
     }
 
     /// Answer `answer` with `error` at once, the dialog showing nothing.
@@ -328,13 +325,14 @@ mod uikit {
                     return Err(not_here());
                 }
                 let every = NSArray::from_retained_slice(&[NSString::from_str(EVERY_DOCUMENT)]);
-                return Ok(
+                return guarded(|| {
                     UIDocumentPickerViewController::initWithDocumentTypes_inMode(
                         UIDocumentPickerViewController::alloc(self.mtm),
                         &every,
                         objc2_ui_kit::UIDocumentPickerMode::Open,
-                    ),
-                );
+                    )
+                })
+                .map_err(not_presented);
             };
             let every = [ContentType::Identifier(EVERY_DOCUMENT)];
             let types = filter
@@ -344,16 +342,23 @@ mod uikit {
                 .collect::<Option<Vec<Retained<AnyObject>>>>()
                 .ok_or_else(not_here)?;
             let types = NSArray::from_retained_slice(&types);
-            // SAFETY: `initForOpeningContentTypes:asCopy:` takes an array of
-            // `UTType`s, which `types` is, on a system that has it, as the
-            // proof says; the picker is made on the main thread.
-            Ok(unsafe {
-                msg_send![
-                    UIDocumentPickerViewController::alloc(self.mtm),
-                    initForOpeningContentTypes: &*types,
-                    asCopy: false
-                ]
+            let picker: Option<Retained<UIDocumentPickerViewController>> = guarded(|| {
+                // SAFETY: `initForOpeningContentTypes:asCopy:` takes an array
+                // of `UTType`s, which `types` is, on a system that has it, as
+                // the proof says, and answers the picker or nil; the picker
+                // is made on the main thread.
+                unsafe {
+                    msg_send![
+                        UIDocumentPickerViewController::alloc(self.mtm),
+                        initForOpeningContentTypes: &*types,
+                        asCopy: false
+                    ]
+                }
             })
+            .map_err(not_presented)?;
+            // A picker the system did not make is a failure it answered,
+            // not one to panic on.
+            picker.ok_or(DialogError::Failed(SystemFailure::MalformedAnswer))
         }
     }
 
@@ -368,19 +373,21 @@ mod uikit {
         mtm: MainThreadMarker,
         export_initializer: Option<Since<ExportInitializer>>,
         file: &NSURL,
-    ) -> Retained<UIDocumentPickerViewController> {
+    ) -> Result<Retained<UIDocumentPickerViewController>, Refusal> {
         let files = NSArray::from_slice(&[file]);
-        let picker = UIDocumentPickerViewController::alloc(mtm);
-        match export_initializer {
-            Some(_proof) => {
-                UIDocumentPickerViewController::initForExportingURLs_asCopy(picker, &files, false)
+        guarded(|| {
+            let picker = UIDocumentPickerViewController::alloc(mtm);
+            match export_initializer {
+                Some(_proof) => UIDocumentPickerViewController::initForExportingURLs_asCopy(
+                    picker, &files, false,
+                ),
+                None => UIDocumentPickerViewController::initWithURLs_inMode(
+                    picker,
+                    &files,
+                    objc2_ui_kit::UIDocumentPickerMode::ExportToService,
+                ),
             }
-            None => UIDocumentPickerViewController::initWithURLs_inMode(
-                picker,
-                &files,
-                objc2_ui_kit::UIDocumentPickerMode::ExportToService,
-            ),
-        }
+        })
     }
 
     /// The name of the place the picker put an export at.
@@ -410,7 +417,7 @@ mod uikit {
             };
             let from = match presenter(window, self.mtm) {
                 Ok(from) => from,
-                Err(refusal) => return refuse(answer, presentation_refused(refusal)),
+                Err(refusal) => return refuse(answer, not_presented(refusal)),
             };
             picker.setAllowsMultipleSelection(request.is_multiple());
             picker.setShouldShowFileExtensions(true);
@@ -442,9 +449,9 @@ mod uikit {
                 }
             });
             delegate.attach(&picker);
-            if !present(&from, &picker) {
+            if let Err(refusal) = present(&from, &picker) {
                 // UIKit took nothing: no delegate method will run.
-                pending.answer(|| Err(DialogError::Busy));
+                pending.answer(|| Err(not_presented(refusal)));
                 return DialogHold::new(());
             }
             DialogHold::new(PickerHold {
@@ -505,13 +512,14 @@ mod uikit {
                     return pending
                         .answer(|| Err(DialogError::Failed(SystemFailure::MalformedAnswer)));
                 };
-                let from = match presenter(&window, mtm) {
-                    Ok(from) => from,
-                    Err(refusal) => {
-                        return pending.answer(|| Err(presentation_refused(refusal)));
-                    }
+                let made = presenter(&window, mtm).and_then(|from| {
+                    let picker = exporting_picker(mtm, export_initializer, &file)?;
+                    Ok((from, picker))
+                });
+                let (from, picker) = match made {
+                    Ok(made) => made,
+                    Err(refusal) => return pending.answer(|| Err(not_presented(refusal))),
                 };
-                let picker = exporting_picker(mtm, export_initializer, &file);
                 let directory = directory
                     .as_deref()
                     .and_then(|directory| file_url(directory, true));
@@ -531,9 +539,9 @@ mod uikit {
                     }
                 });
                 delegate.attach(&picker);
-                if !present(&from, &picker) {
+                if let Err(refusal) = present(&from, &picker) {
                     // UIKit took nothing: no delegate method will run.
-                    return pending.answer(|| Err(DialogError::Busy));
+                    return pending.answer(|| Err(not_presented(refusal)));
                 }
                 shown.set(Some(Weak::from_retained(&picker)));
             });

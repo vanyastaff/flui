@@ -37,10 +37,6 @@ pub use request::{
     FileFilter, MAX_TEXT_LEN, MalformedRequest, OpenRequest, PickedFile, PickedForm, Picks,
     SaveLocation, SaveRequest,
 };
-// A macOS panel's delegate and iOS's document picker hold each item to the
-// same name rule.
-#[cfg(any(target_os = "macos", target_os = "ios", test))]
-pub(crate) use request::name_ends_in;
 // What a provider that names a save's file itself, or hands over a pick's
 // contents, decides the same way on the web and on iOS.
 #[cfg(any(target_arch = "wasm32", target_os = "ios", test))]

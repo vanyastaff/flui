@@ -17,20 +17,57 @@
 //! point at, so whatever is presented with a popover gets it anchored in
 //! the middle of the presenter's view, with no arrow; a phone presents the
 //! same controller as a sheet and reads none of it.
+//!
+//! UIKit reports a controller it cannot make or present by raising an
+//! Objective-C exception, which would end the process from inside a
+//! widget's call. Each call that makes, presents or dismisses a controller
+//! runs where the exception is caught (`guarded`), and answers a typed
+//! refusal ([`Refusal::Raised`]) instead.
 
-/// Why nothing can be presented on a window now.
+use flui_platform::capability::Capability;
+use flui_platform::{SystemFailure, Unsupported, UnsupportedReason};
+
+use crate::dialog::DialogError;
+use crate::share::{ShareCapability, ShareError};
+
+/// Why nothing was presented on a window.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Refusal {
     /// The window has no UIKit window, or that window no root view
     /// controller: a headless window, a view out of any window.
-    #[cfg_attr(
-        not(target_os = "ios"),
-        expect(dead_code, reason = "only UIKit's window lookup finds no window")
-    )]
     NoWindow,
-    /// A controller the window presents is still being dismissed; asking
-    /// again once it has left may succeed.
+    /// A controller the window presents is still being dismissed, or UIKit
+    /// took nothing when asked; asking again later may succeed.
     Busy,
+    /// UIKit raised an exception making, presenting or dismissing a
+    /// controller.
+    Raised,
+}
+
+impl Refusal {
+    /// What a dialog of the capability `C` answers for this refusal: no
+    /// window, a window that is busy, or a system that answered outside its
+    /// contract.
+    pub(super) fn dialog_error<C: Capability>(self) -> DialogError {
+        match self {
+            Self::NoWindow => {
+                DialogError::Unsupported(Unsupported::of::<C>(UnsupportedReason::NoWindow))
+            }
+            Self::Busy => DialogError::Busy,
+            Self::Raised => DialogError::Failed(SystemFailure::MalformedAnswer),
+        }
+    }
+
+    /// What a share answers for this refusal. A share has no busy answer of
+    /// its own: a window that cannot present now is `Unavailable`.
+    pub(super) fn share_error(self) -> ShareError {
+        let reason = match self {
+            Self::NoWindow => UnsupportedReason::NoWindow,
+            Self::Busy => UnsupportedReason::Unavailable,
+            Self::Raised => return ShareError::Failed(SystemFailure::MalformedAnswer),
+        };
+        ShareError::Unsupported(Unsupported::of::<ShareCapability>(reason))
+    }
 }
 
 /// The controller to present from, starting at `root`: the last of the
@@ -70,7 +107,7 @@ pub(super) fn middle(origin: (f64, f64), size: (f64, f64)) -> (f64, f64, f64, f6
 }
 
 #[cfg(target_os = "ios")]
-pub(super) use uikit::{dismiss, present, presenter};
+pub(super) use uikit::{dismiss, guarded, present, presenter};
 
 #[cfg(target_os = "ios")]
 #[expect(unsafe_code, reason = "a raw window handle's view")]
@@ -83,6 +120,15 @@ mod uikit {
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
     use super::{Refusal, middle, topmost};
+
+    /// Run UIKit calls that may raise an Objective-C exception:
+    /// [`Refusal::Raised`] when one did. A Rust panic in `calls` passes
+    /// through unchanged.
+    pub(in crate::ios) fn guarded<R>(calls: impl FnOnce() -> R) -> Result<R, Refusal> {
+        // The exception is released here; nothing of it is a code the
+        // contract could carry.
+        objc2::exception::catch(std::panic::AssertUnwindSafe(calls)).map_err(|_| Refusal::Raised)
+    }
 
     /// The root view controller of the UIKit window `window` is in, when
     /// its handle names a view in one.
@@ -133,32 +179,44 @@ mod uikit {
     }
 
     /// Present `controller` from `presenter`, animated, its popover
-    /// anchored where it has one; whether UIKit took it (see the module).
+    /// anchored where it has one. [`Refusal::Busy`] when UIKit took nothing
+    /// (see the module), [`Refusal::Raised`] when it raised.
     pub(in crate::ios) fn present(
         presenter: &UIViewController,
         controller: &UIViewController,
-    ) -> bool {
-        anchor_popover(controller, presenter);
-        presenter.presentViewController_animated_completion(controller, true, None);
-        presenter
-            .presentedViewController()
-            .is_some_and(|presented| std::ptr::eq(&*presented, controller))
+    ) -> Result<(), Refusal> {
+        let taken = guarded(|| {
+            anchor_popover(controller, presenter);
+            presenter.presentViewController_animated_completion(controller, true, None);
+            presenter
+                .presentedViewController()
+                .is_some_and(|presented| std::ptr::eq(&*presented, controller))
+        })?;
+        if taken { Ok(()) } else { Err(Refusal::Busy) }
     }
 
     /// Dismiss `controller` and whatever it presents, when it is still
     /// presented and not already leaving: a controller that answered has
     /// dismissed itself, and dismissing it again would close whatever its
-    /// presenter shows next.
+    /// presenter shows next. A dismissal UIKit raises on dismisses nothing.
     pub(in crate::ios) fn dismiss(controller: &UIViewController) {
-        if controller.presentingViewController().is_some() && !controller.isBeingDismissed() {
-            controller.dismissViewControllerAnimated_completion(true, None);
-        }
+        // Nobody is left to tell of a refusal: the dialog has ended for its
+        // caller.
+        let _ = guarded(|| {
+            if controller.presentingViewController().is_some() && !controller.isBeingDismissed() {
+                controller.dismissViewControllerAnimated_completion(true, None);
+            }
+        });
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use flui_platform::{SystemFailure, Unsupported, UnsupportedReason};
+
     use super::{Refusal, middle, topmost};
+    use crate::dialog::{DialogError, FileDialogCapability, MessageBoxCapability};
+    use crate::share::{ShareCapability, ShareError};
 
     /// A chain of controllers by index: each presents the next, and those
     /// in `leaving` are being dismissed.
@@ -204,6 +262,47 @@ mod tests {
             anchored,
             (0.0, f64::MAX, 1.0, 1.0),
             "no non-finite geometry reaches UIKit"
+        );
+    }
+
+    #[test]
+    fn a_controller_uikit_cannot_show_answers_a_typed_refusal() {
+        let no_window =
+            |unsupported: Unsupported| unsupported.reason == UnsupportedReason::NoWindow;
+        assert!(matches!(
+            Refusal::NoWindow.dialog_error::<FileDialogCapability>(),
+            DialogError::Unsupported(unsupported) if no_window(unsupported)
+        ));
+        assert_eq!(
+            Refusal::NoWindow.dialog_error::<MessageBoxCapability>(),
+            DialogError::Unsupported(Unsupported::of::<MessageBoxCapability>(
+                UnsupportedReason::NoWindow
+            )),
+            "the refusal names the capability that was asked"
+        );
+        assert_eq!(
+            Refusal::Busy.dialog_error::<FileDialogCapability>(),
+            DialogError::Busy
+        );
+        assert_eq!(
+            Refusal::Raised.dialog_error::<MessageBoxCapability>(),
+            DialogError::Failed(SystemFailure::MalformedAnswer),
+            "an exception is a failure of the system, answered, not a crash"
+        );
+
+        let share = |reason| ShareError::Unsupported(Unsupported::of::<ShareCapability>(reason));
+        assert_eq!(
+            Refusal::NoWindow.share_error(),
+            share(UnsupportedReason::NoWindow)
+        );
+        assert_eq!(
+            Refusal::Busy.share_error(),
+            share(UnsupportedReason::Unavailable),
+            "a share has no busy answer: later may succeed"
+        );
+        assert_eq!(
+            Refusal::Raised.share_error(),
+            ShareError::Failed(SystemFailure::MalformedAnswer)
         );
     }
 }
