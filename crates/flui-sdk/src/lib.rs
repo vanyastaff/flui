@@ -136,6 +136,7 @@ pub mod platform {
         pub use flui_platform::capability::OwnerPoster;
         pub use flui_platform::capability::OwnerRetired;
         pub use flui_platform::capability::Plugin;
+        pub use flui_platform::capability::PortalParent;
         pub use flui_platform::capability::ProviderContext;
         pub use flui_platform::capability::Resolver;
         pub use flui_platform::capability::ResultCode;

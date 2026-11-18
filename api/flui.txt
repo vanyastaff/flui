@@ -12411,7 +12411,7 @@ fn flui::platform::PlatformWindow::request_redraw(&self)
 fn flui::platform::PlatformWindow::reveal_after_first_frame(&self)
 fn flui::platform::PlatformWindow::set_cursor(&self, cursor: &flui::platform::Cursor) -> Result<(), flui::platform::CursorError>
 fn flui::platform::PlatformWindow::set_frame_rate_hint(&self, hint: flui::platform::FrameRateHint) -> Result<(), flui::platform::Unsupported>
-fn flui::platform::PlatformWindow::portal_parent(&self, answer: flui::platform::capability::Resolver<flui_platform::capability::portal_parent::PortalParent>) { .. }
+fn flui::platform::PlatformWindow::portal_parent(&self, answer: flui::platform::capability::Resolver<flui::platform::capability::PortalParent>) { .. }
 fn flui::platform::PlatformWindow::set_input_regions(&self, regions: &[flui::platform::input_regions::InputRegion]) -> Result<(), flui::platform::Unsupported>
 fn flui::platform::PlatformWindow::state(&self) -> flui::platform::WindowState
 fn flui::platform::PlatformWindow::surface_target(&self) -> alloc::rcs::arc::Arc<dyn flui::platform::SurfaceTarget>
@@ -13653,15 +13653,15 @@ impl raw_window_handle::borrowed::HasWindowHandle for flui::platform::capability
 pub fn flui::platform::capability::WindowRef::id(&self) -> flui::platform::WindowId
 pub fn flui::platform::capability::WindowRef::lifetime(&self) -> &flui::platform::capability::WindowLifetime
 pub fn flui::platform::capability::WindowRef::new(window: &alloc::rcs::rc::Rc<dyn flui::platform::PlatformWindow>, lifetime: flui::platform::capability::WindowLifetime) -> Self
-pub fn flui::platform::capability::WindowRef::portal_parent(&self, answer: flui::platform::capability::Resolver<flui_platform::capability::portal_parent::PortalParent>)
-pub struct flui_platform::capability::portal_parent::PortalParent { .. }
-impl Default for flui_platform::capability::portal_parent::PortalParent
-impl core::fmt::Debug for flui_platform::capability::portal_parent::PortalParent
-pub fn flui_platform::capability::portal_parent::PortalParent::as_str(&self) -> &str
-pub fn flui_platform::capability::portal_parent::PortalParent::is_none(&self) -> bool
-pub fn flui_platform::capability::portal_parent::PortalParent::none() -> Self
-pub fn flui_platform::capability::portal_parent::PortalParent::wayland(handle: &str, export: impl core::any::Any + Send) -> Self
-pub fn flui_platform::capability::portal_parent::PortalParent::x11(xid: core::num::nonzero::NonZeroU32) -> Self
+pub fn flui::platform::capability::WindowRef::portal_parent(&self, answer: flui::platform::capability::Resolver<flui::platform::capability::PortalParent>)
+pub struct flui::platform::capability::PortalParent { .. }
+impl Default for flui::platform::capability::PortalParent
+impl core::fmt::Debug for flui::platform::capability::PortalParent
+pub fn flui::platform::capability::PortalParent::as_str(&self) -> &str
+pub fn flui::platform::capability::PortalParent::is_none(&self) -> bool
+pub fn flui::platform::capability::PortalParent::none() -> Self
+pub fn flui::platform::capability::PortalParent::wayland(handle: &str, export: impl core::any::Any + Send) -> Self
+pub fn flui::platform::capability::PortalParent::x11(xid: core::num::nonzero::NonZeroU32) -> Self
 pub fn flui::platform::capability::WindowRef::scale(&self) -> f64
 pub mod flui::platform::capability::scripted
 pub struct flui::platform::capability::scripted::AlreadyDriven;

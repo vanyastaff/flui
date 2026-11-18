@@ -98,6 +98,7 @@ pub mod motion;
 // path keeps its name for the kit's consumers.
 pub use flui_log::testing as log_capture;
 pub mod ownership;
+pub mod portal_exports;
 pub mod primary_selection;
 pub mod recording;
 pub mod replay;
@@ -127,12 +128,12 @@ pub use gesture_alternatives::{
     AlternativesSubject, GestureAlternativesCheck, assert_gesture_alternatives,
 };
 pub use host::{
-    HeadlessDevAgent, HeadlessHost, HeadlessOsDrags, HeadlessPortalExports, HeadlessSink,
-    HeadlessWindow, HeadlessWindowId, HostClock, NotSettled, SESSION_END_BUDGET, StartedOsDrag,
-    UnshownFrame,
+    HeadlessDevAgent, HeadlessHost, HeadlessOsDrags, HeadlessSink, HeadlessWindow,
+    HeadlessWindowId, HostClock, NotSettled, SESSION_END_BUDGET, StartedOsDrag, UnshownFrame,
 };
 pub use log_capture::{CapturedLog, CapturedRecord, capture, disarm_interest_cache};
 pub use ownership::assert_ownership_table;
+pub use portal_exports::HeadlessPortalExports;
 pub use primary_selection::ScriptedPrimarySelection;
 pub use replay::{
     MouseScript, PenScript, PinchPhase, PointerPhase, PointerScript, ScriptError, ScriptStep,

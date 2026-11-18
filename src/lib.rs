@@ -369,7 +369,7 @@ pub mod platform {
             Abandoned, Activity, ActivityBridge, ActivityResult, Capability, CapabilityId,
             CapabilityProvider, CapabilityRegistrar, Completion, CompletionSource, DataRefused,
             HostBridge, IntentFrame, InvalidResultKey, JniFrame, OwnerJob, OwnerPoster,
-            OwnerRetired, OwnerScope, PendingCompletions, Plugin, ProviderContext,
+            OwnerRetired, OwnerScope, PendingCompletions, Plugin, PortalParent, ProviderContext,
             RegisteredProvider, RequestKey, Resolver, ResultCode, ResultIntent, ResultIntentHold,
             ResultKey, ResultMint, ResultOutcome, ResultRefused, ResultRequest, ResultTicket,
             ResultTicketHold, ResultToken, RuntimeLocals, WindowCloseWatch, WindowLifetime,

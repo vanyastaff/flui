@@ -128,13 +128,13 @@ mod tests {
         CompletionSource, OwnerJob, OwnerPoster, OwnerScope, PendingCompletions, PortalParent,
         Resolver, WindowCloser,
     };
+    use crate::haptics::PlatformHaptics;
     use crate::input_regions::InputRegion;
     use crate::{
         AdmittedCommand, ApplyError, Cursor, CursorError, FrameRateHint, GestureGeometry,
-        PlatformHaptics, PlatformSystemChrome, PlatformTextInput, PlatformWindow,
-        PreferenceQueryError, RedrawRequester, SurfaceTarget, SwapChainStatistics, Unsupported,
-        UnsupportedReason, WindowAt, WindowExtent, WindowGeometry, WindowId, WindowIdMint,
-        WindowState,
+        PlatformSystemChrome, PlatformTextInput, PlatformWindow, PreferenceQueryError,
+        RedrawRequester, SurfaceTarget, SwapChainStatistics, Unsupported, UnsupportedReason,
+        WindowAt, WindowExtent, WindowGeometry, WindowId, WindowIdMint, WindowState,
     };
 
     struct NoSurface;
