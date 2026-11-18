@@ -6079,22 +6079,19 @@ GPU-память простаивающего или невидимого окн
   сольётся. Строка и граф говорят то же. Что часть тестов `wayland_window` под Weston
   выходит рано, потому что он не даёт `xdg-decoration`, `wp_fractional_scale_v1` и `xdg-foreign`,
   — находка LY106.
-- [ ] **LY87** (не закрыта: код и зависимости удалены; остаются пропуск в `deny.toml` и тест
-  строки `rg winit`) — #2276 (`053507d53`). Удалены файлы `winit` в фичах, `hosts/winit.rs`, фича
+- [x] **LY87** — #2276 (`053507d53`) удалил файлы `winit` в фичах, `hosts/winit.rs`, фичу
   `winit-backend`, `WinitPlatform`, зависимости `winit`, `arboard`, `ui-events-winit` и прямой
-  `crossbeam-channel`, профиль conformance и запись winit; `deny.toml` запрещает крейт. `zbus` и
-  `futures-util` остались: ими пользуются нативные хосты. Тексты, говорившие о winit как о части
-  графа или запасном хосте, исправлены в LY113: `README.md`, `GLOSSARY.md`,
-  `crates/flui-platform/Cargo.toml`, корневой `Cargo.toml` (заметка о
-  `wildcard_enum_match_arm`), `tests/fixtures/acceptance_app/ime.rs`. **Остаётся.** (1)
-  `deny.toml` игнорирует RUSTSEC-2026-0192 (`ttf-parser` через `sctk-adwaita ← winit`), а
-  `ttf-parser` в `Cargo.lock` больше нет. (2) Тест строки, пустой `rg winit` вне архивных корней
-  и ADR, не выполняется. Часть находок законна: запрет в `deny.toml`, списки `forbid` у `reach`
-  в корневом `Cargo.toml`, фикстуры и тесты xtask, prior art в комментариях и документах (ADR,
-  `ARCHITECTURE.md`, `crates/flui-platform/src/ime.rs`). О winit как об источнике событий всё ещё
-  говорят комментарии `crates/flui-widgets/src/text/editable_text.rs` (контракт подавления
-  `Key::Character`, два места) и `crates/flui-widgets/ARCHITECTURE.md` («Winit's `LineDelta`»).
-  Строке нужно либо их исправить, либо сузить тест до упоминаний winit как зависимости.
+  `crossbeam-channel`, профиль conformance и запись winit; `deny.toml` запрещает крейт, а `zbus`
+  и `futures-util` остались, потому что ими пользуются нативные хосты. Тексты, говорившие о winit
+  как о части графа или запасном хосте, исправлены в LY113; контракт подавления `Key::Character`
+  в `crates/flui-widgets/src/text/editable_text.rs` (два места) и
+  `crates/flui-platform/src/ime.rs` и строка о шаге колеса в `crates/flui-widgets/ARCHITECTURE.md`
+  больше не называют winit источником событий. Пропуск RUSTSEC-2026-0192 в `deny.toml` ушёл
+  вместе с `ttf-parser`. Доказательство: `rg -i winit` по `crates/`, `packages/`, `examples/`,
+  `docs/` (кроме `docs/plans` и `CHANGELOG.md`) и `src/` находит 304 строки вместо 308, и каждая
+  из них — запрет в `deny.toml` и списках `forbid`, пример в тесте xtask, ссылка на тикет winit,
+  сравнение с другим фреймворком (prior art в ADR, `ARCHITECTURE.md` и комментариях) или история
+  в ADR; ни одна не называет winit хостом или источником событий FLUI.
 - [x] **LY89** (закрыта: счётчик пробуждений в виртуальном времени на `main`; прогоны на Mac и
   Android — в parity) — источники macOS и Android читают через `WakingRead`
   (`crates/flui-native/src/preferences/read.rs`): здоровый источник не называет срока и не будит
