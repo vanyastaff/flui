@@ -141,6 +141,7 @@ fn resolved_route_move_invocation_allocates_no_heap_after_setup() {
             handle
                 .invoke_pointer_route(route, &event)
                 .expect("warm invocation")
+                .held()
                 .is_none()
         );
 
@@ -149,6 +150,7 @@ fn resolved_route_move_invocation_allocates_no_heap_after_setup() {
             handle
                 .invoke_pointer_route(route, &event)
                 .expect("measured invocation")
+                .held()
                 .is_none()
         );
         assert_eq!(
@@ -610,11 +612,11 @@ fn measure_route_shape(target_count: usize, shape: RouteShape, history: bool) {
             path = result.path().to_vec();
         }
         let route = handle.resolve_pointer_route(&path).expect("resolve route").token();
-        assert!(handle.invoke_pointer_route(route, &event).expect("warm invocation").is_none());
+        assert!(handle.invoke_pointer_route(route, &event).expect("warm invocation").held().is_none());
         reset_allocations();
         let result = handle.invoke_pointer_route(route, &event).expect("measured invocation");
         let allocations = allocations();
-        assert!(result.is_none());
+        assert!(result.held().is_none());
         assert_eq!(deliveries.get(), target_count * 2);
         if !history || !translated {
             assert_eq!(allocations, 0, "scalar and identity cached delivery borrow every source history after setup: shape={shape:?}, targets={target_count}, history={history}");

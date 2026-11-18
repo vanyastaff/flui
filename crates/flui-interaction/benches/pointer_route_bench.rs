@@ -95,9 +95,7 @@ fn bench_invoke_cached_pointer_route(c: &mut Criterion) {
                         let panic = handle
                             .invoke_pointer_route(black_box(route), black_box(&event))
                             .expect("cached route invocation");
-                        if let Some(panic) = panic {
-                            panic.resume();
-                        }
+                        panic.resume();
                         black_box(deliveries.get());
                     });
                 },

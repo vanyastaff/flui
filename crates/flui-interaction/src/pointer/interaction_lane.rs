@@ -6,6 +6,7 @@
 //! owner-local cells synchronously, and releases cached routes at the end of the
 //! pointer sequence.
 
+use crate::containment::keep_first;
 use flui_foundation::{AtomicIdMint, IdExhausted, IdMint};
 use std::any::Any;
 use std::cell::{Cell, RefCell};
@@ -21,7 +22,7 @@ use flui_painting::paint::{Path, Shader};
 
 use super::hit_test::{EventPropagation, HitTestEntry, HitTestResult, transform_pointer_event};
 use super::pointer_capture::{CaptureRequest, ContactCapture, PointerCapture, PointerCaptureError};
-use crate::containment::RoutePanic;
+use crate::containment::{FirstPanic, caught, try_run};
 use crate::events::{
     PanZoomEvent, PointerEvent, PointerEventExt, PointerSource, ScrollEvent, SmartZoomEvent,
 };
@@ -765,15 +766,15 @@ impl ResolvedHitRoute {
     ///
     /// The first panic payload is captured and returned so the dispatch owner
     /// can perform mandatory cleanup (arena close/sweep, route release) before
-    /// resuming it; later panics are traced without replacing the first, so
+    /// resuming it; later panics are discarded without replacing the first, so
     /// one target's panic never starves the entries after it.
     fn invoke(
         &self,
         event: &PointerEvent,
         capture: Option<&Rc<ContactCapture>>,
         excluded: Option<PointerTarget>,
-    ) -> Option<RoutePanic> {
-        let mut first_panic = None;
+    ) -> FirstPanic {
+        let mut first_panic = FirstPanic::new();
         // Freeze the admitted selection for this observer round. A callback
         // may release its token or end the contact reentrantly, but it cannot
         // change which entries were committed to this packet's delivery.
@@ -814,17 +815,17 @@ impl ResolvedHitRoute {
                     LocalEventTransform::Global | LocalEventTransform::NonInvertible => None,
                 },
             };
-            let delivered = RoutePanic::capture(|| {
+            let delivered = caught(|| {
                 handler(dispatch);
             });
-            RoutePanic::preserve_first(&mut first_panic, delivered, "pointer target");
+            keep_first(&mut first_panic, delivered, "pointer target");
 
             // Re-entrant replacement or unregistration can make this snapshot
             // the callback's final owner. Keep that destructor inside the same
             // dispatch transaction so later hit targets, the pointer router,
             // and lifecycle cleanup still run before the first unwind resumes.
-            let snapshot_cleanup = RoutePanic::capture(|| drop(handler));
-            RoutePanic::preserve_first(
+            let snapshot_cleanup = caught(|| drop(handler));
+            keep_first(
                 &mut first_panic,
                 snapshot_cleanup,
                 "pointer target snapshot cleanup",
@@ -1265,24 +1266,20 @@ impl OwnerLatch {
 /// failure, or else the first failing destructor, is the one resumed, and a
 /// later destructor panic is discarded behind it (ADR-0281 §3).
 fn invoke_snapshot<C, S, R>(cell: C, snapshot: S, call: impl FnOnce(&S) -> R) -> R {
-    let outcome = RoutePanic::try_run(|| call(&snapshot));
-    let mut first = None;
-    let retired = RoutePanic::capture(|| drop(snapshot));
-    RoutePanic::preserve_first(&mut first, retired, "dispatch snapshot retirement");
-    let retired = RoutePanic::capture(|| drop(cell));
-    RoutePanic::preserve_first(&mut first, retired, "dispatch target retirement");
+    let outcome = try_run(|| call(&snapshot));
+    let mut first = FirstPanic::new();
+    let retired = caught(|| drop(snapshot));
+    keep_first(&mut first, retired, "dispatch snapshot retirement");
+    let retired = caught(|| drop(cell));
+    keep_first(&mut first, retired, "dispatch target retirement");
     match outcome {
         Ok(value) => {
-            if let Some(failure) = first {
-                failure.resume();
-            }
+            first.resume();
             value
         }
         Err(failure) => {
-            if let Some(later) = first {
-                later.discard();
-            }
-            failure.resume()
+            drop(first);
+            crate::containment::raise(failure)
         }
     }
 }
@@ -2468,7 +2465,7 @@ impl InteractionDispatchHandle {
         &self,
         token: ResolvedRouteToken,
         event: &PointerEvent,
-    ) -> Result<Option<RoutePanic>, InteractionDispatchError> {
+    ) -> Result<FirstPanic, InteractionDispatchError> {
         self.invoke_pointer_route_with_capture(token, event, None)
     }
 
@@ -2477,7 +2474,7 @@ impl InteractionDispatchHandle {
         token: ResolvedRouteToken,
         event: &PointerEvent,
         capture: Option<&Rc<ContactCapture>>,
-    ) -> Result<Option<RoutePanic>, InteractionDispatchError> {
+    ) -> Result<FirstPanic, InteractionDispatchError> {
         self.invoke_resolved_route(token, event, capture, None)
     }
 
@@ -2489,7 +2486,7 @@ impl InteractionDispatchHandle {
         token: ResolvedRouteToken,
         event: &PointerEvent,
         excluded: PointerTarget,
-    ) -> Result<Option<RoutePanic>, InteractionDispatchError> {
+    ) -> Result<FirstPanic, InteractionDispatchError> {
         self.invoke_resolved_route(token, event, None, Some(excluded))
     }
 
@@ -2499,7 +2496,7 @@ impl InteractionDispatchHandle {
         event: &PointerEvent,
         capture: Option<&Rc<ContactCapture>>,
         excluded: Option<PointerTarget>,
-    ) -> Result<Option<RoutePanic>, InteractionDispatchError> {
+    ) -> Result<FirstPanic, InteractionDispatchError> {
         let lane = self.active_lane()?;
         self.validate_lane(token.lane_id)?;
         let route = lane
@@ -2513,8 +2510,8 @@ impl InteractionDispatchHandle {
         // invocation snapshot as the route's final owner. Keep its entry and
         // HandlerCell destructors in the transaction returned to the binding,
         // rather than unwinding before the root router and arena lifecycle.
-        let snapshot_cleanup = RoutePanic::capture(|| drop(route));
-        RoutePanic::preserve_first(
+        let snapshot_cleanup = caught(|| drop(route));
+        keep_first(
             &mut first_panic,
             snapshot_cleanup,
             "resolved pointer route snapshot cleanup",
@@ -2592,12 +2589,12 @@ impl InteractionDispatchHandle {
         &self,
         path: &[HitTestEntry],
         event: &PointerEvent,
-    ) -> Option<RoutePanic> {
+    ) -> FirstPanic {
         if !path
             .iter()
             .any(|entry| entry.pointer_target.is_some() || entry.mouse_annotation.is_some())
         {
-            return None;
+            return FirstPanic::new();
         }
         let lane = match self.active_lane() {
             Ok(lane) => lane,
@@ -2607,7 +2604,7 @@ impl InteractionDispatchHandle {
                     "hover-interleaved dispatch outside an active interaction lane; \
                      event not delivered"
                 );
-                return None;
+                return FirstPanic::new();
             }
         };
         for target in path.iter().filter_map(|entry| entry.pointer_target) {
@@ -2617,7 +2614,7 @@ impl InteractionDispatchHandle {
                     "pointer target from a foreign lane during interleaved hover dispatch; \
                      event not delivered"
                 );
-                return None;
+                return FirstPanic::new();
             }
         }
 
@@ -2673,7 +2670,7 @@ impl InteractionDispatchHandle {
 
         let pointer = crate::events::pointer_source(event).copied();
         let position = event.position();
-        let mut first_panic = None;
+        let mut first_panic = FirstPanic::new();
         for entry in resolved {
             if let Some((cell, transform, latch)) = entry.pointer {
                 let local_event = match &transform {
@@ -2699,10 +2696,10 @@ impl InteractionDispatchHandle {
                         }
                         None => PointerDispatch::at_root(event),
                     };
-                    let delivered = RoutePanic::capture(|| {
+                    let delivered = caught(|| {
                         handler(dispatch);
                     });
-                    RoutePanic::preserve_first(
+                    keep_first(
                         &mut first_panic,
                         delivered,
                         "pointer target (hover-interleaved)",
@@ -2711,15 +2708,15 @@ impl InteractionDispatchHandle {
                     // the snapshot's destructor inside this transaction rather
                     // than unwinding before later entries and the caller's
                     // mandatory cleanup run.
-                    let snapshot_cleanup = RoutePanic::capture(|| drop(handler));
-                    RoutePanic::preserve_first(
+                    let snapshot_cleanup = caught(|| drop(handler));
+                    keep_first(
                         &mut first_panic,
                         snapshot_cleanup,
                         "pointer target snapshot cleanup (hover-interleaved)",
                     );
                 }
-                let cell_cleanup = RoutePanic::capture(|| drop(cell));
-                RoutePanic::preserve_first(
+                let cell_cleanup = caught(|| drop(cell));
+                keep_first(
                     &mut first_panic,
                     cell_cleanup,
                     "pointer target cell cleanup (hover-interleaved)",
@@ -2729,15 +2726,15 @@ impl InteractionDispatchHandle {
                 if !latch.is_closed()
                     && let (Some(pointer), Some(position)) = (pointer, position)
                 {
-                    let delivered = RoutePanic::capture(|| callback(pointer, position));
-                    RoutePanic::preserve_first(
+                    let delivered = caught(|| callback(pointer, position));
+                    keep_first(
                         &mut first_panic,
                         delivered,
                         "mouse hover callback (hover-interleaved)",
                     );
                 }
-                let snapshot_cleanup = RoutePanic::capture(|| drop(callback));
-                RoutePanic::preserve_first(
+                let snapshot_cleanup = caught(|| drop(callback));
+                keep_first(
                     &mut first_panic,
                     snapshot_cleanup,
                     "mouse hover snapshot cleanup (hover-interleaved)",
@@ -2919,8 +2916,8 @@ mod tests {
                 .token();
             let captured = handle
                 .invoke_pointer_route(route, &event())
-                .expect("route is live")
-                .expect("first panic must be captured");
+                .expect("route is live");
+            assert!(captured.is_held(), "first panic must be captured");
 
             // Delivery continued past both panicking targets.
             assert_eq!(&*order.borrow(), &[1, 2]);

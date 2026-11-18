@@ -29665,6 +29665,19 @@ impl core::hash::Hash for flui_foundation::memory::MemoryPressureLevel
 impl core::marker::StructuralPartialEq for flui_foundation::memory::MemoryPressureLevel
 variant flui_foundation::memory::MemoryPressureLevel::Critical // at 1
 variant flui_foundation::memory::MemoryPressureLevel::Moderate // at 0
+pub struct flui_foundation::panic::FirstPanic(_)
+impl Default for flui_foundation::panic::FirstPanic
+impl Drop for flui_foundation::panic::FirstPanic
+impl core::fmt::Debug for flui_foundation::panic::FirstPanic
+pub const fn flui_foundation::panic::FirstPanic::is_held(&self) -> bool
+pub const fn flui_foundation::panic::FirstPanic::new() -> Self
+pub fn flui_foundation::panic::FirstPanic::absorb(&mut self, later: Self)
+pub fn flui_foundation::panic::FirstPanic::contain<R>(&mut self, run: impl FnOnce() -> R) -> Option<R>
+pub fn flui_foundation::panic::FirstPanic::fold(first: &mut Option<Box<dyn core::any::Any + Send>>, next: Option<Box<dyn core::any::Any + Send>>)
+pub fn flui_foundation::panic::FirstPanic::held(&self) -> Option<&dyn core::any::Any + Send>
+pub fn flui_foundation::panic::FirstPanic::into_payload(self) -> Option<Box<dyn core::any::Any + Send>>
+pub fn flui_foundation::panic::FirstPanic::record(&mut self, payload: Box<dyn core::any::Any + Send>)
+pub fn flui_foundation::panic::FirstPanic::resume(self)
 pub trait flui_foundation::sequence::sealed::Sealed
 impl flui_foundation::sequence::sealed::Sealed for core::num::nonzero::NonZeroU64
 pub trait flui_foundation::slot_table::SlotKey: Copy + Eq
@@ -29762,9 +29775,6 @@ impl core::fmt::Debug for flui_interaction::binding::ResamplingModeChangeError
 impl core::fmt::Display for flui_interaction::binding::ResamplingModeChangeError
 impl core::marker::StructuralPartialEq for flui_interaction::binding::ResamplingModeChangeError
 pub const fn flui_interaction::binding::ResamplingModeChangeError::active_pointer_count(self) -> usize
-pub struct flui_interaction::containment::RoutePanic { .. }
-impl core::fmt::Debug for flui_interaction::containment::RoutePanic
-pub fn flui_interaction::containment::RoutePanic::resume(self) -> never
 pub struct flui_interaction::drag::owner::DragHandle { .. }
 impl Clone for flui_interaction::drag::owner::DragHandle
 impl core::fmt::Debug for flui_interaction::drag::owner::DragHandle
@@ -30176,7 +30186,7 @@ pub fn flui_interaction::pointer::mouse_tracker::MouseTracker::clear_cursor_chan
 pub fn flui_interaction::pointer::mouse_tracker::MouseTracker::device_active_regions(&self, device_id: flui::interaction::DeviceId) -> std::collections::hash::set::HashSet<flui::foundation::RenderId>
 pub fn flui_interaction::pointer::mouse_tracker::MouseTracker::device_cursor(&self, device_id: flui::interaction::DeviceId) -> cursor_icon::CursorIcon
 pub fn flui_interaction::pointer::mouse_tracker::MouseTracker::device_position(&self, device_id: flui::interaction::DeviceId) -> Option<flui::geometry::Offset<f64>>
-pub fn flui_interaction::pointer::mouse_tracker::MouseTracker::dispatch_hover(&self, event: &flui::interaction::PointerEvent, hit_test_result: &flui_interaction::pointer::hit_test::HitTestResult) -> Option<flui_interaction::containment::RoutePanic>
+pub fn flui_interaction::pointer::mouse_tracker::MouseTracker::dispatch_hover(&self, event: &flui::interaction::PointerEvent, hit_test_result: &flui_interaction::pointer::hit_test::HitTestResult) -> flui_foundation::panic::FirstPanic
 pub fn flui_interaction::pointer::mouse_tracker::MouseTracker::dispatch_window_left(&self)
 pub fn flui_interaction::pointer::mouse_tracker::MouseTracker::new() -> Self
 pub fn flui_interaction::pointer::mouse_tracker::MouseTracker::register_annotation(&self, annotation: flui::rendering::MouseTrackerAnnotation)

@@ -1888,7 +1888,12 @@ fn harness_mouse_region_uses_one_tracker_target_for_hover_enter_and_exit() {
     );
 
     lane.enter(|| {
-        assert!(tracker.dispatch_hover(&hover_event, &inside).is_none());
+        assert!(
+            tracker
+                .dispatch_hover(&hover_event, &inside)
+                .held()
+                .is_none()
+        );
     });
     assert_eq!(
         hovers.get(),
@@ -1904,7 +1909,12 @@ fn harness_mouse_region_uses_one_tracker_target_for_hover_enter_and_exit() {
     );
     lane.enter(|| {
         tracker.update_with_motion(&contact_event, PointerMotionKind::Contact, &inside);
-        assert!(tracker.dispatch_hover(&contact_event, &inside).is_none());
+        assert!(
+            tracker
+                .dispatch_hover(&contact_event, &inside)
+                .held()
+                .is_none()
+        );
     });
     assert_eq!(
         hovers.get(),
