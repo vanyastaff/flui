@@ -96,7 +96,6 @@
 mod manager_hints;
 mod sync;
 
-use self::sync::{SyncCounters, initialize_sync};
 use std::cell::{Cell, RefCell};
 use std::num::NonZeroU32;
 use std::rc::Rc;
@@ -130,6 +129,7 @@ use x11rb::protocol::xproto::{
 };
 use x11rb::wrapper::ConnectionExt as _;
 
+use self::sync::{SyncCounters, initialize_sync};
 use super::hints::WM_HINTS;
 use super::mode::{
     LevelAtoms, NetWmState, NetWmStateAtoms, WmState, level_of, mode_flags, with_mode,
