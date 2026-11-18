@@ -2,9 +2,9 @@
 //!
 //! A chunk's IR depends on its transform's linear part and on the fraction
 //! of its translation; the whole pixels of the translation, its
-//! [`PixelOrigin`], only move it. A kept recording replays at another origin
-//! by adding the difference, a [`PixelShift`], to every device position it
-//! holds. Each [`Shift`] impl destructures its instance whole, so a field
+//! `PixelOrigin`, only move it. A kept recording replays at another origin
+//! by adding the difference, a `PixelShift`, to every device position it
+//! holds. Each `Shift` impl destructures its instance whole, so a field
 //! added to one has to say here whether it is a device position. Positions in
 //! a shape's local space, colours, texel coordinates and the SDF clip (the
 //! entry's, which does not move with the chunk) stay as recorded.
