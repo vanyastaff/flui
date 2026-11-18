@@ -31,7 +31,8 @@ use crate::{
     device_domain::DeviceDomain,
     error::{EngineError, EngineResult},
     external_texture_registry::{ExternalTextureRegistry, KeptTextures},
-    gpu_backend::{Attempt, GpuBackend},
+    gpu_backend::Attempt,
+    gpu_probe::{GpuProbe, ProbedDevice},
     layer_dispatcher::LayerDispatcher,
     offscreen::OffscreenRenderer,
     painter::WgpuPainter,
@@ -39,7 +40,7 @@ use crate::{
     pipeline_set::PipelineLibrary,
     raster::PresentDisposition,
     raster_executor::{RasterBackend, SlotConfig, SlotId, SlotTarget},
-    surface_factory::{SurfaceFactory, UnconfiguredSurface, checked_target, instance_descriptor},
+    surface_factory::{SurfaceFactory, UnconfiguredSurface},
     window_slot::{Gpu, WindowSlot},
 };
 
@@ -174,7 +175,7 @@ impl RebuildRefusals {
 /// How a context's device was requested, so a rebuild asks for the same kind
 /// on the same instance (ADR-0305 §8).
 #[derive(Debug, Clone, Copy)]
-enum DeviceRecipe {
+pub(crate) enum DeviceRecipe {
     /// The backend ADR-0244's probe chose, with the capabilities the renderer
     /// negotiates.
     Probed(Attempt),
@@ -370,138 +371,39 @@ impl std::fmt::Debug for GpuBootstrap {
     }
 }
 
-/// One backend attempt's instance, adapter, device and the first window's
-/// surface.
-struct Answered {
-    instance: wgpu::Instance,
-    adapter: wgpu::Adapter,
-    device: wgpu::Device,
-    queue: wgpu::Queue,
-    first: Option<wgpu::Surface<'static>>,
-    /// The backend attempt that answered, for a rebuild to ask the same.
-    attempt: Attempt,
-}
-
 impl GpuContext {
     /// The application's one context, on the host's `display`, with the
     /// factory the owner makes every window's surface with (ADR-0305 §2).
     ///
-    /// Runs ADR-0244 decision 1's probe once: the preferred backend, then its
-    /// fallback, each in an instance of its own, over the `first` window when
-    /// there is one, so the adapter chosen presents to it; `WGPU_BACKEND`
-    /// keeps only the backends it names. The winning instance is the
-    /// context's and the factory's, for the context's life. `first` is
+    /// Runs ADR-0244 decision 1's probe ([`Self::probe`]) over the `first`
+    /// window when there is one, so the adapter chosen presents to it. The
+    /// winning instance is the context's and the factory's until the
+    /// application's retry of a given-up device probes again. `first` is
     /// `None` for a context of offscreen slots only.
     ///
     /// # Errors
-    /// - [`EngineError::SurfaceTargetUnavailable`] or
-    ///   [`EngineError::SurfaceOnForeignDisplay`]: `first` fails the factory's
-    ///   checks, before any GPU work.
-    /// - [`EngineError::NoSupportedGpu`]: no backend gave a device, with why
-    ///   each one failed.
+    /// As [`Self::probe`].
     pub async fn bootstrap(
         display: Arc<dyn DisplayConnection>,
         first: Option<Arc<dyn SurfaceTarget>>,
     ) -> EngineResult<GpuBootstrap> {
-        let first = first
-            .map(|target| checked_target(&*display, &target).map(|leased| (leased, target)))
-            .transpose()?;
-        let attempts = crate::gpu_backend::attempts(
-            crate::gpu_backend::Family::CURRENT.order(),
-            wgpu::Backends::from_env(),
-        );
-        let leased = first.as_ref().map(|(leased, _)| leased);
-        let display_ref = &display;
-        let answered = crate::gpu_backend::first_answering(&attempts, |attempt| async move {
-            Self::answer(attempt, display_ref, leased)
-                .await
-                .map_err(|error| error.to_string())
-        })
-        .await;
-        let (backend, answered) =
-            answered.map_err(|tried| EngineError::NoSupportedGpu { tried })?;
-        tracing::info!(%backend, adapter = %answered.adapter.get_info().name, "GPU backend selected");
-        let Answered {
+        let GpuProbe {
+            device,
+            factory,
+            first,
+        } = Self::probe(display, first).await?;
+        let ProbedDevice {
             instance,
             adapter,
             device,
             queue,
-            first: surface,
-            attempt,
-        } = answered;
-        let first = match (first, surface) {
-            (Some((leased, target)), Some(surface)) => {
-                Some(UnconfiguredSurface::new(leased, target, surface))
-            }
-            _ => None,
-        };
-        let factory = SurfaceFactory::new(instance.clone(), display);
-        let context = Self::from_device(
-            instance,
-            adapter,
-            device,
-            queue,
-            DeviceRecipe::Probed(attempt),
-        );
+            recipe,
+        } = device;
+        let context = Self::from_device(instance, adapter, device, queue, recipe);
         Ok(GpuBootstrap {
             context,
             factory,
             first,
-        })
-    }
-
-    /// One backend attempt: an instance over `display` for `attempt` alone,
-    /// the first window's surface on it, an adapter that presents to it, and
-    /// its device.
-    async fn answer(
-        attempt: Attempt,
-        display: &Arc<dyn DisplayConnection>,
-        first: Option<&Arc<dyn crate::window_target::WindowTarget>>,
-    ) -> EngineResult<Answered> {
-        #[cfg(test)]
-        INSTANCES_CREATED.with(|created| created.set(created.get() + 1));
-        let instance = wgpu::Instance::new(instance_descriptor(
-            display,
-            attempt.backends,
-            wgpu::BackendOptions {
-                dx12: crate::surface_present::dx12_options(),
-                ..Default::default()
-            },
-        ));
-        let surface = |instance: &wgpu::Instance| {
-            first
-                .map(|target| {
-                    instance
-                        .create_surface(Arc::clone(target))
-                        .map_err(EngineError::surface_creation)
-                })
-                .transpose()
-        };
-        // A canvas keeps the first context kind it hands out, so WebGPU gets
-        // its device before it claims the canvas (as `Renderer::new` does).
-        if attempt.backend == GpuBackend::WebGpu {
-            let (adapter, _, device, queue) =
-                crate::Renderer::adapter_and_device(&instance, attempt, None).await?;
-            let first = surface(&instance)?;
-            return Ok(Answered {
-                instance,
-                adapter,
-                device,
-                queue,
-                first,
-                attempt,
-            });
-        }
-        let first = surface(&instance)?;
-        let (adapter, _, device, queue) =
-            crate::Renderer::adapter_and_device(&instance, attempt, first.as_ref()).await?;
-        Ok(Answered {
-            instance,
-            adapter,
-            device,
-            queue,
-            first,
-            attempt,
         })
     }
 
@@ -621,6 +523,48 @@ impl GpuContext {
             SurfaceSlot::Offscreen(_) => None,
         });
         let (adapter, device, queue) = block_on(self.recipe.request(&self.instance, compatible))?;
+        Ok(self.install(adapter, device, queue))
+    }
+
+    /// Adopt `probed`, a device the owner's probe answered in an instance of
+    /// its own, in place of the device whose rebuilds were given up
+    /// (ADR-0305 §8), then configure every slot on it as a rebuild does.
+    /// Every window surface was made on the instance this one replaces, so
+    /// each is dropped and its slot waits for the owner to make another with
+    /// the probe's factory.
+    ///
+    /// Answers the slots the new device cannot serve, with why.
+    fn adopt(&mut self, probed: ProbedDevice) -> Vec<(SlotId, EngineError)> {
+        let ProbedDevice {
+            instance,
+            adapter,
+            device,
+            queue,
+            recipe,
+        } = probed;
+        // Lost until every slot is on the new device, as in a rebuild.
+        self.rebuilding = true;
+        // The instance is the probe's from here on, so a rebuild after an
+        // adoption that unwinds asks the instance the owner's factory makes
+        // surfaces on.
+        self.instance = instance;
+        self.recipe = recipe;
+        for (_, slot) in self.slots.iter_mut() {
+            if let SurfaceSlot::Window(window) = slot {
+                window.release();
+            }
+        }
+        self.install(adapter, device, queue)
+    }
+
+    /// Put the device `adapter` gave in place of the lost one and configure
+    /// every slot on it. What the old device made goes first.
+    fn install(
+        &mut self,
+        adapter: wgpu::Adapter,
+        device: wgpu::Device,
+        queue: wgpu::Queue,
+    ) -> Vec<(SlotId, EngineError)> {
         // The device counts as lost until every slot is on the new one, so a
         // rebuild that unwinds part way is asked for again from the start.
         self.rebuilding = true;
@@ -685,7 +629,7 @@ impl GpuContext {
         }
         self.rebuilding = false;
         let slots = &self.slots;
-        Ok(self.refusals.take(|id| slots.get(id).is_some()))
+        self.refusals.take(|id| slots.get(id).is_some())
     }
 
     /// The device domain every slot submits through.
@@ -1674,6 +1618,10 @@ impl RasterBackend for GpuContext {
 
     fn rebuild_device(&mut self) -> EngineResult<Vec<(SlotId, EngineError)>> {
         self.rebuild()
+    }
+
+    fn adopt_device(&mut self, device: ProbedDevice) -> Vec<(SlotId, EngineError)> {
+        self.adopt(device)
     }
 
     fn rebuilds_inline(&self) -> bool {
@@ -3112,6 +3060,64 @@ mod tests {
             context.render_window(slot, drawn_frame(), &scene, full),
             Err(EngineError::SurfaceReplacementNeeded)
         ));
+        assert!(
+            matches!(
+                context.render_window(slot, drawn_frame(), &scene, full),
+                Ok(crate::raster::PresentDisposition::NotShown)
+            ),
+            "the slot holds no surface until its owner restores one"
+        );
+    }
+
+    /// A device the owner probed for a retry is on another instance than
+    /// every window surface, so the context drops each window's surface when
+    /// it adopts the device, refusing none: the window's next frame finds it
+    /// released and draws nothing until its owner restores one made with the
+    /// probe's factory (ADR-0305 §8).
+    ///
+    /// Red-check: keep the window surfaces in `GpuContext::adopt` and the
+    /// frame acquires from the old instance's surface (here, a timeout).
+    #[cfg(feature = "testing")]
+    #[test]
+    fn adopting_a_probed_device_drops_every_window_surface() {
+        use std::sync::Arc;
+
+        use crate::{testing::ScriptedAcquire, window_slot::WindowSlot};
+
+        let (mut context, factory) = noop_context();
+        let surface = factory
+            .create(Arc::new(crate::testing::FakeWindow::new(7)))
+            .expect("the no-op backend makes a surface for any window");
+        let window = WindowSlot::configured_without_capabilities(
+            surface,
+            (32, 16),
+            ScriptedAcquire::Timeout,
+        );
+        let (_executor, sender) = RasterExecutor::new(
+            crate::testing::ScriptedSlots::new(),
+            std::rc::Rc::new(flui_foundation::SystemClock),
+            || {},
+        );
+        let slot = sender.mint_slot().expect("a slot id is left");
+        context
+            .insert(slot, super::SurfaceSlot::Window(Box::new(window)))
+            .expect("the slot's index is free");
+        let scene = Scene::new(square_and_glyph());
+        let full = DamageRegion::Full(flui_layer::FullReason::FirstFrame);
+        assert!(
+            context
+                .render_window(slot, drawn_frame(), &scene, full)
+                .is_err(),
+            "the held surface hands out no texture"
+        );
+
+        let probe = crate::testing::noop_probe(Arc::new(crate::testing::FakeDisplay));
+        let refused = context.adopt(probe.device);
+        assert!(refused.is_empty(), "a dropped surface is no refusal");
+        assert!(
+            !crate::RasterBackend::device_lost(&context),
+            "the adopted device renders"
+        );
         assert!(
             matches!(
                 context.render_window(slot, drawn_frame(), &scene, full),

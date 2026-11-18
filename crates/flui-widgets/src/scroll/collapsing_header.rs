@@ -653,7 +653,7 @@ fn header_box(
         .include_semantics(false);
     let mut semantics = Semantics::new().container(true).role(SemanticsRole::Banner);
     if let Some(label) = label {
-        semantics = semantics.label(label.to_owned());
+        semantics = semantics.label(label);
     }
     if extents.range() > 0.0 {
         // Assistive technology moves the header the way a scroll would: up

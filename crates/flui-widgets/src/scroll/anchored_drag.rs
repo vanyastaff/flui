@@ -1049,7 +1049,7 @@ impl<K: Copy + Eq + 'static> AnchoredDragState<K> {
         let anchors = controller.anchors();
         let semantics = match assistive {
             Assistive::Named { label, describe } => Semantics::new()
-                .label(label.to_string())
+                .label(label)
                 .value(describe(controller.current())),
             Assistive::Unnamed | Assistive::Withheld => Semantics::new(),
         };

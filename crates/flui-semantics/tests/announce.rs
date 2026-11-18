@@ -6,8 +6,8 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use flui_foundation::RenderId;
 use flui_semantics::{
-    AnnounceError, Announcements, SemanticsIdentitySource, SemanticsNode, SemanticsOwner,
-    TreeUpdate, Urgency,
+    AnnounceError, Announcements, Announcer, SemanticsIdentitySource, SemanticsNode,
+    SemanticsOwner, TreeUpdate, Urgency,
 };
 use parking_lot::Mutex;
 
@@ -28,6 +28,11 @@ fn announcements() -> Announcements {
         .allocate(2)
         .expect("a fresh source has identities");
     Announcements::new(ids[0], ids[1])
+}
+
+/// An announcer whose frame requests go nowhere: these tests flush by hand.
+fn quiet_announcer(announcements: &Announcements) -> Announcer {
+    announcements.announcer(Arc::new(|| {}))
 }
 
 /// An owner rooted and published once, its announcer nodes delivered, with
@@ -76,6 +81,7 @@ fn delivered_value(
 fn announcements_reach_the_live_region_value() {
     let announcements = announcements();
     let (mut owner, received, _) = owner_with(&announcements);
+    let announcer = quiet_announcer(&announcements);
     let polite = accesskit::NodeId(announcements.node_id(Urgency::Polite).as_u64());
     let assertive = accesskit::NodeId(announcements.node_id(Urgency::Assertive).as_u64());
     {
@@ -104,7 +110,7 @@ fn announcements_reach_the_live_region_value() {
         }
     }
 
-    owner
+    announcer
         .announce("Message sent", Urgency::Polite)
         .expect("an installed queue accepts");
     assert!(
@@ -126,7 +132,7 @@ fn announcements_reach_the_live_region_value() {
         "a delivered announcement leaves the queue"
     );
 
-    owner
+    announcer
         .announce("Connection lost", Urgency::Assertive)
         .expect("an installed queue accepts");
     owner.flush();
@@ -142,8 +148,11 @@ fn announcements_reach_the_live_region_value() {
 fn a_repeated_announcement_changes_the_value() {
     let announcements = announcements();
     let (mut owner, received, _) = owner_with(&announcements);
-    owner.announce("Saved", Urgency::Polite).expect("accepted");
-    owner
+    let announcer = quiet_announcer(&announcements);
+    announcer
+        .announce("Saved", Urgency::Polite)
+        .expect("accepted");
+    announcer
         .announce("3 items", Urgency::Polite)
         .expect("accepted");
     owner.flush();
@@ -154,7 +163,9 @@ fn a_repeated_announcement_changes_the_value() {
 
     let mut values = Vec::new();
     for _ in 0..3 {
-        owner.announce("Saved", Urgency::Polite).expect("accepted");
+        announcer
+            .announce("Saved", Urgency::Polite)
+            .expect("accepted");
         owner.flush();
         values.push(delivered_value(&received, &announcements, Urgency::Polite));
     }
@@ -173,7 +184,8 @@ fn a_repeated_announcement_changes_the_value() {
 fn a_failed_delivery_keeps_the_announcement() {
     let announcements = announcements();
     let (mut owner, received, failing) = owner_with(&announcements);
-    owner
+    let announcer = quiet_announcer(&announcements);
+    announcer
         .announce("Uploaded", Urgency::Polite)
         .expect("accepted");
     failing.store(true, Ordering::SeqCst);
@@ -242,7 +254,8 @@ fn an_announcer_queues_then_requests_a_frame() {
 fn an_agent_neither_reads_nor_locates_the_announcer_nodes() {
     let announcements = announcements();
     let (mut owner, _, _) = owner_with(&announcements);
-    owner
+    let announcer = quiet_announcer(&announcements);
+    announcer
         .announce("Message sent", Urgency::Polite)
         .expect("an installed queue accepts");
     owner.flush();
@@ -257,7 +270,7 @@ fn an_agent_neither_reads_nor_locates_the_announcer_nodes() {
         tree.roots[0].children.is_empty(),
         "the window shows no announcer node"
     );
-    let announcer = owner
+    let located = owner
         .locate_wire(
             &flui_protocol::locator::LocateParams::new(
                 flui_protocol::locator::Locator::identifier(Urgency::Polite.announcer_identifier()),
@@ -266,7 +279,7 @@ fn an_agent_neither_reads_nor_locates_the_announcer_nodes() {
         )
         .expect("the tree reads");
     assert!(
-        announcer.matches.is_empty(),
+        located.matches.is_empty(),
         "no locator reaches an announcer node"
     );
 }
@@ -280,9 +293,12 @@ fn the_agent_journal_holds_each_delivered_announcement() {
 
     let announcements = announcements();
     let (mut owner, _, failing) = owner_with(&announcements);
+    let announcer = quiet_announcer(&announcements);
     let window = WindowId::from_u64(1).expect("non-zero");
-    owner.announce("Saved", Urgency::Polite).expect("accepted");
-    owner
+    announcer
+        .announce("Saved", Urgency::Polite)
+        .expect("accepted");
+    announcer
         .announce("Connection lost", Urgency::Assertive)
         .expect("accepted");
     failing.store(true, Ordering::SeqCst);
@@ -317,7 +333,9 @@ fn the_agent_journal_holds_each_delivered_announcement() {
         "journaled with the revision that delivered them"
     );
 
-    owner.announce("Saved", Urgency::Polite).expect("accepted");
+    announcer
+        .announce("Saved", Urgency::Polite)
+        .expect("accepted");
     owner.flush();
     let later = owner.announcement_journal(&AnnouncementsParams::new(window).since(2));
     assert_eq!(later.entries.len(), 1);
@@ -333,9 +351,10 @@ fn the_agent_journal_counts_what_it_no_longer_holds() {
 
     let announcements = announcements();
     let (mut owner, _, _) = owner_with(&announcements);
+    let announcer = quiet_announcer(&announcements);
     for index in 0..300 {
-        owner
-            .announce(&format!("Item {index}"), Urgency::Polite)
+        announcer
+            .announce(format!("Item {index}"), Urgency::Polite)
             .expect("accepted");
         owner.flush();
     }

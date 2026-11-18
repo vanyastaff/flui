@@ -185,11 +185,11 @@ two fields that each validated form two nodes (`a_passed_validation_counts_as_de
 The roles `Generic` and `Presentation` declare a node to mean nothing: it publishes as a
 container, and its label does not make it static text as a node without a role would.
 
-Three groups describe one thing each and never mix: a scrollable's metrics (position, axis,
-extents, scroll index), an entry's place in a set (index, child count) and a field's lengths
-(current, maximum). Either side declaring any member of a group conflicts with the other
-declaring any member; a forced merge keeps the receiver's group whole or takes the
-contributor's whole. A node offers any number of custom actions, each added with its label and
+A scrollable's metrics (position, axis, extents) are one group: either side declaring any of them
+conflicts with the other declaring any, and a forced merge keeps the receiver's group whole or
+takes the contributor's whole. A node's place in a set merges per field ([Where a node sits in a
+set, a tree and a table](#where-a-node-sits-in-a-set-a-tree-and-a-table)).
+A node offers any number of custom actions, each added with its label and
 its own handler, and two sets of them share a node. Their `CustomActionId` is the action's place
 in the node's list: a merge appends the contributor's after the receiver's and so renumbers them,
 but a handler always receives the id its own configuration gave the action, so a widget that
@@ -213,7 +213,7 @@ Content beneath a control is its name, not a second stop: a button over a labell
 one button with that name, as in Flutter. A read-only value ranks as content because it carries no action:
 a meter merged with a button would otherwise publish the button's actions under a role that
 announces none. A group mixed from two sources would publish a position from one scrollable
-against another's extents, an index in one set against another's count.
+against another's extents.
 
 A node that merges its own descendants keeps its node inside an outer merge
 (`nested_merge_semantics_keeps_its_own_node`): a card merging its content still lets a screen
@@ -221,7 +221,7 @@ reader stop on the tile inside it.
 
 **Test.** `a_control_named_by_its_contents_takes_content_roles`,
 `role_precedence_settles_forced_merges`, `state_merge_precedence`,
-`a_forced_merge_keeps_one_scroll_group`, `a_forced_merge_keeps_one_collection_and_text_group`
+`a_forced_merge_keeps_one_scroll_group`, `collection_places_conflict_one_by_one`
 and `a_forced_merge_keeps_custom_actions_with_their_handler` in `configuration.rs`;
 `custom_actions_publish_with_their_ids` in `accesskit_translation.rs`;
 `custom_actions_run_their_own_handler_until_stale` in `owner.rs`;
