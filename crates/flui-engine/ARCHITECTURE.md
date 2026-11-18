@@ -197,9 +197,14 @@ translation on a dyadic grid (whole or quarter pixels) does at every magnitude
 below 2^23; a non-dyadic fraction can round to other bits as the translation
 crosses a power of two, and that move records again. The splice adds the
 difference to every device position the recording holds (`pixel_shift.rs`, one
-exhaustive destructure per instance type and for tessellated vertices), and
-text matches a fresh recording because glyph placement depends on the
-origin's fraction alone (`ShapedRun::placed_glyphs`). A scissor that cuts the chunk
+exhaustive destructure per instance type and for tessellated vertices). Text
+on the device grid is placed from the translation's whole pixels and, apart,
+an offset of its fraction plus the linear part's image of the paragraph's
+position (`ShapedRun::placed_glyphs`), so a replay places the glyphs a fresh
+recording at the new origin does while the paragraph is drawn under the
+chunk's own translation; under a translation pushed inside the chunk, which
+is composed at the device magnitude, a glyph at a rounding boundary can land a
+bin or a row away. A scissor that cuts the chunk
 moves with it only when its clip does, so a chunk moved under a fixed clip that
 cuts it records again. A recording holds no clip chain or scissor: the splice
 gives it the entry's clip and scissor, rebases every arena offset onto the

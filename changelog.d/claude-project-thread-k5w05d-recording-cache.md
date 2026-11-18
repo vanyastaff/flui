@@ -11,7 +11,9 @@
 ### Fixed
 
 - Text placed left of or above the device origin lands on the pixel and subpixel bin a whole-pixel
-  move from the right or below predicts: glyph placement floors with one rule for every sign
-  instead of truncating, and splits the origin's whole pixels from its fraction in `f64`, so far
-  from the origin a glyph no longer picks another bin. `ShapedRun::placed_glyphs` takes its
-  origin as `(f64, f64)`.
+  move from the right or below predicts, and text far from the origin no longer picks another
+  bin or row: glyph placement floors with one rule for every sign instead of truncating, and
+  `ShapedRun::placed_glyphs` takes the paragraph's whole pixels and the rest of its position
+  apart, as `placed_glyphs(key, whole, offset, scale)`, so the whole pixels only move the glyphs.
+  A glyph whose pen alone is past the `i32` range is omitted instead of drawn at a saturated
+  column.

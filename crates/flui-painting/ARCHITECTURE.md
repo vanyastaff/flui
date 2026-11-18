@@ -219,19 +219,23 @@ The raster side is `glyphs` (ADR-0092 §5). What crosses to the engine is the
 `ShapedParagraph`; the engine's atlas registers each run's face in its
 `FontRegistry` (`FontRegistry::prepare_run`, which also interns the run's
 variation coordinates) and places the run's glyphs with
-`ShapedRun::placed_glyphs(key, origin, scale)`: `PlacedGlyph { key: GlyphKey,
-x, y, color }` in device pixels. The origin is split in `f64` into its whole
-pixels and its fraction before any `f32` arithmetic; the pen, the fraction plus
-`x × scale`, is floored into a whole column and binned to a quarter pixel with
-one rule for every sign, and the row is `round(baseline × scale)` plus the
-floored vertical offset, each plus the origin's whole pixels. A glyph's
-column, row and bin thus depend on the origin's fraction alone, so a paragraph
-moved by whole device pixels places every glyph as many pixels away with the
-same key, on either side of 0 and at any magnitude
-(`placed_glyphs_move_with_whole_pixels`), which the engine's recording cache
-relies on when it replays moved text. For a non-negative origin these are the
-rules cosmic-text placed glyphs with; cosmic-text truncated, which placed a
-glyph differently on each side of 0. The atlas draws through the `GlyphRasterizer` trait: a key type
+`ShapedRun::placed_glyphs(key, whole, offset, scale)`: `PlacedGlyph { key:
+GlyphKey, x, y, color }` in device pixels, the paragraph's top-left being
+`whole + offset`. `whole` is whole pixels, which only move the glyphs;
+`offset` is split in `f64` into whole pixels and a fraction narrowed to `f32`.
+The pen, that fraction plus `x × scale`, is floored into a whole column and
+binned to a quarter pixel with one rule for every sign, and the row is
+`round(baseline × scale)` plus the floored vertical offset, each plus both
+whole parts. A glyph's column, row and bin thus depend on the bits of `offset`
+alone: a caller that moves the paragraph by changing `whole` and keeping
+`offset` places every glyph as many pixels away with the same key, on either
+side of 0 and at any magnitude (`placed_glyphs_move_with_whole_pixels`). The
+engine passes a translation's whole pixels as `whole` for that reason; folding
+them into `offset` rounds the fraction at the translation's magnitude. A glyph
+whose pen alone is outside the `i32` range is omitted
+(`placed_glyphs_omit_a_pen_the_split_would_saturate`). For a non-negative
+position these are the rules cosmic-text placed glyphs with; cosmic-text
+truncated, which placed a glyph differently on each side of 0. The atlas draws through the `GlyphRasterizer` trait: a key type
 plus `rasterize(&mut self, key)`, deterministic per key, with `None` for a key
 the rasterizer cannot draw (the atlas does not place it and asks again next
 use). `SwashRasterizer` implements it with `GlyphKey`: blob id and face index,
