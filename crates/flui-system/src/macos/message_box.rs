@@ -142,8 +142,8 @@ mod appkit {
     use objc2_foundation::NSString;
 
     use super::super::appkit::ns_window;
-    use super::super::sheet::Pending;
     use super::{answer, buttons, style, texts};
+    use crate::apple::modal::Pending;
     use crate::dialog::{
         DialogError, DialogHold, MessageBoxBackend, MessageBoxCapability, MessageBoxRequest,
         MessageBoxResult,
