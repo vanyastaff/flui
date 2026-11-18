@@ -48,8 +48,9 @@ pub const fn windows(direct_manipulation: bool) -> InputCapabilities {
 /// fingers only as its finished direction (`swipeWithEvent:`, under the
 /// system's "swipe between pages" setting), with no travel, so no swipe is
 /// delivered. AppKit keeps the resize borders and draws the caption buttons
-/// itself, so their regions are not honoured. Tablet events are not
-/// translated yet.
+/// itself, so their regions are not honoured. A first-click region decides
+/// whether the click that activates a window is delivered, marked
+/// (`acceptsFirstMouse:`). Tablet events are not translated yet.
 #[must_use]
 pub const fn macos() -> InputCapabilities {
     InputCapabilities::builder()
@@ -57,6 +58,7 @@ pub const fn macos() -> InputCapabilities {
         .trackpad_gestures(Native)
         .touchpad_hold(Native)
         .window_move(Native)
+        .first_click(Native)
         .build()
 }
 

@@ -107,7 +107,7 @@ fn reduced_motion_settles_normal_runs_on_the_next_tick() {
         let recorded = Rc::clone(&statuses);
         let _subscription = normal
             .controller()
-            .subscribe_status(Rc::new(move |status| recorded.borrow_mut().push(status)));
+            .listen_status(Rc::new(move |status| recorded.borrow_mut().push(status)));
         let mut completed = normal.controller().forward().expect("normal run");
         let mut continuing = preserve.controller().forward().expect("preserved run");
         let mut clock = MotionClock::new();
@@ -282,7 +282,7 @@ fn settle_simulation(source: impl flui_animation::Simulation + 'static, expected
     let run = controller.animate_with(source).expect("simulation run");
     let delivered = Rc::new(Cell::new(0));
     let count = Rc::clone(&delivered);
-    let _listener = controller.subscribe_status(Rc::new(move |status| {
+    let _listener = controller.listen_status(Rc::new(move |status| {
         assert_eq!(status, AnimationStatus::ForwardSettled);
         count.set(count.get() + 1);
     }));
@@ -380,7 +380,7 @@ fn fling_settlement_reaches_its_declared_bound() {
             let completions = Rc::new(Cell::new(0));
             let delivered = Rc::clone(&completions);
             let observed = controller.clone();
-            let subscription = controller.subscribe_status(Rc::new(move |phase| {
+            let subscription = controller.listen_status(Rc::new(move |phase| {
                 if phase == status {
                     assert_eq!(observed.value(), endpoint, "endpoint precedes delivery");
                     assert!(!observed.is_animating());
@@ -517,7 +517,7 @@ fn reduced_settle_retires_simulation_sources_after_delivery() {
         let peer_run = peer.controller().forward().expect("peer run");
         let completions = Rc::new(Cell::new(0));
         let observed = Rc::clone(&completions);
-        let _listener = owner.controller().subscribe_status(Rc::new(move |status| {
+        let _listener = owner.controller().listen_status(Rc::new(move |status| {
             if status == AnimationStatus::ForwardSettled {
                 observed.set(observed.get() + 1);
                 assert!(
@@ -708,7 +708,7 @@ fn reduced_settle_preserves_peer_delivery_and_reentrant_runs() {
         let _seat = registry.attach_child(&child).expect("nested registry");
         let first = AnimationController::builder(ms(1000)).build_on(Some(&child));
         let peer = AnimationController::builder(ms(1000)).build_on(Some(&registry));
-        let _peer_subscription = peer.controller().subscribe_status(Rc::new(move |status| {
+        let _peer_subscription = peer.controller().listen_status(Rc::new(move |status| {
             if status == AnimationStatus::ForwardSettled {
                 assert!(!panic_peer, "peer settle callback panic");
             }
@@ -718,7 +718,7 @@ fn reduced_settle_preserves_peer_delivery_and_reentrant_runs() {
         let source = first.controller().clone();
         let restart = Rc::clone(&restarted);
         let count = Rc::clone(&calls);
-        let _subscription = first.controller().subscribe_status(Rc::new(move |status| {
+        let _subscription = first.controller().listen_status(Rc::new(move |status| {
             if status == AnimationStatus::ForwardSettled {
                 count.set(count.get() + 1);
                 if count.get() == 1 {
@@ -833,7 +833,7 @@ fn reduced_motion_settles_finite_and_paused_runs_once() {
             }
             let delivered = Rc::new(Cell::new(0));
             let count = Rc::clone(&delivered);
-            let _subscription = controller.subscribe_status(Rc::new(move |received| {
+            let _subscription = controller.listen_status(Rc::new(move |received| {
                 assert_eq!(received, status);
                 count.set(count.get() + 1);
             }));
@@ -1087,7 +1087,7 @@ fn tiny_scale_saturates_and_completes_once() {
         preserve.controller().forward().expect("preserved run");
         let delivered = Rc::new(Cell::new(0));
         let count = Rc::clone(&delivered);
-        let _subscription = owner.controller().subscribe_status(Rc::new(move |status| {
+        let _subscription = owner.controller().listen_status(Rc::new(move |status| {
             if status == flui_animation::AnimationStatus::ForwardSettled {
                 count.set(count.get() + 1);
             }
@@ -1504,7 +1504,7 @@ fn finite_run_completes_once_after_gap(gap: Duration, playback: PlaybackRate) {
     let owner = AnimationController::builder(ms(1000)).build_on(Some(&registry));
     let statuses = Rc::new(RefCell::new(Vec::new()));
     let recorded = Rc::clone(&statuses);
-    let _subscription = owner.controller().subscribe_status(Rc::new(move |status| {
+    let _subscription = owner.controller().listen_status(Rc::new(move |status| {
         recorded.borrow_mut().push(status);
     }));
     let completions = Rc::new(RefCell::new(Vec::new()));
