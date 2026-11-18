@@ -46,5 +46,6 @@
             </intent-filter>
 {{intent_filters}}
         </activity>
+{{providers}}
     </application>
 </manifest>

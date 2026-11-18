@@ -836,7 +836,8 @@ where
         move || {
             let host = flui_native::current_host().map_err(LaunchError::from_platform)?;
             // Before the platform, whose registries report only to a capture already installed.
-            super::begin_native_journal(host.backend());
+            #[cfg(native_journal)]
+            super::native_journal::begin(host.backend());
             let placement = super::raster_host::desktop_placement(host);
             start_host(host, app_id.as_ref(), one_instance)
                 .map(|started| started.map(|platform| (platform, placement)))

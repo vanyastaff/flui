@@ -1,5 +1,6 @@
-//! Windows a provider can be acquired in, on every host: one with no native
-//! handle, and one whose handle a host's own kit supplies.
+//! Windows a provider's test acquires its handles in, on every host: a
+//! [`WindowRef`] over a window that is only its id and the surface target a
+//! test gives it, open until its [`WindowCloser`] closes it.
 
 use std::rc::Rc;
 use std::sync::Arc;

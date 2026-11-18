@@ -2,8 +2,8 @@
 //! linked crates declare: ADR-0307's verify mode, run by `flui doctor`.
 //!
 //! Three kinds are read, told apart by their root element and keys: an
-//! Android `AndroidManifest.xml` (its `uses-permission` entries and the
-//! intent filters of what the application opens), an Apple
+//! Android `AndroidManifest.xml` (its `uses-permission` entries, the intent
+//! filters of what the application opens and its content providers), an Apple
 //! `PrivacyInfo.xcprivacy` (its `NSPrivacyAccessedAPITypes`) and an Apple
 //! `Info.plist` (its URL schemes and document types), each property list in
 //! XML form. Each declared entry the file lacks is a [`Missing`], carrying
@@ -73,6 +73,8 @@ struct Opens {
 pub(crate) struct Manifest {
     kind: ManifestKind,
     android_permissions: BTreeSet<String>,
+    /// The authorities of each `<provider>`, by its class.
+    android_providers: BTreeMap<String, BTreeSet<String>>,
     accessed_apis: BTreeMap<String, BTreeSet<String>>,
     opens: Opens,
 }
@@ -145,9 +147,32 @@ impl Manifest {
             .filter_map(|node| node.attribute((ANDROID_NS, "name")))
             .map(str::to_owned)
             .collect();
+        let mut android_providers: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        for provider in elements(root)
+            .filter(|node| node.has_tag_name("application"))
+            .flat_map(elements)
+            .filter(|node| node.has_tag_name("provider"))
+            .filter(|node| node.attribute((TOOLS_NS, "node")) != Some("remove"))
+        {
+            let Some(class) = provider.attribute((ANDROID_NS, "name")) else {
+                continue;
+            };
+            // `android:authorities` lists one or more, `;`-separated.
+            android_providers
+                .entry(class.to_owned())
+                .or_default()
+                .extend(
+                    provider
+                        .attribute((ANDROID_NS, "authorities"))
+                        .unwrap_or_default()
+                        .split(';')
+                        .map(|authority| authority.trim().to_owned()),
+                );
+        }
         Self {
             kind: ManifestKind::Android,
             android_permissions,
+            android_providers,
             accessed_apis: BTreeMap::new(),
             opens: android_opens(root),
         }
@@ -161,6 +186,7 @@ impl Manifest {
             return Ok(Self {
                 kind: ManifestKind::AppleInfo,
                 android_permissions: BTreeSet::new(),
+                android_providers: BTreeMap::new(),
                 accessed_apis: BTreeMap::new(),
                 opens: apple_info_opens(top)?,
             });
@@ -201,6 +227,7 @@ impl Manifest {
         Ok(Self {
             kind: ManifestKind::ApplePrivacy,
             android_permissions: BTreeSet::new(),
+            android_providers: BTreeMap::new(),
             accessed_apis,
             opens: Opens::default(),
         })
@@ -230,6 +257,7 @@ impl Manifest {
                     })
                     .collect();
                 missing.extend(self.android_opens_missing(declarations));
+                missing.extend(self.android_providers_missing(declarations));
                 missing
             }
             ManifestKind::ApplePrivacy => {
@@ -306,6 +334,33 @@ impl Manifest {
             }
         }
         missing
+    }
+
+    /// The content providers an Android manifest lacks: a `<provider>` of the
+    /// declared class one of whose authorities ends in `.` and the declared
+    /// suffix, so that a literal package and Gradle's `${applicationId}`
+    /// both count.
+    fn android_providers_missing(&self, declarations: &Declarations) -> Vec<Missing> {
+        declarations
+            .android_providers()
+            .filter(|(authority, class, _)| {
+                let suffix = format!(".{}", authority.as_str());
+                !self
+                    .android_providers
+                    .get(class.as_str())
+                    .is_some_and(|stated| stated.iter().any(|stated| stated.ends_with(&suffix)))
+            })
+            .map(|(authority, class, crates)| Missing {
+                entry: format!("content provider {class} for `{authority}`"),
+                line: format!(
+                    "<provider android:name=\"{class}\" android:authorities=\"{}\" \
+                     android:exported=\"false\" android:grantUriPermissions=\"true\" /> in \
+                     <application>",
+                    authority.authority("${applicationId}")
+                ),
+                crates: crates.iter().cloned().collect(),
+            })
+            .collect()
     }
 
     /// The keys an `Info.plist` lacks for what the application opens. Its
