@@ -28,8 +28,8 @@ let list = canvas.finish(); // Save, DrawRect, Restore
   the queries read one Parley layout, shaped through the UI runtime's
   `TextContext`. A face an app registers (`flui::register_font`, through the
   app's `FontCollection`) reaches all three alike.
-- `paint_box_decoration`, `paint_table_border` — the
-  decoration painters.
+- `BoxDecoration::paint` and `TableBorder::paint` (in `styling`): a
+  decoration value records itself into a canvas.
 
 The crate owns the paint, style and text values:
 

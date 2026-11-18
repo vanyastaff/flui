@@ -263,11 +263,10 @@ pub(crate) fn gradient_geometry_checks_intermediate_and_output_overflow() {
     let start = BoxDecoration::<f64>::with_gradient(Gradient::Linear(large_a));
     let end = BoxDecoration::with_gradient(Gradient::Linear(large_b));
     let mut canvas = flui_painting::Canvas::new();
-    flui_painting::paint_box_decoration(
+    (BoxDecoration::lerp(&start, &end, 1e100)).paint(
         &mut canvas,
         Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
-        &BoxDecoration::lerp(&start, &end, 1e100),
-        flui_painting::DecorationPaintOptions::default(),
+        flui_painting::styling::DecorationPaintOptions::default(),
     );
     let list = canvas.finish();
     let flui_painting::DrawOp::Rect { paint, .. } =
@@ -530,11 +529,10 @@ pub(crate) fn radial_overshoot_refuses_coincident_nonzero_circles() {
             let mixed = BoxDecoration::lerp(&start, &end, t);
             assert_eq!(&mixed, if t < 0.0 { &start } else { &end });
             let mut canvas = flui_painting::Canvas::new();
-            flui_painting::paint_box_decoration(
+            mixed.paint(
                 &mut canvas,
                 Rect::from_ltrb(0.0, 0.0, 100.0, 100.0),
-                &mixed,
-                flui_painting::DecorationPaintOptions::default(),
+                flui_painting::styling::DecorationPaintOptions::default(),
             );
             let list = canvas.finish();
             let flui_painting::DrawOp::Rect { paint, .. } =
@@ -621,15 +619,15 @@ pub(crate) fn gradient_packing_preserves_extrapolated_geometry() {
         "large center can resolve in a small representable box"
     );
     let mut canvas = flui_painting::Canvas::new();
-    flui_painting::paint_box_decoration(
+    (BoxDecoration::<f64>::lerp(
+        &BoxDecoration::with_gradient(Gradient::Sweep(distant.clone())),
+        &BoxDecoration::with_gradient(Gradient::Sweep(distant)),
+        0.5,
+    ))
+    .paint(
         &mut canvas,
         Rect::from_xywh(0.0, 0.0, 1e-20, 1e-20),
-        &BoxDecoration::<f64>::lerp(
-            &BoxDecoration::with_gradient(Gradient::Sweep(distant.clone())),
-            &BoxDecoration::with_gradient(Gradient::Sweep(distant)),
-            0.5,
-        ),
-        flui_painting::DecorationPaintOptions::default(),
+        flui_painting::styling::DecorationPaintOptions::default(),
     );
     let list = canvas.finish();
     let flui_painting::DrawOp::Rect { paint, .. } =
@@ -655,11 +653,10 @@ pub(crate) fn gradient_packing_preserves_extrapolated_geometry() {
     );
     let mut canvas = flui_painting::Canvas::new();
     let endpoint = BoxDecoration::<f64>::with_gradient(Gradient::Linear(linear));
-    flui_painting::paint_box_decoration(
+    (BoxDecoration::lerp(&endpoint, &endpoint, 0.5)).paint(
         &mut canvas,
         Rect::from_xywh(0.0, 0.0, 1e-30, 1e-30),
-        &BoxDecoration::lerp(&endpoint, &endpoint, 0.5),
-        flui_painting::DecorationPaintOptions::default(),
+        flui_painting::styling::DecorationPaintOptions::default(),
     );
     let list = canvas.finish();
     let flui_painting::DrawOp::Rect { paint, .. } =
@@ -729,11 +726,10 @@ pub(crate) fn decoration_gradient_falls_back_after_bounds_scaling() {
     );
     for (height, expected_y) in [(100.0, 5e11 + 100.0), (1e38, 1.5e38)] {
         let mut canvas = flui_painting::Canvas::new();
-        flui_painting::paint_box_decoration(
+        mixed.paint(
             &mut canvas,
             Rect::from_xywh(0.0, 0.0, 100.0, height),
-            &mixed,
-            flui_painting::DecorationPaintOptions::default(),
+            flui_painting::styling::DecorationPaintOptions::default(),
         );
         let list = canvas.finish();
         let flui_painting::DrawOp::Rect { paint, .. } =
@@ -761,11 +757,10 @@ pub(crate) fn decoration_gradient_falls_back_after_bounds_scaling() {
     cases.push((restored, 1.5e38));
     for (decoration, expected_y) in cases.drain(..) {
         let mut canvas = flui_painting::Canvas::new();
-        flui_painting::paint_box_decoration(
+        decoration.paint(
             &mut canvas,
             Rect::from_xywh(0.0, 0.0, 100.0, 1e38),
-            &decoration,
-            flui_painting::DecorationPaintOptions::default(),
+            flui_painting::styling::DecorationPaintOptions::default(),
         );
         let list = canvas.finish();
         let flui_painting::DrawOp::Rect { paint, .. } =
@@ -824,11 +819,10 @@ pub(crate) fn decoration_gradient_centers_fall_back_after_bounds_scaling() {
             t,
         );
         let mut canvas = flui_painting::Canvas::new();
-        flui_painting::paint_box_decoration(
+        mixed.paint(
             &mut canvas,
             Rect::from_xywh(0.0, 0.0, 100.0, height),
-            &mixed,
-            flui_painting::DecorationPaintOptions::default(),
+            flui_painting::styling::DecorationPaintOptions::default(),
         );
         let list = canvas.finish();
         let flui_painting::DrawOp::Rect { paint, .. } =
@@ -868,11 +862,10 @@ pub(crate) fn decoration_silhouette_and_terminal_fallback() {
             mixed.shape = flui_painting::BoxShape::Circle;
         }
         let mut canvas = flui_painting::Canvas::new();
-        flui_painting::paint_box_decoration(
+        mixed.paint(
             &mut canvas,
             Rect::from_xywh(0.0, 0.0, 2e38, if circle { 3e38 } else { 2e38 }),
-            &mixed,
-            flui_painting::DecorationPaintOptions::default(),
+            flui_painting::styling::DecorationPaintOptions::default(),
         );
         let list = canvas.finish();
         let (flui_painting::DrawOp::Circle { paint, .. }
@@ -905,11 +898,10 @@ fn decoration_interior_fallbacks() {
     replaced.gradient.clone_from(&start.gradient);
     let record = |decoration: &BoxDecoration, height| {
         let mut canvas = flui_painting::Canvas::new();
-        flui_painting::paint_box_decoration(
+        decoration.paint(
             &mut canvas,
             Rect::from_xywh(0.0, 0.0, 100.0, height),
-            decoration,
-            flui_painting::DecorationPaintOptions::default(),
+            flui_painting::styling::DecorationPaintOptions::default(),
         );
         let list = canvas.finish();
         let flui_painting::DrawOp::Rect { paint, .. } =
@@ -1001,11 +993,10 @@ pub(crate) fn decoration_endpoint_ramp_preserves_stop_limit() {
         2.0,
     );
     let mut canvas = flui_painting::Canvas::new();
-    flui_painting::paint_box_decoration(
+    mixed.paint(
         &mut canvas,
         Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
-        &mixed,
-        flui_painting::DecorationPaintOptions::default(),
+        flui_painting::styling::DecorationPaintOptions::default(),
     );
     let list = canvas.finish();
     let flui_painting::DrawOp::Rect { paint, .. } = &list.iter().next().expect("linear fill").op
@@ -1039,11 +1030,10 @@ pub(crate) fn decoration_linear_overshoot_resolves_in_small_box() {
         1e50,
     );
     let mut canvas = flui_painting::Canvas::new();
-    flui_painting::paint_box_decoration(
+    mixed.paint(
         &mut canvas,
         Rect::from_xywh(0.0, 0.0, 1e-20, 1e-20),
-        &mixed,
-        flui_painting::DecorationPaintOptions::default(),
+        flui_painting::styling::DecorationPaintOptions::default(),
     );
     let list = canvas.finish();
     let flui_painting::DrawOp::Rect { paint, .. } = &list.iter().next().expect("linear fill").op

@@ -38,10 +38,9 @@
 //!
 //! # Decorations
 //!
-//! [`paint_box_decoration`] and [`paint_table_border`] are the two
-//! painters (`BoxDecoration`, `TableBorder`) that record
-//! straight into a canvas; [`box_decoration_hit_test`] is the matching
-//! hit-test.
+//! A decoration value records itself: [`styling::BoxDecoration::paint`] and
+//! [`styling::TableBorder::paint`] draw straight into a canvas, and
+//! [`styling::BoxDecoration::hit_test`] answers against the same shape.
 //!
 //! # Threading
 //!
@@ -82,7 +81,6 @@
 mod alignment;
 mod box_fit;
 mod canvas;
-mod decoration;
 mod display_list;
 mod error;
 #[cfg(feature = "bundled-fonts")]
@@ -92,7 +90,6 @@ mod image_placement;
 mod lerp_impls;
 pub mod paint;
 pub mod styling;
-mod table_border;
 pub mod text_boundaries;
 mod text_layout;
 mod text_painter;
@@ -110,7 +107,6 @@ pub mod testing;
 pub use alignment::{Alignment, AlignmentDirectional, AlignmentGeometry};
 pub use box_fit::{BoxFit, BoxShape, FittedSizes};
 pub use canvas::Canvas;
-pub use decoration::{DecorationPaintOptions, box_decoration_hit_test, paint_box_decoration};
 pub use display_list::{
     BlurSigma, DamageExtent, DisplayList, DrawCommand, DrawCommandBuf, DrawCommands, DrawOp,
     FontBlob, FontFace, ImageRegionPlacement, NestedRRects, NonFiniteOps, Payload, PayloadId,
@@ -118,7 +114,6 @@ pub use display_list::{
 };
 pub use error::RegisterFontError;
 pub use image_placement::ImagePlacement;
-pub use table_border::paint_table_border;
 pub use text_layout::{
     FaceRef, FallbackOrder, FontCollection, HostFontFeed, HostFonts, ScriptCode, SystemFallback,
     TextContext, TextLayoutError, TextLayoutResult,

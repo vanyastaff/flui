@@ -7,9 +7,7 @@
 
 use flui_foundation::geometry::{Offset, Point, Rect};
 use flui_painting::BoxShape;
-use flui_painting::{
-    Canvas, DecorationPaintOptions, DrawOp, box_decoration_hit_test, paint_box_decoration,
-};
+use flui_painting::{Canvas, DrawOp, styling::DecorationPaintOptions};
 use flui_painting::{
     paint::PaintStyle,
     styling::{
@@ -28,12 +26,7 @@ fn commands(decoration: &BoxDecoration) -> Vec<DrawOp> {
 
 fn commands_in(rect: Rect<f64>, decoration: &BoxDecoration) -> Vec<DrawOp> {
     let mut canvas = Canvas::new();
-    paint_box_decoration(
-        &mut canvas,
-        rect,
-        decoration,
-        DecorationPaintOptions::default(),
-    );
+    decoration.paint(&mut canvas, rect, DecorationPaintOptions::default());
     canvas.finish().iter().map(|c| c.op.clone()).collect()
 }
 
@@ -59,13 +52,7 @@ pub(crate) fn hidden_uniform_circle_borders_do_not_paint() {
 pub(crate) fn hidden_table_borders_do_not_paint() {
     let hidden = BorderSide::new(Color::RED, 5.0, BorderStyle::None);
     let mut canvas = Canvas::new();
-    flui_painting::paint_table_border(
-        &mut canvas,
-        rect100(),
-        &[25.0],
-        &[50.0],
-        &TableBorder::all(hidden),
-    );
+    TableBorder::all(hidden).paint(&mut canvas, rect100(), &[25.0], &[50.0]);
     assert!(
         canvas.finish().is_empty(),
         "hidden interior and outer table borders"
@@ -123,30 +110,14 @@ pub(crate) fn hit_test_respects_rounded_corners() {
     let rect = rect100();
 
     // Center: inside.
-    assert!(box_decoration_hit_test(
-        rect,
-        &decoration,
-        Offset::new(50.0, 25.0)
-    ));
+    assert!(decoration.hit_test(rect, Offset::new(50.0, 25.0)));
     // The exact corner of the BOUNDING rect lies outside the rounded
     // shape (radius 20 cuts it off).
-    assert!(!box_decoration_hit_test(
-        rect,
-        &decoration,
-        Offset::new(1.0, 1.0)
-    ));
+    assert!(!decoration.hit_test(rect, Offset::new(1.0, 1.0)));
     // Just inside the corner arc.
-    assert!(box_decoration_hit_test(
-        rect,
-        &decoration,
-        Offset::new(20.0, 20.0)
-    ));
+    assert!(decoration.hit_test(rect, Offset::new(20.0, 20.0)));
     // Outside the rect entirely.
-    assert!(!box_decoration_hit_test(
-        rect,
-        &decoration,
-        Offset::new(150.0, 25.0)
-    ));
+    assert!(!decoration.hit_test(rect, Offset::new(150.0, 25.0)));
 }
 
 // ============================================================================
@@ -178,7 +149,7 @@ pub(crate) fn circular_hit_testing_preserves_finite_distance_ranges() {
             (Offset::new(radius * 0.75, radius * 0.75), false),
         ] {
             assert_eq!(
-                box_decoration_hit_test(rect, &decoration, position),
+                decoration.hit_test(rect, position),
                 expected,
                 "radius {radius}, position {position:?}"
             );

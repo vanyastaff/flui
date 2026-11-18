@@ -503,15 +503,14 @@ fn striped() -> Image {
 pub(super) fn decoration_cover() {
     use flui_painting::{
         BoxFit,
+        styling::DecorationPaintOptions,
         styling::{BoxDecoration, DecorationImage},
-        {DecorationPaintOptions, paint_box_decoration},
     };
     let rgba = draw(32, |p| {
         let mut canvas = flui_painting::Canvas::new();
-        paint_box_decoration(
+        BoxDecoration::with_image(DecorationImage::new(striped()).with_fit(BoxFit::Cover)).paint(
             &mut canvas,
             Rect::from_xywh(8.0, 8.0, 4.0, 4.0),
-            &BoxDecoration::with_image(DecorationImage::new(striped()).with_fit(BoxFit::Cover)),
             DecorationPaintOptions::default(),
         );
         canvas.draw_rect(
@@ -529,8 +528,8 @@ pub(super) fn decoration_filter_opacity() {
     use flui_painting::{
         BoxFit,
         paint::ColorFilter,
+        styling::DecorationPaintOptions,
         styling::{BoxDecoration, DecorationImage},
-        {DecorationPaintOptions, paint_box_decoration},
     };
     let rgba = draw(32, |p| {
         let mut canvas = flui_painting::Canvas::new();
@@ -541,10 +540,9 @@ pub(super) fn decoration_filter_opacity() {
                 color: Color::GREEN,
                 blend_mode: BlendMode::Src,
             });
-        paint_box_decoration(
+        BoxDecoration::with_image(decoration).paint(
             &mut canvas,
             Rect::from_xywh(4.0, 4.0, 8.0, 8.0),
-            &BoxDecoration::with_image(decoration),
             DecorationPaintOptions::default(),
         );
         replay_canvas(p, canvas);
@@ -598,8 +596,8 @@ pub(super) fn render_image_natural_crop() {
 pub(super) fn decoration_repeat_phase() {
     use flui_painting::{
         BoxFit,
+        styling::DecorationPaintOptions,
         styling::{BoxDecoration, DecorationImage},
-        {DecorationPaintOptions, paint_box_decoration},
     };
     let source = Image::from_rgba8(
         4,
@@ -619,10 +617,9 @@ pub(super) fn decoration_repeat_phase() {
         let image = DecorationImage::new(source)
             .with_fit(BoxFit::Contain)
             .with_repeat(ImageRepeat::RepeatX);
-        paint_box_decoration(
+        BoxDecoration::with_image(image).paint(
             &mut canvas,
             Rect::from_xywh(4.0, 4.0, 10.0, 4.0),
-            &BoxDecoration::with_image(image),
             DecorationPaintOptions::default(),
         );
         replay_canvas(p, canvas);
@@ -787,22 +784,22 @@ fn decoration_cover_outside_alignment(
 ) {
     use flui_painting::{
         BoxFit,
+        styling::DecorationPaintOptions,
         styling::{BoxDecoration, DecorationImage},
-        {DecorationPaintOptions, paint_box_decoration},
     };
     let (width, height) = if vertical { (4, 8) } else { (8, 4) };
     let source = Image::from_rgba8(width, height, [255, 255, 255, 255].repeat(32));
     let rgba = draw(32, |p| {
         let mut canvas = flui_painting::Canvas::new();
-        paint_box_decoration(
+        (BoxDecoration::with_image(
+            DecorationImage::new(source)
+                .with_fit(BoxFit::Cover)
+                .with_alignment(alignment)
+                .with_repeat(repeat),
+        ))
+        .paint(
             &mut canvas,
             Rect::from_xywh(8.0, 8.0, 4.0, 4.0),
-            &BoxDecoration::with_image(
-                DecorationImage::new(source)
-                    .with_fit(BoxFit::Cover)
-                    .with_alignment(alignment)
-                    .with_repeat(repeat),
-            ),
             DecorationPaintOptions::default(),
         );
         canvas.draw_rect(
@@ -883,23 +880,23 @@ pub(super) fn decoration_none_crop_keeps_other_axis_repeat() {
     use flui_painting::{
         Alignment, BoxFit,
         paint::ImageRepeat,
+        styling::DecorationPaintOptions,
         styling::{BoxDecoration, DecorationImage},
-        {DecorationPaintOptions, paint_box_decoration},
     };
     let rgba = draw(32, |p| {
         let mut canvas = flui_painting::Canvas::new();
         let mut texels = [255, 255, 255, 255].repeat(8);
         texels.extend([0, 255, 0, 255].repeat(8));
         let image = Image::from_rgba8(8, 2, texels);
-        paint_box_decoration(
+        (BoxDecoration::with_image(
+            DecorationImage::new(image)
+                .with_fit(BoxFit::None)
+                .with_alignment(Alignment::new(2.0, 0.0))
+                .with_repeat(ImageRepeat::RepeatY),
+        ))
+        .paint(
             &mut canvas,
             Rect::from_xywh(8.0, 8.0, 4.0, 6.0),
-            &BoxDecoration::with_image(
-                DecorationImage::new(image)
-                    .with_fit(BoxFit::None)
-                    .with_alignment(Alignment::new(2.0, 0.0))
-                    .with_repeat(ImageRepeat::RepeatY),
-            ),
             DecorationPaintOptions::default(),
         );
         canvas.draw_rect(

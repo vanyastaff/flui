@@ -28,8 +28,8 @@ Design decisions are recorded under [Mapping decisions](#mapping-decisions).
 | Paint values | `paint/{style,path,shader,effects,image,clipping,blend_mode,canvas}.rs` | `Paint`, `Path` (with its shape hint), shaders, filters, images, clip and blend modes: the vocabulary the recorder records. `BlendMode::coverage_class` is the one classification coverage, compositing and damage route on; it and every blend predicate derived from it, `ColorFilter::modifies_transparent_black` and `Color::blend` name every mode with no wildcard arm |
 | Style values | `styling/*.rs`, `lerp_impls.rs` | `Color` (straight-alpha sRGB; `lerp` in premultiplied Oklab), borders, radii, decorations, gradients, shadows |
 | Text values | `typography/*.rs` | `TextStyle`, spans, alignment, decoration (`TextDecoration`, `DecorationThickness`), metrics |
-| Layout-facing values | `alignment.rs`, `box_fit.rs`, `text_painter/baseline.rs` | `Alignment` and its directional form, `BoxFit`/`BoxShape`/`FittedSizes`, `TextBaseline` |
-| Decorations | `decoration.rs`, `table_border.rs` | `paint_box_decoration` / `box_decoration_hit_test`, `paint_table_border` |
+| Layout-facing values | `alignment.rs`, `box_fit.rs`, `typography/text_baseline.rs` | `Alignment` and its directional form, `BoxFit`/`BoxShape`/`FittedSizes` at the root; `TextBaseline` in `typography` |
+| Decorations | `styling/box_decoration_paint.rs`, `styling/table_border_paint.rs` | `BoxDecoration::paint` / `BoxDecoration::hit_test`, `TableBorder::paint`: a decoration value records itself |
 | Test support | `testing/mod.rs` | `record`, the collection and host-scan queries tests read, and `EVERY_BLEND_MODE`, a list a compile-time match keeps complete (`testing` feature) |
 
 ---
@@ -403,7 +403,7 @@ for a caller that wants to check.
 
 ### 6. The zero-area background guard sits on the FILL, not on a caller
 
-**Choice:** `paint_box_decoration` records no background — colour or gradient — when either
+**Choice:** `BoxDecoration::paint` records no background — colour or gradient — when either
 dimension of its rect is exactly zero. Border, shadow and image passes stay outside the guard.
 
 **Why on the fill, not the class:** `ColoredBox` realizes as a `RenderDecoratedBox` with a
@@ -429,7 +429,7 @@ rasterizes nothing either way — and one fewer display-list command.
 
 ### 7. `anti_alias` is a paint OPTION, not a `BoxDecoration` field
 
-**Choice:** `paint_box_decoration` takes a `DecorationPaintOptions` alongside the decoration, and
+**Choice:** `BoxDecoration::paint` takes a `DecorationPaintOptions`, and
 `RenderDecoratedBox` owns the flag. `BoxDecoration` is untouched.
 
 **Why:** a decoration DESCRIBES an appearance and is `serde`-serializable here, while
@@ -458,8 +458,8 @@ reason: it used to write the whole vector, which dropped the paint's bit, and di
 - `BoxDecoration::anti_alias` — rejected per the above. It is additive (`#[non_exhaustive]`) and
   would have avoided the signature change, which is exactly why it was tempting.
 - A bare `bool` fourth parameter — rejected for boolean blindness at the call site:
-  `paint_box_decoration(c, r, d, false)` does not say false what.
-- A second `paint_box_decoration_aliased` entry point — rejected; two names for one operation, and
+  `decoration.paint(c, r, false)` does not say false what.
+- A second `BoxDecoration::paint_aliased` entry point — rejected; two names for one operation, and
   it does not extend to the next option.
 
 **Unasserted:** no test pins this.

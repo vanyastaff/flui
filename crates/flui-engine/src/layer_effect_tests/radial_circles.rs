@@ -2,8 +2,8 @@
 use super::*;
 use flui_painting::{
     Alignment,
+    styling::DecorationPaintOptions,
     styling::{BoxDecoration, Gradient, RadialGradient},
-    {DecorationPaintOptions, paint_box_decoration},
 };
 
 fn radial(
@@ -191,10 +191,9 @@ pub(super) fn decoration_preserves_both_circles(renderer: &HeadlessRenderer) {
     );
     let decoration = BoxDecoration::with_gradient(Gradient::Radial(gradient));
     let mut canvas = Canvas::new();
-    paint_box_decoration(
+    decoration.paint(
         &mut canvas,
         Rect::from_xywh(8.0, 8.0, 32.0, 32.0),
-        &decoration,
         DecorationPaintOptions::with_anti_alias(false),
     );
     let bytes = capture(

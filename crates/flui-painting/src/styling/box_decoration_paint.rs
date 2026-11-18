@@ -1,16 +1,10 @@
-//! `BoxDecoration` painting — the orchestrating painter the canvas
-//! primitives were waiting for.
+//! How a [`BoxDecoration`] records itself: [`BoxDecoration::paint`] draws,
+//! in order, shadows, the background (colour or gradient), the image and the
+//! border, each resolved against the concrete paint rect;
+//! [`BoxDecoration::hit_test`] answers against the same silhouette.
 //!
-//! A box decoration draws, in order: shadows → background
-//! (color/gradient) → image → border. All
-//! the primitives (rect/rrect/drrect/gradient/shadow/image) already
-//! exist on [`Canvas`]; this module sequences them and resolves the
-//! alignment-relative gradient geometry against the concrete paint
-//! rect.
-//!
-//! Everything here is sans-IO: commands are recorded into the canvas's
-//! display list, never rasterized — the same contract as the rest of
-//! the fragment paint model.
+//! Nothing is rasterized here: the commands go into the canvas's display
+//! list.
 
 use std::sync::Once;
 
@@ -25,8 +19,8 @@ use crate::canvas::Canvas;
 /// One-shot gate for the "`border_radius` ignored on `BoxShape::Circle`"
 /// warning (see `resolve_silhouette` below).
 ///
-/// `resolve_silhouette` runs from `paint_box_decoration` on every frame AND
-/// from `box_decoration_hit_test` on every pointer event, so an ungated
+/// `resolve_silhouette` runs from `BoxDecoration::paint` on every frame AND
+/// from `BoxDecoration::hit_test` on every pointer event, so an ungated
 /// `tracing::warn!` here would spam at frame-and-input rate for any
 /// decoration that keeps a mismatched `border_radius` set across rebuilds
 /// (e.g. an `AnimatedContainer` interpolating other fields). This is a
@@ -46,7 +40,7 @@ static WARN_CIRCLE_NON_UNIFORM_BORDER: Once = Once::new();
 /// **The image is the partial case.** A circular decoration clips its image
 /// to the circle; a rounded-rect one still paints its image to the full rect
 /// rather than clipping it. That difference is deliberate and named
-/// at the image step of `paint_box_decoration`, not an oversight of this
+/// at the image step of `BoxDecoration::paint`, not an oversight of this
 /// type.
 ///
 /// Resolved once per paint/hit-test call (`resolve_silhouette`) rather
@@ -75,7 +69,7 @@ enum Silhouette {
 /// via `tracing` instead — testable in every profile — and paints the
 /// circle regardless. The warn fires at most once per process
 /// ([`WARN_CIRCLE_BORDER_RADIUS`]): this function is called from both
-/// `paint_box_decoration` (every frame) and `box_decoration_hit_test`
+/// `BoxDecoration::paint` (every frame) and `BoxDecoration::hit_test`
 /// (every pointer event), and an ungated warn would spam at that rate.
 fn resolve_silhouette(rect: Rect<f64>, decoration: &BoxDecoration) -> Silhouette {
     if decoration.shape.is_circle() {
@@ -113,7 +107,7 @@ pub struct DecorationPaintOptions {
     ///
     /// **Reaches the colour fill only.** Borders, shadows, images and
     /// gradient backgrounds keep the default: only a plain colour box
-    /// exposes the option. Stated at the call site in `paint_box_decoration`.
+    /// exposes the option. Stated at the call site in `BoxDecoration::paint`.
     pub anti_alias: bool,
 }
 
@@ -130,183 +124,182 @@ impl DecorationPaintOptions {
         Self { anti_alias: value }
     }
 }
+impl BoxDecoration {
+    /// Paints this decoration into `rect` on `canvas` in this order:
+    /// shadows, then background color/gradient, then the decoration image,
+    /// then the border.
+    pub fn paint(&self, canvas: &mut Canvas, rect: Rect<f64>, options: DecorationPaintOptions) {
+        let decoration = self;
+        let silhouette = resolve_silhouette(rect, decoration);
 
-/// Paints `decoration` into `rect` on `canvas` in this order:
-/// shadows, then background color/gradient, then the decoration image,
-/// then the border.
-pub fn paint_box_decoration(
-    canvas: &mut Canvas,
-    rect: Rect<f64>,
-    decoration: &BoxDecoration,
-    options: DecorationPaintOptions,
-) {
-    let silhouette = resolve_silhouette(rect, decoration);
-
-    // 1. Shadows (behind everything). Inset shadows are an inner-glow
-    //    effect drawn INSIDE the shape above the background — a
-    //    different compositing path the engine does not expose yet;
-    //    painting them as outer drop shadows would be visually wrong,
-    //    so they are skipped loudly rather than rendered wrongly.
-    if let Some(shadows) = &decoration.box_shadow {
-        for shadow in shadows {
-            if shadow.inset {
-                tracing::warn!(?shadow.color, "inset box shadows are not painted yet");
-                continue;
+        // 1. Shadows (behind everything). Inset shadows are an inner-glow
+        //    effect drawn INSIDE the shape above the background — a
+        //    different compositing path the engine does not expose yet;
+        //    painting them as outer drop shadows would be visually wrong,
+        //    so they are skipped loudly rather than rendered wrongly.
+        if let Some(shadows) = &decoration.box_shadow {
+            for shadow in shadows {
+                if shadow.inset {
+                    tracing::warn!(?shadow.color, "inset box shadows are not painted yet");
+                    continue;
+                }
+                match &silhouette {
+                    Silhouette::Circle(circle) => paint_circle_shadow(canvas, *circle, shadow),
+                    Silhouette::RRect(rrect) => paint_shadow(canvas, rect, Some(*rrect), shadow),
+                    Silhouette::Rect => paint_shadow(canvas, rect, None, shadow),
+                }
             }
+        }
+
+        // 2. Background: a gradient wins over a flat color.
+        //
+        // A background covering no area is not recorded at all (false when
+        // EITHER dimension is zero). One decoration painter serves both
+        // `ColoredBox` and `DecoratedBox`, so the guard goes on the FILL
+        // instead of the caller: for `DecoratedBox` it drops a
+        // command that covers zero pixels either way. The border, shadows and
+        // image below are deliberately outside it — a border on a degenerate box
+        // still draws lines, and skipping the whole decoration would lose them.
+        //
+        // The test is `== 0`, not `<= 0`. A rect whose min exceeds its max is
+        // INVERTED, not empty, and this module deliberately normalizes those
+        // through `shortest_side`'s `.abs()`, so an inverted 100x100 resolves to
+        // the same r=50 circle an upright one gives. A signed test would have
+        // swallowed that whole case.
+        let paints_no_area = rect.width() == 0.0 || rect.height() == 0.0;
+        if paints_no_area {
+            // fall through to the border/shadow/image passes
+        } else if let Some(gradient) = &decoration.gradient {
+            // Circle dispatch narrows the radius before constructing shader bounds.
+            // Resolve alignments in the decoration rect, but validate in that same
+            // bounds-local domain the engine uses for the silhouette.
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "match engine circle dispatch"
+            )]
+            let shader_bounds = match &silhouette {
+                Silhouette::Circle(circle) => {
+                    let radius = circle.radius as f32;
+                    Rect::from_xywh(
+                        circle.center.x - f64::from(radius),
+                        circle.center.y - f64::from(radius),
+                        f64::from(radius * 2.0),
+                        f64::from(radius * 2.0),
+                    )
+                }
+                Silhouette::RRect(rrect) => rrect.bounding_rect(),
+                Silhouette::Rect => rect,
+            };
+            let gradient = if let Some((raw, bounded)) = decoration.gradient_fallback.as_deref()
+                && raw == gradient
+                && !crate::styling::valid_bounds(gradient, rect, shader_bounds)
+            {
+                bounded
+            } else {
+                gradient
+            };
+            // One shader paint for every silhouette, handed to whichever
+            // rect/rrect/circle draw the shape needs.
+            // The fill colour is unreachable except as the backend's fallback
+            // for a stopless shader (`Gradient::new` does not validate that, so
+            // it is reachable from safe input); `Color::TRANSPARENT` makes that
+            // fallback paint nothing, uniformly across the three shapes.
+            //
+            // Deliberately NOT `options.anti_alias`: the flag is a `ColoredBox`
+            // parameter and a `ColoredBox` has no gradient, so it has no
+            // defined meaning here; the shader paint keeps `Paint`'s default.
+            let paint =
+                Paint::fill(Color::TRANSPARENT).with_shader(resolve_gradient(gradient, rect));
             match &silhouette {
-                Silhouette::Circle(circle) => paint_circle_shadow(canvas, *circle, shadow),
-                Silhouette::RRect(rrect) => paint_shadow(canvas, rect, Some(*rrect), shadow),
-                Silhouette::Rect => paint_shadow(canvas, rect, None, shadow),
+                Silhouette::Circle(circle) => {
+                    canvas.draw_circle(circle.center, circle.radius, &paint)
+                }
+                Silhouette::RRect(rrect) => canvas.draw_rrect(*rrect, &paint),
+                Silhouette::Rect => canvas.draw_rect(rect, &paint),
+            }
+        } else if let Some(color) = decoration.color {
+            // `options.anti_alias` reaches THIS arm — the solid colour fill — and
+            // nothing else.
+            //
+            // Not the border, shadow or image: the flag is a `ColoredBox`
+            // parameter and a `ColoredBox` has none of those, so nothing defines
+            // what they should do when it is off.
+            //
+            // Not the gradients either: a gradient-filled `ColoredBox` does not
+            // exist — the widget is colour-only — so the only reachable case is a
+            // `DecoratedBox` gradient, which has no anti-alias knob.
+            let paint = Paint::fill(color).with_anti_alias(options.anti_alias);
+            match &silhouette {
+                Silhouette::Circle(circle) => {
+                    canvas.draw_circle(circle.center, circle.radius, &paint)
+                }
+                Silhouette::RRect(rrect) => canvas.draw_rrect(*rrect, &paint),
+                Silhouette::Rect => canvas.draw_rect(rect, &paint),
             }
         }
-    }
 
-    // 2. Background: a gradient wins over a flat color.
-    //
-    // A background covering no area is not recorded at all (false when
-    // EITHER dimension is zero). One decoration painter serves both
-    // `ColoredBox` and `DecoratedBox`, so the guard goes on the FILL
-    // instead of the caller: for `DecoratedBox` it drops a
-    // command that covers zero pixels either way. The border, shadows and
-    // image below are deliberately outside it — a border on a degenerate box
-    // still draws lines, and skipping the whole decoration would lose them.
-    //
-    // The test is `== 0`, not `<= 0`. A rect whose min exceeds its max is
-    // INVERTED, not empty, and this module deliberately normalizes those
-    // through `shortest_side`'s `.abs()`, so an inverted 100x100 resolves to
-    // the same r=50 circle an upright one gives. A signed test would have
-    // swallowed that whole case.
-    let paints_no_area = rect.width() == 0.0 || rect.height() == 0.0;
-    if paints_no_area {
-        // fall through to the border/shadow/image passes
-    } else if let Some(gradient) = &decoration.gradient {
-        // Circle dispatch narrows the radius before constructing shader bounds.
-        // Resolve alignments in the decoration rect, but validate in that same
-        // bounds-local domain the engine uses for the silhouette.
-        #[expect(
-            clippy::cast_possible_truncation,
-            reason = "match engine circle dispatch"
-        )]
-        let shader_bounds = match &silhouette {
-            Silhouette::Circle(circle) => {
-                let radius = circle.radius as f32;
-                Rect::from_xywh(
-                    circle.center.x - f64::from(radius),
-                    circle.center.y - f64::from(radius),
-                    f64::from(radius * 2.0),
-                    f64::from(radius * 2.0),
-                )
-            }
-            Silhouette::RRect(rrect) => rrect.bounding_rect(),
-            Silhouette::Rect => rect,
-        };
-        let gradient = if let Some((raw, bounded)) = decoration.gradient_fallback.as_deref()
-            && raw == gradient
-            && !crate::styling::valid_bounds(gradient, rect, shader_bounds)
-        {
-            bounded
-        } else {
-            gradient
-        };
-        // One shader paint for every silhouette, handed to whichever
-        // rect/rrect/circle draw the shape needs.
-        // The fill colour is unreachable except as the backend's fallback
-        // for a stopless shader (`Gradient::new` does not validate that, so
-        // it is reachable from safe input); `Color::TRANSPARENT` makes that
-        // fallback paint nothing, uniformly across the three shapes.
+        // 3. Decoration image (above the background, below the border).
         //
-        // Deliberately NOT `options.anti_alias`: the flag is a `ColoredBox`
-        // parameter and a `ColoredBox` has no gradient, so it has no
-        // defined meaning here; the shader paint keeps `Paint`'s default.
-        let paint = Paint::fill(Color::TRANSPARENT).with_shader(resolve_gradient(gradient, rect));
-        match &silhouette {
-            Silhouette::Circle(circle) => canvas.draw_circle(circle.center, circle.radius, &paint),
-            Silhouette::RRect(rrect) => canvas.draw_rrect(*rrect, &paint),
-            Silhouette::Rect => canvas.draw_rect(rect, &paint),
-        }
-    } else if let Some(color) = decoration.color {
-        // `options.anti_alias` reaches THIS arm — the solid colour fill — and
-        // nothing else.
+        // The image is clipped to the decoration's shape. On a circle this
+        // routes through a scoped SDF clip: `save` opens a scope the backend can
+        // unwind, `clip_rrect` with radii at half the shorter side narrows it to
+        // the circle, and `restore` closes it so the border painted afterwards is
+        // untouched.
         //
-        // Not the border, shadow or image: the flag is a `ColoredBox`
-        // parameter and a `ColoredBox` has none of those, so nothing defines
-        // what they should do when it is off.
-        //
-        // Not the gradients either: a gradient-filled `ColoredBox` does not
-        // exist — the widget is colour-only — so the only reachable case is a
-        // `DecoratedBox` gradient, which has no anti-alias knob.
-        let paint = Paint::fill(color).with_anti_alias(options.anti_alias);
-        match &silhouette {
-            Silhouette::Circle(circle) => canvas.draw_circle(circle.center, circle.radius, &paint),
-            Silhouette::RRect(rrect) => canvas.draw_rrect(*rrect, &paint),
-            Silhouette::Rect => canvas.draw_rect(rect, &paint),
-        }
-    }
-
-    // 3. Decoration image (above the background, below the border).
-    //
-    // The image is clipped to the decoration's shape. On a circle this
-    // routes through a scoped SDF clip: `save` opens a scope the backend can
-    // unwind, `clip_rrect` with radii at half the shorter side narrows it to
-    // the circle, and `restore` closes it so the border painted afterwards is
-    // untouched.
-    //
-    // The clip is a distance field, not tessellated geometry, so the circle
-    // is exact — the ~6% diagonal bulge that rules out drrect for a circular
-    // *ring* does not apply to a clip.
-    if let Some(image) = &decoration.image {
-        match &silhouette {
-            Silhouette::Circle(circle) => {
-                let diameter = circle.radius * 2.0;
-                let bounds = Rect::from_xywh(
-                    circle.center.x - circle.radius,
-                    circle.center.y - circle.radius,
-                    diameter,
-                    diameter,
-                );
-                canvas.save();
-                canvas.clip_rrect(RRect::from_rect_circular(bounds, circle.radius));
-                paint_decoration_image(canvas, rect, image);
-                canvas.restore();
+        // The clip is a distance field, not tessellated geometry, so the circle
+        // is exact — the ~6% diagonal bulge that rules out drrect for a circular
+        // *ring* does not apply to a clip.
+        if let Some(image) = &decoration.image {
+            match &silhouette {
+                Silhouette::Circle(circle) => {
+                    let diameter = circle.radius * 2.0;
+                    let bounds = Rect::from_xywh(
+                        circle.center.x - circle.radius,
+                        circle.center.y - circle.radius,
+                        diameter,
+                        diameter,
+                    );
+                    canvas.save();
+                    canvas.clip_rrect(RRect::from_rect_circular(bounds, circle.radius));
+                    paint_decoration_image(canvas, rect, image);
+                    canvas.restore();
+                }
+                // A rounded-rect decoration still paints its image to the full
+                // rect. Clipping that case too would use the same
+                // mechanism as above, but it changes what existing rounded
+                // decorations render, and no readback oracle covers a clipped
+                // image yet — so it is named here rather than changed blind.
+                Silhouette::RRect(_) | Silhouette::Rect => {
+                    paint_decoration_image(canvas, rect, image);
+                }
             }
-            // A rounded-rect decoration still paints its image to the full
-            // rect. Clipping that case too would use the same
-            // mechanism as above, but it changes what existing rounded
-            // decorations render, and no readback oracle covers a clipped
-            // image yet — so it is named here rather than changed blind.
-            Silhouette::RRect(_) | Silhouette::Rect => {
-                paint_decoration_image(canvas, rect, image);
+        }
+
+        // 4. Border (on top).
+        if let Some(border) = &decoration.border {
+            match &silhouette {
+                Silhouette::Circle(circle) => paint_circle_border(canvas, *circle, border),
+                Silhouette::RRect(rrect) => paint_border(canvas, rect, Some(*rrect), border),
+                Silhouette::Rect => paint_border(canvas, rect, None, border),
             }
         }
     }
 
-    // 4. Border (on top).
-    if let Some(border) = &decoration.border {
-        match &silhouette {
-            Silhouette::Circle(circle) => paint_circle_border(canvas, *circle, border),
-            Silhouette::RRect(rrect) => paint_border(canvas, rect, Some(*rrect), border),
-            Silhouette::Rect => paint_border(canvas, rect, None, border),
+    /// Hit test against the decoration's geometry: inside the circle when
+    /// `shape` is `BoxShape::Circle`, inside the rounded rect when a
+    /// border radius is set, inside the plain rect otherwise.
+    #[must_use]
+    pub fn hit_test(&self, rect: Rect<f64>, position: Offset<f64>) -> bool {
+        let decoration = self;
+        let point = Point::new(position.dx, position.dy);
+        if !rect.contains(point) {
+            return false;
         }
-    }
-}
-
-/// Hit test against the decoration's geometry: inside the circle when
-/// `shape` is `BoxShape::Circle`, inside the rounded rect when a
-/// border radius is set, inside the plain rect otherwise.
-#[must_use]
-pub fn box_decoration_hit_test(
-    rect: Rect<f64>,
-    decoration: &BoxDecoration,
-    position: Offset<f64>,
-) -> bool {
-    let point = Point::new(position.dx, position.dy);
-    if !rect.contains(point) {
-        return false;
-    }
-    match resolve_silhouette(rect, decoration) {
-        Silhouette::Circle(circle) => circle.contains(point),
-        Silhouette::RRect(rrect) => rrect.contains(point),
-        Silhouette::Rect => true,
+        match resolve_silhouette(rect, decoration) {
+            Silhouette::Circle(circle) => circle.contains(point),
+            Silhouette::RRect(rrect) => rrect.contains(point),
+            Silhouette::Rect => true,
+        }
     }
 }
 
@@ -538,7 +531,7 @@ fn paint_decoration_image(
 /// edge rects; combining per-side widths with a border radius is
 /// unsupported, so the radius is ignored on that path.
 ///
-/// `pub(crate)`: also reused by `crate::table_border::paint_table_border`
+/// `pub(crate)`: also reused by `TableBorder::paint`
 /// for `TableBorder`'s outer edge, so the uniform/non-uniform split is
 /// written once.
 pub(crate) fn paint_border(
