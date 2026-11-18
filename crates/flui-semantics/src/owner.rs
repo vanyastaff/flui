@@ -33,7 +33,7 @@ use crate::{
 /// The payload is the [`TreeUpdate`](crate::TreeUpdate) a platform
 /// accessibility adapter consumes, keyed by the stable
 /// [`AccessibilityNodeId`] an adapter publishes and routes actions back
-/// through, never by [`SemanticsId`](flui_foundation::SemanticsId), an arena
+/// through, never by [`SemanticsId`], an arena
 /// position in a tree the pipeline rebuilds every pass. See
 /// [`crate::tree_to_update`].
 ///

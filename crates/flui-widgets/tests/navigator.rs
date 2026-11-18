@@ -13,6 +13,7 @@
 //! Unlike `src/navigator/tests.rs` (the route stack's pure-data suite), these drive a
 //! real element tree.
 
+use flui_animation::__runtime::VsyncDriver;
 use std::cell::Cell;
 use std::rc::Rc;
 
@@ -787,7 +788,7 @@ pub(crate) fn closing_mid_transition_releases_the_route_overlay_and_hero() {
     use std::cell::Cell;
     use std::time::Duration;
 
-    use flui_animation::{Animation as _, Vsync};
+    use flui_animation::Animation as _;
     use flui_foundation::ValueKey;
     use flui_view::CloseReason;
     use flui_view::environment::VsyncScope;
@@ -817,9 +818,10 @@ pub(crate) fn closing_mid_transition_releases_the_route_overlay_and_hero() {
         .transition_duration(TRANSITION)
     }
 
-    let vsync = Vsync::new();
+    let driver = VsyncDriver::new();
+    let vsync = driver.vsync().clone();
     let frame_requests = Rc::new(Cell::new(0_usize));
-    vsync.set_frame_requester(Some(Rc::new({
+    driver.set_frame_requester(Some(Rc::new({
         let frame_requests = Rc::clone(&frame_requests);
         move || frame_requests.set(frame_requests.get() + 1)
     })));

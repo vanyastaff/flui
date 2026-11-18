@@ -173,10 +173,22 @@ impl Shared {
         Self::with_placement(lifecycle, INLINE_DEPTH, None)
     }
 
-    /// The state of an executor on a raster thread, which a send wakes.
+    /// The state of an executor on a raster thread, which a send wakes. The
+    /// owner waits for the thread through `owner_wait` where its platform has
+    /// one (ADR-0305 §9), and on the turns' condition variable otherwise.
     #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn threaded(lifecycle: Sender<Lifecycle>) -> Self {
-        Self::with_placement(lifecycle, THREADED_DEPTH, Some(Doorbell::default()))
+    pub(crate) fn threaded(
+        lifecycle: Sender<Lifecycle>,
+        owner_wait: Option<Arc<dyn flui_platform::OwnerWait>>,
+    ) -> Self {
+        Self::with_placement(
+            lifecycle,
+            THREADED_DEPTH,
+            Some(Doorbell {
+                owner_wait,
+                ..Doorbell::default()
+            }),
+        )
     }
 
     fn with_placement(
@@ -232,14 +244,33 @@ impl Shared {
         }
     }
 
-    /// A raster thread finished a turn: an owner waiting on a slot's record
-    /// looks again.
+    /// A raster thread finished a turn, or stopped: an owner waiting on a
+    /// slot's record or on the stop looks again. Answers whether a panic of
+    /// the platform's wait was newly held for the owner, which the thread
+    /// then wakes the owner for.
     #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn note_turn(&self) {
-        if let Some(doorbell) = &self.doorbell {
-            *doorbell.turns.lock() += 1;
-            doorbell.turned.notify_all();
+    #[must_use = "a panic it held is owed a wake of the owner"]
+    pub(crate) fn note_turn(&self) -> bool {
+        let Some(doorbell) = &self.doorbell else {
+            return false;
+        };
+        *doorbell.turns.lock() += 1;
+        doorbell.turned.notify_all();
+        if let Some(wait) = &doorbell.owner_wait {
+            // The platform's code, run with no lock held: a panic is held
+            // for the owner as a turn's is, and the owner's wait then ends at
+            // its deadline instead.
+            let mut caught = FirstPanic::new();
+            caught.contain(|| wait.notify());
+            if let Some(payload) = caught.into_payload() {
+                let message = flui_foundation::panic::payload_text(&*payload)
+                    .unwrap_or("a panic without a message")
+                    .to_owned();
+                flui_foundation::panic::discard_payload(payload);
+                return self.hold_failure(ExecutorFailure::TurnPanicked { message });
+            }
         }
+        false
     }
 
     /// How many turns the raster thread finished.
@@ -250,15 +281,32 @@ impl Shared {
             .map_or(0, |doorbell| *doorbell.turns.lock())
     }
 
-    /// Wait until a turn after the `seen`th finished, at most `timeout`.
+    /// Wait until a turn after the `seen`th finished, at most `timeout`, or
+    /// less: through the platform's wait, which serves what the owner thread
+    /// owes meanwhile and may return early, where it has one.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn wait_for_turn(&self, seen: u64, timeout: std::time::Duration) {
-        if let Some(doorbell) = &self.doorbell {
-            let mut turns = doorbell.turns.lock();
-            if *turns == seen {
-                let _timed_out = doorbell.turned.wait_for(&mut turns, timeout);
+        let Some(doorbell) = &self.doorbell else {
+            return;
+        };
+        if let Some(wait) = &doorbell.owner_wait {
+            // A turn noted after this read notifies the wait, which a
+            // notification before it starts still ends.
+            if *doorbell.turns.lock() == seen {
+                wait.wait(timeout);
             }
+            return;
         }
+        let mut turns = doorbell.turns.lock();
+        if *turns == seen {
+            let _timed_out = doorbell.turned.wait_for(&mut turns, timeout);
+        }
+    }
+
+    /// The platform's wait the owner waits for the thread through, if any.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn owner_wait(&self) -> Option<&dyn flui_platform::OwnerWait> {
+        self.doorbell.as_ref()?.owner_wait.as_deref()
     }
 
     /// Keep `failure` for the owner unless an earlier one waits there; the
@@ -319,7 +367,7 @@ impl Shared {
         let first = self.death.set(failure).is_ok();
         self.health.store(DIED, Ordering::SeqCst);
         // An owner waiting on a slot's record learns of it now.
-        self.note_turn();
+        let _held = self.note_turn();
         if first && let Some(cause) = self.death.get() {
             // Logged once, by whichever side reached the death first, with
             // no lock held. A subscriber is user code: its panic is held for
@@ -429,6 +477,16 @@ pub(crate) struct Doorbell {
         )
     )]
     turned: Condvar,
+    /// The platform's wait the owner waits on the thread through, notified
+    /// after each turn and the stop (ADR-0305 §9).
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            dead_code,
+            reason = "the web has no raster thread: its executor turns inline (ADR-0305 §10)"
+        )
+    )]
+    owner_wait: Option<Arc<dyn flui_platform::OwnerWait>>,
 }
 
 impl Doorbell {
@@ -1201,7 +1259,7 @@ mod death_log {
     #[test]
     fn a_subscriber_that_panics_on_the_deaths_log_is_held_for_the_owner() {
         let (lifecycle, _queue) = bounded(LIFECYCLE_CAPACITY);
-        let shared = Shared::threaded(lifecycle);
+        let shared = Shared::threaded(lifecycle, None);
         let waited = Duration::from_millis(50);
         tracing::subscriber::with_default(PanickingSubscriber, || {
             shared.die(ExecutorFailure::Wedged { waited });

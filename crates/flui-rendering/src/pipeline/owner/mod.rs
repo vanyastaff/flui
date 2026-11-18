@@ -329,6 +329,12 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
     /// a ratio change is observed where it is applied, but acted on at paint.
     retained_pixel_ratio: flui_foundation::geometry::DevicePixelRatio,
 
+    /// Set while a paint pass that began has not committed: it cleared the
+    /// paint flags of the nodes it painted while the records still hold
+    /// their output from before, so the next pass keeps no chunk's recording
+    /// on the strength of a flag (ADR-0304 §2).
+    unrecorded_paint: bool,
+
     /// `RenderId`s of `Layer::Follower` nodes correlated during the last
     /// paint phase that resolved to `None` (unlinked with
     /// `show_when_unlinked == false`, a leader clipped out under
@@ -473,6 +479,7 @@ where
         orphaned_nodes: from.orphaned_nodes,
         abandoned_nodes: from.abandoned_nodes,
         retained_pixel_ratio: from.retained_pixel_ratio,
+        unrecorded_paint: from.unrecorded_paint,
         last_hidden_follower_ids: from.last_hidden_follower_ids,
         device_pixel_ratio: from.device_pixel_ratio,
         dirty_sender: from.dirty_sender,

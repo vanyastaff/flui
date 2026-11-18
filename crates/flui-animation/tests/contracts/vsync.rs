@@ -1,5 +1,6 @@
 //! Registry nesting, muting and owner retirement through public handles.
 
+use flui_animation::__runtime::VsyncDriver;
 use flui_animation::{
     Animation, AnimationController, AnimationStatus, MotionClock, Vsync, VsyncRegistrationError,
 };
@@ -8,7 +9,8 @@ use std::rc::Rc;
 use std::time::Duration;
 
 fn a_muted_ancestor_starves_an_unmuted_descendant() {
-    let outer = Vsync::new();
+    let driver = VsyncDriver::new();
+    let outer = driver.vsync();
     let middle = Vsync::new();
     let inner = Vsync::new();
     outer.attach_child(&middle).unwrap();
@@ -19,8 +21,8 @@ fn a_muted_ancestor_starves_an_unmuted_descendant() {
     middle.set_muted(true);
     assert!(!inner.is_muted());
     let mut clock = MotionClock::new();
-    outer.tick_all(&clock.frame(Duration::ZERO));
-    outer.tick_all(&clock.frame(Duration::from_millis(500)));
+    driver.tick_all(&clock.frame(Duration::ZERO));
+    driver.tick_all(&clock.frame(Duration::from_millis(500)));
     assert_eq!(
         c.value(),
         0.0,
@@ -28,8 +30,8 @@ fn a_muted_ancestor_starves_an_unmuted_descendant() {
     );
     assert!(run.is_pending());
     middle.set_muted(false);
-    outer.tick_all(&clock.frame(Duration::from_secs(1)));
-    outer.tick_all(&clock.frame(Duration::from_millis(1400)));
+    driver.tick_all(&clock.frame(Duration::from_secs(1)));
+    driver.tick_all(&clock.frame(Duration::from_millis(1400)));
     assert!(
         (c.value() - 0.4).abs() < 1e-6,
         "the first eligible frame anchors the run"
@@ -37,23 +39,25 @@ fn a_muted_ancestor_starves_an_unmuted_descendant() {
 }
 
 fn a_cyclic_nesting_is_refused() {
-    let outer = Vsync::new();
+    let driver = VsyncDriver::new();
+    let outer = driver.vsync();
     let inner = Vsync::new();
     outer.attach_child(&inner).unwrap();
     assert_eq!(
-        inner.attach_child(&outer),
+        inner.attach_child(outer),
         Err(VsyncRegistrationError::WouldCycle)
     );
     assert_eq!(
-        outer.attach_child(&outer),
+        outer.attach_child(outer),
         Err(VsyncRegistrationError::WouldCycle)
     );
-    outer.tick_all(&MotionClock::new().frame(Duration::ZERO));
+    driver.tick_all(&MotionClock::new().frame(Duration::ZERO));
 }
 
 fn a_listener_may_unregister_from_inside_tick_all() {
-    let vsync = Vsync::new();
-    let owner = AnimationController::builder(Duration::from_millis(100)).build_on(Some(&vsync));
+    let driver = VsyncDriver::new();
+    let vsync = driver.vsync();
+    let owner = AnimationController::builder(Duration::from_millis(100)).build_on(Some(vsync));
     let c = owner.controller().clone();
     let slot = Rc::new(RefCell::new(Some(owner)));
     let retiring = Rc::downgrade(&slot);
@@ -66,8 +70,8 @@ fn a_listener_may_unregister_from_inside_tick_all() {
     }));
     let run = c.forward().unwrap();
     let mut clock = MotionClock::new();
-    vsync.tick_all(&clock.frame(Duration::ZERO));
-    vsync.tick_all(&clock.frame(Duration::from_millis(200)));
+    driver.tick_all(&clock.frame(Duration::ZERO));
+    driver.tick_all(&clock.frame(Duration::from_millis(200)));
     assert!(
         slot.borrow().is_none(),
         "the completion listener retired its owner"

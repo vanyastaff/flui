@@ -1172,6 +1172,12 @@ unsafe fn layout_subtree_borrowed_impl(
                 entry.state().geometry()
             };
         let geometry_degraded = entry.state().geometry_degraded();
+        // The short-circuit below serves exactly a cached geometry; a node
+        // without one lays out, which the paint that follows reads to record
+        // its chunks again (ADR-0304 §2).
+        if cached_geometry.is_none() {
+            entry.state().flags().mark_laid_out_since_paint();
+        }
         let is_leaf = child_ids.is_empty();
         // Snapshotted here, in the block that already holds the shared borrow,
         // so the record below costs a branch rather than another node read.
@@ -2046,6 +2052,9 @@ unsafe fn layout_sliver_subtree_borrowed_impl(
         // Snapshotted in the block that already holds the shared borrow, as
         // in the Box walk.
         let is_repaint_boundary = entry.state().is_repaint_boundary();
+        // A sliver reached here lays out (see below), which the paint that
+        // follows reads to record its chunks again (ADR-0304 §2).
+        entry.state().flags().mark_laid_out_since_paint();
         (child_ids, node_protocol, is_repaint_boundary)
         // `parent_shared` drops here — the shared borrow of `id`'s slot ends.
     };

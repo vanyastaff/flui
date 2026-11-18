@@ -36,14 +36,8 @@ impl std::fmt::Debug for VsyncRetirement {
 }
 
 impl Vsync {
-    /// Permanently close this registry and every attached descendant identity.
-    ///
-    /// Seats, parent links and frame hooks are withdrawn, and controller kernels
-    /// refuse new runs before this returns. Saved handles cannot revive admission.
-    /// Closing an attached descendant also withdraws its seat from its parent.
-    /// Cancellation callbacks and outgoing capture retirement are deferred to the
-    /// returned receipt; repeated preparation is an empty, idempotent retirement.
-    pub fn prepare_close(&self) -> VsyncRetirement {
+    /// See [`VsyncDriver::prepare_close`](super::VsyncDriver::prepare_close).
+    pub(crate) fn prepare_close(&self) -> VsyncRetirement {
         let mut retirement = VsyncRetirement {
             recovery: None,
             publications: Vec::new(),
@@ -113,7 +107,6 @@ impl VsyncRetirement {
     }
 
     /// Publish under the enclosing framework owner's first-failure custody.
-    #[doc(hidden)]
     pub fn publish_with(mut self, recovery: &mut RecoveryScope<'_>) {
         let prepared = self
             .recovery

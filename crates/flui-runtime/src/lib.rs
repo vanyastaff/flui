@@ -71,6 +71,7 @@ mod input_record;
 mod input_tap;
 pub mod lifecycle_state;
 mod media_query_root;
+mod occluded_frame;
 mod overlay_style;
 pub mod owner;
 pub mod owner_turn;

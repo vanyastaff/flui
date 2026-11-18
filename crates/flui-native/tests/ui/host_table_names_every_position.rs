@@ -1,14 +1,11 @@
 //! A host's table names a type for every position of the closed list, and its
-//! loop writes every service, `page_origin` included: one left out is a compile
-//! error, never an inert default.
+//! loop answers every launch read, `page_origin` included: one left out is a
+//! compile error, never an inert default.
 
-use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
-use flui_native::host::{Absent, Host, Loop, Services, position};
-use flui_native::{
-    AppHandler, PathPromptOptions, Platform, PlatformError, Task,
-};
+use flui_native::host::{Absent, Host, Launch, Loop, position};
+use flui_native::{AppHandler, Platform, PlatformError};
 use flui_platform::LaunchKey;
 
 struct Idle;
@@ -27,34 +24,9 @@ impl Loop for Idle {
     fn request_exit_policy_reevaluation(&self) {}
 }
 
-impl Services for Idle {
-    fn app_path(&self) -> Result<PathBuf, PlatformError> {
-        Ok(PathBuf::new())
-    }
-
+impl Launch for Idle {
     fn launch_value(&self, _: LaunchKey) -> Option<String> {
         None
-    }
-
-    fn open_url(&self, _: &str) {}
-
-    fn reveal_path(&self, _: &Path) {}
-
-    fn open_path(&self, _: &Path) {}
-
-    fn prompt_for_paths(
-        &self,
-        _: PathPromptOptions,
-    ) -> Task<Result<Option<Vec<PathBuf>>, PlatformError>> {
-        Task::ready(Ok(None))
-    }
-
-    fn prompt_for_new_path(
-        &self,
-        _: &Path,
-        _: Option<&str>,
-    ) -> Task<Result<Option<PathBuf>, PlatformError>> {
-        Task::ready(Ok(None))
     }
 }
 

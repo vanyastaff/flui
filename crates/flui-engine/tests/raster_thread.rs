@@ -38,7 +38,7 @@ struct Thread {
 fn spawn_with(wake: impl Fn() + Send + 'static) -> (ExecutorHandle, RasterSender, ScriptedSlots) {
     let backend = ScriptedSlots::new();
     let (handle, sender) =
-        RasterExecutor::spawn(backend.clone(), Arc::new(ManualClock::new()), wake)
+        RasterExecutor::spawn(backend.clone(), Arc::new(ManualClock::new()), wake, None)
             .expect("the raster thread starts");
     (handle, sender, backend)
 }
@@ -242,6 +242,7 @@ fn a_raster_thread_rebuilds_a_lost_device_when_its_backoff_ends() {
         move || {
             let _told = wake.send(());
         },
+        None,
     )
     .expect("the raster thread starts");
     let thread = Thread {
@@ -645,11 +646,15 @@ fn a_clock_that_panics_is_reported_and_does_not_spin_the_raster_thread() {
     let clock = Arc::new(BrokenClock::default());
     let (wake, woken) = mpsc::channel();
     let backend = ScriptedSlots::new();
-    let (handle, sender) =
-        RasterExecutor::spawn(backend.clone(), Arc::clone(&clock) as _, move || {
+    let (handle, sender) = RasterExecutor::spawn(
+        backend.clone(),
+        Arc::clone(&clock) as _,
+        move || {
             let _told = wake.send(());
-        })
-        .expect("the raster thread starts");
+        },
+        None,
+    )
+    .expect("the raster thread starts");
     let thread = Thread {
         handle,
         sender,
@@ -779,11 +784,15 @@ impl flui_foundation::MonotonicClock for GatedClock {
 fn a_failure_held_before_a_stop_that_comes_first_wakes_the_owner() {
     let clock = Arc::new(GatedClock::default());
     let (wake, woken) = mpsc::channel();
-    let (mut handle, sender) =
-        RasterExecutor::spawn(ScriptedSlots::new(), Arc::clone(&clock) as _, move || {
+    let (mut handle, sender) = RasterExecutor::spawn(
+        ScriptedSlots::new(),
+        Arc::clone(&clock) as _,
+        move || {
             let _told = wake.send(());
-        })
-        .expect("the raster thread starts");
+        },
+        None,
+    )
+    .expect("the raster thread starts");
     let stopping = std::thread::spawn(move || handle.shut_down(DETACH_DEADLINE));
     eventually("saw the stop", || {
         sender.health() == ExecutorHealth::ShutDown
@@ -827,6 +836,7 @@ fn a_wake_whose_destructor_blocks_does_not_hold_the_stop_past_its_deadline() {
         move || {
             let _held = &blocking;
         },
+        None,
     )
     .expect("the raster thread starts");
     let waited = Duration::from_millis(50);
@@ -1064,4 +1074,95 @@ fn a_scene_dropped_at_the_death_panics_into_its_own_slot() {
         "the frame settles failed, marked with the panic it came with"
     );
     hold.release();
+}
+
+/// A raster thread whose render waits on the owner thread (as a DXGI present
+/// waits for the window's thread to handle the message it sent) is answered
+/// when the owner waits through its platform's wait, which serves that
+/// message: the detach completes and the stop is told through the same wait,
+/// where a plain wait would hold the two threads on each other until the
+/// deadline (ADR-0305 §9).
+///
+/// Red-check: have `Shared::wait_for_turn` wait on the turns' condition
+/// variable whatever the platform's wait, and the detach dies `Wedged`; have
+/// `ExecutorHandle::await_stop` wait on the stop channel alone, and the stop
+/// answers `Wedged`.
+#[test]
+fn an_owner_that_waits_through_its_platforms_wait_serves_the_raster_thread() {
+    let backend = ScriptedSlots::new();
+    let owner_wait = Arc::new(flui_engine::testing::ScriptedOwnerWait::default());
+    let (mut handle, sender) = RasterExecutor::spawn(
+        backend.clone(),
+        Arc::new(ManualClock::new()),
+        || {},
+        Some(Arc::clone(&owner_wait) as Arc<dyn flui_platform::OwnerWait>),
+    )
+    .expect("the raster thread starts");
+    let at = attach(&sender);
+    let render = backend.hold_next_render();
+    sender.send(frame(at, 1)).expect("accepted");
+    assert!(
+        render.began_within(PATIENCE),
+        "the thread starts the render"
+    );
+    // The render answers only once the owner thread serves it.
+    owner_wait.serve_next_wait(move || render.release());
+    assert_eq!(handle.detach(&sender, at.slot, DETACH_DEADLINE), Ok(()));
+    assert!(
+        owner_wait.waits() > 0,
+        "the owner waited through the platform"
+    );
+    let notified = owner_wait.notifications();
+    assert!(notified > 0, "the thread's turns end the owner's waits");
+    // The stop waits the same way: a render held until the owner serves it
+    // is under way when the owner stops the thread.
+    let other = attach(&sender);
+    let render = backend.hold_next_render();
+    sender.send(frame(other, 1)).expect("accepted");
+    assert!(
+        render.began_within(PATIENCE),
+        "the thread starts the render"
+    );
+    owner_wait.serve_next_wait(move || render.release());
+    assert_eq!(handle.shut_down(DETACH_DEADLINE), Ok(()));
+    assert!(
+        owner_wait.notifications() > notified,
+        "the stop is told through the platform's wait"
+    );
+}
+
+/// A platform's wait whose notification panics on the raster thread does not
+/// take the thread down: the panic is held for the owner as a turn's, and the
+/// owner is woken to take it.
+///
+/// Red-check: drop the wake `serve` owes for a panic `Shared::note_turn`
+/// held, and the owner is never woken.
+#[test]
+fn a_panic_in_the_platforms_wait_reaches_the_owner() {
+    let (wake, woken) = mpsc::channel();
+    let owner_wait = Arc::new(flui_engine::testing::ScriptedOwnerWait::default());
+    owner_wait.panic_next_notify();
+    let (handle, sender) = RasterExecutor::spawn(
+        ScriptedSlots::new(),
+        Arc::new(ManualClock::new()),
+        move || {
+            let _told = wake.send(());
+        },
+        Some(Arc::clone(&owner_wait) as Arc<dyn flui_platform::OwnerWait>),
+    )
+    .expect("the raster thread starts");
+    let at = attach(&sender);
+    assert!(
+        woken.recv_timeout(PATIENCE).is_ok(),
+        "the owner is woken for the panic"
+    );
+    let Some(ExecutorFailure::TurnPanicked { message }) = sender.take_executor_failure() else {
+        panic!("the panic is held for the owner");
+    };
+    assert!(
+        message.contains("scripted owner wait notification panic"),
+        "{message}"
+    );
+    // The thread serves on.
+    assert_eq!(handle.detach(&sender, at.slot, DETACH_DEADLINE), Ok(()));
 }

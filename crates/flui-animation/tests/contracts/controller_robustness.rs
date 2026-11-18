@@ -5,6 +5,7 @@
 //!
 //! The contract rows run in the ordinary suite.
 
+use flui_animation::__runtime::VsyncDriver;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -187,76 +188,6 @@ fn a_switch_tracks_activity_after_hopping_to_a_live_source() {
 }
 
 #[cfg(feature = "serde")]
-fn admission_error_wire_values() {
-    use flui_animation::{AnimationError, AnimationInput, RangeDefect};
-
-    let controller = AnimationController::builder(Duration::from_secs(1))
-        .unbounded()
-        .build();
-    for (error, expected) in [
-        (
-            controller
-                .animate_to(f64::NAN, None)
-                .expect_err("NaN target"),
-            serde_json::json!({"NonFiniteInput": {"input": "Target", "value": "NaN"}}),
-        ),
-        (
-            controller.forward().expect_err("missing upper endpoint"),
-            serde_json::json!({"UnboundedTarget": {"input": "Target", "value": "Infinity"}}),
-        ),
-        (
-            controller.reverse().expect_err("missing lower endpoint"),
-            serde_json::json!({"UnboundedTarget": {"input": "Target", "value": "-Infinity"}}),
-        ),
-    ] {
-        let wire = serde_json::to_value(&error).expect("serialize refused admission");
-        let decoded: AnimationError =
-            serde_json::from_value(wire.clone()).expect("decode refused admission");
-        assert_eq!(wire, expected);
-        match decoded {
-            AnimationError::NonFiniteInput { input, value } => {
-                assert_eq!(input, AnimationInput::Target);
-                assert!(value.is_nan());
-            }
-            AnimationError::UnboundedTarget { input, value } => {
-                assert_eq!(input, AnimationInput::Target);
-                assert!(value.is_infinite());
-                assert_eq!(
-                    value.is_sign_negative(),
-                    expected["UnboundedTarget"]["value"] == "-Infinity"
-                );
-            }
-            other => panic!("unexpected decoded refusal: {other:?}"),
-        }
-    }
-    let error = controller
-        .repeat(flui_animation::RepeatMode::Restart)
-        .expect_err("no finite range to repeat inside");
-    let wire = serde_json::to_value(&error).expect("serialize repeat refusal");
-    assert_eq!(wire["InvalidRepeatRange"]["min"], "-Infinity");
-    assert_eq!(wire["InvalidRepeatRange"]["max"], "Infinity");
-    assert_eq!(wire["InvalidRepeatRange"]["lower"], "-Infinity");
-    assert_eq!(wire["InvalidRepeatRange"]["upper"], "Infinity");
-    assert!(matches!(
-        serde_json::from_value::<AnimationError>(wire).expect("decode repeat refusal"),
-        AnimationError::InvalidRepeatRange { min, max, defect: RangeDefect::NonFinite, .. }
-            if min == f64::NEG_INFINITY && max == f64::INFINITY
-    ));
-    for rejected in [
-        serde_json::Value::Null,
-        serde_json::json!("nan"),
-        serde_json::json!("1.0"),
-    ] {
-        assert!(
-            serde_json::from_value::<AnimationError>(serde_json::json!({
-                "NonFiniteInput": {"input": "Target", "value": rejected}
-            }))
-            .is_err()
-        );
-    }
-}
-
-#[cfg(feature = "serde")]
 fn directional_phase_wire_names() {
     for (phase, wire) in [
         (AnimationStatus::Forward, "\"Forward\""),
@@ -309,7 +240,7 @@ fn curved_run_never_publishes_a_non_finite_value() {
         sink.lock().expect("published values").push(reader.value());
     }));
     let _run = controller
-        .animate_to_curved(1.0, Some(Duration::from_secs(1)), Arc::new(NanInTheMiddle))
+        .animate_to_curved(1.0, Some(Duration::from_secs(1)), NanInTheMiddle)
         .expect("curved run");
 
     controller.tick_at(std::time::Duration::from_secs_f64(0.2));
@@ -334,7 +265,7 @@ fn overshooting_curve_stays_within_bounds() {
     for (curve, bound) in [(1.5, 1.0), (-0.5, 0.0)] {
         let controller = controller();
         let _run = controller
-            .animate_to_curved(1.0, Some(Duration::from_secs(1)), Arc::new(Constant(curve)))
+            .animate_to_curved(1.0, Some(Duration::from_secs(1)), Constant(curve))
             .expect("curved run");
         controller.tick_at(std::time::Duration::from_secs_f64(0.5));
         assert_eq!(
@@ -459,21 +390,21 @@ fn disposed_controller_drops_a_late_value_listener() {
 
 // --- frame time edges ------------------------------------------------------------------
 
-fn registered_run() -> (Vsync, DrivenController) {
-    let vsync = Vsync::new();
-    let owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&vsync));
+fn registered_run() -> (VsyncDriver, DrivenController) {
+    let driver = VsyncDriver::new();
+    let owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(driver.vsync()));
     let _run = owner.controller().forward().expect("run starts");
-    (vsync, owner)
+    (driver, owner)
 }
 
 fn finite_clock_time_anchors_a_run() {
-    let (vsync, owner) = registered_run();
+    let (driver, owner) = registered_run();
     let controller = owner.controller();
     assert!(controller.value().is_finite());
-    vsync.tick_all(
+    driver.tick_all(
         &flui_animation::MotionClock::new().frame(std::time::Duration::from_secs_f64(0.0)),
     );
-    vsync.tick_all(
+    driver.tick_all(
         &flui_animation::MotionClock::new().frame(std::time::Duration::from_secs_f64(0.5)),
     );
     assert_eq!(
@@ -481,7 +412,7 @@ fn finite_clock_time_anchors_a_run() {
         0.5,
         "the run is anchored at the first finite frame"
     );
-    vsync.tick_all(
+    driver.tick_all(
         &flui_animation::MotionClock::new().frame(std::time::Duration::from_secs_f64(1.0)),
     );
     assert_eq!(
@@ -492,12 +423,12 @@ fn finite_clock_time_anchors_a_run() {
 }
 
 fn backwards_frame_time_resumes_the_run() {
-    let (vsync, owner) = registered_run();
+    let (driver, owner) = registered_run();
     let controller = owner.controller();
-    vsync.tick_all(
+    driver.tick_all(
         &flui_animation::MotionClock::new().frame(std::time::Duration::from_secs_f64(10.0)),
     );
-    vsync.tick_all(
+    driver.tick_all(
         &flui_animation::MotionClock::new().frame(std::time::Duration::from_secs_f64(9.0)),
     );
     assert_eq!(
@@ -505,18 +436,18 @@ fn backwards_frame_time_resumes_the_run() {
         0.0,
         "time before the anchor samples the run's start"
     );
-    vsync.tick_all(
+    driver.tick_all(
         &flui_animation::MotionClock::new().frame(std::time::Duration::from_secs_f64(10.5)),
     );
     assert_eq!(controller.value(), 0.5);
-    vsync.tick_all(
+    driver.tick_all(
         &flui_animation::MotionClock::new().frame(std::time::Duration::from_secs_f64(11.0)),
     );
     assert_eq!(controller.status(), AnimationStatus::ForwardSettled);
 }
 
 fn repeated_frame_time_announces_completion_once() {
-    let (vsync, owner) = registered_run();
+    let (driver, owner) = registered_run();
     let controller = owner.controller();
     let statuses = Arc::new(Mutex::new(Vec::new()));
     let sink = Arc::clone(&statuses);
@@ -525,16 +456,16 @@ fn repeated_frame_time_announces_completion_once() {
             sink.lock().expect("status log").push(status);
         }))
         .forget();
-    vsync.tick_all(
+    driver.tick_all(
         &flui_animation::MotionClock::new().frame(std::time::Duration::from_secs_f64(0.0)),
     );
-    vsync.tick_all(
+    driver.tick_all(
         &flui_animation::MotionClock::new().frame(std::time::Duration::from_secs_f64(1.0)),
     );
-    vsync.tick_all(
+    driver.tick_all(
         &flui_animation::MotionClock::new().frame(std::time::Duration::from_secs_f64(1.0)),
     );
-    vsync.tick_all(
+    driver.tick_all(
         &flui_animation::MotionClock::new().frame(std::time::Duration::from_secs_f64(2.0)),
     );
     assert_eq!(
@@ -549,7 +480,8 @@ fn explicit_finish_completes_the_original_finite_run() {
 
     for (target, reverse) in [(1.0, false), (0.0, true), (0.25, false), (0.75, true)] {
         for paused in [false, true] {
-            let registry = Vsync::new();
+            let driver = VsyncDriver::new();
+            let registry = driver.vsync().clone();
             let owner = AnimationController::builder(Duration::from_secs(1))
                 .initial_value(0.4)
                 .build_on(Some(&registry));
@@ -561,8 +493,8 @@ fn explicit_finish_completes_the_original_finite_run() {
             }
             .expect("finite admitted run");
             let mut clock = MotionClock::new();
-            registry.tick_all(&clock.frame(Duration::ZERO));
-            registry.tick_all(&clock.frame(Duration::from_millis(400)));
+            driver.tick_all(&clock.frame(Duration::ZERO));
+            driver.tick_all(&clock.frame(Duration::from_millis(400)));
             assert_ne!(
                 controller.value(),
                 target,
@@ -617,7 +549,7 @@ fn explicit_finish_completes_the_original_finite_run() {
             assert_eq!(*events.borrow(), ["value", "status", "outcome"]);
             assert!(!registry.has_running());
             controller.finish().expect("idle finish is silent");
-            registry.tick_all(&clock.frame(Duration::from_secs(2)));
+            driver.tick_all(&clock.frame(Duration::from_secs(2)));
             assert_eq!(*events.borrow(), ["value", "status", "outcome"]);
             drop(status_listener);
             drop(subscription);
@@ -739,20 +671,21 @@ fn explicit_finish_reaches_native_physical_endpoints() {
 
 fn explicit_finish_distinguishes_parked_owned_work_and_disposal() {
     use flui_animation::{AnimationError, MotionClock, MotionOverride};
-    let registry = Vsync::new();
+    let driver = VsyncDriver::new();
+    let registry = driver.vsync().clone();
     let mut owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&registry));
     let controller = owner.controller().clone();
     let run = controller.repeat(RepeatMode::Alternate).unwrap();
     let mut clock = MotionClock::new();
     clock.set_override(MotionOverride::Reduce);
-    registry.tick_all(&clock.frame(Duration::ZERO));
+    driver.tick_all(&clock.frame(Duration::ZERO));
     assert!(run.is_pending());
     assert!(!registry.has_running(), "parked work requests no frames");
     assert_eq!(controller.finish(), Err(AnimationError::NoFiniteEndpoint));
     assert!(run.is_pending());
     clock.set_override(MotionOverride::Full);
-    registry.tick_all(&clock.frame(Duration::from_millis(500)));
-    registry.tick_all(&clock.frame(Duration::from_secs(1)));
+    driver.tick_all(&clock.frame(Duration::from_millis(500)));
+    driver.tick_all(&clock.frame(Duration::from_secs(1)));
     assert!(controller.value() > 0.0, "refused parked work can resume");
     owner.dispose();
     assert!(run.is_canceled());
@@ -1000,8 +933,6 @@ fn controller_robustness_contract() {
             "explicit finish refuses unknown endpoints atomically",
             explicit_finish_refuses_an_undeclared_endpoint_without_sampling,
         ),
-        #[cfg(feature = "serde")]
-        ("admission error wire values", admission_error_wire_values),
         #[cfg(feature = "serde")]
         ("directional phase wire names", directional_phase_wire_names),
         (

@@ -344,10 +344,12 @@ mod tests {
         use std::task::{Context, Poll, Waker};
         use std::time::Duration;
 
-        use flui_animation::{Animation, AnimationController, MotionClock, Vsync};
+        use flui_animation::__runtime::VsyncDriver;
+        use flui_animation::{Animation, AnimationController, MotionClock};
         use flui_view::prelude::ViewState;
 
-        let registry = Vsync::new();
+        let driver = VsyncDriver::new();
+        let registry = driver.vsync().clone();
         let owner =
             AnimationController::builder(Duration::from_millis(200)).build_on(Some(&registry));
         let observer = owner.controller().clone();
@@ -359,8 +361,8 @@ mod tests {
             slot: Rc::new(Cell::new(SnapTriggerSlot::default())),
         };
         let mut clock = MotionClock::new();
-        registry.tick_all(&clock.frame(Duration::ZERO));
-        registry.tick_all(&clock.frame(Duration::from_millis(16)));
+        driver.tick_all(&clock.frame(Duration::ZERO));
+        driver.tick_all(&clock.frame(Duration::from_millis(16)));
         assert!(observer.value() > 0.0 && observer.value() < 1.0);
         let mut context = Context::from_waker(Waker::noop());
         assert_eq!(Pin::new(&mut run).poll(&mut context), Poll::Pending);
@@ -389,7 +391,7 @@ mod tests {
         assert!(registry.is_empty());
         state.dispose();
         drop(state);
-        registry.tick_all(&clock.frame(Duration::from_secs(1)));
+        driver.tick_all(&clock.frame(Duration::from_secs(1)));
         assert_eq!(calls.get(), 1, "retirement delivers cancellation once");
         assert!(!observer.is_animating());
     }

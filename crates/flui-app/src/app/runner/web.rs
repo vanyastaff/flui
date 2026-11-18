@@ -298,7 +298,7 @@ impl WebFrameDriver {
             let dirty = inbox_redraw || ui_runtime.needs_redraw() || has_pending;
             let scheduler = ui_runtime.scheduler();
             wake_action(
-                scheduler.frames_enabled(),
+                ui_runtime.runs_frames(),
                 dirty,
                 scheduler.is_frame_scheduled(),
                 // No deferral on web: this callback is driven by the

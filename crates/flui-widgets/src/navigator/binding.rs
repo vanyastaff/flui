@@ -236,7 +236,7 @@ pub(crate) type TransitionRegistry = Rc<super::lifecycle::TerminalMap<RouteId, T
 /// The clock a route's `AnimationController` registers with.
 ///
 /// **Correction to ADR-0020.** `flui_animation::Vsync` is not a
-/// ticker provider but a *registry* a binding drives with `tick_all`. So the
+/// ticker provider but a *registry* its presentation's `VsyncDriver` ticks. So the
 /// seam is not "the navigator is the ticker" but "the navigator owns the `Vsync` its routes register with" —
 /// which preserves the property that matters: one clock per navigator, and
 /// transitions freeze when the navigator's binding stops ticking.

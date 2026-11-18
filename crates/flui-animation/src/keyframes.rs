@@ -4,6 +4,7 @@ use std::fmt;
 use std::time::Duration;
 
 use flui_foundation::geometry::Lerp;
+use flui_foundation::panic::drop_contained;
 
 use crate::curve::{Curve, SharedCurve};
 use crate::tween_types::Animatable;
@@ -502,39 +503,28 @@ fn reject<T: TwoWayConverter>(
     rest: impl IntoIterator<Item = Pending<T>>,
 ) -> KeyframesError {
     for value in values {
-        discard(value);
+        drop_contained(value);
     }
-    discard(motion);
+    drop_contained(motion);
     for Segment {
         from, to, motion, ..
     } in segments
     {
-        discard(from);
-        discard(to);
-        discard(motion);
+        drop_contained(from);
+        drop_contained(to);
+        drop_contained(motion);
     }
     for pending in rest {
         match pending {
             Pending::Eased { value, curve, .. } => {
-                discard(value);
-                discard(curve);
+                drop_contained(value);
+                drop_contained(curve);
             }
-            Pending::Cubic { value, .. } | Pending::Jump { value } => discard(value),
+            Pending::Cubic { value, .. } | Pending::Jump { value } => drop_contained(value),
             Pending::Hold { .. } => {}
         }
     }
     error
-}
-
-/// Drops `value`; a payload from a panicking destructor is dropped too.
-fn discard<V>(value: V) {
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "ADR-0287: a keyframe value's drop runs contained so the rest still drop"
-    )]
-    if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(value))) {
-        flui_foundation::panic::discard_payload(payload);
-    }
 }
 
 impl<T: Lerp + TwoWayConverter> Animatable for Keyframes<T> {

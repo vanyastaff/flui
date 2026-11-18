@@ -13,6 +13,7 @@
 // (docs/PANIC-POLICY.md).
 #![expect(clippy::unwrap_used)]
 
+use flui_animation::__runtime::VsyncDriver;
 use std::hint::black_box;
 use std::time::Duration;
 
@@ -25,22 +26,22 @@ const FRAME: Duration = Duration::from_nanos(16_666_667);
 // cannot finish it by advancing one virtual frame per measured iteration.
 const NEVER_ENDING: Duration = Duration::from_secs(u32::MAX as u64);
 
-fn registry_frame(vsync: &Vsync, clock: &mut MotionClock, raw: &mut Duration) {
+fn registry_frame(driver: &VsyncDriver, clock: &mut MotionClock, raw: &mut Duration) {
     *raw = raw
         .checked_add(FRAME)
         .expect("benchmark timeline exhausted");
-    vsync.tick_all(&clock.frame(black_box(*raw)));
+    driver.tick_all(&clock.frame(black_box(*raw)));
 }
 
 fn assert_live_progress(
-    vsync: &Vsync,
+    driver: &VsyncDriver,
     clock: &mut MotionClock,
     raw: &mut Duration,
     controller: &AnimationController,
 ) {
-    registry_frame(vsync, clock, raw);
+    registry_frame(driver, clock, raw);
     let before = controller.value();
-    registry_frame(vsync, clock, raw);
+    registry_frame(driver, clock, raw);
     assert!(
         controller.value() > before,
         "a registry benchmark must sample new animation time on every iteration"
@@ -53,7 +54,8 @@ fn assert_live_progress(
 fn stopped_vsync_registry(criterion: &mut Criterion) {
     let mut group = criterion.benchmark_group("stopped_vsync_registry");
     for count in [100, 1_000, 5_000, 10_000] {
-        let vsync = Vsync::new();
+        let driver = VsyncDriver::new();
+        let vsync = driver.vsync().clone();
         let mut owners = Vec::with_capacity(count);
         for _ in 0..count {
             owners
@@ -63,10 +65,10 @@ fn stopped_vsync_registry(criterion: &mut Criterion) {
         assert_eq!(vsync.len(), count);
         let mut clock = MotionClock::new();
         let mut raw = Duration::ZERO;
-        vsync.tick_all(&clock.frame(raw));
+        driver.tick_all(&clock.frame(raw));
         group.bench_with_input(BenchmarkId::from_parameter(count), &count, |bench, _| {
             bench.iter(|| {
-                registry_frame(&vsync, &mut clock, &mut raw);
+                registry_frame(&driver, &mut clock, &mut raw);
             });
         });
     }
@@ -79,7 +81,8 @@ fn stopped_vsync_registry(criterion: &mut Criterion) {
 fn running_vsync_registry(criterion: &mut Criterion) {
     let mut group = criterion.benchmark_group("running_vsync_registry");
     for count in [100, 1_000, 5_000, 10_000] {
-        let vsync = Vsync::new();
+        let driver = VsyncDriver::new();
+        let vsync = driver.vsync().clone();
         let mut owners = Vec::with_capacity(count);
         for _ in 0..count {
             let owner = AnimationController::builder(NEVER_ENDING).build_on(Some(&vsync));
@@ -90,13 +93,13 @@ fn running_vsync_registry(criterion: &mut Criterion) {
         assert_eq!(vsync.len(), count);
         let mut clock = MotionClock::new();
         let mut raw = Duration::ZERO;
-        vsync.tick_all(&clock.frame(raw)); // anchor every run before the timed loop
-        assert_live_progress(&vsync, &mut clock, &mut raw, owners[0].controller());
+        driver.tick_all(&clock.frame(raw)); // anchor every run before the timed loop
+        assert_live_progress(&driver, &mut clock, &mut raw, owners[0].controller());
         let before = owners[0].controller().value();
         let before_raw = raw;
         group.bench_with_input(BenchmarkId::from_parameter(count), &count, |bench, _| {
             bench.iter(|| {
-                registry_frame(&vsync, &mut clock, &mut raw);
+                registry_frame(&driver, &mut clock, &mut raw);
             });
         });
         assert!(owners.iter().all(|owner| owner.controller().is_animating()));
@@ -116,8 +119,9 @@ fn nested_vsync_registry(criterion: &mut Criterion) {
     let mut group = criterion.benchmark_group("nested_vsync_registry");
     for count in [100, 1_000] {
         for depth in [1, 8, 32] {
-            let root = Vsync::new();
-            let mut leaf = root.clone();
+            let driver = VsyncDriver::new();
+            let root = driver.vsync().clone();
+            let mut leaf = root;
             for _ in 0..depth {
                 let child = Vsync::new();
                 leaf.attach_child(&child).unwrap();
@@ -133,8 +137,8 @@ fn nested_vsync_registry(criterion: &mut Criterion) {
             assert_eq!(leaf.len(), count);
             let mut clock = MotionClock::new();
             let mut raw = Duration::ZERO;
-            root.tick_all(&clock.frame(raw));
-            assert_live_progress(&root, &mut clock, &mut raw, owners[0].controller());
+            driver.tick_all(&clock.frame(raw));
+            assert_live_progress(&driver, &mut clock, &mut raw, owners[0].controller());
             let before = owners[0].controller().value();
             let before_raw = raw;
             group.bench_with_input(
@@ -142,7 +146,7 @@ fn nested_vsync_registry(criterion: &mut Criterion) {
                 &depth,
                 |bench, _| {
                     bench.iter(|| {
-                        registry_frame(&root, &mut clock, &mut raw);
+                        registry_frame(&driver, &mut clock, &mut raw);
                     });
                 },
             );
@@ -167,7 +171,8 @@ fn mixed_vsync_registry(criterion: &mut Criterion) {
 
     let mut group = criterion.benchmark_group("mixed_vsync_registry");
 
-    let vsync = Vsync::new();
+    let driver = VsyncDriver::new();
+    let vsync = driver.vsync().clone();
     let mut owners = Vec::with_capacity(COUNT as usize);
     for i in 0..COUNT {
         let owner = AnimationController::builder(NEVER_ENDING).build_on(Some(&vsync));
@@ -180,13 +185,13 @@ fn mixed_vsync_registry(criterion: &mut Criterion) {
     assert_eq!(vsync.len(), COUNT as usize);
     let mut clock = MotionClock::new();
     let mut raw = Duration::ZERO;
-    vsync.tick_all(&clock.frame(raw));
-    assert_live_progress(&vsync, &mut clock, &mut raw, owners[0].controller());
+    driver.tick_all(&clock.frame(raw));
+    assert_live_progress(&driver, &mut clock, &mut raw, owners[0].controller());
     let before = owners[0].controller().value();
     let before_raw = raw;
     group.bench_function(COUNT.to_string(), |bench| {
         bench.iter(|| {
-            registry_frame(&vsync, &mut clock, &mut raw);
+            registry_frame(&driver, &mut clock, &mut raw);
         });
     });
     assert_eq!(
@@ -216,24 +221,24 @@ fn unregister_all(criterion: &mut Criterion) {
         group.bench_with_input(BenchmarkId::from_parameter(count), &count, |bench, _| {
             bench.iter_batched(
                 || {
-                    let vsync = Vsync::new();
+                    let driver = VsyncDriver::new();
                     let mut retained = Vec::with_capacity(count);
                     let registrations: Vec<_> = (0..count)
                         .map(|_| {
                             let owner = AnimationController::builder(Duration::from_secs(1))
-                                .build_on(Some(&vsync));
+                                .build_on(Some(driver.vsync()));
                             retained.push(owner.controller().clone());
                             owner
                         })
                         .collect();
-                    (vsync, registrations, retained)
+                    (driver, registrations, retained)
                 },
-                |(vsync, registrations, retained)| {
+                |(driver, registrations, retained)| {
                     for mut owner in registrations {
                         black_box(&mut owner).dispose();
                     }
                     // Moved out, not dropped here: see the doc comment above.
-                    (vsync, retained)
+                    (driver, retained)
                 },
                 BatchSize::LargeInput,
             );

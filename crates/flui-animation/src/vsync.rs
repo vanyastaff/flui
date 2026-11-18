@@ -1,17 +1,16 @@
 //! [`Vsync`] — a shared, restart-aware registry that drives
 //! [`AnimationController`]s off a single virtual timeline.
 //!
-//! A frame driver (each UI runtime, deterministic under `flui_testing::HeadlessHost`) owns one
-//! `Vsync` and calls [`tick_all`](Vsync::tick_all) once per frame with the
-//! current virtual instant. Controllers reach the same registry ambiently — in
-//! the widget layer a `VsyncScope` inherited-view hands a clone down a subtree,
-//! and an implicitly-animated widget registers its controller in `init_state`.
-//! It is not a process-wide singleton.
-//!
-//! Both runtime and headless presentations use this registry. A presentation
-//! owns its [`MotionClock`](crate::MotionClock) and supplies a typed
-//! [`FrameTick`] to [`Vsync::tick_all`]. Controllers have no
-//! scheduler ticker or wall-clock sampling path.
+//! A frame driver (each presentation of a UI runtime, deterministic under
+//! `flui_testing::HeadlessHost`) owns one [`VsyncDriver`] and calls its
+//! [`tick_all`](VsyncDriver::tick_all) once per frame with the presentation's
+//! typed [`FrameTick`]. Controllers reach the registry through the driver's
+//! [`Vsync`] handle, ambiently: in the widget layer a `VsyncScope`
+//! inherited-view hands a clone down a subtree, and an implicitly-animated
+//! widget registers its controller in `init_state`. A handle registers, nests
+//! and mutes; only the driver ticks, binds and closes (ADR-0382). The registry
+//! is not a process-wide singleton, and controllers have no scheduler ticker or
+//! wall-clock sampling path.
 //!
 //! ## Restart-awareness
 //!
@@ -36,7 +35,9 @@ use crate::controller::RunStart;
 use crate::{AnimationTime, FrameTick};
 use std::time::Duration;
 
+mod driver;
 mod retirement;
+pub use driver::VsyncDriver;
 pub use retirement::VsyncRetirement;
 
 /// Opaque identity for one admission to a [`Vsync`] registry.
@@ -356,8 +357,9 @@ impl VsyncInner {
 /// A shared, restart-aware controller registry driven once per frame.
 ///
 /// Cloning a `Vsync` clones an `Rc`-backed handle: every clone observes the
-/// same registry, so the handle a `VsyncScope` hands to a subtree and the one a
-/// binding ticks are the same registry.
+/// same registry, so the handle a `VsyncScope` hands to a subtree is the
+/// registry its [`VsyncDriver`] ticks. A handle registers controllers, nests
+/// registries and mutes them; it cannot tick, rebind or close a registry.
 #[derive(Clone, Default)]
 pub struct Vsync {
     inner: Rc<RefCell<VsyncInner>>,
@@ -370,14 +372,8 @@ impl Vsync {
         Self::default()
     }
 
-    /// Bind this registry's frame demand to its presentation's frame driver.
-    ///
-    /// Existing running controllers request a sample from the new driver.
-    /// Invocation and outgoing capture retirement occur outside registry borrows.
-    ///
-    /// # Panics
-    /// Propagates the first callback or capture-retirement failure after recovery.
-    pub fn set_frame_requester(&self, request_frame: Option<Rc<dyn Fn()>>) {
+    /// See [`VsyncDriver::set_frame_requester`].
+    pub(crate) fn set_frame_requester(&self, request_frame: Option<Rc<dyn Fn()>>) {
         let outgoing = {
             let mut inner = self.inner.borrow_mut();
             if inner.closed {
@@ -490,7 +486,7 @@ impl Vsync {
         }
     }
 
-    /// Nest `child` under this registry: [`tick_all`](Self::tick_all) forwards
+    /// Nest `child` under this registry: [`VsyncDriver::tick_all`] forwards
     /// to it — unless this registry is [`muted`](Self::set_muted).
     ///
     /// A registry has at most one live parent. A returned admission refusal
@@ -583,12 +579,8 @@ impl Vsync {
         Rc::ptr_eq(&self.inner, &other.inner)
     }
 
-    /// Bind this registry to the build phase of its presentation (ADR-0086
-    /// §7). A controller registered here, or in a registry nested under it,
-    /// refuses a mutation made while the phase builds with
-    /// [`AnimationError::MutatedDuringBuild`](crate::AnimationError::MutatedDuringBuild).
-    /// The host binding that sets the frame requester sets this too.
-    pub fn set_build_phase(&self, phase: Option<BuildPhase>) {
+    /// See [`VsyncDriver::set_build_phase`].
+    pub(crate) fn set_build_phase(&self, phase: Option<BuildPhase>) {
         self.inner.borrow_mut().build_phase = phase;
     }
 
@@ -640,7 +632,7 @@ impl Vsync {
     /// registry stop advancing.
     #[must_use]
     pub fn is_muted(&self) -> bool {
-        self.inner.borrow_mut().muted
+        self.inner.borrow().muted
     }
 
     /// Mute or unmute this registry: while muted it delivers no ticks, to its
@@ -708,8 +700,8 @@ impl Vsync {
 
     /// Whether at least one registered controller is currently running.
     ///
-    /// Used by a production frame driver (e.g. `flui-app`'s `UiRuntime`) to decide whether
-    /// to request the next frame: call this after [`tick_all`](Self::tick_all)
+    /// A presentation's frame driver uses it to decide whether
+    /// to request the next frame: it calls this after [`VsyncDriver::tick_all`]
     /// and, if `true`, schedule a wake so the frame loop keeps going. Once the
     /// last running controller completes, `has_running()` returns `false` and
     /// the driver does NOT re-request, so the window quiesces cleanly — no
@@ -752,47 +744,19 @@ impl Vsync {
         running
     }
 
-    /// Advance live controller registrations using a presentation's typed tick.
-    ///
-    /// A fresh run anchors on its first observed frame. Registration migration
-    /// preserves its last sampled elapsed time. Moving a child subtree to another
-    /// root also re-anchors on its first delivered frame, without replacing runs.
-    /// Reattaching under the same root retains the existing absolute anchors.
-    /// Older ticks from the same root hold at this
-    /// registry's last accepted time; stopped and disposed kernels are skipped.
-    ///
-    /// State borrows end before sampling user curves or delivering callbacks.
-    /// A listener may release or dispose its [owning controller](crate::DrivenController)
-    /// during the walk. A later registration withdrawn by that listener is
-    /// skipped, while other live controllers remain deliverable.
-    ///
-    /// Admissions made during this call first tick on the next call. Restarting
-    /// an already visited controller also waits for the next call; starting a
-    /// resident controller that has not yet been visited can sample this frame.
-    /// Registration identities are never reused, so withdrawing and re-admitting
-    /// a kernel cannot give the replacement an earlier turn in the current walk.
-    ///
-    /// Child registries admitted at entry tick before this registry's controllers.
-    /// Muting is rechecked between controller samples, so muting during delivery
-    /// stops the remaining samples. Ancestor mute gates apply to nested registries.
-    ///
-    /// A controller or child-registry failure leaves healthy frame peers
-    /// deliverable. The walk resumes its first failure after those peers tick,
-    /// preserving that failure through callback and capture retirement.
-    pub fn tick_all(&self, tick: &FrameTick) {
+    /// See [`VsyncDriver::tick_all`].
+    pub(crate) fn tick_all(&self, tick: &FrameTick) {
         let mut retirement = Retirement::new();
         self.tick_all_with_recovery(tick, &mut retirement.scope());
         crate::refusal::finish_reporting(retirement, "vsync tick", None);
     }
 
-    /// Run the registry under its presentation's existing failure custody.
-    ///
-    /// The runtime supplies one owner for independent sampling stages, then
-    /// chooses publication and report disposition from the captured provenance.
-    /// Standalone [`Self::tick_all`] resumes the same first payload after this
-    /// walk. Neither path loses live peers or admitted delivery on failure.
-    #[doc(hidden)]
-    pub fn tick_all_with_recovery(&self, tick: &FrameTick, retirement: &mut RecoveryScope<'_>) {
+    /// See [`VsyncDriver::tick_all_with_recovery`].
+    pub(crate) fn tick_all_with_recovery(
+        &self,
+        tick: &FrameTick,
+        retirement: &mut RecoveryScope<'_>,
+    ) {
         // A tick can resume a parked run anywhere below the root it reaches.
         self.clear_quiet_chain();
         retirement.run_with(|retirement| {

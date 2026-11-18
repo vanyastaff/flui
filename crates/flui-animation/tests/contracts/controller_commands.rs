@@ -1,5 +1,6 @@
 //! Controller commands, repeat sampling and delivery through public owning handles.
 
+use flui_animation::__runtime::VsyncDriver;
 use flui_animation::{
     Animation, AnimationController, AnimationError, AnimationInput, AnimationStatus, Curve,
     DrivenController, Iterations, MotionClock, RangeDefect, RepeatMode, RepeatSpec, Simulation,
@@ -231,18 +232,19 @@ impl Simulation for GoesNanMidRun {
 }
 
 fn a_simulation_that_turns_non_finite_mid_run_ends_the_run_at_the_last_finite_value() {
-    let vsync = Vsync::new();
+    let driver = VsyncDriver::new();
+    let vsync = driver.vsync().clone();
     let owner = AnimationController::builder(Duration::from_millis(100))
         .unbounded()
         .build_on(Some(&vsync));
     let c = owner.controller();
     let mut future = c.animate_with(GoesNanMidRun { nan_at: 1.0 }).unwrap();
     let mut clock = MotionClock::new();
-    vsync.tick_all(&clock.frame(Duration::ZERO));
-    vsync.tick_all(&clock.frame(Duration::from_millis(500)));
+    driver.tick_all(&clock.frame(Duration::ZERO));
+    driver.tick_all(&clock.frame(Duration::from_millis(500)));
     assert_eq!(c.value(), 0.5);
     assert!(vsync.has_running());
-    vsync.tick_all(&clock.frame(Duration::from_secs(1)));
+    driver.tick_all(&clock.frame(Duration::from_secs(1)));
     assert_eq!(
         c.value(),
         0.5,
@@ -428,12 +430,8 @@ fn repeat_reverse_leg_velocity_is_negative() {
 
 fn animate_to_curved_eases_through_the_given_curve() {
     let (_owner, c) = controller(100);
-    c.animate_to_curved(
-        1.0,
-        Some(Duration::from_millis(100)),
-        Arc::new(curves::EASE_IN_QUINT),
-    )
-    .unwrap();
+    c.animate_to_curved(1.0, Some(Duration::from_millis(100)), curves::EASE_IN_QUINT)
+        .unwrap();
     c.tick_at(Duration::from_millis(50));
     let expected = curves::EASE_IN_QUINT.transform(0.5);
     assert!((c.value() - expected).abs() < 1e-3);
@@ -575,11 +573,12 @@ fn velocity_is_zero_once_set_value_ends_the_run() {
 /// alone; once the build ends the same commands land (ADR-0086 §7). A
 /// registry nested under the bound one reads the root's phase.
 fn controller_mutation_during_build_is_refused() {
-    let root = Vsync::new();
+    let driver = VsyncDriver::new();
+    let root = driver.vsync().clone();
     let nested = Vsync::new();
     let _seat = root.attach_child(&nested).expect("a fresh registry nests");
     let phase = flui_foundation::BuildPhase::new();
-    root.set_build_phase(Some(phase.clone()));
+    driver.set_build_phase(Some(phase.clone()));
     let owner = AnimationController::builder(Duration::from_millis(100)).build_on(Some(&nested));
     let c = owner.controller().clone();
     let notified = Rc::new(AtomicUsize::new(0));

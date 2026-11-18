@@ -157,6 +157,7 @@ impl PipelineOwner<Idle> {
             orphaned_nodes: Vec::new(),
             abandoned_nodes: Vec::new(),
             retained_pixel_ratio: flui_foundation::geometry::DevicePixelRatio::ONE,
+            unrecorded_paint: false,
             last_hidden_follower_ids: FxHashSet::default(),
             device_pixel_ratio: flui_foundation::geometry::DevicePixelRatio::ONE,
             dirty_sender,
