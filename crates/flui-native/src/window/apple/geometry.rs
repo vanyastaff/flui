@@ -14,21 +14,25 @@ pub(crate) mod frame {
     //! Where an `NSWindow` is, in the terms of the window contract.
     //!
     //! AppKit measures from the bottom-left corner of the primary screen, in
-    //! points; the contract measures an outer top-left position in global logical
-    //! pixels, as every other backend does. A display's usable area is published in
-    //! device pixels of that display (`origin / scale` is its global logical
-    //! origin), so a position relative to a display converts through the display's
-    //! own scale.
+    //! points; this module flips that into points from the primary screen's
+    //! top-left corner, AppKit's desktop seen from the top. The contract
+    //! measures a window's outer top-left on a display, in that display's
+    //! logical pixels from its corner (ADR-0364): on macOS a screen's logical
+    //! pixels are points, and a screen publishes its corner in that flipped
+    //! desktop ([`DisplayDescription::origin`]), so a position on it is the desktop
+    //! point less the corner, with no scale between them.
 
     use flui_foundation::geometry::{Bounds, Point, Size};
-    use flui_platform::{DisplayDescription, SizeConstraints, WindowExtent};
+    use flui_platform::{DisplayDescription, SizeConstraints, WindowExtent, WindowPosition};
 
     /// Any content limit at or beyond this counts as AppKit's "no limit"
     /// (`contentMaxSize` defaults to `CGFLOAT_MAX`, or `FLT_MAX` on older systems).
     const UNLIMITED_FROM: f64 = 1.0e30;
 
-    /// The outer top-left of a window whose frame AppKit reports as `frame`, in
-    /// global logical pixels. `primary_height` is the height of the primary screen
+    /// The outer top-left of a window whose frame AppKit reports as `frame`, as
+    /// a point of AppKit's flipped desktop: points from the primary screen's
+    /// top-left corner, which [`position_on`] turns into a position on a
+    /// screen. `primary_height` is the height of the primary screen
     /// (`NSScreen.screens[0]`), whose bottom-left corner is AppKit's origin.
     ///
     /// `None` when a number is not finite: a position is never published from a
@@ -73,19 +77,38 @@ pub(crate) mod frame {
         }
     }
 
-    /// A position or size measured on `display` (from the origin of its usable
-    /// area, in its logical pixels), as global logical pixels. With no display the
-    /// point already is global.
-    pub(crate) fn globalize(at: Point<f64>, display: Option<&DisplayDescription>) -> Point<f64> {
-        let Some(display) = display else {
-            return at;
-        };
-        let ratio = display.scale_factor;
-        let origin = display.usable_bounds.origin;
-        Point::new(
-            ratio.to_logical(f64::from(origin.x)) + at.x,
-            ratio.to_logical(f64::from(origin.y)) + at.y,
+    /// Position `at`, whose display is `display`, as a point of AppKit's
+    /// flipped desktop: the screen's corner plus `at`. `None` for a point past
+    /// the finite numbers.
+    pub(crate) fn desktop_point(
+        at: WindowPosition,
+        display: &DisplayDescription,
+    ) -> Option<Point<f64>> {
+        let corner = display.origin.get();
+        let point = Point::new(
+            f64::from(corner.x) + at.at().x,
+            f64::from(corner.y) + at.at().y,
+        );
+        (point.x.is_finite() && point.y.is_finite()).then_some(point)
+    }
+
+    /// The point `desktop` of AppKit's flipped desktop as a position on
+    /// `display`: the point less the screen's corner, which a window that
+    /// hangs past its screen's edge, or spans two screens, may put outside
+    /// the screen's extent.
+    pub(crate) fn position_on(
+        desktop: Point<f64>,
+        display: &DisplayDescription,
+    ) -> Option<WindowPosition> {
+        let corner = display.origin.get();
+        WindowPosition::try_new(
+            display.id,
+            Point::new(
+                desktop.x - f64::from(corner.x),
+                desktop.y - f64::from(corner.y),
+            ),
         )
+        .ok()
     }
 
     /// The inner-size limits a window reports through `contentMinSize` and
@@ -232,46 +255,64 @@ pub(crate) mod frame {
             }
         }
 
-        fn display(scale: f64, usable_origin: (i32, i32)) -> DisplayDescription {
-            use flui_platform::{DisplayId, DisplayKey, DisplayRegistry};
+        /// A screen whose corner sits at `corner` in AppKit's flipped desktop,
+        /// at `scale`.
+        fn display(scale: f64, corner: (i32, i32)) -> DisplayDescription {
+            use flui_platform::{
+                DesktopOrigin, DisplayBounds, DisplayId, DisplayKey, DisplayRegistry,
+            };
 
             let id: DisplayId = DisplayRegistry::new()
                 .mint(&DisplayKey::MacosUuid([1; 16]))
                 .expect("a fresh registry has ids");
-            let mut info = DisplayDescription::new(
+            DisplayDescription::new(
                 id,
                 "test".to_string(),
-                Bounds {
-                    origin: Point::new(usable_origin.0, usable_origin.1),
-                    size: Size::new(2880, 1800),
-                },
+                DesktopOrigin::new(corner.0, corner.1),
+                DisplayBounds::whole(Size::new(1440.0, 900.0)).expect("a screen"),
                 flui_foundation::geometry::DevicePixelRatio::try_new(scale)
                     .expect("a positive ratio"),
-            );
-            info.usable_bounds = Bounds {
-                origin: Point::new(usable_origin.0, usable_origin.1),
-                size: Size::new(2880, 1750),
-            };
-            info
+            )
         }
 
+        /// A position is a point of its screen in points from its corner:
+        /// AppKit's desktop point less the screen's corner, whatever the
+        /// screen's scale, and back.
         #[test]
         fn a_position_on_a_display_becomes_a_global_one() {
             let at = Point::new(40.0, 30.0);
-            let secondary = display(2.0, (2880, 50));
-            // (name, display, expected global position)
+            // (name, screen, desktop point)
             let rows = [
-                ("no display: already global", None, (40.0, 30.0)),
+                ("the primary at 2x", display(2.0, (0, 0)), (40.0, 30.0)),
                 (
-                    "a 2x display starting at device x 2880",
-                    Some(&secondary),
-                    (1480.0, 55.0),
+                    "a 1x screen right of a 1440-point primary",
+                    display(1.0, (1440, 180)),
+                    (1480.0, 210.0),
+                ),
+                (
+                    "a 2x screen left of and above the primary",
+                    display(2.0, (-1920, -1080)),
+                    (-1880.0, -1050.0),
                 ),
             ];
-            for (name, display, (x, y)) in rows {
-                let global = globalize(at, display);
-                assert_eq!((global.x, global.y), (x, y), "{name}");
+            for (name, screen, (x, y)) in rows {
+                let position = WindowPosition::try_new(screen.id, at).expect("a point");
+                let desktop = desktop_point(position, &screen).expect("a finite point");
+                assert_eq!((desktop.x, desktop.y), (x, y), "{name}");
+                assert_eq!(
+                    position_on(desktop, &screen),
+                    Some(position),
+                    "{name}: back"
+                );
             }
+            let screen = display(1.0, (1440, 0));
+            let far = WindowPosition::try_new(screen.id, Point::new(f64::MAX, 0.0))
+                .expect("a finite point");
+            assert_eq!(
+                desktop_point(far, &screen),
+                Some(Point::new(f64::MAX, 0.0)),
+                "a corner plus the largest number rounds to it, and stays finite"
+            );
         }
 
         #[test]

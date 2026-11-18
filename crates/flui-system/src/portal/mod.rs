@@ -1,6 +1,6 @@
 //! The Linux providers: the XDG desktop portal over the session bus
 //! (`org.freedesktop.portal.Desktop`), which a sandboxed and an unsandboxed
-//! application reach alike.
+//! application reach alike, and the launcher entry's progress signal.
 //!
 //! Each UI runtime keeps one [`Portal`] ([`ProviderContext::runtime_local`]):
 //! a thread of its own runs a `zruntime` executor, with one session-bus
@@ -10,35 +10,66 @@
 //! drops their resolvers, so each waiting completion ends as
 //! `ProviderDropped`, and the thread stops.
 //!
+//! A request that shows something names the acquiring widget's window as its
+//! `parent_window` ([`with_parent`]): the window's
+//! [`PortalParent`], held by the
+//! request until it ends, so a Wayland window's export lasts exactly as long.
+//!
+//! An unsandboxed application is named to the portal by its id
+//! ([`Bus::desktop`]), so the portal attributes its requests, its autostart
+//! entry and its shortcuts to it; inside Flatpak or Snap the sandbox names it.
+//!
 //! [`ProviderContext::runtime_local`]: flui_platform::capability::ProviderContext::runtime_local
 
+mod background;
 mod dialogs;
 mod launcher;
+mod launcher_entry;
 mod request;
+mod shortcuts;
+mod user_dirs;
 
 use std::cell::{Cell, RefCell};
 use std::future::Future;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
-use flui_platform::capability::WindowRef;
-use flui_platform::capability::{CapabilityRegistrar, ProviderContext};
+use flui_platform::capability::{
+    CapabilityRegistrar, CompletionSource, PortalParent, ProviderContext, WindowRef,
+};
 use flui_platform::launch::{Launcher, LauncherCapability};
 use flui_platform::{SystemFailure, Unsupported, UnsupportedReason};
 
+use crate::autostart::{Autostart, AutostartCapability};
 use crate::dialog::{FileDialogCapability, FileDialogs};
-use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+use crate::shortcuts::{GlobalShortcutCapability, GlobalShortcuts};
+use crate::taskbar::{TaskbarCapability, TaskbarEntry};
+use crate::user_dirs::{UserDirCapability, UserDirs};
 
+pub(crate) use background::PortalAutostart;
 pub(crate) use dialogs::PortalDialogs;
 pub(crate) use launcher::PortalLauncher;
+pub(crate) use launcher_entry::{EntryFeedSlot, LauncherEntry};
+pub(crate) use shortcuts::PortalShortcuts;
+pub(crate) use user_dirs::XdgUserDirs;
 
 /// Why a portal request gave no answer of its own.
 #[derive(Debug)]
 pub(crate) enum PortalError {
-    /// No session bus, or no portal on it.
+    /// No session bus, no portal on it, or a portal that lacks the interface
+    /// or the version the request needs.
     Unsupported(Unsupported),
     /// The portal or the bus failed, as the [`SystemFailure`] says.
     Failed(SystemFailure),
+}
+
+impl PortalError {
+    /// The portal on this desktop lacks what the request needs: an interface
+    /// its backend does not implement, or an older version of it. Trying
+    /// again does not help.
+    fn too_old() -> Self {
+        Self::Unsupported(Unsupported::new(UnsupportedReason::NotOnThisDevice))
+    }
 }
 
 impl From<zbus::Error> for PortalError {
@@ -53,14 +84,21 @@ impl From<zbus::Error> for PortalError {
             zbus::Error::FDO(error)
                 if matches!(
                     *error,
-                    zbus::fdo::Error::ServiceUnknown(_)
-                        | zbus::fdo::Error::NameHasNoOwner(_)
-                        | zbus::fdo::Error::UnknownInterface(_)
-                        | zbus::fdo::Error::UnknownMethod(_)
-                        | zbus::fdo::Error::UnknownObject(_)
+                    zbus::fdo::Error::ServiceUnknown(_) | zbus::fdo::Error::NameHasNoOwner(_)
                 ) =>
             {
                 Self::Unsupported(Unsupported::new(UnsupportedReason::Unavailable))
+            }
+            zbus::Error::FDO(error)
+                if matches!(
+                    *error,
+                    zbus::fdo::Error::UnknownInterface(_)
+                        | zbus::fdo::Error::UnknownMethod(_)
+                        | zbus::fdo::Error::UnknownObject(_)
+                        | zbus::fdo::Error::UnknownProperty(_)
+                ) =>
+            {
+                Self::too_old()
             }
             zbus::Error::IncorrectType
             | zbus::Error::SignatureMismatch(..)
@@ -69,6 +107,12 @@ impl From<zbus::Error> for PortalError {
             | zbus::Error::InvalidReply => Self::Failed(SystemFailure::MalformedAnswer),
             _ => Self::Failed(SystemFailure::Bus),
         }
+    }
+}
+
+impl From<zbus::fdo::Error> for PortalError {
+    fn from(error: zbus::fdo::Error) -> Self {
+        Self::from(zbus::Error::from(error))
     }
 }
 
@@ -91,7 +135,10 @@ impl Drop for DismissOnDrop {
     }
 }
 
-/// The task side of a request: when its caller let it go.
+/// The task side of a request: when its caller let it go. The portal's own
+/// retirement is one too, which every task of the portal shares
+/// ([`Desktop::retired`]).
+#[derive(Clone)]
 pub(crate) struct Dismissal(Arc<DismissalState>);
 
 impl Dismissal {
@@ -119,16 +166,197 @@ impl Dismissal {
     }
 }
 
+/// The portal's interfaces, each at the version a request needs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Interface {
+    pub(crate) name: &'static str,
+    /// The oldest version that has what the request uses.
+    pub(crate) since: u32,
+}
+
+impl Interface {
+    pub(crate) const fn new(name: &'static str, since: u32) -> Self {
+        Self { name, since }
+    }
+}
+
+/// The portal on the bus, as one request reaches it: the connection, and the
+/// unique name that owns `org.freedesktop.portal.Desktop` now, which every
+/// call of the request goes to and every signal it hears must come from.
+pub(crate) struct Desktop {
+    pub(crate) connection: zbus::Connection,
+    pub(crate) owner: zbus::names::OwnedUniqueName,
+    /// Ends when the UI runtime that owns the portal retires: a request
+    /// still showing something closes it then.
+    pub(crate) retired: Dismissal,
+    /// The versions the bus has read of this portal instance.
+    versions: Arc<Mutex<Versions>>,
+}
+
+impl Desktop {
+    /// Check that the portal has `interface` at its version at least, before
+    /// a request depends on it: an absent interface or an older version is
+    /// [`UnsupportedReason::NotOnThisDevice`], never a call that hangs or
+    /// fails in a way nobody can tell from a broken portal.
+    ///
+    /// Each interface is read once per portal instance.
+    pub(crate) async fn require(&self, interface: Interface) -> Result<(), PortalError> {
+        let known = {
+            let versions = lock(&self.versions);
+            (versions.portal.as_ref() == Some(&self.owner))
+                .then(|| versions.reported.get(interface.name).copied())
+                .flatten()
+        };
+        let version = if let Some(version) = known {
+            version
+        } else {
+            let version = self.read_version(interface.name).await?;
+            let mut versions = lock(&self.versions);
+            if versions.portal.as_ref() != Some(&self.owner) {
+                versions.portal = Some(self.owner.clone());
+                versions.reported.clear();
+            }
+            versions.reported.insert(interface.name, version);
+            version
+        };
+        if version >= interface.since {
+            Ok(())
+        } else {
+            Err(PortalError::too_old())
+        }
+    }
+
+    /// The version the portal reports of `interface`, `0` for one it does
+    /// not serve.
+    async fn read_version(&self, interface: &'static str) -> Result<u32, PortalError> {
+        let properties = zbus::fdo::PropertiesProxy::builder(&self.connection)
+            .destination(self.owner.as_str())
+            .path(request::PATH)
+            .build()
+            .await?;
+        let name = zbus::names::InterfaceName::try_from(interface)?;
+        match properties.get(name, "version").await {
+            Ok(version) => u32::try_from(version)
+                .map_err(|_| PortalError::Failed(SystemFailure::MalformedAnswer)),
+            // xdg-desktop-portal answers a property of an interface it does
+            // not serve with `InvalidArgs`.
+            Err(zbus::fdo::Error::InvalidArgs(_) | zbus::fdo::Error::UnknownProperty(_)) => Ok(0),
+            Err(error) => Err(error.into()),
+        }
+    }
+}
+
+/// The application's id as the portal and the shell know it: the
+/// composition root's checked `AppId` (ADR-0351), carried as its text.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct AppName(Arc<str>);
+
+impl AppName {
+    /// The name the composition root gave the application, if any.
+    fn of(ctx: &ProviderContext<'_>) -> Option<Self> {
+        ctx.app_id().map(|id| Self(id.as_str().into()))
+    }
+
+    /// A scenario's name for the application.
+    #[cfg(feature = "testing")]
+    pub(crate) fn scripted(id: &str) -> Self {
+        Self(id.into())
+    }
+
+    pub(crate) fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// Where the application stands with the portal's `Registry`.
+#[derive(Default)]
+struct Registration {
+    /// The connection and the portal instance the application was named
+    /// to, or found it could not be named to: a new connection or a portal
+    /// that restarted needs naming again, and a task still on an old
+    /// connection cannot mark a new one named.
+    settled_with: Option<Peers>,
+}
+
+/// One connection to one portal instance, by their unique names.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Peers {
+    connection: Option<zbus::names::OwnedUniqueName>,
+    portal: zbus::names::OwnedUniqueName,
+}
+
+/// The interface versions one portal instance reported, read once per
+/// instance: a portal that restarted may be another version.
+#[derive(Default)]
+struct Versions {
+    portal: Option<zbus::names::OwnedUniqueName>,
+    reported: rustc_hash::FxHashMap<&'static str, u32>,
+}
+
 /// The bus connection the requests of one portal share, made by the first
 /// request that needs it: the session bus, or the bus at `address`.
 pub(crate) struct Bus {
     address: Option<Arc<str>>,
+    /// The application's id, which an unsandboxed application names itself
+    /// to the portal by.
+    app_id: Option<AppName>,
     connection: Mutex<Option<zbus::Connection>>,
+    registration: Mutex<Registration>,
+    /// What each portal instance reported of its interfaces.
+    versions: Arc<Mutex<Versions>>,
+    /// Whether the process runs inside Flatpak or Snap, read once on the
+    /// portal's thread.
+    sandboxed: OnceLock<bool>,
+    /// Ends with the UI runtime: dropped by the worker as it stops.
+    retire: Mutex<Option<DismissOnDrop>>,
+    retired: Dismissal,
+    /// The portal's executor, whose clock a renewal waits on.
+    timer: zruntime::SharedRuntime,
 }
 
+/// How long one call to the bus may take before it fails: the reference
+/// D-Bus implementation's default, which bounds every call a request makes,
+/// the `Close` sent as the UI runtime retires included.
+const METHOD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(25);
+
 impl Bus {
+    fn new(
+        address: Option<Arc<str>>,
+        app_id: Option<AppName>,
+        timer: zruntime::SharedRuntime,
+    ) -> Self {
+        let (retire, retired) = Dismissal::pair();
+        Self {
+            address,
+            app_id,
+            connection: Mutex::new(None),
+            registration: Mutex::new(Registration::default()),
+            versions: Arc::default(),
+            sandboxed: OnceLock::new(),
+            retire: Mutex::new(Some(retire)),
+            retired,
+            timer,
+        }
+    }
+
+    /// The UI runtime retired: every request still showing something closes
+    /// it, and every watch ends.
+    fn retire(&self) {
+        drop(lock(&self.retire).take());
+    }
+
+    /// Completes once the UI runtime retired.
+    pub(crate) async fn retired(&self) {
+        self.retired.dismissed().await;
+    }
+
+    /// Completes after `wait`, on the portal's executor.
+    pub(crate) async fn sleep(&self, wait: std::time::Duration) {
+        self.timer.sleep(wait).await;
+    }
+
     pub(crate) async fn connection(&self) -> Result<zbus::Connection, PortalError> {
-        let existing = self.lock().clone();
+        let existing = lock(&self.connection).clone();
         // A bus that went away closes the connection for good; the next
         // request connects again rather than reuse it.
         if let Some(connection) = existing.filter(|connection| !connection.is_closed()) {
@@ -138,22 +366,84 @@ impl Bus {
             Some(address) => zbus::connection::Builder::address(&**address),
             None => zbus::connection::Builder::session(),
         };
-        let connection = builder.build().await?;
+        let connection = builder.method_timeout(METHOD_TIMEOUT).build().await?;
         // Two requests may both connect; the open one stored first wins and
         // the other connection closes with its last clone.
-        let mut stored = self.lock();
+        let mut stored = lock(&self.connection);
         match &*stored {
             Some(winner) if !winner.is_closed() => Ok(winner.clone()),
-            _ => Ok(stored.insert(connection).clone()),
+            _ => {
+                // A new connection is a new peer: the portal knows it by no
+                // id yet.
+                lock(&self.registration).settled_with = None;
+                Ok(stored.insert(connection).clone())
+            }
         }
     }
 
-    fn lock(&self) -> std::sync::MutexGuard<'_, Option<zbus::Connection>> {
-        // A panic while the lock is held leaves only a connection or none.
-        self.connection
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    /// The portal as a request reaches it: connected, its current owner
+    /// found (an installed portal that is not running is started first), and
+    /// the application named to that owner when it runs unsandboxed with an
+    /// id (`org.freedesktop.host.portal.Registry`), which the portal takes
+    /// only before the connection's first portal call.
+    pub(crate) async fn desktop(&self) -> Result<Desktop, PortalError> {
+        let connection = self.connection().await?;
+        let bus = zbus::fdo::DBusProxy::new(&connection).await?;
+        let owner = request::owner(&bus).await?;
+        self.register(&connection, &owner).await;
+        Ok(Desktop {
+            connection,
+            owner,
+            retired: self.retired.clone(),
+            versions: Arc::clone(&self.versions),
+        })
     }
+
+    /// Name the application to `owner` once per portal instance. A portal
+    /// older than the registry, one that refuses (the connection called it
+    /// before, or it judges the process sandboxed), or a sandbox that names
+    /// the application itself, leaves the requests attributed as the portal
+    /// sees fit: no request fails for it.
+    async fn register(&self, connection: &zbus::Connection, owner: &zbus::names::OwnedUniqueName) {
+        let Some(app_id) = &self.app_id else {
+            return;
+        };
+        if *self.sandboxed.get_or_init(is_sandboxed) {
+            return;
+        }
+        let peers = Peers {
+            connection: connection.unique_name().cloned(),
+            portal: owner.clone(),
+        };
+        if lock(&self.registration).settled_with.as_ref() == Some(&peers) {
+            return;
+        }
+        let options = std::collections::HashMap::<&str, zbus::Variant<'_>>::new();
+        let _ = connection
+            .call_method(
+                Some(owner.as_str()),
+                request::PATH,
+                Some("org.freedesktop.host.portal.Registry"),
+                "Register",
+                &(app_id.as_str(), options),
+            )
+            .await;
+        lock(&self.registration).settled_with = Some(peers);
+    }
+}
+
+/// Whether the process runs in a sandbox that names it to the portal
+/// itself: Flatpak (`/.flatpak-info`) or Snap (`SNAP` set by `snap run`).
+fn is_sandboxed() -> bool {
+    std::path::Path::new("/.flatpak-info").exists() || std::env::var_os("SNAP").is_some()
+}
+
+/// `mutex`'s guard: a panic while one is held leaves only a value that is
+/// whole (a connection, a registration), never one half written.
+fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// The executor thread of one portal and the requests still running on it.
@@ -165,7 +455,7 @@ struct Worker {
 }
 
 impl Worker {
-    fn start(address: Option<Arc<str>>) -> std::io::Result<Self> {
+    fn start(address: Option<Arc<str>>, app_id: Option<AppName>) -> std::io::Result<Self> {
         let runtime = zruntime::SharedRuntime::new()?;
         let stop = Arc::new(zruntime::Event::new());
         let stopped = stop.listen();
@@ -173,24 +463,43 @@ impl Worker {
         std::thread::Builder::new()
             .name("flui-portal".to_owned())
             .spawn(move || driven.block_on(stopped))?;
+        let bus = Arc::new(Bus::new(address, app_id, runtime.clone()));
         Ok(Self {
             runtime,
             stop,
-            bus: Arc::new(Bus {
-                address,
-                connection: Mutex::new(None),
-            }),
+            bus,
             tasks: Vec::new(),
         })
     }
 }
 
+/// How long the portal's thread outlives its UI runtime at most, while its
+/// requests close what they show.
+const DRAIN_BOUND: std::time::Duration = std::time::Duration::from_secs(30);
+
 impl Drop for Worker {
     fn drop(&mut self) {
-        // Cancelling drops each waiting request's future, and with it its
-        // resolver; then the thread's `block_on` returns.
-        self.tasks.clear();
-        self.stop.notify(usize::MAX);
+        // Each request hears the retirement, closes its `Request` or
+        // `Session` (the dialog goes down, the shortcuts are unbound) and
+        // ends, dropping its resolver and the window parent it holds; the
+        // thread stops once all have, or at the bound, cancelling the rest.
+        self.bus.retire();
+        let tasks = std::mem::take(&mut self.tasks);
+        let stop = Arc::clone(&self.stop);
+        let timer = self.runtime.clone();
+        self.runtime
+            .spawn("portal drain", async move {
+                let drained = std::pin::pin!(async {
+                    for task in tasks {
+                        // A request that panicked has ended all the same.
+                        let _ = task.await;
+                    }
+                });
+                let bound = std::pin::pin!(timer.sleep(DRAIN_BOUND));
+                let _ = futures_util::future::select(drained, bound).await;
+                stop.notify(usize::MAX);
+            })
+            .detach();
     }
 }
 
@@ -201,13 +510,15 @@ pub(crate) struct Portal {
     worker: RefCell<Option<Worker>>,
     next_token: Cell<u64>,
     address: RefCell<Option<Arc<str>>>,
+    app_id: RefCell<Option<AppName>>,
 }
 
 impl Portal {
     /// Talk to the portal on the bus at `address` instead of the session
-    /// bus, from the next start on: a scenario's private bus.
-    pub(crate) fn use_address(&self, address: Option<Arc<str>>) {
+    /// bus, naming the application `app_id`, from the next start on.
+    pub(crate) fn configure(&self, address: Option<Arc<str>>, app_id: Option<AppName>) {
         *self.address.borrow_mut() = address;
+        *self.app_id.borrow_mut() = app_id;
     }
 
     /// Start the portal's thread unless it runs; a request asks this first,
@@ -219,7 +530,9 @@ impl Portal {
     pub(crate) fn start(&self) -> Result<(), PortalError> {
         let mut worker = self.worker.borrow_mut();
         if worker.is_none() {
-            *worker = Some(Worker::start(self.address.borrow().clone()).map_err(|_| {
+            let started =
+                Worker::start(self.address.borrow().clone(), self.app_id.borrow().clone());
+            *worker = Some(started.map_err(|_| {
                 PortalError::Unsupported(Unsupported::new(UnsupportedReason::Unavailable))
             })?);
         }
@@ -257,112 +570,80 @@ impl Portal {
     }
 }
 
-/// The `parent_window` a portal dialog or application chooser is attached
-/// to: `x11:<XID>` for an X11 window, empty (not attached) for a Wayland
-/// one, which needs an exported `xdg-foreign` handle the host does not hand
-/// out yet, and for a window with no handle.
-pub(crate) fn parent_window(window: &WindowRef) -> String {
-    match window.window_handle().map(|handle| handle.as_raw()) {
-        Ok(RawWindowHandle::Xlib(handle)) => format!("x11:{:x}", handle.window),
-        Ok(RawWindowHandle::Xcb(handle)) => format!("x11:{:x}", handle.window.get()),
-        _ => String::new(),
-    }
+/// Hand `then` the parent a portal request names, on the owner thread: no
+/// window at once for a request with no window, else what the window answers
+/// ([`WindowRef::portal_parent`]), a turn later. A window whose host let the
+/// answer go names no window. When the owner retires first, `then` is
+/// dropped unrun, and with it whatever it holds.
+pub(crate) fn with_parent(
+    window: Option<&WindowRef>,
+    completions: &CompletionSource,
+    then: impl FnOnce(PortalParent) + 'static,
+) {
+    let Some(window) = window else {
+        then(PortalParent::none());
+        return;
+    };
+    let (parent, answer) = completions.pending::<PortalParent>();
+    window.portal_parent(answer);
+    let mut then = Some(then);
+    parent.on_complete(move |outcome| {
+        if let Some(then) = then.take() {
+            then(outcome.unwrap_or_default());
+        }
+    });
 }
 
 /// Register the portal's providers: on the session bus, or on the bus at
-/// `address`.
-pub(crate) fn register(registrar: &mut CapabilityRegistrar, address: Option<Arc<str>>) {
-    let launcher_address = address.clone();
-    registrar.provide::<LauncherCapability>(move |ctx: &ProviderContext<'_>| {
+/// `address`, naming the application by `app_id` when given, else by the id
+/// the composition root names it by.
+pub(crate) fn register(
+    registrar: &mut CapabilityRegistrar,
+    address: Option<Arc<str>>,
+    app_id: Option<AppName>,
+) {
+    let configure = move |ctx: &ProviderContext<'_>| {
         let portal = ctx.runtime_local::<Portal>();
-        portal.use_address(launcher_address.clone());
+        portal.configure(address.clone(), app_id.clone().or_else(|| AppName::of(ctx)));
+        portal
+    };
+    let launcher = configure.clone();
+    registrar.provide::<LauncherCapability>(move |ctx: &ProviderContext<'_>| {
         Ok::<_, Unsupported>(Launcher::new(
-            PortalLauncher::new(portal, ctx.window()),
+            PortalLauncher::new(launcher(ctx), ctx.window(), ctx.completions().clone()),
             ctx,
         ))
     });
+    let dialogs = configure.clone();
     registrar.provide::<FileDialogCapability>(move |ctx: &ProviderContext<'_>| {
-        let portal = ctx.runtime_local::<Portal>();
-        portal.use_address(address.clone());
-        FileDialogs::try_new(PortalDialogs::new(portal), ctx)
+        FileDialogs::try_new(
+            PortalDialogs::new(dialogs(ctx), ctx.completions().clone()),
+            ctx,
+        )
     });
-}
-
-#[cfg(test)]
-mod tests {
-    use std::num::NonZeroU32;
-    use std::rc::Rc;
-    use std::sync::Arc;
-
-    use flui_platform::capability::{WindowCloser, WindowRef};
-    use flui_platform::{SurfaceTarget, SwapChainStatistics, WindowIdMint};
-    use flui_sdk::foundation::FrameStamp;
-    use raw_window_handle::{
-        DisplayHandle, HandleError, HasDisplayHandle, HasWindowHandle, RawWindowHandle,
-        WindowHandle, XcbWindowHandle,
-    };
-
-    use super::{Portal, PortalLauncher, parent_window};
-
-    /// A window whose native handle names the X11 window `xid`, and nothing
-    /// else: no display, nothing to draw into.
-    struct X11Window {
-        xid: NonZeroU32,
-    }
-
-    impl HasWindowHandle for X11Window {
-        fn window_handle(&self) -> Result<WindowHandle<'_>, HandleError> {
-            let raw = RawWindowHandle::Xcb(XcbWindowHandle::new(self.xid));
-            #[expect(
-                unsafe_code,
-                reason = "a raw handle is borrowed only through this upstream call"
-            )]
-            // SAFETY: the handle carries an X11 window id and no pointer, and
-            // the code under test only formats that id into a string; nothing
-            // hands it to X or reads through it, so it needs no live window.
-            let handle = unsafe { WindowHandle::borrow_raw(raw) };
-            Ok(handle)
-        }
-    }
-
-    impl HasDisplayHandle for X11Window {
-        fn display_handle(&self) -> Result<DisplayHandle<'_>, HandleError> {
-            Err(HandleError::Unavailable)
-        }
-    }
-
-    impl SurfaceTarget for X11Window {
-        fn pre_present_notify(&self, _: Option<FrameStamp>, _: SwapChainStatistics) {}
-
-        fn keep_past_close(&self) {}
-    }
-
-    fn x11_window(xid: u32) -> (WindowRef, WindowCloser) {
-        let (closer, lifetime) = WindowCloser::new();
-        let id = WindowIdMint::new()
-            .next()
-            .expect("BUG: a fresh mint issues its first id");
-        let target = X11Window {
-            xid: NonZeroU32::new(xid).expect("the test names a window"),
-        };
-        (WindowRef::new(id, 1.0, Arc::new(target), lifetime), closer)
-    }
-
-    #[test]
-    fn a_launch_is_attached_to_its_widgets_window_while_it_is_open() {
-        let (window, closer) = x11_window(0x2a);
-        assert_eq!(parent_window(&window), "x11:2a");
-
-        let launcher = PortalLauncher::new(Rc::new(Portal::default()), Some(window));
-        assert_eq!(launcher.parent(), "x11:2a", "the chooser names the window");
-        closer.close();
-        assert_eq!(
-            launcher.parent(),
-            "",
-            "a closed window's id is not handed on: it may name another window"
-        );
-
-        let windowless = PortalLauncher::new(Rc::new(Portal::default()), None);
-        assert_eq!(windowless.parent(), "");
-    }
+    let autostart = configure.clone();
+    registrar.provide::<AutostartCapability>(move |ctx: &ProviderContext<'_>| {
+        Ok::<_, Unsupported>(Autostart::new(
+            PortalAutostart::new(autostart(ctx), ctx),
+            ctx,
+        ))
+    });
+    let shortcuts = configure.clone();
+    registrar.provide::<GlobalShortcutCapability>(move |ctx: &ProviderContext<'_>| {
+        Ok::<_, Unsupported>(GlobalShortcuts::new(
+            PortalShortcuts::new(shortcuts(ctx), ctx),
+            ctx,
+        ))
+    });
+    let entry = configure.clone();
+    registrar.provide::<TaskbarCapability>(move |ctx: &ProviderContext<'_>| {
+        let portal = entry(ctx);
+        let app_id = portal.app_id.borrow().clone();
+        let feed = std::sync::Arc::clone(&ctx.runtime_local::<EntryFeedSlot>().0);
+        LauncherEntry::try_new(portal, app_id, feed).map(|entry| TaskbarEntry::new(entry, ctx))
+    });
+    let dirs = configure;
+    registrar.provide::<UserDirCapability>(move |ctx: &ProviderContext<'_>| {
+        Ok::<_, Unsupported>(UserDirs::new(XdgUserDirs::new(dirs(ctx)), ctx))
+    });
 }

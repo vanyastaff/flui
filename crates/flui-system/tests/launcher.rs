@@ -563,17 +563,48 @@ fn a_held_request_answers_when_released() {
 
 #[test]
 fn the_system_plugin_provides_the_portal_on_linux_and_refuses_elsewhere() {
-    let (_host, launcher) = acquire::<LauncherCapability>(&SystemPlugin::new());
-    let (_host, dialogs) =
-        acquire::<flui_system::dialog::FileDialogCapability>(&SystemPlugin::new());
-    if cfg!(target_os = "linux") {
-        assert!(launcher.is_ok(), "the portal backs the launcher on Linux");
-        assert!(dialogs.is_ok(), "the portal backs the dialogs on Linux");
-    } else {
-        let refusal = launcher.expect_err("no provider yet off Linux");
-        assert_eq!(refusal.reason, UnsupportedReason::NotYetOnThisHost);
-        let refusal = dialogs.expect_err("no provider yet off Linux");
-        assert_eq!(refusal.reason, UnsupportedReason::NotYetOnThisHost);
+    /// How the plugin answers an acquisition of `C`.
+    fn provided<C: flui_platform::capability::Capability>() -> Result<(), UnsupportedReason> {
+        let (_host, handle) = acquire::<C>(&SystemPlugin::new());
+        handle.map(drop).map_err(|refusal| refusal.reason)
+    }
+    let linux = cfg!(target_os = "linux");
+    let elsewhere = Err(UnsupportedReason::NotYetOnThisHost);
+    let cases = [
+        ("launcher", provided::<LauncherCapability>(), Ok(())),
+        (
+            "file dialogs",
+            provided::<flui_system::dialog::FileDialogCapability>(),
+            Ok(()),
+        ),
+        (
+            "autostart",
+            provided::<flui_system::autostart::AutostartCapability>(),
+            Ok(()),
+        ),
+        (
+            "global shortcuts",
+            provided::<flui_system::shortcuts::GlobalShortcutCapability>(),
+            Ok(()),
+        ),
+        (
+            "user folders",
+            provided::<flui_system::user_dirs::UserDirCapability>(),
+            Ok(()),
+        ),
+        // The headless host names no application, and the launcher entry
+        // is named by the application's id.
+        (
+            "launcher entry",
+            provided::<flui_system::taskbar::TaskbarCapability>(),
+            Err(UnsupportedReason::NotDeclared {
+                what: "the application id ([app] id in flui.toml)",
+            }),
+        ),
+    ];
+    for (service, answered, on_linux) in cases {
+        let expected = if linux { on_linux } else { elsewhere };
+        assert_eq!(answered, expected, "{service}");
     }
 }
 

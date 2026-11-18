@@ -3,15 +3,16 @@
 //! is visible and when it is revealed.
 
 use flui_app::AppConfig;
-use flui_foundation::geometry::{Point, Size};
+use flui_foundation::geometry::{DevicePixelRatio, Point, Size};
 use flui_platform::os_options::{OsWindowOptions, Win32WindowOptions, WindowsCornerPreference};
 use flui_platform::{
-    AppTitleBar, ControlsOffset, InputLatency, SystemControls, WindowExtent, WindowFrame,
-    WindowMode, WindowOptions, WindowReveal,
+    AppTitleBar, ControlsOffset, DesktopOrigin, DisplayBounds, DisplayDescription, DisplayKey,
+    DisplayRegistry, DisplaySnapshot, InputLatency, SystemControls, WindowExtent, WindowFrame,
+    WindowMode, WindowOptions, WindowPosition, WindowReveal,
 };
 
 fn options(config: &AppConfig) -> WindowOptions {
-    WindowOptions::from(config)
+    config.window_options(None)
 }
 
 fn the_title_is_kept() {
@@ -20,7 +21,7 @@ fn the_title_is_kept() {
 
 fn the_size_is_kept() {
     assert_eq!(
-        options(&AppConfig::new().size(900, 700)).size,
+        options(&AppConfig::new().size(900, 700)).size.get(),
         Size::new(900.0, 700.0)
     );
 }
@@ -55,12 +56,48 @@ fn the_frame_flags_are_kept() {
     }
 }
 
+/// The configured position lands on the primary display, not on the first one
+/// listed, and the options name no position only where there is no display to
+/// name.
 fn the_position_is_kept() {
+    let registry = DisplayRegistry::new();
+    let display = |key: u64, primary: bool| {
+        let id = registry
+            .mint(&DisplayKey::Injected(key))
+            .expect("a display id");
+        let bounds = DisplayBounds::whole(Size::new(1920.0, 1080.0)).expect("a display's bounds");
+        DisplayDescription::new(
+            id,
+            "Display",
+            DesktopOrigin::new(0, 0),
+            bounds,
+            DevicePixelRatio::ONE,
+        )
+        .with_primary(primary)
+    };
+    let side = display(1, false);
+    let primary = display(2, true);
+    let primary_id = primary.id;
+    let displays = DisplaySnapshot::empty()
+        .successor(vec![side, primary])
+        .expect("a first revision");
+
+    let config = AppConfig::new().position(-1200, 80);
     assert_eq!(
-        options(&AppConfig::new().position(Point::new(-1200.0, 80.0))).position,
-        Some(Point::new(-1200.0, 80.0))
+        config.window_options(Some(&displays)).position,
+        Some(WindowPosition::try_new(primary_id, Point::new(-1200.0, 80.0)).expect("a position"))
     );
-    assert_eq!(options(&AppConfig::new()).position, None);
+    assert_eq!(config.window_options(None).position, None);
+    assert_eq!(
+        config
+            .window_options(Some(&DisplaySnapshot::empty()))
+            .position,
+        None
+    );
+    assert_eq!(
+        AppConfig::new().window_options(Some(&displays)).position,
+        None
+    );
 }
 
 fn the_mode_is_kept() {

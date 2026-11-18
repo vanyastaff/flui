@@ -116,7 +116,13 @@ mod grid {
         let platform = X11Platform::try_new().expect("the X server DISPLAY names answers");
         let window = platform
             .open_window(
-                WindowOptions::default().size(Size::new(f64::from(SIDE), f64::from(SIDE))),
+                WindowOptions::default().size(
+                    flui_platform::WindowExtent::try_new(Size::new(
+                        f64::from(SIDE),
+                        f64::from(SIDE),
+                    ))
+                    .expect("a side is an extent"),
+                ),
                 RecordingWindowHandler::new(),
             )
             .expect("an X11 window opens");
@@ -270,7 +276,13 @@ mod grid {
     fn mount(grid: &Grid, fonts: &FontCollection) -> UiRuntime {
         let window = flui_native::headless_platform()
             .open_window(
-                WindowOptions::default().size(Size::new(f64::from(SIDE), f64::from(SIDE))),
+                WindowOptions::default().size(
+                    flui_platform::WindowExtent::try_new(Size::new(
+                        f64::from(SIDE),
+                        f64::from(SIDE),
+                    ))
+                    .expect("a side is an extent"),
+                ),
                 RecordingWindowHandler::new(),
             )
             .expect("a headless window opens");

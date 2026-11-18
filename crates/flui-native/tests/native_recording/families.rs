@@ -291,8 +291,10 @@ impl<'a> WindowStateTarget<'a> {
 
 impl ReplayTarget for WindowStateTarget<'_> {
     fn window_state(&mut self, state: &RecordedWindowState) -> Result<(), Unsupported> {
-        let display = state.display().map(|label| self.labels.id(label));
-        let sample = state.clone().into_parts(display).into_state();
+        let sample = state
+            .clone()
+            .into_parts(|label| Some(self.labels.id(label)))
+            .into_state();
         let reported = self.window.simulate_state(sample);
         // A consumer is told of the change and reads the window: the read
         // answers the snapshot the replay reported, and replaces nothing.
@@ -377,13 +379,27 @@ pub(super) fn facts(
     )
 }
 
-/// The snapshots a `window_state` recording holds, as [`facts`] compares them.
-fn recorded_states(recording: &NativeRecording) -> Vec<(Option<u64>, WindowStateParts)> {
+/// The snapshots a `window_state` recording holds, as [`facts`] compares them,
+/// each label on the display `resolve` gives it.
+fn recorded_states(
+    recording: &NativeRecording,
+    mut resolve: impl FnMut(u64) -> Option<DisplayId>,
+) -> Vec<(Option<u64>, WindowStateParts)> {
     recording
         .rows
         .iter()
         .filter_map(|row| match row {
-            Row::State { state, .. } => Some((state.display(), state.clone().into_parts(None))),
+            Row::State { state, .. } => {
+                let parts = state.clone().into_parts(&mut resolve);
+                // [`facts`] carries the display as its label.
+                Some((
+                    state.display(),
+                    WindowStateParts {
+                        display: None,
+                        ..parts
+                    },
+                ))
+            }
             _ => None,
         })
         .collect()
@@ -636,7 +652,7 @@ fn a_store_lock_the_recording_joined_after_is_refused() {
     // relaxed before, held in full after, and held in full in a recording that did not join.
     let header = |joined: bool| {
         format!(
-            r#"{{"flui_native_recording":2,"backend":"headless","stream":"window"{}}}"#,
+            r#"{{"flui_native_recording":3,"backend":"headless","stream":"window"{}}}"#,
             if joined { r#","joined_late":true"# } else { "" }
         )
     };
@@ -717,7 +733,7 @@ fn a_store_lock_the_recording_joined_after_is_refused() {
 /// granted, and a close whose cause contradicts the requests before it.
 fn close_rows_out_of_order_are_refused() {
     let header =
-        r#"{"flui_native_recording":2,"backend":"headless","stream":"window","devices":[]}"#;
+        r#"{"flui_native_recording":3,"backend":"headless","stream":"window","devices":[]}"#;
     let request = |answer: &str| format!(r#"{{"row":"close_request","answer":"{answer}"}}"#);
     let closed = |cause: &str| format!(r#"{{"row":"closed","cause":"{cause}"}}"#);
     for (case, rows, line) in [
@@ -826,7 +842,7 @@ fn a_recording_past_its_bound_is_written_cut() {
     );
 
     let header =
-        r#"{"flui_native_recording":2,"backend":"headless","stream":"window","devices":[]}"#;
+        r#"{"flui_native_recording":3,"backend":"headless","stream":"window","devices":[]}"#;
     let after =
         format!("{header}\n{{\"row\":\"cut\",\"reason\":\"bytes\"}}\n{{\"row\":\"reopen\"}}\n");
     assert!(matches!(
@@ -1014,14 +1030,15 @@ fn window_state_recordings_replay_on_the_headless_host() {
             .cloned()
             .map(|state| facts(state, |id| labels.label(id)))
             .collect::<Vec<_>>(),
-        recorded_states(&recording)
+        recorded_states(&recording, |label| Some(labels.id(label)))
     );
     assert_eq!(labels.len(), 2, "one id for each label, kept across rows");
     let last = target.published.last().expect("snapshots were replayed");
     assert_eq!(last.title, None);
     assert_eq!(
         last.normal_geometry
-            .and_then(flui_platform::WindowGeometry::position),
+            .and_then(flui_platform::WindowGeometry::position)
+            .map(flui_platform::WindowPosition::at),
         Some(flui_foundation::geometry::Point::new(10.0, 20.0))
     );
     assert_eq!(
@@ -1220,19 +1237,19 @@ fn a_header_out_of_its_stream_is_refused() {
     for (case, header) in [
         (
             "registry without a clock",
-            r#"{"flui_native_recording":2,"backend":"web","devices":[]}"#,
+            r#"{"flui_native_recording":3,"backend":"web","devices":[]}"#,
         ),
         (
             "application stream with a clock",
-            r#"{"flui_native_recording":2,"backend":"web","stream":"app","epoch_ns":0,"uptime_ns":0,"devices":[]}"#,
+            r#"{"flui_native_recording":3,"backend":"web","stream":"app","epoch_ns":0,"uptime_ns":0,"devices":[]}"#,
         ),
         (
             "platform stream with a clock",
-            r#"{"flui_native_recording":2,"backend":"web","stream":"platform","epoch_ns":0,"uptime_ns":0,"devices":[]}"#,
+            r#"{"flui_native_recording":3,"backend":"web","stream":"platform","epoch_ns":0,"uptime_ns":0,"devices":[]}"#,
         ),
         (
             "window state stream with a clock",
-            r#"{"flui_native_recording":2,"backend":"web","stream":"window_state","epoch_ns":0,"uptime_ns":0,"devices":[]}"#,
+            r#"{"flui_native_recording":3,"backend":"web","stream":"window_state","epoch_ns":0,"uptime_ns":0,"devices":[]}"#,
         ),
     ] {
         assert!(
@@ -1257,7 +1274,7 @@ fn a_store_focus_keeps_every_field_of_its_status() {
     };
 
     let header =
-        r#"{"flui_native_recording":2,"backend":"headless","stream":"window","devices":[]}"#;
+        r#"{"flui_native_recording":3,"backend":"headless","stream":"window","devices":[]}"#;
     let focused = |status: &str| {
         format!(r#"{{"row":"store_focus","focus":{{"store":1,"status":{status}}}}}"#)
     };
@@ -1564,8 +1581,32 @@ fn captured_streams_replay_to_what_the_session_delivered() {
         session.reads,
         "the platform stream journals every read the application made, and only those"
     );
+    // The journal labels a display by its issued number, so each label the
+    // session's snapshots name resolves to the id the window published.
+    let issued = session
+        .states
+        .iter()
+        .flat_map(|state| {
+            state
+                .display
+                .into_iter()
+                .chain(
+                    state
+                        .outer
+                        .position()
+                        .map(flui_platform::WindowPosition::display),
+                )
+                .chain(
+                    state
+                        .normal_geometry
+                        .and_then(flui_platform::WindowGeometry::position)
+                        .map(flui_platform::WindowPosition::display),
+                )
+        })
+        .map(|id| (id.get(), id))
+        .collect::<HashMap<_, _>>();
     assert_eq!(
-        recorded_states(&states),
+        recorded_states(&states, |label| issued.get(&label).copied()),
         session
             .states
             .iter()
@@ -1618,7 +1659,7 @@ fn captured_streams_replay_to_what_the_session_delivered() {
             .cloned()
             .map(|state| facts(state, |id| labels.label(id)))
             .collect::<Vec<_>>(),
-        recorded_states(&states),
+        recorded_states(&states, |label| Some(labels.id(label))),
         "a replayed snapshot publishes what the live window published"
     );
     assert_eq!(
@@ -2221,7 +2262,7 @@ fn every_close_answer_and_cause_replays() {
     }
 
     let mut no_handler = NativeRecording::read(
-        r#"{"flui_native_recording":2,"backend":"headless","stream":"window","devices":[]}"#
+        r#"{"flui_native_recording":3,"backend":"headless","stream":"window","devices":[]}"#
             .as_bytes(),
     )
     .expect("a window header reads");

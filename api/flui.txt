@@ -22,16 +22,15 @@ field flui::AppConfig::mode: flui::platform::WindowMode // at 8
 field flui::AppConfig::motion_override: flui::animation::MotionOverride // at 2
 field flui::AppConfig::os_options: flui::platform::os_options::OsWindowOptions // at 11
 field flui::AppConfig::pointer_resampling: flui::app::PointerResampling // at 23
-field flui::AppConfig::position: Option<flui::geometry::Point<f64>> // at 7
+field flui::AppConfig::position: Option<flui::geometry::Point<i32>> // at 7
 field flui::AppConfig::resizable: bool // at 9
 field flui::AppConfig::services: Vec<flui::app::ServiceDefinition> // at 26
 field flui::AppConfig::show_performance_overlay: bool // at 12
-field flui::AppConfig::size: flui::geometry::Size // at 4
+field flui::AppConfig::size: flui::platform::WindowExtent // at 4
 field flui::AppConfig::surface_color: flui_engine::surface_color::SurfaceColor // at 24
 field flui::AppConfig::title: String // at 3
 impl Clone for flui::AppConfig
 impl Default for flui::AppConfig
-impl From<&flui::AppConfig> for flui::platform::WindowOptions
 impl core::fmt::Debug for flui::AppConfig
 pub fn flui::AppConfig::application_identity(self, identity: flui::app::AppIdentity) -> Self
 pub fn flui::AppConfig::close_request_handler(self, handler: flui::app::CloseRequestHandler) -> Self
@@ -56,7 +55,7 @@ pub fn flui::AppConfig::new() -> Self
 pub fn flui::AppConfig::os_options(self, os_options: flui::platform::os_options::OsWindowOptions) -> Self
 pub fn flui::AppConfig::performance_overlay(self, show: bool) -> Self
 pub fn flui::AppConfig::pointer_resampling(self, policy: flui::app::PointerResampling) -> Self
-pub fn flui::AppConfig::position(self, at: flui::geometry::Point<f64>) -> Self
+pub fn flui::AppConfig::position(self, x: i32, y: i32) -> Self
 pub fn flui::AppConfig::resizable(self, resizable: bool) -> Self
 pub fn flui::AppConfig::restore_placement(self, name: flui::platform::StorageName) -> Self
 pub fn flui::AppConfig::service(self, service: flui::app::ServiceDefinition) -> Self
@@ -64,6 +63,7 @@ pub fn flui::AppConfig::size(self, width: u32, height: u32) -> Self
 pub fn flui::AppConfig::storage_dir(self, dir: flui::platform::AppDataDir) -> Self
 pub fn flui::AppConfig::surface_color(self, color: flui_engine::surface_color::SurfaceColor) -> Self
 pub fn flui::AppConfig::title(self, title: impl Into<String>) -> Self
+pub fn flui::AppConfig::window_options(&self, displays: Option<&flui::platform::DisplaySnapshot>) -> flui::platform::WindowOptions
 #[non_exhaustive] pub enum flui::AppControlError
 impl Clone for flui::AppControlError
 impl core::error::Error for flui::AppControlError
@@ -11447,7 +11447,8 @@ impl core::fmt::Display for flui::platform::ApplyError
 impl core::marker::StructuralPartialEq for flui::platform::ApplyError
 pub fn flui::platform::ApplyError::failed(message: String) -> Self
 variant flui::platform::ApplyError::Closed // at 0
-variant flui::platform::ApplyError::Platform(flui::platform::PlatformFailure) // at 2
+variant flui::platform::ApplyError::DisplayGone(flui::platform::DisplayId) // at 2
+variant flui::platform::ApplyError::Platform(flui::platform::PlatformFailure) // at 3
 variant flui::platform::ApplyError::Superseded { command: flui::platform::WindowCommand } // at 1
 pub struct flui::platform::AspectRatio { .. }
 impl Clone for flui::platform::AspectRatio
@@ -11727,6 +11728,29 @@ variant flui::platform::CursorImageError::Empty { width: u16, height: u16 } // a
 variant flui::platform::CursorImageError::HotspotOutside { x: u16, y: u16 } // at 3
 variant flui::platform::CursorImageError::PixelCount { expected: usize, found: usize } // at 2
 variant flui::platform::CursorImageError::TooLarge { width: u16, height: u16 } // at 1
+pub struct flui::platform::DesktopOrigin { .. }
+impl Clone for flui::platform::DesktopOrigin
+impl Copy for flui::platform::DesktopOrigin
+impl Default for flui::platform::DesktopOrigin
+impl Eq for flui::platform::DesktopOrigin
+impl PartialEq for flui::platform::DesktopOrigin
+impl core::fmt::Debug for flui::platform::DesktopOrigin
+impl core::hash::Hash for flui::platform::DesktopOrigin
+impl core::marker::StructuralPartialEq for flui::platform::DesktopOrigin
+pub const fn flui::platform::DesktopOrigin::get(self) -> flui::geometry::Point<i32>
+pub const fn flui::platform::DesktopOrigin::new(x: i32, y: i32) -> Self
+pub struct flui::platform::DisplayBounds { .. }
+impl Clone for flui::platform::DisplayBounds
+impl Copy for flui::platform::DisplayBounds
+impl Eq for flui::platform::DisplayBounds
+impl PartialEq for flui::platform::DisplayBounds
+impl core::fmt::Debug for flui::platform::DisplayBounds
+impl core::marker::StructuralPartialEq for flui::platform::DisplayBounds
+pub const fn flui::platform::DisplayBounds::extent(self) -> flui::geometry::Size<f64>
+pub const fn flui::platform::DisplayBounds::usable(self) -> flui::geometry::Rect<f64>
+pub fn flui::platform::DisplayBounds::from_device(display: flui::geometry::Bounds<i32>, usable: flui::geometry::Bounds<i32>, scale: flui::geometry::DevicePixelRatio) -> Result<(flui::platform::DesktopOrigin, Self), flui::platform::InvalidDisplayBounds>
+pub fn flui::platform::DisplayBounds::try_new(extent: flui::geometry::Size<f64>, usable: flui::geometry::Rect<f64>) -> Result<Self, flui::platform::InvalidDisplayBounds>
+pub fn flui::platform::DisplayBounds::whole(extent: flui::geometry::Size<f64>) -> Result<Self, flui::platform::InvalidDisplayBounds>
 #[non_exhaustive] pub enum flui::platform::DisplayColor
 impl Clone for flui::platform::DisplayColor
 impl Copy for flui::platform::DisplayColor
@@ -11739,28 +11763,28 @@ pub const fn flui::platform::DisplayColor::headroom(self) -> Result<flui::platfo
 variant flui::platform::DisplayColor::High(flui::platform::ColorGamut, Result<flui::platform::Headroom, flui::platform::CapabilityAbsence>) // at 1
 variant flui::platform::DisplayColor::Standard(flui::platform::ColorGamut) // at 0
 #[non_exhaustive] pub struct flui::platform::DisplayDescription
-field flui::platform::DisplayDescription::bounds: flui::geometry::Bounds<i32> // at 2
+field flui::platform::DisplayDescription::bounds: flui::platform::DisplayBounds // at 3
 field flui::platform::DisplayDescription::color: Result<flui::platform::DisplayColor, flui::platform::CapabilityAbsence> // at 8
 field flui::platform::DisplayDescription::id: flui::platform::DisplayId // at 0
 field flui::platform::DisplayDescription::is_primary: bool // at 6
 field flui::platform::DisplayDescription::name: String // at 1
+field flui::platform::DisplayDescription::origin: flui::platform::DesktopOrigin // at 2
 field flui::platform::DisplayDescription::persistent_key: Option<String> // at 7
 field flui::platform::DisplayDescription::refresh_period: Option<flui::platform::RefreshPeriod> // at 5
 field flui::platform::DisplayDescription::scale_factor: flui::geometry::DevicePixelRatio // at 4
-field flui::platform::DisplayDescription::usable_bounds: flui::geometry::Bounds<i32> // at 3
 impl Clone for flui::platform::DisplayDescription
 impl PartialEq for flui::platform::DisplayDescription
 impl core::fmt::Debug for flui::platform::DisplayDescription
 impl core::marker::StructuralPartialEq for flui::platform::DisplayDescription
 pub fn flui::platform::DisplayDescription::color_space(&self) -> Result<flui::platform::SurfaceColorSpace, flui::platform::Unsupported>
+pub fn flui::platform::DisplayDescription::from_device(id: flui::platform::DisplayId, name: impl Into<String>, display: flui::geometry::Bounds<i32>, usable: flui::geometry::Bounds<i32>, scale_factor: flui::geometry::DevicePixelRatio) -> Result<Self, flui::platform::InvalidDisplayBounds>
 pub fn flui::platform::DisplayDescription::headroom(&self) -> Result<flui::platform::Headroom, flui::platform::Unsupported>
 pub fn flui::platform::DisplayDescription::into_parts(self) -> (flui::platform::DisplayId, flui::platform::DisplayParts)
-pub fn flui::platform::DisplayDescription::new(id: flui::platform::DisplayId, name: impl Into<String>, bounds: flui::geometry::Bounds<i32>, scale_factor: flui::geometry::DevicePixelRatio) -> Self
+pub fn flui::platform::DisplayDescription::new(id: flui::platform::DisplayId, name: impl Into<String>, origin: flui::platform::DesktopOrigin, bounds: flui::platform::DisplayBounds, scale_factor: flui::geometry::DevicePixelRatio) -> Self
 pub fn flui::platform::DisplayDescription::with_color(self, color: Result<flui::platform::DisplayColor, flui::platform::CapabilityAbsence>) -> Self
 pub fn flui::platform::DisplayDescription::with_persistent_key(self, key: impl Into<String>) -> Self
 pub fn flui::platform::DisplayDescription::with_primary(self, is_primary: bool) -> Self
 pub fn flui::platform::DisplayDescription::with_refresh_period(self, period: core::time::Duration) -> Self
-pub fn flui::platform::DisplayDescription::with_usable_bounds(self, usable_bounds: flui::geometry::Bounds<i32>) -> Self
 pub struct flui::platform::DisplayId { .. }
 impl Clone for flui::platform::DisplayId
 impl Copy for flui::platform::DisplayId
@@ -11771,14 +11795,14 @@ impl core::hash::Hash for flui::platform::DisplayId
 impl core::marker::StructuralPartialEq for flui::platform::DisplayId
 pub const fn flui::platform::DisplayId::get(self) -> u64
 pub struct flui::platform::DisplayParts
-field flui::platform::DisplayParts::bounds: flui::geometry::Bounds<i32> // at 1
+field flui::platform::DisplayParts::bounds: flui::platform::DisplayBounds // at 2
 field flui::platform::DisplayParts::color: Result<flui::platform::DisplayColor, flui::platform::CapabilityAbsence> // at 7
 field flui::platform::DisplayParts::is_primary: bool // at 5
 field flui::platform::DisplayParts::name: String // at 0
+field flui::platform::DisplayParts::origin: flui::platform::DesktopOrigin // at 1
 field flui::platform::DisplayParts::persistent_key: Option<String> // at 6
 field flui::platform::DisplayParts::refresh_period: Option<flui::platform::RefreshPeriod> // at 4
 field flui::platform::DisplayParts::scale_factor: flui::geometry::DevicePixelRatio // at 3
-field flui::platform::DisplayParts::usable_bounds: flui::geometry::Bounds<i32> // at 2
 impl Clone for flui::platform::DisplayParts
 impl PartialEq for flui::platform::DisplayParts
 impl core::fmt::Debug for flui::platform::DisplayParts
@@ -12147,6 +12171,16 @@ impl core::error::Error for flui::platform::InvalidControlsOffset
 impl core::fmt::Debug for flui::platform::InvalidControlsOffset
 impl core::fmt::Display for flui::platform::InvalidControlsOffset
 impl core::marker::StructuralPartialEq for flui::platform::InvalidControlsOffset
+pub struct flui::platform::InvalidDisplayBounds
+field flui::platform::InvalidDisplayBounds::extent: flui::geometry::Size<f64> // at 0
+field flui::platform::InvalidDisplayBounds::usable: flui::geometry::Rect<f64> // at 1
+impl Clone for flui::platform::InvalidDisplayBounds
+impl Copy for flui::platform::InvalidDisplayBounds
+impl Eq for flui::platform::InvalidDisplayBounds
+impl PartialEq for flui::platform::InvalidDisplayBounds
+impl core::error::Error for flui::platform::InvalidDisplayBounds
+impl core::fmt::Debug for flui::platform::InvalidDisplayBounds
+impl core::fmt::Display for flui::platform::InvalidDisplayBounds
 #[non_exhaustive] pub enum flui::platform::InvalidGeometry
 impl Clone for flui::platform::InvalidGeometry
 impl Copy for flui::platform::InvalidGeometry
@@ -12393,9 +12427,10 @@ pub const fn flui::platform::OpenedOverflow::is_empty(self) -> bool
 #[non_exhaustive] pub struct flui::platform::OpeningGeometry
 field flui::platform::OpeningGeometry::constraints: flui::platform::SizeConstraints // at 1
 field flui::platform::OpeningGeometry::content: flui::platform::WindowExtent // at 0
-field flui::platform::OpeningGeometry::position: Option<flui::geometry::Point<f64>> // at 2
+field flui::platform::OpeningGeometry::position: Option<flui::platform::WindowPosition> // at 2
 impl Clone for flui::platform::OpeningGeometry
 impl Copy for flui::platform::OpeningGeometry
+impl Eq for flui::platform::OpeningGeometry
 impl PartialEq for flui::platform::OpeningGeometry
 impl core::fmt::Debug for flui::platform::OpeningGeometry
 impl core::marker::StructuralPartialEq for flui::platform::OpeningGeometry
@@ -12420,6 +12455,15 @@ impl core::marker::StructuralPartialEq for flui::platform::PlacementError
 variant flui::platform::PlacementError::Malformed { field: &'static str } // at 2
 variant flui::platform::PlacementError::Truncated // at 0
 variant flui::platform::PlacementError::UnsupportedVersion // at 1
+pub struct flui::platform::PlacementOffset(_)
+impl Clone for flui::platform::PlacementOffset
+impl Copy for flui::platform::PlacementOffset
+impl Eq for flui::platform::PlacementOffset
+impl PartialEq for flui::platform::PlacementOffset
+impl core::fmt::Debug for flui::platform::PlacementOffset
+impl core::marker::StructuralPartialEq for flui::platform::PlacementOffset
+pub const fn flui::platform::PlacementOffset::get(self) -> flui::geometry::Point<f64>
+pub fn flui::platform::PlacementOffset::try_new(at: flui::geometry::Point<f64>) -> Result<Self, flui::platform::InvalidGeometry>
 #[non_exhaustive] pub enum flui::platform::PlatformFailure
 impl Clone for flui::platform::PlatformFailure
 impl Eq for flui::platform::PlatformFailure
@@ -12463,6 +12507,7 @@ fn flui::platform::PlatformWindow::request_redraw(&self)
 fn flui::platform::PlatformWindow::reveal_after_first_frame(&self)
 fn flui::platform::PlatformWindow::set_cursor(&self, cursor: &flui::platform::Cursor) -> Result<(), flui::platform::CursorError>
 fn flui::platform::PlatformWindow::set_frame_rate_hint(&self, hint: flui::platform::FrameRateHint) -> Result<(), flui::platform::Unsupported>
+fn flui::platform::PlatformWindow::portal_parent(&self, answer: flui::platform::capability::Resolver<flui::platform::capability::PortalParent>) { .. }
 fn flui::platform::PlatformWindow::set_input_regions(&self, regions: &[flui::platform::input_regions::InputRegion]) -> Result<(), flui::platform::Unsupported>
 fn flui::platform::PlatformWindow::state(&self) -> flui::platform::WindowState
 fn flui::platform::PlatformWindow::surface_target(&self) -> alloc::rcs::arc::Arc<dyn flui::platform::SurfaceTarget>
@@ -12584,15 +12629,15 @@ impl PartialEq for flui::platform::RegionalParts
 impl core::fmt::Debug for flui::platform::RegionalParts
 impl core::marker::StructuralPartialEq for flui::platform::RegionalParts
 pub fn flui::platform::RegionalParts::into_formats(self) -> flui::platform::RegionalFormats
-#[non_exhaustive] pub struct flui::platform::ResolvedPlacement
+#[non_exhaustive] pub struct flui::platform::ResolvedPlacement { .. }
 field flui::platform::ResolvedPlacement::display: flui::platform::DisplayId // at 0
 field flui::platform::ResolvedPlacement::mode: flui::platform::WindowMode // at 3
-field flui::platform::ResolvedPlacement::offset_in_display: Option<flui::geometry::Point<f64>> // at 1
-field flui::platform::ResolvedPlacement::size: flui::geometry::Size<f64> // at 2
+field flui::platform::ResolvedPlacement::size: flui::platform::WindowExtent // at 2
 impl Clone for flui::platform::ResolvedPlacement
 impl PartialEq for flui::platform::ResolvedPlacement
 impl core::fmt::Debug for flui::platform::ResolvedPlacement
 impl core::marker::StructuralPartialEq for flui::platform::ResolvedPlacement
+pub fn flui::platform::ResolvedPlacement::position(&self) -> Option<flui::platform::WindowPosition>
 pub struct flui::platform::ScrollBarParts
 field flui::platform::ScrollBarParts::track_click: Option<flui::platform::ScrollTrackClick> // at 1
 field flui::platform::ScrollBarParts::visibility: Option<flui::platform::ScrollBarVisibility> // at 0
@@ -12678,6 +12723,7 @@ field flui::platform::SizeConstraints::min: Option<flui::platform::WindowExtent>
 impl Clone for flui::platform::SizeConstraints
 impl Copy for flui::platform::SizeConstraints
 impl Default for flui::platform::SizeConstraints
+impl Eq for flui::platform::SizeConstraints
 impl PartialEq for flui::platform::SizeConstraints
 impl core::fmt::Debug for flui::platform::SizeConstraints
 impl core::marker::StructuralPartialEq for flui::platform::SizeConstraints
@@ -13083,10 +13129,10 @@ variant flui::platform::WindowCommand::SetFrame(flui::platform::WindowFrame) // 
 variant flui::platform::WindowCommand::SetLevel(flui::platform::WindowLevel) // at 13
 variant flui::platform::WindowCommand::SetMaterial(flui::platform::WindowMaterial) // at 11
 variant flui::platform::WindowCommand::SetMode(flui::platform::WindowMode) // at 6
-variant flui::platform::WindowCommand::SetPosition(flui::geometry::Point<f64>) // at 1
+variant flui::platform::WindowCommand::SetPosition(flui::platform::WindowPosition) // at 1
 variant flui::platform::WindowCommand::SetResizable(bool) // at 4
 variant flui::platform::WindowCommand::SetResizeIncrements(Option<flui::platform::WindowExtent>) // at 14
-variant flui::platform::WindowCommand::SetSize(flui::geometry::Size<f64>) // at 2
+variant flui::platform::WindowCommand::SetSize(flui::platform::WindowExtent) // at 2
 variant flui::platform::WindowCommand::SetTitle(String) // at 0
 variant flui::platform::WindowCommand::Show // at 7
 #[non_exhaustive] pub struct flui::platform::WindowDisplay
@@ -13126,8 +13172,8 @@ impl core::marker::StructuralPartialEq for flui::platform::WindowExtent
 pub const flui::platform::WindowExtent::ZERO: Self = _
 pub const fn flui::platform::WindowExtent::get(self) -> flui::geometry::Size<f64>
 pub const fn flui::platform::WindowExtent::height(self) -> f64
+pub const fn flui::platform::WindowExtent::try_new(size: flui::geometry::Size<f64>) -> Result<Self, flui::platform::InvalidGeometry>
 pub const fn flui::platform::WindowExtent::width(self) -> f64
-pub fn flui::platform::WindowExtent::try_new(size: flui::geometry::Size<f64>) -> Result<Self, flui::platform::InvalidGeometry>
 pub enum flui::platform::WindowFocus
 impl Clone for flui::platform::WindowFocus
 impl Copy for flui::platform::WindowFocus
@@ -13163,12 +13209,12 @@ impl PartialEq for flui::platform::WindowGeometry
 impl core::fmt::Debug for flui::platform::WindowGeometry
 impl core::marker::StructuralPartialEq for flui::platform::WindowGeometry
 pub const flui::platform::WindowGeometry::EMPTY: Self = _
+pub const fn flui::platform::WindowGeometry::at(self, position: Option<flui::platform::WindowPosition>) -> Self
 pub const fn flui::platform::WindowGeometry::extent(self) -> flui::platform::WindowExtent
-pub const fn flui::platform::WindowGeometry::position(self) -> Option<flui::geometry::Point<f64>>
+pub const fn flui::platform::WindowGeometry::position(self) -> Option<flui::platform::WindowPosition>
 pub const fn flui::platform::WindowGeometry::size(self) -> flui::geometry::Size<f64>
+pub const fn flui::platform::WindowGeometry::try_new(position: Option<flui::platform::WindowPosition>, size: flui::geometry::Size<f64>) -> Result<Self, flui::platform::InvalidGeometry>
 pub const fn flui::platform::WindowGeometry::unplaced(extent: flui::platform::WindowExtent) -> Self
-pub fn flui::platform::WindowGeometry::at(self, position: Option<flui::geometry::Point<f64>>) -> Result<Self, flui::platform::InvalidGeometry>
-pub fn flui::platform::WindowGeometry::try_new(position: Option<flui::geometry::Point<f64>>, size: flui::geometry::Size<f64>) -> Result<Self, flui::platform::InvalidGeometry>
 pub struct flui::platform::WindowId(_)
 impl Clone for flui::platform::WindowId
 impl Copy for flui::platform::WindowId
@@ -13256,37 +13302,34 @@ impl core::marker::StructuralPartialEq for flui::platform::WindowOption
 variant flui::platform::WindowOption::Limits // at 3
 variant flui::platform::WindowOption::MaxSize // at 2
 variant flui::platform::WindowOption::MinSize // at 1
-variant flui::platform::WindowOption::Position // at 4
 variant flui::platform::WindowOption::Size // at 0
 #[non_exhaustive] pub struct flui::platform::WindowOptions
-field flui::platform::WindowOptions::display: Option<flui::platform::DisplayId> // at 8
 field flui::platform::WindowOptions::frame: flui::platform::WindowFrame // at 5
-field flui::platform::WindowOptions::input_latency: flui::platform::InputLatency // at 12
+field flui::platform::WindowOptions::input_latency: flui::platform::InputLatency // at 11
 field flui::platform::WindowOptions::max_size: Option<flui::platform::WindowExtent> // at 7
 field flui::platform::WindowOptions::min_size: Option<flui::platform::WindowExtent> // at 6
-field flui::platform::WindowOptions::mode: flui::platform::WindowMode // at 10
-field flui::platform::WindowOptions::normal_geometry: Option<flui::platform::WindowGeometry> // at 11
-field flui::platform::WindowOptions::os_options: flui::platform::os_options::OsWindowOptions // at 13
-field flui::platform::WindowOptions::position: Option<flui::geometry::Point<f64>> // at 9
+field flui::platform::WindowOptions::mode: flui::platform::WindowMode // at 9
+field flui::platform::WindowOptions::normal_geometry: Option<flui::platform::WindowGeometry> // at 10
+field flui::platform::WindowOptions::os_options: flui::platform::os_options::OsWindowOptions // at 12
+field flui::platform::WindowOptions::position: Option<flui::platform::WindowPosition> // at 8
 field flui::platform::WindowOptions::resizable: bool // at 2
 field flui::platform::WindowOptions::reveal: flui::platform::WindowReveal // at 4
-field flui::platform::WindowOptions::size: flui::geometry::Size<f64> // at 1
+field flui::platform::WindowOptions::size: flui::platform::WindowExtent // at 1
 field flui::platform::WindowOptions::title: String // at 0
 field flui::platform::WindowOptions::visible: bool // at 3
 impl Clone for flui::platform::WindowOptions
 impl Default for flui::platform::WindowOptions
 impl core::fmt::Debug for flui::platform::WindowOptions
-pub const fn flui::platform::WindowOptions::display(self, display: Option<flui::platform::DisplayId>) -> Self
 pub const fn flui::platform::WindowOptions::frame(self, frame: flui::platform::WindowFrame) -> Self
 pub const fn flui::platform::WindowOptions::input_latency(self, input_latency: flui::platform::InputLatency) -> Self
 pub const fn flui::platform::WindowOptions::max_size(self, max_size: Option<flui::platform::WindowExtent>) -> Self
 pub const fn flui::platform::WindowOptions::min_size(self, min_size: Option<flui::platform::WindowExtent>) -> Self
 pub const fn flui::platform::WindowOptions::mode(self, mode: flui::platform::WindowMode) -> Self
 pub const fn flui::platform::WindowOptions::normal_geometry(self, normal_geometry: Option<flui::platform::WindowGeometry>) -> Self
-pub const fn flui::platform::WindowOptions::position(self, position: Option<flui::geometry::Point<f64>>) -> Self
+pub const fn flui::platform::WindowOptions::position(self, position: Option<flui::platform::WindowPosition>) -> Self
 pub const fn flui::platform::WindowOptions::resizable(self, resizable: bool) -> Self
 pub const fn flui::platform::WindowOptions::reveal(self, reveal: flui::platform::WindowReveal) -> Self
-pub const fn flui::platform::WindowOptions::size(self, size: flui::geometry::Size<f64>) -> Self
+pub const fn flui::platform::WindowOptions::size(self, size: flui::platform::WindowExtent) -> Self
 pub const fn flui::platform::WindowOptions::visible(self, visible: bool) -> Self
 pub fn flui::platform::WindowOptions::geometry(&self) -> Result<flui::platform::OpeningGeometry, flui::platform::InvalidWindowOption>
 pub fn flui::platform::WindowOptions::os_options(self, os_options: flui::platform::os_options::OsWindowOptions) -> Self
@@ -13295,19 +13338,29 @@ pub fn flui::platform::WindowOptions::title(self, title: impl Into<String>) -> S
 field flui::platform::WindowPlacement::display: Option<String> // at 0
 field flui::platform::WindowPlacement::maximized_before_minimize: bool // at 5
 field flui::platform::WindowPlacement::mode: flui::platform::WindowMode // at 3
-field flui::platform::WindowPlacement::offset: Option<flui::geometry::Point<f64>> // at 1
-field flui::platform::WindowPlacement::scale: f64 // at 4
-field flui::platform::WindowPlacement::size: flui::geometry::Size<f64> // at 2
+field flui::platform::WindowPlacement::offset: Option<flui::platform::PlacementOffset> // at 1
+field flui::platform::WindowPlacement::scale: flui::geometry::DevicePixelRatio // at 4
+field flui::platform::WindowPlacement::size: flui::platform::WindowExtent // at 2
 impl Clone for flui::platform::WindowPlacement
 impl PartialEq for flui::platform::WindowPlacement
 impl core::fmt::Debug for flui::platform::WindowPlacement
 impl core::marker::StructuralPartialEq for flui::platform::WindowPlacement
-pub const fn flui::platform::WindowPlacement::new(display: Option<String>, offset: Option<flui::geometry::Point<f64>>, size: flui::geometry::Size<f64>, mode: flui::platform::WindowMode, scale: f64) -> Self
+pub const fn flui::platform::WindowPlacement::new(display: Option<String>, offset: Option<flui::platform::PlacementOffset>, size: flui::platform::WindowExtent, mode: flui::platform::WindowMode, scale: flui::geometry::DevicePixelRatio) -> Self
 pub const fn flui::platform::WindowPlacement::with_maximized_before_minimize(self, maximized: bool) -> Self
 pub fn flui::platform::WindowPlacement::from_bytes(bytes: &[u8]) -> Result<Self, flui::platform::PlacementError>
 pub fn flui::platform::WindowPlacement::from_state(state: &flui::platform::WindowState, displays: &flui::platform::DisplaySnapshot, maximized_before_minimize: bool) -> Option<Self>
 pub fn flui::platform::WindowPlacement::resolve(&self, displays: &flui::platform::DisplaySnapshot, capabilities: &flui::platform::WindowCapabilities, frame: flui::geometry::Size<f64>) -> Option<flui::platform::ResolvedPlacement>
 pub fn flui::platform::WindowPlacement::to_bytes(&self) -> Vec<u8>
+pub struct flui::platform::WindowPosition { .. }
+impl Clone for flui::platform::WindowPosition
+impl Copy for flui::platform::WindowPosition
+impl Eq for flui::platform::WindowPosition
+impl PartialEq for flui::platform::WindowPosition
+impl core::fmt::Debug for flui::platform::WindowPosition
+impl core::marker::StructuralPartialEq for flui::platform::WindowPosition
+pub const fn flui::platform::WindowPosition::at(self) -> flui::geometry::Point<f64>
+pub const fn flui::platform::WindowPosition::display(self) -> flui::platform::DisplayId
+pub const fn flui::platform::WindowPosition::try_new(display: flui::platform::DisplayId, at: flui::geometry::Point<f64>) -> Result<Self, flui::platform::InvalidGeometry>
 #[non_exhaustive] pub enum flui::platform::WindowReveal
 impl Clone for flui::platform::WindowReveal
 impl Copy for flui::platform::WindowReveal
@@ -13510,6 +13563,7 @@ impl Default for flui::platform::capability::HostBridge
 impl core::fmt::Debug for flui::platform::capability::HostBridge
 pub fn flui::platform::capability::HostBridge::install_activity(&self, activity: Option<alloc::rcs::rc::Rc<dyn flui::platform::capability::ActivityBridge>>) -> Option<alloc::rcs::rc::Rc<dyn flui::platform::capability::ActivityBridge>>
 pub fn flui::platform::capability::HostBridge::new() -> Self
+pub fn flui::platform::capability::HostBridge::name_application(&self, app_id: Option<flui::app::AppId>)
 pub struct flui::platform::capability::IntentFrame { .. }
 impl Clone for flui::platform::capability::IntentFrame
 impl Copy for flui::platform::capability::IntentFrame
@@ -13572,6 +13626,7 @@ fn flui::platform::capability::Plugin::register(&self, registrar: &mut flui::pla
 #[non_exhaustive] pub struct flui::platform::capability::ProviderContext<'a> { .. }
 impl core::fmt::Debug for flui::platform::capability::ProviderContext<'_>
 pub fn flui::platform::capability::ProviderContext::activity(&self) -> Option<flui::platform::capability::Activity> // impl<'a> flui::platform::capability::ProviderContext<'a>
+pub fn flui::platform::capability::ProviderContext::app_id(&self) -> Option<flui::app::AppId> // impl<'a> flui::platform::capability::ProviderContext<'a>
 pub fn flui::platform::capability::ProviderContext::completions(&self) -> &flui::platform::capability::CompletionSource // impl<'a> flui::platform::capability::ProviderContext<'a>
 pub fn flui::platform::capability::ProviderContext::new(owner: &'a flui::platform::capability::OwnerPoster, completions: &'a flui::platform::capability::CompletionSource, locals: &'a flui::platform::capability::RuntimeLocals, host: &'a flui::platform::capability::HostBridge, window: Option<flui::platform::capability::WindowRef>) -> Self // impl<'a> flui::platform::capability::ProviderContext<'a>
 pub fn flui::platform::capability::ProviderContext::owner(&self) -> &flui::platform::capability::OwnerPoster // impl<'a> flui::platform::capability::ProviderContext<'a>
@@ -13701,7 +13756,16 @@ impl raw_window_handle::borrowed::HasDisplayHandle for flui::platform::capabilit
 impl raw_window_handle::borrowed::HasWindowHandle for flui::platform::capability::WindowRef
 pub fn flui::platform::capability::WindowRef::id(&self) -> flui::platform::WindowId
 pub fn flui::platform::capability::WindowRef::lifetime(&self) -> &flui::platform::capability::WindowLifetime
-pub fn flui::platform::capability::WindowRef::new(id: flui::platform::WindowId, scale: f64, target: alloc::rcs::arc::Arc<dyn flui::platform::SurfaceTarget>, lifetime: flui::platform::capability::WindowLifetime) -> Self
+pub fn flui::platform::capability::WindowRef::new(window: &alloc::rcs::rc::Rc<dyn flui::platform::PlatformWindow>, lifetime: flui::platform::capability::WindowLifetime) -> Self
+pub fn flui::platform::capability::WindowRef::portal_parent(&self, answer: flui::platform::capability::Resolver<flui::platform::capability::PortalParent>)
+pub struct flui::platform::capability::PortalParent { .. }
+impl Default for flui::platform::capability::PortalParent
+impl core::fmt::Debug for flui::platform::capability::PortalParent
+pub fn flui::platform::capability::PortalParent::as_str(&self) -> &str
+pub fn flui::platform::capability::PortalParent::is_none(&self) -> bool
+pub fn flui::platform::capability::PortalParent::none() -> Self
+pub fn flui::platform::capability::PortalParent::wayland(handle: &str, export: impl core::any::Any + Send) -> Self
+pub fn flui::platform::capability::PortalParent::x11(xid: core::num::nonzero::NonZeroU32) -> Self
 pub fn flui::platform::capability::WindowRef::scale(&self) -> f64
 pub mod flui::platform::capability::scripted
 pub struct flui::platform::capability::scripted::AlreadyDriven;
@@ -22939,6 +23003,310 @@ pub fn flui::services::system::testing::ScriptedSystem::dialogs(&self) -> &flui:
 pub fn flui::services::system::testing::ScriptedSystem::launcher(&self) -> &flui::services::system::testing::ScriptedLauncher
 pub fn flui::services::system::testing::ScriptedSystem::new(launcher: flui::services::system::testing::ScriptedLauncher, dialogs: flui::services::system::testing::ScriptedFileDialogs) -> Self
 pub fn flui::services::system::testing::ScriptedSystem::on(scenario: &flui::platform::capability::scripted::Scenario) -> Self
+pub mod flui::services::system::autostart
+pub struct flui::services::system::autostart::Autostart { .. }
+impl Clone for flui::services::system::autostart::Autostart
+impl core::fmt::Debug for flui::services::system::autostart::Autostart
+pub fn flui::services::system::autostart::Autostart::new(backend: impl flui::services::system::autostart::AutostartBackend, ctx: &flui::platform::capability::ProviderContext<'_>) -> Self
+pub fn flui::services::system::autostart::Autostart::request(&self, request: flui::services::system::autostart::AutostartRequest) -> flui::platform::capability::Completion<flui::services::system::autostart::AutostartResult>
+pub trait flui::services::system::autostart::AutostartBackend: 'static
+fn flui::services::system::autostart::AutostartBackend::request(&self, request: flui::services::system::autostart::AutostartRequest, answer: flui::platform::capability::Resolver<flui::services::system::autostart::AutostartResult>)
+pub enum flui::services::system::autostart::AutostartCapability
+impl core::fmt::Debug for flui::services::system::autostart::AutostartCapability
+impl flui::platform::capability::Capability for flui::services::system::autostart::AutostartCapability { type Handle = flui::services::system::autostart::Autostart; }
+#[non_exhaustive] pub enum flui::services::system::autostart::AutostartError
+impl Clone for flui::services::system::autostart::AutostartError
+impl Copy for flui::services::system::autostart::AutostartError
+impl Eq for flui::services::system::autostart::AutostartError
+impl From<flui::platform::SystemFailure> for flui::services::system::autostart::AutostartError
+impl From<flui::platform::Unsupported> for flui::services::system::autostart::AutostartError
+impl From<flui::services::system::autostart::MalformedAutostart> for flui::services::system::autostart::AutostartError
+impl PartialEq for flui::services::system::autostart::AutostartError
+impl core::error::Error for flui::services::system::autostart::AutostartError
+impl core::fmt::Debug for flui::services::system::autostart::AutostartError
+impl core::fmt::Display for flui::services::system::autostart::AutostartError
+impl core::marker::StructuralPartialEq for flui::services::system::autostart::AutostartError
+variant flui::services::system::autostart::AutostartError::Denied // at 1
+variant flui::services::system::autostart::AutostartError::Failed(flui::platform::SystemFailure) // at 3
+variant flui::services::system::autostart::AutostartError::InvalidRequest(flui::services::system::autostart::MalformedAutostart) // at 0
+variant flui::services::system::autostart::AutostartError::Unsupported(flui::platform::Unsupported) // at 2
+#[non_exhaustive] pub struct flui::services::system::autostart::AutostartRequest { .. }
+field flui::services::system::autostart::AutostartRequest::reason: Option<String> // at 1
+impl Clone for flui::services::system::autostart::AutostartRequest
+impl Eq for flui::services::system::autostart::AutostartRequest
+impl PartialEq for flui::services::system::autostart::AutostartRequest
+impl core::fmt::Debug for flui::services::system::autostart::AutostartRequest
+impl core::marker::StructuralPartialEq for flui::services::system::autostart::AutostartRequest
+pub const flui::services::system::autostart::AutostartRequest::MAX_REASON_LEN: usize = 256
+pub fn flui::services::system::autostart::AutostartRequest::disable() -> Self
+pub fn flui::services::system::autostart::AutostartRequest::enable() -> Self
+pub fn flui::services::system::autostart::AutostartRequest::is_enabled(&self) -> bool
+pub fn flui::services::system::autostart::AutostartRequest::reason(self, reason: impl Into<String>) -> Self
+pub type flui::services::system::autostart::AutostartResult = Result<flui::services::system::autostart::AutostartState, flui::services::system::autostart::AutostartError>
+#[non_exhaustive] pub enum flui::services::system::autostart::AutostartState
+impl Clone for flui::services::system::autostart::AutostartState
+impl Copy for flui::services::system::autostart::AutostartState
+impl Eq for flui::services::system::autostart::AutostartState
+impl PartialEq for flui::services::system::autostart::AutostartState
+impl core::fmt::Debug for flui::services::system::autostart::AutostartState
+impl core::marker::StructuralPartialEq for flui::services::system::autostart::AutostartState
+variant flui::services::system::autostart::AutostartState::Disabled // at 1
+variant flui::services::system::autostart::AutostartState::Enabled // at 0
+#[non_exhaustive] pub enum flui::services::system::autostart::MalformedAutostart
+impl Clone for flui::services::system::autostart::MalformedAutostart
+impl Copy for flui::services::system::autostart::MalformedAutostart
+impl Eq for flui::services::system::autostart::MalformedAutostart
+impl From<flui::services::system::autostart::MalformedAutostart> for flui::services::system::autostart::AutostartError
+impl PartialEq for flui::services::system::autostart::MalformedAutostart
+impl core::error::Error for flui::services::system::autostart::MalformedAutostart
+impl core::fmt::Debug for flui::services::system::autostart::MalformedAutostart
+impl core::fmt::Display for flui::services::system::autostart::MalformedAutostart
+impl core::marker::StructuralPartialEq for flui::services::system::autostart::MalformedAutostart
+variant flui::services::system::autostart::MalformedAutostart::Reason // at 0
+pub mod flui::services::system::shortcuts
+#[non_exhaustive] pub struct flui::services::system::shortcuts::BoundShortcut
+field flui::services::system::shortcuts::BoundShortcut::id: flui::services::system::shortcuts::ShortcutId // at 0
+field flui::services::system::shortcuts::BoundShortcut::trigger: Option<String> // at 1
+impl Clone for flui::services::system::shortcuts::BoundShortcut
+impl Eq for flui::services::system::shortcuts::BoundShortcut
+impl PartialEq for flui::services::system::shortcuts::BoundShortcut
+impl core::fmt::Debug for flui::services::system::shortcuts::BoundShortcut
+impl core::marker::StructuralPartialEq for flui::services::system::shortcuts::BoundShortcut
+pub fn flui::services::system::shortcuts::BoundShortcut::new(id: flui::services::system::shortcuts::ShortcutId, trigger: Option<String>) -> Self
+pub enum flui::services::system::shortcuts::GlobalShortcutCapability
+impl core::fmt::Debug for flui::services::system::shortcuts::GlobalShortcutCapability
+impl flui::platform::capability::Capability for flui::services::system::shortcuts::GlobalShortcutCapability { type Handle = flui::services::system::shortcuts::GlobalShortcuts; }
+pub struct flui::services::system::shortcuts::GlobalShortcuts { .. }
+impl Clone for flui::services::system::shortcuts::GlobalShortcuts
+impl core::fmt::Debug for flui::services::system::shortcuts::GlobalShortcuts
+pub const flui::services::system::shortcuts::GlobalShortcuts::MAX_PER_BINDING: usize = 64
+pub fn flui::services::system::shortcuts::GlobalShortcuts::bind(&self, shortcuts: Vec<flui::services::system::shortcuts::Shortcut>) -> flui::services::system::shortcuts::ShortcutBinding
+pub fn flui::services::system::shortcuts::GlobalShortcuts::new(backend: impl flui::services::system::shortcuts::ShortcutBackend, ctx: &flui::platform::capability::ProviderContext<'_>) -> Self
+#[non_exhaustive] pub enum flui::services::system::shortcuts::MalformedShortcut
+impl Clone for flui::services::system::shortcuts::MalformedShortcut
+impl Copy for flui::services::system::shortcuts::MalformedShortcut
+impl Eq for flui::services::system::shortcuts::MalformedShortcut
+impl From<flui::services::system::shortcuts::MalformedShortcut> for flui::services::system::shortcuts::ShortcutError
+impl PartialEq for flui::services::system::shortcuts::MalformedShortcut
+impl core::error::Error for flui::services::system::shortcuts::MalformedShortcut
+impl core::fmt::Debug for flui::services::system::shortcuts::MalformedShortcut
+impl core::fmt::Display for flui::services::system::shortcuts::MalformedShortcut
+impl core::marker::StructuralPartialEq for flui::services::system::shortcuts::MalformedShortcut
+variant flui::services::system::shortcuts::MalformedShortcut::Count // at 0
+variant flui::services::system::shortcuts::MalformedShortcut::Description // at 2
+variant flui::services::system::shortcuts::MalformedShortcut::DuplicateId // at 1
+#[non_exhaustive] pub struct flui::services::system::shortcuts::Shortcut
+field flui::services::system::shortcuts::Shortcut::description: String // at 1
+field flui::services::system::shortcuts::Shortcut::id: flui::services::system::shortcuts::ShortcutId // at 0
+field flui::services::system::shortcuts::Shortcut::preferred: Option<flui::services::system::shortcuts::Trigger> // at 2
+impl Clone for flui::services::system::shortcuts::Shortcut
+impl Eq for flui::services::system::shortcuts::Shortcut
+impl PartialEq for flui::services::system::shortcuts::Shortcut
+impl core::fmt::Debug for flui::services::system::shortcuts::Shortcut
+impl core::marker::StructuralPartialEq for flui::services::system::shortcuts::Shortcut
+pub const flui::services::system::shortcuts::Shortcut::MAX_DESCRIPTION_LEN: usize = 256
+pub fn flui::services::system::shortcuts::Shortcut::new(id: flui::services::system::shortcuts::ShortcutId, description: impl Into<String>) -> Self
+pub fn flui::services::system::shortcuts::Shortcut::preferred(self, trigger: flui::services::system::shortcuts::Trigger) -> Self
+pub trait flui::services::system::shortcuts::ShortcutBackend: 'static
+fn flui::services::system::shortcuts::ShortcutBackend::bind(&self, shortcuts: Vec<flui::services::system::shortcuts::Shortcut>, feed: flui::services::system::shortcuts::ShortcutFeed) -> flui::services::system::shortcuts::ShortcutHold
+pub struct flui::services::system::shortcuts::ShortcutBinding { .. }
+impl Drop for flui::services::system::shortcuts::ShortcutBinding
+impl core::fmt::Debug for flui::services::system::shortcuts::ShortcutBinding
+pub fn flui::services::system::shortcuts::ShortcutBinding::dropped(&self) -> u64
+pub fn flui::services::system::shortcuts::ShortcutBinding::next(&self) -> flui::platform::capability::Completion<flui::services::system::shortcuts::ShortcutEvent>
+#[non_exhaustive] pub enum flui::services::system::shortcuts::ShortcutError
+impl Clone for flui::services::system::shortcuts::ShortcutError
+impl Copy for flui::services::system::shortcuts::ShortcutError
+impl Eq for flui::services::system::shortcuts::ShortcutError
+impl From<flui::platform::SystemFailure> for flui::services::system::shortcuts::ShortcutError
+impl From<flui::platform::Unsupported> for flui::services::system::shortcuts::ShortcutError
+impl From<flui::services::system::shortcuts::MalformedShortcut> for flui::services::system::shortcuts::ShortcutError
+impl PartialEq for flui::services::system::shortcuts::ShortcutError
+impl core::error::Error for flui::services::system::shortcuts::ShortcutError
+impl core::fmt::Debug for flui::services::system::shortcuts::ShortcutError
+impl core::fmt::Display for flui::services::system::shortcuts::ShortcutError
+impl core::marker::StructuralPartialEq for flui::services::system::shortcuts::ShortcutError
+variant flui::services::system::shortcuts::ShortcutError::Denied // at 1
+variant flui::services::system::shortcuts::ShortcutError::Failed(flui::platform::SystemFailure) // at 4
+variant flui::services::system::shortcuts::ShortcutError::InvalidRequest(flui::services::system::shortcuts::MalformedShortcut) // at 0
+variant flui::services::system::shortcuts::ShortcutError::Revoked // at 2
+variant flui::services::system::shortcuts::ShortcutError::Unsupported(flui::platform::Unsupported) // at 3
+#[non_exhaustive] pub enum flui::services::system::shortcuts::ShortcutEvent
+impl Clone for flui::services::system::shortcuts::ShortcutEvent
+impl Eq for flui::services::system::shortcuts::ShortcutEvent
+impl PartialEq for flui::services::system::shortcuts::ShortcutEvent
+impl core::fmt::Debug for flui::services::system::shortcuts::ShortcutEvent
+impl core::marker::StructuralPartialEq for flui::services::system::shortcuts::ShortcutEvent
+variant flui::services::system::shortcuts::ShortcutEvent::Bound(Vec<flui::services::system::shortcuts::BoundShortcut>) // at 0
+variant flui::services::system::shortcuts::ShortcutEvent::Changed(Vec<flui::services::system::shortcuts::BoundShortcut>) // at 3
+variant flui::services::system::shortcuts::ShortcutEvent::Ended(flui::services::system::shortcuts::ShortcutError) // at 4
+variant flui::services::system::shortcuts::ShortcutEvent::Pressed(flui::services::system::shortcuts::ShortcutId) // at 1
+variant flui::services::system::shortcuts::ShortcutEvent::Released(flui::services::system::shortcuts::ShortcutId) // at 2
+pub struct flui::services::system::shortcuts::ShortcutFeed(_)
+impl Clone for flui::services::system::shortcuts::ShortcutFeed
+impl core::fmt::Debug for flui::services::system::shortcuts::ShortcutFeed
+pub const flui::services::system::shortcuts::ShortcutFeed::MAX_QUEUED: usize = 256
+pub fn flui::services::system::shortcuts::ShortcutFeed::send(&self, event: flui::services::system::shortcuts::ShortcutEvent)
+pub struct flui::services::system::shortcuts::ShortcutHold(_)
+impl core::fmt::Debug for flui::services::system::shortcuts::ShortcutHold
+pub fn flui::services::system::shortcuts::ShortcutHold::new(keep: impl core::any::Any) -> Self
+pub struct flui::services::system::shortcuts::ShortcutId(_)
+impl Clone for flui::services::system::shortcuts::ShortcutId
+impl Eq for flui::services::system::shortcuts::ShortcutId
+impl PartialEq for flui::services::system::shortcuts::ShortcutId
+impl core::fmt::Debug for flui::services::system::shortcuts::ShortcutId
+impl core::fmt::Display for flui::services::system::shortcuts::ShortcutId
+impl core::hash::Hash for flui::services::system::shortcuts::ShortcutId
+impl core::marker::StructuralPartialEq for flui::services::system::shortcuts::ShortcutId
+pub const flui::services::system::shortcuts::ShortcutId::MAX_LEN: usize = 64
+pub fn flui::services::system::shortcuts::ShortcutId::as_str(&self) -> &str
+pub fn flui::services::system::shortcuts::ShortcutId::try_new(id: &str) -> Option<Self>
+pub struct flui::services::system::shortcuts::Trigger { .. }
+impl Clone for flui::services::system::shortcuts::Trigger
+impl Eq for flui::services::system::shortcuts::Trigger
+impl PartialEq for flui::services::system::shortcuts::Trigger
+impl core::fmt::Debug for flui::services::system::shortcuts::Trigger
+impl core::marker::StructuralPartialEq for flui::services::system::shortcuts::Trigger
+pub const flui::services::system::shortcuts::Trigger::MODIFIERS: flui::interaction::Modifiers = _
+pub fn flui::services::system::shortcuts::Trigger::modifiers(&self) -> flui::interaction::Modifiers
+pub fn flui::services::system::shortcuts::Trigger::to_xdg(&self) -> String
+pub fn flui::services::system::shortcuts::Trigger::try_new(modifiers: flui::interaction::Modifiers, key: &flui::interaction::Key) -> Option<Self>
+pub mod flui::services::system::taskbar
+#[non_exhaustive] pub struct flui::services::system::taskbar::EntryState
+field flui::services::system::taskbar::EntryState::count: Option<u64> // at 1
+field flui::services::system::taskbar::EntryState::progress: flui::services::system::taskbar::Progress // at 0
+impl Clone for flui::services::system::taskbar::EntryState
+impl Copy for flui::services::system::taskbar::EntryState
+impl Default for flui::services::system::taskbar::EntryState
+impl PartialEq for flui::services::system::taskbar::EntryState
+impl core::fmt::Debug for flui::services::system::taskbar::EntryState
+impl core::marker::StructuralPartialEq for flui::services::system::taskbar::EntryState
+pub const fn flui::services::system::taskbar::EntryState::new(progress: flui::services::system::taskbar::Progress, count: Option<u64>) -> Self
+pub struct flui::services::system::taskbar::Fraction(_)
+impl Clone for flui::services::system::taskbar::Fraction
+impl Copy for flui::services::system::taskbar::Fraction
+impl PartialEq for flui::services::system::taskbar::Fraction
+impl PartialOrd for flui::services::system::taskbar::Fraction
+impl core::fmt::Debug for flui::services::system::taskbar::Fraction
+impl core::marker::StructuralPartialEq for flui::services::system::taskbar::Fraction
+pub fn flui::services::system::taskbar::Fraction::get(self) -> f64
+pub fn flui::services::system::taskbar::Fraction::try_new(value: f64) -> Option<Self>
+#[non_exhaustive] pub struct flui::services::system::taskbar::Honoured
+field flui::services::system::taskbar::Honoured::confirmed: bool // at 3
+field flui::services::system::taskbar::Honoured::count: bool // at 2
+field flui::services::system::taskbar::Honoured::indeterminate: bool // at 1
+field flui::services::system::taskbar::Honoured::progress: bool // at 0
+impl Clone for flui::services::system::taskbar::Honoured
+impl Copy for flui::services::system::taskbar::Honoured
+impl Eq for flui::services::system::taskbar::Honoured
+impl PartialEq for flui::services::system::taskbar::Honoured
+impl core::fmt::Debug for flui::services::system::taskbar::Honoured
+impl core::marker::StructuralPartialEq for flui::services::system::taskbar::Honoured
+pub const fn flui::services::system::taskbar::Honoured::new(progress: bool, indeterminate: bool, count: bool, confirmed: bool) -> Self
+#[non_exhaustive] pub enum flui::services::system::taskbar::Progress
+impl Clone for flui::services::system::taskbar::Progress
+impl Copy for flui::services::system::taskbar::Progress
+impl Default for flui::services::system::taskbar::Progress
+impl PartialEq for flui::services::system::taskbar::Progress
+impl core::fmt::Debug for flui::services::system::taskbar::Progress
+impl core::marker::StructuralPartialEq for flui::services::system::taskbar::Progress
+variant flui::services::system::taskbar::Progress::Done(flui::services::system::taskbar::Fraction) // at 2
+variant flui::services::system::taskbar::Progress::Hidden // at 0
+variant flui::services::system::taskbar::Progress::Indeterminate // at 1
+pub trait flui::services::system::taskbar::TaskbarBackend: 'static
+fn flui::services::system::taskbar::TaskbarBackend::honours(&self) -> flui::services::system::taskbar::Honoured
+fn flui::services::system::taskbar::TaskbarBackend::show(&self, state: flui::services::system::taskbar::EntryState)
+pub enum flui::services::system::taskbar::TaskbarCapability
+impl core::fmt::Debug for flui::services::system::taskbar::TaskbarCapability
+impl flui::platform::capability::Capability for flui::services::system::taskbar::TaskbarCapability { type Handle = flui::services::system::taskbar::TaskbarEntry; }
+pub struct flui::services::system::taskbar::TaskbarEntry { .. }
+impl Clone for flui::services::system::taskbar::TaskbarEntry
+impl core::fmt::Debug for flui::services::system::taskbar::TaskbarEntry
+pub fn flui::services::system::taskbar::TaskbarEntry::honours(&self) -> flui::services::system::taskbar::Honoured
+pub fn flui::services::system::taskbar::TaskbarEntry::new(backend: impl flui::services::system::taskbar::TaskbarBackend, ctx: &flui::platform::capability::ProviderContext<'_>) -> Self
+pub fn flui::services::system::taskbar::TaskbarEntry::set_count(&self, count: Option<u64>)
+pub fn flui::services::system::taskbar::TaskbarEntry::set_progress(&self, progress: flui::services::system::taskbar::Progress)
+pub fn flui::services::system::taskbar::TaskbarEntry::state(&self) -> flui::services::system::taskbar::EntryState
+pub fn flui::services::system::testing::PortalOnBus::app_id(self, app_id: &str) -> Self
+pub struct flui::services::system::testing::ScriptedAutostart { .. }
+impl Clone for flui::services::system::testing::ScriptedAutostart
+impl Default for flui::services::system::testing::ScriptedAutostart
+impl core::fmt::Debug for flui::services::system::testing::ScriptedAutostart
+impl flui::services::system::autostart::AutostartBackend for flui::services::system::testing::ScriptedAutostart
+pub fn flui::services::system::testing::ScriptedAutostart::on(scenario: &flui::platform::capability::scripted::Scenario) -> Self
+pub fn flui::services::system::testing::ScriptedAutostart::script(&self) -> &flui::platform::capability::scripted::Script<flui::services::system::autostart::AutostartRequest, flui::services::system::autostart::AutostartResult>
+pub struct flui::services::system::testing::ScriptedBinding { .. }
+impl Clone for flui::services::system::testing::ScriptedBinding
+impl core::fmt::Debug for flui::services::system::testing::ScriptedBinding
+pub fn flui::services::system::testing::ScriptedBinding::is_held(&self) -> bool
+pub fn flui::services::system::testing::ScriptedBinding::send(&self, event: flui::services::system::shortcuts::ShortcutEvent)
+pub fn flui::services::system::testing::ScriptedBinding::shortcuts(&self) -> &[flui::services::system::shortcuts::Shortcut]
+pub struct flui::services::system::testing::ScriptedShortcuts { .. }
+impl Clone for flui::services::system::testing::ScriptedShortcuts
+impl Default for flui::services::system::testing::ScriptedShortcuts
+impl core::fmt::Debug for flui::services::system::testing::ScriptedShortcuts
+impl flui::services::system::shortcuts::ShortcutBackend for flui::services::system::testing::ScriptedShortcuts
+pub fn flui::services::system::testing::ScriptedShortcuts::bindings(&self) -> Vec<flui::services::system::testing::ScriptedBinding>
+pub fn flui::services::system::testing::ScriptedSystem::autostart(&self) -> &flui::services::system::testing::ScriptedAutostart
+pub fn flui::services::system::testing::ScriptedSystem::shortcuts(&self) -> &flui::services::system::testing::ScriptedShortcuts
+pub fn flui::services::system::testing::ScriptedSystem::taskbar(&self) -> &flui::services::system::testing::ScriptedTaskbar
+pub fn flui::services::system::testing::ScriptedSystem::user_dirs(&self) -> &flui::services::system::testing::ScriptedUserDirs
+pub struct flui::services::system::testing::ScriptedTaskbar { .. }
+impl Clone for flui::services::system::testing::ScriptedTaskbar
+impl Default for flui::services::system::testing::ScriptedTaskbar
+impl core::fmt::Debug for flui::services::system::testing::ScriptedTaskbar
+impl flui::services::system::taskbar::TaskbarBackend for flui::services::system::testing::ScriptedTaskbar
+pub fn flui::services::system::testing::ScriptedTaskbar::set_honours(&self, honours: flui::services::system::taskbar::Honoured)
+pub fn flui::services::system::testing::ScriptedTaskbar::shown(&self) -> Vec<flui::services::system::taskbar::EntryState>
+pub struct flui::services::system::testing::ScriptedUserDirs { .. }
+impl Clone for flui::services::system::testing::ScriptedUserDirs
+impl Default for flui::services::system::testing::ScriptedUserDirs
+impl core::fmt::Debug for flui::services::system::testing::ScriptedUserDirs
+impl flui::services::system::user_dirs::UserDirBackend for flui::services::system::testing::ScriptedUserDirs
+pub fn flui::services::system::testing::ScriptedUserDirs::on(scenario: &flui::platform::capability::scripted::Scenario) -> Self
+pub fn flui::services::system::testing::ScriptedUserDirs::script(&self) -> &flui::platform::capability::scripted::Script<flui::services::system::user_dirs::UserDir, flui::services::system::user_dirs::UserDirResult>
+pub mod flui::services::system::user_dirs
+#[non_exhaustive] pub enum flui::services::system::user_dirs::UserDir
+impl Clone for flui::services::system::user_dirs::UserDir
+impl Copy for flui::services::system::user_dirs::UserDir
+impl Eq for flui::services::system::user_dirs::UserDir
+impl PartialEq for flui::services::system::user_dirs::UserDir
+impl core::fmt::Debug for flui::services::system::user_dirs::UserDir
+impl core::hash::Hash for flui::services::system::user_dirs::UserDir
+impl core::marker::StructuralPartialEq for flui::services::system::user_dirs::UserDir
+variant flui::services::system::user_dirs::UserDir::Desktop // at 1
+variant flui::services::system::user_dirs::UserDir::Documents // at 2
+variant flui::services::system::user_dirs::UserDir::Downloads // at 3
+variant flui::services::system::user_dirs::UserDir::Home // at 0
+variant flui::services::system::user_dirs::UserDir::Music // at 4
+variant flui::services::system::user_dirs::UserDir::Pictures // at 5
+variant flui::services::system::user_dirs::UserDir::PublicShare // at 8
+variant flui::services::system::user_dirs::UserDir::Templates // at 7
+variant flui::services::system::user_dirs::UserDir::Videos // at 6
+pub trait flui::services::system::user_dirs::UserDirBackend: 'static
+fn flui::services::system::user_dirs::UserDirBackend::locate(&self, dir: flui::services::system::user_dirs::UserDir, answer: flui::platform::capability::Resolver<flui::services::system::user_dirs::UserDirResult>)
+pub enum flui::services::system::user_dirs::UserDirCapability
+impl core::fmt::Debug for flui::services::system::user_dirs::UserDirCapability
+impl flui::platform::capability::Capability for flui::services::system::user_dirs::UserDirCapability { type Handle = flui::services::system::user_dirs::UserDirs; }
+#[non_exhaustive] pub enum flui::services::system::user_dirs::UserDirError
+impl Clone for flui::services::system::user_dirs::UserDirError
+impl Copy for flui::services::system::user_dirs::UserDirError
+impl Eq for flui::services::system::user_dirs::UserDirError
+impl From<flui::platform::SystemFailure> for flui::services::system::user_dirs::UserDirError
+impl From<flui::platform::Unsupported> for flui::services::system::user_dirs::UserDirError
+impl PartialEq for flui::services::system::user_dirs::UserDirError
+impl core::error::Error for flui::services::system::user_dirs::UserDirError
+impl core::fmt::Debug for flui::services::system::user_dirs::UserDirError
+impl core::fmt::Display for flui::services::system::user_dirs::UserDirError
+impl core::marker::StructuralPartialEq for flui::services::system::user_dirs::UserDirError
+variant flui::services::system::user_dirs::UserDirError::Failed(flui::platform::SystemFailure) // at 1
+variant flui::services::system::user_dirs::UserDirError::Unsupported(flui::platform::Unsupported) // at 0
+pub type flui::services::system::user_dirs::UserDirResult = Result<Option<std::path::PathBuf>, flui::services::system::user_dirs::UserDirError>
+pub struct flui::services::system::user_dirs::UserDirs { .. }
+impl Clone for flui::services::system::user_dirs::UserDirs
+impl core::fmt::Debug for flui::services::system::user_dirs::UserDirs
+pub fn flui::services::system::user_dirs::UserDirs::locate(&self, dir: flui::services::system::user_dirs::UserDir) -> flui::platform::capability::Completion<flui::services::system::user_dirs::UserDirResult>
+pub fn flui::services::system::user_dirs::UserDirs::new(backend: impl flui::services::system::user_dirs::UserDirBackend, ctx: &flui::platform::capability::ProviderContext<'_>) -> Self
 pub mod flui::testing
 pub struct flui::testing::CommitBarrier { .. }
 impl Drop for flui::testing::CommitBarrier
@@ -24207,10 +24575,10 @@ pub fn flui::view::WindowHandle::set_frame(&self, frame: flui::platform::WindowF
 pub fn flui::view::WindowHandle::set_level(&self, level: flui::platform::WindowLevel) -> Result<(), flui::platform::SubmitError>
 pub fn flui::view::WindowHandle::set_material(&self, material: flui::platform::WindowMaterial) -> Result<(), flui::platform::SubmitError>
 pub fn flui::view::WindowHandle::set_mode(&self, mode: flui::platform::WindowMode) -> Result<(), flui::platform::SubmitError>
-pub fn flui::view::WindowHandle::set_position(&self, at: flui::geometry::Point<f64>) -> Result<(), flui::platform::SubmitError>
+pub fn flui::view::WindowHandle::set_position(&self, at: flui::platform::WindowPosition) -> Result<(), flui::platform::SubmitError>
 pub fn flui::view::WindowHandle::set_resizable(&self, on: bool) -> Result<(), flui::platform::SubmitError>
 pub fn flui::view::WindowHandle::set_resize_increments(&self, step: Option<flui::platform::WindowExtent>) -> Result<(), flui::platform::SubmitError>
-pub fn flui::view::WindowHandle::set_size(&self, size: flui::geometry::Size<f64>) -> Result<(), flui::platform::SubmitError>
+pub fn flui::view::WindowHandle::set_size(&self, size: flui::platform::WindowExtent) -> Result<(), flui::platform::SubmitError>
 pub fn flui::view::WindowHandle::set_title(&self, title: impl Into<String>) -> Result<(), flui::platform::SubmitError>
 pub fn flui::view::WindowHandle::show(&self) -> Result<(), flui::platform::SubmitError>
 pub fn flui::view::WindowHandle::state(&self) -> Result<flui::platform::WindowState, flui::view::WindowClosed>
@@ -32811,15 +33179,16 @@ impl schemars::JsonSchema for flui_protocol::native_recording::display::Color
 impl serde_core::ser::Serialize for flui_protocol::native_recording::display::Color
 impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::native_recording::display::Color
 pub struct flui_protocol::native_recording::display::Display
-field flui_protocol::native_recording::display::Display::bounds: [i32; 4] // at 2
-field flui_protocol::native_recording::display::Display::color: flui_protocol::native_recording::display::DisplayColor // at 8
+field flui_protocol::native_recording::display::Display::color: flui_protocol::native_recording::display::DisplayColor // at 9
+field flui_protocol::native_recording::display::Display::extent: [f64; 2] // at 3
 field flui_protocol::native_recording::display::Display::label: u64 // at 0
 field flui_protocol::native_recording::display::Display::name: String // at 1
-field flui_protocol::native_recording::display::Display::persistent_key: Option<String> // at 7
-field flui_protocol::native_recording::display::Display::primary: bool // at 6
-field flui_protocol::native_recording::display::Display::refresh_period_ns: Option<u64> // at 5
-field flui_protocol::native_recording::display::Display::scale_factor: f64 // at 4
-field flui_protocol::native_recording::display::Display::usable_bounds: [i32; 4] // at 3
+field flui_protocol::native_recording::display::Display::origin: [i32; 2] // at 2
+field flui_protocol::native_recording::display::Display::persistent_key: Option<String> // at 8
+field flui_protocol::native_recording::display::Display::primary: bool // at 7
+field flui_protocol::native_recording::display::Display::refresh_period_ns: Option<u64> // at 6
+field flui_protocol::native_recording::display::Display::scale_factor: f64 // at 5
+field flui_protocol::native_recording::display::Display::usable: [f64; 4] // at 4
 impl Clone for flui_protocol::native_recording::display::Display
 impl PartialEq for flui_protocol::native_recording::display::Display
 impl core::fmt::Debug for flui_protocol::native_recording::display::Display
@@ -33862,7 +34231,7 @@ variant flui_protocol::native_recording::window::WindowFrame::AppTitleBar { syst
 variant flui_protocol::native_recording::window::WindowFrame::None // at 2
 variant flui_protocol::native_recording::window::WindowFrame::System // at 0
 pub struct flui_protocol::native_recording::window::WindowGeometry
-field flui_protocol::native_recording::window::WindowGeometry::position: Option<[f64; 2]> // at 0
+field flui_protocol::native_recording::window::WindowGeometry::position: Option<flui_protocol::native_recording::window::WindowPosition> // at 0
 field flui_protocol::native_recording::window::WindowGeometry::size: [f64; 2] // at 1
 impl Clone for flui_protocol::native_recording::window::WindowGeometry
 impl Copy for flui_protocol::native_recording::window::WindowGeometry
@@ -33915,6 +34284,17 @@ variant flui_protocol::native_recording::window::WindowMode::Fullscreen // at 3
 variant flui_protocol::native_recording::window::WindowMode::Maximized // at 2
 variant flui_protocol::native_recording::window::WindowMode::Minimized // at 1
 variant flui_protocol::native_recording::window::WindowMode::Normal // at 0
+pub struct flui_protocol::native_recording::window::WindowPosition
+field flui_protocol::native_recording::window::WindowPosition::at: [f64; 2] // at 1
+field flui_protocol::native_recording::window::WindowPosition::display: u64 // at 0
+impl Clone for flui_protocol::native_recording::window::WindowPosition
+impl Copy for flui_protocol::native_recording::window::WindowPosition
+impl PartialEq for flui_protocol::native_recording::window::WindowPosition
+impl core::fmt::Debug for flui_protocol::native_recording::window::WindowPosition
+impl core::marker::StructuralPartialEq for flui_protocol::native_recording::window::WindowPosition
+impl schemars::JsonSchema for flui_protocol::native_recording::window::WindowPosition
+impl serde_core::ser::Serialize for flui_protocol::native_recording::window::WindowPosition
+impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::native_recording::window::WindowPosition
 pub struct flui_protocol::native_recording::window::WindowState
 field flui_protocol::native_recording::window::WindowState::active: bool // at 20
 field flui_protocol::native_recording::window::WindowState::appearance: flui_protocol::native_recording::window::Appearance // at 14

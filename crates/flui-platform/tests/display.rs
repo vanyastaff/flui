@@ -1,11 +1,11 @@
 use std::collections::HashSet;
 use std::time::Duration;
 
-use flui_foundation::geometry::{Bounds, DevicePixelRatio, Point, Size};
+use flui_foundation::geometry::{Bounds, DevicePixelRatio, Point, Rect, Size};
 use flui_platform::{
-    CapabilityAbsence, ColorGamut, DisplayColor, DisplayDescription, DisplayId, DisplayKey,
-    DisplayRegistry, DisplaySnapshot, DynamicRange, Headroom, InvalidHeadroom, RefreshPeriod,
-    SurfaceColorSpace, UnsupportedReason, WindowDisplay,
+    CapabilityAbsence, ColorGamut, DesktopOrigin, DisplayBounds, DisplayColor, DisplayDescription,
+    DisplayId, DisplayKey, DisplayRegistry, DisplaySnapshot, DynamicRange, Headroom,
+    InvalidHeadroom, RefreshPeriod, SurfaceColorSpace, UnsupportedReason, WindowDisplay,
 };
 
 fn same_connector_after_replug_keeps_the_id() {
@@ -75,9 +75,11 @@ fn snapshot_derives_the_window_display_from_its_id() {
     let id = registry.mint(&DisplayKey::Injected(1)).expect("id");
     let unheld = registry.mint(&DisplayKey::Injected(2)).expect("id");
     let bounds = Bounds::new(Point::new(0, 0), Size::new(1920, 1080));
-    let display = DisplayDescription::new(id, "Panel", bounds, DevicePixelRatio::ONE)
-        .with_primary(true)
-        .with_refresh_period(Duration::from_nanos(16_683_333));
+    let display =
+        DisplayDescription::from_device(id, "Panel", bounds, bounds, DevicePixelRatio::ONE)
+            .expect("a display with an area")
+            .with_primary(true)
+            .with_refresh_period(Duration::from_nanos(16_683_333));
     let snapshot = DisplaySnapshot::empty()
         .successor(vec![display.clone()])
         .expect("revision");
@@ -122,14 +124,8 @@ fn an_id_from_another_registry_does_not_resolve() {
         "the issuing registry takes part in Hash"
     );
 
-    let bounds = Bounds::new(Point::new(0, 0), Size::new(1920, 1080));
     let snapshot = DisplaySnapshot::empty()
-        .successor(vec![DisplayDescription::new(
-            our_id,
-            "Panel",
-            bounds,
-            DevicePixelRatio::ONE,
-        )])
+        .successor(vec![panel(our_id)])
         .expect("revision");
     assert!(snapshot.get(our_id).is_some());
     assert!(
@@ -180,6 +176,138 @@ fn display_identity_contract() {
     );
 }
 
+/// A display's bounds are its own logical pixels from its own corner,
+/// whatever unit and arrangement its window system lays the desktop out in:
+/// a monitor left of the primary, or at another scale, has bounds that start
+/// at zero, and a usable area that reaches past the display is refused.
+#[test]
+fn display_bounds_are_logical_pixels_of_the_display() {
+    let ratio = |scale| DevicePixelRatio::try_new(scale).expect("a ratio");
+    let device = |x, y, width, height| Bounds::new(Point::new(x, y), Size::new(width, height));
+    // (case, display in device pixels, usable area, scale,
+    //  expected origin, extent, usable area as left, top, right, bottom)
+    type Row = (
+        &'static str,
+        Bounds<i32>,
+        Bounds<i32>,
+        f64,
+        Option<(DesktopOrigin, (f64, f64), (f64, f64, f64, f64))>,
+    );
+    let rows: [Row; 7] = [
+        (
+            "the primary at scale one, a taskbar along its bottom",
+            device(0, 0, 1920, 1080),
+            device(0, 0, 1920, 1040),
+            1.0,
+            Some((
+                DesktopOrigin::new(0, 0),
+                (1920.0, 1080.0),
+                (0.0, 0.0, 1920.0, 1040.0),
+            )),
+        ),
+        (
+            "left of the primary: a negative origin moves nothing",
+            device(-2560, -200, 2560, 1440),
+            device(-2560, -200, 2560, 1440),
+            2.0,
+            Some((
+                DesktopOrigin::new(-2560, -200),
+                (1280.0, 720.0),
+                (0.0, 0.0, 1280.0, 720.0),
+            )),
+        ),
+        (
+            "a fractional scale, a panel along the top",
+            device(1920, 0, 2560, 1440),
+            device(1920, 60, 2560, 1380),
+            1.5,
+            Some((
+                DesktopOrigin::new(1920, 0),
+                (2560.0 / 1.5, 960.0),
+                (0.0, 40.0, 2560.0 / 1.5, 960.0),
+            )),
+        ),
+        (
+            "edges at the ends of the coordinate range",
+            device(i32::MIN, i32::MIN, i32::MAX, i32::MAX),
+            device(i32::MIN, i32::MIN, i32::MAX, i32::MAX),
+            1.0,
+            Some((
+                DesktopOrigin::new(i32::MIN, i32::MIN),
+                (f64::from(i32::MAX), f64::from(i32::MAX)),
+                (0.0, 0.0, f64::from(i32::MAX), f64::from(i32::MAX)),
+            )),
+        ),
+        (
+            "a work area spanning two displays is no display's",
+            device(0, 0, 1920, 1080),
+            device(0, 0, 3840, 1080),
+            1.0,
+            None,
+        ),
+        (
+            "a usable area above the display",
+            device(0, 100, 1920, 1080),
+            device(0, 0, 1920, 1080),
+            1.0,
+            None,
+        ),
+        (
+            "a display with no area",
+            device(0, 0, 0, 1080),
+            device(0, 0, 0, 1080),
+            1.0,
+            None,
+        ),
+    ];
+    for (case, display, usable, scale, expected) in rows {
+        let read = DisplayBounds::from_device(display, usable, ratio(scale)).ok();
+        let read = read.map(|(origin, bounds)| {
+            let area = bounds.usable();
+            (
+                origin,
+                (bounds.extent().width, bounds.extent().height),
+                (area.left(), area.top(), area.right(), area.bottom()),
+            )
+        });
+        assert_eq!(read, expected, "{case}");
+    }
+
+    // Numbers a logical source reports: refused when not finite, inverted or
+    // past the display.
+    let extent = Size::new(1440.0, 900.0);
+    let whole = DisplayBounds::whole(extent).expect("a display");
+    assert_eq!(whole.usable(), Rect::from_ltrb(0.0, 0.0, 1440.0, 900.0));
+    for (case, extent, usable) in [
+        (
+            "an infinite extent",
+            Size::new(f64::INFINITY, 900.0),
+            Rect::from_ltrb(0.0, 0.0, 1.0, 1.0),
+        ),
+        (
+            "a NaN usable edge",
+            extent,
+            Rect::from_ltrb(f64::NAN, 0.0, 1.0, 1.0),
+        ),
+        (
+            "an inverted usable area",
+            extent,
+            Rect::from_ltrb(10.0, 0.0, 5.0, 900.0),
+        ),
+        (
+            "a usable area past the right edge",
+            extent,
+            Rect::from_ltrb(0.0, 0.0, 1440.5, 900.0),
+        ),
+    ] {
+        let refused = DisplayBounds::try_new(extent, usable).expect_err(case);
+        assert_eq!(
+            refused, refused,
+            "{case}: an error read from a NaN equals itself"
+        );
+    }
+}
+
 fn ratio(numerator: u32, denominator: u32) -> Option<Duration> {
     RefreshPeriod::from_ratio(numerator, denominator)
         .ok()
@@ -200,7 +328,9 @@ fn blank_display() -> DisplayDescription {
     let id = DisplayRegistry::new()
         .mint(&DisplayKey::Injected(1))
         .expect("id");
-    DisplayDescription::new(id, "d", Bounds::default(), DevicePixelRatio::ONE)
+    let bounds = Bounds::new(Point::new(0, 0), Size::new(1, 1));
+    DisplayDescription::from_device(id, "d", bounds, bounds, DevicePixelRatio::ONE)
+        .expect("a display")
 }
 
 fn zero_rate_is_unknown() {
@@ -342,12 +472,9 @@ fn refresh_value_classification_table() {
 }
 
 fn panel(id: DisplayId) -> DisplayDescription {
-    DisplayDescription::new(
-        id,
-        "Panel",
-        Bounds::new(Point::new(0, 0), Size::new(1920, 1080)),
-        DevicePixelRatio::ONE,
-    )
+    let bounds = Bounds::new(Point::new(0, 0), Size::new(1920, 1080));
+    DisplayDescription::from_device(id, "Panel", bounds, bounds, DevicePixelRatio::ONE)
+        .expect("a display with an area")
 }
 
 fn headroom_refuses_what_is_not_a_finite_multiple_of_white() {

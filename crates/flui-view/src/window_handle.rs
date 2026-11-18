@@ -8,10 +8,9 @@
 use std::cell::Cell;
 use std::rc::{Rc, Weak};
 
-use flui_foundation::geometry::{Point, Size};
 use flui_platform::{
-    SizeConstraints, SubmitError, WindowCommand, WindowControl, WindowFrame, WindowMode,
-    WindowRevision, WindowState,
+    SizeConstraints, SubmitError, WindowCommand, WindowControl, WindowExtent, WindowFrame,
+    WindowMode, WindowPosition, WindowRevision, WindowState,
 };
 
 use crate::observation::{Observation, Phase, Subscription, WeakObservation};
@@ -93,13 +92,15 @@ impl WindowHandle {
         self.submit(WindowCommand::SetTitle(title.into()))
     }
 
-    /// Move the window's outer top-left corner to a global position in logical
-    /// pixels.
+    /// Move the window's outer top-left corner to a point of a display, in
+    /// that display's logical pixels from its top-left corner: a position the
+    /// window's [`state`](Self::state) published, or one built on a display of
+    /// the display snapshot. A display unplugged before the command applies
+    /// leaves the window where it is.
     ///
     /// # Errors
-    /// [`InvalidGeometry`](flui_platform::AdmissionError::InvalidGeometry) for
-    /// a non-finite position; otherwise as [`Self::set_title`].
-    pub fn set_position(&self, at: Point<f64>) -> Result<(), SubmitError> {
+    /// As [`Self::set_title`].
+    pub fn set_position(&self, at: WindowPosition) -> Result<(), SubmitError> {
         self.submit(WindowCommand::SetPosition(at))
     }
 
@@ -107,9 +108,8 @@ impl WindowHandle {
     ///
     /// # Errors
     /// [`InvalidGeometry`](flui_platform::AdmissionError::InvalidGeometry) for
-    /// a size that is not finite and positive; otherwise as
-    /// [`Self::set_title`].
-    pub fn set_size(&self, size: Size<f64>) -> Result<(), SubmitError> {
+    /// a size that encloses no area; otherwise as [`Self::set_title`].
+    pub fn set_size(&self, size: WindowExtent) -> Result<(), SubmitError> {
         self.submit(WindowCommand::SetSize(size))
     }
 
