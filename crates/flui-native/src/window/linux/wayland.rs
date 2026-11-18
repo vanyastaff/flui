@@ -68,10 +68,11 @@
 //! asks the compositor for no frame and draws the margins alone; the presses
 //! on its content are answered from the chrome regions (ADR-0286 §11).
 //!
-//! Where the compositor offers `xdg-foreign`, the window is exported as it
-//! opens, so a portal can parent its dialog to it; the handle reaches the
-//! capability crates with the contract's window reference, and only tests
-//! read it until then (`foreign`).
+//! Where the compositor offers `xdg-foreign`, the window exports itself for
+//! each portal request that names it as a dialog's parent
+//! (`PlatformWindow::portal_parent`): the request holds the export and
+//! releases it as it ends, so the handle names the window only while a
+//! request needs it.
 //!
 //! # The surface
 //!
@@ -92,49 +93,6 @@ pub(crate) mod frame;
 pub(crate) mod presented;
 pub(crate) mod scale;
 
-// Read by tests alone until the contract's window reference carries the
-// portal parent to the capability crates; that reader drops this `cfg`.
-#[cfg(any(test, feature = "testing"))]
-pub(crate) mod foreign {
-    //! A Wayland window as another client names it (`xdg-foreign`): the
-    //! handle the compositor gives the window's export, which a portal takes
-    //! as the parent of the dialog it shows.
-
-    #![forbid(unsafe_code)]
-
-    /// A window as an XDG Desktop Portal names the parent of its dialog
-    /// (XDG Desktop Portal, "Window identifiers"): `wayland:<handle>` for a
-    /// Wayland window, from its export's handle.
-    #[derive(Debug, Clone, PartialEq, Eq)]
-    pub(crate) struct PortalParent(String);
-
-    impl PortalParent {
-        /// The parent of a Wayland window whose export the compositor handed
-        /// `handle`.
-        pub(crate) fn wayland(handle: &str) -> Self {
-            Self(format!("wayland:{handle}"))
-        }
-
-        /// The identifier a portal takes.
-        pub(crate) fn as_str(&self) -> &str {
-            &self.0
-        }
-    }
-
-    #[cfg(test)]
-    mod tests {
-        /// A portal names a Wayland parent by its export's handle, prefixed
-        /// with the protocol.
-        #[test]
-        fn a_portal_names_a_window_by_its_export() {
-            assert_eq!(
-                super::PortalParent::wayland("a1b2-c3").as_str(),
-                "wayland:a1b2-c3"
-            );
-        }
-    }
-}
-
 #[cfg(all(target_os = "linux", feature = "wayland"))]
 mod toplevel {
     use std::cell::{Cell, RefCell};
@@ -146,6 +104,7 @@ mod toplevel {
     use std::sync::{Arc, Weak};
 
     use flui_foundation::geometry::{DevicePixelRatio, Size};
+    use flui_platform::capability::{PortalParent, Resolver};
     use flui_platform::input_capabilities::InputCapabilities;
     use flui_platform::{
         AdmittedCommand, ApplyError, CloseDecision, Cursor, CursorError, CursorGrab,
@@ -179,6 +138,7 @@ mod toplevel {
         self, ZxdgToplevelDecorationV1,
     };
     use wayland_protocols::xdg::foreign::zv2::client::zxdg_exported_v2::{self, ZxdgExportedV2};
+    use wayland_protocols::xdg::foreign::zv2::client::zxdg_exporter_v2::ZxdgExporterV2;
     use wayland_protocols::xdg::shell::client::xdg_surface::{self, XdgSurface};
     use wayland_protocols::xdg::shell::client::xdg_toplevel::{self, XdgToplevel};
 
@@ -192,8 +152,6 @@ mod toplevel {
         pointer_reported, protocol_extent,
     };
     use super::decoration::{Decoration, Drawn, FrameDrawer};
-    #[cfg(any(test, feature = "testing"))]
-    use super::foreign::PortalParent;
     use super::frame::{Callbacks, Pacing, Sight, first_live};
     use super::presented;
     use super::scale::{self, BufferScale, ScaleTold, ToldScale, buffer_scale};
@@ -298,10 +256,6 @@ mod toplevel {
         /// The last frame mode as the protocol sent it.
         #[cfg(any(test, feature = "testing"))]
         raw_frame_mode: Option<u32>,
-        /// The handle of the window's export (`xdg-foreign`), which only
-        /// tests read so far.
-        #[cfg(any(test, feature = "testing"))]
-        exported: Option<String>,
         /// What the compositor lets the toplevel do.
         wm: Option<WmCapabilities>,
     }
@@ -439,18 +393,12 @@ mod toplevel {
         decoration: Option<ZxdgToplevelDecorationV1>,
         /// The fractional scale's reports, where the compositor gives them.
         fractional_scale: Option<WpFractionalScaleV1>,
-        /// The export another client names the window by.
-        exported: Option<ZxdgExportedV2>,
     }
 
     impl Roles {
         /// Destroy every object, the decoration before its toplevel (the
-        /// protocol's order) and the export first, so the handle names no
-        /// window once its role is gone.
+        /// protocol's order).
         fn destroy(self) {
-            if let Some(exported) = self.exported {
-                exported.destroy();
-            }
             if let Some(decoration) = self.decoration {
                 decoration.destroy();
             }
@@ -595,6 +543,11 @@ mod toplevel {
         /// What the window asks the compositor to activate it through; `None`
         /// where it takes no activation request.
         activation: Option<XdgActivationV1>,
+        /// What the window exports itself through for a portal's request
+        /// (`xdg-foreign`); `None` where the compositor offers no exporter.
+        exporter: Option<ZxdgExporterV2>,
+        /// The exports requests still hold, which the window's close releases.
+        exports: Arc<Mutex<Exports>>,
         /// The last user input, which an activation token names.
         last_input: LastInput,
         live: LiveOutputs,
@@ -834,12 +787,6 @@ mod toplevel {
                 .fractional_scale
                 .as_ref()
                 .map(|manager| manager.get_fractional_scale(&surface, &queue, Arc::clone(&record)));
-            // The handle comes with the round trip below, so a portal can
-            // name the window as soon as it opened.
-            let exported = protocol
-                .exporter
-                .as_ref()
-                .map(|exporter| exporter.export_toplevel(&surface, &queue, Arc::clone(&record)));
             // Before the first commit, so the shell matches the window to its
             // desktop entry from its first configure.
             toplevel.set_app_id(windows.class.name().to_owned());
@@ -858,7 +805,6 @@ mod toplevel {
                 viewport,
                 decoration,
                 fractional_scale,
-                exported,
             };
             // A compositor that offers no frames leaves the frame to the
             // window from the start: its limits carry the title bar already.
@@ -932,6 +878,8 @@ mod toplevel {
                 executor,
                 presentation: protocol.presentation,
                 activation: protocol.activation,
+                exporter: protocol.exporter,
+                exports: Arc::default(),
                 last_input: protocol.last_input,
                 live: protocol.live,
                 displays,
@@ -1496,6 +1444,8 @@ mod toplevel {
             let mut failure = flui_foundation::panic::FirstPanic::new();
             // No later request names a serial the closed window took.
             failure.contain(|| self.last_input.surface_gone(&self.surface.0));
+            // Before the role objects go: no export outlives its toplevel.
+            failure.contain(|| Exports::close(&self.exports));
             failure.contain(|| self.input.detach(self.id));
             failure.contain(|| self.drag.detach(self.id));
             if let Some(client_frame) = self.client_frame.borrow_mut().take() {
@@ -2031,30 +1981,90 @@ mod toplevel {
         fn drag_source(&self) -> Option<Arc<dyn flui_platform::drag::PlatformDragSource>> {
             Some(Arc::clone(&self.drag).source(self.id))
         }
+
+        /// A new export of the window for this one request (`xdg-foreign`):
+        /// the answer comes with the compositor's handle, as
+        /// `wayland:<handle>`, and holds the export, which its drop releases,
+        /// so the handle names the window only while the request lasts. A
+        /// compositor with no exporter, or a closed window, answers no window.
+        fn portal_parent(&self, answer: Resolver<PortalParent>) {
+            match &self.exporter {
+                Some(exporter) if !self.closed.get() => {
+                    let pending = Arc::new(PendingExport {
+                        answer: Mutex::new(Some(answer)),
+                        connection: self.connection.clone(),
+                        exports: Arc::clone(&self.exports),
+                    });
+                    // The proxy is held by the answer once the handle comes;
+                    // until then the compositor's event reaches it through
+                    // `pending`.
+                    let _ = exporter.export_toplevel(&self.surface.0, &self.queue, pending);
+                }
+                _ => {
+                    // The owner retiring first leaves nothing waiting.
+                    let _ = answer.resolve(PortalParent::none());
+                }
+            }
+        }
     }
 
-    // Read by tests alone until the contract's window reference carries it;
-    // that reader drops this `cfg`.
-    #[cfg(any(test, feature = "testing"))]
-    impl WaylandWindow {
-        /// The window as an XDG Desktop Portal names the parent of the dialog
-        /// it shows: the handle the compositor gave the window's export
-        /// (`xdg-foreign`), so the dialog stays above the window and moves
-        /// with it.
-        ///
-        /// `None` where the compositor offers no `zxdg_exporter_v2`, before
-        /// it answered the export, and once the window closed, when its
-        /// handle names nothing.
-        pub(crate) fn portal_parent(&self) -> Option<PortalParent> {
-            if self.closed.get() {
-                return None;
+    /// One export a portal request waits for: who hears the handle, the
+    /// connection its release is sent on, and the window's exports it joins.
+    pub(crate) struct PendingExport {
+        answer: Mutex<Option<Resolver<PortalParent>>>,
+        connection: Connection,
+        exports: Arc<Mutex<Exports>>,
+    }
+
+    /// The exports of one window that requests still hold, and whether the
+    /// window closed: its close releases every one, whoever holds its
+    /// parent, so no export outlives the toplevel it names.
+    #[derive(Default)]
+    pub(crate) struct Exports {
+        closed: bool,
+        held: Vec<Weak<ExportCell>>,
+    }
+
+    impl Exports {
+        /// The window closed: release every export still held.
+        fn close(exports: &Mutex<Self>) {
+            let held = {
+                let mut exports = exports.lock();
+                exports.closed = true;
+                std::mem::take(&mut exports.held)
+            };
+            for cell in held.iter().filter_map(Weak::upgrade) {
+                cell.release();
             }
-            self.record
-                .protocol
-                .lock()
-                .exported
-                .as_deref()
-                .map(PortalParent::wayland)
+        }
+    }
+
+    /// One export, released once: by the request's end or the window's.
+    struct ExportCell {
+        exported: Mutex<Option<ZxdgExportedV2>>,
+        connection: Connection,
+    }
+
+    impl ExportCell {
+        /// Destroy the export unless that happened already, and send it at
+        /// once: the request may end off the owner thread, where no loop turn
+        /// flushes after it; a connection that failed has nothing to send.
+        fn release(&self) {
+            let exported = self.exported.lock().take();
+            if let Some(exported) = exported {
+                exported.destroy();
+                let _ = self.connection.flush();
+            }
+        }
+    }
+
+    /// An export a portal request holds, released when the request drops its
+    /// parent, on whichever thread it ends.
+    struct HeldExport(Arc<ExportCell>);
+
+    impl Drop for HeldExport {
+        fn drop(&mut self) {
+            self.0.release();
         }
     }
 
@@ -2534,23 +2544,50 @@ mod toplevel {
         }
     }
 
-    impl Dispatch<ZxdgExportedV2, Arc<ToplevelRecord>> for WaylandState {
-        /// The handle is kept where something reads it: only tests, until
-        /// the contract's window reference carries it.
+    impl Dispatch<ZxdgExportedV2, Arc<PendingExport>> for WaylandState {
+        /// The handle answers the request that asked for the export, and the
+        /// answer holds the export from then on. An answer nobody waits for
+        /// any more (the owner retired) drops it, which releases the export.
         fn event(
             _: &mut Self,
-            _: &ZxdgExportedV2,
+            exported: &ZxdgExportedV2,
             event: zxdg_exported_v2::Event,
-            record: &Arc<ToplevelRecord>,
+            pending: &Arc<PendingExport>,
             _: &Connection,
             _: &QueueHandle<Self>,
         ) {
-            #[cfg(any(test, feature = "testing"))]
-            if let zxdg_exported_v2::Event::Handle { handle } = event {
-                record.protocol.lock().exported = Some(handle);
+            let zxdg_exported_v2::Event::Handle { handle } = event else {
+                return;
+            };
+            let cell = Arc::new(ExportCell {
+                exported: Mutex::new(Some(exported.clone())),
+                connection: pending.connection.clone(),
+            });
+            // Taken out before it is answered: resolving runs no code of the
+            // request's, but the lock is still released first.
+            let answer = pending.answer.lock().take();
+            let window_open = {
+                let mut exports = pending.exports.lock();
+                if !exports.closed {
+                    exports.held.retain(|held| held.strong_count() > 0);
+                    exports.held.push(Arc::downgrade(&cell));
+                }
+                !exports.closed
+            };
+            match answer {
+                Some(answer) if window_open => {
+                    let held = HeldExport(cell);
+                    let _ = answer.resolve(PortalParent::wayland(&handle, held));
+                }
+                // The window closed before the compositor named the export:
+                // it names nothing.
+                Some(answer) => {
+                    cell.release();
+                    let _ = answer.resolve(PortalParent::none());
+                }
+                // The protocol sends one handle; a second has no request.
+                None => cell.release(),
             }
-            #[cfg(not(any(test, feature = "testing")))]
-            let _ = (event, record);
         }
     }
 

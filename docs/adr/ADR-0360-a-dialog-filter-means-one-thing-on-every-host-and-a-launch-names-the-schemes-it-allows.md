@@ -186,4 +186,5 @@ is empty, since a closed window's id may name another window by then.
   `a_save_dialog_reports_the_filter_the_portal_says_was_selected` and
   `a_file_that_would_run_is_judged_by_what_was_opened_and_never_handed_on`; the portal's own
   `a_filter_becomes_globs_then_mime_types` and
-  `a_launch_is_attached_to_its_widgets_window_while_it_is_open`.
+  `a_launch_names_the_window_by_its_export_until_the_portal_answers` and
+  `a_closed_window_takes_its_exports_with_it_and_names_no_parent`.

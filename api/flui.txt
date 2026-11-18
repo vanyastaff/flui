@@ -12507,6 +12507,7 @@ fn flui::platform::PlatformWindow::request_redraw(&self)
 fn flui::platform::PlatformWindow::reveal_after_first_frame(&self)
 fn flui::platform::PlatformWindow::set_cursor(&self, cursor: &flui::platform::Cursor) -> Result<(), flui::platform::CursorError>
 fn flui::platform::PlatformWindow::set_frame_rate_hint(&self, hint: flui::platform::FrameRateHint) -> Result<(), flui::platform::Unsupported>
+fn flui::platform::PlatformWindow::portal_parent(&self, answer: flui::platform::capability::Resolver<flui::platform::capability::PortalParent>) { .. }
 fn flui::platform::PlatformWindow::set_input_regions(&self, regions: &[flui::platform::input_regions::InputRegion]) -> Result<(), flui::platform::Unsupported>
 fn flui::platform::PlatformWindow::state(&self) -> flui::platform::WindowState
 fn flui::platform::PlatformWindow::surface_target(&self) -> alloc::rcs::arc::Arc<dyn flui::platform::SurfaceTarget>
@@ -13562,6 +13563,7 @@ impl Default for flui::platform::capability::HostBridge
 impl core::fmt::Debug for flui::platform::capability::HostBridge
 pub fn flui::platform::capability::HostBridge::install_activity(&self, activity: Option<alloc::rcs::rc::Rc<dyn flui::platform::capability::ActivityBridge>>) -> Option<alloc::rcs::rc::Rc<dyn flui::platform::capability::ActivityBridge>>
 pub fn flui::platform::capability::HostBridge::new() -> Self
+pub fn flui::platform::capability::HostBridge::name_application(&self, app_id: Option<flui::app::AppId>)
 pub struct flui::platform::capability::IntentFrame { .. }
 impl Clone for flui::platform::capability::IntentFrame
 impl Copy for flui::platform::capability::IntentFrame
@@ -13624,6 +13626,7 @@ fn flui::platform::capability::Plugin::register(&self, registrar: &mut flui::pla
 #[non_exhaustive] pub struct flui::platform::capability::ProviderContext<'a> { .. }
 impl core::fmt::Debug for flui::platform::capability::ProviderContext<'_>
 pub fn flui::platform::capability::ProviderContext::activity(&self) -> Option<flui::platform::capability::Activity> // impl<'a> flui::platform::capability::ProviderContext<'a>
+pub fn flui::platform::capability::ProviderContext::app_id(&self) -> Option<flui::app::AppId> // impl<'a> flui::platform::capability::ProviderContext<'a>
 pub fn flui::platform::capability::ProviderContext::completions(&self) -> &flui::platform::capability::CompletionSource // impl<'a> flui::platform::capability::ProviderContext<'a>
 pub fn flui::platform::capability::ProviderContext::new(owner: &'a flui::platform::capability::OwnerPoster, completions: &'a flui::platform::capability::CompletionSource, locals: &'a flui::platform::capability::RuntimeLocals, host: &'a flui::platform::capability::HostBridge, window: Option<flui::platform::capability::WindowRef>) -> Self // impl<'a> flui::platform::capability::ProviderContext<'a>
 pub fn flui::platform::capability::ProviderContext::owner(&self) -> &flui::platform::capability::OwnerPoster // impl<'a> flui::platform::capability::ProviderContext<'a>
@@ -13753,7 +13756,16 @@ impl raw_window_handle::borrowed::HasDisplayHandle for flui::platform::capabilit
 impl raw_window_handle::borrowed::HasWindowHandle for flui::platform::capability::WindowRef
 pub fn flui::platform::capability::WindowRef::id(&self) -> flui::platform::WindowId
 pub fn flui::platform::capability::WindowRef::lifetime(&self) -> &flui::platform::capability::WindowLifetime
-pub fn flui::platform::capability::WindowRef::new(id: flui::platform::WindowId, scale: f64, target: alloc::rcs::arc::Arc<dyn flui::platform::SurfaceTarget>, lifetime: flui::platform::capability::WindowLifetime) -> Self
+pub fn flui::platform::capability::WindowRef::new(window: &alloc::rcs::rc::Rc<dyn flui::platform::PlatformWindow>, lifetime: flui::platform::capability::WindowLifetime) -> Self
+pub fn flui::platform::capability::WindowRef::portal_parent(&self, answer: flui::platform::capability::Resolver<flui::platform::capability::PortalParent>)
+pub struct flui::platform::capability::PortalParent { .. }
+impl Default for flui::platform::capability::PortalParent
+impl core::fmt::Debug for flui::platform::capability::PortalParent
+pub fn flui::platform::capability::PortalParent::as_str(&self) -> &str
+pub fn flui::platform::capability::PortalParent::is_none(&self) -> bool
+pub fn flui::platform::capability::PortalParent::none() -> Self
+pub fn flui::platform::capability::PortalParent::wayland(handle: &str, export: impl core::any::Any + Send) -> Self
+pub fn flui::platform::capability::PortalParent::x11(xid: core::num::nonzero::NonZeroU32) -> Self
 pub fn flui::platform::capability::WindowRef::scale(&self) -> f64
 pub mod flui::platform::capability::scripted
 pub struct flui::platform::capability::scripted::AlreadyDriven;
@@ -23000,6 +23012,310 @@ pub fn flui::services::system::testing::ScriptedSystem::dialogs(&self) -> &flui:
 pub fn flui::services::system::testing::ScriptedSystem::launcher(&self) -> &flui::services::system::testing::ScriptedLauncher
 pub fn flui::services::system::testing::ScriptedSystem::new(launcher: flui::services::system::testing::ScriptedLauncher, dialogs: flui::services::system::testing::ScriptedFileDialogs) -> Self
 pub fn flui::services::system::testing::ScriptedSystem::on(scenario: &flui::platform::capability::scripted::Scenario) -> Self
+pub mod flui::services::system::autostart
+pub struct flui::services::system::autostart::Autostart { .. }
+impl Clone for flui::services::system::autostart::Autostart
+impl core::fmt::Debug for flui::services::system::autostart::Autostart
+pub fn flui::services::system::autostart::Autostart::new(backend: impl flui::services::system::autostart::AutostartBackend, ctx: &flui::platform::capability::ProviderContext<'_>) -> Self
+pub fn flui::services::system::autostart::Autostart::request(&self, request: flui::services::system::autostart::AutostartRequest) -> flui::platform::capability::Completion<flui::services::system::autostart::AutostartResult>
+pub trait flui::services::system::autostart::AutostartBackend: 'static
+fn flui::services::system::autostart::AutostartBackend::request(&self, request: flui::services::system::autostart::AutostartRequest, answer: flui::platform::capability::Resolver<flui::services::system::autostart::AutostartResult>)
+pub enum flui::services::system::autostart::AutostartCapability
+impl core::fmt::Debug for flui::services::system::autostart::AutostartCapability
+impl flui::platform::capability::Capability for flui::services::system::autostart::AutostartCapability { type Handle = flui::services::system::autostart::Autostart; }
+#[non_exhaustive] pub enum flui::services::system::autostart::AutostartError
+impl Clone for flui::services::system::autostart::AutostartError
+impl Copy for flui::services::system::autostart::AutostartError
+impl Eq for flui::services::system::autostart::AutostartError
+impl From<flui::platform::SystemFailure> for flui::services::system::autostart::AutostartError
+impl From<flui::platform::Unsupported> for flui::services::system::autostart::AutostartError
+impl From<flui::services::system::autostart::MalformedAutostart> for flui::services::system::autostart::AutostartError
+impl PartialEq for flui::services::system::autostart::AutostartError
+impl core::error::Error for flui::services::system::autostart::AutostartError
+impl core::fmt::Debug for flui::services::system::autostart::AutostartError
+impl core::fmt::Display for flui::services::system::autostart::AutostartError
+impl core::marker::StructuralPartialEq for flui::services::system::autostart::AutostartError
+variant flui::services::system::autostart::AutostartError::Denied // at 1
+variant flui::services::system::autostart::AutostartError::Failed(flui::platform::SystemFailure) // at 3
+variant flui::services::system::autostart::AutostartError::InvalidRequest(flui::services::system::autostart::MalformedAutostart) // at 0
+variant flui::services::system::autostart::AutostartError::Unsupported(flui::platform::Unsupported) // at 2
+#[non_exhaustive] pub struct flui::services::system::autostart::AutostartRequest { .. }
+field flui::services::system::autostart::AutostartRequest::reason: Option<String> // at 1
+impl Clone for flui::services::system::autostart::AutostartRequest
+impl Eq for flui::services::system::autostart::AutostartRequest
+impl PartialEq for flui::services::system::autostart::AutostartRequest
+impl core::fmt::Debug for flui::services::system::autostart::AutostartRequest
+impl core::marker::StructuralPartialEq for flui::services::system::autostart::AutostartRequest
+pub const flui::services::system::autostart::AutostartRequest::MAX_REASON_LEN: usize = 256
+pub fn flui::services::system::autostart::AutostartRequest::disable() -> Self
+pub fn flui::services::system::autostart::AutostartRequest::enable() -> Self
+pub fn flui::services::system::autostart::AutostartRequest::is_enabled(&self) -> bool
+pub fn flui::services::system::autostart::AutostartRequest::reason(self, reason: impl Into<String>) -> Self
+pub type flui::services::system::autostart::AutostartResult = Result<flui::services::system::autostart::AutostartState, flui::services::system::autostart::AutostartError>
+#[non_exhaustive] pub enum flui::services::system::autostart::AutostartState
+impl Clone for flui::services::system::autostart::AutostartState
+impl Copy for flui::services::system::autostart::AutostartState
+impl Eq for flui::services::system::autostart::AutostartState
+impl PartialEq for flui::services::system::autostart::AutostartState
+impl core::fmt::Debug for flui::services::system::autostart::AutostartState
+impl core::marker::StructuralPartialEq for flui::services::system::autostart::AutostartState
+variant flui::services::system::autostart::AutostartState::Disabled // at 1
+variant flui::services::system::autostart::AutostartState::Enabled // at 0
+#[non_exhaustive] pub enum flui::services::system::autostart::MalformedAutostart
+impl Clone for flui::services::system::autostart::MalformedAutostart
+impl Copy for flui::services::system::autostart::MalformedAutostart
+impl Eq for flui::services::system::autostart::MalformedAutostart
+impl From<flui::services::system::autostart::MalformedAutostart> for flui::services::system::autostart::AutostartError
+impl PartialEq for flui::services::system::autostart::MalformedAutostart
+impl core::error::Error for flui::services::system::autostart::MalformedAutostart
+impl core::fmt::Debug for flui::services::system::autostart::MalformedAutostart
+impl core::fmt::Display for flui::services::system::autostart::MalformedAutostart
+impl core::marker::StructuralPartialEq for flui::services::system::autostart::MalformedAutostart
+variant flui::services::system::autostart::MalformedAutostart::Reason // at 0
+pub mod flui::services::system::shortcuts
+#[non_exhaustive] pub struct flui::services::system::shortcuts::BoundShortcut
+field flui::services::system::shortcuts::BoundShortcut::id: flui::services::system::shortcuts::ShortcutId // at 0
+field flui::services::system::shortcuts::BoundShortcut::trigger: Option<String> // at 1
+impl Clone for flui::services::system::shortcuts::BoundShortcut
+impl Eq for flui::services::system::shortcuts::BoundShortcut
+impl PartialEq for flui::services::system::shortcuts::BoundShortcut
+impl core::fmt::Debug for flui::services::system::shortcuts::BoundShortcut
+impl core::marker::StructuralPartialEq for flui::services::system::shortcuts::BoundShortcut
+pub fn flui::services::system::shortcuts::BoundShortcut::new(id: flui::services::system::shortcuts::ShortcutId, trigger: Option<String>) -> Self
+pub enum flui::services::system::shortcuts::GlobalShortcutCapability
+impl core::fmt::Debug for flui::services::system::shortcuts::GlobalShortcutCapability
+impl flui::platform::capability::Capability for flui::services::system::shortcuts::GlobalShortcutCapability { type Handle = flui::services::system::shortcuts::GlobalShortcuts; }
+pub struct flui::services::system::shortcuts::GlobalShortcuts { .. }
+impl Clone for flui::services::system::shortcuts::GlobalShortcuts
+impl core::fmt::Debug for flui::services::system::shortcuts::GlobalShortcuts
+pub const flui::services::system::shortcuts::GlobalShortcuts::MAX_PER_BINDING: usize = 64
+pub fn flui::services::system::shortcuts::GlobalShortcuts::bind(&self, shortcuts: Vec<flui::services::system::shortcuts::Shortcut>) -> flui::services::system::shortcuts::ShortcutBinding
+pub fn flui::services::system::shortcuts::GlobalShortcuts::new(backend: impl flui::services::system::shortcuts::ShortcutBackend, ctx: &flui::platform::capability::ProviderContext<'_>) -> Self
+#[non_exhaustive] pub enum flui::services::system::shortcuts::MalformedShortcut
+impl Clone for flui::services::system::shortcuts::MalformedShortcut
+impl Copy for flui::services::system::shortcuts::MalformedShortcut
+impl Eq for flui::services::system::shortcuts::MalformedShortcut
+impl From<flui::services::system::shortcuts::MalformedShortcut> for flui::services::system::shortcuts::ShortcutError
+impl PartialEq for flui::services::system::shortcuts::MalformedShortcut
+impl core::error::Error for flui::services::system::shortcuts::MalformedShortcut
+impl core::fmt::Debug for flui::services::system::shortcuts::MalformedShortcut
+impl core::fmt::Display for flui::services::system::shortcuts::MalformedShortcut
+impl core::marker::StructuralPartialEq for flui::services::system::shortcuts::MalformedShortcut
+variant flui::services::system::shortcuts::MalformedShortcut::Count // at 0
+variant flui::services::system::shortcuts::MalformedShortcut::Description // at 2
+variant flui::services::system::shortcuts::MalformedShortcut::DuplicateId // at 1
+#[non_exhaustive] pub struct flui::services::system::shortcuts::Shortcut
+field flui::services::system::shortcuts::Shortcut::description: String // at 1
+field flui::services::system::shortcuts::Shortcut::id: flui::services::system::shortcuts::ShortcutId // at 0
+field flui::services::system::shortcuts::Shortcut::preferred: Option<flui::services::system::shortcuts::Trigger> // at 2
+impl Clone for flui::services::system::shortcuts::Shortcut
+impl Eq for flui::services::system::shortcuts::Shortcut
+impl PartialEq for flui::services::system::shortcuts::Shortcut
+impl core::fmt::Debug for flui::services::system::shortcuts::Shortcut
+impl core::marker::StructuralPartialEq for flui::services::system::shortcuts::Shortcut
+pub const flui::services::system::shortcuts::Shortcut::MAX_DESCRIPTION_LEN: usize = 256
+pub fn flui::services::system::shortcuts::Shortcut::new(id: flui::services::system::shortcuts::ShortcutId, description: impl Into<String>) -> Self
+pub fn flui::services::system::shortcuts::Shortcut::preferred(self, trigger: flui::services::system::shortcuts::Trigger) -> Self
+pub trait flui::services::system::shortcuts::ShortcutBackend: 'static
+fn flui::services::system::shortcuts::ShortcutBackend::bind(&self, shortcuts: Vec<flui::services::system::shortcuts::Shortcut>, feed: flui::services::system::shortcuts::ShortcutFeed) -> flui::services::system::shortcuts::ShortcutHold
+pub struct flui::services::system::shortcuts::ShortcutBinding { .. }
+impl Drop for flui::services::system::shortcuts::ShortcutBinding
+impl core::fmt::Debug for flui::services::system::shortcuts::ShortcutBinding
+pub fn flui::services::system::shortcuts::ShortcutBinding::dropped(&self) -> u64
+pub fn flui::services::system::shortcuts::ShortcutBinding::next(&self) -> flui::platform::capability::Completion<flui::services::system::shortcuts::ShortcutEvent>
+#[non_exhaustive] pub enum flui::services::system::shortcuts::ShortcutError
+impl Clone for flui::services::system::shortcuts::ShortcutError
+impl Copy for flui::services::system::shortcuts::ShortcutError
+impl Eq for flui::services::system::shortcuts::ShortcutError
+impl From<flui::platform::SystemFailure> for flui::services::system::shortcuts::ShortcutError
+impl From<flui::platform::Unsupported> for flui::services::system::shortcuts::ShortcutError
+impl From<flui::services::system::shortcuts::MalformedShortcut> for flui::services::system::shortcuts::ShortcutError
+impl PartialEq for flui::services::system::shortcuts::ShortcutError
+impl core::error::Error for flui::services::system::shortcuts::ShortcutError
+impl core::fmt::Debug for flui::services::system::shortcuts::ShortcutError
+impl core::fmt::Display for flui::services::system::shortcuts::ShortcutError
+impl core::marker::StructuralPartialEq for flui::services::system::shortcuts::ShortcutError
+variant flui::services::system::shortcuts::ShortcutError::Denied // at 1
+variant flui::services::system::shortcuts::ShortcutError::Failed(flui::platform::SystemFailure) // at 4
+variant flui::services::system::shortcuts::ShortcutError::InvalidRequest(flui::services::system::shortcuts::MalformedShortcut) // at 0
+variant flui::services::system::shortcuts::ShortcutError::Revoked // at 2
+variant flui::services::system::shortcuts::ShortcutError::Unsupported(flui::platform::Unsupported) // at 3
+#[non_exhaustive] pub enum flui::services::system::shortcuts::ShortcutEvent
+impl Clone for flui::services::system::shortcuts::ShortcutEvent
+impl Eq for flui::services::system::shortcuts::ShortcutEvent
+impl PartialEq for flui::services::system::shortcuts::ShortcutEvent
+impl core::fmt::Debug for flui::services::system::shortcuts::ShortcutEvent
+impl core::marker::StructuralPartialEq for flui::services::system::shortcuts::ShortcutEvent
+variant flui::services::system::shortcuts::ShortcutEvent::Bound(Vec<flui::services::system::shortcuts::BoundShortcut>) // at 0
+variant flui::services::system::shortcuts::ShortcutEvent::Changed(Vec<flui::services::system::shortcuts::BoundShortcut>) // at 3
+variant flui::services::system::shortcuts::ShortcutEvent::Ended(flui::services::system::shortcuts::ShortcutError) // at 4
+variant flui::services::system::shortcuts::ShortcutEvent::Pressed(flui::services::system::shortcuts::ShortcutId) // at 1
+variant flui::services::system::shortcuts::ShortcutEvent::Released(flui::services::system::shortcuts::ShortcutId) // at 2
+pub struct flui::services::system::shortcuts::ShortcutFeed(_)
+impl Clone for flui::services::system::shortcuts::ShortcutFeed
+impl core::fmt::Debug for flui::services::system::shortcuts::ShortcutFeed
+pub const flui::services::system::shortcuts::ShortcutFeed::MAX_QUEUED: usize = 256
+pub fn flui::services::system::shortcuts::ShortcutFeed::send(&self, event: flui::services::system::shortcuts::ShortcutEvent)
+pub struct flui::services::system::shortcuts::ShortcutHold(_)
+impl core::fmt::Debug for flui::services::system::shortcuts::ShortcutHold
+pub fn flui::services::system::shortcuts::ShortcutHold::new(keep: impl core::any::Any) -> Self
+pub struct flui::services::system::shortcuts::ShortcutId(_)
+impl Clone for flui::services::system::shortcuts::ShortcutId
+impl Eq for flui::services::system::shortcuts::ShortcutId
+impl PartialEq for flui::services::system::shortcuts::ShortcutId
+impl core::fmt::Debug for flui::services::system::shortcuts::ShortcutId
+impl core::fmt::Display for flui::services::system::shortcuts::ShortcutId
+impl core::hash::Hash for flui::services::system::shortcuts::ShortcutId
+impl core::marker::StructuralPartialEq for flui::services::system::shortcuts::ShortcutId
+pub const flui::services::system::shortcuts::ShortcutId::MAX_LEN: usize = 64
+pub fn flui::services::system::shortcuts::ShortcutId::as_str(&self) -> &str
+pub fn flui::services::system::shortcuts::ShortcutId::try_new(id: &str) -> Option<Self>
+pub struct flui::services::system::shortcuts::Trigger { .. }
+impl Clone for flui::services::system::shortcuts::Trigger
+impl Eq for flui::services::system::shortcuts::Trigger
+impl PartialEq for flui::services::system::shortcuts::Trigger
+impl core::fmt::Debug for flui::services::system::shortcuts::Trigger
+impl core::marker::StructuralPartialEq for flui::services::system::shortcuts::Trigger
+pub const flui::services::system::shortcuts::Trigger::MODIFIERS: flui::interaction::Modifiers = _
+pub fn flui::services::system::shortcuts::Trigger::modifiers(&self) -> flui::interaction::Modifiers
+pub fn flui::services::system::shortcuts::Trigger::to_xdg(&self) -> String
+pub fn flui::services::system::shortcuts::Trigger::try_new(modifiers: flui::interaction::Modifiers, key: &flui::interaction::Key) -> Option<Self>
+pub mod flui::services::system::taskbar
+#[non_exhaustive] pub struct flui::services::system::taskbar::EntryState
+field flui::services::system::taskbar::EntryState::count: Option<u64> // at 1
+field flui::services::system::taskbar::EntryState::progress: flui::services::system::taskbar::Progress // at 0
+impl Clone for flui::services::system::taskbar::EntryState
+impl Copy for flui::services::system::taskbar::EntryState
+impl Default for flui::services::system::taskbar::EntryState
+impl PartialEq for flui::services::system::taskbar::EntryState
+impl core::fmt::Debug for flui::services::system::taskbar::EntryState
+impl core::marker::StructuralPartialEq for flui::services::system::taskbar::EntryState
+pub const fn flui::services::system::taskbar::EntryState::new(progress: flui::services::system::taskbar::Progress, count: Option<u64>) -> Self
+pub struct flui::services::system::taskbar::Fraction(_)
+impl Clone for flui::services::system::taskbar::Fraction
+impl Copy for flui::services::system::taskbar::Fraction
+impl PartialEq for flui::services::system::taskbar::Fraction
+impl PartialOrd for flui::services::system::taskbar::Fraction
+impl core::fmt::Debug for flui::services::system::taskbar::Fraction
+impl core::marker::StructuralPartialEq for flui::services::system::taskbar::Fraction
+pub fn flui::services::system::taskbar::Fraction::get(self) -> f64
+pub fn flui::services::system::taskbar::Fraction::try_new(value: f64) -> Option<Self>
+#[non_exhaustive] pub struct flui::services::system::taskbar::Honoured
+field flui::services::system::taskbar::Honoured::confirmed: bool // at 3
+field flui::services::system::taskbar::Honoured::count: bool // at 2
+field flui::services::system::taskbar::Honoured::indeterminate: bool // at 1
+field flui::services::system::taskbar::Honoured::progress: bool // at 0
+impl Clone for flui::services::system::taskbar::Honoured
+impl Copy for flui::services::system::taskbar::Honoured
+impl Eq for flui::services::system::taskbar::Honoured
+impl PartialEq for flui::services::system::taskbar::Honoured
+impl core::fmt::Debug for flui::services::system::taskbar::Honoured
+impl core::marker::StructuralPartialEq for flui::services::system::taskbar::Honoured
+pub const fn flui::services::system::taskbar::Honoured::new(progress: bool, indeterminate: bool, count: bool, confirmed: bool) -> Self
+#[non_exhaustive] pub enum flui::services::system::taskbar::Progress
+impl Clone for flui::services::system::taskbar::Progress
+impl Copy for flui::services::system::taskbar::Progress
+impl Default for flui::services::system::taskbar::Progress
+impl PartialEq for flui::services::system::taskbar::Progress
+impl core::fmt::Debug for flui::services::system::taskbar::Progress
+impl core::marker::StructuralPartialEq for flui::services::system::taskbar::Progress
+variant flui::services::system::taskbar::Progress::Done(flui::services::system::taskbar::Fraction) // at 2
+variant flui::services::system::taskbar::Progress::Hidden // at 0
+variant flui::services::system::taskbar::Progress::Indeterminate // at 1
+pub trait flui::services::system::taskbar::TaskbarBackend: 'static
+fn flui::services::system::taskbar::TaskbarBackend::honours(&self) -> flui::services::system::taskbar::Honoured
+fn flui::services::system::taskbar::TaskbarBackend::show(&self, state: flui::services::system::taskbar::EntryState)
+pub enum flui::services::system::taskbar::TaskbarCapability
+impl core::fmt::Debug for flui::services::system::taskbar::TaskbarCapability
+impl flui::platform::capability::Capability for flui::services::system::taskbar::TaskbarCapability { type Handle = flui::services::system::taskbar::TaskbarEntry; }
+pub struct flui::services::system::taskbar::TaskbarEntry { .. }
+impl Clone for flui::services::system::taskbar::TaskbarEntry
+impl core::fmt::Debug for flui::services::system::taskbar::TaskbarEntry
+pub fn flui::services::system::taskbar::TaskbarEntry::honours(&self) -> flui::services::system::taskbar::Honoured
+pub fn flui::services::system::taskbar::TaskbarEntry::new(backend: impl flui::services::system::taskbar::TaskbarBackend, ctx: &flui::platform::capability::ProviderContext<'_>) -> Self
+pub fn flui::services::system::taskbar::TaskbarEntry::set_count(&self, count: Option<u64>)
+pub fn flui::services::system::taskbar::TaskbarEntry::set_progress(&self, progress: flui::services::system::taskbar::Progress)
+pub fn flui::services::system::taskbar::TaskbarEntry::state(&self) -> flui::services::system::taskbar::EntryState
+pub fn flui::services::system::testing::PortalOnBus::app_id(self, app_id: &str) -> Self
+pub struct flui::services::system::testing::ScriptedAutostart { .. }
+impl Clone for flui::services::system::testing::ScriptedAutostart
+impl Default for flui::services::system::testing::ScriptedAutostart
+impl core::fmt::Debug for flui::services::system::testing::ScriptedAutostart
+impl flui::services::system::autostart::AutostartBackend for flui::services::system::testing::ScriptedAutostart
+pub fn flui::services::system::testing::ScriptedAutostart::on(scenario: &flui::platform::capability::scripted::Scenario) -> Self
+pub fn flui::services::system::testing::ScriptedAutostart::script(&self) -> &flui::platform::capability::scripted::Script<flui::services::system::autostart::AutostartRequest, flui::services::system::autostart::AutostartResult>
+pub struct flui::services::system::testing::ScriptedBinding { .. }
+impl Clone for flui::services::system::testing::ScriptedBinding
+impl core::fmt::Debug for flui::services::system::testing::ScriptedBinding
+pub fn flui::services::system::testing::ScriptedBinding::is_held(&self) -> bool
+pub fn flui::services::system::testing::ScriptedBinding::send(&self, event: flui::services::system::shortcuts::ShortcutEvent)
+pub fn flui::services::system::testing::ScriptedBinding::shortcuts(&self) -> &[flui::services::system::shortcuts::Shortcut]
+pub struct flui::services::system::testing::ScriptedShortcuts { .. }
+impl Clone for flui::services::system::testing::ScriptedShortcuts
+impl Default for flui::services::system::testing::ScriptedShortcuts
+impl core::fmt::Debug for flui::services::system::testing::ScriptedShortcuts
+impl flui::services::system::shortcuts::ShortcutBackend for flui::services::system::testing::ScriptedShortcuts
+pub fn flui::services::system::testing::ScriptedShortcuts::bindings(&self) -> Vec<flui::services::system::testing::ScriptedBinding>
+pub fn flui::services::system::testing::ScriptedSystem::autostart(&self) -> &flui::services::system::testing::ScriptedAutostart
+pub fn flui::services::system::testing::ScriptedSystem::shortcuts(&self) -> &flui::services::system::testing::ScriptedShortcuts
+pub fn flui::services::system::testing::ScriptedSystem::taskbar(&self) -> &flui::services::system::testing::ScriptedTaskbar
+pub fn flui::services::system::testing::ScriptedSystem::user_dirs(&self) -> &flui::services::system::testing::ScriptedUserDirs
+pub struct flui::services::system::testing::ScriptedTaskbar { .. }
+impl Clone for flui::services::system::testing::ScriptedTaskbar
+impl Default for flui::services::system::testing::ScriptedTaskbar
+impl core::fmt::Debug for flui::services::system::testing::ScriptedTaskbar
+impl flui::services::system::taskbar::TaskbarBackend for flui::services::system::testing::ScriptedTaskbar
+pub fn flui::services::system::testing::ScriptedTaskbar::set_honours(&self, honours: flui::services::system::taskbar::Honoured)
+pub fn flui::services::system::testing::ScriptedTaskbar::shown(&self) -> Vec<flui::services::system::taskbar::EntryState>
+pub struct flui::services::system::testing::ScriptedUserDirs { .. }
+impl Clone for flui::services::system::testing::ScriptedUserDirs
+impl Default for flui::services::system::testing::ScriptedUserDirs
+impl core::fmt::Debug for flui::services::system::testing::ScriptedUserDirs
+impl flui::services::system::user_dirs::UserDirBackend for flui::services::system::testing::ScriptedUserDirs
+pub fn flui::services::system::testing::ScriptedUserDirs::on(scenario: &flui::platform::capability::scripted::Scenario) -> Self
+pub fn flui::services::system::testing::ScriptedUserDirs::script(&self) -> &flui::platform::capability::scripted::Script<flui::services::system::user_dirs::UserDir, flui::services::system::user_dirs::UserDirResult>
+pub mod flui::services::system::user_dirs
+#[non_exhaustive] pub enum flui::services::system::user_dirs::UserDir
+impl Clone for flui::services::system::user_dirs::UserDir
+impl Copy for flui::services::system::user_dirs::UserDir
+impl Eq for flui::services::system::user_dirs::UserDir
+impl PartialEq for flui::services::system::user_dirs::UserDir
+impl core::fmt::Debug for flui::services::system::user_dirs::UserDir
+impl core::hash::Hash for flui::services::system::user_dirs::UserDir
+impl core::marker::StructuralPartialEq for flui::services::system::user_dirs::UserDir
+variant flui::services::system::user_dirs::UserDir::Desktop // at 1
+variant flui::services::system::user_dirs::UserDir::Documents // at 2
+variant flui::services::system::user_dirs::UserDir::Downloads // at 3
+variant flui::services::system::user_dirs::UserDir::Home // at 0
+variant flui::services::system::user_dirs::UserDir::Music // at 4
+variant flui::services::system::user_dirs::UserDir::Pictures // at 5
+variant flui::services::system::user_dirs::UserDir::PublicShare // at 8
+variant flui::services::system::user_dirs::UserDir::Templates // at 7
+variant flui::services::system::user_dirs::UserDir::Videos // at 6
+pub trait flui::services::system::user_dirs::UserDirBackend: 'static
+fn flui::services::system::user_dirs::UserDirBackend::locate(&self, dir: flui::services::system::user_dirs::UserDir, answer: flui::platform::capability::Resolver<flui::services::system::user_dirs::UserDirResult>)
+pub enum flui::services::system::user_dirs::UserDirCapability
+impl core::fmt::Debug for flui::services::system::user_dirs::UserDirCapability
+impl flui::platform::capability::Capability for flui::services::system::user_dirs::UserDirCapability { type Handle = flui::services::system::user_dirs::UserDirs; }
+#[non_exhaustive] pub enum flui::services::system::user_dirs::UserDirError
+impl Clone for flui::services::system::user_dirs::UserDirError
+impl Copy for flui::services::system::user_dirs::UserDirError
+impl Eq for flui::services::system::user_dirs::UserDirError
+impl From<flui::platform::SystemFailure> for flui::services::system::user_dirs::UserDirError
+impl From<flui::platform::Unsupported> for flui::services::system::user_dirs::UserDirError
+impl PartialEq for flui::services::system::user_dirs::UserDirError
+impl core::error::Error for flui::services::system::user_dirs::UserDirError
+impl core::fmt::Debug for flui::services::system::user_dirs::UserDirError
+impl core::fmt::Display for flui::services::system::user_dirs::UserDirError
+impl core::marker::StructuralPartialEq for flui::services::system::user_dirs::UserDirError
+variant flui::services::system::user_dirs::UserDirError::Failed(flui::platform::SystemFailure) // at 1
+variant flui::services::system::user_dirs::UserDirError::Unsupported(flui::platform::Unsupported) // at 0
+pub type flui::services::system::user_dirs::UserDirResult = Result<Option<std::path::PathBuf>, flui::services::system::user_dirs::UserDirError>
+pub struct flui::services::system::user_dirs::UserDirs { .. }
+impl Clone for flui::services::system::user_dirs::UserDirs
+impl core::fmt::Debug for flui::services::system::user_dirs::UserDirs
+pub fn flui::services::system::user_dirs::UserDirs::locate(&self, dir: flui::services::system::user_dirs::UserDir) -> flui::platform::capability::Completion<flui::services::system::user_dirs::UserDirResult>
+pub fn flui::services::system::user_dirs::UserDirs::new(backend: impl flui::services::system::user_dirs::UserDirBackend, ctx: &flui::platform::capability::ProviderContext<'_>) -> Self
 pub mod flui::testing
 pub struct flui::testing::CommitBarrier { .. }
 impl Drop for flui::testing::CommitBarrier
