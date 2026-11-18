@@ -824,10 +824,10 @@ impl FolderPath {
 /// and for each file under it the file's path and `F`, which is what the
 /// file is read from until it is read and what it holds afterwards.
 ///
-/// Checked once, when it is made, and kept so while `F` changes
-/// ([`try_map`](Self::try_map)): the name is one a folder holds, no two
-/// files are at one path, and the files are in the order of their paths.
-/// What a folder pick is made of ([`into_pick`](Self::into_pick)).
+/// Checked once, when it is made, and kept so while `F` changes (`try_map`,
+/// which the web provider reads the files through): the name is one a
+/// folder holds, no two files are at one path, and the files are in the
+/// order of their paths. What a folder pick is made of (`into_pick`).
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct FolderListing<F> {
     name: String,
