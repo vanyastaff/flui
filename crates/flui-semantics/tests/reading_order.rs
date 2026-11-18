@@ -1,7 +1,8 @@
 //! `reading_order`: lines from the top, each read in the document's direction.
 
+use flui_foundation::TextDirection;
 use flui_foundation::geometry::Rect;
-use flui_semantics::{TextDirection, reading_order};
+use flui_semantics::reading_order;
 
 fn ltwh(left: f64, top: f64, width: f64, height: f64) -> Rect {
     Rect::from_ltwh(left, top, width, height)

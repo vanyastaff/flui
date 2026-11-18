@@ -2406,6 +2406,7 @@ dependencies = [
  "flui-sdk",
  "flui-testing",
  "futures-util",
+ "jni 0.22.4",
  "js-sys",
  "libc",
  "objc2 0.6.5",

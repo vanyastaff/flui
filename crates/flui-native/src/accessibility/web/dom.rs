@@ -31,7 +31,7 @@ use accesskit::{
     Action, ActionData, ActionRequest, NodeId, TextPosition, TextSelection, TreeId, TreeUpdate,
 };
 use flui_platform::keyboard::{KeyPress, KeyState};
-use flui_semantics::AssistiveFocusSupport;
+use flui_semantics::platform::AssistiveFocusSupport;
 use flui_semantics::platform::{
     AccessibilityActionListener, AccessibilityActivationListener, PlatformAccessibility,
 };

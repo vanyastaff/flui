@@ -1087,7 +1087,7 @@ impl PresentationState {
         // Whether this window's adapter says where the assistive technology's
         // cursor is: a widget that acts on it asks before relying on it.
         let assistive_focus = accessibility.as_ref().map_or(
-            flui_semantics::AssistiveFocusSupport::Unreported,
+            flui_semantics::platform::AssistiveFocusSupport::Unreported,
             |bridge| bridge.assistive_focus_support(),
         );
         widgets.with_build_owner_mut(|owner| {

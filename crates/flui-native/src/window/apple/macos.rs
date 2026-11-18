@@ -1705,7 +1705,7 @@ impl PlatformWindow for MacOSWindow {
     fn set_cursor(&self, cursor: &Cursor) -> Result<(), CursorError> {
         let (kept, scale) = {
             let state = self.state.borrow();
-            let scale = state.scale_factor.get();
+            let scale = state.scale_factor;
             (state.cursor.shows(cursor, scale), scale)
         };
         // Made with the state let go: AppKit is messaged.
@@ -1978,7 +1978,7 @@ impl MacOSWindow {
     fn rescale_cursor(&self) {
         let (made, scale) = {
             let state = self.state.borrow();
-            (state.cursor.clone(), state.scale_factor.get())
+            (state.cursor.clone(), state.scale_factor)
         };
         let next = match made.rescaled(scale) {
             Some(Ok(next)) => next,
@@ -2160,7 +2160,7 @@ impl MacOSWindow {
             (
                 state.display,
                 state.normal,
-                state.scale_factor.get(),
+                state.scale_factor,
                 state.occlusion_visible,
                 state.sequence.heading(std::time::Instant::now()),
                 state.frame,

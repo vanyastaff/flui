@@ -10,6 +10,7 @@ use crate::input::assembly::{
     QpcTicks, ReadingTime, TouchpadFrame, ViewportReading, ViewportStatus,
 };
 use crate::input::windows::direct_manipulation::manipulation::TouchpadAssembler;
+use flui_foundation::geometry::DevicePixelRatio;
 use flui_platform::EventTime;
 use flui_platform::PlatformInput;
 use flui_platform::keyboard::Modifiers;
@@ -40,7 +41,7 @@ fn frame(qpc: u64, scale: f64) -> TouchpadFrame {
             counter: Some(QpcTicks(qpc)),
         },
         position: (300.0, 240.0),
-        scale,
+        scale: DevicePixelRatio::try_new(scale).expect("a test frame at a ratio a screen can have"),
         modifiers: Modifiers::NONE,
     }
 }

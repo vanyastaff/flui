@@ -32,6 +32,12 @@
   application's own task instead of starting a second runtime (ADR-0366 §2)
   [ADR-0371](ADR-0371-before-the-first-release-no-xtask-gate-holds-a-rule-about-the-sources.md)
   for the `xtask workspace` gate only (Confirmation): the rule stands and its reader confirms it.
+- **Superseded-by:** [ADR-0377](ADR-0377-non-rust-code-on-android-and-apple-is-a-leaf-by-rule.md)
+  for decision 21 where it differs (every crate that declares a dex, not `flui-native`'s alone,
+  has its digests checked from the list the manifests give, with a protocol constant per dex; the
+  Gradle path writes a provider's authority as `${applicationId}.<suffix>`) and for decision 8's
+  list of what the bridge offers (it also runs a provider's work on Java's main thread,
+  `Activity::on_main_thread`); decision 15 and the rest of decisions 8 and 21 stand.
 - **Related:** [ADR-0151](ADR-0151-platform-layer-boundary-and-names.md) (the platform crates and
   where host code lives), [ADR-0152](ADR-0152-capability-seam-revised.md) (the capability seam and
   `Completion`), [ADR-0154](ADR-0154-capability-crates.md) (capability crates and their native

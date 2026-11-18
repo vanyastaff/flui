@@ -16,25 +16,27 @@
 //!   `codec::NativeRecording` per registry, delivery or platform;
 //! - `lines` (the same builds): the sink that hands each of them on as the wire's lines, a
 //!   header and then its rows, for the driver agent's recordings;
-//! - `codec`, `order` and `store` (with `native-capture` or `testing`): the recording
-//!   read, written and replayed, in the schema `flui-protocol` declares, so a
-//!   reader such as the driver reads it without this crate; `store` holds a
-//!   text store's locks and their replay on another store.
+//! - `codec`, `order` and `store` (the same builds, or with `testing`): the
+//!   recording read, written and replayed, in the schema `flui-protocol`
+//!   declares, so a reader such as the driver reads it without this crate;
+//!   `store` holds a text store's locks and their replay on another store.
 //!
-//! The backends link no serializer: the codec and its dependencies come only
-//! with those features.
+//! A release build compiles none of it, `native-capture` or not (ADR-0151
+//! §16): `flui-app` turns the feature on in every build, since Cargo cannot
+//! tie a feature to a profile, and the journal follows `debug_assertions`.
+//! The backends link no serializer.
 
 #[cfg(all(debug_assertions, feature = "native-capture"))]
 pub mod capture;
-#[cfg(any(feature = "native-capture", feature = "testing"))]
+#[cfg(any(all(debug_assertions, feature = "native-capture"), feature = "testing"))]
 pub mod codec;
 #[cfg(all(debug_assertions, feature = "native-capture"))]
 pub mod lines;
-#[cfg(any(feature = "native-capture", feature = "testing"))]
+#[cfg(any(all(debug_assertions, feature = "native-capture"), feature = "testing"))]
 mod order;
 #[cfg(all(debug_assertions, feature = "native-capture"))]
 pub mod recorder;
-#[cfg(any(feature = "native-capture", feature = "testing"))]
+#[cfg(any(all(debug_assertions, feature = "native-capture"), feature = "testing"))]
 pub mod store;
 #[cfg(all(debug_assertions, feature = "native-capture"))]
 pub(crate) mod store_capture;

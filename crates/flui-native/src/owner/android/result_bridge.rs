@@ -12,6 +12,13 @@
 //! android-activity keeps work it cannot run rather than dropping it.
 //! Answers come back through `FluiHost`'s queue, which the loop drains each
 //! turn and hands to [`ResultBridge::answer`].
+//!
+//! A provider's own work for the Java main thread (`Activity::on_main_thread`)
+//! takes the same road: posted through [`main_thread::post`], refused with
+//! `HandOffFailed` when the main thread has not taken it within
+//! `HAND_OFF_LIMIT` (it then never runs), with `ActivityEnded` once the
+//! Activity ends, and with `TooMuchPosted` past `MAX_POSTED_WORK`, an answer held
+//! until a place frees (`posted_work`).
 
 use std::cell::RefCell;
 use std::num::NonZeroU64;
@@ -21,8 +28,9 @@ use std::sync::{Arc, Weak};
 
 use android_activity::AndroidApp;
 use flui_platform::capability::{
-    ActivityBridge, CapabilityId, CompletionSource, DataRefused, IntentFrame, JniFrame, RequestKey,
-    ResultIntent, ResultMint, ResultRefused, ResultRequest, ResultToken,
+    ActivityBridge, CapabilityId, CompletionSource, DataRefused, IntentFrame, JniFrame,
+    MAX_POSTED_WORK, MainThreadRefused, PostedWork, RequestKey, ResultIntent, ResultMint,
+    ResultRefused, ResultRequest, ResultToken,
 };
 use jni::objects::{JObject, JString};
 use jni::refs::Global;
@@ -31,9 +39,12 @@ use parking_lot::Mutex;
 use web_time::Instant;
 
 use super::activity::with_activity;
-use super::activity_results::{ANSWER_NUMBERS, Answer, Carried, Issuer, ResultRouter, Routed};
+use super::activity_results::{
+    ANSWER_NUMBERS, Answer, Carried, HAND_OFF_LIMIT, Issuer, ResultRouter, Routed,
+};
 use super::java_host::host_class;
 use super::main_thread::{self, PostFailure};
+use super::posted_work::{Admitted, PostedQueue, refuse_unrun, take_and_run};
 use crate::PlatformError;
 use crate::owner::signal::OwnerSignal;
 
@@ -103,6 +114,9 @@ pub(crate) struct ResultBridge {
     app: AndroidApp,
     router: RefCell<ResultRouter<HeldIntent>>,
     hand_offs: Arc<HandOffs>,
+    /// Providers' work posted to the Java main thread and not yet taken
+    /// there, at most [`MAX_POSTED_WORK`].
+    posted: RefCell<PostedQueue<PostedWork>>,
 }
 
 impl std::fmt::Debug for ResultBridge {
@@ -122,6 +136,7 @@ impl ResultBridge {
                 reports: Mutex::new(Reports::default()),
                 signal,
             }),
+            posted: RefCell::new(PostedQueue::new(MAX_POSTED_WORK, HAND_OFF_LIMIT)),
         })
     }
 
@@ -130,10 +145,22 @@ impl ResultBridge {
         Rc::clone(self) as Rc<dyn ActivityBridge>
     }
 
-    /// When the oldest launch the Java main thread has not taken is due, for
-    /// the loop's poll.
+    /// When the oldest launch or provider's work the Java main thread has not
+    /// taken is due, for the loop's poll.
     pub(crate) fn next_deadline(&self) -> Option<Instant> {
-        self.router.borrow().next_deadline()
+        let work = self.posted.borrow().next_deadline();
+        match (self.router.borrow().next_deadline(), work) {
+            (Some(launch), Some(work)) => Some(launch.min(work)),
+            (launch, work) => launch.or(work),
+        }
+    }
+
+    /// Refuse `taken_back` as `refused`, with no borrow held: each refusal
+    /// settles its provider's completion.
+    fn refuse_all(taken_back: Vec<PostedWork>, refused: MainThreadRefused) {
+        for work in taken_back {
+            work.refuse(refused);
+        }
     }
 
     /// Apply what the Java main thread reported, end the launches past their
@@ -150,7 +177,16 @@ impl ResultBridge {
                 delivery.deliver();
             }
         }
-        let (overdue, delivery) = self.router.borrow_mut().overdue(Instant::now());
+        let now = Instant::now();
+        // Work the main thread never takes stays queued in android-activity:
+        // past the limit it is refused, and will not run.
+        let overdue_work = self.posted.borrow_mut().take_overdue(now);
+        Self::refuse_all(overdue_work, MainThreadRefused::HandOffFailed);
+        // Refusals held for want of room go out once a place is free, so the
+        // provider that posts again finds room.
+        let room = self.posted.borrow_mut().take_room_refusals();
+        Self::refuse_all(room, MainThreadRefused::TooMuchPosted);
+        let (overdue, delivery) = self.router.borrow_mut().overdue(now);
         delivery.deliver();
         for token in overdue {
             tracing::warn!(
@@ -212,6 +248,8 @@ impl ResultBridge {
     pub(crate) fn end(&self) {
         let (delivery, let_go) = self.router.borrow_mut().end();
         delivery.deliver();
+        let waiting = self.posted.borrow_mut().take_all();
+        Self::refuse_all(waiting, MainThreadRefused::ActivityEnded);
         if let_go > 0 {
             tracing::warn!(
                 target: "flui_native::android",
@@ -427,6 +465,47 @@ impl ActivityBridge for ResultBridge {
             Ok(true)
         })
         .unwrap_or(false)
+    }
+
+    fn post(&self, work: PostedWork) {
+        if self.router.borrow().has_ended() {
+            work.refuse(MainThreadRefused::ActivityEnded);
+            return;
+        }
+        let admitted = self.posted.borrow_mut().admit(work, Instant::now());
+        let slot = match admitted {
+            Admitted::Posted(slot) => slot,
+            // Refused once a place frees (`answer`), never at once.
+            Admitted::Deferred => return,
+        };
+        let (on_main, on_failure) = (Arc::clone(&slot), slot);
+        let app = self.app.clone();
+        main_thread::post(
+            &self.app,
+            "flui_platform::capability::Activity::on_main_thread",
+            move || {
+                take_and_run(&on_main, |run| {
+                    with_activity(&app, |env, activity| {
+                        run(frame(env, activity));
+                        if env.exception_check() {
+                            env.exception_clear();
+                        }
+                        Ok(())
+                    })
+                    .map_err(|error| error.to_string())
+                })
+            },
+            move |failure: PostFailure| {
+                tracing::warn!(
+                    target: "flui_native::android",
+                    ?failure,
+                    "a provider's work for the Java main thread did not finish"
+                );
+                // A work that panicked consumed itself, and its provider
+                // hears `ProviderDropped`.
+                refuse_unrun(&on_failure);
+            },
+        );
     }
 }
 

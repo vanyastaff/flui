@@ -1127,6 +1127,10 @@ impl flui_platform::capability::ActivityBridge for EndedActivity {
     fn lend(&self, _f: &mut dyn FnMut(flui_platform::capability::JniFrame)) -> bool {
         false
     }
+
+    fn post(&self, work: flui_platform::capability::PostedWork) {
+        work.refuse(flui_platform::capability::MainThreadRefused::ActivityEnded);
+    }
 }
 
 /// A provider sees the Activity the composition root offers through the

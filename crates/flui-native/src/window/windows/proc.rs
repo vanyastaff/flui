@@ -24,7 +24,7 @@ use std::{
     },
 };
 
-use flui_foundation::geometry::{Bounds, Point, Size};
+use flui_foundation::geometry::{Bounds, DevicePixelRatio, Point, Size};
 use flui_platform::{Brightness, SizeConstraints, WindowExtent, WindowId, WindowMode};
 use windows::Win32::{
     Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, SIZE, WPARAM},
@@ -407,7 +407,7 @@ pub(crate) struct WindowContext {
     pub in_app_command: std::cell::Cell<bool>,
     /// The client size, in device pixels, and the scale the last resize
     /// callback delivered.
-    pub last_resize: std::cell::Cell<Option<(Size<i32>, f64)>>,
+    pub last_resize: std::cell::Cell<Option<(Size<i32>, DevicePixelRatio)>>,
     /// Delivers wake deadlines while a modal loop runs for the window, and
     /// reaches the modal loops running on the thread.
     pub(crate) modal_pacing: Rc<ModalPacing>,
@@ -480,7 +480,7 @@ impl WindowContext {
     /// The window's client size is `device` pixels at its current scale:
     /// publish the snapshot, whose metrics read the client area.
     pub(crate) fn report_resize(&self, device: Size<i32>) {
-        self.last_resize.set(Some((device, self.scale.scale())));
+        self.last_resize.set(Some((device, self.scale.ratio())));
         self.delivery.publish_state();
     }
 
@@ -1126,8 +1126,8 @@ impl WindowProc {
                             ctx.update_window_state(|record| WindowRecord {
                                 bounds: Bounds {
                                     size: Size::new(
-                                        width as f64 / ctx.scale.scale(),
-                                        height as f64 / ctx.scale.scale(),
+                                        ctx.scale.ratio().to_logical(width as f64),
+                                        ctx.scale.ratio().to_logical(height as f64),
                                     ),
                                     ..record.bounds
                                 },
@@ -1296,8 +1296,8 @@ impl WindowProc {
                         ctx.update_window_state(|record| WindowRecord {
                             bounds: Bounds {
                                 origin: Point::new(
-                                    x as f64 / ctx.scale.scale(),
-                                    y as f64 / ctx.scale.scale(),
+                                    ctx.scale.ratio().to_logical(x as f64),
+                                    ctx.scale.ratio().to_logical(y as f64),
                                 ),
                                 ..record.bounds
                             },
@@ -1835,7 +1835,6 @@ pub(crate) fn sample_state(hwnd: HWND, record: WindowRecord, tracking: OwnerTrac
         visible,
         focused,
     } = record;
-    let scale = scale_factor.get();
     let mut window = RECT::default();
     let mut client = RECT::default();
     // SAFETY: both RECTs are stack locals and `&raw mut` gives each call a
@@ -1896,7 +1895,7 @@ pub(crate) fn sample_state(hwnd: HWND, record: WindowRecord, tracking: OwnerTrac
                             client.right.checked_sub(client.left)?,
                             client.bottom.checked_sub(client.top)?,
                         ),
-                        scale,
+                        scale_factor,
                     )
                     .ok()
                 })
@@ -2292,17 +2291,16 @@ impl WindowContext {
         };
         let old_dpi = self.scale.dpi();
         self.scale.rescale(dpi);
-        let new_scale = self.scale.scale();
-        tracing::info!(handle = ?hwnd, scale = new_scale, "window scale changed");
+        let new_scale = self.scale.ratio();
+        tracing::info!(handle = ?hwnd, scale = new_scale.get(), "window scale changed");
         // The display's scale changed, so its snapshot entry did.
         self.displays.invalidate();
         self.step(hwnd, WindowStep::Rescaled);
         // The scale and the rectangle change together: a subscriber sees the
         // window once, at its new size.
         let hold = self.hold_publishing();
-        let ratio = self.scale.ratio();
         self.update_window_state(|record| WindowRecord {
-            scale_factor: ratio,
+            scale_factor: new_scale,
             ..record
         });
         self.apply_dpi_rectangle(hwnd, suggested, old_dpi, dpi.get());
@@ -2329,8 +2327,8 @@ impl WindowContext {
                 self.update_window_state(|record| WindowRecord {
                     bounds: Bounds {
                         size: Size::new(
-                            f64::from(size.width) / new_scale,
-                            f64::from(size.height) / new_scale,
+                            new_scale.to_logical(f64::from(size.width)),
+                            new_scale.to_logical(f64::from(size.height)),
                         ),
                         ..record.bounds
                     },

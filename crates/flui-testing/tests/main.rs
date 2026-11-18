@@ -401,7 +401,7 @@ fn containment_and_isolation_matrix() {
             ("runtime_input_lifecycle::a_cancel_failure_precedes_a_pause_diagnostic_failure_and_recovers", runtime_input_lifecycle::a_cancel_failure_precedes_a_pause_diagnostic_failure_and_recovers as fn()),
             ("lifecycle_panic_containment::lifecycle_panic_containment_init_state_paints_exact_error_slot", lifecycle_panic_containment::lifecycle_panic_containment_init_state_paints_exact_error_slot as fn()),
             ("multi_presentation_clock::two_presentations_at_independent_scripted_cadences_tick_and_advance_independently", multi_presentation_clock::two_presentations_at_independent_scripted_cadences_tick_and_advance_independently as fn()),
-            ("window_scale_factor::a_scale_no_window_can_have_is_answered_and_changes_nothing", window_scale_factor::a_scale_no_window_can_have_is_answered_and_changes_nothing as fn()),
+            ("window_scale_factor::the_largest_ratio_a_screen_can_have_is_a_scale_the_window_takes", window_scale_factor::the_largest_ratio_a_screen_can_have_is_a_scale_the_window_takes as fn()),
             ("window_scale_factor::rescaling_a_secondary_window_updates_only_its_semantics_bounds",window_scale_factor::rescaling_a_secondary_window_updates_only_its_semantics_bounds as fn()),
             ("window_scale_factor::rescaling_the_primary_window_updates_only_its_semantics_bounds", window_scale_factor::rescaling_the_primary_window_updates_only_its_semantics_bounds as fn()),
             ("window_scale_factor::a_secondary_window_publishes_its_own_media_query", window_scale_factor::a_secondary_window_publishes_its_own_media_query as fn()),

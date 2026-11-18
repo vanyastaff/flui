@@ -60,6 +60,10 @@ pub(crate) mod main_thread;
 pub(crate) mod native_call;
 pub(crate) mod ndk;
 pub(crate) mod poll;
+// The queue of providers' work for the main thread, a model the host drives;
+// its tests run on every host.
+#[cfg(any(target_os = "android", test))]
+pub(crate) mod posted_work;
 #[cfg(target_os = "android")]
 pub(crate) mod result_bridge;
 #[cfg(any(target_os = "android", all(test, not(target_arch = "wasm32"))))]
@@ -160,7 +164,7 @@ mod hooks {
             &self,
             app: &AndroidApp,
             event: &android_activity::input::MotionEvent<'_>,
-            scale: f64,
+            scale: flui_foundation::geometry::DevicePixelRatio,
         ) -> Vec<PlatformInput>;
 
         /// Whether `event` is a hover of TalkBack's explore by touch: its

@@ -5,7 +5,7 @@ use std::cmp::Ordering;
 
 use flui_foundation::geometry::Rect;
 
-use crate::properties::TextDirection;
+use flui_foundation::TextDirection;
 
 /// The order a reader takes `boxes` in, as indices into `boxes`: line by line
 /// from the top, and along each line in `direction`.
@@ -28,7 +28,8 @@ use crate::properties::TextDirection;
 ///
 /// ```rust
 /// use flui_foundation::geometry::Rect;
-/// use flui_semantics::{TextDirection, reading_order};
+/// use flui_foundation::TextDirection;
+/// use flui_semantics::reading_order;
 ///
 /// let right = Rect::from_ltwh(100.0, 0.0, 50.0, 20.0);
 /// let left = Rect::from_ltwh(0.0, 2.0, 50.0, 16.0);

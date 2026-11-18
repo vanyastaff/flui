@@ -4,7 +4,7 @@
 //! leaves.
 //!
 //! The cursor is the platform's, not the application's: it is reported by an
-//! adapter whose [`AssistiveFocusSupport`](crate::AssistiveFocusSupport) is
+//! adapter whose [`AssistiveFocusSupport`](crate::platform::AssistiveFocusSupport) is
 //! `Reported`, never published. Input focus is a separate thing the
 //! application moves.
 

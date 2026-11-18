@@ -35,10 +35,11 @@ use std::sync::Arc;
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use flui_foundation::RenderId;
+use flui_foundation::TextDirection;
 use flui_foundation::geometry::Rect;
 use flui_semantics::{
     DocumentPosition, DocumentSelection, SemanticsAnchor, SemanticsIdentitySource, SemanticsNode,
-    SemanticsOwner, SemanticsRole, TextContent, TextDirection, TextRun, TextRunParts,
+    SemanticsOwner, SemanticsRole, TextContent, TextRun, TextRunParts,
 };
 
 /// A render-backed node — production assembly always attaches one, and it is

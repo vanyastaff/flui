@@ -436,7 +436,12 @@ fn sample(enumeration: &str, variant: &str) -> Option<Vec<InputRecord>> {
             InputOutcome::Queued,
         )),
         ("WindowObservation", "Metrics") => one(window(WindowObservation::Metrics(
-            WindowMetrics::try_new(DeviceSize::new(1401, 1050), 1.75).expect("valid metrics"),
+            WindowMetrics::try_new(
+                DeviceSize::new(1401, 1050),
+                flui_foundation::geometry::DevicePixelRatio::try_new(1.75)
+                    .expect("a ratio in range"),
+            )
+            .expect("valid metrics"),
         ))),
         ("WindowObservation", "Focus") => one(window(WindowObservation::Focus(false))),
         ("WindowObservation", "Visibility") => one(window(WindowObservation::Visibility(true))),

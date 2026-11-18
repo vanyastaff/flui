@@ -12,12 +12,13 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
+use flui_protocol::native_recording::{MAX_LINE_BYTES, MAX_RECORDING_BYTES, MAX_ROWS};
 use flui_protocol::session::ClientRole;
 use flui_protocol::{record::RecordLayer, record::RecordParams, tree::WindowId};
 
 use crate::agent::Credentials;
 use crate::agent::client::{Connection, Failure};
-use crate::agent::record::native::{NativeFiles, WrittenStream};
+use crate::agent::record::native::{FullBound, NativeFiles, WrittenStream};
 use crate::agent::record::{Ending, RecordFailure, Recorded, record};
 use crate::error::{CliError, CliResult};
 use crate::ui;
@@ -156,7 +157,13 @@ fn report_native(dir: &str, streams: &[WrittenStream]) -> CliResult<()> {
         .count();
     ui::success(format!("Wrote {files} native streams to {dir}"))?;
     for stream in streams {
-        if stream.file.is_none() {
+        if stream.header_too_long {
+            ui::warning(format!(
+                "native stream {}'s header is longer than the {MAX_LINE_BYTES} bytes a line may \
+                 be, so its {} rows have no file",
+                stream.stream, stream.lost_rows
+            ))?;
+        } else if stream.file.is_none() {
             ui::warning(format!(
                 "native stream {} sent no header, so its {} rows have no file",
                 stream.stream, stream.lost_rows
@@ -165,6 +172,17 @@ fn report_native(dir: &str, streams: &[WrittenStream]) -> CliResult<()> {
             ui::warning(format!(
                 "native stream {} lost {} rows, so a replay refuses it at its gap",
                 stream.stream, stream.lost_rows
+            ))?;
+        }
+        if let Some(cut) = stream.cut {
+            let bound = match cut.bound {
+                FullBound::Rows => format!("{MAX_ROWS} rows"),
+                FullBound::Bytes => format!("{MAX_RECORDING_BYTES} bytes"),
+            };
+            ui::warning(format!(
+                "native stream {} reached the {bound} a native recording holds and ends at a \
+                 cut; {} rows from there were not written, and a replay stops at the cut",
+                stream.stream, cut.dropped
             ))?;
         }
     }
