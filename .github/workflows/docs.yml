@@ -98,7 +98,7 @@ jobs:
         run: "cargo test -p flui --locked --lib book::"
 
       - name: The book's samples
-        run: "cargo test -p flui --locked --features testing --doc book::"
+        run: "cargo test -p flui --locked --features testing,material,cupertino --doc book::"
 
   deploy:
     name: deploy

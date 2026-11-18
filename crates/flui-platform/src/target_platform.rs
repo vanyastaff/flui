@@ -45,7 +45,9 @@ pub enum TargetPlatform {
 }
 
 impl TargetPlatform {
-    /// Detects the host platform at compile time via `cfg!` evaluation.
+    /// The platform this code was compiled for (`cfg!(target_os)`): the
+    /// target, not the build machine, and `Unknown` on `wasm32`. A widget
+    /// follows `PlatformConvention::of` instead.
     #[inline]
     pub const fn current() -> Self {
         #[cfg(target_os = "android")]
