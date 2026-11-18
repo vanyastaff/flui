@@ -3,7 +3,7 @@
 use super::Focus;
 use crate::localization::Directionality;
 use flui_foundation::TextDirection;
-use flui_interaction::{
+use flui_interaction::focus::{
     FocusNode, FocusNodeRegistration, FocusTraversalPolicy, ReadingOrderPolicy,
     TraversalEdgeBehavior,
 };

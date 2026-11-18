@@ -50,7 +50,7 @@ pub trait GestureRecognizer: GestureArenaMember {
     fn pointer_frame_end(&self) {}
 
     /// Whether a touchpad pan feeds this recognizer (ADR-0251 §2): a
-    /// drag-family recognizer that admits a [`Trackpad`](crate::PointerKind::Trackpad)
+    /// drag-family recognizer that admits a [`Trackpad`](flui_platform::pointer::PointerKind::Trackpad)
     /// contact. A listener whose recognizers feed declares so on its pointer
     /// target; the recognizer a scroll view builds for its own touch drag
     /// excludes trackpad contacts and does not.

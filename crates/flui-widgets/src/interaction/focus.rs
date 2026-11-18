@@ -290,10 +290,10 @@ impl Focus {
 
     /// Key handler invoked during the leafâ†’root dispatch walk while this
     /// node â€” or a descendant â€” holds the primary focus. Return
-    /// [`Handled`](flui_interaction::KeyEventResult::Handled) to consume the
-    /// event, [`Ignored`](flui_interaction::KeyEventResult::Ignored) to let it
+    /// [`Handled`](flui_interaction::focus::KeyEventResult::Handled) to consume the
+    /// event, [`Ignored`](flui_interaction::focus::KeyEventResult::Ignored) to let it
     /// bubble to the enclosing `Focus`, or
-    /// [`SkipRemainingHandlers`](flui_interaction::KeyEventResult::SkipRemainingHandlers)
+    /// [`SkipRemainingHandlers`](flui_interaction::focus::KeyEventResult::SkipRemainingHandlers)
     /// to stop the bubbling without consuming (ADR-0023).
     ///
     /// The handler runs after routing, so it receives the dispatch's
@@ -717,7 +717,7 @@ impl StatefulView for FocusScope {
 
 /// A scope node a [`FocusScope`] creates for itself: once the widget lets it
 /// go, a late request on it answers
-/// [`Stale`](flui_interaction::FocusRequestOutcome::Stale).
+/// [`Stale`](flui_interaction::focus::FocusRequestOutcome::Stale).
 fn widget_owned_scope() -> Rc<FocusScopeNode> {
     let scope = FocusScopeNode::with_debug_label("FocusScope");
     flui_interaction::__runtime::mark_widget_owned(scope.as_focus_node());

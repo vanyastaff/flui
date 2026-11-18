@@ -16,7 +16,9 @@ use flui_interaction::pointer::{
     MouseTracker, MouseTrackerAnnotation, PointerMotionKind,
 };
 use flui_interaction::{
-    CursorIcon, DeviceId, EventPropagation, HitTestEntry, HitTestResult, PointerId,
+    events::CursorIcon,
+    ids::{DeviceId, PointerId},
+    pointer::{EventPropagation, HitTestEntry, HitTestResult},
 };
 use flui_platform::pointer::{PanZoomEvent, PanZoomPhase, PanZoomTransform, PenTool};
 
@@ -146,7 +148,7 @@ fn shared_region_exits_once_per_device() {
 /// Two surfaces whose trees reuse one render id hold separate regions: each
 /// device's exit reaches the region it entered on its own surface.
 fn surfaces_keep_their_regions_apart_under_one_render_id() {
-    use flui_interaction::{GestureBinding, InputSurface};
+    use flui_interaction::{binding::GestureBinding, ids::InputSurface};
     let lane = InteractionLane::try_new().expect("lane");
     let handle = lane.dispatch_handle();
     let binding = GestureBinding::new();
@@ -203,7 +205,7 @@ enum Departure {
 /// is not re-entered by the next ambient refresh, and releases the regions
 /// only it hovered.
 fn departure_exits_once_and_releases_the_region(departure: Departure) {
-    use flui_interaction::GestureBinding;
+    use flui_interaction::binding::GestureBinding;
     use flui_platform::{
         EventTime,
         pointer::{PointerDeviceChange, PointerSignal},

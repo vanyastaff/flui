@@ -13,7 +13,7 @@
 
 use std::collections::VecDeque;
 
-use flui_interaction::PointerEventExt;
+use flui_interaction::events::PointerEventExt;
 use flui_platform::keyboard::{KeyEvent, KeyState};
 use flui_platform::pointer::{ButtonChange, PointerEvent, PointerKind};
 use flui_platform::{EventTime, ImeEvent, PlatformInput};

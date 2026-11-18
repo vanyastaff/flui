@@ -540,7 +540,7 @@ struct ComposingField {
 
 struct ComposingFieldState {
     field: ComposingField,
-    token: Option<flui_interaction::ClientToken>,
+    token: Option<flui_interaction::text_input::ClientToken>,
     subscription: Option<flui_view::LifecycleSubscription>,
     notices: Option<flui_view::HostNoticeSubscription>,
 }
@@ -564,7 +564,7 @@ impl flui_view::ViewState<ComposingField> for ComposingFieldState {
         self.token = Some(
             ctx.text_input_handle()
                 .expect("the window takes text input")
-                .attach(flui_interaction::TextInputClient::new(store))
+                .attach(flui_interaction::text_input::TextInputClient::new(store))
                 .expect("the field attaches"),
         );
         let (store, seen) = (Rc::clone(&self.field.store), Rc::clone(&self.field.seen));

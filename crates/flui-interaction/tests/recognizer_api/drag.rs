@@ -7,7 +7,8 @@ use flui_interaction::gesture::GestureContest;
 use flui_interaction::gesture::{GestureArena, GestureArenaMember};
 use flui_interaction::pointer::PointerDispatch;
 use flui_interaction::{
-    DragAxis, DragGestureRecognizer, GestureEndReason, GestureRecognizer, PointerId,
+    gesture::{DragAxis, DragGestureRecognizer, GestureEndReason, GestureRecognizer},
+    ids::PointerId,
 };
 use std::{
     cell::{Cell, RefCell},
@@ -55,7 +56,7 @@ fn up_before_acceptance_rejects_drag_and_preserves_the_competitor() {
 
 fn cancelling_drag_from_start_drops_the_stale_update_and_recovers() {
     let arena =
-        GestureArena::binding_driven(std::sync::Arc::new(flui_interaction::ManualClock::new()));
+        GestureArena::binding_driven(std::sync::Arc::new(flui_foundation::ManualClock::new()));
     let pointer = PointerId::new(std::num::NonZeroU64::new(2).expect("nonzero pointer"));
     let slot: Rc<RefCell<std::rc::Weak<DragGestureRecognizer>>> = Rc::default();
     let callback_slot = Rc::clone(&slot);
@@ -189,7 +190,7 @@ fn drag_lifecycle_contracts() {
 fn a_successor_starts_the_drag_only_past_its_own_slop() {
     use flui_interaction::gesture::DragPointerStrategy;
     let arena =
-        GestureArena::binding_driven(std::sync::Arc::new(flui_interaction::ManualClock::new()));
+        GestureArena::binding_driven(std::sync::Arc::new(flui_foundation::ManualClock::new()));
     let starts = Rc::new(Cell::new(0));
     let s = starts.clone();
     let drag = DragGestureRecognizer::builder(arena.clone(), DragAxis::Horizontal)
@@ -242,9 +243,9 @@ fn axial_fling_limits_read_the_drag_axis() {
         |arena: GestureArena| DragGestureRecognizer::builder(arena, DragAxis::Horizontal);
     let railed = |arena: GestureArena| {
         DragGestureRecognizer::builder(arena, DragAxis::Free)
-            .axis_lock(flui_interaction::AxisLock::Rails)
+            .axis_lock(flui_interaction::gesture::AxisLock::Rails)
     };
-    type Builder = fn(GestureArena) -> flui_interaction::DragGestureRecognizerBuilder;
+    type Builder = fn(GestureArena) -> flui_interaction::gesture::DragGestureRecognizerBuilder;
     // The drag, its local release velocity in px/s, the node's local-to-root
     // transform, and the local and root flings the drag reports for it.
     type Row = (
@@ -311,13 +312,13 @@ fn axial_fling_limits_read_the_drag_axis() {
 
 /// One row of [`axial_fling_limits_read_the_drag_axis`].
 fn fling_row(
-    builder: fn(GestureArena) -> flui_interaction::DragGestureRecognizerBuilder,
+    builder: fn(GestureArena) -> flui_interaction::gesture::DragGestureRecognizerBuilder,
     (vx, vy): (f64, f64),
     to_root: fn(f64, f64) -> (f64, f64),
     fling: Option<((f64, f64), (f64, f64))>,
 ) {
     use flui_foundation::geometry::Point;
-    use flui_interaction::Velocity;
+    use flui_interaction::gesture::Velocity;
     use flui_platform::{
         EventTime,
         pointer::{
@@ -327,7 +328,7 @@ fn fling_row(
     };
     {
         let arena =
-            GestureArena::binding_driven(std::sync::Arc::new(flui_interaction::ManualClock::new()));
+            GestureArena::binding_driven(std::sync::Arc::new(flui_foundation::ManualClock::new()));
         let ends = Rc::new(RefCell::new(Vec::new()));
         let e = ends.clone();
         let drag = builder(arena.clone())
@@ -419,7 +420,7 @@ fn continuation_cancel_commits_before_reentry_and_retains_the_first_failure() {
     use flui_interaction::gesture::DragPointerStrategy;
     for callback_panics in [false, true] {
         let arena =
-            GestureArena::binding_driven(std::sync::Arc::new(flui_interaction::ManualClock::new()));
+            GestureArena::binding_driven(std::sync::Arc::new(flui_foundation::ManualClock::new()));
         let starts = Rc::new(Cell::new(0));
         let ends = Rc::new(Cell::new(0));
         let slot: Rc<RefCell<std::rc::Weak<DragGestureRecognizer>>> = Rc::default();
@@ -515,7 +516,7 @@ fn continuation_does_not_take_a_rejected_or_other_device_contact() {
     use flui_platform::pointer::DeviceId;
     for secondary_device in [Some(1_u64), Some(2), None] {
         let arena =
-            GestureArena::binding_driven(std::sync::Arc::new(flui_interaction::ManualClock::new()));
+            GestureArena::binding_driven(std::sync::Arc::new(flui_foundation::ManualClock::new()));
         let ends = Rc::new(Cell::new(0));
         let e = ends.clone();
         let drag = DragGestureRecognizer::builder(arena.clone(), DragAxis::Horizontal)
@@ -565,7 +566,7 @@ fn continuation_does_not_take_a_rejected_or_other_device_contact() {
         assert!(arena.is_empty());
     }
     let arena =
-        GestureArena::binding_driven(std::sync::Arc::new(flui_interaction::ManualClock::new()));
+        GestureArena::binding_driven(std::sync::Arc::new(flui_foundation::ManualClock::new()));
     let ends = Rc::new(Cell::new(0));
     let e = ends.clone();
     let drag = DragGestureRecognizer::builder(arena.clone(), DragAxis::Horizontal)
@@ -635,7 +636,7 @@ fn remaining_touches_continue_in_admission_order_without_a_jump() {
         DragPointerStrategy::ContinueWithRemaining,
     ] {
         let arena =
-            GestureArena::binding_driven(std::sync::Arc::new(flui_interaction::ManualClock::new()));
+            GestureArena::binding_driven(std::sync::Arc::new(flui_foundation::ManualClock::new()));
         let starts = Rc::new(Cell::new(0));
         let updates = Rc::new(RefCell::new(Vec::new()));
         let ends = Rc::new(RefCell::new(Vec::new()));

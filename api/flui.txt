@@ -30244,7 +30244,7 @@ impl Clone for flui_interaction::pointer::mouse_tracker::MouseTracker
 impl Default for flui_interaction::pointer::mouse_tracker::MouseTracker
 impl core::fmt::Debug for flui_interaction::pointer::mouse_tracker::MouseTracker
 pub fn flui_interaction::pointer::mouse_tracker::MouseTracker::clear_cursor_change_callback(&self)
-pub fn flui_interaction::pointer::mouse_tracker::MouseTracker::device_active_regions(&self, device_id: flui::interaction::DeviceId) -> std::collections::hash::set::HashSet<flui::foundation::RenderId>
+pub fn flui_interaction::pointer::mouse_tracker::MouseTracker::device_active_regions(&self, device_id: flui::interaction::DeviceId) -> Vec<flui::foundation::RenderId>
 pub fn flui_interaction::pointer::mouse_tracker::MouseTracker::device_cursor(&self, device_id: flui::interaction::DeviceId) -> cursor_icon::CursorIcon
 pub fn flui_interaction::pointer::mouse_tracker::MouseTracker::device_position(&self, device_id: flui::interaction::DeviceId) -> Option<flui::geometry::Offset<f64>>
 pub fn flui_interaction::pointer::mouse_tracker::MouseTracker::dispatch_hover(&self, event: &flui::interaction::PointerEvent, hit_test_result: &flui_interaction::pointer::hit_test::HitTestResult) -> flui_foundation::panic::FirstPanic

@@ -6,7 +6,10 @@ use std::{
 };
 
 use flui_foundation::{RenderId, geometry::Point};
-use flui_interaction::{GestureBinding, HitTestEntry, HitTestResult, InteractionLane};
+use flui_interaction::{
+    binding::GestureBinding,
+    pointer::{HitTestEntry, HitTestResult, InteractionLane},
+};
 use flui_platform::{
     EventTime,
     pointer::{

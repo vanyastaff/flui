@@ -494,6 +494,8 @@ mod tests {
             "uiMode",
             "fontScale",
             "fontWeightAdjustment",
+            "locale",
+            "layoutDirection",
             "keyboard",
             "keyboardHidden",
             "navigation",

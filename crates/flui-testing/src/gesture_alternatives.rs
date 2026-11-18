@@ -46,7 +46,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use flui_foundation::geometry::Offset;
-use flui_interaction::GestureSettings;
+use flui_interaction::gesture::GestureSettings;
 use flui_platform::keyboard::{Code, KeyEvent, KeyPress, KeyState, NamedKey};
 use flui_platform::pointer::PointerButton;
 use flui_platform::{

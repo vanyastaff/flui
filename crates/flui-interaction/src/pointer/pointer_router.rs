@@ -12,7 +12,7 @@
 //! # Example
 //!
 //! ```rust
-//! use flui_interaction::{PointerRouter, PointerId, PointerRouteHandler};
+//! use flui_interaction::{pointer::{PointerRouter, PointerRouteHandler}, ids::PointerId};
 //! use flui_platform::{EventTime, pointer::{CancelReason, PointerCancel,
 //!     PointerEvent, PointerSource, PointerKind}};
 //! use std::{cell::Cell, rc::Rc};
@@ -44,7 +44,8 @@
 //! ```
 
 use crate::containment::keep_first;
-use std::{cell::RefCell, collections::HashMap, rc::Rc};
+use rustc_hash::FxHashMap;
+use std::{cell::RefCell, rc::Rc};
 
 use smallvec::SmallVec;
 
@@ -94,7 +95,7 @@ pub struct PointerRouter {
     closed: std::cell::Cell<bool>,
     close_mode: crate::close::CloseTombstone,
     /// Routes per pointer ID
-    routes: RefCell<HashMap<PointerId, Vec<RouteRegistration>>>,
+    routes: RefCell<FxHashMap<PointerId, Vec<RouteRegistration>>>,
 
     /// Global handlers (receive all events)
     global_handlers: RefCell<Vec<RouteRegistration>>,
@@ -145,7 +146,7 @@ impl PointerRouter {
         Self {
             closed: std::cell::Cell::new(false),
             close_mode: crate::close::CloseTombstone::default(),
-            routes: RefCell::new(HashMap::new()),
+            routes: RefCell::new(FxHashMap::default()),
             global_handlers: RefCell::new(Vec::new()),
             withdrawn: RefCell::new(Vec::new()),
         }
@@ -312,7 +313,7 @@ impl PointerRouter {
     ///
     /// Dispatch order is **per-pointer handlers first, then global handlers**.
     /// Per-pointer handlers run in their registration order (insertion order in the
-    /// HashMap entry's Vec); global handlers fire afterward.
+    /// map entry's Vec); global handlers fire afterward.
     pub fn route(&self, event: &PointerEvent) {
         if self.closed.get() {
             return;
@@ -326,7 +327,7 @@ impl PointerRouter {
         if self.closed.get() {
             return FirstPanic::new();
         }
-        let pointer = crate::PointerEventExt::pointer_id(event);
+        let pointer = crate::events::PointerEventExt::pointer_id(event);
 
         // Snapshot per-pointer handlers (clone the `Rc`s) so the borrow is
         // released before dispatch — a handler may re-enter the router. A
