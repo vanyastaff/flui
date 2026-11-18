@@ -446,7 +446,7 @@ pub(crate) fn vertical_dismissal_release_uses_its_captured_fling_profile() {
 fn dismissal_release_uses_profile(direction: DismissDirection) {
     for (min, max) in [(50.0, 100.0), (5000.0, 5000.0)] {
         let profile = |min, max| {
-            flui_interaction::GestureSettings::default()
+            flui_interaction::gesture::GestureSettings::default()
                 .try_with_fling_velocity(min, max)
                 .expect("valid fling range")
         };

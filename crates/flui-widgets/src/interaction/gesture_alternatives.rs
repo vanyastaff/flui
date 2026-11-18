@@ -27,11 +27,16 @@ use flui_foundation::ChangeNotifier;
 use flui_foundation::geometry::Offset;
 use flui_interaction::gesture::SequencedBranch;
 use flui_interaction::{
-    FocusManager, GestureArena, GestureRecognizer, GestureSettingsProvider,
-    LongPressGestureRecognizer, LongPressMoveUpdateDetails, LongPressStartDetails, PointerEvent,
-    PointerEventExt, PointerId, PointerKindSet, TapGestureRecognizer, TapUpDetails,
+    events::{PointerEvent, PointerEventExt},
+    focus::FocusManager,
+    gesture::{
+        GestureArena, GestureRecognizer, GestureSettingsProvider, LongPressGestureRecognizer,
+        LongPressMoveUpdateDetails, LongPressStartDetails, TapGestureRecognizer, TapUpDetails,
+    },
+    ids::PointerId,
 };
 use flui_platform::TargetPlatform;
+use flui_platform::input_capabilities::PointerKindSet;
 use flui_view::environment::{GestureArenaScope, GesturePolicy, PlatformConvention};
 use flui_view::prelude::*;
 use flui_view::{InheritedView, RebuildHandle, RebuildReason, WriterSource, impl_inherited_view};
@@ -1301,7 +1306,7 @@ impl GestureAlternatives {
         // A control is drawn at least as large as the minimum target of the
         // coarsest pointer, so no edge or neighbour can clip its hit area.
         let min_target = GestureArenaScope::settings_or_default_of(ctx)
-            .min_target_for(flui_interaction::PointerKind::Touch);
+            .min_target_for(flui_platform::pointer::PointerKind::Touch);
         let mut semantics = Semantics::new().container(true);
         let mut shortcuts_bindings = Vec::new();
         for command in self.commands() {

@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use flui_foundation::geometry::Bounds;
 use flui_interaction::testing::InMemoryTextStore;
-use flui_interaction::{
+use flui_interaction::text_input::{
     ClientToken, TextInputBackend, TextInputClient, TextInputError, TextInputOwner,
 };
 use flui_platform::PlatformTextInput;

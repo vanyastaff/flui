@@ -33,7 +33,9 @@ use std::rc::Rc;
 
 use flui_foundation::ChangeNotifier;
 use flui_foundation::geometry::{Axis, Offset};
-use flui_interaction::{InteractionDispatchError, LocalPayloadTarget, resolve_local_payload};
+use flui_interaction::pointer::{
+    InteractionDispatchError, LocalPayloadTarget, resolve_local_payload,
+};
 use flui_objects::{
     GatedCustomAction, RenderExcludeSemantics, RenderIndexedSemantics, RenderMergeSemantics,
     RenderSemanticsAnnotations, RenderSliverSemanticsAnnotations, SemanticsActionRoute,

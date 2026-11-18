@@ -5,7 +5,7 @@
 //! misses has no `Serialize` impl, so this file stops compiling.
 
 use flui_foundation::geometry::{Offset, Rect};
-use flui_interaction::Velocity;
+use flui_interaction::gesture::Velocity;
 use flui_objects::MainAxisSize;
 use flui_painting::styling::Color;
 use flui_platform::Locale;

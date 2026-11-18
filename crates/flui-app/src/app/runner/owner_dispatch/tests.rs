@@ -10,9 +10,9 @@ use std::{
 };
 
 use flui_foundation::geometry::Offset;
-#[cfg(not(target_os = "ios"))]
-use flui_interaction::HitTestResult;
 use flui_interaction::events::{PointerKind, make_down_event};
+#[cfg(not(target_os = "ios"))]
+use flui_interaction::pointer::HitTestResult;
 use flui_painting::TextSizing;
 use flui_platform::{PlatformInput, PlatformWindow};
 
@@ -788,7 +788,7 @@ fn system_key_default_follows_the_ui_runtimes_decision() {
             ui_runtime.focus_manager().add_global_key_handler(Rc::new(
                 move |_: &flui_interaction::events::KeyEvent| {
                     delivered_in_handler.set(delivered_in_handler.get() + 1);
-                    flui_interaction::KeyEventResult::Ignored
+                    flui_interaction::focus::KeyEventResult::Ignored
                 },
             ));
             let native = turn_window
@@ -819,9 +819,9 @@ fn system_key_default_follows_the_ui_runtimes_decision() {
             ui_runtime.focus_manager().add_global_key_handler(Rc::new(
                 |event: &flui_interaction::events::KeyEvent| {
                     if event.code == Code::F4 {
-                        flui_interaction::KeyEventResult::Handled
+                        flui_interaction::focus::KeyEventResult::Handled
                     } else {
-                        flui_interaction::KeyEventResult::Ignored
+                        flui_interaction::focus::KeyEventResult::Ignored
                     }
                 },
             ));
@@ -1002,7 +1002,7 @@ fn native_keyboard_cannot_overtake_queued_window_changes_and_keys() {
                 } else {
                     "new key"
                 });
-                flui_interaction::KeyEventResult::Ignored
+                flui_interaction::focus::KeyEventResult::Ignored
             }));
         let mut installation = prepare_replacement_ui_runtime(runtime, Rc::clone(&window));
         let dispatcher = installation.dispatcher();

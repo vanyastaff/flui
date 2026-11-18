@@ -1,9 +1,9 @@
 //! Admitted contacts: the route each Down resolved, its capture and resampler,
 //! and the refusals and teardown barriers around them.
 
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::{
     cell::{Cell, RefCell},
-    collections::{HashMap, HashSet},
     rc::Rc,
 };
 
@@ -151,7 +151,7 @@ impl RefusedContacts {
 
 /// Re-entrancy barrier for abnormal pointer-sequence teardown.
 pub(super) struct PointerTeardownGuard<'a> {
-    active: &'a RefCell<HashSet<PointerId>>,
+    active: &'a RefCell<FxHashSet<PointerId>>,
     pointer: PointerId,
 }
 
@@ -183,11 +183,11 @@ impl Drop for AllPointerTeardownGuard<'_> {
 /// of distinct refused identities cannot grow owner state.
 #[derive(Default)]
 pub(super) struct PointerSequences {
-    routes: RefCell<HashMap<PointerId, CachedPointerRoute>>,
+    routes: RefCell<FxHashMap<PointerId, CachedPointerRoute>>,
     refused: RefCell<RefusedContacts>,
     /// Prevent route/member destructors from starting a replacement pointer
     /// transaction while abnormal teardown is still draining its snapshot.
-    retiring: RefCell<HashSet<PointerId>>,
+    retiring: RefCell<FxHashSet<PointerId>>,
     retiring_all: Cell<bool>,
 }
 

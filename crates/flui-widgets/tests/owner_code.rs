@@ -20,7 +20,7 @@ use std::sync::Arc;
 use flui_foundation::geometry::Bounds;
 use flui_interaction::focus::FocusNode;
 use flui_interaction::testing::InMemoryTextStore;
-use flui_interaction::{TextInputBackend, TextInputClient, TextInputOwner};
+use flui_interaction::text_input::{TextInputBackend, TextInputClient, TextInputOwner};
 use flui_platform::text_store::{
     CommitGate, CompositionEnd, LockGrant, LockOutcome, LockTiming, TextChange, TextStore,
     TextStoreError, TextStoreHost, TextStoreHostError, TextStoreObserver, TextStoreStatus,
@@ -479,7 +479,7 @@ fn close_with_a_parked_failure() {
             .handle()
             .attach(TextInputClient::new(InMemoryTextStore::new("")))
             .err(),
-        Some(flui_interaction::TextInputError::Closed),
+        Some(flui_interaction::text_input::TextInputError::Closed),
         "the close completed"
     );
     the_owner_keeps_working(&self::owner());
@@ -1031,7 +1031,7 @@ fn host_closing_then_panicking_released_last() {
             .handle()
             .attach(TextInputClient::new(InMemoryTextStore::new("")))
             .err(),
-        Some(flui_interaction::TextInputError::Closed),
+        Some(flui_interaction::text_input::TextInputError::Closed),
         "the next operation sees the close"
     );
     assert_eq!(
@@ -1098,7 +1098,7 @@ fn host_close_completion_whose_unwind_parks_a_failure() {
             .handle()
             .attach(TextInputClient::new(InMemoryTextStore::new("")))
             .err(),
-        Some(flui_interaction::TextInputError::Closed),
+        Some(flui_interaction::text_input::TextInputError::Closed),
         "the close completed"
     );
     assert_eq!(
@@ -2464,7 +2464,7 @@ fn attach_replacing_a_client_whose_destruction_parks() {
     );
     assert_eq!(
         owner.handle().detach(token),
-        Ok(flui_interaction::DetachOutcome::Detached),
+        Ok(flui_interaction::text_input::DetachOutcome::Detached),
         "a blur detaches the replacement with its token"
     );
     assert!(!owner.is_attached(token));
@@ -2989,7 +2989,7 @@ fn attach_whose_platform_enable_panics() {
     );
     assert_eq!(
         owner.handle().detach(token),
-        Ok(flui_interaction::DetachOutcome::Detached),
+        Ok(flui_interaction::text_input::DetachOutcome::Detached),
         "the token detaches the client"
     );
     the_owner_keeps_working(&owner);
@@ -3066,7 +3066,7 @@ fn attach_whose_outgoing_commit_panics() {
     );
     assert_eq!(
         owner.handle().detach(second),
-        Ok(flui_interaction::DetachOutcome::Detached)
+        Ok(flui_interaction::text_input::DetachOutcome::Detached)
     );
     the_owner_keeps_working(&owner);
 }
@@ -3101,7 +3101,7 @@ fn attach_whose_outgoing_host_completion_panics() {
     );
     assert_eq!(
         owner.handle().detach(second),
-        Ok(flui_interaction::DetachOutcome::Detached)
+        Ok(flui_interaction::text_input::DetachOutcome::Detached)
     );
     the_pull_owner_keeps_working(&owner, &log);
 }
@@ -3136,7 +3136,7 @@ fn attach_replacing_a_client_whose_platform_enable_panicked() {
     );
     assert_eq!(
         owner.handle().detach(second),
-        Ok(flui_interaction::DetachOutcome::Detached)
+        Ok(flui_interaction::text_input::DetachOutcome::Detached)
     );
     the_owner_keeps_working(&owner);
     assert_eq!(
@@ -4030,7 +4030,7 @@ fn stale_detach_whose_diagnostic_closes_the_owner_and_panics() {
         .expect("attach");
     assert_eq!(
         owner.handle().detach(token),
-        Ok(flui_interaction::DetachOutcome::Detached)
+        Ok(flui_interaction::text_input::DetachOutcome::Detached)
     );
     CLOSING_OWNER.with(|slot| *slot.borrow_mut() = Some(Rc::downgrade(&owner)));
     assert_eq!(
@@ -4049,7 +4049,7 @@ fn stale_detach_whose_diagnostic_closes_the_owner_and_panics() {
             .handle()
             .attach(TextInputClient::new(InMemoryTextStore::new("")))
             .err(),
-        Some(flui_interaction::TextInputError::Closed),
+        Some(flui_interaction::text_input::TextInputError::Closed),
         "the diagnostic's close completed"
     );
     the_owner_keeps_working(&self::owner());

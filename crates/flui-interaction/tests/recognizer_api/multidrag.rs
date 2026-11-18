@@ -11,7 +11,9 @@ use flui_interaction::gesture::{
 };
 use flui_interaction::pointer::PointerDispatch;
 use flui_interaction::{
-    GestureRecognizer, HitTestEntry, HitTestResult, InteractionLane, PointerId, RenderId,
+    gesture::GestureRecognizer,
+    ids::PointerId,
+    pointer::{HitTestEntry, HitTestResult, InteractionLane, RenderId},
 };
 use std::{
     cell::{Cell, RefCell},

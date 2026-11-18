@@ -24,7 +24,7 @@
 //!
 //! ```rust
 //! use flui_interaction::pointer::{PointerEventResampler, SamplingClock};
-//! use flui_interaction::PointerId;
+//! use flui_interaction::ids::PointerId;
 //! use std::time::Duration;
 //!
 //! // Pace sampling at the display's 60Hz cadence.

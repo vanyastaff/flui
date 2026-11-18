@@ -459,8 +459,8 @@ fn secondary_window_preserves_its_text_store_backend() {
 fn gestures_follow_the_named_preset_on_every_host() {
     use flui_foundation::geometry::Offset;
     use flui_interaction::{
-        GestureSettings,
         events::PointerKind,
+        gesture::GestureSettings,
         testing::input::{pointer_down, pointer_move, pointer_up},
     };
     use flui_platform::{PlatformInput, TargetPlatform};
@@ -508,10 +508,11 @@ fn gestures_follow_the_named_preset_on_every_host() {
 fn a_mouse_and_a_touch_get_their_own_preset_and_min_target() {
     use flui_foundation::geometry::Offset;
     use flui_interaction::{
-        GestureProfiles, PointerId,
         events::{
             PointerKind, make_down_event_for_id, make_move_event_for_id, make_up_event_for_id,
         },
+        gesture::GestureProfiles,
+        ids::PointerId,
     };
     use flui_platform::{PlatformInput, TargetPlatform};
 
@@ -773,10 +774,10 @@ pub(crate) fn a_single_paint_panic_redraws_without_input() {
 /// before the deadline.
 pub(crate) fn a_pointer_move_does_not_bypass_the_backoff() {
     use flui_foundation::geometry::Offset;
-    use flui_interaction::PointerId;
     use flui_interaction::events::{
         PointerKind, make_down_event_for_id, make_move_event_for_id, make_up_event_for_id,
     };
+    use flui_interaction::ids::PointerId;
     use flui_platform::PlatformInput;
 
     let (mut host, _armed) = tripwire_ui_runtime(true);
@@ -965,9 +966,9 @@ fn opening_a_window_cancels_the_keys_the_focused_one_held() {
 #[test]
 fn a_panicking_cancel_in_the_window_losing_focus_does_not_fail_opening_another() {
     use flui_foundation::geometry::Offset;
-    use flui_interaction::PointerId;
     use flui_interaction::events::{PointerKind, make_down_event_for_id};
     use flui_interaction::focus::{FocusNode, KeyEventResult};
+    use flui_interaction::ids::PointerId;
     use flui_platform::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState};
     use flui_platform::{EventTime, PlatformInput};
 

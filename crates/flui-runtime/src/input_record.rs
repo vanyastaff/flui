@@ -17,7 +17,10 @@ use std::num::NonZeroU64;
 use std::sync::Arc;
 
 use flui_foundation::InputSequenceId;
-use flui_interaction::{GestureDisposition, InputSurface, PointerId};
+use flui_interaction::{
+    gesture::GestureDisposition,
+    ids::{InputSurface, PointerId},
+};
 use flui_platform::{EventTime, PlatformInput, SystemPreferences, WindowId};
 
 use crate::HostInput;
@@ -385,7 +388,7 @@ pub struct RecordingWindow {
     /// Device pixels per logical pixel, possibly fractional.
     pub scale_factor: flui_foundation::geometry::DevicePixelRatio,
     /// The per-kind gesture values the window's contacts are admitted with.
-    pub gesture_profiles: flui_interaction::GestureProfiles,
+    pub gesture_profiles: flui_interaction::gesture::GestureProfiles,
 }
 
 /// The time `input` carries, if any: a pointer or key event's stamp or a
@@ -393,11 +396,11 @@ pub struct RecordingWindow {
 pub(crate) fn input_time(input: &HostInput) -> Option<EventTime> {
     match input {
         HostInput::Platform(PlatformInput::Pointer(event)) => {
-            flui_interaction::PointerEventExt::time(event)
+            flui_interaction::events::PointerEventExt::time(event)
         }
         HostInput::Platform(PlatformInput::PointerFrame(frame)) => {
             // The frame is stamped by its first event.
-            flui_interaction::PointerEventExt::time(&frame.events()[0])
+            flui_interaction::events::PointerEventExt::time(&frame.events()[0])
         }
         HostInput::Platform(PlatformInput::Keyboard(event)) => Some(event.time),
         HostInput::Frame { vsync, .. } => Some(*vsync),
