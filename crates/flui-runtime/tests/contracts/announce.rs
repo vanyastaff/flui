@@ -188,7 +188,7 @@ fn an_idle_presentation_speaks_an_announcement() {
         .expect("the runtime hosts its primary presentation");
     let mut reply = agent
         .call::<flui_protocol::method::SemanticsAnnouncements>(
-            flui_protocol::AnnouncementsParams::new(agent.id()),
+            flui_protocol::events::AnnouncementsParams::new(agent.id()),
         )
         .expect("the inbox has room");
     let _ = runtime.drain_commands();
@@ -204,8 +204,14 @@ fn an_idle_presentation_speaks_an_announcement() {
     assert_eq!(
         heard,
         [
-            (flui_protocol::AnnouncementUrgency::Polite, "Message sent"),
-            (flui_protocol::AnnouncementUrgency::Polite, "Message sent"),
+            (
+                flui_protocol::events::AnnouncementUrgency::Polite,
+                "Message sent"
+            ),
+            (
+                flui_protocol::events::AnnouncementUrgency::Polite,
+                "Message sent"
+            ),
         ]
     );
 }

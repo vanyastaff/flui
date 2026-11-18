@@ -1,7 +1,7 @@
 //! Real widget reassembly delivers a frame request; a failed host delivery
 //! must not strand an already accepted command behind the reload.
 use super::*;
-use flui_protocol::{ErrorCode, ReadParams, method};
+use flui_protocol::{error::ErrorCode, method, tree::ReadParams};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 fn reload_failure(failures: usize, fail_reassemble: bool) {

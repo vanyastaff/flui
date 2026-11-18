@@ -7,7 +7,7 @@
 //! ([`ActivityCallbacks`]; the lifecycle feature implements it), and delivers
 //! the [`Reaction`] to the window and the application ([`ActivityTarget`]).
 
-use flui_platform::{MemoryPressureLevel, WindowExecutionState};
+use flui_platform::{MemoryPressureLevel, WindowExecutionState, WindowFocus};
 
 /// The Activity callbacks that matter for the lifecycle: the ones
 /// `android-activity` hands over, without the payloads
@@ -55,12 +55,134 @@ pub(crate) trait ActivityCallbacks: Send + Sync {
     fn react(&self, event: ActivityEvent) -> Reaction;
 }
 
-/// The one thing an Activity callback tells the window.
+/// The one fact an Activity callback tells the window. What the window
+/// reports follows from the three together ([`ActivityStanding`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ActivitySignal {
+    /// `onStart` (`true`) and `onStop` (`false`).
     Visibility(bool),
-    Execution(WindowExecutionState),
+    /// `onResume` (`true`) and `onPause` (`false`).
+    Foreground(bool),
+    /// `onWindowFocusChanged`.
     Focus(bool),
+}
+
+/// The Activity's three lifecycle facts as its callbacks last reported them,
+/// and what the window reports from them (ADR-0366).
+///
+/// Android keeps a paused Activity on screen wherever another one holds the
+/// foreground without covering it: the other half of a split screen below API
+/// 29, a translucent or dialog Activity on top, picture-in-picture. Such a
+/// window keeps drawing; only `onStop` takes it off screen.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ActivityStanding {
+    /// Between `onStart` and `onStop`.
+    pub(crate) visible: bool,
+    /// Between `onResume` and `onPause`.
+    pub(crate) foreground: bool,
+    /// The window's input focus, as `onWindowFocusChanged` reports it.
+    pub(crate) focused: bool,
+}
+
+impl ActivityStanding {
+    /// The standing of an Activity whose loop ended: off screen, in the
+    /// background, unfocused, so no frame or input is delivered after it.
+    pub(crate) const RETIRED: Self = Self {
+        visible: false,
+        foreground: false,
+        focused: false,
+    };
+
+    const VISIBLE: u8 = 1;
+    const FOREGROUND: u8 = 1 << 1;
+    const FOCUSED: u8 = 1 << 2;
+
+    /// What a loop turn does for the window: everything while the Activity is
+    /// on screen, paused or not; nothing but answering its input while it is
+    /// stopped. The loop asks this once a turn and the window reads its
+    /// execution state from it, so this is the one gate both follow.
+    #[must_use]
+    pub(crate) const fn gate(self) -> TurnGate {
+        if self.visible {
+            TurnGate {
+                frames: true,
+                input: InputDelivery::Dispatch,
+                execution: WindowExecutionState::Running,
+            }
+        } else {
+            TurnGate {
+                frames: false,
+                input: InputDelivery::AnswerUnhandled,
+                execution: WindowExecutionState::Suspended,
+            }
+        }
+    }
+
+    /// The window's focus: focused while it has the input focus and the
+    /// Activity is in the foreground. A paused Activity is not the one the
+    /// user works in even where a focus report is still to come, so its
+    /// lifecycle reads `Inactive` from `onPause` on. An Activity has no
+    /// activation apart from its window's focus.
+    #[must_use]
+    pub(crate) const fn focus(self) -> WindowFocus {
+        let focused = self.focused && self.foreground;
+        WindowFocus::reported(focused, focused)
+    }
+
+    /// The standing once `signal` is recorded.
+    #[must_use]
+    pub(crate) const fn with(self, signal: ActivitySignal) -> Self {
+        match signal {
+            ActivitySignal::Visibility(visible) => Self { visible, ..self },
+            ActivitySignal::Foreground(foreground) => Self { foreground, ..self },
+            ActivitySignal::Focus(focused) => Self { focused, ..self },
+        }
+    }
+
+    /// The standing as one byte, which the loop and its window share through
+    /// one atomic, so a reader never sees half of a change.
+    #[must_use]
+    pub(crate) const fn to_bits(self) -> u8 {
+        (if self.visible { Self::VISIBLE } else { 0 })
+            | (if self.foreground { Self::FOREGROUND } else { 0 })
+            | (if self.focused { Self::FOCUSED } else { 0 })
+    }
+
+    /// The standing [`Self::to_bits`] wrote; other bits are ignored.
+    #[must_use]
+    pub(crate) const fn from_bits(bits: u8) -> Self {
+        Self {
+            visible: bits & Self::VISIBLE != 0,
+            foreground: bits & Self::FOREGROUND != 0,
+            focused: bits & Self::FOCUSED != 0,
+        }
+    }
+}
+
+/// What one turn of the Android loop does for its window
+/// ([`ActivityStanding::gate`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct TurnGate {
+    /// Frames are delivered, a redraw or a due deadline keeps the poll from
+    /// blocking, and the preference cadence runs.
+    pub(crate) frames: bool,
+    /// What the events of the native input queue get.
+    pub(crate) input: InputDelivery,
+    /// The window's execution state. `Running` is also what lets the
+    /// application's owner jobs run, since flui-app asks the window for an
+    /// owner turn only then.
+    pub(crate) execution: WindowExecutionState,
+}
+
+/// What the loop does with the events of the native input queue.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum InputDelivery {
+    /// Translated and dispatched to the window.
+    Dispatch,
+    /// Each answered as unhandled, so the system hears back about the cancel
+    /// it sends for a window it took away instead of reporting the
+    /// application not responding.
+    AnswerUnhandled,
 }
 
 /// What one callback asks the backend to deliver.
@@ -76,9 +198,8 @@ pub(crate) struct Reaction {
 
 /// Where a [`Reaction`] ends up: the backend's window and host callbacks.
 pub(crate) trait ActivityTarget {
-    fn visibility_changed(&self, visible: bool);
-    fn execution_changed(&self, state: WindowExecutionState);
-    fn focus_changed(&self, focused: bool);
+    /// One of the Activity's three facts changed.
+    fn fact_changed(&self, signal: ActivitySignal);
     /// The process may be killed now; see [`Reaction::session_end`].
     fn session_ended(&self);
     fn memory_pressure_raised(&self, level: MemoryPressureLevel);
@@ -87,11 +208,7 @@ pub(crate) trait ActivityTarget {
 impl ActivitySignal {
     /// Hand this signal to `target`.
     pub(crate) fn deliver(self, target: &impl ActivityTarget) {
-        match self {
-            Self::Visibility(visible) => target.visibility_changed(visible),
-            Self::Execution(state) => target.execution_changed(state),
-            Self::Focus(focused) => target.focus_changed(focused),
-        }
+        target.fact_changed(self);
     }
 }
 

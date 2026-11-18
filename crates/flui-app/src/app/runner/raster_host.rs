@@ -620,7 +620,7 @@ struct HostSlot {
     /// (ADR-0304 §7). Moved only by a frame the slot showed.
     base: RasterBase,
     /// Whether the platform gives the window a surface: `false` from the
-    /// platform's release (Android's `Pause` and `TerminateWindow`, a UIKit
+    /// platform's release (Android's `Stop` and `TerminateWindow`, a UIKit
     /// scene's backgrounding) until it gives one back. Only then is a
     /// surface the owner released made again.
     available: bool,

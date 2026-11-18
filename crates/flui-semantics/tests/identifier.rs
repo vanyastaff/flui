@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use flui_foundation::RenderId;
 use flui_foundation::geometry::{DevicePixelRatio, Rect};
-use flui_protocol::{ElementId, ReadQuery, WindowId};
+use flui_protocol::{tree::ElementId, tree::ReadQuery, tree::WindowId};
 use flui_semantics::{
     AccessibilityNodeId, DuplicateIdentifier, Placement, SemanticsConfiguration,
     SemanticsDiagnostic, SemanticsNode, SemanticsOwner, SemanticsRole, TreeUpdate,
@@ -69,7 +69,7 @@ fn published_node(update: &TreeUpdate) -> &accesskit::Node {
 }
 
 /// The button as an agent reads it from the wire.
-fn wire_button(owner: &SemanticsOwner) -> flui_protocol::Node {
+fn wire_button(owner: &SemanticsOwner) -> flui_protocol::tree::Node {
     let element =
         ElementId::from_u64(button_id().as_u64()).expect("an accessibility id is non-zero");
     let placement = Placement::new(
@@ -77,7 +77,7 @@ fn wire_button(owner: &SemanticsOwner) -> flui_protocol::Node {
         WindowId::from_u64(1).expect("non-zero"),
     );
     owner
-        .read_wire(&ReadQuery::new().with_root(element), placement)
+        .read_wire(&ReadQuery::new().root(element), placement)
         .expect("the published tree reads")
         .roots
         .into_iter()
@@ -236,7 +236,7 @@ fn siblings_sharing_an_identifier_are_reported_and_published_as_written() {
         DevicePixelRatio::try_new(1.0).expect("1 is a ratio"),
         WindowId::from_u64(1).expect("non-zero"),
     );
-    let clash = vec![flui_protocol::TreeDiagnostic::DuplicateIdentifier {
+    let clash = vec![flui_protocol::tree::TreeDiagnostic::DuplicateIdentifier {
         identifier: "delete".into(),
         parent: element(1),
         elements: vec![element(2), element(3), element(8)],
@@ -264,7 +264,7 @@ fn siblings_sharing_an_identifier_are_reported_and_published_as_written() {
     );
 
     let shallow = owner
-        .read_wire(&ReadQuery::new().with_max_depth(0), placement)
+        .read_wire(&ReadQuery::new().max_depth(0), placement)
         .expect("the published tree reads");
     assert!(shallow.truncated);
     assert_eq!(
@@ -273,7 +273,7 @@ fn siblings_sharing_an_identifier_are_reported_and_published_as_written() {
     );
 
     let below = owner
-        .read_wire(&ReadQuery::new().with_root(element(5)), placement)
+        .read_wire(&ReadQuery::new().root(element(5)), placement)
         .expect("the group reads");
     assert_eq!(below.diagnostics, Vec::new(), "an only child is no clash");
 }
@@ -388,11 +388,12 @@ fn an_identifier_on_a_node_that_publishes_nothing_else_is_reported() {
         ElementId::from_u64(AccessibilityNodeId::from(render_id(index)).as_u64())
             .expect("an accessibility id is non-zero")
     };
-    let unpublished =
-        |identifier: &str, parent: u32| flui_protocol::TreeDiagnostic::UnpublishedIdentifier {
+    let unpublished = |identifier: &str, parent: u32| {
+        flui_protocol::tree::TreeDiagnostic::UnpublishedIdentifier {
             identifier: identifier.into(),
             parent: element(parent),
-        };
+        }
+    };
     let placement = Placement::new(
         DevicePixelRatio::try_new(1.0).expect("1 is a ratio"),
         WindowId::from_u64(1).expect("non-zero"),
@@ -451,7 +452,7 @@ fn unpublished_identifiers_are_reported_once_per_parent_and_bounded() {
         .diagnostics
         .iter()
         .filter_map(|diagnostic| match diagnostic {
-            flui_protocol::TreeDiagnostic::UnpublishedIdentifier { identifier, .. } => {
+            flui_protocol::tree::TreeDiagnostic::UnpublishedIdentifier { identifier, .. } => {
                 Some(identifier.as_str())
             }
             _ => None,
@@ -501,7 +502,7 @@ fn an_identifier_lifted_under_many_parents_leaves_room_for_the_rest() {
         .diagnostics
         .iter()
         .filter_map(|diagnostic| match diagnostic {
-            flui_protocol::TreeDiagnostic::UnpublishedIdentifier { identifier, .. } => {
+            flui_protocol::tree::TreeDiagnostic::UnpublishedIdentifier { identifier, .. } => {
                 Some(identifier.as_str())
             }
             _ => None,

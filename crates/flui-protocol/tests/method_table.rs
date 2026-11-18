@@ -6,8 +6,8 @@ use std::collections::BTreeSet;
 use flui_protocol::method::{self, MAX_CORE};
 use flui_protocol::version::BREAKING;
 use flui_protocol::{
-    METHODS, Method, MethodEffect, MethodInfo, ProtocolVersion, ServedBy, Tier,
-    method::SemanticsRead,
+    method::METHODS, method::Method, method::MethodEffect, method::MethodRow,
+    method::SemanticsRead, method::ServedBy, method::Tier, version::ProtocolVersion,
 };
 
 #[test]
@@ -40,7 +40,7 @@ fn every_method_is_named_group_dot_verb_once_and_listed_in_order() {
         names, sorted,
         "METHODS is sorted by wire name with no name twice, the order MCP lists tools in"
     );
-    let tools: BTreeSet<String> = METHODS.iter().map(MethodInfo::tool_name).collect();
+    let tools: BTreeSet<String> = METHODS.iter().map(MethodRow::tool_name).collect();
     assert_eq!(
         tools.len(),
         METHODS.len(),
@@ -177,8 +177,9 @@ fn a_window_methods_parameters_name_the_window_they_address() {
     use std::time::Duration;
 
     use flui_protocol::{
-        ActParams, ActionName, Addressed, Condition, ElementId, ElementRef, LocateParams, Locator,
-        LogicalPoint, Target, WaitParams, WindowId,
+        act::ActParams, geometry::LogicalPoint, locator::LocateParams, locator::Locator,
+        locator::Target, method::Addressed, tree::ElementId, tree::ElementRef, tree::WindowId,
+        wait::Condition, wait::WaitParams, wire::ActionName,
     };
 
     let window = WindowId::from_u64(3).expect("non-zero");

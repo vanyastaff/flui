@@ -10,12 +10,19 @@
 //! | Callback | Meaning | Signal |
 //! |---|---|---|
 //! | `onStart` / `onStop` | the Activity is / is not on screen | visibility |
-//! | `onResume` / `onPause` | the Activity may / may not run | execution state |
+//! | `onResume` / `onPause` | the Activity is / is not the one in the foreground | foreground |
 //! | `onWindowFocusChanged` | the window has / lost input focus | focus |
 //! | `onStop` / `onSaveInstanceState` | the process may be killed without notice | session end |
 //!
-//! Focus alone must never stand for the other two: a dialog or the notification
-//! shade takes focus from a running, visible Activity.
+//! What the window reports follows from the three facts together
+//! (`ActivityStanding`, beside the looper's callbacks, ADR-0366): it runs
+//! while it is on screen, so a
+//! paused Activity that stays visible (split screen, picture-in-picture, a
+//! translucent or dialog Activity over it) keeps drawing, taking input and
+//! serving its owner, and only `onStop` suspends it; it is focused while it has
+//! the input focus and is in the foreground. Focus alone never stands for the
+//! others: a dialog or the notification shade takes focus from a running,
+//! visible Activity.
 //!
 //! Memory pressure comes from the system's own calls: `onLowMemory` is
 //! `MemoryPressureLevel::Critical`, and each `onTrimMemory` is the level its
@@ -51,7 +58,7 @@ impl ActivityCallbacks for ActivityRule {
 #[cfg(any(target_os = "android", test))]
 #[forbid(unsafe_code)]
 pub(crate) mod rule {
-    use flui_platform::{MemoryPressureLevel, WindowExecutionState};
+    use flui_platform::MemoryPressureLevel;
 
     use crate::owner::android::activity_callbacks::{ActivityEvent, ActivitySignal, Reaction};
 
@@ -96,12 +103,8 @@ pub(crate) mod rule {
             let signal = match event {
                 ActivityEvent::Start => Some(ActivitySignal::Visibility(true)),
                 ActivityEvent::Stop => Some(ActivitySignal::Visibility(false)),
-                ActivityEvent::Resume => {
-                    Some(ActivitySignal::Execution(WindowExecutionState::Running))
-                }
-                ActivityEvent::Pause => {
-                    Some(ActivitySignal::Execution(WindowExecutionState::Suspended))
-                }
+                ActivityEvent::Resume => Some(ActivitySignal::Foreground(true)),
+                ActivityEvent::Pause => Some(ActivitySignal::Foreground(false)),
                 ActivityEvent::GainedFocus => Some(ActivitySignal::Focus(true)),
                 ActivityEvent::LostFocus => Some(ActivitySignal::Focus(false)),
                 ActivityEvent::LowMemory
@@ -144,9 +147,10 @@ pub(crate) mod rule {
         use super::{ActivityLifecycle, MemoryPressureLevel, pressure_for_trim_level};
         use crate::owner::android::activity_callbacks::{
             ActivityEvent::{self, *},
-            ActivitySignal, Reaction,
+            ActivitySignal, ActivityStanding, InputDelivery, Reaction,
         };
         use flui_platform::WindowExecutionState::{Running, Suspended};
+        use flui_platform::WindowFocus;
 
         /// One event, from a fresh lifecycle.
         fn react(event: ActivityEvent) -> Reaction {
@@ -164,14 +168,12 @@ pub(crate) mod rule {
         }
 
         impl crate::owner::android::activity_callbacks::ActivityTarget for Recorder {
-            fn visibility_changed(&self, visible: bool) {
-                self.0.borrow_mut().push(format!("visible {visible}"));
-            }
-            fn execution_changed(&self, state: flui_platform::WindowExecutionState) {
-                self.0.borrow_mut().push(format!("execution {state:?}"));
-            }
-            fn focus_changed(&self, focused: bool) {
-                self.0.borrow_mut().push(format!("focus {focused}"));
+            fn fact_changed(&self, signal: ActivitySignal) {
+                self.0.borrow_mut().push(match signal {
+                    ActivitySignal::Visibility(visible) => format!("visible {visible}"),
+                    ActivitySignal::Foreground(foreground) => format!("foreground {foreground}"),
+                    ActivitySignal::Focus(focused) => format!("focus {focused}"),
+                });
             }
             fn session_ended(&self) {
                 self.0.borrow_mut().push("session ended".into());
@@ -192,15 +194,131 @@ pub(crate) mod rule {
                 target.told()
             };
             assert_eq!(told(Start), ["visible true"]);
-            assert_eq!(told(Resume), ["execution Running"]);
+            assert_eq!(told(Resume), ["foreground true"]);
             assert_eq!(told(GainedFocus), ["focus true"]);
             assert_eq!(told(LostFocus), ["focus false"]);
             assert_eq!(told(LowMemory), ["pressure Critical"]);
             assert_eq!(told(TrimMemory(5)), ["pressure Moderate"]);
-            assert_eq!(told(Pause), ["execution Suspended"]);
+            assert_eq!(told(Pause), ["foreground false"]);
             assert_eq!(told(Stop), ["visible false", "session ended"]);
             assert_eq!(told(TrimMemory(20)), Vec::<String>::new());
             assert_eq!(told(TrimMemory(80)), ["pressure Critical"]);
+        }
+
+        /// The standing a run of callbacks leaves, from a fresh Activity, as
+        /// the loop records each reaction's signal.
+        fn standing_after(events: &[ActivityEvent]) -> ActivityStanding {
+            let mut lifecycle = ActivityLifecycle::default();
+            events
+                .iter()
+                .fold(ActivityStanding::default(), |standing, &event| {
+                    lifecycle
+                        .react(event)
+                        .signal
+                        .map_or(standing, |signal| standing.with(signal))
+                })
+        }
+
+        #[test]
+        fn a_paused_activity_that_stays_visible_keeps_running() {
+            // A paused Activity another one does not cover (split screen below
+            // API 29, a translucent or dialog Activity on top, picture in
+            // picture) keeps drawing, taking input and serving its owner, as
+            // an inactive window; only `onStop` suspends it, and a stopped
+            // Activity still answers its input queue. Columns: frames, owner
+            // jobs (the window runs), input, execution state, focus.
+            use InputDelivery::{AnswerUnhandled, Dispatch};
+            use WindowFocus::{Focused, Inactive};
+            for (case, events, frames, jobs, input, execution, focus) in [
+                (
+                    "launched",
+                    &[Start, Resume, GainedFocus][..],
+                    true,
+                    true,
+                    Dispatch,
+                    Running,
+                    Focused,
+                ),
+                (
+                    "a dialog takes the focus",
+                    &[Start, Resume, GainedFocus, LostFocus][..],
+                    true,
+                    true,
+                    Dispatch,
+                    Running,
+                    Inactive,
+                ),
+                (
+                    "paused under a translucent Activity",
+                    &[Start, Resume, GainedFocus, Pause, LostFocus][..],
+                    true,
+                    true,
+                    Dispatch,
+                    Running,
+                    Inactive,
+                ),
+                (
+                    "paused before its focus report comes",
+                    &[Start, Resume, GainedFocus, Pause][..],
+                    true,
+                    true,
+                    Dispatch,
+                    Running,
+                    Inactive,
+                ),
+                (
+                    "picture in picture",
+                    &[Start, Resume, GainedFocus, Pause, LostFocus, SaveState][..],
+                    true,
+                    true,
+                    Dispatch,
+                    Running,
+                    Inactive,
+                ),
+                (
+                    "stopped",
+                    &[Start, Resume, GainedFocus, Pause, LostFocus, Stop][..],
+                    false,
+                    false,
+                    AnswerUnhandled,
+                    Suspended,
+                    Inactive,
+                ),
+                (
+                    "started again",
+                    &[Start, Resume, Pause, Stop, Start][..],
+                    true,
+                    true,
+                    Dispatch,
+                    Running,
+                    Inactive,
+                ),
+                (
+                    "before any callback",
+                    &[][..],
+                    false,
+                    false,
+                    AnswerUnhandled,
+                    Suspended,
+                    Inactive,
+                ),
+            ] {
+                let standing = standing_after(events);
+                let gate = standing.gate();
+                assert_eq!(gate.frames, frames, "{case}: frames");
+                assert_eq!(gate.execution == Running, jobs, "{case}: owner jobs");
+                assert_eq!(gate.input, input, "{case}: input");
+                assert_eq!(gate.execution, execution, "{case}: execution");
+                assert_eq!(standing.focus(), focus, "{case}: focus");
+                assert_eq!(
+                    ActivityStanding::from_bits(standing.to_bits()),
+                    standing,
+                    "{case}: the shared byte holds every fact"
+                );
+            }
+            let retired = ActivityStanding::RETIRED;
+            assert!(!retired.gate().frames);
+            assert_eq!(retired.focus(), Inactive);
         }
 
         #[test]
@@ -232,8 +350,8 @@ pub(crate) mod rule {
             for (event, signal) in [
                 (Start, Some(ActivitySignal::Visibility(true))),
                 (Stop, Some(ActivitySignal::Visibility(false))),
-                (Resume, Some(ActivitySignal::Execution(Running))),
-                (Pause, Some(ActivitySignal::Execution(Suspended))),
+                (Resume, Some(ActivitySignal::Foreground(true))),
+                (Pause, Some(ActivitySignal::Foreground(false))),
                 (GainedFocus, Some(ActivitySignal::Focus(true))),
                 (LostFocus, Some(ActivitySignal::Focus(false))),
                 (SaveState, None),

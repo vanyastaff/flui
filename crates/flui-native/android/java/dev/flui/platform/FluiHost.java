@@ -1,10 +1,12 @@
 package dev.flui.platform;
 
 import android.app.Activity;
+import android.app.ActivityManager;
 import android.content.Context;
 import android.content.Intent;
 import android.database.Cursor;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.CancellationSignal;
 import android.os.OperationCanceledException;
@@ -13,6 +15,7 @@ import android.os.Parcelable;
 import android.provider.OpenableColumns;
 import android.util.Log;
 
+import java.security.SecureRandom;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -47,6 +50,14 @@ import java.util.Set;
  * wakes the owner thread, which drains both queues. The Java side queues and
  * wakes and never waits for the owner; the lock guards the deques alone, and
  * neither side calls out while it holds it.
+ *
+ * <p>A process runs one FLUI platform (ADR-0366), over the Activity that owns
+ * the queues ({@link #admit}): the newest {@link FluiActivity} at the root of
+ * a task, unless an older one is still live and not finishing; any other
+ * instance forwards what it was opened with to the application's own task and
+ * finishes. Only the owner
+ * binds a wake handle and reads the queues, so an older platform that is
+ * still winding down never takes what arrived for the newer one.
  */
 public final class FluiHost {
     /**
@@ -55,7 +66,7 @@ public final class FluiHost {
      * calls, the entries of the queue, and what each means. Raised with every
      * change to any of them, together with the library's constant.
      */
-    public static final int PROTOCOL = 6;
+    public static final int PROTOCOL = 7;
 
     /** An entry for {@code onTrimMemory}; its value is the level. */
     static final int TRIM_MEMORY = 1;
@@ -203,6 +214,12 @@ public final class FluiHost {
     /** The Activity between its {@code onStart} and {@code onStop}. Guarded by {@link #LOCK}. */
     private static Activity startedActivity;
 
+    /**
+     * The Activity whose platform owns the queues and the wake handle ({@link #admit}), until
+     * it is destroyed; {@code null} for none. Guarded by {@link #LOCK}.
+     */
+    private static Activity owner;
+
     /** Answers, oldest first. Guarded by {@link #LOCK}. */
     private static final ArrayDeque<Answer> ANSWERS = new ArrayDeque<>();
 
@@ -314,9 +331,13 @@ public final class FluiHost {
     /**
      * Every intent's record queued, oldest first; any thread. They stay
      * queued until {@link #commitOpened}, so a read that fails loses none.
+     * None for an {@code activity} that does not own the queues.
      */
-    static String[][] peekOpened() {
+    static String[][] peekOpened(Activity activity) {
         synchronized (LOCK) {
+            if (owner != activity) {
+                return new String[0][];
+            }
             return OPENED.toArray(new String[0][]);
         }
     }
@@ -564,6 +585,155 @@ public final class FluiHost {
         return count;
     }
 
+    /** {@link #admit}: the instance owns the queues and runs FLUI. */
+    static final int OWN = 0;
+
+    /**
+     * {@link #admit}: the instance starts the Activity again in its own application's task with
+     * what it was opened with ({@link #forwarded}) and finishes.
+     */
+    static final int FORWARD = 1;
+
+    /**
+     * {@link #admit}: the instance, already forwarded, queues what it was opened with for the
+     * live owner, brings the owner's task to the front and finishes.
+     */
+    static final int HAND_OVER = 2;
+
+    /**
+     * The extra that marks a forwarded start, holding {@link #FORWARD_TOKEN}: a sender cannot
+     * set it, since the token is this process's own.
+     */
+    static final String FORWARDED = "dev.flui.platform.forwarded";
+
+    /** The flags a forwarded start adds: a task of the application's own, and the read grant. */
+    static final int FORWARD_ADDED_FLAGS =
+            Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_GRANT_READ_URI_PERMISSION;
+
+    /**
+     * The flags a forwarded start drops from the received ones: a further task or document, a
+     * cleared task, and a launch from history.
+     */
+    static final int FORWARD_DROPPED_FLAGS = Intent.FLAG_ACTIVITY_MULTIPLE_TASK
+            | Intent.FLAG_ACTIVITY_NEW_DOCUMENT
+            | Intent.FLAG_ACTIVITY_CLEAR_TASK
+            | Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY;
+
+    /** This process's mark of a forwarded start; never {@code 0}. */
+    private static final long FORWARD_TOKEN = new SecureRandom().nextLong() | 1;
+
+    /**
+     * {@link FluiActivity#onCreate}, before {@code NativeActivity} starts the library: what
+     * {@code activity} does ({@link #OWN}, {@link #FORWARD}, {@link #HAND_OVER}). A process runs
+     * one FLUI platform, in a task of its own application (ADR-0366):
+     *
+     * <ul>
+     *   <li>beside a live owner (neither destroyed nor finishing), a new instance forwards, or
+     *       hands over once it was forwarded;
+     *   <li>an instance that is not the root of its task (a share or a link another application
+     *       starts in its own task) forwards, so the owner always lives where the launcher brings
+     *       it forward;
+     *   <li>any other becomes the owner; the wake handle of an owner it replaces is forgotten, so
+     *       what arrives for it waits for its own.
+     * </ul>
+     */
+    static int admit(Activity activity, boolean taskRoot, boolean forwarded) {
+        synchronized (LOCK) {
+            if (owner != null && owner != activity && !owner.isFinishing()) {
+                return forwarded ? HAND_OVER : FORWARD;
+            }
+            if (!taskRoot && !forwarded) {
+                return FORWARD;
+            }
+            if (owner != activity) {
+                wakeHandle = 0;
+            }
+            owner = activity;
+            return OWN;
+        }
+    }
+
+    /** Whether {@code intent} is a start {@link #forwarded} made in this process. */
+    static boolean isForwarded(Intent intent) {
+        if (intent == null) {
+            return false;
+        }
+        try {
+            return intent.getLongExtra(FORWARDED, 0) == FORWARD_TOKEN;
+        } catch (RuntimeException error) {
+            // A sender's extras that do not unparcel.
+            return false;
+        }
+    }
+
+    /**
+     * The start {@code from} forwards: the Activity's own component, what it received (its data,
+     * clip data and extras, or a plain launch for {@code null}), with {@link #forwardFlags}, so
+     * Android grants the running instance the URIs {@code from} was granted.
+     */
+    static Intent forwarded(Activity from, Intent received) {
+        Intent intent = received == null ? new Intent(Intent.ACTION_MAIN) : new Intent(received);
+        intent.setComponent(from.getComponentName());
+        intent.setFlags(forwardFlags(received == null ? 0 : received.getFlags()));
+        intent.putExtra(FORWARDED, FORWARD_TOKEN);
+        return intent;
+    }
+
+    /** The flags of a forwarded start, from the flags {@code received} carried. */
+    static int forwardFlags(int received) {
+        return (received & ~FORWARD_DROPPED_FLAGS) | FORWARD_ADDED_FLAGS;
+    }
+
+    /** Whether {@code activity} owns the queues; any thread. */
+    static boolean owns(Activity activity) {
+        synchronized (LOCK) {
+            return owner == activity;
+        }
+    }
+
+    /**
+     * The second instance {@code from} leaves: the owner's task comes to the front, so the user
+     * sees the running application take what they opened. Java main thread.
+     */
+    static void showOwner(Activity from) {
+        Activity shown;
+        synchronized (LOCK) {
+            shown = owner;
+        }
+        if (shown == null || shown.getTaskId() == from.getTaskId()) {
+            return;
+        }
+        try {
+            ActivityManager manager =
+                    (ActivityManager) from.getSystemService(Context.ACTIVITY_SERVICE);
+            for (ActivityManager.AppTask task : manager.getAppTasks()) {
+                if (taskId(task.getTaskInfo()) == shown.getTaskId()) {
+                    task.moveToFront();
+                    return;
+                }
+            }
+        } catch (RuntimeException error) {
+            // The task went meanwhile (`IllegalArgumentException`): nothing to show.
+            Log.w(TAG, "the running FLUI Activity's task could not be brought to the front", error);
+        }
+    }
+
+    /** The id of the task {@code info} describes, read where each level keeps it. */
+    // `RecentTaskInfo.id` is deprecated from API 29, which adds `taskId`; FLUI runs from 23.
+    @SuppressWarnings("deprecation")
+    private static int taskId(ActivityManager.RecentTaskInfo info) {
+        return Build.VERSION.SDK_INT >= Api29.LEVEL ? Api29.taskId(info) : info.id;
+    }
+
+    /** What API 29 adds. */
+    private static final class Api29 {
+        static final int LEVEL = 29;
+
+        static int taskId(ActivityManager.RecentTaskInfo info) {
+            return info.taskId;
+        }
+    }
+
     /** {@link FluiActivity#onStart}: the requests waiting for {@code activity} start. */
     static void started(Activity activity) {
         ArrayList<Waiting> ready = new ArrayList<>();
@@ -604,6 +774,9 @@ public final class FluiHost {
             }
             if (startedActivity == activity) {
                 startedActivity = null;
+            }
+            if (owner == activity) {
+                owner = null;
             }
         }
     }
@@ -684,11 +857,12 @@ public final class FluiHost {
      * {@code {long[] numbers, String[] capabilities, String[] keys, Intent[] data}}:
      * {@link #ANSWER_NUMBERS} numbers each (epoch, token, kind, result code), and one capability,
      * one key and one {@code Intent}, or {@code null}, each; any thread. They stay queued until
-     * {@link #commitAnswers}, so a read that fails loses none.
+     * {@link #commitAnswers}, so a read that fails loses none. None for an {@code activity} that
+     * does not own the queues.
      */
-    static Object[] peekAnswers(int max) {
+    static Object[] peekAnswers(Activity activity, int max) {
         synchronized (LOCK) {
-            int count = Math.min(Math.max(max, 0), ANSWERS.size());
+            int count = owner == activity ? Math.min(Math.max(max, 0), ANSWERS.size()) : 0;
             long[] numbers = new long[count * ANSWER_NUMBERS];
             String[] capabilities = new String[count];
             String[] keys = new String[count];
@@ -732,18 +906,23 @@ public final class FluiHost {
     }
 
     /**
-     * Bind the library's wake handle; Java main thread. Entries queued before
-     * wake it at once.
+     * Bind the wake handle of {@code activity}'s platform; Java main thread. Entries queued
+     * before wake it at once. Answers {@code false}, binding nothing, when {@code activity} does
+     * not own the queues ({@link #admit}).
      */
-    static void bind(long handle) {
-        wakeHandle = handle;
+    static boolean bind(Activity activity, long handle) {
         boolean waiting;
         synchronized (LOCK) {
+            if (owner != activity) {
+                return false;
+            }
+            wakeHandle = handle;
             waiting = !ENTRIES.isEmpty() || !OPENED.isEmpty() || !ANSWERS.isEmpty();
         }
         if (waiting) {
             wake();
         }
+        return true;
     }
 
     /**
@@ -760,10 +939,13 @@ public final class FluiHost {
     /**
      * Every entry queued, oldest first, as kind and value pairs; any thread.
      * They stay queued until {@link #commitEntries}, so a read that fails
-     * loses none.
+     * loses none. None for an {@code activity} that does not own the queues.
      */
-    static int[] peekEntries() {
+    static int[] peekEntries(Activity activity) {
         synchronized (LOCK) {
+            if (owner != activity) {
+                return new int[0];
+            }
             int[] pairs = new int[ENTRIES.size() * 2];
             int index = 0;
             for (int[] entry : ENTRIES) {

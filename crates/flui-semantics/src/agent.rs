@@ -44,8 +44,8 @@ use accesskit::{Action, NodeId, Toggled, TreeId};
 use accesskit_consumer::{FilterResult, NodeRef};
 use flui_foundation::geometry::{DevicePixelRatio, Rect as LogicalRect, device_rect_covering};
 use flui_protocol::{
-    ActionName, ActionRequest, Checked, ElementId, Node, ReadQuery, Rect, Role, Tree,
-    TreeDiagnostic, WindowId,
+    act::ActionRequest, tree::ElementId, tree::Node, tree::ReadQuery, tree::Rect, tree::Tree,
+    tree::TreeDiagnostic, tree::WindowId, wire::ActionName, wire::Checked, wire::Role,
 };
 use rustc_hash::FxHashMap;
 
@@ -837,7 +837,7 @@ impl SemanticsOwner {
             if is_window_root {
                 root.window = Some(placement.window);
             }
-            Ok(Tree::new(vec![root], walk.truncated).with_diagnostics(walk.diagnostics))
+            Ok(Tree::new(vec![root], walk.truncated).diagnostics(walk.diagnostics))
         });
         match read {
             Ok(result) => result,

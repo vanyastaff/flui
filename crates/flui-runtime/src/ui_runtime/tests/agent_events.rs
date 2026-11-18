@@ -5,8 +5,9 @@
 use flui_foundation::ManualClock;
 use flui_protocol::method;
 use flui_protocol::{
-    ActionName, Condition, ErrorCode, ErrorObject, Event, EventFilter, EventKind, Retry,
-    WaitOutcome, WaitParams, WindowId,
+    error::ErrorCode, error::ErrorObject, error::Retry, events::Event, events::EventFilter,
+    events::EventKind, tree::WindowId, wait::Condition, wait::WaitOutcome, wait::WaitParams,
+    wire::ActionName,
 };
 use flui_view::dev_agent::{AgentAnswer, AgentEvents, AgentWindow};
 
@@ -274,7 +275,7 @@ fn a_reader_that_fell_behind_still_sees_the_window_close() {
         .expect("the second presentation is open");
     let second_window = WindowId::from_u64(second.as_u64()).expect("a generation");
     for number in 1..=300 {
-        state.emit_agent_event(Event::Frame(flui_protocol::FrameEvent::new(
+        state.emit_agent_event(Event::Frame(flui_protocol::events::FrameEvent::new(
             second_window,
             number,
             true,

@@ -25,7 +25,11 @@
   host last in the root) stands; and
   [ADR-0340](ADR-0340-the-android-activity-forwards-what-has-a-consumer-and-routes-results-by-token-and-epoch.md)
   for decision 2's list of forwarded callbacks, the shape of decision 8's `launch_for_result`, and
-  the `windowSoftInputMode` sentence of decision 6 with its Confirmation row
+  the `windowSoftInputMode` sentence of decision 6 with its Confirmation row;
+  [ADR-0366](ADR-0366-an-android-activity-runs-while-it-is-on-screen-and-a-process-runs-one.md)
+  for the reason of decision 6's `launchMode` bullet only: `singleTop` stands, and an Activity
+  started in another application's task, or beside the running one, forwards its intent to the
+  application's own task instead of starting a second runtime (ADR-0366 §2)
 - **Related:** [ADR-0151](ADR-0151-platform-layer-boundary-and-names.md) (the platform crates and
   where host code lives), [ADR-0152](ADR-0152-capability-seam-revised.md) (the capability seam and
   `Completion`), [ADR-0154](ADR-0154-capability-crates.md) (capability crates and their native

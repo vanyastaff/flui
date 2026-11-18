@@ -5,8 +5,10 @@
 
 use flui_protocol::version::BREAKING;
 use flui_protocol::{
-    ErrorCode, ErrorObject, Event, FrameEvent, GapEvent, Greeting, Hello, HelloReply,
-    PROTOCOL_VERSION, ProtocolVersion, Request, RequestId, ServerLine, WindowId,
+    envelope::Greeting, envelope::Request, envelope::RequestId, envelope::ServerLine,
+    error::ErrorCode, error::ErrorObject, events::Event, events::FrameEvent, events::GapEvent,
+    session::Hello, session::HelloReply, tree::WindowId, version::PROTOCOL_VERSION,
+    version::ProtocolVersion,
 };
 use serde_json::{Value, json};
 
@@ -43,7 +45,7 @@ fn a_server_line_is_read_by_its_keys_and_writes_back_the_same() {
             ServerLine::answer(
                 RequestId::Number(8),
                 Err(ErrorObject::new(ErrorCode::Busy, "full")
-                    .with_retry(flui_protocol::Retry::Soon)),
+                    .retry(flui_protocol::error::Retry::Soon)),
             ),
         ),
         (
@@ -73,7 +75,7 @@ fn a_server_line_reads_past_what_it_does_not_know_and_says_what_is_wrong() {
     assert_eq!(
         read(&json!({"id": null, "error": {"code": "busy", "message": "m", "retry": "never"}})),
         Ok(ServerLine::refusal(
-            ErrorObject::new(ErrorCode::Busy, "m").with_retry(flui_protocol::Retry::Never)
+            ErrorObject::new(ErrorCode::Busy, "m").retry(flui_protocol::error::Retry::Never)
         ))
     );
     // A key this reader does not know is a newer app's addition.
@@ -140,7 +142,7 @@ fn a_server_line_reads_past_what_it_does_not_know_and_says_what_is_wrong() {
 
 #[test]
 fn a_client_line_round_trips() {
-    let greeting = Greeting::new(Hello::new("t".repeat(32), PROTOCOL_VERSION).with_client("c/1"));
+    let greeting = Greeting::new(Hello::new("t".repeat(32), PROTOCOL_VERSION).client("c/1"));
     let written = serde_json::to_value(&greeting).expect("a greeting writes");
     assert_eq!(
         written,

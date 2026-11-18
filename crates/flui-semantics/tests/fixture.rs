@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use flui_foundation::geometry::{DevicePixelRatio, Rect};
 use flui_foundation::{RenderId, SemanticsId};
-use flui_protocol::{ElementId, ElementRef, WindowId};
+use flui_protocol::{tree::ElementId, tree::ElementRef, tree::WindowId};
 use flui_semantics::{
     AccessibilityNodeId, Placement, SemanticsConfiguration, SemanticsNode, SemanticsOwner,
     TreeUpdate,
