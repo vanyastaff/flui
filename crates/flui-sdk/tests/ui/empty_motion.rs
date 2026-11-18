@@ -1,12 +1,12 @@
-use flui_sdk::animation::TwoWayConverter;
+use flui_sdk::animation::MotionValue;
 
-#[derive(Clone, TwoWayConverter)]
+#[derive(Clone, MotionValue)]
 struct Empty;
 
-#[derive(Clone, TwoWayConverter)]
+#[derive(Clone, MotionValue)]
 struct EmptyNamed {}
 
-#[derive(Clone, TwoWayConverter)]
+#[derive(Clone, MotionValue)]
 struct EmptyTuple();
 
 fn main() {}

@@ -87,7 +87,7 @@ fn spring(omega: f64, zeta: f64) -> SpringDescription {
 
 /// The right derivative of `value()` at the current instant, from probes `h`
 /// and `2h` ahead: `(−3x(0) + 4x(h) − x(2h)) / 2h`.
-fn right_derivative<T: flui_animation::TwoWayConverter + 'static>(
+fn right_derivative<T: flui_animation::MotionValue + 'static>(
     value: &AnimatedValue<T>,
     component: usize,
     h: f64,
@@ -107,7 +107,7 @@ fn close(actual: f64, expected: f64, relative: f64) -> bool {
 
 /// Retargets `value` toward `target`, asserting C⁰ and C¹ at the seam and that
 /// the reported velocity is the derivative of the value on both sides.
-fn seam<T: flui_animation::TwoWayConverter + 'static>(
+fn seam<T: flui_animation::MotionValue + 'static>(
     value: &mut AnimatedValue<T>,
     target: T,
     mode: &Mode,
@@ -142,7 +142,7 @@ fn seam<T: flui_animation::TwoWayConverter + 'static>(
 /// evaluation noise a difference amplifies by `8/h` is the value's own: a
 /// spring is closed form (rounding only), a cubic curve's `transform` is
 /// solved to about 1e-8 of its output.
-fn assert_velocity_is_the_derivative<T: flui_animation::TwoWayConverter + 'static>(
+fn assert_velocity_is_the_derivative<T: flui_animation::MotionValue + 'static>(
     value: &AnimatedValue<T>,
     component: usize,
     mode: &Mode,

@@ -16,8 +16,8 @@
 
 ### Changed
 
-- **`flui-animation`**: `#[derive(Animatable)]` is `#[derive(TwoWayConverter)]` and also derives
-  `Lerp`, so a derived type can be tweened and used as a keyframe value. `Lerp` is re-exported.
+- **`flui-animation`**: `#[derive(Animatable)]` is `#[derive(MotionValue)]`; a fieldwise `Lerp` is the
+  separate `#[derive(Lerp)]` in `flui_foundation::geometry`, so a type that interpolates its own way can still derive its motion vector.
 
 ### Removed
 

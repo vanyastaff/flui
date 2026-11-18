@@ -694,7 +694,7 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 > **Environments:** all · **Who it hurts:** Apps that mix a scroll fling with an animated offset, size or rect on a dense display, where the two settle at visibly different precision · **Parity:** none (animation has no row)
 
 - A scroll fling rests within half a device pixel: `Tolerance::for_device_pixel_ratio` gives `0.5 / dpr` logical pixels (`crates/flui-animation/src/simulation.rs`, used by `crates/flui-widgets/src/scroll/scroll_physics.rs`; ADR-0155, ADR-0200). At a ratio of 3 that is about 0.17 logical pixels.
-- Animated geometry rests within a fixed 0.01 logical pixels whatever the display: the converters' rest thresholds in `crates/flui-animation/src/value_conversion.rs` (ADR-0186), and the controller's fling tolerance `FLING_TOLERANCE` in `crates/flui-animation/src/controller.rs`. That is about 17 times finer than the fling at a ratio of 3.
+- Animated geometry rests within a fixed 0.01 logical pixels whatever the display: the converters' rest thresholds in `crates/flui-animation/src/motion_value.rs` (ADR-0186), and the controller's fling tolerance `FLING_TOLERANCE` in `crates/flui-animation/src/controller.rs`. That is about 17 times finer than the fling at a ratio of 3.
 - No record chooses one source for rest in logical pixels or says why the two differ. A candidate ADR after the render-scaling gates.
 - The entry closes when one rule decides rest in logical pixels for both, or an accepted record states why they differ, with a test of each.
 

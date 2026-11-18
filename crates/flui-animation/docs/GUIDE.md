@@ -417,7 +417,7 @@ let _ = Tween::new(BorderRadius::ZERO, BorderRadius::circular(8.0));
 
 ### Keyframes
 
-A `Keyframes<T>` track (`T: Lerp + TwoWayConverter`) is a value as a pure
+A `Keyframes<T>` track (`T: Lerp + MotionValue`) is a value as a pure
 function of elapsed time. Segments are timed by `Duration` and placed end to
 end from zero:
 

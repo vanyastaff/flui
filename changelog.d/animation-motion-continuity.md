@@ -1,6 +1,6 @@
 ### Added
 
-- Derive `TwoWayConverter` for nested fixed-width values, including geometry
+- Derive `MotionValue` for nested fixed-width values, including geometry
   and colors, while preserving each field's interpolation contract.
 
 - Browser hosts observe reduced motion before canvas creation and deliver live
@@ -49,7 +49,7 @@
 - Mounted Hero registration follows tag updates, HeroScope replacement and
   GlobalKey reparenting while preserving mounted state and first-wins matching.
 
-- `TwoWayConverter` derives require at least one motion field; empty unit,
+- `MotionValue` derives require at least one motion field; empty unit,
   named and tuple structs are rejected rather than producing empty vectors.
 
 - `MediaQueryData` gains a `motion` field; exhaustive struct literals must supply
@@ -207,7 +207,7 @@
   preserve the first destructor failure while cancelling remaining drivers and
   retaining independent child and transition captures during unwind.
 - Use component-specific spring rest distances through
-  `TwoWayConverter::rest_thresholds`; derived values compose their fields'
+  `MotionValue::rest_thresholds`; derived values compose their fields'
   distances. Manual converters must implement the new method with positive finite
   distances in their vector units. Invalid distances preserve the previous run.
 - Cancel every presentation's animation before runtime shutdown callbacks,
