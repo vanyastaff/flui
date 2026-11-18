@@ -42,31 +42,45 @@ Its frame driver is `HeadlessHost`, which pumps a
   only. `closing_the_focused_window_moves_the_focus_to_a_survivor` and the
   last-window row of `a_read_pending_when_its_runtime_drops_ends_as_owner_retired`
   pin both. The widget harness closes through the same path.
-- **A turn does what a runner's owner turn does, in its order.** A close a
-  widget asks for through its window's handle is queued and carried out at
-  the next turn after the guard is asked as for the program's close (a
-  runner's window queue); every close the guards let through is carried out
-  contained, the first panic resumed after the rest; a `Program` close that
-  comes due is a window's consent to a quit and closes nothing alone, and one
-  kept open cancels the quit; a quit (`request_quit`) asks every window,
-  defers on a recorded refusal and commits by closing every window past its
-  hold. The session's end follows the primary window's platform: `Hold` and
-  `Delay` close every window and retire, `Background` keeps them open and
-  answers `Block` while writes are in flight. A closed window hears no input
-  or fact, and its handle answers `Closed`. These are mirrors, not calls:
-  the runner's close router, application control and session end live in
-  `flui-app`, which sits above this crate, and `docs/gaps.md` ("The headless
-  host mirrors the runner's owner turn") names what that leaves out.
+- **A turn runs a runner's owner-turn steps, not copies of them.** The host
+  registers every window with a `flui_runtime::owner_turn::CloseRequestRouter`
+  (its close guard, and the application's `CloseRequestHandler` a
+  `HeadlessWindow` or `TestWindow` carries where the platform asks before a
+  window closes), keeps a quit in a `QuitRequest` and answers a session end
+  through a `SessionEnd`, the types a runner's turn uses; the closes the
+  window's platform lets the application refuse are `close_vetoes`'. A close a
+  widget asks for through its window's handle is queued and carried out at the
+  next turn after the router is asked as for the program's close (a runner's
+  window queue); what the guards let through is routed by `settled_steps` and
+  carried out contained, the first panic resumed after the rest; a quit asks
+  every window with `ask_quit`. What the host supplies is what a step does to
+  its own state (`HeadlessSessionEnd` in `src/host/turn.rs`): the notice
+  reaches its one runtime, `Detached` goes through
+  `UiRuntime::update_host_lifecycle`, the flush runs the queued writes without
+  waiting for a held one, teardown closes every window, a phone's background
+  hold lasts until the queued writes end, and a contained panic is raised
+  after the session end instead of logged. The tables
+  `close_guard_hosting` (`a_close_handler_is_asked_after_the_guard_and_first_at_a_session_end`,
+  `a_session_end_query_reaches_the_subscribers_and_their_block_holds_it`,
+  `a_quit_asks_every_windows_handler_and_waits_for_each_record`) and
+  `a_session_end_writes_before_the_runtime_is_torn_down` fail against the
+  guard-only copies this host kept before. A quit the host commits closes
+  every window and then writes, as a runner's loop exit tears its runtimes
+  down before its flush. A closed window hears no input or fact, and its
+  handle answers `Closed`.
 - **The built-ins are a runner's built-ins.** Without a registry of the test's
-  own, the host registers what `flui-app` registers on the primary window's
-  platform with the test build's features: the clipboard and background lanes,
+  own, the host composes its registry as a runner does
+  (`flui_runtime::capability::BuiltIns::compose`), with scripted providers on
+  the primary window's platform and the test build's features: the clipboard
+  and background lanes, the storage (refused as not registered without one),
   the primary selection only on Linux, scripted HTTP only with this crate's
   `http` feature (the facade's `http` forwards it), and the application's
   overrides and plugins a `TestWindow` carries, in the runner's tiers
   (`a_runtime_without_a_primary_selection_answers_not_registered`,
   `a_plugin_the_test_registers_answers_and_an_override_replaces_it`). The
-  native-window capability is `flui-app`'s and above this crate: a test of a
-  widget that reaches `flui::native` runs on `flui_app::testing`.
+  native-window capability names a type of `flui-app`, above this crate,
+  which registers it as a host-specific built-in: a test of a widget that
+  reaches `flui::native` runs on `flui_app::testing`.
 - **A phone's trip is delivered in a phone's order.** `Tester::background`
   reports focus lost, execution suspended, hidden, then the session's
   `Ending` (the session-ended notice, then the documents' write) with the

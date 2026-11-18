@@ -1,8 +1,8 @@
 # Платформенный слой — задачи
 
 - **Статус:** редакция 3 утверждена: ADR-0151, 0152, 0153, 0154, 0254 и 0255 приняты 2026-10-21.
-  Из 134 задач серии 115 закрыты и 19 открыты (сверено с `main` @ `4db9c6981` и закрытием
-  LY85); записи — в разделе «Ход исполнения». Прогоны на устройствах, которых ждут закрытые
+  Из 134 задач серии 116 закрыты и 18 открыты (сверено с `main` @ `4db9c6981`, закрытиями
+  LY85 и LY145); записи — в разделе «Ход исполнения». Прогоны на устройствах, которых ждут закрытые
   задачи, — строки
   `crates/flui-native/platform-parity.toml`. Открытые задачи и код, которого они ждут:
   - LY61 — удалить сервисы `Platform`, `PathPromptOptions`, `Task` и `TaskLabel`, когда LY67 даст
@@ -24,7 +24,6 @@
   - LY121 — захват указателя на iOS и Android, образ и скрытый курсор из виджета;
   - LY139 — пометка первого клика с регионом, запись истечения буфера macOS и жизненный цикл окна
     iOS без замков, курсор macOS на типизированных вызовах;
-  - LY145 — шаги закрытия, выхода и конца сеанса и сборка возможностей в `flui-runtime`;
   - LY148 — долг кадра у перекрытого окна, уход композитного менеджера X11, отключённый удалённый
     сеанс Win32.
 - **Ограниченное утверждение:** LY8/LY9 исполняются вместе по
@@ -7915,8 +7914,7 @@ GPU-память простаивающего или невидимого окн
   сценарий отзыва после `OleUninitialize` здесь не воспроизведён, удержание — по типам. Ожидание
   trybuild `owner_platform_is_not_send` не устарело: локально у тулчейна нет `rust-src`, и
   фрагменты из `$RUST/core` выпадают из вывода; на CI (с `rust-src`) оно верно.
-- [ ] **LY145** (открыта: ход владельца ниже `flui-app`) — ветка `testing/headless-fidelity` на
-  `main`. Построено: `HeadlessHost` закрывает окно, которое переживает другое, через
+- [x] **LY145** — ветки `testing/headless-fidelity` и `runtime/owner-turn-steps`. Построено: `HeadlessHost` закрывает окно, которое переживает другое, через
   `close_presentation_entered` (фокус ОС переходит к выжившему), последнее закрытие роняет
   `UiRuntime`, и удержанные ответы кончаются `OwnerRetired`; `UiRuntime::stop_presentation_for_test`
   удалён; встроенные возможности — как у runner (primary selection только на Linux, сценарный HTTP
@@ -7927,12 +7925,31 @@ GPU-память простаивающего или невидимого окн
   `a_middle_press_pastes_the_primary_selection_where_it_lands`,
   `a_plugin_the_test_registers_answers_and_an_override_replaces_it`,
   `a_trip_to_the_background_pauses_the_application_and_its_return_resumes_it`,
-  `a_service_watches_the_application_pause_and_resume`. Остаётся код: шаги закрытия, выхода и конца
-  сеанса хода владельца и сборка встроенных возможностей переезжают из `flui-app` в `flui-runtime`,
-  и их зовут и runner, и `HeadlessHost`. Сейчас `flui-testing` (ниже `flui-app`) их зеркалит без
-  `CloseRequestHandler` приложения, уведомления `HostNotice::SessionEnding`, бюджета конца сеанса,
-  возможности нативного окна и моста хоста
-  ([gaps](../../../gaps.md#the-headless-host-mirrors-the-runners-owner-turn)).
+  `a_service_watches_the_application_pause_and_resume`. Шаги хода владельца — в `flui-runtime`
+  (`owner_turn`): `CloseRequestRouter` с `CloseRequest`/`CloseResponse`/`CloseRequestHandler`/
+  `CloseRequestError` переехал из `flui-app` (`flui_app::CloseRequestHandler` и соседи —
+  реэкспорт), `QuitRequest` с `ask_quit` заменил состояние выхода `Ingress` и копию `QuitAsk`
+  headless, `settled_steps` разводит то, что отпустили guard'ы, `SessionEnd::answer` с
+  `SessionEndHost` — запрос, отмену и конец сеанса (уведомление, `Detached`, сброс, состояние хоста,
+  разбор, фоновое удержание, бюджет `session_end_budget` и порог 1 с), `close_vetoes` — какие
+  закрытия платформа даёт отклонить; встроенные возможности — `capability::BuiltIns::compose`
+  (primary selection только на Linux; нативное окно `flui-app` передаёт как `host_specific`).
+  Runner и `HeadlessHost` зовут один код; копии в `flui-testing` (`QuitAsk`, опрос одних guard'ов,
+  собственный конец сеанса, сборка реестра) и `UiRuntime::{close_refused, close_recorded,
+  withdraw_close}` удалены. Headless теперь спрашивает `CloseRequestHandler` приложения
+  (`HeadlessWindow::with_close_request_handler`, `TestWindow::close_request_handler`), доставляет
+  `HostNotice::SessionEnding`/`SessionEndCancelled` и пишет документы до разбора runtime, как
+  runner. Тесты: строки `close_guard_hosting`
+  `a_close_handler_is_asked_after_the_guard_and_first_at_a_session_end`,
+  `a_session_end_query_reaches_the_subscribers_and_their_block_holds_it`,
+  `a_quit_asks_every_windows_handler_and_waits_for_each_record`, и
+  `a_session_end_writes_before_the_runtime_is_torn_down`,
+  `a_close_handler_the_test_registers_keeps_the_window_open`; на прежних копиях (опрос одних
+  guard'ов в `request_close`, `end_session(Query)` и выходе, конец сеанса через закрытие окон до
+  записи), восстановленных в рабочем дереве, все пять падают, остальные строки таблицы зелёные;
+  `quit::tests::a_quit_moves_on_its_presentations_answers` — модель выхода; `close_request_matrix`
+  переехал в `flui-runtime`. Нативное окно (`flui::native`) по-прежнему проверяется на
+  `flui_app::testing`: его тип принадлежит `flui-app`.
 - [x] **LY154** — ветка `docs/platform-citations`. Цитаты Flutter читаются по коммиту тега 3.50.0,
   `flutter/flutter@ab2912035e` (правило `owner/repo@sha` в ADR-0151, 0152, 0154, 0254, 0255 стоит;
   рядом для читателя «3.50.0»); исходники читались через `gh` и неглубокий клон в `.flutter/`.

@@ -186,6 +186,20 @@ host.
   bridge is `flui_semantics::platform::PlatformAccessibility` (ADR-0082 §2,
   amended), and the development reload tier is this crate's own
   `reload::ReloadTier`, which the host translates from its hot-reload driver.
+- **Every host runs one set of owner-turn steps.** The close, quit and
+  session-end steps (`owner_turn`) and the built-in tier of an application's
+  registry (`capability::BuiltIns`) live here, so `flui-app`'s runners and
+  `flui-testing`'s headless host call the same code: one
+  `CloseRequestRouter` asks a window's guard before its handler for a close
+  and after it for the session's end, `ask_quit` and `QuitRequest` decide a
+  quit, `settled_steps` routes what the guards let through, and
+  `SessionEnd::answer` orders the session end (notice, `Detached`, flush, host
+  state, teardown, background hold) within `session_end_budget`. A host
+  supplies only what a step does to its own state, through `SessionEndHost`,
+  whose methods take no borrow of the book, so application code they run may
+  re-enter it. `close_vetoes` says which closes a platform lets the
+  application refuse, and `BuiltIns::primary_selection` registers the
+  primary selection only on Linux.
 - **A UI runtime is owner-affine.** `UiRuntime` is `!Send + !Sync` (a raw-pointer
   `PhantomData` marker; pinned by `assert_not_impl_any!` in the UI runtime tests).
   Everything that crosses a thread goes through a `UiCommandSender` into a

@@ -413,7 +413,8 @@ the dispatch layer moves there too.
   `Cell` or `RefCell`: each is reached only from the loop's routes, its frame
   drivers and its wake-deadline query, none of which another thread calls.
   No call checks its thread at run time: the router and a handler are
-  neither `Send` nor `Sync` (`close_request_matrix` asserts it), and a thread
+  neither `Send` nor `Sync` (`flui-runtime`'s `close_request_matrix`, where
+  the router lives with the other owner-turn steps, asserts it), and a thread
   that runs no loop finds no runtime of its own, so a close it asks for is
   answered `NoHostedRuntime`
   (`a_close_from_a_thread_without_a_loop_is_refused`). A table is borrowed
