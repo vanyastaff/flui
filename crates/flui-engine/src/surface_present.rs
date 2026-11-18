@@ -36,7 +36,7 @@ pub(crate) fn swap_chain_statistics(
 /// present, a break in the statistics, or nothing (nothing shown yet: DXGI
 /// then answers an error, not statistics). Nothing on another backend.
 ///
-/// The crate's one production `unsafe`: wgpu reaches its swap chain only
+/// A production `unsafe` the crate's `ARCHITECTURE.md` lists: wgpu reaches its swap chain only
 /// through the hal escape (`Surface::as_hal`), and DXGI's statistics are COM
 /// calls on it.
 #[cfg(windows)]
