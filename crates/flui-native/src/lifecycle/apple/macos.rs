@@ -201,7 +201,9 @@ mod notices {
                 let control = Weak::clone(&self.control);
                 move || {
                     if let Some(control) = control.upgrade() {
-                        control.session_end_announced();
+                        control.session_end_announced(objc2::MainThreadMarker::new().expect(
+                            "BUG: the workspace notification centre posts on the main thread",
+                        ));
                     }
                 }
             };

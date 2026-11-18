@@ -140,7 +140,7 @@ pub struct MacosDisplays {
     version: MacOSVersion,
     /// Whether each screen's last scale read was refused, so a run of refusals
     /// is reported once.
-    scale_streak: parking_lot::Mutex<ScaleStreaks<DisplayId>>,
+    scale_streak: crate::owner::apple::NativeOwner<std::cell::RefCell<ScaleStreaks<DisplayId>>>,
 }
 
 impl std::fmt::Debug for MacosDisplays {
@@ -150,11 +150,14 @@ impl std::fmt::Debug for MacosDisplays {
 }
 
 impl MacosDisplays {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(main: MainThreadMarker) -> Self {
         Self {
             source: DisplaySource::new(),
             version: MacOSVersion::read(),
-            scale_streak: parking_lot::Mutex::new(ScaleStreaks::default()),
+            scale_streak: crate::owner::apple::NativeOwner::new(
+                std::cell::RefCell::default(),
+                main,
+            ),
         }
     }
 
@@ -174,9 +177,10 @@ impl MacosDisplays {
             };
             // The screen's scale by the hosts' one rule; a refusal is
             // reported with nothing borrowed.
-            let (ratio, refused) = self.scale_streak.lock().read(
+            let backing_scale = screen.backingScaleFactor();
+            let (ratio, refused) = self.scale_streak.get(mtm).borrow_mut().read(
                 id,
-                screen.backingScaleFactor(),
+                backing_scale,
                 "NSScreen backingScaleFactor",
             );
             if let Some(refused) = refused {
@@ -228,7 +232,7 @@ impl MacosDisplays {
         }
         // A screen this sample did not read takes its streak with it.
         let read: Vec<DisplayId> = displays.iter().map(|display| display.id).collect();
-        self.scale_streak.lock().keep_only(&read);
+        self.scale_streak.get(mtm).borrow_mut().keep_only(&read);
         displays
     }
 }
