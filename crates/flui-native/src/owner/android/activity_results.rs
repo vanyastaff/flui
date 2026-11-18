@@ -861,6 +861,14 @@ mod tests {
         fn lend(&self, _f: &mut dyn FnMut(JniFrame)) -> bool {
             false
         }
+
+        fn post(
+            &self,
+            _work: flui_platform::capability::MainThreadWork,
+            refused: flui_platform::capability::MainThreadRefusal,
+        ) {
+            refused(flui_platform::capability::MainThreadRefused::ActivityEnded);
+        }
     }
 
     /// A mint, as the composition root hands one to an installed bridge.

@@ -1,27 +1,86 @@
 package dev.flui.system;
 
+import java.lang.ref.PhantomReference;
+import java.lang.ref.ReferenceQueue;
 import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.Method;
+import java.util.HashSet;
+import java.util.Set;
 
 /**
  * The one object Android calls {@code flui-system}'s native code back through: the handler
- * of a {@code java.lang.reflect.Proxy}, so a {@code Runnable} posted to the main thread and a
- * dialog's listeners need no class of their own.
+ * of a {@code java.lang.reflect.Proxy}, so a dialog's listeners need no class of their own.
  *
  * <p>The library makes every instance, through JNI, with a handle of its own, and binds
  * {@link #called} and {@link #released} after it has read {@link #PROTOCOL}. A call of an
  * interface method reaches {@link #called} with the method's name; the methods every object
  * has are answered here, since a proxy routes those to its handler too. The handle is the
- * library's until this object is collected, which {@link #released} tells it.
+ * library's until this object is collected: a phantom reference to it is enqueued then, and a
+ * daemon thread of this class hands its handle to {@link #released}. (A {@code Cleaner} does
+ * the same from API 33; the floor is API 23, and {@code finalize} runs with the object still
+ * reachable from the finalizer.)
  */
 public final class FluiCallback implements InvocationHandler {
-    /** The contract with the native library; raised with every change of a signature here. */
-    public static final int PROTOCOL = 1;
+    /**
+     * The contract with the native library, over this package's classes; raised with every
+     * change of a signature the library calls or binds.
+     */
+    public static final int PROTOCOL = 2;
+
+    /** Where the collected callbacks' references arrive. */
+    private static final ReferenceQueue<FluiCallback> COLLECTED = new ReferenceQueue<>();
+
+    /** The references not yet enqueued, kept reachable until they are; guarded by itself. */
+    private static final Set<Release> PENDING = new HashSet<>();
+
+    /** The thread that releases collected handles; started with the first callback. */
+    private static Thread releaser;
 
     private final long handle;
 
     FluiCallback(long handle) {
         this.handle = handle;
+        track(this, handle);
+    }
+
+    /** The handle of a callback, reachable only through its phantom reference. */
+    private static final class Release extends PhantomReference<FluiCallback> {
+        final long handle;
+
+        Release(FluiCallback callback, long handle) {
+            super(callback, COLLECTED);
+            this.handle = handle;
+        }
+    }
+
+    /** Releases each collected callback's handle, for as long as the process lives. */
+    private static final class Releaser implements Runnable {
+        @Override
+        public void run() {
+            while (true) {
+                Release release;
+                try {
+                    release = (Release) COLLECTED.remove();
+                } catch (InterruptedException interrupted) {
+                    return;
+                }
+                synchronized (PENDING) {
+                    PENDING.remove(release);
+                }
+                released(release.handle);
+            }
+        }
+    }
+
+    private static void track(FluiCallback callback, long handle) {
+        synchronized (PENDING) {
+            PENDING.add(new Release(callback, handle));
+            if (releaser == null) {
+                releaser = new Thread(new Releaser(), "flui-callback-release");
+                releaser.setDaemon(true);
+                releaser.start();
+            }
+        }
     }
 
     @Override
@@ -43,15 +102,6 @@ public final class FluiCallback implements InvocationHandler {
         }
         called(handle, method.getName(), argument);
         return null;
-    }
-
-    @Override
-    protected void finalize() throws Throwable {
-        try {
-            released(handle);
-        } finally {
-            super.finalize();
-        }
     }
 
     /** The interface method {@code method} was called on the proxy of {@code handle}. */

@@ -159,7 +159,7 @@ pub(crate) use provider::AndroidMessageBoxes;
 mod provider {
     use std::sync::Arc;
 
-    use flui_platform::capability::{Activity, Resolver, WindowRef};
+    use flui_platform::capability::{Activity, CompletionSource, Resolver, WindowRef};
 
     use super::super::java::{BoxOnScreen, Java, Waiting};
     use super::{BoxEvent, BoxLayout, not_shown};
@@ -169,18 +169,27 @@ mod provider {
     pub(crate) struct AndroidMessageBoxes {
         activity: Activity,
         java: Arc<Java>,
+        completions: CompletionSource,
     }
 
     impl AndroidMessageBoxes {
-        pub(crate) fn new(activity: Activity, java: Arc<Java>) -> Self {
-            Self { activity, java }
+        pub(crate) fn new(
+            activity: Activity,
+            java: Arc<Java>,
+            completions: CompletionSource,
+        ) -> Self {
+            Self {
+                activity,
+                java,
+                completions,
+            }
         }
     }
 
     /// Dismisses a box when its dialog ends before the user answered.
     struct BoxHold {
         activity: Activity,
-        java: Arc<Java>,
+        completions: CompletionSource,
         waiting: Waiting<MessageBoxResult>,
         on_screen: Arc<BoxOnScreen>,
     }
@@ -190,7 +199,7 @@ mod provider {
             // Taken first: the dismissal's own event, and a button the user
             // reaches before it, find nobody to answer.
             drop(self.waiting.take());
-            self.java.dismiss_box(&self.activity, &self.on_screen);
+            Java::dismiss_box(&self.activity, &self.completions, &self.on_screen);
         }
     }
 
@@ -207,6 +216,7 @@ mod provider {
             let on_screen = Arc::new(BoxOnScreen::default());
             let asked = self.java.show_box(
                 &self.activity,
+                &self.completions,
                 request,
                 layout,
                 &on_screen,
@@ -218,13 +228,16 @@ mod provider {
                     }
                 },
             );
-            if !asked {
-                waiting.answer(Err(not_shown()));
-                return DialogHold::new(());
-            }
+            // Work the host did not run on Java's main thread showed no box.
+            let refused = waiting.clone();
+            asked.on_complete(move |outcome| {
+                if let Ok(Err(_refused)) = outcome {
+                    refused.answer(Err(not_shown()));
+                }
+            });
             DialogHold::new(BoxHold {
                 activity: self.activity.clone(),
-                java: Arc::clone(&self.java),
+                completions: self.completions.clone(),
                 waiting,
                 on_screen,
             })

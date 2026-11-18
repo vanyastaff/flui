@@ -3,12 +3,12 @@
 
 use std::sync::{Arc, Mutex, PoisonError};
 
-use flui_platform::capability::Activity;
+use flui_platform::capability::{Activity, Completion, CompletionSource, MainThreadRefused};
 use jni::objects::{Global, JObject};
 use jni::{Env, JValue, jni_sig, jni_str};
 
 use super::super::message_box::{BoxEvent, BoxLayout, event_of};
-use super::{CallbackSlot, Java};
+use super::{CallbackSlot, Java, in_frame};
 use crate::dialog::{MessageBoxRequest, MessageLevel};
 
 /// A message box between the owner thread, which may let it go, and Java's
@@ -147,19 +147,20 @@ impl Java {
 
     /// Ask for the message box of `request` on Java's main thread, where it
     /// is shown unless `on_screen` was let go meanwhile; `heard` hears each
-    /// event of the box. `false`, and `heard` is dropped unrun, when the
-    /// job was not posted.
+    /// event of the box, `NotShown` when it could not be built. The
+    /// completion says whether the host ran the work there at all.
     pub(crate) fn show_box(
         self: &Arc<Self>,
         activity: &Activity,
+        completions: &CompletionSource,
         request: MessageBoxRequest,
         layout: BoxLayout,
         on_screen: &Arc<BoxOnScreen>,
         heard: impl Fn(BoxEvent) + Send + Sync + 'static,
-    ) -> bool {
+    ) -> Completion<Result<(), MainThreadRefused>> {
         let java = Arc::clone(self);
         let on_screen = Arc::clone(on_screen);
-        self.on_main_thread(activity, move |env, activity| {
+        activity.on_main_thread(completions, move |frame| {
             if on_screen.state().let_go {
                 return;
             }
@@ -170,30 +171,44 @@ impl Java {
                     by_listener(event);
                 }
             });
-            match java.show_dialog(env, activity, &request, &layout, &listener) {
-                Ok(dialog) => on_screen.state().dialog = Some(dialog),
-                Err(_) => {
+            let shown = in_frame(frame, |env, activity| {
+                let shown = java.show_dialog(env, activity, &request, &layout, &listener);
+                if shown.is_err() {
                     env.exception_clear();
-                    heard(BoxEvent::NotShown);
                 }
+                Ok(shown.ok())
+            });
+            if let Ok(Some(dialog)) = shown {
+                on_screen.state().dialog = Some(dialog);
+            } else {
+                heard(BoxEvent::NotShown);
             }
         })
     }
 
     /// Let the box of `on_screen` go: one not shown yet is not shown, and
     /// one on screen is dismissed on Java's main thread.
-    pub(crate) fn dismiss_box(&self, activity: &Activity, on_screen: &Arc<BoxOnScreen>) {
+    pub(crate) fn dismiss_box(
+        activity: &Activity,
+        completions: &CompletionSource,
+        on_screen: &Arc<BoxOnScreen>,
+    ) {
         on_screen.state().let_go = true;
         let on_screen = Arc::clone(on_screen);
-        // An Activity that ended took the box's window with it.
-        let _ = self.on_main_thread(activity, move |env, _| {
+        // An Activity that ended took the box's window with it, so whether
+        // the dismissal ran is nobody's to hear.
+        drop(activity.on_main_thread(completions, move |frame| {
             let dialog = on_screen.state().dialog.take();
             if let Some(dialog) = dialog {
-                let dismissed = env.call_method(&dialog, jni_str!("dismiss"), jni_sig!("()V"), &[]);
-                if dismissed.is_err() {
-                    env.exception_clear();
-                }
+                let _ = in_frame(frame, |env, _| {
+                    let dismissed =
+                        env.call_method(&dialog, jni_str!("dismiss"), jni_sig!("()V"), &[]);
+                    if dismissed.is_err() {
+                        env.exception_clear();
+                    }
+                    Ok(())
+                });
             }
-        });
+        }));
     }
 }

@@ -12,6 +12,12 @@
 //! android-activity keeps work it cannot run rather than dropping it.
 //! Answers come back through `FluiHost`'s queue, which the loop drains each
 //! turn and hands to [`ResultBridge::answer`].
+//!
+//! A provider's own work for the Java main thread (`Activity::on_main_thread`)
+//! takes the same road: posted through [`main_thread::post`], refused with
+//! `HandOffFailed` when the main thread has not taken it within
+//! `HAND_OFF_LIMIT` (it then never runs), with `ActivityEnded` once the
+//! Activity ends, and with `TooMuchPosted` past `MAX_POSTED_WORK`.
 
 use std::cell::RefCell;
 use std::num::NonZeroU64;
@@ -21,7 +27,8 @@ use std::sync::{Arc, Weak};
 
 use android_activity::AndroidApp;
 use flui_platform::capability::{
-    ActivityBridge, CapabilityId, CompletionSource, DataRefused, IntentFrame, JniFrame, RequestKey,
+    ActivityBridge, CapabilityId, CompletionSource, DataRefused, IntentFrame, JniFrame,
+    MAX_POSTED_WORK, MainThreadRefusal, MainThreadRefused, MainThreadWork, RequestKey,
     ResultIntent, ResultMint, ResultRefused, ResultRequest, ResultToken,
 };
 use jni::objects::{JObject, JString};
@@ -31,7 +38,9 @@ use parking_lot::Mutex;
 use web_time::Instant;
 
 use super::activity::with_activity;
-use super::activity_results::{ANSWER_NUMBERS, Answer, Carried, Issuer, ResultRouter, Routed};
+use super::activity_results::{
+    ANSWER_NUMBERS, Answer, Carried, HAND_OFF_LIMIT, Issuer, ResultRouter, Routed,
+};
 use super::java_host::host_class;
 use super::main_thread::{self, PostFailure};
 use crate::PlatformError;
@@ -98,11 +107,56 @@ impl HandOffs {
     }
 }
 
+/// One provider's work for the Java main thread, between the owner, which
+/// refuses it at the deadline or when the Activity ends, and the main
+/// thread, which runs it: whichever takes `work` first decides.
+struct PostedWork {
+    /// The work, until the main thread takes it to run or the owner takes it
+    /// to refuse it.
+    work: Option<MainThreadWork>,
+    /// The refusal, until the work returns (then dropped) or is refused.
+    refused: Option<MainThreadRefusal>,
+}
+
+/// A [`PostedWork`] the owner holds, posted at `posted`.
+struct Posted {
+    posted: Instant,
+    slot: Arc<Mutex<PostedWork>>,
+}
+
+impl Posted {
+    /// The main thread has not taken the work yet.
+    fn waits(&self) -> bool {
+        self.slot.lock().work.is_some()
+    }
+
+    /// Neither the work nor its refusal is left to run.
+    fn is_done(&self) -> bool {
+        let slot = self.slot.lock();
+        slot.work.is_none() && slot.refused.is_none()
+    }
+
+    /// Take the work back from the main thread and its refusal, for the
+    /// owner to call; `None` once the main thread took the work.
+    fn take_back(&self) -> Option<(MainThreadWork, MainThreadRefusal)> {
+        let mut slot = self.slot.lock();
+        let work = slot.work.take()?;
+        let refused = slot
+            .refused
+            .take()
+            .expect("BUG: a posted work keeps its refusal until the work is taken");
+        Some((work, refused))
+    }
+}
+
 /// The running Activity's side of activity results.
 pub(crate) struct ResultBridge {
     app: AndroidApp,
     router: RefCell<ResultRouter<HeldIntent>>,
     hand_offs: Arc<HandOffs>,
+    /// Providers' work posted to the Java main thread and not yet done, at
+    /// most [`MAX_POSTED_WORK`].
+    posted: RefCell<Vec<Posted>>,
 }
 
 impl std::fmt::Debug for ResultBridge {
@@ -122,6 +176,7 @@ impl ResultBridge {
                 reports: Mutex::new(Reports::default()),
                 signal,
             }),
+            posted: RefCell::new(Vec::new()),
         })
     }
 
@@ -130,10 +185,40 @@ impl ResultBridge {
         Rc::clone(self) as Rc<dyn ActivityBridge>
     }
 
-    /// When the oldest launch the Java main thread has not taken is due, for
-    /// the loop's poll.
+    /// When the oldest launch or provider's work the Java main thread has not
+    /// taken is due, for the loop's poll.
     pub(crate) fn next_deadline(&self) -> Option<Instant> {
-        self.router.borrow().next_deadline()
+        let work = self
+            .posted
+            .borrow()
+            .iter()
+            .filter(|posted| posted.waits())
+            .map(|posted| posted.posted + HAND_OFF_LIMIT)
+            .min();
+        match (self.router.borrow().next_deadline(), work) {
+            (Some(launch), Some(work)) => Some(launch.min(work)),
+            (launch, work) => launch.or(work),
+        }
+    }
+
+    /// Refuse, as `refused`, every provider's work the Java main thread has
+    /// not taken and `due` selects by when it was posted; forget the work
+    /// that is done. The refusals run after the borrow is released.
+    fn refuse_posted(&self, refused: MainThreadRefused, due: impl Fn(Instant) -> bool) {
+        let taken_back: Vec<(MainThreadWork, MainThreadRefusal)> = {
+            let mut posted = self.posted.borrow_mut();
+            let taken_back = posted
+                .iter()
+                .filter(|posted| due(posted.posted))
+                .filter_map(Posted::take_back)
+                .collect();
+            posted.retain(|posted| !posted.is_done());
+            taken_back
+        };
+        for (work, refusal) in taken_back {
+            drop(work);
+            refusal(refused);
+        }
     }
 
     /// Apply what the Java main thread reported, end the launches past their
@@ -150,7 +235,13 @@ impl ResultBridge {
                 delivery.deliver();
             }
         }
-        let (overdue, delivery) = self.router.borrow_mut().overdue(Instant::now());
+        let now = Instant::now();
+        // Work the main thread never takes stays queued in android-activity:
+        // past the limit it is refused, and will not run.
+        self.refuse_posted(MainThreadRefused::HandOffFailed, |posted| {
+            now.saturating_duration_since(posted) >= HAND_OFF_LIMIT
+        });
+        let (overdue, delivery) = self.router.borrow_mut().overdue(now);
         delivery.deliver();
         for token in overdue {
             tracing::warn!(
@@ -212,6 +303,7 @@ impl ResultBridge {
     pub(crate) fn end(&self) {
         let (delivery, let_go) = self.router.borrow_mut().end();
         delivery.deliver();
+        self.refuse_posted(MainThreadRefused::ActivityEnded, |_| true);
         if let_go > 0 {
             tracing::warn!(
                 target: "flui_native::android",
@@ -427,6 +519,73 @@ impl ActivityBridge for ResultBridge {
             Ok(true)
         })
         .unwrap_or(false)
+    }
+
+    fn post(&self, work: MainThreadWork, refused: MainThreadRefusal) {
+        if self.router.borrow().has_ended() {
+            drop(work);
+            refused(MainThreadRefused::ActivityEnded);
+            return;
+        }
+        let full = {
+            let mut posted = self.posted.borrow_mut();
+            posted.retain(|posted| !posted.is_done());
+            posted.len() >= MAX_POSTED_WORK
+        };
+        if full {
+            drop(work);
+            refused(MainThreadRefused::TooMuchPosted);
+            return;
+        }
+        let slot = Arc::new(Mutex::new(PostedWork {
+            work: Some(work),
+            refused: Some(refused),
+        }));
+        self.posted.borrow_mut().push(Posted {
+            posted: Instant::now(),
+            slot: Arc::clone(&slot),
+        });
+        let (on_main, on_failure) = (Arc::clone(&slot), slot);
+        let app = self.app.clone();
+        main_thread::post(
+            &self.app,
+            "flui_platform::capability::Activity::on_main_thread",
+            move || {
+                // Taken first: the owner no longer refuses it at the deadline.
+                let Some(work) = on_main.lock().work.take() else {
+                    return Ok(());
+                };
+                with_activity(&app, |env, activity| {
+                    let Some(lent) = frame(env, activity) else {
+                        return Err(jni::errors::Error::NullPtr("the Activity"));
+                    };
+                    work(lent);
+                    if env.exception_check() {
+                        env.exception_clear();
+                    }
+                    Ok(())
+                })
+                .map_err(|error| error.to_string())?;
+                // Done: nothing is owed.
+                drop(on_main.lock().refused.take());
+                Ok(())
+            },
+            move |failure: PostFailure| {
+                tracing::warn!(
+                    target: "flui_native::android",
+                    ?failure,
+                    "a provider's work for the Java main thread did not finish"
+                );
+                let (work, refused) = {
+                    let mut slot = on_failure.lock();
+                    (slot.work.take(), slot.refused.take())
+                };
+                drop(work);
+                if let Some(refused) = refused {
+                    refused(MainThreadRefused::HandOffFailed);
+                }
+            },
+        );
     }
 }
 

@@ -471,8 +471,13 @@ impl AndroidBuilder {
                 facts.signing.keystore().display()
             ));
         }
+        // A Gradle wrapper in the project means the app has grown a Java or
+        // Kotlin side and Gradle owns the APK; without one, the SDK's own
+        // build-tools package the NativeActivity app directly.
+        let gradle_wrapper_path = android_dir.join(gradle_wrapper_name);
+        let by_gradle = gradle_wrapper_path.exists();
         let declarations = self.declarations(ctx)?;
-        self.write_manifest(&facts.config, &declarations)?;
+        self.write_manifest(&facts.config, &declarations, by_gradle)?;
         // Both packagers write the same file, so a Gradle wrapper added later
         // replaces the APK rather than leaving a second one beside it.
         let output = ctx.output_dir.join(format!(
@@ -481,11 +486,7 @@ impl AndroidBuilder {
             ctx.profile.as_str()
         ));
 
-        // A Gradle wrapper in the project means the app has grown a Java or
-        // Kotlin side and Gradle owns the APK; without one, the SDK's own
-        // build-tools package the NativeActivity app directly.
-        let gradle_wrapper_path = android_dir.join(gradle_wrapper_name);
-        if !gradle_wrapper_path.exists() {
+        if !by_gradle {
             let apk = self
                 .package_with_build_tools(ctx, artifacts, &facts, &declarations, &output)
                 .await?;
@@ -622,11 +623,15 @@ impl AndroidBuilder {
     /// Writes `platforms/android/app/src/main/AndroidManifest.xml`, which
     /// both packagers read: FLUI's base, what the crates linked for the ABIs
     /// built declare, the label from `flui.toml` and the library `cargo ndk`
-    /// built (ADR-0307).
+    /// built (ADR-0307). A provider's authority leads with Gradle's
+    /// `${applicationId}` when Gradle packs the APK (`by_gradle`), so a
+    /// variant's `applicationIdSuffix` reaches it, and with `flui.toml`'s id,
+    /// the package `aapt2` links, otherwise.
     fn write_manifest(
         &self,
         config: &crate::config::FluiConfig,
         declarations: &crate::declarations::Declarations,
+        by_gradle: bool,
     ) -> BuildResult<()> {
         let lib_name = super::util::cargo::cargo_project(&self.workspace_root)?
             .cdylib
@@ -642,7 +647,11 @@ impl AndroidBuilder {
             &super::android_manifest::ManifestFacts {
                 label: config.app.shown_name(),
                 lib_name: &lib_name,
-                application_id: config.app.id.android_package(),
+                application_id: if by_gradle {
+                    super::android_manifest::ApplicationId::Gradle
+                } else {
+                    super::android_manifest::ApplicationId::Written(config.app.id.android_package())
+                },
             },
             declarations,
         )

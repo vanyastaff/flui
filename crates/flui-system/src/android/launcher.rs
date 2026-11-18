@@ -25,19 +25,9 @@ use std::path::Path;
 use flui_platform::launch::{LaunchError, LaunchResult, LauncherCapability, runs_when_opened};
 use flui_platform::{SystemFailure, Unsupported, UnsupportedReason};
 
+use super::opened::Held;
 use super::workers::NotRun;
 use super::{StartAnswer, UNNAMED_FAILURE};
-
-/// What an opened path turned out to hold.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Held {
-    /// A regular file.
-    File,
-    /// A folder.
-    Folder,
-    /// Anything else: a pipe, a device, a socket.
-    Other,
-}
 
 /// `ENOENT`, `EACCES`, `ENOTDIR` and `EPERM`, on Linux and so on Android.
 const ENOENT: i32 = 2;
@@ -97,6 +87,7 @@ pub(crate) fn start_result(started: StartAnswer) -> LaunchResult {
         StartAnswer::Started => Ok(()),
         StartAnswer::NoHandler => Err(LaunchError::NoHandler),
         StartAnswer::Denied => Err(LaunchError::Denied),
+        StartAnswer::Busy => Err(unavailable()),
         StartAnswer::Failed => Err(LaunchError::Failed(UNNAMED_FAILURE)),
     }
 }
@@ -117,44 +108,18 @@ pub(crate) fn not_run<T>(reason: NotRun) -> Result<T, LaunchError> {
     })
 }
 
-/// The document at `path`, opened and judged: the open file and the name it
-/// is handed over under.
-///
-/// The open follows links, so the file judged is the one the path leads to
-/// now, whatever replaces the path later; `O_NONBLOCK` keeps a pipe from
-/// holding the worker, `O_NOCTTY` a terminal from becoming the process's.
+/// The document at `path`, opened and judged ([`super::opened`]): the open
+/// file and the name it is handed over under, its final one.
 ///
 /// # Errors
 ///
 /// What [`open_error`] and [`judge`] refuse.
 #[cfg(any(target_os = "android", all(test, target_os = "linux")))]
 pub(crate) fn open_document(path: &Path) -> Result<(std::fs::File, String), LaunchError> {
-    use std::os::fd::AsRawFd as _;
-    use std::os::unix::fs::OpenOptionsExt as _;
-
-    let io_error = |error: std::io::Error| open_error(error.raw_os_error());
-    let file = std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NONBLOCK | libc::O_NOCTTY)
-        .open(path)
-        .map_err(io_error)?;
-    let kind = file.metadata().map_err(io_error)?.file_type();
-    let held = if kind.is_file() {
-        Held::File
-    } else if kind.is_dir() {
-        Held::Folder
-    } else {
-        Held::Other
-    };
-    let final_name =
-        std::fs::read_link(format!("/proc/self/fd/{}", file.as_raw_fd())).map_err(io_error)?;
-    judge(held, &final_name)?;
-    let name = final_name
-        .file_name()
-        .ok_or(LaunchError::NotADocument)?
-        .to_string_lossy()
-        .into_owned();
-    Ok((file, name))
+    let opened = super::opened::open(path).map_err(|error| open_error(error.raw_os_error()))?;
+    judge(opened.held, &opened.final_name)?;
+    let name = opened.file_name().ok_or(LaunchError::NotADocument)?;
+    Ok((opened.file, name))
 }
 
 #[cfg(target_os = "android")]
@@ -169,9 +134,28 @@ mod provider {
     use flui_platform::capability::{Activity, CompletionSource, Resolver};
     use flui_platform::launch::{ExternalUri, LaunchResult, LauncherBackend};
 
-    use super::super::java::{Java, Waiting};
+    use super::super::java::{Java, Started, view};
     use super::super::workers::Workers;
     use super::{not_on_android, not_run, open_document, start_result, unavailable};
+
+    /// Answer `answer` with what `started` did: a start the host did not
+    /// run on Java's main thread never reached Android.
+    fn answer_start(started: Started, answer: Resolver<LaunchResult>) {
+        let mut answer = Some(answer);
+        started.on_complete(move |outcome| {
+            let Some(answer) = answer.take() else {
+                return;
+            };
+            match outcome {
+                // The owner retiring first leaves nothing waiting.
+                Ok(Ok(started)) => drop(answer.resolve(start_result(started))),
+                Ok(Err(_refused)) => drop(answer.resolve(Err(unavailable()))),
+                // The owner retired: the caller's completion ends as its
+                // own did.
+                Err(_) => {}
+            }
+        });
+    }
 
     /// [`LauncherBackend`] over `ACTION_VIEW`.
     pub(crate) struct AndroidLauncher {
@@ -199,16 +183,10 @@ mod provider {
 
     impl LauncherBackend for AndroidLauncher {
         fn open_uri(&self, uri: ExternalUri, answer: Resolver<LaunchResult>) {
-            let waiting = Waiting::new(answer);
-            let heard = waiting.clone();
-            let posted = self
-                .java
-                .view(&self.activity, uri.as_str().to_owned(), move |started| {
-                    heard.answer(start_result(started));
-                });
-            if !posted {
-                waiting.answer(Err(unavailable()));
-            }
+            answer_start(
+                view(&self.activity, &self.completions, uri.as_str().to_owned()),
+                answer,
+            );
         }
 
         fn open_path(&self, path: PathBuf, answer: Resolver<LaunchResult>) {
@@ -219,22 +197,17 @@ mod provider {
                 });
             let activity = self.activity.clone();
             let java = Arc::clone(&self.java);
+            let completions = self.completions.clone();
             let mut answer = Some(answer);
             opened.on_complete(move |outcome| {
                 let Some(answer) = answer.take() else {
                     return;
                 };
                 match outcome {
-                    Ok(Ok((file, name))) => {
-                        let waiting = Waiting::new(answer);
-                        let heard = waiting.clone();
-                        let posted = java.view_document(&activity, file, name, move |started| {
-                            heard.answer(start_result(started));
-                        });
-                        if !posted {
-                            waiting.answer(Err(unavailable()));
-                        }
-                    }
+                    Ok(Ok((file, name))) => answer_start(
+                        java.view_document(&activity, &completions, file, name),
+                        answer,
+                    ),
                     // The owner retiring first leaves nothing waiting.
                     Ok(Err(refusal)) => drop(answer.resolve(Err(refusal))),
                     // The worker panicked: the caller's completion ends as

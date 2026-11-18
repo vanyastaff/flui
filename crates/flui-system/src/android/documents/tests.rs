@@ -11,8 +11,9 @@ use flui_platform::capability::{
 use flui_platform::{SystemFailure, Unsupported, UnsupportedReason};
 
 use super::{
-    Described, MAX_INTENT_TYPES, MAX_PICKS, NotOpened, OPEN_KEY, PickerIntent, SAVE_KEY,
-    create_intent, open_refusal, open_types, read_picks, request_refusal, write_save,
+    Described, LetGo, MAX_INTENT_TYPES, MAX_PICKS, NotOpened, OPEN_KEY, PickerIntent, READ_CHUNK,
+    SAVE_KEY, create_intent, open_refusal, open_types, read_bounded, read_picks, request_refusal,
+    write_save,
 };
 use crate::dialog::{
     DialogError, FileDialogCapability, FileDialogs, FileFilter, OpenRequest, OpenResult,
@@ -204,35 +205,50 @@ fn the_picks_are_held_to_the_filters_and_the_limit_before_any_is_read() {
 
     let (mut documents, steps) = steps_of(vec![png(), text()]);
     assert_eq!(
-        read_picks(&mut documents, &[images()], true, 100),
+        read_picks(&mut documents, &[images()], true, 100, &LetGo::default()),
         Err(DialogError::NotInFilter)
     );
     assert_eq!(steps.taken(), described_only(2), "nothing was read");
 
     let (mut documents, steps) = steps_of(vec![png(), nameless()]);
-    assert_eq!(read_picks(&mut documents, &[], true, 100), malformed());
+    assert_eq!(
+        read_picks(&mut documents, &[], true, 100, &LetGo::default()),
+        malformed()
+    );
     assert_eq!(steps.taken(), described_only(2));
 
     let (mut documents, steps) = steps_of(vec![png(), text()]);
-    assert_eq!(read_picks(&mut documents, &[], false, 100), malformed());
+    assert_eq!(
+        read_picks(&mut documents, &[], false, 100, &LetGo::default()),
+        malformed()
+    );
     assert!(
         steps.taken().is_empty(),
         "several picks for one are not described"
     );
 
     let (mut documents, steps) = steps_of(Vec::new());
-    assert_eq!(read_picks(&mut documents, &[], true, 100), malformed());
+    assert_eq!(
+        read_picks(&mut documents, &[], true, 100, &LetGo::default()),
+        malformed()
+    );
     assert!(
         steps.taken().is_empty(),
         "an empty answer has nothing to describe"
     );
 
     let (mut documents, steps) = steps_of(vec![png(), text()]);
-    assert_eq!(read_picks(&mut documents, &[], true, 7), too_large(8, 7));
+    assert_eq!(
+        read_picks(&mut documents, &[], true, 7, &LetGo::default()),
+        too_large(8, 7)
+    );
     assert_eq!(steps.taken(), described_only(2), "declared past the limit");
 
     let (mut documents, steps) = steps_of(vec![understated(), text()]);
-    assert_eq!(read_picks(&mut documents, &[], true, 4), too_large(5, 4));
+    assert_eq!(
+        read_picks(&mut documents, &[], true, 4, &LetGo::default()),
+        too_large(5, 4)
+    );
     assert_eq!(
         steps.taken(),
         [Step::Described(0), Step::Described(1), Step::Read(0, 5)],
@@ -240,7 +256,7 @@ fn the_picks_are_held_to_the_filters_and_the_limit_before_any_is_read() {
     );
 
     let (mut documents, steps) = steps_of(vec![png(), undeclared()]);
-    let picks = read_picks(&mut documents, &[], true, 8)
+    let picks = read_picks(&mut documents, &[], true, 8, &LetGo::default())
         .expect("within the limit")
         .expect("two picks");
     assert_eq!(
@@ -269,7 +285,7 @@ fn the_picks_are_held_to_the_filters_and_the_limit_before_any_is_read() {
     let (mut documents, _) = steps_of(vec![Document::new("IMG_0001", "image/jpeg", b"1")]);
     let typed = [FileFilter::new("Pictures").with_mime_type("image/*")];
     assert!(matches!(
-        read_picks(&mut documents, &typed, false, 8),
+        read_picks(&mut documents, &typed, false, 8, &LetGo::default()),
         Ok(Some(_))
     ));
 }
@@ -580,6 +596,83 @@ fn a_dialog_let_go_finishes_its_picker_and_stops_the_read_of_its_answer() {
         "the hold's drop stops the worker's calls"
     );
     drop(release);
+}
+
+/// An open dialog let go after its picker answered, before the answer's
+/// owner turn, leaves the answer unread: no worker describes or reads any
+/// of its documents, and the caller hears nothing.
+#[test]
+fn a_dialog_let_go_before_its_answer_is_read_reads_nothing() {
+    let bench = Bench::new();
+    let dialogs = bench.dialogs();
+    let opening = dialogs.open(OpenRequest::files());
+    bench
+        .picker
+        .will_answer(vec![Document::new("a.png", "image/png", b"12345")]);
+    bench.activity.answer(0, ResultCode::Ok, true);
+    // The answer has arrived; the caller lets go before its owner turn.
+    drop(opening);
+    // Turns until the owner is idle: the answer's settlement runs among
+    // them, and a worker it started would have taken its first step.
+    for _ in 0..100 {
+        if bench.owner.turn() == 0 {
+            break;
+        }
+    }
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    assert_eq!(
+        bench.picker.steps.taken(),
+        Vec::<Step>::new(),
+        "nobody waits for the answer, so nothing of it is read"
+    );
+    assert_eq!(
+        bench.activity.intents_read(),
+        1,
+        "the answer's Intent was let go"
+    );
+}
+
+/// A read stops between two chunks once its dialog is let go: the reader
+/// is asked for one chunk, not for the rest of the document.
+#[test]
+fn a_read_stops_between_chunks_once_its_dialog_is_let_go() {
+    /// A reader that lets its dialog go once it has handed over a chunk.
+    struct LettingGo<'a> {
+        left: &'a [u8],
+        let_go: LetGo,
+        chunks: usize,
+    }
+
+    impl std::io::Read for LettingGo<'_> {
+        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+            let read = self.left.read(buffer)?;
+            self.chunks += 1;
+            self.let_go.set();
+            Ok(read)
+        }
+    }
+
+    let document = vec![7_u8; READ_CHUNK * 3];
+    let let_go = LetGo::default();
+    let mut reader = LettingGo {
+        left: &document,
+        let_go: let_go.clone(),
+        chunks: 0,
+    };
+    assert_eq!(
+        read_bounded(&mut reader, u64::MAX, &let_go),
+        Err(DialogError::WindowClosed)
+    );
+    assert_eq!(reader.chunks, 1, "the rest of the document is not read");
+
+    let whole = read_bounded(&document[..], u64::MAX, &LetGo::default()).expect("read");
+    assert_eq!(
+        whole.len(),
+        document.len(),
+        "a dialog still held reads it all"
+    );
+    let bounded = read_bounded(&document[..], 5, &LetGo::default()).expect("read");
+    assert_eq!(bounded.len(), 5, "and no more than it asks for");
 }
 
 /// A save writes its contents to the document the user chose and answers

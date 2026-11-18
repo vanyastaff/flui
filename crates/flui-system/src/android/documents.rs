@@ -19,10 +19,18 @@
 //! are held to the filters all the same (ADR-0360 §4). The picker shows no
 //! title, accept label or starting folder of the request's.
 //!
-//! The request lasts by its [`ResultTicket`]: dropping the dialog's hold
-//! drops the ticket, which finishes the picker (ADR-0344), and stops a read
-//! in progress through its cancellation signal. A save that the user has
-//! answered completes whoever still waits. When Android replaces the
+//! The request lasts by its [`ResultTicket`]. Dropping an open dialog's hold
+//! before the picker answers drops the ticket, which finishes the picker
+//! (ADR-0344). Dropped after the answer arrived and before its owner turn,
+//! it leaves the answer unread: no worker starts. Dropped while a worker
+//! reads, it stops three things: the provider's calls that take the
+//! cancellation signal (the query of a name or a size, the open of a
+//! document, whose `OperationCanceledException` ends the read), and the
+//! worker itself before its next document and between two
+//! [`READ_CHUNK`]-sized reads ([`LetGo`]). A read the provider holds blocked
+//! inside one chunk keeps the worker's place until the provider writes or
+//! closes its end. A save that the user has answered completes whoever still
+//! waits. When Android replaces the
 //! Activity, the request ends as the window closing; the answer that comes
 //! later reaches the next Activity, where [`EarlierAnswers`] claims it so
 //! the host holds nothing: an open's answer is let go, and the empty
@@ -32,6 +40,7 @@
 use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use flui_platform::capability::{
     Activity, CompletionSource, IntentFrame, JniFrame, MAX_OPEN_REQUESTS_PER_CAPABILITY,
@@ -114,7 +123,6 @@ pub(crate) fn open_refusal(reason: NotOpened) -> DialogError {
 
 /// The failure a read or a write of a document reports: the system's code,
 /// or an answer outside its contract when it gives none.
-#[cfg(target_os = "android")]
 pub(crate) fn io_failure(error: &std::io::Error) -> DialogError {
     DialogError::Failed(
         error
@@ -238,6 +246,60 @@ pub(crate) struct Described {
 /// run once, from the owner thread, and never waits for the provider.
 pub(crate) type Interrupt = Box<dyn FnOnce()>;
 
+/// Set on the owner thread when an open dialog's hold is dropped; the worker
+/// reading the dialog's answer checks it before each document and between
+/// chunks of one, and stops.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct LetGo(Arc<AtomicBool>);
+
+impl LetGo {
+    /// Nobody waits for the answer any more.
+    fn set(&self) {
+        self.0.store(true, Ordering::Release);
+    }
+
+    /// Whether nobody waits for the answer any more.
+    pub(crate) fn is_set(&self) -> bool {
+        self.0.load(Ordering::Acquire)
+    }
+}
+
+/// The most bytes one read of a document asks for, between two checks of
+/// its dialog's [`LetGo`].
+pub(crate) const READ_CHUNK: usize = 64 * 1024;
+
+/// The first `at_most` bytes `reader` holds, or all of them when it holds
+/// fewer, read [`READ_CHUNK`] at a time with `let_go` checked before each.
+///
+/// # Errors
+///
+/// [`DialogError::WindowClosed`] once `let_go` is set: nobody hears the
+/// answer, and the rest is not read. The system's failure of a read.
+pub(crate) fn read_bounded(
+    mut reader: impl std::io::Read,
+    at_most: u64,
+    let_go: &LetGo,
+) -> Result<Vec<u8>, DialogError> {
+    let mut contents = Vec::new();
+    let mut chunk = vec![0_u8; READ_CHUNK];
+    loop {
+        let left = at_most.saturating_sub(u64::try_from(contents.len()).unwrap_or(u64::MAX));
+        if left == 0 {
+            return Ok(contents);
+        }
+        if let_go.is_set() {
+            return Err(DialogError::WindowClosed);
+        }
+        let wanted = usize::try_from(left).unwrap_or(usize::MAX).min(READ_CHUNK);
+        match reader.read(&mut chunk[..wanted]) {
+            Ok(0) => return Ok(contents),
+            Ok(read) => contents.extend_from_slice(&chunk[..read]),
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(error) => return Err(io_failure(&error)),
+        }
+    }
+}
+
 /// The documents one answer of a picker names, as a worker reaches them:
 /// the content URIs and the resolver they are read through on Android, a
 /// stand-in in the tests. Every call may block for as long as the
@@ -250,12 +312,13 @@ pub(crate) trait PickedDocuments: Send + 'static {
     fn describe(&mut self, index: usize) -> Described;
 
     /// The first `at_most` bytes of document `index`, or all of it when it
-    /// holds fewer.
+    /// holds fewer, read by [`read_bounded`] under `let_go`.
     ///
     /// # Errors
     ///
-    /// Why the document could not be read.
-    fn read(&mut self, index: usize, at_most: u64) -> Result<Vec<u8>, DialogError>;
+    /// Why the document could not be read, or `WindowClosed` once `let_go`
+    /// is set.
+    fn read(&mut self, index: usize, at_most: u64, let_go: &LetGo) -> Result<Vec<u8>, DialogError>;
 
     /// Replace what document `index` holds with `contents`.
     ///
@@ -270,12 +333,14 @@ pub(crate) trait PickedDocuments: Send + 'static {
 
 /// The answer of an open dialog whose picker answered `documents`: each is
 /// described, the picks are held to `filters` and to `max_bytes` as
-/// declared, and only then read, the bytes counted again.
+/// declared, and only then read, the bytes counted again, until `let_go` is
+/// set.
 pub(crate) fn read_picks(
     documents: &mut impl PickedDocuments,
     filters: &[FileFilter],
     multiple: bool,
     max_bytes: u64,
+    let_go: &LetGo,
 ) -> OpenResult {
     let malformed = || DialogError::Failed(SystemFailure::MalformedAnswer);
     let count = documents.len();
@@ -306,7 +371,7 @@ pub(crate) fn read_picks(
     for (index, name) in names.into_iter().enumerate() {
         // One byte past what is left shows a document larger than declared.
         let left = max_bytes - read;
-        let contents = documents.read(index, left.saturating_add(1))?;
+        let contents = documents.read(index, left.saturating_add(1), let_go)?;
         read = read.saturating_add(u64::try_from(contents.len()).unwrap_or(u64::MAX));
         admit_read(read, max_bytes)?;
         picks.push(
@@ -342,8 +407,8 @@ pub(crate) fn write_save(
         .ok_or_else(malformed)
 }
 
-/// Android's side of a picker, on the owner thread: `FluiSystem` through
-/// JNI on Android, a stand-in in the tests.
+/// Android's side of a picker, on the owner thread: the Storage Access
+/// Framework through JNI on Android (`JavaPicker`), a stand-in in the tests.
 pub(crate) trait DocumentPicker: 'static {
     /// What a worker reads an answer's documents through.
     type Documents: PickedDocuments;
@@ -407,10 +472,11 @@ fn not_run<T>(reason: NotRun) -> Result<T, DialogError> {
 struct Asked {
     /// The request's claim; dropping it finishes the picker.
     ticket: Cell<Option<ResultTicket>>,
-    /// Stops the worker reading the answer, once there is one.
+    /// Stops the worker's calls into the provider, once there is an answer.
     interrupt: Cell<Option<Interrupt>>,
-    /// The hold was dropped: nobody waits for the answer.
-    let_go: Cell<bool>,
+    /// The hold was dropped: nobody waits for the answer. Shared with the
+    /// worker reading it.
+    let_go: LetGo,
 }
 
 /// A dialog's hold: its drop finishes the picker, or stops the read of what
@@ -419,7 +485,7 @@ struct PickerHold(Rc<Asked>);
 
 impl Drop for PickerHold {
     fn drop(&mut self) {
-        self.0.let_go.set(true);
+        self.0.let_go.set();
         let ticket = self.0.ticket.take();
         let interrupt = self.0.interrupt.take();
         drop(ticket);
@@ -470,7 +536,7 @@ impl<P: DocumentPicker> AndroidDialogs<P> {
         intent: &PickerIntent,
         after: AfterAnswer,
         answer: Resolver<Result<Option<T>, DialogError>>,
-        work: impl FnOnce(&mut P::Documents) -> Result<Option<T>, DialogError> + Send + 'static,
+        work: impl FnOnce(&mut P::Documents, &LetGo) -> Result<Option<T>, DialogError> + Send + 'static,
     ) -> DialogHold {
         let picker = Rc::clone(&self.picker);
         let launched = self
@@ -512,14 +578,19 @@ impl<P: DocumentPicker> AndroidDialogs<P> {
             };
             match documents {
                 Ok(Some((mut documents, interrupt))) => {
-                    if after == AfterAnswer::StopsWithCaller {
-                        if asked.let_go.get() {
-                            return;
+                    // A save the user answered is written whoever waits.
+                    let let_go = match after {
+                        AfterAnswer::StopsWithCaller => {
+                            if asked.let_go.is_set() {
+                                return;
+                            }
+                            asked.interrupt.set(Some(interrupt));
+                            asked.let_go.clone()
                         }
-                        asked.interrupt.set(Some(interrupt));
-                    }
+                        AfterAnswer::Completes => LetGo::default(),
+                    };
                     workers.run("flui-system-documents", answer, not_run, move || {
-                        work(&mut documents)
+                        work(&mut documents, &let_go)
                     });
                 }
                 Ok(None) => drop(answer.resolve(Ok(None))),
@@ -559,7 +630,7 @@ impl<P: DocumentPicker> FileDialogBackend for AndroidDialogs<P> {
             &intent,
             AfterAnswer::StopsWithCaller,
             answer,
-            move |documents| read_picks(documents, &filters, multiple, max_bytes),
+            move |documents, let_go| read_picks(documents, &filters, multiple, max_bytes, let_go),
         )
     }
 
@@ -593,7 +664,7 @@ impl<P: DocumentPicker> FileDialogBackend for AndroidDialogs<P> {
             &intent,
             AfterAnswer::Completes,
             answer,
-            move |documents| write_save(documents, &contents, proposed),
+            move |documents, _| write_save(documents, &contents, proposed),
         )
     }
 }

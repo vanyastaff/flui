@@ -302,7 +302,7 @@ order = 5
 [package.metadata.flui.declares]
 schema = 4
 
-# The crate's Java classes (`FluiSystem`, `FluiMessageBox`, `FluiDocuments`),
+# The crate's Java classes (`FluiCallback`, `FluiDocuments`),
 # compiled from `java` into the checked-in dex (`cargo xtask android-dex`):
 # `flui build` packs the dex into the APK and hands Gradle the sources.
 [package.metadata.flui.declares.android]
@@ -315,7 +315,7 @@ proguard = "android/proguard-rules.pro"
 
 # The content provider a view or a share hands a file through: not exported,
 # granting per URI, under `<application id>.flui.documents`
-# (`FluiDocuments.AUTHORITY_SUFFIX`).
+# (the authority Android attaches `FluiDocuments` with, which it serves under).
 [[package.metadata.flui.declares.android.providers]]
 class = "dev.flui.system.FluiDocuments"
 authority = "flui.documents"

@@ -10,13 +10,13 @@ use std::fs::File;
 use std::os::fd::AsRawFd as _;
 use std::sync::Arc;
 
-use flui_platform::capability::Activity;
+use flui_platform::capability::{Activity, Completion, CompletionSource, MainThreadRefused};
 use jni::objects::{JObject, JString};
 use jni::{Env, JValue, jni_sig, jni_str};
 
 use super::super::StartAnswer;
 use super::super::share::common_type;
-use super::{Java, is_a, nullable, put_string, string_array, thrown, with_string};
+use super::{Java, in_frame, is_a, nullable, put_string, string_array, thrown, with_string};
 
 /// `Intent.FLAG_GRANT_READ_URI_PERMISSION`.
 const GRANT_READ: i32 = 1;
@@ -57,6 +57,10 @@ fn start_activity(
         Some(exception) if is_a(env, &exception, jni_str!("java/lang/SecurityException")) => {
             StartAnswer::Denied
         }
+        // `FluiDocuments.offer` keeps as many documents as it serves.
+        Some(exception) if is_a(env, &exception, jni_str!("java/lang/IllegalStateException")) => {
+            StartAnswer::Busy
+        }
         _ => StartAnswer::Failed,
     }
 }
@@ -74,7 +78,7 @@ impl Java {
     ) -> jni::errors::Result<JObject<'local>> {
         let uri = env
             .call_static_method(
-                &self.documents,
+                self.documents()?,
                 jni_str!("offer"),
                 jni_sig!("(Landroid/content/Context;ILjava/lang/String;)Landroid/net/Uri;"),
                 &[
@@ -95,7 +99,7 @@ impl Java {
     fn type_of_name(&self, env: &mut Env<'_>, name: &JString<'_>) -> jni::errors::Result<String> {
         let mime_type = env
             .call_static_method(
-                &self.documents,
+                self.documents()?,
                 jni_str!("typeOfName"),
                 jni_sig!("(Ljava/lang/String;)Ljava/lang/String;"),
                 &[JValue::Object(name)],
@@ -254,56 +258,62 @@ impl Java {
         .l()
     }
 
-    /// View `uri` in the activity Android resolves for it, on Java's main
-    /// thread: `ACTION_VIEW` under `CATEGORY_BROWSABLE`, with no grant.
-    /// `heard` hears what the start did; `false`, and `heard` is dropped
-    /// unrun, when the job was not posted.
-    pub(crate) fn view(
-        &self,
-        activity: &Activity,
-        uri: String,
-        heard: impl FnOnce(StartAnswer) + Send + 'static,
-    ) -> bool {
-        self.on_main_thread(activity, move |env, activity| {
-            let intent = view_intent(env, &uri);
-            heard(start_activity(env, activity, intent));
-        })
-    }
-
     /// View the document open as `file` under `name`, on Java's main
-    /// thread; `heard` and the answer as for [`view`](Self::view).
+    /// thread; the completion as for [`view`].
     pub(crate) fn view_document(
         self: &Arc<Self>,
         activity: &Activity,
+        completions: &CompletionSource,
         file: File,
         name: String,
-        heard: impl FnOnce(StartAnswer) + Send + 'static,
-    ) -> bool {
+    ) -> Started {
         let java = Arc::clone(self);
-        self.on_main_thread(activity, move |env, activity| {
-            let intent = java.document_intent(env, activity, &file, &name);
-            heard(start_activity(env, activity, intent));
+        activity.on_main_thread(completions, move |frame| {
+            in_frame(frame, |env, activity| {
+                let intent = java.document_intent(env, activity, &file, &name);
+                Ok(start_activity(env, activity, intent))
+            })
+            .unwrap_or(StartAnswer::Failed)
         })
     }
 
     /// Show the share sheet with `text` and `files`, each open and named,
-    /// on Java's main thread; `heard` and the answer as for
-    /// [`view`](Self::view).
+    /// on Java's main thread; the completion as for [`view`].
     pub(crate) fn share(
         self: &Arc<Self>,
         activity: &Activity,
+        completions: &CompletionSource,
         title: Option<String>,
         text: Option<String>,
         files: Vec<(File, String)>,
-        heard: impl FnOnce(StartAnswer) + Send + 'static,
-    ) -> bool {
+    ) -> Started {
         let java = Arc::clone(self);
-        self.on_main_thread(activity, move |env, activity| {
-            let intent =
-                java.share_intent(env, activity, title.as_deref(), text.as_deref(), &files);
-            heard(start_activity(env, activity, intent));
+        activity.on_main_thread(completions, move |frame| {
+            in_frame(frame, |env, activity| {
+                let intent =
+                    java.share_intent(env, activity, title.as_deref(), text.as_deref(), &files);
+                Ok(start_activity(env, activity, intent))
+            })
+            .unwrap_or(StartAnswer::Failed)
         })
     }
+}
+
+/// What a start on Java's main thread answers: what it did, or why the host
+/// did not run it there.
+pub(crate) type Started = Completion<Result<StartAnswer, MainThreadRefused>>;
+
+/// View `uri` in the activity Android resolves for it, on Java's main
+/// thread: `ACTION_VIEW` under `CATEGORY_BROWSABLE`, with no grant, and none
+/// of the crate's classes.
+pub(crate) fn view(activity: &Activity, completions: &CompletionSource, uri: String) -> Started {
+    activity.on_main_thread(completions, move |frame| {
+        in_frame(frame, |env, activity| {
+            let intent = view_intent(env, &uri);
+            Ok(start_activity(env, activity, intent))
+        })
+        .unwrap_or(StartAnswer::Failed)
+    })
 }
 
 /// The `Intent` that views `uri`: `ACTION_VIEW` under `CATEGORY_BROWSABLE`.

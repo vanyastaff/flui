@@ -1,21 +1,24 @@
 //! Android as the providers call it through JNI, and the registration.
 //!
 //! The library keeps no `JavaVM` of its own: a UI runtime's first provider
-//! reads the VM, the Activity's class loader, the crate's two classes and
-//! the application's content resolver in a frame the host's Activity lends
-//! ([`Java::load`]), checks `FluiCallback.PROTOCOL`, and keeps them with the
-//! runtime (`ProviderContext::runtime_local`). A call on the owner thread
-//! that needs the Activity runs in a frame it lends; a worker attaches
-//! itself to the VM for each call.
+//! reads the VM, the Activity's class loader and the application's content
+//! resolver in a frame the host's Activity lends ([`Java::load`]) and keeps
+//! them with the runtime (`ProviderContext::runtime_local`). A call on the
+//! owner thread that needs the Activity runs in a frame it lends; a worker
+//! attaches itself to the VM for each call; work for Java's main thread goes
+//! through the host (`Activity::on_main_thread`), which runs it inside its
+//! panic boundary and refuses it past its deadline.
 //!
-//! Android calls back through `FluiCallback`, the handler of a
-//! `java.lang.reflect.Proxy` the library makes for the interfaces a callback
-//! has: a `Runnable` is how a job reaches Java's main thread
-//! ([`Java::on_main_thread`]), and a dialog's three listeners are one proxy.
-//! Each `FluiCallback` holds a handle, an [`Arc`] of a [`CallbackSlot`] the
-//! library leaked for it: `FluiCallback.called` runs the slot's closure, and
-//! `FluiCallback.released`, from the object's finalizer, gives the reference
-//! back.
+//! The crate's own classes are reached only by the providers that need them
+//! ([`Java::classes`]): the launcher and the share sheet hand files through
+//! `FluiDocuments`, and the message box's listeners are a
+//! `java.lang.reflect.Proxy` whose handler is `FluiCallback`. They are read
+//! once, `FluiCallback.PROTOCOL` is checked before anything is bound, and the
+//! user's folders, the system information and the file dialogs work without
+//! them. Each `FluiCallback` holds a handle, an [`Arc`] of a [`CallbackSlot`]
+//! the library leaked for it: `FluiCallback.called` runs the slot's closure,
+//! and `FluiCallback.released`, once the object is collected, gives the
+//! reference back.
 //!
 //! No compiler checks the class names, method names and signatures spelled
 //! here: each was read against the platform's `android.jar`.
@@ -25,7 +28,7 @@ mod saf;
 mod starts;
 
 use std::cell::RefCell;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use flui_platform::capability::{
     Activity, Capability, CapabilityRegistrar, JniFrame, ProviderContext, Resolver,
@@ -39,6 +42,7 @@ use jni::{Env, EnvUnowned, JValue, JavaVM, NativeMethod, jni_sig, jni_str};
 
 pub(crate) use alert::BoxOnScreen;
 use saf::JavaPicker;
+pub(crate) use starts::{Started, view};
 
 use super::documents::{self, MAX_NAME_UNITS};
 use super::workers::Workers;
@@ -95,9 +99,9 @@ extern "system" fn called<'local>(
                 let method = method.try_to_string(env)?;
                 // SAFETY: a non-zero handle is an `Arc<CallbackSlot>` leaked
                 // by `Java::proxy` for the `FluiCallback` that passes it,
-                // which is reachable for the length of this call, so its
-                // finalizer, the one place the reference is given back, has
-                // not run.
+                // which is reachable for the length of this call, so it has
+                // not been collected and `released`, the one place the
+                // reference is given back, has not run for it.
                 let slot = unsafe { &*(handle as *const CallbackSlot) };
                 slot.call(env, &method, argument);
             }
@@ -118,8 +122,9 @@ extern "system" fn released<'local>(
         |_| {
             if handle != 0 {
                 // SAFETY: a non-zero handle is an `Arc<CallbackSlot>` leaked
-                // by `Java::proxy`; `FluiCallback.finalize` passes it here
-                // once, after which nothing calls the object, so this takes
+                // by `Java::proxy`; `FluiCallback` passes it here once, from
+                // the phantom reference enqueued after its object was
+                // collected, so nothing calls the object again and this takes
                 // back the one reference Java held.
                 drop(unsafe { Arc::from_raw(handle as *const CallbackSlot) });
             }
@@ -247,8 +252,9 @@ fn with_string(
     .map(drop)
 }
 
-/// An answer Java's main thread gives a caller, or the owner thread when
-/// the job that would give it never got there: whichever takes it first.
+/// An answer that two threads race to give: a message box's listener on
+/// Java's main thread, and its hold or the refusal of its work on the owner
+/// thread. Whichever takes it first answers.
 pub(crate) struct Waiting<T>(Arc<Mutex<Option<Resolver<T>>>>);
 
 impl<T> Clone for Waiting<T> {
@@ -279,7 +285,7 @@ impl<T: Send + 'static> Waiting<T> {
 }
 
 /// Why the crate's Java classes were not reached.
-#[derive(Debug, thiserror::Error)]
+#[derive(Clone, Copy, Debug, thiserror::Error)]
 enum NotLoaded {
     /// The Activity's class loader lacks them: the APK was packed without
     /// the crate's dex.
@@ -288,9 +294,13 @@ enum NotLoaded {
     /// The classes in the APK state another protocol than the library's.
     #[error("the APK's classes state protocol {0}, the library {PROTOCOL}")]
     OtherProtocol(i32),
-    /// A JNI call failed.
-    #[error("a JNI call failed: {0}")]
-    Jni(jni::errors::Error),
+    /// Android never attached `FluiDocuments`: the manifest declares no
+    /// `<provider>` of the class.
+    #[error("the manifest declares no provider of dev.flui.system.FluiDocuments")]
+    NoProvider,
+    /// A JNI call failed; the failure was logged.
+    #[error("a JNI call failed")]
+    Jni,
 }
 
 /// The class `loader` finds by the binary name `name`, or `None` when it
@@ -320,22 +330,29 @@ fn load_class<'local>(
     }
 }
 
+/// The crate's own classes, read and bound once.
+struct Classes {
+    callback: Global<JClass<'static>>,
+    documents: Global<JClass<'static>>,
+}
+
 /// What the providers of one UI runtime call Android through.
 pub(crate) struct Java {
     vm: JavaVM,
-    /// The Activity's class loader, which defines the proxies.
+    /// The Activity's class loader, which holds the crate's classes and
+    /// defines the proxies.
     loader: Global<JObject<'static>>,
-    callback: Global<JClass<'static>>,
-    documents: Global<JClass<'static>>,
     /// The application's `ContentResolver`, which outlives an Activity.
     resolver: Global<JObject<'static>>,
+    /// The crate's classes, once a provider that needs them asked.
+    classes: OnceLock<Result<Classes, NotLoaded>>,
 }
 
 impl Java {
-    /// Read the classes through the Activity lent in `frame`, check their
-    /// protocol, and bind `FluiCallback`'s native methods.
-    fn load(frame: JniFrame) -> Result<Self, NotLoaded> {
-        let loaded = in_frame(frame, |env, activity| {
+    /// Read the class loader and the content resolver through the Activity
+    /// lent in `frame`.
+    fn load(frame: JniFrame) -> jni::errors::Result<Self> {
+        in_frame(frame, |env, activity| {
             let loader = env
                 .call_method(
                     activity,
@@ -344,39 +361,6 @@ impl Java {
                     &[],
                 )?
                 .l()?;
-            let (Some(callback), Some(provider)) = (
-                load_class(env, &loader, CALLBACK_CLASS)?,
-                load_class(env, &loader, DOCUMENTS_CLASS)?,
-            ) else {
-                return Ok(Err(NotLoaded::NotPackaged));
-            };
-            let protocol = env
-                .get_static_field(&callback, jni_str!("PROTOCOL"), jni_sig!("I"))?
-                .i()?;
-            if protocol != PROTOCOL {
-                return Ok(Err(NotLoaded::OtherProtocol(protocol)));
-            }
-            // SAFETY: `called` and `released` are `extern "system"`
-            // functions whose parameters are the JNI environment, the class
-            // (the methods are static), and what each signature names: a
-            // `long`, a `String` and an `int`, and a `long`; each returns
-            // `void`.
-            let natives = unsafe {
-                [
-                    NativeMethod::from_raw_parts(
-                        jni_str!("called"),
-                        jni_str!("(JLjava/lang/String;I)V"),
-                        called as *mut std::ffi::c_void,
-                    ),
-                    NativeMethod::from_raw_parts(
-                        jni_str!("released"),
-                        jni_str!("(J)V"),
-                        released as *mut std::ffi::c_void,
-                    ),
-                ]
-            };
-            // SAFETY: as above.
-            unsafe { env.register_native_methods(&callback, &natives) }?;
             let context = env
                 .call_method(
                     activity,
@@ -396,15 +380,91 @@ impl Java {
             // SAFETY: the host lends the process's `JavaVM*`, which lives as
             // long as the process.
             let vm = unsafe { JavaVM::from_raw(frame.vm().cast()) };
-            Ok(Ok(Self {
+            Ok(Self {
                 vm,
                 loader: env.new_global_ref(&loader)?,
-                callback: env.new_global_ref(&callback)?,
-                documents: env.new_global_ref(&provider)?,
                 resolver: env.new_global_ref(&resolver)?,
-            }))
-        });
-        loaded.unwrap_or_else(|error| Err(NotLoaded::Jni(error)))
+                classes: OnceLock::new(),
+            })
+        })
+    }
+
+    /// The crate's classes: read through the Activity's class loader the
+    /// first time, their protocol checked before `FluiCallback`'s natives
+    /// are bound, and `FluiDocuments` attached by Android under the
+    /// authority the manifest gives it.
+    fn classes(&self) -> Result<&Classes, NotLoaded> {
+        self.classes
+            .get_or_init(|| {
+                self.attached(|env| self.read_classes(env))
+                    .unwrap_or_else(|error| {
+                        tracing::warn!(
+                            target: "flui_system::android",
+                            %error,
+                            "reading flui-system's Java classes failed"
+                        );
+                        Err(NotLoaded::Jni)
+                    })
+            })
+            .as_ref()
+            .map_err(|not_loaded| *not_loaded)
+    }
+
+    fn read_classes(&self, env: &mut Env<'_>) -> jni::errors::Result<Result<Classes, NotLoaded>> {
+        let (Some(callback), Some(documents)) = (
+            load_class(env, &self.loader, CALLBACK_CLASS)?,
+            load_class(env, &self.loader, DOCUMENTS_CLASS)?,
+        ) else {
+            return Ok(Err(NotLoaded::NotPackaged));
+        };
+        let protocol = env
+            .get_static_field(&callback, jni_str!("PROTOCOL"), jni_sig!("I"))?
+            .i()?;
+        if protocol != PROTOCOL {
+            return Ok(Err(NotLoaded::OtherProtocol(protocol)));
+        }
+        let authority = env
+            .call_static_method(
+                &documents,
+                jni_str!("authority"),
+                jni_sig!("()Ljava/lang/String;"),
+                &[],
+            )?
+            .l()?;
+        if authority.is_null() {
+            return Ok(Err(NotLoaded::NoProvider));
+        }
+        // SAFETY: `called` and `released` are `extern "system"` functions
+        // whose parameters are the JNI environment, the class (the methods
+        // are static), and what each signature names: a `long`, a `String`
+        // and an `int`, and a `long`; each returns `void`.
+        let natives = unsafe {
+            [
+                NativeMethod::from_raw_parts(
+                    jni_str!("called"),
+                    jni_str!("(JLjava/lang/String;I)V"),
+                    called as *mut std::ffi::c_void,
+                ),
+                NativeMethod::from_raw_parts(
+                    jni_str!("released"),
+                    jni_str!("(J)V"),
+                    released as *mut std::ffi::c_void,
+                ),
+            ]
+        };
+        // SAFETY: as above.
+        unsafe { env.register_native_methods(&callback, &natives) }?;
+        Ok(Ok(Classes {
+            callback: env.new_global_ref(&callback)?,
+            documents: env.new_global_ref(&documents)?,
+        }))
+    }
+
+    /// `FluiDocuments`, once [`classes`](Self::classes) answered.
+    fn documents(&self) -> jni::errors::Result<&Global<JClass<'static>>> {
+        self.classes()
+            .map(|classes| &classes.documents)
+            .map_err(|_| jni::errors::Error::NullPtr("FluiDocuments"))
     }
 
     /// Run `call` with this thread's environment, attaching the thread for
@@ -425,6 +485,10 @@ impl Java {
         interfaces: &[&JNIStr],
         slot: &Arc<CallbackSlot>,
     ) -> jni::errors::Result<JObject<'local>> {
+        let callback = &self
+            .classes()
+            .map_err(|_| jni::errors::Error::NullPtr("FluiCallback"))?
+            .callback;
         let classes = env.new_object_array(
             i32::try_from(interfaces.len()).unwrap_or(i32::MAX),
             jni_str!("java/lang/Class"),
@@ -435,11 +499,7 @@ impl Java {
             classes.set_element(env, index, &class)?;
         }
         let leaked = Arc::into_raw(Arc::clone(slot));
-        let handler = env.new_object(
-            &self.callback,
-            jni_sig!("(J)V"),
-            &[JValue::Long(leaked as jlong)],
-        );
+        let handler = env.new_object(callback, jni_sig!("(J)V"), &[JValue::Long(leaked as jlong)]);
         let handler = match handler {
             Ok(handler) => handler,
             Err(error) => {
@@ -463,37 +523,6 @@ impl Java {
             ],
         )?
         .l()
-    }
-
-    /// Post `job` to Java's main thread, where it runs once with that
-    /// thread's environment and the Activity; whether it was posted. A job
-    /// that was not, or that Android never runs, is dropped unrun.
-    fn on_main_thread(
-        &self,
-        activity: &Activity,
-        job: impl FnOnce(&mut Env<'_>, &JObject<'_>) + Send + 'static,
-    ) -> bool {
-        let mut job = Some(job);
-        let posted = activity.with_java(|frame| {
-            in_frame(frame, |env, activity| {
-                let held = env.new_global_ref(activity)?;
-                let slot = CallbackSlot::new(move |env, _, _| {
-                    if let Some(job) = job.take() {
-                        job(env, &held);
-                    }
-                });
-                let runnable = self.proxy(env, &[jni_str!("java/lang/Runnable")], &slot)?;
-                env.call_method(
-                    activity,
-                    jni_str!("runOnUiThread"),
-                    jni_sig!("(Ljava/lang/Runnable;)V"),
-                    &[JValue::Object(&runnable)],
-                )
-                .map(drop)
-            })
-            .is_ok()
-        });
-        posted.unwrap_or(false)
     }
 
     /// The MIME type Android maps `extension` to (`MimeTypeMap`), if any.
@@ -521,81 +550,110 @@ impl Java {
         .ok()
         .flatten()
     }
+}
 
-    /// The folder `Environment` names for `kind`
-    /// (`getExternalStoragePublicDirectory`), as a path. It reads no
-    /// storage.
-    ///
-    /// # Errors
-    ///
-    /// The JNI call failed.
-    pub(crate) fn public_folder(&self, kind: &str) -> jni::errors::Result<Option<String>> {
-        self.attached(|env| {
-            let kind = env.new_string(kind)?;
-            let folder = env
-                .call_static_method(
-                    jni_str!("android/os/Environment"),
-                    jni_str!("getExternalStoragePublicDirectory"),
-                    jni_sig!("(Ljava/lang/String;)Ljava/io/File;"),
-                    &[JValue::Object(&kind)],
-                )?
-                .l()?;
-            if folder.is_null() {
-                return Ok(None);
-            }
-            let path = env
-                .call_method(
-                    &folder,
-                    jni_str!("getAbsolutePath"),
-                    jni_sig!("()Ljava/lang/String;"),
-                    &[],
-                )?
-                .l()?;
-            bounded_string(env, path, MAX_NAME_UNITS)
-        })
-    }
+/// The folder `Environment` names for `kind`
+/// (`getExternalStoragePublicDirectory`), as a path, read in the frame the
+/// Activity lends. It reads no storage and needs none of the crate's
+/// classes.
+///
+/// # Errors
+///
+/// The JNI call failed.
+pub(crate) fn public_folder(frame: JniFrame, kind: &str) -> jni::errors::Result<Option<String>> {
+    in_frame(frame, |env, _activity| {
+        let kind = env.new_string(kind)?;
+        let folder = env
+            .call_static_method(
+                jni_str!("android/os/Environment"),
+                jni_str!("getExternalStoragePublicDirectory"),
+                jni_sig!("(Ljava/lang/String;)Ljava/io/File;"),
+                &[JValue::Object(&kind)],
+            )?
+            .l()?;
+        if folder.is_null() {
+            return Ok(None);
+        }
+        let path = env
+            .call_method(
+                &folder,
+                jni_str!("getAbsolutePath"),
+                jni_sig!("()Ljava/lang/String;"),
+                &[],
+            )?
+            .l()?;
+        bounded_string(env, path, MAX_NAME_UNITS)
+    })
 }
 
 /// One UI runtime's way to Android, read with its first provider.
 #[derive(Default)]
 struct Loaded(RefCell<Option<Arc<Java>>>);
 
+/// Whether a provider calls the crate's own Java classes.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Reach {
+    /// It calls `FluiDocuments` or `FluiCallback`: an APK without them, or
+    /// with another version of them, refuses it.
+    OwnClasses,
+    /// It calls Android's classes alone.
+    FrameworkOnly,
+}
+
 /// The Activity and the JNI state a provider of `C` works through.
 ///
 /// A runtime whose host offers no Activity (a headless one) has no path to
-/// Android and is refused with `NotYetOnThisHost`; an APK packed without
-/// the crate's Java classes, or with another version of them, with
-/// `NotDeclared`.
-fn host<C: Capability>(ctx: &ProviderContext<'_>) -> Result<(Activity, Arc<Java>), Unsupported> {
+/// Android and is refused with `NotYetOnThisHost`. A provider that needs the
+/// crate's classes is refused with `NotDeclared` by an APK packed without
+/// them, with another version of them, or whose manifest declares no
+/// `FluiDocuments`.
+fn host<C: Capability>(
+    ctx: &ProviderContext<'_>,
+    reach: Reach,
+) -> Result<(Activity, Arc<Java>), Unsupported> {
     let refused = |reason| Unsupported::of::<C>(reason);
     let activity = ctx
         .activity()
         .ok_or_else(|| refused(UnsupportedReason::NotYetOnThisHost))?;
     let loaded = ctx.runtime_local::<Loaded>();
-    if let Some(java) = loaded.0.borrow().clone() {
-        return Ok((activity, java));
-    }
-    // The log line follows the host's call, with nothing of its lent.
-    let java = match activity.with_java(Java::load) {
-        Some(Ok(java)) => Arc::new(java),
-        Some(Err(not_loaded)) => {
-            tracing::warn!(
-                target: "flui_system::android",
-                reason = %not_loaded,
-                "flui-system's Java classes were not reached"
-            );
-            return Err(refused(match not_loaded {
-                NotLoaded::NotPackaged | NotLoaded::OtherProtocol(_) => {
-                    UnsupportedReason::NotDeclared {
-                        what: "flui-system's Java classes, which `flui build` packs from the crate's declarations",
-                    }
-                }
-                NotLoaded::Jni(_) => UnsupportedReason::Unavailable,
-            }));
-        }
-        None => return Err(refused(UnsupportedReason::Unavailable)),
+    let cached = loaded.0.borrow().clone();
+    let java = match cached {
+        Some(java) => java,
+        // The log line follows the host's call, with nothing of its lent.
+        None => match activity.with_java(Java::load) {
+            Some(Ok(java)) => {
+                let java = Arc::new(java);
+                loaded.0.replace(Some(Arc::clone(&java)));
+                java
+            }
+            Some(Err(error)) => {
+                tracing::warn!(
+                    target: "flui_system::android",
+                    %error,
+                    "the Activity's class loader and content resolver were not read"
+                );
+                return Err(refused(UnsupportedReason::Unavailable));
+            }
+            None => return Err(refused(UnsupportedReason::Unavailable)),
+        },
     };
-    loaded.0.replace(Some(Arc::clone(&java)));
+    if reach == Reach::OwnClasses
+        && let Err(not_loaded) = java.classes()
+    {
+        tracing::warn!(
+            target: "flui_system::android",
+            reason = %not_loaded,
+            "flui-system's Java classes were not reached"
+        );
+        return Err(refused(match not_loaded {
+            NotLoaded::NotPackaged | NotLoaded::OtherProtocol(_) | NotLoaded::NoProvider => {
+                UnsupportedReason::NotDeclared {
+                    what: "flui-system's Java classes and content provider, which `flui build` packs and declares from the crate's declarations",
+                }
+            }
+            NotLoaded::Jni => UnsupportedReason::Unavailable,
+        }));
+    }
     Ok((activity, java))
 }
 
@@ -612,7 +670,7 @@ fn not_on_android<C: Capability>(registrar: &mut CapabilityRegistrar) {
 /// list are refused, since an Android application has none of them.
 pub(crate) fn register(registrar: &mut CapabilityRegistrar) {
     registrar.provide::<LauncherCapability>(|ctx: &ProviderContext<'_>| {
-        let (activity, java) = host::<LauncherCapability>(ctx)?;
+        let (activity, java) = host::<LauncherCapability>(ctx, Reach::OwnClasses)?;
         Ok::<_, Unsupported>(Launcher::new(
             super::launcher::AndroidLauncher::new(
                 activity,
@@ -624,18 +682,18 @@ pub(crate) fn register(registrar: &mut CapabilityRegistrar) {
         ))
     });
     registrar.provide::<FileDialogCapability>(|ctx: &ProviderContext<'_>| {
-        let (activity, java) = host::<FileDialogCapability>(ctx)?;
+        let (activity, java) = host::<FileDialogCapability>(ctx, Reach::FrameworkOnly)?;
         documents::provide(ctx, activity, std::rc::Rc::new(JavaPicker(java)))
     });
     registrar.provide::<MessageBoxCapability>(|ctx: &ProviderContext<'_>| {
-        let (activity, java) = host::<MessageBoxCapability>(ctx)?;
+        let (activity, java) = host::<MessageBoxCapability>(ctx, Reach::OwnClasses)?;
         MessageBoxes::try_new(
-            super::message_box::AndroidMessageBoxes::new(activity, java),
+            super::message_box::AndroidMessageBoxes::new(activity, java, ctx.completions().clone()),
             ctx,
         )
     });
     registrar.provide::<ShareCapability>(|ctx: &ProviderContext<'_>| {
-        let (activity, java) = host::<ShareCapability>(ctx)?;
+        let (activity, java) = host::<ShareCapability>(ctx, Reach::OwnClasses)?;
         Share::try_new(
             super::share::AndroidShare::new(
                 activity,
@@ -647,9 +705,11 @@ pub(crate) fn register(registrar: &mut CapabilityRegistrar) {
         )
     });
     registrar.provide::<UserDirCapability>(|ctx: &ProviderContext<'_>| {
-        let (_, java) = host::<UserDirCapability>(ctx)?;
+        let activity = ctx.activity().ok_or_else(|| {
+            Unsupported::of::<UserDirCapability>(UnsupportedReason::NotYetOnThisHost)
+        })?;
         Ok::<_, Unsupported>(UserDirs::new(
-            super::user_dirs::AndroidUserDirs::new(java),
+            super::user_dirs::AndroidUserDirs::new(activity),
             ctx,
         ))
     });

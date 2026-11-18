@@ -56,9 +56,32 @@ pub(crate) struct ManifestFacts<'a> {
     pub(crate) label: &'a str,
     /// The native library `NativeActivity` loads, without `lib` and `.so`.
     pub(crate) lib_name: &'a str,
-    /// The application's Android package, the `applicationId` Gradle builds
-    /// (`flui.toml`'s `[app] id`), which leads every provider's authority.
-    pub(crate) application_id: &'a str,
+    /// What leads every provider's authority: the application id as the
+    /// packager that reads the manifest knows it.
+    pub(crate) application_id: ApplicationId<'a>,
+}
+
+/// The application id as the manifest names it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ApplicationId<'a> {
+    /// The packager without Gradle links the manifest under this package,
+    /// `flui.toml`'s `[app] id`, the one the build passes to `aapt2`.
+    Written(&'a str),
+    /// Gradle's `${applicationId}`, which its manifest merger replaces with
+    /// the id of the variant it builds, an `applicationIdSuffix` included,
+    /// so a debug and a release install never claim one authority.
+    Gradle,
+}
+
+impl ApplicationId<'_> {
+    /// The text the manifest carries for it, not yet escaped.
+    #[must_use]
+    pub(crate) fn as_manifest_text(&self) -> &str {
+        match self {
+            Self::Written(package) => package,
+            Self::Gradle => "${applicationId}",
+        }
+    }
 }
 
 /// The manifest for `facts` and what the linked crates declare.
@@ -74,7 +97,10 @@ pub(crate) fn render(facts: &ManifestFacts<'_>, declarations: &Declarations) -> 
         .replace("{{intent_filters}}\n", &intent_filters(declarations))
         .replace(
             "{{providers}}\n",
-            &providers(&xml_escape(facts.application_id), declarations),
+            &providers(
+                &xml_escape(facts.application_id.as_manifest_text()),
+                declarations,
+            ),
         )
         .replace("{{app_name}}", &xml_escape(facts.label))
         .replace("{{lib_name}}", &xml_escape(facts.lib_name))
@@ -82,7 +108,8 @@ pub(crate) fn render(facts: &ManifestFacts<'_>, declarations: &Declarations) -> 
 }
 
 /// A `<provider>` per content provider the linked crates declare, under the
-/// authority `<application_id>.<suffix>`: unexported and granting URI
+/// authority `<application_id>.<suffix>` (`application_id` already the
+/// manifest's text: a package, or Gradle's placeholder): unexported and granting URI
 /// permissions, so it serves only the URIs its crate grants per intent. The
 /// class and the suffix were checked when they were read
 /// (`declarations::provider`), so neither needs escaping.
@@ -201,7 +228,7 @@ pub(crate) fn write(
     for (authority, class, crates) in declarations.android_providers() {
         crate::ui::debug(format!(
             "AndroidManifest.xml: provider {class} for {}, declared by {}",
-            authority.authority(facts.application_id),
+            authority.authority(facts.application_id.as_manifest_text()),
             crates.iter().cloned().collect::<Vec<_>>().join(", ")
         ));
     }
@@ -213,13 +240,13 @@ pub(crate) fn write(
 mod tests {
     use std::path::Path;
 
-    use super::{ACTIVITY, ManifestFacts, render, write};
+    use super::{ACTIVITY, ApplicationId, ManifestFacts, render, write};
     use crate::declarations::{Build, Declarations};
 
     const FACTS: ManifestFacts<'static> = ManifestFacts {
         label: "R&D <Notes>",
         lib_name: "notes",
-        application_id: "com.example.notes",
+        application_id: ApplicationId::Written("com.example.notes"),
     };
 
     /// The declarations of the `flui` facade built for Android, as an
@@ -374,9 +401,9 @@ mod tests {
 
     /// A content provider a crate declares is declared inside
     /// `<application>`, after the Activity, under the application's package
-    /// followed by the crate's suffix, unexported and granting URI
-    /// permissions. An application whose crates declare none has no
-    /// `<provider>`.
+    /// followed by the crate's suffix (Gradle's `${applicationId}` when Gradle
+    /// packs the APK), unexported and granting URI permissions. An
+    /// application whose crates declare none has no `<provider>`.
     #[test]
     fn the_application_declares_the_providers_its_crates_ship() {
         const ELEMENT: &str = "        </activity>\n        <provider\n            \
@@ -395,6 +422,23 @@ mod tests {
         roxmltree::Document::parse(&manifest).expect("the manifest is XML");
         let plain = render(&FACTS, &Declarations::default());
         assert!(!plain.contains("<provider"), "{plain}");
+
+        // Gradle names the variant's id itself, its suffix included.
+        let gradle = render(
+            &ManifestFacts {
+                application_id: ApplicationId::Gradle,
+                ..FACTS
+            },
+            &declarations,
+        );
+        assert!(
+            gradle.contains("android:authorities=\"${applicationId}.flui.documents\""),
+            "{gradle}"
+        );
+        assert!(
+            !gradle.contains("com.example.notes.flui.documents"),
+            "{gradle}"
+        );
     }
 
     /// The manifest a FLUI application that turns on `http` gets on

@@ -42,39 +42,40 @@ pub(crate) use provider::AndroidUserDirs;
 
 #[cfg(target_os = "android")]
 mod provider {
-    use std::sync::Arc;
-
-    use flui_platform::capability::Resolver;
+    use flui_platform::capability::{Activity, Resolver};
     use flui_platform::{Unsupported, UnsupportedReason};
 
-    use super::super::java::Java;
+    use super::super::java::public_folder;
     use super::{environment_directory, folder};
     use crate::user_dirs::{
         UserDir, UserDirBackend, UserDirCapability, UserDirError, UserDirResult,
     };
 
-    /// [`UserDirBackend`] over `Environment`.
+    /// [`UserDirBackend`] over `Environment`, called in the frame the
+    /// Activity lends on the owner thread.
     pub(crate) struct AndroidUserDirs {
-        java: Arc<Java>,
+        activity: Activity,
     }
 
     impl AndroidUserDirs {
-        pub(crate) fn new(java: Arc<Java>) -> Self {
-            Self { java }
+        pub(crate) fn new(activity: Activity) -> Self {
+            Self { activity }
         }
     }
 
     impl UserDirBackend for AndroidUserDirs {
         fn locate(&self, dir: UserDir, answer: Resolver<UserDirResult>) {
+            let unavailable = || {
+                UserDirError::Unsupported(Unsupported::of::<UserDirCapability>(
+                    UnsupportedReason::Unavailable,
+                ))
+            };
             let located = match environment_directory(dir) {
                 None => Ok(None),
-                Some(kind) => match self.java.public_folder(kind) {
-                    Ok(named) => folder(named),
-                    Err(_) => Err(UserDirError::Unsupported(Unsupported::of::<
-                        UserDirCapability,
-                    >(
-                        UnsupportedReason::Unavailable
-                    ))),
+                // An Activity that ended lends nothing.
+                Some(kind) => match self.activity.with_java(|frame| public_folder(frame, kind)) {
+                    Some(Ok(named)) => folder(named),
+                    Some(Err(_)) | None => Err(unavailable()),
                 },
             };
             // The owner retiring first leaves nothing waiting.

@@ -3,7 +3,7 @@
 //! application's content resolver, on a worker.
 
 use std::fs::File;
-use std::io::{Read as _, Write as _};
+use std::io::Write as _;
 use std::os::fd::FromRawFd as _;
 use std::sync::Arc;
 
@@ -13,7 +13,7 @@ use jni::objects::{Global, JObject, JObjectArray};
 use jni::{Env, JValue, jni_sig, jni_str};
 
 use super::super::documents::{
-    self, Described, DocumentPicker, Interrupt, MAX_NAME_UNITS, NotOpened, PickedDocuments,
+    self, Described, DocumentPicker, Interrupt, LetGo, MAX_NAME_UNITS, NotOpened, PickedDocuments,
     PickerIntent,
 };
 use super::{Java, bounded_string, in_frame, is_a, put_string, string_array, thrown, with_string};
@@ -228,7 +228,10 @@ pub(crate) struct JavaDocuments {
 impl JavaDocuments {
     /// The value of `column` in the one row the provider answers for `uri`
     /// (`ContentResolver.query`), read by `read` from the cursor at column
-    /// 0; `None` when the provider answers no row or a `null`.
+    /// 0; `None` when the provider answers no row or a `null`. Every exit
+    /// leaves no exception pending, so a provider that throws for one column
+    /// does not fail the next call made for the document (another column,
+    /// its type).
     fn column<R>(
         &self,
         env: &mut Env<'_>,
@@ -236,10 +239,10 @@ impl JavaDocuments {
         column: &str,
         read: impl FnOnce(&mut Env<'_>, &JObject<'_>) -> jni::errors::Result<Option<R>>,
     ) -> jni::errors::Result<Option<R>> {
-        let projection = string_array(env, &[column])?;
-        let nothing = JObject::null();
-        let cursor = env
-            .call_method(
+        let cursor = (|| {
+            let projection = string_array(env, &[column])?;
+            let nothing = JObject::null();
+            env.call_method(
                 &self.java.resolver,
                 jni_str!("query"),
                 jni_sig!(
@@ -251,10 +254,18 @@ impl JavaDocuments {
                     JValue::Object(&nothing),
                     JValue::Object(&nothing),
                     JValue::Object(&nothing),
-                    JValue::Object(&**self.signal),
+                    JValue::Object(&self.signal),
                 ],
             )?
-            .l()?;
+            .l()
+        })();
+        let cursor = match cursor {
+            Ok(cursor) => cursor,
+            Err(error) => {
+                env.exception_clear();
+                return Err(error);
+            }
+        };
         if cursor.is_null() {
             return Ok(None);
         }
@@ -303,7 +314,7 @@ impl JavaDocuments {
                     &[
                         JValue::Object(&uri),
                         JValue::Object(&mode),
-                        JValue::Object(&**self.signal),
+                        JValue::Object(&self.signal),
                     ],
                 );
                 let descriptor = match descriptor {
@@ -407,13 +418,9 @@ impl PickedDocuments for JavaDocuments {
             .unwrap_or_default()
     }
 
-    fn read(&mut self, index: usize, at_most: u64) -> Result<Vec<u8>, DialogError> {
+    fn read(&mut self, index: usize, at_most: u64, let_go: &LetGo) -> Result<Vec<u8>, DialogError> {
         let file = self.open(index, "r")?;
-        let mut contents = Vec::new();
-        file.take(at_most)
-            .read_to_end(&mut contents)
-            .map_err(|error| documents::io_failure(&error))?;
-        Ok(contents)
+        documents::read_bounded(file, at_most, let_go)
     }
 
     fn write(&mut self, index: usize, contents: &[u8]) -> Result<(), DialogError> {

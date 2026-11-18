@@ -1,16 +1,18 @@
-//! `cargo xtask android-dex`: the dex of each crate's Java classes: the
-//! Android backend's (`FluiActivity`, `FluiHost`, `FluiView`; ADR-0247,
-//! ADR-0255) and `flui-system`'s (`FluiSystem`, `FluiMessageBox`,
-//! `FluiDocuments`).
+//! `cargo xtask android-dex`: the dex of each workspace crate that declares
+//! Java classes (ADR-0373 §2), such as the Android backend's
+//! (`flui-native`: `FluiActivity`, `FluiHost`, `FluiView`) and `flui-system`'s
+//! (`FluiCallback`, `FluiDocuments`).
 //!
-//! A crate's Java sources live under its `android/java`. Their compiled dex,
-//! `android/classes.dex`, is checked in and declared by the crate
-//! (`[package.metadata.flui.declares.android] dex`), so `flui build` packs
-//! the dex of each crate an application links into its APK, and building FLUI
-//! for Android needs no JDK and no build script. `classes.dex.toml` next to
-//! it records the SHA-256 of the sources and of the dex, and the tools that
-//! compiled it. Each crate's classes compile against the platform alone, so
-//! no dex depends on another's.
+//! A crate declares its Java sources and their compiled dex in
+//! `[package.metadata.flui.declares.android]` (`java`, `dex`; ADR-0307), at
+//! the top or under a feature, and the task reads that list from
+//! `cargo metadata`: no list here is kept by hand. The dex is checked in, so
+//! `flui build` packs the dex of each crate an application links into its
+//! APK, and building FLUI for Android needs no JDK and no build script. A
+//! record beside the dex (`classes.dex` → `classes.dex.toml`) holds the
+//! SHA-256 of the sources and of the dex, and the tools that compiled it.
+//! Each crate's classes compile against the platform alone, so no dex
+//! depends on another's.
 //!
 //! - Without arguments (the `cargo xtask checks` step) both digests of every
 //!   crate are checked, which needs no JDK: a source edited without
@@ -22,11 +24,13 @@
 //! - `--write` compiles and writes each dex and its record, with the build
 //!   tools and platform the record names when they are installed (the newest
 //!   installed otherwise, which it says).
+//! - `--list` prints the path of each declared dex and its record, which the
+//!   workflow below uploads.
 //!
 //! Without a local JDK or SDK, `.github/workflows/android-dex.yml` runs
-//! `--write` on a GitHub runner for a pull request that changes the sources
-//! (and `--write` or `--rebuild` by hand on any branch) and uploads each dex
-//! and its record as an artifact to commit.
+//! `--write` on a GitHub runner for a pull request that changes any
+//! `android/java` tree (and `--write` or `--rebuild` by hand on any branch)
+//! and uploads each dex and its record as an artifact to commit.
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -37,34 +41,95 @@ use sha2::{Digest, Sha256};
 
 use crate::util::{ScratchDir, repo_root};
 
-/// The `android` directory of each crate that ships Java classes, relative
-/// to the repository root: its sources under `java`, its dex and the record.
-const TREES: [&str; 2] = ["crates/flui-native/android", "crates/flui-system/android"];
 /// The oldest API level the dex runs on: FLUI's `minSdk`.
 const MIN_API: u32 = 23;
 /// The Java language level: what `d8` accepts for that API level without desugaring.
 const JAVA_RELEASE: &str = "8";
 
 /// One crate's Java classes, by the paths the task reads and writes, each
-/// relative to the repository root.
+/// relative to the repository root and `/`-separated.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct Tree {
     /// The directory of the Java sources.
     sources: String,
     /// The checked-in dex.
     dex: String,
-    /// Its record.
+    /// Its record: the dex's path with `.toml` added.
     record: String,
 }
 
-impl Tree {
-    /// The tree under the crate's `android` directory.
-    fn under(android: &str) -> Self {
-        Self {
-            sources: format!("{android}/java"),
-            dex: format!("{android}/classes.dex"),
-            record: format!("{android}/classes.dex.toml"),
+/// The trees one crate declares in its `[package.metadata]` (`metadata`):
+/// the `java` and `dex` of `flui.declares.android` and of each
+/// `flui.declares.features.<name>.android`, each pair resolved against the
+/// crate's directory `crate_dir`, given relative to the repository root.
+///
+/// # Errors
+///
+/// A table that names one of `java` and `dex` without the other, or either
+/// as anything but a string.
+fn declared_trees(crate_dir: &str, metadata: &serde_json::Value) -> anyhow::Result<Vec<Tree>> {
+    let Some(declares) = metadata.pointer("/flui/declares") else {
+        return Ok(Vec::new());
+    };
+    let features = declares
+        .get("features")
+        .and_then(serde_json::Value::as_object)
+        .into_iter()
+        .flat_map(|features| features.values());
+    let mut trees = Vec::new();
+    for android in std::iter::once(declares)
+        .chain(features)
+        .filter_map(|table| table.get("android"))
+    {
+        let path = |key: &str| -> anyhow::Result<Option<String>> {
+            android
+                .get(key)
+                .map(|value| {
+                    value
+                        .as_str()
+                        .map(|path| format!("{crate_dir}/{}", path.trim_start_matches("./")))
+                        .with_context(|| format!("{crate_dir}: android.{key} is not a path"))
+                })
+                .transpose()
+        };
+        match (path("java")?, path("dex")?) {
+            (Some(sources), Some(dex)) => trees.push(Tree {
+                record: format!("{dex}.toml"),
+                sources,
+                dex,
+            }),
+            (None, None) => {}
+            _ => bail!("{crate_dir}: android.java and android.dex are declared together"),
         }
     }
+    Ok(trees)
+}
+
+/// The trees every workspace crate declares, from `cargo metadata`, each
+/// once and in path order.
+fn workspace_trees(root: &Path) -> anyhow::Result<Vec<Tree>> {
+    let metadata = cargo_metadata::MetadataCommand::new()
+        .current_dir(root)
+        .no_deps()
+        .other_options(vec!["--locked".to_owned()])
+        .exec()
+        .context("running `cargo metadata`")?;
+    let mut trees = Vec::new();
+    for package in &metadata.packages {
+        let crate_dir = package
+            .manifest_path
+            .parent()
+            .context("a manifest has a directory")?;
+        let relative = crate_dir
+            .strip_prefix(&metadata.workspace_root)
+            .unwrap_or(crate_dir)
+            .as_str()
+            .replace('\\', "/");
+        trees.extend(declared_trees(&relative, &package.metadata)?);
+    }
+    trees.sort();
+    trees.dedup();
+    Ok(trees)
 }
 
 /// Arguments for `cargo xtask android-dex`.
@@ -76,6 +141,9 @@ pub(crate) struct AndroidDexArgs {
     /// Also compile the sources and require the checked-in bytes (needs a JDK and the SDK).
     #[arg(long)]
     rebuild: bool,
+    /// Print the path of each declared dex and its record, one per line, and check nothing.
+    #[arg(long, conflicts_with_all = ["write", "rebuild"])]
+    list: bool,
 }
 
 /// What `classes.dex.toml` records.
@@ -177,9 +245,19 @@ fn read_sources(root: &Path, tree: &Tree) -> anyhow::Result<Vec<(String, Vec<u8>
 /// `cargo xtask android-dex`: check (or `--write`) each crate's dex.
 pub(crate) fn android_dex(args: &AndroidDexArgs) -> anyhow::Result<ExitCode> {
     let root = repo_root();
+    let trees = workspace_trees(&root)?;
+    if trees.is_empty() {
+        bail!("no workspace crate declares `android.dex` and `android.java`");
+    }
+    if args.list {
+        for tree in &trees {
+            println!("{}\n{}", tree.dex, tree.record);
+        }
+        return Ok(ExitCode::SUCCESS);
+    }
     let mut held = true;
-    for android in TREES {
-        held &= one_tree(&root, &Tree::under(android), args)?;
+    for tree in &trees {
+        held &= one_tree(&root, tree, args)?;
     }
     Ok(if held {
         ExitCode::SUCCESS
@@ -453,8 +531,57 @@ mod tests {
         let args = AndroidDexArgs {
             write: false,
             rebuild: false,
+            list: false,
         };
         assert_eq!(android_dex(&args).expect("runs"), ExitCode::SUCCESS);
+    }
+
+    /// The trees come from what each crate declares, at the top and under
+    /// its features; a crate that declares neither key has none, and one
+    /// that declares one key of the pair is refused.
+    fn the_trees_are_what_the_crates_declare() {
+        let declared = serde_json::json!({
+            "flui": { "declares": {
+                "schema": 4,
+                "android": { "dex": "android/classes.dex", "java": "android/java" },
+                "features": {
+                    "camera": { "android": { "dex": "./camera/classes.dex", "java": "camera/java" } },
+                    "http": { "android": { "permissions": ["android.permission.INTERNET"] } },
+                },
+            } }
+        });
+        let mut trees = declared_trees("crates/flui-x", &declared).expect("declared");
+        trees.sort();
+        assert_eq!(
+            trees,
+            [
+                Tree {
+                    sources: "crates/flui-x/android/java".to_owned(),
+                    dex: "crates/flui-x/android/classes.dex".to_owned(),
+                    record: "crates/flui-x/android/classes.dex.toml".to_owned(),
+                },
+                Tree {
+                    sources: "crates/flui-x/camera/java".to_owned(),
+                    dex: "crates/flui-x/camera/classes.dex".to_owned(),
+                    record: "crates/flui-x/camera/classes.dex.toml".to_owned(),
+                },
+            ]
+        );
+        let none = serde_json::json!({ "flui": { "tier": "pkg" } });
+        assert_eq!(
+            declared_trees("crates/flui-y", &none).expect("none"),
+            Vec::<Tree>::new()
+        );
+        let half = serde_json::json!({ "flui": { "declares": { "android": { "dex": "a.dex" } } } });
+        assert!(declared_trees("crates/flui-z", &half).is_err());
+
+        let workspace = workspace_trees(&repo_root()).expect("cargo metadata");
+        for declaring in ["crates/flui-native/", "crates/flui-system/"] {
+            assert!(
+                workspace.iter().any(|tree| tree.dex.starts_with(declaring)),
+                "{declaring} declares its dex: {workspace:?}"
+            );
+        }
     }
 
     #[test]
@@ -470,6 +597,10 @@ mod tests {
                 (
                     "the_checked_in_dex_matches_its_sources",
                     the_checked_in_dex_matches_its_sources as fn(),
+                ),
+                (
+                    "the_trees_are_what_the_crates_declare",
+                    the_trees_are_what_the_crates_declare as fn(),
                 ),
             ],
         );

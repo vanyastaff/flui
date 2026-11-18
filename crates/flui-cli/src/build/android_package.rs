@@ -509,7 +509,9 @@ mod tests {
             &super::super::android_manifest::ManifestFacts {
                 label: "Notes",
                 lib_name: "notes",
-                application_id: "com.example.notes",
+                application_id: super::super::android_manifest::ApplicationId::Written(
+                    "com.example.notes",
+                ),
             },
             &crate::declarations::Declarations::of_table(
                 "flui-system",

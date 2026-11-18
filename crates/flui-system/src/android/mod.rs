@@ -2,17 +2,17 @@
 //! and an `AlertDialog`, called through JNI over the Activity the host
 //! lends.
 //!
-//! Android's own classes are called from Rust; the crate ships Java only
-//! where JNI cannot stand in for it (`android/java`, `dev.flui.system`):
+//! Android's own classes are called from Rust; the crate ships Java only as
+//! the leaf ADR-0373 allows (`android/java`, `dev.flui.system`), as a
+//! checked-in dex its declarations name:
 //!
 //! - `FluiDocuments`, the content provider a view or a share hands a file
-//!   through: Android instantiates a provider by the class name the
-//!   manifest states.
-//! - `FluiCallback`, the handler of a `java.lang.reflect.Proxy`: JNI can
-//!   define no class, and a callback Android makes (a `Runnable` on its main
-//!   thread, a dialog's listeners) needs an object of a Java type. One
-//!   handler serves every interface, and its calls arrive at one native
-//!   method.
+//!   through: a component the manifest must name, which Android instantiates
+//!   by that name.
+//! - `FluiCallback`, the one handler of every `java.lang.reflect.Proxy` the
+//!   crate makes for a listener interface (a dialog's three listeners): JNI
+//!   defines no class, and a handler is an object of a Java type. Its calls
+//!   arrive at one native method.
 //!
 //! Each service runs where Android puts it:
 //!
@@ -21,8 +21,8 @@
 //!   of a picker (filled inside the host's call, in the frame it lends), and
 //!   the hand-over of an answer the host lent.
 //! - **On Java's main thread**: starting an activity (a view, the share
-//!   sheet) and the message box, each a job the library posts there
-//!   (`Activity.runOnUiThread`).
+//!   sheet) and the message box, each work the host runs there for the
+//!   provider (`Activity::on_main_thread`).
 //! - **On a thread of its own** ([`workers`]): whatever reads another
 //!   application's content provider (a picked document's name, size and
 //!   contents, a save's write) or the file system (the file a launch or a
@@ -44,6 +44,7 @@ pub(crate) mod documents;
 mod java;
 mod launcher;
 mod message_box;
+mod opened;
 mod os;
 mod share;
 mod user_dirs;
@@ -53,7 +54,7 @@ use flui_platform::SystemFailure;
 
 /// `FluiCallback.PROTOCOL`: the contract between the library and its Java
 /// classes, checked before anything is bound or called.
-pub(crate) const PROTOCOL: i32 = 1;
+pub(crate) const PROTOCOL: i32 = 2;
 
 /// The binary name of the class Android calls the library back through.
 pub(crate) const CALLBACK_CLASS: &str = "dev.flui.system.FluiCallback";
@@ -71,6 +72,9 @@ pub(crate) enum StartAnswer {
     NoHandler,
     /// The application may not start it (`SecurityException`).
     Denied,
+    /// `FluiDocuments` serves as many documents as it keeps
+    /// (`IllegalStateException` from its `offer`): one must expire first.
+    Busy,
     /// Android failed otherwise.
     Failed,
 }
@@ -98,8 +102,9 @@ mod tests {
     use super::{CALLBACK_CLASS, DOCUMENTS_CLASS, PROTOCOL, java_source};
 
     /// The library and its Java classes state one protocol and the native
-    /// methods the library binds, and the provider the manifest declares is
-    /// the class and the authority the Java source serves.
+    /// methods the library binds; the provider the manifest declares is the
+    /// class the Java source defines, and it serves under the authority
+    /// Android attached it with rather than one it computes.
     #[test]
     fn the_java_classes_state_what_the_library_and_the_manifest_name() {
         let callback = java_source(CALLBACK_CLASS);
@@ -124,14 +129,20 @@ mod tests {
             panic!("the crate declares one provider: {providers:?}");
         };
         assert_eq!(provider["class"].as_str(), Some(DOCUMENTS_CLASS));
-        let authority = provider["authority"].as_str().expect("an authority");
         assert!(
-            documents.contains(&format!(
-                "static final String AUTHORITY_SUFFIX = \".{authority}\";"
-            )),
-            "FluiDocuments serves the authority the manifest declares: {authority}"
+            provider["authority"].as_str().is_some(),
+            "the declaration names an authority suffix"
+        );
+        assert!(
+            !documents.contains("getPackageName()"),
+            "FluiDocuments takes its authority from the manifest, not the package name"
         );
         for stated in [
+            "public final class FluiDocuments extends ContentProvider {",
+            "public void attachInfo(Context context, ProviderInfo info) {",
+            "attachedAuthority = info.authority.split(\";\")[0];",
+            ".authority(authority)",
+            "static String authority() {",
             "static Uri offer(Context context, int fd, String name) {",
             "static String typeOfName(String name) {",
         ] {

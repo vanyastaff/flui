@@ -13,13 +13,13 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use flui_platform::capability::{
     ActivityBridge, ActivityResult, CapabilityId, CompletionSource, DataRefused, IntentFrame,
-    JniFrame, RequestKey, Resolver, ResultCode, ResultIntent, ResultIntentHold, ResultKey,
-    ResultMint, ResultOutcome, ResultRefused, ResultRequest, ResultTicketHold, ResultToken,
-    ResultTokenMint,
+    JniFrame, MainThreadRefusal, MainThreadRefused, MainThreadWork, RequestKey, Resolver,
+    ResultCode, ResultIntent, ResultIntentHold, ResultKey, ResultMint, ResultOutcome,
+    ResultRefused, ResultRequest, ResultTicketHold, ResultToken, ResultTokenMint,
 };
 
 use crate::android::documents::{
-    Described, DocumentPicker, Interrupt, PickedDocuments, PickerIntent,
+    Described, DocumentPicker, Interrupt, LetGo, PickedDocuments, PickerIntent, read_bounded,
 };
 use crate::dialog::DialogError;
 
@@ -234,6 +234,13 @@ impl ActivityBridge for ActivityStandIn {
     fn lend(&self, _f: &mut dyn FnMut(JniFrame)) -> bool {
         false
     }
+
+    /// The stand-in has no Java main thread: work is refused as a hand-off
+    /// that failed, and never runs.
+    fn post(&self, work: MainThreadWork, refused: MainThreadRefusal) {
+        drop(work);
+        refused(MainThreadRefused::HandOffFailed);
+    }
 }
 
 /// One document of a stand-in picker's answer.
@@ -329,17 +336,13 @@ impl PickedDocuments for DocumentsStandIn {
         self.documents[index].described.clone()
     }
 
-    fn read(&mut self, index: usize, at_most: u64) -> Result<Vec<u8>, DialogError> {
+    fn read(&mut self, index: usize, at_most: u64, let_go: &LetGo) -> Result<Vec<u8>, DialogError> {
         self.steps.push(Step::Read(index, at_most));
         if let Some(reads) = &self.reads {
             // A dropped sender lets the read go on as well.
             let _ = reads.recv();
         }
-        let contents = &self.documents[index].contents;
-        let length = usize::try_from(at_most)
-            .unwrap_or(usize::MAX)
-            .min(contents.len());
-        Ok(contents[..length].to_vec())
+        read_bounded(self.documents[index].contents.as_slice(), at_most, let_go)
     }
 
     fn write(&mut self, index: usize, contents: &[u8]) -> Result<(), DialogError> {

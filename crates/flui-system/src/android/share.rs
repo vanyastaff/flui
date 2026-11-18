@@ -3,8 +3,9 @@
 //! The text and the link travel together as `EXTRA_TEXT`, the link on a
 //! line of its own, which is how Android applications share a page; the
 //! title is the chooser's and the content's subject. Each file is opened
-//! first, on a worker, and only a regular file is shared: the open file is
-//! offered through the crate's content provider (`FluiDocuments`) under a
+//! first, on a worker, without blocking, and only a regular file is shared,
+//! under the name it ends at (`open_shared`): the open file is offered
+//! through the crate's content provider (`FluiDocuments`) under a
 //! URI that names a random token, and the intent's clip carries the read
 //! grant, which the chooser hands to the target the user picks and to no
 //! other application. Several files are `ACTION_SEND_MULTIPLE`, typed by
@@ -74,6 +75,35 @@ pub(crate) fn not_a_file() -> ShareError {
     refused(UnsupportedReason::NotOnThisPlatform)
 }
 
+/// Each of `files` opened and judged ([`super::opened`]): only a regular
+/// file is shared, under its final name, so a link named `notes.pdf` that
+/// leads to `secret.db` goes out as `secret.db`, typed by that name, and a
+/// named pipe is refused without holding the worker. Unlike a launch, a share
+/// hands over contents, not something to run, so a file of any name is
+/// shared.
+///
+/// # Errors
+///
+/// [`file_error`] for a path the system could not open, [`not_a_file`] for
+/// anything but a regular file.
+#[cfg(any(target_os = "android", all(test, target_os = "linux")))]
+pub(crate) fn open_shared(
+    files: &[std::path::PathBuf],
+) -> Result<Vec<(std::fs::File, String)>, ShareError> {
+    files
+        .iter()
+        .map(|path| {
+            let opened =
+                super::opened::open(path).map_err(|error| file_error(error.raw_os_error()))?;
+            if opened.held != super::opened::Held::File {
+                return Err(not_a_file());
+            }
+            let name = opened.file_name().ok_or_else(not_a_file)?;
+            Ok((opened.file, name))
+        })
+        .collect()
+}
+
 /// What a share answers for what starting the chooser did.
 pub(crate) fn start_result(started: StartAnswer) -> ShareResult {
     match started {
@@ -81,6 +111,7 @@ pub(crate) fn start_result(started: StartAnswer) -> ShareResult {
         // The chooser is the system's own: a device without one shares
         // nothing.
         StartAnswer::NoHandler => Err(refused(UnsupportedReason::NotOnThisDevice)),
+        StartAnswer::Busy => Err(unavailable()),
         StartAnswer::Denied | StartAnswer::Failed => Err(ShareError::Failed(UNNAMED_FAILURE)),
     }
 }
@@ -110,9 +141,9 @@ mod provider {
 
     use flui_platform::capability::{Activity, CompletionSource, Resolver, WindowRef};
 
-    use super::super::java::{Java, Waiting};
+    use super::super::java::Java;
     use super::super::workers::Workers;
-    use super::{extra_text, file_error, not_a_file, not_run, start_result, unavailable};
+    use super::{extra_text, not_run, open_shared, start_result, unavailable};
     use crate::share::{ShareBackend, ShareError, ShareRequest, ShareResult};
 
     /// [`ShareBackend`] over `ACTION_SEND`.
@@ -139,59 +170,62 @@ mod provider {
         }
     }
 
-    /// Each of `files` opened, with the name it is shared under.
-    fn open_files(files: &[PathBuf]) -> Result<Vec<(File, String)>, ShareError> {
-        files
-            .iter()
-            .map(|path| {
-                let io_error = |error: std::io::Error| file_error(error.raw_os_error());
-                let file = File::open(path).map_err(io_error)?;
-                if !file.metadata().map_err(io_error)?.is_file() {
-                    return Err(not_a_file());
-                }
-                let name = path.file_name().ok_or_else(not_a_file)?;
-                Ok((file, name.to_string_lossy().into_owned()))
-            })
-            .collect()
-    }
-
     /// Show the chooser with `request`'s text and `files` and answer
-    /// `answer` with what its start did.
+    /// `answer` with what its start did; a start the host did not run on
+    /// Java's main thread never reached Android.
     fn show(
         java: &Arc<Java>,
         activity: &Activity,
+        completions: &CompletionSource,
         request: &ShareRequest,
         files: Vec<(File, String)>,
         answer: Resolver<ShareResult>,
     ) {
-        let waiting = Waiting::new(answer);
-        let heard = waiting.clone();
-        let posted = java.share(
+        let started = java.share(
             activity,
+            completions,
             request.title.clone(),
             extra_text(request),
             files,
-            move |started| heard.answer(start_result(started)),
         );
-        if !posted {
-            waiting.answer(Err(unavailable()));
-        }
+        let mut answer = Some(answer);
+        started.on_complete(move |outcome| {
+            let Some(answer) = answer.take() else {
+                return;
+            };
+            match outcome {
+                // The owner retiring first leaves nothing waiting.
+                Ok(Ok(started)) => drop(answer.resolve(start_result(started))),
+                Ok(Err(_refused)) => drop(answer.resolve(Err(unavailable()))),
+                // The owner retired: the caller's completion ends as its own
+                // did.
+                Err(_) => {}
+            }
+        });
     }
 
     impl ShareBackend for AndroidShare {
         fn share(&self, window: &WindowRef, request: ShareRequest, answer: Resolver<ShareResult>) {
             if request.files.is_empty() {
-                show(&self.java, &self.activity, &request, Vec::new(), answer);
+                show(
+                    &self.java,
+                    &self.activity,
+                    &self.completions,
+                    &request,
+                    Vec::new(),
+                    answer,
+                );
                 return;
             }
-            let files = request.files.clone();
+            let files: Vec<PathBuf> = request.files.clone();
             let (opened, opening) = self.completions.pending();
             self.workers
                 .run("flui-system-share", opening, not_run, move || {
-                    open_files(&files)
+                    open_shared(&files)
                 });
             let activity = self.activity.clone();
             let java = Arc::clone(&self.java);
+            let completions = self.completions.clone();
             let window = window.clone();
             let mut answer = Some(answer);
             opened.on_complete(move |outcome| {
@@ -203,7 +237,7 @@ mod provider {
                     Ok(Ok(_)) if window.lifetime().is_closed() => {
                         let _ = answer.resolve(Err(ShareError::WindowClosed));
                     }
-                    Ok(Ok(files)) => show(&java, &activity, &request, files, answer),
+                    Ok(Ok(files)) => show(&java, &activity, &completions, &request, files, answer),
                     Ok(Err(refusal)) => drop(answer.resolve(Err(refusal))),
                     // The worker panicked: the caller's completion ends as
                     // its own did.
@@ -299,6 +333,56 @@ mod tests {
         assert_eq!(
             not_run::<()>(NotRun::Busy).map_err(reason),
             Err(Some(UnsupportedReason::Unavailable))
+        );
+        assert_eq!(
+            start_result(StartAnswer::Busy).map_err(reason),
+            Err(Some(UnsupportedReason::Unavailable)),
+            "the provider keeps as many documents as it serves"
+        );
+    }
+
+    /// A shared file is the one its open reached, named by where it ends: a
+    /// link named like a document goes out under its target's name, a named
+    /// pipe is refused at once instead of holding the worker until a writer
+    /// comes, and a folder is no file.
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[expect(unsafe_code, reason = "`mkfifo` makes the named pipe the test shares")]
+    fn a_share_opens_each_file_and_names_it_by_where_it_ends() {
+        use std::os::unix::ffi::OsStrExt as _;
+
+        use super::open_shared;
+
+        let folder = tempfile::tempdir().expect("a folder of the test's own");
+        let secret = folder.path().join("secret.db");
+        std::fs::write(&secret, b"rows").expect("written");
+        let disguised = folder.path().join("notes.pdf");
+        std::os::unix::fs::symlink(&secret, &disguised).expect("linked");
+        let pipe = folder.path().join("pipe.pdf");
+        let pipe_name =
+            std::ffi::CString::new(pipe.as_os_str().as_bytes()).expect("no NUL in a temp path");
+        // SAFETY: `pipe_name` is a NUL-terminated path that outlives the call.
+        let made = unsafe { libc::mkfifo(pipe_name.as_ptr(), 0o600) };
+        assert_eq!(made, 0, "mkfifo");
+
+        let shared = open_shared(&[disguised]).expect("a regular file behind a link");
+        assert_eq!(
+            shared
+                .iter()
+                .map(|(_, name)| name.as_str())
+                .collect::<Vec<&str>>(),
+            ["secret.db"],
+            "shared under the name of what was opened"
+        );
+        let refused = open_shared(&[pipe]).map(|_| ()).map_err(reason);
+        assert_eq!(refused, Err(Some(UnsupportedReason::NotOnThisPlatform)));
+        let refused = open_shared(&[folder.path().to_path_buf()])
+            .map(|_| ())
+            .map_err(reason);
+        assert_eq!(refused, Err(Some(UnsupportedReason::NotOnThisPlatform)));
+        assert_eq!(
+            open_shared(&[folder.path().join("gone.pdf")]).map(|_| ()),
+            Err(ShareError::NotFound)
         );
     }
 }
