@@ -297,7 +297,7 @@ note = 'iOS: the scene supplies the window; Android: one native window, which th
 id = "multiple-windows"
 feature = 'Multiple windows'
 status = { windows = "partial", macos = "partial", wayland = "partial", x11 = "partial", ios = "missing", android = "missing", web = "na", headless = "yes" }
-note = 'No iPad scenes, no Android multi-window'
+note = 'No iPad scenes, no Android multi-window; the iOS `Info.plist` lists all four orientations for iPad (`UISupportedInterfaceOrientations~ipad`), which no iPad Simulator run has shown'
 
 [[group.section.row]]
 id = "show-without-a-blank-first-frame"

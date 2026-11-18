@@ -149,7 +149,7 @@ Quality bar: 2 of 16 met (no process-global state, one monotonic clock); 9 partl
 | Feature | Windows | macOS | Wayland | X11 | iOS | Android | Web | Headless | Notes |
 |:--|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:--|
 | Open and close a window | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | iOS: the scene supplies the window; Android: one native window, which the application cannot close (`closes` is `Unavailable`) |
-| Multiple windows | 🟡 | 🟡 | 🟡 | 🟡 | ❌ | ❌ | — | ✅ | No iPad scenes, no Android multi-window |
+| Multiple windows | 🟡 | 🟡 | 🟡 | 🟡 | ❌ | ❌ | — | ✅ | No iPad scenes, no Android multi-window; the iOS `Info.plist` lists all four orientations for iPad (`UISupportedInterfaceOrientations~ipad`), which no iPad Simulator run has shown |
 | Show without a blank first frame | 🟡 | ✅ | 🟡 | 🟡 | — | — | — | ✅ | Windows and X11 create the window hidden and show it after the first presented frame; Wayland maps with the first buffer, so nothing is deferred, and `show` is refused. |
 | Launch-screen handoff: the first frame matches the OS splash | — | — | — | — | ❌ | ❌ | ❌ | — | Nothing aligns the first frame with the OS splash (the iOS launch screen, Android's `SplashScreen`, the Web page before the wasm loads). Desktop is the row above. |
 | Title | 🟡 | 🟡 | 🟡 | 🟡 | — | — | 🟡 | ✅ | Linux: Wayland sets `xdg_toplevel`'s title and X11 `_NET_WM_NAME` and `WM_NAME`; neither lets a client read the title shown back, so the snapshot holds the one last set. Other hosts: not yet |

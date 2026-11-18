@@ -748,7 +748,14 @@ fn application_base_plist(
                 }]
             }
         },
-        "UISupportedInterfaceOrientations":["UIInterfaceOrientationPortrait","UIInterfaceOrientationLandscapeLeft","UIInterfaceOrientationLandscapeRight"]
+        "UISupportedInterfaceOrientations":["UIInterfaceOrientationPortrait","UIInterfaceOrientationLandscapeLeft","UIInterfaceOrientationLandscapeRight"],
+        // iPad multitasking (Split View, Slide Over, Stage Manager) requires
+        // all four orientations unless the application sets
+        // `UIRequiresFullScreen`; the key `~ipad` overrides the phone list on
+        // an iPad, so the phone list keeps `PortraitUpsideDown` out. Neither
+        // `flui.toml` nor the platform sources set `UIRequiresFullScreen`
+        // yet, so the iPad list is always the four.
+        "UISupportedInterfaceOrientations~ipad":["UIInterfaceOrientationPortrait","UIInterfaceOrientationPortraitUpsideDown","UIInterfaceOrientationLandscapeLeft","UIInterfaceOrientationLandscapeRight"]
     })
 }
 fn validate_bundle(bundle: &crate::build::AppBundle) -> BuildResult<()> {
@@ -1064,6 +1071,28 @@ mod tests {
                 "{malformed} was accepted"
             );
         }
+    }
+    /// The whole `Info.plist` of a fixed project is the golden, so any key
+    /// added, dropped or changed shows as a diff: among them the iPad's own
+    /// orientation list, which multitasking needs in full.
+    #[test]
+    fn the_info_plist_matches_its_golden() {
+        let mut bundle = crate::build::AppBundle::new("Notes", "com.example.notes".to_owned());
+        bundle.display_name =
+            Some(crate::types::DisplayName::try_new("My Notes").expect("a display name"));
+        bundle.build =
+            Some(crate::build::app_version::BuildNumber::try_new(17).expect("a build number"));
+        let numbers = numbers_of(&bundle, "1.4.0");
+        let declarations = Declarations::of_table(
+            "notes",
+            "schema = 3\nurl-schemes = [\"notes\"]\n[[file-types]]\nextension = \"note\"\n\
+             mime = \"application/x-notes-note\"\nname = \"Note\"\n",
+        );
+        let plist = application_info_plist(&bundle, &numbers, "15.0", "IOS", &declarations);
+        insta::assert_snapshot!(
+            "ios_info_plist",
+            serde_json::to_string_pretty(&plist).expect("the plist serializes")
+        );
     }
     #[test]
     fn publication_contract() {

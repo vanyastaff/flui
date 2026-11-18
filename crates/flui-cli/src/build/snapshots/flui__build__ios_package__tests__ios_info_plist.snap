@@ -1,0 +1,86 @@
+---
+source: crates/flui-cli/src/build/ios_package.rs
+expression: "serde_json::to_string_pretty(&plist).expect(\"the plist serializes\")"
+---
+{
+  "CADisableMinimumFrameDurationOnPhone": true,
+  "CFBundleDisplayName": "My Notes",
+  "CFBundleDocumentTypes": [
+    {
+      "CFBundleTypeName": "Note",
+      "CFBundleTypeRole": "Viewer",
+      "LSHandlerRank": "Owner",
+      "LSItemContentTypes": [
+        "com.example.notes.note"
+      ]
+    }
+  ],
+  "CFBundleExecutable": "flui_app",
+  "CFBundleIdentifier": "com.example.notes",
+  "CFBundleName": "Notes",
+  "CFBundlePackageType": "APPL",
+  "CFBundleShortVersionString": "1.4.0",
+  "CFBundleSupportedPlatforms": [
+    "iPhoneOS"
+  ],
+  "CFBundleURLTypes": [
+    {
+      "CFBundleTypeRole": "Viewer",
+      "CFBundleURLName": "com.example.notes",
+      "CFBundleURLSchemes": [
+        "notes"
+      ]
+    }
+  ],
+  "CFBundleVersion": "17",
+  "FLUIVersion": "1.4.0",
+  "LSRequiresIPhoneOS": true,
+  "LSSupportsOpeningDocumentsInPlace": false,
+  "MinimumOSVersion": "15.0",
+  "UIApplicationSceneManifest": {
+    "UIApplicationSupportsMultipleScenes": false,
+    "UISceneConfigurations": {
+      "UIWindowSceneSessionRoleApplication": [
+        {
+          "UISceneConfigurationName": "FLUI",
+          "UISceneDelegateClassName": "FluiSceneDelegate"
+        }
+      ]
+    }
+  },
+  "UIApplicationSupportsIndirectInputEvents": true,
+  "UIDeviceFamily": [
+    1,
+    2
+  ],
+  "UILaunchScreen": {},
+  "UISupportedInterfaceOrientations": [
+    "UIInterfaceOrientationPortrait",
+    "UIInterfaceOrientationLandscapeLeft",
+    "UIInterfaceOrientationLandscapeRight"
+  ],
+  "UISupportedInterfaceOrientations~ipad": [
+    "UIInterfaceOrientationPortrait",
+    "UIInterfaceOrientationPortraitUpsideDown",
+    "UIInterfaceOrientationLandscapeLeft",
+    "UIInterfaceOrientationLandscapeRight"
+  ],
+  "UTExportedTypeDeclarations": [
+    {
+      "UTTypeConformsTo": [
+        "public.data",
+        "public.content"
+      ],
+      "UTTypeDescription": "Note",
+      "UTTypeIdentifier": "com.example.notes.note",
+      "UTTypeTagSpecification": {
+        "public.filename-extension": [
+          "note"
+        ],
+        "public.mime-type": [
+          "application/x-notes-note"
+        ]
+      }
+    }
+  ]
+}
