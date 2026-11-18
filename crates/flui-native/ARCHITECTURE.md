@@ -3997,7 +3997,7 @@ UIKit bindings at all. Every shipping Rust Apple stack is on `objc2` (winit sinc
 0.30, `wgpu-hal`, egui, slint, gpui). Carrying both stacks was a two-generation
 wart with a `build.rs` to feed.
 
-**One binding generation: typed classes and messages (ADR-0368).** Every class
+**One binding generation: typed classes and messages (ADR-0369).** Every class
 an Apple host registers is a `define_class!` class whose Rust state is its
 `ContainedIvars` (`FLUIWindow`, `FLUIWindowDelegate`, `FLUIContentView`, the
 loop delegate, the Metal layer, every iOS class), and the macOS window holds

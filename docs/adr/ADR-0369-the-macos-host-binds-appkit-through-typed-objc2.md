@@ -1,4 +1,4 @@
-# ADR-0368: The macOS host binds AppKit through typed objc2
+# ADR-0369: The macOS host binds AppKit through typed objc2
 
 - **Status:** Implemented (2026-11-17)
 - **Date:** 2026-11-17

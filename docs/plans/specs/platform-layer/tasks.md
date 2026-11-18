@@ -8788,7 +8788,7 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
   Dex пересобран и воспроизводится (`android-dex --rebuild`). Должно на устройстве (строка «Deep
   links»): share при работающем и неработающем FLUI, чтение документа и кнопка лаунчера после.
 
-- [ ] **LY139** — ветка `native/apple-owner-thread-forms`, решение — ADR-0368 (заменяет §2
+- [ ] **LY139** — ветка `native/apple-owner-thread-forms`, решение — ADR-0369 (заменяет §2
   ADR-0071). Проверено на `main` @ `94f26e2f3` чтением и перекрёстной проверкой типов. Подтвердились
   все три находки. `MacOSWindow` (`!Send + !Sync`) держал `parking_lot::Mutex<MacOSWindowState>`,
   `LoopControl` — `Mutex<State>` и `Mutex<TerminateGate>`, а ответ `applicationShouldTerminate:`
