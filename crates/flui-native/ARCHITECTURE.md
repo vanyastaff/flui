@@ -1505,13 +1505,14 @@ trait depends on `flui-platform` instead.
   deadline of the loop's wait, never a poll, and the first `done` ends the
   backoff; a `done` releases the callback out only when it answers that
   callback or a later one, and an older one gives it the first grace
-  (`frame::Callbacks`, by ticket). Where the compositor offers `xdg-foreign` v2 the window is
-  exported as it opens, and the export lives until the window closes. Its
-  portal parent `wayland:<handle>` (`foreign::PortalParent`) is a
-  cross-platform fact (X11 names a window `x11:<XID>`), so it reaches the
-  capability crates through the contract's window reference, not through an
-  OS extension; until that reader exists the handle is kept and read under
-  `testing` only. The window tells its AT-SPI bridge each change of the
+  (`frame::Callbacks`, by ticket). Where the compositor offers `xdg-foreign` v2 the window
+  exports itself for each portal request that names it
+  (`PlatformWindow::portal_parent`, ADR-0365) and answers `wayland:<handle>` when the
+  compositor's `handle` event comes; the answer holds the `zxdg_exported_v2`, whose drop
+  destroys it and flushes the connection on whichever thread the request ended, so no handle
+  names the window between requests. The window's close destroys every export a request still
+  holds (`Exports::close`, before the role objects go), so none outlives its toplevel. A compositor with no exporter and a closed window answer no
+  window; an X11 window answers `x11:<XID>` at once. The window tells its AT-SPI bridge each change of the
   compositor's activation, which `UnixAccessibility::focus_changed` passes to
   the adapter (the X11 window already called it), and where its content is
   (`WindowAccessibility::bounds_changed`): the compositor tells a client
@@ -2620,6 +2621,53 @@ native contract rows `refresh_is_the_rational_active_mode`,
 is not a CI row; it ran by hand (see
 `docs/platform-parity.md`). Unplugging a monitor on Windows was not run.
 
+### A window's position is a point of its display, converted through that display alone (ADR-0364)
+
+A `WindowPosition` names its display and is measured in that display's logical
+pixels from its corner, so a host converts it through the display it names and
+never through the window's own scale: the same position lands on the same
+pixel whichever display the window is on, and a position read back converts to
+the corner it was read from.
+
+- **Win32 and X11** lay their desktop out in device pixels, and share
+  `window::desktop::DisplayFrame`: the display's published `DesktopOrigin`
+  (device pixels there) and its scale. `to_desktop` is `origin + snap(at ×
+  scale)`, refused past the `i32` range; each host refuses past its own range
+  too (Win32's `DEVICE_COORDINATE_LIMIT`, X11's signed 16 bits), as
+  `PlatformFailure::OutOfRange`, never saturating. `position` is `(pixel −
+  origin) / scale`, in which a difference of two `i32`s is exact.
+  `display_of_rect` names the display holding the largest part of a device
+  rectangle, the first of equals, else the nearest (Win32's
+  `MonitorFromRect(MONITOR_DEFAULTTONEAREST)`), in 128-bit area and distance.
+  A Win32 window's outer position is measured on its `MonitorFromWindow`
+  display; the rectangle a maximized, minimized or full-screen window returns
+  to is measured on the display holding most of it, which need not be the
+  window's. An X11 window's display is `display_of_rect` of its outer
+  rectangle.
+- **Both read the published snapshot** (`HostDisplays::published`, which never
+  samples) while they report a window and when they apply `SetPosition`, so a
+  position an application read converts back with the same numbers. A
+  position whose display the snapshot no longer holds is refused with
+  `ApplyError::DisplayGone` before any call; an opening at one is placed by
+  the window system.
+- **AppKit** measures in points, its screens' logical pixels, and adds or
+  takes away the screen's corner (the AppKit section above).
+- **The headless host** keeps a window's position on its display and lays its
+  displays left to right in device pixels, so `window_at` and the
+  accessibility bridge read a window's place on that desktop through its
+  display's origin and scale. Maximize fills the display's usable area,
+  fullscreen the whole display.
+
+Rows: `a_position_converts_through_its_own_display`,
+`a_window_spanning_two_displays_has_one_pixel_and_two_names`,
+`a_rectangle_is_on_the_display_holding_most_of_it` (pure), `open_geometry`
+(Win32 opening), `a_position_set_on_a_normal_window_moves_it`, which checks the
+corner against `GetMonitorInfoW` and `GetDpiForMonitor`, and
+`a_position_on_a_display_the_host_does_not_hold_is_refused` (real Win32
+windows), `open_plan_places_by_display_origin_and_scale` and
+`a_window_is_on_the_display_it_overlaps_most` (X11). Two monitors of
+different DPI are not a CI row; the parity source owes the run.
+
 ### Windows preferences have a window-independent owner lifetime
 
 `Platform::preferences` reads text scale, animation preference, high contrast,
@@ -3321,13 +3369,18 @@ after three seconds. AppKit keeps no rectangle to return to from a zoomed,
 minimized or full-screen window, so the backend records the outer rectangle
 just before the window leaves normal mode.
 
-A position is the outer top-left in global logical points: AppKit measures from
-the bottom-left corner of the primary screen, so `window::apple::geometry::frame`
-flips through the primary screen's height. The display snapshot is measured the
-same way (device pixels of that screen from the primary screen's top-left
-corner), so a position and a display origin share one space. `Platform::open_window`
-turns a position measured on a display into a global one before the window is
-built.
+A position is the outer top-left on the screen the window is on, in that
+screen's points from its corner (ADR-0364). AppKit measures from the bottom-left
+corner of the primary screen, so `window::apple::geometry::frame` flips through
+the primary screen's height into points from its top-left, and a screen
+publishes its corner in that flipped desktop as its `DesktopOrigin` and its
+extent and visible frame in its own points. A position is the desktop point
+less its screen's corner (`position_on`), and back (`desktop_point`), with no
+scale between them: a screen's logical pixels are points. Both read the
+published snapshot, so a position an application read converts back to the
+same frame; `Platform::open_window` turns the options' positions into desktop
+points before the window is built, and one on a screen the snapshot no longer
+holds leaves the place to AppKit.
 
 The notice sources (`NSWorkspace` sleep and wake, the distributed screen lock
 notifications, the memory-pressure dispatch source) start in `run`, after the
@@ -4075,9 +4128,10 @@ promise only a frame-loop owner can keep, and the promise is selected at the
 one place that keeps it: `flui-app`'s desktop runner asks for
 `AfterFirstFrame` at its two open sites (the main window and a content-bearing
 secondary window, through `runner::desktop::OpeningWindow::open`), whose
-frame closure performs the reveal. Its shared `From<&AppConfig> for
-WindowOptions` conversion stays at `AtOpen` on purpose — `run_direct` and the
-bare `open_secondary_window` use it and have no frame loop that would reveal.
+frame closure performs the reveal. The options every open site builds
+(`AppConfig::window_options`) stay at `AtOpen` on purpose — `run_direct` and
+the bare `open_secondary_window` use them and have no frame loop that would
+reveal.
 A direct consumer of this crate — the platform probes — likewise has no first frame to report, and a window
 whose reveal waits for a call that never comes is a window nobody sees. The
 default `WindowReveal::AtOpen` therefore leaves alpha untouched and those

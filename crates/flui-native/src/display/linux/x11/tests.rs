@@ -232,8 +232,8 @@ fn a_randr_reconfiguration_on_a_real_server_is_published() {
     sent();
     until_changed(&mut session, &stop);
     assert_eq!(
-        session.views()[0].usable_bounds.size,
-        Size::new(100, 100),
+        session.views()[0].bounds.usable().size(),
+        Size::new(100.0, 100.0),
         "the work area behind the unrelated events was read"
     );
     for property in [unrelated, work_area] {

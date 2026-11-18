@@ -13,6 +13,39 @@ use parking_lot::Mutex;
 
 use crate::error::PlatformError;
 
+/// A display a window system lays out in device pixels (Win32, the web's
+/// screens), from its rectangle and usable area in the desktop's device
+/// pixels: the one rule every such source reads a display's bounds by.
+///
+/// A usable area that reaches past the display (a work area a window manager
+/// sent for the whole desktop) leaves the display usable as a whole, with a
+/// warning; a display with no area is left out of the snapshot (`None`),
+/// with a warning, and its windows name no display.
+#[cfg(any(windows, target_arch = "wasm32"))]
+pub(crate) fn device_display(
+    id: DisplayId,
+    name: String,
+    display: flui_foundation::geometry::Bounds<i32>,
+    usable: flui_foundation::geometry::Bounds<i32>,
+    scale: flui_foundation::geometry::DevicePixelRatio,
+) -> Option<DisplayDescription> {
+    match DisplayDescription::from_device(id, name.clone(), display, usable, scale) {
+        Ok(info) => Some(info),
+        Err(refused) => {
+            tracing::warn!(
+                %refused,
+                display = %name,
+                "a display's usable area is not inside it; the whole display is usable"
+            );
+            DisplayDescription::from_device(id, name, display, display, scale)
+                .inspect_err(|refused| {
+                    tracing::warn!(%refused, "a display with no area is left out of the snapshot");
+                })
+                .ok()
+        }
+    }
+}
+
 /// The gamut of a display whose platform reports only whether it shows the
 /// wide gamut, which on Apple and Android is Display P3.
 #[cfg(any(target_os = "android", target_os = "ios", target_os = "macos", test))]
@@ -712,7 +745,7 @@ mod mapping {
 mod tests {
     use std::cell::Cell;
 
-    use flui_foundation::geometry::{Bounds, DevicePixelRatio};
+    use flui_foundation::geometry::{Bounds, DevicePixelRatio, Point, Size};
     use flui_platform::{DisplayDescription, DisplayKey};
 
     use super::DisplaySource;
@@ -723,12 +756,8 @@ mod tests {
             .mint(&DisplayKey::Injected(1))
             .expect("ids are not exhausted");
         let scale = DevicePixelRatio::try_new(scale).expect("a positive ratio");
-        vec![DisplayDescription::new(
-            id,
-            "Test",
-            Bounds::default(),
-            scale,
-        )]
+        let bounds = Bounds::new(Point::new(0, 0), Size::new(1, 1));
+        vec![DisplayDescription::from_device(id, "Test", bounds, bounds, scale).expect("a display")]
     }
 
     /// A source with a counted sample that reads one display.

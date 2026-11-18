@@ -818,6 +818,9 @@ where
         .opening
         .keeps_one_instance(&application.config.application_identity);
     let app_id = application.config.application_identity.app_id().cloned();
+    // The capabilities' providers name the application by the id its windows
+    // carry (ADR-0351).
+    APP_RUNTIME.with(|slot| slot.borrow().host_bridge().name_application(app_id.clone()));
     // Held for the main window's first frame; a launch the running instance
     // takes drops it, so only the instance that runs registers.
     #[cfg(windows)]

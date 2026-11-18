@@ -90,6 +90,11 @@ pub(crate) trait HostDisplays: StaleOnWake {
     /// again. Any thread.
     fn invalidate(&self);
 
+    /// The last published snapshot; never samples. What a window reads and
+    /// places its position against: the displays an application read, so a
+    /// position it was given converts back exactly.
+    fn published(&self) -> DisplaySnapshot;
+
     /// The id of the display `screen` is on; `None` for a screen the source
     /// leaves out.
     fn id_of(&self, screen: &NSScreen) -> Option<DisplayId>;

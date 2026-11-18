@@ -113,7 +113,7 @@ use crate::profiler::{FramePhase, Profiler};
 /// tracing::subscriber::set_global_default(subscriber).expect("no subscriber installed yet");
 /// ```
 ///
-/// In a FLUI app the registry is the one `flui_log::LogConfig::subscriber`
+/// In a FLUI app the registry is the one `flui_log::config::LogConfig::subscriber`
 /// builds; the crate README shows that composition.
 pub struct FrameTimingLayer {
     inner: CaptureLayer,

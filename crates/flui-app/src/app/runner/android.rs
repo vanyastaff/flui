@@ -127,20 +127,20 @@ where
 
         // 1. Open window (wraps the existing ANativeWindow). `Ready` is
         // guaranteed inside `on_ready` (ADR-0039 §1).
-        let options: WindowOptions = (&config).into();
         let routes = super::window_routes::WindowRoutes::new();
-        let host =
-            match owner_platform_installed(|owner| owner.open_window(options, routes.clone()))
-                .and_then(flui_native::WindowOpen::try_ready)
-            {
-                Ok(window) => window,
-                Err(error) => {
-                    tracing::error!(%error, "Failed to create Android window");
-                    return Err(
-                        anyhow::Error::from(error).context("Failed to create Android window")
-                    );
-                }
-            };
+        let host = match owner_platform_installed(|owner| {
+            let options: WindowOptions =
+                config.window_options(owner.display_snapshot().ok().as_ref());
+            owner.open_window(options, routes.clone())
+        })
+        .and_then(flui_native::WindowOpen::try_ready)
+        {
+            Ok(window) => window,
+            Err(error) => {
+                tracing::error!(%error, "Failed to create Android window");
+                return Err(anyhow::Error::from(error).context("Failed to create Android window"));
+            }
+        };
         routes.adopt(host.id());
         let presentation_window = super::presentation_window(std::rc::Rc::clone(&host))
             .with_pointer_resampling(config.pointer_resampling);

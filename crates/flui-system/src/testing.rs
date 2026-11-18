@@ -1,9 +1,11 @@
 //! The scripted system services a scenario registers instead of the OS's
 //! (ADR-0154 §10, ADR-0243): [`ScriptedSystem`], over a
-//! [`ScriptedLauncher`] and a [`ScriptedFileDialogs`], both on the scenario
-//! primitive ([`flui_platform::capability::scripted`]).
+//! [`ScriptedLauncher`], [`ScriptedFileDialogs`], [`ScriptedAutostart`] and
+//! [`ScriptedUserDirs`] on the scenario primitive
+//! ([`flui_platform::capability::scripted`]), and a [`ScriptedShortcuts`]
+//! and a [`ScriptedTaskbar`] the test speaks for directly.
 
-use std::{cell::RefCell, fmt, rc::Rc};
+use std::{cell::Cell, cell::RefCell, fmt, rc::Rc};
 
 use flui_platform::Unsupported;
 use flui_platform::WindowId;
@@ -14,10 +16,19 @@ use flui_platform::capability::{
 use flui_platform::launch::{Launcher, LauncherCapability};
 pub use flui_platform::testing::{LaunchRequest, ScriptedLauncher};
 
+use crate::autostart::{
+    Autostart, AutostartBackend, AutostartCapability, AutostartRequest, AutostartResult,
+};
 use crate::dialog::{
     DialogHold, FileDialogBackend, FileDialogCapability, FileDialogs, OpenRequest, OpenResult,
     SaveRequest, SaveResult,
 };
+use crate::shortcuts::{
+    GlobalShortcutCapability, GlobalShortcuts, Shortcut, ShortcutBackend, ShortcutEvent,
+    ShortcutFeed, ShortcutHold,
+};
+use crate::taskbar::{EntryState, Honoured, TaskbarBackend, TaskbarCapability, TaskbarEntry};
+use crate::user_dirs::{UserDir, UserDirBackend, UserDirCapability, UserDirResult, UserDirs};
 
 /// One dialog a [`ScriptedFileDialogs`] was asked to show.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -172,31 +183,217 @@ impl fmt::Debug for ScriptedFileDialogs {
     }
 }
 
-/// The system services' plugin over a script: registers a [`Launcher`] over
-/// `launcher` and [`FileDialogs`] over `dialogs`, which the test keeps
-/// clones of.
+/// Autostart whose system is a script: each request is answered by the
+/// [`Script`] in the order asked. Cheap to clone; clones share the script.
+#[derive(Clone, Debug)]
+pub struct ScriptedAutostart {
+    script: Script<AutostartRequest, AutostartResult>,
+}
+
+impl Default for ScriptedAutostart {
+    fn default() -> Self {
+        Self::on(&Scenario::new())
+    }
+}
+
+impl ScriptedAutostart {
+    /// Autostart whose script is on `scenario`, with nothing scripted.
+    #[must_use]
+    pub fn on(scenario: &Scenario) -> Self {
+        Self {
+            script: scenario.script("autostart"),
+        }
+    }
+
+    /// The requests' script.
+    #[must_use]
+    pub fn script(&self) -> &Script<AutostartRequest, AutostartResult> {
+        &self.script
+    }
+}
+
+impl AutostartBackend for ScriptedAutostart {
+    fn request(&self, request: AutostartRequest, answer: Resolver<AutostartResult>) {
+        self.script.receive(request, answer);
+    }
+}
+
+/// User folders whose system is a script: each lookup is answered by the
+/// [`Script`]. Cheap to clone; clones share the script.
+#[derive(Clone, Debug)]
+pub struct ScriptedUserDirs {
+    script: Script<UserDir, UserDirResult>,
+}
+
+impl Default for ScriptedUserDirs {
+    fn default() -> Self {
+        Self::on(&Scenario::new())
+    }
+}
+
+impl ScriptedUserDirs {
+    /// User folders whose script is on `scenario`, with nothing scripted.
+    #[must_use]
+    pub fn on(scenario: &Scenario) -> Self {
+        Self {
+            script: scenario.script("user folders"),
+        }
+    }
+
+    /// The lookups' script.
+    #[must_use]
+    pub fn script(&self) -> &Script<UserDir, UserDirResult> {
+        &self.script
+    }
+}
+
+impl UserDirBackend for ScriptedUserDirs {
+    fn locate(&self, dir: UserDir, answer: Resolver<UserDirResult>) {
+        self.script.receive(dir, answer);
+    }
+}
+
+/// A launcher entry that records what it was asked to show, honouring what
+/// the test says. Cheap to clone; clones share the record.
+#[derive(Clone, Debug)]
+pub struct ScriptedTaskbar {
+    shown: Rc<RefCell<Vec<EntryState>>>,
+    honours: Rc<Cell<Honoured>>,
+}
+
+impl Default for ScriptedTaskbar {
+    fn default() -> Self {
+        Self {
+            shown: Rc::default(),
+            honours: Rc::new(Cell::new(Honoured::new(true, true, true, true))),
+        }
+    }
+}
+
+impl ScriptedTaskbar {
+    /// Honour `honours` from now on; every part, confirmed, until then.
+    pub fn set_honours(&self, honours: Honoured) {
+        self.honours.set(honours);
+    }
+
+    /// Every state the entry was asked to show, oldest first.
+    #[must_use]
+    pub fn shown(&self) -> Vec<EntryState> {
+        self.shown.borrow().clone()
+    }
+}
+
+impl TaskbarBackend for ScriptedTaskbar {
+    fn show(&self, state: EntryState) {
+        self.shown.borrow_mut().push(state);
+    }
+
+    fn honours(&self) -> Honoured {
+        self.honours.get()
+    }
+}
+
+/// One binding a [`ScriptedShortcuts`] was asked for: the shortcuts, where
+/// the test sends what the system says, and whether the binding still holds.
+#[derive(Clone, Debug)]
+pub struct ScriptedBinding {
+    shortcuts: Vec<Shortcut>,
+    feed: ShortcutFeed,
+    held: Rc<Cell<bool>>,
+}
+
+impl ScriptedBinding {
+    /// The shortcuts it asked for.
+    #[must_use]
+    pub fn shortcuts(&self) -> &[Shortcut] {
+        &self.shortcuts
+    }
+
+    /// Send `event` as the system.
+    pub fn send(&self, event: ShortcutEvent) {
+        self.feed.send(event);
+    }
+
+    /// Whether the application still holds the binding.
+    #[must_use]
+    pub fn is_held(&self) -> bool {
+        self.held.get()
+    }
+}
+
+/// Global shortcuts whose system is the test: each binding is recorded
+/// ([`bindings`](Self::bindings)), and the test sends what the system says
+/// through it. Cheap to clone; clones share the record.
+#[derive(Clone, Debug, Default)]
+pub struct ScriptedShortcuts {
+    bindings: Rc<RefCell<Vec<ScriptedBinding>>>,
+}
+
+impl ScriptedShortcuts {
+    /// The bindings asked for, oldest first.
+    #[must_use]
+    pub fn bindings(&self) -> Vec<ScriptedBinding> {
+        self.bindings.borrow().clone()
+    }
+}
+
+/// Marks its binding let go when dropped.
+struct Unbind(Rc<Cell<bool>>);
+
+impl Drop for Unbind {
+    fn drop(&mut self) {
+        self.0.set(false);
+    }
+}
+
+impl ShortcutBackend for ScriptedShortcuts {
+    fn bind(&self, shortcuts: Vec<Shortcut>, feed: ShortcutFeed) -> ShortcutHold {
+        let held = Rc::new(Cell::new(true));
+        self.bindings.borrow_mut().push(ScriptedBinding {
+            shortcuts,
+            feed,
+            held: Rc::clone(&held),
+        });
+        ShortcutHold::new(Unbind(held))
+    }
+}
+
+/// The system services' plugin over a script: registers each handle over
+/// the scripted system the test keeps clones of.
 #[derive(Clone, Debug, Default)]
 pub struct ScriptedSystem {
     launcher: ScriptedLauncher,
     dialogs: ScriptedFileDialogs,
+    autostart: ScriptedAutostart,
+    shortcuts: ScriptedShortcuts,
+    taskbar: ScriptedTaskbar,
+    user_dirs: ScriptedUserDirs,
 }
 
 impl ScriptedSystem {
-    /// The plugin over `launcher` and `dialogs`.
+    /// The plugin over `launcher` and `dialogs`, with the other services
+    /// unscripted.
     #[must_use]
     pub fn new(launcher: ScriptedLauncher, dialogs: ScriptedFileDialogs) -> Self {
-        Self { launcher, dialogs }
+        Self {
+            launcher,
+            dialogs,
+            ..Self::default()
+        }
     }
 
-    /// The plugin over a launcher and dialogs on `scenario`, with nothing
-    /// scripted: the test scripts them through
-    /// [`launcher`](Self::launcher) and [`dialogs`](Self::dialogs).
+    /// The plugin over services on `scenario`, with nothing scripted: the
+    /// test scripts them through the accessors.
     #[must_use]
     pub fn on(scenario: &Scenario) -> Self {
-        Self::new(
-            ScriptedLauncher::on(scenario),
-            ScriptedFileDialogs::on(scenario),
-        )
+        Self {
+            launcher: ScriptedLauncher::on(scenario),
+            dialogs: ScriptedFileDialogs::on(scenario),
+            autostart: ScriptedAutostart::on(scenario),
+            shortcuts: ScriptedShortcuts::default(),
+            taskbar: ScriptedTaskbar::default(),
+            user_dirs: ScriptedUserDirs::on(scenario),
+        }
     }
 
     /// The launcher the plugin provides over.
@@ -210,6 +407,30 @@ impl ScriptedSystem {
     pub fn dialogs(&self) -> &ScriptedFileDialogs {
         &self.dialogs
     }
+
+    /// The autostart the plugin provides over.
+    #[must_use]
+    pub fn autostart(&self) -> &ScriptedAutostart {
+        &self.autostart
+    }
+
+    /// The global shortcuts the plugin provides over.
+    #[must_use]
+    pub fn shortcuts(&self) -> &ScriptedShortcuts {
+        &self.shortcuts
+    }
+
+    /// The launcher entry the plugin provides over.
+    #[must_use]
+    pub fn taskbar(&self) -> &ScriptedTaskbar {
+        &self.taskbar
+    }
+
+    /// The user folders the plugin provides over.
+    #[must_use]
+    pub fn user_dirs(&self) -> &ScriptedUserDirs {
+        &self.user_dirs
+    }
 }
 
 impl Plugin for ScriptedSystem {
@@ -222,6 +443,22 @@ impl Plugin for ScriptedSystem {
         registrar.provide::<FileDialogCapability>(move |ctx: &ProviderContext<'_>| {
             FileDialogs::try_new(dialogs.clone(), ctx)
         });
+        let autostart = self.autostart.clone();
+        registrar.provide::<AutostartCapability>(move |ctx: &ProviderContext<'_>| {
+            Ok::<_, Unsupported>(Autostart::new(autostart.clone(), ctx))
+        });
+        let shortcuts = self.shortcuts.clone();
+        registrar.provide::<GlobalShortcutCapability>(move |ctx: &ProviderContext<'_>| {
+            Ok::<_, Unsupported>(GlobalShortcuts::new(shortcuts.clone(), ctx))
+        });
+        let taskbar = self.taskbar.clone();
+        registrar.provide::<TaskbarCapability>(move |ctx: &ProviderContext<'_>| {
+            Ok::<_, Unsupported>(TaskbarEntry::new(taskbar.clone(), ctx))
+        });
+        let user_dirs = self.user_dirs.clone();
+        registrar.provide::<UserDirCapability>(move |ctx: &ProviderContext<'_>| {
+            Ok::<_, Unsupported>(UserDirs::new(user_dirs.clone(), ctx))
+        });
     }
 }
 
@@ -233,22 +470,38 @@ impl Plugin for ScriptedSystem {
 #[derive(Clone, Debug)]
 pub struct PortalOnBus {
     address: std::sync::Arc<str>,
+    app_id: Option<crate::portal::AppName>,
 }
 
 #[cfg(target_os = "linux")]
 impl PortalOnBus {
     /// The providers on the bus at `address`, a D-Bus address such as
-    /// `unix:path=/tmp/bus`.
+    /// `unix:path=/tmp/bus`, naming the application as the composition root
+    /// does.
     #[must_use]
     pub fn new(address: impl Into<std::sync::Arc<str>>) -> Self {
-        let address: std::sync::Arc<str> = address.into();
-        Self { address }
+        Self {
+            address: address.into(),
+            app_id: None,
+        }
+    }
+
+    /// Name the application `app_id` to the portal, as a composition root
+    /// that declares it does.
+    #[must_use]
+    pub fn app_id(mut self, app_id: &str) -> Self {
+        self.app_id = Some(crate::portal::AppName::scripted(app_id));
+        self
     }
 }
 
 #[cfg(target_os = "linux")]
 impl Plugin for PortalOnBus {
     fn register(&self, registrar: &mut CapabilityRegistrar) {
-        crate::portal::register(registrar, Some(std::sync::Arc::clone(&self.address)));
+        crate::portal::register(
+            registrar,
+            Some(std::sync::Arc::clone(&self.address)),
+            self.app_id.clone(),
+        );
     }
 }

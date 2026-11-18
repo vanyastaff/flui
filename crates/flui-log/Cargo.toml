@@ -21,8 +21,8 @@ tracing-subscriber = { workspace = true }
 tracing-log = { workspace = true }
 thiserror = { workspace = true }
 # `diagnostics::REDACTED_VALUE`, the placeholder a redacted field renders as,
-# re-exported from `backend::privacy`; framework types that are not allowed a
-# `flui-log` edge share it from there.
+# and `AppId`. The placeholder lives there so framework types that are not
+# allowed a `flui-log` edge render withheld text the same way.
 flui-foundation = { workspace = true }
 
 # Android: logcat via the NDK's `__android_log_write`.
@@ -52,6 +52,10 @@ tracing-forest = { workspace = true, optional = true }
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 tracing-wasm = { workspace = true }
 
+[dev-dependencies]
+# The crate's own suite covers its test support.
+flui-log = { path = ".", features = ["testing"] }
+
 [features]
 default = []
 # Hierarchical span-tree desktop output via `tracing-forest`.
@@ -59,6 +63,9 @@ hierarchical = ["dep:tracing-forest"]
 # Apple unified logging as a selectable backend on macOS (always available on
 # iOS, where it is the default).
 apple-unified-logging = ["dep:tracing-oslog"]
+# Test support (ADR-0243): `testing::capture`, the race-free event capture
+# `flui-testing` re-exports as `log_capture`.
+testing = []
 
 [package.metadata.docs.rs]
 all-features = true

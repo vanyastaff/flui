@@ -37,10 +37,11 @@ The two global slots have separate policies. `LogBridgePolicy::Auto` installs
 untouched for a host that owns it independently of tracing.
 
 ```rust,no_run
-use flui_log::{LogConfig, SubscriberPolicy};
+use flui_log::config::LogConfig;
+use flui_log::ownership::SubscriberPolicy;
 
 let installation = flui_log::setup(&LogConfig::default(), SubscriberPolicy::Auto)?;
-# Ok::<(), flui_log::SetupError>(())
+# Ok::<(), flui_log::ownership::SetupError>(())
 ```
 
 ## Composing your own stack
@@ -49,11 +50,16 @@ let installation = flui_log::setup(&LogConfig::default(), SubscriberPolicy::Auto
 pieces and installs the result itself:
 
 ```rust,no_run
-use flui_log::{InstallPolicy, LogBridgePolicy, LogConfig, PlatformLayer, install_subscriber};
+use flui_log::backend::PlatformLayer;
+use flui_log::config::LogConfig;
+use flui_log::filter::FilterConfig;
+use flui_log::ownership::{InstallPolicy, LogBridgePolicy, install_subscriber};
 use tracing_subscriber::{Registry, layer::SubscriberExt as _, Layer as _};
 
-let config = LogConfig::builder().directives("info,flui_view=trace").build();
-let filter = config.targets()?;
+let config = LogConfig::builder()
+    .filter(FilterConfig::new("info,flui_view=trace"))
+    .build();
+let filter = config.filter().targets()?;
 
 let subscriber = Registry::default()
     .with(PlatformLayer::platform_default(&config).with_filter(filter));
@@ -109,7 +115,7 @@ equivalent. Redaction happens in-process before the value reaches the sink, so
 on Apple a private value is never stored at all (stronger than the OS default,
 at the cost of the "Enable-Private-Data" reveal workflow). The full contract,
 including what it deliberately does not cover, lives in
-`flui_log::backend::privacy`. Desktop and web-console sinks are
+`flui_log::privacy`. Desktop and web-console sinks are
 developer-facing and publish fields verbatim.
 
 ## Filtering
@@ -131,6 +137,7 @@ filter, so an application links no regex engine. A span or field directive
 |---|---|
 | `hierarchical` | Adds `DesktopFormat::Hierarchical`, a `tracing-forest` span tree printed when each root span closes |
 | `apple-unified-logging` | Makes `os_log` selectable on macOS (always available on iOS) |
+| `testing` | `testing::capture`, a race-free capture of the events a closure emits; `flui-testing` re-exports it as `log_capture` |
 
 ## Out of scope
 

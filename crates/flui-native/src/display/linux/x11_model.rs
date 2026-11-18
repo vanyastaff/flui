@@ -181,13 +181,19 @@ impl RandrState {
         let first_output = self.outputs.iter().find(|output| output.id == first);
         let persistent_key =
             first_output.and_then(|output| persistent_key(&output.name, output.edid.as_deref()));
+        let scale_factor = self.scale_factor.unwrap_or(DevicePixelRatio::ONE);
+        // The work area is cut to the monitor, so it lies inside it; a monitor
+        // with no area is no display.
+        let (origin, bounds) =
+            flui_platform::DisplayBounds::from_device(monitor.bounds, usable_bounds, scale_factor)
+                .ok()?;
         Some(OutputView {
             identity: Identity::Keyed(DisplayKey::X11Output(first)),
             natives,
             name: monitor.name.clone(),
-            bounds: monitor.bounds,
-            usable_bounds,
-            scale_factor: self.scale_factor.unwrap_or(DevicePixelRatio::ONE),
+            origin,
+            bounds,
+            scale_factor,
             refresh_period,
             is_primary: monitor.is_primary,
             persistent_key,
@@ -311,6 +317,7 @@ mod tests {
 
     use super::super::view::{FreshIds, display_of_native_number};
     use super::*;
+    use flui_foundation::geometry::Rect;
     use flui_platform::DisplayRegistry;
 
     fn mode(id: u32, dot_clock: u32, htotal: u16, vtotal: u16) -> RandrMode {
@@ -617,9 +624,10 @@ mod tests {
         randr.work_area = current_work_area(&[0, 28, 1920, 1052, 0, 0, 1920, 1080], Some(0));
         let view = &randr.views()[0];
         assert_eq!(view.scale_factor.get(), 1.5);
-        assert_eq!(view.usable_bounds.origin.y, 28);
-        assert_eq!(view.usable_bounds.size.height, 1052);
-        assert_eq!(view.bounds.size.height, 1080);
+        // 28 and 1080 device pixels at 1.5, in the display's logical pixels.
+        assert_eq!(view.bounds.usable().top(), 28.0 / 1.5);
+        assert_eq!(view.bounds.usable().height(), 1052.0 / 1.5);
+        assert_eq!(view.bounds.extent().height, 720.0);
         // The second desktop's area, and an index past the list falls back.
         let areas = [0, 0, 100, 100, 5, 5, 200, 200];
         assert_eq!(
@@ -633,7 +641,11 @@ mod tests {
         assert_eq!(current_work_area(&areas[..3], Some(0)), None);
         // A work area that misses the monitor leaves the bounds.
         randr.work_area = Some(Bounds::new(Point::new(5000, 0), Size::new(10, 10)));
-        assert_eq!(randr.views()[0].usable_bounds, randr.views()[0].bounds);
+        let whole = randr.views()[0].bounds;
+        assert_eq!(
+            whole.usable(),
+            Rect::from_origin_size(Point::new(0.0, 0.0), whole.extent())
+        );
     }
 
     /// A server that lists monitors, outputs and modes without end is read as

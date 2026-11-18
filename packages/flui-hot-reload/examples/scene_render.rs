@@ -54,7 +54,7 @@ use flui_native::current_platform;
 use flui_painting::{paint::Paint, styling::Color};
 use flui_platform::{
     CloseDecision, DispatchEventResult, FrameOutcome, FrameRequest, PlatformInput, SurfaceChange,
-    WindowFrame, WindowHandler, WindowOptions,
+    WindowExtent, WindowFrame, WindowHandler, WindowOptions,
 };
 
 /// Build a scene with colored rectangles (fallback when no plugin is loaded).
@@ -209,7 +209,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let options = WindowOptions::default()
         .title(title.to_string())
-        .size(Size::new(800.0, 600.0))
+        .size(WindowExtent::try_new(Size::new(800.0, 600.0)).expect("800x600 is an extent"))
         .resizable(true)
         .visible(true)
         .frame(WindowFrame::System)

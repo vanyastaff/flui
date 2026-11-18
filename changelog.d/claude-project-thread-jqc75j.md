@@ -29,7 +29,7 @@
   up after ten such failures, about twelve seconds after the loss: the window reports
   `DeviceRecovery::Abandoned` once and attempts no more frames until the application asks again.
 - **`flui-log`, `flui-testing`, `flui-painting`, `flui-assets`**: constructors that can fail are named `try_new` (`cargo xtask try-new` lists the rest):
-  `flui_log::AppIdentity` and `AppleBundleId`, `flui_testing` `RecordingReader` and
+  `flui_log::identity::AppIdentity` and `AppleBundleId`, `flui_testing` `RecordingReader` and
   `RecordingWriter`, `flui_painting` `CornerRounding` and `RoundedPolygon`, and
   `flui_assets::NetworkLoader`.
 - **`flui-objects`, `flui-interaction`**: the same for `AspectRatioFactor`, `FractionFactor`,
